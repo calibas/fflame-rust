@@ -836,6 +836,49 @@ This is what makes the shader's version sizeable. The earlier note
 that the address "needs only its last few entries, and that bound
 should be measured" is moot -- it needs none.
 
+## 5k. The kernel Jacobians are in the shader, 2026-09-17
+
+§5i settled that the measure walk needs them and that the two cheaper
+ways round were worse. Ported: `IFS_JACOBIAN`, a WGSL const holding
+`ifs_bubble_dscale`, `ifs_kernel_jacobian` over all six kernels, and
+`ifs_map_jacobian` composing `pre · J_kernel · inv` -- the shader's
+own chain, since its first affine is the post-inverse with `1/w`
+folded in.
+
+**Its own const, not text inside `IFS_TEMPLATE`.** It depends on
+nothing but the map rows and `ff_atan2`, so
+`the_shader_jacobians_are_the_cpu_ones` compiles it against a
+twenty-line harness with three bindings and checks the arithmetic,
+instead of standing up the whole walk to reach it.
+
+Against [`Kernel::inverse_jacobian`] in f64, four hundred points per
+kernel spread over the ball, skipping points the CPU declines or that
+sit within a hundredth of the ball of a singularity -- a pole is not
+a disagreement, it is a place with no derivative:
+
+| kernel | worst entry, relative |
+|---|---|
+| root n=3 d=1 | 1.4e-6 |
+| root n=15 d=-1 | 6.2e-6 |
+| spherical | 4.5e-7 |
+| bubble | 3.8e-6 |
+| hemisphere | 9.3e-6 |
+| disc | 5.2e-7 |
+| blob | 4.6e-6 |
+
+That is f32's own precision, and the comparison is **every entry**
+rather than a norm, because WGSL matrices are column-major and a
+transposed one still renders a picture. Checked: transposing the
+root's reads 1.99 relative and fails.
+
+Two fixtures had to be built for it rather than borrowed -- the plain
+affine one has no variations and does not qualify, and a bare blob
+has no invariant ball -- which is the third time this project has
+found a kernel fixture that could not carry a test.
+
+The const is not spliced into the walk yet, because nothing reads it
+until `ifs_measure` exists. That is the next piece.
+
 ## 6. Gates
 
 - **G1. The measure is the chaos game's.** At 2^2 to 2^6 on the

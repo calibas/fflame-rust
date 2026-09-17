@@ -2286,6 +2286,174 @@ pub fn pack_flame(
     Ok(PackedIfs { globals, rows, ifs, colors, solid })
 }
 
+/// The six kernels' inverse Jacobians, and the map-level composition,
+/// as WGSL.
+///
+/// Its own const rather than text inside `IFS_TEMPLATE`, because it
+/// depends on nothing but the `IfsMapGpu` rows and `ff_atan2` -- so
+/// `the_shader_jacobians_are_the_cpu_ones` can compile it against a
+/// twenty-line harness and check the arithmetic, instead of standing
+/// up the whole walk to reach it.
+///
+/// **The measure walk needs this and two cheaper ways round it were
+/// measured worse** (measure plan §5i): carrying the pixel's centre
+/// and two edge neighbours as a secant parallelogram reads 0.617 of
+/// the truth on a grand julian, and a local central difference reads
+/// 0.790 on a 6:1:1 gasket. A linearisation that is LOCAL is the
+/// point of it.
+///
+/// Transcribed from [`crate::scene::ifs_analysis::Kernel::inverse_jacobian`],
+/// which `the_kernels_jacobians_are_the_derivative` gates against
+/// central differences to 3.5e-5.
+///
+/// WGSL matrices are COLUMN-major: `mat2x2(col0, col1)` and `m[c][r]`,
+/// so a row-major `J[i][j] = ∂u_i/∂q_j` packs as
+/// `mat2x2(vec2(J00, J10), vec2(J01, J11))`. Getting that backwards
+/// transposes every derivative and still renders a picture.
+pub(crate) const IFS_JACOBIAN: &str = r#"
+// Bubble's radial scale AND its derivative in x = |v|^2, along the
+// row's branch, written so nothing cancels (Kernel::bubble_scale):
+//
+//   inner:  s = 2/(1 + root)        ds = 1/(root*(1 + root)^2)
+//   outer:  s = 2(1 + root)/x       ds = -(1 + root)^2/(x^2*root)
+//
+// with root = sqrt(1 - x). The inner branch's naive form is a
+// difference of two numbers either side of 2 and keeps only the digits
+// x is below 1 -- three of f32's seven at |v| = 1e-4 -- and its
+// derivative then cancels what is left. Measured at 102% wrong before
+// this form.
+fn ifs_bubble_dscale(r2: f32, branch: f32) -> f32 {
+    let root = sqrt(max(1.0 - r2, 0.0));
+    let up = 1.0 + root;
+    let safe_root = max(root, 1e-30);
+    let inner = 1.0 / (safe_root * up * up);
+    let x = max(r2, 1e-30);
+    let outer = -(up * up) / (x * x * safe_root);
+    return select(outer, inner, branch == 0.0);
+}
+
+// The kernel's inverse Jacobian at v, along the row's branch.
+fn ifs_kernel_jacobian(i: u32, v: vec2<f32>) -> mat2x2<f32> {
+    let kind = ifs_maps[i].kind;
+    let r2 = dot(v, v);
+    if (kind == 1.0) {
+        // root: u = |v|^m e^{i n arg v}, m = |n|/d. In the radial and
+        // tangential frames the derivative is diag(m, n)*|v|^(m-1),
+        // read out of the frame at v and into the one at u:
+        // R(psi) diag(m, n) R(-phi).
+        let n = ifs_maps[i].params.x;
+        let d = ifs_maps[i].params.y;
+        let rho = sqrt(max(r2, 1e-30));
+        let m = abs(n) / d;
+        let scale = pow(rho, m - 1.0);
+        let phi = ff_atan2(v.y, v.x);
+        let psi = n * phi;
+        let cp = cos(phi);
+        let sp = sin(phi);
+        let cs = cos(psi);
+        let ss = sin(psi);
+        let a = m * scale;
+        let b = n * scale;
+        return mat2x2<f32>(
+            vec2<f32>(cs * a * cp + ss * b * sp, ss * a * cp - cs * b * sp),
+            vec2<f32>(cs * a * sp - ss * b * cp, ss * a * sp + cs * b * cp),
+        );
+    }
+    if (kind == 2.0) {
+        // spherical: u = v/|v|^2, J = (I - 2 v v^T/|v|^2)/|v|^2.
+        let s = 1.0 / max(r2, 1e-30);
+        let off = s * (-2.0 * v.x * v.y * s);
+        return mat2x2<f32>(
+            vec2<f32>(s * (1.0 - 2.0 * v.x * v.x * s), off),
+            vec2<f32>(off, s * (1.0 - 2.0 * v.y * v.y * s)),
+        );
+    }
+    if (kind == 4.0) {
+        // hemisphere: u = v*t, t = (1 - |v|^2)^(-1/2); J = t I + t^3 v v^T.
+        let t = 1.0 / sqrt(max(1.0 - r2, 1e-30));
+        let t3 = t * t * t;
+        let off = t3 * v.x * v.y;
+        return mat2x2<f32>(
+            vec2<f32>(t + t3 * v.x * v.x, off),
+            vec2<f32>(off, t + t3 * v.y * v.y),
+        );
+    }
+    if (kind == 5.0) {
+        // disc: the chain rule through (|v|, phi), with phi the angle
+        // of v from +y, r = phi/pi + branch the ring and the branch's
+        // parity the sign of theta.
+        let pi = 3.14159265358979;
+        let rho = sqrt(max(r2, 1e-30));
+        let mb = ifs_maps[i].branch;
+        let phi = ff_atan2(v.x, v.y);
+        let r = phi / pi + mb;
+        let even = fract(mb * 0.5) == 0.0;
+        let sgn = select(-1.0, 1.0, even);
+        let theta = sgn * pi * rho;
+        let st = sin(theta);
+        let ct = cos(theta);
+        let du_drho = vec2<f32>(r * ct * sgn * pi, -r * st * sgn * pi);
+        let du_dphi = vec2<f32>(st / pi, ct / pi);
+        let drho = v / rho;
+        let dphi = vec2<f32>(v.y, -v.x) / max(r2, 1e-30);
+        return mat2x2<f32>(
+            vec2<f32>(
+                du_drho.x * drho.x + du_dphi.x * dphi.x,
+                du_drho.y * drho.x + du_dphi.y * dphi.x,
+            ),
+            vec2<f32>(
+                du_drho.x * drho.y + du_dphi.x * dphi.y,
+                du_drho.y * drho.y + du_dphi.y * dphi.y,
+            ),
+        );
+    }
+    if (kind == 6.0) {
+        // blob: u = P v / s(theta), P the swap; J = P/s + (P v) grad(1/s),
+        // grad(1/s) = -(s'/s^2) grad(theta), grad(theta) = (-v_y, v_x)/|v|^2.
+        let high = ifs_maps[i].params.x;
+        let low = ifs_maps[i].params.y;
+        let waves = ifs_maps[i].params.z;
+        let theta = ff_atan2(v.y, v.x);
+        let sc = low + (high - low) * 0.5 * (sin(waves * theta) + 1.0);
+        let ds = (high - low) * 0.5 * waves * cos(waves * theta);
+        let pv = vec2<f32>(v.y, v.x);
+        let g = -ds / max(sc * sc, 1e-30);
+        let grad = vec2<f32>(g * (-v.y / max(r2, 1e-30)), g * (v.x / max(r2, 1e-30)));
+        let inv_s = 1.0 / sc;
+        return mat2x2<f32>(
+            vec2<f32>(pv.x * grad.x, inv_s + pv.y * grad.x),
+            vec2<f32>(inv_s + pv.x * grad.y, pv.y * grad.y),
+        );
+    }
+    // bubble: u = v*s(|v|^2), J = s I + 2 s' v v^T.
+    let s = ifs_bubble_scale(r2, ifs_maps[i].branch);
+    let ds = ifs_bubble_dscale(r2, ifs_maps[i].branch);
+    let off = 2.0 * ds * v.x * v.y;
+    return mat2x2<f32>(
+        vec2<f32>(s + 2.0 * ds * v.x * v.x, off),
+        vec2<f32>(off, s + 2.0 * ds * v.y * v.y),
+    );
+}
+
+// The whole map's inverse Jacobian at q: the shader's chain is
+// q -> inv affine (the post-inverse with 1/w folded in) -> kernel
+// inverse -> pre affine, so the derivative is pre * J_kernel * inv.
+// An affine row has no kernel and is just the one matrix.
+fn ifs_map_jacobian(i: u32, q: vec2<f32>) -> mat2x2<f32> {
+    let m = ifs_maps[i].inv_m;
+    // Row-major [a, b, c, d] as a COLUMN-major mat2x2.
+    let am = mat2x2<f32>(vec2<f32>(m.x, m.z), vec2<f32>(m.y, m.w));
+    if (ifs_maps[i].kind == 0.0) {
+        return am;
+    }
+    let t = ifs_maps[i].inv_t;
+    let v = vec2<f32>(m.x * q.x + m.y * q.y + t.x, m.z * q.x + m.w * q.y + t.y);
+    let p = ifs_maps[i].pre_m;
+    let bm = mat2x2<f32>(vec2<f32>(p.x, p.z), vec2<f32>(p.y, p.w));
+    return bm * (ifs_kernel_jacobian(i, v) * am);
+}
+"#;
+
 /// How many `vec4`s of the params' `fdata` block one seed occupies.
 pub const SEED_VEC4S: usize = 6;
 /// Where the seeds start in `fdata`; the whole-IFS constants are below.
@@ -6818,6 +6986,269 @@ mod gpu_tests {
                     ratio(by_min.4, best_near.4)
                 );
             }
+        }
+    }
+
+    /// The shader's kernel Jacobians ARE the f64 ones.
+    ///
+    /// The measure walk needs `|det D(S_a⁻¹)|` along an address, and
+    /// two cheaper ways of getting it without these were measured
+    /// worse -- a secant parallelogram of three carried points reads
+    /// 0.617 of the truth on a grand julian, a local central
+    /// difference reads 0.790 on a 6:1:1 gasket (measure plan §5i).
+    /// So the six closed forms are ported, and this is what says the
+    /// port is faithful.
+    ///
+    /// Compiled against a twenty-line harness rather than the whole
+    /// walk: `IFS_JACOBIAN` depends on nothing but the map rows and
+    /// `ff_atan2`, which is the reason it is its own const.
+    ///
+    /// **A transposed matrix still renders a picture**, so this
+    /// compares every entry and not a norm.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_shader_jacobians_are_the_cpu_ones() {
+        use crate::scene::ifs_analysis::Map2;
+        let (device, queue) = device();
+
+        // One flame per kernel, so every arm of the switch is reached.
+        let jul = |power: f32, dist: f32| {
+            let mut t = crate::scene::transforms::Transform::default();
+            t.a = 0.7071;
+            t.b = 0.7071;
+            t.c = -0.7071;
+            t.d = 0.7071;
+            t.e = 0.2;
+            t.f = -0.1;
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("flatten", 1.0);
+            t.set_variation("julian", 1.0);
+            t.set_variation_param("julian", "power", power);
+            t.set_variation_param("julian", "dist", dist);
+            t
+        };
+        let kern = |name: &str| {
+            let mut t = crate::scene::transforms::Transform::default();
+            t.a = 0.9;
+            t.b = 0.3;
+            t.c = -0.3;
+            t.d = 0.9;
+            t.e = 0.15;
+            t.f = -0.2;
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation(name, 1.1);
+            t
+        };
+        let mut affine = crate::scene::transforms::Transform::default();
+        affine.a = 0.5;
+        affine.d = 0.5;
+        affine.e = 0.3;
+        affine.variations.clear();
+        affine.variation_order.clear();
+        affine.set_variation("linear", 1.0);
+
+        let cases: Vec<(&str, Vec<crate::scene::transforms::Transform>)> = vec![
+            ("root n=3 d=1", vec![jul(3.0, 1.0), affine.clone()]),
+            ("root n=15 d=-1", vec![jul(15.0, -1.0), affine.clone()]),
+            ("spherical", vec![kern("spherical"), affine.clone()]),
+            ("bubble", vec![kern("bubble"), affine.clone()]),
+            ("hemisphere", vec![kern("hemisphere"), affine.clone()]),
+            ("disc", vec![kern("disc"), affine.clone()]),
+            // The blob fixture the kernel's other gates use: the
+            // plain one has no invariant ball.
+            ("blob", {
+                let mut t = kern("blob");
+                t.a = 1.0;
+                t.b = 0.0;
+                t.c = 0.0;
+                t.d = 1.0;
+                t.e = 0.0;
+                t.f = 0.0;
+                t.set_variation("blob", 0.8);
+                t.set_variation_param("blob", "high", 1.2);
+                t.set_variation_param("blob", "low", 0.5);
+                t.set_variation_param("blob", "waves", 5.0);
+                let mut a2 = affine.clone();
+                a2.a = 0.6;
+                a2.b = 0.3;
+                a2.c = -0.3;
+                a2.d = 0.6;
+                a2.e = 0.5;
+                a2.f = 0.0;
+                vec![t, a2]
+            }),
+        ];
+
+        let harness = format!(
+            r#"
+struct IfsMapGpu {{
+    inv_m: vec4<f32>,
+    inv_t: vec2<f32>,
+    sigma_min: f32,
+    color: f32,
+    pre_m: vec4<f32>,
+    pre_t: vec2<f32>,
+    kind: f32,
+    branch: f32,
+    params: vec4<f32>,
+    measure: vec4<f32>,
+}}
+@group(0) @binding(0) var<storage, read> ifs_maps: array<IfsMapGpu>;
+@group(0) @binding(1) var<storage, read> pts: array<vec2<f32>>;
+@group(0) @binding(2) var<storage, read_write> out: array<vec4<f32>>;
+
+fn ff_atan2(y: f32, x: f32) -> f32 {{
+    if (y == 0.0 && x == 0.0) {{
+        let pi = 3.14159265358979;
+        let mag = select(0.0, pi, (bitcast<u32>(x) & 0x80000000u) != 0u);
+        return select(mag, -mag, (bitcast<u32>(y) & 0x80000000u) != 0u);
+    }}
+    return atan2(y, x);
+}}
+
+fn ifs_bubble_scale(r2: f32, branch: f32) -> f32 {{
+    let root = sqrt(max(1.0 - r2, 0.0));
+    let up = 1.0 + root;
+    return select(2.0 * up / max(r2, 1e-30), 2.0 / up, branch == 0.0);
+}}
+{}
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    let n = arrayLength(&pts);
+    if (gid.x >= n) {{ return; }}
+    let j = ifs_map_jacobian(0u, pts[gid.x]);
+    // Row-major out: (J00, J01, J10, J11).
+    out[gid.x] = vec4<f32>(j[0][0], j[1][0], j[0][1], j[1][1]);
+}}
+"#,
+            IFS_JACOBIAN
+        );
+
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("jacobian harness"),
+            source: wgpu::ShaderSource::Wgsl(harness.into()),
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("jacobian harness"),
+            layout: None,
+            module: &module,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        for (name, transforms) in cases {
+            let guard = crate::variations::global_registry();
+            let flame = {
+                let mut f = crate::scene::transforms::Flame::default();
+                f.transforms = transforms;
+                f
+            };
+            let ifs = crate::scene::ifs_analysis::analyse_2d(&flame, &guard).expect("qualifies");
+            drop(guard);
+            let colors: Vec<f32> = flame.transforms.iter().map(|t| t.color).collect();
+            let rows = pack_maps(&ifs, &colors, None);
+
+            // Points spread over the ball, skipping any the CPU
+            // declines -- a pole or an image edge is not a
+            // disagreement, it is a place with no derivative.
+            let (bc, br) = (ifs.ball.centre, ifs.ball.radius);
+            let mut pts: Vec<[f32; 2]> = Vec::new();
+            let mut want: Vec<[f64; 4]> = Vec::new();
+            let mut st = 0x2545F4914F6CDD1Du64;
+            let mut rnd = move || {
+                st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                (st >> 11) as f64 / (1u64 << 53) as f64
+            };
+            while pts.len() < 400 {
+                let q = [
+                    bc[0] + (rnd() * 2.0 - 1.0) * br,
+                    bc[1] + (rnd() * 2.0 - 1.0) * br,
+                ];
+                let Some(j) = ifs.maps[0].inverse.jacobian(q) else { continue };
+                // Near a singularity f32 cannot follow f64 and the
+                // comparison says nothing about the transcription.
+                if ifs.maps[0].inverse.singular_distance(q) < 1e-2 * br {
+                    continue;
+                }
+                let mag = j.iter().flatten().fold(0.0f64, |a, b| a.max(b.abs()));
+                if !(mag > 1e-6) || mag > 1e6 {
+                    continue;
+                }
+                pts.push([q[0] as f32, q[1] as f32]);
+                want.push([j[0][0], j[0][1], j[1][0], j[1][1]]);
+            }
+
+            let mk = |data: &[u8], usage: wgpu::BufferUsages| {
+                use wgpu::util::DeviceExt;
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: None,
+                    contents: data,
+                    usage,
+                })
+            };
+            let maps_buf = mk(
+                bytemuck::cast_slice(&rows),
+                wgpu::BufferUsages::STORAGE,
+            );
+            let pts_buf = mk(bytemuck::cast_slice(&pts), wgpu::BufferUsages::STORAGE);
+            let out_buf = device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: (pts.len() * 16) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            });
+            let stage = device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: (pts.len() * 16) as u64,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &pipeline.get_bind_group_layout(0),
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: maps_buf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: pts_buf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 2, resource: out_buf.as_entire_binding() },
+                ],
+            });
+            let mut enc = device.create_command_encoder(&Default::default());
+            {
+                let mut pass = enc.begin_compute_pass(&Default::default());
+                pass.set_pipeline(&pipeline);
+                pass.set_bind_group(0, &bg, &[]);
+                pass.dispatch_workgroups(pts.len().div_ceil(64) as u32, 1, 1);
+            }
+            enc.copy_buffer_to_buffer(&out_buf, 0, &stage, 0, (pts.len() * 16) as u64);
+            queue.submit(std::iter::once(enc.finish()));
+            let (tx, rx) = std::sync::mpsc::channel();
+            stage.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+                let _ = tx.send(r);
+            });
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            rx.recv().expect("map").expect("map ok");
+            let got: Vec<[f32; 4]> = {
+                let d = stage.slice(..).get_mapped_range();
+                bytemuck::cast_slice::<u8, [f32; 4]>(&d).to_vec()
+            };
+            stage.unmap();
+
+            let mut worst = 0.0f64;
+            for (g, w) in got.iter().zip(&want) {
+                let scale = w.iter().fold(0.0f64, |a, b| a.max(b.abs())).max(1e-9);
+                for k in 0..4 {
+                    worst = worst.max((g[k] as f64 - w[k]).abs() / scale);
+                }
+            }
+            println!("  {name:<16} {} points, worst entry {worst:.2e} relative", got.len());
+            assert!(
+                worst < 2e-3,
+                "{name}: the shader's Jacobian differs from the f64 one by {worst:.2e} \
+                 relative -- a transposed or mis-scaled entry still renders a picture"
+            );
         }
     }
 
