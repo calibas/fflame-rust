@@ -4366,7 +4366,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 "#;
 
-const IFS_TEMPLATE: &str = r#"
+pub(crate) const IFS_TEMPLATE: &str = r#"
 // Distance-field compute pass (mode D, ifs-distance-rendering.md
 // phase 1): no iteration of the pixel and no series - each pixel walks
 // the INVERSE maps of an affine IFS until it leaves a bounding ball,
@@ -4542,9 +4542,13 @@ fn ifs_seed_dead_min() -> f32 {
     return select(1e30, v, v > 0.0);
 }
 
-// Word `w` of seed `j`. Four words each, from index 4.
+// Word `w` of seed `j`. SIX words each, from index 4 -- the stride
+// must match `escape::ifs::SEED_VEC4S`, and it grew from four when the
+// delta gained its quadratic part. A stale stride here reads seed 1
+// onward out of the middle of seed 0's words, which is invisible on a
+// one-seed walk and cost a Sierpinski 11% of its view.
 fn ifs_seed(j: u32, w: u32) -> vec4<f32> {
-    return params.fdata[4u + 4u * j + w];
+    return params.fdata[4u + 6u * j + w];
 }
 
 

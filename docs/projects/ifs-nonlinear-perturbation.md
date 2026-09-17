@@ -530,7 +530,13 @@ prefix gets past a gap, that one was actually met, and that the
 answer still matches each pixel's own walk to a quarter pixel. It
 fails with the old stop restored.
 
-## 11. The second-order term, tried and parked, 2026-09-16
+## 11. The second-order term, parked and then unparked, 2026-09-16
+
+**Resolved by §13.** What follows is the first attempt, kept because
+the three failed models are the reason the second attempt stopped
+modelling at all.
+
+### 11a. The first attempt
 
 Item 7, attempted. `Map2::hessian` is built and gated and the carry
 works; what does NOT work is the objective's ability to use it, and
@@ -587,6 +593,9 @@ against the pixel's own -- and the way to get one is probably to
 measure the reported distance at the corners, continuing each of them
 a few levels, rather than to measure their positions.
 
+*That last sentence turned out to be the answer; §13 is what came of
+it.*
+
 ## 12. The solid twin, measured before it was touched, 2026-09-16
 
 §7 found `estimate_seeded` -- the reference for what the shader does
@@ -625,7 +634,59 @@ surface. Gate: `the_solid_continuation_is_the_walk`, which also
 pins the measurement above so the latency is a fact rather than an
 assumption.
 
-## 13. Cost and risk
+## 13. The handover measures itself, 2026-09-16
+
+§11 failed three times to PREDICT what handing over at a level would
+cost. The way out was to stop predicting.
+
+**Level 0 is a handover that approximates nothing.** Its position is
+the view centre, its basis is the view, and it carries no quadratic;
+continuing from it therefore IS each pixel's own walk. So the cost of
+handing over at level L is not a quantity to be modelled -- it is the
+difference between continuing from L and continuing from 0, and both
+are things the walk can just run. Five probe points, the corners and
+the centre, continued `PROBE_LEVELS` each, and the objective has the
+real number instead of a proxy.
+
+Two details make it right rather than nearly right. Both
+continuations must finish at the same ABSOLUTE depth, or the
+comparison is between two different walks -- a handover at level L
+continued by `n` has gone `L + n` deep, and the reference starts at
+zero; getting this wrong cost 0.33 pixels at zoom 2^28 and nothing
+anywhere shallower, which is exactly the shape of a bug that ships.
+And the check runs only on a nonlinear walk: an affine handover
+approximates nothing at any level, so it pays neither the arithmetic
+nor the risk.
+
+**With a trustworthy objective the quadratic pays.** Carrying
+`Q(uv) = C_uu·u² + C_uv·u·v + C_vv·v²` beside the basis, with
+`Q_{k+1} = J·Q_k + ½H[A_k, A_k]`, and letting the measurement choose:
+
+| set | before | after |
+|---|---|---|
+| grand julian, 2^20, 1080p | level 2, **20.2 px** total | level 6, **6.6 px** |
+| julia dust, 2^20, 1080p | level 7, 0.32 px | level 8, 0.23 px |
+
+The grand julian's deep handover costs twenty times the curvature and
+buys four thousand times less f32 error, which is the trade the whole
+objective exists to make and which every model of it had refused.
+
+**A gate that bars the curvature bars the trade.** The CPU gates run
+`estimate_seeded` in f64, so they see the linearisation and not the
+f32 error it was spent on. Holding them to a quarter pixel of
+curvature would have forbidden exactly the choice that halves the
+total. They now assert against the SUM, with the f32 half computed
+the way the objective computes it.
+
+**And a trap worth naming.** `SEED_VEC4S` went from four to six to
+make room for `Q`, and the shader's `ifs_seed` kept a stride of four
+written as a literal. That reads seed 1 onward out of the middle of
+seed 0's words -- invisible on the one-seed nonlinear gate, which
+passed at 99.9%, and 11% of the view wrong on a Sierpinski, which
+keeps eight. `the_shaders_seed_stride_matches_the_packer` is the
+source-scanning gate for it.
+
+## 14. Cost and risk
 
 The CPU pays `beam × maps` inverse evaluations per level, as now, in
 `BigFloat` where today they are f64 affines; a rung-1 root costs a
@@ -644,7 +705,7 @@ the centre and can leave the ball at any level; that is state the
 seed carries already (`escape`, `done`), and the same rule applies:
 the cut is the cut.
 
-## 14. What is next
+## 15. What is next
 
 For a bounded nonlinear set, nothing: the cap is lifted and §7's
 table is the evidence. The remaining work is the shader half -- the
@@ -724,7 +785,7 @@ the no-handover cap, because the shader's walk is f32 throughout and
 a delta far below the position's own ulp is swamped by the first
 step whatever it was stored in.
 
-## 15. Order of work
+## 16. Order of work
 
 1. ~~Jacobians and singular distances for the six kernels, with G1.~~
    Done 2026-09-16; §6 records what it found.
@@ -742,10 +803,10 @@ step whatever it was stored in.
 5. ~~Carry `dead_min` through the handover~~ -- done, §10.
 6. ~~A per-seed handover level~~ -- measured to be a non-issue: the
    grand julian's handover holds one seed (§12).
-7. ~~The second-order term~~ -- tried, and parked with the reason
-   measured (§11). The Hessian and its gate are in; the objective
-   cannot use them until there is a trustworthy predictor of the
-   seeded walk's error, which the corner probe is not.
+7. ~~The second-order term~~ -- done (§13). The objective stopped
+   predicting and started measuring against level 0, and with a
+   trustworthy number the quadratic pays: the grand julian's total
+   error at 2^20 went from 20.2 pixels to 6.6.
 8. ~~Widen the seed position~~ -- dropped, with the reason. It
    cannot help while the shader's continuation is f32 THROUGHOUT: a
    handover position stored to 48 bits is rounded to 24 by the first
