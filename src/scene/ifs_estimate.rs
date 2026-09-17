@@ -3036,7 +3036,7 @@ mod tests {
                     if !foot {
                         return rho(q);
                     }
-                    const K: i32 = 4;
+                    const K: i32 = 8;
                     let mut acc = 0.0;
                     for sy in 0..K {
                         for sx in 0..K {
@@ -3057,7 +3057,8 @@ mod tests {
                 // `beam` of zero enumerates every address, which is
                 // §5a's reference and separates the formula from the
                 // truncation.
-                let estimate = |x: [f64; 2], beam: usize, foot: bool| -> f64 {
+                let estimate = |x: [f64; 2], beam: usize, foot: bool, cells: f64| -> f64 {
+                    let want = want * cells;
                     let mut acc = 0.0f64;
                     // (point, probability, composed Jacobian)
                     let mut live: Vec<([f64; 2], f64, [[f64; 2]; 2])> =
@@ -3122,12 +3123,21 @@ mod tests {
                     acc
                 };
 
-                let mut rows: Vec<(&str, Vec<f64>)> = vec![
-                    ("enumerate, point", Vec::new()),
-                    ("enumerate, footprint", Vec::new()),
-                    ("beam 8, footprint", Vec::new()),
-                    ("beam 2, footprint", Vec::new()),
-                ];
+                // The beam is held at 16 so that what varies is the
+                // STOP RULE alone -- §5b measured the truncation
+                // separately and found 8 enough everywhere but the
+                // band.
+                let variants: Vec<(String, bool, f64)> = [1.0f64, 4.0, 16.0, 64.0]
+                    .iter()
+                    .flat_map(|&c| {
+                        [
+                            (format!("{c:>4.0} cell, point"), false, c),
+                            (format!("{c:>4.0} cell, footprint"), true, c),
+                        ]
+                    })
+                    .collect();
+                let mut rows: Vec<(String, Vec<f64>)> =
+                    variants.iter().map(|v| (v.0.clone(), Vec::new())).collect();
                 for iy in 0..VP {
                     for ix in 0..VP {
                         let h = hits[iy * VP + ix];
@@ -3139,10 +3149,8 @@ mod tests {
                             origin[0] + (ix as f64 + 0.5) * px,
                             origin[1] + (iy as f64 + 0.5) * px,
                         ];
-                        for (k, want_beam, foot) in
-                            [(0usize, 0usize, false), (1, 0, true), (2, 8, true), (3, 2, true)]
-                        {
-                            let e = estimate(x, want_beam, foot);
+                        for (k, v) in variants.iter().enumerate() {
+                            let e = estimate(x, 16, v.1, v.2);
                             if e > 0.0 && d > 0.0 {
                                 rows[k].1.push(e / d);
                             }
