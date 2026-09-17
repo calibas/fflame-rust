@@ -1140,7 +1140,18 @@ fn seed_beam_inner<P: SeedPoint>(
             / px
     };
     let mut best_error = if choose { f32_pixels(&bases, &live) } else { f64::INFINITY };
-    let mut best = if choose && force.map_or(true, |l| l == 0) {
+    // Level 0 is a candidate when the objective is running, and it
+    // is THE answer when level 0 is the one forced.
+    //
+    // `choose` is false for an affine IFS -- one pays no curvature,
+    // so the deepest handover always wins and there is nothing to
+    // choose. But `force` is not the objective: it is a test asking
+    // for a particular level, and it used to be silently ignored on
+    // exactly those sets. That cost half a day. A gasket asked for
+    // level 0 handed over at level 2 and a dragon at level 4, each
+    // four times the basis and sixteen times the pixel area, which is
+    // precisely the gap §5n traced the shader's measure walk to.
+    let mut best = if force.map_or(choose, |l| l == 0) {
         Some((0u32, live.clone(), bases.clone(), quads.clone(), dead_min))
     } else {
         None
@@ -1336,7 +1347,13 @@ fn seed_beam_inner<P: SeedPoint>(
         quads = order.iter().map(|&i| next_quads[i]).collect();
         level += 1;
 
-        if choose {
+        if let Some(want) = force {
+            // A forced walk wants the level and not the objective, so
+            // it does not pay for the probe continuations either.
+            if level == want {
+                best = Some((level, live.clone(), bases.clone(), quads.clone(), dead_min));
+            }
+        } else if choose {
             // What handing over HERE costs, measured rather than
             // modelled.
             //
@@ -1392,12 +1409,8 @@ fn seed_beam_inner<P: SeedPoint>(
             // The measurement cannot resolve below its own f64 noise,
             // so it does not get to claim it did (R2).
             let err = curv.max(f64_floor(&live)) + f32_pixels(&bases, &live);
-            let take = match force {
-                Some(want) => level == want,
-                None => err < best_error,
-            };
-            if take {
-                best_error = if force.is_some() { f64::NEG_INFINITY } else { err };
+            if err < best_error {
+                best_error = err;
                 best = Some((level, live.clone(), bases.clone(), quads.clone(), dead_min));
             }
             // Nothing deeper can win once the curvature term ALONE
