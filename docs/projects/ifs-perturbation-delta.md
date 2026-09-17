@@ -121,6 +121,101 @@ opened.
   invisible at 96. The direct reference is still f64, so still
   2^28; §3's gates go past it by a different route (G6).
 
+## 2a. What the repairs found, 2026-09-17
+
+R1 to R5 done. The headline is that **§17a was too hard on the f32
+model**, and the reason is instructive.
+
+**R1: the GPU says the model is roughly right.**
+`probe_what_the_f32_term_costs_on_the_gpu` renders the reported grand
+julian at 1920x1080, reads the walk's own distance back out of the
+recolor cache (`IfsRecord.distance`, which `read_results_full`
+already exposes), and compares it against `estimate_seeded` in f64
+from the same seeds. That difference is the handover's rounding PLUS
+the shader's f32 arithmetic, which is the whole of what the term
+models.
+
+The control row is what makes it readable: at 2^4 the disagreement is
+0.000 to 0.003 pixels, so the shader's walk and `estimate_seeded`'s
+are the same walk and everything deeper is f32.
+
+| target, zoom | level | model | rounding only | GPU max |
+|---|---|---|---|---|
+| 0, 2^26 | 4 | 3.50 px | 0.15 px | 1.02 px |
+| 1, 2^30 | 8 | 0.36 px | 0.09 px | 0.55 px |
+| 2, 2^26 | 3 | 0.24 px | 0.11 px | 0.72 px |
+| 3, 2^30 | 7 | 43.1 px | 0.02 px | 0.93 px |
+
+Over twenty deep rows the model is within 2.5x of the GPU either way
+in eighteen, and **below** it in seven of them. §17a's "3x to 800x
+above the measurement and below it nowhere" was true of the
+ROUNDING-ONLY measurement, which understates by one to two orders
+because it prices the handover and not the arithmetic after it. Said
+against the GPU, the model is a fair proxy. It stays.
+
+**The two rows where it is 50x pessimistic are the same lesson
+again.** Target 3 at 2^26 and 2^30 model 2.69 and 43.1 pixels where
+the GPU measures 0.05 and 0.93. In both a lineage whose view has
+COLLAPSED prices the level, and the answer is a MINIMUM over
+lineages, so a seed that never wins should not set the price.
+
+Tried: restrict the term to the seeds whose address answered one of
+the five probes. It is WORSE, and by a lot -- eight rows worse, two
+better, ten unchanged:
+
+| target, zoom | GPU max, max over all | GPU max, winners only |
+|---|---|---|
+| 0, 2^30 | 0.010 px | 0.424 px |
+| 1, 2^26 | 0.037 px | 2.067 px |
+| 2, 2^30 | 0.058 px | 2.562 px |
+| 3, 2^20 | 0.272 px | 6.423 px |
+
+Five probes are far too sparse a sample of "who wins": the 1296-pixel
+GPU sample finds the dropped seed winning somewhere the probes did
+not look. That is retirement (§16) and per-seed levels (§17) for a
+third time, and the asymmetry decides it -- over-pricing a seed costs
+a suboptimal level, under-pricing costs a wrong picture at pixels
+nobody sampled. **The max over ALL seeds is the conservative choice
+and it stays.** Reverted.
+
+**R2: the objective's own floor.** Its reference is the level-0
+handover continued in f64, so a distance it reports carries a
+relative error of `F64_ULP`, which in pixels is `|q|·2.22e-16/px`.
+At 1080p on this set that is 0.0065 pixels at 2^36, 0.1 at 2^40 and
+**10 at 2^46** -- so §16's 2^46 row measured rounding noise, and past
+about 2^40 the walk chose levels on a number that had stopped meaning
+anything. The repair is `curv.max(floor)`: a measurement may not
+claim an error finer than it can resolve. The floor scales as `1/px`
+like both other terms, so resolution-independence survives it, which
+is now gated.
+
+**R3: both keys.** `view_agrees` tested `r` where an all-inversion
+set sorts by `σ·r`. Now both, when the key is weighted. Still not
+sound -- σ varies across the view and this scales the reach by the
+centre's σ alone -- and measured a no-op on all 42 rows, so it is
+here for agreement with the sort rather than for a bug it fixed.
+
+**R4:** `spent`, `next_cost`, `curvature_pixels` and the
+singular-distance evaluation that fed them, all dead since §16
+removed the early exit. Gone; the derivation stays as a comment
+because it is still the right way to think about where the error
+comes from.
+
+**R5:** `the_handover_does_not_depend_on_the_resolution` now runs the
+grand julian beside the rabbit at 96, 1080 and 2160 pixels over
+fourteen zooms. The rabbit's objective is smooth, so an argmin could
+hold there by being flat; an inversion set's swings by orders between
+adjacent levels. The magnitude bars (f32 and curvature each under a
+pixel) stay on the bounded arm, because on an inversion set they are
+false and §16 measured them so -- what is claimed on both is the
+INDEPENDENCE, which is what the cap broke.
+
+**Nothing moved.** All 42 rows of `probe_where_a_grand_julian_caps`
+choose the same level as before, the 1212 unit tests pass, the
+release check passes, and the eleven shipped mode-D presets are
+byte-identical to `output/ifs-before3/`. These are repairs to what
+the walk KNOWS, not to what it does.
+
 ## 3. The idea: the delta at every level
 
 Mandelbrot perturbation stores the reference orbit `Z_n`, carries a
@@ -364,9 +459,11 @@ The risks, ranked:
 
 The cheap and the decisive first. Each item names its plan.
 
-1. **R1 to R5** (here, §2): the GPU measurement of the f32 term, the
-   ceiling declared, both keys, dead code, gates at 1080p. A day,
-   and R1 may move the grand julian's cap on its own.
+1. ~~**R1 to R5**~~ -- done 2026-09-17, §2a. R1 did not move the
+   cap: the model it was auditing turned out to be a fair proxy
+   against the GPU, and the refinement it suggested measured worse.
+   The ceiling, both keys, the dead code and the widened gate all
+   landed and changed no chosen level.
 2. **The measure at shallow zoom**
    ([ifs-measure-by-inverse-walk.md](ifs-measure-by-inverse-walk.md)
    §5 items 1 to 3): the coarse pass, the lookup colouring, the

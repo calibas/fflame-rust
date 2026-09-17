@@ -5900,6 +5900,273 @@ mod gpu_tests {
     /// on a spherical IFS and on a bubble IFS, by the gasket's test.
     /// The view is framed on each set's ball rather than the harness
     /// default, which was chosen for the gasket.
+    /// R1 of [`ifs-perturbation-delta.md`] §2: what the objective's
+    /// f32 term is actually worth, measured on the GPU.
+    ///
+    /// `seed_beam` chooses where to hand over by minimising a MEASURED
+    /// curvature plus a MODELLED f32 cost,
+    /// `|q|·2⁻²⁴ / (px · reach_L/reach_0)`. The model was never
+    /// checked against anything. `probe_where_a_grand_julian_caps`
+    /// checked it against the handover's own ROUNDING -- position,
+    /// basis and quadratic to f32, continued in f64 -- and found the
+    /// model 3x to 800x above it over 42 rows. But that measurement
+    /// prices the rounding at the handover and NOT the f32 arithmetic
+    /// of every step after it, which the shader does and f64 does
+    /// not, so the truth sits between the two and only the GPU says
+    /// where.
+    ///
+    /// This is that measurement: render at the resolution the model
+    /// is quoted at, read the walk's own distance back out of the
+    /// recolor cache, and compare it against `estimate_seeded` in f64
+    /// from the same seeds. The difference is the rounding plus the
+    /// arithmetic, which is the whole of what the term models.
+    ///
+    /// **The 2^4 row is the control and the point.** At a shallow
+    /// zoom the model is nothing and any disagreement is the shader's
+    /// walk differing from `estimate_seeded`'s -- the floor this
+    /// measurement cannot see past. A deep row is only evidence to
+    /// the extent it rises above that floor.
+    #[test]
+    #[ignore = "needs a GPU; run with --ignored --nocapture"]
+    fn probe_what_the_f32_term_costs_on_the_gpu() {
+        use crate::scene::transforms::{Flame, Transform};
+        // 1080p, because that is the resolution the model's table is
+        // quoted at and the term scales with it.
+        const RW: u32 = 1920;
+        const RH: u32 = 1080;
+        const LEVELS: u32 = 80;
+        const BEAM: u32 = 5;
+
+        let j = |aff: [f32; 6], w: f32, power: f32| {
+            let mut t = Transform::default();
+            let [a, b, c, d, e, f] = aff;
+            t.a = a;
+            t.b = b;
+            t.c = c;
+            t.d = d;
+            t.e = e;
+            t.f = f;
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("flatten", 1.0);
+            t.set_variation("julian", w);
+            t.set_variation_param("julian", "power", power);
+            t.set_variation_param("julian", "dist", -1.0);
+            t
+        };
+        let sq = [0.7071f32, 0.7071, -0.7071, 0.7071, 0.0, 0.0];
+        let mut flame = Flame::default();
+        flame.transforms = vec![
+            j([0.7071, 0.7071, -0.7071, 0.7071, 0.0, -0.3], 1.0, 2.0),
+            j(sq, 0.2, 15.0),
+            j(sq, 0.3, 8.0),
+        ];
+        let registry = crate::variations::global_registry();
+        let ifs = crate::scene::ifs_analysis::analyse_2d(&flame, &registry).expect("qualifies");
+        drop(registry);
+
+        // Targets on the attractor, by a forward chaos walk with a
+        // deterministic branch choice -- self-contained, so this does
+        // not depend on another module's test fixture.
+        let mut state: u64 = 0x2545_F491_4F6C_DD1D;
+        let mut next = || {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (state >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let mut p = ifs.ball.centre;
+        let mut targets: Vec<[f64; 2]> = Vec::new();
+        for i in 0..3000 {
+            let m = &ifs.maps[(next() * ifs.maps.len() as f64).floor() as usize % ifs.maps.len()];
+            let k = match m.forward.nonlinear().map(|n| n.kernel) {
+                Some(crate::scene::ifs_analysis::Kernel::Root { n, .. }) => {
+                    (next() * n.unsigned_abs() as f64).floor() as u32
+                }
+                _ => 0,
+            };
+            p = match &m.forward {
+                crate::scene::ifs_analysis::Map2::Nonlinear(n) => n.apply_branch(p, k),
+                other => other.apply(p),
+            };
+            if i > 500 && i % 700 == 0 && p[0].is_finite() && p[1].is_finite() {
+                targets.push(p);
+            }
+        }
+        assert!(targets.len() >= 3, "no targets found");
+
+        let (device, queue) = device();
+        let base = crate::config::FractalConfig::default();
+        let pal = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            64,
+            64,
+            &base.flame,
+            base.palette_size,
+        );
+
+        println!(
+            "  {:>6} {:>7} | {:>5} {:>12} {:>12} | {:>10} {:>10} {:>10}",
+            "target", "zoom", "L", "f32 model", "f32 round", "gpu med", "gpu p90", "gpu max"
+        );
+        for (t, &target) in targets.iter().enumerate() {
+            for &zoom in &[4.0f64, 20.0, 26.0, 30.0, 33.0, 36.0] {
+                let mut config = crate::config::FractalConfig::default();
+                config.render_mode = RenderMode::Escape;
+                config.flame = flame.clone();
+                config.escape.formula = "ifs_flame".to_string();
+                config.escape.coloring = "ifs_distance".to_string();
+                config.escape.center_re = format!("{:?}", target[0]);
+                config.escape.center_im = format!("{:?}", target[1]);
+                config.escape.zoom_log2 = zoom;
+                config.escape.rotation = 0.0;
+                config.escape.supersample = 1;
+                config.escape.formula_params.insert("levels".to_string(), LEVELS as f32);
+                config.escape.formula_params.insert("beam".to_string(), BEAM as f32);
+                let esc = config.escape.clone();
+
+                // The seeds the renderer will build, built here too.
+                let span_y = 4.0 / 2f64.powf(zoom);
+                let span_x = span_y * RW as f64 / RH as f64;
+                let basis = view_basis(span_x, span_y, 0.0);
+                let px = span_y / RH as f64;
+                let centre = centre_at_precision(&esc).expect("centre parses");
+                let seeds = crate::scene::ifs_estimate::seed_beam(
+                    &ifs,
+                    centre,
+                    basis,
+                    px,
+                    zoom as u32 + 64,
+                    BEAM,
+                );
+
+                let mut escape = crate::escape::EscapeRenderer::new(&device, RW, RH);
+                // The flame itself. Mode D reads it as an IFS through
+                // `pack_for`, and without this the renderer has no
+                // flame and every pixel reads the empty sentinel.
+                let def = get_ifs(&config.escape.formula).expect("ifs_flame");
+                let reg = crate::variations::global_registry();
+                let packed = pack_for(def, &config, &reg);
+                drop(reg);
+                assert!(packed.is_some(), "the flame does not qualify");
+                escape.set_ifs(packed);
+                let mut guard = 0;
+                loop {
+                    let mut enc = device.create_command_encoder(
+                        &wgpu::CommandEncoderDescriptor { label: Some("r1") },
+                    );
+                    let done = escape.render(
+                        &device,
+                        &queue,
+                        &mut enc,
+                        &esc,
+                        pal.palette_view(),
+                        pal.palette_generation(),
+                    );
+                    queue.submit(std::iter::once(enc.finish()));
+                    let _ = device
+                        .poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                    if done {
+                        break;
+                    }
+                    guard += 1;
+                    assert!(guard < 10_000, "render never settled");
+                }
+                let recs = escape.read_results_full(&device, &queue).expect("records");
+                escape.destroy();
+
+                // The two CPU numbers the model is being judged
+                // against. `basis_reach` is private to the estimator,
+                // so the corner of the unit square, transcribed.
+                let reach = |b: [[f64; 2]; 2]| -> f64 {
+                    let x = (b[0][0].abs() + b[0][1].abs()) * 0.5;
+                    let y = (b[1][0].abs() + b[1][1].abs()) * 0.5;
+                    (x * x + y * y).sqrt()
+                };
+                let reach0 = reach(basis);
+                let model = seeds
+                    .cands
+                    .iter()
+                    .map(|c| {
+                        let grown = reach(c.basis) / reach0;
+                        if !(grown > 0.0) {
+                            return f64::INFINITY;
+                        }
+                        let mag = c.position[0].hypot(c.position[1]).max(ifs.ball.radius);
+                        mag * 5.96e-8 / (px * grown)
+                    })
+                    .fold(0.0, f64::max);
+                let rounded = crate::scene::ifs_estimate::Seeds {
+                    level: seeds.level,
+                    dead_min_per_px: seeds.dead_min_per_px,
+                    cands: seeds
+                        .cands
+                        .iter()
+                        .map(|c| {
+                            let r = |x: f64| x as f32 as f64;
+                            let mut c = c.clone();
+                            c.position = [r(c.position[0]), r(c.position[1])];
+                            c.basis = [
+                                [r(c.basis[0][0]), r(c.basis[0][1])],
+                                [r(c.basis[1][0]), r(c.basis[1][1])],
+                            ];
+                            c.quad = [
+                                [r(c.quad[0][0]), r(c.quad[0][1])],
+                                [r(c.quad[1][0]), r(c.quad[1][1])],
+                                [r(c.quad[2][0]), r(c.quad[2][1])],
+                            ];
+                            c
+                        })
+                        .collect(),
+                };
+
+                let after = LEVELS.saturating_sub(seeds.level).max(1);
+                let mut round_err = 0.0f64;
+                let mut gpu_err: Vec<f64> = Vec::new();
+                // A sparse grid: the CPU continuation is the cost
+                // here, not the render.
+                for gy in 0..27u32 {
+                    for gx in 0..48u32 {
+                        let x = gx * (RW / 48) + RW / 96;
+                        let y = gy * (RH / 27) + RH / 54;
+                        let uv = [
+                            (x as f64 + 0.5) / RW as f64 - 0.5,
+                            (y as f64 + 0.5) / RH as f64 - 0.5,
+                        ];
+                        let a = crate::scene::ifs_estimate::estimate_seeded(
+                            &ifs, &seeds, uv, after, BEAM,
+                        )
+                        .distance;
+                        let b = crate::scene::ifs_estimate::estimate_seeded(
+                            &ifs, &rounded, uv, after, BEAM,
+                        )
+                        .distance;
+                        round_err = round_err.max((a - b).abs());
+                        let g = recs[(y * RW + x) as usize].z[0] as f64;
+                        if a.is_finite() && g.is_finite() {
+                            gpu_err.push((a - g).abs());
+                        }
+                    }
+                }
+                gpu_err.sort_by(f64::total_cmp);
+                let at = |q: f64| -> f64 {
+                    if gpu_err.is_empty() {
+                        return f64::NAN;
+                    }
+                    gpu_err[((gpu_err.len() - 1) as f64 * q).round() as usize]
+                };
+                println!(
+                    "  {t:>6} 2^{zoom:<5.0} | {:>5} {model:>12.3} {round_err:>12.3} | \
+                     {:>10.3} {:>10.3} {:>10.3}",
+                    seeds.level,
+                    at(0.5),
+                    at(0.9),
+                    at(1.0)
+                );
+            }
+        }
+    }
+
     /// The reported view (`grand-julian-glitches3.fflame`), GPU
     /// against CPU, pixel by pixel.
     ///
