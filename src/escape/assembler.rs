@@ -4421,6 +4421,12 @@ struct IfsMapGpu {
     kind: f32,
     branch: f32,
     params: vec4<f32>,
+    // What the MEASURE walk needs and nothing else reads:
+    // (probability, colour speed, spare, spare). A whole vec4 because
+    // std430 rounds the struct's stride to its largest member's
+    // alignment -- at 88 bytes this would stride 96 here and 88 in
+    // Rust, and every row after the first would be misread.
+    measure: vec4<f32>,
 }
 
 @group(1) @binding(0) var<storage, read> ifs_maps: array<IfsMapGpu>;
