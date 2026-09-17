@@ -130,9 +130,12 @@ ball's centre the distance walk ranks by (D3).
   Its output binds to the mode-D pass as a texture in group 1
   beside `ifs_maps`, both channels: the hit count and the mean
   colour.
-- **D2. The stop is per lineage, at coarse resolution.** A lineage
-  walks until `|det J_{S_a⁻¹}| · px²` reaches the coarse pixel's
-  area, or it escapes, or it reads zero. Lineages expand at
+- **D2. The stop is per lineage, at SIXTEEN coarse cells** (§5c,
+  measured; it was one cell and one cell is wrong). A lineage walks
+  until `|det J_{S_a⁻¹}| · px²` reaches sixteen times the coarse
+  pixel's area, or it escapes, or it reads zero. At one cell neither
+  lookup integrates anything and the estimator reads 0.24 to 0.89 of
+  the truth; at sixteen it is within 2.6% on every fixture. Lineages expand at
   different rates; on an inversion set some contract and never get
   there -- those read the coarse pixel containing their endpoint,
   which averages the density over a region larger than their true
@@ -361,6 +364,64 @@ comparable pixels -- so its evidence is the weakest here.
 Until then the point lookup stays the baseline, and §5a's statement
 of the limitation stands unchanged.
 
+## 5c. The stop rule was the bug, 2026-09-17
+
+§5b's suspicion was that with the region at about ONE coarse cell
+neither estimator integrates anything, and the fix would be to stop
+deeper. Tested by sweeping the stop rule -- how many coarse cells the
+preimage region may reach before the lookup -- with the beam held at
+16 so nothing else varies. **The suspicion was right, and the
+correction is large.**
+
+Median ratio to the direct chaos game, footprint lookup:
+
+| set, zoom | 1 cell | 4 cells | 16 cells |
+|---|---|---|---|
+| gasket equal, 2^4 | 0.893 | 1.025 | **1.000** |
+| gasket equal, 2^6 | 0.879 | 0.947 | **0.987** |
+| gasket 6:1:1, 2^4 | 0.506 | 1.007 | **1.006** |
+| gasket 6:1:1, 2^6 | 0.741 | 1.059 | **0.977** |
+| dragon, 2^4 | 0.985 | 0.995 | **1.000** |
+| fat gasket, 2^4 | 0.984 | 0.988 | **0.996** |
+| overlapping band, 2^4 | 0.666 | 0.857 | **0.974** |
+
+Seven fixtures and zooms, every one within 2.6% of unity at sixteen
+cells, spreads 1.03x to 1.26x. The 6:1:1 gasket -- the pathological
+case that read 0.237 with a spread of 37x in §5a -- reads 1.006 with
+a spread of 1.26x. **The estimator works.**
+
+**And the point lookup fails the same test, which is the
+confirmation.** Reading one cell for a region spanning many gets
+worse as the region grows, monotonically and by a lot: the band at
+2^4 reads 1.019, 2.083, 4.250, 7.537 as the stop goes 1, 4, 16, 64
+cells. A hypothesis that only explained the footprint's improvement
+would be a story; this is the same mechanism predicting a
+degradation, and the degradation is there.
+
+**Two conditions the measurement puts on the design.**
+
+*The quadrature must scale with the region.* At 64 cells with 16
+samples the footprint degrades again (gasket 6:1:1 reads 2.139);
+with 64 samples it recovers to 0.987. The rule is roughly one sample
+per cell, so sixteen cells wants sixteen or more. Sixty-four texture
+reads per address is too many for the shader, and the standard
+answer is the one §5a listed and this now selects: **a mip chain
+over the coarse pass, read at the region's scale**, which is one
+filtered fetch for the same integral. D1 gains that.
+
+*A deeper stop needs a wider beam on an overlapping set.* The band at
+2^6 goes the wrong way -- 0.696, 0.742, 0.509, 0.297 -- because a
+deeper stop means more addresses and a beam of 16 truncates more of
+them. §5b measured the truncation at a fixed stop; this says the two
+interact, and that D3's Monte Carlo is wanted exactly where D2 wants
+depth. Every other fixture is unaffected, so this is the band's
+shape of set rather than overlap as such.
+
+**Settled, then:** footprint lookup, stop at about sixteen coarse
+cells, quadrature matched to the region (a mip in the shader), beam
+wide enough for the set. The point lookup of §5a and §5b is
+withdrawn as the baseline.
+
 **What this still does not say.** Nothing about colour, units, or a
 nonlinear or inversion set -- every fixture is affine. Those are §5
 items 3 and after.
@@ -400,7 +461,8 @@ items 3 and after.
 | the beam sum's bias on overlapping flames is large | dark where the flame is bright | G1 measures it per beam; D3's Monte Carlo is the answer if so |
 | brightness at depth reads wrong to a user calibrated on the chaos game | "it doesn't look like my flame" at depth | D4 says which normalisation is on and offers the other; the shallow case is pinned by G4 |
 | the coarse pass at 2048² is too coarse for a set with fine density structure | intra-pixel bias in the lookup, blur at depth | G7 measures agreement against resolution; a resolution parameter beside Extent |
-| **the single-cell lookup on a fractal measure** (§5a, measured) | medians off by tens of per cent on the gasket, individual pixels by orders | not resolution: the mismatch is scale-free. Footprint integration was tried (§5b) and trades bias for variance; the open candidate is a deeper stop rule |
+| ~~the single-cell lookup on a fractal measure~~ | ~~medians off by tens of per cent~~ | **Solved, §5c**: footprint lookup with the stop at sixteen cells reads within 2.6% on every fixture. The residue is the quadrature's cost, which a mip chain answers |
+| a deeper stop needs a wider beam where many addresses carry weight (§5c) | the overlapping band reads 0.30 at 2^6 with beam 16 | D3's Monte Carlo, wanted exactly where D2 wants depth; every other fixture is unaffected |
 | the determinant along a contracting lineage underflows f32 | a lineage weighted zero that should count | the same scaled-float care the delta walk takes with σ; carry `log det` |
 
 ## 8. Deliberately not here
