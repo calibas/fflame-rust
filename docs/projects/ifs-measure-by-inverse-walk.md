@@ -224,11 +224,12 @@ ball's centre the distance walk ranks by (D3).
    endpoint, as a check that the binding, the extent and the
    coordinates agree. No estimator yet. **The lookup's filtering is
    now part of this item, not a refinement of it** (§5a).
-2. **The beam sum at shallow zoom.** The measure walk on the CPU
-   (`estimate_measure`, the reference), then in the shader:
-   probability, determinant, stop rule, sum. G1 at 2^2 to 2^6. The
-   beam's truncation is measured against §5a's enumeration, which
-   separates it from the formula.
+2. ~~**The beam's truncation**~~ -- measured 2026-09-17, §5b:
+   free on every set tested but the overlapping band, where beam 8
+   loses 12% and beam 2 loses 70%. The shipped beam of eight is
+   enough. What remains of this item is the SHADER half: probability,
+   determinant, stop rule and sum in WGSL, against the CPU
+   enumeration as its reference.
 3. **Colour and units.** D4 and D5; G2 and G4.
 4. **Monte Carlo** (D3), if G1 shows the beam sum's bias on the
    overlap fixtures.
@@ -300,10 +301,69 @@ the coarse pass covers the whole ball and the view is inside it, but
 it invalidated a third of this probe's own rows and it is marked in
 the output now.
 
-**What this does not yet say.** Nothing about the beam (the
-estimator enumerated), nothing about colour, nothing about units,
-nothing about a nonlinear or inversion set -- the three fixtures are
-affine. Those are §5 items 2 to 4 and they are next.
+## 5b. The beam is cheap, the lookup is not solved, 2026-09-17
+
+Same probe, extended: the enumeration of §5a is now the reference a
+truncated beam is measured against, which is what separates the
+formula from the truncation. Two overlapping fixtures joined the
+three affine ones.
+
+**The beam costs nothing on a non-overlapping set, and D3 is right
+about where it costs.** Ratios to the direct chaos game, median:
+
+| set | enumerate | beam 8 | beam 2 |
+|---|---|---|---|
+| gasket, equal, 2^6 | 0.879 | 0.879 | 0.879 |
+| gasket, 6:1:1, 2^4 | 0.506 | 0.506 | 0.506 |
+| dragon, 2^4 | 0.985 | 0.985 | 0.985 |
+| fat gasket, 2^4 | 0.984 | 0.984 | 0.984 |
+| **overlapping band, 2^6** | **0.722** | **0.638** | **0.204** |
+
+Identical to three decimals everywhere except the band, where many
+addresses cover one pixel and a truncated SUM is biased dark exactly
+as D3 predicted -- beam 8 loses twelve per cent and beam 2 loses
+seventy. The fat gasket, whose pieces also overlap, loses nothing,
+so the cost is not "overlap" but how MANY addresses carry real
+weight. A beam of eight is the shipped default and is enough on
+everything tested; D3's Monte Carlo is for the band's shape of set,
+and now has a number to beat.
+
+**The footprint lookup is not the repair §5a hoped for.** Reading ρ
+over the preimage of the WHOLE pixel -- the composed Jacobian maps
+the pixel square to that region, so it is available for nothing --
+instead of at its centre:
+
+| set, zoom | point median / spread | footprint median / spread |
+|---|---|---|
+| gasket 6:1:1, 2^4 | 0.237 / **36.9x** | 0.506 / **3.4x** |
+| gasket equal, 2^6 | 1.053 / 1.65x | 0.879 / 1.28x |
+| dragon, 2^4 | 0.995 / 1.22x | 0.985 / 1.16x |
+| overlapping band, 2^4 | **1.019** / 1.01x | **0.654** / 1.13x |
+
+It trades bias for variance and neither wins outright. On the
+pathological 6:1:1 gasket it cuts the spread elevenfold, which is
+the difference between a usable picture and a speckled one. On the
+band it reads a third low where the point lookup is within two per
+cent. **The bias is structural, not quadrature**: sixteen samples
+and a hundred and forty-four give 0.668 and 0.654.
+
+Why is not settled. The suspicion is that with the stop rule putting
+the region at about ONE coarse cell, neither estimator is really
+integrating anything -- the point lookup reads one cell and the
+footprint reads a handful of neighbours, and at that scale the cell
+grid is too coarse for either to be the measure of the region. If
+that is right the fix is to stop DEEPER, with the region spanning
+many cells so the average is a real integral, at the cost of more
+addresses. That is a change to D2's stop rule and it is the next
+thing to measure. The band fixture is also thin -- sixty-four
+comparable pixels -- so its evidence is the weakest here.
+
+Until then the point lookup stays the baseline, and §5a's statement
+of the limitation stands unchanged.
+
+**What this still does not say.** Nothing about colour, units, or a
+nonlinear or inversion set -- every fixture is affine. Those are §5
+items 3 and after.
 
 ## 6. Gates
 
@@ -340,7 +400,7 @@ affine. Those are §5 items 2 to 4 and they are next.
 | the beam sum's bias on overlapping flames is large | dark where the flame is bright | G1 measures it per beam; D3's Monte Carlo is the answer if so |
 | brightness at depth reads wrong to a user calibrated on the chaos game | "it doesn't look like my flame" at depth | D4 says which normalisation is on and offers the other; the shallow case is pinned by G4 |
 | the coarse pass at 2048² is too coarse for a set with fine density structure | intra-pixel bias in the lookup, blur at depth | G7 measures agreement against resolution; a resolution parameter beside Extent |
-| **the single-cell lookup on a fractal measure** (§5a, measured) | medians off by tens of per cent on the gasket, individual pixels by orders | not resolution: the mismatch is scale-free. Filtering or footprint integration, chosen in item 1 |
+| **the single-cell lookup on a fractal measure** (§5a, measured) | medians off by tens of per cent on the gasket, individual pixels by orders | not resolution: the mismatch is scale-free. Footprint integration was tried (§5b) and trades bias for variance; the open candidate is a deeper stop rule |
 | the determinant along a contracting lineage underflows f32 | a lineage weighted zero that should count | the same scaled-float care the delta walk takes with σ; carry `log det` |
 
 ## 8. Deliberately not here
