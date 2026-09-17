@@ -454,11 +454,18 @@ fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
         let d = ifs_seed(j, 2u);
         let e = ifs_seed(j, 3u);
         var cand: IfsCand;
-        // position + basis * uv, the basis already composed with the
-        // view so this one multiply is the whole delta.
+        // position + basis * uv + Q(uv). The basis is already composed
+        // with the view, and Q is the second-order part a nonlinear
+        // inverse would otherwise drop -- zero on an affine walk, so
+        // an affine delta stays the exact thing it has always been.
+        let f = ifs_seed(j, 4u);
+        let g = ifs_seed(j, 5u);
+        let uu = uv.x * uv.x;
+        let uvv = uv.x * uv.y;
+        let vv = uv.y * uv.y;
         cand.q = vec2<f32>(
-            a.x + a.z * uv.x + a.w * uv.y,
-            a.y + b.x * uv.x + b.y * uv.y,
+            a.x + a.z * uv.x + a.w * uv.y + f.x * uu + f.z * uvv + g.x * vv,
+            a.y + b.x * uv.x + b.y * uv.y + f.y * uu + f.w * uvv + g.y * vv,
         );
         cand.sigma = b.z;
         cand.bound = b.w;
@@ -2264,7 +2271,7 @@ pub fn pack_flame(
 }
 
 /// How many `vec4`s of the params' `fdata` block one seed occupies.
-pub const SEED_VEC4S: usize = 4;
+pub const SEED_VEC4S: usize = 6;
 /// Where the seeds start in `fdata`; the whole-IFS constants are below.
 pub const SEED_BASE: usize = 4;
 /// The widest beam a seeded walk can hand over, bounded by `fdata`.
@@ -2281,6 +2288,14 @@ pub const MAX_SEEDS: usize = (64 - SEED_BASE) / SEED_VEC4S;
 /// 1. `basis[1][0]`, `basis[1][1]`, `sigma_per_px`, `bound_per_px`
 /// 2. `address fraction`, `last_sigma`, `escape level` (−1 = none), `flags`
 /// 3. `escape point.xy`, `transform colour`, unused
+/// 4. `quad[0].xy`, `quad[1].xy` — the delta's quadratic part
+/// 5. `quad[2].xy`, unused, unused
+///
+/// Six `vec4`s rather than four since the quadratic: a nonlinear
+/// inverse drops a second-order term when it carries an offset
+/// through its Jacobian alone, and `Q(uv) = C_uu·u² + C_uv·u·v +
+/// C_vv·v²` is what replaces it. Ten seeds still fit where the beam
+/// allows eight.
 ///
 /// `flags`: bit 0 escaped, bit 1 done.
 pub fn pack_seeds(
@@ -2351,6 +2366,13 @@ pub fn pack_seeds(
             f32::from_bits(flags),
         ];
         out[base + 3] = [esc_point[0], esc_point[1], colour, 0.0];
+        out[base + 4] = [
+            c.quad[0][0] as f32,
+            c.quad[0][1] as f32,
+            c.quad[1][0] as f32,
+            c.quad[1][1] as f32,
+        ];
+        out[base + 5] = [c.quad[2][0] as f32, c.quad[2][1] as f32, 0.0, 0.0];
     }
 }
 
@@ -6782,6 +6804,33 @@ mod gpu_tests {
         println!("  standalone hits {hits_a}, IFS hits {hits_b}, agreement {pct:.1}% of {}", N * N);
         assert!(hits_a > 500 && hits_b > 500, "too few hits to compare ({hits_a} / {hits_b})");
         assert!(pct > 95.0, "the two arithmetics disagree on {:.1}% of pixels", 100.0 - pct);
+    }
+
+    /// The shader's seed stride is `SEED_VEC4S`.
+    ///
+    /// `ifs_seed(j, w)` indexes `fdata` by a stride written into the
+    /// WGSL as a literal, and nothing but this connects it to the
+    /// packer's constant. When the delta gained its quadratic part the
+    /// stride went from four to six on the Rust side and stayed at
+    /// four in the shader, which reads seed 1 onward out of the middle
+    /// of seed 0's words. That is INVISIBLE on a one-seed walk -- the
+    /// nonlinear GPU gate passed at 99.9% -- and cost a Sierpinski,
+    /// which keeps eight, 11% of its view.
+    #[test]
+    fn the_shaders_seed_stride_matches_the_packer() {
+        let src = crate::escape::assembler::IFS_TEMPLATE;
+        let want = format!("params.fdata[4u + {}u * j + w]", super::SEED_VEC4S);
+        assert!(
+            src.contains(&want),
+            "the shader's `ifs_seed` does not stride by SEED_VEC4S ({}); looked for {want:?}",
+            super::SEED_VEC4S
+        );
+        // And the block it indexes into has room for what the packer
+        // may write.
+        assert!(
+            SEED_BASE + super::SEED_VEC4S * super::MAX_SEEDS <= 64,
+            "the seeds do not fit in the 64 vec4s of `fdata`"
+        );
     }
 
     /// Rung 1 at arbitrary precision is the same map as the f64 one.
