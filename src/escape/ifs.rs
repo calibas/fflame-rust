@@ -2016,6 +2016,21 @@ pub struct IfsMapGpu {
     pub branch: f32,
     /// The kernel's parameters: a root's signed power and distance.
     pub params: [f32; 4],
+    /// What the MEASURE walk needs of this map, and nothing else
+    /// reads: `[probability, colour speed, 0, 0]`.
+    ///
+    /// **A whole `vec4`, not the two floats it uses.** The row's
+    /// largest member is a `vec4`, so std430 aligns the struct to 16
+    /// and rounds its stride up; at 88 bytes the shader would stride
+    /// 96 while Rust packed 88, and every row after the first would
+    /// be misread. 80 works today for exactly that reason. The two
+    /// spare slots are the change's own margin.
+    ///
+    /// The probability is a TRANSFORM's, divided by its forward
+    /// branch count for a root and NOT for a bubble --
+    /// [`crate::scene::ifs_estimate::MeasureMaps`] is where that
+    /// lives and where it is explained.
+    pub measure: [f32; 4],
 }
 
 /// The whole-IFS constants, packed into the `fdata` block the escape
@@ -2266,7 +2281,8 @@ pub fn pack_flame(
     };
     let mut globals = [[0.0f32; 4]; 4];
     pack_globals(&ifs, &mut globals);
-    let rows = pack_maps(&ifs, &colors);
+    let measure = crate::scene::ifs_estimate::MeasureMaps::of(&ifs, flame);
+    let rows = pack_maps(&ifs, &colors, Some(&measure));
     Ok(PackedIfs { globals, rows, ifs, colors, solid })
 }
 
@@ -3185,13 +3201,26 @@ pub fn formula_is_solid(name: &str) -> bool {
 
 /// The per-map rows of the storage buffer, in the flame's transform
 /// order — so a branch index in the address IS a transform index.
-pub fn pack_maps(ifs: &Ifs2, colors: &[f32]) -> Vec<IfsMapGpu> {
+pub fn pack_maps(
+    ifs: &Ifs2,
+    colors: &[f32],
+    measure: Option<&crate::scene::ifs_estimate::MeasureMaps>,
+) -> Vec<IfsMapGpu> {
     let m4 = |a: &Affine2| [a.m[0][0] as f32, a.m[0][1] as f32, a.m[1][0] as f32, a.m[1][1] as f32];
     let t2 = |a: &Affine2| [a.t[0] as f32, a.t[1] as f32];
     ifs.maps
         .iter()
-        .map(|m| {
+        .enumerate()
+        .map(|(i, m)| {
             let color = colors.get(m.transform_index).copied().unwrap_or(0.0);
+            let meas = measure.map_or([0.0f32; 4], |mm| {
+                [
+                    mm.prob.get(i).copied().unwrap_or(0.0) as f32,
+                    mm.colour.get(i).map_or(0.0, |c| c.1) as f32,
+                    0.0,
+                    0.0,
+                ]
+            });
             match m.inverse {
                 Map2::Affine(inv) => IfsMapGpu {
                     inv_m: m4(&inv),
@@ -3203,6 +3232,7 @@ pub fn pack_maps(ifs: &Ifs2, colors: &[f32]) -> Vec<IfsMapGpu> {
                     kind: 0.0,
                     branch: 0.0,
                     params: [0.0; 4],
+                    measure: meas,
                 },
                 Map2::NonlinearInverse(r) | Map2::Nonlinear(r) => {
                     // post⁻¹ with the 1/w folded in: the shader's first
@@ -3242,6 +3272,7 @@ pub fn pack_maps(ifs: &Ifs2, colors: &[f32]) -> Vec<IfsMapGpu> {
                         kind,
                         branch: r.branch as f32,
                         params,
+                        measure: meas,
                     }
                 }
             }
@@ -4022,7 +4053,7 @@ mod tests {
         let colors = vec![0.1f32, 0.4, 0.7];
         let mut packed = PackedIfs {
             globals: [[0.0; 4]; 4],
-            rows: pack_maps(&ifs, &colors),
+            rows: pack_maps(&ifs, &colors, None),
             ifs: ifs.clone(),
             colors,
             solid: None,
@@ -5199,7 +5230,7 @@ mod tests {
     #[test]
     fn packed_inverses_undo_the_forward_maps_in_the_shader_s_layout() {
         let ifs = square();
-        let rows = pack_maps(&ifs, &[0.1, 0.4, 0.7]);
+        let rows = pack_maps(&ifs, &[0.1, 0.4, 0.7], None);
         assert_eq!(rows.len(), 3);
 
         for (row, m) in rows.iter().zip(ifs.maps.iter()) {
@@ -5223,14 +5254,14 @@ mod tests {
     #[test]
     fn packed_rows_carry_sigma_and_the_transform_colour_in_order() {
         let ifs = square();
-        let rows = pack_maps(&ifs, &[0.1, 0.4, 0.7]);
+        let rows = pack_maps(&ifs, &[0.1, 0.4, 0.7], None);
         for r in &rows {
             assert!((r.sigma_min - 0.5).abs() < 1e-6, "sigma {r:?}");
         }
         assert_eq!(rows.iter().map(|r| r.color).collect::<Vec<_>>(), vec![0.1, 0.4, 0.7]);
         // A colour list shorter than the flame (a caller bug) must not
         // panic mid-render.
-        let short = pack_maps(&ifs, &[0.1]);
+        let short = pack_maps(&ifs, &[0.1], None);
         assert_eq!(short[2].color, 0.0);
     }
 
@@ -5360,7 +5391,7 @@ mod tests {
 
     #[test]
     fn the_gpu_row_is_the_layout_the_shader_declares() {
-        assert_eq!(std::mem::size_of::<IfsMapGpu>(), 80);
+        assert_eq!(std::mem::size_of::<IfsMapGpu>(), 96);
         assert_eq!(std::mem::align_of::<IfsMapGpu>(), 4);
         assert_eq!(std::mem::offset_of!(IfsMapGpu, inv_m), 0);
         assert_eq!(std::mem::offset_of!(IfsMapGpu, inv_t), 16);
@@ -5371,6 +5402,12 @@ mod tests {
         assert_eq!(std::mem::offset_of!(IfsMapGpu, kind), 56);
         assert_eq!(std::mem::offset_of!(IfsMapGpu, branch), 60);
         assert_eq!(std::mem::offset_of!(IfsMapGpu, params), 64);
+        assert_eq!(std::mem::offset_of!(IfsMapGpu, measure), 80);
+        // std430 rounds a struct's stride to its largest member's
+        // alignment, and `inv_m` is a vec4. A size that is not a
+        // multiple of 16 strides differently in the shader than in
+        // Rust and misreads every row after the first.
+        assert_eq!(std::mem::size_of::<IfsMapGpu>() % 16, 0);
     }
 }
 
