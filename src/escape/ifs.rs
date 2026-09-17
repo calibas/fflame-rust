@@ -5845,7 +5845,14 @@ mod gpu_tests {
                 "{name}: the prefix did no work, so this is not testing the handover"
             );
 
-            let after = DEEP_LEVELS.saturating_sub(seeds.level).max(1);
+            // `DEEP_LEVELS` steps AFTER the handover, which is what the
+            // shader walks (`for k in 0..max_levels`, with `max_levels`
+            // the `levels` parameter and no handover subtracted) and
+            // what `estimate_seeded` walks. This used to subtract the
+            // handover level, so the two walks ended `level` steps
+            // apart; the binary agreement below could not see it, and
+            // `probe_what_the_f32_term_costs_on_the_gpu` could.
+            let after = DEEP_LEVELS;
             let (mut inside, mut outside) = (Vec::new(), Vec::new());
             for y in 0..H {
                 for x in 0..W {
@@ -5955,12 +5962,23 @@ mod gpu_tests {
             t
         };
         let sq = [0.7071f32, 0.7071, -0.7071, 0.7071, 0.0, 0.0];
-        let mut flame = Flame::default();
-        flame.transforms = vec![
+        let mut gj = Flame::default();
+        gj.transforms = vec![
             j([0.7071, 0.7071, -0.7071, 0.7071, 0.0, -0.3], 1.0, 2.0),
             j(sq, 0.2, 15.0),
             j(sq, 0.3, 8.0),
         ];
+        // Two SEEDED controls beside the set under test: a bounded
+        // julia and an affine gasket, whose handovers are deep and
+        // whose f32 cost is small and known. The 2^4 row's handover
+        // is level 0, so it checks the walk and not the seeded path;
+        // these check the seeded path, depth accounting included.
+        let cases: Vec<(&str, Flame, Vec<f64>, usize)> = vec![
+            ("julia", julia_ifs_flame([-0.4, 0.6]), vec![4.0, 20.0, 28.0], 1),
+            ("sierpinski", sierpinski_flame(), vec![4.0, 20.0, 28.0], 1),
+            ("grand julian", gj, vec![4.0, 20.0, 26.0, 30.0, 33.0, 36.0], 4),
+        ];
+        for (case, flame, zooms, n_targets) in cases {
         let registry = crate::variations::global_registry();
         let ifs = crate::scene::ifs_analysis::analyse_2d(&flame, &registry).expect("qualifies");
         drop(registry);
@@ -5992,6 +6010,7 @@ mod gpu_tests {
             }
         }
         assert!(targets.len() >= 3, "no targets found");
+        targets.truncate(n_targets);
 
         let (device, queue) = device();
         let base = crate::config::FractalConfig::default();
@@ -6005,12 +6024,13 @@ mod gpu_tests {
             base.palette_size,
         );
 
+        println!("{case}:");
         println!(
             "  {:>6} {:>7} | {:>5} {:>12} {:>12} | {:>10} {:>10} {:>10}",
             "target", "zoom", "L", "f32 model", "f32 round", "gpu med", "gpu p90", "gpu max"
         );
         for (t, &target) in targets.iter().enumerate() {
-            for &zoom in &[4.0f64, 20.0, 26.0, 30.0, 33.0, 36.0] {
+            for &zoom in &zooms {
                 let mut config = crate::config::FractalConfig::default();
                 config.render_mode = RenderMode::Escape;
                 config.flame = flame.clone();
@@ -6120,7 +6140,14 @@ mod gpu_tests {
                         .collect(),
                 };
 
-                let after = LEVELS.saturating_sub(seeds.level).max(1);
+                // Both walk `LEVELS` steps from the seeds: the shader's
+                // loop is `0..max_levels` after the handover and does
+                // not subtract the handover level, and neither does
+                // `estimate_seeded`. The first version of this probe
+                // subtracted it, and every deep row compared walks
+                // that ended `level` steps apart -- which the level-0
+                // control could not see.
+                let after = LEVELS;
                 let mut round_err = 0.0f64;
                 let mut gpu_err: Vec<f64> = Vec::new();
                 // A sparse grid: the CPU continuation is the cost
@@ -6164,6 +6191,7 @@ mod gpu_tests {
                     at(1.0)
                 );
             }
+        }
         }
     }
 

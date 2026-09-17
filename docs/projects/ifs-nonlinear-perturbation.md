@@ -884,8 +884,12 @@ below it nowhere.
 **Corrected 2026-09-17.** That verdict is against the ROUNDING, and
 the rounding is not the whole f32 cost. Measured on the GPU
 ([ifs-perturbation-delta.md](ifs-perturbation-delta.md) §2a) the
-model is within 2.5× of the truth in eighteen of twenty deep rows and
-BELOW it in seven, so it is a fair proxy and stays. The paragraph
+model is pessimistic by a factor of a few -- against the GPU's 90th
+percentile it is within 2.5× in seven of twenty deep rows and above
+in thirteen, and below by more than 1.4× nowhere -- so it is a
+usable proxy and stays. (An earlier wording of this note, "within
+2.5× in eighteen and below in seven", was miscounted and counted
+branch flips as model error.) The paragraph
 below anticipated exactly this and it is what happened. The reason is that a position error at level L
 reaches the reported distance through the σ the walk actually
 carries -- a product of per-level LOWER bounds on the forward

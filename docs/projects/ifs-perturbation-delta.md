@@ -135,27 +135,63 @@ from the same seeds. That difference is the handover's rounding PLUS
 the shader's f32 arithmetic, which is the whole of what the term
 models.
 
-The control row is what makes it readable: at 2^4 the disagreement is
-0.000 to 0.003 pixels, so the shader's walk and `estimate_seeded`'s
-are the same walk and everything deeper is f32.
+**Reviewed the same day, and the first version of this section was
+wrong in three ways.** The probe compared walks that ended at
+different depths: the shader walks the `levels` parameter AFTER the
+handover and never subtracts the handover level, and the probe's CPU
+continuation subtracted it -- so every deep row was short by exactly
+`level` steps, and the 2^4 control (handover 0) could not see it.
+Fixed, the grand julian's numbers are unchanged to three decimals,
+so the flaw was real and moved nothing; `the_gpu_agrees_on_a_nonlinear_set_at_depth`
+had the same convention and is fixed with it. The control was also
+too weak for what it was claimed to show -- a level-0 handover checks
+the walk, not the seeded path -- so the probe now runs two SEEDED
+controls beside the set under test. And the counts below were
+counted by eye and miscounted; they are now from a script over the
+saved output.
 
-| target, zoom | level | model | rounding only | GPU max |
-|---|---|---|---|---|
-| 0, 2^26 | 4 | 3.50 px | 0.15 px | 1.02 px |
-| 1, 2^30 | 8 | 0.36 px | 0.09 px | 0.55 px |
-| 2, 2^26 | 3 | 0.24 px | 0.11 px | 0.72 px |
-| 3, 2^30 | 7 | 43.1 px | 0.02 px | 0.93 px |
+The controls: the affine gasket at 2^28 hands over at level 17 and
+the GPU disagrees with f64 by at most 0.027 pixels, model 0.070; the
+julia at 2^20 hands over at level 6 with a median disagreement of
+0.025 pixels and a 90th percentile of 0.110, model 0.119 -- and a
+MAXIMUM of 2.25, which the rounding-only measurement also sees (2.48).
+That maximum is not rounding. It is a pixel near a ranking tie whose
+f32 position falls on the other side of it and follows a different
+lineage to a different, still valid, lower bound. No per-seed model
+prices a branch flip, and none should: the max statistic is dominated
+by them, so the model is judged against the 90th percentile and the
+maximum is reported beside it.
 
-Over twenty deep rows the model is within 2.5x of the GPU either way
-in eighteen, and **below** it in seven of them. §17a's "3x to 800x
-above the measurement and below it nowhere" was true of the
-ROUNDING-ONLY measurement, which understates by one to two orders
-because it prices the handover and not the arithmetic after it. Said
-against the GPU, the model is a fair proxy. It stays.
+| target, zoom | level | model | rounding only | GPU p90 | GPU max |
+|---|---|---|---|---|---|
+| 0, 2^26 | 4 | 3.50 px | 0.15 px | 0.42 px | 1.02 px |
+| 1, 2^30 | 8 | 0.36 px | 0.09 px | 0.16 px | 0.55 px |
+| 2, 2^26 | 3 | 0.24 px | 0.11 px | 0.24 px | 0.72 px |
+| 3, 2^30 | 7 | 43.1 px | 0.02 px | 0.41 px | 0.93 px |
 
-**The two rows where it is 50x pessimistic are the same lesson
+Over twenty deep grand-julian rows, against the 90th percentile the
+model is within 2.5x in seven, more than 2.5x ABOVE in thirteen
+(typically 3.5x to 8x), and below by more than 1.4x nowhere. Against
+the maximum it is within 2.5x in fourteen, above in three and below
+in three, and the three below are flips of half a pixel. So: §17a's
+"3x to 800x above and below nowhere" was against the rounding alone,
+which understates by one to two orders because it prices the handover
+and not the arithmetic after it; against the GPU the model is
+pessimistic by a factor of a few, never optimistic beyond a flip, and
+it is a usable proxy. It stays.
+
+**What R1 did not do.** The plan asked for FORCED levels, so that the
+model's RANKING of levels -- the only thing an argmin uses -- could
+be checked against the GPU's. The renderer builds its own seeds and
+has no hook to force one, so this measured the chosen level only.
+Whether the model orders levels correctly at a given zoom is still
+unmeasured; a test-only field on `EscapeRenderer` that routes
+`ensure_ifs_seeds` through `seed_beam_at` is the twenty lines it
+needs, and it is open.
+
+**The two rows where it is 100x pessimistic are the same lesson
 again.** Target 3 at 2^26 and 2^30 model 2.69 and 43.1 pixels where
-the GPU measures 0.05 and 0.93. In both a lineage whose view has
+the GPU's 90th percentile is 0.017 and 0.41. In both a lineage whose view has
 COLLAPSED prices the level, and the answer is a MINIMUM over
 lineages, so a seed that never wins should not set the price.
 
@@ -459,11 +495,13 @@ The risks, ranked:
 
 The cheap and the decisive first. Each item names its plan.
 
-1. ~~**R1 to R5**~~ -- done 2026-09-17, §2a. R1 did not move the
-   cap: the model it was auditing turned out to be a fair proxy
-   against the GPU, and the refinement it suggested measured worse.
-   The ceiling, both keys, the dead code and the widened gate all
-   landed and changed no chosen level.
+1. ~~**R1 to R5**~~ -- done 2026-09-17, §2a, with R1's forced-level
+   half still open (the ranking of levels is unmeasured; the chosen
+   level is). R1 did not move the cap: the model it was auditing is
+   pessimistic by a factor of a few against the GPU and never
+   optimistic beyond a branch flip, and the refinement it suggested
+   measured worse. The ceiling, both keys, the dead code and the
+   widened gate all landed and changed no chosen level.
 2. **The measure at shallow zoom**
    ([ifs-measure-by-inverse-walk.md](ifs-measure-by-inverse-walk.md)
    §5 items 1 to 3): the coarse pass, the lookup colouring, the
