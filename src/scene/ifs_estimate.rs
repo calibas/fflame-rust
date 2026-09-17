@@ -4635,6 +4635,123 @@ mod tests {
         }
     }
 
+    /// What a PER-SEED handover level would be worth, simulated before
+    /// building one.
+    ///
+    /// The handover picks one level for the whole beam and pays the
+    /// WORST seed's f32 cost -- measured at nine orders of spread
+    /// between seeds of the same level (§16). A per-seed level would
+    /// let each lineage stop where its OWN view is widest and keep
+    /// refining from there, which is the thing retirement was not.
+    ///
+    /// Simulated honestly: pick each surviving lineage's ancestor
+    /// level by that candidate's own f32 cost -- the quantity the
+    /// worst seed poisons -- assemble the mixed set into one handover,
+    /// and measure THAT against the exact one. A first cut ranked each
+    /// lineage by its cost in ISOLATION, which is not its contribution
+    /// to a set: a seed that never wins reads badly alone and costs
+    /// nothing in company.
+    #[test]
+    #[ignore = "a survey; run with --ignored --nocapture"]
+    fn probe_what_per_seed_levels_would_buy() {
+        let ifs = grand_julian([0.7071, 0.7071, -0.7071, 0.7071, 0.0, 0.0]);
+        let smp = chaos_sample(&ifs, 200_000);
+        let targets: Vec<[f64; 2]> = (0..4).map(|k| smp[smp.len() - 1 - k * 31_337]).collect();
+        let probes = [[0.0f64, 0.0], [-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5]];
+        for (t, &target) in targets.iter().enumerate() {
+            println!("target {t}:");
+            println!(
+                "  {:>7} | {:>5} {:>11} | {:>14} {:>11}  {}",
+                "zoom", "L", "today", "levels", "mixed", "gain"
+            );
+            for &zoom in &[20.0f64, 26.0, 30.0, 33.0, 36.0, 40.0] {
+                let span = 4.0 / 2f64.powf(zoom);
+                let view_basis = [[span * 16.0 / 9.0, 0.0], [0.0, -span]];
+                let px = span / 1080.0;
+                let reach0 = basis_reach(view_basis);
+                let budget = zoom as u32 + 64;
+                let beam = 5u32;
+                let exact = seed_beam_at(&ifs, target, view_basis, px, budget, beam, 0);
+                let today = seed_beam(&ifs, target, view_basis, px, budget, beam);
+
+                // The error of a WHOLE handover set against the exact
+                // one, which is the only thing worth comparing.
+                let err_of = |sd: &Seeds| -> f64 {
+                    probes
+                        .iter()
+                        .map(|uv| {
+                            let a = estimate_seeded(&ifs, &exact, *uv, 48 + sd.level, beam)
+                                .distance;
+                            let b = estimate_seeded(&ifs, sd, *uv, 48, beam).distance;
+                            (a - b).abs()
+                        })
+                        .fold(0.0, f64::max)
+                };
+                let f32_of = |c: &Seed| -> f64 {
+                    let grown = basis_reach(c.basis) / reach0;
+                    if !(grown > 0.0) {
+                        return f64::INFINITY;
+                    }
+                    let mag = c.position[0].hypot(c.position[1]).max(ifs.ball.radius);
+                    mag * 5.96e-8 / (px * grown)
+                };
+
+                // Every level the walk reaches, kept whole.
+                let mut per_level: Vec<Seeds> = Vec::new();
+                for l in 0..=40u32 {
+                    let sd = seed_beam_at(&ifs, target, view_basis, px, budget, beam, l);
+                    if sd.level == l {
+                        per_level.push(sd);
+                    }
+                }
+                let Some(deepest) = per_level.last().cloned() else { continue };
+
+                // Each deepest lineage takes the ancestor level where
+                // its OWN view is widest.
+                let mut chosen: Vec<(u32, Seed)> = Vec::new();
+                for c in &deepest.cands {
+                    let mut best: Option<(f64, u32, Seed)> = None;
+                    for sd in &per_level {
+                        for a in &sd.cands {
+                            if !c.address.starts_with(a.address.as_slice()) {
+                                continue;
+                            }
+                            let f = f32_of(a);
+                            if best.as_ref().map_or(true, |(bf, _, _)| f < *bf) {
+                                best = Some((f, sd.level, a.clone()));
+                            }
+                        }
+                    }
+                    if let Some((_, l, a)) = best {
+                        if !chosen.iter().any(|(_, e)| e.address == a.address) {
+                            chosen.push((l, a));
+                        }
+                    }
+                }
+                let mut levels: Vec<u32> = chosen.iter().map(|(l, _)| *l).collect();
+                let mixed = Seeds {
+                    // The escape arithmetic wants one number; the
+                    // deepest is the honest stand-in for a simulation.
+                    level: chosen.iter().map(|(l, _)| *l).max().unwrap_or(0),
+                    cands: chosen.into_iter().map(|(_, c)| c).collect(),
+                    dead_min_per_px: deepest.dead_min_per_px,
+                };
+                let today_err = err_of(&today)
+                    + today.cands.iter().map(&f32_of).fold(0.0, f64::max);
+                let mixed_err =
+                    err_of(&mixed) + mixed.cands.iter().map(&f32_of).fold(0.0, f64::max);
+                levels.sort_unstable();
+                levels.dedup();
+                println!(
+                    "  2^{zoom:<5.0} | {:>5} {today_err:>11.3} | {:>14?} {mixed_err:>11.3}  {:>7.1}x",
+                    today.level,
+                    levels,
+                    if mixed_err > 0.0 { today_err / mixed_err } else { 1.0 }
+                );
+            }
+        }
+    }
+
     /// Greedy is a heuristic, and the dragon is where it shows.
     ///
     /// Every address gives a valid bound on the distance to ITS piece;
