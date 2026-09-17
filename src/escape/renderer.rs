@@ -196,6 +196,21 @@ pub const IFS_SOLID_BUDGET: u64 = 43_000_000_000;
 ///
 /// `beam` and `levels` are the def's parameters, `maps` the analysed
 /// flame's transform count.
+/// `seed_beam_at` for the f64 fallback path, so the forced level
+/// applies whichever way the centre was built.
+#[cfg(test)]
+fn return_seeds_forced(
+    ifs: &crate::scene::ifs_analysis::Ifs2,
+    centre: [f64; 2],
+    basis: [[f64; 2]; 2],
+    px: f64,
+    budget: u32,
+    beam: u32,
+    level: u32,
+) -> crate::scene::ifs_estimate::Seeds {
+    crate::scene::ifs_estimate::seed_beam_at(ifs, centre, basis, px, budget, beam, level)
+}
+
 /// The coarse pass's grid, across the ball.
 ///
 /// D1 wanted 2048. This is 1024 because the pass is a full flame
@@ -4128,7 +4143,25 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 beam,
             ),
             None => {
+                // The centre strings would not parse at the precision
+                // the zoom asks for -- `from_decimal` takes plain
+                // decimals, and a small value written by `{:?}` comes
+                // out in scientific notation -- so fall back to f64
+                // and render something rather than nothing.
                 let (x, y) = escape.center_f64();
+                #[cfg(test)]
+                if let Some(level) = forced {
+                    // The forced level belongs on BOTH paths. It was
+                    // on the big-float one alone, so a config whose
+                    // centre did not parse silently ignored it, and a
+                    // gasket asked for level 0 handed over at level 2.
+                    return_seeds_forced(&packed.ifs, [x, y], basis, px, budget, beam, level)
+                } else {
+                    crate::scene::ifs_estimate::seed_beam(
+                        &packed.ifs, [x, y], basis, px, budget, beam,
+                    )
+                }
+                #[cfg(not(test))]
                 crate::scene::ifs_estimate::seed_beam(
                     &packed.ifs,
                     [x, y],
