@@ -900,10 +900,14 @@ pub const HANDOVER_FRACTION: f64 = 0.25;
 /// that product is what [`seed_beam`] weighs against f32's.
 ///
 /// An affine map has an infinite clearance and pays nothing.
-fn curvature_pixels(spent: f64, reach_px: f64) -> f64 {
-    spent * reach_px
-}
-
+///
+/// **Not used.** `Σ ρ_k/s_k` was the first of three models of the
+/// curvature and the only one that survived into the walk; §13 of the
+/// plan replaced all of them with a measurement against the level-0
+/// handover, and the early exit that read the running sum went with
+/// §16's finding that the measured curvature is not monotone. The
+/// derivation is kept because it is still the right way to think about
+/// where the error comes from, and the arithmetic is gone.
 /// Where the handover checks itself, as normalised offsets.
 ///
 /// The corners and the centre: the corners because the delta is
@@ -922,6 +926,24 @@ const PROBE_UV: [[f64; 2]; 5] = [
 /// them per level is a rounding error against the prefix itself,
 /// which walks hundreds of levels in `BigFloat`.
 const PROBE_LEVELS: u32 = 48;
+
+/// One unit in the last place of an f64 mantissa.
+///
+/// The objective of [`seed_beam_inner`] measures a handover against
+/// the level-0 one by continuing both in f64, so a distance it
+/// reports is built from positions carrying a relative error of this.
+/// Divided by the pixel that is a number of PIXELS below which the
+/// measurement says nothing -- and it grows as the zoom does, because
+/// the pixel shrinks while the position's magnitude does not.
+///
+/// At 1080p on the reported grand julian it is 0.0065 pixels at
+/// 2^36, 0.1 at 2^40 and **10 at 2^46** -- so §16's 2^46 row
+/// measured rounding noise, and past about 2^40 the walk was
+/// choosing levels on a number that had stopped meaning anything.
+/// `curv.max(floor)` is the repair: a measurement cannot claim an
+/// error smaller than it can resolve, and clamping says so rather
+/// than believing it.
+const F64_ULP: f64 = 2.22e-16;
 
 /// One unit in the last place of an f32 mantissa.
 ///
@@ -1023,11 +1045,10 @@ fn seed_beam_inner<P: SeedPoint>(
         }
         None => (centre, 1.0, view_basis),
     };
-    // What the linearisation has spent, in the relative units
-    // `curvature_pixels` converts. The view's half-diagonal in pixels
-    // is that conversion, and it is the same at every level.
+    // The view's half-diagonal in pixels. Only its positivity is read
+    // now -- it is the degeneracy guard on `choose` below -- since the
+    // running curvature sum it used to convert is gone (R4).
     let reach_px = if px > 0.0 { basis_reach(view_basis) / px } else { 0.0 };
-    let mut spent = 0.0f64;
 
     let r0 = q0.distance_to(ball);
     let mut live = vec![Cand {
@@ -1096,6 +1117,27 @@ fn seed_beam_inner<P: SeedPoint>(
         level: 0,
         dead_min_per_px: f64::INFINITY,
         cands: seeds_of(&live, &bases, &quads, ifs, mean, scale),
+    };
+    // How fine a difference the objective can actually resolve, in
+    // pixels: see [`F64_ULP`]. Both continuations round their
+    // positions to f64, so the reference's magnitude counts beside
+    // the level's.
+    let ref_mag = {
+        let p = live[0].q.to_f64();
+        p[0].hypot(p[1]).max(radius)
+    };
+    let f64_floor = |cs: &[Cand<P>]| -> f64 {
+        if !(px > 0.0) {
+            return 0.0;
+        }
+        cs.iter()
+            .map(|c| {
+                let p = c.q.to_f64();
+                p[0].hypot(p[1]).max(radius)
+            })
+            .fold(ref_mag, f64::max)
+            * F64_ULP
+            / px
     };
     let mut best_error = if choose { f32_pixels(&bases, &live) } else { f64::INFINITY };
     let mut best = if choose && force.map_or(true, |l| l == 0) {
@@ -1172,18 +1214,12 @@ fn seed_beam_inner<P: SeedPoint>(
         let mut next: Vec<Cand<P>> = Vec::with_capacity(live.len() * ifs.maps.len());
         let mut next_bases: Vec<[[f64; 2]; 2]> = Vec::with_capacity(next.capacity());
         let mut next_quads: Vec<[[f64; 2]; 3]> = Vec::with_capacity(next.capacity());
-        // What each child's step costs the linearisation: the view's
-        // reach as a fraction of the clearance at the point the map
-        // was taken from. Zero for an affine, whose clearance is
-        // infinite and whose delta is exact.
-        let mut next_cost: Vec<f64> = Vec::with_capacity(next.capacity());
         let mut stop = false;
         'expand: for ((c, basis), quad) in live.iter().zip(&bases).zip(&quads) {
             if c.done {
                 next.push(c.clone());
                 next_bases.push(*basis);
                 next_quads.push(*quad);
-                next_cost.push(0.0);
                 continue;
             }
             let reach = delta_reach(*basis, quad);
@@ -1208,7 +1244,6 @@ fn seed_beam_inner<P: SeedPoint>(
                     stop = true;
                     break 'expand;
                 };
-                let s = m.inverse.singular_distance(qf);
                 let sigma = c.sigma * m.inverse.local_sigma(qf, m.sigma_min);
                 let r = q.distance_to(ball);
                 let mut child = c.clone();
@@ -1220,7 +1255,6 @@ fn seed_beam_inner<P: SeedPoint>(
                 next.push(child);
                 next_bases.push(compose_matrix(jac, *basis));
                 next_quads.push(compose_quad(jac, &hess, *basis, quad));
-                next_cost.push(if s > 0.0 { reach / s } else { f64::INFINITY });
             }
         }
         if stop {
@@ -1271,34 +1305,31 @@ fn seed_beam_inner<P: SeedPoint>(
         // outer frame on the dragon at one zoom and beam and 0% at the
         // next, which is what "the structure warps as I zoom, and no
         // beam setting fixes it" was.
-        if !view_agrees(&order, |i| next[i].r, |i| delta_reach(next_bases[i], &next_quads[i]), beam)
-        {
+        // Both keys, because neither alone is the one in use. The
+        // sort is by `Auto`, which is `σ·r` when every map is an
+        // inversion and `r` otherwise -- and this tested `r` always.
+        // Measured as a no-op on the 42 rows of
+        // `probe_where_a_grand_julian_caps`, so it is here for
+        // agreement with the sort and not for a bug it fixed. It is
+        // still not SOUND on the weighted key: σ varies across the
+        // view too, and this scales the reach by the centre's σ
+        // alone. Tightening that needs a bound on σ's own variation,
+        // which no kernel supplies today.
+        let agreed = view_agrees(
+            &order,
+            |i| next[i].r,
+            |i| delta_reach(next_bases[i], &next_quads[i]),
+            beam,
+        ) && (resolved_key(ifs, RankKey::Auto) != RankKey::Weighted
+            || view_agrees(
+                &order,
+                |i| next[i].sigma * next[i].r,
+                |i| next[i].sigma * delta_reach(next_bases[i], &next_quads[i]),
+                beam,
+            ));
+        if !agreed {
             break;
         }
-        // And the linearisation's price for the level, paid only by
-        // the branches the beam keeps -- a branch about to be pruned
-        // does not have to be accurate.
-        //
-        // This is NOT a cap. It was one, a tenth of a pixel, and that
-        // was the bug behind "the quality degrades at certain zoom
-        // levels and gets better again when I zoom in a little more,
-        // and anti-aliasing sometimes makes it worse". The cap is
-        // spent in units that a pixel converts by MULTIPLYING by the
-        // view's half-diagonal, while f32's error is a length the
-        // same half-diagonal DIVIDES -- so the room between the level
-        // a cap allows and the level f32 needs falls as the square of
-        // the resolution. Measured on the reported set: at the 96-wide
-        // resolution the gates run at, capped and uncapped choose the
-        // same level at every zoom; at 1080p the cap stops two to four
-        // levels short and f32's error rises from 0.13-0.40 px to
-        // 1.0-2.8 px, oscillating with the zoom as the integer level
-        // lands one short and then catches up; with 2x supersampling,
-        // which is a resolution increase as far as `ensure_ifs_seeds`
-        // is concerned, it reaches 11 px.
-        let cost = order[..beam.min(order.len())]
-            .iter()
-            .fold(0.0f64, |acc, &i| acc.max(next_cost[i]));
-        spent += cost;
         order.truncate(beam);
         live = order.iter().map(|&i| next[i].clone()).collect();
         bases = order.iter().map(|&i| next_bases[i]).collect();
@@ -1358,7 +1389,9 @@ fn seed_beam_inner<P: SeedPoint>(
                     })
                     .fold(0.0, f64::max)
             };
-            let err = curv + f32_pixels(&bases, &live);
+            // The measurement cannot resolve below its own f64 noise,
+            // so it does not get to claim it did (R2).
+            let err = curv.max(f64_floor(&live)) + f32_pixels(&bases, &live);
             let take = match force {
                 Some(want) => level == want,
                 None => err < best_error,
@@ -3871,13 +3904,28 @@ mod tests {
     /// supersampled pixel is half the size, so an error measured in
     /// them is twice the number for the same length; in DISPLAY
     /// pixels, which is what the downsample leaves, the two are equal.
+    ///
+    /// **Both classes, since 2026-09-17 (R5).** The rabbit is
+    /// bounded and its objective is smooth; a grand julian's swings
+    /// by orders between adjacent levels (§16), so an argmin that
+    /// held on the rabbit by being flat could still move there. It
+    /// also guards the f64 noise floor of [`F64_ULP`], which is a
+    /// third term added to the objective and would break this gate if
+    /// it did not scale as `1/px` like the other two.
     #[test]
     fn the_handover_does_not_depend_on_the_resolution() {
         // The shipped Douady Rabbit: julia after a translation.
         let mut t = affine_xform(1.0, 0.0, 0.0, 1.0, 0.123, -0.745);
         t.variations = HashMap::from([("julia".to_string(), 1.0)]);
         t.variation_order = vec!["julia".to_string()];
-        let ifs = analyse(vec![t]);
+        let rabbit = analyse(vec![t]);
+        let julian = grand_julian([0.7071, 0.7071, -0.7071, 0.7071, 0.0, 0.0]);
+        // `strict` is whether the set's errors are expected to stay
+        // under a pixel at all. The rabbit's are; a grand julian's
+        // oscillate by orders with the zoom (§16 of the plan), and on
+        // it only the resolution-INDEPENDENCE is claimed -- which is
+        // the whole point of this gate and the thing the cap broke.
+        for (name, ifs, strict) in [("rabbit", rabbit, true), ("grand julian", julian, false)] {
         let smp = chaos_sample(&ifs, 20_000);
         let target = smp[smp.len() - 1];
 
@@ -3895,9 +3943,9 @@ mod tests {
                     None => chosen = Some(seeds.level),
                     Some(l) => assert_eq!(
                         l, seeds.level,
-                        "zoom 2^{zoom} at height {h}: handover level {} against {l} elsewhere \
-                         -- the choice has picked up a dependence on the resolution, which is \
-                         what made anti-aliasing change the picture",
+                        "{name} zoom 2^{zoom} at height {h}: handover level {} against {l} \
+                         elsewhere -- the choice has picked up a dependence on the resolution, \
+                         which is what made anti-aliasing change the picture",
                         seeds.level
                     ),
                 }
@@ -3918,10 +3966,10 @@ mod tests {
                         m * 5.96e-8 / (px * grown) / display_scale
                     })
                     .fold(0.0, f64::max);
-                if h >= 1080.0 {
+                if h >= 1080.0 && strict {
                     assert!(
                         f32_px < 1.0,
-                        "zoom 2^{zoom} at height {h}: f32 would be {f32_px:.2} display pixels \
+                        "{name} zoom 2^{zoom} at height {h}: f32 would be {f32_px:.2} display pixels \
                          out at the handover (level {})",
                         seeds.level
                     );
@@ -3933,6 +3981,9 @@ mod tests {
                 let after = total.saturating_sub(seeds.level).max(1);
                 let mut worst = 0.0f64;
                 for gy in 0..5 {
+                    if !strict {
+                        break;
+                    }
                     for gx in 0..5 {
                         let uv = [gx as f64 / 4.0 - 0.5, gy as f64 / 4.0 - 0.5];
                         let d = apply_basis(view_basis, uv);
@@ -3943,12 +3994,13 @@ mod tests {
                     }
                 }
                 assert!(
-                    worst / display_scale < 1.0,
-                    "zoom 2^{zoom} at height {h}: the handover's own curvature costs \
+                    !strict || worst / display_scale < 1.0,
+                    "{name} zoom 2^{zoom} at height {h}: the handover's own curvature costs \
                      {worst:.3} pixels (level {})",
                     seeds.level
                 );
             }
+        }
         }
     }
 

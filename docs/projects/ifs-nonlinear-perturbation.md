@@ -879,7 +879,14 @@ and quadratic to f32 and continuing both in f64
 | 0, 2^20 | 2 | 1.01 px | 0.06 px |
 
 Over 42 rows the model is above the measurement by 3× to 800× and
-below it nowhere. The reason is that a position error at level L
+below it nowhere.
+
+**Corrected 2026-09-17.** That verdict is against the ROUNDING, and
+the rounding is not the whole f32 cost. Measured on the GPU
+([ifs-perturbation-delta.md](ifs-perturbation-delta.md) §2a) the
+model is within 2.5× of the truth in eighteen of twenty deep rows and
+BELOW it in seven, so it is a fair proxy and stays. The paragraph
+below anticipated exactly this and it is what happened. The reason is that a position error at level L
 reaches the reported distance through the σ the walk actually
 carries -- a product of per-level LOWER bounds on the forward
 contraction -- and the model divides by the view's expansion
