@@ -2902,6 +2902,17 @@ mod tests {
                 affine_xform(0.5, -0.5, 0.5, 0.5, 0.0, 0.0),
                 affine_xform(-0.5, -0.5, 0.5, -0.5, 1.0, 0.0),
             ]),
+            // Where the beam has something to lose: many addresses
+            // cover one pixel, and a truncated SUM is biased dark.
+            ("fat gasket", vec![
+                affine_xform(0.6, 0.0, 0.0, 0.6, 0.0, 0.0),
+                affine_xform(0.6, 0.0, 0.0, 0.6, 0.4, 0.0),
+                affine_xform(0.6, 0.0, 0.0, 0.6, 0.2, 0.4),
+            ]),
+            ("overlapping band", vec![
+                affine_xform(0.7, 0.0, 0.0, 0.7, 0.0, 0.0),
+                affine_xform(0.7, 0.0, 0.0, 0.7, 0.3, 0.3),
+            ]),
         ];
 
         for (name, transforms) in cases {
@@ -2970,60 +2981,103 @@ mod tests {
                 direct.push((zoom, hits));
             }
 
-            // THE COARSE PASS, at each resolution: the density per
-            // unit area over the ball, as an ordinary render knows it.
-            // Sweeping it answers G7 -- whether the spread is the
-            // lookup averaging over a cell (which more resolution
-            // fixes) or a bias in the formula (which it does not).
+            // THE COARSE PASS: the density per unit area over the
+            // ball, as an ordinary render knows it. One resolution
+            // now; §5a swept it and found the spread scale-free.
             const COARSE_N: usize = 20_000_000;
-            for &res in &[128usize, 512, 2048] {
-                let cpx = 2.0 * br / res as f64;
-                let mut grid = vec![0u32; res * res];
-                let cell = |q: [f64; 2]| -> Option<usize> {
-                    let fx = (q[0] - (bc[0] - br)) / cpx;
-                    let fy = (q[1] - (bc[1] - br)) / cpx;
-                    if fx < 0.0 || fy < 0.0 {
-                        return None;
-                    }
-                    let (ix, iy) = (fx as usize, fy as usize);
-                    (ix < res && iy < res).then(|| iy * res + ix)
-                };
-                let mut q = bc;
-                for i in 0..COARSE_N + 1000 {
-                    let m = pick(rnd(), &p);
-                    q = ifs.maps[m].forward.apply(q);
-                    if i >= 1000 {
-                        if let Some(c) = cell(q) {
-                            grid[c] += 1;
-                        }
+            let res = 512usize;
+            let cpx = 2.0 * br / res as f64;
+            let mut grid = vec![0u32; res * res];
+            let cell = |q: [f64; 2]| -> Option<usize> {
+                let fx = (q[0] - (bc[0] - br)) / cpx;
+                let fy = (q[1] - (bc[1] - br)) / cpx;
+                if fx < 0.0 || fy < 0.0 {
+                    return None;
+                }
+                let (ix, iy) = (fx as usize, fy as usize);
+                (ix < res && iy < res).then(|| iy * res + ix)
+            };
+            let mut q = bc;
+            for i in 0..COARSE_N + 1000 {
+                let m = pick(rnd(), &p);
+                q = ifs.maps[m].forward.apply(q);
+                if i >= 1000 {
+                    if let Some(c) = cell(q) {
+                        grid[c] += 1;
                     }
                 }
-                let rho = |q: [f64; 2]| -> f64 {
-                    cell(q).map_or(0.0, |c| {
-                        grid[c] as f64 / (COARSE_N as f64 * cpx * cpx)
-                    })
+            }
+            let rho = |q: [f64; 2]| -> f64 {
+                cell(q).map_or(0.0, |c| grid[c] as f64 / (COARSE_N as f64 * cpx * cpx))
+            };
+
+            for (zoom, hits) in &direct {
+                let span = 2.0 * br / 2f64.powf(*zoom);
+                let px = span / VP as f64;
+                let origin = [centre[0] - span * 0.5, centre[1] - span * 0.5];
+                let want = (cpx / px) * (cpx / px);
+                if want < 2.0 {
+                    continue;
+                }
+
+                // `foot` reads rho over the preimage of the WHOLE
+                // pixel rather than of its centre.
+                //
+                // §5a named the single-cell lookup as the accuracy
+                // limit on a fractal measure: the estimator asks for
+                // the density in a grid square and the truth is the
+                // measure of one particular same-sized region. The
+                // composed Jacobian `m` is that region to first order
+                // -- it maps the pixel square to the preimage -- so
+                // sampling rho across `m . [-1/2,1/2]^2` integrates
+                // the footprint instead of point-sampling it. That is
+                // what texture hardware does, for this reason.
+                let look = |q: [f64; 2], m: [[f64; 2]; 2], foot: bool| -> f64 {
+                    if !foot {
+                        return rho(q);
+                    }
+                    const K: i32 = 4;
+                    let mut acc = 0.0;
+                    for sy in 0..K {
+                        for sx in 0..K {
+                            // Cell centres of a K x K tiling of
+                            // [-1/2, 1/2]^2, so the average is the
+                            // pixel's own area and nothing else's.
+                            let u = ((sx as f64 + 0.5) / K as f64 - 0.5) * px;
+                            let v = ((sy as f64 + 0.5) / K as f64 - 0.5) * px;
+                            acc += rho([
+                                q[0] + m[0][0] * u + m[0][1] * v,
+                                q[1] + m[1][0] * u + m[1][1] * v,
+                            ]);
+                        }
+                    }
+                    acc / (K * K) as f64
                 };
 
-                for (zoom, hits) in &direct {
-                    let span = 2.0 * br / 2f64.powf(*zoom);
-                    let px = span / VP as f64;
-                    let origin = [centre[0] - span * 0.5, centre[1] - span * 0.5];
-                    let want = (cpx / px) * (cpx / px);
-                    // Every address, to the depth at which its
-                    // preimage of a pixel reaches one coarse cell.
-                    let estimate = |x: [f64; 2]| -> f64 {
-                        let mut acc = 0.0f64;
-                        let mut stack: Vec<([f64; 2], f64, f64, u32)> = vec![(x, 1.0, 1.0, 0)];
-                        while let Some((q, pa, det, depth)) = stack.pop() {
-                            if det >= want || depth >= 24 {
-                                acc += pa * rho(q) * det;
+                // `beam` of zero enumerates every address, which is
+                // §5a's reference and separates the formula from the
+                // truncation.
+                let estimate = |x: [f64; 2], beam: usize, foot: bool| -> f64 {
+                    let mut acc = 0.0f64;
+                    // (point, probability, composed Jacobian)
+                    let mut live: Vec<([f64; 2], f64, [[f64; 2]; 2])> =
+                        vec![(x, 1.0, [[1.0, 0.0], [0.0, 1.0]])];
+                    for _ in 0..24u32 {
+                        if live.is_empty() {
+                            break;
+                        }
+                        let mut next: Vec<([f64; 2], f64, [[f64; 2]; 2])> = Vec::new();
+                        for (q, pa, m) in live.drain(..) {
+                            let det = (m[0][0] * m[1][1] - m[0][1] * m[1][0]).abs();
+                            if det >= want {
+                                acc += pa * look(q, m, foot) * det;
                                 continue;
                             }
-                            for (i, m) in ifs.maps.iter().enumerate() {
+                            for (i, mp) in ifs.maps.iter().enumerate() {
                                 // The preimage of a set is the union
-                                // over BRANCHES, each with the same p_i.
-                                let Some(j) = m.inverse.jacobian(q) else { continue };
-                                let qi = m.inverse.apply(q);
+                                // over BRANCHES, each with the same p.
+                                let Some(j) = mp.inverse.jacobian(q) else { continue };
+                                let qi = mp.inverse.apply(q);
                                 if !qi[0].is_finite() || !qi[1].is_finite() {
                                     continue;
                                 }
@@ -3033,65 +3087,88 @@ mod tests {
                                 if Affine2::distance(qi, bc) > br * 1.000001 {
                                     continue;
                                 }
-                                let dj = (j[0][0] * j[1][1] - j[0][1] * j[1][0]).abs();
-                                if !(dj > 0.0) || !dj.is_finite() {
+                                let m2 = [
+                                    [
+                                        j[0][0] * m[0][0] + j[0][1] * m[1][0],
+                                        j[0][0] * m[0][1] + j[0][1] * m[1][1],
+                                    ],
+                                    [
+                                        j[1][0] * m[0][0] + j[1][1] * m[1][0],
+                                        j[1][0] * m[0][1] + j[1][1] * m[1][1],
+                                    ],
+                                ];
+                                let d2 = (m2[0][0] * m2[1][1] - m2[0][1] * m2[1][0]).abs();
+                                if !(d2 > 0.0) || !d2.is_finite() {
                                     continue;
                                 }
-                                stack.push((qi, pa * p[i], det * dj, depth + 1));
+                                next.push((qi, pa * p[i], m2));
                             }
                         }
-                        acc
-                    };
+                        if beam > 0 && next.len() > beam {
+                            // Keep the largest CONTRIBUTIONS, since
+                            // the answer is a sum and a pruned lineage
+                            // is lost from it entirely.
+                            next.sort_by(|a, b| {
+                                let key = |c: &([f64; 2], f64, [[f64; 2]; 2])| {
+                                    let d = (c.2[0][0] * c.2[1][1] - c.2[0][1] * c.2[1][0]).abs();
+                                    c.1 * d * rho(c.0)
+                                };
+                                key(b).total_cmp(&key(a))
+                            });
+                            next.truncate(beam);
+                        }
+                        live = next;
+                    }
+                    acc
+                };
 
-                    let mut ratios: Vec<f64> = Vec::new();
-                    let mut lit = 0usize;
-                    for iy in 0..VP {
-                        for ix in 0..VP {
-                            let h = hits[iy * VP + ix];
-                            if h > 0 {
-                                lit += 1;
-                            }
-                            if h < 40 {
-                                continue;
-                            }
-                            let d = h as f64 / (DIRECT_N as f64 * px * px);
-                            let x = [
-                                origin[0] + (ix as f64 + 0.5) * px,
-                                origin[1] + (iy as f64 + 0.5) * px,
-                            ];
-                            let est = estimate(x);
-                            if est > 0.0 && d > 0.0 {
-                                ratios.push(est / d);
+                let mut rows: Vec<(&str, Vec<f64>)> = vec![
+                    ("enumerate, point", Vec::new()),
+                    ("enumerate, footprint", Vec::new()),
+                    ("beam 8, footprint", Vec::new()),
+                    ("beam 2, footprint", Vec::new()),
+                ];
+                for iy in 0..VP {
+                    for ix in 0..VP {
+                        let h = hits[iy * VP + ix];
+                        if h < 40 {
+                            continue;
+                        }
+                        let d = h as f64 / (DIRECT_N as f64 * px * px);
+                        let x = [
+                            origin[0] + (ix as f64 + 0.5) * px,
+                            origin[1] + (iy as f64 + 0.5) * px,
+                        ];
+                        for (k, want_beam, foot) in
+                            [(0usize, 0usize, false), (1, 0, true), (2, 8, true), (3, 2, true)]
+                        {
+                            let e = estimate(x, want_beam, foot);
+                            if e > 0.0 && d > 0.0 {
+                                rows[k].1.push(e / d);
                             }
                         }
                     }
-                    ratios.sort_by(f64::total_cmp);
+                }
+                for (label, mut r) in rows {
+                    r.sort_by(f64::total_cmp);
                     let qt = |f: f64| -> f64 {
-                        if ratios.is_empty() {
+                        if r.is_empty() {
                             f64::NAN
                         } else {
-                            ratios[((ratios.len() - 1) as f64 * f).round() as usize]
+                            r[((r.len() - 1) as f64 * f).round() as usize]
                         }
                     };
-                    // `cpx/px` under one is the estimator OUTSIDE its
-                    // domain: the coarse grid is finer than the view
-                    // pixel, `want` is below one, the walk takes no
-                    // step at all, and what comes back is the coarse
-                    // density at a scale finer than the thing it is
-                    // compared against. On a measure of dimension
-                    // below two that density DIVERGES as the cell
-                    // shrinks, which is the whole of the drift with
-                    // resolution. It cannot happen at a real zoom --
-                    // the coarse pass covers the ball and the view is
-                    // inside it -- but it happens here, and a row it
-                    // happened in says nothing about the formula.
-                    let _ = lit;
+                    // How far a typical pixel is from the truth, in
+                    // the units a log tonemap cares about.
+                    let spread = if r.is_empty() {
+                        f64::NAN
+                    } else {
+                        (qt(0.9) / qt(0.1)).sqrt()
+                    };
                     println!(
-                        "  {name:<16} 2^{zoom:<3.0} coarse {res:>4} | cpx/px {:>6.2}{} | \
-                         cmp {:>4} | p10 {:.3}  median {:.3}  p90 {:.3}",
-                        cpx / px,
-                        if cpx / px < 1.5 { " DEGENERATE" } else { "           " },
-                        ratios.len(),
+                        "  {name:<16} 2^{zoom:<3.0} {label:<22} | cmp {:>4} | \
+                         p10 {:.3} median {:.3} p90 {:.3} | spread {spread:.2}x",
+                        r.len(),
                         qt(0.1),
                         qt(0.5),
                         qt(0.9)
