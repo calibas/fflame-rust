@@ -4361,6 +4361,106 @@ mod tests {
         }
     }
 
+    /// What the prefix costs, now that it measures itself.
+    ///
+    /// `ensure_ifs_seeds` runs once per view on the interactive path,
+    /// so this is paid on every pan and every zoom step. The
+    /// self-check added ten continuations per level -- five probes
+    /// against the level-0 reference -- and a deep zoom hands over
+    /// tens of levels down, so the arithmetic is worth knowing rather
+    /// than assuming.
+    #[test]
+    #[ignore = "a measurement; run with --ignored --nocapture"]
+    fn probe_what_the_prefix_costs() {
+        let cases: Vec<(&str, Ifs2)> = vec![
+            ("sierpinski (affine)", sierpinski()),
+            ("rabbit", julia([-0.123, 0.745])),
+            ("grand julian", grand_julian([0.7071, 0.7071, -0.7071, 0.7071, 0.0, 0.0])),
+        ];
+        for (name, ifs) in cases {
+            let smp = chaos_sample(&ifs, 20_000);
+            let target = smp[smp.len() - 1];
+            for &zoom in &[8.0f64, 20.0, 32.0, 44.0] {
+                let span = 4.0 / 2f64.powf(zoom);
+                let view_basis = [[span * 16.0 / 9.0, 0.0], [0.0, -span]];
+                let px = span / 1080.0;
+                let budget = zoom as u32 + 64;
+                // Warm, then timed: the first call pays whatever the
+                // allocator is doing.
+                let _ = seed_beam(&ifs, target, view_basis, px, budget, 8);
+                let t0 = std::time::Instant::now();
+                let reps = 5;
+                let mut level = 0;
+                for _ in 0..reps {
+                    level = seed_beam(&ifs, target, view_basis, px, budget, 8).level;
+                }
+                let each = t0.elapsed().as_secs_f64() / reps as f64;
+                println!(
+                    "  {name:>20} 2^{zoom:<4.0}: handover level {level:>3}, {:>8.2} ms per view",
+                    each * 1e3
+                );
+            }
+        }
+    }
+
+    /// G3 of `ifs-nonlinear-perturbation.md`: the handover goes deeper
+    /// as the zoom does, and a reference orbit that passes close to a
+    /// pole is what stops it.
+    ///
+    /// The prefix exists to grow the view until f32 can resolve it, so
+    /// its level has to track the zoom -- an affine set's climbs about
+    /// one level per `log(1/σ)` of zoom, and a nonlinear one's climbs
+    /// too until its own curvature stops it. Measured, per view:
+    ///
+    /// | zoom | Sierpinski | julia | grand julian |
+    /// |---|---|---|---|
+    /// | 2^8 | 2 | 0 | 0 |
+    /// | 2^20 | 15 | 8 | 6 |
+    /// | 2^32 | 24 | 19 | 9 |
+    /// | 2^44 | 33 | 33 | 11 |
+    ///
+    /// The third column is the pole fixture, and it is the same grand
+    /// julian the reports of 2026-09-15 and -16 were about: three
+    /// julians of NEGATIVE distance, whose inverses have holes and
+    /// whose orbit comes within 4e-5 of a singularity. It hands over,
+    /// and it stops climbing -- eleven levels where the other two
+    /// reach thirty-three. That is the curvature refusing, measured by
+    /// the handover itself (§13), and it is the honest shape of the
+    /// limit rather than a cap someone chose.
+    #[test]
+    fn the_handover_goes_deeper_as_the_zoom_does() {
+        let cases: Vec<(&str, Ifs2, u32)> = vec![
+            ("sierpinski", sierpinski(), 25),
+            ("julia", julia([-0.123, 0.745]), 25),
+            // The pole fixture: it must still hand over, and it is not
+            // held to the others' depth.
+            ("grand julian", grand_julian([0.7071, 0.7071, -0.7071, 0.7071, 0.0, 0.0]), 8),
+        ];
+        for (name, ifs, deep_enough) in cases {
+            let smp = chaos_sample(&ifs, 20_000);
+            let target = smp[smp.len() - 1];
+            let mut last = 0u32;
+            for &zoom in &[8.0f64, 20.0, 32.0, 44.0] {
+                let span = 4.0 / 2f64.powf(zoom);
+                let view_basis = [[span * 16.0 / 9.0, 0.0], [0.0, -span]];
+                let px = span / 1080.0;
+                let level = seed_beam(&ifs, target, view_basis, px, zoom as u32 + 64, 8).level;
+                assert!(
+                    level >= last,
+                    "{name}: the handover went BACKWARDS at 2^{zoom}, {last} to {level} -- \
+                     a deeper view can always take the shallower prefix, so this means the \
+                     objective is not monotone in what it is offered"
+                );
+                last = level;
+            }
+            assert!(
+                last >= deep_enough,
+                "{name} at 2^44: handed over at level {last}, under the {deep_enough} this set \
+                 reached when the measurement was taken"
+            );
+        }
+    }
+
     /// Greedy is a heuristic, and the dragon is where it shows.
     ///
     /// Every address gives a valid bound on the distance to ITS piece;
