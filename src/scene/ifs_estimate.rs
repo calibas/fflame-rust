@@ -4626,8 +4626,40 @@ mod tests {
                     })
                     .fold(0.0, f64::max);
                 let total = f32_px + curv;
+                let ulps = px / (target[0].hypot(target[1]).max(1.0) * 2.22e-16);
+                // The f32 term MEASURED: the same seeds with their
+                // position, basis and quadratic rounded to f32, against
+                // themselves unrounded, continued the same way.
+                let rounded = Seeds {
+                    level: seeds.level,
+                    dead_min_per_px: seeds.dead_min_per_px,
+                    cands: seeds
+                        .cands
+                        .iter()
+                        .map(|c| {
+                            let r = |x: f64| x as f32 as f64;
+                            let mut c = c.clone();
+                            c.position = [r(c.position[0]), r(c.position[1])];
+                            c.basis = [[r(c.basis[0][0]), r(c.basis[0][1])], [r(c.basis[1][0]), r(c.basis[1][1])]];
+                            c.quad = [
+                                [r(c.quad[0][0]), r(c.quad[0][1])],
+                                [r(c.quad[1][0]), r(c.quad[1][1])],
+                                [r(c.quad[2][0]), r(c.quad[2][1])],
+                            ];
+                            c
+                        })
+                        .collect(),
+                };
+                let f32_meas = [[0.0f64, 0.0], [-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5]]
+                    .iter()
+                    .map(|uv| {
+                        let a = estimate_seeded(&ifs, &seeds, *uv, 48, 5).distance;
+                        let b = estimate_seeded(&ifs, &rounded, *uv, 48, 5).distance;
+                        (a - b).abs()
+                    })
+                    .fold(0.0, f64::max);
                 println!(
-                    "  2^{zoom:<5.0} {:>6} {f32_px:>10.3} {curv:>10.3} {total:>10.3}  {}",
+                    "  2^{zoom:<5.0} {:>6} {f32_px:>10.3} {curv:>10.3} {total:>10.3}  {} (f64 ulps/px {ulps:.1}, f32 measured {f32_meas:.3})",
                     seeds.level,
                     if total < 1.0 { "clean" } else { "past the cap" }
                 );
@@ -4676,13 +4708,16 @@ mod tests {
 
                 // The error of a WHOLE handover set against the exact
                 // one, which is the only thing worth comparing.
-                let err_of = |sd: &Seeds| -> f64 {
+                // `extra` continues the set past 48 so that a seed
+                // `extra` levels shallower than `sd.level` still reaches
+                // the reference's absolute depth.
+                let err_of = |sd: &Seeds, extra: u32| -> f64 {
                     probes
                         .iter()
                         .map(|uv| {
                             let a = estimate_seeded(&ifs, &exact, *uv, 48 + sd.level, beam)
                                 .distance;
-                            let b = estimate_seeded(&ifs, sd, *uv, 48, beam).distance;
+                            let b = estimate_seeded(&ifs, sd, *uv, 48 + extra, beam).distance;
                             (a - b).abs()
                         })
                         .fold(0.0, f64::max)
@@ -4736,14 +4771,18 @@ mod tests {
                     cands: chosen.into_iter().map(|(_, c)| c).collect(),
                     dead_min_per_px: deepest.dead_min_per_px,
                 };
-                let today_err = err_of(&today)
-                    + today.cands.iter().map(&f32_of).fold(0.0, f64::max);
-                let mixed_err =
-                    err_of(&mixed) + mixed.cands.iter().map(&f32_of).fold(0.0, f64::max);
+                let spread = mixed.level - levels.iter().copied().min().unwrap_or(0);
+                let today_curv = err_of(&today, 0);
+                let today_f32 = today.cands.iter().map(&f32_of).fold(0.0, f64::max);
+                let mixed_curv_short = err_of(&mixed, 0);
+                let mixed_curv = err_of(&mixed, spread);
+                let mixed_f32 = mixed.cands.iter().map(&f32_of).fold(0.0, f64::max);
+                let today_err = today_curv + today_f32;
+                let mixed_err = mixed_curv + mixed_f32;
                 levels.sort_unstable();
                 levels.dedup();
                 println!(
-                    "  2^{zoom:<5.0} | {:>5} {today_err:>11.3} | {:>14?} {mixed_err:>11.3}  {:>7.1}x",
+                    "  2^{zoom:<5.0} | {:>5} {today_err:>11.3} (c {today_curv:.3} f {today_f32:.3}) | {:>14?} {mixed_err:>11.3} (c {mixed_curv:.3}, short {mixed_curv_short:.3}, f {mixed_f32:.3})  {:>7.1}x",
                     today.level,
                     levels,
                     if mixed_err > 0.0 { today_err / mixed_err } else { 1.0 }
