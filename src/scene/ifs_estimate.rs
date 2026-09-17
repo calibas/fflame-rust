@@ -1372,9 +1372,15 @@ fn seed_beam_inner<P: SeedPoint>(
             // later level's total is at least this one's curvature.
             // That is exact, and it is what bounds the walk now that
             // the arbitrary cap is gone.
-            if force.is_none() && curv >= best_error {
-                break;
-            }
+            // No early exit on the curvature. It was sound while the
+            // curvature was a MODEL that only grew; MEASURED, it is
+            // not monotone -- on a grand julian it swings by two
+            // orders between adjacent levels, because the view's
+            // expansion collapses and recovers with every inversion --
+            // so stopping when it passes the best so far can skip the
+            // level that wins. Measured to change nothing on the sets
+            // tested; removed because the argument for it no longer
+            // holds, not because it cost anything.
         }
     }
 
@@ -4553,6 +4559,80 @@ mod tests {
         let e = estimate_seeded(&ifs, &empty, [0.25, -0.25], 20, 4);
         assert_eq!(e.distance, 12.5);
         assert!(!e.escaped && e.address.is_empty());
+    }
+
+    /// Where a grand julian's zoom actually stops, and why it depends
+    /// on where you are.
+    ///
+    /// Reported from use, 2026-09-16: "I can zoom to about 1e10 in
+    /// certain regions of the grand julian now" -- 1e10 being about
+    /// 2^33, against roughly 2^14 before the handover carried
+    /// nonlinear maps at all. The "certain regions" is the half worth
+    /// measuring: the prefix follows the REFERENCE ORBIT of the view
+    /// centre, and how deep it gets is a property of that orbit, so
+    /// two targets on the same set cap at different zooms.
+    ///
+    /// Per target and zoom: the level chosen, what f32 costs there,
+    /// what the linearisation costs (measured against the level-0
+    /// handover, which approximates nothing), and their sum. The cap
+    /// is where the sum passes a pixel.
+    #[test]
+    #[ignore = "a survey; run with --ignored --nocapture"]
+    fn probe_where_a_grand_julian_caps() {
+        let ifs = grand_julian([0.7071, 0.7071, -0.7071, 0.7071, 0.0, 0.0]);
+        let smp = chaos_sample(&ifs, 200_000);
+        // Several places on the set, which is what "certain regions"
+        // means.
+        let targets: Vec<[f64; 2]> = (0..6).map(|k| smp[smp.len() - 1 - k * 31_337]).collect();
+        for (t, &target) in targets.iter().enumerate() {
+            println!(
+                "target {t} at ({:.5}, {:.5}), |t| {:.4}:",
+                target[0],
+                target[1],
+                target[0].hypot(target[1])
+            );
+            println!(
+                "  {:>7} {:>6} {:>10} {:>10} {:>10}  {}",
+                "zoom", "level", "f32 px", "curv px", "total", "verdict"
+            );
+            for &zoom in &[20.0f64, 26.0, 30.0, 33.0, 36.0, 40.0, 46.0] {
+                let span = 4.0 / 2f64.powf(zoom);
+                let view_basis = [[span * 16.0 / 9.0, 0.0], [0.0, -span]];
+                let px = span / 1080.0;
+                let reach0 = basis_reach(view_basis);
+                let budget = zoom as u32 + 64;
+                let seeds = seed_beam(&ifs, target, view_basis, px, budget, 5);
+                let exact = seed_beam_at(&ifs, target, view_basis, px, budget, 5, 0);
+                let f32_px = seeds
+                    .cands
+                    .iter()
+                    .map(|c| {
+                        let grown = basis_reach(c.basis) / reach0;
+                        if !(grown > 0.0) {
+                            return f64::INFINITY;
+                        }
+                        let mag = c.position[0].hypot(c.position[1]).max(ifs.ball.radius);
+                        mag * 5.96e-8 / (px * grown)
+                    })
+                    .fold(0.0, f64::max);
+                // The linearisation, against the handover that
+                // approximates nothing, at the same absolute depth.
+                let curv = [[0.0f64, 0.0], [-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5]]
+                    .iter()
+                    .map(|uv| {
+                        let a = estimate_seeded(&ifs, &exact, *uv, 48 + seeds.level, 5).distance;
+                        let b = estimate_seeded(&ifs, &seeds, *uv, 48, 5).distance;
+                        (a - b).abs()
+                    })
+                    .fold(0.0, f64::max);
+                let total = f32_px + curv;
+                println!(
+                    "  2^{zoom:<5.0} {:>6} {f32_px:>10.3} {curv:>10.3} {total:>10.3}  {}",
+                    seeds.level,
+                    if total < 1.0 { "clean" } else { "past the cap" }
+                );
+            }
+        }
     }
 
     /// Greedy is a heuristic, and the dragon is where it shows.
