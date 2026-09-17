@@ -3253,6 +3253,83 @@ mod tests {
         out
     }
 
+    /// Hunt a `disc` IFS whose attractor is not a single point.
+    ///
+    /// The fixture every other `disc` gate uses has one: both maps fix
+    /// the origin and both contract toward it, so six million
+    /// chaos-game samples land in one cell. Translations give the maps
+    /// different fixed points, which is what it takes.
+    #[test]
+    #[ignore = "a survey; run with --ignored --nocapture"]
+    fn probe_hunt_a_disc_fixture_that_spreads() {
+        let cases: Vec<(&str, Vec<Transform>)> = vec![
+            ("the current one", vec![
+                kernel_xform("disc", [0.9, 0.4, -0.4, 0.9, 0.0, 0.0], 1.0),
+                affine_xform(0.55, 0.0, 0.0, 0.55, 0.0, 0.0),
+            ]),
+            ("disc shifted", vec![
+                kernel_xform("disc", [0.9, 0.4, -0.4, 0.9, 0.3, 0.2], 1.0),
+                affine_xform(0.55, 0.0, 0.0, 0.55, -0.4, 0.1),
+            ]),
+            ("disc shifted harder", vec![
+                kernel_xform("disc", [0.6, 0.3, -0.3, 0.6, 0.7, -0.4], 1.0),
+                affine_xform(0.5, 0.0, 0.0, 0.5, -0.6, 0.3),
+            ]),
+            ("disc pair", vec![
+                kernel_xform("disc", [0.8, 0.2, -0.2, 0.8, 0.4, 0.0], 1.0),
+                kernel_xform("disc", [0.5, -0.4, 0.4, 0.5, -0.5, 0.3], 1.0),
+            ]),
+            ("disc and two affines", vec![
+                kernel_xform("disc", [0.7, 0.3, -0.3, 0.7, 0.5, -0.2], 1.0),
+                affine_xform(0.5, 0.0, 0.0, 0.5, -0.5, 0.0),
+                affine_xform(0.45, 0.2, -0.2, 0.45, 0.1, 0.55),
+            ]),
+        ];
+        for (name, transforms) in cases {
+            let guard = global_registry();
+            let flame = flame_of(transforms);
+            let Ok(ifs) = analyse_2d(&flame, &guard) else {
+                println!("  {name:<22} does not qualify");
+                continue;
+            };
+            drop(guard);
+            let smp = chaos_sample(&ifs, 100_000);
+            if smp.is_empty() {
+                println!("  {name:<22} no samples");
+                continue;
+            }
+            let span = |f: &dyn Fn(&[f64; 2]) -> f64| {
+                let lo = smp.iter().map(|p| f(p)).fold(f64::INFINITY, f64::min);
+                let hi = smp.iter().map(|p| f(p)).fold(f64::NEG_INFINITY, f64::max);
+                hi - lo
+            };
+            // How many cells of a 128-grid over the ball the sample
+            // reaches, which is the vacuity guard the gate uses.
+            let (bc, br) = (ifs.ball.centre, ifs.ball.radius);
+            let res = 128usize;
+            let c = 2.0 * br / res as f64;
+            let mut seen = vec![false; res * res];
+            for p in &smp {
+                let fx = (p[0] - (bc[0] - br)) / c;
+                let fy = (p[1] - (bc[1] - br)) / c;
+                if fx >= 0.0 && fy >= 0.0 {
+                    let (ix, iy) = (fx as usize, fy as usize);
+                    if ix < res && iy < res {
+                        seen[iy * res + ix] = true;
+                    }
+                }
+            }
+            let lit = seen.iter().filter(|b| **b).count();
+            println!(
+                "  {name:<22} maps {} | ball r {:.3} | extent {:.4} x {:.4} | cells lit {lit}",
+                ifs.maps.len(),
+                br,
+                span(&|p| p[0]),
+                span(&|p| p[1]),
+            );
+        }
+    }
+
     /// D4 of the measure plan: what brightness does at depth, and how
     /// many stops a user loses to it.
     ///
@@ -3446,15 +3523,22 @@ mod tests {
                 kernel_xform("bubble", [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], 1.6),
                 kernel_xform("bubble", [0.7, 0.7, -0.7, 0.7, 0.0, -0.3], 1.2),
             ], MEASURE_CELLS),
-            // `disc` is NOT here, and the reason is worth keeping:
-            // the obvious fixture -- the one the kernel's other gates
-            // use -- has a single POINT for an attractor. Six million
-            // chaos-game samples land in one coarse cell out of
-            // 65536, and `chaos_sample` collapses to the origin too,
-            // so it is the fixture and not the sampler. A disc IFS
-            // that spreads is wanted before that kernel's twelve
-            // inverse branches can be gated; the guard below is what
-            // caught it.
+            // `disc`, whose INVERSE branches are a bubble's case with
+            // up to twelve of them, and the one kernel whose branch
+            // count depends on the ball.
+            //
+            // NOT the fixture the kernel's other gates use: that one
+            // has a single POINT for an attractor -- both its maps fix
+            // the origin and both contract toward it, so six million
+            // samples land in one cell of 65536 and `chaos_sample`
+            // collapses too. Translations give the maps different
+            // fixed points, and this spreads over 7631 cells of a
+            // 128-grid (`probe_hunt_a_disc_fixture_that_spreads`).
+            ("disc", vec![
+                kernel_xform("disc", [0.7, 0.3, -0.3, 0.7, 0.5, -0.2], 1.0),
+                affine_xform(0.5, 0.0, 0.0, 0.5, -0.5, 0.0),
+                affine_xform(0.45, 0.2, -0.2, 0.45, 0.1, 0.55),
+            ], MEASURE_CELLS),
         ];
 
         for (name, mut transforms, cells) in cases {

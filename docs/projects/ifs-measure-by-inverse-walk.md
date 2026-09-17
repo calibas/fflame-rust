@@ -672,16 +672,25 @@ a sparse attractor that is common, and it cost the grand julian
 0.001. Reading both from one footprint, weighted by the measure at
 each sample, takes it to 0.0118.
 
-**And `disc` is not gated, for a reason worth keeping.** The obvious
-fixture -- the one that kernel's other tests use -- has a single
-POINT for an attractor: six million chaos-game samples land in one
-coarse cell of 65536, and the pre-existing `chaos_sample` helper
-collapses to the origin too, so it is the fixture and not the
-sampler. A disc IFS that actually spreads is wanted before those
-twelve inverse branches can be gated. The gate now asserts that a
-fixture's coarse pass lights more than a hundred cells, which is
-what caught it and what stops a degenerate fixture from passing by
-having nothing to measure.
+**`disc` is gated too, on a fixture built for it.** The obvious one
+-- the fixture that kernel's other tests use -- has a single POINT
+for an attractor: both its maps fix the origin and both contract
+toward it, so six million chaos-game samples land in one coarse cell
+of 65536, and the pre-existing `chaos_sample` helper collapses there
+as well, so it is the fixture and not the sampler. **Other tests
+using that fixture are asserting less than they look like they
+are**, which is worth someone's attention separately.
+
+Translations give the maps different fixed points.
+`probe_hunt_a_disc_fixture_that_spreads` tried five arrangements; a
+disc with two affines spreads over 7631 cells of a 128-grid, and on
+it the estimator reads 0.955 and 0.959 with a colour error of
+0.0010. That closes the last kernel class: affine, a root's forward
+branches, a bubble's inverse branches, and now a disc's twelve.
+
+The gate asserts a fixture's coarse pass lights more than a hundred
+cells, which is what caught the degenerate one and what stops any
+future fixture from passing by having nothing to measure.
 
 ## 5h. Units, and what the zoom does to brightness, 2026-09-17
 
