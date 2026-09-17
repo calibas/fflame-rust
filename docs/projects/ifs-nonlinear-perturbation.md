@@ -251,10 +251,13 @@ pairs suffice because only the linear term reads them).
   It ran at 96 pixels and so could not see §9's fault;
   `the_handover_does_not_depend_on_the_resolution` is the gate that
   can, and it is the one to extend when this part changes again.
-- **G3** The handover level tracks the zoom on a nonlinear set, as
-  `the_handover_level_tracks_the_zoom` shows for affine ones, and
-  stops early on a view whose centre orbit passes a pole (a fixture
-  built to do so).
+- **G3** The handover level tracks the zoom, **done**:
+  `the_handover_goes_deeper_as_the_zoom_does` walks three sets at
+  four zooms and asserts the level never goes backwards and reaches
+  the depth measured. The pole fixture is the grand julian of the
+  reports, and it is held to a lower bar on purpose -- eleven levels
+  at 2^44 where the other two reach thirty-three, which is its
+  curvature refusing rather than a cap anyone chose.
 - **G4** Byte identity: every affine mode-D preset renders
   byte-identical (`output/ifs/preset-*.png` against the current
   set); the affine path is not touched.
@@ -686,7 +689,29 @@ passed at 99.9%, and 11% of the view wrong on a Sierpinski, which
 keeps eight. `the_shaders_seed_stride_matches_the_packer` is the
 source-scanning gate for it.
 
-## 14. Cost and risk
+## 14. What the prefix costs, 2026-09-16
+
+The self-check of §13 runs ten continuations per level -- five probes
+against the level-0 reference -- and `ensure_ifs_seeds` is on the
+interactive path, so it is paid on every pan and every zoom step.
+Measured per view, at 1080p with a beam of eight:
+
+| zoom | Sierpinski | julia | grand julian |
+|---|---|---|---|
+| 2^8 | 0.02 ms | 0.11 ms | 0.24 ms |
+| 2^20 | 0.17 ms | 1.28 ms | 2.00 ms |
+| 2^32 | 0.21 ms | 4.36 ms | 2.36 ms |
+| 2^44 | 0.29 ms | 8.23 ms | 3.16 ms |
+
+An affine walk pays none of it -- the check does not run, since an
+affine handover approximates nothing at any level -- which is why the
+first column is flat. The worst case is eight milliseconds against a
+mode-D render measured in hundreds, so it is two to five per cent,
+and the cost grows with the handover LEVEL rather than with the zoom,
+which is why the grand julian's column stops climbing where its level
+does. `probe_what_the_prefix_costs` keeps the measurement.
+
+## 15. Cost and risk
 
 The CPU pays `beam × maps` inverse evaluations per level, as now, in
 `BigFloat` where today they are f64 affines; a rung-1 root costs a
@@ -705,7 +730,7 @@ the centre and can leave the ball at any level; that is state the
 seed carries already (`escape`, `done`), and the same rule applies:
 the cut is the cut.
 
-## 15. What is next
+## 16. What is next
 
 For a bounded nonlinear set, nothing: the cap is lifted and §7's
 table is the evidence. The remaining work is the shader half -- the
@@ -785,7 +810,7 @@ the no-handover cap, because the shader's walk is f32 throughout and
 a delta far below the position's own ulp is swamped by the first
 step whatever it was stored in.
 
-## 16. Order of work
+## 17. Order of work
 
 1. ~~Jacobians and singular distances for the six kernels, with G1.~~
    Done 2026-09-16; §6 records what it found.
@@ -818,5 +843,5 @@ step whatever it was stored in.
 10. ~~The `estimate_seeded3` staleness §7 left alone~~ -- done and
     measured latent, §12. `seed_beam3` carrying a Jacobian is still
     open, and waits on §11's predictor like its planar twin.
-11. G3: the handover level against the zoom, and a fixture whose
-    reference orbit passes a pole.
+11. ~~G3~~ -- done; the grand julian IS the pole fixture, and the
+    gate holds it to its own measured depth rather than the others'.
