@@ -196,6 +196,20 @@ pub const IFS_SOLID_BUDGET: u64 = 43_000_000_000;
 ///
 /// `beam` and `levels` are the def's parameters, `maps` the analysed
 /// flame's transform count.
+/// The coarse pass's grid, across the ball.
+///
+/// D1 wanted 2048. This is 1024 because the pass is a full flame
+/// render and a readback of `res² × 16` bytes -- 16 MB here, 67 at
+/// 2048 -- and the measure plan's §5a swept 128, 512 and 2048 and
+/// found the estimator resolution-stable across them, while §5f found
+/// 64 too coarse to be a measure at all. The floor matters and the
+/// ceiling buys little.
+const COARSE_RES: u32 = 1024;
+
+/// How many batches the coarse pass draws. Each is
+/// `256 × 64 × 256` samples, so this is about 400 million.
+const COARSE_BATCHES: u32 = 24;
+
 pub fn ifs_rows_per_dispatch(
     width: u32,
     height: u32,
@@ -693,6 +707,9 @@ pub struct EscapeRenderer {
     /// seed chain is bound for the planar walk: one layout for one
     /// shader family.
     ifs_coarse_buffer: Buffer,
+    /// The `ifs_token` the coarse pass was built for, so a flame edit
+    /// rebuilds it and a pan or a zoom does not. Zero means none.
+    ifs_coarse_token: u64,
     ifs_geom_px: u32,
     /// Interaction preview (mode D): render one pixel in each 2×2
     /// block while the user is still moving something, every pixel
@@ -1580,6 +1597,7 @@ impl EscapeRenderer {
             ifs_chain_capacity: 0,
             ifs_geom_buffer,
             ifs_coarse_buffer,
+            ifs_coarse_token: 0,
             ifs_geom_px: 0,
             preview: false,
             ifs: None,
@@ -3819,6 +3837,44 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         queue.write_buffer(&self.ifs_coarse_buffer, 0, bytes);
         true
+    }
+
+    /// Build the coarse pass if this flame needs one and has not got
+    /// one, and hand it to the shader.
+    ///
+    /// Only the MEASURE colouring reads it, so only that colouring
+    /// pays for it -- and it is keyed on `ifs_token`, which changes
+    /// with the flame and not with the view, because the pass covers
+    /// the ball and no pan or zoom moves it.
+    ///
+    /// Without this the measure colouring renders BLACK: the buffer
+    /// is bound at its one dummy element, every lookup reads no
+    /// measure, and every pixel reads zero density.
+    pub fn ensure_coarse(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        escape: &EscapeConfig,
+        flame: &crate::scene::transforms::Flame,
+    ) {
+        if escape.coloring != "ifs_measure" {
+            return;
+        }
+        let Some(packed) = self.ifs.as_ref() else { return };
+        if self.ifs_token == 0 || self.ifs_coarse_token == self.ifs_token {
+            return;
+        }
+        let (centre, radius) = (packed.ifs.ball.centre, packed.ifs.ball.radius);
+        let flame = flame.clone();
+        let Some(coarse) = super::ifs::coarse_measure_for(
+            device, queue, &flame, centre, radius, COARSE_RES, COARSE_BATCHES,
+        ) else {
+            return;
+        };
+        let packed_rows = super::ifs::pack_coarse(&coarse);
+        if self.set_coarse(device, queue, &packed_rows) {
+            self.ifs_coarse_token = self.ifs_token;
+        }
     }
 
     /// The stride this render uses: 2 in preview for a mode-D formula,

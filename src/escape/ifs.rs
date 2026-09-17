@@ -2749,6 +2749,180 @@ fn ifs_measure(uv: vec2<f32>, cells: f32) -> vec4<f32> {
 }
 "#;
 
+/// Render the flame's own measure over its ball -- D1's coarse pass,
+/// from the renderer that draws every other flame rather than from a
+/// chaos game written for a test.
+///
+/// **The palette is an inverse-sRGB grey ramp, and that is the
+/// trick.** The chaos game plots `srgb_to_linear(palette(c))`, which
+/// is `palette(c)^2.2`, and the accumulator keeps the
+/// density-weighted MEAN of it. A ramp storing `t^(1/2.2)` therefore
+/// plots exactly `c`, so the accumulator's red channel comes back as
+/// the mean palette coordinate and needs no second render or engine
+/// change to recover.
+///
+/// The framing follows `world_to_pixel`: it maps
+/// `(p - pan)·zoom·min(w,h)/4` about the centre, so a view spanning
+/// the ball exactly is `pan = ball.centre`, `zoom = 2/radius`.
+///
+/// `res` must be a multiple of 16 so the readback's rows are already
+/// 256-byte aligned.
+///
+/// Returns `None` if the device cannot hold the readback.
+#[allow(clippy::too_many_arguments)]
+pub fn coarse_measure_for(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    flame: &crate::scene::transforms::Flame,
+    ball_centre: [f64; 2],
+    ball_radius: f64,
+    res: u32,
+    batches: u32,
+) -> Option<crate::scene::ifs_estimate::CoarseMeasure> {
+    use crate::scene::palette::{ColorStop, Palette};
+    if res == 0 || res % 16 != 0 || !(ball_radius > 0.0) {
+        return None;
+    }
+    // `t^(1/2.2)` at enough stops that the texture's interpolation
+    // follows the curve rather than a chord.
+    let ramp = Palette::new(
+        "measure ramp",
+        (0..64)
+            .map(|i| {
+                let t = i as f32 / 63.0;
+                let v = t.powf(1.0 / 2.2);
+                ColorStop { position: t, color: [v, v, v] }
+            })
+            .collect(),
+    );
+
+    let mut config = crate::config::FractalConfig::default();
+    config.flame = flame.clone();
+    config.render_mode = crate::scene::transforms::RenderMode::TwoD;
+    config.pan_x = ball_centre[0] as f32;
+    config.pan_y = ball_centre[1] as f32;
+    config.zoom = (2.0 / ball_radius) as f32;
+    config.rotation = 0.0;
+    config.color_mode = crate::scene::palette::ColorMode::Palette;
+
+    let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+        device,
+        queue,
+        wgpu::TextureFormat::Rgba8Unorm,
+        res,
+        res,
+        &config.flame,
+        config.palette_size,
+    );
+    let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("coarse measure load"),
+    });
+    renderer.load_config(device, &mut enc, queue, &config, &ramp, 256, 20);
+    queue.submit(std::iter::once(enc.finish()));
+
+    const WORKGROUPS: u32 = 256;
+    let mut total: u64 = 0;
+    for b in 0..batches.max(1) {
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("coarse measure batch"),
+        });
+        let n = renderer.compute_pass(
+            &mut enc, queue, device, WORKGROUPS, 256, 20,
+            config.zoom, config.pan_x, config.pan_y, config.rotation,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, config.speed_factor,
+            b == 0, b == 0,
+        );
+        total += n;
+        renderer.accumulate_pass(&mut enc, queue, device, n);
+        queue.submit(std::iter::once(enc.finish()));
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+    }
+
+    // Read the accumulator: rgb the density-weighted mean colour --
+    // here the palette coordinate -- and a the raw hit count.
+    let row = (res as u64) * 16;
+    let size = row * res as u64;
+    if size > device.limits().max_buffer_size {
+        renderer.destroy();
+        return None;
+    }
+    let stage = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("coarse measure readback"),
+        size,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("coarse measure readback"),
+    });
+    enc.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: renderer.accumulation_texture(),
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &stage,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(row as u32),
+                rows_per_image: Some(res),
+            },
+        },
+        wgpu::Extent3d { width: res, height: res, depth_or_array_layers: 1 },
+    );
+    queue.submit(std::iter::once(enc.finish()));
+    let (tx, rx) = std::sync::mpsc::channel();
+    stage.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+        let _ = tx.send(r);
+    });
+    let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+    if rx.recv().ok()?.is_err() {
+        renderer.destroy();
+        return None;
+    }
+    let n = (res * res) as usize;
+    let mut hits = vec![0u32; n];
+    let mut palette_sum = vec![0.0f64; n];
+    {
+        let data = stage.slice(..).get_mapped_range();
+        let px: &[[f32; 4]] = bytemuck::cast_slice(&data);
+        for i in 0..n {
+            let a = px[i][3];
+            if a > 0.0 && a.is_finite() {
+                hits[i] = a as u32;
+                // rgb is the MEAN, so the sum is mean x count.
+                palette_sum[i] = px[i][0].clamp(0.0, 1.0) as f64 * a as f64;
+            }
+        }
+    }
+    stage.unmap();
+    renderer.destroy();
+
+    // Normalised by what LANDED, not by what was dispatched.
+    //
+    // The invariant measure is a probability measure and this
+    // estimates it, so the divisor is the sample total that reached
+    // the grid. It also makes the result independent of whatever
+    // constant the accumulator's alpha carries -- the histogram's
+    // `color_scale`, the burn-in the dispatch count includes and the
+    // plot does not, the samples a bad-value respawn drops. Counting
+    // the dispatch instead read 12.5x the chaos game's density, and
+    // chasing which of those constants it was would have been chasing
+    // a number that cancels.
+    let landed: u64 = hits.iter().map(|h| *h as u64).sum();
+    let _ = total;
+    Some(crate::scene::ifs_estimate::CoarseMeasure {
+        res: res as usize,
+        centre: ball_centre,
+        radius: ball_radius,
+        hits,
+        palette_sum,
+        samples: landed.max(1),
+    })
+}
+
 /// How many `vec4`s of the params' `fdata` block one seed occupies.
 pub const SEED_VEC4S: usize = 6;
 /// Where the seeds start in `fdata`; the whole-IFS constants are below.
@@ -7819,6 +7993,269 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 "{name}: the shader's palette is {cm:.5} off the f64 walk's"
             );
         }
+    }
+
+    /// The rendered coarse pass IS the measure a chaos game gives.
+    ///
+    /// D1's coarse pass comes from the flame renderer -- the one that
+    /// draws every other flame -- and the walk reads it as a density
+    /// and a palette coordinate. Two things have to hold and neither
+    /// is obvious: the framing has to map the ball onto the grid
+    /// exactly, and the inverse-sRGB ramp has to make the
+    /// accumulator's mean colour come back as the mean palette
+    /// coordinate.
+    ///
+    /// Compared against a CPU chaos game over the same ball. Not
+    /// pixel by pixel -- the two draw different sample sets -- but by
+    /// the two properties the walk actually uses: where the measure
+    /// IS, and how much of it is there.
+    #[test]
+    #[ignore = "needs a GPU; run with --ignored --nocapture"]
+    fn the_rendered_coarse_pass_is_the_chaos_games() {
+        use crate::scene::transforms::{Flame, Transform};
+        let aff = |a: f32, b: f32, c: f32, d: f32, e: f32, f: f32, col: f32| {
+            let mut t = Transform::default();
+            t.a = a; t.b = b; t.c = c; t.d = d; t.e = e; t.f = f;
+            t.color = col;
+            t.color_speed = 0.0;
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("linear", 1.0);
+            t
+        };
+        let cases: Vec<(&str, Vec<Transform>)> = vec![
+            ("gasket", vec![
+                aff(0.5, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0),
+                aff(0.5, 0.0, 0.0, 0.5, 0.5, 0.0, 0.5),
+                aff(0.5, 0.0, 0.0, 0.5, 0.25, 0.5, 1.0),
+            ]),
+            ("dragon", vec![
+                aff(0.5, -0.5, 0.5, 0.5, 0.0, 0.0, 0.0),
+                aff(-0.5, -0.5, 0.5, -0.5, 1.0, 0.0, 1.0),
+            ]),
+        ];
+        let (device, queue) = device();
+        const RES: u32 = 256;
+
+        for (name, transforms) in cases {
+            let mut flame = Flame::default();
+            flame.transforms = transforms;
+            let guard = crate::variations::global_registry();
+            let ifs = crate::scene::ifs_analysis::analyse_2d(&flame, &guard).expect("qualifies");
+            drop(guard);
+
+            let gpu = coarse_measure_for(
+                &device, &queue, &flame, ifs.ball.centre, ifs.ball.radius, RES, 24,
+            )
+            .expect("the coarse pass renders");
+
+            // The CPU reference over the same grid.
+            let cpu = {
+                let mut st = 0x9E3779B97F4A7C15u64;
+                let mut rnd = move || {
+                    st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    (st >> 11) as f64 / (1u64 << 53) as f64
+                };
+                let used: std::collections::BTreeSet<usize> =
+                    ifs.maps.iter().map(|m| m.transform_index).collect();
+                let total: f64 =
+                    used.iter().map(|&i| flame.transforms[i].weight as f64).sum();
+                let mut out = crate::scene::ifs_estimate::CoarseMeasure {
+                    res: RES as usize,
+                    centre: ifs.ball.centre,
+                    radius: ifs.ball.radius,
+                    hits: vec![0; (RES * RES) as usize],
+                    palette_sum: vec![0.0; (RES * RES) as usize],
+                    samples: 4_000_000,
+                };
+                let mut q = ifs.ball.centre;
+                let mut col = 0.5f64;
+                for i in 0..4_001_000usize {
+                    let u = rnd();
+                    let mut acc = 0.0;
+                    let mut m = ifs.maps.len() - 1;
+                    for (k, mp) in ifs.maps.iter().enumerate() {
+                        acc += flame.transforms[mp.transform_index].weight as f64 / total;
+                        if u <= acc { m = k; break; }
+                    }
+                    q = ifs.maps[m].forward.apply(q);
+                    let t = &flame.transforms[ifs.maps[m].transform_index];
+                    col = col * 0.5 + t.color as f64 * 0.5;
+                    if i < 1000 { continue; }
+                    if let Some(c) = out.index_for_test(q) {
+                        out.hits[c] += 1;
+                        out.palette_sum[c] += col;
+                    }
+                }
+                out
+            };
+
+            // 1. WHERE the measure is: the two must light the same
+            // cells. A framing error moves, scales or flips the grid
+            // and this is what sees it.
+            let (mut both, mut only_g, mut only_c) = (0usize, 0usize, 0usize);
+            for i in 0..(RES * RES) as usize {
+                match (gpu.hits[i] > 0, cpu.hits[i] > 0) {
+                    (true, true) => both += 1,
+                    (true, false) => only_g += 1,
+                    (false, true) => only_c += 1,
+                    _ => {}
+                }
+            }
+            let jaccard = both as f64 / (both + only_g + only_c).max(1) as f64;
+
+            // 2. HOW MUCH is there, and the palette: over the cells
+            // both found, which is where a comparison means anything.
+            let mut dens: Vec<f64> = Vec::new();
+            let mut cerr: Vec<f64> = Vec::new();
+            for i in 0..(RES * RES) as usize {
+                if gpu.hits[i] < 8 || cpu.hits[i] < 8 {
+                    continue;
+                }
+                let gd = gpu.hits[i] as f64 / gpu.samples as f64;
+                let cd = cpu.hits[i] as f64 / cpu.samples as f64;
+                dens.push(gd / cd);
+                cerr.push(
+                    (gpu.palette_sum[i] / gpu.hits[i] as f64
+                        - cpu.palette_sum[i] / cpu.hits[i] as f64)
+                        .abs(),
+                );
+            }
+            dens.sort_by(f64::total_cmp);
+            cerr.sort_by(f64::total_cmp);
+            let dm = dens[dens.len() / 2];
+            let cm = cerr[cerr.len() / 2];
+            println!(
+                "  {name:<8} lit both {both} | gpu-only {only_g} cpu-only {only_c} | \
+                 overlap {:.3} | density ratio median {dm:.3} | palette |err| {cm:.4}",
+                jaccard
+            );
+            assert!(
+                jaccard > 0.85,
+                "{name}: the rendered and sampled measures light different cells \
+                 (overlap {jaccard:.3}) -- the framing maps the ball onto the grid wrong"
+            );
+            assert!(
+                (0.8..=1.25).contains(&dm),
+                "{name}: the rendered measure is {dm:.3} of the sampled one"
+            );
+            assert!(
+                cm < 0.02,
+                "{name}: the rendered palette coordinate is {cm:.4} off -- the \
+                 inverse-sRGB ramp is not recovering it"
+            );
+        }
+    }
+
+    /// The MEASURE colouring draws something through the ordinary
+    /// render path.
+    ///
+    /// Every other gate for this feature drives the pieces directly.
+    /// This one goes through `renderer::render` -- the path the CLI
+    /// and the app take -- and is the only thing that would have
+    /// caught the colouring shipping BLACK, which is what it did
+    /// before `ensure_coarse` was wired: the coarse buffer stayed at
+    /// its one dummy element, every lookup read no measure, and every
+    /// pixel came back zero.
+    ///
+    /// It asserts a picture, not a value: lit pixels, more than one
+    /// distinct brightness, and the set drawn where the DISTANCE
+    /// colouring agrees it is.
+    #[test]
+    #[ignore = "needs a GPU; run with --ignored --nocapture"]
+    fn the_measure_colouring_draws_through_the_render_path() {
+        use crate::scene::transforms::{Flame, Transform};
+        let jul = |power: f32, ty: f32, col: f32| {
+            let mut t = Transform::default();
+            t.a = 0.7071; t.b = 0.7071; t.c = -0.7071; t.d = 0.7071; t.f = ty;
+            t.color = col;
+            t.color_speed = 0.0;
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("flatten", 1.0);
+            t.set_variation("julian", 1.0);
+            t.set_variation_param("julian", "power", power);
+            t.set_variation_param("julian", "dist", 1.0);
+            t
+        };
+        let mut flame = Flame::default();
+        flame.transforms = vec![jul(2.0, -0.3, 0.0), jul(3.0, 0.2, 1.0)];
+
+        let mut config = config_for(flame);
+        config.escape.coloring = "ifs_measure".to_string();
+        config.escape.coloring_params.clear();
+        config.escape.coloring_params.insert("cells".to_string(), 4.0);
+        config.escape.coloring_params.insert("scale".to_string(), 1.0);
+        config.escape.zoom_log2 = 1.0;
+        config.escape.center_re = "0.0".to_string();
+        config.escape.center_im = "0.0".to_string();
+        let measure = render(&config);
+
+        let lit = measure
+            .chunks(4)
+            .filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 12)
+            .count();
+        let shades: std::collections::BTreeSet<u8> =
+            measure.chunks(4).map(|p| p[0]).collect();
+        println!(
+            "  measure: {lit}/{} lit, {} distinct reds",
+            (W * H) as usize,
+            shades.len()
+        );
+        assert!(
+            lit > 200,
+            "the measure colouring drew {lit} lit pixels of {} -- it is rendering \
+             black, which is what an unbuilt coarse pass looks like",
+            W * H
+        );
+        assert!(
+            shades.len() > 8,
+            "the measure drew {} distinct brightnesses -- a flat frame is not a \
+             measure",
+            shades.len()
+        );
+
+        // And it draws the set where the distance colouring does.
+        let mut distance_cfg = config.clone();
+        distance_cfg.escape.coloring = "ifs_distance".to_string();
+        distance_cfg.escape.coloring_params.clear();
+        distance_cfg.escape.coloring_params.insert("interior".to_string(), 0.5);
+        distance_cfg.escape.coloring_params.insert("bands".to_string(), 0.0);
+        distance_cfg.escape.coloring_params.insert("edge".to_string(), 1.0);
+        let dist = render(&distance_cfg);
+
+        let bright = |v: &[u8], i: usize| {
+            v[i * 4] as u32 + v[i * 4 + 1] as u32 + v[i * 4 + 2] as u32
+        };
+        let (mut on, mut off) = (0usize, 0usize);
+        let (mut on_lit, mut off_lit) = (0usize, 0usize);
+        for i in 0..(W * H) as usize {
+            if bright(&dist, i) > 12 {
+                on += 1;
+                if bright(&measure, i) > 12 {
+                    on_lit += 1;
+                }
+            } else {
+                off += 1;
+                if bright(&measure, i) > 12 {
+                    off_lit += 1;
+                }
+            }
+        }
+        println!(
+            "  where distance says SET: {on_lit}/{on} lit by measure; \
+             where it says exterior: {off_lit}/{off}"
+        );
+        assert!(on > 100 && off > 100, "the view is not a mix of set and exterior");
+        // The measure lives ON the set, so it must light far more of
+        // the interior than of the exterior.
+        let on_rate = on_lit as f64 / on as f64;
+        let off_rate = off_lit as f64 / off as f64;
+        assert!(
+            on_rate > 4.0 * off_rate.max(1e-3),
+            "the measure is not concentrated on the set: {on_rate:.3} of the \
+             interior lit against {off_rate:.3} of the exterior"
+        );
     }
 
     /// The reported view (`grand-julian-glitches3.fflame`), GPU

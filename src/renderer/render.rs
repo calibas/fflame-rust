@@ -967,6 +967,10 @@ async fn render_escape(
     if let Some(def) = crate::escape::ifs::get_ifs(&job.config.escape.formula) {
         let registry = crate::variations::global_registry();
         escape_renderer.set_ifs(crate::escape::ifs::pack_for(def, &job.config, &registry));
+        // The MEASURE colouring reads a coarse pass over the ball;
+        // without one it renders black. Keyed on the flame, so this
+        // is once per flame and not once per view.
+        escape_renderer.ensure_coarse(device, queue, &job.config.escape, &job.config.flame);
         // A SOLID walk lights itself, from the app's own lighting
         // settings rather than a second vocabulary of its own.
         escape_renderer.set_solid_lighting(
