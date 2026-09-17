@@ -625,12 +625,22 @@ pin `MeasureMaps`: the dragon (affine), the 6:1:1 gasket
 and the bubble pair (an inverse's branches). Six million samples
 each side, at 2^2 and 2^4:
 
-| fixture | density 2^5 | 2^6 | colour 2^5 | 2^6 |
-|---|---|---|---|---|
-| dragon | 0.997 | 1.004 | 0.0002 | 0.0002 |
-| gasket 6:1:1 | 0.997 | 1.001 | 0.0000 | 0.0000 |
-| grand julian | 0.963 | 1.063 | 0.0118 | 0.0100 |
-| bubble pair | 0.959 | 0.957 | 0.0023 | 0.0041 |
+| fixture | stop | density 2^5 | 2^6 | colour 2^5 | 2^6 |
+|---|---|---|---|---|---|
+| dragon | 16 cells | 0.998 | 0.971 | 0.0001 | 0.0002 |
+| gasket 6:1:1 | 16 cells | 0.987 | 1.032 | 0.0002 | 0.0000 |
+| grand julian | 4 cells | 0.956 | 0.901 | 0.0087 | 0.0086 |
+| bubble pair | 4 cells | 0.973 | 0.980 | 0.0026 | 0.0038 |
+
+**Each fixture gates at its own stop depth, and that is the point.**
+An affine map's preimage of a pixel is exactly the parallelogram the
+composed Jacobian describes, at any size, so it can stop deep; a
+curved one outgrows it. The 6:1:1 gasket reads 1.234 at four cells
+and 1.032 at sixteen, and the bubble pair reads 0.957 at four and
+0.894 at sixteen -- opposite directions, and one constant for both
+would hide it. Checked that the gasket's 1.234 is the estimator and
+not the reference: at 40M samples rather than 6M it reads 1.267, so
+it does not converge.
 
 Held to `0.88..=1.15` on the median density and 0.02 on the median
 palette error. The tolerance is the REFERENCE's noise at this sample
@@ -672,6 +682,55 @@ twelve inverse branches can be gated. The gate now asserts that a
 fixture's coarse pass lights more than a hundred cells, which is
 what caught it and what stops a degenerate fixture from passing by
 having nothing to measure.
+
+## 5h. Units, and what the zoom does to brightness, 2026-09-17
+
+D4's measurable half was already settled by every row above: the
+estimator answers in the same units as [`CoarseMeasure::density`],
+which is why a ratio against an ordinary render of the same view is
+one and why the gate can assert that at all. What was left is the
+policy, and `probe_what_brightness_does_at_depth` gives it a number.
+
+Two quantities as the zoom climbs from 2^5 to 2^20, in stops:
+
+| set | measure the view holds | median density per unit area |
+|---|---|---|
+| dragon | **−30.0** | 0.0 |
+| gasket | −23.3 | +6.5 |
+| grand julian | −21.6 | +7.4 |
+
+**The first column is the starvation, measured.** A chaos game has to
+find that measure by sampling, so holding brightness at 2^20 would
+take 2^21 to 2^30 times the samples. That is the wall this plan
+exists to go around, and the estimator does not care: it reads the
+same coarse pass at every zoom.
+
+**The second column is the attractor's dimension, read off the
+picture.** Density per unit area scales as `2^(z(2−D))`, so the rate
+IS `2 − D`. The dragon's measure is two-dimensional and its density
+is flat to 0.0 stops over fifteen zoom levels; the gasket gains 6.5
+over fifteen, a rate of 0.43 against `2 − log3/log2 = 0.415`; the
+grand julian gains 7.4, a rate of 0.49, so its measure carries
+dimension about 1.51. A quantity that falls out of the estimator and
+agrees with the arithmetic to two digits is a good sign the units
+are right.
+
+So the tonemap's choice is between a brightness that falls by
+twenty-odd stops (the flame's own normalisation, which is
+iteration-invariant and not zoom-invariant) and one that divides by
+the view's own measure and does not. D4's default stands.
+
+**And the probe found a trap that was in the gate too.** Centring a
+view on the densest coarse CELL is not the same as centring it on
+the attractor: a cell that is dense on average can have the set
+nowhere near its geometric middle, and once the view is smaller than
+a cell it misses entirely. The grand julian read a flat ZERO past
+2^12 for that reason and nothing was wrong with the estimator.
+Centring on a chaos-game sample is not enough either -- a random
+attractor point on the 6:1:1 gasket left eight comparable pixels in
+frame. Both now centre on **the attractor sample whose coarse cell
+holds the most measure**, which is on the set and where the
+reference has the statistics to be one.
 
 ## 6. Gates
 
