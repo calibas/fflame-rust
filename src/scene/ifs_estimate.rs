@@ -2951,7 +2951,15 @@ mod tests {
             ]),
         ];
 
-        for (name, transforms) in cases {
+        for (name, mut transforms) in cases {
+            // Distinct colours, spread over the palette, so a right
+            // answer is not right by everything being equal. Speed
+            // zero is the plain flam3 halving.
+            let n = transforms.len().max(2) - 1;
+            for (i, t) in transforms.iter_mut().enumerate() {
+                t.color = i as f32 / n as f32;
+                t.color_speed = 0.0;
+            }
             let flame = flame_of(transforms);
             let ifs = {
                 let guard = global_registry();
@@ -3055,16 +3063,21 @@ mod tests {
             for k in 0..40 {
                 centre = step(centre, k % ifs.maps.len(), 0.31 * k as f64 % 1.0, &ifs);
             }
-            let mut direct: Vec<(f64, Vec<u32>)> = Vec::new();
+            let mut direct: Vec<(f64, Vec<u32>, Vec<f64>)> = Vec::new();
             for &zoom in &[2.0f64, 4.0, 6.0] {
                 let span = 2.0 * br / 2f64.powf(zoom);
                 let px = span / VP as f64;
                 let origin = [centre[0] - span * 0.5, centre[1] - span * 0.5];
                 let mut hits = vec![0u32; VP * VP];
+                let mut hcol = vec![0.0f64; VP * VP];
                 let mut q = bc;
+                let mut col = 0.5f64;
                 for i in 0..DIRECT_N + 1000 {
                     let m = pick_transform(rnd(), &ifs, &flame, total);
                     q = step(q, m, rnd(), &ifs);
+                    let t = &flame.transforms[ifs.maps[m].transform_index];
+                    let sp = t.color_speed as f64;
+                    col = col * (1.0 + sp) * 0.5 + t.color as f64 * (1.0 - sp) * 0.5;
                     if i < 1000 {
                         continue;
                     }
@@ -3074,10 +3087,11 @@ mod tests {
                         let (ix, iy) = (fx as usize, fy as usize);
                         if ix < VP && iy < VP {
                             hits[iy * VP + ix] += 1;
+                            hcol[iy * VP + ix] += col;
                         }
                     }
                 }
-                direct.push((zoom, hits));
+                direct.push((zoom, hits, hcol));
             }
 
             // THE COARSE PASS: the density per unit area over the
@@ -3087,6 +3101,7 @@ mod tests {
             let res = 512usize;
             let cpx = 2.0 * br / res as f64;
             let mut grid = vec![0u32; res * res];
+            let mut cgrid = vec![0.0f64; res * res];
             let cell = |q: [f64; 2]| -> Option<usize> {
                 let fx = (q[0] - (bc[0] - br)) / cpx;
                 let fy = (q[1] - (bc[1] - br)) / cpx;
@@ -3097,20 +3112,39 @@ mod tests {
                 (ix < res && iy < res).then(|| iy * res + ix)
             };
             let mut q = bc;
+            let mut col = 0.5f64;
             for i in 0..COARSE_N + 1000 {
                 let m = pick_transform(rnd(), &ifs, &flame, total);
                 q = step(q, m, rnd(), &ifs);
+                // The flam3 rule, exactly as `main_template.wgsl`
+                // applies it: c' = c(1+s)/2 + col(1-s)/2.
+                let t = &flame.transforms[ifs.maps[m].transform_index];
+                let sp = t.color_speed as f64;
+                col = col * (1.0 + sp) * 0.5 + t.color as f64 * (1.0 - sp) * 0.5;
                 if i >= 1000 {
                     if let Some(c) = cell(q) {
                         grid[c] += 1;
+                        cgrid[c] += col;
                     }
                 }
             }
             let rho = |q: [f64; 2]| -> f64 {
                 cell(q).map_or(0.0, |c| grid[c] as f64 / (COARSE_N as f64 * cpx * cpx))
             };
+            // The coarse pass's mean palette coordinate: `c_0`, which
+            // the address rule damps by `prod (1+s)/2` and which
+            // therefore only has to be roughly right (D5).
+            let rho_col = |q: [f64; 2]| -> f64 {
+                cell(q).map_or(0.5, |c| {
+                    if grid[c] > 0 {
+                        cgrid[c] / grid[c] as f64
+                    } else {
+                        0.5
+                    }
+                })
+            };
 
-            for (zoom, hits) in &direct {
+            for (zoom, hits, hcol) in &direct {
                 let span = 2.0 * br / 2f64.powf(*zoom);
                 let px = span / VP as f64;
                 let origin = [centre[0] - span * 0.5, centre[1] - span * 0.5];
@@ -3156,21 +3190,40 @@ mod tests {
                 // `beam` of zero enumerates every address, which is
                 // §5a's reference and separates the formula from the
                 // truncation.
-                let estimate = |x: [f64; 2], beam: usize, foot: bool, cells: f64| -> f64 {
+                // Density and colour together. The walk applies
+                // `S_{a_1}^-1` first, so the forward sequence from
+                // `q_a` back to the pixel runs `a_k` first and `a_1`
+                // LAST -- and the flam3 rule is a fold in that order,
+                // which makes the SHALLOWEST branch dominate with
+                // weight a half. `c_0` is the coarse colour at the
+                // endpoint, damped by `prod (1+s)/2`.
+                let estimate_c = |x: [f64; 2], beam: usize, foot: bool, cells: f64|
+                 -> (f64, f64) {
                     let want = want * cells;
                     let mut acc = 0.0f64;
-                    // (point, probability, composed Jacobian)
-                    let mut live: Vec<([f64; 2], f64, [[f64; 2]; 2])> =
-                        vec![(x, 1.0, [[1.0, 0.0], [0.0, 1.0]])];
+                    let mut acc_col = 0.0f64;
+                    // (point, probability, composed Jacobian, address)
+                    let mut live: Vec<([f64; 2], f64, [[f64; 2]; 2], Vec<usize>)> =
+                        vec![(x, 1.0, [[1.0, 0.0], [0.0, 1.0]], Vec::new())];
                     for _ in 0..24u32 {
                         if live.is_empty() {
                             break;
                         }
-                        let mut next: Vec<([f64; 2], f64, [[f64; 2]; 2])> = Vec::new();
-                        for (q, pa, m) in live.drain(..) {
+                        let mut next: Vec<([f64; 2], f64, [[f64; 2]; 2], Vec<usize>)> =
+                            Vec::new();
+                        for (q, pa, m, addr) in live.drain(..) {
                             let det = (m[0][0] * m[1][1] - m[0][1] * m[1][0]).abs();
                             if det >= want {
-                                acc += pa * look(q, m, foot) * det;
+                                let w = pa * look(q, m, foot) * det;
+                                // `a_k` first, `a_1` last.
+                                let mut c = rho_col(q);
+                                for &i in addr.iter().rev() {
+                                    let t = &flame.transforms[ifs.maps[i].transform_index];
+                                    let sp = t.color_speed as f64;
+                                    c = c * (1.0 + sp) * 0.5 + t.color as f64 * (1.0 - sp) * 0.5;
+                                }
+                                acc += w;
+                                acc_col += w * c;
                                 continue;
                             }
                             for (i, mp) in ifs.maps.iter().enumerate() {
@@ -3201,7 +3254,9 @@ mod tests {
                                 if !(d2 > 0.0) || !d2.is_finite() {
                                     continue;
                                 }
-                                next.push((qi, pa * pb[i], m2));
+                                let mut a2 = addr.clone();
+                                a2.push(i);
+                                next.push((qi, pa * pb[i], m2, a2));
                             }
                         }
                         if beam > 0 && next.len() > beam {
@@ -3209,7 +3264,7 @@ mod tests {
                             // the answer is a sum and a pruned lineage
                             // is lost from it entirely.
                             next.sort_by(|a, b| {
-                                let key = |c: &([f64; 2], f64, [[f64; 2]; 2])| {
+                                let key = |c: &([f64; 2], f64, [[f64; 2]; 2], Vec<usize>)| {
                                     let d = (c.2[0][0] * c.2[1][1] - c.2[0][1] * c.2[1][0]).abs();
                                     c.1 * d * rho(c.0)
                                 };
@@ -3219,7 +3274,10 @@ mod tests {
                         }
                         live = next;
                     }
-                    acc
+                    (acc, if acc > 0.0 { acc_col / acc } else { 0.5 })
+                };
+                let estimate = |x: [f64; 2], beam: usize, foot: bool, cells: f64| -> f64 {
+                    estimate_c(x, beam, foot, cells).0
                 };
 
                 // The beam is held at 16 so that what varies is the
@@ -3255,6 +3313,56 @@ mod tests {
                             }
                         }
                     }
+                }
+                // COLOUR: the address rule against the chaos game's
+                // own mean palette coordinate, at the stop depth the
+                // density rows found best for this class of set.
+                {
+                    let mut err: Vec<f64> = Vec::new();
+                    let mut err0: Vec<f64> = Vec::new();
+                    for iy in 0..VP {
+                        for ix in 0..VP {
+                            let h = hits[iy * VP + ix];
+                            if h < 40 {
+                                continue;
+                            }
+                            let truth = hcol[iy * VP + ix] / h as f64;
+                            let x = [
+                                origin[0] + (ix as f64 + 0.5) * px,
+                                origin[1] + (iy as f64 + 0.5) * px,
+                            ];
+                            let (_, c) = estimate_c(x, 16, true, 4.0);
+                            err.push((c - truth).abs());
+                            // What the coarse colour alone would say,
+                            // with no address rule: the control that
+                            // shows the fold is doing the work.
+                            err0.push((rho_col(x) - truth).abs());
+                        }
+                    }
+                    err.sort_by(f64::total_cmp);
+                    err0.sort_by(f64::total_cmp);
+                    let md = |v: &[f64]| -> f64 {
+                        if v.is_empty() {
+                            f64::NAN
+                        } else {
+                            v[v.len() / 2]
+                        }
+                    };
+                    let p90 = |v: &[f64]| -> f64 {
+                        if v.is_empty() {
+                            f64::NAN
+                        } else {
+                            v[((v.len() - 1) as f64 * 0.9).round() as usize]
+                        }
+                    };
+                    println!(
+                        "  {name:<16} 2^{zoom:<3.0} COLOUR                | cmp {:>4} | \
+                         address rule |err| median {:.4} p90 {:.4} | coarse only {:.4}",
+                        err.len(),
+                        md(&err),
+                        p90(&err),
+                        md(&err0)
+                    );
                 }
                 for (label, mut r) in rows {
                     r.sort_by(f64::total_cmp);
