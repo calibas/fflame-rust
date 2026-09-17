@@ -7906,8 +7906,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 .max_by_key(|p| coarse.index_for_test(**p).map_or(0, |i| coarse.hits[i]))
                 .expect("samples");
             let zoom = 5.0f64;
-            let span = 2.0 * ifs.ball.radius / 2f64.powf(zoom);
-            let px = span / RH as f64;
+            let want_span = 2.0 * ifs.ball.radius / 2f64.powf(zoom);
 
             let mut config = crate::config::FractalConfig::default();
             config.render_mode = RenderMode::Escape;
@@ -7916,13 +7915,24 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             config.escape.coloring = "ifs_measure".to_string();
             config.escape.center_re = format!("{:?}", centre[0]);
             config.escape.center_im = format!("{:?}", centre[1]);
-            config.escape.zoom_log2 = (4.0 / span).log2();
+            config.escape.zoom_log2 = (4.0 / want_span).log2();
             config.escape.supersample = 1;
             config.escape.formula_params.insert("levels".to_string(), 60.0);
             config.escape.formula_params.insert("beam".to_string(), 8.0);
             config.escape.coloring_params.insert("cells".to_string(), MEASURE_CELLS as f32);
             config.escape.coloring_params.insert("scale".to_string(), 1.0);
             let esc = config.escape.clone();
+            // The VIEW, derived the way `ensure_ifs_seeds` derives it
+            // rather than from the span this gate asked for.
+            //
+            // Those are not the same number, and assuming they were
+            // is what made this gate report the shader 3.4x out on a
+            // gasket: the reference was measuring a different view.
+            // Everything below reads the renderer's own arithmetic.
+            let span_y = 4.0 / esc.zoom_factor();
+            let span_x = span_y * RW as f64 / RH as f64;
+            let basis = view_basis(span_x, span_y, esc.rotation);
+            let px = span_y / RH as f64;
 
             let mut escape = crate::escape::EscapeRenderer::new(&device, RW, RH);
             escape.ifs_force_level = Some(0);
@@ -7959,9 +7969,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                         (x as f64 + 0.5) / RW as f64 - 0.5,
                         (y as f64 + 0.5) / RH as f64 - 0.5,
                     ];
+                    // `basis` carries the y flip, so uv runs down the
+                    // screen with the pixels -- the convention the
+                    // seeded start uses.
                     let world = [
-                        centre[0] + uv[0] * span * RW as f64 / RH as f64,
-                        centre[1] - uv[1] * span,
+                        centre[0] + basis[0][0] * uv[0] + basis[0][1] * uv[1],
+                        centre[1] + basis[1][0] * uv[0] + basis[1][1] * uv[1],
                     ];
                     let want = estimate_measure(
                         &ifs, &maps, &coarse, world, px, 8, MEASURE_CELLS, 60,

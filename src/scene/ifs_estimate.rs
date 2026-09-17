@@ -1629,6 +1629,9 @@ pub struct MeasureEstimate {
     pub palette: f64,
     /// How many addresses contributed.
     pub addresses: u32,
+    /// The deepest level at which one of them stopped, which is what
+    /// the stop rule actually chose.
+    pub depth: u32,
 }
 
 /// How large the preimage region may grow, in coarse cells, before the
@@ -1685,7 +1688,7 @@ pub fn estimate_measure(
     let (bc, br) = (ifs.ball.centre, ifs.ball.radius);
     let cpx = coarse.cell();
     if !(px > 0.0) || !(cpx > 0.0) {
-        return MeasureEstimate { density: 0.0, palette: 0.5, addresses: 0 };
+        return MeasureEstimate { density: 0.0, palette: 0.5, addresses: 0, depth: 0 };
     }
     // The area the region must reach, as a determinant.
     let want = (cpx / px) * (cpx / px) * cells.max(1.0);
@@ -1754,8 +1757,9 @@ pub fn estimate_measure(
     let mut acc = 0.0f64;
     let mut acc_col = 0.0f64;
     let mut addresses = 0u32;
+    let mut depth = 0u32;
 
-    for _ in 0..max_levels {
+    for level in 0..max_levels {
         if live.is_empty() {
             break;
         }
@@ -1771,6 +1775,7 @@ pub fn estimate_measure(
                     acc += w;
                     acc_col += w * col;
                     addresses += 1;
+                    depth = depth.max(level);
                 }
                 continue;
             }
@@ -1825,6 +1830,7 @@ pub fn estimate_measure(
         density: acc,
         palette: if acc > 0.0 { acc_col / acc } else { 0.5 },
         addresses,
+        depth,
     }
 }
 
@@ -4274,6 +4280,164 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// Is the shader's measure gap on a gasket f32, or a mistake?
+    ///
+    /// `the_shader_measure_walk_is_the_cpu_one` finds the GPU exact on
+    /// a julia dust and 2.4x to 3.4x the reference on a gasket, with
+    /// the ADDRESSES agreeing (the colour matches once the beam's ties
+    /// are broken). If the addresses agree then the probability and
+    /// the determinant agree, so the difference is `ρ` -- the
+    /// footprint average -- and the suspicion is f32.
+    ///
+    /// The mechanism, if it is real: the walk EXPANDS, so a lineage's
+    /// endpoint sits at a `|q|` far larger than the ball, where one
+    /// f32 ulp is a large fraction of a coarse cell. On a measure of
+    /// dimension 1.585 most of a footprint lands in empty cells and
+    /// two or three samples of sixteen carry everything, so a sample
+    /// moved across a cell boundary changes `ρ` by a lot. A measure of
+    /// dimension two has no such cliff.
+    ///
+    /// This walks each set and reports, at the points the lookup
+    /// actually happens: how big one f32 ulp is against a coarse
+    /// cell, and how much `ρ` moves when the sample positions are
+    /// rounded to f32.
+    #[test]
+    #[ignore = "a survey; run with --ignored --nocapture"]
+    fn probe_whether_the_measure_gap_is_f32() {
+        let jul = |power: f32, ty: f32| {
+            let mut t = kernel_xform("julian", [0.7071, 0.7071, -0.7071, 0.7071, 0.0, ty], 1.0);
+            t.variations.insert("flatten".to_string(), 1.0);
+            t.variation_order.insert(0, "flatten".to_string());
+            t.set_variation_param("julian", "power", power);
+            t.set_variation_param("julian", "dist", 1.0);
+            t
+        };
+        let cases: Vec<(&str, Vec<Transform>)> = vec![
+            ("gasket", vec![half(0.0, 0.0), half(0.5, 0.0), half(0.25, 0.5)]),
+            ("dragon", vec![
+                affine_xform(0.5, -0.5, 0.5, 0.5, 0.0, 0.0),
+                affine_xform(-0.5, -0.5, 0.5, -0.5, 1.0, 0.0),
+            ]),
+            ("julia dust", vec![jul(2.0, -0.3), jul(3.0, 0.2)]),
+        ];
+        const RES: usize = 256;
+        for (name, transforms) in cases {
+            let flame = flame_of(transforms);
+            let ifs = {
+                let guard = global_registry();
+                analyse_2d(&flame, &guard).expect("qualifies")
+            };
+            let maps = MeasureMaps::of(&ifs, &flame);
+            let (bc, br) = (ifs.ball.centre, ifs.ball.radius);
+            let cpx = 2.0 * br / RES as f64;
+
+            // A coarse pass, and a view on the set.
+            let mut coarse = CoarseMeasure {
+                res: RES,
+                centre: bc,
+                radius: br,
+                hits: vec![0; RES * RES],
+                palette_sum: vec![0.0; RES * RES],
+                samples: 4_000_000,
+            };
+            let smp = chaos_sample(&ifs, 4_000_000);
+            for q in &smp {
+                if let Some(c) = coarse.index_for_test(*q) {
+                    coarse.hits[c] += 1;
+                    coarse.palette_sum[c] += 0.5;
+                }
+            }
+            coarse.samples = smp.len() as u64;
+            let centre = *smp
+                .iter()
+                .max_by_key(|p| coarse.index_for_test(**p).map_or(0, |i| coarse.hits[i]))
+                .expect("samples");
+
+            let span = 2.0 * br / 2f64.powf(5.0);
+            let px = span / 64.0;
+            let want = (cpx / px) * (cpx / px) * MEASURE_CELLS;
+
+            // Walk to the stop and record where the lookup happens.
+            let mut mags: Vec<f64> = Vec::new();
+            let mut moved: Vec<f64> = Vec::new();
+            for gy in 0..16 {
+                for gx in 0..16 {
+                    let x = [
+                        centre[0] + (gx as f64 / 16.0 - 0.5) * span,
+                        centre[1] + (gy as f64 / 16.0 - 0.5) * span,
+                    ];
+                    let mut live = vec![(x, [[1.0f64, 0.0], [0.0, 1.0]])];
+                    for _ in 0..40 {
+                        let mut next = Vec::new();
+                        for (q, m) in live.drain(..) {
+                            let det = (m[0][0] * m[1][1] - m[0][1] * m[1][0]).abs();
+                            if det >= want {
+                                // The footprint, in f64 and rounded.
+                                let (mut a, mut b) = (0.0f64, 0.0f64);
+                                for sy in 0..4 {
+                                    for sx in 0..4 {
+                                        let u = ((sx as f64 + 0.5) / 4.0 - 0.5) * px;
+                                        let v = ((sy as f64 + 0.5) / 4.0 - 0.5) * px;
+                                        let at = [
+                                            q[0] + m[0][0] * u + m[0][1] * v,
+                                            q[1] + m[1][0] * u + m[1][1] * v,
+                                        ];
+                                        a += coarse.density(at);
+                                        b += coarse.density([
+                                            at[0] as f32 as f64,
+                                            at[1] as f32 as f64,
+                                        ]);
+                                    }
+                                }
+                                if a > 0.0 {
+                                    mags.push(q[0].hypot(q[1]));
+                                    moved.push((b / a).ln().abs());
+                                }
+                                continue;
+                            }
+                            for (i, mp) in ifs.maps.iter().enumerate() {
+                                let _ = i;
+                                let Some(j) = mp.inverse.jacobian(q) else { continue };
+                                let qi = mp.inverse.apply(q);
+                                if !qi[0].is_finite() || !qi[1].is_finite() { continue; }
+                                if Affine2::distance(qi, bc) > br * (1.0 + 1e-6) { continue; }
+                                next.push((qi, compose_matrix(j, m)));
+                            }
+                        }
+                        if next.len() > 8 {
+                            next.sort_by(|p, q2| {
+                                let k = |c: &([f64; 2], [[f64; 2]; 2])| {
+                                    (c.1[0][0] * c.1[1][1] - c.1[0][1] * c.1[1][0]).abs()
+                                        * coarse.density(c.0)
+                                };
+                                k(q2).total_cmp(&k(p))
+                            });
+                            next.truncate(8);
+                        }
+                        live = next;
+                        if live.is_empty() { break; }
+                    }
+                }
+            }
+            if mags.is_empty() {
+                println!("  {name:<12} no lookups");
+                continue;
+            }
+            mags.sort_by(f64::total_cmp);
+            moved.sort_by(f64::total_cmp);
+            let med_mag = mags[mags.len() / 2];
+            let ulp = med_mag * 5.96e-8;
+            println!(
+                "  {name:<12} median |q| at the lookup {med_mag:.3e} | one f32 ulp \
+                 {ulp:.3e} = {:.4} of a coarse cell | rounding moves rho by \
+                 median {:.3}x, p90 {:.3}x",
+                ulp / cpx,
+                moved[moved.len() / 2].exp(),
+                moved[((moved.len() - 1) as f64 * 0.9) as usize].exp(),
+            );
         }
     }
 
