@@ -1685,21 +1685,36 @@ pub fn estimate_measure(
     let want = (cpx / px) * (cpx / px) * cells.max(1.0);
     let beam = beam.max(1);
 
-    // `ρ` averaged over the region the composed Jacobian describes.
+    // `ρ` averaged over the region the composed Jacobian describes,
+    // and the palette coordinate averaged over the SAME samples,
+    // weighted by the measure at each.
+    //
+    // Both from one footprint, because reading them differently is a
+    // bug: an address whose footprint straddles a populated cell while
+    // its centre sits in an empty one would get a positive weight and
+    // the palette's mid-grey fallback. On a sparse attractor that is
+    // common -- it cost the grand julian 0.057 in palette coordinate,
+    // fourteen entries of a 256-colour ramp, where every other
+    // fixture read under 0.001.
     const K: i32 = 4;
-    let look = |q: [f64; 2], m: [[f64; 2]; 2]| -> f64 {
+    let look = |q: [f64; 2], m: [[f64; 2]; 2]| -> (f64, f64) {
         let mut acc = 0.0;
+        let mut col = 0.0;
         for sy in 0..K {
             for sx in 0..K {
                 let u = ((sx as f64 + 0.5) / K as f64 - 0.5) * px;
                 let v = ((sy as f64 + 0.5) / K as f64 - 0.5) * px;
-                acc += coarse.density([
+                let at = [
                     q[0] + m[0][0] * u + m[0][1] * v,
                     q[1] + m[1][0] * u + m[1][1] * v,
-                ]);
+                ];
+                let d = coarse.density(at);
+                acc += d;
+                col += d * coarse.palette(at);
             }
         }
-        acc / (K * K) as f64
+        let n = (K * K) as f64;
+        (acc / n, if acc > 0.0 { col / acc } else { 0.5 })
     };
 
     struct Live {
@@ -1721,11 +1736,12 @@ pub fn estimate_measure(
         for c in live.drain(..) {
             let det = (c.m[0][0] * c.m[1][1] - c.m[0][1] * c.m[1][0]).abs();
             if det >= want {
-                let w = c.p * look(c.q, c.m) * det;
+                let (rho, c0) = look(c.q, c.m);
+                let w = c.p * rho * det;
                 if w > 0.0 {
                     // `a_k` first, `a_1` last: the flam3 rule as
                     // `main_template.wgsl` applies it.
-                    let mut col = coarse.palette(c.q);
+                    let mut col = c0;
                     for &i in c.addr.iter().rev() {
                         let (cl, sp) = maps.colour[i as usize];
                         col = col * (1.0 + sp) * 0.5 + cl * (1.0 - sp) * 0.5;
@@ -3264,7 +3280,13 @@ mod tests {
         const COARSE: usize = 6_000_000;
         const DIRECT: usize = 6_000_000;
         const RES: usize = 256;
-        const VP: usize = 40;
+        // The view must sit where the estimator is DEFINED: a
+        // coarse cell coarser than a view pixel, `VP·2^zoom >= 2·RES`
+        // (§5a's domain condition). And the reference must have the
+        // samples to be a reference, which pulls the other way -- the
+        // measure in view falls as `2^(-zoom·D)`. VP 16 at 2^5 and
+        // 2^6 satisfies both at six million samples.
+        const VP: usize = 16;
 
         let j = |aff: [f32; 6], w: f32, power: f32| {
             let mut t = affine_xform(aff[0], aff[1], aff[2], aff[3], aff[4], aff[5]);
@@ -3300,6 +3322,15 @@ mod tests {
                 kernel_xform("bubble", [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], 1.6),
                 kernel_xform("bubble", [0.7, 0.7, -0.7, 0.7, 0.0, -0.3], 1.2),
             ]),
+            // `disc` is NOT here, and the reason is worth keeping:
+            // the obvious fixture -- the one the kernel's other gates
+            // use -- has a single POINT for an attractor. Six million
+            // chaos-game samples land in one coarse cell out of
+            // 65536, and `chaos_sample` collapses to the origin too,
+            // so it is the fixture and not the sampler. A disc IFS
+            // that spreads is wanted before that kernel's twelve
+            // inverse branches can be gated; the guard below is what
+            // caught it.
         ];
 
         for (name, mut transforms) in cases {
@@ -3315,15 +3346,32 @@ mod tests {
             };
             let maps = MeasureMaps::of(&ifs, &flame);
             let coarse = chaos_measure(&ifs, &flame, COARSE, RES, 0x9E3779B97F4A7C15);
+            // A fixture whose attractor is a point gates nothing, and
+            // looks like a pass. The `disc` fixture above lit ONE cell
+            // of 65536 and this is what found it.
+            let lit = coarse.hits.iter().filter(|&&h| h > 0).count();
+            assert!(
+                lit > 100,
+                "{name}: the coarse pass lit {lit} cells of {} -- the attractor is \
+                 degenerate and this fixture cannot measure anything",
+                RES * RES
+            );
             let (bc, br) = (ifs.ball.centre, ifs.ball.radius);
-            let mut centre = bc;
-            for k in 0..40 {
-                centre = match &ifs.maps[k % ifs.maps.len()].forward {
-                    Map2::Nonlinear(nl) => nl.apply_branch(centre, 0),
-                    other => other.apply(centre),
-                };
-            }
-            for &zoom in &[2.0f64, 4.0] {
+            // The DENSEST coarse cell, so the view has measure in it
+            // whatever the set's shape. Iterating the forward maps
+            // from the ball's centre does not: on a `disc` it landed
+            // somewhere with one comparable pixel in the frame.
+            let centre = {
+                let best = (0..coarse.hits.len())
+                    .max_by_key(|&i| coarse.hits[i])
+                    .unwrap_or(0);
+                let c = coarse.cell();
+                [
+                    bc[0] - br + (best % RES) as f64 * c + c * 0.5,
+                    bc[1] - br + (best / RES) as f64 * c + c * 0.5,
+                ]
+            };
+            for &zoom in &[5.0f64, 6.0] {
                 let span = 2.0 * br / 2f64.powf(zoom);
                 let px = span / VP as f64;
                 let origin = [centre[0] - span * 0.5, centre[1] - span * 0.5];
@@ -3396,7 +3444,7 @@ mod tests {
                 for iy in 0..VP {
                     for ix in 0..VP {
                         let h = view.0[iy * VP + ix];
-                        if h < 40 {
+                        if h < 25 {
                             continue;
                         }
                         let truth = h as f64 / (DIRECT as f64 * px * px);
@@ -3429,12 +3477,12 @@ mod tests {
                     ratios.len()
                 );
                 assert!(
-                    (0.78..=1.28).contains(&median),
+                    (0.88..=1.15).contains(&median),
                     "{name} 2^{zoom}: the measure walk reads {median:.3} of the chaos \
                      game's density"
                 );
                 assert!(
-                    cmed < 0.04,
+                    cmed < 0.02,
                     "{name} 2^{zoom}: the colour is {cmed:.4} off the chaos game's, in \
                      palette coordinates"
                 );

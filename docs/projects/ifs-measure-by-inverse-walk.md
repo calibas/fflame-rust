@@ -625,24 +625,53 @@ pin `MeasureMaps`: the dragon (affine), the 6:1:1 gasket
 and the bubble pair (an inverse's branches). Six million samples
 each side, at 2^2 and 2^4:
 
-| fixture | 2^2 | 2^4 |
-|---|---|---|
-| dragon | 0.998 | 1.002 |
-| gasket 6:1:1 | 0.864 | 1.137 |
-| grand julian | 1.002 | 1.000 |
-| bubble pair | 1.002 | 0.973 |
+| fixture | density 2^5 | 2^6 | colour 2^5 | 2^6 |
+|---|---|---|---|---|
+| dragon | 0.997 | 1.004 | 0.0002 | 0.0002 |
+| gasket 6:1:1 | 0.997 | 1.001 | 0.0000 | 0.0000 |
+| grand julian | 0.963 | 1.063 | 0.0118 | 0.0100 |
+| bubble pair | 0.959 | 0.957 | 0.0023 | 0.0041 |
 
-Held to `0.78..=1.28` on the median density and 0.04 on the median
+Held to `0.88..=1.15` on the median density and 0.02 on the median
 palette error. The tolerance is the REFERENCE's noise at this sample
-count, not the estimator's accuracy: §5c to §5f measured that at 20M
-samples as within 3% everywhere. The 6:1:1 gasket is the loosest and
-has the fewest comparable pixels, and it tightened from 0.812/1.300
-to 0.864/1.137 when the samples went from 2M to 6M, which is what
-says the residue is the reference.
+count, not the estimator's accuracy.
 
-**Checked that it can fail.** With the root's branch division
-removed the gate reports 5.276 on the grand julian and fails. A gate
-that cannot fail is not a gate, and this one has now been seen to.
+**Checked that it can fail, both ways.** With the root's branch
+division removed it reports 5.276 on the grand julian; with the
+normalisation over transforms replaced by one over maps it reports
+0.128 on the bubble pair. Each correction has its own fixture and
+its own failure.
+
+**Two things the gate found while being built.**
+
+*The view has to sit where the estimator is defined.* The first
+version ran at 2^2 and 2^4 with forty pixels across and a 256-cell
+coarse grid, which puts the coarse cell FINER than the view pixel --
+§5a's degenerate regime. In it the 6:1:1 gasket read 0.864 and 1.137
+and the colour read 0.085. Moved to `VP·2^zoom >= 2·RES` (sixteen
+pixels at 2^5 and 2^6) the same fixture reads 0.997 and 1.001 with a
+colour error of 0.0000. None of that was the estimator.
+
+*The colour must read the same footprint as the weight.* It did not:
+the weight averaged ρ over the preimage region while the colour
+point-sampled the palette at its centre. An address whose footprint
+straddles a populated cell while its centre sits in an empty one
+then gets a positive weight and the palette's mid-grey fallback. On
+a sparse attractor that is common, and it cost the grand julian
+0.057 in palette coordinate where every other fixture read under
+0.001. Reading both from one footprint, weighted by the measure at
+each sample, takes it to 0.0118.
+
+**And `disc` is not gated, for a reason worth keeping.** The obvious
+fixture -- the one that kernel's other tests use -- has a single
+POINT for an attractor: six million chaos-game samples land in one
+coarse cell of 65536, and the pre-existing `chaos_sample` helper
+collapses to the origin too, so it is the fixture and not the
+sampler. A disc IFS that actually spreads is wanted before those
+twelve inverse branches can be gated. The gate now asserts that a
+fixture's coarse pass lights more than a hundred cells, which is
+what caught it and what stops a degenerate fixture from passing by
+having nothing to measure.
 
 ## 6. Gates
 
