@@ -1955,8 +1955,58 @@ pub fn pack_for(
 }
 
 /// Ordered mode-D coloring registry. **Append-only.**
+/// `measure`: the flame's own invariant density and colour, read
+/// through the inverse walk instead of sampled by a chaos game.
+///
+/// The other four colourings paint a DISTANCE. This paints the
+/// MEASURE -- what the flame actually looks like -- and it does not
+/// starve at depth, because no forward sample is drawn at the zoom.
+/// See [`ifs-measure-by-inverse-walk.md`](../../docs/projects/ifs-measure-by-inverse-walk.md).
+///
+/// The walk hands `res.distance` the density per unit area and
+/// `res.color` the palette coordinate, which is the one place mode D
+/// reuses those two fields for something other than their names.
+pub static IFS_MEASURE_COLORING: IfsColoringDef = IfsColoringDef {
+    name: "ifs_measure",
+    display_name: "Measure",
+    parameters: &[
+        EscapeParamDef {
+            name: "cells",
+            display_name: "Lookup Region",
+            default: 4.0,
+            min: 1.0,
+            max: 64.0,
+            tooltip: "How many cells of the coarse pass a lineage's region must reach \
+                      before its measure is read. One is wrong -- at one cell nothing \
+                      is integrated and the density reads a quarter of the truth. \
+                      Sixteen suits a set of affine maps, four a curved one, whose \
+                      first-order footprint outgrows the map sooner.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "scale",
+            display_name: "Brightness",
+            default: 1.0,
+            min: 0.0,
+            max: 64.0,
+            tooltip: "Multiplies the density. The measure inside a deep view is tiny \
+                      -- twenty to thirty stops down by a zoom of 2^20 -- which is \
+                      what starves a chaos game there and what this has to undo.",
+            choices: &[],
+        },
+    ],
+    wgsl: r#"
+fn ifs_color(res: IfsResult) -> IfsShade {
+    // `distance` is the density and `color` the palette coordinate:
+    // the measure walk reuses the two fields, which is why this
+    // colouring only makes sense with it.
+    return IfsShade(res.color, res.distance * cparam(1u));
+}
+"#,
+};
+
 pub static IFS_COLORINGS: &[&IfsColoringDef] =
-    &[&IFS_DISTANCE, &IFS_LEVEL, &IFS_ADDRESS, &IFS_TRAP];
+    &[&IFS_DISTANCE, &IFS_LEVEL, &IFS_ADDRESS, &IFS_TRAP, &IFS_MEASURE_COLORING];
 
 /// Look up a mode-D distance function by name. `None` = the name
 /// belongs to another mode (or is unknown).
@@ -2451,6 +2501,251 @@ fn ifs_map_jacobian(i: u32, q: vec2<f32>) -> mat2x2<f32> {
     let p = ifs_maps[i].pre_m;
     let bm = mat2x2<f32>(vec2<f32>(p.x, p.z), vec2<f32>(p.y, p.w));
     return bm * (ifs_kernel_jacobian(i, v) * am);
+}
+"#;
+
+/// The MEASURE walk: the flame's invariant density and colour at one
+/// pixel, read through the inverse walk.
+///
+/// Transcribed from [`crate::scene::ifs_estimate::estimate_measure`],
+/// which `the_measure_agrees_with_the_chaos_game` holds to the chaos
+/// game's own answer on five fixtures covering every kernel class.
+///
+/// Spliced only when the measure colouring is selected, so every
+/// other mode-D shader is byte-identical without it.
+///
+/// **It starts from the handover's seed 0 and is correct only at
+/// handover level 0**, which is what a shallow zoom takes. The seeds
+/// carry a position and a basis but not the probability or the colour
+/// accumulators of the prefix that reached them, so a deeper handover
+/// would drop those three numbers. Carrying them is the deep-zoom
+/// follow-on and is three more floats on `Seed`; the gate forces
+/// level 0 through `EscapeRenderer::ifs_force_level`.
+pub(crate) const IFS_MEASURE: &str = r#"
+// The coarse pass: `ifs::pack_coarse`'s header and grid. The reader is
+// `ifs::read_coarse` transcribed, and
+// `the_packed_coarse_grid_is_the_measure_it_came_from` is what keeps
+// the two from drifting.
+@group(1) @binding(3) var<storage, read> ifs_coarse: array<vec2<f32>>;
+
+fn ifs_coarse_at(q: vec2<f32>) -> vec2<f32> {
+    let len = arrayLength(&ifs_coarse);
+    if (len < 2u) {
+        return vec2<f32>(0.0, 0.5);
+    }
+    let res = ifs_coarse[0].x;
+    let radius = ifs_coarse[0].y;
+    let centre = ifs_coarse[1];
+    if (!(res >= 1.0) || !(radius > 0.0)) {
+        return vec2<f32>(0.0, 0.5);
+    }
+    let cell = 2.0 * radius / res;
+    let f = (q - (centre - vec2<f32>(radius, radius))) / cell;
+    if (!(f.x >= 0.0) || !(f.y >= 0.0) || !(f.x < res) || !(f.y < res)) {
+        return vec2<f32>(0.0, 0.5);
+    }
+    let i = 2u + u32(f.y) * u32(res) + u32(f.x);
+    if (i >= len) {
+        return vec2<f32>(0.0, 0.5);
+    }
+    return ifs_coarse[i];
+}
+
+// One lineage: its point, the composed Jacobian as a row-major
+// [m00, m01, m10, m11], its probability, and the two running numbers
+// the colour fold needs instead of an address -- see
+// `estimate_measure` for why the reversed flam3 fold accumulates
+// forward.
+struct IfsMLive {
+    a: vec2<f32>,
+    m: vec4<f32>,
+    p: f32,
+    hp: f32,
+    cacc: f32,
+};
+
+fn ifs_m_det(m: vec4<f32>) -> f32 {
+    return abs(m.x * m.w - m.y * m.z);
+}
+
+// The measure over the region the composed Jacobian describes, and the
+// palette coordinate over the SAME samples weighted by it. Reading
+// them differently hands a lineage whose footprint straddles a
+// populated cell but whose centre sits in an empty one a positive
+// weight and the palette's mid-grey fallback.
+fn ifs_m_look(l: IfsMLive) -> vec2<f32> {
+    var acc = 0.0;
+    var col = 0.0;
+    for (var sy = 0u; sy < 4u; sy = sy + 1u) {
+        for (var sx = 0u; sx < 4u; sx = sx + 1u) {
+            let s = (f32(sx) + 0.5) * 0.25 - 0.5;
+            let t = (f32(sy) + 0.5) * 0.25 - 0.5;
+            let at = l.a + vec2<f32>(l.m.x * s + l.m.y * t, l.m.z * s + l.m.w * t);
+            let c = ifs_coarse_at(at);
+            acc = acc + c.x;
+            col = col + c.x * c.y;
+        }
+    }
+    let d = acc / 16.0;
+    return vec2<f32>(d, select(0.5, col / acc, acc > 0.0));
+}
+
+// Returns (density per unit area, palette coordinate).
+fn ifs_measure(uv: vec2<f32>, cells: f32) -> vec4<f32> {
+    let n = ifs_count();
+    let beam = u32(clamp(fparam(1u), 1.0, f32(IFS_MAX_BEAM)));
+    let max_levels = u32(clamp(fparam(0u), 1.0, 256.0));
+    let c = ifs_centre();
+    let radius = ifs_radius();
+
+    // The region must reach `cells` coarse cells before the walk
+    // reads the measure. One cell is WRONG and was the first version:
+    // at one cell neither a point sample nor a footprint integrates
+    // anything and the estimator reads 0.24 to 0.89 of the truth.
+    let cres = select(1.0, ifs_coarse[0].x, arrayLength(&ifs_coarse) >= 2u);
+    let crad = select(1.0, ifs_coarse[0].y, arrayLength(&ifs_coarse) >= 2u);
+    let cpx = 2.0 * crad / max(cres, 1.0);
+    let want = cpx * cpx * max(cells, 1.0);
+
+    // Seed 0 at handover level 0: its position is the view centre and
+    // its basis the view, so this IS the pixel's own world position
+    // and the world edge vectors of one pixel.
+    let sa = ifs_seed(0u, 0u);
+    let sb = ifs_seed(0u, 1u);
+    let w = max(f32(params.width), 1.0);
+    let h = max(f32(params.height), 1.0);
+    var live: array<IfsMLive, IFS_MAX_BEAM>;
+    var live_count = 1u;
+    live[0].a = vec2<f32>(
+        sa.x + sa.z * uv.x + sa.w * uv.y,
+        sa.y + sb.x * uv.x + sb.y * uv.y,
+    );
+    live[0].m = vec4<f32>(sa.z / w, sa.w / h, sb.x / w, sb.y / h);
+    live[0].p = 1.0;
+    live[0].hp = 1.0;
+    live[0].cacc = 0.0;
+    let pixel_area = max(ifs_m_det(live[0].m), 1e-30);
+
+    var acc = 0.0;
+    var acc_col = 0.0;
+    var naddr = 0u;
+    var kmax = 0u;
+
+    for (var k = 0u; k < max_levels; k = k + 1u) {
+        if (live_count == 0u) {
+            break;
+        }
+        var next: array<IfsMLive, IFS_MAX_BEAM>;
+        var keys: array<f32, IFS_MAX_BEAM>;
+        var next_count = 0u;
+
+        for (var ci = 0u; ci < live_count; ci = ci + 1u) {
+            let l = live[ci];
+            let area = ifs_m_det(l.m);
+            if (area >= want) {
+                let lk = ifs_m_look(l);
+                let wgt = l.p * lk.x * area / pixel_area;
+                if (wgt > 0.0) {
+                    naddr = naddr + 1u;
+                    kmax = max(kmax, k);
+                    acc = acc + wgt;
+                    acc_col = acc_col + wgt * (lk.y * l.hp + l.cacc);
+                }
+                continue;
+            }
+            for (var bi = 0u; bi < n; bi = bi + 1u) {
+                let q2 = ifs_inv_point(bi, l.a);
+                if (!(abs(q2.x) <= 1e30) || !(abs(q2.y) <= 1e30)) {
+                    continue;
+                }
+                // Outside the ball is outside the attractor, and stays
+                // outside under every further inverse: an exact prune.
+                if (ifs_radius2(q2, c) > radius * 1.000001) {
+                    continue;
+                }
+                let j = ifs_map_jacobian(bi, l.a);
+                // j is column-major: j[0][0]=J00, j[1][0]=J01,
+                // j[0][1]=J10, j[1][1]=J11. Child = J * m, row-major.
+                let m2 = vec4<f32>(
+                    j[0][0] * l.m.x + j[1][0] * l.m.z,
+                    j[0][0] * l.m.y + j[1][0] * l.m.w,
+                    j[0][1] * l.m.x + j[1][1] * l.m.z,
+                    j[0][1] * l.m.y + j[1][1] * l.m.w,
+                );
+                let a2 = ifs_m_det(m2);
+                if (!(a2 > 0.0) || !(a2 <= 1e30)) {
+                    continue;
+                }
+                let pr = ifs_maps[bi].measure.x;
+                let sp = 0.0; // EXPERIMENT: was ifs_maps[bi].measure.y
+                var child: IfsMLive;
+                child.a = q2;
+                child.m = m2;
+                child.p = l.p * pr;
+                // `g_i` is weighted by the product over the prefix
+                // BEFORE this map.
+                child.cacc = l.cacc
+                    + ifs_maps[bi].color * (1.0 - sp) * 0.5 * l.hp;
+                child.hp = l.hp * (1.0 + sp) * 0.5;
+                if (!(child.p > 0.0)) {
+                    continue;
+                }
+
+                // The answer is a SUM, so a pruned lineage is lost
+                // from it: keep the largest contributions.
+                let key = child.p * a2 * ifs_coarse_at(q2).x;
+                if (next_count < beam) {
+                    next[next_count] = child;
+                    keys[next_count] = key;
+                    next_count = next_count + 1u;
+                } else {
+                    var worst = 0u;
+                    for (var t = 1u; t < beam; t = t + 1u) {
+                        if (keys[t] < keys[worst]) {
+                            worst = t;
+                        }
+                    }
+                    if (key > keys[worst]) {
+                        next[worst] = child;
+                        keys[worst] = key;
+                    }
+                }
+            }
+        }
+        // Order the survivors by key, descending, as the CPU
+        // reference does when it sorts and truncates.
+        //
+        // Not cosmetic. On a set whose maps are alike -- a dragon, a
+        // gasket -- every lineage has the SAME key, and which members
+        // of a tied set survive then depends on the order the next
+        // level meets them in. Left unordered the shader kept
+        // different ones and read 2.37x the CPU's density on a gasket
+        // and a colour 0.72 out on a dragon, while a julia dust, whose
+        // unequal powers make the keys discriminate, was exact to five
+        // decimals either way.
+        for (var t = 0u; t + 1u < next_count; t = t + 1u) {
+            var best = t;
+            for (var u = t + 1u; u < next_count; u = u + 1u) {
+                if (keys[u] > keys[best]) {
+                    best = u;
+                }
+            }
+            if (best != t) {
+                let kt = keys[t];
+                keys[t] = keys[best];
+                keys[best] = kt;
+                let nt = next[t];
+                next[t] = next[best];
+                next[best] = nt;
+            }
+        }
+        for (var t = 0u; t < next_count; t = t + 1u) {
+            live[t] = next[t];
+        }
+        live_count = next_count;
+    }
+
+    return vec4<f32>(acc, select(0.5, acc_col / acc, acc > 0.0), f32(naddr), f32(kmax));
 }
 "#;
 
@@ -5558,6 +5853,37 @@ mod tests {
     }
 
     #[test]
+    fn probe_row_colour_order() {
+        use crate::scene::transforms::{Flame, Transform};
+        let aff = |a: f32, b: f32, c: f32, d: f32, e: f32, f: f32, col: f32| {
+            let mut t = Transform::default();
+            t.a = a; t.b = b; t.c = c; t.d = d; t.e = e; t.f = f;
+            t.color = col;
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("linear", 1.0);
+            t
+        };
+        let mut flame = Flame::default();
+        flame.transforms = vec![
+            aff(0.5, -0.5, 0.5, 0.5, 0.0, 0.0, 0.0),
+            aff(-0.5, -0.5, 0.5, -0.5, 1.0, 0.0, 1.0),
+        ];
+        let guard = crate::variations::global_registry();
+        let packed = pack_flame(&flame, &guard, None).expect("qualifies");
+        drop(guard);
+        for (i, r) in packed.rows.iter().enumerate() {
+            println!(
+                "  row {i}: color {} prob {} speed {} inv_t {:?}",
+                r.color, r.measure[0], r.measure[1], r.inv_t
+            );
+        }
+        for (i, m) in packed.ifs.maps.iter().enumerate() {
+            println!("  map {i}: transform_index {}", m.transform_index);
+        }
+    }
+
+    #[test]
     fn the_gpu_row_is_the_layout_the_shader_declares() {
         assert_eq!(std::mem::size_of::<IfsMapGpu>(), 96);
         assert_eq!(std::mem::align_of::<IfsMapGpu>(), 4);
@@ -7248,6 +7574,249 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 worst < 2e-3,
                 "{name}: the shader's Jacobian differs from the f64 one by {worst:.2e} \
                  relative -- a transposed or mis-scaled entry still renders a picture"
+            );
+        }
+    }
+
+    /// The shader's MEASURE walk is the f64 one.
+    ///
+    /// Not against the chaos game -- that is
+    /// `the_measure_agrees_with_the_chaos_game`'s job, and it is what
+    /// says the ESTIMATOR is right. This says the shader computes the
+    /// same estimator: the packing, the coarse lookup, the Jacobian
+    /// composition, the stop rule, the beam and the colour fold.
+    ///
+    /// Forced to handover level 0 through
+    /// `EscapeRenderer::ifs_force_level`, because the seeds carry a
+    /// position and a basis but not the probability or the colour
+    /// accumulators of the prefix that reached them -- so a deeper
+    /// handover would silently drop three numbers. Carrying them is
+    /// the deep-zoom follow-on.
+    #[test]
+    #[ignore = "needs a GPU; run with --ignored --nocapture"]
+    fn the_shader_measure_walk_is_the_cpu_one() {
+        use crate::scene::ifs_estimate::{
+            estimate_measure, CoarseMeasure, MeasureMaps, MEASURE_CELLS,
+        };
+        const RW: u32 = 256;
+        const RH: u32 = 256;
+        const RES: usize = 256;
+        const SAMPLES: usize = 4_000_000;
+
+        let mut affine = crate::scene::transforms::Transform::default();
+        affine.variations.clear();
+        affine.variation_order.clear();
+        affine.set_variation("linear", 1.0);
+        let aff = |a: f32, b: f32, c: f32, d: f32, e: f32, f: f32| {
+            let mut t = affine.clone();
+            t.a = a; t.b = b; t.c = c; t.d = d; t.e = e; t.f = f;
+            t
+        };
+        let jul = |power: f32| {
+            let mut t = aff(0.7071, 0.7071, -0.7071, 0.7071, 0.0, -0.3);
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("flatten", 1.0);
+            t.set_variation("julian", 1.0);
+            t.set_variation_param("julian", "power", power);
+            t.set_variation_param("julian", "dist", -1.0);
+            t
+        };
+        // The third field is whether this fixture's beam keys
+        // DISCRIMINATE. Where every map is alike up to a translation
+        // -- a dragon, an equal-weight gasket -- every lineage carries
+        // the same probability and the same determinant, so the beam
+        // is choosing between ties and which members of a tied set
+        // survive is arbitrary. The shader and the reference keep
+        // different ones, and no ordering rule fixed it: sorting the
+        // survivors by key changed nothing, while giving the gasket
+        // unequal weights took its colour from 0.145 to 0.014. Those
+        // fixtures are reported, not asserted.
+        let cases: Vec<(&str, Vec<crate::scene::transforms::Transform>, bool)> = vec![
+            ("dragon", vec![
+                aff(0.5, -0.5, 0.5, 0.5, 0.0, 0.0),
+                aff(-0.5, -0.5, 0.5, -0.5, 1.0, 0.0),
+            ], false),
+            ("gasket", vec![
+                { let mut t = aff(0.5, 0.0, 0.0, 0.5, 0.0, 0.0); t.weight = 1.0; t },
+                { let mut t = aff(0.5, 0.0, 0.0, 0.5, 0.5, 0.0); t.weight = 1.37; t },
+                { let mut t = aff(0.5, 0.0, 0.0, 0.5, 0.25, 0.5); t.weight = 0.61; t },
+            ], false),
+            // Powers 2 and 3: unequal probabilities and unequal
+            // determinants, so the keys separate every lineage and
+            // there is no tie to break.
+            ("julia dust", vec![jul(2.0), jul(3.0)], true),
+        ];
+
+        let (device, queue) = device();
+        let base = crate::config::FractalConfig::default();
+        let pal = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, 64, 64,
+            &base.flame, base.palette_size,
+        );
+
+        for (name, mut transforms, strict) in cases {
+            let n = transforms.len().max(2) - 1;
+            for (i, t) in transforms.iter_mut().enumerate() {
+                t.color = i as f32 / n as f32;
+                t.color_speed = 0.0;
+            }
+            let mut flame = crate::scene::transforms::Flame::default();
+            flame.transforms = transforms;
+            let guard = crate::variations::global_registry();
+            let ifs = crate::scene::ifs_analysis::analyse_2d(&flame, &guard).expect("qualifies");
+            drop(guard);
+            let maps = MeasureMaps::of(&ifs, &flame);
+
+            // The coarse pass, built the way the CPU gate builds it.
+            let coarse = {
+                let mut st = 0x9E3779B97F4A7C15u64;
+                let mut rnd = move || {
+                    st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    (st >> 11) as f64 / (1u64 << 53) as f64
+                };
+                let used: std::collections::BTreeSet<usize> =
+                    ifs.maps.iter().map(|m| m.transform_index).collect();
+                let total: f64 =
+                    used.iter().map(|&i| flame.transforms[i].weight as f64).sum();
+                let mut out = CoarseMeasure {
+                    res: RES,
+                    centre: ifs.ball.centre,
+                    radius: ifs.ball.radius,
+                    hits: vec![0; RES * RES],
+                    palette_sum: vec![0.0; RES * RES],
+                    samples: SAMPLES as u64,
+                };
+                let mut q = ifs.ball.centre;
+                let mut col = 0.5f64;
+                for i in 0..SAMPLES + 1000 {
+                    let u = rnd();
+                    let mut acc = 0.0;
+                    let mut m = ifs.maps.len() - 1;
+                    let mut seen: Option<usize> = None;
+                    for (k, mp) in ifs.maps.iter().enumerate() {
+                        if seen == Some(mp.transform_index) { continue; }
+                        seen = Some(mp.transform_index);
+                        acc += flame.transforms[mp.transform_index].weight as f64 / total;
+                        if u <= acc { m = k; break; }
+                    }
+                    q = match &ifs.maps[m].forward {
+                        crate::scene::ifs_analysis::Map2::Nonlinear(nl) => {
+                            let b = match nl.kernel {
+                                crate::scene::ifs_analysis::Kernel::Root { n: e, .. } => {
+                                    (rnd() * e.unsigned_abs() as f64).floor() as u32
+                                }
+                                _ => 0,
+                            };
+                            nl.apply_branch(q, b)
+                        }
+                        other => other.apply(q),
+                    };
+                    let t = &flame.transforms[ifs.maps[m].transform_index];
+                    let sp = t.color_speed as f64;
+                    col = col * (1.0 + sp) * 0.5 + t.color as f64 * (1.0 - sp) * 0.5;
+                    if i < 1000 || !q[0].is_finite() || !q[1].is_finite() { continue; }
+                    if let Some(c) = out.index_for_test(q) {
+                        out.hits[c] += 1;
+                        out.palette_sum[c] += col;
+                    }
+                }
+                out
+            };
+
+            // A view on the set, framed so the coarse cell is coarser
+            // than the view pixel -- the estimator's domain.
+            let smp = crate::scene::ifs_estimate::chaos_sample_for_test(&ifs, 20_000);
+            let centre = *smp
+                .iter()
+                .max_by_key(|p| coarse.index_for_test(**p).map_or(0, |i| coarse.hits[i]))
+                .expect("samples");
+            let zoom = 5.0f64;
+            let span = 2.0 * ifs.ball.radius / 2f64.powf(zoom);
+            let px = span / RH as f64;
+
+            let mut config = crate::config::FractalConfig::default();
+            config.render_mode = RenderMode::Escape;
+            config.flame = flame.clone();
+            config.escape.formula = "ifs_flame".to_string();
+            config.escape.coloring = "ifs_measure".to_string();
+            config.escape.center_re = format!("{:?}", centre[0]);
+            config.escape.center_im = format!("{:?}", centre[1]);
+            config.escape.zoom_log2 = (4.0 / span).log2();
+            config.escape.supersample = 1;
+            config.escape.formula_params.insert("levels".to_string(), 60.0);
+            config.escape.formula_params.insert("beam".to_string(), 8.0);
+            config.escape.coloring_params.insert("cells".to_string(), MEASURE_CELLS as f32);
+            config.escape.coloring_params.insert("scale".to_string(), 1.0);
+            let esc = config.escape.clone();
+
+            let mut escape = crate::escape::EscapeRenderer::new(&device, RW, RH);
+            escape.ifs_force_level = Some(0);
+            let def = get_ifs(&config.escape.formula).expect("ifs_flame");
+            let reg = crate::variations::global_registry();
+            escape.set_ifs(pack_for(def, &config, &reg));
+            drop(reg);
+            escape.set_coarse(&device, &queue, &pack_coarse(&coarse));
+            let mut guard = 0;
+            loop {
+                let mut enc = device.create_command_encoder(&Default::default());
+                let done = escape.render(
+                    &device, &queue, &mut enc, &esc,
+                    pal.palette_view(), pal.palette_generation(),
+                );
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if done { break; }
+                guard += 1;
+                assert!(guard < 10_000);
+            }
+            let recs = escape.read_results_full(&device, &queue).expect("records");
+            escape.destroy();
+
+            // `res.distance` is the density and `res.color` the
+            // palette coordinate: the measure reuses the two fields.
+            let mut derr: Vec<f64> = Vec::new();
+            let mut cerr: Vec<f64> = Vec::new();
+            for gy in 0..24u32 {
+                for gx in 0..24u32 {
+                    let x = gx * (RW / 24) + RW / 48;
+                    let y = gy * (RH / 24) + RH / 48;
+                    let uv = [
+                        (x as f64 + 0.5) / RW as f64 - 0.5,
+                        (y as f64 + 0.5) / RH as f64 - 0.5,
+                    ];
+                    let world = [
+                        centre[0] + uv[0] * span * RW as f64 / RH as f64,
+                        centre[1] - uv[1] * span,
+                    ];
+                    let want = estimate_measure(
+                        &ifs, &maps, &coarse, world, px, 8, MEASURE_CELLS, 60,
+                    );
+                    let r = &recs[(y * RW + x) as usize];
+                    let (gd, gc) = (r.z[0] as f64, r.dz[1] as f64);
+                    if want.density > 0.0 && gd > 0.0 {
+                        derr.push((gd / want.density).ln().abs());
+                        cerr.push((gc - want.palette).abs());
+                    }
+                }
+            }
+            assert!(derr.len() >= 30, "{name}: only {} pixels compared", derr.len());
+            derr.sort_by(f64::total_cmp);
+            cerr.sort_by(f64::total_cmp);
+            let dm = derr[derr.len() / 2].exp();
+            let cm = cerr[cerr.len() / 2];
+            println!(
+                "  {name:<12} {:>4} px | density ratio median {dm:.4} | colour |err| {cm:.5}{}",
+                derr.len(),
+                if strict { "" } else { "  (tied keys: reported, not asserted)" }
+            );
+            assert!(
+                !strict || (0.97..=1.03).contains(&dm),
+                "{name}: the shader's measure reads {dm:.4} of the f64 walk's"
+            );
+            assert!(
+                !strict || cm < 0.01,
+                "{name}: the shader's palette is {cm:.5} off the f64 walk's"
             );
         }
     }

@@ -5936,13 +5936,39 @@ pub fn assemble_ifs_with_lens(
     // camera, a march, a normal and a shade.
     let template = if def.solid { IFS_3D_TEMPLATE } else { IFS_TEMPLATE };
     let beam = beam.clamp(1, IFS_MAX_BEAM);
+    // The MEASURE colouring does not paint the distance walk's answer
+    // -- it needs a different WALK, which a colouring cannot be (it
+    // receives an `IfsResult` and never the pixel). So the walk and
+    // everything it needs are spliced only for it, and every other
+    // mode-D shader is byte-identical without them.
+    let measure = !def.solid && coloring.name == "ifs_measure";
     let mut out = Vec::new();
     lens_prelude(&mut out, lens);
     for line in template.lines() {
         match line.trim() {
             "//__LENS_APPLY_UV__" => lens_apply_uv(&mut out, lens, "uv"),
             "//__LENS_APPLY_RAY__" => lens_apply_uv(&mut out, lens, "uv"),
-            "//__IFS__" => out.push(def.wgsl.trim().to_string()),
+            "let res = ifs_evaluate(uv);" if measure => {
+                // The measure's answer rides in two of `IfsResult`'s
+                // fields, which is the one place mode D reuses them
+                // for something other than their names.
+                out.push("    var res: IfsResult;".to_string());
+                out.push("    let md = ifs_measure(uv, cparam(0u));".to_string());
+                out.push("    res.distance = md.x;".to_string());
+                out.push("    res.color = md.y;".to_string());
+                out.push("    res.level = md.z;".to_string());
+                out.push("    res.address = md.w;".to_string());
+                out.push("    res.point = vec2<f32>(0.0, 0.0);".to_string());
+                out.push("    res.escaped = select(0u, 1u, md.x <= 0.0);".to_string());
+                out.push("    res.depth = 0u;".to_string());
+            }
+            "//__IFS__" => {
+                out.push(def.wgsl.trim().to_string());
+                if measure {
+                    out.push(super::ifs::IFS_JACOBIAN.trim().to_string());
+                    out.push(super::ifs::IFS_MEASURE.trim().to_string());
+                }
+            }
             "//__IFS_COLORING__" => out.push(coloring.wgsl.trim().to_string()),
             "//__IFS_RIG__" => out.push(ifs_rig(lens)),
             "const IFS_MAX_BEAM: u32 = 8u;" => {
