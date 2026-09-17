@@ -782,13 +782,26 @@ colouring receives an `IfsResult` and cannot run a different walk
    existing `SOLID` one, so the WGSL is byte-identical when off.
 2. `ifs_measure(uv) -> vec2<f32>` in WGSL, transcribed from
    `estimate_measure`: a frontier of (point, probability, composed
-   Jacobian, address), the determinant as the stop test against
-   `cells·(cpx/px)²`, the 4×4 footprint reading density and palette
-   together, the beam kept by largest contribution, and the flam3
-   fold over the address in reverse. The address needs only its last
-   few entries for the colour, since `2⁻ᵏ` damps the rest -- a fixed
-   small array will do, and that bound should be measured before it
-   is chosen.
+   Jacobian, two colour accumulators), the determinant as the stop
+   test against `cells·(cpx/px)²`, the 4×4 footprint reading density
+   and palette together, and the beam kept by largest contribution.
+   **No address is carried and none is needed** -- the colour fold
+   accumulates forward (§5j), so a lineage is nine floats and there
+   is nothing to size.
+
+   **It needs the six kernel Jacobians in WGSL, and two cheaper ways
+   round that were tried and measured worse.** Carrying three points
+   -- the pixel's centre and its two edge neighbours, pushed through
+   the same inverses, whose parallelogram is the preimage without any
+   derivative -- costs the same six floats and reads **0.617** on the
+   grand julian against 0.956, because under an expanding inverse the
+   three separate until the parallelogram is a secant over a region
+   the map has curved right out of. A local central difference per
+   step keeps it tangent but reads **0.790** on the 6:1:1 gasket
+   against 0.987. So the analytic Jacobian stays, and porting the six
+   is mechanical rather than new: `Kernel::inverse_jacobian` exists
+   in f64 and `the_kernels_jacobians_are_the_derivative` already
+   gates it to 3.5e-5.
 3. Per-map probability and colour speed. `IfsMapGpu` has no spare
    word, so this is either a second small storage buffer or two more
    floats on the row; the row is 80 bytes and already has `color`,
@@ -799,6 +812,29 @@ colouring receives an `IfsResult` and cannot run a different walk
    against `estimate_measure` in f64 -- not against the chaos game,
    which is the CPU reference's job. A shallow control where the
    walk takes no step separates the arithmetic from the walk.
+
+## 5j. The colour fold needs no address, 2026-09-17
+
+The flam3 rule runs `a_k` first and `a_1` last, the reverse of the
+order the walk discovers them in, so `estimate_measure` carried each
+lineage's whole address and folded at the end -- a heap allocation
+per lineage, and nothing a shader could size.
+
+It does not need the address. With `h = (1+s)/2` and
+`g = col·(1−s)/2` for a map, the reversed fold is
+
+```text
+c = c_0 · ∏_{j≤k} h_j  +  Σ_i g_i · ∏_{j<i} h_j
+```
+
+and that inner product is over the PREFIX `a_1..a_{i-1}`, which the
+walk already has in hand. A lineage carries the running product and
+the running sum, two floats, and the fold needs no history at all.
+Verified by the gate: identical to the last digit on all ten rows.
+
+This is what makes the shader's version sizeable. The earlier note
+that the address "needs only its last few entries, and that bound
+should be measured" is moot -- it needs none.
 
 ## 6. Gates
 
