@@ -945,6 +945,66 @@ them is three more floats on `Seed` and is the deep-zoom follow-on --
 without it this paints the measure only as far as a pixel's own f32
 position reaches, about 2^17.
 
+## 5m. The coarse pass is real, and the colouring was black, 2026-09-17
+
+§5l shipped a colouring that rendered **black**, and nothing caught
+it. The only caller of `set_coarse` was its own gate: in the app the
+buffer stayed at its one dummy element, every lookup read no measure,
+and every pixel came back zero. A feature reachable from the panel
+that draws nothing is worse than one that is not there.
+
+**D1, built.** `coarse_measure_for` renders the flame's own measure
+over its ball with the renderer that draws every other flame.
+
+*The palette is an inverse-sRGB grey ramp, and that is the trick.*
+The chaos game plots `srgb_to_linear(palette(c))`, which is
+`palette(c)^2.2`, and the accumulator keeps the density-weighted MEAN
+of it. A ramp storing `t^(1/2.2)` therefore plots exactly `c`, so the
+accumulator's red channel comes back as the mean palette coordinate
+with no second render and no engine change.
+
+*The framing follows `world_to_pixel`*, which maps
+`(p − pan)·zoom·min(w,h)/4` about the centre, so a view spanning the
+ball exactly is `pan = ball.centre`, `zoom = 2/radius`.
+
+*And it is normalised by what LANDED, not by what was dispatched.*
+Counting the dispatch read **12.5x** the chaos game's density.
+Chasing which constant that was -- the histogram's `color_scale`, the
+burn-in the dispatch counts and the plot does not, the samples a
+bad-value respawn drops -- would have been chasing a number that
+cancels: the invariant measure is a probability measure, so the
+divisor is the sample total that reached the grid, and every constant
+divides out.
+
+`the_rendered_coarse_pass_is_the_chaos_games` checks the two
+properties the walk uses, against a CPU chaos game over the same
+ball -- not pixel by pixel, since the two draw different samples:
+
+| | cells lit by both | overlap | density ratio | palette error |
+|---|---|---|---|---|
+| gasket | 5350 | 0.899 | **1.000** | 0.0083 |
+| dragon | 9667 | 0.993 | **1.000** | 0.0081 |
+
+The overlap is what sees a framing error -- a shifted, scaled or
+flipped grid lights different cells -- and the palette column is what
+says the ramp inverted the gamma.
+
+**Wired at both production sites.** `EscapeRenderer::ensure_coarse`
+builds and uploads it beside `set_ifs`, keyed on `ifs_token` so a
+flame edit rebuilds it and a pan or a zoom does not, and only for the
+measure colouring so nothing else pays. 1024 across the ball: §5a
+found the estimator resolution-stable over 128, 512 and 2048 while
+§5f found 64 too coarse to be a measure, so the floor matters and the
+ceiling buys little.
+
+**And a gate that goes through the render path**, which is the only
+kind that could have caught the black frame.
+`the_measure_colouring_draws_through_the_render_path` calls
+`renderer::render` as the CLI and the app do, and asserts a picture
+rather than a value: 2157 of 9216 pixels lit, 185 distinct
+brightnesses, and of the 867 pixels the DISTANCE colouring calls
+exterior, **none** are lit. The measure sits on the set.
+
 ## 6. Gates
 
 - **G1. The measure is the chaos game's.** At 2^2 to 2^6 on the

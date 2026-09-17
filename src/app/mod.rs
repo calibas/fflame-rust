@@ -2798,6 +2798,16 @@ impl App {
                     if escape.set_ifs(packed) {
                         self.escape_dirty = true;
                     }
+                    // The MEASURE colouring reads a coarse pass over
+                    // the ball; without one it renders black. Keyed on
+                    // the flame, so a pan or a zoom does not rebuild
+                    // it.
+                    escape.ensure_coarse(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        &final_config.escape,
+                        &final_config.flame,
+                    );
                     if escape.set_solid_lighting(
                         &final_config.solid_shading,
                         (
