@@ -1717,13 +1717,34 @@ pub fn estimate_measure(
         (acc / n, if acc > 0.0 { col / acc } else { 0.5 })
     };
 
+    // The colour fold, accumulated FORWARD.
+    //
+    // The flam3 rule runs `a_k` first and `a_1` last, which is the
+    // reverse of the order the walk discovers them in. Writing
+    // `h = (1+s)/2` and `g = col·(1−s)/2` for a map, the reversed fold
+    // comes out as
+    //
+    // ```text
+    // c = c_0 · ∏_{j≤k} h_j  +  Σ_i g_i · ∏_{j<i} h_j
+    // ```
+    //
+    // and that inner product is over the PREFIX `a_1..a_{i-1}`, which
+    // the walk already has in hand. So a lineage carries two numbers
+    // -- the running `∏h` and the running sum -- instead of its
+    // address, and the fold needs no history at all. That is what
+    // makes the shader's version possible: no per-lineage array, and
+    // nothing to size.
     struct Live {
         q: [f64; 2],
         p: f64,
         m: [[f64; 2]; 2],
-        addr: Vec<u32>,
+        /// `∏ h` over the prefix so far.
+        hp: f64,
+        /// `Σ g_i ∏_{j<i} h_j` over the prefix so far.
+        cacc: f64,
     }
-    let mut live = vec![Live { q: x, p: 1.0, m: [[1.0, 0.0], [0.0, 1.0]], addr: Vec::new() }];
+    let mut live =
+        vec![Live { q: x, p: 1.0, m: [[1.0, 0.0], [0.0, 1.0]], hp: 1.0, cacc: 0.0 }];
     let mut acc = 0.0f64;
     let mut acc_col = 0.0f64;
     let mut addresses = 0u32;
@@ -1739,13 +1760,8 @@ pub fn estimate_measure(
                 let (rho, c0) = look(c.q, c.m);
                 let w = c.p * rho * det;
                 if w > 0.0 {
-                    // `a_k` first, `a_1` last: the flam3 rule as
-                    // `main_template.wgsl` applies it.
-                    let mut col = c0;
-                    for &i in c.addr.iter().rev() {
-                        let (cl, sp) = maps.colour[i as usize];
-                        col = col * (1.0 + sp) * 0.5 + cl * (1.0 - sp) * 0.5;
-                    }
+                    // The closed form of the reversed fold, above.
+                    let col = c0 * c.hp + c.cacc;
                     acc += w;
                     acc_col += w * col;
                     addresses += 1;
@@ -1772,9 +1788,18 @@ pub fn estimate_measure(
                 if !(d2 > 0.0) || !d2.is_finite() {
                     continue;
                 }
-                let mut addr = c.addr.clone();
-                addr.push(i as u32);
-                next.push(Live { q: qi, p: c.p * maps.prob[i], m: m2, addr });
+                let (cl, sp) = maps.colour[i];
+                let h = (1.0 + sp) * 0.5;
+                let g = cl * (1.0 - sp) * 0.5;
+                next.push(Live {
+                    q: qi,
+                    p: c.p * maps.prob[i],
+                    m: m2,
+                    // `g_i` is weighted by the product over the
+                    // prefix BEFORE this map, which is `c.hp`.
+                    cacc: c.cacc + g * c.hp,
+                    hp: c.hp * h,
+                });
             }
         }
         if next.len() > beam {
