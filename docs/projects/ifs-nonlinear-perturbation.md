@@ -852,6 +852,63 @@ julian's cap stays where §16 measured it. `probe_what_per_seed_levels_would_buy
 keeps the simulation, including the shape of the first, wrong version
 in its doc comment.
 
+## 17a. Reviewed, 2026-09-17: what §13 to §17 got wrong
+
+Asked to step back and check the calculations. Three findings, two of
+them mistakes in the record and one a mistake in the objective.
+
+**The f32 term is a model, and the model is pessimistic by one to
+three orders.** The objective adds a MEASURED curvature to a MODELLED
+f32 cost, `|q|·2⁻²⁴ / (px · reach_L/reach_0)`, and the model was
+never checked. Checked now by rounding the handover's position, basis
+and quadratic to f32 and continuing both in f64
+(`probe_where_a_grand_julian_caps`, the `f32 measured` column):
+
+| target, zoom | level | f32 modelled | f32 measured |
+|---|---|---|---|
+| 2, 2^36 | 7 | 61.8 px | 0.07 px |
+| 5, 2^33 | 7 | 28.5 px | 0.06 px |
+| 4, 2^33 | 5 | 4.74 px | 1.25 px |
+| 0, 2^20 | 2 | 1.01 px | 0.06 px |
+
+Over 42 rows the model is above the measurement by 3× to 800× and
+below it nowhere. The reason is that a position error at level L
+reaches the reported distance through the σ the walk actually
+carries -- a product of per-level LOWER bounds on the forward
+contraction -- and the model divides by the view's expansion
+instead, which is the reciprocal of a different singular value. The
+measurement is itself incomplete: it prices the rounding at the
+handover and not the f32 arithmetic of every step after it, which the
+GPU does and this does not, so the true number sits between the two
+columns and the only measurement that settles it is the GPU render
+against the f64 continuation at a FORCED level, on this set, at
+these zooms. Not done. Until it is, every f32 number in §13, §16 and
+§17 is a model number, and the objective has been refusing levels on
+the strength of it.
+
+**The self-measuring objective has a ceiling.** Its reference is the
+level-0 handover continued in f64, whose position is the view centre
+rounded to f64. At 1080p and `|q| ≈ 1` a pixel is 15 f64 ulps at
+2^40 and a fifth of one at 2^46, so §16's 2^46 row measured rounding
+noise and its 2^40 row is marginal. In production the walk keeps
+choosing levels past 2^40 with an objective that no longer means
+anything. The rows from 2^20 to 2^36 stand.
+
+**§17's simulation under-continued its shallower seeds** -- a mixed
+set continued 48 levels from its DEEPEST level leaves a seed 14
+levels shallower 14 levels short of the reference. Re-run with the
+continuation extended by the spread: identical to three decimals in
+every row, because the mixed set's error is curvature and the
+curvature is set by the level, not the depth. The conclusion stands;
+the method was wrong in a way that happened not to matter.
+
+**And one inconsistency with no measured effect.** `view_agrees`
+tests agreement on `r`, and on an all-inversion set -- the grand
+julian -- the beam is sorted by `σ·r`. Tested with the agreement on
+`σ·r` and the reach scaled by σ: not one of the 42 rows moved.
+Recorded, not fixed, because the fix would still ignore σ's own
+variation across the view and so would not be sound either.
+
 ## 18. Cost and risk
 
 The CPU pays `beam × maps` inverse evaluations per level, as now, in
