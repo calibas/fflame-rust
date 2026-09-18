@@ -6017,7 +6017,7 @@ fn ifs_rig(lens: Option<&str>) -> String {
 }
 
 pub fn assemble_ifs(def: &IfsDef, coloring: &IfsColoringDef, beam: u32) -> String {
-    assemble_ifs_with_lens(def, coloring, beam, None)
+    assemble_ifs_with_lens(def, coloring, beam, None, false)
 }
 
 /// The same, with a camera lens.
@@ -6032,7 +6032,13 @@ pub fn assemble_ifs_with_lens(
     coloring: &IfsColoringDef,
     beam: u32,
     lens: Option<&str>,
+    delta: bool,
 ) -> String {
+    // The DELTA walk is a different `ifs_evaluate`, not a branch
+    // inside one (`ifs-perturbation-delta.md` §3). Spliced or not, so
+    // the shipped path's WGSL is the same text it has always been and
+    // its pixels cannot move by this existing.
+    let delta = delta && !def.solid;
     // The two templates share the walk's shape and all four
     // colourings; what differs is everything around the walk -- a
     // camera, a march, a normal and a shade.
@@ -6050,6 +6056,9 @@ pub fn assemble_ifs_with_lens(
         match line.trim() {
             "//__LENS_APPLY_UV__" => lens_apply_uv(&mut out, lens, "uv"),
             "//__LENS_APPLY_RAY__" => lens_apply_uv(&mut out, lens, "uv"),
+            "let res = ifs_evaluate(uv);" if delta && !measure => {
+                out.push("    let res = ifs_evaluate_delta(uv);".to_string());
+            }
             "let res = ifs_evaluate(uv);" if measure => {
                 // The measure's answer rides in two of `IfsResult`'s
                 // fields, which is the one place mode D reuses them
@@ -6069,6 +6078,10 @@ pub fn assemble_ifs_with_lens(
                 if measure {
                     out.push(super::ifs::IFS_JACOBIAN.trim().to_string());
                     out.push(super::ifs::IFS_MEASURE.trim().to_string());
+                }
+                if delta {
+                    out.push(super::ifs::IFS_DIFFERENCE.trim().to_string());
+                    out.push(super::ifs::IFS_DELTA_WALK.trim().to_string());
                 }
             }
             "//__IFS_COLORING__" => out.push(coloring.wgsl.trim().to_string()),
@@ -6713,6 +6726,83 @@ mod tests {
         assert!(plain.contains("let c = select"));
     }
 
+    /// The delta walk assembles, validates, and is spliced ONLY when
+    /// asked (`ifs-perturbation-delta.md` §3).
+    ///
+    /// The last clause is the one that matters for G0: the shipped
+    /// walk's WGSL must be the same text with the delta walk in the
+    /// tree as without it, or the presets could move by this
+    /// existing. Checked as an equality on the source, not on a
+    /// render.
+    #[test]
+    fn the_delta_walk_assembles_and_is_spliced_only_when_asked() {
+        let Some(def) = crate::escape::ifs::get_ifs("ifs_flame") else {
+            panic!("ifs_flame")
+        };
+        for &coloring in crate::escape::ifs::IFS_COLORINGS {
+            if coloring.name == "ifs_measure" {
+                // The measure colouring replaces the whole evaluate
+                // call with its own walk, so there is nothing for the
+                // delta walk to be spliced into.
+                continue;
+            }
+            let off = assemble_ifs_with_lens(def, coloring, 4, None, false);
+            let on = assemble_ifs_with_lens(def, coloring, 4, None, true);
+            assert_eq!(
+                off,
+                assemble_ifs_with_lens(def, coloring, 4, None, false),
+                "{}: assembly is not deterministic",
+                coloring.name
+            );
+            assert!(
+                !off.contains("ifs_evaluate_delta"),
+                "{}: the delta walk is in the shipped shader",
+                coloring.name
+            );
+            assert!(
+                on.contains("fn ifs_evaluate_delta"),
+                "{}: asked for the delta walk and did not get it",
+                coloring.name
+            );
+            assert!(
+                on.contains("let res = ifs_evaluate_delta(uv);"),
+                "{}: the delta walk is spliced but never called",
+                coloring.name
+            );
+            assert!(
+                on.contains("fn ifs_map_difference"),
+                "{}: the delta walk has no difference forms to step with",
+                coloring.name
+            );
+            for (label, src) in [("off", &off), ("on", &on)] {
+                let module = naga::front::wgsl::parse_str(src).unwrap_or_else(|e| {
+                    panic!("ifs_flame/{} delta {label} failed to parse: {e}", coloring.name)
+                });
+                naga::valid::Validator::new(
+                    naga::valid::ValidationFlags::all(),
+                    naga::valid::Capabilities::all(),
+                )
+                .validate(&module)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "ifs_flame/{} delta {label} failed validation: {e}",
+                        coloring.name
+                    )
+                });
+            }
+        }
+        // ...and the SOLID formula never takes it: its walk is a
+        // different shape and the 3D twin is D5, not this.
+        let Some(solid) = crate::escape::ifs::get_ifs("ifs_flame_3d") else {
+            panic!("ifs_flame_3d")
+        };
+        let col = crate::escape::ifs::get_ifs_coloring("ifs_distance", solid);
+        assert!(
+            !assemble_ifs_with_lens(solid, col, 4, None, true).contains("ifs_evaluate_delta"),
+            "the solid walk took the delta path"
+        );
+    }
+
     /// The Tricorn tier compiles on both rungs, for every integer
     /// power, and actually carries the conjugation (a wrapper that
     /// silently emitted the plain power would render the Multibrot
@@ -7224,8 +7314,8 @@ mod lens_tests {
         // Mode D, both of its sites, planar and solid.
         for def in crate::escape::ifs::IFS_DEFS {
             let col = crate::escape::ifs::get_ifs_coloring("ifs_distance", def);
-            let lensed = assemble_ifs_with_lens(def, col, 4, Some(&src));
-            let plain = assemble_ifs_with_lens(def, col, 4, None);
+            let lensed = assemble_ifs_with_lens(def, col, 4, Some(&src), false);
+            let plain = assemble_ifs_with_lens(def, col, 4, None, false);
             let what = format!("ifs {}", def.name);
             assert!(lensed.contains("esc_lens("), "{what}: the lens is not applied");
             assert!(!plain.contains("esc_lens("), "{what}: lens glue without a lens");

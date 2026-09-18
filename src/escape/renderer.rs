@@ -725,6 +725,13 @@ pub struct EscapeRenderer {
     /// The `ifs_token` the coarse pass was built for, so a flame edit
     /// rebuilds it and a pan or a zoom does not. Zero means none.
     ifs_coarse_token: u64,
+    /// The centre's beam at every level, for the DELTA walk
+    /// (`ifs-perturbation-delta.md` §3). One dummy row when the walk
+    /// is off, which is the default.
+    ifs_ref_buffer: Buffer,
+    /// The rows themselves, rebuilt with the seeds -- the beam
+    /// depends on the VIEW, not only on the flame.
+    ifs_ref_rows: Option<Vec<super::ifs::IfsRefRowGpu>>,
     /// The transition graph a xaos flame's walk reads
     /// (`ifs-general.md` D4), packed by
     /// [`super::ifs::pack_xaos`]. One element -- a zero count -- for
@@ -1557,6 +1564,19 @@ impl EscapeRenderer {
                     },
                     count: None,
                 },
+                // The reference beam the DELTA walk follows. One
+                // dummy row when that walk is off, which is the
+                // default; same reasoning as the two below.
+                BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
                 // The xaos transition graph. Same reasoning as the
                 // coarse pass below: one element when the flame has
                 // none, which is almost every flame.
@@ -1604,6 +1624,12 @@ impl EscapeRenderer {
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let ifs_ref_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Escape IFS Reference Beam"),
+            size: std::mem::size_of::<super::ifs::IfsRefRowGpu>() as u64,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let ifs_xaos_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Escape IFS Xaos Graph"),
             size: 16,
@@ -1644,6 +1670,8 @@ impl EscapeRenderer {
             ifs_geom_buffer,
             ifs_coarse_buffer,
             ifs_xaos_buffer,
+            ifs_ref_buffer,
+            ifs_ref_rows: None,
             ifs_coarse_token: 0,
             ifs_coarse_cpu: None,
             ifs_geom_px: 0,
@@ -3891,6 +3919,35 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         true
     }
 
+    /// Hand the shader the centre's beam, every level of it.
+    ///
+    /// Written with the SEEDS rather than with the maps: the beam is
+    /// the centre's own walk through this view, so it changes when
+    /// the view does and not when the flame does.
+    fn set_reference(&mut self, device: &Device, queue: &Queue) {
+        let one = [super::ifs::IfsRefRowGpu::default()];
+        let rows: &[super::ifs::IfsRefRowGpu] =
+            self.ifs_ref_rows.as_deref().filter(|r| !r.is_empty()).unwrap_or(&one);
+        let bytes = bytemuck::cast_slice::<super::ifs::IfsRefRowGpu, u8>(rows);
+        let want = bytes.len() as u64;
+        if self.ifs_ref_buffer.size() < want {
+            let old = std::mem::replace(
+                &mut self.ifs_ref_buffer,
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Escape IFS Reference Beam"),
+                    size: want,
+                    usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }),
+            );
+            old.destroy();
+            // A new buffer is a new binding, so every cached bind
+            // group naming the old one is stale.
+            self.ifs_token = self.ifs_token.wrapping_add(1) | 1;
+        }
+        queue.write_buffer(&self.ifs_ref_buffer, 0, bytes);
+    }
+
     /// Hand the shader this flame's transition graph
     /// (`ifs-general.md` D4).
     ///
@@ -4166,6 +4223,10 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     binding: 4,
                     resource: self.ifs_xaos_buffer.as_entire_binding(),
                 },
+                BindGroupEntry {
+                    binding: 5,
+                    resource: self.ifs_ref_buffer.as_entire_binding(),
+                },
             ],
         });
         let pipeline = &self.pipelines[&key];
@@ -4236,8 +4297,11 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let forced = self.ifs_force_level;
         #[cfg(not(test))]
         let forced: Option<u32> = None;
+        // Only where every map has an exact difference form: see
+        // `Ifs2::has_delta_forms`.
+        let delta = param("delta", 0.0) > 0.5 && packed.ifs.has_delta_forms();
         let key = format!(
-            "{}|{}|{}|{}|{}x{}|{beam}|{}|{forced:?}",
+            "{}|{}|{}|{}|{}x{}|{beam}|{}|{forced:?}|d{delta}",
             escape.center_re,
             escape.center_im,
             escape.zoom_log2,
@@ -4310,6 +4374,35 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     beam,
                 )
             }
+        };
+
+        // The centre's beam at EVERY level, for the delta walk. Off,
+        // nothing is walked and nothing is uploaded: the seeded path
+        // is what it has always been.
+        //
+        // This is a SECOND walk of the same centre, not the one above
+        // reused, because `seed_beam` stops at its handover and this
+        // one may not. Paid only when the walk is on, and the plan's
+        // end state is that the two become one.
+        self.ifs_ref_rows = if delta {
+            let rows = match super::ifs::centre_at_precision(escape) {
+                Some(centre) => {
+                    let b = crate::scene::ifs_estimate::reference_beam(
+                        &packed.ifs, centre, basis, px, budget, beam,
+                    );
+                    super::ifs::pack_reference(&b, packed.rows.len(), beam as usize)
+                }
+                None => {
+                    let (x, y) = escape.center_f64();
+                    let b = crate::scene::ifs_estimate::reference_beam(
+                        &packed.ifs, [x, y], basis, px, budget, beam,
+                    );
+                    super::ifs::pack_reference(&b, packed.rows.len(), beam as usize)
+                }
+            };
+            Some(rows)
+        } else {
+            None
         };
 
         let mut out = [[0.0f32; 4]; 4 + super::ifs::SEED_VEC4S * super::ifs::MAX_SEEDS];
@@ -6612,13 +6705,35 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             let lens_registry = crate::variations::global_registry();
             let lens_src = super::lens::lens_source(escape, &lens_registry);
             let lens_id = super::lens::lens_key(escape, &lens_registry);
-            let key = format!("ifs|{}|{}|b{beam}|{lens_id}", def.name, coloring.name);
+            // The DELTA walk is a different shader, not a branch in
+            // one, so it belongs in the pipeline's identity beside the
+            // beam.
+            let delta = escape
+                .formula_params
+                .get("delta")
+                .copied()
+                .unwrap_or_else(|| {
+                    def.parameters
+                        .iter()
+                        .find(|p| p.name == "delta")
+                        .map_or(0.0, |p| p.default)
+                })
+                > 0.5;
+            // ...and the same question the seeds asked, so the
+            // pipeline and the buffer cannot disagree about which walk
+            // is running.
+            let delta = delta
+                && self.ifs.as_ref().is_some_and(|p| p.ifs.has_delta_forms());
+            let dtag = if delta { "|delta" } else { "" };
+            let key =
+                format!("ifs|{}|{}|b{beam}|{lens_id}{dtag}", def.name, coloring.name);
             if !self.pipelines.contains_key(&key) {
                 let source = assembler::assemble_ifs_with_lens(
                     def,
                     coloring,
                     beam,
                     lens_src.as_deref(),
+                    delta,
                 );
                 let module = device.create_shader_module(ShaderModuleDescriptor {
                     label: Some(&format!("Escape Shader {key}")),
@@ -6910,6 +7025,9 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // pipeline compiled with one must find it bound.
         self.ensure_lens(device, queue, escape);
         self.ensure_ifs_seeds(escape);
+        // Whatever that walked, the shader reads: one dummy row when
+        // the delta walk is off, which is the default.
+        self.set_reference(device, queue);
         let mut params = self.params_for(escape);
         if results_active {
             // Bit 3: the iterate templates write their terminal
@@ -7417,6 +7535,10 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     BindGroupEntry {
                         binding: 4,
                         resource: self.ifs_xaos_buffer.as_entire_binding(),
+                    },
+                    BindGroupEntry {
+                        binding: 5,
+                        resource: self.ifs_ref_buffer.as_entire_binding(),
                     },
                 ],
             }))
