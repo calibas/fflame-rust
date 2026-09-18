@@ -643,6 +643,53 @@ blob rebase immediately and walk exactly as they do today; the
 shader, which is the next step and where the f32 arithmetic finally
 gets measured; and G3, G5, G6 and G7, which are all shader gates.
 
+## 3c. The difference forms reach the shader, 2026-09-18
+
+Item 5's third step, and the last one before the shader's own walk.
+`IFS_DIFFERENCE` in [ifs.rs](../../src/escape/ifs.rs) is
+`kernel_difference_gen` and `Map2::difference` in WGSL, its own const
+for the same reason `IFS_JACOBIAN` is: it depends on nothing but the
+map rows, so a gate can compile it against a twenty-line harness and
+check the arithmetic instead of standing up the whole walk to reach
+it.
+
+`the_shader_differences_are_the_cpu_ones` runs one flame per kernel
+so every arm is reached, at four hundred points each, against the
+CPU's own answer:
+
+| | affine | root n=3 | root n=-2 | spherical | bubble | hemisphere |
+|---|---|---|---|---|---|---|
+| worst relative | 4.5e-8 | 2.5e-7 | 2.0e-7 | 4.6e-7 | 3.0e-6 | 9.7e-6 |
+
+f32's own precision is 6e-8, so the spread across the six is the
+conditioning of each form and not a transcription difference.
+
+**The exponent pair is a ROW FIELD, not a test the shader does.** A
+root's inverse is `v^a·conj(v)^b` when `a = (|n|/d + n)/2` and
+`b = (|n|/d − n)/2` are whole, and that is a tolerance. The shader's
+f32 and `root_powers`' f64 would not always agree about a borderline
+`dist`, and a disagreement there is not a rounding: one side has an
+exact form and the other walks a different rung. So `IfsMapGpu` grew
+a `delta` vec4 carrying `(a, b, has_form, _)` computed once on the
+CPU -- 96 bytes to 112, and the layout gate says so.
+
+**δ in that gate is a thousandth of the ball, not a millionth.** The
+comparison is f32 against f64, so at a δ small enough to be
+interesting the f32 answer is dominated by its own rounding and says
+nothing about the transcription. What it checks is that the two
+expressions ARE the same expression; the conditioning at small δ is
+`the_difference_forms_survive_f32`, measured in Rust where the
+arithmetic is the same on both sides.
+
+**No gaps are stored on a reference row**, and §3's table listed
+them. A gap is a branch whose image the point is outside of, and the
+one-shot handover had to carry the reference's because the
+continuation could not see the levels the prefix walked. Here every
+level is in hand, so a pixel asks `image_gap` at its own `Z + δ` --
+what the shipped walk already does, exact rather than the
+reference's value less `|δ|`, and one fewer column in the row the
+shader will read. Dropping them changed no number in G2.
+
 ## 4. Decisions
 
 - **D1. Every child's row is stored, not only the beam's.** One

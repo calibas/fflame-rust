@@ -2217,10 +2217,16 @@ pub struct RefRow {
     /// Whether this row survived the reference's own beam, or is one
     /// of the slack children (D1). A lineage on a slack row has no
     /// children stored and must rebase to continue.
+    ///
+    /// **No gaps are stored**, and the plan's §3 table listed them.
+    /// A gap is a branch whose IMAGE the point is outside of, and the
+    /// one-shot handover had to carry the reference's because the
+    /// continuation could not see the levels the prefix walked. Here
+    /// every level is in hand, so a pixel asks `image_gap` at its own
+    /// `Z + δ` -- which is what the shipped walk already does, is
+    /// exact rather than the reference's value less `|δ|`, and is one
+    /// fewer column in the row the shader reads.
     pub kept: bool,
-    /// The branches this row could not take, with their gaps in world
-    /// units at the reference's own position.
-    pub gaps: Vec<(u32, f64)>,
 }
 
 /// The centre's beam at every level.
@@ -2309,7 +2315,6 @@ pub fn reference_beam<P: SeedPoint>(
             .then(|| (escape_residual(r0, radius, mean), q0.to_f64())),
         done: !r0.is_finite() || r0 > far,
         kept: true,
-        gaps: Vec::new(),
     }]];
 
     for level in 0..max_levels as usize {
@@ -2328,17 +2333,14 @@ pub fn reference_beam<P: SeedPoint>(
             }
             let qf = p.to_f64();
             let last = address_of(&levels, level, *idx).last().copied();
-            let mut gaps: Vec<(u32, f64)> = Vec::new();
             for (i, m) in ifs.maps.iter().enumerate() {
                 if !admits(ifs, i, last) {
                     continue;
                 }
-                // A branch the REFERENCE cannot take. Its gap is the
-                // row's, and a pixel corrects it by its own `|δ|`
-                // rather than by the whole view's reach -- which is
-                // what the one-shot handover had to do.
-                if let Some(gap) = m.inverse.gap_bound(qf, ball, radius, m.sigma_min) {
-                    gaps.push((i as u32, gap));
+                // A branch the reference cannot take. It expands no
+                // child, and nothing about it is stored: a pixel
+                // meets its own gaps at its own position.
+                if m.inverse.gap_bound(qf, ball, radius, m.sigma_min).is_some() {
                     continue;
                 }
                 let Some(q) = p.apply_map(&m.inverse) else {
@@ -2370,11 +2372,9 @@ pub fn reference_beam<P: SeedPoint>(
                     done: !r.is_finite() || r > far,
                     // Decided below, once the level is ranked.
                     kept: false,
-                    gaps: Vec::new(),
                 });
                 next_live.push((q, (next_rows.len() - 1) as u32));
             }
-            levels[level][*idx as usize].gaps = gaps;
             if stop {
                 break;
             }
@@ -2583,23 +2583,23 @@ pub fn estimate_delta(
             }
             let last = c.address.last().copied();
             let here = c.point(reference);
-            let dmag = f64::hypot(c.d[0], c.d[1]);
 
             for (i, m) in ifs.maps.iter().enumerate() {
                 if !admits(ifs, i, last) {
                     continue;
                 }
+                // A branch whose image this pixel is outside of, asked
+                // at the pixel's OWN position -- the same question the
+                // shipped walk asks, and the reason no gap is stored
+                // on a reference row. It comes before either kind of
+                // step, since a gap is not a place to take one.
+                if let Some(gap) = m.inverse.gap_bound(here, ball, radius, m.sigma_min) {
+                    dead_min = dead_min.min(c.bound.max(c.sigma * gap));
+                    continue;
+                }
                 // ---- the delta step, while there is a row to follow
                 if let Some((lvl, idx)) = c.anchor {
                     let row = &reference.levels[lvl as usize][idx as usize];
-                    // The reference could not take this branch: its
-                    // gap is the answer for the piece, corrected by
-                    // this pixel's own offset rather than the whole
-                    // view's reach.
-                    if let Some(&(_, gap)) = row.gaps.iter().find(|(g, _)| *g == i as u32) {
-                        dead_min = dead_min.min(c.bound.max(c.sigma * (gap - dmag)));
-                        continue;
-                    }
                     let child = reference.child(lvl as usize, idx, i as u32);
                     let step = m.inverse.difference(row.z, c.d);
                     match (child, step) {
@@ -2671,10 +2671,6 @@ pub fn estimate_delta(
                 }
 
                 // ---- the absolute step, exactly `estimate_seeded`'s
-                if let Some(gap) = m.inverse.gap_bound(here, ball, radius, m.sigma_min) {
-                    dead_min = dead_min.min(c.bound.max(c.sigma * gap));
-                    continue;
-                }
                 let (q, _, s) = m.inverse.step(here, 0.0, m.sigma_min);
                 let sigma = c.sigma * s;
                 let r = Affine2::distance(q, ball);

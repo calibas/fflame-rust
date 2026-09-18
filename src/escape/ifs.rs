@@ -2110,6 +2110,21 @@ pub struct IfsMapGpu {
     pub branch: f32,
     /// The kernel's parameters: a root's signed power and distance.
     pub params: [f32; 4],
+    /// What the DELTA walk needs of this map
+    /// (`ifs-perturbation-delta.md` §3): `[a, b, has_form, 0]`.
+    ///
+    /// A root's inverse is `v^a·conj(v)^b` when the exponents are
+    /// whole, and `has_form` is 1 when the kernel has an exact
+    /// difference at all -- false for the disc, the blob, and a root
+    /// whose exponents are not.
+    ///
+    /// **Computed on the CPU, not derived in the shader.** The test
+    /// for a whole exponent is a tolerance on `(|n|/d ± n)/2`, and
+    /// the shader's f32 and `ifs_analysis::root_powers`' f64 would
+    /// not always agree about a borderline `dist`. A disagreement
+    /// there is not a rounding: one side has an exact form and the
+    /// other does not, so they walk differently.
+    pub delta: [f32; 4],
     /// What the MEASURE walk needs of this map, and nothing else
     /// reads: `[probability, colour speed, 0, 0]`.
     ///
@@ -2559,6 +2574,169 @@ fn ifs_map_jacobian(i: u32, q: vec2<f32>) -> mat2x2<f32> {
     let p = ifs_maps[i].pre_m;
     let bm = mat2x2<f32>(vec2<f32>(p.x, p.z), vec2<f32>(p.y, p.w));
     return bm * (ifs_kernel_jacobian(i, v) * am);
+}
+"#;
+
+/// The kernels' DIFFERENCE forms, and the map-level composition, as
+/// WGSL (`ifs-perturbation-delta.md` §3).
+///
+/// `m⁻¹(Z + δ) − m⁻¹(Z)` without ever forming the subtraction. A
+/// perturbed lineage carries this instead of a position, and the
+/// reason is the same one Mandelbrot perturbation computes `2Zδ + δ²`
+/// rather than `(Z+δ)² − Z²`: the subtraction loses every digit of
+/// the answer below `m⁻¹(Z)`'s last one, which at a deep zoom is all
+/// of them.
+///
+/// Its own const, like [`IFS_JACOBIAN`] and for the same reason: it
+/// depends on nothing but the `IfsMapGpu` rows, so
+/// `the_shader_differences_are_the_cpu_ones` compiles it against a
+/// small harness and checks the arithmetic rather than standing up
+/// the whole walk to reach it.
+///
+/// Transcribed from
+/// [`crate::scene::ifs_analysis::kernel_difference_gen`], which
+/// `the_difference_forms_are_exact` holds to 1.4e-14 of `|D|` against
+/// a 512-bit reference over thirty decades of δ.
+///
+/// **`ifs_has_difference` is a ROW field, not a test done here.**
+/// Whether a root's exponents are whole is a tolerance on
+/// `(|n|/d ± n)/2`, and this shader's f32 and the analysis's f64
+/// would not always agree about a borderline `dist`. A disagreement
+/// there is not a rounding: one side has an exact form and the other
+/// walks differently.
+pub(crate) const IFS_DIFFERENCE: &str = r#"
+// `w^n − z^n = δ·Σ_{j<n} w^j z^{n−1−j}`, every term O(1) and the
+// product O(δ). `w` is passed rather than recomputed so the caller's
+// own sum is the one used.
+fn ifs_cmul(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
+}
+
+fn ifs_cpow(a: vec2<f32>, n: u32) -> vec2<f32> {
+    var out = vec2<f32>(1.0, 0.0);
+    for (var k = 0u; k < n; k = k + 1u) {
+        out = ifs_cmul(out, a);
+    }
+    return out;
+}
+
+fn ifs_cpow_delta(z: vec2<f32>, w: vec2<f32>, d: vec2<f32>, n: u32) -> vec2<f32> {
+    if (n == 0u) {
+        return vec2<f32>(0.0, 0.0);
+    }
+    var sum = vec2<f32>(0.0, 0.0);
+    for (var j = 0u; j < n; j = j + 1u) {
+        sum = sum + ifs_cmul(ifs_cpow(w, j), ifs_cpow(z, n - 1u - j));
+    }
+    return ifs_cmul(d, sum);
+}
+
+// Whether this row's kernel has an exact difference at all.
+fn ifs_has_difference(i: u32) -> bool {
+    return ifs_maps[i].delta.z > 0.5;
+}
+
+// The kernel's own difference, in the kernel's frame.
+//
+// `v` is the reference's point there, `vw` the pixel's, `dv` their
+// offset. Returns `vec3(D.x, D.y, ok)` -- WGSL has no option, and a
+// caller that ignored the flag would carry a zero delta forever.
+fn ifs_kernel_difference(i: u32, v: vec2<f32>, vw: vec2<f32>, dv: vec2<f32>) -> vec3<f32> {
+    let kind = ifs_maps[i].kind;
+    let bad = vec3<f32>(0.0, 0.0, 0.0);
+    if (!ifs_has_difference(i)) {
+        return bad;
+    }
+    // `t = |vw|² − |v|² = 2v·dv + |dv|²`, the norm's own difference,
+    // itself written so nothing cancels.
+    let t = 2.0 * dot(v, dv) + dot(dv, dv);
+    let x = dot(v, v);
+
+    if (kind == 1.0) {
+        // root: m⁻¹(v) = v^a·conj(v)^b, so
+        // D = Z^a·Q + P·conj(Z)^b + P·Q with P and Q the two power
+        // differences.
+        let a = u32(max(ifs_maps[i].delta.x, 0.0));
+        let b = u32(max(ifs_maps[i].delta.y, 0.0));
+        let p = ifs_cpow_delta(v, vw, dv, a);
+        let cv = vec2<f32>(v.x, -v.y);
+        let cw = vec2<f32>(vw.x, -vw.y);
+        let cd = vec2<f32>(dv.x, -dv.y);
+        let q = ifs_cpow_delta(cv, cw, cd, b);
+        let za = ifs_cpow(v, a);
+        let zb = ifs_cpow(cv, b);
+        return vec3<f32>(ifs_cmul(za, q) + ifs_cmul(p, zb) + ifs_cmul(p, q), 1.0);
+    }
+    if (kind == 2.0) {
+        // spherical: (δ|Z|² − Z·t) / (|Z|²·|W|²).
+        let xw = dot(vw, vw);
+        if (!(x > 0.0) || !(xw > 0.0)) {
+            return bad;
+        }
+        return vec3<f32>((dv * x - v * t) / (x * xw), 1.0);
+    }
+    if (kind == 4.0) {
+        // hemisphere: (Z·t/(√A + √B) + δ√A) / (√A·√B), A = 1 − |Z|².
+        let a_ = 1.0 - x;
+        let b_ = a_ - t;
+        if (!(a_ > 0.0) || !(b_ > 0.0)) {
+            return bad;
+        }
+        let ra = sqrt(a_);
+        let rb = sqrt(b_);
+        let s = ra + rb;
+        if (!(s > 0.0)) {
+            return bad;
+        }
+        return vec3<f32>((v * (t / s) + dv * ra) / (ra * rb), 1.0);
+    }
+    if (kind == 3.0) {
+        // bubble, both branches; r and r' are the roots the scale
+        // takes.
+        let xw = x + t;
+        if (!(x > 0.0) || !(x < 1.0) || !(xw > 0.0) || !(xw < 1.0)) {
+            return bad;
+        }
+        let r = sqrt(1.0 - x);
+        let rw = sqrt(1.0 - xw);
+        let rs = r + rw;
+        if (!(rs > 0.0)) {
+            return bad;
+        }
+        if (ifs_maps[i].branch < 0.5) {
+            // 2(Z·t/(r + r') + δ(1 + r)) / ((1 + r)(1 + r'))
+            let num = v * (t / rs) + dv * (1.0 + r);
+            return vec3<f32>(2.0 * num / ((1.0 + r) * (1.0 + rw)), 1.0);
+        }
+        // 2(−Z·x·t/(r + r') + δ·x·(1 + r') − Z(1 + r)·t) / (x·x')
+        let num = v * (-(x * t) / rs) + dv * (x * (1.0 + rw)) + v * (-((1.0 + r) * t));
+        return vec3<f32>(2.0 * num / (x * xw), 1.0);
+    }
+    return bad;
+}
+
+// The whole map's inverse difference at `q`: the affines drop out of a
+// difference exactly, so this is the kernel's form with the inverse
+// affine applied to δ going in and the pre affine coming out. An
+// affine row is just the one matrix, which is the basis carry the
+// walk has always done.
+fn ifs_map_difference(i: u32, q: vec2<f32>, d: vec2<f32>) -> vec3<f32> {
+    let m = ifs_maps[i].inv_m;
+    let md = vec2<f32>(m.x * d.x + m.y * d.y, m.z * d.x + m.w * d.y);
+    if (ifs_maps[i].kind == 0.0) {
+        return vec3<f32>(md, 1.0);
+    }
+    let t = ifs_maps[i].inv_t;
+    let v = vec2<f32>(m.x * q.x + m.y * q.y + t.x, m.z * q.x + m.w * q.y + t.y);
+    // The kernel-frame point is `v + dv`, not the affine re-applied
+    // to `q + δ`: the same value, one rounding instead of an affine
+    // evaluation, and it is the sum the CPU forms too.
+    let du = ifs_kernel_difference(i, v, v + md, md);
+    if (du.z < 0.5) {
+        return vec3<f32>(0.0, 0.0, 0.0);
+    }
+    let p = ifs_maps[i].pre_m;
+    return vec3<f32>(p.x * du.x + p.y * du.y, p.z * du.x + p.w * du.y, 1.0);
 }
 "#;
 
@@ -4017,6 +4195,25 @@ pub fn pack_maps(
         .enumerate()
         .map(|(i, m)| {
             let color = colors.get(m.transform_index).copied().unwrap_or(0.0);
+            // Filled whatever the caller asked for: it describes
+            // the KERNEL, not the measure.
+            let delta = match m.inverse {
+                Map2::NonlinearInverse(r) => {
+                    match crate::scene::ifs_analysis::root_powers_of(&r.kernel) {
+                        Some((a, b)) => [a as f32, b as f32, 1.0, 0.0],
+                        None => [
+                            0.0,
+                            0.0,
+                            f32::from(crate::scene::ifs_analysis::kernel_has_difference(
+                                &r.kernel,
+                            )),
+                            0.0,
+                        ],
+                    }
+                }
+                // An affine's difference is its own matrix.
+                _ => [0.0, 0.0, 1.0, 0.0],
+            };
             let meas = measure.map_or([0.0f32; 4], |mm| {
                 [
                     mm.prob.get(i).copied().unwrap_or(0.0) as f32,
@@ -4036,7 +4233,8 @@ pub fn pack_maps(
                     kind: 0.0,
                     branch: 0.0,
                     params: [0.0; 4],
-                    measure: meas,
+                    delta,
+                measure: meas,
                 },
                 Map2::NonlinearInverse(r) | Map2::Nonlinear(r) => {
                     // post⁻¹ with the 1/w folded in: the shader's first
@@ -4076,7 +4274,8 @@ pub fn pack_maps(
                         kind,
                         branch: r.branch as f32,
                         params,
-                        measure: meas,
+                        delta,
+                measure: meas,
                     }
                 }
             }
@@ -6279,7 +6478,7 @@ mod tests {
 
     #[test]
     fn the_gpu_row_is_the_layout_the_shader_declares() {
-        assert_eq!(std::mem::size_of::<IfsMapGpu>(), 96);
+        assert_eq!(std::mem::size_of::<IfsMapGpu>(), 112);
         assert_eq!(std::mem::align_of::<IfsMapGpu>(), 4);
         assert_eq!(std::mem::offset_of!(IfsMapGpu, inv_m), 0);
         assert_eq!(std::mem::offset_of!(IfsMapGpu, inv_t), 16);
@@ -6290,7 +6489,8 @@ mod tests {
         assert_eq!(std::mem::offset_of!(IfsMapGpu, kind), 56);
         assert_eq!(std::mem::offset_of!(IfsMapGpu, branch), 60);
         assert_eq!(std::mem::offset_of!(IfsMapGpu, params), 64);
-        assert_eq!(std::mem::offset_of!(IfsMapGpu, measure), 80);
+        assert_eq!(std::mem::offset_of!(IfsMapGpu, delta), 80);
+        assert_eq!(std::mem::offset_of!(IfsMapGpu, measure), 96);
         // std430 rounds a struct's stride to its largest member's
         // alignment, and `inv_m` is a vec4. A size that is not a
         // multiple of 16 strides differently in the shader than in
@@ -7725,6 +7925,249 @@ mod gpu_tests {
     ///
     /// **A transposed matrix still renders a picture**, so this
     /// compares every entry and not a norm.
+    /// The shader's difference forms are the CPU's.
+    ///
+    /// `ifs-perturbation-delta.md` D3: the exact forms exist in f64
+    /// and in WGSL, and a transcription slip between them is a wrong
+    /// picture that still renders. Same shape as
+    /// `the_shader_jacobians_are_the_cpu_ones`: a small harness
+    /// around [`IFS_DIFFERENCE`] alone, one flame per kernel so every
+    /// arm is reached, and the CPU's own answer as the reference.
+    ///
+    /// **δ is a thousandth of the ball, not a millionth.** The
+    /// comparison is in f32 against f64, so at a δ small enough to be
+    /// interesting the f32 answer is dominated by its own rounding
+    /// and says nothing about the transcription. What this gate
+    /// checks is that the two expressions ARE the same expression;
+    /// `the_difference_forms_survive_f32` is where the conditioning
+    /// at small δ is measured, and it is measured in Rust where the
+    /// arithmetic is the same.
+    #[test]
+    #[ignore = "needs a GPU; run with --ignored --nocapture"]
+    fn the_shader_differences_are_the_cpu_ones() {
+        let (device, queue) = device();
+        let jul = |power: f32, dist: f32| {
+            let mut t = crate::scene::transforms::Transform::default();
+            t.a = 0.7071; t.b = 0.7071; t.c = -0.7071; t.d = 0.7071;
+            t.e = 0.2; t.f = -0.1;
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("flatten", 1.0);
+            t.set_variation("julian", 1.0);
+            t.set_variation_param("julian", "power", power);
+            t.set_variation_param("julian", "dist", dist);
+            t
+        };
+        let kern = |name: &str| {
+            let mut t = crate::scene::transforms::Transform::default();
+            t.a = 0.9; t.b = 0.3; t.c = -0.3; t.d = 0.9;
+            t.e = 0.15; t.f = -0.2;
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation(name, 1.1);
+            t
+        };
+        let mut affine = crate::scene::transforms::Transform::default();
+        affine.a = 0.5;
+        affine.d = 0.5;
+        affine.e = 0.3;
+        affine.variations.clear();
+        affine.variation_order.clear();
+        affine.set_variation("linear", 1.0);
+
+        // The map index tested is 0 in each, so the fixture's first
+        // transform is the kernel and the second only gives the set a
+        // ball.
+        let cases: Vec<(&str, Vec<crate::scene::transforms::Transform>)> = vec![
+            // Two DIFFERENT affines: the same one twice is a
+            // degenerate IFS whose attractor is a single point, so
+            // the ball has no radius and every sampled offset is
+            // zero.
+            ("affine", {
+                let mut b = affine.clone();
+                b.e = -0.4;
+                b.f = 0.25;
+                b.a = 0.45;
+                b.d = 0.55;
+                vec![affine.clone(), b]
+            }),
+            ("root n=3 d=1", vec![jul(3.0, 1.0), affine.clone()]),
+            ("root n=-2 d=1", vec![jul(-2.0, 1.0), affine.clone()]),
+            ("spherical", vec![kern("spherical"), affine.clone()]),
+            ("bubble", vec![kern("bubble"), affine.clone()]),
+            ("hemisphere", vec![kern("hemisphere"), affine.clone()]),
+        ];
+
+        let harness = format!(
+            r#"
+struct IfsMapGpu {{
+    inv_m: vec4<f32>,
+    inv_t: vec2<f32>,
+    sigma_min: f32,
+    color: f32,
+    pre_m: vec4<f32>,
+    pre_t: vec2<f32>,
+    kind: f32,
+    branch: f32,
+    params: vec4<f32>,
+    delta: vec4<f32>,
+    measure: vec4<f32>,
+}}
+@group(0) @binding(0) var<storage, read> ifs_maps: array<IfsMapGpu>;
+@group(0) @binding(1) var<storage, read> pts: array<vec4<f32>>;
+@group(0) @binding(2) var<storage, read_write> out: array<vec4<f32>>;
+{}
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    let n = arrayLength(&pts);
+    if (gid.x >= n) {{ return; }}
+    let p = pts[gid.x];
+    let d = ifs_map_difference(0u, p.xy, p.zw);
+    out[gid.x] = vec4<f32>(d.x, d.y, d.z, 0.0);
+}}
+"#,
+            IFS_DIFFERENCE
+        );
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("difference harness"),
+            source: wgpu::ShaderSource::Wgsl(harness.into()),
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("difference harness"),
+            layout: None,
+            module: &module,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        for (name, transforms) in cases {
+            let guard = crate::variations::global_registry();
+            let flame = {
+                let mut f = crate::scene::transforms::Flame::default();
+                f.transforms = transforms;
+                f
+            };
+            let ifs = crate::scene::ifs_analysis::analyse_2d(&flame, &guard).expect("qualifies");
+            drop(guard);
+            let colors: Vec<f32> = flame.transforms.iter().map(|t| t.color).collect();
+            let rows = pack_maps(&ifs, &colors, None);
+            assert!(
+                ifs.maps[0].inverse.has_difference(),
+                "{name}: no exact form on the CPU"
+            );
+            assert!(rows[0].delta[2] > 0.5, "{name}: the row says no exact form");
+
+            let (bc, br) = (ifs.ball.centre, ifs.ball.radius);
+            let mut pts: Vec<[f32; 4]> = Vec::new();
+            let mut want: Vec<[f64; 2]> = Vec::new();
+            let mut st = 0x9E3779B97F4A7C15u64;
+            let mut rnd = move || {
+                st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                (st >> 11) as f64 / (1u64 << 53) as f64
+            };
+            // BOUNDED, because most of the ball is outside some
+            // kernels' domains: a bubble's inverse wants `|v| < 1` in
+            // the KERNEL's frame, and the ball in `q`'s frame maps
+            // mostly outside it. An unbounded `while pts.len() < 400`
+            // here did not fail, it hung.
+            let mut tries = 0usize;
+            while pts.len() < 400 && tries < 400_000 {
+                tries += 1;
+                let q = [
+                    bc[0] + (rnd() * 2.0 - 1.0) * br,
+                    bc[1] + (rnd() * 2.0 - 1.0) * br,
+                ];
+                let a = rnd() * std::f64::consts::TAU;
+                let mag = br * 1e-3;
+                let d = [mag * a.cos(), mag * a.sin()];
+                // A pole or an image edge is not a disagreement.
+                if ifs.maps[0].inverse.singular_distance(q) < 1e-2 * br {
+                    continue;
+                }
+                let Some(w) = ifs.maps[0].inverse.difference(q, d) else { continue };
+                let norm = f64::hypot(w[0], w[1]);
+                if !(norm > 1e-9) || norm > 1e6 {
+                    continue;
+                }
+                pts.push([q[0] as f32, q[1] as f32, d[0] as f32, d[1] as f32]);
+                want.push(w);
+            }
+            assert!(
+                pts.len() >= 60,
+                "{name}: only {} of {tries} sampled points are in the kernel's domain \
+                 -- too few to say anything about the transcription",
+                pts.len()
+            );
+
+            let mk = |data: &[u8], usage: wgpu::BufferUsages| {
+                use wgpu::util::DeviceExt;
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: None,
+                    contents: data,
+                    usage,
+                })
+            };
+            let maps_buf = mk(bytemuck::cast_slice(&rows), wgpu::BufferUsages::STORAGE);
+            let pts_buf = mk(bytemuck::cast_slice(&pts), wgpu::BufferUsages::STORAGE);
+            let bytes = (pts.len() * 16) as u64;
+            let out_buf = device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: bytes,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            });
+            let stage = device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: bytes,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &pipeline.get_bind_group_layout(0),
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: maps_buf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: pts_buf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 2, resource: out_buf.as_entire_binding() },
+                ],
+            });
+            let mut enc = device.create_command_encoder(&Default::default());
+            {
+                let mut pass = enc.begin_compute_pass(&Default::default());
+                pass.set_pipeline(&pipeline);
+                pass.set_bind_group(0, &bg, &[]);
+                pass.dispatch_workgroups(pts.len().div_ceil(64) as u32, 1, 1);
+            }
+            enc.copy_buffer_to_buffer(&out_buf, 0, &stage, 0, bytes);
+            queue.submit(std::iter::once(enc.finish()));
+            let (tx, rx) = std::sync::mpsc::channel();
+            stage.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+                let _ = tx.send(r);
+            });
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            rx.recv().expect("map").expect("map ok");
+            let got: Vec<[f32; 4]> = {
+                let d = stage.slice(..).get_mapped_range();
+                bytemuck::cast_slice::<u8, [f32; 4]>(&d).to_vec()
+            };
+            stage.unmap();
+
+            let mut worst = 0.0f64;
+            for (g, w) in got.iter().zip(&want) {
+                assert!(g[2] > 0.5, "{name}: the shader declined a point the CPU took");
+                let norm = f64::hypot(w[0], w[1]);
+                let e = f64::hypot(g[0] as f64 - w[0], g[1] as f64 - w[1]) / norm;
+                worst = worst.max(e);
+            }
+            println!("  {name:<14} worst relative {worst:.2e} over {} points", got.len());
+            assert!(
+                worst < 2e-5,
+                "{name}: the shader's difference is {worst:.2e} from the CPU's"
+            );
+        }
+    }
+
     #[test]
     #[ignore = "needs a GPU"]
     fn the_shader_jacobians_are_the_cpu_ones() {
@@ -7813,6 +8256,7 @@ struct IfsMapGpu {{
     kind: f32,
     branch: f32,
     params: vec4<f32>,
+    delta: vec4<f32>,
     measure: vec4<f32>,
 }}
 @group(0) @binding(0) var<storage, read> ifs_maps: array<IfsMapGpu>;

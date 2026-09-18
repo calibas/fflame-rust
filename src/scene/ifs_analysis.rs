@@ -757,6 +757,16 @@ pub fn kernel_inverse_real<T: Real>(k: &Kernel, v: &[T; 2], branch: u32) -> Opti
     }
 }
 
+/// [`root_powers`] for a kernel, or `None` when it is not a root or
+/// its exponents are not whole. What the GPU row carries, so the two
+/// sides cannot disagree about a borderline `dist`.
+pub fn root_powers_of(k: &Kernel) -> Option<(u32, u32)> {
+    match *k {
+        Kernel::Root { n, d } => root_powers(n, d),
+        _ => None,
+    }
+}
+
 /// Whether [`kernel_difference_gen`] has an EXACT form for this
 /// kernel on this branch.
 ///

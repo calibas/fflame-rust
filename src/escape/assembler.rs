@@ -4422,6 +4422,12 @@ struct IfsMapGpu {
     branch: f32,
     params: vec4<f32>,
     // What the MEASURE walk needs and nothing else reads:
+    // (a, b, has_form, spare): the delta walk's own row. A root's
+    // inverse is `v^a conj(v)^b` when the exponents are whole, and
+    // `has_form` is 1 where the kernel has an exact difference at
+    // all. Computed on the CPU so the two sides cannot disagree
+    // about a borderline exponent.
+    delta: vec4<f32>,
     // (probability, colour speed, spare, spare). A whole vec4 because
     // std430 rounds the struct's stride to its largest member's
     // alignment -- at 88 bytes this would stride 96 here and 88 in
