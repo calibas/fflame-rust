@@ -4212,6 +4212,38 @@ mod tests {
         }
     }
 
+    /// What `measure_third` costs, per map.
+    ///
+    /// It runs inside `analyse_2d`, which the renderer calls on every
+    /// flame edit, so this is a number the interactive path pays.
+    #[test]
+    #[ignore = "a measurement; run with --ignored --nocapture"]
+    fn probe_what_the_third_derivative_costs() {
+        let guard = global_registry();
+        let r = &*guard;
+        for name in ["disc", "blob", "spherical"] {
+            let mut t = affine_xform(0.83, -0.24, 0.31, 0.77, 0.19, -0.12);
+            t.variations.clear();
+            t.variation_order.clear();
+            let mut t = with(t, name, 0.9);
+            if name == "blob" {
+                t.set_variation_param("blob", "high", 1.2);
+                t.set_variation_param("blob", "low", 0.5);
+                t.set_variation_param("blob", "waves", 5.0);
+            }
+            let m = transform_map_2d_ordered(&t, r, &t.ordered_variation_names(r))
+                .expect("a kernel");
+            let Map2::Nonlinear(mut n) = m else { panic!("{name}") };
+            let t0 = std::time::Instant::now();
+            n.measure_third([0.0, 0.0], 1.5);
+            println!(
+                "  {name:<10} {:>8.1} ms  third = {:.3e}",
+                t0.elapsed().as_secs_f64() * 1e3,
+                n.third
+            );
+        }
+    }
+
     /// What the exact Hessian buys, by clearance.
     ///
     /// The dual is exact to f64 rounding, so the gap between it and
