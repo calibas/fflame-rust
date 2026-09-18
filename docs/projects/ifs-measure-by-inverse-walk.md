@@ -224,30 +224,39 @@ ball's centre the distance walk ranks by (D3).
    CPU with no plumbing at all. Exact on the dragon, approximate on
    the gasket, with the single-cell lookup named as the reason and
    the domain condition `cpx > px` found.
-1. **The coarse pass and the lookup.** The headless render into a
-   texture over the ball; bound to the mode-D pass; a probe
-   colouring that paints the coarse density at the walk's ESCAPE
-   endpoint, as a check that the binding, the extent and the
-   coordinates agree. No estimator yet. **The lookup's filtering is
-   now part of this item, not a refinement of it** (§5a).
-2. ~~**The beam's truncation**~~ -- measured 2026-09-17, §5b:
-   free on every set tested but the overlapping band, where beam 8
-   loses 12% and beam 2 loses 70%. The shipped beam of eight is
-   enough. What remains of this item is the SHADER half: probability,
-   determinant, stop rule and sum in WGSL, against the CPU
-   enumeration as its reference.
-3. ~~**Colour**~~ -- measured 2026-09-17, §5f: the address fold is
+1. ~~**The coarse pass and the lookup**~~ -- done 2026-09-17,
+   §5c and §5m. The lookup's filtering came with it: a footprint
+   over the preimage region, with the stop rule at sixteen cells on
+   an affine set and four on a curved one, because one cell
+   integrates nothing. The pass itself renders from the flame
+   renderer with an inverse-sRGB ramp, normalised by what landed,
+   and `ensure_coarse` wires it in at both production sites.
+2. ~~**The beam sum, and the shader half**~~ -- done 2026-09-17.
+   The truncation is free on every set tested but the overlapping
+   band (§5b), so the shipped beam of eight is enough. The shader
+   half landed in §5l with the six kernel Jacobians (§5k), and §5o
+   gave it the handover's prefix so it zooms. It is exact against
+   the f64 reference on the affine fixtures at every handover level
+   tested.
+3. ~~**Colour**~~ -- done 2026-09-17, §5f: the address fold is
    four to twenty-six times better than a coarse lookup and its
-   error falls toward zero with the zoom, inside one palette entry
-   on the affine sets and three on the grand julian. **Units (D4)
-   are still open** and are the remaining half of this item.
+   error falls toward zero with the zoom. §5j then removed the
+   address from it entirely -- the reversed fold accumulates
+   forward, two floats, which is what made the shader's version
+   sizeable. **Units (D4) are the remaining half of this item and
+   are OPEN**: §5h measured the falloff at twenty to thirty stops
+   between 2^5 and 2^20, and the normalisation that answers it is
+   not built.
 4. **Monte Carlo** (D3), if G1 shows the beam sum's bias on the
    overlap fixtures.
 5. **Depth.** Nothing to build: the walk is the seeded walk, and
    the delta plan's walk when it lands. G5 is the gate.
 
-Items 1 to 3 are item 2 of the delta plan's §9, and they run on
-today's walk unchanged.
+Items 1 to 3 are item 2 of the delta plan's §9. **What is left of
+this plan is item 3's units half, item 4, and two measured residues**:
+the gasket's 1.5% (§5n) and a curved set's 1.296 at a handover past
+level 0 (§5o), which is the delta plan's quadratic carry to fix and
+not this plan's.
 
 ## 5a. The factorisation holds, 2026-09-17
 

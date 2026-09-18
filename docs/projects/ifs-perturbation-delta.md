@@ -1,7 +1,7 @@
 # Perturbation in delta form: the second design (plan, 2026-09-17)
 
 The first design is
-[ifs-nonlinear-perturbation.md](ifs-nonlinear-perturbation.md): the
+[ifs-nonlinear-perturbation.md](../archive/projects/ifs-nonlinear-perturbation.md): the
 CPU walks the view centre's inverse orbit in `BigFloat`, hands over
 ONCE at a chosen level, and every pixel continues from an f32
 absolute position. §17a there records what a review of it found, and
@@ -617,13 +617,15 @@ The cheap and the decisive first. Each item names its plan.
    with a reason: near-weighting the objective's curvature probes.
    The ceiling, both keys, the dead code and the widened gate all
    landed and changed no chosen level.
-2. **The measure at shallow zoom**
-   ([ifs-measure-by-inverse-walk.md](ifs-measure-by-inverse-walk.md)
-   §5 items 1 to 3): the coarse pass, the lookup colouring, the
-   beam sum, gated against the direct chaos game at 2^2 to 2^6. It
-   uses today's walk unchanged and it is the first picture that
-   looks like a flame; if it does not, the rest of that plan is
-   moot and this one is unaffected.
+2. ~~**The measure**~~ -- done 2026-09-17, and it went well past
+   "at shallow zoom". The factorisation holds against a chaos game
+   on five fixtures covering every kernel class; the colouring
+   ships, reads a coarse pass built by the flame renderer, and
+   carries the handover's prefix so it zooms as far as the distance
+   walk does. Open there: the brightness normalisation, the Monte
+   Carlo variant for overlapping sets, and a curved set's 1.296 at a
+   deep handover -- which is §3 HERE, since a handover hands over a
+   linearisation and the quadratic is what straightens it.
 3. **The scalar-generic kernel** ([ifs-general.md](ifs-general.md)
    D1 and D2): forward, inverse and difference form written once
    over a `Real` trait; derivatives by dual numbers; the six kernels

@@ -3075,7 +3075,7 @@ Mandelbrot perturbation and would buy deep zoom past f32 on these
 sets; near a pole the linearisation fails and the handover would
 stop there, exactly as the affine one stops where the view disagrees.
 A real project, not a patch: the plan is
-[ifs-nonlinear-perturbation.md](ifs-nonlinear-perturbation.md).
+[ifs-nonlinear-perturbation.md](../archive/projects/ifs-nonlinear-perturbation.md).
 
 **A caveat on this section's ground truth, found the next day.** The
 "true nearest piece" samples above were drawn with every root's
