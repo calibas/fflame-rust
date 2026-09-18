@@ -1187,10 +1187,18 @@ The cheap and the decisive first. Each item names its plan.
    the imported corpus, zero flames unlocked, because every one of
    those four sits behind a variation with no inverse at all. The
    catalogue is the wall.
-7. **The Monte Carlo measure**
-   ([ifs-measure-by-inverse-walk.md](ifs-measure-by-inverse-walk.md)
-   §5 item 4) for overlapping sets, once the beam sum's bias is
-   measured on them.
+7. ~~**The Monte Carlo measure**~~ -- done 2026-09-18,
+   [ifs-measure-by-inverse-walk.md](ifs-measure-by-inverse-walk.md)
+   §5q. The backward chaos game is unbiased for the sum the beam
+   truncates: on the overlapping band it reads 1.00 of the
+   enumerated sum at every zoom where a beam of 16 falls to 0.26,
+   and it does not disturb the fat gasket, where the beam already
+   loses nothing. Separating the beam's bias from the LOOKUP's drift
+   is what made the numbers legible, and the lookup's own residue --
+   1.065 to 1.134 across four zooms -- is now visible on its own for
+   the first time. On the CPU only: 6x the beam's cost at 11% pixel
+   noise, 103x at 2.5%, so shipping it means a progressive render
+   and that is a design decision rather than a gate.
 8. **`BigFloat` exp, sin, cos**, and the Taylor rung's remainders,
    for Disc, Blob and the non-integer roots.
 9. **3D** (D5 here), once a solid exists that a deep zoom would
