@@ -173,6 +173,50 @@ impl Real for f64 {
     }
 }
 
+/// `f32`, for the arithmetic the SHADER runs.
+///
+/// `Real` only: the kernels that need a transcendental are the ones
+/// the shader writes out by hand in WGSL, and a `Transcendental` impl
+/// here would invite a CPU body that has no WGSL twin. What this is
+/// for is checking an f32 expression's conditioning against its own
+/// f64 value -- `the_difference_forms_survive_f32` -- which needs
+/// only the four operations and a square root.
+impl Real for f32 {
+    fn lit(&self, v: f64) -> Self {
+        v as f32
+    }
+    fn to_f64(&self) -> f64 {
+        *self as f64
+    }
+    fn add(&self, o: &Self) -> Self {
+        self + o
+    }
+    fn sub(&self, o: &Self) -> Self {
+        self - o
+    }
+    fn mul(&self, o: &Self) -> Self {
+        self * o
+    }
+    fn div(&self, o: &Self) -> Self {
+        self / o
+    }
+    fn neg(&self) -> Self {
+        -self
+    }
+    fn sqrt(&self) -> Self {
+        f32::sqrt(*self)
+    }
+    fn abs(&self) -> Self {
+        f32::abs(*self)
+    }
+    fn recip(&self) -> Self {
+        f32::recip(*self)
+    }
+    fn is_finite(&self) -> bool {
+        f32::is_finite(*self)
+    }
+}
+
 impl Transcendental for f64 {
     fn exp(&self) -> Self {
         f64::exp(*self)
@@ -333,6 +377,87 @@ impl<T: Transcendental> Transcendental for Dual<T> {
             Dual { d: [self.d[0].mul(&ns), self.d[1].mul(&ns)], v: c.clone() },
         )
     }
+}
+
+// ------------------------------------------------ complex arithmetic
+
+// The planar kernels are complex maps, and their DIFFERENCE forms
+// (`ifs-perturbation-delta.md` §3) are written in complex algebra.
+// These are the operations those forms need, over any `Real`, so one
+// body serves f64, `Dual` and `BigFloat`.
+
+/// `a + b`.
+pub fn cadd<T: Real>(a: &[T; 2], b: &[T; 2]) -> [T; 2] {
+    [a[0].add(&b[0]), a[1].add(&b[1])]
+}
+
+/// `a − b`.
+pub fn csub<T: Real>(a: &[T; 2], b: &[T; 2]) -> [T; 2] {
+    [a[0].sub(&b[0]), a[1].sub(&b[1])]
+}
+
+/// `a · b`.
+pub fn cmul<T: Real>(a: &[T; 2], b: &[T; 2]) -> [T; 2] {
+    [
+        a[0].mul(&b[0]).sub(&a[1].mul(&b[1])),
+        a[0].mul(&b[1]).add(&a[1].mul(&b[0])),
+    ]
+}
+
+/// `a · s`, a real scale.
+pub fn cscale<T: Real>(a: &[T; 2], s: &T) -> [T; 2] {
+    [a[0].mul(s), a[1].mul(s)]
+}
+
+/// `a / s`, a real divisor.
+pub fn cdiv_real<T: Real>(a: &[T; 2], s: &T) -> [T; 2] {
+    [a[0].div(s), a[1].div(s)]
+}
+
+/// `conj(a)`.
+pub fn cconj<T: Real>(a: &[T; 2]) -> [T; 2] {
+    [a[0].clone(), a[1].neg()]
+}
+
+/// `|a|²`.
+pub fn cnorm2<T: Real>(a: &[T; 2]) -> T {
+    a[0].hypot2(&a[1])
+}
+
+/// Zero, at `like`'s precision.
+pub fn czero<T: Real>(like: &T) -> [T; 2] {
+    [like.zero(), like.zero()]
+}
+
+/// `a^n`, by repeated multiplication. `n = 0` is one.
+pub fn cpow<T: Real>(a: &[T; 2], n: u32) -> [T; 2] {
+    let mut out = [a[0].one(), a[0].zero()];
+    for _ in 0..n {
+        out = cmul(&out, a);
+    }
+    out
+}
+
+/// `(Z + δ)^n − Z^n`, **without forming the difference**.
+///
+/// `w^n − z^n = (w − z)·Σ_{j<n} w^j z^{n−1−j}`, and `w − z` is `δ`
+/// exactly. Every term of the sum is `O(1)` and the whole product is
+/// `O(δ)`, so nothing cancels -- which is the point: the direct form
+/// loses every digit of `δ` below `|Z^n|`'s last one, and at a deep
+/// zoom that is all of them.
+///
+/// `w` is passed rather than recomputed so the caller's `Z + δ` is
+/// the one used: at `BigFloat` it is exact, and forming it twice
+/// would be two roundings instead of one.
+pub fn cpow_delta<T: Real>(z: &[T; 2], w: &[T; 2], d: &[T; 2], n: u32) -> [T; 2] {
+    if n == 0 {
+        return czero(&z[0]);
+    }
+    let mut sum = czero(&z[0]);
+    for j in 0..n {
+        sum = cadd(&sum, &cmul(&cpow(w, j), &cpow(z, n - 1 - j)));
+    }
+    cmul(d, &sum)
 }
 
 /// The Jacobian of a planar map, as `[[∂u/∂x, ∂u/∂y], [∂v/∂x, ∂v/∂y]]`.
