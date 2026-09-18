@@ -8563,6 +8563,233 @@ mod gpu_tests {
     ///
     /// **A transposed matrix still renders a picture**, so this
     /// compares every entry and not a norm.
+    /// A point of the Sierpinski gasket at `half(0,0)`, `half(.5,0)`,
+    /// `half(.25,.5)`, given by its ADDRESS, exactly, as a decimal
+    /// string.
+    ///
+    /// The point of the address `a₁a₂…a_k` is `Σ tₐᵢ·2⁻ⁱ`, and every
+    /// `t` here is a quarter or a half, so `4x·2^k` is a whole number
+    /// `M = Σ (4tₐᵢ)·2^(k−i)` -- built by Horner below. Then
+    /// `x = M/2^(k+2) = M·5^(k+2)/10^(k+2)`, whose decimal expansion
+    /// is finite and is what this returns.
+    ///
+    /// **Why not a cycle point.** The obvious centre is the fixed
+    /// point of `S₀∘S₁∘S₂`, `(5/14, 1/7)`, and it is useless for a
+    /// precision gate: the cycle scales by `(1/2)³` about it, so the
+    /// walk's own state REPEATS every three zoom levels and both
+    /// walks reproduce the picture at 2^60 exactly, having drawn it
+    /// at 2^18. Measured, all four zooms read 0.0000 pixels of drift
+    /// on both walks. An aperiodic address has no such symmetry to
+    /// hide behind.
+    #[cfg(test)]
+    fn gasket_address_point(addr: &[u8]) -> (String, String) {
+        // Little-endian decimal big integer.
+        let mul_small = |v: &mut Vec<u8>, m: u32| {
+            let mut carry = 0u32;
+            for d in v.iter_mut() {
+                let t = *d as u32 * m + carry;
+                *d = (t % 10) as u8;
+                carry = t / 10;
+            }
+            while carry > 0 {
+                v.push((carry % 10) as u8);
+                carry /= 10;
+            }
+        };
+        let add_small = |v: &mut Vec<u8>, a: u32| {
+            let mut carry = a;
+            let mut i = 0;
+            while carry > 0 {
+                if i == v.len() {
+                    v.push(0);
+                }
+                let t = v[i] as u32 + carry;
+                v[i] = (t % 10) as u8;
+                carry = t / 10;
+                i += 1;
+            }
+        };
+        let k = addr.len();
+        let coord = |pick: &dyn Fn(u8) -> u32| -> String {
+            let mut m: Vec<u8> = vec![0];
+            for &a in addr {
+                mul_small(&mut m, 2);
+                add_small(&mut m, pick(a));
+            }
+            for _ in 0..(k + 2) {
+                mul_small(&mut m, 5);
+            }
+            let mut digits: Vec<char> =
+                m.iter().rev().map(|d| (b'0' + d) as char).collect();
+            while digits.len() < k + 2 {
+                digits.insert(0, '0');
+            }
+            let point = digits.len() - (k + 2);
+            let mut out: String = digits[..point].iter().collect();
+            if out.is_empty() {
+                out.push('0');
+            }
+            out.push('.');
+            out.extend(digits[point..].iter());
+            out
+        };
+        // 4·t for each map: (0,0), (2,0), (1,2).
+        (
+            coord(&|a| [0u32, 2, 1][a as usize]),
+            coord(&|a| [0u32, 0, 2][a as usize]),
+        )
+    }
+
+    /// G6: the picture is consistent with itself past where f64 can
+    /// check it.
+    ///
+    /// `ifs-perturbation-delta.md` §6, and the gate the first design
+    /// never had -- the one that would have caught its ceiling. No
+    /// reference exists past 2^40, so the reference is the PICTURE: a
+    /// render at `2^(z+2)` shows the centre quarter of the render at
+    /// `2^z`, so the deeper one downsampled by four must reproduce
+    /// the shallower one's middle. A walk that has run out of
+    /// precision disagrees with itself here, and nothing it is
+    /// compared against has to exist.
+    ///
+    /// The observable is the DISTANCE in pixels, which is what the
+    /// picture is made of, scaled by four between the two zooms. The
+    /// centre is an aperiodic address of the gasket, exact to three
+    /// hundred digits -- see [`gasket_address_point`] for why a cycle
+    /// point will not do.
+    #[test]
+    #[ignore = "needs a GPU; run with --ignored --nocapture"]
+    fn the_delta_walk_holds_its_own_picture_past_f64() {
+        const RW: u32 = 128;
+        const RH: u32 = 128;
+
+        // An aperiodic address: the Thue-Morse-ish pattern below has
+        // no period, so the picture at one zoom is not the picture at
+        // another and the walk has nothing to hide behind.
+        let addr: Vec<u8> = (0..300u32)
+            .map(|i| ((i / 3 + i % 7 + (i * i) % 5) % 3) as u8)
+            .collect();
+        let (cre, cim) = gasket_address_point(&addr);
+        assert!(cre.len() > 200 && cim.len() > 200, "the centre is not deep");
+
+        let flame = sierpinski_flame();
+        let (device, queue) = device();
+        let base = crate::config::FractalConfig::default();
+        let pal = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            64,
+            64,
+            &base.flame,
+            base.palette_size,
+        );
+
+        let shot = |zoom: f64, delta: bool| -> Vec<f32> {
+            let mut config = crate::config::FractalConfig::default();
+            config.render_mode = RenderMode::Escape;
+            config.flame = flame.clone();
+            config.escape.formula = "ifs_flame".to_string();
+            config.escape.coloring = "ifs_distance".to_string();
+            config.escape.supersample = 1;
+            config.escape.center_re = cre.clone();
+            config.escape.center_im = cim.clone();
+            config.escape.zoom_log2 = zoom;
+            config.escape.formula_params.insert("levels".to_string(), 140.0);
+            config.escape.formula_params.insert("beam".to_string(), 8.0);
+            config
+                .escape
+                .formula_params
+                .insert("delta".to_string(), if delta { 1.0 } else { 0.0 });
+            let esc = config.escape.clone();
+            let mut escape = crate::escape::EscapeRenderer::new(&device, RW, RH);
+            let def = get_ifs(&config.escape.formula).expect("ifs_flame");
+            let reg = crate::variations::global_registry();
+            escape.set_ifs(pack_for(def, &config, &reg));
+            drop(reg);
+            let mut guard = 0;
+            loop {
+                let mut enc = device.create_command_encoder(&Default::default());
+                let done = escape.render(
+                    &device,
+                    &queue,
+                    &mut enc,
+                    &esc,
+                    pal.palette_view(),
+                    pal.palette_generation(),
+                );
+                queue.submit(std::iter::once(enc.finish()));
+                let _ =
+                    device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if done {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 10_000, "render never settled");
+            }
+            let recs = escape.read_results_full(&device, &queue).expect("records");
+            escape.destroy();
+            recs.iter().map(|r| r.z[0]).collect()
+        };
+
+        // The shallower render's centre quarter against the deeper
+        // one downsampled by four, both in pixels -- so the deeper
+        // one's distances are four times the shallower's and are
+        // divided back.
+        //
+        // MEDIAN, not worst: a pixel on a branch boundary can flip
+        // between two addresses whose bounds differ, which is the
+        // beam and not the precision, and it happens as readily at
+        // 2^18 as at 2^60.
+        let drift = |a: &[f32], b: &[f32]| -> f64 {
+            let (x0, y0) = (RW * 3 / 8, RH * 3 / 8);
+            let mut d: Vec<f64> = Vec::new();
+            for j in 0..(RH / 4) {
+                for i in 0..(RW / 4) {
+                    let shallow = a[((y0 + j) * RW + x0 + i) as usize] as f64;
+                    let mut deep = 0.0f64;
+                    for dy in 0..4u32 {
+                        for dx in 0..4u32 {
+                            deep += b[((j * 4 + dy) * RW + i * 4 + dx) as usize] as f64;
+                        }
+                    }
+                    deep /= 16.0 * 4.0;
+                    if shallow > 0.0 || deep > 0.0 {
+                        d.push((deep - shallow).abs());
+                    }
+                }
+            }
+            if d.is_empty() {
+                return 0.0;
+            }
+            d.sort_by(f64::total_cmp);
+            d[d.len() / 2]
+        };
+
+        println!("  median drift between 2^z and 2^(z+2), in pixels");
+        println!("  {:<8} {:>12} {:>12}", "z", "shipped", "delta");
+        let mut rows: Vec<(f64, f64, f64)> = Vec::new();
+        for z in [16.0f64, 28.0, 40.0, 52.0, 64.0] {
+            let ds = drift(&shot(z, false), &shot(z + 2.0, false));
+            let dd = drift(&shot(z, true), &shot(z + 2.0, true));
+            println!("  2^{z:<6} {ds:>12.4} {dd:>12.4}");
+            rows.push((z, ds, dd));
+        }
+
+        // The calibration: at 2^16 both walks are exact, so whatever
+        // they disagree by there is the downsampling's own cost.
+        let floor = rows[0].1.max(rows[0].2).max(0.02);
+        println!("  downsampling floor {floor:.4} px");
+        for (z, ds, dd) in &rows {
+            assert!(
+                *dd <= floor * 4.0,
+                "at 2^{z} the delta walk disagrees with itself by {dd:.4} pixels against a \
+                 downsampling floor of {floor:.4} -- it has run out of precision \
+                 (the shipped walk reads {ds:.4})"
+            );
+        }
+    }
+
     /// G5's first half: the shader's DELTA walk is the CPU's.
     ///
     /// `ifs-perturbation-delta.md` §6. The renderer walks the

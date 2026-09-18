@@ -765,9 +765,42 @@ walk reads 3.1 -- a branch the three do not agree about at a corner
 therefore on the MEDIAN, and the comparative clause, which is the one
 with teeth, is on the worst.
 
+### G6: the picture holds to 2^64, and the fixture took two tries
+
+The gate the first design never had. No reference exists past 2^40,
+so the reference is the PICTURE: a render at `2^(z+2)` shows the
+centre quarter of the render at `2^z`, so the deeper one downsampled
+by four must reproduce the shallower one's middle, in pixels, with
+the deeper distances divided by four.
+
+| median drift, px | 2^16 | 2^28 | 2^40 | 2^52 | 2^64 |
+|---|---|---|---|---|---|
+| shipped | 0 | 0 | 0.0007 | 0 | 0.0028 |
+| delta | 0 | 0 | **0** | 0 | 0.0028 |
+
+Both hold to 2^64 on this set, and at 2^40 the delta walk is exact
+where the shipped walk has begun to drift.
+
+**The first fixture measured nothing, and it is worth saying why.**
+The obvious centre is `(5/14, 1/7)`, the fixed point of `S₀∘S₁∘S₂`.
+That cycle scales by `(1/2)³` about it, so the walk's own state
+REPEATS every three zoom levels: both walks reproduced the picture at
+2^60 exactly, having drawn it at 2^18, and every row read 0.0000.
+That is the same trap `tetra_cycle_target` warns about in another
+guise -- a dyadic centre is not the only kind a walk can hide behind.
+The centre is now an APERIODIC address of the gasket, three hundred
+maps long, built exactly: the point of an address is `Σ tₐᵢ·2⁻ⁱ` and
+every `t` is a quarter or a half, so `4x·2^k` is a whole number and
+the decimal expansion is finite.
+
+**What it does not cover**: the set is AFFINE, whose basis carry is
+exact either way, so this measures the f32 arithmetic and the
+handover rather than the difference forms. A curved set with exact
+forms would be the stronger test and needs a deep centre on a bubble
+attractor, which has no closed form the way a gasket address does.
+
 **Still open in item 5**: the Taylor rung (D4), G3's lineage trace,
-G6's zoom self-consistency past 2^40, and G7's cost. The walk is off
-by default until those land.
+and G7's cost. The walk is off by default until those land.
 
 ## 4. Decisions
 
