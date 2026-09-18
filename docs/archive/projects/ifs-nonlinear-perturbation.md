@@ -7,6 +7,15 @@ affine handover of §2.5 there -- through nonlinear inverse maps, so
 a julia, spherical or bubble set zooms past f32 the way an affine
 set already does.
 
+**ARCHIVED 2026-09-17.** The work this plan describes is built and
+shipped -- a nonlinear set hands over and zooms, where before it
+handed over at level 0 -- and the repairs its §17a review called for
+all landed. What replaced it is the DESIGN, not the code: see
+[ifs-perturbation-delta.md](../../projects/ifs-perturbation-delta.md)
+§2a for the audit of this plan's objective and §3 for the shape that
+follows from it. Kept for the measurements, which are still the only
+record of what was tried.
+
 **Superseded in design, 2026-09-17.** §17a records what a review of
 this plan found, and [ifs-perturbation-delta.md](ifs-perturbation-delta.md)
 is the design that follows from it: the reference/delta split
