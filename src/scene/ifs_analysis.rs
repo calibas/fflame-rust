@@ -1313,11 +1313,28 @@ impl Map2 {
     /// `S⁻¹(q + δ) − S⁻¹(q)` to SECOND order, for a map with no
     /// exact form -- the delta plan's Taylor rung (D4).
     ///
-    /// `J·δ + ½·H[δ, δ]`, with both from dual numbers, so the only
-    /// approximation is the truncation itself. Returns the step and
-    /// a bound on what was dropped: `M·|δ|³/6` with `M` the third
-    /// derivative's size over the ball, which
-    /// [`NonlinearMap2::third`] measures.
+    /// **The TRAPEZOID of the Jacobian**, not a Taylor series:
+    ///
+    /// ```text
+    /// S⁻¹(q + δ) − S⁻¹(q) = ∫₀¹ J(q + tδ)·δ dt ≈ ½(J(q) + J(q+δ))·δ
+    /// ```
+    ///
+    /// Algebraically that is `J·δ + ½H[δ,δ] + O(|δ|³)` -- the same
+    /// second-order step, with the same error class -- and it needs
+    /// no Hessian at all. That is what makes the rung reachable from
+    /// WGSL, where the Jacobians exist and the Hessians do not, and
+    /// it means the two sides run the SAME rule rather than two rules
+    /// that agree to third order.
+    ///
+    /// Neither half ever forms the difference of two positions: `J·δ`
+    /// is a product, and `q + δ` enters only as a place to evaluate a
+    /// Jacobian, where it is needed to relative precision alone.
+    ///
+    /// Returns the step and a bound on what was dropped: `M·|δ|³/6`
+    /// with `M` the third derivative's size over the ball, which
+    /// [`NonlinearMap2::third`] measures. The trapezoid's own error
+    /// is `M|δ|³/12`, so that bound is conservative by a factor of
+    /// two, which is the direction a rebase criterion should err in.
     ///
     /// **A lineage rebases on that bound rather than on a level.**
     /// That is what makes this a rung and not a guess: the truncation
@@ -1325,27 +1342,22 @@ impl Map2 {
     /// reference exactly when carrying on would cost more than the
     /// absolute continuation it leaves for.
     pub fn difference_taylor(&self, q: [f64; 2], d: [f64; 2]) -> Option<([f64; 2], f64)> {
-        let j = self.jacobian(q)?;
-        let h = self.hessian(q)?;
-        let lin = [
-            j[0][0] * d[0] + j[0][1] * d[1],
-            j[1][0] * d[0] + j[1][1] * d[1],
+        let a = self.jacobian(q)?;
+        let b = self.jacobian([q[0] + d[0], q[1] + d[1]])?;
+        let m = |i: usize, j: usize| 0.5 * (a[i][j] + b[i][j]);
+        let out = [
+            m(0, 0) * d[0] + m(0, 1) * d[1],
+            m(1, 0) * d[0] + m(1, 1) * d[1],
         ];
-        let quad = |i: usize| {
-            0.5 * (h[i][0][0] * d[0] * d[0]
-                + 2.0 * h[i][0][1] * d[0] * d[1]
-                + h[i][1][1] * d[1] * d[1])
-        };
-        let out = [lin[0] + quad(0), lin[1] + quad(1)];
         if !out.iter().all(|v| v.is_finite()) {
             return None;
         }
-        let m = match self {
+        let third = match self {
             Map2::NonlinearInverse(r) => r.third,
             _ => 0.0,
         };
         let mag = f64::hypot(d[0], d[1]);
-        Some((out, m * mag * mag * mag / 6.0))
+        Some((out, third * mag * mag * mag / 6.0))
     }
 
     /// Whether [`Self::difference`] is exact here, rather than
@@ -2631,11 +2643,24 @@ impl Ifs2 {
     /// what the SHADER's delta walk needs
     /// (`ifs-perturbation-delta.md` §3).
     ///
-    /// **Not the same question the CPU walk asks any more.** Since D4
-    /// the CPU carries a Taylor-rung map too, stepping by
-    /// `J·δ + ½H[δ,δ]` and leaving when the dropped term reaches a
-    /// tenth of a pixel. The shader cannot: it has the Jacobians in
-    /// WGSL and not the Hessians. So this gates the shader path, and
+    /// **Not the same question the CPU walk asks.** Since D4 the CPU
+    /// carries a Taylor-rung map too, stepping by the trapezoid of
+    /// the Jacobian and leaving when the dropped term reaches a tenth
+    /// of a pixel. The shader has that step as well -- `ifs_map_step`
+    /// -- and is still not allowed to take it, for a measured reason:
+    ///
+    /// **the rebase is a THRESHOLD, and the two sides cross it at
+    /// different levels.** On a julia dust at 2^24 the truncation at
+    /// level 0 lands within a factor of three of the tenth-of-a-pixel
+    /// bar, so f32 and f64 disagree about whether to carry -- and one
+    /// extra level of a kernel whose third derivative is that large
+    /// read 25x further from the reference than the walk it replaces.
+    /// That is not a defect in either side; it is a hard threshold
+    /// evaluated in two precisions, and until the decision is made
+    /// once and carried, admitting the rung here costs more than it
+    /// buys.
+    ///
+    /// So this gates the SHADER path on exact forms, and
     /// `estimate_delta` does not consult it.
     ///
     /// **A set with even one Taylor-rung map must not take that
