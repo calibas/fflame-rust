@@ -2577,6 +2577,106 @@ fn ifs_map_jacobian(i: u32, q: vec2<f32>) -> mat2x2<f32> {
 }
 "#;
 
+/// One reference row, as the shader reads it
+/// (`ifs-perturbation-delta.md` §3).
+///
+/// Sixty-four bytes. The rows are a REGULAR GRID -- `beam × maps` per
+/// level, whether or not that many exist -- so a row's index is
+/// `level * stride + i` and no offset table is needed. At beam 8,
+/// eight maps and a hundred levels that is 6,656 rows and 426 KB,
+/// against the escape engine's reference orbits of millions of
+/// entries.
+///
+/// No gaps: a pixel asks `ifs_image_gap` at its own `Z + δ`, which is
+/// what the shipped walk already does and is exact rather than the
+/// reference's value less `|δ|`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct IfsRefRowGpu {
+    /// `Z.xy` and `u = Z − c`, the offset from the ball's centre.
+    ///
+    /// `u` is stored rather than recomputed because the pixel's own
+    /// radius goes through `|Z + δ − c|² = r² + 2u·δ + |δ|²`, and
+    /// forming `Z − c` in f32 at the point of use would round away
+    /// exactly the digits that difference exists to keep.
+    pub z_u: [f32; 4],
+    /// `σ per pixel`, `r`, `|Z − c|² − R²`, `σ_min` of the map that
+    /// made this row.
+    pub scalars: [f32; 4],
+    /// The row of the previous level this came from, the map that
+    /// made it, the flags, and the escape level.
+    ///
+    /// Parent and map ride as f32 because every other field is one
+    /// and a mixed struct strides differently; both are small
+    /// integers a f32 holds exactly.
+    pub meta: [f32; 4],
+    /// The escape point, the reference's own bound in pixels, and a
+    /// spare.
+    pub esc: [f32; 4],
+}
+
+/// Bit 0: this row exists. Bit 1: it survived the reference's beam
+/// (a slack row has no children, so a lineage on one must rebase).
+/// Bit 2: it escaped. Bit 3: it is done.
+pub const REF_LIVE: u32 = 1;
+pub const REF_KEPT: u32 = 2;
+pub const REF_ESCAPED: u32 = 4;
+pub const REF_DONE: u32 = 8;
+
+/// The reference beam as the shader reads it: a header row, then
+/// `levels × stride` rows.
+///
+/// Row 0 is the HEADER -- `z_u = [levels, stride, px, maps]` -- rather
+/// than a separate binding or a slot stolen from the globals block.
+/// A buffer that describes itself cannot be bound with the wrong
+/// stride, which is the failure this shape exists to make impossible.
+pub fn pack_reference(beam: &crate::scene::ifs_estimate::ReferenceBeam, n_maps: usize, beam_width: usize) -> Vec<IfsRefRowGpu> {
+    let stride = (beam_width.max(1) * n_maps.max(1)).max(1);
+    let levels = beam.levels.len();
+    let mut out = vec![IfsRefRowGpu::default(); 1 + levels * stride];
+    out[0].z_u = [levels as f32, stride as f32, beam.px as f32, n_maps as f32];
+    for (k, rows) in beam.levels.iter().enumerate() {
+        for (i, r) in rows.iter().enumerate().take(stride) {
+            let mut flags = REF_LIVE;
+            if r.kept {
+                flags |= REF_KEPT;
+            }
+            if r.escape.is_some() {
+                flags |= REF_ESCAPED;
+            }
+            if r.done {
+                flags |= REF_DONE;
+            }
+            let (elvl, epoint) = match r.escape {
+                Some((l, p)) => (l as f32, [p[0] as f32, p[1] as f32]),
+                None => (-1.0, [0.0, 0.0]),
+            };
+            out[1 + k * stride + i] = IfsRefRowGpu {
+                z_u: [
+                    r.z[0] as f32,
+                    r.z[1] as f32,
+                    r.u[0] as f32,
+                    r.u[1] as f32,
+                ],
+                scalars: [
+                    r.sigma_per_px as f32,
+                    r.r as f32,
+                    r.excess2 as f32,
+                    r.last_sigma as f32,
+                ],
+                meta: [
+                    if r.parent == u32::MAX { -1.0 } else { r.parent as f32 },
+                    if r.map == u32::MAX { -1.0 } else { r.map as f32 },
+                    f32::from_bits(flags),
+                    elvl,
+                ],
+                esc: [epoint[0], epoint[1], r.bound_per_px as f32, 0.0],
+            };
+        }
+    }
+    out
+}
+
 /// The kernels' DIFFERENCE forms, and the map-level composition, as
 /// WGSL (`ifs-perturbation-delta.md` §3).
 ///
@@ -6474,6 +6574,95 @@ mod tests {
                 (0..n).map(|j| out[SEED_BASE + SEED_VEC4S * j + 3][3]).collect::<Vec<_>>()
             );
         }
+    }
+
+    /// The packed reference beam is the beam it came from.
+    ///
+    /// A read-back in Rust, not on the GPU: what can go wrong here is
+    /// the INDEXING -- a row landing at the wrong level, a parent
+    /// pointing into the wrong one, a flag on the wrong bit -- and
+    /// none of that needs a device to catch. What the grid buys is
+    /// that `level * stride + i` is the whole address, so a shader
+    /// reading it cannot be told the wrong offset table.
+    #[test]
+    fn the_packed_reference_is_the_beam_it_came_from() {
+        use crate::scene::ifs_estimate::reference_beam;
+        let guard = crate::variations::global_registry();
+        let mut t = crate::scene::transforms::Transform::default();
+        t.a = 0.5;
+        t.d = 0.5;
+        t.variations.clear();
+        t.variation_order.clear();
+        t.set_variation("linear", 1.0);
+        let mut b = t.clone();
+        b.e = 0.5;
+        let mut c = t.clone();
+        c.e = 0.25;
+        c.f = 0.5;
+        let mut flame = crate::scene::transforms::Flame::default();
+        flame.transforms = vec![t, b, c];
+        let ifs = crate::scene::ifs_analysis::analyse_2d(&flame, &guard).expect("qualifies");
+        drop(guard);
+
+        let span = 2.0 * ifs.ball.radius / 1024.0;
+        let px = span / 64.0;
+        let target = ifs.ball.centre;
+        let beam_width = 8usize;
+        let beam = reference_beam(&ifs, target, [[span, 0.0], [0.0, -span]], px, 30, 8);
+        let packed = pack_reference(&beam, ifs.maps.len(), beam_width);
+
+        let stride = beam_width * ifs.maps.len();
+        assert_eq!(packed[0].z_u[0] as usize, beam.levels.len());
+        assert_eq!(packed[0].z_u[1] as usize, stride);
+        assert_eq!(packed[0].z_u[3] as usize, ifs.maps.len());
+        assert_eq!(packed.len(), 1 + beam.levels.len() * stride);
+
+        let mut live = 0usize;
+        for (k, rows) in beam.levels.iter().enumerate() {
+            assert!(
+                rows.len() <= stride,
+                "level {k} has {} rows, past the stride of {stride}",
+                rows.len()
+            );
+            for (i, r) in rows.iter().enumerate() {
+                let g = &packed[1 + k * stride + i];
+                assert_eq!(g.z_u[0], r.z[0] as f32, "level {k} row {i} z.x");
+                assert_eq!(g.z_u[2], r.u[0] as f32, "level {k} row {i} u.x");
+                assert_eq!(g.scalars[1], r.r as f32, "level {k} row {i} r");
+                assert_eq!(g.scalars[2], r.excess2 as f32, "level {k} row {i} excess");
+                let flags = g.meta[2].to_bits();
+                assert!(flags & REF_LIVE != 0, "level {k} row {i} not marked live");
+                assert_eq!(
+                    flags & REF_KEPT != 0,
+                    r.kept,
+                    "level {k} row {i} kept flag"
+                );
+                if k > 0 {
+                    assert_eq!(g.meta[0] as u32, r.parent, "level {k} row {i} parent");
+                    assert_eq!(g.meta[1] as u32, r.map, "level {k} row {i} map");
+                    // ...and the parent must be a row that EXISTS at
+                    // the level above, and one that was kept -- a
+                    // slack row expands nothing.
+                    let p = &packed[1 + (k - 1) * stride + r.parent as usize];
+                    assert!(
+                        p.meta[2].to_bits() & (REF_LIVE | REF_KEPT) == (REF_LIVE | REF_KEPT),
+                        "level {k} row {i} points at a parent that is not a kept row"
+                    );
+                }
+                live += 1;
+            }
+            // Past the level's own rows, nothing is live.
+            for i in rows.len()..stride {
+                let g = &packed[1 + k * stride + i];
+                assert_eq!(g.meta[2].to_bits() & REF_LIVE, 0, "level {k} slot {i} is live");
+            }
+        }
+        assert!(live > 50, "only {live} rows");
+        println!(
+            "  {} levels, stride {stride}, {live} live rows, {} KB",
+            beam.levels.len(),
+            packed.len() * std::mem::size_of::<IfsRefRowGpu>() / 1024
+        );
     }
 
     #[test]
