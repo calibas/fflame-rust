@@ -527,6 +527,18 @@ exercising. A gasket at speed 0.6 now runs beside them: it reads
 0.024 off with the leftover in place and 0.00009 with the map row's
 own value, which is the repair and the evidence for it in one.
 
+**D7's row, and it is not the one the order of work expected.**
+Zero of the 170 shipped flames carry a xaos matrix at all, so the
+census is unmoved and says nothing about D4's reach -- those configs
+are our own. What does say something: Apophysis and JWildfire write
+the matrix into EVERY export, so of 45 imported `.flame` files to
+hand, **27 carry one and 8 are non-trivial**. The check D4 removed
+was `flame.xaos.is_some()`, not `has_xaos()`, so all 27 were refused
+-- three in five imported flames turned away by a matrix that in
+nineteen of those cases was all ones and meant nothing. That is the
+reach this rung actually bought, and it is larger than the census
+could have shown.
+
 **Open.** The BALL is still one ball for every node, which is
 stricter than a graph-directed IFS needs and therefore sound; D6 is
 where that is revisited. And `NotContractive` still refuses any map

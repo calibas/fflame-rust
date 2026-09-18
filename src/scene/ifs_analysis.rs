@@ -4944,7 +4944,27 @@ mod census {
             }
         }
         let presets = all.iter().filter(|(n, _)| n.starts_with("preset[")).count();
+        // D7 of `ifs-general.md`: the rung's own row. Xaos was a
+        // blanket refusal until D4, and it fired on `xaos.is_some()`
+        // -- an all-ones matrix, which means nothing, refused a flame
+        // just as a real graph did.
+        let has_matrix = all.iter().filter(|(_, c)| c.flame.xaos.is_some()).count();
+        let real_xaos = all.iter().filter(|(_, c)| c.flame.has_xaos()).count();
+        let matrix_ok = all
+            .iter()
+            .filter(|(_, c)| c.flame.xaos.is_some() && analyse_2d(&c.flame, r).is_ok())
+            .count();
         println!("\n=== affine-IFS census over {} shipped flames ===", all.len());
+        // The shipped corpus is our own configs and carries none, so
+        // this row reads zero and says nothing about D4's reach. What
+        // does: Apophysis and JWildfire write the matrix into every
+        // export, so of 45 imported `.flame` files to hand, 27 carried
+        // one and 8 were non-trivial -- and the check D4 removed was
+        // `xaos.is_some()`, which refused all 27.
+        println!(
+            "  xaos: {has_matrix} carry a matrix ({real_xaos} of them non-trivial); \
+             {matrix_ok} of those qualify"
+        );
         println!(
             "  ({presets} from the preset library, the rest visual-regression configs; \
              {preserve_z_on} are 3D with preserve_z on, which is what a SOLID candidate needs)"
