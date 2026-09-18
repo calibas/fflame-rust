@@ -2386,6 +2386,21 @@ pub fn pack_flame(
         .map(|ifs| match extent {
             Some(r) => ifs.with_extent(r),
             None => ifs,
+        })
+        // A SUM is a map the analysis can now build and the shader
+        // cannot yet run (`ifs-general.md` D3: the forward variation
+        // bodies still have to be spliced in through the per-flame
+        // local index map). The CPU walk and every gate here take it;
+        // the render path turns it away, naming the transform, which
+        // is what the panel used to say for the same flame under
+        // `MixedSum`.
+        .and_then(|ifs| match ifs.maps.iter().find_map(|m| {
+            m.forward.sum().map(|r| (m.transform_index, r.kind.to_string()))
+        }) {
+            Some((index, kind)) => Err(vec![
+                crate::scene::ifs_analysis::Disqualification::NoShaderForm { index, kind },
+            ]),
+            None => Ok(ifs),
         });
     let solid = crate::scene::ifs_analysis::analyse_3d(flame, registry)
         .ok()
@@ -4166,6 +4181,12 @@ impl crate::scene::ifs_estimate::SeedPoint for [super::bigfloat::BigFloat; 2] {
             }
             // The walk only ever inverts.
             Map2::Nonlinear(_) => None,
+            // A SUM's inverse is a Newton solve, and Newton needs a
+            // forward map at this precision, which `BigFloat` has for
+            // the affine part and not for the kernel until the
+            // `Real` impl reaches the transcendental rung. A deep
+            // reference on a summed flame is item 8's business.
+            Map2::Sum(_) | Map2::SumInverse(_) => None,
         }
     }
 
@@ -4884,9 +4905,30 @@ pub fn pack_maps(
                         branch: r.branch as f32,
                         params,
                         delta,
-                measure: meas,
+                        measure: meas,
                     }
                 }
+                // A SUM has no packed form: its inverse is a Newton
+                // solve over the flame's own forward bodies, which
+                // the mode-D shader does not splice (D3's one piece
+                // of real plumbing). A row of kind 7 draws nothing,
+                // and `analyse_2d` refuses such a flame for the GPU
+                // before it gets here -- this arm is what makes that
+                // refusal a compile-time obligation rather than a
+                // convention.
+                Map2::Sum(_) | Map2::SumInverse(_) => IfsMapGpu {
+                    inv_m: [0.0; 4],
+                    inv_t: [0.0; 2],
+                    sigma_min: m.sigma_min as f32,
+                    color,
+                    pre_m: [0.0; 4],
+                    pre_t: [0.0; 2],
+                    kind: 7.0,
+                    branch: 0.0,
+                    params: [0.0; 4],
+                    delta,
+                    measure: meas,
+                },
             }
         })
         .collect()
