@@ -948,6 +948,19 @@ pub struct NonlinearMap2 {
     pub hole: f64,
     /// The variation's weight; the kernel's output is scaled by it.
     pub w: f64,
+    /// A bound on the size of this map's inverse's THIRD derivative
+    /// over the ball -- what the Taylor rung's remainder is measured
+    /// in (D4).
+    ///
+    /// **Sampled, not derived, and the plan asks which.** The third
+    /// derivative of six kernels through two affines is six more hand
+    /// derivations of the kind D2 exists to remove, and what the walk
+    /// needs of it is an order of magnitude rather than a value. So
+    /// [`Self::measure_third`] central-differences the DUAL Hessian
+    /// over a grid of the ball and takes the largest, with a margin.
+    /// Zero until `analyse_2d` fills it, and zero on a map with an
+    /// exact difference form, which never asks.
+    pub third: f64,
 }
 
 impl NonlinearMap2 {
@@ -956,6 +969,60 @@ impl NonlinearMap2 {
     pub fn apply_branch(&self, p: [f64; 2], k: u32) -> [f64; 2] {
         let z = self.kernel.forward(self.pre.apply(p), k);
         self.post.apply([self.w * z[0], self.w * z[1]])
+    }
+
+    /// Measure [`Self::third`] over a ball, by central-differencing
+    /// the dual-number Hessian.
+    ///
+    /// The margin is a factor of four on the sampled maximum. A
+    /// sampled bound can miss a spike between its samples, and the
+    /// consequence of missing one is a lineage carrying a delta a
+    /// level longer than it should; the consequence of being
+    /// generous is a lineage rebasing a level early, into the
+    /// absolute walk it would have used anyway. The cheap direction
+    /// is up.
+    pub fn measure_third(&mut self, centre: [f64; 2], radius: f64) {
+        let inv = Map2::NonlinearInverse(*self);
+        let mut worst = 0.0f64;
+        const N: i32 = 24;
+        for i in 0..=N {
+            for j in 0..=N {
+                let q = [
+                    centre[0] + radius * (2.0 * i as f64 / N as f64 - 1.0),
+                    centre[1] + radius * (2.0 * j as f64 / N as f64 - 1.0),
+                ];
+                let clear = inv.singular_distance(q);
+                if !(clear > 0.0) {
+                    continue;
+                }
+                let step = (clear * 0.05).clamp(1e-9, radius * 0.05);
+                let (Some(a), Some(b)) = (
+                    inv.hessian([q[0] + step, q[1]]),
+                    inv.hessian([q[0] - step, q[1]]),
+                ) else {
+                    continue;
+                };
+                let (Some(c), Some(d)) = (
+                    inv.hessian([q[0], q[1] + step]),
+                    inv.hessian([q[0], q[1] - step]),
+                ) else {
+                    continue;
+                };
+                let diff = |x: &[[[f64; 2]; 2]; 2], y: &[[[f64; 2]; 2]; 2]| {
+                    x.iter()
+                        .flatten()
+                        .flatten()
+                        .zip(y.iter().flatten().flatten())
+                        .fold(0.0f64, |m, (p, q)| m.max((p - q).abs()))
+                        / (2.0 * step)
+                };
+                let t = diff(&a, &b).max(diff(&c, &d));
+                if t.is_finite() {
+                    worst = worst.max(t);
+                }
+            }
+        }
+        self.third = worst * 4.0;
     }
 
     /// This map's whole inverse, over any [`Transcendental`]:
@@ -1241,6 +1308,44 @@ impl Map2 {
             Map2::NonlinearInverse(r) => r.inverse_difference(q, d),
             Map2::Nonlinear(_) => None,
         }
+    }
+
+    /// `S⁻¹(q + δ) − S⁻¹(q)` to SECOND order, for a map with no
+    /// exact form -- the delta plan's Taylor rung (D4).
+    ///
+    /// `J·δ + ½·H[δ, δ]`, with both from dual numbers, so the only
+    /// approximation is the truncation itself. Returns the step and
+    /// a bound on what was dropped: `M·|δ|³/6` with `M` the third
+    /// derivative's size over the ball, which
+    /// [`NonlinearMap2::third`] measures.
+    ///
+    /// **A lineage rebases on that bound rather than on a level.**
+    /// That is what makes this a rung and not a guess: the truncation
+    /// is a number the walk can read, so a lineage leaves the
+    /// reference exactly when carrying on would cost more than the
+    /// absolute continuation it leaves for.
+    pub fn difference_taylor(&self, q: [f64; 2], d: [f64; 2]) -> Option<([f64; 2], f64)> {
+        let j = self.jacobian(q)?;
+        let h = self.hessian(q)?;
+        let lin = [
+            j[0][0] * d[0] + j[0][1] * d[1],
+            j[1][0] * d[0] + j[1][1] * d[1],
+        ];
+        let quad = |i: usize| {
+            0.5 * (h[i][0][0] * d[0] * d[0]
+                + 2.0 * h[i][0][1] * d[0] * d[1]
+                + h[i][1][1] * d[1] * d[1])
+        };
+        let out = [lin[0] + quad(0), lin[1] + quad(1)];
+        if !out.iter().all(|v| v.is_finite()) {
+            return None;
+        }
+        let m = match self {
+            Map2::NonlinearInverse(r) => r.third,
+            _ => 0.0,
+        };
+        let mag = f64::hypot(d[0], d[1]);
+        Some((out, m * mag * mag * mag / 6.0))
     }
 
     /// Whether [`Self::difference`] is exact here, rather than
@@ -2113,7 +2218,17 @@ pub fn transform_map_2d_ordered(
     let (Some(pre_inv), Some(post_inv)) = (pre.inverse(), post.inverse()) else {
         return Ok(Map2::Affine(Affine2 { m: [[0.0; 2]; 2], t: [0.0; 2] }));
     };
-    Ok(Map2::Nonlinear(NonlinearMap2 { kernel, branch: 0, pre, post, pre_inv, post_inv, hole: 0.0, w }))
+    Ok(Map2::Nonlinear(NonlinearMap2 {
+        kernel,
+        branch: 0,
+        pre,
+        post,
+        pre_inv,
+        post_inv,
+        hole: 0.0,
+        third: 0.0,
+        w,
+    }))
 }
 
 /// The 2D affine a transform composes to, or why it does not, with
@@ -2512,9 +2627,16 @@ pub struct Ifs<A, P> {
 }
 
 impl Ifs2 {
-    /// Whether EVERY map has an exact difference form, so the delta
-    /// walk can carry a lineage rather than rebase it
+    /// Whether EVERY map has an exact difference form -- which is
+    /// what the SHADER's delta walk needs
     /// (`ifs-perturbation-delta.md` §3).
+    ///
+    /// **Not the same question the CPU walk asks any more.** Since D4
+    /// the CPU carries a Taylor-rung map too, stepping by
+    /// `J·δ + ½H[δ,δ]` and leaving when the dropped term reaches a
+    /// tenth of a pixel. The shader cannot: it has the Jacobians in
+    /// WGSL and not the Hessians. So this gates the shader path, and
+    /// `estimate_delta` does not consult it.
     ///
     /// **A set with even one Taylor-rung map must not take that
     /// walk.** A lineage on such a map rebases at level 0, which
@@ -2608,6 +2730,16 @@ fn set_holes(maps: &mut [IfsMap<Map2>], ball: &Ball<[f64; 2]>) {
             let (_, pre_hi) = r.pre.singular_values();
             let r_pre = c[0].hypot(c[1]) + pre_hi * ball.radius;
             r.hole = r.kernel.hole_radius(r_pre);
+            // The Taylor rung's remainder, for a kernel with no exact
+            // difference form. Measured HERE because it is a property
+            // of the map over the BALL, and the ball is not known
+            // until now -- the same reason the hole above is set here
+            // and not where the map is built. A kernel with an exact
+            // form never reads it and does not pay for it.
+            if !kernel_has_difference(&r.kernel) {
+                let (bc, br) = (ball.centre, ball.radius);
+                r.measure_third(bc, br);
+            }
         }
     }
 }

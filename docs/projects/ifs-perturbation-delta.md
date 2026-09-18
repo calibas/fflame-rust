@@ -819,8 +819,58 @@ because the two are separate walks. §5 says they become one, and that
 is where the 4.7x goes. The reference itself is 127 to 147 KB, near
 the half-megabyte §3 estimated for a wider set.
 
-**Still open in item 5**: the Taylor rung (D4) and G3's lineage
-trace. The walk is off by default until those land.
+### 3e. The Taylor rung, 2026-09-18
+
+D4, on the CPU. A disc, a blob and a root of fractional distance have
+no exact difference form: their inverses are transcendental, or a
+power that is not a polynomial in `v` and `conj(v)`. Before this they
+rebased at LEVEL 0 -- there was nothing to step with -- which throws
+the reference away entirely and is measurably worse than the seeded
+walk (§3d). Now they step by `J·δ + ½H[δ,δ]`, both from the dual
+numbers D2 built, and leave when the dropped `O(|δ|³)` reaches a
+tenth of a pixel.
+
+**The remainder is SAMPLED, and the plan asks which.** The third
+derivative of six kernels through two affines is six more hand
+derivations of the kind D2 exists to remove, and what the walk needs
+is an order of magnitude rather than a value. So `measure_third`
+central-differences the dual Hessian over a 25x25 grid of the ball
+and takes the largest, times four. A sampled bound can miss a spike
+between its samples; missing one costs a lineage carrying a level too
+long, and being generous costs a lineage rebasing a level early into
+the walk it would have used anyway. The cheap direction is up.
+
+Measured once per map, where the HOLES are measured, because it is a
+property of the map over the ball and the ball is not known until
+then. A kernel with an exact form never reads it and does not pay
+for it.
+
+**G4: the rung carries, deeper as the view shrinks.** The deepest
+first-rebase level over a grid of pixels:
+
+| | 2^8 | 2^14 | 2^20 | worst against the direct walk |
+|---|---|---|---|---|
+| blob | 1 | 14 | **29** | 0 |
+| julian, dist 2 | 1 | 4 | **12** | 7.3e-5 |
+| disc | 0 | 1 | 1 | 7.4e-12 |
+
+And **no lineage leaves for want of a form** on any of them, which is
+the thing that changed and what the gate asserts directly.
+
+The disc barely carries, and that is honest rather than a defect: its
+inverse reads polar coordinates the other way round and its third
+derivative over the ball is large, so the remainder reaches a tenth
+of a pixel almost at once. A closed-form bound would not move it --
+the derivative is what it is.
+
+**The SHADER does not take this rung.** It has the Jacobians in WGSL
+and not the Hessians, so `Ifs2::has_delta_forms` still gates the
+shader path on EXACT forms only, and a Taylor set renders by the
+seeded walk exactly as before. That is the next piece of D4 and the
+reason the flag is still off by default.
+
+**Still open in item 5**: the Taylor rung IN THE SHADER, and G3's
+lineage trace.
 
 ## 4. Decisions
 

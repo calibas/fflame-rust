@@ -2442,9 +2442,14 @@ pub enum Rebase {
     /// row it follows was itself slack, so the tree stops there. One
     /// level of slack is what D1 buys; this is the level after.
     OffTree,
-    /// The kernel has no exact difference form -- the disc, the blob,
-    /// a fractional root. The Taylor rung is not built, so these
-    /// rebase immediately and the walk is exactly today's.
+    /// The Taylor rung's truncation has reached a tenth of a pixel
+    /// (D4). `J·δ + ½H[δ,δ]` drops `O(|δ|³)`, and a lineage leaves
+    /// the reference exactly when carrying on would cost more than
+    /// the absolute continuation it leaves for -- a NUMBER the walk
+    /// reads, not a level it was told.
+    Truncated,
+    /// The kernel has no exact difference form AND no Taylor bound
+    /// either, so there is nothing to step with.
     NoForm,
 }
 
@@ -2616,17 +2621,32 @@ pub fn estimate_delta(
                 if let Some((lvl, idx)) = c.anchor {
                     let row = &reference.levels[lvl as usize][idx as usize];
                     let child = reference.child(lvl as usize, idx, i as u32);
-                    let step = m.inverse.difference(row.z, c.d);
+                    // The exact form where there is one, the Taylor
+                    // rung where there is not, and in the second case
+                    // a truncation the lineage is judged on below.
+                    let (step, trunc) = match m.inverse.difference(row.z, c.d) {
+                        Some(d) => (Some(d), 0.0),
+                        None => match m.inverse.difference_taylor(row.z, c.d) {
+                            Some((d, t)) => (Some(d), t),
+                            None => (None, 0.0),
+                        },
+                    };
                     match (child, step) {
                         (Some(ci), Some(dd)) => {
                             let crow =
                                 &reference.levels[lvl as usize + 1][ci as usize];
                             let dmag2 = f64::hypot(dd[0], dd[1]);
                             let zmag = f64::hypot(crow.z[0] + dd[0], crow.z[1] + dd[1]);
+                            // The truncation in PIXELS: a world error
+                            // `e` at this level is `σ_per_px·e` of the
+                            // answer, which is what the walk reports.
+                            let trunc_px = c.sigma * trunc;
                             if dmag2 > cap {
                                 rebases.push((level, Rebase::Expanded));
                             } else if zmag < dmag2 {
                                 rebases.push((level, Rebase::Cancelled));
+                            } else if trunc_px > 0.1 {
+                                rebases.push((level, Rebase::Truncated));
                             } else {
                                 // The pixel's own radius, exactly in
                                 // δ rather than linearised in it:
@@ -4043,6 +4063,151 @@ mod tests {
             }
         }
         println!("  worst over every case: {worst_overall:.2e} px");
+    }
+
+    /// G4: the Taylor rung carries a lineage, and says when it
+    /// stops being able to.
+    ///
+    /// `ifs-perturbation-delta.md` D4 and G4. A disc, a blob and a
+    /// root of fractional distance have no exact difference form:
+    /// their inverses are transcendental, or a power that is not a
+    /// polynomial in `v` and `conj(v)`. Before this they rebased at
+    /// level 0, which throws away the reference entirely. Now they
+    /// step by `J·δ + ½H[δ,δ]`, both from dual numbers, and leave
+    /// when the dropped `O(|δ|³)` reaches a tenth of a pixel.
+    ///
+    /// Three things are asserted, and the middle one is the rung:
+    ///
+    /// 1. the set really has no exact form, so the fixture is not
+    ///    quietly testing the exact path;
+    /// 2. a lineage now carries PAST level 0, and deeper as the view
+    ///    shrinks -- which is the whole claim;
+    /// 3. the answer still agrees with the direct walk, so carrying
+    ///    it bought accuracy rather than spending it.
+    #[test]
+    fn the_taylor_rung_carries_a_lineage_and_declares_its_remainder() {
+        let disc = analyse(vec![
+            kernel_xform("disc", [0.6, 0.0, 0.0, 0.6, 0.0, 0.0], 0.9),
+            affine_xform(0.5, 0.0, 0.0, 0.5, 0.5, 0.2),
+        ]);
+        let blob = analyse(vec![
+            {
+                let mut t = kernel_xform("blob", [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], 0.8);
+                t.set_variation_param("blob", "high", 1.2);
+                t.set_variation_param("blob", "low", 0.5);
+                t.set_variation_param("blob", "waves", 5.0);
+                t
+            },
+            affine_xform(0.6, 0.3, -0.3, 0.6, 0.5, 0.0),
+        ]);
+        let frac = analyse(vec![
+            {
+                let mut t = kernel_xform("julian", [0.9, 0.2, -0.2, 0.9, 0.1, -0.1], 0.7);
+                t.set_variation_param("julian", "power", 3.0);
+                // dist 2 gives |v|^(3/2), which is no polynomial.
+                t.set_variation_param("julian", "dist", 2.0);
+                t
+            },
+            affine_xform(0.5, 0.0, 0.0, 0.5, 0.4, 0.3),
+        ]);
+
+        for (name, ifs) in [("disc", disc), ("blob", blob), ("julian dist 2", frac)] {
+            // (1) the fixture is on the Taylor rung.
+            let taylor: Vec<usize> = ifs
+                .maps
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| !m.inverse.has_difference())
+                .map(|(i, _)| i)
+                .collect();
+            assert!(!taylor.is_empty(), "{name}: every map has an exact form");
+            for &i in &taylor {
+                let third = match ifs.maps[i].inverse {
+                    Map2::NonlinearInverse(r) => r.third,
+                    _ => 0.0,
+                };
+                assert!(
+                    third > 0.0 && third.is_finite(),
+                    "{name}: map {i} is on the Taylor rung with no third-derivative \
+                     bound ({third})"
+                );
+            }
+
+            let target = chaos_sample(&ifs, 20_000)[10_000];
+            let mut carried: Vec<(f64, u32)> = Vec::new();
+            for zoom in [8.0f64, 14.0, 20.0] {
+                let span = 2.0 * ifs.ball.radius / 2f64.powf(zoom);
+                let px = span / 64.0;
+                let basis = [[span, 0.0], [0.0, -span]];
+                let reference = reference_beam(&ifs, target, basis, px, 40, 8);
+                let (mut worst, mut n) = (0.0f64, 0usize);
+                let mut first: Vec<u32> = Vec::new();
+                let mut no_form = 0usize;
+                let mut truncated = 0usize;
+                for gy in 0..6u32 {
+                    for gx in 0..6u32 {
+                        let uv = [
+                            (gx as f64 + 0.5) / 6.0 - 0.5,
+                            (gy as f64 + 0.5) / 6.0 - 0.5,
+                        ];
+                        let at = [
+                            target[0] + basis[0][0] * uv[0] + basis[0][1] * uv[1],
+                            target[1] + basis[1][0] * uv[0] + basis[1][1] * uv[1],
+                        ];
+                        let (got, log) = estimate_delta(&ifs, &reference, uv, 8, 40);
+                        let want = estimate(&ifs, at, 40, 8).distance / px;
+                        let scale = want.abs().max(1.0);
+                        worst = worst.max((got.distance - want).abs() / scale);
+                        if let Some((l, _)) = log.first() {
+                            first.push(*l);
+                        }
+                        no_form += log.iter().filter(|(_, r)| *r == Rebase::NoForm).count();
+                        truncated +=
+                            log.iter().filter(|(_, r)| *r == Rebase::Truncated).count();
+                        n += 1;
+                    }
+                }
+                first.sort_unstable();
+                let median = first.get(first.len() / 2).copied().unwrap_or(u32::MAX);
+                let deepest = first.last().copied().unwrap_or(0);
+                println!(
+                    "  {name:<14} 2^{zoom:<4} | worst {worst:.2e} | first rebase median \
+                     {median}, deepest {deepest} | {truncated} truncations, {no_form} \
+                     for want of a form"
+                );
+                // **The rung is what changed.** Before D4 every one of
+                // these lineages left with `NoForm` -- there was
+                // nothing to step with -- and that is the thing this
+                // gate is here to see the end of.
+                assert_eq!(
+                    no_form, 0,
+                    "{name} at 2^{zoom}: {no_form} lineages still leave for want of a \
+                     difference form"
+                );
+                carried.push((zoom, deepest));
+                // (3) the answer is still the direct walk's.
+                assert!(
+                    worst < 1e-2,
+                    "{name} at 2^{zoom}: the Taylor rung is {worst:.2e} from the direct \
+                     walk"
+                );
+            }
+
+            // (2) the rung CARRIES, and deeper as the view shrinks.
+            //
+            // The DEEPEST first-rebase over the grid, not the median:
+            // these sets mix a Taylor map with an affine one, and a
+            // lineage that takes the Taylor map on its first step
+            // leaves at level 0 however deep the view. What the zoom
+            // buys is how far the ones that can carry do carry, and
+            // the median is dominated by the ones that cannot.
+            let (shallow, deep) = (carried[0].1, carried[carried.len() - 1].1);
+            assert!(
+                deep > shallow,
+                "{name}: the deepest first rebase is level {shallow} at 2^8 and {deep} \
+                 at 2^20 -- the Taylor rung is not carrying further as the view shrinks"
+            );
+        }
     }
 
     /// D6: no level is chosen, and the level a lineage rebases at
