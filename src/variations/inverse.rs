@@ -26,7 +26,7 @@
 //! canonical one; what the plan wanted from the field is what this
 //! gives, without the bulk edit.
 
-use crate::scene::ifs_analysis::{Kernel, Kernel3};
+use crate::scene::ifs_analysis::{AffineRole, Kernel, Kernel3, Space};
 
 /// A variation's parameters, by name, at the transform being
 /// analysed. The kernel constructors read their own parameters
@@ -50,12 +50,21 @@ pub enum Refusal {
     Mode,
 }
 
-/// The kernel a variation is, in the space it is a kernel in.
+/// What a variation is, to the analysis.
 ///
-/// A variation is planar or solid here, never both: the planar
-/// kernels are two-dimensional maps and the solid ones move a point
-/// in space, and nothing in the catalogue is a kernel in both senses.
+/// A kernel is planar or solid, never both: the planar kernels are
+/// two-dimensional maps and the solid ones move a point in space,
+/// and nothing in the catalogue is a kernel in both senses. An
+/// AFFINE variation answers for both spaces at once, because most of
+/// them are affine in one and nothing at all in the other -- a
+/// z-only map has no plane to act on.
 pub enum InverseKernel {
+    /// Affine in at least one space: what this contributes to a
+    /// transform's map at weight `w`, or `None` where it is not
+    /// affine there. The weight is separate from the parameters
+    /// because for several of these it IS the parameter -- a
+    /// rotation's angle, a z scale's factor.
+    Affine(fn(f64, ParamFn, Space) -> Option<AffineRole>),
     Planar(fn(ParamFn) -> Result<Kernel, Refusal>),
     Solid(fn(ParamFn) -> Result<Kernel3, Refusal>),
 }
@@ -70,9 +79,15 @@ pub struct InverseDef {
 }
 
 impl InverseDef {
-    /// Whether this kernel lives in the plane.
-    pub fn is_planar(&self) -> bool {
-        matches!(self.kernel, InverseKernel::Planar(_))
+    /// Whether this is a KERNEL in `space` -- a nonlinear map the
+    /// walk inverts, as opposed to an affine role or a kernel of the
+    /// other space.
+    pub fn is_kernel_in(&self, space: Space) -> bool {
+        match (&self.kernel, space) {
+            (InverseKernel::Planar(_), Space::Planar) => true,
+            (InverseKernel::Solid(_), Space::Solid) => true,
+            _ => false,
+        }
     }
 }
 
@@ -80,6 +95,20 @@ impl InverseDef {
 /// registration list, and for the same reason: the gates iterate it,
 /// so the order is what a failure report names.
 pub static INVERSES: &[&InverseDef] = &[
+    // The affine roles first: `linear` is what every flame has.
+    &super::defs::INVERSE_LINEAR,
+    &super::defs::INVERSE_LINEAR3D,
+    &super::defs::INVERSE_ZSCALE,
+    &super::defs::INVERSE_ZTRANSLATE,
+    &super::defs::INVERSE_AFFINE3D,
+    &super::defs::INVERSE_FLATTEN,
+    &super::defs::INVERSE_ZCONE,
+    &super::defs::INVERSE_ZBLUR,
+    &super::defs::INVERSE_PRE_ROTATE_X,
+    &super::defs::INVERSE_PRE_ROTATE_Y,
+    &super::defs::INVERSE_POST_ROTATE_X,
+    &super::defs::INVERSE_POST_ROTATE_Y,
+    // ...then the kernels.
     &super::defs::INVERSE_JULIA,
     &super::defs::INVERSE_JULIAN,
     &super::defs::INVERSE_SPHERICAL,
@@ -124,6 +153,10 @@ mod tests {
             assert!(!seen.contains(&d.name), "inverse {:?} registered twice", d.name);
             seen.push(d.name);
         }
-        assert_eq!(seen.len(), 10, "ten inverses: seven planar, three solid");
+        assert_eq!(
+            seen.len(),
+            22,
+            "twenty-two inverses: twelve affine roles, seven planar kernels, three solid"
+        );
     }
 }

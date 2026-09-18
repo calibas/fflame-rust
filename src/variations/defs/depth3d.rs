@@ -3,6 +3,8 @@
 //! These variations modify only the Z component for depth effects.
 //! They are only used in 3D rendering mode.
 
+use crate::scene::ifs_analysis::{Affine3, AffineRole, Space};
+use crate::variations::inverse::{InverseDef, InverseKernel};
 use crate::variations::{
     definition::{Feature, VariationDef},
     VariationCategory, VariationPhase,
@@ -103,4 +105,51 @@ fn variation_zscale(p: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(0.0, 0.0, p.z);
 }
 "#,
+};
+
+// ------------------------------------------------- the inverse walks
+
+/// `diag(x, y, z)` as an affine with no translation.
+fn diag3(x: f64, y: f64, z: f64) -> Affine3 {
+    Affine3 { m: [[x, 0.0, 0.0], [0.0, y, 0.0], [0.0, 0.0, z]], t: [0.0; 3] }
+}
+
+/// `zscale`: `w·z` on the z axis, summed (`ifs-general.md` D1).
+///
+/// Nothing in the plane: the 2D stub returns zero, and the planar
+/// chaos game has no z for it to scale.
+pub static INVERSE_ZSCALE: InverseDef = InverseDef {
+    name: "zscale",
+    kernel: InverseKernel::Affine(|w, _, space| {
+        Some(match space {
+            Space::Planar => AffineRole::Nothing,
+            Space::Solid => AffineRole::Sum(diag3(0.0, 0.0, w)),
+        })
+    }),
+};
+
+/// `flatten`: post-phase `z ← 0`.
+///
+/// Nothing in the plane, where its stub returns its input. As a
+/// solid it is affine and SINGULAR, and the criterion says so: a map
+/// with no inverse collapses the attractor. Five shipped flames were
+/// lost to this one variation before the rule distinguished the two
+/// spaces.
+pub static INVERSE_FLATTEN: InverseDef = InverseDef {
+    name: "flatten",
+    kernel: InverseKernel::Affine(|_, _, space| {
+        Some(match space {
+            Space::Planar => AffineRole::Nothing,
+            Space::Solid => AffineRole::Post(diag3(1.0, 1.0, 0.0)),
+        })
+    }),
+};
+
+/// `zcone`: nothing in the plane, where its 2D stub returns zero;
+/// nonlinear as a solid, so no role there.
+pub static INVERSE_ZCONE: InverseDef = InverseDef {
+    name: "zcone",
+    kernel: InverseKernel::Affine(|_, _, space| {
+        matches!(space, Space::Planar).then_some(AffineRole::Nothing)
+    }),
 };

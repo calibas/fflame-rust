@@ -2,6 +2,7 @@
 //!
 //! These are the fundamental variations from the original fractal flame algorithm.
 
+use crate::scene::ifs_analysis::{Affine3, AffineRole};
 use crate::scene::ifs_analysis::Kernel;
 use crate::variations::inverse::{InverseDef, InverseKernel, Refusal};
 use crate::variations::{
@@ -223,4 +224,26 @@ fn variation_horseshoe(p: vec3<f32>) -> vec3<f32> {
 pub static INVERSE_SPHERICAL: InverseDef = InverseDef {
     name: "spherical",
     kernel: InverseKernel::Planar(|_| Ok(Kernel::Spherical)),
+};
+
+/// `diag(x, y, z)` as an affine with no translation.
+fn diag3(x: f64, y: f64, z: f64) -> Affine3 {
+    Affine3 { m: [[x, 0.0, 0.0], [0.0, y, 0.0], [0.0, 0.0, z]], t: [0.0; 3] }
+}
+
+/// `linear`: the identity on the point, summed
+/// (`ifs-general.md` D1).
+///
+/// The one variation every flame has, and the reason the analysis
+/// reaches any flame at all.
+pub static INVERSE_LINEAR: InverseDef = InverseDef {
+    name: "linear",
+    kernel: InverseKernel::Affine(|w, _, _| Some(AffineRole::Sum(diag3(w, w, w)))),
+};
+
+/// `linear3D`: the same map. Apophysis and JWildfire keep it
+/// separate; here it is the identity in both spaces too.
+pub static INVERSE_LINEAR3D: InverseDef = InverseDef {
+    name: "linear3D",
+    kernel: InverseKernel::Affine(|w, _, _| Some(AffineRole::Sum(diag3(w, w, w)))),
 };

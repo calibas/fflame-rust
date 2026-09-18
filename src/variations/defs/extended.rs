@@ -2,6 +2,7 @@
 //!
 //! Additional variations beyond the basic and advanced sets.
 
+use crate::scene::ifs_analysis::{Affine3, AffineRole, Space};
 use crate::scene::ifs_analysis::Kernel3;
 use crate::variations::inverse::{InverseDef, InverseKernel, Refusal};
 use crate::variations::{
@@ -1399,5 +1400,18 @@ pub static INVERSE_JULIA3DZ: InverseDef = InverseDef {
             return Err(Refusal::Degenerate);
         }
         Ok(Kernel3::RootZ3 { n })
+    }),
+};
+
+/// `ztranslate`: `w` on the z axis, summed (`ifs-general.md` D1).
+///
+/// Nothing in the plane, where its 2D stub returns zero.
+pub static INVERSE_ZTRANSLATE: InverseDef = InverseDef {
+    name: "ztranslate",
+    kernel: InverseKernel::Affine(|w, _, space| {
+        Some(match space {
+            Space::Planar => AffineRole::Nothing,
+            Space::Solid => AffineRole::Sum(Affine3 { m: [[0.0; 3]; 3], t: [0.0, 0.0, w] }),
+        })
     }),
 };
