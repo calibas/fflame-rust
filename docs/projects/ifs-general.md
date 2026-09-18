@@ -124,7 +124,8 @@ living in `defs/julia.rs`, `defs/spherical.rs` and so on; the
 
 ## 3. Decisions
 
-- **D1. The math moves into the definitions.** The six kernels
+- ~~**D1. The math moves into the definitions.**~~ -- done
+  2026-09-17, §9b and §9c. The six kernels
   become `InverseDef`s on their variations; `transform_map_2d_ordered`
   consults the registry; `AFFINE_VARIATIONS` becomes an `InverseDef`
   of kind affine on each of the dozen variations that carry it,
@@ -133,7 +134,9 @@ living in `defs/julia.rs`, `defs/spherical.rs` and so on; the
   automatically (G1), so the seventh kernel gets the six's gates for
   free.
 - **D2. Derivatives by dual numbers, never by hand and never by
-  finite differences.** The generic implementation is the only
+  finite differences.** -- the f64 and `Dual` halves are done
+  (§9a); `BigFloat` implements neither trait yet, which is the delta
+  plan's item 8. The generic implementation is the only
   source of `J` and `H`. `Map2::hessian`'s central difference goes.
   The `BigFloat` implementations of `Real` and `Transcendental` are
   the same code path the delta plan needs for its rungs. Cost: the
@@ -422,8 +425,37 @@ Two things the gate had to be told, both real:
 
 Presets byte-identical, every existing gate green.
 
-**Still open in D1**: `AFFINE_VARIATIONS` and the per-space role
-function are still a list in `ifs_analysis.rs` rather than an
-`InverseDef` of kind affine on each variation that carries one.
-That is the larger half by count -- a dozen variations -- and the
-smaller by risk, since an affine role has no inverse to get wrong.
+### 9c. The affine roles moved too, 2026-09-17
+
+D1's other half, and with it D1 is done. `AFFINE_VARIATIONS` -- a
+name list -- and `affine_role`'s twelve-arm match are gone.
+`InverseKernel` gained an `Affine` arm carrying
+`fn(f64, ParamFn, Space) -> Option<AffineRole>`, and each of the
+twelve is now beside its own forward WGSL: `linear` and `linear3D`
+in `defs/basic.rs`, `zscale`, `flatten` and `zcone` in
+`defs/depth3d.rs`, `ztranslate` in `defs/extended.rs`, `affine3D`
+(with its fifteen-parameter map, moved wholesale) in
+`defs/affine3d_misc.rs`, `zblur` in `defs/blur.rs`, and the four
+axis rotations in `defs/rotation3d.rs`. The weight is passed
+separately from the parameters because for several of them it IS
+the parameter: a rotation's angle, a z scale's factor.
+
+`affine_role` is now five lines: ask the registry, take the `Affine`
+arm, call it. A variation whose entry is a KERNEL is not affine,
+which is what `variation_stage` wants -- it reads a `None` here as
+"ask whether it is a kernel instead".
+
+G1 grew an affine arm to match, and it checks the one thing the
+name list could not. An affine entry is analysed alongside a
+`linear`, since several of these contribute nothing in the plane and
+a transform with no contribution at all is refused for having no
+variations, which would say nothing about the role. Then: the plane
+must give an affine map, and where the SOLID role is absent the
+transform must be REFUSED naming this variation. That last clause is
+what `zcone` and `zblur` exercise -- both are nothing in the plane
+and neither is affine in space, and before this the only evidence
+they were handled right was that a match arm existed.
+
+Twenty-two registered inverses now: twelve affine roles, seven
+planar kernels, three solid. 1223 unit tests, every gate green,
+presets byte-identical.

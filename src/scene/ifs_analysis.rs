@@ -46,28 +46,7 @@
 
 use crate::scene::transforms::{Flame, Transform};
 use crate::variations::{VariationPhase, VariationRegistry};
-use crate::scene::ifs_real::{Dual, Real, Transcendental, hessian2, jacobian2};
-
-/// The variations the analysis knows: every name [`affine_role`] can
-/// answer for in at least one space. Deliberately short: growing it
-/// means proving each addition is affine, in each space, by reading
-/// its body (conformal invertible maps — Möbius, spherical inversion,
-/// the julia family — are the next candidates and are NOT affine; see
-/// the plan's §8).
-pub const AFFINE_VARIATIONS: &[&str] = &[
-    "linear",
-    "linear3D",
-    "zscale",
-    "ztranslate",
-    "affine3D",
-    "flatten",
-    "zcone",
-    "zblur",
-    "pre_rotate_x",
-    "pre_rotate_y",
-    "post_rotate_x",
-    "post_rotate_y",
-];
+use crate::scene::ifs_real::{Real, Transcendental, hessian2, jacobian2};
 
 /// What a variation does to a transform's map, in one space.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -84,28 +63,22 @@ pub enum AffineRole {
 }
 
 /// What variation `name` at weight `w` contributes in `space`, or
-/// `None` when it is not affine there. Read from the bodies:
+/// `None` when it is not affine there.
 ///
-/// - `linear` / `linear3D`: the identity on the point, summed.
-/// - `zscale` / `ztranslate`: `w·z` and `w` on z, summed; in the
-///   plane their 2D stubs return zero, so nothing.
-/// - `affine3D`: JWildfire's general 3D affine — per-axis scale, six
-///   shears, a Z·Y·X rotation and a translation, all fifteen
-///   parameters, summed. **This is the one that makes a solid affine
-///   IFS buildable**: without it every 3D transform is an XY affine
-///   with a unit z scale, and the census found none that qualified.
-/// - `flatten`: post-phase `z ← 0`. In the plane its stub returns its
-///   input, so nothing; as a solid it is affine and SINGULAR, and the
-///   criterion says so — a map with no inverse collapses the attractor.
-/// - `zcone`, `zblur`: their 2D stubs return zero, so nothing in the
-///   plane; as solids one is nonlinear and the other a measure.
-/// - `pre_rotate_x/y`, `post_rotate_x/y`: rotations by the weight in
-///   radians about the named axis, replacing the point in their
-///   phase; isometries, so they change no singular value. 2D stubs
-///   return their input, so nothing in the plane.
+/// `ifs-general.md` D1: the answer is the variation's own, from its
+/// [`InverseDef`](crate::variations::inverse::InverseDef), so
+/// nothing here has to know that `flatten` is singular as a solid
+/// and nothing in the plane, or that `affine3D` has fifteen
+/// parameters. A variation with no `InverseDef`, or one whose entry
+/// is a kernel rather than an affine role, is not affine -- which is
+/// what a kernel wants, since `variation_stage` treats a `None` here
+/// as "ask whether it is a kernel".
 ///
-/// The census before this rule counted five shipped flames lost to
-/// `flatten` alone, on a transform whose plane map was affine.
+/// The list this replaced was deliberately short, and the reason
+/// still holds for whatever is added: growing it means proving each
+/// addition is affine, in each space, by reading its body.
+/// Conformal invertible maps -- Mobius, spherical inversion, the
+/// julia family -- are the next candidates and are NOT affine.
 pub fn affine_role(
     name: &str,
     w: f64,
@@ -113,37 +86,12 @@ pub fn affine_role(
     registry: &VariationRegistry,
     space: Space,
 ) -> Option<AffineRole> {
-    let planar = space == Space::Planar;
-    let diag = |x: f64, y: f64, z: f64| Affine3 { m: [[x, 0.0, 0.0], [0.0, y, 0.0], [0.0, 0.0, z]], t: [0.0; 3] };
-    Some(match name {
-        "linear" | "linear3D" => AffineRole::Sum(diag(w, w, w)),
-        "zscale" if planar => AffineRole::Nothing,
-        "zscale" => AffineRole::Sum(diag(0.0, 0.0, w)),
-        "ztranslate" if planar => AffineRole::Nothing,
-        "ztranslate" => AffineRole::Sum(Affine3 { m: [[0.0; 3]; 3], t: [0.0, 0.0, w] }),
-        "affine3D" => {
-            let a = affine3d_map(t, registry);
-            AffineRole::Sum(Affine3 { m: a.m.map(|r| r.map(|v| w * v)), t: a.t.map(|v| w * v) })
-        }
-        "flatten" if planar => AffineRole::Nothing,
-        "flatten" => AffineRole::Post(diag(1.0, 1.0, 0.0)),
-        "zcone" | "zblur" if planar => AffineRole::Nothing,
-        "pre_rotate_x" | "pre_rotate_y" | "post_rotate_x" | "post_rotate_y" if planar => {
-            AffineRole::Nothing
-        }
-        // pre_rotate_x: (x, s·z + c·y, c·z − s·y); _y: (c·x − s·z, y, s·x + c·z).
-        "pre_rotate_x" | "post_rotate_x" | "pre_rotate_y" | "post_rotate_y" => {
-            let (sn, cs) = w.sin_cos();
-            let m = if name.ends_with('x') {
-                [[1.0, 0.0, 0.0], [0.0, cs, sn], [0.0, -sn, cs]]
-            } else {
-                [[cs, 0.0, -sn], [0.0, 1.0, 0.0], [sn, 0.0, cs]]
-            };
-            let r = Affine3 { m, t: [0.0; 3] };
-            if name.starts_with("pre") { AffineRole::Pre(r) } else { AffineRole::Post(r) }
-        }
-        _ => return None,
-    })
+    let def = registry.inverse(name)?;
+    let crate::variations::inverse::InverseKernel::Affine(role) = def.kernel else {
+        return None;
+    };
+    let p = |q: &str| t.get_variation_param_or_default(name, q, registry) as f64;
+    role(w, &p, space)
 }
 
 // ---------------------------------------------------------------- 2D
@@ -1681,47 +1629,6 @@ pub enum NotAffine {
     Mode(String),
 }
 
-/// `affine3D`'s map from its fifteen parameters, mirroring the
-/// shader's body exactly: scale, then shear (the shear terms multiply
-/// the SCALED coordinates), then the rotation the body writes out
-/// longhand — which is `Rz · Ry · Rx` — then the translation. The
-/// variation's weight multiplies every output term, translation
-/// included ("cpp uses VVAR consistently on every output term"), so
-/// the caller scales the whole thing.
-fn affine3d_map(t: &Transform, registry: &VariationRegistry) -> Affine3 {
-    let p = |name: &str| t.get_variation_param_or_default("affine3D", name, registry) as f64;
-    let (tx, ty, tz) = (p("translateX"), p("translateY"), p("translateZ"));
-    let (sx, sy, sz) = (p("scaleX"), p("scaleY"), p("scaleZ"));
-    let d2r = std::f64::consts::PI / 180.0;
-    let (rx, ry, rz) = (p("rotateX") * d2r, p("rotateY") * d2r, p("rotateZ") * d2r);
-    let (shxy, shxz, shyx, shyz, shzx, shzy) =
-        (p("shearXY"), p("shearXZ"), p("shearYX"), p("shearYZ"), p("shearZX"), p("shearZY"));
-    // mx = sx·x + shxy·sy·y + shxz·sz·z, and so on: shear of the
-    // scaled point. With every shear zero this is diag(sx, sy, sz),
-    // which is the body's no-shear branch.
-    let shs = Affine3 {
-        m: [
-            [sx, shxy * sy, shxz * sz],
-            [shyx * sx, sy, shyz * sz],
-            [shzx * sx, shzy * sy, sz],
-        ],
-        t: [0.0; 3],
-    };
-    let (sinx, cosx, siny, cosy, sinz, cosz) = (rx.sin(), rx.cos(), ry.sin(), ry.cos(), rz.sin(), rz.cos());
-    // nx = cosz·(cosy·mx + siny·(sinx·my + cosx·mz)) − sinz·(cosx·my − sinx·mz)
-    // ny = sinz·(cosy·mx + siny·(sinx·my + cosx·mz)) + cosz·(cosx·my − sinx·mz)
-    // nz = −siny·mx + cosy·(sinx·my + cosx·mz)
-    let rot = Affine3 {
-        m: [
-            [cosz * cosy, cosz * siny * sinx - sinz * cosx, cosz * siny * cosx + sinz * sinx],
-            [sinz * cosy, sinz * siny * sinx + cosz * cosx, sinz * siny * cosx - cosz * sinx],
-            [-siny, cosy * sinx, cosy * cosx],
-        ],
-        t: [tx, ty, tz],
-    };
-    rot.then_after(&shs)
-}
-
 /// A transform's variations as three affine maps: the pre-phase
 /// composition `P`, the weighted normal-phase sum `V`, and the
 /// post-phase composition `Q`, so that the variation stage is
@@ -1771,9 +1678,7 @@ fn variation_stage(
             // REGISTRY's answer now, not a list here
             // (`ifs-general.md` D1). The transform's kind is decided
             // once the whole stage is known.
-            let root = registry.inverse(name).filter(|d| {
-                d.is_planar() == matches!(space, Space::Planar)
-            });
+            let root = registry.inverse(name).filter(|d| d.is_kernel_in(space));
             let Some(root) = root.map(|d| d.name) else {
                 return Err(NotAffine::Variation(name.clone()));
             };
@@ -1844,7 +1749,7 @@ fn kernel_from_registry(
     let p = |name: &str| t.get_variation_param_or_default(kind, name, registry) as f64;
     let def = registry
         .inverse(kind)
-        .filter(|d| d.is_planar() == matches!(space, Space::Planar))
+        .filter(|d| d.is_kernel_in(space))
         .ok_or_else(|| NotAffine::Variation(kind.to_string()))?;
     let crate::variations::inverse::InverseKernel::Planar(build) = def.kernel else {
         return Err(NotAffine::Variation(kind.to_string()));
@@ -3810,8 +3715,7 @@ mod tests {
         // variation on a transform gets.
         let overrides: &[(&str, f32)] = &[("inverse", 1.0), ("projection", 0.0), ("power", 3.0)];
 
-        let mut planar = 0usize;
-        let mut solid = 0usize;
+        let (mut affine, mut planar, mut solid) = (0usize, 0usize, 0usize);
         for def in INVERSES {
             let info = r.get(def.name).expect("a registered variation");
             let mut t = affine_xform(0.83, -0.24, 0.31, 0.77, 0.19, -0.12);
@@ -3910,9 +3814,63 @@ mod tests {
                     assert_eq!(kernel.variation(), def.name, "{} analysed to {:?}", def.name, kernel);
                     solid += 1;
                 }
+                InverseKernel::Affine(role) => {
+                    // An affine role is checked against the analysis
+                    // the other way round: alongside a `linear`, so
+                    // the transform has something to be affine WITH
+                    // -- several of these contribute nothing in the
+                    // plane, and a transform with no contribution at
+                    // all is refused as having no variations, which
+                    // would say nothing about the role.
+                    let mut t = t.clone();
+                    let t = with(t.clone(), "linear", 1.0);
+                    let order = t.ordered_variation_names(r);
+                    let p = |q: &str| t.get_variation_param_or_default(def.name, q, r) as f64;
+
+                    let planar_role = role(0.8, &p, Space::Planar);
+                    assert!(
+                        planar_role.is_some(),
+                        "{}: no role in the plane -- every affine entry answers there, \
+                         even if the answer is Nothing",
+                        def.name
+                    );
+                    let m = transform_map_2d_ordered(&t, r, &order)
+                        .unwrap_or_else(|e| panic!("{}: {e:?}", def.name));
+                    assert!(m.is_affine(), "{}: analysed to a kernel in the plane", def.name);
+
+                    // In space the role may be absent, and then the
+                    // transform must be REFUSED, naming this
+                    // variation -- which is what the flame panel
+                    // shows and what `zcone` and `zblur` exercise.
+                    match role(0.8, &p, Space::Solid) {
+                        Some(_) => {
+                            let m3 = transform_map_3d_ordered(&t, r, &order)
+                                .unwrap_or_else(|e| panic!("{} in space: {e:?}", def.name));
+                            assert!(
+                                m3.is_affine(),
+                                "{}: analysed to a kernel in space",
+                                def.name
+                            );
+                        }
+                        None => {
+                            let e = transform_map_3d_ordered(&t, r, &order)
+                                .expect_err(&format!("{}: no solid role, yet accepted", def.name));
+                            assert!(
+                                matches!(&e, NotAffine::Variation(v) if v == def.name),
+                                "{}: refused as {e:?}, which does not name it",
+                                def.name
+                            );
+                        }
+                    }
+                    affine += 1;
+                }
             }
         }
-        assert_eq!((planar, solid), (7, 3), "seven planar kernels and three solid");
+        assert_eq!(
+            (affine, planar, solid),
+            (12, 7, 3),
+            "twelve affine roles, seven planar kernels and three solid"
+        );
     }
 
     #[test]
