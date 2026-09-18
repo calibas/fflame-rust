@@ -6080,6 +6080,13 @@ pub fn assemble_ifs_with_lens(
                     out.push(super::ifs::IFS_MEASURE.trim().to_string());
                 }
                 if delta {
+                    // The Taylor rung steps by the TRAPEZOID of the
+                    // Jacobian, so the delta walk needs the Jacobians
+                    // too -- and only once, when the measure
+                    // colouring has not already spliced them.
+                    if !measure {
+                        out.push(super::ifs::IFS_JACOBIAN.trim().to_string());
+                    }
                     out.push(super::ifs::IFS_DIFFERENCE.trim().to_string());
                     out.push(super::ifs::IFS_DELTA_WALK.trim().to_string());
                 }

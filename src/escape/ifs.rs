@@ -2128,7 +2128,7 @@ pub struct IfsMapGpu {
     /// The kernel's parameters: a root's signed power and distance.
     pub params: [f32; 4],
     /// What the DELTA walk needs of this map
-    /// (`ifs-perturbation-delta.md` §3): `[a, b, has_form, 0]`.
+    /// (`ifs-perturbation-delta.md` §3): `[a, b, has_form, third]`.
     ///
     /// A root's inverse is `v^a·conj(v)^b` when the exponents are
     /// whole, and `has_form` is 1 when the kernel has an exact
@@ -2849,6 +2849,44 @@ fn ifs_kernel_difference(i: u32, v: vec2<f32>, vw: vec2<f32>, dv: vec2<f32>) -> 
     return bad;
 }
 
+// The Taylor rung: the TRAPEZOID of the Jacobian (D4).
+//
+//   S⁻¹(q + δ) − S⁻¹(q) = ∫₀¹ J(q + tδ)·δ dt ≈ ½(J(q) + J(q+δ))·δ
+//
+// Algebraically `J·δ + ½H[δ,δ] + O(|δ|³)` -- the same second-order
+// step as a Taylor series, with the same error class -- and it needs
+// no Hessian, which is what makes the rung reachable here at all: the
+// Jacobians exist in WGSL and the Hessians do not.
+//
+// Never a difference of two positions: `J·δ` is a product, and `q + δ`
+// enters only as a place to evaluate a Jacobian, where relative
+// precision is all it needs.
+//
+// Returns the step and the dropped term's bound, `M·|δ|³/6`, with `M`
+// measured over the ball on the CPU and carried in the row. The walk
+// rebases on that number rather than on a level.
+fn ifs_map_taylor(i: u32, q: vec2<f32>, d: vec2<f32>) -> vec3<f32> {
+    let a = ifs_map_jacobian(i, q);
+    let b = ifs_map_jacobian(i, q + d);
+    let m = (a + b) * 0.5;
+    let step = m * d;
+    let mag = length(d);
+    return vec3<f32>(step, ifs_maps[i].delta.w * mag * mag * mag / 6.0);
+}
+
+// One step of a lineage's offset, whichever rung this map is on:
+// `vec4(D.x, D.y, ok, truncation)`, with the truncation zero on an
+// exact form.
+fn ifs_map_step(i: u32, q: vec2<f32>, d: vec2<f32>) -> vec4<f32> {
+    if (ifs_has_difference(i)) {
+        let e = ifs_map_difference(i, q, d);
+        return vec4<f32>(e.x, e.y, e.z, 0.0);
+    }
+    let t = ifs_map_taylor(i, q, d);
+    let ok = select(0.0, 1.0, abs(t.x) <= 1e30 && abs(t.y) <= 1e30);
+    return vec4<f32>(t.x, t.y, ok, t.z);
+}
+
 // The whole map's inverse difference at `q`: the affines drop out of a
 // difference exactly, so this is the kernel's form with the inverse
 // affine applied to δ going in and the pre affine coming out. An
@@ -3122,7 +3160,8 @@ fn ifs_evaluate_delta(uv: vec2<f32>) -> IfsResult {
                     let ci2 = ifs_ref_child(cur.level_of, cur.index_of, bi);
                     let kept = (bitcast<u32>(ifs_ref[cur.row].link.z) & REF_KEPT) != 0u;
                     if (ci2 != REF_NONE && kept) {
-                        let dd = ifs_map_difference(bi, ifs_ref[cur.row].z_u.xy, cur.d);
+                        let st = ifs_map_step(bi, ifs_ref[cur.row].z_u.xy, cur.d);
+                        let dd = vec3<f32>(st.x, st.y, st.z);
                         if (dd.z > 0.5) {
                             let row = ifs_ref[ci2];
                             let dm = length(dd.xy);
@@ -3131,7 +3170,11 @@ fn ifs_evaluate_delta(uv: vec2<f32>) -> IfsResult {
                             // offset grown to O(R), and `Z + δ`
                             // cancelling. Past either, absolute f32 is
                             // where the precision now is.
-                            if (dm <= cap && zm >= dm) {
+                            // The Taylor rung's truncation, in
+                            // PIXELS: a world error `e` at this level
+                            // is `σ_per_px·e` of the answer.
+                            let trunc_px = cur.sigma * st.w;
+                            if (dm <= cap && zm >= dm && trunc_px <= 0.1) {
                                 let t = 2.0 * dot(row.z_u.zw, dd.xy) + dot(dd.xy, dd.xy);
                                 let rr = sqrt(max(row.scalars.y * row.scalars.y + t, 0.0));
                                 // `r − R` two ways, and which is
@@ -4756,7 +4799,11 @@ pub fn pack_maps(
                             f32::from(crate::scene::ifs_analysis::kernel_has_difference(
                                 &r.kernel,
                             )),
-                            0.0,
+                            // The Taylor rung's remainder constant,
+                            // measured over the ball when the flame
+                            // was analysed. Zero on a map with an
+                            // exact form, which never reads it.
+                            r.third as f32,
                         ],
                     }
                 }
@@ -9022,6 +9069,13 @@ mod gpu_tests {
             // rebasing every lineage at level 0 instead throws away
             // the BigFloat prefix and read twenty-five times further
             // from the reference than the walk it replaces.
+            // The julia dust is DECLINED, and the shader renders it
+            // by the seeded walk. Its root has a negative distance,
+            // so there is no exact difference form; the Taylor rung
+            // exists in both the CPU walk and the shader, and is
+            // still not allowed here because the two cross its rebase
+            // threshold at different levels -- see
+            // `Ifs2::has_delta_forms`.
             let takes_delta = ifs.has_delta_forms();
             assert_eq!(
                 takes_delta,
@@ -9177,6 +9231,7 @@ mod gpu_tests {
                         "{name} at 2^{zoom}: declined, yet the two walks differ"
                     );
                 }
+
                 // ...and a loose bar, to catch a walk that has
                 // stopped walking rather than one that rounds.
                 // The absolute bar is on the MEDIAN, and the reason
@@ -9295,16 +9350,39 @@ struct IfsMapGpu {{
 @group(0) @binding(0) var<storage, read> ifs_maps: array<IfsMapGpu>;
 @group(0) @binding(1) var<storage, read> pts: array<vec4<f32>>;
 @group(0) @binding(2) var<storage, read_write> out: array<vec4<f32>>;
+
+fn ff_atan2(y: f32, x: f32) -> f32 {{
+    if (y == 0.0 && x == 0.0) {{
+        let pi = 3.14159265358979;
+        let mag = select(0.0, pi, (bitcast<u32>(x) & 0x80000000u) != 0u);
+        return select(mag, -mag, (bitcast<u32>(y) & 0x80000000u) != 0u);
+    }}
+    return atan2(y, x);
+}}
+
+fn ifs_bubble_scale(r2: f32, branch: f32) -> f32 {{
+    let root = sqrt(max(1.0 - r2, 0.0));
+    let up = 1.0 + root;
+    return select(2.0 * up / max(r2, 1e-30), 2.0 / up, branch == 0.0);
+}}
+{}
 {}
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     let n = arrayLength(&pts);
     if (gid.x >= n) {{ return; }}
     let p = pts[gid.x];
-    let d = ifs_map_difference(0u, p.xy, p.zw);
-    out[gid.x] = vec4<f32>(d.x, d.y, d.z, 0.0);
+    // `ifs_map_step`, not `ifs_map_difference`: the step is what the
+    // walk calls, and it is the exact form here only because every
+    // fixture below has one. A fixture that did not would take the
+    // Taylor rung through the same call.
+    let d = ifs_map_step(0u, p.xy, p.zw);
+    out[gid.x] = vec4<f32>(d.x, d.y, d.z, d.w);
 }}
 "#,
+            // The Taylor rung steps by the trapezoid of the Jacobian,
+            // so the difference forms no longer stand alone.
+            IFS_JACOBIAN,
             IFS_DIFFERENCE
         );
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -9435,6 +9513,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             let mut worst = 0.0f64;
             for (g, w) in got.iter().zip(&want) {
                 assert!(g[2] > 0.5, "{name}: the shader declined a point the CPU took");
+                assert_eq!(
+                    g[3], 0.0,
+                    "{name}: an exact form reported a Taylor truncation of {}",
+                    g[3]
+                );
                 let norm = f64::hypot(w[0], w[1]);
                 let e = f64::hypot(g[0] as f64 - w[0], g[1] as f64 - w[1]) / norm;
                 worst = worst.max(e);

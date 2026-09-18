@@ -870,13 +870,47 @@ derivative over the ball is large, so the remainder reaches a tenth
 of a pixel almost at once. A closed-form bound would not move it --
 the derivative is what it is.
 
-**The SHADER does not take this rung.** It has the Jacobians in WGSL
-and not the Hessians, so `Ifs2::has_delta_forms` still gates the
-shader path on EXACT forms only, and a Taylor set renders by the
-seeded walk exactly as before. That is the next piece of D4 and the
-reason the flag is still off by default.
+### The rung is the TRAPEZOID, which is why the shader can have it
 
-**Still open in item 5**: the Taylor rung IN THE SHADER, and G3's
+The step was `J·δ + ½H[δ,δ]` for an afternoon, and it is now
+
+```text
+S⁻¹(q + δ) − S⁻¹(q) = ∫₀¹ J(q + tδ)·δ dt ≈ ½(J(q) + J(q+δ))·δ
+```
+
+Algebraically the same thing to second order, with the same error
+class, and **no Hessian anywhere**. That matters twice. The shader
+has the Jacobians in WGSL and not the Hessians, so this is what makes
+the rung reachable there at all; and both sides now run the SAME rule
+rather than two rules that agree to third order. It is also more
+accurate in practice -- the julian at dist 2 went from 5.3e-6 /
+1.4e-5 / 7.3e-5 to 2.3e-6 / 7.4e-6 / 3.7e-5, twice as close at every
+zoom -- because the trapezoid's error constant is half a Taylor
+series'.
+
+`ifs_map_step` in WGSL picks the rung: the exact form where there is
+one, the trapezoid where there is not, with the truncation alongside.
+
+### ...and the shader is still not allowed to take it
+
+`Ifs2::has_delta_forms` gates the shader path on EXACT forms, and a
+Taylor set renders by the seeded walk. The reason is measured, not
+cautionary. **The rebase is a THRESHOLD, and the two sides cross it
+at different levels.** On a julia dust at 2^24 the truncation at
+level 0 lands within a factor of three of the tenth-of-a-pixel bar,
+so f32 and f64 disagree about whether to carry -- and one extra level
+of a kernel whose third derivative is that large read 25x further
+from the reference than the walk it replaces. Enabled, the gate
+measured 5.1e-3 against the shipped walk's 2.0e-4; declined, the two
+are identical.
+
+That is not a defect in either side. It is a hard threshold evaluated
+in two precisions, and the fix is to make the decision ONCE and carry
+it -- a flag on the reference row, as the escape state already is --
+rather than to let each side decide. Until then the rung is built,
+gated on the CPU, compiled into the shader and unreachable there.
+
+**Still open in item 5**: making that rebase decision once, and G3's
 lineage trace.
 
 ## 4. Decisions
