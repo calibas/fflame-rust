@@ -857,6 +857,13 @@ first-rebase level over a grid of pixels:
 And **no lineage leaves for want of a form** on any of them, which is
 the thing that changed and what the gate asserts directly.
 
+**What the sampling costs**, measured because it runs inside
+`analyse_2d` and the renderer calls that on every flame edit: 0.2 ms
+for a disc, 0.7 for a blob, 0.4 for a spherical -- per map, in
+release. Nothing, and worth knowing rather than assuming; a preset
+render that looked four times slower beside it turned out to be a
+test loop competing for the machine.
+
 The disc barely carries, and that is honest rather than a defect: its
 inverse reads polar coordinates the other way round and its third
 derivative over the ball is large, so the remainder reaches a tenth
