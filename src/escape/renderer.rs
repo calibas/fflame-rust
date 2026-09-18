@@ -732,6 +732,12 @@ pub struct EscapeRenderer {
     /// The rows themselves, rebuilt with the seeds -- the beam
     /// depends on the VIEW, not only on the flame.
     ifs_ref_rows: Option<Vec<super::ifs::IfsRefRowGpu>>,
+    /// Whether the DELTA walk is the one running: the flame is on a
+    /// rung it can take AND the reference says a lineage carries past
+    /// the first level. Decided with the seeds, read by the pipeline,
+    /// so the buffer and the shader cannot disagree about which walk
+    /// this frame is.
+    ifs_delta_active: bool,
     /// The transition graph a xaos flame's walk reads
     /// (`ifs-general.md` D4), packed by
     /// [`super::ifs::pack_xaos`]. One element -- a zero count -- for
@@ -1672,6 +1678,7 @@ impl EscapeRenderer {
             ifs_xaos_buffer,
             ifs_ref_buffer,
             ifs_ref_rows: None,
+            ifs_delta_active: false,
             ifs_coarse_token: 0,
             ifs_coarse_cpu: None,
             ifs_geom_px: 0,
@@ -4384,23 +4391,31 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // reused, because `seed_beam` stops at its handover and this
         // one may not. Paid only when the walk is on, and the plan's
         // end state is that the two become one.
+        self.ifs_delta_active = false;
         self.ifs_ref_rows = if delta {
-            let rows = match super::ifs::centre_at_precision(escape) {
-                Some(centre) => {
-                    let b = crate::scene::ifs_estimate::reference_beam(
-                        &packed.ifs, centre, basis, px, budget, beam,
-                    );
-                    super::ifs::pack_reference(&b, packed.rows.len(), beam as usize)
-                }
+            let b = match super::ifs::centre_at_precision(escape) {
+                Some(centre) => crate::scene::ifs_estimate::reference_beam(
+                    &packed.ifs, centre, basis, px, budget, beam,
+                ),
                 None => {
                     let (x, y) = escape.center_f64();
-                    let b = crate::scene::ifs_estimate::reference_beam(
+                    crate::scene::ifs_estimate::reference_beam(
                         &packed.ifs, [x, y], basis, px, budget, beam,
-                    );
-                    super::ifs::pack_reference(&b, packed.rows.len(), beam as usize)
+                    )
                 }
             };
-            Some(rows)
+            // ...and only if it buys anything on this view. A
+            // reference whose every lineage rebases at level 0 hands
+            // each pixel a LEVEL-0 handover in f32, which is worse
+            // than the chosen one the seeded walk already has --
+            // measured, 156 pixels against 1.7 on a julia dust at
+            // 2^24. See `ReferenceBeam::carries`.
+            if b.carries() {
+                self.ifs_delta_active = true;
+                Some(super::ifs::pack_reference(&b, packed.rows.len(), beam as usize))
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -6719,11 +6734,9 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                         .map_or(0.0, |p| p.default)
                 })
                 > 0.5;
-            // ...and the same question the seeds asked, so the
-            // pipeline and the buffer cannot disagree about which walk
-            // is running.
-            let delta = delta
-                && self.ifs.as_ref().is_some_and(|p| p.ifs.has_delta_forms());
+            // ...and what the SEEDS decided, so the pipeline and the
+            // buffer cannot disagree about which walk this frame is.
+            let delta = delta && self.ifs_delta_active;
             let dtag = if delta { "|delta" } else { "" };
             let key =
                 format!("ifs|{}|{}|b{beam}|{lens_id}{dtag}", def.name, coloring.name);

@@ -2638,11 +2638,15 @@ pub struct IfsRefRowGpu {
 
 /// Bit 0: this row exists. Bit 1: it survived the reference's beam
 /// (a slack row has no children, so a lineage on one must rebase).
-/// Bit 2: it escaped. Bit 3: it is done.
+/// Bit 2: it escaped. Bit 3: it is done. Bit 4: a lineage may CARRY
+/// its delta through it -- the Taylor rung's rebase criterion,
+/// decided once on the CPU so the two precisions cannot disagree
+/// about a threshold.
 pub const REF_LIVE: u32 = 1;
 pub const REF_KEPT: u32 = 2;
 pub const REF_ESCAPED: u32 = 4;
 pub const REF_DONE: u32 = 8;
+pub const REF_CARRY: u32 = 16;
 
 /// The reference beam as the shader reads it: a header row, then
 /// `levels × stride` rows.
@@ -2680,6 +2684,9 @@ pub fn pack_reference(beam: &crate::scene::ifs_estimate::ReferenceBeam, n_maps: 
             }
             if r.done {
                 flags |= REF_DONE;
+            }
+            if r.carry {
+                flags |= REF_CARRY;
             }
             let (elvl, epoint) = match r.escape {
                 Some((l, p)) => (l as f32, [p[0] as f32, p[1] as f32]),
@@ -2944,6 +2951,12 @@ struct IfsRefRow {
 
 const REF_LIVE: u32 = 1u;
 const REF_KEPT: u32 = 2u;
+// A lineage may carry its delta through this row. False on a
+// Taylor-rung row whose dropped term has reached a tenth of a pixel
+// at the view's reach -- decided ONCE on the CPU, because the
+// criterion is a threshold and two precisions cross it at different
+// levels.
+const REF_CARRY: u32 = 16u;
 const REF_NONE: u32 = 0xffffffffu;
 
 // Row 0 is the header: (levels, stride, px, maps).
@@ -3170,11 +3183,11 @@ fn ifs_evaluate_delta(uv: vec2<f32>) -> IfsResult {
                             // offset grown to O(R), and `Z + δ`
                             // cancelling. Past either, absolute f32 is
                             // where the precision now is.
-                            // The Taylor rung's truncation, in
-                            // PIXELS: a world error `e` at this level
-                            // is `σ_per_px·e` of the answer.
-                            let trunc_px = cur.sigma * st.w;
-                            if (dm <= cap && zm >= dm && trunc_px <= 0.1) {
+                            // The Taylor rung's criterion is the
+                            // ROW's, not this pixel's: see REF_CARRY.
+                            let may_carry =
+                                (bitcast<u32>(row.link.z) & REF_CARRY) != 0u;
+                            if (dm <= cap && zm >= dm && may_carry) {
                                 let t = 2.0 * dot(row.z_u.zw, dd.xy) + dot(dd.xy, dd.xy);
                                 let rr = sqrt(max(row.scalars.y * row.scalars.y + t, 0.0));
                                 // `r − R` two ways, and which is
@@ -9013,6 +9026,30 @@ mod gpu_tests {
                     vec![jul(2.0), jul(3.0)]
                 },
             ),
+            // A TAYLOR-rung set the walk takes anyway: a blob has no
+            // exact form, but its remainder is small enough that a
+            // lineage carries, so the reference says the walk is worth
+            // running. Between this and the julia dust -- same rung,
+            // opposite verdict -- the decision is shown to be about
+            // the REMAINDER and not about the kernel's class.
+            (
+                "blob",
+                {
+                    let mut t = crate::scene::transforms::Transform::default();
+                    t.a = 1.0;
+                    t.d = 1.0;
+                    t.variations.clear();
+                    t.variation_order.clear();
+                    t.set_variation("blob", 0.8);
+                    t.set_variation_param("blob", "high", 1.2);
+                    t.set_variation_param("blob", "low", 0.5);
+                    t.set_variation_param("blob", "waves", 5.0);
+                    let mut a = half(0.5, 0.0, 0.6, 0.6);
+                    a.b = 0.3;
+                    a.c = -0.3;
+                    vec![t, a]
+                },
+            ),
             // A curved set the delta walk TAKES: bubble is algebraic,
             // so every map has an exact difference form and no lineage
             // has to rebase for want of one. The julia dust above is
@@ -9069,18 +9106,18 @@ mod gpu_tests {
             // rebasing every lineage at level 0 instead throws away
             // the BigFloat prefix and read twenty-five times further
             // from the reference than the walk it replaces.
-            // The julia dust is DECLINED, and the shader renders it
-            // by the seeded walk. Its root has a negative distance,
-            // so there is no exact difference form; the Taylor rung
-            // exists in both the CPU walk and the shader, and is
-            // still not allowed here because the two cross its rebase
-            // threshold at different levels -- see
-            // `Ifs2::has_delta_forms`.
-            let takes_delta = ifs.has_delta_forms();
-            assert_eq!(
-                takes_delta,
-                name != "julia dust",
-                "{name}: has_delta_forms is {takes_delta}"
+            // Every fixture is on a rung the walk can take, the
+            // julia dust included: its root has a negative distance
+            // and so no exact form, but the Taylor rung has a
+            // measured remainder. Whether the walk is worth RUNNING
+            // is a second question, asked of the reference per view,
+            // and the dust is expected to fail it -- its remainder is
+            // over the bar at the first level, so every lineage would
+            // rebase at level 0 into f32, which is worse than the
+            // handover the seeded walk already chose.
+            assert!(
+                ifs.has_delta_forms(),
+                "{name}: no rung the delta walk can take"
             );
             let target = crate::scene::ifs_estimate::chaos_sample_for_test(&ifs, 20_000)[10_000];
 
@@ -9223,14 +9260,7 @@ mod gpu_tests {
                     "{name} at 2^{zoom}: the delta walk reads {worst_delta:.3e} where \
                      the shipped walk reads {worst_shipped:.3e}"
                 );
-                // A declined set must be the shipped walk EXACTLY,
-                // not merely close: nothing else is running.
-                if !takes_delta {
-                    assert_eq!(
-                        worst_delta, worst_shipped,
-                        "{name} at 2^{zoom}: declined, yet the two walks differ"
-                    );
-                }
+
 
                 // ...and a loose bar, to catch a walk that has
                 // stopped walking rather than one that rounds.

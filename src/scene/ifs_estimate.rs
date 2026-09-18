@@ -2218,6 +2218,30 @@ pub struct RefRow {
     /// of the slack children (D1). A lineage on a slack row has no
     /// children stored and must rebase to continue.
     ///
+    /// Whether a lineage may CARRY its delta through this row, or
+    /// must rebase on reaching it.
+    ///
+    /// True for every map with an exact difference form. For a
+    /// Taylor-rung map it is the rebase criterion of D4 -- the
+    /// dropped `M·|δ|³/6` under a tenth of a pixel -- **decided once,
+    /// here, and carried**.
+    ///
+    /// That is the whole point of it being a row field. The criterion
+    /// is a THRESHOLD, and evaluated independently in f64 by this
+    /// walk and in f32 by the shader the two crossed it at different
+    /// levels: on a julia dust at 2^24 the truncation at level 0
+    /// lands within a factor of three of the bar, and one extra level
+    /// of a kernel whose third derivative is that large read 25x
+    /// further from the reference than the walk it replaces. A bit
+    /// computed once cannot be disagreed with.
+    ///
+    /// It is measured at the VIEW's own reach rather than at each
+    /// pixel's `|δ|`, because a row is shared by every pixel that
+    /// follows it. The view's reach is the largest `|δ|` any of them
+    /// has, so a row that permits the carry permits it for all of
+    /// them -- conservative, in the direction that costs a level of
+    /// depth rather than an answer.
+    pub carry: bool,
     /// **No gaps are stored**, and the plan's §3 table listed them.
     /// A gap is a branch whose IMAGE the point is outside of, and the
     /// one-shot handover had to carry the reference's because the
@@ -2246,6 +2270,30 @@ pub struct ReferenceBeam {
 }
 
 impl ReferenceBeam {
+    /// Whether the delta form buys anything on this view.
+    ///
+    /// **A lineage that rebases at level 0 is worse off than the
+    /// seeded walk, and this is the measurement that says so.** On a
+    /// julia dust at 2^24 the Taylor rung's remainder is over the bar
+    /// at the very first level, so every lineage leaves at once and
+    /// continues from a LEVEL-0 handover in f32 -- which is precisely
+    /// what the first design's objective existed to avoid choosing.
+    /// Measured on the GPU: 156 pixels from the f64 reference against
+    /// the chosen handover's 1.7, on a distance of thirty thousand.
+    ///
+    /// So the reference answers, once, whether any lineage carries
+    /// past the first level. If none does there is nothing to carry
+    /// and the renderer uses the walk it already had.
+    ///
+    /// Asked of level 1 and not deeper because that is where the
+    /// question is decided: a rung that cannot take one step will not
+    /// take two.
+    pub fn carries(&self) -> bool {
+        self.levels
+            .get(1)
+            .is_some_and(|rows| rows.iter().any(|r| r.carry))
+    }
+
     /// How many levels the reference reached.
     pub fn depth(&self) -> u32 {
         self.levels.len().saturating_sub(1) as u32
@@ -2298,8 +2346,10 @@ pub fn reference_beam<P: SeedPoint>(
         None => (centre, 1.0, view_basis),
     };
 
-    // The walk's own state, in `P`; the rows are the f64 shadow of it.
-    let mut live: Vec<(P, u32)> = vec![(q0.clone(), 0)];
+    // The walk's own state, in `P`, with the composed basis beside
+    // it: the view's `δ` at each level, which is what the carry bit
+    // is measured at.
+    let mut live: Vec<(P, u32, [[f64; 2]; 2])> = vec![(q0.clone(), 0, basis0)];
     let r0 = q0.distance_to(ball);
     let mut levels: Vec<Vec<RefRow>> = vec![vec![RefRow {
         z: q0.to_f64(),
@@ -2315,6 +2365,7 @@ pub fn reference_beam<P: SeedPoint>(
             .then(|| (escape_residual(r0, radius, mean), q0.to_f64())),
         done: !r0.is_finite() || r0 > far,
         kept: true,
+        carry: true,
     }]];
 
     for level in 0..max_levels as usize {
@@ -2323,10 +2374,10 @@ pub fn reference_beam<P: SeedPoint>(
             break;
         }
         let mut next_rows: Vec<RefRow> = Vec::new();
-        let mut next_live: Vec<(P, u32)> = Vec::new();
+        let mut next_live: Vec<(P, u32, [[f64; 2]; 2])> = Vec::new();
         let mut stop = false;
 
-        for (p, idx) in live.iter() {
+        for (p, idx, basis) in live.iter() {
             let row = &here[*idx as usize];
             if row.done || !row.kept {
                 continue;
@@ -2348,6 +2399,23 @@ pub fn reference_beam<P: SeedPoint>(
                     break;
                 };
                 let sigma = row.sigma_per_px * m.inverse.local_sigma(qf, m.sigma_min);
+                // The view's own delta at the child, and whether a
+                // lineage may carry through it. An exact form always
+                // may; a Taylor one may while its dropped term is
+                // under a tenth of a pixel at the view's reach.
+                let child_basis = match m.inverse.jacobian(qf) {
+                    Some(j) => compose_matrix(j, *basis),
+                    None => *basis,
+                };
+                let carry = if m.inverse.has_difference() {
+                    true
+                } else {
+                    let reach = basis_reach(child_basis);
+                    match m.inverse.difference_taylor(qf, [reach, 0.0]) {
+                        Some((_, trunc)) => sigma * trunc <= 0.1,
+                        None => false,
+                    }
+                };
                 let r = q.distance_to(ball);
                 let escape = row.escape.clone().or_else(|| {
                     (r > radius).then(|| {
@@ -2372,8 +2440,9 @@ pub fn reference_beam<P: SeedPoint>(
                     done: !r.is_finite() || r > far,
                     // Decided below, once the level is ranked.
                     kept: false,
+                    carry,
                 });
-                next_live.push((q, (next_rows.len() - 1) as u32));
+                next_live.push((q, (next_rows.len() - 1) as u32, child_basis));
             }
             if stop {
                 break;
@@ -2401,7 +2470,7 @@ pub fn reference_beam<P: SeedPoint>(
                 r.kept = true;
             }
         }
-        next_live.retain(|(_, i)| next_rows[*i as usize].kept);
+        next_live.retain(|(_, i, _)| next_rows[*i as usize].kept);
         levels.push(next_rows);
         live = next_live;
         if live.is_empty() {
@@ -2622,30 +2691,24 @@ pub fn estimate_delta(
                     let row = &reference.levels[lvl as usize][idx as usize];
                     let child = reference.child(lvl as usize, idx, i as u32);
                     // The exact form where there is one, the Taylor
-                    // rung where there is not, and in the second case
-                    // a truncation the lineage is judged on below.
-                    let (step, trunc) = match m.inverse.difference(row.z, c.d) {
-                        Some(d) => (Some(d), 0.0),
-                        None => match m.inverse.difference_taylor(row.z, c.d) {
-                            Some((d, t)) => (Some(d), t),
-                            None => (None, 0.0),
-                        },
+                    // rung where there is not. Whether the rung's
+                    // truncation is still small enough is NOT asked
+                    // here: the child row carries that decision, made
+                    // once (see `RefRow::carry`).
+                    let step = match m.inverse.difference(row.z, c.d) {
+                        Some(d) => Some(d),
+                        None => m.inverse.difference_taylor(row.z, c.d).map(|(d, _)| d),
                     };
                     match (child, step) {
                         (Some(ci), Some(dd)) => {
-                            let crow =
-                                &reference.levels[lvl as usize + 1][ci as usize];
+                            let crow = &reference.levels[lvl as usize + 1][ci as usize];
                             let dmag2 = f64::hypot(dd[0], dd[1]);
                             let zmag = f64::hypot(crow.z[0] + dd[0], crow.z[1] + dd[1]);
-                            // The truncation in PIXELS: a world error
-                            // `e` at this level is `σ_per_px·e` of the
-                            // answer, which is what the walk reports.
-                            let trunc_px = c.sigma * trunc;
                             if dmag2 > cap {
                                 rebases.push((level, Rebase::Expanded));
                             } else if zmag < dmag2 {
                                 rebases.push((level, Rebase::Cancelled));
-                            } else if trunc_px > 0.1 {
+                            } else if !crow.carry {
                                 rebases.push((level, Rebase::Truncated));
                             } else {
                                 // The pixel's own radius, exactly in
