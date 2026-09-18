@@ -725,6 +725,13 @@ pub struct EscapeRenderer {
     /// The `ifs_token` the coarse pass was built for, so a flame edit
     /// rebuilds it and a pan or a zoom does not. Zero means none.
     ifs_coarse_token: u64,
+    /// The same pass, kept on the CPU.
+    ///
+    /// The measure's AUTO brightness samples `estimate_measure` across
+    /// the view, and that needs the coarse pass the shader is reading
+    /// -- not another one. A 1024 grid is 12 MB, and it is dropped
+    /// with the flame.
+    ifs_coarse_cpu: Option<crate::scene::ifs_estimate::CoarseMeasure>,
     ifs_geom_px: u32,
     /// Interaction preview (mode D): render one pixel in each 2×2
     /// block while the user is still moving something, every pixel
@@ -1613,6 +1620,7 @@ impl EscapeRenderer {
             ifs_geom_buffer,
             ifs_coarse_buffer,
             ifs_coarse_token: 0,
+            ifs_coarse_cpu: None,
             ifs_geom_px: 0,
             preview: false,
             ifs: None,
@@ -3889,7 +3897,75 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let packed_rows = super::ifs::pack_coarse(&coarse);
         if self.set_coarse(device, queue, &packed_rows) {
             self.ifs_coarse_token = self.ifs_token;
+            self.ifs_coarse_cpu = Some(coarse);
         }
+    }
+
+    /// What the measure's density needs multiplying by for this view
+    /// to look like the last one.
+    ///
+    /// The flam3 tonemap normalises by iterations per pixel, which is
+    /// iteration-invariant and NOT zoom-invariant, and the measure is
+    /// neither: §5h of the measure plan put the density's climb at 6.5
+    /// stops over fifteen zoom levels on a gasket and 7.4 on a grand
+    /// julian, because density per unit AREA scales as `2^(z(2−D))`
+    /// and a flame's attractor has `D < 2`. Left alone the picture
+    /// brightens as it is zoomed, by a factor that depends on the
+    /// set's dimension.
+    ///
+    /// So the view's own median density is the divisor. Sampled
+    /// rather than reduced on the GPU: a reduction pass would be
+    /// exact and this is a brightness, and forty-nine
+    /// `estimate_measure` calls are a fraction of the prefix the same
+    /// view already pays for.
+    ///
+    /// `None` when there is nothing to normalise against, which
+    /// leaves the user's own scale alone.
+    fn measure_auto_scale(&self, escape: &EscapeConfig) -> Option<f32> {
+        let coarse = self.ifs_coarse_cpu.as_ref()?;
+        let packed = self.ifs.as_ref()?;
+        let maps = &packed.measure;
+        let span_y = 4.0 / escape.zoom_factor();
+        let span_x = span_y * (self.width as f64 / self.height.max(1) as f64);
+        let basis = super::ifs::view_basis(span_x, span_y, escape.rotation);
+        let px = span_y / self.height.max(1) as f64;
+        let (cx, cy) = escape.center_f64();
+        let beam = escape
+            .formula_params
+            .get("beam")
+            .copied()
+            .unwrap_or(8.0)
+            .clamp(1.0, 8.0) as usize;
+        let cells = escape
+            .coloring_params
+            .get("cells")
+            .copied()
+            .unwrap_or(crate::scene::ifs_estimate::MEASURE_CELLS as f32)
+            as f64;
+        let mut seen: Vec<f64> = Vec::with_capacity(49);
+        for gy in 0..7 {
+            for gx in 0..7 {
+                let uv = [gx as f64 / 6.0 - 0.5, gy as f64 / 6.0 - 0.5];
+                let at = [
+                    cx + basis[0][0] * uv[0] + basis[0][1] * uv[1],
+                    cy + basis[1][0] * uv[0] + basis[1][1] * uv[1],
+                ];
+                let e = crate::scene::ifs_estimate::estimate_measure(
+                    &packed.ifs, maps, coarse, at, px, beam, cells.max(1.0), 60,
+                );
+                if e.density > 0.0 && e.density.is_finite() {
+                    seen.push(e.density);
+                }
+            }
+        }
+        // Too little measure in view to say anything -- an exterior
+        // view, or one past where the walk reaches.
+        if seen.len() < 5 {
+            return None;
+        }
+        seen.sort_by(f64::total_cmp);
+        let median = seen[seen.len() / 2];
+        (median > 0.0).then(|| (1.0 / median) as f32)
     }
 
     /// The stride this render uses: 2 in preview for a mode-D formula,
@@ -6647,6 +6723,12 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 &escape.coloring_params,
                 cparams.as_flattened_mut(),
             );
+            // Brightness 0 means AUTO: divide by the view's own median
+            // density, so zooming does not change the exposure. Any
+            // other value is the user's and is left alone.
+            if coloring.name == "ifs_measure" && cparams[0][1] <= 0.0 {
+                cparams[0][1] = self.measure_auto_scale(escape).unwrap_or(1.0);
+            }
             if def.solid {
                 if let Some((ifs3, _)) = self.ifs.as_ref().and_then(|p| p.solid.as_ref()) {
                     let cam = super::ifs::solid_camera(escape, ifs3);

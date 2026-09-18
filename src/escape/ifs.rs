@@ -1996,12 +1996,14 @@ pub static IFS_MEASURE_COLORING: IfsColoringDef = IfsColoringDef {
         EscapeParamDef {
             name: "scale",
             display_name: "Brightness",
-            default: 1.0,
+            default: 0.0,
             min: 0.0,
             max: 64.0,
-            tooltip: "Multiplies the density. The measure inside a deep view is tiny \
-                      -- twenty to thirty stops down by a zoom of 2^20 -- which is \
-                      what starves a chaos game there and what this has to undo.",
+            tooltip: "Multiplies the density. ZERO means automatic: the view's own \
+                      median density is divided out, so zooming does not change the \
+                      exposure. Density per unit area CLIMBS as the zoom deepens -- \
+                      six to seven stops over fifteen levels, at a rate set by the \
+                      attractor's dimension -- so a fixed value brightens as you go in.",
             choices: &[],
         },
     ],
@@ -8415,6 +8417,101 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             on_rate > 4.0 * off_rate.max(1e-3),
             "the measure is not concentrated on the set: {on_rate:.3} of the \
              interior lit against {off_rate:.3} of the exterior"
+        );
+    }
+
+    /// The measure's brightness does not change when you zoom.
+    ///
+    /// D4, and the reason it needs answering: density per unit AREA
+    /// CLIMBS as the zoom deepens, because the measure lives on a set
+    /// of dimension below two and `ρ` scales as `2^(z(2−D))`. §5h put
+    /// that at 6.5 stops over fifteen zoom levels on a gasket and 7.4
+    /// on a grand julian. A fixed brightness therefore blows out as
+    /// you go in, and the flam3 tonemap does not help: it normalises
+    /// by iterations per pixel, which is iteration-invariant and not
+    /// zoom-invariant.
+    ///
+    /// Brightness 0 is AUTO -- the view's own median density is
+    /// divided out -- and this renders the same flame at four zooms
+    /// two decades apart and asserts the picture's own brightness
+    /// holds. Against the same run with a FIXED brightness, which is
+    /// what shows the climb is real and the fix is doing something.
+    #[test]
+    #[ignore = "needs a GPU; run with --ignored --nocapture"]
+    fn the_measures_brightness_holds_across_the_zoom() {
+        use crate::scene::transforms::{Flame, Transform};
+        let half = |tx: f32, ty: f32, col: f32| {
+            let mut t = Transform::default();
+            t.a = 0.5; t.d = 0.5; t.e = tx; t.f = ty;
+            t.color = col;
+            t.color_speed = 0.0;
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("linear", 1.0);
+            t
+        };
+        let mut flame = Flame::default();
+        flame.transforms = vec![half(0.0, 0.0, 0.0), half(0.5, 0.0, 0.5), half(0.25, 0.5, 1.0)];
+        let guard = crate::variations::global_registry();
+        let ifs = crate::scene::ifs_analysis::analyse_2d(&flame, &guard).expect("qualifies");
+        drop(guard);
+        // A point on the set, so every zoom has measure in frame.
+        let target = crate::scene::ifs_estimate::chaos_sample_for_test(&ifs, 20_000)[10_000];
+
+        let mut spread_of: Vec<f64> = Vec::new();
+        for auto in [true, false] {
+            let mut lit: Vec<f64> = Vec::new();
+            for zoom in [2.0f64, 5.0, 8.0, 11.0] {
+                let mut config = config_for(flame.clone());
+                config.escape.coloring = "ifs_measure".to_string();
+                config.escape.coloring_params.clear();
+                config.escape.coloring_params.insert("cells".to_string(), 16.0);
+                config.escape.coloring_params
+                    .insert("scale".to_string(), if auto { 0.0 } else { 0.002 });
+                config.escape.center_re = format!("{}", target[0]);
+                config.escape.center_im = format!("{}", target[1]);
+                config.escape.zoom_log2 =
+                    (4.0 / (2.0 * ifs.ball.radius / 2f64.powf(zoom))).log2();
+                let rgba = render(&config);
+                // The median brightness of the pixels that have any,
+                // which is what the eye reads as exposure.
+                let mut b: Vec<f64> = rgba
+                    .chunks(4)
+                    .map(|p| (p[0] as f64 + p[1] as f64 + p[2] as f64) / 765.0)
+                    .filter(|v| *v > 0.004)
+                    .collect();
+                if b.len() < 50 {
+                    continue;
+                }
+                b.sort_by(f64::total_cmp);
+                lit.push(b[b.len() / 2]);
+            }
+            assert!(lit.len() >= 3, "too few usable zooms: {}", lit.len());
+            let lo = lit.iter().copied().fold(f64::INFINITY, f64::min);
+            let hi = lit.iter().copied().fold(0.0, f64::max);
+            let stops = (hi / lo.max(1e-6)).log2();
+            println!(
+                "  {:<6} median brightness {:?} | spread {stops:.2} stops",
+                if auto { "auto" } else { "fixed" },
+                lit.iter().map(|v| (v * 1000.0).round() / 1000.0).collect::<Vec<_>>()
+            );
+            spread_of.push(stops);
+        }
+        let (auto, fixed) = (spread_of[0], spread_of[1]);
+        assert!(
+            auto < 0.15,
+            "auto brightness drifts {auto:.2} stops across four zooms -- the point \
+             of it is that it does not"
+        );
+        // And the fixed control has to DRIFT, or this gate is passing
+        // on a flame that never needed the correction. It first read
+        // 0.03 stops because a brightness of 1 saturates every lit
+        // pixel to the same value: a control that clips is no control.
+        assert!(
+            fixed > 3.0 * auto,
+            "the fixed control drifts only {fixed:.2} stops against auto's \
+             {auto:.2} -- this view does not exercise the climb, so the gate is \
+             not measuring the fix"
         );
     }
 
