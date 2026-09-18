@@ -401,6 +401,11 @@ struct IfsCand {
     last_sigma: f32,
     // bit 0 = escaped, bit 1 = done (past FAR, no longer expanded).
     flags: u32,
+    // The map this path took last, or `IFS_NO_LAST` at level zero.
+    // Only xaos reads it: appending a child puts it immediately
+    // BEFORE this one in the chaos game's order, and that is the
+    // transition the graph has to admit (`ifs-general.md` D4).
+    last: u32,
 }
 
 fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
@@ -473,7 +478,14 @@ fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
         cand.addr = d.x;
         cand.last_sigma = d.y;
         cand.level = d.z;
-        cand.flags = bitcast<u32>(d.w);
+        // Bits 0 and 1 are the flags; bits 8 and up are the last map
+        // plus one, packed by `pack_seeds` because every seed vec4 is
+        // already full. Zero there is a handover at level 0, which has
+        // no last map and admits every child.
+        let fw = bitcast<u32>(d.w);
+        cand.flags = fw & 3u;
+        let lastp = fw >> 8u;
+        cand.last = select(IFS_NO_LAST, lastp - 1u, lastp != 0u);
         cand.point = vec2<f32>(e.x, e.y);
         cand.color = e.z;
         var pos = live_count;
@@ -591,6 +603,13 @@ fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
                 continue;
             }
             for (var bi = first; bi < last; bi = bi + 1u) {
+                // A transition the graph forbids is not a gap: a gap
+                // is a proof that no PREIMAGE exists and belongs in
+                // the answer's minimum, while this branch simply is
+                // not part of the dynamics and has nothing to say.
+                if (bi < n && !ifs_admits(bi, live[ci].last)) {
+                    continue;
+                }
                 var cand_key = live[ci].r;
                 if (bi < n) {
                     var gap = ifs_image_gap(bi, live[ci].q);
@@ -661,6 +680,7 @@ fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
                 child.q = ifs_inv_point(bi, live[parent].q);
                 child.sigma = live[parent].sigma * ifs_inv_sigma(bi, live[parent].q);
                 child.last_sigma = ifs_maps[bi].sigma_min;
+                child.last = bi;
                 child.r = ifs_radius2(child.q, c);
                 // Score the child as it is made: one that inherited
                 // only its parent's bound would rank identically to
@@ -1043,6 +1063,9 @@ struct IfsCand3 {
     // The scalar coordinate a quaternion kernel carries (plan 8.11
     // step 3); affine and 3D-root rows pass it through.
     w: f32,
+    // The map this path took last, or `IFS_NO_LAST`, for the xaos
+    // test (`ifs-general.md` D4). As the planar walk's.
+    last: u32,
 }
 
 // The walk's radius: the 4D distance to the ball's centre, whose
@@ -1163,6 +1186,9 @@ fn ifs_walk3(delta: vec3<f32>, eps_asked: f32) -> IfsResult {
         root.color = L.esc.w;
         root.last_sigma = L.extra.y;
         root.flags = flags & 3u;
+        // Bits 8 and up of the same word are the last map plus one.
+        let rlast = flags >> 8u;
+        root.last = select(IFS_NO_LAST, rlast - 1u, rlast != 0u);
         // An escape carried by the link keeps the level it happened
         // at. Recomputing it here would report a candidate that left
         // the ball at level three of a fifty-level prefix as leaving
@@ -1290,6 +1316,9 @@ fn ifs_walk3(delta: vec3<f32>, eps_asked: f32) -> IfsResult {
                 continue;
             }
             for (var bi = first; bi < last; bi = bi + 1u) {
+                if (bi < n && !ifs_admits(bi, live[ci].last)) {
+                    continue;
+                }
                 var cand_key = live[ci].r;
                 if (bi < n) {
                     let s = ifs_inv_step3(bi, live[ci].q, live[ci].w);
@@ -1334,6 +1363,7 @@ fn ifs_walk3(delta: vec3<f32>, eps_asked: f32) -> IfsResult {
                 child.w = s.w;
                 child.sigma = live[parent].sigma * ifs_inv_sigma3(bi, live[parent].q, live[parent].w);
                 child.last_sigma = ifs_maps[bi].extra.x;
+                child.last = bi;
                 child.r = ifs_radius4(child.q, child.w, c);
                 let cterm = child.sigma * (child.r - radius);
                 if (abs(cterm) <= 1e37) {
@@ -1924,8 +1954,8 @@ pub fn pack_standalone(def: &IfsDef, escape: &crate::config::escape::EscapeConfi
         .max(1e-3);
     let ball2 = crate::scene::ifs_analysis::Ball { centre: [0.0, 0.0], radius };
     let ball3 = crate::scene::ifs_analysis::Ball { centre: [0.0, 0.0, 0.0], radius };
-    let ifs = crate::scene::ifs_analysis::Ifs { maps: Vec::new(), final_map: None, frame_radius: ball2.radius, ball: ball2, aux_centre: 0.0 };
-    let ifs3 = crate::scene::ifs_analysis::Ifs { maps: Vec::new(), final_map: None, frame_radius: ball3.radius, ball: ball3, aux_centre: 0.0 };
+    let ifs = crate::scene::ifs_analysis::Ifs { maps: Vec::new(), final_map: None, frame_radius: ball2.radius, ball: ball2, aux_centre: 0.0, xaos: None };
+    let ifs3 = crate::scene::ifs_analysis::Ifs { maps: Vec::new(), final_map: None, frame_radius: ball3.radius, ball: ball3, aux_centre: 0.0, xaos: None };
     let mut globals = [[0.0f32; 4]; 4];
     pack_globals(&ifs, &mut globals);
     PackedIfs {
@@ -1935,8 +1965,10 @@ pub fn pack_standalone(def: &IfsDef, escape: &crate::config::escape::EscapeConfi
         colors: Vec::new(),
         measure: crate::scene::ifs_estimate::MeasureMaps {
             prob: Vec::new(),
+            step: None,
             colour: Vec::new(),
         },
+        xaos: vec![0.0; 4],
         solid: Some((ifs3, Vec::new())),
     }
 }
@@ -2247,6 +2279,9 @@ pub fn pack_maps3(ifs: &Ifs3, colors: &[f32]) -> Vec<IfsMap3Gpu> {
 /// loop analyses once per frame rather than once per pixel.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PackedIfs {
+    /// The transition graph, flat, as [`pack_xaos`] lays it out. One
+    /// zero element for a flame without xaos.
+    pub xaos: Vec<f32>,
     pub globals: [[f32; 4]; 4],
     pub rows: Vec<IfsMapGpu>,
     /// The f64 analysis the rows were packed from.
@@ -2346,13 +2381,17 @@ pub fn pack_flame(
             },
             frame_radius: ifs3.frame_radius,
             aux_centre: 0.0,
+            // No maps, so no transitions: the plane is empty here and
+            // the solid's own graph is on `ifs3`.
+            xaos: None,
         },
     };
     let mut globals = [[0.0f32; 4]; 4];
     pack_globals(&ifs, &mut globals);
     let measure = crate::scene::ifs_estimate::MeasureMaps::of(&ifs, flame);
     let rows = pack_maps(&ifs, &colors, Some(&measure));
-    Ok(PackedIfs { globals, rows, ifs, colors, measure, solid })
+    let xaos = pack_xaos(&ifs, &measure);
+    Ok(PackedIfs { globals, rows, ifs, colors, measure, xaos, solid })
 }
 
 /// The six kernels' inverse Jacobians, and the map-level composition,
@@ -2581,6 +2620,11 @@ struct IfsMLive {
     p: f32,
     hp: f32,
     cacc: f32,
+    // The map this lineage took last, or `IFS_NO_LAST`. Under xaos it
+    // decides both which children are admissible and what each one's
+    // probability is, which is a Markov chain rather than a product of
+    // independent draws (`ifs-general.md` D4).
+    last: u32,
 };
 
 fn ifs_m_det(m: vec4<f32>) -> f32 {
@@ -2662,6 +2706,8 @@ fn ifs_measure(uv: vec2<f32>, cells: f32) -> vec4<f32> {
         live[live_count].p = sd.w;
         live[live_count].hp = sf.z;
         live[live_count].cacc = sf.w;
+        let mfw = bitcast<u32>(ifs_seed(j, 2u).w) >> 8u;
+        live[live_count].last = select(IFS_NO_LAST, mfw - 1u, mfw != 0u);
         if (sd.w > 0.0) {
             live_count = live_count + 1u;
         }
@@ -2704,6 +2750,9 @@ fn ifs_measure(uv: vec2<f32>, cells: f32) -> vec4<f32> {
                 continue;
             }
             for (var bi = 0u; bi < n; bi = bi + 1u) {
+                if (!ifs_admits(bi, l.last)) {
+                    continue;
+                }
                 let q2 = ifs_inv_point(bi, l.a);
                 if (!(abs(q2.x) <= 1e30) || !(abs(q2.y) <= 1e30)) {
                     continue;
@@ -2726,8 +2775,16 @@ fn ifs_measure(uv: vec2<f32>, cells: f32) -> vec4<f32> {
                 if (!(a2 > 0.0) || !(a2 <= 1e30)) {
                     continue;
                 }
-                let pr = ifs_maps[bi].measure.x;
-                let sp = 0.0; // EXPERIMENT: was ifs_maps[bi].measure.y
+                // Under xaos the step's probability depends on what
+                // came before it, and the graph holds the same
+                // branch-corrected numbers the map row does. Without
+                // one, `ifs_xaos_step` returns a negative and the row
+                // stands.
+                var pr = ifs_xaos_step(bi, l.last);
+                if (pr < 0.0) {
+                    pr = ifs_maps[bi].measure.x;
+                }
+                let sp = ifs_maps[bi].measure.y;
                 var child: IfsMLive;
                 child.a = q2;
                 child.m = m2;
@@ -2737,6 +2794,7 @@ fn ifs_measure(uv: vec2<f32>, cells: f32) -> vec4<f32> {
                 child.cacc = l.cacc
                     + ifs_maps[bi].color * (1.0 - sp) * 0.5 * l.hp;
                 child.hp = l.hp * (1.0 + sp) * 0.5;
+                child.last = bi;
                 if (!(child.p > 0.0)) {
                     continue;
                 }
@@ -2995,6 +3053,33 @@ pub const COARSE_HEADER: usize = 2;
 /// samples are weighted by the density beside them, and an empty cell
 /// weighs nothing -- which is the point of reading both from one
 /// footprint (measure plan §5g).
+pub fn pack_xaos(
+    ifs: &Ifs2,
+    measure: &crate::scene::ifs_estimate::MeasureMaps,
+) -> Vec<f32> {
+    // Element 0 is the map count, and ZERO there is what the shader
+    // reads as "no graph" -- the ordinary case, where every map may
+    // follow every map and a step's probability is the map's own.
+    if ifs.xaos.is_none() || ifs.maps.is_empty() {
+        return vec![0.0; 4];
+    }
+    let n = ifs.maps.len();
+    let mut out = vec![0.0f32; 1 + n * n + n];
+    out[0] = n as f32;
+    for i in 0..n {
+        for l in 0..n {
+            out[1 + i * n + l] = measure.step_probability(i, Some(l as u32)) as f32;
+        }
+        // The stationary row, which the first level after the
+        // handover reads. The walk's own admissibility test is the
+        // SIGN of one of these, so both halves have to be packed from
+        // the same source as the CPU's -- branch corrections included,
+        // since those never change a sign but do change a measure.
+        out[1 + n * n + i] = measure.step_probability(i, None) as f32;
+    }
+    out
+}
+
 pub fn pack_coarse(c: &crate::scene::ifs_estimate::CoarseMeasure) -> Vec<[f32; 2]> {
     let cell = c.cell();
     let norm = 1.0 / (c.samples.max(1) as f64 * cell * cell);
@@ -3118,7 +3203,14 @@ pub fn pack_seeds(
             Some((lvl, p)) => (lvl as f32, [p[0] as f32, p[1] as f32], 1u32),
             None => (-1.0, [0.0, 0.0], 0u32),
         };
-        let flags = escaped | if c.done { 2 } else { 0 };
+        // Bits 0 and 1 are the flags; bits 8 and up are the last map
+        // plus one, so zero there means "no last map" -- which is what
+        // a handover at level 0 has. Riding in the flags word rather
+        // than taking a slot of its own: every one of the six vec4s a
+        // seed packs into is full, and a u32 bitcast through an f32
+        // carries 24 spare bits exactly.
+        let last = c.address.last().map_or(0u32, |&i| i + 1);
+        let flags = escaped | if c.done { 2 } else { 0 } | (last << 8);
         let colour = c
             .address
             .first()
@@ -3863,7 +3955,10 @@ pub fn pack_chain3(
                 Some((lvl, p)) => (lvl as f32, [p[0] as f32, p[1] as f32, p[2] as f32], 1u32),
                 None => (-1.0, [0.0, 0.0, 0.0], 0u32),
             };
-            let flags = escaped | if c.done { 2 } else { 0 };
+            // As `pack_seeds`: bits 8 and up carry the last map plus
+            // one, for the solid walk's own xaos test.
+            let last = c.address.last().map_or(0u32, |&i| i + 1);
+            let flags = escaped | if c.done { 2 } else { 0 } | (last << 8);
             let colour = c
                 .address
                 .first()
@@ -4761,8 +4856,10 @@ mod tests {
         let ifs = square();
         let colors = vec![0.1f32, 0.4, 0.7];
         let mut packed = PackedIfs {
+            xaos: vec![0.0; 4],
             measure: crate::scene::ifs_estimate::MeasureMaps {
                 prob: Vec::new(),
+                step: None,
                 colour: Vec::new(),
             },
             globals: [[0.0; 4]; 4],
@@ -6009,6 +6106,7 @@ mod tests {
         // empty map table is the right stand-in here.
         let measure = crate::scene::ifs_estimate::MeasureMaps {
             prob: vec![1.0; ifs.maps.len()],
+            step: None,
             colour: vec![(0.0, 0.0); ifs.maps.len()],
         };
         pack_seeds(&measure, &seeds, ifs.maps.len(), &[0.1, 0.4, 0.7], &mut out);
@@ -7925,7 +8023,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // the walk -- and the cost of believing it was that the gate
         // stopped looking at exactly the two fixtures that had
         // something to say.
-        // The third field is whether the maps are CURVED.
+        // The third field is whether the maps are CURVED, the fourth
+        // the transforms' COLOUR SPEED.
+        //
+        // The speed was 0 on every fixture until 2026-09-17, and that
+        // is how the shader shipped for a day ignoring it entirely --
+        // a leftover `let sp = 0.0` where the map row's own value
+        // belonged. With every speed zero both sides agreed on a fold
+        // that was not being exercised. A non-zero one now runs
+        // beside the others.
         //
         // A handover hands over a LINEARISATION: the seed's basis is
         // the Jacobian at the reference, and every pixel of the view
@@ -7937,17 +8043,19 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // accumulates, since its walk reaches level 1 and no further.
         // That is §5d's finding arriving at the handover, and it is
         // reported rather than asserted past level 0.
-        let cases: Vec<(&str, Vec<crate::scene::transforms::Transform>, bool)> = vec![
+        let gasket = || vec![
+            { let mut t = aff(0.5, 0.0, 0.0, 0.5, 0.0, 0.0); t.weight = 1.0; t },
+            { let mut t = aff(0.5, 0.0, 0.0, 0.5, 0.5, 0.0); t.weight = 1.37; t },
+            { let mut t = aff(0.5, 0.0, 0.0, 0.5, 0.25, 0.5); t.weight = 0.61; t },
+        ];
+        let cases: Vec<(&str, Vec<crate::scene::transforms::Transform>, bool, f32)> = vec![
             ("dragon", vec![
                 aff(0.5, -0.5, 0.5, 0.5, 0.0, 0.0),
                 aff(-0.5, -0.5, 0.5, -0.5, 1.0, 0.0),
-            ], false),
-            ("gasket", vec![
-                { let mut t = aff(0.5, 0.0, 0.0, 0.5, 0.0, 0.0); t.weight = 1.0; t },
-                { let mut t = aff(0.5, 0.0, 0.0, 0.5, 0.5, 0.0); t.weight = 1.37; t },
-                { let mut t = aff(0.5, 0.0, 0.0, 0.5, 0.25, 0.5); t.weight = 0.61; t },
-            ], false),
-            ("julia dust", vec![jul(2.0), jul(3.0)], true),
+            ], false, 0.0),
+            ("gasket", gasket(), false, 0.0),
+            ("gasket speed 0.6", gasket(), false, 0.6),
+            ("julia dust", vec![jul(2.0), jul(3.0)], true, 0.0),
         ];
 
         let (device, queue) = device();
@@ -7957,11 +8065,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             &base.flame, base.palette_size,
         );
 
-        for (name, mut transforms, curved) in cases {
+        for (name, mut transforms, curved, speed) in cases {
             let n = transforms.len().max(2) - 1;
             for (i, t) in transforms.iter_mut().enumerate() {
                 t.color = i as f32 / n as f32;
-                t.color_speed = 0.0;
+                t.color_speed = speed;
             }
             let mut flame = crate::scene::transforms::Flame::default();
             flame.transforms = transforms;
@@ -8418,6 +8526,143 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             "the measure is not concentrated on the set: {on_rate:.3} of the \
              interior lit against {off_rate:.3} of the exterior"
         );
+    }
+
+    /// The shader takes the transition graph, and takes it the same
+    /// way the CPU does (`ifs-general.md` D4, G5).
+    ///
+    /// Three renders of one four-map square:
+    ///
+    /// 1. no xaos;
+    /// 2. a UNIFORM xaos of one half everywhere -- which `has_xaos`
+    ///    reads as real xaos, so the whole graph path engages, and
+    ///    whose every row normalises to the same draw a plain weight
+    ///    gives. It must be pixel-identical to (1). All-ones would be
+    ///    vacuous: the flame reports no xaos at all and nothing runs.
+    /// 3. a four-cycle -- after map `i` only `i+1` may follow. A
+    ///    strictly smaller attractor, so it must NOT be identical,
+    ///    and its distance field must be the CPU walk's.
+    ///
+    /// The third assertion is the one with teeth. A shader that
+    /// ignored the graph would pass (1) and (2) and fail (3); one
+    /// that admitted nothing would fail all three.
+    #[test]
+    #[ignore = "needs a GPU; run with --ignored --nocapture"]
+    fn the_shader_takes_the_transition_graph() {
+        use crate::scene::transforms::{Flame, Transform};
+        let half = |tx: f32, ty: f32, col: f32| {
+            let mut t = Transform::default();
+            t.a = 0.5; t.d = 0.5; t.e = tx; t.f = ty;
+            t.color = col;
+            t.color_speed = 0.0;
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("linear", 1.0);
+            t
+        };
+        let build = |xaos: Option<Vec<Vec<f32>>>| {
+            let mut flame = Flame::default();
+            flame.transforms = vec![
+                half(0.0, 0.0, 0.0),
+                half(0.5, 0.0, 0.33),
+                half(0.0, 0.5, 0.66),
+                half(0.5, 0.5, 1.0),
+            ];
+            flame.xaos = xaos;
+            flame
+        };
+        let cycle: Vec<Vec<f32>> = (0..4)
+            .map(|i| (0..4).map(|j| if j == (i + 1) % 4 { 1.0 } else { 0.0 }).collect())
+            .collect();
+
+        let guard = crate::variations::global_registry();
+        let base = crate::scene::ifs_analysis::analyse_2d(&build(None), &guard).expect("qualifies");
+        drop(guard);
+
+        let shot = |flame: Flame| -> Vec<u8> {
+            let mut config = config_for(flame);
+            config.escape.coloring = "ifs_distance".to_string();
+            config.escape.formula_params.insert("levels".to_string(), 24.0);
+            config.escape.formula_params.insert("beam".to_string(), 8.0);
+            config.escape.center_re = format!("{:?}", base.ball.centre[0]);
+            config.escape.center_im = format!("{:?}", base.ball.centre[1]);
+            config.escape.zoom_log2 = (4.0 / (2.2 * base.ball.radius)).log2();
+            render(&config)
+        };
+
+        let plain = shot(build(None));
+        let uniform = shot(build(Some(vec![vec![0.5; 4]; 4])));
+        let cycled = shot(build(Some(cycle.clone())));
+
+        assert_eq!(
+            plain, uniform,
+            "a uniform xaos moved pixels -- the graph is meant to be the identity there"
+        );
+        let moved = plain
+            .chunks(4)
+            .zip(cycled.chunks(4))
+            .filter(|(a, b)| a[0..3] != b[0..3])
+            .count();
+        assert!(
+            moved > plain.len() / 4 / 20,
+            "the four-cycle changed only {moved} pixels of {} -- the shader is not \
+             reading the graph",
+            plain.len() / 4
+        );
+        println!("  the four-cycle moves {moved} of {} pixels", plain.len() / 4);
+
+        // ...and the field it draws is the CPU walk's. Sampled where
+        // the two can be compared: the rendered value is a colouring
+        // of the distance, so this compares the SET -- which pixels
+        // read as on it -- rather than the number.
+        let flame = build(Some(cycle));
+        let guard = crate::variations::global_registry();
+        let ifs = crate::scene::ifs_analysis::analyse_2d(&flame, &guard).expect("qualifies");
+        drop(guard);
+        let mut config = config_for(flame);
+        config.escape.coloring = "ifs_distance".to_string();
+        config.escape.formula_params.insert("levels".to_string(), 24.0);
+        config.escape.formula_params.insert("beam".to_string(), 8.0);
+        config.escape.center_re = format!("{:?}", base.ball.centre[0]);
+        config.escape.center_im = format!("{:?}", base.ball.centre[1]);
+        config.escape.zoom_log2 = (4.0 / (2.2 * base.ball.radius)).log2();
+        let (w, h) = (W, H);
+        let span_y = 4.0 / config.escape.zoom_factor();
+        let span_x = span_y * w as f64 / h as f64;
+        let basis = view_basis(span_x, span_y, config.escape.rotation);
+        let px = span_y / h as f64;
+        let mut disagree = 0usize;
+        let mut checked = 0usize;
+        for gy in 0..16u32 {
+            for gx in 0..16u32 {
+                let x = gx * (w / 16) + w / 32;
+                let y = gy * (h / 16) + h / 32;
+                let uv = [
+                    (x as f64 + 0.5) / w as f64 - 0.5,
+                    (y as f64 + 0.5) / h as f64 - 0.5,
+                ];
+                let at = [
+                    base.ball.centre[0] + basis[0][0] * uv[0] + basis[0][1] * uv[1],
+                    base.ball.centre[1] + basis[1][0] * uv[0] + basis[1][1] * uv[1],
+                ];
+                let cpu_on =
+                    crate::scene::ifs_estimate::estimate(&ifs, at, 24, 8).distance <= 2.0 * px;
+                let i = ((y * w + x) * 4) as usize;
+                let gpu_on = cycled[i] as u32 + cycled[i + 1] as u32 + cycled[i + 2] as u32 > 24;
+                if cpu_on != gpu_on {
+                    disagree += 1;
+                }
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 256);
+        // A few boundary pixels may straddle the threshold, since one
+        // side reads a distance and the other a tone-mapped colour.
+        assert!(
+            disagree <= 6,
+            "{disagree} of {checked} sample points disagree about the restricted set"
+        );
+        println!("  CPU and GPU disagree at {disagree} of {checked} points");
     }
 
     /// The measure's brightness does not change when you zoom.

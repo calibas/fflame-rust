@@ -4431,6 +4431,54 @@ struct IfsMapGpu {
 
 @group(1) @binding(0) var<storage, read> ifs_maps: array<IfsMapGpu>;
 
+// The transition graph, when the flame has xaos (`ifs-general.md`
+// D4). Element 0 is the map count, and zero there means no xaos at
+// all -- the ordinary case, where every map may follow every map.
+// After it, `n*n` step probabilities in `[child * n + last]` order.
+//
+// One array for both questions the walk asks: a transition is
+// ADMISSIBLE exactly when its step probability is positive, so the
+// distance walk reads the sign and the measure walk reads the value.
+// Bound at a dummy element when there is no graph, like the coarse
+// pass beside it.
+@group(1) @binding(4) var<storage, read> ifs_xaos: array<f32>;
+
+const IFS_NO_LAST: u32 = 0xffffffffu;
+
+fn ifs_xaos_n() -> u32 {
+    if (arrayLength(&ifs_xaos) < 2u) {
+        return 0u;
+    }
+    return u32(max(ifs_xaos[0], 0.0));
+}
+
+// The factor an address's probability gains when `child` is appended
+// to a path whose last map is `last`. `IFS_NO_LAST` is the first
+// level, where the factor is the chain's stationary probability --
+// stored in the diagonal-free header row that follows the count.
+fn ifs_xaos_step(child: u32, last: u32) -> f32 {
+    let n = ifs_xaos_n();
+    if (n == 0u || child >= n) {
+        return -1.0;
+    }
+    if (last == IFS_NO_LAST) {
+        // The stationary row, packed after the n*n matrix.
+        return ifs_xaos[1u + n * n + child];
+    }
+    if (last >= n) {
+        return -1.0;
+    }
+    return ifs_xaos[1u + child * n + last];
+}
+
+// Whether `child` may be applied immediately BEFORE `last` in the
+// chaos game's own order -- which is what appending it to an address
+// means, since the forward chain runs an address backwards.
+fn ifs_admits(child: u32, last: u32) -> bool {
+    let s = ifs_xaos_step(child, last);
+    return s < 0.0 || s > 0.0;
+}
+
 // One pixel's walk, cached so a colouring change need not re-walk it.
 //
 // Thirty-two bytes, the same stride as mode A's `IterResult`, so both
@@ -5215,6 +5263,54 @@ struct IfsMap3Gpu {
 }
 
 @group(1) @binding(0) var<storage, read> ifs_maps: array<IfsMap3Gpu>;
+
+// The transition graph, when the flame has xaos (`ifs-general.md`
+// D4). Element 0 is the map count, and zero there means no xaos at
+// all -- the ordinary case, where every map may follow every map.
+// After it, `n*n` step probabilities in `[child * n + last]` order.
+//
+// One array for both questions the walk asks: a transition is
+// ADMISSIBLE exactly when its step probability is positive, so the
+// distance walk reads the sign and the measure walk reads the value.
+// Bound at a dummy element when there is no graph, like the coarse
+// pass beside it.
+@group(1) @binding(4) var<storage, read> ifs_xaos: array<f32>;
+
+const IFS_NO_LAST: u32 = 0xffffffffu;
+
+fn ifs_xaos_n() -> u32 {
+    if (arrayLength(&ifs_xaos) < 2u) {
+        return 0u;
+    }
+    return u32(max(ifs_xaos[0], 0.0));
+}
+
+// The factor an address's probability gains when `child` is appended
+// to a path whose last map is `last`. `IFS_NO_LAST` is the first
+// level, where the factor is the chain's stationary probability --
+// stored in the diagonal-free header row that follows the count.
+fn ifs_xaos_step(child: u32, last: u32) -> f32 {
+    let n = ifs_xaos_n();
+    if (n == 0u || child >= n) {
+        return -1.0;
+    }
+    if (last == IFS_NO_LAST) {
+        // The stationary row, packed after the n*n matrix.
+        return ifs_xaos[1u + n * n + child];
+    }
+    if (last >= n) {
+        return -1.0;
+    }
+    return ifs_xaos[1u + child * n + last];
+}
+
+// Whether `child` may be applied immediately BEFORE `last` in the
+// chaos game's own order -- which is what appending it to an address
+// means, since the forward chain runs an address backwards.
+fn ifs_admits(child: u32, last: u32) -> bool {
+    let s = ifs_xaos_step(child, last);
+    return s < 0.0 || s > 0.0;
+}
 
 // One link of the seed chain -- the beam's state after some number of
 // inverse maps applied to the TARGET, walked on the CPU at a precision

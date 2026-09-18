@@ -725,6 +725,11 @@ pub struct EscapeRenderer {
     /// The `ifs_token` the coarse pass was built for, so a flame edit
     /// rebuilds it and a pan or a zoom does not. Zero means none.
     ifs_coarse_token: u64,
+    /// The transition graph a xaos flame's walk reads
+    /// (`ifs-general.md` D4), packed by
+    /// [`super::ifs::pack_xaos`]. One element -- a zero count -- for
+    /// every flame without one, which is the ordinary case.
+    ifs_xaos_buffer: Buffer,
     /// The same pass, kept on the CPU.
     ///
     /// The measure's AUTO brightness samples `estimate_measure` across
@@ -1552,6 +1557,19 @@ impl EscapeRenderer {
                     },
                     count: None,
                 },
+                // The xaos transition graph. Same reasoning as the
+                // coarse pass below: one element when the flame has
+                // none, which is almost every flame.
+                BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
                 // The coarse pass for the measure walk. Bound at a
                 // dummy element for every other walk; a layout entry
                 // the shader does not read is allowed and costs
@@ -1582,6 +1600,12 @@ impl EscapeRenderer {
         });
         let ifs_geom_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Escape IFS Geometry"),
+            size: 16,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let ifs_xaos_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Escape IFS Xaos Graph"),
             size: 16,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -1619,6 +1643,7 @@ impl EscapeRenderer {
             ifs_chain_capacity: 0,
             ifs_geom_buffer,
             ifs_coarse_buffer,
+            ifs_xaos_buffer,
             ifs_coarse_token: 0,
             ifs_coarse_cpu: None,
             ifs_geom_px: 0,
@@ -3620,6 +3645,10 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         .max(std::mem::size_of::<super::ifs::IfsMap3Gpu>()) as u32;
 
+        // The transition graph rides with the maps: it is indexed by
+        // MAP, so a map table that changed invalidates it, and the
+        // condition above is exactly "the maps changed".
+        self.set_xaos(device, queue, &packed.xaos);
         if bytes > self.ifs_capacity {
             self.ifs_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Escape IFS Maps"),
@@ -3862,6 +3891,36 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         true
     }
 
+    /// Hand the shader this flame's transition graph
+    /// (`ifs-general.md` D4).
+    ///
+    /// Written whenever the maps are, since the graph is indexed by
+    /// MAP and a map table that changed invalidates it. A flame with
+    /// no xaos writes a single zero, which is what
+    /// `ifs_xaos_n` reads as "no graph".
+    pub fn set_xaos(&mut self, device: &Device, queue: &Queue, packed: &[f32]) {
+        let padded: Vec<f32> =
+            if packed.len() < 4 { vec![0.0; 4] } else { packed.to_vec() };
+        let bytes = bytemuck::cast_slice::<f32, u8>(&padded);
+        let want = bytes.len() as u64;
+        if self.ifs_xaos_buffer.size() < want {
+            let old = std::mem::replace(
+                &mut self.ifs_xaos_buffer,
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Escape IFS Xaos Graph"),
+                    size: want,
+                    usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }),
+            );
+            old.destroy();
+            // A new buffer is a new binding, so every cached bind
+            // group that names the old one is stale.
+            self.ifs_token = self.ifs_token.wrapping_add(1) | 1;
+        }
+        queue.write_buffer(&self.ifs_xaos_buffer, 0, bytes);
+    }
+
     /// Build the coarse pass if this flame needs one and has not got
     /// one, and hand it to the shader.
     ///
@@ -4102,6 +4161,10 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 BindGroupEntry {
                     binding: 3,
                     resource: self.ifs_coarse_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 4,
+                    resource: self.ifs_xaos_buffer.as_entire_binding(),
                 },
             ],
         });
@@ -7350,6 +7413,10 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     BindGroupEntry {
                         binding: 3,
                         resource: self.ifs_coarse_buffer.as_entire_binding(),
+                    },
+                    BindGroupEntry {
+                        binding: 4,
+                        resource: self.ifs_xaos_buffer.as_entire_binding(),
                     },
                 ],
             }))

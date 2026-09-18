@@ -272,6 +272,23 @@ struct Cand<P> {
     aux: f64,
 }
 
+/// Whether map `child` may be appended to a path whose last map is
+/// `last` (`ifs-general.md` D4).
+///
+/// True for every child when the flame has no xaos, which is the
+/// ordinary case and the reason this is a free function rather than
+/// a branch at each of the six expansion sites.
+///
+/// **The direction.** An address is `[a_1, a_2, ...]` in DISCOVERY
+/// order and the forward chain runs it backwards, so appending
+/// `child` puts it immediately BEFORE `last` in the chaos game's own
+/// order: the transition to admit is `child -> last`.
+/// [`XaosGraph`](crate::scene::ifs_analysis::XaosGraph) holds it that
+/// way round.
+pub fn admits<A, P>(ifs: &Ifs<A, P>, child: usize, last: Option<u32>) -> bool {
+    ifs.xaos.as_ref().is_none_or(|g| g.admits(child, last))
+}
+
 /// Which quantity the beam keeps by.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RankKey {
@@ -575,7 +592,11 @@ where
                 }
                 continue;
             }
+            let last = c.address.last().copied();
             for (i, m) in ifs.maps.iter().enumerate() {
+                if !admits(ifs, i, last) {
+                    continue;
+                }
                 if let Some(gap) = m.inverse.gap_bound(c.q, ifs.ball.centre, ifs.ball.radius, m.sigma_min) {
                     dead_min = dead_min.min(c.bound.max(c.sigma * gap));
                     continue;
@@ -1235,7 +1256,11 @@ fn seed_beam_inner<P: SeedPoint>(
             }
             let reach = delta_reach(*basis, quad);
             let qf = c.q.to_f64();
+            let last = c.address.last().copied();
             for (i, m) in ifs.maps.iter().enumerate() {
+                if !admits(ifs, i, last) {
+                    continue;
+                }
                 // A branch the REFERENCE cannot take. Its gap belongs
                 // in the answer's minimum, and `Seeds::dead_min_per_px`
                 // is where the handover carries it -- less the view's
@@ -1587,8 +1612,21 @@ impl CoarseMeasure {
 /// them corrections rather than fitted constants.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MeasureMaps {
-    /// Per map, the probability one step of the inverse walk carries.
+    /// Per map, the probability the FIRST step of the inverse walk
+    /// carries -- the stationary probability of landing in that map,
+    /// which without xaos is simply its normalised weight.
     pub prob: Vec<f64>,
+    /// `step[child * n + last]`, the factor a later step carries
+    /// (`ifs-general.md` D4). `None` without xaos, where every step
+    /// carries [`Self::prob`] whatever came before it.
+    ///
+    /// A cylinder's weight under a graph-directed IFS is
+    /// `π_{a_k} · Π p_{a_{m+1} a_m}` -- a Markov chain, not a product
+    /// of independent draws -- and the incremental form of that is
+    /// `π_i · p_{i l} / π_l` per appended map. Without xaos
+    /// `p_{i l} = w_i` for every `l`, so the factor is `w_i` and the
+    /// product collapses to what it always was.
+    pub step: Option<Vec<f64>>,
     /// Per map, its transform's palette colour and colour speed.
     pub colour: Vec<(f64, f64)>,
 }
@@ -1616,6 +1654,32 @@ impl MeasureMaps {
                 p / branches
             })
             .collect();
+        // Under xaos the first step's factor is the chain's
+        // stationary probability, not the raw weight, and every later
+        // step's depends on what it is being appended to. Both carry
+        // the same branch correction, since a root's forward is
+        // many-valued whatever chose it.
+        let branches = |i: usize| match ifs.maps[i].forward.nonlinear().map(|n| n.kernel) {
+            Some(crate::scene::ifs_analysis::Kernel::Root { n, .. }) => {
+                n.unsigned_abs().max(1) as f64
+            }
+            _ => 1.0,
+        };
+        let (prob, step) = match ifs.xaos.as_ref() {
+            None => (prob, None),
+            Some(g) => {
+                let n = ifs.maps.len();
+                let pi: Vec<f64> =
+                    (0..n).map(|i| g.stationary()[i] / branches(i)).collect();
+                let mut step = vec![0.0f64; n * n];
+                for i in 0..n {
+                    for l in 0..n {
+                        step[i * n + l] = g.step_probability(i, Some(l as u32)) / branches(i);
+                    }
+                }
+                (pi, Some(step))
+            }
+        };
         let colour = ifs
             .maps
             .iter()
@@ -1626,7 +1690,19 @@ impl MeasureMaps {
                     .map_or((0.5, 0.0), |t| (t.color as f64, t.color_speed as f64))
             })
             .collect();
-        Self { prob, colour }
+        Self { prob, step, colour }
+    }
+
+    /// The factor the walk's probability gains when `child` is
+    /// appended to a path whose last map is `last`.
+    pub fn step_probability(&self, child: usize, last: Option<u32>) -> f64 {
+        match (&self.step, last) {
+            (Some(step), Some(l)) => {
+                let n = self.prob.len();
+                step.get(child * n + l as usize).copied().unwrap_or(0.0)
+            }
+            _ => self.prob.get(child).copied().unwrap_or(0.0),
+        }
     }
 }
 
@@ -1764,9 +1840,19 @@ pub fn estimate_measure(
         hp: f64,
         /// `Σ g_i ∏_{j<i} h_j` over the prefix so far.
         cacc: f64,
+        /// The last map appended, which under xaos decides both which
+        /// children are admissible and what each one's probability
+        /// is (`ifs-general.md` D4). `None` at level 0.
+        last: Option<u32>,
     }
-    let mut live =
-        vec![Live { q: x, p: 1.0, m: [[1.0, 0.0], [0.0, 1.0]], hp: 1.0, cacc: 0.0 }];
+    let mut live = vec![Live {
+        q: x,
+        p: 1.0,
+        m: [[1.0, 0.0], [0.0, 1.0]],
+        hp: 1.0,
+        cacc: 0.0,
+        last: None,
+    }];
     let mut acc = 0.0f64;
     let mut acc_col = 0.0f64;
     let mut addresses = 0u32;
@@ -1793,6 +1879,9 @@ pub fn estimate_measure(
                 continue;
             }
             for (i, mp) in ifs.maps.iter().enumerate() {
+                if !admits(ifs, i, c.last) {
+                    continue;
+                }
                 // The preimage of a set is the union over the
                 // inverse's branches, which `analyse_2d` has already
                 // made separate maps of.
@@ -1817,12 +1906,13 @@ pub fn estimate_measure(
                 let g = cl * (1.0 - sp) * 0.5;
                 next.push(Live {
                     q: qi,
-                    p: c.p * maps.prob[i],
+                    p: c.p * maps.step_probability(i, c.last),
                     m: m2,
                     // `g_i` is weighted by the product over the
                     // prefix BEFORE this map, which is `c.hp`.
                     cacc: c.cacc + g * c.hp,
                     hp: c.hp * h,
+                    last: Some(i as u32),
                 });
             }
         }
@@ -1976,7 +2066,11 @@ pub fn estimate_seeded(
                 }
                 continue;
             }
+            let last = c.address.last().copied();
             for (i, m) in ifs.maps.iter().enumerate() {
+                if !admits(ifs, i, last) {
+                    continue;
+                }
                 if let Some(gap) = m.inverse.gap_bound(c.q, ifs.ball.centre, ifs.ball.radius, m.sigma_min) {
                     dead_min = dead_min.min(c.bound.max(c.sigma * gap));
                     continue;
@@ -2312,7 +2406,11 @@ pub fn seed_chain3<P: SeedPoint3>(
                 next_mats.push(*m);
                 continue;
             }
+            let last = c.address.last().copied();
             for (i, map) in ifs.maps.iter().enumerate() {
+                if !admits(ifs, i, last) {
+                    continue;
+                }
                 let inv = map.inverse.as_affine().expect("checked affine above");
                 let q = c.q.apply_affine3(&inv);
                 let sigma = c.sigma * map.sigma_min;
@@ -2463,7 +2561,11 @@ pub fn estimate_seeded3(
                 }
                 continue;
             }
+            let last = c.address.last().copied();
             for (i, m) in ifs.maps.iter().enumerate() {
+                if !admits(ifs, i, last) {
+                    continue;
+                }
                 let (q, aux, s) = m.inverse.step(c.q, c.aux, m.sigma_min);
                 let sigma = c.sigma * s;
                 let r = Affine3::distance(q, centre).hypot(aux - ifs.aux_centre);
@@ -2854,6 +2956,215 @@ mod tests {
     /// A dense chaos-game sample of an IFS with nonlinear maps, as an
     /// upper bound on the distance to its set: the distance to the
     /// nearest sample point is at least the distance to the set.
+    /// The chaos game a xaos flame actually plays: the next map is
+    /// drawn from the previous one's row.
+    ///
+    /// The shipped `select_transform_xaos` in `utilities.wgsl` does
+    /// exactly this, and the walk's whole claim is that its addresses
+    /// are the ones this generates.
+    fn chaos_sample_xaos(ifs: &Ifs2, xaos: &[Vec<f32>], weights: &[f64], count: usize)
+        -> Vec<[f64; 2]>
+    {
+        let mut state: u64 = 0x2545_F491_4F6C_DD1D;
+        let mut next = || {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (state >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let n = ifs.maps.len();
+        let mut p = ifs.ball.centre;
+        let mut prev = 0usize;
+        let mut out = Vec::with_capacity(count);
+        for i in 0..count + 500 {
+            let row: Vec<f64> = (0..n)
+                .map(|j| weights[j] * xaos[ifs.maps[prev].transform_index]
+                    [ifs.maps[j].transform_index] as f64)
+                .collect();
+            let total: f64 = row.iter().sum();
+            let mut t = next() * total;
+            let mut pick = n - 1;
+            for (j, w) in row.iter().enumerate() {
+                t -= w;
+                if t <= 0.0 {
+                    pick = j;
+                    break;
+                }
+            }
+            prev = pick;
+            p = ifs.maps[pick].forward.apply(p);
+            if i >= 500 && p[0].is_finite() && p[1].is_finite() {
+                out.push(p);
+            }
+        }
+        out
+    }
+
+    /// A four-corner square, with a xaos matrix on it.
+    fn square4(xaos: Option<Vec<Vec<f32>>>) -> (crate::scene::transforms::Flame, Ifs2) {
+        use crate::scene::transforms::{Flame, Transform};
+        let half = |tx: f32, ty: f32, col: f32| {
+            let mut t = Transform::default();
+            t.a = 0.5; t.d = 0.5; t.e = tx; t.f = ty;
+            t.color = col;
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("linear", 1.0);
+            t
+        };
+        let mut flame = Flame::default();
+        flame.transforms = vec![
+            half(0.0, 0.0, 0.0),
+            half(0.5, 0.0, 0.33),
+            half(0.0, 0.5, 0.66),
+            half(0.5, 0.5, 1.0),
+        ];
+        flame.xaos = xaos;
+        let guard = crate::variations::global_registry();
+        let ifs = crate::scene::ifs_analysis::analyse_2d(&flame, &guard).expect("qualifies");
+        drop(guard);
+        (flame, ifs)
+    }
+
+    /// A xaos flame is no longer refused, and a UNIFORM one changes
+    /// nothing (`ifs-general.md` D4, G5's first half).
+    ///
+    /// All-ones would be a vacuous test: `Flame::has_xaos` reads it as
+    /// no xaos at all and the graph is never built. All-halves is the
+    /// real one -- the graph IS built, every row normalises to the
+    /// same thing a plain weight draw gives, and the walk and the
+    /// measure have to come out unchanged to the last bit.
+    #[test]
+    fn a_uniform_xaos_changes_nothing() {
+        let (_, plain) = square4(None);
+        let (flame, uniform) = square4(Some(vec![vec![0.5; 4]; 4]));
+        assert!(plain.xaos.is_none(), "all-ones is not xaos");
+        let g = uniform.xaos.as_ref().expect("all-halves is");
+
+        // Every transition admitted, and every step factor the plain
+        // weight -- a quarter each, on four transforms of weight one.
+        for i in 0..4 {
+            assert!(g.admits(i, None), "map {i} unreachable");
+            assert!(
+                (g.step_probability(i, None) - 0.25).abs() < 1e-12,
+                "stationary {i} is {}",
+                g.step_probability(i, None)
+            );
+            for l in 0..4u32 {
+                assert!(g.admits(i, Some(l)));
+                assert!(
+                    (g.step_probability(i, Some(l)) - 0.25).abs() < 1e-12,
+                    "step {i} after {l} is {}",
+                    g.step_probability(i, Some(l))
+                );
+            }
+        }
+
+        // And the answers: the distance walk and the measure, at a
+        // grid over the ball.
+        let maps_plain = MeasureMaps::of(&plain, &flame);
+        let maps_uni = MeasureMaps::of(&uniform, &flame);
+        assert!(maps_uni.step.is_some(), "the graph is carried");
+        let coarse = chaos_measure(&plain, &flame, 400_000, 128, 0x1234_5678_9abc_def1);
+        let mut checked = 0usize;
+        for gy in 0..12 {
+            for gx in 0..12 {
+                let x = [
+                    plain.ball.centre[0] + plain.ball.radius * (gx as f64 / 5.5 - 1.0),
+                    plain.ball.centre[1] + plain.ball.radius * (gy as f64 / 5.5 - 1.0),
+                ];
+                let a = estimate(&plain, x, 24, 8);
+                let b = estimate(&uniform, x, 24, 8);
+                assert_eq!(
+                    a.distance.to_bits(),
+                    b.distance.to_bits(),
+                    "distance at {x:?}: {} vs {}",
+                    a.distance,
+                    b.distance
+                );
+                assert_eq!(a.address, b.address, "address at {x:?}");
+                let px = plain.ball.radius / 64.0;
+                let ma = estimate_measure(&plain, &maps_plain, &coarse, x, px, 8, 4.0, 40);
+                let mb = estimate_measure(&uniform, &maps_uni, &coarse, x, px, 8, 4.0, 40);
+                assert!(
+                    (ma.density - mb.density).abs() <= 1e-12 * ma.density.max(1.0),
+                    "density at {x:?}: {} vs {}",
+                    ma.density,
+                    mb.density
+                );
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 144);
+    }
+
+    /// A restrictive xaos makes a SMALLER attractor, and the walk
+    /// knows it (`ifs-general.md` D4, G5's second half).
+    ///
+    /// The matrix is a four-cycle: after map `i` only `i+1` may
+    /// follow. The chain is irreducible, so the chaos game and the
+    /// walk agree on one invariant measure and there is no question
+    /// of which class the game happened to start in. The attractor is
+    /// a proper subset of the filled square the same four maps make
+    /// without it.
+    ///
+    /// Two directions, because either alone is easy to pass: every
+    /// point the restricted chaos game reaches must read as ON the
+    /// set, and enough points the UNrestricted game reaches must read
+    /// as off it. A walk that ignored the graph would pass the first
+    /// and fail the second; one that admitted nothing would pass the
+    /// second and fail the first.
+    #[test]
+    fn a_restrictive_xaos_shrinks_the_set_and_the_walk_follows() {
+        let cycle: Vec<Vec<f32>> = (0..4)
+            .map(|i| (0..4).map(|j| if j == (i + 1) % 4 { 1.0 } else { 0.0 }).collect())
+            .collect();
+        let (flame, ifs) = square4(Some(cycle.clone()));
+        let g = ifs.xaos.as_ref().expect("a graph");
+        // The transition to admit when `child` is appended after
+        // `last` is `child -> last`, so `last` must be `child + 1`.
+        for child in 0..4usize {
+            for last in 0..4u32 {
+                let want = last as usize == (child + 1) % 4;
+                assert_eq!(
+                    g.admits(child, Some(last)),
+                    want,
+                    "child {child} after {last}"
+                );
+            }
+        }
+
+        let weights = vec![1.0f64; 4];
+        let on = chaos_sample_xaos(&ifs, &cycle, &weights, 4000);
+        let (_, full) = square4(None);
+        let off = chaos_sample(&full, 4000);
+
+        let px = ifs.ball.radius / 256.0;
+        let mut on_far = 0usize;
+        for p in on.iter().take(2000) {
+            if estimate(&ifs, *p, 40, 8).distance > 4.0 * px {
+                on_far += 1;
+            }
+        }
+        assert_eq!(on_far, 0, "{on_far} of 2000 points ON the set read as off it");
+
+        // The restricted set is a strict subset, so a good share of
+        // the full square's points must now read as exterior. Not all
+        // of them: the two sets share points, and a cycle of four
+        // still covers a lot of the square.
+        let mut off_far = 0usize;
+        for p in off.iter().take(2000) {
+            if estimate(&ifs, *p, 40, 8).distance > 4.0 * px {
+                off_far += 1;
+            }
+        }
+        assert!(
+            off_far > 200,
+            "only {off_far} of 2000 points of the UNrestricted attractor read as off \
+             the restricted one -- the walk is not using the graph"
+        );
+        println!("  the four-cycle rejects {off_far} of 2000 free-chaos points");
+        let _ = flame;
+    }
+
     pub(super) fn chaos_sample(ifs: &Ifs2, count: usize) -> Vec<[f64; 2]> {
         let mut state: u64 = 0x2545_F491_4F6C_DD1D;
         let mut next = || {

@@ -172,8 +172,8 @@ living in `defs/julia.rs`, `defs/spherical.rs` and so on; the
     chaos game. That is the one piece of real plumbing in this
     plan, and it is what §8.6 of the design doc reserved the room
     for.
-- **D4. Xaos is a graph-directed IFS, and the walk takes the
-  graph.** A child at level k+1 by map `j` is admissible after a
+- ~~**D4. Xaos is a graph-directed IFS, and the walk takes the
+  graph.**~~ -- done 2026-09-18, §9d. A child at level k+1 by map `j` is admissible after a
   parent by map `i` only if `xaos[i][j] > 0`; the beam expands
   admissible children only; the address is the same address. The
   invariant ball becomes one ball per node in principle, and stays
@@ -459,3 +459,76 @@ they were handled right was that a match arm existed.
 Twenty-two registered inverses now: twelve affine roles, seven
 planar kernels, three solid. 1223 unit tests, every gate green,
 presets byte-identical.
+
+### 9d. Xaos, and a colour-speed repair found on the way, 2026-09-18
+
+D4. `Disqualification::Xaos` is gone: a xaos flame is an IFS the
+walks handle, on the CPU and in both shaders.
+
+**The direction is the whole thing.** An address is `[a_1, a_2, ...]`
+in DISCOVERY order and the forward chain runs it backwards, so
+appending a child `i` to a path whose last map is `l` puts `i`
+immediately BEFORE `l` in the chaos game's own order. The transition
+to admit is `i -> l`, not `l -> i`. `XaosGraph` in
+[`ifs_analysis.rs`](../../src/scene/ifs_analysis.rs) stores it that
+way round, built from `weight_j · xaos[i][j]` row-normalised, which
+is what `select_transform_xaos` in `utilities.wgsl` draws from.
+
+**The measure is a Markov chain now, not a product of draws.** A
+cylinder's weight under a graph-directed IFS is
+`π_{a_k} · Π p_{a_{m+1} a_m}`, whose incremental form is
+`step[i][l] = π_i · p_{i l} / π_l` per appended map. Without xaos
+`p_{i l} = w_i` for every `l`, so the factor is `w_i` and the whole
+thing collapses to the product of weights it always was -- which is
+why `MeasureMaps::step` is an `Option` and the ordinary path did not
+move a bit. `π` comes from power iteration, and a state whose
+stationary probability falls below 1e-12 is treated as unreachable:
+the chain leaves it and never returns, so no part of the attractor is
+there.
+
+**One array serves both questions on the GPU.** A transition is
+admissible exactly when its step probability is positive, so
+`ifs_xaos` at group 1 binding 4 holds the count, the `n*n` matrix and
+the stationary row, and the distance walk reads a sign where the
+measure walk reads a value. A candidate's last map rides in the flags
+word -- bits 8 and up, plus one, so zero means none -- because all
+six vec4s a seed packs into were full and a u32 bitcast through an
+f32 has 24 spare bits.
+
+**G5, both halves.** All-ones would be a vacuous test: `has_xaos`
+reads it as no xaos and the graph is never built. All-HALVES is the
+real one -- the graph is built, every row normalises to the plain
+weight draw, and the distance, the address and the measure have to
+come out bit-identical, which they do at 144 grid points, and the
+render pixel-identical, which it is. The teeth are in the second
+half: a four-cycle matrix, where after map `i` only `i+1` may follow.
+Irreducible, so there is no question of which class the chaos game
+happened to start in, and the attractor is a strict subset of the
+filled square the same four maps make without it.
+
+| | |
+|---|---|
+| restricted-chaos points reading as ON the set | 2000 of 2000 |
+| free-chaos points the restricted walk rejects | 1994 of 2000 |
+| pixels the four-cycle moves | 4096 of 9216 |
+| sample points where CPU and GPU disagree | 0 of 256 |
+
+Either direction alone is easy to pass. A walk that ignored the graph
+would pass the first row and fail the second; one that admitted
+nothing would pass the second and fail the first.
+
+**A repair found on the way.** The shader's measure walk carried
+`let sp = 0.0; // EXPERIMENT: was ifs_maps[bi].measure.y` -- a
+leftover committed on 2026-09-17 with §5l, which made the GPU's
+colour fold ignore colour speed entirely. The gate that compares the
+shader to the CPU did not catch it because every fixture had
+`color_speed` zero, where both sides agree on a fold neither is
+exercising. A gasket at speed 0.6 now runs beside them: it reads
+0.024 off with the leftover in place and 0.00009 with the map row's
+own value, which is the repair and the evidence for it in one.
+
+**Open.** The BALL is still one ball for every node, which is
+stricter than a graph-directed IFS needs and therefore sound; D6 is
+where that is revisited. And `NotContractive` still refuses any map
+with `σ_max ≥ 1`, where a graph only needs its CYCLES to contract --
+also D6.
