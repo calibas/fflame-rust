@@ -1951,6 +1951,186 @@ pub fn estimate_measure(
     }
 }
 
+/// The invariant measure at one pixel, by the BACKWARD CHAOS GAME --
+/// [`estimate_measure`]'s answer without its beam
+/// ([ifs-measure-by-inverse-walk.md](../../docs/projects/ifs-measure-by-inverse-walk.md)
+/// D3).
+///
+/// The beam sum keeps the `beam` largest contributions and drops the
+/// rest, which biases the answer DARK wherever many addresses cover
+/// one pixel. Measured: the overlapping band at 2^6 reads 0.696,
+/// 0.742, 0.509, 0.297 of the truth as the stop rule deepens from one
+/// coarse cell to sixty-four, going the wrong way exactly because a
+/// deeper stop means more addresses for a fixed beam to truncate
+/// (§5c). Every other fixture is unaffected.
+///
+/// This walks ONE address per pass, chosen at random, and averages:
+///
+/// ```text
+/// level k:  choose child i among the admissible ones with
+///           probability p_i / P,  P = Σ_admissible p_j
+///           w *= P
+/// at stop:  contribute w · ρ(q) · |det|
+/// ```
+///
+/// and the expectation over passes is the full sum, because
+/// `E[w·f] = Σ_i (p_i/P)·P·f_i = Σ_i p_i·f_i` at every level. **No
+/// address is ever dropped** -- each is reached with exactly its own
+/// probability -- so there is no truncation to bias, and the price is
+/// variance instead: the answer is noisy and its noise falls as
+/// `1/√passes`.
+///
+/// `P` is the mass of the children that EXIST, not of all of them: a
+/// child whose inverse has no preimage, or lands outside the ball, is
+/// not part of the sum either, and renormalising over what is left is
+/// what keeps the estimator unbiased rather than merely rescaled. A
+/// pass whose every child is gone contributes zero, which is also the
+/// right answer -- that address genuinely carries none of the measure.
+///
+/// `seed` makes a render reproducible. The same pixel with the same
+/// seed is the same answer, which is what the visual-regression
+/// suite needs and what a progressive refinement would advance.
+pub fn estimate_measure_mc(
+    ifs: &Ifs2,
+    maps: &MeasureMaps,
+    coarse: &CoarseMeasure,
+    x: [f64; 2],
+    px: f64,
+    passes: u32,
+    seed: u64,
+    cells: f64,
+    max_levels: u32,
+) -> MeasureEstimate {
+    let (bc, br) = (ifs.ball.centre, ifs.ball.radius);
+    let cpx = coarse.cell();
+    if !(px > 0.0) || !(cpx > 0.0) || passes == 0 {
+        return MeasureEstimate { density: 0.0, palette: 0.5, addresses: 0, depth: 0 };
+    }
+    let want = (cpx / px) * (cpx / px) * cells.max(1.0);
+
+    // The same footprint as [`estimate_measure`]'s, for the same
+    // reason: a point sample of `ρ` over a region spanning many cells
+    // reads up to 7.5x too much (§5c), and reading the palette from a
+    // different place than the density gives a positive weight a
+    // mid-grey colour.
+    const K: i32 = 4;
+    let look = |q: [f64; 2], m: [[f64; 2]; 2]| -> (f64, f64) {
+        let mut acc = 0.0;
+        let mut col = 0.0;
+        for sy in 0..K {
+            for sx in 0..K {
+                let u = ((sx as f64 + 0.5) / K as f64 - 0.5) * px;
+                let v = ((sy as f64 + 0.5) / K as f64 - 0.5) * px;
+                let at = [
+                    q[0] + m[0][0] * u + m[0][1] * v,
+                    q[1] + m[1][0] * u + m[1][1] * v,
+                ];
+                let d = coarse.density(at);
+                acc += d;
+                col += d * coarse.palette(at);
+            }
+        }
+        let n = (K * K) as f64;
+        (acc / n, if acc > 0.0 { col / acc } else { 0.5 })
+    };
+
+    // A pixel's own stream, so two pixels are independent and one
+    // pixel is reproducible.
+    let mut state = seed
+        ^ (x[0].to_bits().rotate_left(17))
+        ^ (x[1].to_bits().rotate_left(41))
+        ^ 0x9E37_79B9_7F4A_7C15;
+    let mut next = move || {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let z = state ^ (state >> 31);
+        (z >> 11) as f64 / (1u64 << 53) as f64
+    };
+
+    let mut acc = 0.0f64;
+    let mut acc_col = 0.0f64;
+    let mut landed = 0u32;
+    let mut depth = 0u32;
+    // Reused across passes so a deep walk does not allocate per level.
+    let mut choices: Vec<(usize, f64, [f64; 2], [[f64; 2]; 2])> = Vec::new();
+
+    for _ in 0..passes {
+        let mut q = x;
+        let mut m = [[1.0f64, 0.0], [0.0, 1.0]];
+        let mut w = 1.0f64;
+        let mut hp = 1.0f64;
+        let mut cacc = 0.0f64;
+        let mut last: Option<u32> = None;
+
+        for level in 0..max_levels {
+            let det = (m[0][0] * m[1][1] - m[0][1] * m[1][0]).abs();
+            if det >= want {
+                let (rho, c0) = look(q, m);
+                let contribution = w * rho * det;
+                if contribution > 0.0 {
+                    acc += contribution;
+                    acc_col += contribution * (c0 * hp + cacc);
+                    landed += 1;
+                    depth = depth.max(level);
+                }
+                break;
+            }
+            choices.clear();
+            let mut total = 0.0f64;
+            for (i, mp) in ifs.maps.iter().enumerate() {
+                if !admits(ifs, i, last) {
+                    continue;
+                }
+                let Some(j) = mp.inverse.jacobian(q) else { continue };
+                let qi = mp.inverse.apply(q);
+                if !qi[0].is_finite() || !qi[1].is_finite() {
+                    continue;
+                }
+                if Affine2::distance(qi, bc) > br * (1.0 + 1e-6) {
+                    continue;
+                }
+                let m2 = compose_matrix(j, m);
+                let d2 = (m2[0][0] * m2[1][1] - m2[0][1] * m2[1][0]).abs();
+                if !(d2 > 0.0) || !d2.is_finite() {
+                    continue;
+                }
+                let p = maps.step_probability(i, last);
+                if !(p > 0.0) {
+                    continue;
+                }
+                total += p;
+                choices.push((i, total, qi, m2));
+            }
+            if choices.is_empty() || !(total > 0.0) {
+                break;
+            }
+            // The cumulative weights are already in `choices.1`, so
+            // the draw is one pass over them.
+            let t = next() * total;
+            let pick = choices.iter().position(|c| t < c.1).unwrap_or(choices.len() - 1);
+            let (i, _, qi, m2) = choices[pick];
+            // The importance weight: the child was chosen with
+            // probability `p_i/total` and carries `p_i`, so the two
+            // leave `total` behind.
+            w *= total;
+            let (cl, sp) = maps.colour[i];
+            let h = (1.0 + sp) * 0.5;
+            let g = cl * (1.0 - sp) * 0.5;
+            cacc += g * hp;
+            hp *= h;
+            q = qi;
+            m = m2;
+            last = Some(i as u32);
+        }
+    }
+
+    MeasureEstimate {
+        density: acc / passes as f64,
+        palette: if acc > 0.0 { acc_col / acc } else { 0.5 },
+        addresses: landed,
+        depth,
+    }
+}
+
 /// Continue a seeded walk for one pixel — the reference for what the
 /// shader does after the handover.
 ///
@@ -5331,6 +5511,351 @@ mod tests {
                 br,
                 span(&|p| p[0]),
                 span(&|p| p[1]),
+            );
+        }
+    }
+
+    /// A chaos game binned into ONE VIEW -- the reference the measure
+    /// gates compare against, which is what mode A actually draws.
+    fn chaos_view(
+        ifs: &Ifs2,
+        flame: &Flame,
+        samples: usize,
+        origin: [f64; 2],
+        px: f64,
+        vp: usize,
+        seed: u64,
+    ) -> (Vec<u32>, Vec<f64>) {
+        let mut hits = vec![0u32; vp * vp];
+        let mut pal = vec![0.0f64; vp * vp];
+        let mut st = seed;
+        let mut rnd = move || {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (st >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let used: std::collections::BTreeSet<usize> =
+            ifs.maps.iter().map(|m| m.transform_index).collect();
+        let total: f64 = used.iter().map(|&i| flame.transforms[i].weight as f64).sum();
+        let mut q = ifs.ball.centre;
+        let mut col = 0.5f64;
+        for i in 0..samples + 1000 {
+            let u = rnd();
+            let mut acc = 0.0;
+            let mut m = ifs.maps.len() - 1;
+            let mut seen: Option<usize> = None;
+            for (k, mp) in ifs.maps.iter().enumerate() {
+                if seen == Some(mp.transform_index) {
+                    continue;
+                }
+                seen = Some(mp.transform_index);
+                acc += flame.transforms[mp.transform_index].weight as f64 / total;
+                if u <= acc {
+                    m = k;
+                    break;
+                }
+            }
+            q = match &ifs.maps[m].forward {
+                Map2::Nonlinear(nl) => {
+                    let b = match nl.kernel {
+                        crate::scene::ifs_analysis::Kernel::Root { n: e, .. } => {
+                            (rnd() * e.unsigned_abs() as f64).floor() as u32
+                        }
+                        _ => 0,
+                    };
+                    nl.apply_branch(q, b)
+                }
+                other => other.apply(q),
+            };
+            let t = &flame.transforms[ifs.maps[m].transform_index];
+            let sp = t.color_speed as f64;
+            col = col * (1.0 + sp) * 0.5 + t.color as f64 * (1.0 - sp) * 0.5;
+            if i < 1000 || !q[0].is_finite() || !q[1].is_finite() {
+                continue;
+            }
+            let fx = (q[0] - origin[0]) / px;
+            let fy = (q[1] - origin[1]) / px;
+            if fx >= 0.0 && fy >= 0.0 {
+                let (ix, iy) = (fx as usize, fy as usize);
+                if ix < vp && iy < vp {
+                    hits[iy * vp + ix] += 1;
+                    pal[iy * vp + ix] += col;
+                }
+            }
+        }
+        (hits, pal)
+    }
+
+    /// The measure plan's D3, second half: the backward chaos game is
+    /// the sum the beam truncates.
+    ///
+    /// The trigger the plan set -- "built once the beam sum's bias is
+    /// measured on the D9 overlap fixtures (G1), and only if it is
+    /// visible" -- fired in §5c: the overlapping band at 2^6 reads
+    /// 0.696, 0.742, 0.509, 0.297 of the truth as the stop rule
+    /// deepens from one coarse cell to sixty-four, going the WRONG way
+    /// because a deeper stop means more addresses for a fixed beam to
+    /// truncate. Every other fixture is unaffected.
+    ///
+    /// **The reference is the ENUMERATION, not the chaos game.** Monte
+    /// Carlo is unbiased for the sum the formula writes down, and the
+    /// formula has an approximation of its own -- the footprint
+    /// lookup, whose residue §5a to §5c measured separately. Asking
+    /// this gate for agreement with a chaos game would be asking it
+    /// about both at once and it would fail on the one that is not its
+    /// business. So the beam is opened wide enough to enumerate every
+    /// address, and that is what both truncations are read against.
+    /// Both are also reported against the chaos game, because a
+    /// reference that has drifted is worth seeing.
+    #[test]
+    #[ignore = "a measurement; several seconds per fixture"]
+    fn the_backward_chaos_game_is_the_sum_the_beam_truncates() {
+        const COARSE: usize = 6_000_000;
+        const DIRECT: usize = 6_000_000;
+        const RES: usize = 256;
+        const VP: usize = 32;
+        const CELLS: f64 = 16.0;
+        const PASSES: u32 = 4096;
+        /// Wide enough that nothing is dropped on these fixtures --
+        /// checked, not assumed: a beam this size and one twice it
+        /// give the same answer, which is what "enumerated" means.
+        const ALL: usize = 20_000;
+
+        let cases: Vec<(&str, Vec<Transform>)> = vec![
+            (
+                "overlapping band",
+                vec![
+                    affine_xform(0.7, 0.0, 0.0, 0.7, 0.0, 0.0),
+                    affine_xform(0.7, 0.0, 0.0, 0.7, 0.3, 0.3),
+                ],
+            ),
+            (
+                "fat gasket",
+                vec![
+                    affine_xform(0.6, 0.0, 0.0, 0.6, 0.0, 0.0),
+                    affine_xform(0.6, 0.0, 0.0, 0.6, 0.4, 0.0),
+                    affine_xform(0.6, 0.0, 0.0, 0.6, 0.2, 0.4),
+                ],
+            ),
+        ];
+
+        let mut showed_the_bias = false;
+        for (name, mut transforms) in cases {
+            let n = transforms.len().max(2) - 1;
+            for (i, t) in transforms.iter_mut().enumerate() {
+                t.color = i as f32 / n as f32;
+                t.color_speed = 0.0;
+            }
+            let flame = flame_of(transforms);
+            let ifs = {
+                let guard = global_registry();
+                analyse_2d(&flame, &guard).expect("qualifies")
+            };
+            let maps = MeasureMaps::of(&ifs, &flame);
+            let coarse = chaos_measure(&ifs, &flame, COARSE, RES, 0x9E3779B97F4A7C15);
+            let br = ifs.ball.radius;
+            let smp = chaos_sample(&ifs, 50_000);
+            let centre = *smp
+                .iter()
+                .max_by_key(|p| coarse.index_for_test(**p).map_or(0, |i| coarse.hits[i]))
+                .expect("the sample is not empty");
+
+            for &zoom in &[4.0f64, 5.0, 6.0, 7.0] {
+                let span = 2.0 * br / 2f64.powf(zoom);
+                let px = span / VP as f64;
+                let origin = [centre[0] - span * 0.5, centre[1] - span * 0.5];
+                let view = chaos_view(&ifs, &flame, DIRECT, origin, px, VP, 0x2545F4914F6CDD1D);
+
+                // Ratios to the ENUMERATION for the two truncations,
+                // and to the chaos game for all three.
+                let (mut beam_e, mut mc_e) = (Vec::new(), Vec::new());
+                let (mut all_t, mut beam_t, mut mc_t) = (Vec::new(), Vec::new(), Vec::new());
+                let mut mc_spread = Vec::new();
+                for iy in 0..VP {
+                    for ix in 0..VP {
+                        let h = view.0[iy * VP + ix];
+                        if h < 25 {
+                            continue;
+                        }
+                        let truth = h as f64 / (DIRECT as f64 * px * px);
+                        let x = [
+                            origin[0] + (ix as f64 + 0.5) * px,
+                            origin[1] + (iy as f64 + 0.5) * px,
+                        ];
+                        let all = estimate_measure(&ifs, &maps, &coarse, x, px, ALL, CELLS, 60);
+                        let b = estimate_measure(&ifs, &maps, &coarse, x, px, 16, CELLS, 60);
+                        let m = estimate_measure_mc(
+                            &ifs, &maps, &coarse, x, px, PASSES, 0xD1B54A32D192ED03, CELLS, 60,
+                        );
+                        if !(all.density > 0.0) {
+                            continue;
+                        }
+                        all_t.push(all.density / truth);
+                        if b.density > 0.0 {
+                            beam_e.push(b.density / all.density);
+                            beam_t.push(b.density / truth);
+                        }
+                        if m.density > 0.0 {
+                            mc_e.push(m.density / all.density);
+                            mc_t.push(m.density / truth);
+                            let m2 = estimate_measure_mc(
+                                &ifs, &maps, &coarse, x, px, PASSES, 0x853C49E6748FEA9B, CELLS, 60,
+                            );
+                            if m2.density > 0.0 {
+                                mc_spread.push((m2.density / m.density - 1.0).abs());
+                            }
+                        }
+                    }
+                }
+                if all_t.len() < 20 || mc_e.len() < 20 {
+                    println!("  {name:<18} 2^{zoom:<3} only {} pixels", all_t.len());
+                    continue;
+                }
+                let med = |v: &mut Vec<f64>| {
+                    v.sort_by(f64::total_cmp);
+                    v[v.len() / 2]
+                };
+                let (be, me) = (med(&mut beam_e), med(&mut mc_e));
+                let (at, bt, mt) = (med(&mut all_t), med(&mut beam_t), med(&mut mc_t));
+                let sp = med(&mut mc_spread);
+                println!(
+                    "  {name:<18} 2^{zoom:<3} | vs enumeration: beam16 {be:.3} mc {me:.3} | \
+                     vs chaos: all {at:.3} beam16 {bt:.3} mc {mt:.3} | seed-to-seed \
+                     {:.1}% | {} px",
+                    sp * 100.0,
+                    all_t.len()
+                );
+                // The claim, and the whole of it: the backward chaos
+                // game estimates the SUM, so it agrees with the
+                // enumeration of that sum.
+                assert!(
+                    (me - 1.0).abs() <= 0.10,
+                    "{name} 2^{zoom}: Monte Carlo reads {me:.3} of the enumerated sum, and it is \
+                     the unbiased estimator OF that sum -- this is a bug in the weight"
+                );
+                // And where the beam truncates, it is the one that is
+                // wrong, not this.
+                if (be - 1.0).abs() > 0.05 {
+                    showed_the_bias = true;
+                    assert!(
+                        (me - 1.0).abs() < (be - 1.0).abs(),
+                        "{name} 2^{zoom}: the beam reads {be:.3} of the sum and Monte Carlo \
+                         {me:.3} -- no better"
+                    );
+                }
+            }
+        }
+        assert!(
+            showed_the_bias,
+            "no fixture and zoom truncated by more than 5%, so this gate saw nothing of what \
+             D3 is about -- the fixtures have drifted"
+        );
+
+        // What the passes buy, on the fixture that needs them. The
+        // bias is gone at every count -- that is what unbiased means
+        // -- and what falls is the NOISE, which is the number a
+        // shader would have to amortise over frames.
+        let flame = flame_of(vec![
+            affine_xform(0.7, 0.0, 0.0, 0.7, 0.0, 0.0),
+            affine_xform(0.7, 0.0, 0.0, 0.7, 0.3, 0.3),
+        ]);
+        let ifs = {
+            let guard = global_registry();
+            analyse_2d(&flame, &guard).expect("qualifies")
+        };
+        let maps = MeasureMaps::of(&ifs, &flame);
+        let coarse = chaos_measure(&ifs, &flame, COARSE, RES, 0x9E3779B97F4A7C15);
+        let smp = chaos_sample(&ifs, 50_000);
+        let centre = *smp
+            .iter()
+            .max_by_key(|p| coarse.index_for_test(**p).map_or(0, |i| coarse.hits[i]))
+            .expect("the sample is not empty");
+        let span = 2.0 * ifs.ball.radius / 64.0;
+        let px = span / VP as f64;
+        let origin = [centre[0] - span * 0.5, centre[1] - span * 0.5];
+        let view = chaos_view(&ifs, &flame, DIRECT, origin, px, VP, 0x2545F4914F6CDD1D);
+        let mut last_noise = f64::INFINITY;
+        for &passes in &[64u32, 256, 1024, 4096, 16384] {
+            let (mut ratio, mut noise) = (Vec::new(), Vec::new());
+            for iy in 0..VP {
+                for ix in 0..VP {
+                    let h = view.0[iy * VP + ix];
+                    if h < 25 {
+                        continue;
+                    }
+                    let x = [
+                        origin[0] + (ix as f64 + 0.5) * px,
+                        origin[1] + (iy as f64 + 0.5) * px,
+                    ];
+                    let all = estimate_measure(&ifs, &maps, &coarse, x, px, ALL, CELLS, 60);
+                    let a = estimate_measure_mc(
+                        &ifs, &maps, &coarse, x, px, passes, 0xD1B54A32D192ED03, CELLS, 60,
+                    );
+                    let b = estimate_measure_mc(
+                        &ifs, &maps, &coarse, x, px, passes, 0x853C49E6748FEA9B, CELLS, 60,
+                    );
+                    if all.density > 0.0 && a.density > 0.0 && b.density > 0.0 {
+                        ratio.push(a.density / all.density);
+                        noise.push((b.density / a.density - 1.0).abs());
+                    }
+                }
+            }
+            if ratio.len() < 20 {
+                continue;
+            }
+            let med = |v: &mut Vec<f64>| {
+                v.sort_by(f64::total_cmp);
+                v[v.len() / 2]
+            };
+            let (r, nz) = (med(&mut ratio), med(&mut noise));
+            println!(
+                "  band 2^6, {passes:>5} passes: {r:.3} of the sum, seed-to-seed {:.1}%",
+                nz * 100.0
+            );
+            assert!(
+                (r - 1.0).abs() <= 0.10,
+                "{passes} passes read {r:.3} of the sum -- the bias is supposed to be gone at \
+                 every count, since it is the VARIANCE the passes buy"
+            );
+            assert!(
+                nz <= last_noise * 1.35,
+                "{passes} passes are noisier ({:.1}%) than the count before them -- the \
+                 average is not converging",
+                nz * 100.0
+            );
+            last_noise = nz;
+        }
+
+        // And what it costs, which is the whole of the shipping
+        // question. A beam of 16 walks at most 16 lineages per level;
+        // a pass walks ONE, so the counts are directly comparable and
+        // the ratio is roughly passes/beam.
+        let sample: Vec<[f64; 2]> = (0..VP)
+            .flat_map(|iy| (0..VP).map(move |ix| (ix, iy)))
+            .filter(|(ix, iy)| view.0[iy * VP + ix] >= 25)
+            .map(|(ix, iy)| {
+                [
+                    origin[0] + (ix as f64 + 0.5) * px,
+                    origin[1] + (iy as f64 + 0.5) * px,
+                ]
+            })
+            .collect();
+        let t0 = std::time::Instant::now();
+        for x in &sample {
+            std::hint::black_box(estimate_measure(&ifs, &maps, &coarse, *x, px, 16, CELLS, 60));
+        }
+        let beam_ms = t0.elapsed().as_secs_f64() * 1e3 / sample.len() as f64;
+        for &passes in &[256u32, 1024, 4096] {
+            let t = std::time::Instant::now();
+            for x in &sample {
+                std::hint::black_box(estimate_measure_mc(
+                    &ifs, &maps, &coarse, *x, px, passes, 0xD1B54A32D192ED03, CELLS, 60,
+                ));
+            }
+            let mc_ms = t.elapsed().as_secs_f64() * 1e3 / sample.len() as f64;
+            println!(
+                "  band 2^6 cost: beam16 {beam_ms:.3} ms/px | mc x{passes} {mc_ms:.3} ms/px \
+                 = {:.0}x",
+                mc_ms / beam_ms.max(1e-9)
             );
         }
     }

@@ -145,7 +145,8 @@ ball's centre the distance walk ranks by (D3).
   preimage. That is the same approximation any texture lookup
   makes, and it is biased where the density varies inside a coarse
   pixel, which D1's resolution bounds.
-- **D3. The beam sum first, Monte Carlo second.** The distance walk
+- ~~**D3. The beam sum first, Monte Carlo second.**~~ -- done
+  2026-09-18, §5q, on the CPU. The distance walk
   keeps `beam` lineages by the distance to the ball's centre and
   answers a minimum. This walk keeps `beam` lineages by the coarse
   density at their point (the exact key of §2), and answers a SUM.
@@ -246,17 +247,22 @@ ball's centre the distance walk ranks by (D3).
    brightness 0 is AUTO and divides out the view's own median
    density, holding exposure to 0.07 stops across four zooms where
    a fixed value drifts 0.46.
-4. **Monte Carlo** (D3), if G1 shows the beam sum's bias on the
-   overlap fixtures.
+4. ~~**Monte Carlo**~~ (D3) -- done 2026-09-18, §5q. Built on the
+   CPU, unbiased to 0.6% of the enumerated sum where a beam of 16
+   reads 26% of it, and NOT shipped in the shader: it costs 6x at
+   11% pixel noise and 103x at 2.5%, and whether that trade is
+   worth making in a live render is a judgement, not a gate.
 5. **Depth.** Nothing to build: the walk is the seeded walk, and
    the delta plan's walk when it lands. G5 is the gate.
 
-Items 1 to 3 are item 2 of the delta plan's §9, and all three are
-done. **What is left of this plan is item 4** -- the Monte Carlo
-variant, wanted only where many addresses cover one pixel -- **and
-two measured residues**: the gasket's 1.5% (§5n) and a curved set's
-1.296 at a handover past level 0 (§5o), which is the delta plan's
-quadratic carry to fix and not this plan's.
+Items 1 to 4 are done; items 1 to 3 are item 2 of the delta plan's
+§9 and item 4 is its item 7. **What is left of this plan is item 5,
+which is nothing to build**, plus three measured residues: the
+gasket's 1.5% (§5n), a curved set's 1.296 at a handover past level 0
+(§5o) -- which is the delta plan's quadratic carry to fix and not
+this plan's -- and the lookup's own drift, which §5q now separates
+from the beam's for the first time and which reads 1.13 on the
+overlapping band at 2^7.
 
 ## 5a. The factorisation holds, 2026-09-17
 
@@ -1219,3 +1225,73 @@ never needed the correction.
 - **The hybrid** the design doc's §7 names -- the distance as a mask
   or a trap inside the chaos game. The measure colouring subsumes
   the mask; the trap stays a colouring of the distance walk.
+
+## 5q. Monte Carlo, and what it is measured against, 2026-09-18
+
+D3's second half. The beam sum keeps the `beam` largest
+contributions and drops the rest; the backward chaos game walks ONE
+address per pass, chosen with probability `p_i/P` among the children
+that exist, weights by `P`, and averages. `E[w·f] = Σ (p_i/P)·P·f_i
+= Σ p_i f_i` at every level, so no address is dropped and there is
+nothing to bias -- the price is variance instead.
+
+**The reference had to change, and that is the finding that makes
+the rest legible.** §5a to §5c read every estimator against a chaos
+game, which folds two questions together: how much of the SUM an
+estimator captures, and how far the sum itself is from the truth
+through the footprint lookup. Monte Carlo is unbiased for the sum,
+not for the truth, so against a chaos game it fails on the question
+that is not its business -- it read 1.095 at 2^5 on the band where
+the beam read 0.936, which looks like a defeat and is not. Opening
+the beam wide enough to enumerate every address separates them:
+
+| band | beam 16 / enumerated | MC 4096 / enumerated | enumerated / chaos |
+|---|---|---|---|
+| 2^4 | 1.000 | 1.003 | 1.065 |
+| 2^5 | 0.860 | 1.006 | 1.087 |
+| 2^6 | 0.516 | 1.001 | 1.106 |
+| 2^7 | 0.261 | 1.002 | 1.134 |
+
+The beam loses three quarters of the sum by 2^7 and Monte Carlo
+loses none of it at any zoom. The third column is the lookup's own
+drift, which this is the first measurement to show on its own, and
+it is the residue §5b and §5c were arguing about.
+
+**The control matters as much.** On the fat gasket -- whose pieces
+also overlap, and where §5b measured the beam to cost nothing --
+beam 16 reads 1.000 of the enumeration at every zoom and Monte Carlo
+reads 1.000 to 1.004. The unbiased estimator does not break a set
+the beam already handles.
+
+**What the passes buy is noise, not bias.** Band at 2^6, ratio to
+the enumerated sum and the median seed-to-seed difference:
+
+| passes | of the sum | seed-to-seed | cost vs beam 16 |
+|---|---|---|---|
+| 64 | 1.033 | 23.8% | |
+| 256 | 1.034 | 11.1% | 6x |
+| 1024 | 1.005 | 5.1% | 26x |
+| 4096 | 1.001 | 2.5% | 103x |
+| 16384 | 0.991 | 1.8% | |
+
+Halving per four passes, which is `1/√N` and is the only rate on
+offer.
+
+**Not shipped in the shader, and that is a judgement rather than an
+omission.** A beam of 16 walks sixteen lineages a level; a pass
+walks one, so the ratio is about `passes/beam` and the table above
+is what it costs. Against that: the bias it removes is 48% at 2^6
+and 74% at 2^7 on the one shape of set that has it, and a bias does
+not average away between frames while noise does -- so a progressive
+render is exactly where this belongs, and a single-frame one is
+exactly where it does not. Wiring it to the measure colouring means
+a per-pixel stream and an accumulation across frames, which is a
+design with a cost, and the estimator now exists to be wired when
+that design is wanted. `estimate_measure_mc` is public and gated;
+nothing calls it in a render.
+
+**Open.** The lookup's drift in the third column above -- 1.065 to
+1.134 across four zooms of the band -- is not the beam and is not
+Monte Carlo. It is the footprint quadrature against a fractal
+measure, §5a's original limitation, now measured without the beam's
+bias on top of it.
