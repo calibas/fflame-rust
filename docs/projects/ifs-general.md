@@ -299,3 +299,66 @@ D1 and D2 are item 3 there, D4 is item 4, D3 is item 6, D5 to D8
 fall between as the census rows say which unlocks most. D6 is cheap
 and should be measured (G4) early, since it decides how many census
 flames the other decisions can reach at all.
+
+## 9. Record
+
+### 9a. The scalar trait, and the derivatives that come with it, 2026-09-17
+
+D2's arithmetic half. [`src/scene/ifs_real.rs`](../../src/scene/ifs_real.rs)
+holds `Real` -- the four operations, a square root, and `lit`, which
+takes `&self` because a `BigFloat` carries its own limb count and
+there is no "the constant 2" without a precision to build it at --
+and `Transcendental` on top of it. `f64` implements both. `Dual<T>`
+implements both when `T` does, so it nests, and `Dual<Dual<f64>>` is
+a second derivative.
+
+**The six kernels are now one body each.** `kernel_forward_gen` and
+`kernel_inverse_gen` were written operation for operation against
+the f64 bodies, and `the_generic_kernel_is_the_f64_kernel` compares
+them BIT FOR BIT -- not to a tolerance -- at every fixture and probe
+point. It passed on the first run, so the f64 bodies are now those
+functions, and the second copy is gone.
+
+**The Jacobian is differentiated, not derived.** Six closed forms,
+each with its own frame change and its own chance of a sign, against
+one rule applied by the compiler: they agree to a relative 1e-9 at
+13,731 points spread over every branch and both sides of every guard.
+The closed forms are deleted. What survives of them is
+`kernel_inverse_domain`, the guards, which are still needed: the
+generic inverse returns a SENTINEL where there is no preimage, and
+the derivative of a sentinel is a finite number meaning nothing.
+
+**The Hessian's central difference is gone, and here is what it was
+costing.** The dual is exact to f64 rounding, so the gap between the
+two IS the difference's error. Sampled uniformly it never showed:
+1e-8 relative everywhere, which is why the old comment's estimate of
+1e-10 was in the right neighbourhood. A uniform sample almost never
+lands near a singularity. Walking downhill in clearance does, and
+the worst relative gap then reads:
+
+| clearance < | 1e-8 | 1e-6 | 1e-4 | 1e-2 | more |
+|---|---|---|---|---|---|
+| spherical | **58** | 2.8e-8 | 2.8e-8 | 2.8e-8 | 2.8e-8 |
+| bubble | **4.7** | 1.5e-4 | 1.1e-6 | 1.6e-8 | 1.6e-8 |
+| hemisphere | **23** | 5.7e-5 | 6.4e-7 | 1.8e-8 | 2.4e-8 |
+| disc | 6.5e-5 | 3.2e-5 | 2.7e-7 | 1.9e-9 | 1.1e-8 |
+| julian | **240** | 6.3e-8 | 6.3e-8 | 6.3e-8 | 7.1e-8 |
+
+Eight digits in the open plane and NO digits within 1e-8 of a pole.
+A relative error of 58 is not a worse answer, it is a different
+tensor, and a second-order correction built on it adds noise where
+it was meant to subtract curvature. That band is where the
+perturbation handover lives, which is the reason this mattered
+enough to measure rather than assume.
+
+**G2 holds.** Every existing gate green, 1221 unit tests, all 52 GPU
+IFS gates, and all eleven shipped mode-D presets byte-identical.
+
+**Still open in D2**: `BigFloat` implements neither trait yet, so
+`big_kernel_inverse` is still a transcription. It has `sqrt`, `ln`
+and `atan2` and lacks `exp`, `sin` and `cos`, which is the delta
+plan's item 8 -- the algebraic three (spherical, bubble,
+hemisphere) could take `Real` today and the other three could not,
+and splitting the walk by rung before item 8 lands would buy one
+copy of three kernels at the price of two code paths. D1 -- the move
+into the registry -- has not begun.

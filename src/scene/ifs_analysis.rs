@@ -46,6 +46,7 @@
 
 use crate::scene::transforms::{Flame, Transform};
 use crate::variations::{VariationPhase, VariationRegistry};
+use crate::scene::ifs_real::{Dual, Real, Transcendental, hessian2, jacobian2};
 
 /// The variations the analysis knows: every name [`affine_role`] can
 /// answer for in at least one space. Deliberately short: growing it
@@ -301,7 +302,7 @@ impl Kernel {
     }
 
     /// Blob's angular scale at `theta`.
-    fn blob_scale(high: f64, low: f64, waves: f64, theta: f64) -> (f64, f64) {
+    pub(crate) fn blob_scale(high: f64, low: f64, waves: f64, theta: f64) -> (f64, f64) {
         let s = low + (high - low) / 2.0 * ((waves * theta).sin() + 1.0);
         let ds = (high - low) / 2.0 * waves * (waves * theta).cos();
         (s, ds)
@@ -310,41 +311,7 @@ impl Kernel {
     /// The forward kernel on `z` in the pre-frame, along `k` -- a
     /// root's branch, or the flame's ε-guarded body for the others.
     pub fn forward(&self, z: [f64; 2], k: u32) -> [f64; 2] {
-        let r2 = z[0] * z[0] + z[1] * z[1];
-        match *self {
-            Kernel::Hemisphere => {
-                let t = 1.0 / (r2 + 1.0).sqrt();
-                [z[0] * t, z[1] * t]
-            }
-            Kernel::Disc => {
-                // Apophysis: theta = atan2(x, y), the angle from +y.
-                let theta = z[0].atan2(z[1]);
-                let r = r2.sqrt();
-                let rho = theta / std::f64::consts::PI;
-                let a = std::f64::consts::PI * r;
-                [rho * a.sin(), rho * a.cos()]
-            }
-            Kernel::Blob { high, low, waves } => {
-                let theta = z[0].atan2(z[1]);
-                let (sc, _) = Kernel::blob_scale(high, low, waves, theta);
-                let r = r2.sqrt();
-                [r * sc * theta.cos(), r * sc * theta.sin()]
-            }
-            Kernel::Root { n, d } => {
-                let n = n as f64;
-                let rr = r2.sqrt().powf(d / n.abs());
-                let a = (z[1].atan2(z[0]) + std::f64::consts::TAU * k as f64) / n;
-                [rr * a.cos(), rr * a.sin()]
-            }
-            Kernel::Spherical => {
-                let s = 1.0 / (r2 + 1e-6);
-                [z[0] * s, z[1] * s]
-            }
-            Kernel::Bubble => {
-                let s = 4.0 / (r2 + 4.0);
-                [z[0] * s, z[1] * s]
-            }
-        }
+        kernel_forward_gen(self, &z, k)
     }
 
     /// The inverse kernel on `v`, along `branch`. A `v` with no
@@ -352,59 +319,7 @@ impl Kernel {
     /// for one, because [`NonlinearMap2::image_gap`] answers first
     /// with the piece's distance (S4, amended).
     pub fn inverse(&self, v: [f64; 2], branch: u32) -> [f64; 2] {
-        let r2 = v[0] * v[0] + v[1] * v[1];
-        match *self {
-            Kernel::Hemisphere => {
-                if r2 >= 1.0 {
-                    return [v[0] * 1e30, v[1] * 1e30];
-                }
-                let t = 1.0 / (1.0 - r2).sqrt();
-                [v[0] * t, v[1] * t]
-            }
-            Kernel::Disc => {
-                // rho is the input's |theta|/pi; phi, the angle of v
-                // from +y, is pi·r modulo 2pi; the ring m and the
-                // sign of theta come with the branch (D2).
-                let rho = r2.sqrt();
-                if rho > 1.0 {
-                    return [v[0] * 1e30, v[1] * 1e30];
-                }
-                let phi = v[0].atan2(v[1]);
-                let r = phi / std::f64::consts::PI + branch as f64;
-                if r < 0.0 {
-                    return [1e30, 1e30];
-                }
-                let theta = if branch % 2 == 0 { std::f64::consts::PI * rho } else { -std::f64::consts::PI * rho };
-                [r * theta.sin(), r * theta.cos()]
-            }
-            Kernel::Blob { high, low, waves } => {
-                let theta = v[1].atan2(v[0]);
-                let (sc, _) = Kernel::blob_scale(high, low, waves, theta);
-                [v[1] / sc, v[0] / sc]
-            }
-            Kernel::Root { n, d } => {
-                let n = n as f64;
-                let rr = r2.sqrt().powf(n.abs() / d);
-                let a = n * v[1].atan2(v[0]);
-                [rr * a.cos(), rr * a.sin()]
-            }
-            Kernel::Spherical => {
-                let s = 1.0 / r2.max(f64::MIN_POSITIVE);
-                [v[0] * s, v[1] * s]
-            }
-            Kernel::Bubble => {
-                if r2 > 1.0 || !(r2 > 0.0) {
-                    if r2 > 1.0 {
-                        return [v[0] * 1e30, v[1] * 1e30];
-                    }
-                    // The origin: the inner preimage is the origin,
-                    // the outer is at infinity.
-                    return if branch == 0 { [0.0, 0.0] } else { [1e30, 0.0] };
-                }
-                let (s, _) = Kernel::bubble_scale(r2, branch);
-                [v[0] * s, v[1] * s]
-            }
-        }
+        kernel_inverse_gen(self, &v, branch)
     }
 
     /// The factor on the constant σ_min at the point whose image is
@@ -496,116 +411,21 @@ impl Kernel {
     /// values are the forward's reciprocated and swapped --
     /// `σ_max(J) = 1/σ_min(forward)` -- which is what ties it to
     /// [`Self::local_sigma_factor`] and is checked against it.
+    ///
+    /// **By dual numbers, not by derivation** (`ifs-general.md` D2):
+    /// this differentiates [`kernel_inverse_gen`], the same body
+    /// [`Self::inverse`] runs, so there is no second expression to
+    /// slip a sign in. The six closed forms it replaces agreed with
+    /// it to a relative 1e-9 at every point of
+    /// `the_dual_jacobian_is_the_derivation`, which is the evidence
+    /// for dropping them. The domain guards they carried survive as
+    /// [`kernel_inverse_domain`], since a derivative of the
+    /// no-preimage sentinel is a finite number meaning nothing.
     pub fn inverse_jacobian(&self, v: [f64; 2], branch: u32) -> Option<[[f64; 2]; 2]> {
-        let r2 = v[0] * v[0] + v[1] * v[1];
-        let rho = r2.sqrt();
-        let finite = |j: [[f64; 2]; 2]| {
-            j.iter().flatten().all(|x| x.is_finite()).then_some(j)
-        };
-        match *self {
-            // u = v·t, t = (1 − |v|²)^{−1/2}: J = t·I + t³·v vᵀ.
-            Kernel::Hemisphere => {
-                if !(r2 < 1.0) {
-                    return None;
-                }
-                let t = (1.0 - r2).sqrt().recip();
-                let t3 = t * t * t;
-                finite([
-                    [t + t3 * v[0] * v[0], t3 * v[0] * v[1]],
-                    [t3 * v[0] * v[1], t + t3 * v[1] * v[1]],
-                ])
-            }
-            // u = v/|v|²: J = (I − 2 v vᵀ/|v|²)/|v|².
-            Kernel::Spherical => {
-                if !(r2 > 0.0) {
-                    return None;
-                }
-                let s = r2.recip();
-                finite([
-                    [s * (1.0 - 2.0 * v[0] * v[0] * s), s * (-2.0 * v[0] * v[1] * s)],
-                    [s * (-2.0 * v[0] * v[1] * s), s * (1.0 - 2.0 * v[1] * v[1] * s)],
-                ])
-            }
-            // u = v·s(|v|²): J = s·I + 2 s'·v vᵀ, both from
-            // [`Kernel::bubble_scale`].
-            Kernel::Bubble => {
-                if !(r2 > 0.0) || !(r2 < 1.0) {
-                    return None;
-                }
-                let (s, ds) = Kernel::bubble_scale(r2, branch);
-                finite([
-                    [s + 2.0 * ds * v[0] * v[0], 2.0 * ds * v[0] * v[1]],
-                    [2.0 * ds * v[0] * v[1], s + 2.0 * ds * v[1] * v[1]],
-                ])
-            }
-            // u = |v|^m·e^{i·n·arg v}, m = |n|/d: in the radial and
-            // tangential frames the derivative is `diag(m, n)·|v|^{m−1}`,
-            // read out of the frame at `v` and into the one at `u`.
-            Kernel::Root { n, d } => {
-                if !(rho > 0.0) || !(d != 0.0) {
-                    return None;
-                }
-                let nf = n as f64;
-                let m = nf.abs() / d;
-                let scale = rho.powf(m - 1.0);
-                let phi = v[1].atan2(v[0]);
-                let psi = nf * phi;
-                // R(ψ)·diag(m, n)·R(−φ), times the common scale.
-                let (cp, sp) = (phi.cos(), phi.sin());
-                let (cs, ss) = (psi.cos(), psi.sin());
-                let (a, b) = (m * scale, nf * scale);
-                finite([
-                    [cs * a * cp + (-ss) * b * (-sp), cs * a * sp + (-ss) * b * cp],
-                    [ss * a * cp + cs * b * (-sp), ss * a * sp + cs * b * cp],
-                ])
-            }
-            // u = (r·sin θ, r·cos θ) with r = φ/π + branch and
-            // θ = ±π|v|, φ the angle of `v` from +y: the chain rule
-            // through (|v|, φ).
-            Kernel::Disc => {
-                if !(rho > 0.0) || rho > 1.0 {
-                    return None;
-                }
-                let phi = v[0].atan2(v[1]);
-                let r = phi / std::f64::consts::PI + branch as f64;
-                if r < 0.0 {
-                    return None;
-                }
-                let sign = if branch % 2 == 0 { 1.0 } else { -1.0 };
-                let theta = sign * std::f64::consts::PI * rho;
-                let (st, ct) = (theta.sin(), theta.cos());
-                // du/d|v| and du/dφ
-                let du_drho = [r * ct * sign * std::f64::consts::PI, -r * st * sign * std::f64::consts::PI];
-                let du_dphi = [st / std::f64::consts::PI, ct / std::f64::consts::PI];
-                // d|v|/dv and dφ/dv
-                let drho = [v[0] / rho, v[1] / rho];
-                let dphi = [v[1] / r2, -v[0] / r2];
-                finite([
-                    [du_drho[0] * drho[0] + du_dphi[0] * dphi[0], du_drho[0] * drho[1] + du_dphi[0] * dphi[1]],
-                    [du_drho[1] * drho[0] + du_dphi[1] * dphi[0], du_drho[1] * drho[1] + du_dphi[1] * dphi[1]],
-                ])
-            }
-            // u = P·v/s(θ) with P the swap and θ the angle of `v`:
-            // J = P/s + (P v)·∇(1/s), ∇(1/s) = −(s'/s²)·∇θ.
-            Kernel::Blob { high, low, waves } => {
-                if !(r2 > 0.0) {
-                    return None;
-                }
-                let theta = v[1].atan2(v[0]);
-                let (sc, ds) = Kernel::blob_scale(high, low, waves, theta);
-                if !(sc != 0.0) {
-                    return None;
-                }
-                let pv = [v[1], v[0]];
-                let g = -ds / (sc * sc);
-                // ∇θ = (−v_y, v_x)/|v|²
-                let grad = [g * (-v[1] / r2), g * (v[0] / r2)];
-                finite([
-                    [pv[0] * grad[0], 1.0 / sc + pv[0] * grad[1]],
-                    [1.0 / sc + pv[1] * grad[0], pv[1] * grad[1]],
-                ])
-            }
+        if !kernel_inverse_domain(self, v, branch) {
+            return None;
         }
+        jacobian2(v, |z| kernel_inverse_gen(self, &z, branch))
     }
 
     /// How far `v` may move before [`Self::inverse`] stops being
@@ -744,6 +564,197 @@ impl Kernel {
     }
 }
 
+
+// ------------------------------------------ the kernels, written once
+
+/// An affine, over any [`Real`].
+///
+/// The coefficients are `f64` -- an affine's numbers come from the
+/// flame and are `f32` there -- so they enter through
+/// [`Real::lit`] at the point's own precision.
+pub fn affine_apply_gen<T: Real>(a: &Affine2, p: &[T; 2]) -> [T; 2] {
+    let l = |v: f64| p[0].lit(v);
+    [
+        l(a.m[0][0]).mul(&p[0]).add(&l(a.m[0][1]).mul(&p[1])).add(&l(a.t[0])),
+        l(a.m[1][0]).mul(&p[0]).add(&l(a.m[1][1]).mul(&p[1])).add(&l(a.t[1])),
+    ]
+}
+
+/// Bubble's radial scale `s` with `u = v·s`, generically.
+///
+/// Written as [`Kernel::bubble_scale`] explains: `x = (1 − root)(1 +
+/// root)` divides the root out, so nothing cancels. The derivative
+/// that function also returns is not here, because at `Dual` the
+/// derivative comes from differentiating this.
+fn bubble_scale_gen<T: Real>(x: &T, branch: u32) -> T {
+    let one_minus = x.one().sub(x);
+    let clamped = if one_minus.to_f64() < 0.0 { x.zero() } else { one_minus };
+    let root = clamped.sqrt();
+    let up = root.one().add(&root);
+    if branch == 0 {
+        up.lit(2.0).div(&up)
+    } else {
+        up.lit(2.0).mul(&up).div(x)
+    }
+}
+
+/// Blob's angular scale at `theta`, generically.
+fn blob_scale_gen<T: Transcendental>(high: f64, low: f64, waves: f64, theta: &T) -> T {
+    let wave = theta.lit(waves).mul(theta).sin().add(&theta.one());
+    theta.lit(low).add(&theta.lit((high - low) / 2.0).mul(&wave))
+}
+
+/// The forward kernel, over any [`Transcendental`].
+///
+/// The one body [`Kernel::forward`] is, and the one the `BigFloat`
+/// walk and the dual-number derivatives call. Every branch decision
+/// reads [`Real::to_f64`], which is the VALUE at a `Dual` and so
+/// takes the same branch the point does.
+pub fn kernel_forward_gen<T: Transcendental>(k: &Kernel, z: &[T; 2], branch: u32) -> [T; 2] {
+    use std::f64::consts::{PI, TAU};
+    let r2 = z[0].hypot2(&z[1]);
+    match *k {
+        Kernel::Hemisphere => {
+            let t = r2.add(&r2.one()).sqrt().recip();
+            [z[0].mul(&t), z[1].mul(&t)]
+        }
+        Kernel::Disc => {
+            // Apophysis: theta = atan2(x, y), the angle from +y.
+            let theta = T::atan2(&z[0], &z[1]);
+            let r = r2.sqrt();
+            let rho = theta.div(&theta.lit(PI));
+            let (sa, ca) = r.lit(PI).mul(&r).sin_cos();
+            [rho.mul(&sa), rho.mul(&ca)]
+        }
+        Kernel::Blob { high, low, waves } => {
+            let theta = T::atan2(&z[0], &z[1]);
+            let sc = blob_scale_gen(high, low, waves, &theta);
+            let r = r2.sqrt();
+            let (st, ct) = theta.sin_cos();
+            [r.mul(&sc).mul(&ct), r.mul(&sc).mul(&st)]
+        }
+        Kernel::Root { n, d } => {
+            let nf = n as f64;
+            let rr = r2.sqrt().powf(&r2.lit(d / nf.abs()));
+            let a = T::atan2(&z[1], &z[0])
+                .add(&z[0].lit(TAU * branch as f64))
+                .div(&z[0].lit(nf));
+            let (sa, ca) = a.sin_cos();
+            [rr.mul(&ca), rr.mul(&sa)]
+        }
+        Kernel::Spherical => {
+            let s = r2.add(&r2.lit(1e-6)).recip();
+            [z[0].mul(&s), z[1].mul(&s)]
+        }
+        Kernel::Bubble => {
+            let s = r2.lit(4.0).div(&r2.add(&r2.lit(4.0)));
+            [z[0].mul(&s), z[1].mul(&s)]
+        }
+    }
+}
+
+/// The inverse kernel, over any [`Transcendental`].
+///
+/// The sentinels a `v` with no preimage lands on are the same
+/// arithmetic as [`Kernel::inverse`]'s, so the f64 call is that
+/// function. A caller that needs to know rather than to compute asks
+/// [`kernel_inverse_domain`], which is also what stops a Jacobian
+/// being taken of a sentinel.
+pub fn kernel_inverse_gen<T: Transcendental>(k: &Kernel, v: &[T; 2], branch: u32) -> [T; 2] {
+    use std::f64::consts::PI;
+    let r2 = v[0].hypot2(&v[1]);
+    let r2v = r2.to_f64();
+    let far = |v: &[T; 2]| [v[0].mul(&v[0].lit(1e30)), v[1].mul(&v[1].lit(1e30))];
+    match *k {
+        Kernel::Hemisphere => {
+            if r2v >= 1.0 {
+                return far(v);
+            }
+            let t = r2.one().sub(&r2).sqrt().recip();
+            [v[0].mul(&t), v[1].mul(&t)]
+        }
+        Kernel::Disc => {
+            let rho = r2.sqrt();
+            if rho.to_f64() > 1.0 {
+                return far(v);
+            }
+            let phi = T::atan2(&v[0], &v[1]);
+            let r = phi.div(&phi.lit(PI)).add(&phi.lit(branch as f64));
+            if r.to_f64() < 0.0 {
+                return [v[0].lit(1e30), v[1].lit(1e30)];
+            }
+            let theta = if branch % 2 == 0 {
+                phi.lit(PI).mul(&rho)
+            } else {
+                phi.lit(-PI).mul(&rho)
+            };
+            let (st, ct) = theta.sin_cos();
+            [r.mul(&st), r.mul(&ct)]
+        }
+        Kernel::Blob { high, low, waves } => {
+            let theta = T::atan2(&v[1], &v[0]);
+            let sc = blob_scale_gen(high, low, waves, &theta);
+            [v[1].div(&sc), v[0].div(&sc)]
+        }
+        Kernel::Root { n, d } => {
+            let nf = n as f64;
+            let rr = r2.sqrt().powf(&r2.lit(nf.abs() / d));
+            let a = v[0].lit(nf).mul(&T::atan2(&v[1], &v[0]));
+            let (sa, ca) = a.sin_cos();
+            [rr.mul(&ca), rr.mul(&sa)]
+        }
+        Kernel::Spherical => {
+            let den = if r2v < f64::MIN_POSITIVE { r2.lit(f64::MIN_POSITIVE) } else { r2 };
+            let s = den.recip();
+            [v[0].mul(&s), v[1].mul(&s)]
+        }
+        Kernel::Bubble => {
+            if r2v > 1.0 || !(r2v > 0.0) {
+                if r2v > 1.0 {
+                    return far(v);
+                }
+                // The origin: the inner preimage is the origin, the
+                // outer is at infinity.
+                return if branch == 0 {
+                    [v[0].zero(), v[1].zero()]
+                } else {
+                    [v[0].lit(1e30), v[1].zero()]
+                };
+            }
+            let s = bubble_scale_gen(&r2, branch);
+            [v[0].mul(&s), v[1].mul(&s)]
+        }
+    }
+}
+
+/// Whether `v` has a preimage on `branch` that
+/// [`kernel_inverse_gen`] differentiates.
+///
+/// False at the kernel's pole, past the edge of its image, and on a
+/// ring the branch does not reach -- the places the generic body
+/// returns a sentinel, where a derivative of that sentinel would be
+/// a finite number meaning nothing. These are the guards the
+/// hand-derived [`Kernel::inverse_jacobian`] carried, kept as a
+/// predicate now that the derivative itself is not hand-derived.
+pub fn kernel_inverse_domain(k: &Kernel, v: [f64; 2], branch: u32) -> bool {
+    let r2 = v[0] * v[0] + v[1] * v[1];
+    match *k {
+        Kernel::Hemisphere => r2 < 1.0,
+        Kernel::Spherical => r2 > 0.0,
+        Kernel::Bubble => r2 > 0.0 && r2 < 1.0,
+        Kernel::Root { d, .. } => r2 > 0.0 && d != 0.0,
+        Kernel::Disc => {
+            let rho = r2.sqrt();
+            rho > 0.0
+                && rho <= 1.0
+                && v[0].atan2(v[1]) / std::f64::consts::PI + branch as f64 >= 0.0
+        }
+        Kernel::Blob { high, low, waves } => {
+            r2 > 0.0 && Kernel::blob_scale(high, low, waves, v[1].atan2(v[0])).0 != 0.0
+        }
+    }
+}
+
 /// A transform whose one nonlinear variation the walk can invert
 /// (plan §8.8, §8.9): forward `p ↦ post(w · K(pre(p)))`, inverse
 /// `q ↦ pre⁻¹(K⁻¹(post⁻¹(q) / w))` along this map's `branch`.
@@ -774,6 +785,27 @@ impl NonlinearMap2 {
     pub fn apply_branch(&self, p: [f64; 2], k: u32) -> [f64; 2] {
         let z = self.kernel.forward(self.pre.apply(p), k);
         self.post.apply([self.w * z[0], self.w * z[1]])
+    }
+
+    /// This map's whole inverse, over any [`Transcendental`]:
+    /// `pre⁻¹(K⁻¹(post⁻¹(q) / w))`.
+    ///
+    /// The composition [`Self::apply_inverse`] performs, in one
+    /// expression, so a derivative of it is a derivative of the
+    /// composition and not of a chain rule written out by hand.
+    /// [`Map2::hessian`] is the caller that needs that.
+    pub fn apply_inverse_gen<T: Transcendental>(&self, q: &[T; 2]) -> [T; 2] {
+        let v = affine_apply_gen(&self.post_inv, q);
+        let w = q[0].lit(self.w);
+        let z = [v[0].div(&w), v[1].div(&w)];
+        let u = kernel_inverse_gen(&self.kernel, &z, self.branch);
+        affine_apply_gen(&self.pre_inv, &u)
+    }
+
+    /// Whether `q` has a preimage this map can be differentiated at
+    /// -- [`kernel_inverse_domain`] carried into `q`'s own frame.
+    pub fn inverse_domain(&self, q: [f64; 2]) -> bool {
+        kernel_inverse_domain(&self.kernel, self.before_kernel(q), self.branch)
     }
 
     /// The point before the kernel's inverse, `post⁻¹(q) / w`.
@@ -999,55 +1031,50 @@ impl Map2 {
     /// The SECOND derivative of [`Self::apply`] at `q`:
     /// `H[i][j][k] = ∂²u_i/∂q_j∂q_k`, symmetric in the last two.
     ///
-    /// Taken by central-differencing [`Self::jacobian`], which is
-    /// exact and gated
-    /// (`the_kernels_jacobians_are_the_derivative`), rather than
-    /// derived per kernel. Six closed forms would be six chances to
-    /// slip a sign, and this only has to be good enough to CORRECT a
-    /// second-order term: an error `ε` in `H` moves the correction by
-    /// `ε·ρ²`, where the term it replaces was `ρ²·|H|` -- so a
-    /// relative accuracy of 1e-6 leaves a residual a millionth of
-    /// what carrying nothing leaves. A central difference of an exact
-    /// derivative reaches about 1e-10.
+    /// By nested dual numbers (`ifs-general.md` D2):
+    /// [`NonlinearMap2::apply_inverse_gen`] evaluated at
+    /// `Dual<Dual<f64>>`, which carries the second derivative of the
+    /// whole composition exactly. No step size is chosen.
     ///
-    /// The step is a fraction of the clearance, so it never straddles
-    /// the pole or the image edge that [`Self::singular_distance`]
-    /// measures to.
+    /// That matters where the handover runs. The central difference
+    /// this replaces took its step as a fraction of the clearance,
+    /// and `probe_what_the_exact_hessian_buys` measured what that
+    /// cost as the clearance shrank -- worst relative gap, which is
+    /// the difference's own error since the dual is exact:
+    ///
+    /// ```text
+    /// clearance <    1e-8     1e-6     1e-4     1e-2     more
+    /// spherical      58       2.8e-8   2.8e-8   2.8e-8   2.8e-8
+    /// bubble          4.7     1.5e-4   1.1e-6   1.6e-8   1.6e-8
+    /// hemisphere     23       5.7e-5   6.4e-7   1.8e-8   2.4e-8
+    /// julian        240       6.3e-8   6.3e-8   6.3e-8   7.1e-8
+    /// ```
+    ///
+    /// Eight digits in the open plane, and NO digits within 1e-8 of
+    /// a pole -- a relative error of 58 is not a worse answer, it is
+    /// a different tensor. A correction built on it would add noise
+    /// where it was meant to subtract curvature.
     ///
     /// Zero for an affine -- exactly, not nearly -- so the affine
     /// delta stays the exact thing it has always been.
+    ///
+    /// `None` where `q` has no preimage on this branch. That test is
+    /// [`NonlinearMap2::inverse_domain`] now, not a positive
+    /// clearance: the clearance was the step's constraint, and there
+    /// is no step.
     pub fn hessian(&self, q: [f64; 2]) -> Option<[[[f64; 2]; 2]; 2]> {
         match self {
             Map2::Affine(_) => Some([[[0.0; 2]; 2]; 2]),
             Map2::Nonlinear(_) => None,
-            Map2::NonlinearInverse(_) => {
-                let clear = self.singular_distance(q);
-                if !(clear > 0.0) {
+            Map2::NonlinearInverse(r) => {
+                if !r.inverse_domain(q) {
                     return None;
                 }
-                let h = (clear * 1e-4).clamp(1e-12, 1e-3);
-                let mut out = [[[0.0f64; 2]; 2]; 2];
-                for k in 0..2 {
-                    let (mut a, mut b) = (q, q);
-                    a[k] += h;
-                    b[k] -= h;
-                    let ja = self.jacobian(a)?;
-                    let jb = self.jacobian(b)?;
-                    for i in 0..2 {
-                        for j in 0..2 {
-                            out[i][j][k] = (ja[i][j] - jb[i][j]) / (2.0 * h);
-                        }
-                    }
-                }
-                // Symmetric in its last two indices by Clairaut; the
-                // differences are only nearly so, and the carry reads
-                // both halves.
-                for i in 0..2 {
-                    let m = (out[i][0][1] + out[i][1][0]) * 0.5;
-                    out[i][0][1] = m;
-                    out[i][1][0] = m;
-                }
-                out.iter().flatten().flatten().all(|x| x.is_finite()).then_some(out)
+                let h = hessian2(q, |z| r.apply_inverse_gen(&z))?;
+                // `h[c][i][j]` is `∂²out_c/∂q_i∂q_j`; the carry reads
+                // `[i][j][k]` as `∂²u_i/∂q_j∂q_k`, which is the same
+                // thing under the same name.
+                Some(h)
             }
         }
     }
@@ -2861,6 +2888,122 @@ fn ball_3d_affine(maps: &[IfsMap<Affine3>]) -> Ball<[f64; 3]> {
 
 // ---------------------------------------------------------------- tests
 
+/// Every kernel, at a grid dense enough to reach each branch and
+/// each guard.
+#[cfg(test)]
+pub(crate) fn kernel_fixtures() -> Vec<(Kernel, u32)> {
+    let mut out = vec![
+        (Kernel::Spherical, 0),
+        (Kernel::Hemisphere, 0),
+        (Kernel::Bubble, 0),
+        (Kernel::Bubble, 1),
+        (Kernel::Disc, 0),
+        (Kernel::Disc, 1),
+        (Kernel::Disc, 2),
+        (Kernel::Blob { high: 1.3, low: 0.4, waves: 3.0 }, 0),
+        (Kernel::Blob { high: 1.0, low: 1.0, waves: 0.0 }, 0),
+    ];
+    for n in [-3i32, -2, 2, 3, 5] {
+        for d in [1.0f64, 2.0, 0.5] {
+            for k in 0..(n.unsigned_abs().max(1)) {
+                out.push((Kernel::Root { n, d }, k));
+            }
+        }
+    }
+    out
+}
+
+/// A grid over the plane, the unit disc and the neighbourhood of
+/// every guard: the origin, the unit circle either side, and points
+/// far out.
+#[cfg(test)]
+pub(crate) fn kernel_probe_points() -> Vec<[f64; 2]> {
+    let mut pts = vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [-1.0, 0.0], [0.0, -1.0]];
+    for i in 0..24 {
+        let a = std::f64::consts::TAU * i as f64 / 24.0;
+        for r in [1e-9, 1e-4, 0.13, 0.5, 0.7071, 0.999, 1.0, 1.0001, 1.7, 9.0, 1e4] {
+            pts.push([r * a.cos(), r * a.sin()]);
+        }
+    }
+    pts
+}
+
+#[cfg(test)]
+mod generic_kernel_tests {
+    use super::*;
+
+    /// The generic body IS the body it replaces -- bit for bit.
+    ///
+    /// Not a tolerance: [`kernel_forward_gen`] and
+    /// [`kernel_inverse_gen`] were written operation for operation
+    /// against the f64 bodies, so any difference is a transcription
+    /// slip and not a rounding one. This is the check that lets the
+    /// f64 bodies BE the generic ones, which is what removes the
+    /// second copy.
+    #[test]
+    fn the_generic_kernel_is_the_f64_kernel() {
+        for (k, branch) in kernel_fixtures() {
+            for p in kernel_probe_points() {
+                let want = k.forward(p, branch);
+                let got = kernel_forward_gen(&k, &p, branch);
+                for i in 0..2 {
+                    assert!(
+                        want[i].to_bits() == got[i].to_bits()
+                            || (want[i].is_nan() && got[i].is_nan()),
+                        "forward {k:?} branch {branch} at {p:?}: {want:?} vs {got:?}"
+                    );
+                }
+                let want = k.inverse(p, branch);
+                let got = kernel_inverse_gen(&k, &p, branch);
+                for i in 0..2 {
+                    assert!(
+                        want[i].to_bits() == got[i].to_bits()
+                            || (want[i].is_nan() && got[i].is_nan()),
+                        "inverse {k:?} branch {branch} at {p:?}: {want:?} vs {got:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The dual-number Jacobian is the hand-derived one.
+    ///
+    /// Six closed forms, each a chance to slip a sign, against one
+    /// differentiation rule applied by the compiler. They agree to a
+    /// relative 1e-9 wherever the hand form exists; where they
+    /// differ is where the hand form was the suspect, and this is
+    /// the evidence for replacing it.
+    #[test]
+    fn the_dual_jacobian_is_the_derivation() {
+        let mut checked = 0usize;
+        for (k, branch) in kernel_fixtures() {
+            for p in kernel_probe_points() {
+                let Some(want) = k.inverse_jacobian(p, branch) else { continue };
+                assert!(
+                    kernel_inverse_domain(&k, p, branch),
+                    "{k:?} branch {branch} at {p:?}: a Jacobian outside the domain"
+                );
+                let got = jacobian2(p, |z| kernel_inverse_gen(&k, &z, branch))
+                    .unwrap_or_else(|| panic!("{k:?} branch {branch} at {p:?}: no dual"));
+                let scale = want.iter().flatten().fold(0.0f64, |m, x| m.max(x.abs()));
+                for i in 0..2 {
+                    for j in 0..2 {
+                        assert!(
+                            (want[i][j] - got[i][j]).abs() <= 1e-9 * scale.max(1e-30),
+                            "{k:?} branch {branch} at {p:?}: J[{i}][{j}] hand {} dual {}",
+                            want[i][j],
+                            got[i][j]
+                        );
+                    }
+                }
+                checked += 1;
+            }
+        }
+        assert!(checked > 2000, "only {checked} points had a Jacobian");
+        println!("  dual against hand-derived: {checked} Jacobians agree");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3146,18 +3289,178 @@ mod tests {
         assert!(errs.iter().any(|e| matches!(e, Disqualification::NoBall)), "{errs:?}");
     }
 
+    /// What the exact Hessian buys, by clearance.
+    ///
+    /// The dual is exact to f64 rounding, so the gap between it and
+    /// the central difference it replaces IS the difference's error.
+    /// Reported in bands of `clearance`, which is the quantity the
+    /// old step was a fraction of: the claim being measured is that
+    /// the error grew as the clearance shrank, which is the regime
+    /// the perturbation handover actually runs in.
+    #[test]
+    #[ignore = "a survey; run with --ignored --nocapture"]
+    fn probe_what_the_exact_hessian_buys() {
+        let guard = global_registry();
+        let r = &*guard;
+        let build = |name: &str, w: f32, tweak: &dyn Fn(&mut Transform)| -> Map2 {
+            let mut t = affine_xform(0.83, -0.24, 0.31, 0.77, 0.19, -0.12);
+            t.variations.clear();
+            t.variation_order.clear();
+            let mut t = with(t, name, w);
+            tweak(&mut t);
+            let m = transform_map_2d_ordered(&t, r, &t.ordered_variation_names(r))
+                .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            m.inverse().expect("invertible")
+        };
+        let noop = |_: &mut Transform| {};
+        let cases: Vec<(&str, Map2)> = vec![
+            ("spherical", build("spherical", 0.7, &noop)),
+            ("bubble", build("bubble", 1.3, &noop)),
+            ("hemisphere", build("hemisphere", 0.9, &noop)),
+            ("disc", build("disc", 0.6, &noop)),
+            ("julian", build("julian", 0.5, &|t: &mut Transform| {
+                t.set_variation_param("julian", "power", 3.0);
+                t.set_variation_param("julian", "dist", -1.0);
+            })),
+        ];
+        // The central difference this replaced, verbatim.
+        let old = |m: &Map2, q: [f64; 2]| -> Option<[[[f64; 2]; 2]; 2]> {
+            let clear = m.singular_distance(q);
+            if !(clear > 0.0) {
+                return None;
+            }
+            let h = (clear * 1e-4).clamp(1e-12, 1e-3);
+            let mut out = [[[0.0f64; 2]; 2]; 2];
+            for k in 0..2 {
+                let (mut a, mut b) = (q, q);
+                a[k] += h;
+                b[k] -= h;
+                let (ja, jb) = (m.jacobian(a)?, m.jacobian(b)?);
+                for i in 0..2 {
+                    for j in 0..2 {
+                        out[i][j][k] = (ja[i][j] - jb[i][j]) / (2.0 * h);
+                    }
+                }
+            }
+            for i in 0..2 {
+                let mid = (out[i][0][1] + out[i][1][0]) * 0.5;
+                out[i][0][1] = mid;
+                out[i][1][0] = mid;
+            }
+            out.iter().flatten().flatten().all(|x| x.is_finite()).then_some(out)
+        };
+
+        let mut st: u64 = 0x2545_F491_4F6C_DD1D;
+        let mut next = move || {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (st >> 11) as f64 / (1u64 << 53) as f64
+        };
+        // A uniform sample almost never lands near a singularity, and
+        // near a singularity is the whole question -- the handover
+        // runs there. So walk DOWNHILL in clearance: random steps that
+        // reduce it, with the step shrinking, which reaches the
+        // singular set without needing its equation.
+        let mut descend = |m: &Map2, mut q: [f64; 2], next: &mut dyn FnMut() -> f64| -> [f64; 2] {
+            let mut step = 0.5f64;
+            for _ in 0..400 {
+                let c = m.singular_distance(q);
+                if !c.is_finite() {
+                    break;
+                }
+                let t = [q[0] + (next() - 0.5) * step, q[1] + (next() - 0.5) * step];
+                let ct = m.singular_distance(t);
+                if ct.is_finite() && ct < c && m.hessian(t).is_some() {
+                    q = t;
+                } else {
+                    step *= 0.9;
+                }
+            }
+            q
+        };
+
+        let bands = [1e-8f64, 1e-6, 1e-4, 1e-2, f64::INFINITY];
+        println!("  worst relative gap between the central difference and the exact Hessian");
+        println!(
+            "  {:<11} {:>9} {:>9} {:>9} {:>9} {:>9}",
+            "clearance <", "1e-8", "1e-6", "1e-4", "1e-2", "more"
+        );
+        for (name, m) in cases {
+            let mut worst = [0.0f64; 5];
+            let mut count = [0usize; 5];
+            let mut record = |q: [f64; 2]| {
+                let (Some(exact), Some(fd)) = (m.hessian(q), old(&m, q)) else { return };
+                let clear = m.singular_distance(q);
+                let band = bands.iter().position(|b| clear < *b).unwrap_or(4);
+                let scale = exact.iter().flatten().flatten().fold(0.0f64, |a, x| a.max(x.abs()));
+                if !(scale > 0.0) {
+                    return;
+                }
+                let gap = exact
+                    .iter()
+                    .flatten()
+                    .flatten()
+                    .zip(fd.iter().flatten().flatten())
+                    .fold(0.0f64, |a, (e, f)| a.max((e - f).abs()))
+                    / scale;
+                if gap.is_finite() {
+                    worst[band] = worst[band].max(gap);
+                    count[band] += 1;
+                }
+            };
+            for _ in 0..20_000 {
+                record([(next() - 0.5) * 6.0, (next() - 0.5) * 6.0]);
+            }
+            // ...and the same again, walked in toward the singular set,
+            // recording the whole descent so every band is populated.
+            for _ in 0..300 {
+                let start = [(next() - 0.5) * 6.0, (next() - 0.5) * 6.0];
+                if m.hessian(start).is_none() {
+                    continue;
+                }
+                let end = descend(&m, start, &mut next);
+                // Geometric in `1 − t`, so the sweep spends its
+                // points where the clearance is small -- linear
+                // spacing lands almost all of them far away.
+                for i in 0..60 {
+                    let t = 1.0 - 0.5f64.powi(i);
+                    record([
+                        start[0] + (end[0] - start[0]) * t,
+                        start[1] + (end[1] - start[1]) * t,
+                    ]);
+                }
+                record(end);
+            }
+            let cell = |i: usize| {
+                if count[i] == 0 {
+                    "--".to_string()
+                } else {
+                    format!("{:.1e}", worst[i])
+                }
+            };
+            println!(
+                "  {name:<11} {:>9} {:>9} {:>9} {:>9} {:>9}   ({} points)",
+                cell(0),
+                cell(1),
+                cell(2),
+                cell(3),
+                cell(4),
+                count.iter().sum::<usize>()
+            );
+        }
+    }
+
     /// Gate 2 of plan 8.9: every kernel's inverse undoes each of its
     /// branches, and a bubble transform is two maps that share its
     /// colour and differ in the branch.
     /// [`Map2::hessian`] is the second derivative, checked the long
     /// way round.
     ///
-    /// It is taken by central-differencing the analytic Jacobian, so
-    /// differencing the MAP twice is an independent route to the same
-    /// tensor -- it never touches `jacobian` at all. Both are
-    /// approximations, so this is a loose agreement by design; what
-    /// it catches is a transposed index, a missing half, or a
-    /// symmetrisation that averaged the wrong pair.
+    /// It comes from nested dual numbers, so differencing the MAP
+    /// twice is an independent route to the same tensor -- it never
+    /// touches `jacobian` or a dual at all. One side is exact and
+    /// one is an approximation, so this is a loose agreement by
+    /// design; what it catches is a transposed index, a missing
+    /// half, or a pair symmetrised the wrong way round.
     #[test]
     fn a_maps_hessian_is_its_second_derivative() {
         let guard = global_registry();
