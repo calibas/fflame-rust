@@ -144,6 +144,20 @@ impl IfsSpace for Map2 {
     fn step(&self, q: [f64; 2], aux: f64, sigma_min: f64) -> ([f64; 2], f64, f64) {
         match self {
             Map2::NonlinearInverse(r) => (r.apply_inverse(q), aux, sigma_min * r.local_sigma_factor(q)),
+            // A sum's σ and its point come from the SAME Newton solve,
+            // so taking them together is one solve rather than two.
+            Map2::SumInverse(r) => match r.solve(q) {
+                Some((z, _)) => {
+                    let s = r
+                        .forward_jacobian(z)
+                        .map_or(0.0, |j| crate::scene::ifs_analysis::singular_values_of(j).0);
+                    (z, aux, sigma_min * s)
+                }
+                // Not a gap: a failed solve proves nothing (D3). The
+                // point is unreachable, and the caller reads that the
+                // same way it reads a non-finite inverse.
+                None => ([f64::INFINITY, f64::INFINITY], aux, sigma_min),
+            },
             other => (other.apply(q), aux, sigma_min),
         }
     }
@@ -4290,6 +4304,305 @@ mod tests {
         }
     }
 
+    /// A transform that sums `kernel` at weight `kw` with a `linear`
+    /// at weight `lw`, contracted by `scale` and placed at `at`.
+    ///
+    /// The shape D3 is about, and the shape the census found: a
+    /// kernel and an affine in one normal-phase sum.
+    fn sum_xform(
+        kernel: &str,
+        kw: f64,
+        lw: f64,
+        scale: f64,
+        at: [f64; 2],
+    ) -> crate::scene::transforms::Transform {
+        let mut t = crate::scene::transforms::Transform::default();
+        t.a = scale as f32;
+        t.b = 0.0;
+        t.c = 0.0;
+        t.d = scale as f32;
+        t.e = at[0] as f32;
+        t.f = at[1] as f32;
+        t.variations.clear();
+        t.variation_order.clear();
+        t.variations.insert(kernel.to_string(), kw as f32);
+        t.variation_order.push(kernel.to_string());
+        if lw != 0.0 {
+            t.variations.insert("linear".to_string(), lw as f32);
+            t.variation_order.push("linear".to_string());
+        }
+        t.weight = 1.0;
+        t
+    }
+
+    /// G3, first half: Newton is an inverse where it converges, and
+    /// the fold is where it does not.
+    ///
+    /// `ifs-general.md` G3 asks for "`linear + spherical` at ten
+    /// mixes, and three census transforms chosen for being common:
+    /// convergence rate and iteration count at random points of the
+    /// support; the residual on convergence".
+    ///
+    /// The three "census transforms" are the kernels the census
+    /// actually found summed -- `spherical` three times and `bubble`
+    /// once -- plus `julia`, the root case, whose FORWARD map has
+    /// branches and so is the one that can seed the wrong preimage.
+    /// The corpus those counts came from is gitignored, so a
+    /// committed gate builds the shapes rather than reading the files.
+    ///
+    /// **The mixes have a fold in them, and that is the finding.**
+    /// `0.9·z + 0.1·z/|z|²` scales radially by `0.9ρ + 0.1/ρ`, whose
+    /// derivative `lw − kw/ρ²` vanishes at `ρ = √(kw/lw)`: two
+    /// preimages meet on that circle and the map is not invertible
+    /// there. Every mix has one. Newton at a point that close to it
+    /// converges linearly rather than quadratically and stalls near
+    /// `√ε` relative -- on an earlier mix set a point 3e-4 from the
+    /// circle read 7.4e-9 where the rest of its row read 1e-13. That
+    /// is not a defect in the solve; it is what a fold is.
+    ///
+    /// A root has a second reason to fail, and it is not a fold: its
+    /// forward map DIVIDES the angle, so `atan2`'s jump across the
+    /// negative x axis lands on another branch and the map restricted
+    /// to one branch is discontinuous there. Seven of four hundred
+    /// solves on `julia 0.6 + linear 0.4` fail, and all seven have
+    /// their preimage within 0.028 of that ray -- which is why
+    /// [`Kernel::forward_singular_distance`](crate::scene::ifs_analysis::Kernel::forward_singular_distance)
+    /// reports the ray and [`Kernel::singular_distance`](crate::scene::ifs_analysis::Kernel::singular_distance),
+    /// which is about the INVERSE, does not.
+    ///
+    /// Measured across the thirteen rows: three to six steps on
+    /// average, ten at worst away from a fold, residual at or under
+    /// 1e-12 everywhere, and every failure within 0.03 of the cut.
+    ///
+    /// So the gate buckets by conditioning, on `σ_min` of the forward
+    /// Jacobian at the preimage, and asks different things of the two:
+    ///
+    /// - away from the fold, the residual must reach
+    ///   [`NEWTON_TOL`](crate::scene::ifs_analysis::NEWTON_TOL)
+    ///   inside the step cap;
+    /// - at the fold, it need only stay under the solve's own
+    ///   acceptance bound of 1e-6, and the answer must still be a
+    ///   preimage -- which is the property the walk needs and the one
+    ///   a wrong branch would break.
+    #[test]
+    fn newton_inverts_a_sum_where_it_converges() {
+        let guard = crate::variations::global_registry();
+        let r = &*guard;
+        /// Below this σ_min the forward map is folding and Newton's
+        /// quadratic convergence is not available.
+        const WELL: f64 = 1e-2;
+        /// Within this of the forward kernel's own cut or pole, a
+        /// solve is allowed to fail.
+        const CUT: f64 = 0.05;
+        let mut cases: Vec<(String, f64, f64, &str)> = Vec::new();
+        // Elevenths, so neither weight is ever zero: a mix with no
+        // `linear` in it is not a sum at all, and a mix whose
+        // `linear` is 1.1e-16 -- which `0.1 + 0.9·(9/9)` gives -- is a
+        // sum with a singular affine, and neither is what "ten mixes"
+        // means.
+        for i in 1..=10 {
+            let kw = i as f64 / 11.0;
+            cases.push((format!("spherical {kw:.3} + linear {:.3}", 1.0 - kw), kw, 1.0 - kw, "spherical"));
+        }
+        for k in ["spherical", "bubble", "julia"] {
+            cases.push((format!("{k} 0.6 + linear 0.4 (census shape)"), 0.6, 0.4, k));
+        }
+        let mut rows = 0usize;
+        for (label, kw, lw, kernel) in cases {
+            let t = sum_xform(kernel, kw, lw, 0.5, [0.2, -0.1]);
+            let order = vec![kernel.to_string(), "linear".to_string()];
+            let m = crate::scene::ifs_analysis::transform_map_2d_ordered(&t, r, &order)
+                .unwrap_or_else(|e| panic!("{label}: {e:?}"));
+            let sum = m.sum().copied().unwrap_or_else(|| panic!("{label}: not a sum"));
+            let inv = m.inverse().expect("an inverse");
+            let inv = inv.sum().copied().expect("a sum inverse");
+            let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+            let mut next = || {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                (state >> 11) as f64 / (1u64 << 53) as f64
+            };
+            let (mut tried, mut solved, mut folded) = (0usize, 0usize, 0usize);
+            let (mut unsolved, mut worst_unsolved_clear) = (0usize, 0.0f64);
+            let (mut worst_well, mut worst_fold, mut worst_fwd) = (0.0f64, 0.0f64, 0.0f64);
+            let (mut steps_well, mut steps_fold) = (0usize, 0usize);
+            let mut total_steps = 0usize;
+            for _ in 0..400 {
+                let p = [2.0 * next() - 1.0, 2.0 * next() - 1.0];
+                if f64::hypot(p[0], p[1]) < 0.05 {
+                    continue;
+                }
+                let q = sum.apply_branch(p, 0);
+                if !q.iter().all(|v| v.is_finite()) {
+                    continue;
+                }
+                tried += 1;
+                let clear = sum.kernel.forward_singular_distance(sum.pre.apply(p));
+                let Some((back, res, steps)) = inv.solve_counted(q) else {
+                    // A failed solve is allowed -- D3 says it is not a
+                    // gap -- but only where the map gives it a reason.
+                    // A failure in the smooth interior would be a
+                    // defect in the solve.
+                    assert!(
+                        clear < CUT,
+                        "{label}: no solve at {p:?}, {clear:.2e} clear of the forward kernel's \
+                         own singularity -- nothing about the map explains that"
+                    );
+                    unsolved += 1;
+                    worst_unsolved_clear = worst_unsolved_clear.max(clear);
+                    continue;
+                };
+                solved += 1;
+                total_steps += steps;
+                // The answer has to be a PREIMAGE -- forward it and
+                // land on `q`. A residual says the equation is met; a
+                // round trip says the point is the one the walk needs.
+                let again = sum.apply_branch(back, 0);
+                let scale = f64::hypot(q[0], q[1]).max(1.0);
+                worst_fwd = worst_fwd.max(f64::hypot(again[0] - q[0], again[1] - q[1]) / scale);
+                let cond = sum
+                    .forward_jacobian(back)
+                    .map_or(0.0, |j| crate::scene::ifs_analysis::singular_values_of(j).0);
+                if cond > WELL {
+                    worst_well = worst_well.max(res);
+                    steps_well = steps_well.max(steps);
+                } else {
+                    folded += 1;
+                    worst_fold = worst_fold.max(res);
+                    steps_fold = steps_fold.max(steps);
+                }
+            }
+            println!(
+                "  {label:<42} {solved:>3}/{tried:<3} | away from the fold: res<={worst_well:.1e} \
+                 steps<={steps_well} | at it ({folded:>2}): res<={worst_fold:.1e} \
+                 steps<={steps_fold} | mean {:.1} steps, fwd<={worst_fwd:.1e} | \
+                 {unsolved} unsolved (clear<={worst_unsolved_clear:.1e})",
+                total_steps as f64 / solved.max(1) as f64
+            );
+            assert_eq!(solved + unsolved, tried);
+            assert!(
+                unsolved * 50 <= tried,
+                "{label}: {unsolved} of {tried} points had no solve -- more than one in fifty is \
+                 not the cut, it is the solve"
+            );
+            assert!(
+                worst_well <= crate::scene::ifs_analysis::NEWTON_TOL,
+                "{label}: residual {worst_well:.2e} at a WELL-conditioned point, over the tolerance"
+            );
+            assert!(
+                steps_well < crate::scene::ifs_analysis::NEWTON_STEPS,
+                "{label}: {steps_well} steps away from the fold -- the cap is the answer, not convergence"
+            );
+            assert!(
+                worst_fold <= 1e-6,
+                "{label}: residual {worst_fold:.2e} at the fold, past even the acceptance bound"
+            );
+            assert!(
+                worst_fwd <= 1e-6,
+                "{label}: a solved preimage maps {worst_fwd:.2e} away -- it is not a preimage"
+            );
+            rows += 1;
+        }
+        assert_eq!(rows, 13);
+    }
+
+    /// G3, second half: a walk on a set of sums reads the set as the
+    /// set.
+    ///
+    /// `ifs-general.md` G3: "a walk on a two-transform set built from
+    /// them against a chaos sample at 2^4: no pixel on the set reads
+    /// as exterior".
+    ///
+    /// The set is two `spherical + linear` transforms, which is the
+    /// census's own shape twice over. The chaos sample IS the set --
+    /// every point in it is a point the forward maps reach -- so the
+    /// walk's distance at each of them has to be a pixel or less. A
+    /// Newton that fails is not a gap (D3), so a lineage that cannot
+    /// be inverted keeps the bound it had; the failure mode this
+    /// gate catches is the opposite one, a sum whose solve returns a
+    /// preimage that is not one, which reads as distance where there
+    /// is none.
+    #[test]
+    fn a_walk_on_summed_transforms_puts_the_chaos_sample_on_the_set() {
+        let guard = crate::variations::global_registry();
+        let r = &*guard;
+        let flame = flame_of(vec![
+            sum_xform("spherical", 0.6, 0.4, 0.55, [0.25, 0.0]),
+            sum_xform("spherical", 0.5, 0.5, 0.5, [-0.3, 0.2]),
+        ]);
+        let ifs = crate::scene::ifs_analysis::analyse_2d(&flame, r).expect("a set of sums");
+        assert!(ifs.maps.iter().all(|m| m.forward.sum().is_some()), "every map is a sum");
+        let sample = chaos_sample(&ifs, 4_000);
+        assert!(sample.len() > 3_000);
+
+        // 2^4 about the ball, at 256 across: the plan's zoom.
+        let span = 2.0 * ifs.ball.radius / 16.0;
+        let px = span / 256.0;
+        let (mut worst, mut worst_at) = (0.0f64, [0.0f64; 2]);
+        let mut over = 0usize;
+        for p in sample.iter().step_by(4) {
+            let e = estimate(&ifs, *p, 24, 8);
+            if e.distance > worst {
+                worst = e.distance;
+                worst_at = *p;
+            }
+            if e.distance > px {
+                over += 1;
+            }
+        }
+        let n = sample.iter().step_by(4).count();
+        println!(
+            "  {n} points of the set at 2^4 (px {px:.3e}): worst {worst:.3e} = {:.2} px, \
+             {over} over a pixel, at {worst_at:?}",
+            worst / px
+        );
+        assert!(
+            over == 0,
+            "{over} of {n} points ON the set read as exterior; worst {:.2} px at {worst_at:?}",
+            worst / px
+        );
+
+        // The control, and it is not optional: a walk that answered
+        // zero everywhere would pass the line above. A point outside
+        // the set must read a distance of the right ORDER, and never
+        // MORE than the nearest sampled point of the set -- every
+        // bound the walk reports is a lower bound on the true
+        // distance, and the sample is an upper one.
+        let c = ifs.ball.centre;
+        for k in [2.0f64, 4.0, 8.0] {
+            let far = [c[0] + k * ifs.ball.radius, c[1]];
+            let e = estimate(&ifs, far, 24, 8);
+            let truth = sample
+                .iter()
+                .fold(f64::INFINITY, |m, s| m.min(f64::hypot(s[0] - far[0], s[1] - far[1])));
+            println!(
+                "  {k}R out: {:.4e} ({:.0} px) against the sample's {truth:.4e} -- {:.3} of it",
+                e.distance,
+                e.distance / px,
+                e.distance / truth
+            );
+            assert!(
+                e.distance > 10.0 * px,
+                "a point {k} radii out reads {:.3e}, under ten pixels -- this walk is answering                  zero and the line above proves nothing",
+                e.distance
+            );
+            // The sample is an upper bound with a gap of its own --
+            // four thousand points do not reach every fold of the
+            // set -- and the walk's far field is the ball's, which is
+            // itself sampled. `nonlinear_walks_never_exceed_a_sampled_upper_bound`
+            // has the same allowance for the same reason and pins it
+            // per kernel. Measured here: 1.007, 1.004 and 1.002 of
+            // the sample at two, four and eight radii, tightening as
+            // the far field takes over, which is the shape a sampling
+            // gap has and not the shape a wrong bound has.
+            assert!(
+                e.distance <= truth * 1.05,
+                "a point {k} radii out reads {:.3e}, {:.2}x the nearest sampled point of the set                  ({truth:.3e}) -- too far past it to be the sample's own gap",
+                e.distance,
+                e.distance / truth
+            );
+        }
+    }
+
     /// G3, and the plan's claim was wrong: a lineage does not HAVE a
     /// fate, it oscillates.
     ///
@@ -4494,12 +4807,24 @@ mod tests {
         let mut out = Vec::with_capacity(count);
         for i in 0..count + 500 {
             let m = &ifs.maps[(next() * ifs.maps.len() as f64).floor() as usize % ifs.maps.len()];
-            let k = match m.forward.nonlinear().map(|n| n.kernel) {
+            // A sum carries its kernel too, and a summed ROOT is the
+            // one forward map whose branch the game has to pick --
+            // every other kernel's forward is single-valued, so `k`
+            // reaching it changes nothing and draws nothing.
+            let kernel = m
+                .forward
+                .nonlinear()
+                .map(|n| n.kernel)
+                .or_else(|| m.forward.sum().map(|r| r.kernel));
+            let k = match kernel {
                 Some(crate::scene::ifs_analysis::Kernel::Root { n, .. }) => (next() * n.unsigned_abs() as f64).floor() as u32,
                 _ => 0,
             };
             p = match &m.forward {
                 Map2::Nonlinear(n) => n.apply_branch(p, k),
+                // A sum's branches are its kernel's, so the game
+                // picks among them as it does for a bare root.
+                Map2::Sum(r) => r.apply_branch(p, k),
                 other => other.apply(p),
             };
             if i >= 500 && p[0].is_finite() && p[1].is_finite() {
@@ -6638,13 +6963,25 @@ mod tests {
         for i in 0..20_500 {
             let mi = (next() * g.maps.len() as f64).floor() as usize % g.maps.len();
             let m = &g.maps[mi];
-            let k = match m.forward.nonlinear().map(|n| n.kernel) {
+            // A sum carries its kernel too, and a summed ROOT is the
+            // one forward map whose branch the game has to pick --
+            // every other kernel's forward is single-valued, so `k`
+            // reaching it changes nothing and draws nothing.
+            let kernel = m
+                .forward
+                .nonlinear()
+                .map(|n| n.kernel)
+                .or_else(|| m.forward.sum().map(|r| r.kernel));
+            let k = match kernel {
                 Some(crate::scene::ifs_analysis::Kernel::Root { n, .. }) => (next() * n.unsigned_abs() as f64).floor() as u32,
                 _ => 0,
             };
             let r_before = Affine2::distance(p, centre);
             p = match &m.forward {
                 Map2::Nonlinear(n) => n.apply_branch(p, k),
+                // A sum's branches are its kernel's, so the game
+                // picks among them as it does for a bare root.
+                Map2::Sum(r) => r.apply_branch(p, k),
                 other => other.apply(p),
             };
             hist.push((mi, r_before));

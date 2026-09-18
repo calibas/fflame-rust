@@ -376,6 +376,45 @@ impl Kernel {
         jacobian2(v, |z| kernel_inverse_gen(self, &z, branch))
     }
 
+    /// How far `z` may move before the FORWARD kernel stops being
+    /// smooth there -- the other side of [`Self::singular_distance`],
+    /// and what a sum needs, since a sum's inverse is a Newton solve
+    /// on the forward map and it is the forward map that has to be
+    /// differentiable.
+    ///
+    /// Only the origin matters for most of them: `z^{1/n}`, `z/|z|²`
+    /// and the blob's radial scale all have their pole there and are
+    /// smooth elsewhere. Disc's forward reads `atan2`, so its cut
+    /// counts too. Hemisphere and bubble's forwards are smooth on the
+    /// whole plane -- their branching is in the INVERSE -- so they
+    /// report no bound at all.
+    pub fn forward_singular_distance(&self, z: [f64; 2]) -> f64 {
+        let rho = z[0].hypot(z[1]);
+        // The negative x axis, in the `[sin φ, cos φ]` frame
+        // `ray_distance` measures in.
+        const NEG_X: f64 = -std::f64::consts::FRAC_PI_2;
+        match *self {
+            Kernel::Hemisphere | Kernel::Bubble => f64::INFINITY,
+            Kernel::Disc => rho.min(Kernel::ray_distance(z, std::f64::consts::PI)),
+            // A root's forward DIVIDES the angle, so `atan2`'s jump
+            // from +π to −π across the negative x axis lands on a
+            // DIFFERENT branch: the map restricted to one branch is
+            // discontinuous there, not merely non-smooth.
+            //
+            // The inverse has no such cut -- it multiplies the angle
+            // by a whole number, and a whole turn is a whole turn --
+            // which is why [`Self::singular_distance`] says the pole
+            // and nothing else and this does not. Measured: seven of
+            // four hundred solves on `julia 0.6 + linear 0.4` failed,
+            // and every one of the seven had its preimage within 0.03
+            // of this ray.
+            Kernel::Root { n, .. } if n.unsigned_abs() > 1 => {
+                rho.min(Kernel::ray_distance(z, NEG_X))
+            }
+            _ => rho,
+        }
+    }
+
     /// How far `v` may move before [`Self::inverse`] stops being
     /// smooth along `branch` -- its pole, its image's edge, or the
     /// cut a branch is taken along.
@@ -982,7 +1021,21 @@ impl NonlinearMap2 {
     /// absolute walk it would have used anyway. The cheap direction
     /// is up.
     pub fn measure_third(&mut self, centre: [f64; 2], radius: f64) {
-        let inv = Map2::NonlinearInverse(*self);
+        self.third = sampled_third(&Map2::NonlinearInverse(*self), centre, radius);
+    }
+}
+
+/// A bound on the largest third derivative of `inv` over the ball
+/// `(centre, radius)`, by central-differencing its Hessian.
+///
+/// The margin is a factor of four on the sampled maximum. A sampled
+/// bound can miss a spike between its samples, and the consequence of
+/// missing one is a lineage carrying a delta a level longer than it
+/// should; the consequence of being generous is a lineage rebasing a
+/// level early, into the absolute walk it would have used anyway. The
+/// cheap direction is up.
+fn sampled_third(inv: &Map2, centre: [f64; 2], radius: f64) -> f64 {
+    {
         let mut worst = 0.0f64;
         const N: i32 = 24;
         for i in 0..=N {
@@ -1022,9 +1075,11 @@ impl NonlinearMap2 {
                 }
             }
         }
-        self.third = worst * 4.0;
+        worst * 4.0
     }
+}
 
+impl NonlinearMap2 {
     /// This map's whole inverse, over any [`Transcendental`]:
     /// `pre⁻¹(K⁻¹(post⁻¹(q) / w))`.
     ///
@@ -1257,6 +1312,12 @@ pub enum Map2 {
     Affine(Affine2),
     Nonlinear(NonlinearMap2),
     NonlinearInverse(NonlinearMap2),
+    /// A kernel SUMMED with an affine, whose inverse is a Newton
+    /// solve rather than a formula (`ifs-general.md` D3). `Sum` is
+    /// the forward direction and `SumInverse` the one the walk
+    /// takes, as the two nonlinear variants are.
+    Sum(SumMap2),
+    SumInverse(SumMap2),
 }
 
 impl Map2 {
@@ -1265,6 +1326,13 @@ impl Map2 {
             Map2::Affine(a) => a.apply(p),
             Map2::Nonlinear(r) => r.apply_branch(p, 0),
             Map2::NonlinearInverse(r) => r.apply_inverse(p),
+            Map2::Sum(r) => r.apply_branch(p, r.branch),
+            // A Newton solve that did not converge is not a point.
+            // Infinity is what the walk reads as "no step here", the
+            // same answer a non-finite inverse gives it.
+            Map2::SumInverse(r) => {
+                r.solve(p).map_or([f64::INFINITY, f64::INFINITY], |(z, _)| z)
+            }
         }
     }
 
@@ -1273,6 +1341,8 @@ impl Map2 {
             Map2::Affine(a) => a.inverse().map(Map2::Affine),
             Map2::Nonlinear(r) => Some(Map2::NonlinearInverse(*r)),
             Map2::NonlinearInverse(r) => Some(Map2::Nonlinear(*r)),
+            Map2::Sum(r) => Some(Map2::SumInverse(*r)),
+            Map2::SumInverse(r) => Some(Map2::Sum(*r)),
         }
     }
 
@@ -1285,7 +1355,8 @@ impl Map2 {
         match self {
             Map2::Affine(a) => Some(a.m),
             Map2::NonlinearInverse(r) => r.inverse_jacobian(q),
-            Map2::Nonlinear(_) => None,
+            Map2::SumInverse(r) => r.inverse_jacobian(q),
+            Map2::Nonlinear(_) | Map2::Sum(_) => None,
         }
     }
 
@@ -1306,7 +1377,10 @@ impl Map2 {
                 a.m[1][0] * d[0] + a.m[1][1] * d[1],
             ]),
             Map2::NonlinearInverse(r) => r.inverse_difference(q, d),
-            Map2::Nonlinear(_) => None,
+            // A sum has no closed-form inverse, so it has no closed-
+            // form DIFFERENCE either. The Taylor rung takes it, as it
+            // takes the disc and the blob.
+            Map2::Nonlinear(_) | Map2::Sum(_) | Map2::SumInverse(_) => None,
         }
     }
 
@@ -1354,6 +1428,7 @@ impl Map2 {
         }
         let third = match self {
             Map2::NonlinearInverse(r) => r.third,
+            Map2::SumInverse(r) => r.third,
             _ => 0.0,
         };
         let mag = f64::hypot(d[0], d[1]);
@@ -1366,7 +1441,7 @@ impl Map2 {
         match self {
             Map2::Affine(_) => true,
             Map2::NonlinearInverse(r) => kernel_has_difference(&r.kernel),
-            Map2::Nonlinear(_) => false,
+            Map2::Nonlinear(_) | Map2::Sum(_) | Map2::SumInverse(_) => false,
         }
     }
 
@@ -1379,6 +1454,10 @@ impl Map2 {
     pub fn local_sigma(&self, q: [f64; 2], sigma_min: f64) -> f64 {
         match self {
             Map2::NonlinearInverse(r) => sigma_min * r.local_sigma_factor(q),
+            // A sum has no constant part to scale: its σ_min is the
+            // whole derivative's, measured at the preimage, and the
+            // map's stored `sigma_min` is 1.
+            Map2::SumInverse(r) => sigma_min * r.local_sigma(q),
             _ => sigma_min,
         }
     }
@@ -1420,7 +1499,31 @@ impl Map2 {
     pub fn hessian(&self, q: [f64; 2]) -> Option<[[[f64; 2]; 2]; 2]> {
         match self {
             Map2::Affine(_) => Some([[[0.0; 2]; 2]; 2]),
-            Map2::Nonlinear(_) => None,
+            Map2::Nonlinear(_) | Map2::Sum(_) => None,
+            // By central differences of the inverse's Jacobian, which
+            // is itself a Newton solve: nesting dual numbers through
+            // a solve would differentiate the ITERATION, not the map.
+            Map2::SumInverse(r) => {
+                let step = 1e-5 * f64::hypot(q[0], q[1]).max(1.0);
+                let mut out = [[[0.0f64; 2]; 2]; 2];
+                for k in 0..2 {
+                    let (mut a, mut b) = (q, q);
+                    a[k] += step;
+                    b[k] -= step;
+                    let (ja, jb) = (r.inverse_jacobian(a)?, r.inverse_jacobian(b)?);
+                    for i in 0..2 {
+                        for j in 0..2 {
+                            out[i][j][k] = (ja[i][j] - jb[i][j]) / (2.0 * step);
+                        }
+                    }
+                }
+                for i in 0..2 {
+                    let mid = (out[i][0][1] + out[i][1][0]) * 0.5;
+                    out[i][0][1] = mid;
+                    out[i][1][0] = mid;
+                }
+                out.iter().flatten().flatten().all(|x| x.is_finite()).then_some(out)
+            }
             Map2::NonlinearInverse(r) => {
                 if !r.inverse_domain(q) {
                     return None;
@@ -1441,7 +1544,8 @@ impl Map2 {
         match self {
             Map2::Affine(_) => f64::INFINITY,
             Map2::NonlinearInverse(r) => r.singular_distance(q),
-            Map2::Nonlinear(_) => 0.0,
+            Map2::SumInverse(r) => r.singular_clearance(q),
+            Map2::Nonlinear(_) | Map2::Sum(_) => 0.0,
         }
     }
 
@@ -1451,6 +1555,9 @@ impl Map2 {
         match self {
             Map2::Affine(a) => a.singular_values(),
             Map2::Nonlinear(r) | Map2::NonlinearInverse(r) => r.singular_values(),
+            // Constant parts a sum does not have. One, so the local
+            // factor above is the whole of it.
+            Map2::Sum(_) | Map2::SumInverse(_) => (1.0, 1.0),
         }
     }
 
@@ -1476,8 +1583,16 @@ impl Map2 {
     /// The nonlinear map behind a map, either direction.
     pub fn nonlinear(&self) -> Option<&NonlinearMap2> {
         match self {
-            Map2::Affine(_) => None,
             Map2::Nonlinear(r) | Map2::NonlinearInverse(r) => Some(r),
+            _ => None,
+        }
+    }
+
+    /// The SUM behind a map, either direction.
+    pub fn sum(&self) -> Option<&SumMap2> {
+        match self {
+            Map2::Sum(r) | Map2::SumInverse(r) => Some(r),
+            _ => None,
         }
     }
 }
@@ -2186,6 +2301,331 @@ fn refusal(r: crate::variations::inverse::Refusal, kind: &str) -> NotAffine {
     }
 }
 
+/// A transform whose normal phase SUMS a kernel with an affine
+/// (`ifs-general.md` D3): forward `p ↦ post(L(z) + w·K(z))` with
+/// `z = pre(p)`.
+///
+/// **This is the commonest transform in the census that the walk
+/// refused.** `linear 0.5 + spherical 0.5` and its kin are everywhere
+/// in real flames, and a weighted sum of a kernel and an affine has
+/// no closed-form inverse -- so before this the analysis returned
+/// `MixedSum` and the flame drew nothing.
+///
+/// It does have a JACOBIAN, exactly, from the affine's matrix and the
+/// kernel's own; and a Jacobian is all Newton needs, because Newton's
+/// accuracy comes from the RESIDUAL and not from the derivative it
+/// steps with. So the inverse is Newton from a seed, and what the
+/// walk gets is an answer with a residual it can check rather than a
+/// refusal.
+///
+/// One kernel and one affine, not a general sum. Two kernels summed
+/// have no dominant term to seed from and no branch rule; the
+/// analysis still refuses those, naming them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SumMap2 {
+    /// The transform's own affine composed with its pre-phase: what
+    /// the summed terms are applied to.
+    pub pre: Affine2,
+    pub pre_inv: Affine2,
+    /// The post-phase composition and the post-affine.
+    pub post: Affine2,
+    pub post_inv: Affine2,
+    /// The affine part of the normal-phase sum, already weighted.
+    pub lin: Affine2,
+    /// Its inverse, for the seed when the affine dominates. `None`
+    /// when the affine part is singular, which is common -- a
+    /// `linear` of weight zero in one axis -- and then the kernel
+    /// seeds.
+    pub lin_inv: Option<Affine2>,
+    pub kernel: Kernel,
+    /// The kernel variation's own name, for the refusal a caller that
+    /// cannot take a sum has to write.
+    pub kind: &'static str,
+    /// Which of the kernel's preimages this map follows.
+    pub branch: u32,
+    /// The kernel's weight in the sum.
+    pub kw: f64,
+    /// A bound on the third derivative of the INVERSE over the ball,
+    /// which is the Taylor rung's remainder. A sum has no exact
+    /// difference form, so every one of them needs this. Zero until
+    /// `analyse_2d` fills it.
+    pub third: f64,
+    /// Whether the KERNEL is the dominant term, which decides where
+    /// Newton starts.
+    pub kernel_leads: bool,
+}
+
+/// How close Newton has to get, relative to `|q|`, before its answer
+/// is taken.
+///
+/// The plan's figure. Below it the residual is the arithmetic's own
+/// and another step buys nothing; above it the point is not a
+/// preimage and saying so is better than returning it.
+pub const NEWTON_TOL: f64 = 1e-12;
+
+/// How many steps it may take.
+///
+/// The plan expects three to six, and away from a fold that is what
+/// it costs -- measured on `linear 0.5 + julia`, four or five steps
+/// to 1e-12 at five of six sample points, with the residual squaring
+/// each step once it starts.
+///
+/// The sixth point is why this is twelve and not six. At `p =
+/// (0.9, 0.4)` on branch 1 the map's derivative `0.5 − 1/(2√z)`
+/// nearly vanishes -- the fold sits at `|z| = 1` and the point is at
+/// `0.985` -- and the dominant term's seed lands at `|z| = 0.27`,
+/// the wrong side of it. Newton then wanders for six steps, its
+/// residual RISING at the fourth, before finding the basin and
+/// converging in three more: nine in total.
+///
+/// A halving safeguard was measured against that and bought one step
+/// of the nine and nothing at all at the other five points, so it is
+/// not here: the cost of a wide cap is paid only where the loop
+/// actually wanders, since it returns the moment the residual is
+/// met, while the safeguard's extra forward evaluation is paid at
+/// every step of every solve.
+pub const NEWTON_STEPS: usize = 12;
+
+impl SumMap2 {
+    /// The normal phase at `z`: `L(z) + w·K(z)`.
+    fn phase(&self, z: [f64; 2], k: u32) -> [f64; 2] {
+        let a = self.lin.apply(z);
+        let b = self.kernel.forward(z, k);
+        [a[0] + self.kw * b[0], a[1] + self.kw * b[1]]
+    }
+
+    /// Its derivative: `L_M + w·J_K(z)`.
+    fn phase_jacobian(&self, z: [f64; 2]) -> Option<[[f64; 2]; 2]> {
+        let j = forward_kernel_jacobian(&self.kernel, z, self.branch)?;
+        let m = &self.lin.m;
+        let out = [
+            [m[0][0] + self.kw * j[0][0], m[0][1] + self.kw * j[0][1]],
+            [m[1][0] + self.kw * j[1][0], m[1][1] + self.kw * j[1][1]],
+        ];
+        out.iter().flatten().all(|v| v.is_finite()).then_some(out)
+    }
+
+    /// The forward map along the kernel's branch `k`.
+    pub fn apply_branch(&self, p: [f64; 2], k: u32) -> [f64; 2] {
+        self.post.apply(self.phase(self.pre.apply(p), k))
+    }
+
+    /// Newton's seed for `v = post⁻¹(q)`, from whichever term leads
+    /// AT THIS POINT.
+    ///
+    /// D3 says "the seed from the transform's dominant term's own
+    /// inverse", and [`Self::kernel_leads`] answers that from the
+    /// weights -- once, for the whole map. That is not where the
+    /// question is asked. On `spherical 0.1 + linear 0.9` the weights
+    /// say the affine leads, and they are right over most of the
+    /// plane and wrong near the origin, where `z/|z|²` is unbounded
+    /// and 0.1 of it dwarfs 0.9 of anything: measured, the affine
+    /// seed there ran the full twelve steps and stopped at a residual
+    /// of 2.3e-10, four orders past the tolerance.
+    ///
+    /// So both seeds are formed where both exist and the one with the
+    /// smaller residual starts. That is the same rule read locally
+    /// rather than globally -- the dominant term at `v`, not the
+    /// dominant term of the map -- and it costs two forward
+    /// evaluations against a solve that is otherwise eight of them.
+    /// `kernel_leads` remains the tiebreak, for the case where only
+    /// one seed exists or the two residuals are equal.
+    fn seed(&self, v: [f64; 2]) -> Option<[f64; 2]> {
+        let from_kernel = {
+            let s = [v[0] / self.kw, v[1] / self.kw];
+            let z = self.kernel.inverse(s, self.branch);
+            (z[0].is_finite() && z[1].is_finite() && z[0].abs() < 1e29 && z[1].abs() < 1e29)
+                .then_some(z)
+        };
+        let from_affine = self
+            .lin_inv
+            .map(|l| l.apply(v))
+            .filter(|z| z.iter().all(|c| c.is_finite()));
+        let residual = |z: [f64; 2]| {
+            let f = self.phase(z, self.branch);
+            let r = f64::hypot(f[0] - v[0], f[1] - v[1]);
+            if r.is_finite() { r } else { f64::INFINITY }
+        };
+        match (from_kernel, from_affine) {
+            (Some(a), Some(b)) => {
+                let (ra, rb) = (residual(a), residual(b));
+                Some(if ra < rb || (ra == rb && self.kernel_leads) { a } else { b })
+            }
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        }
+    }
+
+    /// The inverse along this map's branch, by Newton.
+    ///
+    /// Returns the preimage and the residual it converged to, both
+    /// `None` when it did not. **A failure here is not a gap.** A gap
+    /// is a proof that no preimage exists; a solve that ran out of
+    /// steps proves nothing, so the walk's lineage keeps the bound it
+    /// had -- a valid lower bound, and loose -- rather than claiming
+    /// a distance it has not earned.
+    pub fn solve(&self, q: [f64; 2]) -> Option<([f64; 2], f64)> {
+        self.solve_counted(q).map(|(z, res, _)| (z, res))
+    }
+
+    /// [`Self::solve`], and how many steps it took -- what G3 reports
+    /// and what a GPU budget would be set from.
+    pub fn solve_counted(&self, q: [f64; 2]) -> Option<([f64; 2], f64, usize)> {
+        let v = self.post_inv.apply(q);
+        let scale = f64::hypot(v[0], v[1]).max(1.0);
+        let mut z = self.seed(v)?;
+        for step in 0..NEWTON_STEPS {
+            let f = self.phase(z, self.branch);
+            let r = [f[0] - v[0], f[1] - v[1]];
+            let res = f64::hypot(r[0], r[1]);
+            if res <= NEWTON_TOL * scale {
+                return Some((self.pre_inv.apply(z), res / scale, step));
+            }
+            let j = self.phase_jacobian(z)?;
+            let det = j[0][0] * j[1][1] - j[0][1] * j[1][0];
+            if !(det.abs() > 1e-300) || !det.is_finite() {
+                return None;
+            }
+            let step = [
+                (j[1][1] * r[0] - j[0][1] * r[1]) / det,
+                (j[0][0] * r[1] - j[1][0] * r[0]) / det,
+            ];
+            let next = [z[0] - step[0], z[1] - step[1]];
+            if !next.iter().all(|v| v.is_finite()) {
+                return None;
+            }
+            z = next;
+        }
+        // One last look: eight steps that never met the tolerance may
+        // still have landed somewhere usable, and the caller is told
+        // the residual either way.
+        let f = self.phase(z, self.branch);
+        let res = f64::hypot(f[0] - v[0], f[1] - v[1]) / scale;
+        (res <= 1e-6).then(|| (self.pre_inv.apply(z), res, NEWTON_STEPS))
+    }
+
+    /// The inverse's Jacobian at `q`: the forward's, inverted.
+    pub fn inverse_jacobian(&self, q: [f64; 2]) -> Option<[[f64; 2]; 2]> {
+        let (p, _) = self.solve(q)?;
+        let j = self.forward_jacobian(p)?;
+        let det = j[0][0] * j[1][1] - j[0][1] * j[1][0];
+        if !(det.abs() > 1e-300) || !det.is_finite() {
+            return None;
+        }
+        let out = [
+            [j[1][1] / det, -j[0][1] / det],
+            [-j[1][0] / det, j[0][0] / det],
+        ];
+        out.iter().flatten().all(|v| v.is_finite()).then_some(out)
+    }
+
+    /// The FORWARD map's derivative at `p`, affines and all.
+    pub fn forward_jacobian(&self, p: [f64; 2]) -> Option<[[f64; 2]; 2]> {
+        let j = self.phase_jacobian(self.pre.apply(p))?;
+        let a = &self.pre.m;
+        let b = &self.post.m;
+        let mid = [
+            [j[0][0] * a[0][0] + j[0][1] * a[1][0], j[0][0] * a[0][1] + j[0][1] * a[1][1]],
+            [j[1][0] * a[0][0] + j[1][1] * a[1][0], j[1][0] * a[0][1] + j[1][1] * a[1][1]],
+        ];
+        let out = [
+            [
+                b[0][0] * mid[0][0] + b[0][1] * mid[1][0],
+                b[0][0] * mid[0][1] + b[0][1] * mid[1][1],
+            ],
+            [
+                b[1][0] * mid[0][0] + b[1][1] * mid[1][0],
+                b[1][0] * mid[0][1] + b[1][1] * mid[1][1],
+            ],
+        ];
+        out.iter().flatten().all(|v| v.is_finite()).then_some(out)
+    }
+
+    /// The forward map's smallest singular value at the preimage of
+    /// `q` -- what one level of the walk contracts by there.
+    ///
+    /// Zero when Newton did not converge, which the walk reads as a
+    /// step it cannot take.
+    pub fn local_sigma(&self, q: [f64; 2]) -> f64 {
+        let Some((p, _)) = self.solve(q) else { return 0.0 };
+        let Some(j) = self.forward_jacobian(p) else { return 0.0 };
+        singular_values_of(j).0
+    }
+
+    /// How far `q` may move before this map's inverse stops being
+    /// smooth.
+    ///
+    /// A sum's inverse is a Newton solve on the forward map, so what
+    /// has to stay smooth is the FORWARD kernel, at the preimage --
+    /// [`Kernel::forward_singular_distance`] there, carried into
+    /// `q`'s frame by the forward map's smallest singular value,
+    /// since `|Δq| ≥ σ_min·|Δz|` makes that a sound under-estimate.
+    ///
+    /// It does NOT cover a fold, where `det J` passes through zero
+    /// and two preimages meet: there the inverse is non-smooth at a
+    /// point this reports clearance at. A fold is where Newton stops
+    /// converging, so the walk meets it as a failed solve rather than
+    /// as a wrong answer -- loose, and sound, which is the whole
+    /// bargain D3 strikes.
+    pub fn singular_clearance(&self, q: [f64; 2]) -> f64 {
+        let Some((p, _)) = self.solve(q) else { return 0.0 };
+        let Some(j) = self.forward_jacobian(p) else { return 0.0 };
+        let dom = self.kernel.forward_singular_distance(self.pre.apply(p));
+        let s = singular_values_of(j).0;
+        if !(s > 0.0) {
+            return 0.0;
+        }
+        s * dom
+    }
+
+    /// Measure [`Self::third`] over a ball, as
+    /// [`NonlinearMap2::measure_third`] does and by the same sampling
+    /// -- EVERY sum needs it, since no sum has an exact difference
+    /// form and so every one of them rides the Taylor rung.
+    pub fn measure_third(&mut self, centre: [f64; 2], radius: f64) {
+        self.third = sampled_third(&Map2::SumInverse(*self), centre, radius);
+    }
+
+    /// How many preimages to follow: the kernel's own branch count,
+    /// since the sum's branches are the kernel's.
+    pub fn branches(&self) -> u32 {
+        match self.kernel {
+            Kernel::Root { n, .. } => n.unsigned_abs().max(1),
+            Kernel::Bubble => 2,
+            _ => 1,
+        }
+    }
+}
+
+/// The FORWARD kernel's Jacobian at `z`, by dual numbers.
+///
+/// The walk has never needed this -- it only ever inverts, and
+/// `Kernel::inverse_jacobian` is the derivative of the inverse -- but
+/// a Newton solve steps on the forward map, so here it is, from the
+/// same generic body and with no second derivation.
+/// The branch is not decoration: a root's second preimage is the
+/// NEGATIVE of its first, so a Jacobian taken on branch 0 while the
+/// residual is taken on branch 1 has the wrong sign and Newton walks
+/// away from the answer rather than towards it. Measured: every solve
+/// on branch 1 of `linear + julia` failed until this argument existed.
+pub fn forward_kernel_jacobian(k: &Kernel, z: [f64; 2], branch: u32) -> Option<[[f64; 2]; 2]> {
+    jacobian2(z, |v| kernel_forward_gen(k, &v, branch))
+}
+
+/// `(σ_min, σ_max)` of a 2x2, in closed form -- [`Affine2::singular_values`]
+/// for a bare matrix.
+pub fn singular_values_of(m: [[f64; 2]; 2]) -> (f64, f64) {
+    let [[a, b], [c, d]] = m;
+    let fro2 = a * a + b * b + c * c + d * d;
+    let det = a * d - b * c;
+    let disc = (fro2 * fro2 - 4.0 * det * det).max(0.0).sqrt();
+    (
+        ((fro2 - disc) * 0.5).max(0.0).sqrt(),
+        ((fro2 + disc) * 0.5).max(0.0).sqrt(),
+    )
+}
+
 /// The 2D map a transform composes to -- affine, or a nonlinear map
 /// with its kernel -- or why it is neither. A `bubble` returns its
 /// inner branch; `analyse_2d` adds the outer (S1).
@@ -2204,7 +2644,11 @@ pub fn transform_map_2d_ordered(
         return transform_affine_2d_ordered(t, registry, order).map(Map2::Affine);
     }
     let (kind, w) = stage.roots[0];
-    if stage.roots.len() > 1 || stage.any {
+    // TWO kernels summed have no dominant term to seed Newton from
+    // and no branch rule, so they are still refused. One kernel and
+    // an affine is the case D3 is about, and the commonest transform
+    // in the census the walk used to turn away.
+    if stage.roots.len() > 1 {
         return Err(NotAffine::MixedSum(kind.to_string()));
     }
     let kernel = kernel_from_registry(t, registry, kind, Space::Planar)?;
@@ -2230,6 +2674,33 @@ pub fn transform_map_2d_ordered(
     let (Some(pre_inv), Some(post_inv)) = (pre.inverse(), post.inverse()) else {
         return Ok(Map2::Affine(Affine2 { m: [[0.0; 2]; 2], t: [0.0; 2] }));
     };
+    if stage.any {
+        // A kernel SUMMED with an affine (D3). The affine part is
+        // `stage.sum`'s xy block, already weighted, applied to the
+        // same point the kernel is.
+        let lin = xy(&stage.sum);
+        let (_, lin_hi) = lin.singular_values();
+        // Which term Newton starts from. The kernel's own inverse is
+        // the better seed where it dominates the sum's size; the
+        // affine's where it does not. `w` scales the kernel's output,
+        // and the affine's scale is its largest singular value, so
+        // that is the comparison.
+        let kernel_leads = w.abs() > lin_hi;
+        return Ok(Map2::Sum(SumMap2 {
+            pre,
+            pre_inv,
+            post,
+            post_inv,
+            lin,
+            lin_inv: lin.inverse(),
+            kernel,
+            kind,
+            branch: 0,
+            kw: w,
+            third: 0.0,
+            kernel_leads,
+        }));
+    }
     Ok(Map2::Nonlinear(NonlinearMap2 {
         kernel,
         branch: 0,
@@ -2415,6 +2886,16 @@ pub enum Disqualification {
     /// No ball every map sends into itself was found (plan §8.8 J5):
     /// the root maps do not keep the set bounded.
     NoBall,
+    /// Transform `index` sums `kind` with an affine. The CPU walk
+    /// inverts that by Newton (`ifs-general.md` D3), but the shader
+    /// has no forward body for it yet -- D3's remaining half, "the
+    /// one piece of real plumbing in this plan" -- so the GPU turns
+    /// the flame away and says which half is missing.
+    ///
+    /// **Only [`crate::escape::ifs::pack_flame`] raises this.** The
+    /// analysis itself returns the map; a caller that can only take a
+    /// closed form is the one that has to say so.
+    NoShaderForm { index: usize, kind: String },
 }
 
 impl std::fmt::Display for Disqualification {
@@ -2432,6 +2913,11 @@ impl std::fmt::Display for Disqualification {
                 NotAffine::Degenerate(v) => write!(f, "transform {index}'s `{v}` has a parameter that leaves it no single inverse (a zero power or distance, a scale that reaches zero)"),
                 NotAffine::Mode(v) => write!(f, "transform {index}'s `{v}` must be in inverse mode with the vector projection"),
             },
+            Self::NoShaderForm { index, kind } => write!(
+                f,
+                "transform {index} sums `{kind}` with an affine, which this renderer inverts \
+                 numerically and the GPU does not yet"
+            ),
             Self::Singular { index } => write!(f, "transform {index} is singular (no inverse)"),
             Self::NotContractive { index, sigma_max } => {
                 write!(f, "transform {index} is not contractive (σ_max = {sigma_max:.3})")
@@ -2718,12 +3204,27 @@ pub fn analyse_2d(flame: &Flame, registry: &VariationRegistry) -> Result<Ifs2, V
     let maps: Vec<IfsMap<Map2>> = maps
         .into_iter()
         .flat_map(|m| {
-            let branches = m.forward.nonlinear().map_or(1, |n| n.branch_count(&ball));
+            // A sum's branches are its KERNEL's (D3: "the branch count
+            // is the dominant term's, and each of its branches seeds
+            // one Newton solve"), so the two cases read the same
+            // count from the same kernel.
+            let branches = match (m.forward.nonlinear(), m.forward.sum()) {
+                (Some(n), _) => n.branch_count(&ball),
+                (_, Some(r)) => r.branches(),
+                _ => 1,
+            };
             (0..branches).map(move |b| {
                 let mut mb = m;
-                if let (Map2::Nonlinear(f), Map2::NonlinearInverse(i)) = (&mut mb.forward, &mut mb.inverse) {
-                    f.branch = b;
-                    i.branch = b;
+                match (&mut mb.forward, &mut mb.inverse) {
+                    (Map2::Nonlinear(f), Map2::NonlinearInverse(i)) => {
+                        f.branch = b;
+                        i.branch = b;
+                    }
+                    (Map2::Sum(f), Map2::SumInverse(i)) => {
+                        f.branch = b;
+                        i.branch = b;
+                    }
+                    _ => {}
                 }
                 mb
             })
@@ -2756,6 +3257,12 @@ fn set_holes(maps: &mut [IfsMap<Map2>], ball: &Ball<[f64; 2]>) {
                 let (bc, br) = (ball.centre, ball.radius);
                 r.measure_third(bc, br);
             }
+        }
+        // A sum has no hole -- its image is not the kernel's, because
+        // the affine term moves it -- but it always rides the Taylor
+        // rung, so it always needs the remainder.
+        if let Map2::Sum(r) | Map2::SumInverse(r) = &mut m.inverse {
+            r.measure_third(ball.centre, ball.radius);
         }
     }
 }
@@ -4041,17 +4548,70 @@ mod tests {
         }
     }
 
-    /// A root summed with an affine has no closed-form inverse (J4);
-    /// a root with a power of zero is not a map. Both are said, not
-    /// silently treated as affine or as unknown.
+    /// A root summed with an affine is a [`SumMap2`], inverted by
+    /// Newton (`ifs-general.md` D3); a root summed with ANOTHER root
+    /// still is not a map this can invert, and says so; a root with a
+    /// power of zero is not a map at all.
+    ///
+    /// The first of those three used to be the second. `linear 0.5 +
+    /// julia 1.0` is the shape of the commonest transform the census
+    /// turned away, and it is taken now -- but two kernels summed have
+    /// no dominant term to seed Newton from and no branch rule, so
+    /// that refusal stands, with the reason naming one of them.
     #[test]
     fn a_root_must_be_alone_in_its_sum_and_have_a_power() {
         let guard = global_registry();
         let r = &*guard;
         let mixed = with(julia_xform([0.0, 0.0]), "linear", 0.5);
-        let errs = analyse_2d(&flame_of(vec![mixed]), r).unwrap_err();
+        let ifs = analyse_2d(&flame_of(vec![mixed]), r).expect("a sum is a map now");
+        let sum = ifs.maps[0].forward.sum().copied().expect("a sum");
+        assert_eq!(sum.kernel, Kernel::Root { n: 2, d: 1.0 });
+        assert_eq!(sum.kind, "julia");
+        assert!(close(sum.kw, 1.0) && close(sum.lin.m[0][0], 0.5));
+        // A root's two preimages are the sum's two, and each is a
+        // Newton solve of its own (D3).
+        assert_eq!(ifs.maps.len(), 2);
+        assert_eq!((ifs.maps[0].inverse.sum().unwrap().branch, ifs.maps[1].inverse.sum().unwrap().branch), (0, 1));
+        // And both of them invert: the branch reaches the Newton
+        // JACOBIAN as well as its residual, which it did not at first
+        // -- branch 1 of a root is the negative of branch 0, so a
+        // Jacobian on the wrong branch has the wrong sign and every
+        // solve failed.
+        for m in ifs.maps.iter() {
+            let f = m.forward.sum().expect("a sum");
+            let inv = m.inverse.sum().expect("a sum");
+            for p in [[0.31, -0.22], [0.9, 0.4], [-0.5, 0.7]] {
+                let q = f.apply_branch(p, f.branch);
+                let (back, res, steps) = inv
+                    .solve_counted(q)
+                    .unwrap_or_else(|| panic!("branch {}: no solve at {p:?}", f.branch));
+                // Four or five steps, except branch 1 at (0.9, 0.4),
+                // which takes NINE: the fold of `0.5z − √z` sits at
+                // `|z| = 1` and that point is at 0.985, so the seed
+                // lands the wrong side of it and Newton wanders six
+                // steps before it finds the basin. That is the
+                // measurement [`NEWTON_STEPS`] is set from, pinned
+                // here so a change to the seed rule has to face it.
+                assert!(steps <= 9, "branch {}: {steps} steps at {p:?}", f.branch);
+                assert!(res < 1e-12, "branch {}: residual {res:.2e}", f.branch);
+                assert!(
+                    close(back[0], p[0]) && close(back[1], p[1]),
+                    "branch {}: {back:?} not {p:?}",
+                    f.branch
+                );
+            }
+        }
+
+        // TWO kernels in one sum: still refused, and the reason names
+        // a kernel rather than saying "not affine".
+        let two = with(with(julia_xform([0.0, 0.0]), "spherical", 0.4), "linear", 0.5);
+        let errs = analyse_2d(&flame_of(vec![two]), r).unwrap_err();
         assert!(
-            errs.iter().any(|e| matches!(e, Disqualification::NotAffine { why: NotAffine::MixedSum(v), .. } if v == "julia")),
+            errs.iter().any(|e| matches!(
+                e,
+                Disqualification::NotAffine { why: NotAffine::MixedSum(v), .. }
+                    if v == "julia" || v == "spherical"
+            )),
             "{errs:?}"
         );
         let mut j = affine_xform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
@@ -5777,6 +6337,128 @@ mod census {
         out
     }
 
+    /// D7's row for D3, and the shipped corpus does not have it.
+    ///
+    /// `ifs-general.md` says `linear 0.5 + spherical 0.5` "is among
+    /// the commonest transforms in the census". Of the 170 shipped
+    /// flames, **not one** is refused for it -- `MixedSum` does not
+    /// appear in
+    /// [`how_many_shipped_flames_are_affine_ifss`]'s reason table at
+    /// all, before this rung or after, and the count of flames that
+    /// qualify is the same twenty either way. Those configs are our
+    /// own, mostly one-variation smoke tests, and a smoke test for one
+    /// variation does not sum it with a `linear`.
+    ///
+    /// So the row is measured where D4's was: the imported `.flame`
+    /// files in `output/`, which are Apophysis and JWildfire exports
+    /// and are what a real flame looks like. **That corpus is
+    /// gitignored**, so this is `#[ignore]`d and prints rather than
+    /// asserts -- it is a meter, and a meter with no corpus in front
+    /// of it reports that.
+    ///
+    /// Measured 2026-09-18 over the 45 files then present:
+    ///
+    /// ```text
+    ///   files 45 | flames 45 | transforms 109
+    ///   transforms that SUM a kernel with an affine: 4 in 4 flames
+    ///   flames unlocked by the sum rung alone: 0
+    ///   still refused: 0 sum TWO kernels; 87 name a variation with no inverse
+    ///   the sums, by kernel: spherical 3, bubble 1
+    /// ```
+    ///
+    /// Read flat, four transforms in a hundred and nine is not
+    /// "among the commonest". Read against what this rung can
+    /// possibly reach, it is: eighty-seven of those transforms name
+    /// a variation with no `InverseDef` at all and never get as far
+    /// as the sum, so of the twenty-two that do, **four are sums** --
+    /// close to one in five.
+    ///
+    /// And ZERO flames are unlocked, because each of those four sits
+    /// in a flame that also carries one of the eighty-seven. That is
+    /// the shape of this rung and it is worth saying plainly: the
+    /// catalogue is the wall, and the sum is a second wall behind it.
+    /// Taking the sum down makes no flame render today; it stops the
+    /// sum from being the NEXT refusal every time D1's registry gains
+    /// an entry. Not one of the four sums two kernels, so the case
+    /// D3 leaves refused did not occur at all here.
+    #[test]
+    #[ignore]
+    fn how_often_a_real_flame_sums_a_kernel_with_an_affine() {
+        let guard = global_registry();
+        let r = &*guard;
+        let dir = std::path::Path::new("output");
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(dir) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.extension().and_then(|x| x.to_str()) == Some("flame") {
+                    files.push(p);
+                }
+            }
+        }
+        files.sort();
+        if files.is_empty() {
+            println!(
+                "no `.flame` corpus in output/ -- this meter has nothing in front of it"
+            );
+            return;
+        }
+        let (mut flames, mut xforms, mut sums, mut sum_flames, mut unlocked) = (0, 0, 0, 0, 0);
+        let (mut two_kernels, mut unknown_var) = (0usize, 0usize);
+        let mut by_kernel: BTreeMap<String, usize> = BTreeMap::new();
+        for f in &files {
+            let Ok(text) = std::fs::read_to_string(f) else { continue };
+            let Ok(configs) = crate::flame_xml::parse_flame_xml(&text) else { continue };
+            for c in configs {
+                flames += 1;
+                let order = c.flame.active_variation_names_ordered(r);
+                let mut any_sum = false;
+                let mut all_known = true;
+                for t in c.flame.transforms.iter() {
+                    xforms += 1;
+                    match transform_map_2d_ordered(t, r, &order) {
+                        Ok(m) => {
+                            if let Some(su) = m.sum() {
+                                sums += 1;
+                                any_sum = true;
+                                *by_kernel.entry(su.kind.to_string()).or_default() += 1;
+                            }
+                        }
+                        Err(why) => {
+                            all_known = false;
+                            match why {
+                                NotAffine::MixedSum(_) => two_kernels += 1,
+                                NotAffine::Variation(_) => unknown_var += 1,
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                if any_sum {
+                    sum_flames += 1;
+                    // "Unlocked by this rung alone" means: every other
+                    // transform reads, so the sum was the only wall.
+                    if all_known && analyse_2d(&c.flame, r).is_ok() {
+                        unlocked += 1;
+                    }
+                }
+            }
+        }
+        let mut v: Vec<_> = by_kernel.iter().collect();
+        v.sort_by(|a, b| b.1.cmp(a.1));
+        println!("\n=== the sum rung's census row ===");
+        println!("  files {} | flames {flames} | transforms {xforms}", files.len());
+        println!("  transforms that SUM a kernel with an affine: {sums} in {sum_flames} flames");
+        println!("  flames unlocked by the sum rung alone: {unlocked}");
+        println!(
+            "  still refused: {two_kernels} sum TWO kernels; {unknown_var} name a variation with no inverse"
+        );
+        println!(
+            "  the sums, by kernel: {}",
+            v.iter().map(|(k, n)| format!("{k} {n}")).collect::<Vec<_>>().join(", ")
+        );
+    }
+
     #[test]
     fn how_many_shipped_flames_are_affine_ifss() {
         let guard = global_registry();
@@ -5805,6 +6487,9 @@ mod census {
                             Disqualification::MultipleFinals { .. } => "multiple finals".to_string(),
                             Disqualification::Empty => "empty".to_string(),
                             Disqualification::NoBall => "no invariant ball".to_string(),
+                            Disqualification::NoShaderForm { .. } => {
+                                "sum, no shader form".to_string()
+                            }
                         };
                         seen.insert(key);
                     }
