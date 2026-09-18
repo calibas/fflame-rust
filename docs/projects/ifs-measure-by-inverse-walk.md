@@ -238,25 +238,25 @@ ball's centre the distance walk ranks by (D3).
    gave it the handover's prefix so it zooms. It is exact against
    the f64 reference on the affine fixtures at every handover level
    tested.
-3. ~~**Colour**~~ -- done 2026-09-17, §5f: the address fold is
-   four to twenty-six times better than a coarse lookup and its
-   error falls toward zero with the zoom. §5j then removed the
-   address from it entirely -- the reversed fold accumulates
-   forward, two floats, which is what made the shader's version
-   sizeable. **Units (D4) are the remaining half of this item and
-   are OPEN**: §5h measured the falloff at twenty to thirty stops
-   between 2^5 and 2^20, and the normalisation that answers it is
-   not built.
+3. ~~**Colour and units**~~ -- done 2026-09-17. The address fold
+   is four to twenty-six times better than a coarse lookup (§5f),
+   and §5j then removed the address from it entirely -- the
+   reversed fold accumulates forward, two floats, which is what
+   made the shader's version sizeable. Units followed in §5p:
+   brightness 0 is AUTO and divides out the view's own median
+   density, holding exposure to 0.07 stops across four zooms where
+   a fixed value drifts 0.46.
 4. **Monte Carlo** (D3), if G1 shows the beam sum's bias on the
    overlap fixtures.
 5. **Depth.** Nothing to build: the walk is the seeded walk, and
    the delta plan's walk when it lands. G5 is the gate.
 
-Items 1 to 3 are item 2 of the delta plan's §9. **What is left of
-this plan is item 3's units half, item 4, and two measured residues**:
-the gasket's 1.5% (§5n) and a curved set's 1.296 at a handover past
-level 0 (§5o), which is the delta plan's quadratic carry to fix and
-not this plan's.
+Items 1 to 3 are item 2 of the delta plan's §9, and all three are
+done. **What is left of this plan is item 4** -- the Monte Carlo
+variant, wanted only where many addresses cover one pixel -- **and
+two measured residues**: the gasket's 1.5% (§5n) and a curved set's
+1.296 at a handover past level 0 (§5o), which is the delta plan's
+quadratic carry to fix and not this plan's.
 
 ## 5a. The factorisation holds, 2026-09-17
 
@@ -1123,6 +1123,42 @@ was the point of the exercise: the coarse pass is view-independent,
 the handover carries the prefix, and no forward sample is drawn at
 the zoom.
 
+## 5p. Brightness holds across the zoom, 2026-09-17
+
+D4's open half. §5h measured the problem: density per unit AREA
+CLIMBS as the zoom deepens, because the measure lives on a set of
+dimension below two and `ρ` scales as `2^(z(2−D))` -- 6.5 stops over
+fifteen zoom levels on a gasket, 7.4 on a grand julian. A fixed
+brightness therefore blows out as you go in, and the flam3 tonemap
+does not help: it normalises by iterations per pixel, which is
+iteration-invariant and not zoom-invariant.
+
+**Brightness 0 is now AUTO, and is the default.** The view's own
+median density is divided out, sampled by forty-nine
+`estimate_measure` calls across the frame rather than reduced on the
+GPU -- a reduction would be exact and this is an exposure, and
+forty-nine calls are a fraction of the prefix the same view already
+pays for. `EscapeRenderer` keeps the coarse pass on the CPU for it,
+which is what those calls read; 12 MB at a 1024 grid, dropped with
+the flame. Any other value is the user's and is left alone.
+
+| | 2^2 | 2^5 | 2^8 | 2^11 | spread |
+|---|---|---|---|---|---|
+| auto | 0.243 | 0.254 | 0.247 | 0.255 | **0.07 stops** |
+| fixed | 0.152 | 0.173 | 0.187 | 0.209 | 0.46 stops |
+
+Median brightness of the lit pixels, same flame, four zooms two
+decades apart.
+
+**The control had to be fixed before it said anything.** At a fixed
+brightness of 1 it read 0.03 stops -- flatter than auto -- because
+every lit pixel saturates to the same value, and a control that
+clips is no control. At 0.002 it drifts monotonically, which is the
+climb, and the gate now asserts BOTH that auto holds under 0.15
+stops and that the control drifts at least three times as far.
+Without the second assertion the gate would pass on a view that
+never needed the correction.
+
 ## 6. Gates
 
 - **G1. The measure is the chaos game's.** At 2^2 to 2^6 on the
@@ -1138,9 +1174,14 @@ the zoom.
   correction, at `color_speed` 0, 0.5 and 0.9.
 - **G3. Xaos and finals**, when [ifs-general.md](ifs-general.md)
   D4 and D5 land: G1 on a xaos flame and on a flame with a final.
-- **G4. Units.** The coarse flame rendered through the measure walk
-  at zoom 1 with the flame's own tonemap settings, against the
-  coarse render itself: identical to the tonemap's quantisation.
+- **G4. Units** -- MET by `the_measures_brightness_holds_across_the_zoom`,
+  §5p, though not in the shape written here. Matching the coarse
+  render at zoom 1 would pin the units at ONE view, and the problem
+  §5h measured is that they move BETWEEN views. So the gate renders
+  one flame at four zooms two decades apart and asserts the median
+  brightness of the lit pixels holds: 0.07 stops on auto against
+  0.46 for a fixed control, which it also asserts must drift, or
+  the view is not exercising the climb.
 - **G5. Depth.** The delta plan's G6, zoom self-consistency, on the
   measure: the centre quarter at 2^z downsampled against 2^(z−2),
   for z to 40 today and to 64 with the delta walk.
