@@ -2886,16 +2886,6 @@ pub enum Disqualification {
     /// No ball every map sends into itself was found (plan §8.8 J5):
     /// the root maps do not keep the set bounded.
     NoBall,
-    /// Transform `index` sums `kind` with an affine. The CPU walk
-    /// inverts that by Newton (`ifs-general.md` D3), but the shader
-    /// has no forward body for it yet -- D3's remaining half, "the
-    /// one piece of real plumbing in this plan" -- so the GPU turns
-    /// the flame away and says which half is missing.
-    ///
-    /// **Only [`crate::escape::ifs::pack_flame`] raises this.** The
-    /// analysis itself returns the map; a caller that can only take a
-    /// closed form is the one that has to say so.
-    NoShaderForm { index: usize, kind: String },
 }
 
 impl std::fmt::Display for Disqualification {
@@ -2913,11 +2903,6 @@ impl std::fmt::Display for Disqualification {
                 NotAffine::Degenerate(v) => write!(f, "transform {index}'s `{v}` has a parameter that leaves it no single inverse (a zero power or distance, a scale that reaches zero)"),
                 NotAffine::Mode(v) => write!(f, "transform {index}'s `{v}` must be in inverse mode with the vector projection"),
             },
-            Self::NoShaderForm { index, kind } => write!(
-                f,
-                "transform {index} sums `{kind}` with an affine, which this renderer inverts \
-                 numerically and the GPU does not yet"
-            ),
             Self::Singular { index } => write!(f, "transform {index} is singular (no inverse)"),
             Self::NotContractive { index, sigma_max } => {
                 write!(f, "transform {index} is not contractive (σ_max = {sigma_max:.3})")
@@ -6487,9 +6472,6 @@ mod census {
                             Disqualification::MultipleFinals { .. } => "multiple finals".to_string(),
                             Disqualification::Empty => "empty".to_string(),
                             Disqualification::NoBall => "no invariant ball".to_string(),
-                            Disqualification::NoShaderForm { .. } => {
-                                "sum, no shader form".to_string()
-                            }
                         };
                         seen.insert(key);
                     }

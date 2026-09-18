@@ -329,6 +329,7 @@ fn ifs_image_gap(i: u32, p: vec2<f32>) -> f32 {
 // post-inverse with 1/w folded in, then the kernel's inverse along
 // the row's branch, then the pre-inverse.
 fn ifs_inv_point(i: u32, p: vec2<f32>) -> vec2<f32> {
+//__IFS_SUM_POINT__
     let m = ifs_maps[i].inv_m;
     let t = ifs_maps[i].inv_t;
     let q = vec2<f32>(
@@ -350,6 +351,7 @@ fn ifs_inv_point(i: u32, p: vec2<f32>) -> vec2<f32> {
 // The forward map's sigma_min at the point whose image is p: the
 // row's constant, times the kernel's local factor.
 fn ifs_inv_sigma(i: u32, p: vec2<f32>) -> f32 {
+//__IFS_SUM_SIGMA__
     let s = ifs_maps[i].sigma_min;
     if (ifs_maps[i].kind == 0.0) {
         return s;
@@ -2157,6 +2159,23 @@ pub struct IfsMapGpu {
     /// [`crate::scene::ifs_estimate::MeasureMaps`] is where that
     /// lives and where it is explained.
     pub measure: [f32; 4],
+    /// A SUM row's affine term, row-major 2x2; zero on every other
+    /// row (`ifs-general.md` D3).
+    ///
+    /// The other three affines a sum needs are already here --
+    /// `inv_m`/`inv_t` is its `post⁻¹` and `pre_m`/`pre_t` its
+    /// `pre⁻¹` -- but the summed affine is a fourth and has nowhere
+    /// to go. Two whole `vec4`s rather than the seven floats it
+    /// needs, because std430 would round the stride to a multiple of
+    /// sixteen anyway.
+    pub lin_m: [f32; 4],
+    /// `(t.x, t.y, kw, kernel_kind)`.
+    ///
+    /// The kernel's own kind code lives here because `kind` says 7
+    /// for every sum -- the row's kind is what the WALK dispatches
+    /// on, and which kernel is inside the sum is a separate question
+    /// that only the forward body asks.
+    pub lin_t: [f32; 4],
 }
 
 /// The whole-IFS constants, packed into the `fdata` block the escape
@@ -2382,26 +2401,13 @@ pub fn pack_flame(
     // of 3D roots is a solid one and not a planar one. Both failing
     // is what "does not qualify" means; the planar reasons are the
     // ones reported, as the panel's criterion is the planar one.
-    let planar = crate::scene::ifs_analysis::analyse_2d(flame, registry)
-        .map(|ifs| match extent {
-            Some(r) => ifs.with_extent(r),
-            None => ifs,
-        })
-        // A SUM is a map the analysis can now build and the shader
-        // cannot yet run (`ifs-general.md` D3: the forward variation
-        // bodies still have to be spliced in through the per-flame
-        // local index map). The CPU walk and every gate here take it;
-        // the render path turns it away, naming the transform, which
-        // is what the panel used to say for the same flame under
-        // `MixedSum`.
-        .and_then(|ifs| match ifs.maps.iter().find_map(|m| {
-            m.forward.sum().map(|r| (m.transform_index, r.kind.to_string()))
-        }) {
-            Some((index, kind)) => Err(vec![
-                crate::scene::ifs_analysis::Disqualification::NoShaderForm { index, kind },
-            ]),
-            None => Ok(ifs),
-        });
+    // A SUM needs no special case here: the shader inverts it by
+    // Newton over the kernel's forward body (`ifs-general.md` D3) and
+    // `pack_maps` writes kind 7 with the summed affine beside it.
+    let planar = crate::scene::ifs_analysis::analyse_2d(flame, registry).map(|ifs| match extent {
+        Some(r) => ifs.with_extent(r),
+        None => ifs,
+    });
     let solid = crate::scene::ifs_analysis::analyse_3d(flame, registry)
         .ok()
         .map(|ifs3| {
@@ -2595,6 +2601,7 @@ fn ifs_kernel_jacobian(i: u32, v: vec2<f32>) -> mat2x2<f32> {
 // inverse -> pre affine, so the derivative is pre * J_kernel * inv.
 // An affine row has no kernel and is just the one matrix.
 fn ifs_map_jacobian(i: u32, q: vec2<f32>) -> mat2x2<f32> {
+//__IFS_SUM_JACOBIAN__
     let m = ifs_maps[i].inv_m;
     // Row-major [a, b, c, d] as a COLUMN-major mat2x2.
     let am = mat2x2<f32>(vec2<f32>(m.x, m.z), vec2<f32>(m.y, m.w));
@@ -2931,6 +2938,315 @@ fn ifs_map_difference(i: u32, q: vec2<f32>, d: vec2<f32>) -> vec3<f32> {
     }
     let p = ifs_maps[i].pre_m;
     return vec3<f32>(p.x * du.x + p.y * du.y, p.z * du.x + p.w * du.y, 1.0);
+}
+"#;
+
+/// The FORWARD kernels, the summed phase, and the Newton solve that
+/// inverts it -- the shader half of `ifs-general.md` D3.
+///
+/// Its own const, like [`IFS_JACOBIAN`] and for the same reason: it
+/// depends on nothing but the map rows and `ff_atan2`, so a gate can
+/// compile it against a short harness and check the arithmetic point
+/// by point against the CPU, instead of standing up a whole render
+/// and inferring.
+///
+/// **Spliced only when a row is a sum.** The two marker lines it
+/// fills -- `//__IFS_SUM_POINT__` and `//__IFS_SUM_SIGMA__` -- are
+/// dropped otherwise, so every shader that has no sum in it is the
+/// byte-identical text it was before this existed.
+///
+/// The Jacobian is central differences in f32, which D3 says Newton
+/// tolerates "because its accuracy comes from the residual and not
+/// from `J`". That is the whole reason a sum can be inverted on a GPU
+/// at all: nobody has to write seven forward derivatives in WGSL and
+/// keep them in step with seven on the CPU.
+pub(crate) const IFS_NEWTON: &str = r#"
+// The kernel's FORWARD map on z, along the row's branch. The inverse
+// of `ifs_kernel_inverse`, and the same arithmetic as
+// `kernel_forward_gen` on the CPU -- including spherical's 1e-6,
+// which is the flame's own guard and not a tolerance.
+//
+// `k` is the row's KERNEL kind (lin_t.w), not its row kind: every sum
+// says 7.
+fn ifs_kernel_forward(i: u32, z: vec2<f32>) -> vec2<f32> {
+    let k = ifs_maps[i].lin_t.w;
+    let r2 = dot(z, z);
+    if (k == 1.0) {
+        let n = ifs_maps[i].params.x;
+        let d = ifs_maps[i].params.y;
+        let tau = 6.28318530717959;
+        let rr = pow(sqrt(r2), d / abs(n));
+        let a = (ff_atan2(z.y, z.x) + tau * ifs_maps[i].branch) / n;
+        return vec2<f32>(rr * cos(a), rr * sin(a));
+    }
+    if (k == 2.0) {
+        return z / (r2 + 1e-6);
+    }
+    if (k == 4.0) {
+        return z / sqrt(r2 + 1.0);
+    }
+    if (k == 5.0) {
+        let theta = ff_atan2(z.x, z.y);
+        let pi = 3.14159265358979;
+        let r = sqrt(r2);
+        let rho = theta / pi;
+        return vec2<f32>(rho * sin(pi * r), rho * cos(pi * r));
+    }
+    if (k == 6.0) {
+        let theta = ff_atan2(z.x, z.y);
+        let high = ifs_maps[i].params.x;
+        let low = ifs_maps[i].params.y;
+        let waves = ifs_maps[i].params.z;
+        let sc = low + (high - low) * 0.5 * (sin(waves * theta) + 1.0);
+        let r = sqrt(r2) * sc;
+        return vec2<f32>(r * cos(theta), r * sin(theta));
+    }
+    // bubble
+    return z * (4.0 / (r2 + 4.0));
+}
+
+// The summed phase: `L(z) + kw * K(z)`.
+fn ifs_sum_phase(i: u32, z: vec2<f32>) -> vec2<f32> {
+    let m = ifs_maps[i].lin_m;
+    let t = ifs_maps[i].lin_t;
+    let a = vec2<f32>(m.x * z.x + m.y * z.y + t.x, m.z * z.x + m.w * z.y + t.y);
+    return a + t.z * ifs_kernel_forward(i, z);
+}
+
+// Its derivative, by central differences.
+//
+// The step is relative to |z| and never below 1e-4: in f32 a smaller
+// one loses more to cancellation than it gains in truncation, and
+// Newton does not need the digits -- a Jacobian good to three places
+// still halves the residual's exponent every step, and it is the
+// RESIDUAL that decides when to stop.
+fn ifs_sum_phase_jacobian(i: u32, z: vec2<f32>) -> mat2x2<f32> {
+    let h = max(1e-4, 1e-3 * max(abs(z.x), abs(z.y)));
+    let ax = ifs_sum_phase(i, z + vec2<f32>(h, 0.0));
+    let bx = ifs_sum_phase(i, z - vec2<f32>(h, 0.0));
+    let ay = ifs_sum_phase(i, z + vec2<f32>(0.0, h));
+    let by = ifs_sum_phase(i, z - vec2<f32>(0.0, h));
+    // Columns, which is how WGSL builds a matrix.
+    return mat2x2<f32>((ax - bx) / (2.0 * h), (ay - by) / (2.0 * h));
+}
+
+// `ifs_kernel_inverse`'s body against the row's KERNEL kind rather
+// than its row kind. Only the seed needs it, and only the kinds a sum
+// can hold.
+fn ifs_sum_kernel_inverse(i: u32, v: vec2<f32>) -> vec2<f32> {
+    let k = ifs_maps[i].lin_t.w;
+    let r2 = dot(v, v);
+    if (k == 1.0) {
+        let n = ifs_maps[i].params.x;
+        let a = n * ff_atan2(v.y, v.x);
+        let rr = pow(sqrt(r2), abs(n) / ifs_maps[i].params.y);
+        return vec2<f32>(rr * cos(a), rr * sin(a));
+    }
+    if (k == 2.0) {
+        return v / max(r2, 1e-30);
+    }
+    if (k == 4.0) {
+        if (r2 >= 1.0) {
+            return v * 1e30;
+        }
+        return v / sqrt(1.0 - r2);
+    }
+    if (k == 5.0) {
+        let rho = sqrt(r2);
+        if (rho > 1.0) {
+            return v * 1e30;
+        }
+        let pi = 3.14159265358979;
+        let m = ifs_maps[i].branch;
+        let r = ff_atan2(v.x, v.y) / pi + m;
+        if (r < 0.0) {
+            return vec2<f32>(1e30, 1e30);
+        }
+        let even = fract(m * 0.5) == 0.0;
+        let theta = select(-pi * rho, pi * rho, even);
+        return vec2<f32>(r * sin(theta), r * cos(theta));
+    }
+    if (k == 6.0) {
+        let theta = ff_atan2(v.y, v.x);
+        let high = ifs_maps[i].params.x;
+        let low = ifs_maps[i].params.y;
+        let waves = ifs_maps[i].params.z;
+        let s = low + (high - low) * 0.5 * (sin(waves * theta) + 1.0);
+        return vec2<f32>(v.y, v.x) / s;
+    }
+    if (r2 > 1.0) {
+        return v * 1e30;
+    }
+    // `ifs_bubble_scale`, inlined: this const is spliced BEFORE the
+    // formula's own body, because `ifs_inv_point` has to be able to
+    // call into it and WGSL declares before it uses. So it may not
+    // call back the other way.
+    let root = sqrt(max(1.0 - r2, 0.0));
+    let up = 1.0 + root;
+    return v * select(2.0 * up / max(r2, 1e-30), 2.0 / up, ifs_maps[i].branch == 0.0);
+}
+
+// Newton's seed, from whichever term leads AT v -- the two candidate
+// inverses, and the one with the smaller residual starts. The same
+// rule as `SumMap2::seed`, and for the same measured reason: a
+// weight-decided leader is wrong wherever the kernel is unbounded.
+fn ifs_sum_seed(i: u32, v: vec2<f32>) -> vec2<f32> {
+    let t = ifs_maps[i].lin_t;
+    // The kernel's own inverse wants `v/kw`, and `ifs_kernel_inverse`
+    // reads the row's `kind`, which says 7 -- so the kernel kind is
+    // swapped in by evaluating against `lin_t.w` here instead.
+    let a = ifs_sum_kernel_inverse(i, v / t.z);
+    let m = ifs_maps[i].lin_m;
+    let det = m.x * m.w - m.y * m.z;
+    var b = a;
+    var have_b = false;
+    if (abs(det) > 1e-30) {
+        let u = v - vec2<f32>(t.x, t.y);
+        b = vec2<f32>((m.w * u.x - m.y * u.y) / det, (m.x * u.y - m.z * u.x) / det);
+        have_b = true;
+    }
+    let good_a = abs(a.x) <= 1e29 && abs(a.y) <= 1e29;
+    if (!good_a) {
+        return b;
+    }
+    if (!have_b) {
+        return a;
+    }
+    let ra = length(ifs_sum_phase(i, a) - v);
+    let rb = length(ifs_sum_phase(i, b) - v);
+    return select(b, a, ra <= rb);
+}
+
+// Solve `phase(z) = post^-1(q)` for z, and return `(z, ok)`.
+//
+// The tolerance is 1e-6 relative, which is D3's f32 figure, and the
+// step budget is twelve, which is the CPU's. A solve that does not
+// meet the tolerance returns `ok = 0`, and the caller reads that as
+// a step it cannot take -- NOT as a gap. A gap is a proof that no
+// preimage exists; this is a proof of nothing.
+//
+// 1e-6 is close to what f32 can hold -- seven digits, and the
+// residual is a difference of two numbers of size |v| -- so the loop
+// can reach the cap on a point it has actually solved. That is what
+// the fallback below is for.
+fn ifs_sum_solve(i: u32, q: vec2<f32>) -> vec3<f32> {
+    let m = ifs_maps[i].inv_m;
+    let t = ifs_maps[i].inv_t;
+    let v = vec2<f32>(m.x * q.x + m.y * q.y + t.x, m.z * q.x + m.w * q.y + t.y);
+    let scale = max(length(v), 1.0);
+    var z = ifs_sum_seed(i, v);
+    // NOT a self-compare: Metal runs with fast-math and `x != x` is
+    // false for a real NaN there. The negated comparison is the
+    // idiom `main_template.wgsl` uses and it survives the optimizer.
+    if (!(abs(z.x) <= 1e29) || !(abs(z.y) <= 1e29)) {
+        return vec3<f32>(0.0, 0.0, 0.0);
+    }
+    for (var s = 0u; s < 12u; s = s + 1u) {
+        let r = ifs_sum_phase(i, z) - v;
+        if (length(r) <= 1e-6 * scale) {
+            return vec3<f32>(z, 1.0);
+        }
+        let j = ifs_sum_phase_jacobian(i, z);
+        let det = j[0].x * j[1].y - j[1].x * j[0].y;
+        if (!(abs(det) > 1e-30)) {
+            return vec3<f32>(0.0, 0.0, 0.0);
+        }
+        let step = vec2<f32>(
+            (j[1].y * r.x - j[1].x * r.y) / det,
+            (j[0].x * r.y - j[0].y * r.x) / det,
+        );
+        let next = z - step;
+        if (!(abs(next.x) <= 1e29) || !(abs(next.y) <= 1e29)) {
+            return vec3<f32>(0.0, 0.0, 0.0);
+        }
+        z = next;
+    }
+    // Twelve steps that never met the tolerance may still have landed
+    // somewhere usable, and 1e-4 relative is a tenth of a pixel at
+    // any zoom the walk runs at.
+    let r = length(ifs_sum_phase(i, z) - v);
+    return vec3<f32>(z, select(0.0, 1.0, r <= 1e-4 * scale));
+}
+
+// The sum row's inverse at p: the solve, carried back through the
+// pre-inverse. A solve that failed returns a point far outside the
+// ball, which is what the walk reads as a branch it cannot follow --
+// the same answer an overflowing kernel inverse gives it.
+fn ifs_sum_inv_point(i: u32, p: vec2<f32>) -> vec2<f32> {
+    let r = ifs_sum_solve(i, p);
+    if (r.z == 0.0) {
+        return vec2<f32>(1e30, 1e30);
+    }
+    let pm = ifs_maps[i].pre_m;
+    let pt = ifs_maps[i].pre_t;
+    return vec2<f32>(
+        pm.x * r.x + pm.y * r.y + pt.x,
+        pm.z * r.x + pm.w * r.y + pt.y,
+    );
+}
+
+// The forward map's smallest singular value at that preimage -- what
+// one level of the walk contracts by there.
+//
+// A sum's row carries `sigma_min = 1`: unlike a nonlinear row there
+// is no constant part to factor out, so the whole of it is local.
+// The FORWARD map's derivative at the pre-frame point z: pre, then
+// the phase, then post.
+//
+// `pre` is the inverse of the row's `pre_m` and `post` the inverse of
+// `inv_m` -- both are 2x2s the shader inverts itself rather than
+// spending two more vec4s on. A singular one returns the zero matrix,
+// which every caller reads as "no derivative here".
+fn ifs_sum_forward_jacobian(i: u32, z: vec2<f32>) -> mat2x2<f32> {
+    let zero = mat2x2<f32>(vec2<f32>(0.0, 0.0), vec2<f32>(0.0, 0.0));
+    let pm = ifs_maps[i].pre_m;
+    let pd = pm.x * pm.w - pm.y * pm.z;
+    let im = ifs_maps[i].inv_m;
+    let id = im.x * im.w - im.y * im.z;
+    if (!(abs(pd) > 1e-30) || !(abs(id) > 1e-30)) {
+        return zero;
+    }
+    let j = ifs_sum_phase_jacobian(i, z);
+    let pre = mat2x2<f32>(vec2<f32>(pm.w / pd, -pm.z / pd), vec2<f32>(-pm.y / pd, pm.x / pd));
+    let post = mat2x2<f32>(vec2<f32>(im.w / id, -im.z / id), vec2<f32>(-im.y / id, im.x / id));
+    return post * (j * pre);
+}
+
+// The INVERSE map's derivative at q: the forward's at its preimage,
+// inverted. The zero matrix where there is none.
+fn ifs_sum_inv_jacobian(i: u32, q: vec2<f32>) -> mat2x2<f32> {
+    let zero = mat2x2<f32>(vec2<f32>(0.0, 0.0), vec2<f32>(0.0, 0.0));
+    let r = ifs_sum_solve(i, q);
+    if (r.z == 0.0) {
+        return zero;
+    }
+    let f = ifs_sum_forward_jacobian(i, vec2<f32>(r.x, r.y));
+    let det = f[0].x * f[1].y - f[1].x * f[0].y;
+    if (!(abs(det) > 1e-30)) {
+        return zero;
+    }
+    return mat2x2<f32>(
+        vec2<f32>(f[1].y / det, -f[0].y / det),
+        vec2<f32>(-f[1].x / det, f[0].x / det),
+    );
+}
+
+fn ifs_sum_inv_sigma(i: u32, p: vec2<f32>) -> f32 {
+    let r = ifs_sum_solve(i, p);
+    if (r.z == 0.0) {
+        return 0.0;
+    }
+    // sigma_min of a product is not the product of sigma_mins, so the
+    // matrices are multiplied and the singular value taken once.
+    let full = ifs_sum_forward_jacobian(i, vec2<f32>(r.x, r.y));
+    let a = full[0].x;
+    let b = full[1].x;
+    let c = full[0].y;
+    let d = full[1].y;
+    let fro2 = a * a + b * b + c * c + d * d;
+    let det = a * d - b * c;
+    let disc = sqrt(max(fro2 * fro2 - 4.0 * det * det, 0.0));
+    return sqrt(max((fro2 - disc) * 0.5, 0.0));
 }
 "#;
 
@@ -4865,6 +5181,8 @@ pub fn pack_maps(
                     params: [0.0; 4],
                     delta,
                 measure: meas,
+                    lin_m: [0.0; 4],
+                    lin_t: [0.0; 4],
                 },
                 Map2::NonlinearInverse(r) | Map2::Nonlinear(r) => {
                     // post⁻¹ with the 1/w folded in: the shader's first
@@ -4906,29 +5224,49 @@ pub fn pack_maps(
                         params,
                         delta,
                         measure: meas,
+                        lin_m: [0.0; 4],
+                        lin_t: [0.0; 4],
                     }
                 }
-                // A SUM has no packed form: its inverse is a Newton
-                // solve over the flame's own forward bodies, which
-                // the mode-D shader does not splice (D3's one piece
-                // of real plumbing). A row of kind 7 draws nothing,
-                // and `analyse_2d` refuses such a flame for the GPU
-                // before it gets here -- this arm is what makes that
-                // refusal a compile-time obligation rather than a
-                // convention.
-                Map2::Sum(_) | Map2::SumInverse(_) => IfsMapGpu {
-                    inv_m: [0.0; 4],
-                    inv_t: [0.0; 2],
+                // A SUM: kind 7, and the shader inverts it by
+                // Newton over the kernel's forward body (D3). The
+                // row carries what the solve needs and nothing it
+                // does not -- there is no hole, because a sum's
+                // image is not the kernel's, and no gap scale for
+                // the same reason.
+                //
+                // `post⁻¹` goes in `inv_m` UNSCALED: a nonlinear row
+                // folds `1/w` into it because the kernel's inverse is
+                // taken of `v/w`, and a sum's `w` multiplies only the
+                // kernel TERM, which the phase does itself.
+                Map2::Sum(r) | Map2::SumInverse(r) => {
+                    use crate::scene::ifs_analysis::Kernel;
+                    let (kk, params) = match r.kernel {
+                        Kernel::Root { n, d } => (1.0, [n as f32, d as f32, 0.0, 0.0]),
+                        Kernel::Spherical => (2.0, [0.0; 4]),
+                        Kernel::Bubble => (3.0, [0.0; 4]),
+                        Kernel::Hemisphere => (4.0, [0.0; 4]),
+                        Kernel::Disc => (5.0, [0.0; 4]),
+                        Kernel::Blob { high, low, waves } => {
+                            (6.0, [high as f32, low as f32, waves as f32, 0.0])
+                        }
+                    };
+                    IfsMapGpu {
+                    inv_m: m4(&r.post_inv),
+                    inv_t: t2(&r.post_inv),
                     sigma_min: m.sigma_min as f32,
                     color,
-                    pre_m: [0.0; 4],
-                    pre_t: [0.0; 2],
+                    pre_m: m4(&r.pre_inv),
+                    pre_t: t2(&r.pre_inv),
                     kind: 7.0,
-                    branch: 0.0,
-                    params: [0.0; 4],
+                    branch: r.branch as f32,
+                    params,
                     delta,
                     measure: meas,
-                },
+                    lin_m: m4(&r.lin),
+                    lin_t: [r.lin.t[0] as f32, r.lin.t[1] as f32, r.kw as f32, kk],
+                }
+                }
             }
         })
         .collect()
@@ -7218,7 +7556,7 @@ mod tests {
 
     #[test]
     fn the_gpu_row_is_the_layout_the_shader_declares() {
-        assert_eq!(std::mem::size_of::<IfsMapGpu>(), 112);
+        assert_eq!(std::mem::size_of::<IfsMapGpu>(), 144);
         assert_eq!(std::mem::align_of::<IfsMapGpu>(), 4);
         assert_eq!(std::mem::offset_of!(IfsMapGpu, inv_m), 0);
         assert_eq!(std::mem::offset_of!(IfsMapGpu, inv_t), 16);
@@ -7231,6 +7569,10 @@ mod tests {
         assert_eq!(std::mem::offset_of!(IfsMapGpu, params), 64);
         assert_eq!(std::mem::offset_of!(IfsMapGpu, delta), 80);
         assert_eq!(std::mem::offset_of!(IfsMapGpu, measure), 96);
+        // The sum row's affine term (`ifs-general.md` D3), which is
+        // why the row is 144 and not 112.
+        assert_eq!(std::mem::offset_of!(IfsMapGpu, lin_m), 112);
+        assert_eq!(std::mem::offset_of!(IfsMapGpu, lin_t), 128);
         // std430 rounds a struct's stride to its largest member's
         // alignment, and `inv_m` is a vec4. A size that is not a
         // multiple of 16 strides differently in the shader than in
@@ -7269,6 +7611,86 @@ mod gpu_tests {
     /// The def parameter default, mirrored so the CPU reference walks
     /// the same beam the shader does.
     pub(super) const BEAM: u32 = 4;
+
+    /// Run a one-entry-point compute harness over `maps` and `pts`,
+    /// and read back one `vec4` per point.
+    ///
+    /// Three bindings, always the same three: the packed map rows, the
+    /// input points, the output. Every mode-D arithmetic gate here
+    /// wants exactly this and each used to spell it out.
+    pub(super) fn run_vec4_kernel(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        wgsl: &str,
+        maps: &[super::IfsMapGpu],
+        pts: &[[f32; 4]],
+    ) -> Vec<[f32; 4]> {
+        use wgpu::util::DeviceExt;
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("ifs harness"),
+            source: wgpu::ShaderSource::Wgsl(wgsl.into()),
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("ifs harness"),
+            layout: None,
+            module: &module,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let mk = |data: &[u8], usage: wgpu::BufferUsages| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: data,
+                usage,
+            })
+        };
+        let maps_buf = mk(bytemuck::cast_slice(maps), wgpu::BufferUsages::STORAGE);
+        let pts_buf = mk(bytemuck::cast_slice(pts), wgpu::BufferUsages::STORAGE);
+        let bytes = (pts.len() * 16) as u64;
+        let out_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let stage = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: bytes,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: maps_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: pts_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: out_buf.as_entire_binding() },
+            ],
+        });
+        let mut enc = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = enc.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.dispatch_workgroups(pts.len().div_ceil(64) as u32, 1, 1);
+        }
+        enc.copy_buffer_to_buffer(&out_buf, 0, &stage, 0, bytes);
+        queue.submit(std::iter::once(enc.finish()));
+        let (tx, rx) = std::sync::mpsc::channel();
+        stage.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        rx.recv().expect("map").expect("map ok");
+        let got: Vec<[f32; 4]> = {
+            let d = stage.slice(..).get_mapped_range();
+            bytemuck::cast_slice::<u8, [f32; 4]>(&d).to_vec()
+        };
+        stage.unmap();
+        got
+    }
 
     pub(super) fn device() -> (wgpu::Device, wgpu::Queue) {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -9331,6 +9753,228 @@ mod gpu_tests {
         }
     }
 
+    /// G3 on the GPU: the shader's Newton solve is the CPU's, at 1e-5
+    /// relative.
+    ///
+    /// `ifs-general.md` G3 ends "On the GPU, the same at 1e-5
+    /// relative", which is also the tolerance the shader's own solve
+    /// stops at -- so this asks the two sides to agree to the
+    /// accuracy either of them claims, and no closer.
+    ///
+    /// The harness is [`IFS_NEWTON`] and twenty lines, as
+    /// [`the_shader_differences_are_the_cpu_ones`]'s is: a whole
+    /// render would reach the same arithmetic through a beam, a
+    /// handover and a colouring, and tell you only that a picture
+    /// came out.
+    ///
+    /// **The two sides are not the same solve.** The CPU
+    /// differentiates the forward kernel with dual numbers and stops
+    /// at 1e-12; the shader central-differences it in f32 and stops
+    /// at 1e-5. D3 says that is allowed because Newton's accuracy
+    /// comes from the residual and not from the Jacobian, and this is
+    /// where that claim is either true or it is not.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_shader_newton_is_the_cpu_newton() {
+        use crate::scene::ifs_analysis::{analyse_2d, Map2};
+        let guard = crate::variations::global_registry();
+        let r = &*guard;
+
+        let sum = |kernel: &str, kw: f32, lw: f32, scale: f32, at: [f32; 2]| {
+            let mut t = crate::scene::transforms::Transform::default();
+            t.a = scale;
+            t.d = scale;
+            t.e = at[0];
+            t.f = at[1];
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation(kernel, kw);
+            t.set_variation("linear", lw);
+            t
+        };
+        let mut ball = crate::scene::transforms::Transform::default();
+        ball.a = 0.45;
+        ball.d = 0.55;
+        ball.e = -0.4;
+        ball.f = 0.25;
+        ball.variations.clear();
+        ball.variation_order.clear();
+        ball.set_variation("linear", 1.0);
+
+        let cases: Vec<(&str, crate::scene::transforms::Transform)> = vec![
+            ("spherical + linear", sum("spherical", 0.6, 0.4, 0.5, [0.2, -0.1])),
+            ("spherical, affine-led", sum("spherical", 0.2, 0.8, 0.5, [0.2, -0.1])),
+            ("bubble + linear", sum("bubble", 0.6, 0.4, 0.5, [0.2, -0.1])),
+            ("hemisphere + linear", sum("hemisphere", 0.7, 0.3, 0.5, [0.1, 0.1])),
+            ("julia + linear", sum("julia", 0.6, 0.4, 0.5, [0.2, -0.1])),
+        ];
+
+        let harness = format!(
+            r#"
+struct IfsMapGpu {{
+    inv_m: vec4<f32>,
+    inv_t: vec2<f32>,
+    sigma_min: f32,
+    color: f32,
+    pre_m: vec4<f32>,
+    pre_t: vec2<f32>,
+    kind: f32,
+    branch: f32,
+    params: vec4<f32>,
+    delta: vec4<f32>,
+    measure: vec4<f32>,
+    lin_m: vec4<f32>,
+    lin_t: vec4<f32>,
+}}
+@group(0) @binding(0) var<storage, read> ifs_maps: array<IfsMapGpu>;
+@group(0) @binding(1) var<storage, read> pts: array<vec4<f32>>;
+@group(0) @binding(2) var<storage, read_write> out: array<vec4<f32>>;
+
+fn ff_atan2(y: f32, x: f32) -> f32 {{
+    if (y == 0.0 && x == 0.0) {{
+        let pi = 3.14159265358979;
+        let mag = select(0.0, pi, (bitcast<u32>(x) & 0x80000000u) != 0u);
+        return select(mag, -mag, (bitcast<u32>(y) & 0x80000000u) != 0u);
+    }}
+    return atan2(y, x);
+}}
+{}
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    let n = arrayLength(&pts);
+    if (gid.x >= n) {{ return; }}
+    let q = pts[gid.x].xy;
+    let u = ifs_sum_inv_point(0u, q);
+    let s = ifs_sum_inv_sigma(0u, q);
+    // The RESIDUAL the shader converged to, relative -- D3's own
+    // criterion, reported rather than inferred.
+    let sol = ifs_sum_solve(0u, q);
+    let m = ifs_maps[0].inv_m;
+    let t = ifs_maps[0].inv_t;
+    let v = vec2<f32>(m.x * q.x + m.y * q.y + t.x, m.z * q.x + m.w * q.y + t.y);
+    let res = length(ifs_sum_phase(0u, sol.xy) - v) / max(length(v), 1.0);
+    out[gid.x] = vec4<f32>(u.x, u.y, s, res);
+}}
+"#,
+            IFS_NEWTON
+        );
+
+        let (device, queue) = device();
+        /// Below this sigma the inverse is folding and neither side's
+        /// answer is a function of the other's.
+        const WELL: f64 = 1e-2;
+        let mut rows = 0usize;
+        for (label, t) in cases {
+            let flame = {
+                let mut f = crate::scene::transforms::Flame::default();
+                f.transforms = vec![t.clone(), ball.clone()];
+                f
+            };
+            let ifs = analyse_2d(&flame, r).unwrap_or_else(|e| panic!("{label}: {e:?}"));
+            let m = &ifs.maps[0];
+            let inv = m.inverse.sum().copied().unwrap_or_else(|| panic!("{label}: not a sum"));
+            let maps = pack_maps(&ifs, &[0.1, 0.4], None);
+            assert_eq!(maps[0].kind, 7.0, "{label}: not packed as a sum");
+
+            // Points of the SUPPORT, forwarded from a grid so every
+            // one of them has a preimage to find.
+            let fwd = m.forward.sum().copied().expect("a sum");
+            let mut pts: Vec<[f32; 4]> = Vec::new();
+            let mut want: Vec<([f64; 2], f64)> = Vec::new();
+            for i in 0..16 {
+                for j in 0..16 {
+                    let p = [
+                        -1.0 + 2.0 * i as f64 / 15.0,
+                        -1.0 + 2.0 * j as f64 / 15.0,
+                    ];
+                    if f64::hypot(p[0], p[1]) < 0.1 {
+                        continue;
+                    }
+                    let q = fwd.apply_branch(p, fwd.branch);
+                    if !q.iter().all(|v| v.is_finite()) {
+                        continue;
+                    }
+                    let Some((back, _)) = inv.solve(q) else { continue };
+                    let sig = m.inverse.local_sigma(q, m.sigma_min);
+                    pts.push([q[0] as f32, q[1] as f32, 0.0, 0.0]);
+                    want.push((back, sig));
+                }
+            }
+            assert!(pts.len() > 150, "{label}: only {} points", pts.len());
+            let got = run_vec4_kernel(&device, &queue, &harness, &maps, &pts);
+
+            let (mut worst_p, mut worst_s, mut worst_res) = (0.0f64, 0.0f64, 0.0f64);
+            let mut worst_pc = 0.0f64;
+            let (mut agreed, mut gpu_missed, mut folded) = (0usize, 0usize, 0usize);
+            for (k, (p, sig)) in want.iter().enumerate() {
+                let g = got[k];
+                if g[0] as f64 > 1e29 {
+                    gpu_missed += 1;
+                    continue;
+                }
+                agreed += 1;
+                // The residual is comparable EVERYWHERE, because it
+                // is what both sides stop on. The preimage and the
+                // sigma are not: at a fold the map's derivative
+                // vanishes, so a residual of 1e-6 becomes a point
+                // error of 1e-6/sigma and a sigma error of anything
+                // at all -- measured, 3.0 relative on `spherical 0.2
+                // + linear 0.8`, whose fold circle at `rho =
+                // sqrt(0.2/0.8)` the sample grid crosses. That is not
+                // the two sides disagreeing, it is the question being
+                // ill-posed there, and the CPU half of G3 buckets it
+                // the same way.
+                worst_res = worst_res.max(g[3] as f64);
+                if !(*sig > WELL) {
+                    folded += 1;
+                    continue;
+                }
+                let scale = f64::hypot(p[0], p[1]).max(1.0);
+                let e = f64::hypot(g[0] as f64 - p[0], g[1] as f64 - p[1]) / scale;
+                worst_p = worst_p.max(e);
+                // The point error TIMES the local contraction, which
+                // is the residual it came from: a solve that stops at
+                // a residual of `r` lands within `r/sigma` of the
+                // answer, so `e * sigma` is the quantity the two
+                // tolerances actually bound and the only one a flat
+                // number can be asked of.
+                worst_pc = worst_pc.max(e * sig);
+                worst_s = worst_s.max(((g[2] as f64 - sig) / sig).abs());
+            }
+            println!(
+                "  {label:<24} {agreed:>3}/{} agree | point <= {worst_p:.1e} | sigma <= \
+                 {worst_s:.1e} | residual <= {worst_res:.1e} | point*sigma <= \
+                 {worst_pc:.1e} | {folded} at a fold, {gpu_missed} unsolved",
+                want.len()
+            );
+            assert!(
+                gpu_missed * 20 <= want.len(),
+                "{label}: the GPU failed {gpu_missed} of {} solves the CPU made",
+                want.len()
+            );
+            // D3's criterion FIRST, because it is the one the shader
+            // stops on: the residual, relative. The preimages' own
+            // agreement follows from it and is looser, since a
+            // residual divides by the map's derivative to become a
+            // distance.
+            assert!(
+                worst_res <= 1e-6,
+                "{label}: the shader converged to a residual of {worst_res:.2e}, past its own                  stopping tolerance"
+            );
+            assert!(
+                worst_pc <= 1e-5,
+                "{label}: preimages differ by {worst_p:.2e}, which is {worst_pc:.2e} once the                  local contraction is taken out -- more than the residual can explain"
+            );
+            // sigma goes through a central-differenced Jacobian on one
+            // side and a dual-number one on the other, and then through
+            // a singular value, which is a square root of a difference
+            // -- two more digits of room than the point needs.
+            assert!(worst_s <= 2e-3, "{label}: sigma differs by {worst_s:.2e}");
+            rows += 1;
+        }
+        assert_eq!(rows, 5);
+    }
+
     /// The shader's difference forms are the CPU's.
     ///
     /// `ifs-perturbation-delta.md` D3: the exact forms exist in f64
@@ -9418,6 +10062,8 @@ struct IfsMapGpu {{
     params: vec4<f32>,
     delta: vec4<f32>,
     measure: vec4<f32>,
+    lin_m: vec4<f32>,
+    lin_t: vec4<f32>,
 }}
 @group(0) @binding(0) var<storage, read> ifs_maps: array<IfsMapGpu>;
 @group(0) @binding(1) var<storage, read> pts: array<vec4<f32>>;
@@ -9692,6 +10338,8 @@ struct IfsMapGpu {{
     params: vec4<f32>,
     delta: vec4<f32>,
     measure: vec4<f32>,
+    lin_m: vec4<f32>,
+    lin_t: vec4<f32>,
 }}
 @group(0) @binding(0) var<storage, read> ifs_maps: array<IfsMapGpu>;
 @group(0) @binding(1) var<storage, read> pts: array<vec2<f32>>;
@@ -10789,6 +11437,105 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 outside.len()
             );
         }
+    }
+
+    /// A flame whose every transform is a SUM, rendered, against the
+    /// CPU walk on the same set -- the whole of `ifs-general.md` D3
+    /// through the whole pipeline.
+    ///
+    /// [`the_shader_newton_is_the_cpu_newton`] checks the solve
+    /// against the CPU's point by point, in a harness. This checks
+    /// that the solve is REACHED: that `analyse_2d` builds the sums,
+    /// `pack_maps` writes kind 7, the renderer notices and asks for a
+    /// shader with the rung spliced, the marker lands inside
+    /// `ifs_inv_point` and the walk's answer paints a picture the CPU
+    /// agrees with. Any one of those six going wrong renders
+    /// something, which is why the gate is a comparison and not a
+    /// brightness check.
+    ///
+    /// The fixture is `spherical + linear` twice, which is the shape
+    /// the census found in the wild -- three of the four sums in the
+    /// imported corpus are `spherical` -- and the same set the CPU
+    /// gate walks.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_gpu_walk_agrees_with_the_cpu_reference_on_a_set_of_sums() {
+        let sum = |kw: f32, lw: f32, scale: f32, at: [f32; 2], color: f32| {
+            let mut t = Transform::default();
+            t.a = scale;
+            t.d = scale;
+            t.e = at[0];
+            t.f = at[1];
+            t.color = color;
+            t.variations = HashMap::from([
+                ("spherical".to_string(), kw),
+                ("linear".to_string(), lw),
+            ]);
+            t.variation_order = vec!["spherical".to_string(), "linear".to_string()];
+            t.weight = 1.0;
+            t
+        };
+        let mut flame = Flame::default();
+        flame.transforms = vec![
+            sum(0.6, 0.4, 0.55, [0.25, 0.0], 0.1),
+            sum(0.5, 0.5, 0.5, [-0.3, 0.2], 0.8),
+        ];
+
+        let guard = global_registry();
+        let ifs = crate::scene::ifs_analysis::analyse_2d(&flame, &guard).expect("qualifies");
+        drop(guard);
+        assert!(
+            ifs.maps.iter().all(|m| m.forward.sum().is_some()),
+            "the fixture stopped being a set of sums"
+        );
+        let rows = pack_maps(&ifs, &[0.1, 0.8], None);
+        assert!(rows.iter().all(|r| r.kind == 7.0), "a row is not packed as a sum");
+
+        let mut config = config_for(flame);
+        config.escape.center_re = format!("{}", ifs.ball.centre[0]);
+        config.escape.center_im = format!("{}", ifs.ball.centre[1]);
+        let span = ifs.ball.radius * 2.4;
+        config.escape.zoom_log2 = (4.0 / span).log2();
+        let rgba = render(&config);
+        let px = span / H as f64;
+        let plane = |x: u32, y: u32| -> [f64; 2] {
+            let u = (x as f64 + 0.5) / W as f64 - 0.5;
+            let v = (y as f64 + 0.5) / H as f64 - 0.5;
+            [ifs.ball.centre[0] + u * span * W as f64 / H as f64, ifs.ball.centre[1] - v * span]
+        };
+        let (mut inside, mut outside) = (Vec::new(), Vec::new());
+        for y in 0..H {
+            for x in 0..W {
+                let d = estimate(&ifs, plane(x, y), LEVELS, BEAM).distance;
+                if d < 0.25 * px {
+                    inside.push(brightness(&rgba, x, y));
+                } else if d > 3.0 * px {
+                    outside.push(brightness(&rgba, x, y));
+                }
+            }
+        }
+        println!("  sums: interior {} / exterior {} of {} pixels", inside.len(), outside.len(), W * H);
+        assert!(inside.len() > 150, "too few interior pixels: {}", inside.len());
+        assert!(outside.len() > 1500, "too few exterior pixels: {}", outside.len());
+        let mean = |v: &Vec<f64>| v.iter().sum::<f64>() / v.len() as f64;
+        let (mi, mo) = (mean(&inside), mean(&outside));
+        assert!(mi > 0.05, "the set rendered dark ({mi:.4})");
+        assert!(mi > mo * 8.0 + 0.02, "interior ({mi:.4}) and exterior ({mo:.4}) are not separated");
+        let cut = (mi + mo) * 0.5;
+        let lit_in = inside.iter().filter(|&&b| b > cut).count();
+        let lit_out = outside.iter().filter(|&&b| b > cut).count();
+        let agree = (lit_in + (outside.len() - lit_out)) as f64 / (inside.len() + outside.len()) as f64;
+        println!(
+            "  GPU and CPU agree on {:.2}% (interior lit {lit_in}/{}, exterior lit {lit_out}/{})",
+            agree * 100.0,
+            inside.len(),
+            outside.len()
+        );
+        assert!(
+            agree > 0.97,
+            "GPU and CPU disagree on {:.1}% of pixels",
+            (1.0 - agree) * 100.0
+        );
     }
 
     /// Candidate spherical and bubble presets (plan 8.9 gate 5), and

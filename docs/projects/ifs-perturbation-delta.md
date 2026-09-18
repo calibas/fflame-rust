@@ -1175,10 +1175,18 @@ The cheap and the decisive first. Each item names its plan.
    wrong -- a lineage oscillates rather than settling. Off by
    default: turning it on is a judgement about shipping a second
    walk, not a gate waiting to pass.
-6. **Sums, by Newton** ([ifs-general.md](ifs-general.md) D3): the
-   largest reach into the catalogue and the least certain
-   mechanism; after the delta walk, because the delta walk's rows
-   carry the Jacobians Newton needs on the GPU.
+6. ~~**Sums, by Newton**~~ -- done 2026-09-18,
+   [ifs-general.md](ifs-general.md) §9e. A kernel summed with an
+   affine is a map on both sides now: Newton from the dominant
+   term's seed, decided at the point rather than at the map, and in
+   the shader over the kernel's own forward body with the Jacobian
+   by central differences. Three to six steps away from a fold,
+   twelve at one; the two sides agree to 1e-6 on the residual and
+   99.56% of pixels on a rendered set of sums. **It reaches less of
+   the catalogue than the plan claimed**: four of 109 transforms in
+   the imported corpus, zero flames unlocked, because every one of
+   those four sits behind a variation with no inverse at all. The
+   catalogue is the wall.
 7. **The Monte Carlo measure**
    ([ifs-measure-by-inverse-walk.md](ifs-measure-by-inverse-walk.md)
    §5 item 4) for overlapping sets, once the beam sum's bias is
