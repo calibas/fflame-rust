@@ -8640,6 +8640,99 @@ mod gpu_tests {
         )
     }
 
+    /// G7: what the delta walk costs, per view and per pixel.
+    ///
+    /// `ifs-perturbation-delta.md` §6. Two numbers, and the plan says
+    /// to decide if either is over 2x.
+    ///
+    /// **The per-view cost is a SECOND walk of the centre**, because
+    /// `seed_beam` stops at its handover and the reference may not.
+    /// The plan's end state is that the two become one; until then
+    /// the prefix is paid twice, and this is what that is worth.
+    ///
+    /// **The per-pixel cost is measured at two zooms**, because the
+    /// delta walk's work per level is the difference form rather than
+    /// the inverse, and how often it rebases depends on the view.
+    #[test]
+    #[ignore = "needs a GPU; a measurement; run with --ignored --nocapture"]
+    fn what_the_delta_walk_costs() {
+        let flame = sierpinski_flame();
+        let guard = crate::variations::global_registry();
+        let ifs = crate::scene::ifs_analysis::analyse_2d(&flame, &guard).expect("qualifies");
+        drop(guard);
+        let target = crate::scene::ifs_estimate::chaos_sample_for_test(&ifs, 20_000)[10_000];
+
+        println!("  per view, on the CPU, at a 1080p pixel and beam 8");
+        println!("  {:<8} {:>12} {:>12} {:>8}", "zoom", "seed_beam", "+reference", "ratio");
+        for zoom in [20.0f64, 40.0] {
+            let span = 4.0 / 2f64.powf(zoom);
+            let basis = [[span, 0.0], [0.0, -span]];
+            let px = span / 1080.0;
+            let budget = zoom as u32 + 64;
+            let t0 = web_time::Instant::now();
+            let seeds =
+                crate::scene::ifs_estimate::seed_beam(&ifs, target, basis, px, budget, 8);
+            let seed_ms = t0.elapsed().as_secs_f64() * 1000.0;
+            let t1 = web_time::Instant::now();
+            let refbeam = crate::scene::ifs_estimate::reference_beam(
+                &ifs, target, basis, px, budget, 8,
+            );
+            let rows = pack_reference(&refbeam, ifs.maps.len(), 8);
+            let ref_ms = t1.elapsed().as_secs_f64() * 1000.0;
+            println!(
+                "  2^{zoom:<6} {seed_ms:>12.3} {:>12.3} {:>7.2}x   ({} rows, {} KB)",
+                seed_ms + ref_ms,
+                (seed_ms + ref_ms) / seed_ms.max(1e-6),
+                rows.len(),
+                rows.len() * std::mem::size_of::<IfsRefRowGpu>() / 1024,
+            );
+            let _ = seeds;
+        }
+
+        let (device, queue) = device();
+        println!("  per frame, on the GPU, 512x512");
+        println!("  {:<8} {:>12} {:>12} {:>8}", "zoom", "shipped", "delta", "ratio");
+        for zoom in [20.0f64, 40.0] {
+            let once = |delta: bool| -> f64 {
+                let mut c = config_for(flame.clone());
+                c.escape.coloring = "ifs_distance".to_string();
+                c.escape.center_re = format!("{:?}", target[0]);
+                c.escape.center_im = format!("{:?}", target[1]);
+                c.escape.zoom_log2 = zoom;
+                c.escape.formula_params.insert("levels".to_string(), 80.0);
+                c.escape.formula_params.insert("beam".to_string(), 8.0);
+                c.escape
+                    .formula_params
+                    .insert("delta".to_string(), if delta { 1.0 } else { 0.0 });
+                let run = || {
+                    let job = crate::renderer::RenderJob::new(&c, 512, 512);
+                    pollster::block_on(crate::renderer::render(
+                        &device,
+                        &queue,
+                        job,
+                        &mut crate::renderer::NoProgress,
+                    ))
+                    .expect("render")
+                };
+                // Once to compile the pipeline and warm the cache.
+                let _ = run();
+                let t0 = web_time::Instant::now();
+                let _ = run();
+                t0.elapsed().as_secs_f64() * 1000.0
+            };
+            let (a, b) = (once(false), once(true));
+            println!("  2^{zoom:<6} {a:>12.1} {b:>12.1} {:>7.2}x", b / a.max(1e-6));
+            // A loose ceiling: this is a measurement, and the plan
+            // says to DECIDE if it is over 2x rather than to fail. A
+            // tenfold regression is not a decision, it is a bug.
+            assert!(
+                b < a * 10.0,
+                "the delta walk costs {:.1}x the shipped one at 2^{zoom}",
+                b / a
+            );
+        }
+    }
+
     /// G6: the picture is consistent with itself past where f64 can
     /// check it.
     ///

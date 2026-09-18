@@ -799,8 +799,28 @@ handover rather than the difference forms. A curved set with exact
 forms would be the stronger test and needs a deep centre on a bubble
 attractor, which has no closed form the way a gasket address does.
 
-**Still open in item 5**: the Taylor rung (D4), G3's lineage trace,
-and G7's cost. The walk is off by default until those land.
+### G7: what it costs
+
+| per view, CPU, 1080p pixel, beam 8 | `seed_beam` | with the reference | ratio |
+|---|---|---|---|
+| 2^20 | 0.204 ms | 0.956 ms | 4.7x |
+| 2^40 | 0.280 ms | 1.075 ms | 3.8x |
+
+| per frame, GPU, 512x512 | shipped | delta | ratio |
+|---|---|---|---|
+| 2^20 | 174 ms | 229 ms | **1.32x** |
+| 2^40 | 169 ms | 304 ms | **1.80x** |
+
+**Both under the plan's 2x threshold**, so there is nothing to
+decide. The per-view figure is a ratio on a millisecond: the
+reference walks to full depth AND keeps every child, against a
+`seed_beam` that stops at its handover, and the prefix is paid TWICE
+because the two are separate walks. §5 says they become one, and that
+is where the 4.7x goes. The reference itself is 127 to 147 KB, near
+the half-megabyte §3 estimated for a wider set.
+
+**Still open in item 5**: the Taylor rung (D4) and G3's lineage
+trace. The walk is off by default until those land.
 
 ## 4. Decisions
 
