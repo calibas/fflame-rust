@@ -626,15 +626,27 @@ The cheap and the decisive first. Each item names its plan.
    Carlo variant for overlapping sets, and a curved set's 1.296 at a
    deep handover -- which is §3 HERE, since a handover hands over a
    linearisation and the quadratic is what straightens it.
-3. **The scalar-generic kernel** ([ifs-general.md](ifs-general.md)
-   D1 and D2): forward, inverse and difference form written once
-   over a `Real` trait; derivatives by dual numbers; the six kernels
-   moved into their variations. Before §3 here, because the
-   difference forms and the `BigFloat` rung are then one
-   implementation each instead of three.
-4. **Xaos** ([ifs-general.md](ifs-general.md) D4): small, and it
-   unlocks a large share of the census for both the walk and the
-   measure.
+3. ~~**The scalar-generic kernel**~~ -- done 2026-09-17,
+   [ifs-general.md](ifs-general.md) §9a to §9c. `Real`,
+   `Transcendental` and `Dual` landed; the six planar kernels are
+   one body each, bit-identical to the f64 bodies they replaced;
+   the Jacobian and the Hessian are differentiated rather than
+   derived, and the central difference the Hessian used had NO
+   correct digits within 1e-8 of a pole, which is where the handover
+   lives. All twenty-two inverses -- twelve affine roles, seven
+   planar kernels, three solid -- are registered beside their own
+   forward WGSL, and G1 runs over that list. Open: `BigFloat`
+   implements neither trait, which is item 8 below, so the
+   difference forms of §3 here have one implementation for the
+   algebraic kernels and will need the second after item 8.
+4. ~~**Xaos**~~ -- done 2026-09-18, [ifs-general.md](ifs-general.md)
+   §9d. The walk expands admissible children only, on the CPU and in
+   both shaders, and the measure became the Markov chain it always
+   was under a graph. A uniform xaos is bit-identical to none; a
+   four-cycle rejects 1994 of 2000 free-chaos points and moves 4096
+   of 9216 pixels, with CPU and GPU agreeing at every sample point.
+   A colour-speed leftover in the shader's measure fold was found and
+   repaired on the way.
 5. **The delta walk** (here, §3 to §6): G1 on the rational and
    algebraic kernels first, then `estimate_delta`, then the shader.
    G6 is the gate that says whether the grand julian went past

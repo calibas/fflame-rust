@@ -1988,9 +1988,6 @@ pub enum Disqualification {
     /// transform fails here with `sigma_max == 1.0` exactly, because
     /// its z scale is one.
     NotContractive { index: usize, sigma_max: f64 },
-    /// Xaos is set: a graph-directed IFS, whose distance estimate is
-    /// not this one (plan §7).
-    Xaos,
     /// A final transform is not affine, or is singular. `why` is `None`
     /// for singular.
     FinalNotAffine { why: Option<NotAffine> },
@@ -2022,7 +2019,6 @@ impl std::fmt::Display for Disqualification {
             Self::NotContractive { index, sigma_max } => {
                 write!(f, "transform {index} is not contractive (σ_max = {sigma_max:.3})")
             }
-            Self::Xaos => write!(f, "xaos is not supported"),
             Self::FinalNotAffine { why: Some(NotAffine::Variation(v)) } => {
                 write!(f, "the final transform uses `{v}`, which is not affine")
             }
@@ -2045,6 +2041,146 @@ pub struct IfsMap<A> {
     /// The transform's index in the flame, so a colouring can look up
     /// its colour.
     pub transform_index: usize,
+}
+
+
+/// The transition graph a xaos matrix makes of an IFS
+/// (`ifs-general.md` D4).
+///
+/// **The direction is the thing to get right.** A candidate's address
+/// is `[a_1, a_2, ...]` in DISCOVERY order, and the forward chain runs
+/// it backwards: `x = S_{a_1}(S_{a_2}(...S_{a_k}(q)))`. So appending a
+/// child `i` to a path whose last map is `l` puts `i` immediately
+/// BEFORE `l` in the chaos game's own order, and the transition that
+/// has to be admissible is `i → l`, not `l → i`.
+///
+/// The chaos game picks its next transform with probability
+/// proportional to `weight_j · xaos[i][j]`, which is what
+/// `select_transform_xaos` in `utilities.wgsl` does; this mirrors it.
+/// Indices here are MAP indices, so a transform that expanded into
+/// several maps (a bubble's two branches) shares its transform's row
+/// and column.
+#[derive(Debug, Clone, PartialEq)]
+pub struct XaosGraph {
+    n: usize,
+    /// `π_i`, the chain's stationary probability of being in map `i`.
+    /// Without xaos this is the normalised weight.
+    pi: Vec<f64>,
+    /// `step[i * n + l] = π_i · p_{i l} / π_l` -- the factor an
+    /// address's probability gains when `i` is appended to a path
+    /// whose last map is `l`.
+    ///
+    /// The rule it makes incremental: a cylinder's weight is
+    /// `π_{a_k} · Π p_{a_{m+1} a_m}`, and `weight_{k+1} = weight_k ·
+    /// step[a_{k+1}][a_k]` with `weight_1 = π_{a_1}`. Without xaos
+    /// `p_{i l} = w_i` for every `l`, so `step` is `w_i · w_l / w_l =
+    /// w_i` and the product collapses to today's `Π w`.
+    step: Vec<f64>,
+}
+
+impl XaosGraph {
+    /// A state whose stationary probability is below this is treated
+    /// as unreachable: the chain leaves it and never returns, so no
+    /// part of the attractor is there.
+    ///
+    /// Power iteration on a stochastic matrix loses a transient
+    /// state's mass geometrically, and a hundred steps on the
+    /// matrices a flame can have (128 transforms at most) is far past
+    /// where the remainder matters. A threshold rather than an exact
+    /// reachability analysis because the answer feeds a probability,
+    /// and a state with 1e-14 of the measure draws nothing.
+    const UNREACHABLE: f64 = 1e-12;
+
+    /// The graph a flame's xaos makes of `maps`, or `None` when the
+    /// flame has none -- in which case the caller uses the plain
+    /// weights and nothing about the walk changes.
+    pub fn of<A>(flame: &Flame, maps: &[IfsMap<A>]) -> Option<Self> {
+        if !flame.has_xaos() {
+            return None;
+        }
+        let n = maps.len();
+        if n == 0 {
+            return None;
+        }
+        let tx = |i: usize| maps[i].transform_index;
+        let weight = |i: usize| flame.transforms.get(i).map_or(0.0, |t| t.weight as f64).max(0.0);
+        // `p[i][j]`, at MAP granularity, mirroring the shader: the
+        // row is normalised over the transforms actually present, so
+        // a transform the analysis dropped cannot take probability
+        // with it.
+        let mut p = vec![0.0f64; n * n];
+        for i in 0..n {
+            let row: Vec<f64> = (0..n)
+                .map(|j| weight(tx(j)) * flame.get_xaos(tx(i), tx(j)).max(0.0) as f64)
+                .collect();
+            let total: f64 = row.iter().sum();
+            if total > 0.0 {
+                for j in 0..n {
+                    p[i * n + j] = row[j] / total;
+                }
+            }
+        }
+        // The stationary distribution, by power iteration.
+        let mut pi = vec![1.0 / n as f64; n];
+        for _ in 0..200 {
+            let mut next = vec![0.0f64; n];
+            for i in 0..n {
+                for j in 0..n {
+                    next[j] += pi[i] * p[i * n + j];
+                }
+            }
+            let total: f64 = next.iter().sum();
+            if !(total > 0.0) {
+                break;
+            }
+            for v in next.iter_mut() {
+                *v /= total;
+            }
+            pi = next;
+        }
+        let mut step = vec![0.0f64; n * n];
+        for i in 0..n {
+            for l in 0..n {
+                // A path that ends in an unreachable state carries no
+                // measure, so it gains nothing rather than dividing
+                // by zero.
+                if pi[l] > Self::UNREACHABLE {
+                    step[i * n + l] = pi[i] * p[i * n + l] / pi[l];
+                }
+            }
+        }
+        Some(XaosGraph { n, pi, step })
+    }
+
+    /// Whether map `child` may be appended to a path whose last map is
+    /// `last` -- that is, whether the chaos game may apply `child`
+    /// and then `last`.
+    ///
+    /// `None` for `last` is the first level, where the path has no
+    /// successor yet and any map the chain actually visits will do.
+    pub fn admits(&self, child: usize, last: Option<u32>) -> bool {
+        match last {
+            None => self.pi.get(child).is_some_and(|&v| v > Self::UNREACHABLE),
+            Some(l) => {
+                let (l, i) = (l as usize, child);
+                l < self.n && i < self.n && self.step[i * self.n + l] > 0.0
+            }
+        }
+    }
+
+    /// The factor an address's probability gains when `child` is
+    /// appended to a path whose last map is `last`.
+    pub fn step_probability(&self, child: usize, last: Option<u32>) -> f64 {
+        match last {
+            None => self.pi.get(child).copied().unwrap_or(0.0),
+            Some(l) => self.step.get(child * self.n + l as usize).copied().unwrap_or(0.0),
+        }
+    }
+
+    /// The stationary probabilities, one per map.
+    pub fn stationary(&self) -> &[f64] {
+        &self.pi
+    }
 }
 
 /// A ball `B(centre, radius)` that every map of the IFS sends into
@@ -2071,6 +2207,18 @@ pub struct Ifs<A, P> {
     /// The ball centre's scalar coordinate, for a solid whose kernels
     /// carry a fourth one (plan §8.11 step 3); zero otherwise.
     pub aux_centre: f64,
+    /// The transition graph, when the flame has xaos
+    /// (`ifs-general.md` D4). `None` is the ordinary case, where
+    /// every map may follow every map and the address probability is
+    /// a plain product of weights.
+    ///
+    /// The BALL is still one ball for every node. A graph-directed
+    /// IFS has one attractor per node in principle, and the walk's
+    /// escape test needs only `B ⊇ A`, which a ball every map sends
+    /// into itself gives for all of them at once -- stricter than
+    /// necessary, and sound. Per-node balls wait for a flame that
+    /// shows the single one too loose.
+    pub xaos: Option<XaosGraph>,
 }
 
 pub type Ifs2 = Ifs<Map2, [f64; 2]>;
@@ -2132,7 +2280,8 @@ pub fn analyse_2d(flame: &Flame, registry: &VariationRegistry) -> Result<Ifs2, V
         .collect();
     let mut maps = maps;
     set_holes(&mut maps, &ball);
-    Ok(Ifs { maps, final_map, frame_radius: ball.radius, ball, aux_centre })
+    let xaos = XaosGraph::of(flame, &maps);
+    Ok(Ifs { maps, final_map, frame_radius: ball.radius, ball, aux_centre, xaos })
 }
 
 /// Each inversion's hole, once the ball's reach in its pre-frame is
@@ -2196,7 +2345,8 @@ pub fn analyse_3d(flame: &Flame, registry: &VariationRegistry) -> Result<Ifs3, V
         errs.push(Disqualification::NoBall);
         return Err(errs);
     };
-    Ok(Ifs { maps, final_map, frame_radius: ball.radius, ball, aux_centre })
+    let xaos = XaosGraph::of(flame, &maps);
+    Ok(Ifs { maps, final_map, frame_radius: ball.radius, ball, aux_centre, xaos })
 }
 
 /// The 3D map a transform composes to -- affine, or a nonlinear map
@@ -2278,9 +2428,6 @@ fn merge<A: Copy + MapKind>(
                 out.push(IfsMap { forward, inverse, sigma_min, sigma_max, transform_index: index });
             }
         }
-    }
-    if flame.xaos.is_some() {
-        errs.push(Disqualification::Xaos);
     }
     let final_map = match finals.len() {
         0 => None,
@@ -4629,6 +4776,11 @@ mod tests {
     /// and a non-affine variation is the first thing said.
     #[test]
     fn every_reason_is_reported_not_just_the_first() {
+        // The xaos matrix here is all ones, which is no xaos at all --
+        // `Flame::has_xaos` says so -- and since `ifs-general.md` D4
+        // a real one is not a reason either. It stays because the
+        // flame it is on is the one with two other reasons, and the
+        // point of this gate is that BOTH are reported.
         let guard = global_registry();
         let r = &*guard;
         let mut bad = affine_xform(0.5, 0.0, 0.0, 0.5, 0.0, 0.0);
@@ -4641,8 +4793,7 @@ mod tests {
         let text: Vec<String> = errs.iter().map(|e| e.to_string()).collect();
         assert!(text.iter().any(|s| s == "transform 1 uses `sinusoidal`, which is not affine"), "{text:?}");
         assert!(text.iter().any(|s| s.starts_with("transform 2 is not contractive")), "{text:?}");
-        assert!(text.iter().any(|s| s == "xaos is not supported"), "{text:?}");
-        assert_eq!(errs.len(), 3, "{text:?}");
+        assert_eq!(errs.len(), 2, "{text:?}");
     }
 
     /// A final transform is applied to the whole attractor and rides
@@ -4720,7 +4871,6 @@ mod census {
                             Disqualification::NotAffine { why, .. } => format!("{why:?}"),
                             Disqualification::NotContractive { .. } => "not contractive".to_string(),
                             Disqualification::Singular { .. } => "singular".to_string(),
-                            Disqualification::Xaos => "xaos".to_string(),
                             Disqualification::FinalNotAffine { .. } => "non-affine final".to_string(),
                             Disqualification::MultipleFinals { .. } => "multiple finals".to_string(),
                             Disqualification::Empty => "empty".to_string(),
