@@ -1766,23 +1766,15 @@ fn variation_stage(
             continue;
         }
         let Some(role) = affine_role(name, w, t, registry, space) else {
-            // A kernel in the plane is a nonlinear map the analysis
-            // knows (plan §8.8, §8.9); the transform's kind is decided
+            // A kernel is a nonlinear map the analysis knows (plan
+            // §8.8, §8.9), and which variations those are is the
+            // REGISTRY's answer now, not a list here
+            // (`ifs-general.md` D1). The transform's kind is decided
             // once the whole stage is known.
-            let root = match (name.as_str(), space) {
-                ("julia", Space::Planar) => Some("julia"),
-                ("julian", Space::Planar) => Some("julian"),
-                ("spherical", Space::Planar) => Some("spherical"),
-                ("bubble", Space::Planar) => Some("bubble"),
-                ("hemisphere", Space::Planar) => Some("hemisphere"),
-                ("disc", Space::Planar) => Some("disc"),
-                ("blob", Space::Planar) => Some("blob"),
-                ("julia3D", Space::Solid) => Some("julia3D"),
-                ("julia3Dz", Space::Solid) => Some("julia3Dz"),
-                ("quaternion_julia", Space::Solid) => Some("quaternion_julia"),
-                _ => None,
-            };
-            let Some(root) = root else {
+            let root = registry.inverse(name).filter(|d| {
+                d.is_planar() == matches!(space, Space::Planar)
+            });
+            let Some(root) = root.map(|d| d.name) else {
                 return Err(NotAffine::Variation(name.clone()));
             };
             let summed = match registry.get(name).map(|i| i.phase.clone()) {
@@ -1835,6 +1827,53 @@ fn variation_stage(
     Ok(stage)
 }
 
+/// The kernel `kind` is, from its own
+/// [`InverseDef`](crate::variations::inverse::InverseDef).
+///
+/// `ifs-general.md` D1: the parameters are read by the variation's
+/// own constructor through a lookup closure, so `ifs_analysis.rs`
+/// no longer knows that `julian` has a `dist` or that `blob` has
+/// three. A [`Refusal`] becomes this transform's refusal, naming the
+/// variation, which is what the flame panel shows.
+fn kernel_from_registry(
+    t: &Transform,
+    registry: &VariationRegistry,
+    kind: &str,
+    space: Space,
+) -> Result<Kernel, NotAffine> {
+    let p = |name: &str| t.get_variation_param_or_default(kind, name, registry) as f64;
+    let def = registry
+        .inverse(kind)
+        .filter(|d| d.is_planar() == matches!(space, Space::Planar))
+        .ok_or_else(|| NotAffine::Variation(kind.to_string()))?;
+    let crate::variations::inverse::InverseKernel::Planar(build) = def.kernel else {
+        return Err(NotAffine::Variation(kind.to_string()));
+    };
+    build(&p).map_err(|r| refusal(r, kind))
+}
+
+/// The solid kernel `kind` is. [`kernel_from_registry`]'s twin.
+fn kernel3_from_registry(
+    t: &Transform,
+    registry: &VariationRegistry,
+    kind: &str,
+) -> Result<Kernel3, NotAffine> {
+    let p = |name: &str| t.get_variation_param_or_default(kind, name, registry) as f64;
+    let def = registry.inverse(kind).ok_or_else(|| NotAffine::Variation(kind.to_string()))?;
+    let crate::variations::inverse::InverseKernel::Solid(build) = def.kernel else {
+        return Err(NotAffine::Variation(kind.to_string()));
+    };
+    build(&p).map_err(|r| refusal(r, kind))
+}
+
+/// A variation's [`Refusal`] as the transform's own.
+fn refusal(r: crate::variations::inverse::Refusal, kind: &str) -> NotAffine {
+    match r {
+        crate::variations::inverse::Refusal::Degenerate => NotAffine::Degenerate(kind.to_string()),
+        crate::variations::inverse::Refusal::Mode => NotAffine::Mode(kind.to_string()),
+    }
+}
+
 /// The 2D map a transform composes to -- affine, or a nonlinear map
 /// with its kernel -- or why it is neither. A `bubble` returns its
 /// inner branch; `analyse_2d` adds the outer (S1).
@@ -1856,32 +1895,7 @@ pub fn transform_map_2d_ordered(
     if stage.roots.len() > 1 || stage.any {
         return Err(NotAffine::MixedSum(kind.to_string()));
     }
-    let kernel = match kind {
-        "julia" => Kernel::Root { n: 2, d: 1.0 },
-        "julian" => {
-            let p = |name: &str| t.get_variation_param_or_default("julian", name, registry) as f64;
-            let (n, d) = (p("power").round() as i32, p("dist"));
-            if n == 0 || !(d != 0.0) || !d.is_finite() {
-                return Err(NotAffine::Degenerate(kind.to_string()));
-            }
-            Kernel::Root { n, d }
-        }
-        "spherical" => Kernel::Spherical,
-        "bubble" => Kernel::Bubble,
-        "hemisphere" => Kernel::Hemisphere,
-        "disc" => Kernel::Disc,
-        "blob" => {
-            let p = |name: &str| t.get_variation_param_or_default("blob", name, registry) as f64;
-            let (high, low, waves) = (p("high"), p("low"), p("waves"));
-            // The scale must stay positive for the preimage to be one
-            // point (D3).
-            if !(high > 0.0) || !(low > 0.0) || !waves.is_finite() {
-                return Err(NotAffine::Degenerate(kind.to_string()));
-            }
-            Kernel::Blob { high, low, waves }
-        }
-        _ => unreachable!("collected above"),
-    };
+    let kernel = kernel_from_registry(t, registry, kind, Space::Planar)?;
     if !(w != 0.0) || !w.is_finite() {
         return Err(NotAffine::Degenerate(kind.to_string()));
     }
@@ -2296,35 +2310,10 @@ pub fn transform_map_3d_ordered(
     if stage.roots.len() > 1 || stage.any {
         return Err(NotAffine::MixedSum(kind.to_string()));
     }
-    let n = t.get_variation_param_or_default(kind, "power", registry).round() as i32;
-    if n == 0 || !(w != 0.0) || !w.is_finite() {
+    if !(w != 0.0) || !w.is_finite() {
         return Err(NotAffine::Degenerate(kind.to_string()));
     }
-    let kernel = match kind {
-        "julia3D" => Kernel3::Root3 { n },
-        "julia3Dz" => Kernel3::RootZ3 { n },
-        "quaternion_julia" => {
-            let p = |name: &str| t.get_variation_param_or_default(kind, name, registry) as f64;
-            let projection = p("projection").round();
-            // Projection 2 (Perspective) divides by `1 − w`, which is
-            // not an isometry and has a singularity inside the ball;
-            // 0 (Vector) and 1 (Depth) are permutations.
-            if p("inverse") < 0.5 || !(projection == 0.0 || projection == 1.0) {
-                return Err(NotAffine::Mode(kind.to_string()));
-            }
-            let d = p("dist");
-            if !(d != 0.0) || !d.is_finite() {
-                return Err(NotAffine::Degenerate(kind.to_string()));
-            }
-            Kernel3::Quaternion {
-                n,
-                d,
-                c: [p("cx"), p("cy"), p("cz"), p("cw")],
-                depth: projection == 1.0,
-            }
-        }
-        _ => unreachable!("collected above"),
-    };
+    let kernel = kernel3_from_registry(t, registry, kind)?;
     let affine = plane_affine(
         [[t.a as f64, t.b as f64], [t.c as f64, t.d as f64]],
         [t.e as f64, t.f as f64],
@@ -3788,6 +3777,144 @@ mod tests {
             assert!(checked > 200, "{name}: only {checked} points were checkable");
         }
     }
+    /// G1: every REGISTERED inverse, not a list written here.
+    ///
+    /// `ifs-general.md` D1's point. Three things, over
+    /// `variations::inverse::INVERSES`:
+    ///
+    /// 1. the analysis reaches it -- a transform carrying only that
+    ///    variation analyses to a map with that kernel, which is the
+    ///    whole wiring from the definition through the registry to
+    ///    `transform_map_2d_ordered`;
+    /// 2. every forward branch is undone by SOME inverse branch,
+    ///    which is the kernel property the walk depends on and the
+    ///    one Bubble's inverse failed by 102% before it was rewritten;
+    /// 3. the dual Jacobian exists wherever the domain says it does.
+    ///
+    /// A seventh kernel gets all three by being appended to that
+    /// list. The solid kernels take (1) only: their round trip
+    /// carries an `aux` and a quaternion branch rule, which
+    /// `the_solid_kernels_invert_their_branches` covers in its own
+    /// terms.
+    #[test]
+    fn every_registered_inverse_is_reachable_and_inverts() {
+        use crate::variations::inverse::{InverseKernel, INVERSES};
+        let guard = global_registry();
+        let r = &*guard;
+        // The two MODE refusals, set to the arm the walk inverts,
+        // and a power of three. The power is not cosmetic: `julian`
+        // at its default power 2 and dist 1 IS `julia`, the same
+        // `Root { n: 2, d: 1 }`, so at the defaults check (1) below
+        // cannot tell which definition produced it. Nothing else is
+        // overridden -- the rest is what a user who drops the
+        // variation on a transform gets.
+        let overrides: &[(&str, f32)] = &[("inverse", 1.0), ("projection", 0.0), ("power", 3.0)];
+
+        let mut planar = 0usize;
+        let mut solid = 0usize;
+        for def in INVERSES {
+            let info = r.get(def.name).expect("a registered variation");
+            let mut t = affine_xform(0.83, -0.24, 0.31, 0.77, 0.19, -0.12);
+            t.variations.clear();
+            t.variation_order.clear();
+            let mut t = with(t, def.name, 0.8);
+            for (k, v) in overrides {
+                if info.parameters.iter().any(|q| q.name == *k) {
+                    t.set_variation_param(def.name, k, *v);
+                }
+            }
+
+            // (1) the analysis reaches it.
+            let order = t.ordered_variation_names(r);
+            match def.kernel {
+                InverseKernel::Planar(_) => {
+                    let m = transform_map_2d_ordered(&t, r, &order)
+                        .unwrap_or_else(|e| panic!("{}: {e:?}", def.name));
+                    let kernel = m
+                        .nonlinear()
+                        .unwrap_or_else(|| panic!("{}: analysed as affine", def.name))
+                        .kernel;
+                    assert_eq!(
+                        kernel.variation(),
+                        def.name,
+                        "{} analysed to {:?}",
+                        def.name,
+                        kernel
+                    );
+
+                    // (2) every forward branch is undone by one of
+                    // the inverse's.
+                    let mut checked = 0usize;
+                    // The annulus this runs in is chosen, not
+                    // arbitrary. Below it `spherical`'s forward
+                    // carries the flame's `1e-6` guard --
+                    // `z/(|z|² + 1e-6)` -- which its inverse
+                    // deliberately does not undo, so the round trip
+                    // is off by `1e-6/|z|²`: a millionth at radius
+                    // 1, and everything at the origin. Above it
+                    // `disc`'s forward is periodic in the radius and
+                    // the ring would be past the four branches
+                    // tried below. The tolerance is that guard's
+                    // own size at the inner edge.
+                    for z in kernel_probe_points() {
+                        let rad = z[0].hypot(z[1]);
+                        if !(0.2..=2.0).contains(&rad) {
+                            continue;
+                        }
+                        for k in 0..4u32 {
+                            let v = kernel.forward(z, k);
+                            if !(v[0].is_finite() && v[1].is_finite()) {
+                                continue;
+                            }
+                            let scale = z[0].hypot(z[1]).max(1e-3);
+                            let best = (0..4u32)
+                                .map(|b| {
+                                    let u = kernel.inverse(v, b);
+                                    (u[0] - z[0]).hypot(u[1] - z[1])
+                                })
+                                .fold(f64::INFINITY, f64::min);
+                            if !best.is_finite() {
+                                continue;
+                            }
+                            assert!(
+                                best <= 3e-5 * scale,
+                                "{}: forward branch {k} at {z:?} -> {v:?}, no inverse \
+                                 branch returns it (closest {best:.3e}, scale {scale:.3e})",
+                                def.name
+                            );
+                            checked += 1;
+
+                            // (3) a Jacobian wherever the domain says.
+                            for b in 0..4u32 {
+                                if kernel_inverse_domain(&kernel, v, b) {
+                                    assert!(
+                                        kernel.inverse_jacobian(v, b).is_some(),
+                                        "{}: in the domain at {v:?} branch {b} with no \
+                                         Jacobian",
+                                        def.name
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    assert!(checked > 100, "{}: only {checked} round trips", def.name);
+                    planar += 1;
+                }
+                InverseKernel::Solid(_) => {
+                    let m = transform_map_3d_ordered(&t, r, &order)
+                        .unwrap_or_else(|e| panic!("{}: {e:?}", def.name));
+                    let kernel = m
+                        .nonlinear()
+                        .unwrap_or_else(|| panic!("{}: analysed as affine", def.name))
+                        .kernel;
+                    assert_eq!(kernel.variation(), def.name, "{} analysed to {:?}", def.name, kernel);
+                    solid += 1;
+                }
+            }
+        }
+        assert_eq!((planar, solid), (7, 3), "seven planar kernels and three solid");
+    }
+
     #[test]
     fn every_kernel_inverse_undoes_each_of_its_branches() {
         let guard = global_registry();

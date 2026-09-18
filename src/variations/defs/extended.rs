@@ -2,6 +2,8 @@
 //!
 //! Additional variations beyond the basic and advanced sets.
 
+use crate::scene::ifs_analysis::Kernel3;
+use crate::variations::inverse::{InverseDef, InverseKernel, Refusal};
 use crate::variations::{
     definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
@@ -1370,4 +1372,32 @@ fn variation_crop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<funct
     return vec3<f32>(x, y, p.z);
 }
 "#,
+};
+
+// ------------------------------------------------- the inverse walks
+
+/// `julia3D`: the `n`th root of a point in space
+/// (`ifs-general.md` D1).
+pub static INVERSE_JULIA3D: InverseDef = InverseDef {
+    name: "julia3D",
+    kernel: InverseKernel::Solid(|p| {
+        let n = p("power").round() as i32;
+        if n == 0 {
+            return Err(Refusal::Degenerate);
+        }
+        Ok(Kernel3::Root3 { n })
+    }),
+};
+
+/// `julia3Dz`: the same root with the z component taken the other
+/// way.
+pub static INVERSE_JULIA3DZ: InverseDef = InverseDef {
+    name: "julia3Dz",
+    kernel: InverseKernel::Solid(|p| {
+        let n = p("power").round() as i32;
+        if n == 0 {
+            return Err(Refusal::Degenerate);
+        }
+        Ok(Kernel3::RootZ3 { n })
+    }),
 };
