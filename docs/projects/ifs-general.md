@@ -143,7 +143,8 @@ living in `defs/julia.rs`, `defs/spherical.rs` and so on; the
   `Real` trait, three impls, and re-expressing the six kernels'
   inverses in it -- the inverses are short; the derivations they
   replace were the long part.
-- **D3. Sums by Newton, with the limits said.** A transform whose
+- ~~**D3. Sums by Newton, with the limits said.**~~ -- done
+  2026-09-18, §9e, both sides. A transform whose
   normal phase sums several variations, or one kernel with an
   affine (`linear 0.5 + spherical 0.5` is among the commonest
   transforms in the census), has no closed-form inverse. It has a
@@ -544,3 +545,126 @@ stricter than a graph-directed IFS needs and therefore sound; D6 is
 where that is revisited. And `NotContractive` still refuses any map
 with `σ_max ≥ 1`, where a graph only needs its CYCLES to contract --
 also D6.
+
+### 9e. Sums, by Newton, on both sides, 2026-09-18
+
+D3, whole. A transform whose normal phase sums a kernel with an
+affine is a `Map2::Sum`, inverted by Newton from the dominant term's
+seed; the branches are the kernel's and each seeds its own solve;
+the shader inverts the same map over the same kernel's forward body,
+with the Jacobian by central differences in f32.
+
+**What the measurement changed, three times.**
+
+*The seed is decided at the point, not at the map.* D3 says "the
+seed from the transform's dominant term's own inverse", and a
+`kernel_leads` flag answered that from the weights -- once, for the
+whole map. That is not where the question is asked. On `spherical
+0.1 + linear 0.9` the weights say the affine leads, which is right
+over most of the plane and wrong near the origin where `z/|z|²` is
+unbounded: the affine seed there ran the full step budget and stopped
+at a residual of 2.3e-10, four orders past the tolerance. Both seeds
+are formed now and the smaller residual starts.
+
+*The Jacobian needs the branch.* A root's second preimage is the
+negative of its first, so a Jacobian taken on branch 0 against a
+residual taken on branch 1 has the wrong sign and Newton walks away
+from the answer. Every branch-1 solve failed until
+`forward_kernel_jacobian` took a branch argument.
+
+*A root's FORWARD map has a cut its inverse does not.* The forward
+divides the angle, so `atan2`'s jump across the negative x axis lands
+on another branch and the map restricted to one branch is
+discontinuous there -- not merely non-smooth. Seven of four hundred
+solves on `julia 0.6 + linear 0.4` fail, and all seven have their
+preimage within 0.028 of that ray. `Kernel::forward_singular_distance`
+reports the ray; `Kernel::singular_distance`, which is about the
+inverse, correctly does not.
+
+**The step cap is twelve, and the fold is why.** Away from a fold
+Newton takes three to six steps, which is what D3 expected. But
+`0.5z − √z` folds at `|z| = 1`, and at a point 0.985 out the
+dominant term's seed lands on the wrong side of it: the residual
+RISES at the fourth step and the solve wanders six before finding the
+basin, converging in three more. A halving safeguard was measured
+against that and bought one step of the nine and nothing at all at
+the other five sample points, so it is not there -- a wide cap is
+paid only where the loop wanders, since it returns the moment the
+residual is met, while a safeguard's extra forward evaluation is paid
+at every step of every solve.
+
+**G3.** Thirteen mixes -- ten of `linear + spherical`, plus
+`spherical`, `bubble` and `julia` at the census's own 0.6/0.4 -- at
+400 points of the support each:
+
+| | |
+|---|---|
+| mean steps to 1e-12 | 3.2 to 6.0 |
+| worst residual away from a fold | ≤ 1.0e-12 |
+| worst steps away from a fold | 10 |
+| solves that failed | 7 of 5200, all within 0.028 of a root's cut |
+| chaos-sample points reading as exterior at 2^4 | 0 of 1000 |
+| the walk's far field against the sample, at 2R / 4R / 8R | 1.007x / 1.004x / 1.002x |
+
+On the GPU, against the CPU point by point over five fixtures:
+
+| | |
+|---|---|
+| residual the shader converged to | ≤ 1.0e-6, which is D3's f32 figure |
+| preimage error × the local contraction | ≤ 2.8e-6 |
+| σ, relative | ≤ 7.9e-4 |
+| solves the GPU declined that the CPU made | 0 of 1255 |
+| pixel agreement, rendered, on a set of two sums | 99.56% |
+
+**The fold is where the two sides stop being comparable, and that is
+not a defect.** A sum `lw·z + kw·z/|z|²` folds on the circle `ρ =
+√(kw/lw)`: two preimages meet there and the map is not invertible AT
+it. Newton converges linearly rather than quadratically that close,
+and a residual of 1e-6 divided by a vanishing σ is a point error of
+anything -- measured, 3.0 relative in σ on `spherical 0.2 + linear
+0.8`, whose sample grid crosses its circle. Both halves of G3 bucket
+by conditioning for that reason and compare the residual, which is
+what both sides stop on, everywhere.
+
+**D7's row, and the plan overstated the prevalence.** Of the 170
+shipped flames, not one is refused for `MixedSum` -- the reason does
+not appear in the census table before this rung or after, and the
+count that qualify is the same twenty either way. Measured instead on
+the imported `.flame` corpus, where D4's row was also measured:
+
+```text
+  files 45 | flames 45 | transforms 109
+  transforms that SUM a kernel with an affine: 4 in 4 flames
+  flames unlocked by the sum rung alone: 0
+  still refused: 0 sum TWO kernels; 87 name a variation with no inverse
+  the sums, by kernel: spherical 3, bubble 1
+```
+
+Four in a hundred and nine is not "among the commonest". Four of the
+TWENTY-TWO that get past the catalogue is -- close to one in five --
+and that is the honest reading, because eighty-seven of those
+transforms name a variation with no `InverseDef` at all and never
+reach the sum. Zero flames are unlocked, because each of the four
+sits in a flame that also carries one of the eighty-seven. The
+catalogue is the wall; the sum was a second wall behind it, and
+taking it down stops the sum from being the NEXT refusal every time
+D1's registry gains an entry. Not one of the four sums two kernels,
+so the case D3 leaves refused did not occur at all.
+
+**Nothing that is not a sum changed.** The row grew from 112 bytes
+to 144 -- a sum needs a fourth affine and there was nowhere to put it
+-- but `IFS_NEWTON`, the seven forward kernels and the three dispatch
+lines are spliced only when a packed row says kind 7, through markers
+that are DROPPED otherwise. Every shipped mode-D preset is
+byte-identical, and a gate asserts that no marker and no solve
+reaches a shader without a sum in it.
+
+**Open.** The shader solves twice per step where it could solve once:
+`ifs_inv_point` and `ifs_inv_sigma` each run their own Newton, and
+the walk calls both. That is paid only by a flame with a sum in it,
+of which there are none shipped, so it is a cost waiting for a user
+rather than a cost. Two kernels summed are still refused, per D3.
+And the CPU's `Map2::hessian` for a sum is central differences of a
+Newton Jacobian -- the one place D2's dual numbers do not reach,
+because nesting duals through a solve would differentiate the
+iteration rather than the map.

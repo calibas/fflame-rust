@@ -6738,8 +6738,18 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             // buffer cannot disagree about which walk this frame is.
             let delta = delta && self.ifs_delta_active;
             let dtag = if delta { "|delta" } else { "" };
+            // Whether any packed row is a SUM (`ifs-general.md` D3),
+            // read off the rows rather than carried in a field: the
+            // rows ARE the answer, and a field could disagree with
+            // them. In the key, so a flame with a sum and one without
+            // do not share a pipeline.
+            let sums = self
+                .ifs
+                .as_ref()
+                .is_some_and(|p| p.rows.iter().any(|r| r.kind == 7.0));
+            let stag = if sums { "|sum" } else { "" };
             let key =
-                format!("ifs|{}|{}|b{beam}|{lens_id}{dtag}", def.name, coloring.name);
+                format!("ifs|{}|{}|b{beam}|{lens_id}{dtag}{stag}", def.name, coloring.name);
             if !self.pipelines.contains_key(&key) {
                 let source = assembler::assemble_ifs_with_lens(
                     def,
@@ -6747,6 +6757,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     beam,
                     lens_src.as_deref(),
                     delta,
+                    sums,
                 );
                 let module = device.create_shader_module(ShaderModuleDescriptor {
                     label: Some(&format!("Escape Shader {key}")),

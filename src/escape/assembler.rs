@@ -4433,6 +4433,13 @@ struct IfsMapGpu {
     // alignment -- at 88 bytes this would stride 96 here and 88 in
     // Rust, and every row after the first would be misread.
     measure: vec4<f32>,
+    // A SUM row's affine term (`ifs-general.md` D3): the 2x2, then
+    // (t.x, t.y, kw, kernel_kind). Zero on every other row. A sum's
+    // other three affines are `inv_*` (its post-inverse, UNSCALED --
+    // a sum's weight multiplies only the kernel term) and `pre_*`;
+    // this is the fourth and had nowhere else to go.
+    lin_m: vec4<f32>,
+    lin_t: vec4<f32>,
 }
 
 @group(1) @binding(0) var<storage, read> ifs_maps: array<IfsMapGpu>;
@@ -6017,7 +6024,32 @@ fn ifs_rig(lens: Option<&str>) -> String {
 }
 
 pub fn assemble_ifs(def: &IfsDef, coloring: &IfsColoringDef, beam: u32) -> String {
-    assemble_ifs_with_lens(def, coloring, beam, None, false)
+    assemble_ifs_with_lens(def, coloring, beam, None, false, false)
+}
+
+/// Push `text` a line at a time, filling the three SUM markers
+/// (`ifs-general.md` D3) -- or DROPPING them, which is what makes a
+/// shader with no sum in it the byte-identical text it was before the
+/// rung existed.
+///
+/// The dispatch has to go INSIDE `ifs_inv_point`, `ifs_inv_sigma` and
+/// `ifs_map_jacobian` rather than wrapping them: every caller of those
+/// three would otherwise have to learn about sums, and there are
+/// dozens across the walk, the beam and three colourings.
+fn push_ifs_sum_markers(out: &mut Vec<String>, text: &str, sums: bool) {
+    for l in text.lines() {
+        let call = match l.trim() {
+            "//__IFS_SUM_POINT__" => Some("return ifs_sum_inv_point(i, p);"),
+            "//__IFS_SUM_SIGMA__" => Some("return ifs_sum_inv_sigma(i, p);"),
+            "//__IFS_SUM_JACOBIAN__" => Some("return ifs_sum_inv_jacobian(i, q);"),
+            _ => None,
+        };
+        match call {
+            Some(c) if sums => out.push(format!("    if (ifs_maps[i].kind == 7.0) {{ {c} }}")),
+            Some(_) => {}
+            None => out.push(l.to_string()),
+        }
+    }
 }
 
 /// The same, with a camera lens.
@@ -6033,7 +6065,13 @@ pub fn assemble_ifs_with_lens(
     beam: u32,
     lens: Option<&str>,
     delta: bool,
+    sums: bool,
 ) -> String {
+    // A SUM row's inverse is a Newton solve over the kernel's forward
+    // body (`ifs-general.md` D3), which only a flame that HAS one
+    // pays for. Spliced or not, exactly as the delta walk is, so a
+    // flame without a sum keeps the WGSL it has always had.
+    let sums = sums && !def.solid;
     // The DELTA walk is a different `ifs_evaluate`, not a branch
     // inside one (`ifs-perturbation-delta.md` §3). Spliced or not, so
     // the shipped path's WGSL is the same text it has always been and
@@ -6074,9 +6112,19 @@ pub fn assemble_ifs_with_lens(
                 out.push("    res.depth = 0u;".to_string());
             }
             "//__IFS__" => {
-                out.push(def.wgsl.trim().to_string());
+                // BEFORE the formula's own body: `ifs_inv_point` calls
+                // into the solve, and WGSL declares before it uses.
+                if sums {
+                    out.push(super::ifs::IFS_NEWTON.trim().to_string());
+                }
+                // The formula's body carries two marker lines of its
+                // own, which is how the sum dispatch gets INSIDE
+                // `ifs_inv_point` and `ifs_inv_sigma` rather than
+                // wrapping them. Dropped when there is no sum, so the
+                // text is what it was.
+                push_ifs_sum_markers(&mut out, def.wgsl.trim(), sums);
                 if measure {
-                    out.push(super::ifs::IFS_JACOBIAN.trim().to_string());
+                    push_ifs_sum_markers(&mut out, super::ifs::IFS_JACOBIAN.trim(), sums);
                     out.push(super::ifs::IFS_MEASURE.trim().to_string());
                 }
                 if delta {
@@ -6085,7 +6133,7 @@ pub fn assemble_ifs_with_lens(
                     // too -- and only once, when the measure
                     // colouring has not already spliced them.
                     if !measure {
-                        out.push(super::ifs::IFS_JACOBIAN.trim().to_string());
+                        push_ifs_sum_markers(&mut out, super::ifs::IFS_JACOBIAN.trim(), sums);
                     }
                     out.push(super::ifs::IFS_DIFFERENCE.trim().to_string());
                     out.push(super::ifs::IFS_DELTA_WALK.trim().to_string());
@@ -6753,11 +6801,11 @@ mod tests {
                 // delta walk to be spliced into.
                 continue;
             }
-            let off = assemble_ifs_with_lens(def, coloring, 4, None, false);
-            let on = assemble_ifs_with_lens(def, coloring, 4, None, true);
+            let off = assemble_ifs_with_lens(def, coloring, 4, None, false, false);
+            let on = assemble_ifs_with_lens(def, coloring, 4, None, true, false);
             assert_eq!(
                 off,
-                assemble_ifs_with_lens(def, coloring, 4, None, false),
+                assemble_ifs_with_lens(def, coloring, 4, None, false, false),
                 "{}: assembly is not deterministic",
                 coloring.name
             );
@@ -6805,7 +6853,7 @@ mod tests {
         };
         let col = crate::escape::ifs::get_ifs_coloring("ifs_distance", solid);
         assert!(
-            !assemble_ifs_with_lens(solid, col, 4, None, true).contains("ifs_evaluate_delta"),
+            !assemble_ifs_with_lens(solid, col, 4, None, true, false).contains("ifs_evaluate_delta"),
             "the solid walk took the delta path"
         );
     }
@@ -7321,8 +7369,8 @@ mod lens_tests {
         // Mode D, both of its sites, planar and solid.
         for def in crate::escape::ifs::IFS_DEFS {
             let col = crate::escape::ifs::get_ifs_coloring("ifs_distance", def);
-            let lensed = assemble_ifs_with_lens(def, col, 4, Some(&src), false);
-            let plain = assemble_ifs_with_lens(def, col, 4, None, false);
+            let lensed = assemble_ifs_with_lens(def, col, 4, Some(&src), false, false);
+            let plain = assemble_ifs_with_lens(def, col, 4, None, false, false);
             let what = format!("ifs {}", def.name);
             assert!(lensed.contains("esc_lens("), "{what}: the lens is not applied");
             assert!(!plain.contains("esc_lens("), "{what}: lens glue without a lens");
@@ -7331,6 +7379,69 @@ mod lens_tests {
                 "{what}: a marker survived"
             );
             validate_lens(&lensed, &what);
+        }
+    }
+
+    /// Every mode-D combination still validates with the SUM rung
+    /// spliced (`ifs-general.md` D3), and every combination WITHOUT it
+    /// is the byte-identical text it was.
+    ///
+    /// The second half is the one that matters: the sum rung adds a
+    /// Newton solve, seven forward kernels and three dispatch lines
+    /// inside functions the shipped walk calls on every step, and the
+    /// only reason no shipped preset moved is that none of it is
+    /// SPLICED unless a row is a sum. A marker that stopped being
+    /// dropped would move every picture in mode D at once.
+    #[test]
+    fn the_sum_rung_validates_and_is_absent_when_no_row_is_a_sum() {
+        for def in crate::escape::ifs::IFS_DEFS {
+            for col in crate::escape::ifs::IFS_COLORINGS {
+                if crate::escape::ifs::get_ifs_coloring(col.name, def).name != col.name {
+                    continue;
+                }
+                for delta in [false, true] {
+                    let plain = assemble_ifs_with_lens(def, col, 4, None, delta, false);
+                    let summed = assemble_ifs_with_lens(def, col, 4, None, delta, true);
+                    let what = format!("ifs {} / {} / delta {delta}", def.name, col.name);
+                    assert!(
+                        !plain.lines().map(str::trim).any(|l| l.starts_with("//__IFS_SUM")),
+                        "{what}: a marker survived into the plain shader"
+                    );
+                    assert!(
+                        !summed.lines().map(str::trim).any(|l| l.starts_with("//__IFS_SUM")),
+                        "{what}: a marker survived into the summed shader"
+                    );
+                    assert!(
+                        !plain.contains("ifs_sum_solve"),
+                        "{what}: the solve is in a shader that has no sum in it"
+                    );
+                    if def.solid {
+                        // A solid flame cannot hold a sum -- `analyse_3d`
+                        // refuses one -- so the flag is ignored there and
+                        // the two texts are one text.
+                        assert_eq!(plain, summed, "{what}: the solid template took the flag");
+                        continue;
+                    }
+                    assert!(summed.contains("fn ifs_sum_solve"), "{what}: no solve");
+                    assert!(
+                        summed.contains("if (ifs_maps[i].kind == 7.0) { return ifs_sum_inv_point(i, p); }"),
+                        "{what}: the point dispatch is missing"
+                    );
+                    assert!(
+                        summed.contains("if (ifs_maps[i].kind == 7.0) { return ifs_sum_inv_sigma(i, p); }"),
+                        "{what}: the sigma dispatch is missing"
+                    );
+                    // The Jacobian is only spliced where a walk reads
+                    // it, so its dispatch follows it.
+                    let has_jac = summed.contains("fn ifs_map_jacobian");
+                    assert_eq!(
+                        has_jac,
+                        summed.contains("if (ifs_maps[i].kind == 7.0) { return ifs_sum_inv_jacobian(i, q); }"),
+                        "{what}: the Jacobian and its sum dispatch disagree about being here"
+                    );
+                    validate_lens(&summed, &what);
+                }
+            }
         }
     }
 
