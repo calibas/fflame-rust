@@ -138,6 +138,23 @@ pub static IFS_FLAME: IfsDef = IfsDef {
             choices: &[],
         },
         EscapeParamDef {
+            name: "delta",
+            display_name: "Delta Walk",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "EXPERIMENTAL. Carry each pixel as an OFFSET from the centre's \
+                      own walk, level by level, instead of starting it from an \
+                      absolute position at one handed-over level. The offset's step \
+                      is the kernel's exact difference form, so there is no \
+                      linearisation to go bad and no level to choose -- a lineage \
+                      leaves the reference when its own offset grows to a fraction \
+                      of the ball, which happens deeper the deeper the view. Off by \
+                      default while the shader half is measured; see \
+                      `ifs-perturbation-delta.md`.",
+            choices: &[],
+        },
+        EscapeParamDef {
             name: "extent",
             display_name: "Extent",
             default: 0.0,
@@ -2606,10 +2623,14 @@ pub struct IfsRefRowGpu {
     /// The row of the previous level this came from, the map that
     /// made it, the flags, and the escape level.
     ///
+    /// Named `link` and not `meta` because `meta` is a RESERVED
+    /// KEYWORD in WGSL, and the mirror struct there has to spell it
+    /// the same.
+    ///
     /// Parent and map ride as f32 because every other field is one
     /// and a mixed struct strides differently; both are small
     /// integers a f32 holds exactly.
-    pub meta: [f32; 4],
+    pub link: [f32; 4],
     /// The escape point, the reference's own bound in pixels, and a
     /// spare.
     pub esc: [f32; 4],
@@ -2626,15 +2647,28 @@ pub const REF_DONE: u32 = 8;
 /// The reference beam as the shader reads it: a header row, then
 /// `levels × stride` rows.
 ///
-/// Row 0 is the HEADER -- `z_u = [levels, stride, px, maps]` -- rather
-/// than a separate binding or a slot stolen from the globals block.
-/// A buffer that describes itself cannot be bound with the wrong
-/// stride, which is the failure this shape exists to make impossible.
+/// Row 0 is the HEADER -- `z_u = [levels, stride, px, maps]` and
+/// `scalars = basis0` -- rather than a separate binding or a slot
+/// stolen from the globals block. A buffer that describes itself
+/// cannot be bound with the wrong stride, which is the failure this
+/// shape exists to make impossible.
+///
+/// **The basis belongs here and nowhere else.** The seed block's own
+/// basis is the view composed with the prefix at the HANDOVER level,
+/// which is what the seeded walk wants and is not the view. Reading
+/// it as the view put the delta walk 1,259 pixels out on a gasket at
+/// 2^8, which is how this was found.
 pub fn pack_reference(beam: &crate::scene::ifs_estimate::ReferenceBeam, n_maps: usize, beam_width: usize) -> Vec<IfsRefRowGpu> {
     let stride = (beam_width.max(1) * n_maps.max(1)).max(1);
     let levels = beam.levels.len();
     let mut out = vec![IfsRefRowGpu::default(); 1 + levels * stride];
     out[0].z_u = [levels as f32, stride as f32, beam.px as f32, n_maps as f32];
+    out[0].scalars = [
+        beam.basis0[0][0] as f32,
+        beam.basis0[0][1] as f32,
+        beam.basis0[1][0] as f32,
+        beam.basis0[1][1] as f32,
+    ];
     for (k, rows) in beam.levels.iter().enumerate() {
         for (i, r) in rows.iter().enumerate().take(stride) {
             let mut flags = REF_LIVE;
@@ -2664,7 +2698,7 @@ pub fn pack_reference(beam: &crate::scene::ifs_estimate::ReferenceBeam, n_maps: 
                     r.excess2 as f32,
                     r.last_sigma as f32,
                 ],
-                meta: [
+                link: [
                     if r.parent == u32::MAX { -1.0 } else { r.parent as f32 },
                     if r.map == u32::MAX { -1.0 } else { r.map as f32 },
                     f32::from_bits(flags),
@@ -2837,6 +2871,421 @@ fn ifs_map_difference(i: u32, q: vec2<f32>, d: vec2<f32>) -> vec3<f32> {
     }
     let p = ifs_maps[i].pre_m;
     return vec3<f32>(p.x * du.x + p.y * du.y, p.z * du.x + p.w * du.y, 1.0);
+}
+"#;
+
+/// The DELTA walk: a pixel as an offset from the centre's own beam,
+/// level by level (`ifs-perturbation-delta.md` §3).
+///
+/// The shipped walk starts every pixel from an absolute f32 position
+/// at ONE handed-over level, and pays for it twice: a lineage whose
+/// view has collapsed pays f32's whole ulp at any handover, and one
+/// whose view has expanded pays the linearisation's curvature at any
+/// handover deep enough for f32 to be cheap. Here neither is paid. A
+/// lineage carries `(row, δ)`, its step is the kernel's EXACT
+/// difference form, and it leaves the reference only when its own δ
+/// has grown to a fraction of the ball -- where absolute f32 is
+/// exact by construction.
+///
+/// Transcribed from [`crate::scene::ifs_estimate::estimate_delta`],
+/// which `the_delta_walk_is_the_direct_walk` holds to a millionth of
+/// a pixel against the direct f64 walk.
+///
+/// **What is NOT here.** The Taylor rung: a kernel with no exact
+/// difference rebases at once and walks exactly as it does today, so
+/// the disc and the blob are unaffected by this path either way.
+pub(crate) const IFS_DELTA_WALK: &str = r#"
+struct IfsRefRow {
+    z_u: vec4<f32>,
+    scalars: vec4<f32>,
+    // `meta` is a reserved keyword in WGSL.
+    link: vec4<f32>,
+    esc: vec4<f32>,
+};
+@group(1) @binding(5) var<storage, read> ifs_ref: array<IfsRefRow>;
+
+const REF_LIVE: u32 = 1u;
+const REF_KEPT: u32 = 2u;
+const REF_NONE: u32 = 0xffffffffu;
+
+// Row 0 is the header: (levels, stride, px, maps).
+fn ifs_ref_levels() -> u32 {
+    if (arrayLength(&ifs_ref) < 2u) {
+        return 0u;
+    }
+    return u32(max(ifs_ref[0].z_u.x, 0.0));
+}
+
+fn ifs_ref_stride() -> u32 {
+    return u32(max(ifs_ref[0].z_u.y, 1.0));
+}
+
+// The row at (level, i), or REF_NONE when that slot is empty.
+fn ifs_ref_at(level: u32, i: u32) -> u32 {
+    let stride = ifs_ref_stride();
+    if (level >= ifs_ref_levels() || i >= stride) {
+        return REF_NONE;
+    }
+    let idx = 1u + level * stride + i;
+    if ((bitcast<u32>(ifs_ref[idx].link.z) & REF_LIVE) == 0u) {
+        return REF_NONE;
+    }
+    return idx;
+}
+
+// The child of (level, i) by map `m`, or REF_NONE. A linear scan of
+// the next level, which is at most `beam * maps` slots -- the same
+// number the walk expands anyway, so it costs one pass over what it
+// was about to touch.
+fn ifs_ref_child(level: u32, i: u32, m: u32) -> u32 {
+    let stride = ifs_ref_stride();
+    if (level + 1u >= ifs_ref_levels()) {
+        return REF_NONE;
+    }
+    let base = 1u + (level + 1u) * stride;
+    for (var j = 0u; j < stride; j = j + 1u) {
+        let r = ifs_ref[base + j];
+        if ((bitcast<u32>(r.link.z) & REF_LIVE) == 0u) {
+            continue;
+        }
+        if (u32(max(r.link.x, 0.0)) == i && u32(max(r.link.y, 0.0)) == m) {
+            return base + j;
+        }
+    }
+    return REF_NONE;
+}
+
+// One lineage: an offset from a reference row, or an absolute
+// position once it has rebased. `row` is REF_NONE for the second.
+struct IfsDeltaCand {
+    d: vec2<f32>,
+    point: vec2<f32>,
+    row: u32,
+    level_of: u32,
+    index_of: u32,
+    sigma: f32,
+    bound: f32,
+    r: f32,
+    addr: f32,
+    lvl: f32,
+    color: f32,
+    last_sigma: f32,
+    // The map this lineage took last, for the xaos test. Carried on
+    // the CANDIDATE and not read off its row, because a rebased
+    // lineage has no row and the graph still applies to it.
+    last_map: u32,
+    flags: u32,
+};
+
+// The pixel's own position: the row's Z plus its offset, or the
+// absolute position it rebased to.
+fn ifs_delta_point(c: IfsDeltaCand) -> vec2<f32> {
+    if (c.row == REF_NONE) {
+        return c.d;
+    }
+    return ifs_ref[c.row].z_u.xy + c.d;
+}
+
+fn ifs_evaluate_delta(uv: vec2<f32>) -> IfsResult {
+    let c = ifs_centre();
+    let radius = ifs_radius();
+    let n = ifs_count();
+
+    var res: IfsResult;
+    res.distance = 0.0;
+    res.level = 0.0;
+    res.address = 0.0;
+    res.color = 0.0;
+    res.point = vec2<f32>(0.0, 0.0);
+    res.escaped = 0u;
+    res.depth = 0u;
+    if (n == 0u || ifs_ref_levels() == 0u) {
+        res.distance = 1e30;
+        res.escaped = 1u;
+        return res;
+    }
+
+    let max_levels = u32(clamp(fparam(0u), 1.0, 256.0));
+    let beam = u32(clamp(fparam(1u), 1.0, f32(IFS_MAX_BEAM)));
+    let far = max(radius, 1.0) * 1e12;
+    let cap = radius * 0.25;
+    // This walk starts at level 0, so the first digit's weight is
+    // `1/n` -- not `ifs_addr_scale()`, which is the seeded walk's and
+    // already has the handover's levels in it.
+    var addr_scale = 1.0 / f32(n);
+    var dead_min = 1e30;
+
+    // Level 0: one lineage, at the root row, offset by the view basis
+    // applied to this pixel. The only place the pixel's position
+    // enters at all.
+    let root = ifs_ref[1u];
+    // The VIEW's basis, from the header. Not a seed's: that one is
+    // the view composed with the prefix at the handover level.
+    let vb = ifs_ref[0u].scalars;
+    let d0 = vec2<f32>(
+        vb.x * uv.x + vb.y * uv.y,
+        vb.z * uv.x + vb.w * uv.y,
+    );
+    var live: array<IfsDeltaCand, IFS_MAX_BEAM>;
+    var next: array<IfsDeltaCand, IFS_MAX_BEAM>;
+    var live_count = 1u;
+    {
+        let t0 = 2.0 * dot(root.z_u.zw, d0) + dot(d0, d0);
+        let r0 = sqrt(max(root.scalars.y * root.scalars.y + t0, 0.0));
+        let e0 = select(
+            r0 - radius,
+            (root.scalars.z + t0) / (r0 + radius),
+            r0 < radius * 4.0,
+        );
+        var cand: IfsDeltaCand;
+        cand.d = d0;
+        cand.row = 1u;
+        cand.level_of = 0u;
+        cand.index_of = 0u;
+        cand.sigma = root.scalars.x;
+        let term0 = root.scalars.x * e0;
+        cand.bound = select(-1e30, term0, abs(term0) <= 1e37);
+        cand.r = r0;
+        cand.addr = 0.0;
+        cand.lvl = 0.0;
+        cand.color = 0.0;
+        cand.last_sigma = root.scalars.w;
+        cand.last_map = IFS_NO_LAST;
+        cand.flags = 0u;
+        cand.point = root.z_u.xy + d0;
+        if (r0 > radius) {
+            cand.flags = 1u;
+            cand.lvl = ifs_residual(r0, radius, root.scalars.w);
+        }
+        if (!(r0 < far)) {
+            cand.flags = cand.flags | 2u;
+        }
+        live[0] = cand;
+    }
+
+    var best_done: IfsDeltaCand;
+    var has_done = false;
+    var deepest_done = 0.0;
+
+    // `max_levels` POSITIONS are scored, level 0 included, which is
+    // what the direct walk means by the budget.
+    for (var k = 0u; k + 1u < max_levels; k = k + 1u) {
+        var all_done = true;
+        for (var ci = 0u; ci < live_count; ci = ci + 1u) {
+            if ((live[ci].flags & 2u) == 0u) {
+                all_done = false;
+            }
+        }
+        if (all_done) {
+            break;
+        }
+
+        var next_count = 0u;
+        var keys: array<f32, IFS_MAX_BEAM>;
+        for (var ci = 0u; ci < live_count; ci = ci + 1u) {
+            let cur = live[ci];
+            if ((cur.flags & 2u) != 0u) {
+                if ((cur.flags & 1u) != 0u) {
+                    deepest_done = max(deepest_done, cur.lvl);
+                }
+                if (abs(cur.bound) <= 1e37 && (!has_done || cur.bound < best_done.bound)) {
+                    best_done = cur;
+                    has_done = true;
+                }
+                continue;
+            }
+            let here = ifs_delta_point(cur);
+            for (var bi = 0u; bi < n; bi = bi + 1u) {
+                if (!ifs_admits(bi, cur.last_map)) {
+                    continue;
+                }
+                // A branch whose image this pixel is outside of, asked
+                // at the pixel's OWN position -- the same question the
+                // shipped walk asks, and why no gap is stored on a
+                // reference row.
+                var gap = ifs_image_gap(bi, here);
+                if (gap >= 0.0) {
+                    let gq = ifs_inv_point(bi, here);
+                    let gt = ifs_inv_sigma(bi, here) * (ifs_radius2(gq, c) - radius);
+                    if (abs(gt) <= 1e37) {
+                        gap = max(gap, gt);
+                    }
+                    dead_min = min(dead_min, max(cur.bound, cur.sigma * gap));
+                    continue;
+                }
+
+                var child: IfsDeltaCand;
+                child = cur;
+                child.addr = cur.addr;
+                var took_delta = false;
+                if (cur.row != REF_NONE) {
+                    let ci2 = ifs_ref_child(cur.level_of, cur.index_of, bi);
+                    let kept = (bitcast<u32>(ifs_ref[cur.row].link.z) & REF_KEPT) != 0u;
+                    if (ci2 != REF_NONE && kept) {
+                        let dd = ifs_map_difference(bi, ifs_ref[cur.row].z_u.xy, cur.d);
+                        if (dd.z > 0.5) {
+                            let row = ifs_ref[ci2];
+                            let dm = length(dd.xy);
+                            let zm = length(row.z_u.xy + dd.xy);
+                            // The two rebase events, per lineage: the
+                            // offset grown to O(R), and `Z + δ`
+                            // cancelling. Past either, absolute f32 is
+                            // where the precision now is.
+                            if (dm <= cap && zm >= dm) {
+                                let t = 2.0 * dot(row.z_u.zw, dd.xy) + dot(dd.xy, dd.xy);
+                                let rr = sqrt(max(row.scalars.y * row.scalars.y + t, 0.0));
+                                // `r − R` two ways, and which is
+                                // right depends on where the point
+                                // is. Near the ball the direct
+                                // subtraction CANCELS, and the
+                                // difference of squares avoids it.
+                                // Far outside, `r²` is enormous --
+                                // the walk runs to a thousand billion
+                                // radii -- and the stored `r² − R²`
+                                // has no digits left relative to `t`,
+                                // while the direct subtraction has
+                                // nothing to cancel. Four radii is
+                                // where each is comfortable.
+                                let ex = select(
+                                    rr - radius,
+                                    (row.scalars.z + t) / (rr + radius),
+                                    rr < radius * 4.0,
+                                );
+                                // σ is the PIXEL's, not the row's: it
+                                // varies across the view like
+                                // everything else, and sixty levels of
+                                // a tenth of a percent compound.
+                                child.sigma = cur.sigma * ifs_inv_sigma(bi, here);
+                                child.d = dd.xy;
+                                child.row = ci2;
+                                child.level_of = cur.level_of + 1u;
+                                child.index_of = (ci2 - 1u) % ifs_ref_stride();
+                                child.r = rr;
+                                let term = child.sigma * ex;
+                                child.bound = select(cur.bound, max(cur.bound, term),
+                                    abs(term) <= 1e37);
+                                child.last_sigma = ifs_maps[bi].sigma_min;
+                                took_delta = true;
+                            }
+                        }
+                    }
+                }
+                if (!took_delta) {
+                    // The absolute step, which is the shipped walk's.
+                    let q = ifs_inv_point(bi, here);
+                    child.sigma = cur.sigma * ifs_inv_sigma(bi, here);
+                    child.d = q;
+                    child.row = REF_NONE;
+                    child.r = ifs_radius2(q, c);
+                    let term = child.sigma * (child.r - radius);
+                    child.bound = select(cur.bound, max(cur.bound, term),
+                        abs(term) <= 1e37);
+                    child.last_sigma = ifs_maps[bi].sigma_min;
+                }
+
+                child.last_map = bi;
+                let cp = ifs_delta_point(child);
+                if ((cur.flags & 1u) == 0u) {
+                    child.addr = cur.addr + f32(bi) * addr_scale;
+                    if (k == 0u) {
+                        child.color = ifs_maps[bi].color;
+                    }
+                }
+                if (child.r > radius && (child.flags & 1u) == 0u) {
+                    child.flags = child.flags | 1u;
+                    child.lvl = f32(k + 1u) + ifs_residual(child.r, radius, child.last_sigma);
+                    child.point = cp;
+                }
+                if (!(child.r < far)) {
+                    child.flags = child.flags | 2u;
+                    if (!(abs(child.r) <= 1e37) && !(child.bound > 0.0)) {
+                        child.bound = 1e38;
+                    }
+                }
+
+                // Insertion into the beam, by the pixel's own key.
+                var key = child.r;
+                if (ifs_weighted_key()) {
+                    key = key * child.sigma;
+                }
+                if (!(key <= 1e37)) {
+                    key = 1e38;
+                }
+                var pos = next_count;
+                for (var j = 0u; j < next_count; j = j + 1u) {
+                    if (key < keys[j]) {
+                        pos = j;
+                        break;
+                    }
+                }
+                if (pos < beam) {
+                    var j = min(next_count, beam - 1u);
+                    loop {
+                        if (j <= pos) {
+                            break;
+                        }
+                        keys[j] = keys[j - 1u];
+                        next[j] = next[j - 1u];
+                        j = j - 1u;
+                    }
+                    keys[pos] = key;
+                    next[pos] = child;
+                    next_count = min(next_count + 1u, beam);
+                }
+            }
+        }
+        if (next_count == 0u) {
+            for (var ci = 0u; ci < live_count; ci = ci + 1u) {
+                live[ci].bound = 1e38;
+            }
+            break;
+        }
+        for (var ci = 0u; ci < next_count; ci = ci + 1u) {
+            live[ci] = next[ci];
+        }
+        live_count = next_count;
+        addr_scale = addr_scale / f32(n);
+    }
+
+    var win = 0u;
+    for (var ci = 1u; ci < live_count; ci = ci + 1u) {
+        let bb = live[ci].bound;
+        let wb = live[win].bound;
+        if (abs(bb) <= 1e37 && (!(abs(wb) <= 1e37) || bb < wb)) {
+            win = ci;
+        }
+    }
+    if (has_done && (!(abs(live[win].bound) <= 1e37) || best_done.bound < live[win].bound)) {
+        live[win] = best_done;
+    }
+    let best = live[win];
+    for (var ci = 0u; ci < live_count; ci = ci + 1u) {
+        if ((live[ci].flags & 1u) != 0u) {
+            deepest_done = max(deepest_done, live[ci].lvl);
+        }
+    }
+
+    var dist = 0.0;
+    if (abs(best.bound) <= 1e37) {
+        dist = min(max(best.bound, 0.0), max(dead_min, 0.0));
+    } else if (dead_min < 1e30) {
+        dist = max(dead_min, 0.0);
+    }
+    res.distance = dist;
+    res.address = best.addr;
+    res.color = best.color;
+    res.point = ifs_delta_point(best);
+    let unescaped = f32(max_levels);
+    if ((best.flags & 1u) != 0u) {
+        res.level = best.lvl;
+        res.escaped = 1u;
+        res.point = best.point;
+    } else {
+        res.level = unescaped;
+        res.escaped = 0u;
+    }
+    res.depth = u32(max(deepest_done, 0.0));
+    return res;
 }
 "#;
 
@@ -6630,7 +7079,7 @@ mod tests {
                 assert_eq!(g.z_u[2], r.u[0] as f32, "level {k} row {i} u.x");
                 assert_eq!(g.scalars[1], r.r as f32, "level {k} row {i} r");
                 assert_eq!(g.scalars[2], r.excess2 as f32, "level {k} row {i} excess");
-                let flags = g.meta[2].to_bits();
+                let flags = g.link[2].to_bits();
                 assert!(flags & REF_LIVE != 0, "level {k} row {i} not marked live");
                 assert_eq!(
                     flags & REF_KEPT != 0,
@@ -6638,14 +7087,14 @@ mod tests {
                     "level {k} row {i} kept flag"
                 );
                 if k > 0 {
-                    assert_eq!(g.meta[0] as u32, r.parent, "level {k} row {i} parent");
-                    assert_eq!(g.meta[1] as u32, r.map, "level {k} row {i} map");
+                    assert_eq!(g.link[0] as u32, r.parent, "level {k} row {i} parent");
+                    assert_eq!(g.link[1] as u32, r.map, "level {k} row {i} map");
                     // ...and the parent must be a row that EXISTS at
                     // the level above, and one that was kept -- a
                     // slack row expands nothing.
                     let p = &packed[1 + (k - 1) * stride + r.parent as usize];
                     assert!(
-                        p.meta[2].to_bits() & (REF_LIVE | REF_KEPT) == (REF_LIVE | REF_KEPT),
+                        p.link[2].to_bits() & (REF_LIVE | REF_KEPT) == (REF_LIVE | REF_KEPT),
                         "level {k} row {i} points at a parent that is not a kept row"
                     );
                 }
@@ -6654,7 +7103,7 @@ mod tests {
             // Past the level's own rows, nothing is live.
             for i in rows.len()..stride {
                 let g = &packed[1 + k * stride + i];
-                assert_eq!(g.meta[2].to_bits() & REF_LIVE, 0, "level {k} slot {i} is live");
+                assert_eq!(g.link[2].to_bits() & REF_LIVE, 0, "level {k} slot {i} is live");
             }
         }
         assert!(live > 50, "only {live} rows");
@@ -8114,6 +8563,327 @@ mod gpu_tests {
     ///
     /// **A transposed matrix still renders a picture**, so this
     /// compares every entry and not a norm.
+    /// G5's first half: the shader's DELTA walk is the CPU's.
+    ///
+    /// `ifs-perturbation-delta.md` §6. The renderer walks the
+    /// centre's beam, uploads every level of it, and each pixel
+    /// continues in delta form on the GPU. This reads the walk's own
+    /// distance back out of the recolor cache and compares it against
+    /// `estimate_delta` in f64 from the same reference.
+    ///
+    /// **The shipped walk is the control.** Both are rendered, so a
+    /// number that only says "the delta walk is close to the CPU" is
+    /// set beside what the path it replaces reads at the same pixels.
+    /// That is the comparison the plan is actually about.
+    #[test]
+    #[ignore = "needs a GPU; run with --ignored --nocapture"]
+    fn the_shader_delta_walk_is_the_cpu_one() {
+        use crate::scene::ifs_estimate::{estimate_delta, reference_beam};
+        const RW: u32 = 192;
+        const RH: u32 = 192;
+        const LEVELS: u32 = 40;
+        const BEAM: u32 = 8;
+
+        let half = |tx: f32, ty: f32, a: f32, d: f32| {
+            let mut t = crate::scene::transforms::Transform::default();
+            t.a = a;
+            t.d = d;
+            t.e = tx;
+            t.f = ty;
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("linear", 1.0);
+            t
+        };
+        let cases: Vec<(&str, Vec<crate::scene::transforms::Transform>)> = vec![
+            (
+                "gasket",
+                vec![
+                    half(0.0, 0.0, 0.5, 0.5),
+                    half(0.5, 0.0, 0.5, 0.5),
+                    half(0.25, 0.5, 0.5, 0.5),
+                ],
+            ),
+            (
+                "dragon",
+                vec![
+                    {
+                        let mut t = half(0.0, 0.0, 0.5, 0.5);
+                        t.b = -0.5;
+                        t.c = 0.5;
+                        t
+                    },
+                    {
+                        let mut t = half(1.0, 0.0, -0.5, -0.5);
+                        t.b = -0.5;
+                        t.c = 0.5;
+                        t
+                    },
+                ],
+            ),
+            // A CURVED set, which is the one the plan is about: an
+            // affine's basis carry is already exact, so the two walks
+            // cannot differ on the two above however deep the view.
+            (
+                "julia dust",
+                {
+                    let jul = |power: f32| {
+                        let mut t = crate::scene::transforms::Transform::default();
+                        t.a = 0.7071;
+                        t.b = 0.7071;
+                        t.c = -0.7071;
+                        t.d = 0.7071;
+                        t.e = 0.0;
+                        t.f = -0.3;
+                        t.variations.clear();
+                        t.variation_order.clear();
+                        t.set_variation("flatten", 1.0);
+                        t.set_variation("julian", 1.0);
+                        t.set_variation_param("julian", "power", power);
+                        t.set_variation_param("julian", "dist", -1.0);
+                        t
+                    };
+                    vec![jul(2.0), jul(3.0)]
+                },
+            ),
+            // A curved set the delta walk TAKES: bubble is algebraic,
+            // so every map has an exact difference form and no lineage
+            // has to rebase for want of one. The julia dust above is
+            // the opposite case and is here to prove the renderer
+            // DECLINES it -- its two columns must be identical.
+            (
+                "bubble set",
+                {
+                    let kern = |a: f32, b: f32, c: f32, d: f32, e: f32, f: f32, w: f32| {
+                        let mut t = crate::scene::transforms::Transform::default();
+                        t.a = a;
+                        t.b = b;
+                        t.c = c;
+                        t.d = d;
+                        t.e = e;
+                        t.f = f;
+                        t.variations.clear();
+                        t.variation_order.clear();
+                        t.set_variation("bubble", w);
+                        t
+                    };
+                    vec![
+                        kern(1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.6),
+                        kern(0.7, 0.7, -0.7, 0.7, 0.0, -0.3, 1.2),
+                        half(1.0, 0.5, 0.5, 0.5),
+                    ]
+                },
+            ),
+        ];
+
+        let (device, queue) = device();
+        let base = crate::config::FractalConfig::default();
+        let pal = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            64,
+            64,
+            &base.flame,
+            base.palette_size,
+        );
+
+        for (name, transforms) in cases {
+            let mut flame = crate::scene::transforms::Flame::default();
+            flame.transforms = transforms;
+            let guard = crate::variations::global_registry();
+            let ifs = crate::scene::ifs_analysis::analyse_2d(&flame, &guard).expect("qualifies");
+            drop(guard);
+            // Which walk the renderer will actually run, stated here
+            // so the columns below are read knowing it. A julia dust
+            // of NEGATIVE distance has `|v|^{|n|/d}` with a negative
+            // exponent, which is no polynomial in `v` and `conj(v)`,
+            // so it has no exact difference and must be DECLINED --
+            // rebasing every lineage at level 0 instead throws away
+            // the BigFloat prefix and read twenty-five times further
+            // from the reference than the walk it replaces.
+            let takes_delta = ifs.has_delta_forms();
+            assert_eq!(
+                takes_delta,
+                name != "julia dust",
+                "{name}: has_delta_forms is {takes_delta}"
+            );
+            let target = crate::scene::ifs_estimate::chaos_sample_for_test(&ifs, 20_000)[10_000];
+
+            for zoom in [8.0f64, 16.0, 24.0] {
+                let shot = |delta: bool| -> Vec<crate::escape::renderer::IterRecord> {
+                    let mut config = crate::config::FractalConfig::default();
+                    config.render_mode = RenderMode::Escape;
+                    config.flame = flame.clone();
+                    config.escape.formula = "ifs_flame".to_string();
+                    config.escape.coloring = "ifs_distance".to_string();
+                    config.escape.supersample = 1;
+                    config.escape.center_re = format!("{:?}", target[0]);
+                    config.escape.center_im = format!("{:?}", target[1]);
+                    config.escape.zoom_log2 =
+                        (4.0 / (2.0 * ifs.ball.radius / 2f64.powf(zoom))).log2();
+                    config.escape.formula_params.insert("levels".to_string(), LEVELS as f32);
+                    config.escape.formula_params.insert("beam".to_string(), BEAM as f32);
+                    config
+                        .escape
+                        .formula_params
+                        .insert("delta".to_string(), if delta { 1.0 } else { 0.0 });
+                    let esc = config.escape.clone();
+                    let mut escape = crate::escape::EscapeRenderer::new(&device, RW, RH);
+                    let def = get_ifs(&config.escape.formula).expect("ifs_flame");
+                    let reg = crate::variations::global_registry();
+                    escape.set_ifs(pack_for(def, &config, &reg));
+                    drop(reg);
+                    let mut guard = 0;
+                    loop {
+                        let mut enc = device.create_command_encoder(&Default::default());
+                        let done = escape.render(
+                            &device,
+                            &queue,
+                            &mut enc,
+                            &esc,
+                            pal.palette_view(),
+                            pal.palette_generation(),
+                        );
+                        queue.submit(std::iter::once(enc.finish()));
+                        let _ = device
+                            .poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                        if done {
+                            break;
+                        }
+                        guard += 1;
+                        assert!(guard < 10_000);
+                    }
+                    let recs = escape.read_results_full(&device, &queue).expect("records");
+                    escape.destroy();
+                    recs
+                };
+                let with_delta = shot(true);
+                let shipped = shot(false);
+
+                // The same reference the renderer built, walked again
+                // here so the comparison is against f64 and not
+                // against the shader's own arithmetic.
+                let span_y = 4.0 / (4.0 / (2.0 * ifs.ball.radius / 2f64.powf(zoom)));
+                let span_x = span_y * RW as f64 / RH as f64;
+                let basis = view_basis(span_x, span_y, 0.0);
+                let px = span_y / RH as f64;
+                let budget = (zoom.max(0.0) as u32 + 64).min(4096);
+                let reference =
+                    reference_beam(&ifs, target, basis, px, budget, BEAM);
+
+                let (mut worst_delta, mut worst_shipped) = (0.0f64, 0.0f64);
+                let mut n = 0usize;
+                let mut errs: Vec<f64> = Vec::new();
+                let mut reb: Vec<u32> = Vec::new();
+                let mut worst_at = (0u32, 0u32, 0.0f64, 0.0f64, 0.0f64);
+                for gy in 0..12u32 {
+                    for gx in 0..12u32 {
+                        let x = gx * (RW / 12) + RW / 24;
+                        let y = gy * (RH / 12) + RH / 24;
+                        let uv = [
+                            (x as f64 + 0.5) / RW as f64 - 0.5,
+                            (y as f64 + 0.5) / RH as f64 - 0.5,
+                        ];
+                        let (est, log) = estimate_delta(&ifs, &reference, uv, BEAM, LEVELS);
+                        let want = est.distance;
+                        let i = (y * RW + x) as usize;
+                        // `IterRecord.z[0]` is where mode D's walk
+                        // writes its distance -- the record is shared
+                        // with mode A, which spends the same slot on a
+                        // position.
+                        // RELATIVE above a pixel, absolute below it.
+                        // A distance of thirty thousand pixels is
+                        // background, and an absolute comparison there
+                        // is measuring f32's mantissa on a large
+                        // number rather than anything about the walk;
+                        // a distance under a pixel is where the
+                        // picture is and absolute is what matters.
+                        let scale = want.abs().max(1.0);
+                        let ed = (with_delta[i].z[0] as f64 - want).abs() / scale;
+                        if ed > worst_delta {
+                            worst_at = (
+                                gx,
+                                gy,
+                                with_delta[i].z[0] as f64,
+                                shipped[i].z[0] as f64,
+                                want,
+                            );
+                        }
+                        worst_delta = worst_delta.max(ed);
+                        worst_shipped = worst_shipped
+                            .max((shipped[i].z[0] as f64 - want).abs() / scale);
+                        errs.push(ed);
+                        if let Some((l, _)) = log.first() {
+                            reb.push(*l);
+                        }
+                        n += 1;
+                    }
+                }
+                errs.sort_by(f64::total_cmp);
+                reb.sort_unstable();
+                println!(
+                    "  {name:<11} 2^{zoom:<4} | delta {worst_delta:.3e} | shipped \
+                     {worst_shipped:.3e} | median {:.3e} | rebase {:?}/{} | worst {:?}",
+                    errs[errs.len() / 2],
+                    reb.get(reb.len() / 2),
+                    reb.len(),
+                    worst_at
+                );
+                // **The comparison is against the SHIPPED walk, not
+                // against an absolute bar.** An absolute one would be
+                // measuring the f32 arithmetic, which both walks run
+                // and neither claims to fix: on the julia dust the
+                // two read the same 1.002e-2 px at 2^8 and the same
+                // 5.539e-1 at 2^16, because that set EXPANDS -- a
+                // lineage's δ reaches a quarter of the ball at once,
+                // it rebases, and the delta walk correctly reduces to
+                // the walk it replaces. The gain is on sets whose
+                // lineages stay small, and the gasket at 2^24 is what
+                // that looks like: 2.9e-5 px against 1.6e-3, fifty
+                // times closer.
+                //
+                // So what is asserted is that it is never WORSE.
+                assert!(
+                    worst_delta <= worst_shipped.max(1e-9) * 1.5,
+                    "{name} at 2^{zoom}: the delta walk reads {worst_delta:.3e} where \
+                     the shipped walk reads {worst_shipped:.3e}"
+                );
+                // A declined set must be the shipped walk EXACTLY,
+                // not merely close: nothing else is running.
+                if !takes_delta {
+                    assert_eq!(
+                        worst_delta, worst_shipped,
+                        "{name} at 2^{zoom}: declined, yet the two walks differ"
+                    );
+                }
+                // ...and a loose bar, to catch a walk that has
+                // stopped walking rather than one that rounds.
+                // The absolute bar is on the MEDIAN, and the reason
+                // is a measurement rather than a convenience. On the
+                // bubble set at 2^8 one pixel of 144 has both shaders
+                // reading 178.8 where the f64 walk reads 3.1 -- a
+                // branch the three do not agree about at a corner --
+                // and the two shaders agree there to the BIT. A worst
+                // over the grid would make this gate fail on
+                // something it is not about, and would go on failing
+                // however good the delta walk got. The comparative
+                // clause above is what has teeth, and it is on the
+                // worst.
+                //
+                // A twentieth, which below a pixel means a twentieth
+                // OF a pixel: where a curved set's f32 cost sits
+                // whichever walk runs.
+                let median = errs[errs.len() / 2];
+                assert!(
+                    median < 5e-2,
+                    "{name} at 2^{zoom}: the shader's delta walk is {median:.3e} from \
+                     the CPU's at the median pixel, which is not a rounding"
+                );
+            }
+        }
+    }
+
     /// The shader's difference forms are the CPU's.
     ///
     /// `ifs-perturbation-delta.md` D3: the exact forms exist in f64

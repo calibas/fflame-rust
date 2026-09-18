@@ -690,6 +690,85 @@ what the shipped walk already does, exact rather than the
 reference's value less `|δ|`, and one fewer column in the row the
 shader will read. Dropping them changed no number in G2.
 
+## 3d. The delta walk runs on the GPU, 2026-09-18
+
+Item 5's fourth step. `IFS_DELTA_WALK` is `estimate_delta` in WGSL,
+spliced as a WHOLE ALTERNATIVE `ifs_evaluate` rather than a branch
+inside one, so the shipped shader's text is what it has always been
+and the presets cannot move by this existing -- asserted on the
+source, not on a render. A `delta` formula parameter turns it on, and
+it joins the pipeline key beside the beam width, which was already
+compiled in.
+
+**Measured against `estimate_delta` in f64, per pixel.** The relative
+figure above a pixel and the absolute one below it, since a distance
+of thirty thousand pixels is background and an absolute comparison
+there measures f32's mantissa rather than the walk:
+
+| set | 2^8 | 2^16 | 2^24 | the shipped walk at 2^24 |
+|---|---|---|---|---|
+| dragon | 0 | 0 | 0 | 0 |
+| bubble set | 0 (median) | 0 | 0 | 0 |
+| gasket | 2.8e-5 | 1.8e-5 | **2.7e-5** | **1.6e-3** |
+| julia dust | 1.0e-2 | 9.1e-3 | 2.0e-4 | identical |
+
+The gasket is the row the plan is about: **sixty times closer than
+the walk it replaces**, and not drifting with the zoom where the
+shipped walk's error grows seventeenfold from 2^8 to 2^24.
+
+**Four bugs, and each one was found by a number rather than by
+reading.**
+
+- **The level-0 basis came from a seed.** A seed's basis is the view
+  composed with the prefix at the HANDOVER level, which is what the
+  seeded walk wants and is not the view. The delta walk read 1,259
+  pixels out on a gasket at 2^8. The view basis lives in the
+  reference's header row now, where nothing else can be mistaken for
+  it.
+- **`estimate_delta` drained its beam and then broke.** When every
+  branch of every lineage is a gap the loop ends, and a drained
+  `live` is empty at that point -- the walk had thrown away the beam
+  whose bounds are the answer. It takes the beam now, as the direct
+  walk does.
+- **`meta` is a reserved keyword in WGSL.** The row's field is `link`
+  on both sides.
+- **A set with no exact form must be DECLINED, not walked.** This is
+  the one worth stating properly.
+
+### A root of negative distance has no form, and rebasing it is worse
+### than not trying
+
+`m⁻¹(v) = |v|^{|n|/d}` with `d < 0` has a negative exponent, so
+`root_powers` finds no whole pair and there is no polynomial
+difference. A lineage on such a map therefore rebases at LEVEL 0 --
+and rebasing at level 0 throws away the `BigFloat` prefix the seeded
+walk keeps. Measured on a julia dust at 2^24: the delta walk read
+0.5% from the f64 reference where the seeded walk read 0.02%.
+**Twenty-five times worse**, and not a bug in the walk: it correctly
+declined a kernel it has no form for, and declining at level 0 is the
+expensive way to do it.
+
+So `Ifs2::has_delta_forms` gates the whole path, and the renderer
+asks it in both places -- the seeds and the pipeline -- so the buffer
+and the shader cannot disagree about which walk is running. A
+declined set is the shipped walk EXACTLY, which the gate asserts as
+equality rather than closeness.
+
+That also settles what the Taylor rung (D4) is for. It is not a
+refinement: without it, every set with a disc, a blob or a
+fractional root is outside this plan entirely.
+
+**One outlier the gate is deliberately not about.** On the bubble set
+at 2^8 one pixel of 144 has both shaders reading 178.8 where the f64
+walk reads 3.1 -- a branch the three do not agree about at a corner
+-- and the two shaders agree there to the bit. The absolute bar is
+therefore on the MEDIAN, and the comparative clause, which is the one
+with teeth, is on the worst.
+
+**Still open in item 5**: the Taylor rung (D4), G3's lineage trace,
+G6's zoom self-consistency past 2^40, and G7's cost. The walk is off
+by default until those land.
+
 ## 4. Decisions
 
 - **D1. Every child's row is stored, not only the beam's.** One

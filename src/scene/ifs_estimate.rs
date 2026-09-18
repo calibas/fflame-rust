@@ -2533,7 +2533,11 @@ pub fn estimate_delta(
     ];
     let t0 = 2.0 * (root.u[0] * d0[0] + root.u[1] * d0[1]) + d0[0] * d0[0] + d0[1] * d0[1];
     let r0 = (root.r * root.r + t0).max(0.0).sqrt();
-    let excess0 = (root.excess2 + t0) / (r0 + radius);
+    let excess0 = if r0 < radius * 4.0 {
+        (root.excess2 + t0) / (r0 + radius)
+    } else {
+        r0 - radius
+    };
     let mut live = vec![DeltaCand {
         anchor: Some((0, 0)),
         d: d0,
@@ -2556,6 +2560,9 @@ pub fn estimate_delta(
     let mut dead_min = f64::INFINITY;
     let mut best_done: Option<DeltaCand> = None;
     let mut deepest_done = 0.0f64;
+    // The last non-empty beam, for the case where every path ended
+    // without a finite bound and there is still an address to report.
+    let mut current_last: Option<DeltaCand> = None;
 
     // `max_levels` POSITIONS are scored, level 0 included, which is
     // what the direct walk means by the budget: it scores the live set
@@ -2569,7 +2576,15 @@ pub fn estimate_delta(
             break;
         }
         let mut next: Vec<DeltaCand> = Vec::with_capacity(live.len() * ifs.maps.len());
-        for c in live.drain(..) {
+        // Taken rather than DRAINED: when every branch of every
+        // lineage turns out to be a gap the loop breaks, and a
+        // drained `live` would be empty at that point -- the walk
+        // would have thrown away the beam whose bounds are the
+        // answer. The direct walk iterates by reference for the same
+        // reason.
+        let current = std::mem::take(&mut live);
+        current_last = current.first().cloned();
+        for c in current.iter().cloned() {
             if c.done {
                 if let Some((lvl, _, _)) = &c.escape {
                     deepest_done = deepest_done.max(*lvl);
@@ -2622,11 +2637,29 @@ pub fn estimate_delta(
                                     + dd[0] * dd[0]
                                     + dd[1] * dd[1];
                                 let r = (crow.r * crow.r + t).max(0.0).sqrt();
-                                // ...and the EXCESS through the same
-                                // difference of squares, so the bound
-                                // keeps its per-pixel variation
-                                // wherever `t` is representable.
-                                let excess = (crow.excess2 + t) / (r + radius);
+                                // ...and the EXCESS two ways, since
+                                // which is right depends on where the
+                                // point is. Near the ball the direct
+                                // subtraction CANCELS and the
+                                // difference of squares avoids it;
+                                // far outside, `r²` is enormous -- the
+                                // walk runs to a thousand billion
+                                // radii -- and `r² − R²` has no digits
+                                // left beside `t`, while the direct
+                                // subtraction has nothing to cancel.
+                                //
+                                // In f64 here either would do. The
+                                // SHADER is where it matters, and the
+                                // two have to choose the same way or
+                                // they are not the same walk: this
+                                // read 156 pixels against the CPU on a
+                                // julia dust at 2^24, where the
+                                // shipped walk read 6.
+                                let excess = if r < radius * 4.0 {
+                                    (crow.excess2 + t) / (r + radius)
+                                } else {
+                                    r - radius
+                                };
                                 // σ is the PIXEL's, not the row's.
                                 //
                                 // `σ_min` varies across the view like
@@ -2687,6 +2720,14 @@ pub fn estimate_delta(
             }
         }
         if next.is_empty() {
+            // Every live path's branches were gaps: their own bounds
+            // are stale and the gaps are the answer (the walk's rule).
+            live = current;
+            for c in live.iter_mut() {
+                if !c.done {
+                    c.bound = f64::INFINITY;
+                }
+            }
             break;
         }
         // The same ranking the walk uses, on the PIXEL's own numbers.
@@ -2717,7 +2758,22 @@ pub fn estimate_delta(
         (Some(l), Some(d)) => if d.bound < l.bound { d } else { l },
         (Some(l), None) => l,
         (None, Some(d)) => d,
-        (None, None) => live.first().cloned().expect("a beam"),
+        // Nothing finite anywhere: the answer is `dead_min` or zero,
+        // and the candidate only supplies an address and a point.
+        (None, None) => match live.first().or(current_last.as_ref()) {
+            Some(c) => c.clone(),
+            None => return (
+                Estimate {
+                    distance: if dead_min.is_finite() { dead_min.max(0.0) } else { 0.0 },
+                    level: max_levels as f64,
+                    address: Vec::new(),
+                    point: [root.z[0] + d0[0], root.z[1] + d0[1]],
+                    escaped: false,
+                    deepest_level: deepest_done,
+                },
+                rebases,
+            ),
+        },
     };
     let distance = match (best.bound.is_finite(), dead_min.is_finite()) {
         (true, _) => best.bound.max(0.0).min(dead_min.max(0.0)),

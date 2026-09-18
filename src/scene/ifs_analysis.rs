@@ -2511,6 +2511,29 @@ pub struct Ifs<A, P> {
     pub xaos: Option<XaosGraph>,
 }
 
+impl Ifs2 {
+    /// Whether EVERY map has an exact difference form, so the delta
+    /// walk can carry a lineage rather than rebase it
+    /// (`ifs-perturbation-delta.md` §3).
+    ///
+    /// **A set with even one Taylor-rung map must not take that
+    /// walk.** A lineage on such a map rebases at level 0, which
+    /// throws away the `BigFloat` prefix the seeded walk keeps --
+    /// measured on a julia dust of negative distance at 2^24, where
+    /// the delta walk read 0.5% from the f64 reference against the
+    /// seeded walk's 0.02%. Twenty-five times WORSE, and not a bug:
+    /// the walk correctly declined a kernel it has no form for, and
+    /// declining at level 0 is the expensive way to do it.
+    ///
+    /// A root with a negative `dist` is the common case here. Its
+    /// inverse is `|v|^{|n|/d}` with a negative exponent, which is
+    /// not a polynomial in `v` and `conj(v)`, so `root_powers` finds
+    /// no whole pair.
+    pub fn has_delta_forms(&self) -> bool {
+        !self.maps.is_empty() && self.maps.iter().all(|m| m.inverse.has_difference())
+    }
+}
+
 pub type Ifs2 = Ifs<Map2, [f64; 2]>;
 pub type Ifs3 = Ifs<Map3, [f64; 3]>;
 
