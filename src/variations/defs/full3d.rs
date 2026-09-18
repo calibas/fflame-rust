@@ -3,7 +3,7 @@
 //! Variations that create true 3D structures by modifying all three coordinates.
 
 use crate::scene::ifs_analysis::Kernel;
-use crate::variations::inverse::{InverseDef, InverseKernel, Refusal};
+use crate::variations::inverse::{InverseDef, InverseKernel};
 use crate::variations::{
     definition::{Feature, VariationDef},
     VariationCategory, VariationPhase,

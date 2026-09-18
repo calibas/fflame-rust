@@ -4,7 +4,7 @@
 
 use crate::scene::ifs_analysis::{Affine3, AffineRole};
 use crate::scene::ifs_analysis::Kernel;
-use crate::variations::inverse::{InverseDef, InverseKernel, Refusal};
+use crate::variations::inverse::{InverseDef, InverseKernel};
 use crate::variations::{
     definition::{Feature, VariationDef},
     VariationCategory, VariationPhase,
