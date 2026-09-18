@@ -2218,6 +2218,21 @@ pub struct RefRow {
     /// of the slack children (D1). A lineage on a slack row has no
     /// children stored and must rebase to continue.
     ///
+    /// The VIEW's own `|δ|` at this row: the half-diagonal of the
+    /// basis, composed down from level 0.
+    ///
+    /// The ratio of this to level 0's is what the first plan's §16
+    /// called a lineage's REACH, and it is the whole story of which
+    /// lineages the delta form helps. A lineage whose ratio stays
+    /// under one has COLLAPSED -- its offset is smaller than the
+    /// pixel it started from -- so it can never reach the expansion
+    /// cap and carries to the budget. One whose ratio grows reaches
+    /// the cap and rebases, which is where absolute f32 is exact by
+    /// construction and the right place to hand over.
+    ///
+    /// An inversion set has both at once, which is why no single
+    /// handover level ever suited it.
+    pub reach: f64,
     /// Whether a lineage may CARRY its delta through this row, or
     /// must rebase on reaching it.
     ///
@@ -2366,6 +2381,7 @@ pub fn reference_beam<P: SeedPoint>(
         done: !r0.is_finite() || r0 > far,
         kept: true,
         carry: true,
+        reach: basis_reach(basis0),
     }]];
 
     for level in 0..max_levels as usize {
@@ -2441,6 +2457,7 @@ pub fn reference_beam<P: SeedPoint>(
                     // Decided below, once the level is ranked.
                     kept: false,
                     carry,
+                    reach: basis_reach(child_basis),
                 });
                 next_live.push((q, (next_rows.len() - 1) as u32, child_basis));
             }
@@ -4269,6 +4286,92 @@ mod tests {
                 deep > shallow,
                 "{name}: the deepest first rebase is level {shallow} at 2^8 and {deep} \
                  at 2^20 -- the Taylor rung is not carrying further as the view shrinks"
+            );
+        }
+    }
+
+    /// G3, and the plan's claim was wrong: a lineage does not HAVE a
+    /// fate, it oscillates.
+    ///
+    /// `ifs-perturbation-delta.md` §6 asks for this: "trace which
+    /// lineages rebase and at what level; assert the collapsed ones
+    /// (reach ratio under 1) reach the budget in delta form". A
+    /// lineage's REACH is its basis's half-diagonal against level
+    /// 0's, and the expansion rebase fires at a quarter of the ball,
+    /// so a lineage under that cap cannot be pushed off by it.
+    ///
+    /// **Measured on the grand julian, no lineage keeps a fate.**
+    /// Counting the kept rows under the cap by level, at 2^10:
+    ///
+    /// ```text
+    /// level  0    3    6    9   12   15   18   21
+    /// under  1/1  2/2  2/3  0/2  1/3  0/1  0/3  0/3
+    /// ```
+    ///
+    /// None under the cap at level 9, one again at 12, none from 15
+    /// on. A lineage collapses, expands, collapses again. That is the
+    /// same swing the first plan's §19 found in the BITS a level
+    /// needs -- sixty between neighbours -- seen from the other side,
+    /// and it is what an inversion does: each map's derivative is
+    /// large where the last one's was small.
+    ///
+    /// So the plan's assertion cannot be made, and what replaces it
+    /// is the structure itself. This checks that the fixture has both
+    /// kinds at once, and that the reach is NOT monotone -- a level
+    /// with none under the cap followed by one with some. Both are
+    /// properties a single handover level cannot serve, which is the
+    /// thing G3 was written to demonstrate.
+    #[test]
+    fn a_lineages_reach_oscillates_rather_than_settling() {
+        let ifs = grand_julian([0.7071, 0.7071, -0.7071, 0.7071, 0.0, 0.0]);
+        let target = chaos_sample(&ifs, 20_000)[10_000];
+        let cap = ifs.ball.radius * HANDOVER_FRACTION;
+
+        for zoom in [10.0f64, 18.0, 26.0] {
+            let span = 2.0 * ifs.ball.radius / 2f64.powf(zoom);
+            let px = span / 64.0;
+            let basis = [[span, 0.0], [0.0, -span]];
+            let reference = reference_beam(&ifs, target, basis, px, 50, 8);
+            let reach0 = reference.levels[0][0].reach;
+            assert!(reach0 > 0.0);
+
+            let (mut lo, mut hi) = (f64::INFINITY, 0.0f64);
+            let mut under: Vec<usize> = Vec::new();
+            for rows in reference.levels.iter() {
+                for r in rows.iter().filter(|r| r.reach.is_finite()) {
+                    lo = lo.min(r.reach / reach0);
+                    hi = hi.max(r.reach / reach0);
+                }
+                under.push(rows.iter().filter(|r| r.kept && r.reach < cap).count());
+            }
+            // A level with none under the cap, and a LATER one with
+            // some: the reach came back down.
+            let mut oscillates = false;
+            let mut seen_none = false;
+            for &u in under.iter() {
+                if u == 0 {
+                    seen_none = true;
+                } else if seen_none {
+                    oscillates = true;
+                }
+            }
+            println!(
+                "  2^{zoom:<4} depth {:>3} | reach {lo:.2e} to {hi:.2e} | under the cap \
+                 by level {:?}",
+                reference.levels.len() - 1,
+                &under[..under.len().min(24)]
+            );
+
+            assert!(
+                lo < 1.0 && hi > 1.0,
+                "at 2^{zoom} every lineage has the same fate (reach {lo:.2e} to \
+                 {hi:.2e}) -- this fixture cannot show what G3 is about"
+            );
+            assert!(
+                oscillates,
+                "at 2^{zoom} the reach never came back under the cap after leaving it, \
+                 so a lineage does have a fate here and one handover level could serve \
+                 it"
             );
         }
     }

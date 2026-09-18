@@ -938,7 +938,50 @@ remainder. A third derivative nobody measured is the one
 disqualification left, because then there is no criterion for when to
 stop.
 
-**Still open in item 5**: G3's lineage trace.
+### 3f. G3, and the plan's claim was wrong, 2026-09-18
+
+§6 asks for: "trace which lineages rebase and at what level; assert
+the collapsed ones (reach ratio under 1) reach the budget in delta
+form". The reference now carries a basis per row, so the reach -- the
+view's own `|δ|` there against level 0's -- is a column, and the
+claim is directly checkable.
+
+**It is false, and what replaces it is better.** A lineage does not
+HAVE a fate. Counting the kept rows whose reach is under the
+expansion cap, by level, on the grand julian:
+
+| zoom | under the cap, level 0 to 21 |
+|---|---|
+| 2^10 | 1 3 3 2 1 1 2 0 0 0 0 0 1 0 1 0 0 0 0 0 0 0 |
+| 2^18 | 1 3 3 2 1 2 3 0 1 1 1 0 2 0 1 0 0 0 1 0 0 1 |
+| 2^26 | 1 3 3 2 1 2 3 1 2 2 1 0 2 0 2 0 0 0 1 0 0 1 |
+
+None under the cap at level 11, some again at 12, none at 13, some at
+14. A lineage collapses, expands, collapses again. That is the same
+swing the first plan's §19 found in the BITS a level needs -- sixty
+between neighbours -- seen from the other side, and it is what an
+inversion does: each map's derivative is large where the last one's
+was small.
+
+So the gate asserts the structure instead: the fixture has lineages
+both under and over the cap at once, and the reach is NOT monotone --
+a level with none under the cap followed by one with some. Both are
+properties a single handover level cannot serve, which is the thing
+G3 was written to demonstrate, and the oscillation demonstrates it
+more sharply than the original claim would have.
+
+**Two things fall out of the same table.** The reach RATIO range is
+identical at all three zooms -- 5.2e-13 to 8.2e16 -- because it is a
+property of the maps and not of the view. And the COUNT under the cap
+grows with the zoom, because the cap is absolute while the reach
+scales with the view: at 2^10 almost nothing is under it past level
+7, at 2^26 lineages are still under it at level 21. That is the delta
+form buying more the deeper you go, which is the whole plan in one
+column.
+
+**Item 5 is done.** The delta walk is off by default; turning it on
+is a judgement about whether to ship a second walk, not a gate
+waiting to pass.
 
 ## 4. Decisions
 
@@ -1121,10 +1164,17 @@ The cheap and the decisive first. Each item names its plan.
    of 9216 pixels, with CPU and GPU agreeing at every sample point.
    A colour-speed leftover in the shader's measure fold was found and
    repaired on the way.
-5. **The delta walk** (here, §3 to §6): G1 on the rational and
-   algebraic kernels first, then `estimate_delta`, then the shader.
-   G6 is the gate that says whether the grand julian went past
-   2^40, and it is the only one that can.
+5. ~~**The delta walk**~~ -- done 2026-09-18, §3a to §3f. The
+   difference forms hold to 1.4e-14 over thirty decades where the
+   direct subtraction has no correct digits below 1e-16; the walk
+   runs on the CPU and in the shader; the Taylor rung carries a
+   curved kernel; the rebase is decided once on the reference and
+   the walk is declined per view where it would not carry. G6 says
+   the picture holds to 2^64, G7 that it costs 1.32x to 1.80x, and
+   G3 that the plan's own claim about collapsed lineages was
+   wrong -- a lineage oscillates rather than settling. Off by
+   default: turning it on is a judgement about shipping a second
+   walk, not a gate waiting to pass.
 6. **Sums, by Newton** ([ifs-general.md](ifs-general.md) D3): the
    largest reach into the catalogue and the least certain
    mechanism; after the delta walk, because the delta walk's rows
