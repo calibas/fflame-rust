@@ -549,6 +549,100 @@ to the transcendental one on the first three and within 1.3e-15 on
 the roots. That is the beginning of `big_kernel_inverse`'s
 replacement, though it has not been swapped in yet.
 
+## 3b. The delta walk runs on the CPU, 2026-09-18
+
+Item 5's second step. `reference_beam` walks the centre to the level
+budget and keeps its beam at EVERY level; `estimate_delta` is a
+pixel's own walk against it, carrying `(row, δ)` instead of a
+position. Both in
+[ifs_estimate.rs](../../src/scene/ifs_estimate.rs). The shipped path
+is untouched: `seed_beam` and `estimate_seeded` are exactly as they
+were, so nothing rendered can have moved.
+
+**G2, and the two bugs it caught.** Worst disagreement with the
+direct f64 walk, over sixty-four pixels at four zooms:
+
+| set | 2^12 | 2^18 | 2^24 | 2^28 |
+|---|---|---|---|---|
+| dragon | 0 | 0 | 0 | 0 |
+| bubble set | 0 | 0 | 0 | 0 |
+| gasket | 2.4e-12 | 1.5e-10 | 1.1e-8 | 1.6e-7 |
+| julia | 1.5e-11 | 6.6e-10 | 9.0e-8 | 1.2e-6 |
+
+Pixels, against a bar of a thousandth of one. The dragon and the
+bubble set are EXACT -- the same bits, not a tolerance. The other
+two grow about tenfold every six zoom levels and end six orders
+below the bar. Which of the two walks that residue belongs to is NOT
+established: the direct walk's own one-ulp jitter was measured and is
+zero everywhere here, so it is not the reference moving, and the
+remaining candidates are the delta form's f64 rounding accumulating
+and the `excess2` column's own 1e-16. Both are below anything that
+matters at these zooms, and the shader step is where the question
+becomes worth answering.
+
+Neither bug was in the difference forms, and neither was visible in
+an aggregate:
+
+- **σ came from the reference row instead of the pixel.** `σ_min`
+  varies across the view like everything else, by `O(|δ|/s)` a
+  level, and sixty levels of a tenth of a percent compound to six --
+  eight pixels on a julia at 2^12. Evaluating it at `Z + δ` costs
+  nothing, because σ is a smooth `O(1)` factor and so needs the
+  position only to RELATIVE precision, which the sum has at any
+  depth.
+- **One level too many in the budget.** The direct walk scores its
+  live set and then expands, so its last expansion is never scored;
+  scoring it here found a radius crossing the ball at level sixty
+  that the reference had already stopped looking for. A tenth of a
+  pixel at 2^18, and nothing at all at the other three zooms.
+
+A third thing the gate had to learn: on a julia the direct f64 walk
+is not automatically a reference. Sixty levels of a squaring map
+amplify its own last digit, so the bar is `max(1e-3, 4×)` the
+direct walk's answer moved one ULP of the pixel's position. Measured,
+that jitter is ZERO on every fixture here, so the bar is the
+thousandth everywhere and the clause costs nothing -- but it is what
+the gate would fall back on rather than loosening a fixed tolerance.
+
+**The pixel's own radius is exact in δ, not linearised in it.** §3
+proposed `r + û·δ`, which is wrong by `O(|δ|²/r)` -- near the rebase
+cap, a fraction of the ball. The row carries `u = Z − c` and
+`excess2 = |Z − c|² − R²` instead, and
+
+```text
+r² = excess2 + R² + t,   t = 2u·δ + |δ|²
+r − R = (excess2 + t)/(r + R)
+```
+
+has nothing to cancel at any δ. The limit left is `excess2`
+computed in f64, whose absolute error of 1e-16 swallows `t` at
+around 2^50; past there the reference has to compute that column in
+its own precision, which it has and f64 does not.
+
+**D6, and it is a stronger statement than the first design could
+make.** The old gate checked that an objective picked the same level
+at two pixel sizes. There is no objective now: a lineage rebases when
+its own δ reaches a fraction of the ball or when `Z + δ` cancels, and
+neither quantity contains `px`. So four times the resolution moves
+not one rebase level, which the gate asserts as EQUALITY. What they
+do depend on is the zoom:
+
+| median rebase level | 2^12 | 2^20 | 2^28 |
+|---|---|---|---|
+| dragon | 16 | 31 | 48 |
+| julia | 18 | 28 | 34 |
+| gasket | 10 | 18 | 26 |
+
+Two zoom levels buy roughly one more level of delta carry on the
+dragon. That is the whole claim of this plan in one table: the first
+design picked ONE level for the whole view, and this picks each
+lineage's own, deeper every time the view shrinks.
+
+**Still open in item 5**: the Taylor rung (D4), so the disc and the
+blob rebase immediately and walk exactly as they do today; the
+shader, which is the next step and where the f32 arithmetic finally
+gets measured; and G3, G5, G6 and G7, which are all shader gates.
+
 ## 4. Decisions
 
 - **D1. Every child's row is stored, not only the beam's.** One

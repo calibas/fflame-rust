@@ -2145,6 +2145,632 @@ pub fn estimate_seeded(
     }
 }
 
+// ===================================================== the delta walk
+//
+// `ifs-perturbation-delta.md` §3. The first design walks the centre in
+// `BigFloat`, hands over ONCE at a chosen level, and every pixel
+// continues from an absolute f32 position. This walks the centre to
+// the full budget, keeps its beam at EVERY level, and lets a pixel
+// carry an offset `δ` from whichever row it is following -- which is
+// what perturbation means in the escape engine and was not what the
+// first design built.
+//
+// Two things make it work, and both are already here: the difference
+// forms of `ifs_analysis::kernel_difference_gen`, which compute
+// `m⁻¹(Z + δ) − m⁻¹(Z)` without ever forming the subtraction; and the
+// observation that the reference's POSITION only ever enters as a
+// coefficient, so f64 holds it however deep the zoom.
+
+/// One reference row: where the centre's beam was at one level, on one
+/// lineage.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RefRow {
+    /// `Z_k`. O(1) by construction -- the walk stays in the ball's
+    /// neighbourhood -- and it enters the difference forms only as a
+    /// coefficient, so f64 holds it however precise the walk that
+    /// produced it was. This is the same argument the escape engine's
+    /// `ref_orbit` makes for storing a reference orbit in f32.
+    pub z: [f64; 2],
+    /// The row of the previous level this came from, and the map that
+    /// made it. `u32::MAX` for the root.
+    pub parent: u32,
+    pub map: u32,
+    /// Product of σ_min so far, per pixel width.
+    pub sigma_per_px: f64,
+    /// `|Z_k − c|`, the reference's own distance to the ball's centre.
+    pub r: f64,
+    /// `Z_k − c`, the offset from the ball's centre, and
+    /// `|Z_k − c|² − R²`, its EXCESS.
+    ///
+    /// Both exist so a pixel's own radius is exact in `δ` rather than
+    /// linearised in it. `|Z + δ − c|² = r² + t` with
+    /// `t = 2u·δ + |δ|²`, and `t` is a sum of products with nothing to
+    /// cancel, so
+    ///
+    /// ```text
+    /// r_pixel − R = (excess2 + t) / (r_pixel + R)
+    /// ```
+    ///
+    /// is accurate to f64's own relative precision for any `δ`. The
+    /// first-order form `r + û·δ` that this replaced is wrong by
+    /// `O(|δ|²/r)`, which near the rebase cap is a fraction of the
+    /// ball -- measured as eight pixels on a julia at 2^12, where the
+    /// tolerance is a thousandth of one.
+    ///
+    /// The remaining limit is `excess2` itself: computed in f64 it
+    /// carries an absolute error of about `1e-16`, so the per-pixel
+    /// variation is lost once `|t|` falls below that, around 2^50.
+    /// Past there the reference has to compute this column in its own
+    /// precision, which it has and f64 does not.
+    pub u: [f64; 2],
+    pub excess2: f64,
+    /// σ_min of the map that made this row, for the escape residual.
+    pub last_sigma: f64,
+    /// Running maximum of `σ·(r − R)` in pixels along the REFERENCE's
+    /// path. A pixel recomputes its own from `r` above; this is what a
+    /// row means on its own.
+    pub bound_per_px: f64,
+    /// Where the reference left the ball, if it has.
+    pub escape: Option<(f64, [f64; 2])>,
+    /// Past `FAR`: the reference stopped expanding it.
+    pub done: bool,
+    /// Whether this row survived the reference's own beam, or is one
+    /// of the slack children (D1). A lineage on a slack row has no
+    /// children stored and must rebase to continue.
+    pub kept: bool,
+    /// The branches this row could not take, with their gaps in world
+    /// units at the reference's own position.
+    pub gaps: Vec<(u32, f64)>,
+}
+
+/// The centre's beam at every level.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReferenceBeam {
+    /// `levels[k]` is the beam at level `k`; `levels[0]` is the single
+    /// root. Every child of every KEPT row is present, pruned or not
+    /// (D1): one level of slack for a pixel whose ranking differs at
+    /// the margin, which is the common case and what the first
+    /// design's `view_agrees` measured as losing 41% of a frame.
+    pub levels: Vec<Vec<RefRow>>,
+    /// The view basis at level 0: a pixel's normalised offset to its
+    /// delta from the centre.
+    pub basis0: [[f64; 2]; 2],
+    /// The pixel width the σ and bound columns are scaled by.
+    pub px: f64,
+}
+
+impl ReferenceBeam {
+    /// How many levels the reference reached.
+    pub fn depth(&self) -> u32 {
+        self.levels.len().saturating_sub(1) as u32
+    }
+
+    /// The child of `(level, idx)` by map `m`, if the reference made
+    /// one.
+    fn child(&self, level: usize, idx: u32, m: u32) -> Option<u32> {
+        let rows = self.levels.get(level + 1)?;
+        rows.iter()
+            .position(|r| r.parent == idx && r.map == m)
+            .map(|i| i as u32)
+    }
+}
+
+/// Walk the centre's beam to the level budget, keeping every level.
+///
+/// The same walk `seed_beam` does, with three differences, each of
+/// which is a decision in §3 or §4 of the plan:
+///
+/// - it does NOT stop at a handover -- no cap on the delta, no
+///   `view_agrees`, no objective. There is no level to choose.
+/// - it keeps every child of every kept row, not only the beam's
+///   (D1).
+/// - it records per row what a pixel needs to continue in delta form.
+///
+/// `P` is the precision the reference itself is walked in --
+/// `BigFloat` for a deep view -- and nothing of that precision is
+/// stored, because nothing of it is needed downstream.
+pub fn reference_beam<P: SeedPoint>(
+    ifs: &Ifs2,
+    centre: P,
+    view_basis: [[f64; 2]; 2],
+    px: f64,
+    max_levels: u32,
+    beam: u32,
+) -> ReferenceBeam {
+    let ball = ifs.ball.centre;
+    let radius = ifs.ball.radius;
+    let beam = beam.max(1) as usize;
+    let scale = if px > 0.0 { 1.0 / px } else { 1.0 };
+    let far = radius.max(1.0) * FAR;
+    let mean = mean_sigma_min(&ifs.maps);
+
+    let (q0, sigma0, basis0) = match &ifs.final_map {
+        Some(f) => {
+            let inv = f.inverse.as_affine().expect("the final transform is affine (J4)");
+            (centre.apply_affine(&inv), f.sigma_min, compose_basis(&inv, view_basis))
+        }
+        None => (centre, 1.0, view_basis),
+    };
+
+    // The walk's own state, in `P`; the rows are the f64 shadow of it.
+    let mut live: Vec<(P, u32)> = vec![(q0.clone(), 0)];
+    let r0 = q0.distance_to(ball);
+    let mut levels: Vec<Vec<RefRow>> = vec![vec![RefRow {
+        z: q0.to_f64(),
+        parent: u32::MAX,
+        map: u32::MAX,
+        sigma_per_px: sigma0 * scale,
+        r: r0,
+        u: [q0.to_f64()[0] - ball[0], q0.to_f64()[1] - ball[1]],
+        excess2: r0 * r0 - radius * radius,
+        last_sigma: mean,
+        bound_per_px: fold_level(f64::NEG_INFINITY, sigma0 * scale, r0, radius),
+        escape: (r0 > radius)
+            .then(|| (escape_residual(r0, radius, mean), q0.to_f64())),
+        done: !r0.is_finite() || r0 > far,
+        kept: true,
+        gaps: Vec::new(),
+    }]];
+
+    for level in 0..max_levels as usize {
+        let here = levels[level].clone();
+        if here.iter().all(|r| r.done) {
+            break;
+        }
+        let mut next_rows: Vec<RefRow> = Vec::new();
+        let mut next_live: Vec<(P, u32)> = Vec::new();
+        let mut stop = false;
+
+        for (p, idx) in live.iter() {
+            let row = &here[*idx as usize];
+            if row.done || !row.kept {
+                continue;
+            }
+            let qf = p.to_f64();
+            let last = address_of(&levels, level, *idx).last().copied();
+            let mut gaps: Vec<(u32, f64)> = Vec::new();
+            for (i, m) in ifs.maps.iter().enumerate() {
+                if !admits(ifs, i, last) {
+                    continue;
+                }
+                // A branch the REFERENCE cannot take. Its gap is the
+                // row's, and a pixel corrects it by its own `|δ|`
+                // rather than by the whole view's reach -- which is
+                // what the one-shot handover had to do.
+                if let Some(gap) = m.inverse.gap_bound(qf, ball, radius, m.sigma_min) {
+                    gaps.push((i as u32, gap));
+                    continue;
+                }
+                let Some(q) = p.apply_map(&m.inverse) else {
+                    stop = true;
+                    break;
+                };
+                let sigma = row.sigma_per_px * m.inverse.local_sigma(qf, m.sigma_min);
+                let r = q.distance_to(ball);
+                let escape = row.escape.clone().or_else(|| {
+                    (r > radius).then(|| {
+                        (
+                            (level + 1) as f64 + escape_residual(r, radius, m.sigma_min),
+                            q.to_f64(),
+                        )
+                    })
+                });
+                let zf = q.to_f64();
+                next_rows.push(RefRow {
+                    z: zf,
+                    parent: *idx,
+                    map: i as u32,
+                    sigma_per_px: sigma,
+                    r,
+                    u: [zf[0] - ball[0], zf[1] - ball[1]],
+                    excess2: r * r - radius * radius,
+                    last_sigma: m.sigma_min,
+                    bound_per_px: fold_level(row.bound_per_px, sigma, r, radius),
+                    escape,
+                    done: !r.is_finite() || r > far,
+                    // Decided below, once the level is ranked.
+                    kept: false,
+                    gaps: Vec::new(),
+                });
+                next_live.push((q, (next_rows.len() - 1) as u32));
+            }
+            levels[level][*idx as usize].gaps = gaps;
+            if stop {
+                break;
+            }
+        }
+        if stop || next_rows.is_empty() {
+            break;
+        }
+
+        // Rank as the walk ranks, and mark the top `beam` as kept.
+        // The rest stay as rows -- that is the slack.
+        let weighted = matches!(resolved_key(ifs, RankKey::Auto), RankKey::Weighted);
+        let key = |r: &RefRow| if weighted { r.sigma_per_px * r.r } else { r.r };
+        let mut order: Vec<usize> = (0..next_rows.len()).collect();
+        order.sort_by(|&a, &b| {
+            key(&next_rows[a]).total_cmp(&key(&next_rows[b]))
+        });
+        for &i in order.iter().take(beam) {
+            next_rows[i].kept = true;
+        }
+        // A done row is carried forward whether or not it was kept:
+        // its bound is final and the answer is a minimum over it.
+        for r in next_rows.iter_mut() {
+            if r.done {
+                r.kept = true;
+            }
+        }
+        next_live.retain(|(_, i)| next_rows[*i as usize].kept);
+        levels.push(next_rows);
+        live = next_live;
+        if live.is_empty() {
+            break;
+        }
+    }
+
+    ReferenceBeam { levels, basis0, px }
+}
+
+/// The address of a row, read back up the tree.
+fn address_of(levels: &[Vec<RefRow>], level: usize, idx: u32) -> Vec<u32> {
+    let mut out = Vec::new();
+    let (mut l, mut i) = (level, idx);
+    while l > 0 {
+        let row = &levels[l][i as usize];
+        out.push(row.map);
+        i = row.parent;
+        l -= 1;
+    }
+    out.reverse();
+    out
+}
+
+/// Why a lineage stopped carrying a delta.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Rebase {
+    /// The delta grew to a fraction of the ball, so `Z + δ` in
+    /// absolute f32 is as accurate as δ was. The first design's cap,
+    /// applied to ONE lineage at the level its own delta gets there.
+    Expanded,
+    /// `|Z + δ| < |δ|`: the reference passed near a pole and the
+    /// precision is now in the sum rather than in either term. The
+    /// Zhuoran-style event, measured in `the_difference_forms_survive_f32`
+    /// as forty times the error of anywhere else.
+    Cancelled,
+    /// The reference has no row for the branch this pixel wants: the
+    /// row it follows was itself slack, so the tree stops there. One
+    /// level of slack is what D1 buys; this is the level after.
+    OffTree,
+    /// The kernel has no exact difference form -- the disc, the blob,
+    /// a fractional root. The Taylor rung is not built, so these
+    /// rebase immediately and the walk is exactly today's.
+    NoForm,
+}
+
+/// One lineage of a pixel's beam: an offset from a reference row, or
+/// an absolute position once it has rebased.
+#[derive(Clone)]
+struct DeltaCand {
+    /// `(level, index)` into the reference, while this is a delta.
+    anchor: Option<(u32, u32)>,
+    /// The offset from that row's `Z`, or the absolute position once
+    /// `anchor` is `None`.
+    d: [f64; 2],
+    sigma: f64,
+    bound: f64,
+    /// The pixel's own distance to the ball's centre.
+    r: f64,
+    last_sigma: f64,
+    address: Vec<u32>,
+    escape: Option<(f64, Vec<u32>, [f64; 2])>,
+    done: bool,
+}
+
+impl DeltaCand {
+    /// The pixel's own position: the row's `Z` plus its offset, or
+    /// the absolute position it rebased to.
+    fn point(&self, beam: &ReferenceBeam) -> [f64; 2] {
+        match self.anchor {
+            Some((l, i)) => {
+                let z = beam.levels[l as usize][i as usize].z;
+                [z[0] + self.d[0], z[1] + self.d[1]]
+            }
+            None => self.d,
+        }
+    }
+}
+
+/// The distance estimate at one pixel, walked in DELTA form against a
+/// reference beam (`ifs-perturbation-delta.md` §3).
+///
+/// This is the CPU twin of the shader walk the plan describes, and
+/// the function G2 measures. `uv` is the pixel's normalised offset,
+/// the screen spanning `[-½, ½]` on each axis, exactly as the shader
+/// takes it.
+///
+/// **What it carries and what it does not.** A lineage's state is
+/// `(row, δ)`: which reference row it follows and its offset from it.
+/// One level is the kernel's exact difference form and a row change,
+/// with no position ever formed in the pixel's own precision. The
+/// bound and the escape test take the reference's `r` and add the
+/// pixel's own first-order correction `û · δ`, with `û` the unit
+/// vector from the ball's centre to `Z` -- exact to `O(|δ|²/r)`.
+///
+/// **Where it rebases**, per lineage rather than per view: the four
+/// cases of [`Rebase`]. Past one it continues in absolute f64 exactly
+/// as [`estimate_seeded`] does, which is why nothing new had to be
+/// built for the continuation.
+///
+/// **The limit this first cut has.** The reference's `r` is an f64,
+/// so `r − R` carries an absolute error of about `1e-16`, and the
+/// pixel's correction `û · δ` is below that once `|δ|` is. On the
+/// zooms G2 measures -- 2^12 to 2^28, where `|δ|` is 1e-4 to 1e-9 --
+/// that is eight orders of headroom. Past about 2^50 it is not, and
+/// the row will have to carry `r − R` computed in the reference's own
+/// precision rather than f64's.
+pub fn estimate_delta(
+    ifs: &Ifs2,
+    reference: &ReferenceBeam,
+    uv: [f64; 2],
+    beam: u32,
+    max_levels: u32,
+) -> (Estimate<[f64; 2]>, Vec<(u32, Rebase)>) {
+    let ball = ifs.ball.centre;
+    let radius = ifs.ball.radius;
+    let beam = beam.max(1) as usize;
+    let far = radius.max(1.0) * FAR;
+    let cap = radius * HANDOVER_FRACTION;
+    let root = &reference.levels[0][0];
+    let b = reference.basis0;
+    let mut rebases: Vec<(u32, Rebase)> = Vec::new();
+
+    // δ at level 0 is the view basis applied to the pixel's offset --
+    // the one place the pixel's position enters at all.
+    let d0 = [
+        b[0][0] * uv[0] + b[0][1] * uv[1],
+        b[1][0] * uv[0] + b[1][1] * uv[1],
+    ];
+    let t0 = 2.0 * (root.u[0] * d0[0] + root.u[1] * d0[1]) + d0[0] * d0[0] + d0[1] * d0[1];
+    let r0 = (root.r * root.r + t0).max(0.0).sqrt();
+    let excess0 = (root.excess2 + t0) / (r0 + radius);
+    let mut live = vec![DeltaCand {
+        anchor: Some((0, 0)),
+        d: d0,
+        sigma: root.sigma_per_px,
+        bound: {
+            let term = root.sigma_per_px * excess0;
+            if term.is_finite() { term } else { f64::NEG_INFINITY }
+        },
+        r: r0,
+        last_sigma: root.last_sigma,
+        address: Vec::new(),
+        escape: (r0 > radius).then(|| {
+            (escape_residual(r0, radius, root.last_sigma), Vec::new(), [
+                root.z[0] + d0[0],
+                root.z[1] + d0[1],
+            ])
+        }),
+        done: !r0.is_finite() || r0 > far,
+    }];
+    let mut dead_min = f64::INFINITY;
+    let mut best_done: Option<DeltaCand> = None;
+    let mut deepest_done = 0.0f64;
+
+    // `max_levels` POSITIONS are scored, level 0 included, which is
+    // what the direct walk means by the budget: it scores the live set
+    // and then expands, so its last expansion's result is never
+    // scored. Scoring it here instead cost a julia at 2^18 a tenth of
+    // a pixel -- one extra level of a squaring map, at level sixty,
+    // where the radius crossed the ball and the direct walk had
+    // already stopped looking.
+    for level in 0..max_levels.saturating_sub(1) {
+        if live.iter().all(|c| c.done) {
+            break;
+        }
+        let mut next: Vec<DeltaCand> = Vec::with_capacity(live.len() * ifs.maps.len());
+        for c in live.drain(..) {
+            if c.done {
+                if let Some((lvl, _, _)) = &c.escape {
+                    deepest_done = deepest_done.max(*lvl);
+                }
+                if c.bound.is_finite()
+                    && best_done.as_ref().map_or(true, |b| c.bound < b.bound)
+                {
+                    best_done = Some(c);
+                }
+                continue;
+            }
+            let last = c.address.last().copied();
+            let here = c.point(reference);
+            let dmag = f64::hypot(c.d[0], c.d[1]);
+
+            for (i, m) in ifs.maps.iter().enumerate() {
+                if !admits(ifs, i, last) {
+                    continue;
+                }
+                // ---- the delta step, while there is a row to follow
+                if let Some((lvl, idx)) = c.anchor {
+                    let row = &reference.levels[lvl as usize][idx as usize];
+                    // The reference could not take this branch: its
+                    // gap is the answer for the piece, corrected by
+                    // this pixel's own offset rather than the whole
+                    // view's reach.
+                    if let Some(&(_, gap)) = row.gaps.iter().find(|(g, _)| *g == i as u32) {
+                        dead_min = dead_min.min(c.bound.max(c.sigma * (gap - dmag)));
+                        continue;
+                    }
+                    let child = reference.child(lvl as usize, idx, i as u32);
+                    let step = m.inverse.difference(row.z, c.d);
+                    match (child, step) {
+                        (Some(ci), Some(dd)) => {
+                            let crow =
+                                &reference.levels[lvl as usize + 1][ci as usize];
+                            let dmag2 = f64::hypot(dd[0], dd[1]);
+                            let zmag = f64::hypot(crow.z[0] + dd[0], crow.z[1] + dd[1]);
+                            if dmag2 > cap {
+                                rebases.push((level, Rebase::Expanded));
+                            } else if zmag < dmag2 {
+                                rebases.push((level, Rebase::Cancelled));
+                            } else {
+                                // The pixel's own radius, exactly in
+                                // δ rather than linearised in it:
+                                // `|Z + δ − c|² = r² + t` with
+                                // `t = 2u·δ + |δ|²`, a sum of products
+                                // with nothing to cancel.
+                                let t = 2.0 * (crow.u[0] * dd[0] + crow.u[1] * dd[1])
+                                    + dd[0] * dd[0]
+                                    + dd[1] * dd[1];
+                                let r = (crow.r * crow.r + t).max(0.0).sqrt();
+                                // ...and the EXCESS through the same
+                                // difference of squares, so the bound
+                                // keeps its per-pixel variation
+                                // wherever `t` is representable.
+                                let excess = (crow.excess2 + t) / (r + radius);
+                                // σ is the PIXEL's, not the row's.
+                                //
+                                // `σ_min` varies across the view like
+                                // everything else, by `O(|δ|/s)` per
+                                // level, and sixty levels of a tenth
+                                // of a percent compound to six. On a
+                                // julia at 2^12 that read as eight
+                                // pixels against a tolerance of a
+                                // thousandth, which is what found it.
+                                // Evaluating it at `Z + δ` costs
+                                // nothing: σ is a smooth O(1) factor,
+                                // so it needs the position only to
+                                // RELATIVE precision, which the sum
+                                // has at any depth -- and where δ is
+                                // below the sum's last digit the
+                                // answer is the reference's, which is
+                                // then the correct one.
+                                let s = m.inverse.local_sigma(here, m.sigma_min);
+                                let mut child_c = c.clone();
+                                child_c.anchor = Some((lvl + 1, ci));
+                                child_c.d = dd;
+                                child_c.sigma = c.sigma * s;
+                                child_c.r = r;
+                                child_c.last_sigma = m.sigma_min;
+                                let term = child_c.sigma * excess;
+                                child_c.bound =
+                                    if term.is_finite() { c.bound.max(term) } else { c.bound };
+                                child_c.address.push(i as u32);
+                                finish_child(
+                                    &mut child_c, level, radius, far, reference,
+                                );
+                                next.push(child_c);
+                                continue;
+                            }
+                        }
+                        (None, _) => rebases.push((level, Rebase::OffTree)),
+                        (_, None) => rebases.push((level, Rebase::NoForm)),
+                    }
+                    // Fall through: this branch rebases and is taken
+                    // in absolute arithmetic from the pixel's own
+                    // position.
+                }
+
+                // ---- the absolute step, exactly `estimate_seeded`'s
+                if let Some(gap) = m.inverse.gap_bound(here, ball, radius, m.sigma_min) {
+                    dead_min = dead_min.min(c.bound.max(c.sigma * gap));
+                    continue;
+                }
+                let (q, _, s) = m.inverse.step(here, 0.0, m.sigma_min);
+                let sigma = c.sigma * s;
+                let r = Affine2::distance(q, ball);
+                let mut child_c = c.clone();
+                child_c.anchor = None;
+                child_c.d = q;
+                child_c.sigma = sigma;
+                child_c.r = r;
+                child_c.last_sigma = m.sigma_min;
+                child_c.bound = fold_level(c.bound, sigma, r, radius);
+                child_c.address.push(i as u32);
+                finish_child(&mut child_c, level, radius, far, reference);
+                next.push(child_c);
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        // The same ranking the walk uses, on the PIXEL's own numbers.
+        let weighted = matches!(resolved_key(ifs, RankKey::Auto), RankKey::Weighted);
+        next.sort_by(|a, b| {
+            let (ka, kb) = if weighted {
+                (a.sigma * a.r, b.sigma * b.r)
+            } else {
+                (a.r, b.r)
+            };
+            ka.total_cmp(&kb)
+        });
+        next.truncate(beam);
+        live = next;
+    }
+
+    for c in live.iter() {
+        if let Some((lvl, _, _)) = &c.escape {
+            deepest_done = deepest_done.max(*lvl);
+        }
+    }
+    let live_best = live
+        .iter()
+        .filter(|c| c.bound.is_finite())
+        .min_by(|a, b| a.bound.total_cmp(&b.bound))
+        .cloned();
+    let best = match (live_best, best_done) {
+        (Some(l), Some(d)) => if d.bound < l.bound { d } else { l },
+        (Some(l), None) => l,
+        (None, Some(d)) => d,
+        (None, None) => live.first().cloned().expect("a beam"),
+    };
+    let distance = match (best.bound.is_finite(), dead_min.is_finite()) {
+        (true, _) => best.bound.max(0.0).min(dead_min.max(0.0)),
+        (false, true) => dead_min.max(0.0),
+        (false, false) => 0.0,
+    };
+    let point = best.point(reference);
+    let est = match best.escape.clone() {
+        Some((level, address, point)) => Estimate {
+            distance,
+            level,
+            address,
+            point,
+            escaped: true,
+            deepest_level: deepest_done,
+        },
+        None => Estimate {
+            distance,
+            level: max_levels as f64,
+            address: best.address.clone(),
+            point,
+            escaped: false,
+            deepest_level: deepest_done,
+        },
+    };
+    (est, rebases)
+}
+
+/// The escape and freeze tests every child takes, either way it was
+/// stepped.
+fn finish_child(
+    c: &mut DeltaCand,
+    level: u32,
+    radius: f64,
+    far: f64,
+    reference: &ReferenceBeam,
+) {
+    if c.r > radius && c.escape.is_none() {
+        c.escape = Some((
+            (level + 1) as f64 + escape_residual(c.r, radius, c.last_sigma),
+            c.address.clone(),
+            c.point(reference),
+        ));
+    }
+    if !c.r.is_finite() || c.r > far {
+        c.done = true;
+    }
+}
+
 // ===================================================== 3D seeding
 //
 // The same split as the seeding above — a reference half the CPU walks
@@ -3163,6 +3789,316 @@ mod tests {
         );
         println!("  the four-cycle rejects {off_far} of 2000 free-chaos points");
         let _ = flame;
+    }
+
+    /// The two walks side by side, level by level, on one pixel.
+    ///
+    /// A diagnostic, kept because it is what found the two bugs G2
+    /// caught: σ taken from the reference instead of the pixel, worth
+    /// eight pixels on a julia at 2^12, and one level too many in the
+    /// budget, worth a tenth of one at 2^18. Both were invisible in
+    /// the aggregate and obvious in this table -- the first as a slow
+    /// drift in the bound column with the radius column matching, the
+    /// second as a perfect match for sixty rows and a disagreement on
+    /// the sixty-first.
+    ///
+    /// The `sum r` column is the delta form's own answer, `Z + δ`
+    /// against the direct walk's absolute position. That it agrees to
+    /// ten decimals even where `|δ|` has grown past the ball is the
+    /// difference forms working.
+    #[test]
+    #[ignore = "a diagnostic; run with --ignored --nocapture"]
+    fn probe_the_delta_walk_beside_the_direct_one() {
+        let ifs = julia([-0.4, 0.6]);
+        let target = chaos_sample(&ifs, 20_000)[10_000];
+        let zoom = 18.0f64;
+        let span = 2.0 * ifs.ball.radius / 2f64.powf(zoom);
+        let px = span / 64.0;
+        let basis = [[span, 0.0], [0.0, -span]];
+        let reference = reference_beam(&ifs, target, basis, px, 60, 8);
+        let uv = [(5.0 + 0.5) / 8.0 - 0.5, (7.0 + 0.5) / 8.0 - 0.5];
+        let at = [
+            target[0] + basis[0][0] * uv[0] + basis[0][1] * uv[1],
+            target[1] + basis[1][0] * uv[0] + basis[1][1] * uv[1],
+        ];
+        println!("  maps {}  target {target:?}  at {at:?}", ifs.maps.len());
+        // The direct walk, one map, one lineage.
+        let m = &ifs.maps[0];
+        let mut q = at;
+        let mut zq = reference.levels[0][0].z;
+        let mut d = [
+            basis[0][0] * uv[0] + basis[0][1] * uv[1],
+            basis[1][0] * uv[0] + basis[1][1] * uv[1],
+        ];
+        let radius = ifs.ball.radius;
+        let mut bd = f64::NEG_INFINITY;   // direct bound, pixels
+        let mut bs = f64::NEG_INFINITY;   // delta-form bound, pixels
+        let mut sd = 1.0 / px;            // direct sigma per px
+        let mut ss = 1.0 / px;
+        println!("  radius {radius}  px {px:.3e}");
+        let (got, reb) = estimate_delta(&ifs, &reference, uv, 8, 60);
+        let want = estimate(&ifs, at, 60, 8);
+        println!(
+            "  estimate_delta {:.6} px | direct {:.6} px | escaped {} vs {} | rebases {:?}",
+            got.distance,
+            want.distance / px,
+            got.escaped,
+            want.escaped,
+            &reb[..reb.len().min(6)]
+        );
+        println!("  lvl  direct r          sum r            direct bound     delta bound");
+        for k in 0..60usize {
+            if k + 1 >= reference.levels.len() {
+                println!("  reference stops at level {k}");
+                break;
+            }
+            let rows = &reference.levels[k + 1];
+            let Some(ci) = rows.iter().position(|r| r.parent == 0 || rows.len() == 1) else {
+                println!("  no child row at level {}", k + 1);
+                break;
+            };
+            let dd = m.inverse.difference(zq, d).expect("a form");
+            let qprev = q;
+            let sprev = [zq[0] + d[0], zq[1] + d[1]];
+            q = m.inverse.apply(q);
+            zq = rows[ci].z;
+            d = dd;
+            let rq = Affine2::distance(q, ifs.ball.centre);
+            let t = 2.0 * (rows[ci].u[0] * d[0] + rows[ci].u[1] * d[1]) + d[0] * d[0] + d[1] * d[1];
+            let rs = (rows[ci].r * rows[ci].r + t).max(0.0).sqrt();
+            sd *= m.inverse.local_sigma(qprev, m.sigma_min);
+            ss *= m.inverse.local_sigma(sprev, m.sigma_min);
+            bd = bd.max(sd * (rq - radius));
+            bs = bs.max(ss * ((rows[ci].excess2 + t) / (rs + radius)));
+            println!(
+                "  {:>3}  {rq:<17.10} {rs:<16.10} {bd:<16.6} {bs:<16.6}",
+                k + 1,
+            );
+            if k > 58 {
+                break;
+            }
+        }
+    }
+
+    /// G2: the delta walk is the direct walk.
+    ///
+    /// `ifs-perturbation-delta.md` §6. The centre's beam is walked to
+    /// the budget, every pixel of a grid continues from it in DELTA
+    /// form, and the answer is compared against the direct f64 walk
+    /// at the pixel's own absolute position.
+    ///
+    /// **No f32 cost and no curvature tolerance.** The first design's
+    /// gates needed both, and needing neither is the point of this
+    /// one.
+    ///
+    /// **The bar is the direct walk's OWN reproducibility.** A
+    /// thousandth of a pixel is the bar wherever the direct walk is
+    /// stable, and on the affine sets and the bubble set it is: they
+    /// agree exactly, to the last bit, at every zoom. On a julia they
+    /// do not, and the reason is not the delta form. The walk
+    /// amplifies its own rounding by the map's derivative at every
+    /// level, and sixty levels of a squaring map turn f64's last
+    /// digit into a visible fraction of a pixel -- so the direct walk
+    /// moved by one ulp of the pixel's position is a DIFFERENT
+    /// answer too. This measures that jitter and requires the delta
+    /// walk to sit inside it, which is the strongest statement the
+    /// reference can support. Where the jitter is zero the bar is the
+    /// thousandth again, so the measurement can never loosen the
+    /// gate on a set where the reference is sound.
+    #[test]
+    fn the_delta_walk_is_the_direct_walk() {
+        let cases: Vec<(&str, Ifs2)> = vec![
+            ("dragon", dragon()),
+            ("gasket", sierpinski()),
+            ("julia", julia([-0.4, 0.6])),
+            (
+                "bubble set",
+                analyse(vec![
+                    kernel_xform("bubble", [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], 1.6),
+                    kernel_xform("bubble", [0.7, 0.7, -0.7, 0.7, 0.0, -0.3], 1.2),
+                    affine_xform(0.5, 0.0, 0.0, 0.5, 1.0, 0.5),
+                ]),
+            ),
+        ];
+
+        let mut worst_overall = 0.0f64;
+        for (name, ifs) in cases {
+            // A point ON the set, so the view has something in it at
+            // every zoom.
+            let target = chaos_sample(&ifs, 20_000)[10_000];
+            for zoom in [12.0f64, 18.0, 24.0, 28.0] {
+                let span = 2.0 * ifs.ball.radius / 2f64.powf(zoom);
+                let px = span / 64.0;
+                let basis = [[span, 0.0], [0.0, -span]];
+                let reference = reference_beam(&ifs, target, basis, px, 60, 8);
+                let (mut worst, mut worst_ratio) = (0.0f64, 0.0f64);
+                let (mut rebased, mut n, mut jittery) = (0usize, 0usize, 0usize);
+                let mut first: Vec<u32> = Vec::new();
+                for gy in 0..8u32 {
+                    for gx in 0..8u32 {
+                        let uv = [
+                            (gx as f64 + 0.5) / 8.0 - 0.5,
+                            (gy as f64 + 0.5) / 8.0 - 0.5,
+                        ];
+                        let at = [
+                            target[0] + basis[0][0] * uv[0] + basis[0][1] * uv[1],
+                            target[1] + basis[1][0] * uv[0] + basis[1][1] * uv[1],
+                        ];
+                        let (got, reb) = estimate_delta(&ifs, &reference, uv, 8, 60);
+                        let want = estimate(&ifs, at, 60, 8).distance / px;
+                        // The same question asked one ulp away: what
+                        // the reference itself can tell apart.
+                        let nudged = [
+                            f64::from_bits(at[0].to_bits() + 1),
+                            f64::from_bits(at[1].to_bits() + 1),
+                        ];
+                        let jitter =
+                            (estimate(&ifs, nudged, 60, 8).distance / px - want).abs();
+                        let err = (got.distance - want).abs();
+                        let bar = 1e-3f64.max(4.0 * jitter);
+                        if err > worst {
+                            worst = err;
+                        }
+                        if err / bar > worst_ratio {
+                            worst_ratio = err / bar;
+                        }
+                        if jitter > 1e-3 {
+                            jittery += 1;
+                        }
+                        if let Some((lvl, _)) = reb.first() {
+                            rebased += 1;
+                            first.push(*lvl);
+                        }
+                        assert!(
+                            err <= bar,
+                            "{name} at 2^{zoom}, pixel ({gx}, {gy}): delta {:.6} px, \
+                             direct {want:.6} px, and the direct walk's own one-ulp \
+                             jitter is only {jitter:.6}",
+                            got.distance
+                        );
+                        n += 1;
+                    }
+                }
+                first.sort_unstable();
+                let carried = first.get(first.len() / 2).copied().unwrap_or(u32::MAX);
+                println!(
+                    "  {name:<11} 2^{zoom:<4} depth {:>3} | worst {worst:.2e} px, \
+                     {worst_ratio:.2} of its bar | {jittery}/{n} jittery | {rebased}/{n} \
+                     rebase, median at level {carried}",
+                    reference.depth()
+                );
+                worst_overall = worst_overall.max(worst);
+            }
+        }
+        println!("  worst over every case: {worst_overall:.2e} px");
+    }
+
+    /// D6: no level is chosen, and the level a lineage rebases at
+    /// does not depend on the RESOLUTION.
+    ///
+    /// This is what replaces the first design's
+    /// `the_handover_does_not_depend_on_the_resolution`, and it is a
+    /// stronger statement than that gate could make. The old one
+    /// checked that an OBJECTIVE picked the same level at two pixel
+    /// sizes, which was a property of the objective's arithmetic.
+    /// Here there is no objective: a lineage rebases when its own δ
+    /// reaches a fraction of the ball, or when `Z + δ` cancels, and
+    /// neither quantity contains `px` at all. So the levels must be
+    /// IDENTICAL, not close -- and rendering the same view at four
+    /// times the resolution must not move a single one of them.
+    ///
+    /// What they do depend on is the zoom, and they should: a deeper
+    /// view starts with a smaller δ and therefore carries it further.
+    /// That relationship is measured beside the equality, so the
+    /// gate cannot pass by the rebase level being constant.
+    #[test]
+    fn the_rebase_level_depends_on_the_zoom_and_not_on_the_pixel() {
+        for (name, ifs) in [
+            ("dragon", dragon()),
+            ("gasket", sierpinski()),
+            ("julia", julia([-0.4, 0.6])),
+        ] {
+            let target = chaos_sample(&ifs, 20_000)[10_000];
+            let mut by_zoom: Vec<(f64, u32)> = Vec::new();
+            for zoom in [12.0f64, 20.0, 28.0] {
+                let span = 2.0 * ifs.ball.radius / 2f64.powf(zoom);
+                let basis = [[span, 0.0], [0.0, -span]];
+                let levels = |px: f64| -> Vec<Option<u32>> {
+                    let reference = reference_beam(&ifs, target, basis, px, 60, 8);
+                    (0..8u32)
+                        .flat_map(|gy| (0..8u32).map(move |gx| (gx, gy)))
+                        .map(|(gx, gy)| {
+                            let uv = [
+                                (gx as f64 + 0.5) / 8.0 - 0.5,
+                                (gy as f64 + 0.5) / 8.0 - 0.5,
+                            ];
+                            estimate_delta(&ifs, &reference, uv, 8, 60)
+                                .1
+                                .first()
+                                .map(|(l, _)| *l)
+                        })
+                        .collect()
+                };
+                let coarse = levels(span / 64.0);
+                let fine = levels(span / 256.0);
+                assert_eq!(
+                    coarse, fine,
+                    "{name} at 2^{zoom}: four times the resolution moved a rebase level"
+                );
+                let mut seen: Vec<u32> = coarse.iter().flatten().copied().collect();
+                seen.sort_unstable();
+                by_zoom.push((zoom, seen.get(seen.len() / 2).copied().unwrap_or(0)));
+            }
+            println!(
+                "  {name:<8} median rebase level by zoom: {:?}",
+                by_zoom.iter().map(|(z, l)| (*z as u32, *l)).collect::<Vec<_>>()
+            );
+            // Deeper carries further. Not a tight law -- the set
+            // decides how fast a delta grows -- but it must not be
+            // flat, or the delta form is not doing anything the
+            // first design's single handover did not.
+            let (first, last) = (by_zoom[0].1, by_zoom[by_zoom.len() - 1].1);
+            assert!(
+                last > first + 4,
+                "{name}: the rebase level went from {first} at 2^12 to {last} at 2^28, \
+                 which is not the delta form carrying further as the view shrinks"
+            );
+        }
+    }
+
+    /// The affine difference form IS the affine basis carry.
+    ///
+    /// G0's argument, made directly rather than through a render: on
+    /// a set whose every map is affine, a delta step is `M⁻¹δ` and the
+    /// basis carry is `M⁻¹` composed with the view -- the same
+    /// arithmetic in the same order -- so the two agree to the last
+    /// bit, not to a tolerance. If this ever needed a tolerance, the
+    /// shipped presets would be about to move.
+    #[test]
+    fn the_affine_delta_is_the_affine_basis_carry() {
+        for (name, ifs) in [("dragon", dragon()), ("gasket", sierpinski())] {
+            let target = chaos_sample(&ifs, 20_000)[10_000];
+            let span = 2.0 * ifs.ball.radius / 2f64.powf(20.0);
+            let px = span / 64.0;
+            let basis = [[span, 0.0], [0.0, -span]];
+            let reference = reference_beam(&ifs, target, basis, px, 40, 8);
+            let seeds = seed_beam(&ifs, target, basis, px, 40, 8);
+            // The reference's rows at the level the handover chose
+            // must hold the same positions the seeds do.
+            let lvl = seeds.level as usize;
+            assert!(lvl < reference.levels.len(), "{name}: reference is shallower");
+            for seed in seeds.cands.iter() {
+                let found = reference.levels[lvl].iter().any(|r| {
+                    r.z[0].to_bits() == seed.position[0].to_bits()
+                        && r.z[1].to_bits() == seed.position[1].to_bits()
+                });
+                assert!(
+                    found,
+                    "{name}: seed at {:?} has no reference row at level {lvl}",
+                    seed.position
+                );
+            }
+        }
     }
 
     pub(super) fn chaos_sample(ifs: &Ifs2, count: usize) -> Vec<[f64; 2]> {
