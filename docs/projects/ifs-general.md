@@ -362,3 +362,68 @@ hemisphere) could take `Real` today and the other three could not,
 and splitting the walk by rung before item 8 lands would buy one
 copy of three kernels at the price of two code paths. D1 -- the move
 into the registry -- has not begun.
+
+### 9b. The kernels moved into the registry, 2026-09-17
+
+D1's first half. Two `match`es on the variation NAME are gone: the
+one in `variation_stage` that noticed a kernel, and the one in
+`transform_map_2d_ordered` (with its solid twin) that built it from
+the transform's parameters. In their place
+[`src/variations/inverse.rs`](../../src/variations/inverse.rs) holds
+`InverseDef`, `INVERSES` -- append-only, like the variation
+registration list -- and `VariationRegistry::inverse(name)`, which
+resolves through `get()` so an alias finds the canonical variation's
+inverse and a name the registry does not hold has none.
+
+Each kernel now lives beside its own forward WGSL: `julia`,
+`julian`, `bubble`, `disc` and `blob` in `defs/advanced.rs`,
+`spherical` in `defs/basic.rs`, `hemisphere` in `defs/full3d.rs`,
+`julia3D` and `julia3Dz` in `defs/extended.rs`,
+`quaternion_julia` in its own file. Each reads its OWN parameters
+through a lookup closure, so `ifs_analysis.rs` no longer knows that
+`julian` has a `dist` or that `blob` has three parameters. A
+variation that has an inverse but cannot supply one at these
+settings returns a `Refusal`, and the caller turns that into the
+transform's own `Degenerate` or `Mode` naming the variation, which
+is what the flame panel already shows.
+
+**A side list, not a field on `VariationDef`.** §2 asked for
+`inverse: Option<&'static InverseDef>` "absent by default so the
+other 640 definitions do not move". Rust has no default for a field
+of a plain struct literal, so that field would mean adding
+`inverse: None,` to all 647 of them: 647 lines of noise to reach
+seven. The list is keyed by `VariationDef::name` and the lookup goes
+through the registry, which is what the field was for.
+
+**G1 now runs over the registry.** `every_registered_inverse_is_
+reachable_and_inverts` iterates `INVERSES` and checks three things
+per entry: that a transform carrying only that variation analyses to
+a map with that kernel -- the whole wiring, definition through
+registry to `transform_map_2d_ordered`; that every forward branch is
+undone by SOME inverse branch, which is the property Bubble's
+inverse failed by 102% before it was rewritten; and that the dual
+Jacobian exists wherever `kernel_inverse_domain` says it does. A
+seventh kernel gets all three by being appended to the list.
+
+Two things the gate had to be told, both real:
+
+- **`julian` at its defaults IS `julia`.** Power 2 and distance 1
+  give the same `Root { n: 2, d: 1 }`, so at the defaults the first
+  check cannot tell which definition produced it. The gate sets
+  power 3.
+- **The round trip runs in an annulus, 0.2 to 2.** Below it,
+  `spherical`'s forward carries the flame's `1e-6` guard --
+  `z/(|z|² + 1e-6)` -- which its inverse deliberately does not undo,
+  so the round trip is off by `1e-6/|z|²`: a millionth at radius one
+  and everything at the origin. Above it, `disc`'s forward is
+  periodic in the radius and the ring passes the four branches
+  tried. The tolerance, 3e-5, is that guard's own size at the inner
+  edge.
+
+Presets byte-identical, every existing gate green.
+
+**Still open in D1**: `AFFINE_VARIATIONS` and the per-space role
+function are still a list in `ifs_analysis.rs` rather than an
+`InverseDef` of kind affine on each variation that carries one.
+That is the larger half by count -- a dozen variations -- and the
+smaller by risk, since an affine role has no inverse to get wrong.

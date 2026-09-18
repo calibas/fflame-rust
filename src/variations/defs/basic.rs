@@ -2,6 +2,8 @@
 //!
 //! These are the fundamental variations from the original fractal flame algorithm.
 
+use crate::scene::ifs_analysis::Kernel;
+use crate::variations::inverse::{InverseDef, InverseKernel, Refusal};
 use crate::variations::{
     definition::{Feature, VariationDef},
     VariationCategory, VariationPhase,
@@ -212,4 +214,13 @@ fn variation_horseshoe(p: vec3<f32>) -> vec3<f32> {
     );
 }
 "#,
+};
+
+// ------------------------------------------------- the inverse walks
+
+/// `spherical`: inversion in the circle, its own inverse
+/// (`ifs-general.md` D1).
+pub static INVERSE_SPHERICAL: InverseDef = InverseDef {
+    name: "spherical",
+    kernel: InverseKernel::Planar(|_| Ok(Kernel::Spherical)),
 };

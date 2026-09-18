@@ -2,6 +2,8 @@
 //!
 //! More complex 2D variations including polar coordinates, Julia sets, etc.
 
+use crate::scene::ifs_analysis::Kernel;
+use crate::variations::inverse::{InverseDef, InverseKernel, Refusal};
 use crate::variations::{
     definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
@@ -2236,4 +2238,62 @@ fn variation_cpow(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<funct
     return vec3<f32>(m * cos(ang), m * sin(ang), p.z);
 }
 "#,
+};
+
+// ------------------------------------------------- the inverse walks
+
+/// `julia`: the square root, both branches (`ifs-general.md` D1).
+///
+/// A fixed `Root { n: 2, d: 1 }` -- `julia` takes no parameters, and
+/// `julian` is the same kernel with them.
+pub static INVERSE_JULIA: InverseDef = InverseDef {
+    name: "julia",
+    kernel: InverseKernel::Planar(|_| Ok(Kernel::Root { n: 2, d: 1.0 })),
+};
+
+/// `julian`: the `n`th root raised to `d`, every branch.
+///
+/// A zero power has no inverse and a zero distance collapses the
+/// radius, so both are refused here rather than producing a kernel
+/// the walk would divide by.
+pub static INVERSE_JULIAN: InverseDef = InverseDef {
+    name: "julian",
+    kernel: InverseKernel::Planar(|p| {
+        let (n, d) = (p("power").round() as i32, p("dist"));
+        if n == 0 || !(d != 0.0) || !d.is_finite() {
+            return Err(Refusal::Degenerate);
+        }
+        Ok(Kernel::Root { n, d })
+    }),
+};
+
+/// `bubble`: onto the unit disc and two-to-one, the branch picking
+/// the inner or outer preimage.
+pub static INVERSE_BUBBLE: InverseDef = InverseDef {
+    name: "bubble",
+    kernel: InverseKernel::Planar(|_| Ok(Kernel::Bubble)),
+};
+
+/// `disc`: polar coordinates read from the +y axis, periodic in the
+/// radius, so a branch picks the ring.
+pub static INVERSE_DISC: InverseDef = InverseDef {
+    name: "disc",
+    kernel: InverseKernel::Planar(|_| Ok(Kernel::Disc)),
+};
+
+/// `blob`: a reflection in the diagonal times an angular radial
+/// scale.
+///
+/// The scale must stay positive for the preimage to be one point; a
+/// `low` or `high` at or below zero puts a zero in the denominator of
+/// the inverse and the walk has no branch rule for what is past it.
+pub static INVERSE_BLOB: InverseDef = InverseDef {
+    name: "blob",
+    kernel: InverseKernel::Planar(|p| {
+        let (high, low, waves) = (p("high"), p("low"), p("waves"));
+        if !(high > 0.0) || !(low > 0.0) || !waves.is_finite() {
+            return Err(Refusal::Degenerate);
+        }
+        Ok(Kernel::Blob { high, low, waves })
+    }),
 };

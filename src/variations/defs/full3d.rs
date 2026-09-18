@@ -2,6 +2,8 @@
 //!
 //! Variations that create true 3D structures by modifying all three coordinates.
 
+use crate::scene::ifs_analysis::Kernel;
+use crate::variations::inverse::{InverseDef, InverseKernel, Refusal};
 use crate::variations::{
     definition::{Feature, VariationDef},
     VariationCategory, VariationPhase,
@@ -39,4 +41,16 @@ fn variation_hemisphere(p: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(p.x * t, p.y * t, t);
 }
 "#,
+};
+
+// ------------------------------------------------- the inverse walks
+
+/// `hemisphere`: onto the open unit disc and one-to-one
+/// (`ifs-general.md` D1).
+///
+/// Planar, though it lives in a 3D file: the walk inverts the map it
+/// makes of the PLANE, which is `p / sqrt(|p|² + 1)`.
+pub static INVERSE_HEMISPHERE: InverseDef = InverseDef {
+    name: "hemisphere",
+    kernel: InverseKernel::Planar(|_| Ok(Kernel::Hemisphere)),
 };

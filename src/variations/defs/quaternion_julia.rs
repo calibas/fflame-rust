@@ -26,6 +26,8 @@
 //!
 //! 2D mode is the complex Julia-N `zⁿ + (cx + i·cy)` / its inverse.
 
+use crate::scene::ifs_analysis::Kernel3;
+use crate::variations::inverse::{InverseDef, InverseKernel, Refusal};
 use crate::variations::{
     definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
@@ -311,3 +313,38 @@ mod quaternion_identity_tests {
         }
     }
 }
+
+// ------------------------------------------------- the inverse walks
+
+/// `quaternion_julia`: the quaternion root, projected back to space
+/// (`ifs-general.md` D1).
+///
+/// Two settings are refused as a MODE rather than as a degeneracy,
+/// because another setting of the same variation is fine: the
+/// forward direction (`inverse` off), which is not what the walk
+/// inverts, and projection 2 (Perspective), which divides by `1 − w`
+/// -- not an isometry, and singular inside the ball. Projections 0
+/// (Vector) and 1 (Depth) are permutations and are taken.
+pub static INVERSE_QUATERNION_JULIA: InverseDef = InverseDef {
+    name: "quaternion_julia",
+    kernel: InverseKernel::Solid(|p| {
+        let n = p("power").round() as i32;
+        if n == 0 {
+            return Err(Refusal::Degenerate);
+        }
+        let projection = p("projection").round();
+        if p("inverse") < 0.5 || !(projection == 0.0 || projection == 1.0) {
+            return Err(Refusal::Mode);
+        }
+        let d = p("dist");
+        if !(d != 0.0) || !d.is_finite() {
+            return Err(Refusal::Degenerate);
+        }
+        Ok(Kernel3::Quaternion {
+            n,
+            d,
+            c: [p("cx"), p("cy"), p("cz"), p("cw")],
+            depth: projection == 1.0,
+        })
+    }),
+};
