@@ -891,27 +891,54 @@ series'.
 `ifs_map_step` in WGSL picks the rung: the exact form where there is
 one, the trapezoid where there is not, with the truncation alongside.
 
-### ...and the shader is still not allowed to take it
+### The rebase is decided ONCE, on the reference
 
-`Ifs2::has_delta_forms` gates the shader path on EXACT forms, and a
-Taylor set renders by the seeded walk. The reason is measured, not
-cautionary. **The rebase is a THRESHOLD, and the two sides cross it
-at different levels.** On a julia dust at 2^24 the truncation at
-level 0 lands within a factor of three of the tenth-of-a-pixel bar,
-so f32 and f64 disagree about whether to carry -- and one extra level
-of a kernel whose third derivative is that large read 25x further
-from the reference than the walk it replaces. Enabled, the gate
-measured 5.1e-3 against the shipped walk's 2.0e-4; declined, the two
-are identical.
+`RefRow::carry` is a bit per row: may a lineage carry its delta
+through it. True wherever the map has an exact form; for a
+Taylor-rung map it is D4's criterion -- the dropped `M·|δ|³/6` under
+a tenth of a pixel -- evaluated in f64 on the CPU, once, and read by
+both walks.
 
-That is not a defect in either side. It is a hard threshold evaluated
-in two precisions, and the fix is to make the decision ONCE and carry
-it -- a flag on the reference row, as the escape state already is --
-rather than to let each side decide. Until then the rung is built,
-gated on the CPU, compiled into the shader and unreachable there.
+It is measured at the VIEW's reach rather than at each pixel's `|δ|`,
+because a row is shared by every pixel that follows it. The view's
+reach is the largest `|δ|` any of them has, so a row that permits the
+carry permits it for all -- conservative in the direction that costs
+a level of depth rather than an answer. The reference now carries a
+composed basis per row to know that reach.
 
-**Still open in item 5**: making that rebase decision once, and G3's
-lineage trace.
+### ...and the walk is declined where it would not carry at all
+
+The bit was not enough on its own, and what it missed is worth
+stating. **A lineage that rebases at level 0 is worse off than the
+seeded walk.** On a julia dust at 2^24 the remainder is over the bar
+at the very first level, so every lineage leaves at once and
+continues from a LEVEL-0 handover in f32 -- precisely what the first
+design's objective existed to avoid choosing. Measured on the GPU:
+156 pixels from the f64 reference against the chosen handover's 1.7,
+on a distance of thirty thousand.
+
+So `ReferenceBeam::carries` asks, once per view, whether any lineage
+carries past the first level, and the renderer uses the walk it
+already had when none does. The verdict is per VIEW, not per kernel
+class:
+
+| | rung | carries? | delta vs shipped |
+|---|---|---|---|
+| blob | Taylor | yes, first rebase at level 26 by 2^24 | 0, identical |
+| julia dust | Taylor | no, level 0 at every zoom | declined, identical |
+| gasket | exact | yes | 2.7e-5 vs 1.6e-3 |
+| bubble set | exact | yes | 0 |
+
+Same rung, opposite verdict, which is what says the decision is about
+the REMAINDER and not about the kernel.
+
+`Ifs2::has_delta_forms` now asks only whether every map is on a rung
+the walk can take -- an exact form, or the Taylor one with a measured
+remainder. A third derivative nobody measured is the one
+disqualification left, because then there is no criterion for when to
+stop.
+
+**Still open in item 5**: G3's lineage trace.
 
 ## 4. Decisions
 

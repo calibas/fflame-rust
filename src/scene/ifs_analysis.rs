@@ -2639,45 +2639,36 @@ pub struct Ifs<A, P> {
 }
 
 impl Ifs2 {
-    /// Whether EVERY map has an exact difference form -- which is
-    /// what the SHADER's delta walk needs
-    /// (`ifs-perturbation-delta.md` §3).
+    /// Whether every map is on a rung the delta walk can take
+    /// (`ifs-perturbation-delta.md` §3, D4).
     ///
-    /// **Not the same question the CPU walk asks.** Since D4 the CPU
-    /// carries a Taylor-rung map too, stepping by the trapezoid of
-    /// the Jacobian and leaving when the dropped term reaches a tenth
-    /// of a pixel. The shader has that step as well -- `ifs_map_step`
-    /// -- and is still not allowed to take it, for a measured reason:
+    /// A map qualifies on either: an exact difference form, or the
+    /// TAYLOR one with a measured remainder. What it may not have is
+    /// a third derivative nobody measured, because then there is no
+    /// criterion for when to stop carrying.
     ///
-    /// **the rebase is a THRESHOLD, and the two sides cross it at
-    /// different levels.** On a julia dust at 2^24 the truncation at
-    /// level 0 lands within a factor of three of the tenth-of-a-pixel
-    /// bar, so f32 and f64 disagree about whether to carry -- and one
-    /// extra level of a kernel whose third derivative is that large
-    /// read 25x further from the reference than the walk it replaces.
-    /// That is not a defect in either side; it is a hard threshold
-    /// evaluated in two precisions, and until the decision is made
-    /// once and carried, admitting the rung here costs more than it
-    /// buys.
+    /// **Whether to keep carrying is not asked here, or by either
+    /// walk.** It is a THRESHOLD, and asked independently in f64 and
+    /// in f32 the two crossed it at different levels: on a julia dust
+    /// at 2^24 the truncation at level 0 lands within a factor of
+    /// three of the tenth-of-a-pixel bar, and one extra level of a
+    /// kernel whose third derivative is that large read 25x further
+    /// from the reference than the walk it replaces. So the reference
+    /// decides it once per row and both sides read the bit -- see
+    /// `RefRow::carry`.
     ///
-    /// So this gates the SHADER path on exact forms, and
-    /// `estimate_delta` does not consult it.
-    ///
-    /// **A set with even one Taylor-rung map must not take that
-    /// walk.** A lineage on such a map rebases at level 0, which
-    /// throws away the `BigFloat` prefix the seeded walk keeps --
-    /// measured on a julia dust of negative distance at 2^24, where
-    /// the delta walk read 0.5% from the f64 reference against the
-    /// seeded walk's 0.02%. Twenty-five times WORSE, and not a bug:
-    /// the walk correctly declined a kernel it has no form for, and
-    /// declining at level 0 is the expensive way to do it.
-    ///
-    /// A root with a negative `dist` is the common case here. Its
-    /// inverse is `|v|^{|n|/d}` with a negative exponent, which is
-    /// not a polynomial in `v` and `conj(v)`, so `root_powers` finds
-    /// no whole pair.
+    /// `estimate_delta` does not consult this at all; it walks
+    /// whatever it is handed. This is the RENDERER's question, about
+    /// whether the shader can be given the flame.
     pub fn has_delta_forms(&self) -> bool {
-        !self.maps.is_empty() && self.maps.iter().all(|m| m.inverse.has_difference())
+        !self.maps.is_empty()
+            && self.maps.iter().all(|m| {
+                m.inverse.has_difference()
+                    || match m.inverse {
+                        Map2::NonlinearInverse(r) => r.third > 0.0 && r.third.is_finite(),
+                        _ => false,
+                    }
+            })
     }
 }
 
