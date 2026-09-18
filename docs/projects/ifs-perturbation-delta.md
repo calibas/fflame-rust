@@ -466,6 +466,89 @@ kernel generic over the scalar so the `BigFloat` rung is the same
 code as the f64 one; until then it is today's
 `big_kernel_inverse`, extended per rung.
 
+## 3a. The difference forms are built and exact, 2026-09-18
+
+Item 5's first step, which §9 puts before `estimate_delta`: G1 on the
+rational and algebraic kernels.
+
+`kernel_difference_gen` in
+[ifs_analysis.rs](../../src/scene/ifs_analysis.rs) computes
+`m⁻¹(Z + δ) − m⁻¹(Z)` **without forming the difference**, over the
+`Real` trait D2 built, so one body serves f64, f32 and `BigFloat`.
+Every form has each term `O(δ)`:
+
+| kernel | form |
+|---|---|
+| Root `(a, b)` | `Z^a·Q + P·conj(Z)^b + P·Q` |
+| Spherical | `(δ\|Z\|² − Z·t) / (\|Z\|²·\|W\|²)` |
+| Hemisphere | `(Z·t/(√A + √B) + δ√A) / (√A·√B)` |
+| Bubble, inner | `2(Z·t/(r + r') + δ(1 + r)) / ((1 + r)(1 + r'))` |
+| Bubble, outer | `2(−Z·x·t/(r + r') + δ·x·(1 + r') − Z(1 + r)·t) / (x·x')` |
+
+with `W = Z + δ` and `t = 2Z·δ + |δ|²` the norm's own
+cancellation-free difference. `P` and `Q` are the two power
+differences, each from `w^n − z^n = δ·Σ_{j<n} w^j z^{n−1−j}`. Every
+square-root difference goes through `(a − b)/(√a + √b)`.
+
+**A root is `v^a·conj(v)^b` when it is a polynomial at all.**
+`m⁻¹(v) = |v|^{|n|/d}·e^{i·n·arg v}` is `ρ^{a+b}e^{i(a−b)θ}`, so the
+exponents are `a = (|n|/d + n)/2` and `b = (|n|/d − n)/2`, and the
+form exists exactly when both are whole and non-negative. `julia`
+and any `julian` at `dist` 1 are `(n, 0)`; a negative power at
+`dist` 1 is `(0, |n|)`, the conjugate power; `dist = 1/k` works too.
+`dist` 2 does not, and falls to the Taylor rung with the disc and
+the blob.
+
+**G1, measured.** Against the same inverse taken at 512 bits and
+subtracted THERE, at δ from 1 to 1e-30 relative to `|Z|`, over 8,815
+points of nine kernel-and-branch fixtures: **worst relative error
+1.4e-14**, relative to `|D|` and not to `|m⁻¹(Z)|`. That distinction
+is the whole gate, and the companion measurement is what shows it:
+
+| \|δ\|/\|Z\| | direct subtraction | exact form |
+|---|---|---|
+| 1 | 2.1e-16 | 0 |
+| 1e-8 | 8.6e-9 | 1.5e-16 |
+| 1e-12 | 2.2e-5 | 4.0e-17 |
+| 1e-16 | **1.0** | 4.9e-17 |
+| 1e-24 | **1.0** | 7.2e-17 |
+
+A relative error of 1.0 is not a poor answer; it is no correct digits
+at all. That is where today's walk is at a deep zoom, and it is
+asserted rather than assumed, so if the direct form ever became
+accurate there the exact forms would be shown to be dead weight.
+
+**The f32 half, split by the rebase criterion.** In f32 against its
+own f64 value the forms hold to **4.2e-7** across 2,457 points --
+and to 1.7e-5 across the 98 where `|Z + δ| < |δ|`. That second
+number is not a flaw in the form: there `Z` and `δ` nearly cancel,
+so `Z + δ` has lost digits before any kernel touches it, and an
+outer bubble squares what is left. It is the measured justification
+for §3's third rebase criterion, and the gate asserts the two sides
+differ by at least tenfold, so the split stays a measurement rather
+than a story.
+
+**The composition is gated too.** `Map2::difference` wraps the
+kernel's form in the two affines and the weight, and a slip there --
+the wrong matrix, the weight on the wrong side -- shows in none of
+the kernel gates. It is bracketed from both ends:
+`the_composed_difference_is_the_maps_own` checks it against the
+DIRECT subtraction at a δ of 1e-3, where f64 still has eleven good
+digits, and against `J·δ` at 1e-9, where the answer must approach the
+dual-number Jacobian to first order. Worst across six maps: 5.1e-12
+far, 2.8e-6 near. **For the affine the near figure is exactly zero**
+-- the difference IS `M⁻¹δ` and the Jacobian IS `M⁻¹`, the same
+arithmetic -- which is G0's argument in miniature.
+
+**`BigFloat` now implements `Real`.** Not `Transcendental` -- `exp`,
+`sin` and `cos` are still item 8 -- so what it can run is exactly
+the rational and algebraic rungs, which is exactly what G1 needed.
+`kernel_inverse_real` is the inverse over `Real` alone: spherical,
+hemisphere, bubble and a whole-power root, in one body, bit-identical
+to the transcendental one on the first three and within 1.3e-15 on
+the roots. That is the beginning of `big_kernel_inverse`'s
+replacement, though it has not been swapped in yet.
+
 ## 4. Decisions
 
 - **D1. Every child's row is stored, not only the beam's.** One

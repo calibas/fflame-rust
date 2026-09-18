@@ -675,6 +675,219 @@ pub fn kernel_inverse_gen<T: Transcendental>(k: &Kernel, v: &[T; 2], branch: u32
     }
 }
 
+/// A root's inverse as `v^a · conj(v)^b`, when it is one.
+///
+/// `m⁻¹(v) = |v|^{|n|/d} · e^{i·n·arg v}`, and in polar form that is
+/// `ρ^{a+b} e^{i(a−b)θ}`: a polynomial in `v` and `conj(v)` exactly
+/// when `a = (|n|/d + n)/2` and `b = (|n|/d − n)/2` are both
+/// non-negative whole numbers. `julia` and any `julian` at `dist` 1
+/// are `(n, 0)`; a negative power at `dist` 1 is `(0, |n|)`, the
+/// conjugate power; `dist` `1/k` gives whole numbers too. Anything
+/// else -- `dist` 2, say -- has a fractional exponent and no
+/// polynomial form, so no exact difference either.
+///
+/// The tolerance is 1e-9 on each exponent, which is far tighter than
+/// any parameter a user sets and far looser than the rounding of
+/// `power` through an f32 slider.
+pub fn root_powers(n: i32, d: f64) -> Option<(u32, u32)> {
+    if d == 0.0 || !d.is_finite() {
+        return None;
+    }
+    let m = (n as f64).abs() / d;
+    let (a, b) = ((m + n as f64) * 0.5, (m - n as f64) * 0.5);
+    let whole = |v: f64| {
+        (v >= -1e-9 && (v - v.round()).abs() < 1e-9 && v.round() <= 64.0)
+            .then(|| v.round().max(0.0) as u32)
+    };
+    Some((whole(a)?, whole(b)?))
+}
+
+/// The inverse kernel over [`Real`] alone -- no transcendentals.
+///
+/// `ifs-perturbation-delta.md` §3's rungs, in one function. The
+/// rational and algebraic kernels are the four operations and a
+/// square root: spherical is `v/|v|²`, hemisphere `v/√(1 − |v|²)`,
+/// bubble `v·s(|v|²)`, and a root whose exponents are whole is
+/// `v^a·conj(v)^b`. None of them needs `exp`, `sin`, `cos` or
+/// `atan2`, and that matters because `BigFloat` has none of those
+/// (item 8 of the delta plan's order of work).
+///
+/// So this is the body the `BigFloat` reference walk can run TODAY
+/// on those kernels, and the one the difference forms are gated
+/// against. `None` for the disc, the blob and a fractional root,
+/// which are transcendental and must go through
+/// [`kernel_inverse_gen`].
+///
+/// It is not bit-identical to that function on a root -- the polar
+/// form takes an `atan2` and a `powf` where this takes `a + b`
+/// complex multiplications -- and
+/// `the_algebraic_inverse_is_the_polar_one` measures the gap.
+pub fn kernel_inverse_real<T: Real>(k: &Kernel, v: &[T; 2], branch: u32) -> Option<[T; 2]> {
+    use crate::scene::ifs_real::{cconj, cmul, cnorm2, cpow, cscale};
+    let r2 = cnorm2(v);
+    let r2v = r2.to_f64();
+    match *k {
+        // Reciprocal-then-scale, not divide: that is the spelling
+        // `kernel_inverse_gen` uses, and the two bodies are then
+        // BIT-identical rather than an ulp apart, which is what
+        // `the_algebraic_inverse_is_the_polar_one` asserts.
+        Kernel::Spherical => {
+            let den = if r2v < f64::MIN_POSITIVE { r2.lit(f64::MIN_POSITIVE) } else { r2 };
+            Some(cscale(v, &den.recip()))
+        }
+        Kernel::Hemisphere => {
+            if !(r2v < 1.0) {
+                return None;
+            }
+            Some(cscale(v, &r2.one().sub(&r2).sqrt().recip()))
+        }
+        Kernel::Bubble => {
+            if !(r2v > 0.0) || !(r2v < 1.0) {
+                return None;
+            }
+            // The same cancellation-free scale `kernel_inverse_gen`
+            // uses, since `bubble_scale_gen` is already `Real`-only.
+            Some(cscale(v, &bubble_scale_gen(&r2, branch)))
+        }
+        Kernel::Root { n, d } => {
+            let (a, b) = root_powers(n, d)?;
+            Some(cmul(&cpow(v, a), &cpow(&cconj(v), b)))
+        }
+        Kernel::Disc | Kernel::Blob { .. } => None,
+    }
+}
+
+/// Whether [`kernel_difference_gen`] has an EXACT form for this
+/// kernel on this branch.
+///
+/// False for the disc, the blob and a root with a fractional
+/// exponent, which the delta plan's §3 puts on the Taylor rung
+/// instead.
+pub fn kernel_has_difference(k: &Kernel) -> bool {
+    match *k {
+        Kernel::Spherical | Kernel::Bubble | Kernel::Hemisphere => true,
+        Kernel::Root { n, d } => root_powers(n, d).is_some(),
+        Kernel::Disc | Kernel::Blob { .. } => false,
+    }
+}
+
+/// `m⁻¹(Z + δ) − m⁻¹(Z)`, computed **without forming the
+/// difference** (`ifs-perturbation-delta.md` §3).
+///
+/// This is what a perturbed lineage carries instead of a position.
+/// The direct subtraction loses every digit of the answer below
+/// `m⁻¹(Z)`'s last one, and at a deep zoom that is all of them --
+/// the same reason Mandelbrot perturbation computes `2Zδ + δ²`
+/// rather than `(Z+δ)² − Z²`. Each form below is algebraically
+/// identical to the subtraction and has every term `O(δ)`:
+///
+/// | kernel | form |
+/// |---|---|
+/// | Root `(a, b)` | `Z^a·Q + P·conj(Z)^b + P·Q`, with `P`, `Q` the two power differences |
+/// | Spherical | `(δ|Z|² − Z·(2Z·δ + |δ|²)) / (|Z|²·|W|²)` |
+/// | Hemisphere | `(Z·t/(√A + √B) + δ√A) / (√A·√B)` |
+/// | Bubble, inner | `2(Z·t/(r + r') + δ(1 + r)) / ((1 + r)(1 + r'))` |
+/// | Bubble, outer | `2(−Z·x·t/(r + r') + δ·x·(1 + r') − Z(1 + r)·t) / (x·x')` |
+///
+/// where `W = Z + δ`, `t = 2Z·δ + |δ|²` (the norm's own difference,
+/// itself cancellation-free), `A = 1 − |Z|²`, `B = A − t`,
+/// `r = √(1 − |Z|²)`, `r' = √(1 − |W|²)`, `x = |Z|²`, `x' = x + t`.
+/// The square-root differences go through `(a − b)/(√a + √b)`, which
+/// is the conjugate form and cancels nothing.
+///
+/// `W` is taken rather than recomputed so the caller's own `Z + δ`
+/// is the one used: at `BigFloat` that sum is exact, and forming it
+/// twice would round twice.
+///
+/// `None` where the kernel has no exact form, or where `Z` or `W`
+/// is outside the branch's domain -- a difference of two points, one
+/// of which has no preimage, is not a difference.
+pub fn kernel_difference_gen<T: Real>(
+    k: &Kernel,
+    z: &[T; 2],
+    w: &[T; 2],
+    d: &[T; 2],
+    branch: u32,
+) -> Option<[T; 2]> {
+    use crate::scene::ifs_real::{
+        cadd, cconj, cdiv_real, cmul, cnorm2, cpow, cpow_delta, cscale, csub,
+    };
+    let zf = [z[0].to_f64(), z[1].to_f64()];
+    let wf = [w[0].to_f64(), w[1].to_f64()];
+    if !kernel_inverse_domain(k, zf, branch) || !kernel_inverse_domain(k, wf, branch) {
+        return None;
+    }
+    // `t = |W|² − |Z|² = 2Z·δ + |δ|²`, the norm's difference, which is
+    // itself written so nothing cancels.
+    let dot2 = z[0].mul(&d[0]).add(&z[1].mul(&d[1]));
+    let t = dot2.add(&dot2).add(&cnorm2(d));
+    let x = cnorm2(z);
+
+    match *k {
+        Kernel::Root { n, d: dist } => {
+            let (a, b) = root_powers(n, dist)?;
+            // P = W^a − Z^a, Q = conj(W)^b − conj(Z)^b, and
+            // (Z^a + P)(conj(Z)^b + Q) − Z^a·conj(Z)^b
+            //   = Z^a·Q + P·conj(Z)^b + P·Q.
+            let p = cpow_delta(z, w, d, a);
+            let q = cconj(&cpow_delta(z, w, d, b));
+            let za = cpow(z, a);
+            let zb = cpow(&cconj(z), b);
+            Some(cadd(&cadd(&cmul(&za, &q), &cmul(&p, &zb)), &cmul(&p, &q)))
+        }
+        Kernel::Spherical => {
+            let xw = cnorm2(w);
+            let num = csub(&cscale(d, &x), &cscale(z, &t));
+            Some(cdiv_real(&num, &x.mul(&xw)))
+        }
+        Kernel::Hemisphere => {
+            // u = v/√(1 − |v|²); A = 1 − |Z|², B = A − t.
+            let a_ = x.one().sub(&x);
+            let b_ = a_.sub(&t);
+            let (ra, rb) = (a_.sqrt(), b_.sqrt());
+            let sum = ra.add(&rb);
+            if !(sum.to_f64() > 0.0) {
+                return None;
+            }
+            let num = cadd(&cscale(z, &t.div(&sum)), &cscale(d, &ra));
+            Some(cdiv_real(&num, &ra.mul(&rb)))
+        }
+        Kernel::Bubble => {
+            // r and r' are the same roots `bubble_scale_gen` takes.
+            let r = x.one().sub(&x).sqrt();
+            let xw = x.add(&t);
+            let rw = x.one().sub(&xw).sqrt();
+            let rsum = r.add(&rw);
+            if !(rsum.to_f64() > 0.0) {
+                return None;
+            }
+            let one = x.one();
+            if branch == 0 {
+                // 2·(Z·t/(r + r') + δ·(1 + r)) / ((1 + r)(1 + r'))
+                let num = cadd(&cscale(z, &t.div(&rsum)), &cscale(d, &one.add(&r)));
+                let den = one.add(&r).mul(&one.add(&rw));
+                Some(cdiv_real(&cscale(&num, &one.lit(2.0)), &den))
+            } else {
+                // 2·(−Z·x·t/(r + r') + δ·x·(1 + r') − Z·(1 + r)·t) / (x·x')
+                let term1 = cscale(z, &x.mul(&t).div(&rsum).neg());
+                let term2 = cscale(d, &x.mul(&one.add(&rw)));
+                let term3 = cscale(z, &one.add(&r).mul(&t).neg());
+                let num = cadd(&cadd(&term1, &term2), &term3);
+                Some(cdiv_real(&cscale(&num, &one.lit(2.0)), &x.mul(&xw)))
+            }
+        }
+        Kernel::Disc | Kernel::Blob { .. } => None,
+    }
+}
+
+impl Kernel {
+    /// [`kernel_difference_gen`] at `f64`, forming `Z + δ` itself.
+    pub fn difference(&self, z: [f64; 2], d: [f64; 2], branch: u32) -> Option<[f64; 2]> {
+        let w = [z[0] + d[0], z[1] + d[1]];
+        kernel_difference_gen(self, &z, &w, &d, branch)
+    }
+}
+
 /// Whether `v` has a preimage on `branch` that
 /// [`kernel_inverse_gen`] differentiates.
 ///
@@ -769,6 +982,42 @@ impl NonlinearMap2 {
             return [f64::INFINITY, f64::INFINITY];
         }
         self.pre_inv.apply(u)
+    }
+
+    /// `S⁻¹(q + δ) − S⁻¹(q)`, **without forming the difference**
+    /// (`ifs-perturbation-delta.md` §3).
+    ///
+    /// The affines drop out of a difference exactly -- a translation
+    /// cancels and a linear part distributes -- so this is the
+    /// kernel's own difference form with `post⁻¹/w` applied to `δ`
+    /// going in and `pre⁻¹`'s linear part applied coming out. No
+    /// approximation anywhere: the only rounding is f64's own, on
+    /// terms that are all `O(δ)`.
+    ///
+    /// The kernel-frame point is formed as `v + δv` rather than by
+    /// re-applying the affine to `q + δ`: algebraically the same, one
+    /// rounding instead of an affine evaluation, and it is the sum
+    /// the shader will form too.
+    ///
+    /// `None` where the kernel has no exact form -- the disc, the
+    /// blob, a fractional root -- which the delta plan puts on the
+    /// Taylor rung instead.
+    pub fn inverse_difference(&self, q: [f64; 2], d: [f64; 2]) -> Option<[f64; 2]> {
+        let v = self.before_kernel(q);
+        let a = &self.post_inv.m;
+        let iw = 1.0 / self.w;
+        let dv = [
+            (a[0][0] * d[0] + a[0][1] * d[1]) * iw,
+            (a[1][0] * d[0] + a[1][1] * d[1]) * iw,
+        ];
+        let vw = [v[0] + dv[0], v[1] + dv[1]];
+        let du = kernel_difference_gen(&self.kernel, &v, &vw, &dv, self.branch)?;
+        let b = &self.pre_inv.m;
+        let out = [
+            b[0][0] * du[0] + b[0][1] * du[1],
+            b[1][0] * du[0] + b[1][1] * du[1],
+        ];
+        out.iter().all(|x| x.is_finite()).then_some(out)
     }
 
     /// The Jacobian of [`Self::apply_inverse`] at `q`, or `None`
@@ -960,6 +1209,37 @@ impl Map2 {
             Map2::Affine(a) => Some(a.m),
             Map2::NonlinearInverse(r) => r.inverse_jacobian(q),
             Map2::Nonlinear(_) => None,
+        }
+    }
+
+    /// `S⁻¹(q + δ) − S⁻¹(q)`, without forming the difference: what a
+    /// perturbed lineage carries in place of a position
+    /// (`ifs-perturbation-delta.md` §3).
+    ///
+    /// For an AFFINE map this is `M⁻¹δ` -- the basis carry the walk
+    /// has always done, in the same arithmetic -- which is why the
+    /// affine presets cannot move.
+    ///
+    /// `None` for a forward map, and for a kernel with no exact
+    /// form; [`Self::has_difference`] answers that ahead of time.
+    pub fn difference(&self, q: [f64; 2], d: [f64; 2]) -> Option<[f64; 2]> {
+        match self {
+            Map2::Affine(a) => Some([
+                a.m[0][0] * d[0] + a.m[0][1] * d[1],
+                a.m[1][0] * d[0] + a.m[1][1] * d[1],
+            ]),
+            Map2::NonlinearInverse(r) => r.inverse_difference(q, d),
+            Map2::Nonlinear(_) => None,
+        }
+    }
+
+    /// Whether [`Self::difference`] is exact here, rather than
+    /// needing the Taylor rung.
+    pub fn has_difference(&self) -> bool {
+        match self {
+            Map2::Affine(_) => true,
+            Map2::NonlinearInverse(r) => kernel_has_difference(&r.kernel),
+            Map2::Nonlinear(_) => false,
         }
     }
 
@@ -2970,6 +3250,321 @@ pub(crate) fn kernel_probe_points() -> Vec<[f64; 2]> {
 }
 
 #[cfg(test)]
+mod difference_tests {
+    use super::*;
+    use crate::escape::bigfloat::BigFloat;
+    use crate::scene::ifs_real::Real;
+
+    const LIMBS: usize = 8;
+
+    fn big(v: f64) -> BigFloat {
+        BigFloat::from_f64(v, LIMBS)
+    }
+
+    fn big2(v: [f64; 2]) -> [BigFloat; 2] {
+        [big(v[0]), big(v[1])]
+    }
+
+    /// The kernels with an exact difference, and a point in each
+    /// one's domain to test around.
+    fn cases() -> Vec<(Kernel, u32, Vec<[f64; 2]>)> {
+        // Inside the unit disc for the three whose image it is; the
+        // whole plane for spherical and the roots.
+        let disc: Vec<[f64; 2]> = (0..12)
+            .map(|i| {
+                let a = std::f64::consts::TAU * i as f64 / 12.0;
+                let r = 0.1 + 0.07 * i as f64;
+                [r * a.cos(), r * a.sin()]
+            })
+            .collect();
+        let plane: Vec<[f64; 2]> = (0..12)
+            .map(|i| {
+                let a = std::f64::consts::TAU * i as f64 / 12.0;
+                let r = 0.05 * 3.0f64.powi(i % 6);
+                [r * a.cos(), r * a.sin()]
+            })
+            .collect();
+        vec![
+            (Kernel::Spherical, 0, plane.clone()),
+            (Kernel::Hemisphere, 0, disc.clone()),
+            (Kernel::Bubble, 0, disc.clone()),
+            (Kernel::Bubble, 1, disc.clone()),
+            (Kernel::Root { n: 2, d: 1.0 }, 0, plane.clone()),
+            (Kernel::Root { n: 3, d: 1.0 }, 0, plane.clone()),
+            (Kernel::Root { n: -2, d: 1.0 }, 0, plane.clone()),
+            (Kernel::Root { n: 5, d: 1.0 }, 0, plane.clone()),
+            (Kernel::Root { n: 2, d: 0.5 }, 0, plane),
+        ]
+    }
+
+    /// The algebraic inverse is the polar one.
+    ///
+    /// [`kernel_inverse_real`] reaches the same map without `atan2`,
+    /// `powf`, `sin` or `cos`, which is what lets `BigFloat` run it.
+    /// Not bit-identical on a root -- the polar form is a magnitude
+    /// raised to a power and an angle multiplied, this is `a + b`
+    /// complex multiplications -- so the gate is a tolerance, and a
+    /// tight one, because a disagreement here would be a wrong
+    /// exponent pair rather than a rounding.
+    #[test]
+    fn the_algebraic_inverse_is_the_polar_one() {
+        let mut worst = 0.0f64;
+        let mut checked = 0usize;
+        for (k, branch, points) in cases() {
+            for z in points {
+                if !kernel_inverse_domain(&k, z, branch) {
+                    continue;
+                }
+                let want = kernel_inverse_gen(&k, &z, branch);
+                let got = kernel_inverse_real(&k, &z, branch).expect("algebraic");
+                let norm = f64::hypot(want[0], want[1]);
+                if !(norm > 0.0) || !norm.is_finite() {
+                    continue;
+                }
+                let err = (got[0] - want[0]).hypot(got[1] - want[1]) / norm;
+                worst = worst.max(err);
+                checked += 1;
+                // Spherical, hemisphere and bubble are the same
+                // expression either way, so those must be EXACT.
+                if !matches!(k, Kernel::Root { .. }) {
+                    assert_eq!(
+                        got[0].to_bits(),
+                        want[0].to_bits(),
+                        "{k:?} at {z:?}: {got:?} vs {want:?}"
+                    );
+                }
+            }
+        }
+        println!("  {checked} algebraic inverses; worst relative gap {worst:.2e}");
+        assert!(checked > 80, "only {checked}");
+        assert!(worst < 1e-12, "worst relative gap {worst:.2e}");
+    }
+
+    /// G1: the difference forms are EXACT.
+    ///
+    /// `D(Z, δ)` in f64 against `m⁻¹(Z+δ) − m⁻¹(Z)` taken in
+    /// `BigFloat` at eight limbs -- 512 bits, so the subtraction
+    /// there keeps every digit f64 could have carried -- at δ from
+    /// 1e-30 to 1 relative to `|Z|`.
+    ///
+    /// **The tolerance is relative to `|D|`, not to `|m⁻¹(Z)|`, and
+    /// that is the whole test.** A form that merely computes the
+    /// right answer to f64's absolute precision passes the loose
+    /// version at every δ and is useless at a deep zoom, where δ is
+    /// thirty orders below the position it sits beside. Judged this
+    /// way, the direct subtraction scores 1.0 -- no correct digits
+    /// at all -- for δ under about 1e-17 of `|Z|`, which
+    /// `the_direct_subtraction_fails_this_gate` demonstrates rather
+    /// than asserts by assumption.
+    #[test]
+    fn the_difference_forms_are_exact() {
+        let mut worst = 0.0f64;
+        let mut worst_where = String::new();
+        let mut checked = 0usize;
+        for (k, branch, points) in cases() {
+            assert!(kernel_has_difference(&k), "{k:?} should have an exact form");
+            for z in points {
+                if !kernel_inverse_domain(&k, z, branch) {
+                    continue;
+                }
+                let scale = f64::hypot(z[0], z[1]).max(1e-300);
+                for e in 0..31 {
+                    let mag = scale * 10f64.powi(-e);
+                    for dir in [[1.0, 0.0], [0.0, 1.0], [0.6, -0.8], [-0.3, -0.954]] {
+                        let d = [mag * dir[0], mag * dir[1]];
+                        let w = [z[0] + d[0], z[1] + d[1]];
+                        // f64 must be able to tell W from Z at all,
+                        // or there is no difference to check.
+                        if w == z || !kernel_inverse_domain(&k, w, branch) {
+                            continue;
+                        }
+                        let Some(got) = k.difference(z, d, branch) else { continue };
+
+                        // The reference: the same inverse, at 512
+                        // bits, subtracted there.
+                        let (bz, bd) = (big2(z), big2(d));
+                        let bw = [bz[0].add(&bd[0]), bz[1].add(&bd[1])];
+                        let iz = kernel_inverse_real(&k, &bz, branch).expect("algebraic");
+                        let iw = kernel_inverse_real(&k, &bw, branch).expect("algebraic");
+                        let want = [iw[0].sub(&iz[0]), iw[1].sub(&iz[1])];
+                        let want_f = [want[0].to_f64(), want[1].to_f64()];
+                                let norm = f64::hypot(want_f[0], want_f[1]);
+                        if !(norm > 0.0) || !norm.is_finite() {
+                            continue;
+                        }
+                        let err = (got[0] - want_f[0]).hypot(got[1] - want_f[1]) / norm;
+                        if !err.is_finite() {
+                            continue;
+                        }
+                        if err > worst {
+                            worst = err;
+                            worst_where =
+                                format!("{k:?} branch {branch} at {z:?} with |δ| {mag:.2e}");
+                        }
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        println!("  {checked} differences; worst relative error {worst:.2e} at {worst_where}");
+        assert!(checked > 3000, "only {checked} points were checkable");
+        assert!(
+            worst < 1e-13,
+            "worst relative error {worst:.2e} at {worst_where} -- a form that loses \
+             digits of δ is a form with a cancellation in it"
+        );
+    }
+
+    /// What the exact forms are FOR, stated as a measurement.
+    ///
+    /// The same comparison against the obvious `m⁻¹(Z+δ) − m⁻¹(Z)`
+    /// in f64. It agrees at δ near `|Z|` and has nothing left by
+    /// 1e-20 of it -- a relative error of 1, meaning not one correct
+    /// digit. Asserted, because if it ever stopped being true the
+    /// exact forms would be dead weight.
+    #[test]
+    fn the_direct_subtraction_fails_this_gate() {
+        let k = Kernel::Root { n: 2, d: 1.0 };
+        let z = [0.31, -0.47];
+        let mut rows: Vec<(i32, f64, f64)> = Vec::new();
+        for e in [0i32, 4, 8, 12, 16, 20, 24] {
+            let mag = f64::hypot(z[0], z[1]) * 10f64.powi(-e);
+            let d = [mag * 0.6, mag * -0.8];
+            let w = [z[0] + d[0], z[1] + d[1]];
+            let direct = {
+                let a = k.inverse(w, 0);
+                let b = k.inverse(z, 0);
+                [a[0] - b[0], a[1] - b[1]]
+            };
+            let exact = k.difference(z, d, 0).expect("an exact form");
+
+            let (bz, bd) = (big2(z), big2(d));
+            let bw = [bz[0].add(&bd[0]), bz[1].add(&bd[1])];
+            let iz = kernel_inverse_real(&k, &bz, 0).expect("algebraic");
+            let iw = kernel_inverse_real(&k, &bw, 0).expect("algebraic");
+            let want = [iw[0].sub(&iz[0]).to_f64(), iw[1].sub(&iz[1]).to_f64()];
+            let norm = want[0].hypot(want[1]);
+            rows.push((
+                e,
+                (direct[0] - want[0]).hypot(direct[1] - want[1]) / norm,
+                (exact[0] - want[0]).hypot(exact[1] - want[1]) / norm,
+            ));
+        }
+        println!("  |δ|/|Z|      direct        exact");
+        for (e, dv, ev) in &rows {
+            println!("  1e-{e:<8}  {dv:.2e}      {ev:.2e}");
+        }
+        let (_, deep_direct, deep_exact) = *rows.last().expect("rows");
+        assert!(
+            deep_direct > 0.3,
+            "the direct subtraction still has {deep_direct:.2e} relative error at \
+             1e-24 of |Z| -- if it were accurate there the exact forms would not be \
+             needed"
+        );
+        assert!(deep_exact < 1e-13, "the exact form should not care: {deep_exact:.2e}");
+    }
+
+    /// The forms survive f32, which is where the shader will run
+    /// them -- and the one place they do not is the one the walk
+    /// already refuses to run in.
+    ///
+    /// G1's second half: the same expression in f32 against its own
+    /// f64 value, relative to `|D|`. A cancellation the f64 mantissa
+    /// hides shows up at once here, with sixteen fewer bits to hide
+    /// in.
+    ///
+    /// **Split by `|Z + δ| ≥ |δ|`,** which is the delta plan's third
+    /// rebase criterion (§3, the Zhuoran-style one) stated exactly.
+    /// Below it `Z` and `δ` nearly cancel, so `Z + δ` in f32 has lost
+    /// digits before any kernel touches it, and an outer bubble --
+    /// whose inverse is `O(1/|W|²)` -- squares what is left. That is
+    /// not a flaw in the difference form; it is why the criterion
+    /// exists, and the numbers printed below are its justification.
+    #[test]
+    fn the_difference_forms_survive_f32() {
+        let (mut worst_ok, mut worst_rebase) = (0.0f64, 0.0f64);
+        let mut where_ok = String::new();
+        let mut where_rebase = String::new();
+        let (mut n_ok, mut n_rebase) = (0usize, 0usize);
+        for (k, branch, points) in cases() {
+            for z in points {
+                if !kernel_inverse_domain(&k, z, branch) {
+                    continue;
+                }
+                let scale = f64::hypot(z[0], z[1]).max(1e-300);
+                // f32 holds about seven decades below its own value,
+                // and a δ below that is not representable beside Z at
+                // all. This range is where the shader's arithmetic
+                // lives.
+                for e in 0..8 {
+                    let mag = scale * 10f64.powi(-e);
+                    for dir in [[1.0, 0.0], [0.6, -0.8], [-0.3, -0.954]] {
+                        let d = [mag * dir[0], mag * dir[1]];
+                        let w = [z[0] + d[0], z[1] + d[1]];
+                        if !kernel_inverse_domain(&k, w, branch) {
+                            continue;
+                        }
+                        let Some(want) = k.difference(z, d, branch) else { continue };
+                        let norm = f64::hypot(want[0], want[1]);
+                        if !(norm > 0.0) || !norm.is_finite() {
+                            continue;
+                        }
+                        let zf = [z[0] as f32, z[1] as f32];
+                        let df = [d[0] as f32, d[1] as f32];
+                        let wf = [zf[0] + df[0], zf[1] + df[1]];
+                        let Some(got) =
+                            kernel_difference_gen(&k, &zf, &wf, &df, branch)
+                        else {
+                            continue;
+                        };
+                        let err = (got[0] as f64 - want[0]).hypot(got[1] as f64 - want[1])
+                            / norm;
+                        if !err.is_finite() {
+                            continue;
+                        }
+                        let at = format!("{k:?} branch {branch} at {z:?} |δ| {mag:.2e}");
+                        // The rebase criterion, in the f32 the walk
+                        // would actually test it in.
+                        if f32::hypot(wf[0], wf[1]) >= f32::hypot(df[0], df[1]) {
+                            n_ok += 1;
+                            if err > worst_ok {
+                                worst_ok = err;
+                                where_ok = at;
+                            }
+                        } else {
+                            n_rebase += 1;
+                            if err > worst_rebase {
+                                worst_rebase = err;
+                                where_rebase = at;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        println!("  |Z+δ| >= |δ| : {n_ok} points, worst {worst_ok:.2e} at {where_ok}");
+        println!(
+            "  |Z+δ| <  |δ| : {n_rebase} points, worst {worst_rebase:.2e} at \
+             {where_rebase}  (the walk rebases here)"
+        );
+        assert!(n_ok > 300 && n_rebase > 0, "{n_ok} / {n_rebase} points");
+        assert!(
+            worst_ok < 1e-5,
+            "worst f32 relative error {worst_ok:.2e} at {where_ok}, where the walk does \
+             NOT rebase -- the form has a cancellation f64 was hiding"
+        );
+        // And the rebase side has to be WORSE, or the criterion is
+        // guarding nothing and the split is a story rather than a
+        // measurement.
+        assert!(
+            worst_rebase > 10.0 * worst_ok,
+            "the rebase side's worst is {worst_rebase:.2e} against {worst_ok:.2e} -- \
+             this fixture set does not reach the regime the criterion is for"
+        );
+    }
+}
+
+#[cfg(test)]
 mod generic_kernel_tests {
     use super::*;
 
@@ -3328,6 +3923,128 @@ mod tests {
         j.set_variation_param("julian", "dist", 4.0);
         let errs = analyse_2d(&flame_of(vec![j]), r).unwrap_err();
         assert!(errs.iter().any(|e| matches!(e, Disqualification::NoBall)), "{errs:?}");
+    }
+
+    /// The composed difference is the map's own difference, checked
+    /// from both ends.
+    ///
+    /// `Map2::difference` wraps the kernel's form in the two affines
+    /// and the weight, and a slip there -- the wrong matrix, the
+    /// weight on the wrong side -- would not show in the kernel gates
+    /// at all. Two independent checks bracket it:
+    ///
+    /// - **large δ**, a thousandth of the frame, where the DIRECT
+    ///   subtraction of `apply_inverse` still has eleven good digits,
+    ///   so it is a reference;
+    /// - **small δ**, where the answer must approach `J·δ` with the
+    ///   Jacobian the dual numbers give, to first order in `δ`. That
+    ///   pins the linear part, which is the half the affines live in.
+    ///
+    /// Neither alone is enough: the first passes on a form that is
+    /// right to first order and wrong in its curvature, the second on
+    /// a form scaled by any constant that happens to match `J`.
+    #[test]
+    fn the_composed_difference_is_the_maps_own() {
+        let guard = global_registry();
+        let r = &*guard;
+        let build = |name: &str, w: f32, set: &dyn Fn(&mut Transform)| -> Map2 {
+            let mut t = affine_xform(0.83, -0.24, 0.31, 0.77, 0.19, -0.12);
+            t.variations.clear();
+            t.variation_order.clear();
+            let mut t = with(t, name, w);
+            set(&mut t);
+            let m = transform_map_2d_ordered(&t, r, &t.ordered_variation_names(r))
+                .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            m.inverse().expect("invertible")
+        };
+        let noop = |_: &mut Transform| {};
+        let cases: Vec<(&str, Map2)> = vec![
+            ("affine", Map2::Affine(
+                Affine2 { m: [[0.7, -0.2], [0.3, 0.9]], t: [0.1, -0.2] }
+                    .inverse()
+                    .expect("invertible"),
+            )),
+            ("spherical", build("spherical", 0.7, &noop)),
+            ("bubble", build("bubble", 1.3, &noop)),
+            ("hemisphere", build("hemisphere", 0.9, &noop)),
+            ("julian 3", build("julian", 0.5, &|t: &mut Transform| {
+                t.set_variation_param("julian", "power", 3.0);
+                t.set_variation_param("julian", "dist", 1.0);
+            })),
+            ("julian -2", build("julian", 0.6, &|t: &mut Transform| {
+                t.set_variation_param("julian", "power", -2.0);
+                t.set_variation_param("julian", "dist", 1.0);
+            })),
+        ];
+
+        let mut st: u64 = 0xD1B5_4A32_D192_ED03;
+        let mut next = move || {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (st >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for (name, m) in cases {
+            assert!(m.has_difference(), "{name} should have an exact form");
+            let (mut n_far, mut n_near) = (0usize, 0usize);
+            let (mut worst_far, mut worst_near) = (0.0f64, 0.0f64);
+            for _ in 0..4000 {
+                let q = [(next() - 0.5) * 1.6, (next() - 0.5) * 1.6];
+                let dir = {
+                    let a = next() * std::f64::consts::TAU;
+                    [a.cos(), a.sin()]
+                };
+                let base = m.apply(q);
+                if !base[0].is_finite() || !base[1].is_finite() {
+                    continue;
+                }
+
+                // Far: the direct subtraction is the reference.
+                let big = [dir[0] * 1e-3, dir[1] * 1e-3];
+                if let (Some(got), true) = (m.difference(q, big), m.singular_distance(q) > 1e-2)
+                {
+                    let other = m.apply([q[0] + big[0], q[1] + big[1]]);
+                    if other[0].is_finite() && other[1].is_finite() {
+                        let want = [other[0] - base[0], other[1] - base[1]];
+                        let norm = f64::hypot(want[0], want[1]);
+                        if norm > 1e-12 {
+                            let e = f64::hypot(got[0] - want[0], got[1] - want[1]) / norm;
+                            if e.is_finite() {
+                                worst_far = worst_far.max(e);
+                                n_far += 1;
+                            }
+                        }
+                    }
+                }
+
+                // Near: `J·δ` is the reference, to first order.
+                let Some(j) = m.jacobian(q) else { continue };
+                let tiny = [dir[0] * 1e-9, dir[1] * 1e-9];
+                let Some(got) = m.difference(q, tiny) else { continue };
+                let want = [
+                    j[0][0] * tiny[0] + j[0][1] * tiny[1],
+                    j[1][0] * tiny[0] + j[1][1] * tiny[1],
+                ];
+                let norm = f64::hypot(want[0], want[1]);
+                if !(norm > 1e-300) {
+                    continue;
+                }
+                let e = f64::hypot(got[0] - want[0], got[1] - want[1]) / norm;
+                if e.is_finite() {
+                    worst_near = worst_near.max(e);
+                    n_near += 1;
+                }
+            }
+            println!(
+                "  {name:<12} far {worst_far:.2e} ({n_far}) | near J-δ {worst_near:.2e} ({n_near})"
+            );
+            assert!(n_far > 200 && n_near > 200, "{name}: {n_far} / {n_near} points");
+            assert!(worst_far < 1e-6, "{name}: far {worst_far:.2e}");
+            // The near check is second-order, so the residual scales
+            // with |δ|/s. At 1e-9 and a clearance of order one that
+            // is a part in 1e-6 or better; the bar is loose because
+            // what it is pinning is the LINEAR part, not the size of
+            // the curvature.
+            assert!(worst_near < 1e-3, "{name}: near {worst_near:.2e}");
+        }
     }
 
     /// What the exact Hessian buys, by clearance.

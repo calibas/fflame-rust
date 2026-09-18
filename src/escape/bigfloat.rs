@@ -444,6 +444,73 @@ impl BigFloat {
     }
 }
 
+/// `BigFloat` as the scalar the IFS kernels are written over
+/// (`ifs-general.md` D2).
+///
+/// **[`Real`] only, not [`Transcendental`].** This type has `sqrt`,
+/// `ln` and `atan2` and lacks `exp`, `sin` and `cos`, which is item 8
+/// of the delta plan's order of work. So the algebraic kernels --
+/// spherical, bubble, hemisphere, and a root whose exponent is a
+/// whole power -- can run their one generic body at this precision
+/// today, and the disc, the blob and a fractional root cannot.
+///
+/// A constant comes from [`Real::lit`], which takes `&self` because
+/// there is no "the number two" without a limb count to build it at.
+impl crate::scene::ifs_real::Real for BigFloat {
+    fn lit(&self, v: f64) -> Self {
+        BigFloat::from_f64(v, self.n_limbs())
+    }
+    fn to_f64(&self) -> f64 {
+        BigFloat::to_f64(self)
+    }
+    fn add(&self, o: &Self) -> Self {
+        BigFloat::add(self, o)
+    }
+    fn sub(&self, o: &Self) -> Self {
+        BigFloat::sub(self, o)
+    }
+    fn mul(&self, o: &Self) -> Self {
+        BigFloat::mul(self, o)
+    }
+    /// Division is multiplication by the reciprocal, and a zero
+    /// divisor PANICS rather than returning an infinity this type
+    /// does not have. Every kernel body guards its own denominators
+    /// by value before dividing.
+    fn div(&self, o: &Self) -> Self {
+        BigFloat::mul(self, &o.recip())
+    }
+    fn neg(&self) -> Self {
+        BigFloat::neg(self)
+    }
+    /// A negative argument gives zero rather than panicking: the
+    /// kernel bodies clamp by value first (`(1 − x).max(0)`), and a
+    /// value that rounds to a hair below zero there is a zero.
+    fn sqrt(&self) -> Self {
+        if self.neg {
+            return Self::zero(self.n_limbs());
+        }
+        BigFloat::sqrt(self)
+    }
+    fn abs(&self) -> Self {
+        BigFloat::abs(self)
+    }
+    /// The comparison a kernel's branch test makes, without going
+    /// through `to_f64` -- which saturates to an infinity outside
+    /// f64's range, where this type is still perfectly ordered.
+    fn cmp_f64(&self, v: f64) -> std::cmp::Ordering {
+        let other = BigFloat::from_f64(v, self.n_limbs());
+        match (self.neg, other.neg) {
+            (false, true) => std::cmp::Ordering::Greater,
+            (true, false) => std::cmp::Ordering::Less,
+            (false, false) => self.cmp_abs(&other),
+            (true, true) => other.cmp_abs(self),
+        }
+    }
+    fn is_finite(&self) -> bool {
+        true
+    }
+}
+
 /// `sum_j s^(2j+1)/(2j+1)`, plain (atanh) or alternating (atan), for
 /// |s| well inside 1. Stops when a term drops below the sum's
 /// resolution at the format's width.
