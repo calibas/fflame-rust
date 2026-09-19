@@ -701,6 +701,7 @@ impl FlamePipelines {
         path_features_enabled: bool,
         census: bool,
         cylinder_targeting: bool,
+        cylinder_replay: bool,
     ) -> bool {
         // Census is renderer state, not config state — a .fflame cannot
         // ask to be instrumented. Threaded from FlameRenderer::census.
@@ -712,6 +713,13 @@ impl FlamePipelines {
         // does for the census. `constants_from_config` cannot know:
         // it has no frame size and does not run the enumeration.
         constants.cylinder_targeting = cylinder_targeting;
+        // ...and which ARM of it. Threaded for the same reason and
+        // with the same consequence if it is not: the buffer would
+        // hold the replay layout while the shader read the composed
+        // one, which renders an empty frame rather than a wrong
+        // picture -- silent unless a gate compares against a
+        // reference.
+        constants.cylinder_replay = cylinder_replay;
         self.shader_cache.ensure_current_full(
             device,
             &self.compute_bind_group_layout,

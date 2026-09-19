@@ -67,6 +67,7 @@
 
 use crate::scene::transforms::Flame;
 use crate::scene::ifs_analysis::Affine2;
+use crate::variations::bound::Ball;
 
 /// How far a word may be expanded before the enumeration gives up.
 ///
@@ -91,10 +92,21 @@ pub const MAX_WORDS: usize = 4096;
 /// Why a flame cannot be cylinder-targeted.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NoCylinders {
-    /// A transform is not affine, so it has no exact image bound and
-    /// no Lipschitz constant is available yet (the deep-zoom plan's
-    /// §7 item 1). Names the first one.
-    NotAffine(usize),
+    /// A transform contains something with no forward bound, so
+    /// there is no way to push a disc through it. Names the transform
+    /// and what inside it refused.
+    Unbounded { index: usize, why: String },
+    /// No origin-centred disc could be found that every map sends
+    /// into itself, so the enumeration has no root to refine from.
+    /// A flame whose attractor sits far from the origin, or whose
+    /// bounds are too loose to close.
+    NoInvariantBall,
+    /// The flame's colour is not an affine function of the running
+    /// colour coordinate -- a `WritesColor` or `WritesRgb` variation
+    /// is active -- so the word's colour cannot be folded into the
+    /// two coefficients the kernel applies, and forcing a prefix
+    /// would plot the right point in the wrong colour.
+    ColourNotAffine,
     /// The flame carries a non-trivial xaos matrix: the first
     /// symbol's probability is conditional on the burn-in's last
     /// transform, which this table does not carry.
@@ -164,6 +176,11 @@ pub struct Cylinders {
     /// The deepest word kept, which is what the prefix costs per
     /// plotted sample.
     pub depth: usize,
+    /// Whether every map in the flame is affine, so a word composes
+    /// to ONE matrix on the CPU and the kernel applies a single
+    /// multiply. False when any map is merely bounded, where the
+    /// kernel has to walk the word's symbols instead.
+    pub composable: bool,
 }
 
 impl Cylinders {
@@ -200,23 +217,56 @@ impl Cylinders {
             return Err(NoCylinders::Xaos);
         }
 
-        // Every transform as an affine, with its selection
-        // probability and its Lipschitz constant. `σ_max` of the 2×2
-        // is EXACT for an affine: the image of a disc of radius r is
-        // an ellipse inside a disc of radius `σ_max · r`, so the
-        // bound is tight in the worst direction and never wrong.
-        let mut maps: Vec<(Affine2, f64, f64)> = Vec::with_capacity(n);
+        // Colour must stay an affine function of the running colour
+        // coordinate, because that is what lets a whole word fold
+        // into the two coefficients the kernel applies. A
+        // `WritesColor` or `WritesRgb` variation breaks that, and the
+        // forced sample would land in the right place wearing the
+        // wrong colour -- a bug that looks like an artistic choice.
+        {
+            let reg = registry;
+            for t in &flame.transforms {
+                if t.weight <= 0.0 {
+                    continue;
+                }
+                for name in t.ordered_variation_names(reg) {
+                    if t.variations.get(&name).copied().unwrap_or(0.0) == 0.0 {
+                        continue;
+                    }
+                    let writes = reg.get(&name).is_some_and(|i| {
+                        i.has_feature(crate::variations::Feature::WritesColor)
+                            || i.has_feature(crate::variations::Feature::WritesRgb)
+                    });
+                    if writes {
+                        return Err(NoCylinders::ColourNotAffine);
+                    }
+                }
+            }
+        }
+
+        // Each transform's selection probability, and whether the
+        // whole flame is affine -- which decides whether a word can
+        // be composed into one matrix or has to be replayed symbol by
+        // symbol in the kernel.
+        let mut weights: Vec<f64> = Vec::with_capacity(n);
         let mut total_w = 0.0f64;
+        let mut composable = true;
         for (i, t) in flame.transforms.iter().enumerate() {
-            let a = crate::scene::ifs_analysis::transform_affine_2d(t, registry)
-                .map_err(|_| NoCylinders::NotAffine(i))?;
-            let (_, hi) = a.singular_values();
-            if !(hi < 1.0) {
-                return Err(NoCylinders::NotContractive(i));
+            if crate::scene::ifs_analysis::transform_affine_2d(t, registry).is_err() {
+                composable = false;
+                // It still has to be BOUNDED, or there is nothing to
+                // push a disc with. Ask at a disc that is certainly
+                // in range; a variation that refuses only at specific
+                // inputs is caught again during expansion.
+                if let Err(why) =
+                    crate::scene::ifs_ball::transform_ball_2d(t, registry, Ball::new([0.0, 0.0], 1.0))
+                {
+                    return Err(NoCylinders::Unbounded { index: i, why: why.to_string() });
+                }
             }
             let w = (t.weight as f64).max(0.0);
             total_w += w;
-            maps.push((a, w, hi));
+            weights.push(w);
         }
         if !(total_w > 0.0) {
             return Err(NoCylinders::Empty);
@@ -224,9 +274,26 @@ impl Cylinders {
 
         // The ball every map sends into itself: the enumeration's
         // root, and what `S_a(B)` is the image of.
-        let ifs = crate::scene::ifs_analysis::analyse_2d(flame, registry)
-            .map_err(|_| NoCylinders::NotAffine(0))?;
-        let (root_c, root_r) = (ifs.ball.centre, ifs.ball.radius);
+        let (root_c, root_r) = invariant_ball(flame, registry)?;
+
+        // Contraction, measured on the root rather than read off a
+        // matrix. For an affine map the two agree (`σ_max` exactly);
+        // for a bounded one there is no matrix to read, and what the
+        // enumeration actually needs is that a word's disc shrinks.
+        for (i, t) in flame.transforms.iter().enumerate() {
+            if weights[i] <= 0.0 {
+                continue;
+            }
+            let img = crate::scene::ifs_ball::transform_ball_2d(
+                t,
+                registry,
+                Ball::new(root_c, root_r),
+            )
+            .map_err(|why| NoCylinders::Unbounded { index: i, why: why.to_string() })?;
+            if !(img.r < root_r) {
+                return Err(NoCylinders::NotContractive(i));
+            }
+        }
 
         // Breadth-first, because the frontier is then ordered by
         // depth and the antichain comes out sorted — which makes the
@@ -252,12 +319,28 @@ impl Cylinders {
             }
             let mut next: Vec<Node> = Vec::new();
             for node in frontier.drain(..) {
-                for (i, (a, w, lip)) in maps.iter().enumerate() {
-                    if !(*w > 0.0) {
+                for (i, t) in flame.transforms.iter().enumerate() {
+                    let w = weights[i];
+                    if !(w > 0.0) {
                         continue;
                     }
-                    let centre = a.apply(node.centre);
-                    let radius = node.radius * lip;
+                    // The one call that unifies affine and bounded
+                    // maps: for an affine transform it is exact, for
+                    // a bounded one it is an over-estimate, and the
+                    // enumeration cannot tell the difference.
+                    let Ok(img) = crate::scene::ifs_ball::transform_ball_2d(
+                        t,
+                        registry,
+                        Ball::new(node.centre, node.radius),
+                    ) else {
+                        // A bound that refuses at THIS disc (a radial
+                        // map over the origin). Keeping the parent is
+                        // the sound answer: its disc already contains
+                        // every child's image.
+                        continue;
+                    };
+                    let centre = img.c;
+                    let radius = img.r;
                     // Disjoint from the view: this word and every
                     // word extending it miss, because a child's image
                     // is a SUBSET of its parent's. Dropping it keeps
@@ -272,7 +355,7 @@ impl Cylinders {
                     }
                     let mut word = node.word.clone();
                     word.push(i as u32);
-                    let prob = node.prob * (*w / total_w);
+                    let prob = node.prob * (w / total_w);
                     // Small enough: the image fits the view, so
                     // forcing this word puts a sample in the frame
                     // and subdividing further would only lengthen the
@@ -283,6 +366,18 @@ impl Cylinders {
                             return Err(NoCylinders::TooManyWords(kept.len()));
                         }
                     } else {
+                        // The FRONTIER is capped too, not just the
+                        // kept antichain. With affine contractive
+                        // maps the frontier shrinks on its own and
+                        // this never fires; with a bound that does
+                        // not shrink -- `spherical`'s crude
+                        // near-origin disc, say -- nothing terminates
+                        // and the frontier grows like the branching
+                        // factor to the depth. Without this cap that
+                        // is not a slow answer, it is a hang.
+                        if next.len() >= MAX_WORDS {
+                            return Err(NoCylinders::TooManyWords(next.len()));
+                        }
                         next.push(Node { word, prob, centre, radius });
                     }
                 }
@@ -307,8 +402,62 @@ impl Cylinders {
         }
         let mass: f64 = kept.iter().map(|c| c.prob).sum();
         let depth = kept.iter().map(|c| c.word.len()).max().unwrap_or(0);
-        Ok(Self { words: kept, mass, depth })
+        Ok(Self { words: kept, mass, depth, composable })
     }
+}
+
+/// The disc every map sends into itself.
+///
+/// For an affine flame this is `analyse_2d`'s own answer, which is
+/// exact and tight. For anything else there is no closed form, so
+/// walk an origin-centred ladder and take the first disc the bounds
+/// say is invariant: if every `T_i(B)` is inside `B`, then `B`
+/// contains the attractor, which is all the enumeration needs of it.
+///
+/// **Origin-centred is a real limitation**, not a simplification. A
+/// flame whose attractor sits far from the origin needs a disc large
+/// enough to reach it, and a large root is a loose root. The honest
+/// fix is to search the centre too; the reason it is not done here is
+/// that the obvious way to find a good centre — run the chaos game
+/// and look — needs a CPU evaluation of the variations, and there
+/// isn't one: the bodies are WGSL.
+fn invariant_ball(
+    flame: &Flame,
+    registry: &crate::variations::VariationRegistry,
+) -> Result<([f64; 2], f64), NoCylinders> {
+    // Whether the BOUNDS keep this disc invariant. Asked even of
+    // `analyse_2d`'s own answer, which is the subtlety: that analysis
+    // understands the kernel variations through their `InverseDef`s,
+    // so it happily returns a ball for a flame whose forward bound is
+    // much cruder -- `spherical` near the origin, say. Its ball is
+    // then correct for the walks and NOT invariant under what the
+    // enumeration will actually push with, and taking it on trust
+    // produced a root that the very next contraction check rejected.
+    let invariant = |c: [f64; 2], r: f64| -> bool {
+        flame.transforms.iter().filter(|t| t.weight > 0.0).all(|t| {
+            match crate::scene::ifs_ball::transform_ball_2d(t, registry, Ball::new(c, r)) {
+                Ok(img) => {
+                    let d = ((img.c[0] - c[0]).powi(2) + (img.c[1] - c[1]).powi(2)).sqrt();
+                    d + img.r <= r
+                }
+                Err(_) => false,
+            }
+        })
+    };
+
+    if let Ok(ifs) = crate::scene::ifs_analysis::analyse_2d(flame, registry) {
+        if invariant(ifs.ball.centre, ifs.ball.radius) {
+            return Ok((ifs.ball.centre, ifs.ball.radius));
+        }
+    }
+    let mut r = 0.125f64;
+    for _ in 0..40 {
+        if invariant([0.0, 0.0], r) {
+            return Ok(([0.0, 0.0], r));
+        }
+        r *= 2.0;
+    }
+    Err(NoCylinders::NoInvariantBall)
 }
 
 /// How many floats one packed word occupies: the composed affine
@@ -398,6 +547,63 @@ pub fn pack(cyl: &Cylinders, flame: &Flame, registry: &crate::variations::Variat
     // a uniform draw always finds a word.
     if let Some(last) = cyl.words.len().checked_sub(1) {
         out[last * WORD_FLOATS + 8] = 1.0;
+    }
+    out
+}
+
+/// Pack the enumeration for a kernel that must REPLAY it.
+///
+/// Used when [`Cylinders::composable`] is false: some map in the
+/// flame is only bounded, not affine, so there is no single matrix
+/// for the whole word and the kernel walks the symbols instead —
+/// running each transform exactly as the chaos game would.
+///
+/// Layout: a four-float header `[stride, count, 0, 0]`, then one word
+/// per stride as `[cdf, H, G, len, sym0, sym1, …]`. The colour still
+/// folds to the two coefficients `H` and `G`, because flam3's rule is
+/// affine in the colour coordinate whatever the POSITION map does —
+/// so the colour is exact here for the same reason it is in
+/// [`pack`], and only the position costs a walk.
+///
+/// The stride is uniform and set by the deepest word. That wastes a
+/// few floats on the shallow ones and buys the kernel a multiply
+/// instead of an indirection; at the caps (4096 words, depth 96) the
+/// whole table is under 1.6 MB.
+pub fn pack_words(cyl: &Cylinders, flame: &Flame) -> Vec<f32> {
+    let longest = cyl.words.iter().map(|c| c.word.len()).max().unwrap_or(0);
+    // Round the stride to a vec4 multiple, as `pack` does, so a word
+    // never straddles awkwardly.
+    let stride = ((4 + longest) + 3) / 4 * 4;
+    let mut out = vec![0.0f32; 4 + cyl.words.len() * stride];
+    out[0] = stride as f32;
+    out[1] = cyl.words.len() as f32;
+
+    let mut acc = 0.0f64;
+    for (w, c) in cyl.words.iter().enumerate() {
+        let mut h_prod = 1.0f64;
+        let mut g_acc = 0.0f64;
+        for &sym in &c.word {
+            let t = &flame.transforms[sym as usize];
+            let s = t.color_speed as f64;
+            let h = (1.0 + s) * 0.5;
+            let g = t.color as f64 * (1.0 - s) * 0.5;
+            g_acc = g_acc * h + g;
+            h_prod *= h;
+        }
+        acc += c.prob / cyl.mass.max(f64::MIN_POSITIVE);
+        let base = 4 + w * stride;
+        out[base] = acc as f32;
+        out[base + 1] = h_prod as f32;
+        out[base + 2] = g_acc as f32;
+        out[base + 3] = c.word.len() as f32;
+        for (k, &sym) in c.word.iter().enumerate() {
+            out[base + 4 + k] = sym as f32;
+        }
+    }
+    // The last entry is exactly one, whatever the sum rounded to, so
+    // a uniform draw always finds a word.
+    if let Some(last) = cyl.words.len().checked_sub(1) {
+        out[4 + last * stride] = 1.0;
     }
     out
 }
@@ -625,6 +831,105 @@ mod gpu_tests {
              longer being dimmed by the iteration-count normalisation, or the measured \
              coverage is not reaching the tone map"
         );
+    }
+
+    /// A REPLAYED word is the untargeted render too — the same
+    /// claim as the composed path, for the kernel that has to walk
+    /// the symbols.
+    ///
+    /// The flame carries a bounded-but-not-affine map (`blur` on one
+    /// transform), so `Cylinders::composable` is false, `pack_words`
+    /// emits the symbol form, and the shader compiles the
+    /// `CYLINDER_REPLAY` arm: a loop over the word running each
+    /// transform through `apply_variations` exactly as the chaos game
+    /// would.
+    ///
+    /// **This is the gate that makes the forward bounds worth
+    /// building.** Everything before it — the per-variation contract,
+    /// its GPU soundness check, the composition through a transform's
+    /// phases, the enumeration — is machinery for producing a word
+    /// list. If the kernel replays that list and the picture moves,
+    /// none of it was worth anything.
+    ///
+    /// Measured on a gasket with `blur` at 0.02 on one transform:
+    ///
+    /// ```text
+    ///   zoom   P(A_V)    speedup   lit ref / tgt   overlap   brightness
+    /// ```
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_replayed_word_is_the_untargeted_render() {
+        const N: u32 = 96;
+        let stats = |rgba: &[u8]| -> (Vec<bool>, f64) {
+            let lit: Vec<bool> = rgba
+                .chunks(4)
+                .map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24)
+                .collect();
+            let (mut acc, mut n) = (0.0f64, 0.0f64);
+            for (p, l) in rgba.chunks(4).zip(&lit) {
+                if !*l {
+                    continue;
+                }
+                acc += (p[0] as f64 + p[1] as f64 + p[2] as f64) / 765.0;
+                n += 1.0;
+            }
+            (lit, if n > 0.0 { acc / n } else { 0.0 })
+        };
+
+        let reg = crate::variations::global_registry();
+        println!("  zoom   P(A_V)    speedup   lit ref / tgt   overlap   brightness");
+        let mut ran = 0;
+        for zoom_pow in [2i32, 4, 6] {
+            let mut base = gasket_config();
+            // Bounded, not affine: this is what forces the replay.
+            base.flame.transforms[1].set_variation("blur", 0.02);
+            base.zoom = 2f32.powi(zoom_pow);
+
+            let plan = Cylinders::plan(
+                &base.flame,
+                &reg,
+                View::of(base.zoom as f64, [base.pan_x as f64, base.pan_y as f64], N, N),
+            )
+            .expect("a bounded flame enumerates");
+            assert!(!plan.composable, "this fixture must exercise the REPLAY arm");
+
+            let mut tgt = base.clone();
+            tgt.cylinder_targeting = true;
+
+            let (lit_r, bright_r) = stats(&render(&base, N, 64_000_000));
+            let (lit_t, bright_t) = stats(&render(&tgt, N, 4_000_000));
+
+            let nr = lit_r.iter().filter(|b| **b).count();
+            let nt = lit_t.iter().filter(|b| **b).count();
+            let both = lit_r.iter().zip(&lit_t).filter(|(a, b)| **a && **b).count();
+            let overlap = both as f64 / nr.max(1) as f64;
+            println!(
+                "  2^{zoom_pow:<4} {:.2e}  {:>7.1}   {nr:>4} / {nt:>4}   {:>6.1}%   {bright_r:.3} / {bright_t:.3}",
+                plan.mass,
+                plan.speedup(),
+                overlap * 100.0
+            );
+
+            if plan.speedup() <= 1.0 {
+                // Below the pay line the renderer declines, so the
+                // two renders differ only by iteration count.
+                continue;
+            }
+            ran += 1;
+            assert!(nr > 100 && nt > 100, "2^{zoom_pow}: {nr} / {nt} lit -- nothing to compare");
+            assert!(
+                overlap > 0.93,
+                "2^{zoom_pow}: the replayed render covers only {:.1}% of the reference's lit \
+                 pixels -- the kernel is walking the word wrongly, or walking the wrong word",
+                overlap * 100.0
+            );
+            assert!(
+                (bright_t / bright_r - 1.0).abs() < 0.25,
+                "2^{zoom_pow}: the replayed render is {:.3}x the reference's brightness",
+                bright_t / bright_r
+            );
+        }
+        assert!(ran > 0, "no zoom in the sweep actually exercised the replay");
     }
 
     /// A targeted render is the untargeted render — the same picture,
@@ -1184,14 +1489,51 @@ mod tests {
         let reg = global_registry();
         let view = View::of(8.0, ON_SET, 96, 96);
 
-        // Nonlinear: no Lipschitz constant exists yet.
+        // Nonlinear but BOUNDED is no longer a refusal -- that is
+        // what the forward bounds bought. The flame enumerates; it is
+        // simply not composable, and the kernel walks the word
+        // instead of multiplying a matrix.
         let mut curved = gasket();
-        curved.transforms[1].set_variation("spherical", 1.0);
-        assert_eq!(
-            Cylinders::plan(&curved, &reg, view),
-            Err(NoCylinders::NotAffine(1)),
-            "a spherical transform has no image bound and must be refused by index"
+        curved.transforms[1].set_variation("blur", 0.02);
+        let planned = Cylinders::plan(&curved, &reg, view)
+            .expect("a bounded transform is enumerable");
+        assert!(
+            !planned.composable,
+            "a flame with a nonlinear map cannot fold a word into one matrix"
         );
+
+        // **Bounded is necessary and not sufficient.** `spherical`'s
+        // bound is the inversion's `1/t²` away from the origin and a
+        // crude global disc over it, and a transform whose input
+        // reaches the origin therefore gets a claim that never
+        // shrinks -- so the enumeration has no stopping rule and says
+        // so, rather than running to the depth cap. A tighter
+        // near-origin bound is the fix, and it is a fact about the
+        // bound rather than about the map.
+        let mut sph = gasket();
+        sph.transforms[1].set_variation("spherical", 0.2);
+        assert!(
+            Cylinders::plan(&sph, &reg, view).is_err(),
+            "a bound that cannot shrink must refuse, not enumerate forever"
+        );
+
+        // Nonlinear and UNBOUNDED still refuses, by index and with a
+        // reason that names what inside the transform refused.
+        let mut wild = gasket();
+        wild.transforms[1].set_variation("waves", 1.0);
+        match Cylinders::plan(&wild, &reg, view) {
+            Err(NoCylinders::Unbounded { index, why }) => {
+                assert_eq!(index, 1);
+                assert!(why.contains("waves"), "the reason must name it: {why}");
+            }
+            other => panic!("expected an unbounded refusal, got {other:?}"),
+        }
+
+        // A colour-writing variation would plot the right point in
+        // the wrong colour, so it is refused rather than approximated.
+        let mut dc = gasket();
+        dc.transforms[1].set_variation("dc_cube", 1.0);
+        assert_eq!(Cylinders::plan(&dc, &reg, view), Err(NoCylinders::ColourNotAffine));
 
         // Xaos: the first symbol's probability is conditional.
         let mut x = gasket();
@@ -1208,7 +1550,9 @@ mod tests {
         big.transforms[2] = affine(1.2, 0.0, 0.0, 1.2, 0.0, 0.0, 1.0);
         assert!(matches!(
             Cylinders::plan(&big, &reg, view),
-            Err(NoCylinders::NotContractive(2)) | Err(NoCylinders::NotAffine(_))
+            Err(NoCylinders::NotContractive(2))
+                | Err(NoCylinders::Unbounded { .. })
+                | Err(NoCylinders::NoInvariantBall)
         ));
 
         // A view nowhere near the attractor.

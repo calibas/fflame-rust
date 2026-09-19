@@ -389,26 +389,47 @@ fn bias_ratio(prev: u32, i: u32) -> f32 {
 // transform is an affine map of `c`, so a whole word is `c <- c*H + G`.
 @group(0) @binding(15) var<storage, read> cylinders: array<f32>;
 
+{{#if CYLINDER_REPLAY}}
+// Replay layout. A word whose maps are not all affine cannot be
+// composed into one matrix on the CPU, so the kernel is handed the
+// SYMBOLS and walks them. Header `[stride, count, _, _]`, then one
+// word per stride: `[cdf, H, G, len, sym0, sym1, ...]`.
+//
+// Stride is uniform and set by the deepest word, which wastes a few
+// floats on the shallow ones and buys a multiply instead of an
+// indirection. At 4096 words and depth 96 the whole table is under
+// 1.6 MB.
+fn ct_stride() -> u32 {
+    return u32(cylinders[0]);
+}
+
+fn ct_count() -> u32 {
+    return u32(cylinders[1]);
+}
+
+fn ct_base(i: u32) -> u32 {
+    return 4u + i * ct_stride();
+}
+{{else}}
 fn ct_count() -> u32 {
     return arrayLength(&cylinders) / 12u;
 }
+{{/if}}
 
 // The word a uniform draw selects, by binary search on the cumulative
 // probability -- which is `p_a / P(A_V)`, so the draw is exactly the
 // `pi(a) = p_a / P(A_V)` the estimator wants.
 fn ct_pick(u: f32) -> u32 {
     let n = ct_count();
-    if (n <= 1u) {
-        return 0u;
-    }
     var lo = 0u;
     var hi = n - 1u;
-    loop {
-        if (lo >= hi) {
-            break;
-        }
+    while (lo < hi) {
         let mid = (lo + hi) / 2u;
+{{#if CYLINDER_REPLAY}}
+        if (u <= cylinders[ct_base(mid)]) {
+{{else}}
         if (u <= cylinders[mid * 12u + 8u]) {
+{{/if}}
             hi = mid;
         } else {
             lo = mid + 1u;

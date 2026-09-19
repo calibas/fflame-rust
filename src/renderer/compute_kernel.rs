@@ -651,6 +651,7 @@ impl FlameRenderer {
             // this path is the incremental one and has no config.
             importance_sampling: self.importance.enabled,
             cylinder_targeting: self.cylinders.is_some(),
+            cylinder_replay: self.cylinders.as_ref().is_some_and(|c| !c.composable),
             frame_coverage: self.auto_exposure,
             flatten_z_per_iter: matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD)
                 && !preserve_z,
@@ -1878,6 +1879,7 @@ impl FlameRenderer {
             path_features_enabled,
             self.census,
             self.cylinders.is_some(),
+            self.cylinders.as_ref().is_some_and(|c| !c.composable),
         );
         if shaders_changed {
             log::info!("Shaders recompiled during preset load - recreating bind group");
@@ -3240,7 +3242,14 @@ impl FlameRenderer {
             self.width.max(1),
             self.height.max(1),
         );
-        let planned = if config.cylinder_targeting {
+        // The enumeration is PLANAR -- it asks whether a word's
+        // image disc meets a disc in the xy plane -- and in 3D what
+        // reaches the frame depends on the camera and the point's z,
+        // which that test knows nothing about. So targeting is 2D
+        // only, rather than quietly answering a question it was not
+        // asked.
+        let two_d = matches!(config.render_mode, crate::scene::transforms::RenderMode::TwoD);
+        let planned = if config.cylinder_targeting && two_d {
             match Cylinders::plan(&config.flame, &registry, view) {
                 Err(why) => {
                     self.targeting_state = TargetingState::Declined(why);
@@ -3264,16 +3273,24 @@ impl FlameRenderer {
             self.targeting_state = TargetingState::Off;
             None
         };
-        let packed = planned
-            .as_ref()
-            .map(|c| crate::scene::cylinder::pack(c, &config.flame, &registry));
+        // Two packings, because there are two kernels: a flame
+        // whose maps are all affine folds each word into one matrix,
+        // and anything else is handed the symbols to walk.
+        let packed = planned.as_ref().map(|c| {
+            if c.composable {
+                crate::scene::cylinder::pack(c, &config.flame, &registry)
+            } else {
+                crate::scene::cylinder::pack_words(c, &config.flame)
+            }
+        });
         let changed = self.buffers.update_cylinders(device, queue, packed.as_deref());
-        let was = self.cylinders.is_some();
+        let was = self.cylinders.as_ref().map(|c| c.composable);
         self.cylinders = planned;
+        let now = self.cylinders.as_ref().map(|c| c.composable);
         // The SHADER changes when targeting starts or stops, so the
         // constants have to be seen to change even if the buffer did
         // not resize.
-        changed || was != self.cylinders.is_some()
+        changed || was != now
     }
 
     /// The factor the tone map's iteration count is inflated by.
