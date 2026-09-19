@@ -1039,6 +1039,81 @@ mod gpu_tests {
         assert!(ran > 0, "no zoom in the sweep actually exercised the replay");
     }
 
+    /// The per-frame sync asks for a reload only when the SHADER
+    /// changes, and never for an ordinary pan.
+    ///
+    /// **The gate for a bug the whole suite missed.** `sync_cylinders`
+    /// used to rebuild the shader itself, from the raw config —
+    /// while `load_config` compiles against the sticky-adopted flame
+    /// and packs the variation-params buffer against that same local
+    /// index map. The rebuilt shader's variation indices therefore did
+    /// not match the buffer, `get_param` read the wrong slots, and
+    /// every flame in the app collapsed to a single pixel at the
+    /// origin: on load, and again after every pan, with any real
+    /// config change appearing to fix it.
+    ///
+    /// Nothing here caught it because nothing here drove the APP's
+    /// order — load a config, then move the view, then render. The
+    /// CLI and every render gate call `load_config` once and never
+    /// move, so the whole path was untested. This test is that order.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_pan_does_not_disturb_the_shader() {
+        let (device, queue) = device();
+        let mut cfg = gasket_config();
+        // A nonlinear variation, so the sticky superset has something
+        // to retain and the two index maps can actually differ.
+        cfg.flame.transforms[1].set_variation("spherical", 0.3);
+
+        let mut r = crate::renderer::FlameRenderer::with_palette_size(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            96,
+            96,
+            &cfg.flame,
+            cfg.palette_size,
+        );
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("sync gate"),
+        });
+        r.load_config(&device, &mut enc, &queue, &cfg, &cfg.palette, 1, 0);
+        queue.submit(Some(enc.finish()));
+
+        // The app's per-frame call, with nothing changed: must be a
+        // no-op, because `load_config` already recorded the key.
+        assert!(
+            !r.sync_cylinders(&device, &queue, &cfg),
+            "an unchanged view must not ask for a reload"
+        );
+
+        // ...and with the view moved, targeting off (the default, and
+        // what every existing flame does). Still no reload: there is
+        // no shader change to make, and asking for one here is what
+        // broke the app.
+        for (dx, dz) in [(0.01f32, 1.0f32), (-0.2, 1.0), (0.0, 8.0), (0.0, 4096.0)] {
+            cfg.pan_x += dx;
+            cfg.zoom *= dz;
+            assert!(
+                !r.sync_cylinders(&device, &queue, &cfg),
+                "a pan or zoom with targeting off must not ask for a reload \
+                 (pan {}, zoom {})",
+                cfg.pan_x,
+                cfg.zoom
+            );
+        }
+
+        // Switching targeting ON at a zoom where it pays DOES change
+        // the shader, and must say so.
+        let mut on = gasket_config();
+        on.cylinder_targeting = true;
+        on.zoom = 64.0;
+        assert!(
+            r.sync_cylinders(&device, &queue, &on),
+            "starting targeting changes the shader and must ask for a reload"
+        );
+    }
+
     /// A targeted render is the untargeted render — the same picture,
     /// from a fraction of the samples.
     ///

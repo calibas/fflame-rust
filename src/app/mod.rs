@@ -3160,7 +3160,24 @@ impl App {
                 // view. Cheap when nothing moved; the view moves
                 // without a config load, which is why this cannot
                 // live in `load_config` alone.
-                renderer.sync_cylinders(&self.gpu.device, &self.gpu.queue, &final_config);
+                //
+                // A true return means targeting started, stopped, or
+                // changed arm, which changes the SHADER -- and the
+                // only path that rebuilds it consistently with the
+                // sticky superset and the variation-params packing is
+                // a full load. Rare: it needs the view to cross the
+                // pay threshold with the feature switched on.
+                if renderer.sync_cylinders(&self.gpu.device, &self.gpu.queue, &final_config) {
+                    renderer.load_config(
+                        &self.gpu.device,
+                        &mut render_encoder,
+                        &self.gpu.queue,
+                        &final_config,
+                        &final_config.palette,
+                        self.config_manager.system_settings().iterations_per_thread,
+                        self.config_manager.system_settings().burn_in,
+                    );
+                }
 
                 let t_compute = Instant::now();
                 // 1. Compute new samples with fresh random seed
