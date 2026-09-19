@@ -205,7 +205,10 @@ ball's centre the distance walk ranks by (D3).
   including direct colour. This plan needs neither and gets colour
   to a damping factor. Build this first; measure what the forward
   plan would add (direct colour; the overlap bias) on real flames;
-  decide then.
+  decide then. -- **Decided 2026-09-18** (delta plan §10): the
+  forward plan is the branch's destination. This plan's coarse pass,
+  `∏p` and row-normalised chain are the forced sample's weight and
+  its reference, which is how the two meet.
 
 ## 4. What changes, and what does not
 

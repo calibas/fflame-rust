@@ -304,11 +304,45 @@ pixel-identical) applies to every step here.
 
 ## 8. Order of work
 
-Item numbers are the delta plan's §9, which orders all three plans:
-D1 and D2 are item 3 there, D4 is item 4, D3 is item 6, D5 to D8
-fall between as the census rows say which unlocks most. D6 is cheap
-and should be measured (G4) early, since it decides how many census
-flames the other decisions can reach at all.
+Item numbers were the delta plan's §9, which ordered all three plans:
+D1 and D2 are item 3 there, D4 is item 4, D3 is item 6. **From
+2026-09-18 the order is the delta plan's §10**, which redirects the
+branch at [flame-deep-zoom.md](flame-deep-zoom.md) and makes this
+plan's reach a lever for it. Two levers, and the meter decides
+between them:
+
+- **`InverseDef`s for the variations that block real flames.** Not
+  the shipped smoke tests -- one variation each, a long tail of
+  one-offs -- but the imported corpus, where 3 of 45 flames have
+  every variation invertible and 57 distinct variations block the
+  rest (§9f). Read off the bodies, the invertible ones near the top
+  are `curl` (a rational conformal map), `polar2`, `elliptic` and
+  `bipolar` (log-type conformal maps, with branches) and `eyefish`
+  (radial). A day each on the generic-body machinery, and the meter
+  moves with every one. Three that LOOK invertible are not:
+  `juliascope` and `rays` draw a random branch per sample and
+  `boarders` takes a random 25% path, so they are stochastic maps --
+  refusals under the design doc's §8.2 alongside the blurs
+  (`pre_blur`), the subflames and the plots, and the panel should
+  name the reason rather than say "not affine".
+- **Forward reach without an inverse.** A forced prefix needs
+  forward maps, which every variation has, and a Lipschitz bound per
+  variation over the ball, which none supplies yet -- the deep-zoom
+  plan's §7 item 1. Where that bound exists the deep zoom's stage 2
+  can enumerate cylinders by forward branch-and-bound with no
+  `InverseDef` at all. It does not help the inverse WALKS (mode D,
+  the measure), which still need the inverse; it is the reach lever
+  for the chaos-game deep zoom, which is the destination.
+
+D5 (finals) and D6 (the ball as a bound) stay as written and are
+picked up when the corpus meter says a final or a non-contractive
+transform is what blocks the next flame. D8's registry half is not
+on the path.
+
+Extend the corpus meter (`how_often_a_real_flame_sums_a_kernel_with_an_affine`,
+ignored, over `output/*.flame`) to print the blocking variations
+before starting either lever, so each `InverseDef` is chosen by a
+number.
 
 ## 9. Record
 
@@ -674,3 +708,62 @@ And the CPU's `Map2::hessian` for a sum is central differences of a
 Newton Jacobian -- the one place D2's dual numbers do not reach,
 because nesting duals through a solve would differentiate the
 iteration rather than the map.
+
+### 9f. The corpus meter, and what actually blocks it, 2026-09-18
+
+Measured for the review that redirected the branch (delta plan §10),
+by a temporary probe over the 45 imported `.flame` files in
+`output/`, counting a flame under every variation it uses that has no
+`InverseDef`:
+
+```text
+  corpus: 45 flames, 3 with every variation invertible
+  flames blocked by:
+     7  hypertile1      7  poincare3D      7  rays
+     6  arctruchet      6  polar2          6  pre_blur
+     5  curl            5  elliptic        4  juliascope
+     3  combimirror     3  spirograph3D    3  subflame_wf
+     3  yplot3d_wf      2  bipolar         2  boarders
+     2  crown_js        2  dc_carpet       2  dc_hexes_wf
+     2  eJulia          2  eyefish         2  iconattractor_js
+     2  lorenz_js       2  parplot2d_wf    2  polarplot2d_wf
+     2  post_mirror_wf
+  57 distinct blocking variations
+```
+
+The corpus is JWildfire's randomiser output and is variation-heavy,
+so the numbers overstate how bad a hand-made flame fares; but it is
+the only corpus of real flames to hand, and the shipped census (170
+flames, mostly one-variation smoke tests) is worse as a meter, not
+better. Three things the table says:
+
+- **No single variation unlocks much.** Seven flames is the top row.
+  The reach is a long tail and has to be walked as one.
+- **The invertible ones are the cheap ones, and they were checked
+  against the bodies rather than the names.** `curl` is
+  `p / (1 + c1·p + c2·p²)` in complex form, a rational conformal map;
+  `polar2` is `(arg p / π, ln|p| / 2π)`, a log map with the branch of
+  the argument; `elliptic` and `bipolar` are log-type conformal maps
+  of the same family; `eyefish` is `2p / (|p| + 1)`, radial. All fit
+  the `InverseDef` shape D1 built, with the generic body giving the
+  Jacobian for free.
+- **Three that look invertible draw a random number.** `juliascope`
+  picks one of `|power|` branches per sample with a mirror on the
+  odd ones, `rays` draws a random angle, and `boarders` takes a
+  random 25% path. Those are stochastic maps -- each is several maps
+  chosen by the sample, like a root's forward branches -- and an
+  inverse walk treats them as a refusal today. (A forced prefix CAN
+  take them: the branch is one more choice in the prefix, weighted
+  by its probability. That is the forward direction's advantage
+  again.)
+- **The rest should be said, not left as "not affine".** `pre_blur`
+  is a blur, `subflame_wf` iterates a whole other flame, the
+  `*plot*_wf` family draws a graph, `dc_*` writes colour, `lorenz_js`
+  and `iconattractor_js` are attractors of their own. The design
+  doc's §8.2 already sorts these out; the panel should name the
+  reason.
+
+And the thing the meter cannot say, which is the point of the second
+lever in §8: every one of these variations has a FORWARD body, so a
+forced-prefix deep zoom with a Lipschitz bound reaches every one of
+them without an inverse being written.
