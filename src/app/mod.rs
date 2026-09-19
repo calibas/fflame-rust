@@ -3156,6 +3156,12 @@ impl App {
                 let batch_size = if use_overwrite { 1 } else { self.accumulation_batch_size };
                 let should_accumulate = self.frames_since_accumulation >= batch_size;
 
+                // Keep the cylinder enumeration current with the
+                // view. Cheap when nothing moved; the view moves
+                // without a config load, which is why this cannot
+                // live in `load_config` alone.
+                renderer.sync_cylinders(&self.gpu.device, &self.gpu.queue, &final_config);
+
                 let t_compute = Instant::now();
                 // 1. Compute new samples with fresh random seed
                 // Clear histogram only when starting a new batch (frame 1 of batch)

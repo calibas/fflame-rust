@@ -314,6 +314,9 @@ pub struct FlameRenderer {
     /// What targeting decided for the current view — reported to the
     /// panel, never read by the render path (which asks `cylinders`).
     targeting_state: TargetingState,
+    /// Fingerprint of everything the enumeration depends on, so the
+    /// per-frame sync can skip the work when nothing moved.
+    cylinder_key: Option<u64>,
     /// Whether this render is auto-exposing. Mirrors
     /// `FractalConfig::auto_exposure`; decides both whether the shader
     /// carries the counters and whether the fraction is read back.
@@ -477,6 +480,7 @@ impl FlameRenderer {
             solid_density_fraction: 1.0,
             frame_coverage_fraction: 1.0,
             targeting_state: TargetingState::default(),
+            cylinder_key: None,
             auto_exposure: false,
             filter_radius: 0.0,
             filter_blur_edges: 0.0,
@@ -1873,6 +1877,7 @@ impl FlameRenderer {
         // plain one -- the buffer uploaded, the shader never asking
         // for it.
         let cyl_changed = self.update_cylinders(device, queue, config);
+        self.cylinder_key = Some(self.enumeration_key(config));
         let shaders_changed = self.pipelines.ensure_shaders_current_with_config(
             device,
             config,
@@ -3217,6 +3222,84 @@ impl FlameRenderer {
         self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
         self.blur_convolve_bind_group = self.pipelines.create_blur_convolve_bind_group(device, &self.buffers);
         self.blur_upscale_bind_group = self.pipelines.create_blur_upscale_bind_group(device, &self.buffers);
+    }
+
+    /// Everything the cylinder enumeration depends on, as one number.
+    ///
+    /// The view AND the flame, because either changing invalidates
+    /// the word list: a new zoom selects different words, and an
+    /// edited transform changes where every word lands. Hashing f32
+    /// BITS rather than values so the comparison is exact — a key
+    /// that missed a change would leave the kernel forcing a prefix
+    /// computed for a flame that no longer exists.
+    fn enumeration_key(&self, config: &FractalConfig) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        config.cylinder_targeting.hash(&mut h);
+        matches!(config.render_mode, crate::scene::transforms::RenderMode::TwoD).hash(&mut h);
+        config.zoom.to_bits().hash(&mut h);
+        config.pan_x.to_bits().hash(&mut h);
+        config.pan_y.to_bits().hash(&mut h);
+        self.width.hash(&mut h);
+        self.height.hash(&mut h);
+        config.flame.has_xaos().hash(&mut h);
+        for t in &config.flame.transforms {
+            for v in [
+                t.a, t.b, t.c, t.d, t.e, t.f, t.weight, t.color, t.color_speed, t.post_a,
+                t.post_b, t.post_c, t.post_d, t.post_e, t.post_f,
+            ] {
+                v.to_bits().hash(&mut h);
+            }
+            t.post_affine_enabled.hash(&mut h);
+            let mut vars: Vec<(&str, u32)> =
+                t.variations.iter().map(|(k, v)| (k.as_str(), v.to_bits())).collect();
+            vars.sort_unstable();
+            vars.hash(&mut h);
+            let mut ps: Vec<(&str, u32)> =
+                t.variation_params.iter().map(|(k, v)| (k.as_str(), v.to_bits())).collect();
+            ps.sort_unstable();
+            ps.hash(&mut h);
+        }
+        h.finish()
+    }
+
+    /// Keep the enumeration current with the VIEW, once per frame.
+    ///
+    /// `load_config` alone was not enough and the panel sat at "Not
+    /// running" forever: it fires on a preset load, and the two
+    /// things that actually change here — ticking the checkbox and
+    /// zooming — do neither. Zoom is a `ViewOnly` update that never
+    /// reaches it, and the enumeration is a property of the view
+    /// above all.
+    ///
+    /// Skipped entirely when the fingerprint is unchanged, which is
+    /// almost every frame of an accumulating render.
+    pub fn sync_cylinders(&mut self, device: &Device, queue: &Queue, config: &FractalConfig) {
+        let key = self.enumeration_key(config);
+        if self.cylinder_key == Some(key) {
+            return;
+        }
+        self.cylinder_key = Some(key);
+        self.update_cylinders(device, queue, config);
+        // Starting or stopping targeting, or crossing between the
+        // composed and replayed arms, changes the SHADER. Rebuilding
+        // here rather than leaving it to the next config load is the
+        // whole point: otherwise the buffer and the kernel disagree
+        // about the layout, which renders an empty frame.
+        let path_features_enabled = config.color_mode == ColorMode::PathMap
+            || !self.path_filters.is_empty();
+        if self.pipelines.ensure_shaders_current_with_config(
+            device,
+            config,
+            path_features_enabled,
+            self.census,
+            self.cylinders.is_some(),
+            self.cylinders.as_ref().is_some_and(|c| !c.composable),
+        ) {
+            self.compute_bind_group =
+                self.pipelines.create_compute_bind_group(device, &self.buffers);
+            self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
+        }
     }
 
     /// Enumerate and upload the cylinders that reach this view, or
