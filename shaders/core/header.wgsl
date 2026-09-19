@@ -360,6 +360,21 @@ fn bias_ratio(prev: u32, i: u32) -> f32 {
 }
 {{/if}}
 
+{{#if FRAME_COVERAGE}}
+// Frame-coverage counters (auto exposure --
+// docs/projects/flame-deep-zoom.md). Two words: [0] plot attempts that
+// landed INSIDE the frame, [1] plot attempts. Their ratio is the share
+// of the flame's deposited work the viewport actually holds, which is
+// what the tone map's `sample_density` has to be scaled by when the
+// view is a deep zoom and most of the attractor is off-screen.
+//
+// Counted per thread in registers and flushed once at the end of the
+// dispatch, NOT subsampled: at depth the in-frame count is small by
+// definition, and sampling one thread in a thousand would read zero
+// exactly where the number is needed.
+@group(0) @binding(16) var<storage, read_write> coverage: array<atomic<u32>>;
+{{/if}}
+
 {{#if CYLINDER_TARGETING}}
 // The enumerated cylinders -- stage 2 of
 // docs/projects/flame-deep-zoom.md. Twelve floats a word, packed by

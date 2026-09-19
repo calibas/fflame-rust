@@ -307,6 +307,14 @@ pub struct ShaderConstants {
     /// docs/projects/flame-deep-zoom.md stage 1.
     pub importance_sampling: bool,
 
+    /// Whether the frame-coverage counters are compiled in (auto
+    /// exposure — `docs/projects/flame-deep-zoom.md`). Drives
+    /// `FRAME_COVERAGE`; when false the binding, the per-thread
+    /// tallies and the flush are all stripped, so a render that is
+    /// not auto-exposing is byte-identical to one built before the
+    /// feature existed.
+    pub frame_coverage: bool,
+
     /// Whether cylinder targeting runs for this flame and view
     /// (`docs/projects/flame-deep-zoom.md` stage 2). Drives
     /// `CYLINDER_TARGETING` — when false the binding, the word draw
@@ -419,6 +427,7 @@ impl Default for ShaderConstants {
             has_analytic_blur: false,
             importance_sampling: false,
             cylinder_targeting: false,
+            frame_coverage: false,
             flatten_z_per_iter: false,
             solid_enabled: false,
             probe: false,
@@ -649,6 +658,7 @@ impl ShaderConstants {
             // CONFIG, so a caller that has one sets this after.
             importance_sampling: false,
             cylinder_targeting: false,
+            frame_coverage: false,
             // Per-iteration Z flatten — only meaningful in 3D, and
             // only when preserve_z is false (JWF/Apo default).
             flatten_z_per_iter: matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD)
@@ -1654,6 +1664,10 @@ impl ShaderBuilder {
         // (docs/projects/flame-deep-zoom.md stage 2). Off strips the
         // binding, the draw and the prefix.
         processor.set("CYLINDER_TARGETING", constants.cylinder_targeting);
+        // FRAME_COVERAGE tallies plot attempts and in-frame landings so
+        // the tone map can be told what share of the work the viewport
+        // holds (docs/projects/flame-deep-zoom.md).
+        processor.set("FRAME_COVERAGE", constants.frame_coverage);
         // FLATTEN_Z_PER_ITER used to insert a blanket `current.z = 0.0;`
         // at the end of each iteration under preserve_z=false. That
         // destroyed the z compounding JWF gets through unconditional
@@ -1925,6 +1939,7 @@ impl ShaderBuilder {
             has_analytic_blur: false,
             importance_sampling: false,
             cylinder_targeting: false,
+            frame_coverage: false,
             flatten_z_per_iter: false,
             solid_enabled: false,
             probe: false,
@@ -3641,6 +3656,73 @@ mod tests {
         keys.sort_unstable();
         keys.dedup();
         assert_eq!(keys.len(), total, "duplicate switch keys in get_inlined_var_param:\n{body}");
+    }
+
+    /// Auto exposure's hard requirement, the same as both deep-zoom
+    /// stages': with `frame_coverage = false` the emitted WGSL
+    /// contains NO CODE from the feature.
+    ///
+    /// It sits against the bounds check that every plotted sample of
+    /// every flame passes, so anything leaking past the flag would
+    /// cost on every render there has ever been. The counters are
+    /// deliberately NOT subsampled, which makes this gate the thing
+    /// standing between that choice and a global tax.
+    #[test]
+    fn frame_coverage_off_is_byte_identical() {
+        use crate::scene::transforms::{Flame, Transform};
+        let registry = crate::variations::global_registry().clone();
+        let builder = ShaderBuilder::new(registry);
+
+        let mut flame = Flame::new();
+        let mut xform = Transform::new();
+        xform.variations.insert("linear".to_string(), 1.0);
+        flame.transforms.push(xform);
+        let mut active = HashMap::new();
+        active.insert("linear".to_string(), 1.0);
+
+        let base = ShaderConstants::default();
+        let mut on = ShaderConstants::default();
+        on.frame_coverage = true;
+
+        for render_3d in [false, true] {
+            let off = builder.build_from_template(&flame, &active, render_3d, false, false, true, &base);
+            let with = builder.build_from_template(&flame, &active, render_3d, false, false, true, &on);
+
+            for needle in ["coverage", "fc_in", "fc_att"] {
+                assert!(
+                    !off.contains(needle),
+                    "3d={render_3d}: `{needle}` leaked into a shader with auto exposure off"
+                );
+            }
+            assert!(
+                !off.lines().any(|l| l.trim().starts_with("{{")),
+                "3d={render_3d}: an unresolved template marker survived"
+            );
+
+            assert!(
+                with.contains("@binding(16) var<storage, read_write> coverage"),
+                "3d={render_3d}: no counter binding"
+            );
+            assert!(with.contains("fc_att = fc_att + 1u;"), "3d={render_3d}: nothing counts attempts");
+            assert!(with.contains("fc_in = fc_in + 1u;"), "3d={render_3d}: nothing counts landings");
+            assert!(with.contains("atomicAdd(&coverage[1], fc_att);"), "3d={render_3d}: no flush");
+
+            // The tally must precede the plot's own bounds check, and
+            // the flush must follow the whole iteration loop -- one
+            // pair of atomics per THREAD, not per iteration. A flush
+            // that slipped inside the loop would still be correct and
+            // would quietly cost a global atomic per sample.
+            let tally = with.find("fc_att = fc_att + 1u;").expect("tally");
+            let guard = with.find("// Check bounds and opacity").expect("guard");
+            let flush = with.find("atomicAdd(&coverage[1], fc_att);").expect("flush");
+            let loop_end = with.find("// PROBE-BLOCK-BEGIN").unwrap_or(with.len());
+            assert!(tally < guard, "3d={render_3d}: the tally is not at the plot's bounds check");
+            assert!(
+                guard < flush && flush < loop_end,
+                "3d={render_3d}: the flush is not after the iteration loop -- if it moved \
+                 inside, every sample pays a global atomic"
+            );
+        }
     }
 
     /// Stage 2's hard requirement, the same as stage 1's: with

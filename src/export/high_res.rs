@@ -129,6 +129,10 @@ pub struct HighResExporter {
     // uniform; the tiled exporter renders many views and the
     // enumeration is per view, so it does not target yet.
     cylinder_buffer: Buffer,
+    // Frame-coverage counters. Allocated so the layout is uniform; the
+    // tiled exporter renders many views and coverage is a property of
+    // one view, so it does not auto-expose yet.
+    coverage_buffer: Buffer,
     attachments_buffer: Buffer,  // Per-normal Linked + Final attachment lists
     subflame_metadata_buffer: Buffer,  // binding 12: per-subflame metadata
     // Dummy path-tracking buffers — the unified shader's `header.wgsl`
@@ -531,6 +535,12 @@ impl HighResExporter {
         });
         queue.write_buffer(&bias_buffer, 0, bytemuck::cast_slice(&bias_table));
 
+        let coverage_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Export Coverage Counters"),
+            size: 32,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
         let cylinder_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Export Cylinder Buffer"),
             size: 48,
@@ -924,6 +934,18 @@ impl HighResExporter {
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::Buffer {
                         ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 16: frame-coverage counters. The shader
+                // declares it only under FRAME_COVERAGE.
+                BindGroupLayoutEntry {
+                    binding: 16,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -1443,6 +1465,7 @@ impl HighResExporter {
             xaos_buffer,
             bias_buffer,
             cylinder_buffer,
+            coverage_buffer,
             attachments_buffer,
             subflame_metadata_buffer,
             dummy_path_buffer,
@@ -1605,6 +1628,10 @@ impl HighResExporter {
                 BindGroupEntry {
                     binding: 15,
                     resource: self.cylinder_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 16,
+                    resource: self.coverage_buffer.as_entire_binding(),
                 },
                 BindGroupEntry {
                     binding: 12,

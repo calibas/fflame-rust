@@ -238,6 +238,8 @@ struct AttachmentList {
 
 
 
+
+
 // Per-subflame metadata: where each subflame's normals + finals live
 // inside the *unified* `transforms[]` buffer. Indexed by
 // `subflame_id` (the variation parameter). Pre-v2 there was a
@@ -1187,6 +1189,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // with no custom-init variations.
 
 
+
+
     // Iterate
     for (var i = 0u; i < params.iterations_per_thread; i++) {
         // Save old position for speed calculation
@@ -1425,6 +1429,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 
 
+
             // Check bounds and opacity (only plot if both pass)
             if (pixel.x >= 0 && pixel.x < i32(params.width) &&
                 pixel.y >= 0 && pixel.y < i32(params.height) && should_plot) {
@@ -1486,4 +1491,5 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 
     }
+
 }

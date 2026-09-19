@@ -180,6 +180,7 @@ impl ShaderCache {
             has_analytic_blur: flame.analytic_blur_active(&crate::variations::global_registry(), RenderMode::TwoD),
             importance_sampling: false,
             cylinder_targeting: false,
+            frame_coverage: false,
             flatten_z_per_iter: false,
             solid_enabled: false,
             probe: false,
@@ -383,6 +384,7 @@ impl ShaderCache {
                 constants.solid_enabled = config.solid_strength > 0.0
                     && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD);
                 constants.importance_sampling = config.importance.enabled;
+                constants.frame_coverage = config.auto_exposure;
                 constants
             }
         } else {
@@ -407,6 +409,10 @@ impl ShaderCache {
                 has_analytic_blur: config.flame.analytic_blur_active(&registry, config.render_mode),
                 importance_sampling: config.importance.enabled,
                 cylinder_targeting: false,
+                // Auto exposure is a config choice, so unlike
+                // targeting it can be read straight off the config
+                // here -- it needs no knowledge of the view.
+                frame_coverage: config.auto_exposure,
                 flatten_z_per_iter: matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD)
                     && !config.preserve_z,
                 solid_enabled: config.solid_strength > 0.0
