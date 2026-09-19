@@ -102,9 +102,14 @@ pub fn render_view_content(
                         TS::Declined(why) => {
                             use crate::scene::cylinder::NoCylinders as NC;
                             let reason = match why {
-                                NC::NotAffine(i) => {
-                                    t!("view.no_cyl_not_affine", index = i.to_string()).to_string()
-                                }
+                                NC::Unbounded { index, why } => t!(
+                                    "view.no_cyl_unbounded",
+                                    index = index.to_string(),
+                                    why = why.clone()
+                                )
+                                .to_string(),
+                                NC::NoInvariantBall => t!("view.no_cyl_no_ball").to_string(),
+                                NC::ColourNotAffine => t!("view.no_cyl_colour").to_string(),
                                 NC::Xaos => t!("view.no_cyl_xaos").to_string(),
                                 NC::NotContractive(i) => {
                                     t!("view.no_cyl_expanding", index = i.to_string()).to_string()

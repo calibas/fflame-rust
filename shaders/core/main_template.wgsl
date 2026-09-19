@@ -495,6 +495,69 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let ct_saved = current;
             let ct_saved_color = color_index;
             {
+{{#if CYLINDER_REPLAY}}
+                // REPLAY. The word's maps are not all affine, so
+                // there is no single matrix to apply: walk the
+                // symbols and run each transform exactly as the chaos
+                // game would. `depth + 1` map applications per plot is
+                // what `speedup = 1/(mass·(depth+1))` has charged for
+                // all along, so this costs nothing the measurement did
+                // not already assume.
+                //
+                // `ct_rng` throughout, never `rng`: the forced prefix
+                // must not disturb the free orbit's stream, or the
+                // walk this thread is carrying stops being the chaos
+                // game.
+                let ct_i = ct_pick(rng_nextf(&ct_rng));
+                let ct_b = ct_base(ct_i);
+                let ct_len = u32(cylinders[ct_b + 3u]);
+                for (var ct_k = 0u; ct_k < ct_len; ct_k = ct_k + 1u) {
+                    let ct_sym = u32(cylinders[ct_b + 4u + ct_k]);
+                    let ct_xf = transforms[ct_sym];
+                    let ct_aff = apply_affine(ct_xf, current);
+                    var ct_hide = false;
+{{#if HAS_ANALYTIC_BLUR}}
+{{#if RENDER_3D}}
+                    var ct_blur = vec3<f32>(0.0, 0.0, 0.0);
+{{else}}
+                    var ct_blur = vec2<f32>(0.0, 0.0);
+{{/if}}
+{{/if}}
+{{#if HAS_DC}}
+                    // Fresh registers: writing the iteration's own
+                    // `vc`/`vrc` here would leak the forced prefix's
+                    // colour into the plot, which takes its colour
+                    // from the fold below instead.
+                    var ct_vc: f32 = color_index;
+{{/if}}
+{{#if HAS_RGB}}
+                    var ct_vrc: vec3<f32> = vec3<f32>(-1.0e30);
+{{/if}}
+{{#if HAS_DC}}
+{{#if HAS_RGB}}
+                    current = apply_variations(ct_xf, ct_sym, ct_aff, &ct_rng, &ct_vc, &ct_vrc, &ct_hide{{#if HAS_ANALYTIC_BLUR}}, &ct_blur{{/if}});
+{{else}}
+                    current = apply_variations(ct_xf, ct_sym, ct_aff, &ct_rng, &ct_vc, &ct_hide{{#if HAS_ANALYTIC_BLUR}}, &ct_blur{{/if}});
+{{/if}}
+{{else}}
+{{#if HAS_RGB}}
+                    current = apply_variations(ct_xf, ct_sym, ct_aff, &ct_rng, &ct_vrc, &ct_hide{{#if HAS_ANALYTIC_BLUR}}, &ct_blur{{/if}});
+{{else}}
+                    current = apply_variations(ct_xf, ct_sym, ct_aff, &ct_rng, &ct_hide{{#if HAS_ANALYTIC_BLUR}}, &ct_blur{{/if}});
+{{/if}}
+{{/if}}
+                    if (HAS_POST_AFFINE) {
+                        if (ct_xf.post_enabled > 0.5) {
+                            current = apply_post_affine(ct_xf, current);
+                        }
+                    }
+                }
+                color_index = color_index * cylinders[ct_b + 1u] + cylinders[ct_b + 2u];
+{{else}}
+                // COMPOSED. Every map in the word is affine, so the
+                // CPU folded the whole prefix into one 2x2 and a
+                // translation: one matrix multiply however deep the
+                // word.
                 let ct_w = ct_pick(rng_nextf(&ct_rng)) * 12u;
                 let ct_p = current.xy;
                 let ct_x = cylinders[ct_w] * ct_p.x + cylinders[ct_w + 1u] * ct_p.y
@@ -507,6 +570,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 current = vec2<f32>(ct_x, ct_y);
 {{/if}}
                 color_index = color_index * cylinders[ct_w + 6u] + cylinders[ct_w + 7u];
+{{/if}}
             }
 {{/if}}
 {{#if HAS_ATTACHMENTS}}

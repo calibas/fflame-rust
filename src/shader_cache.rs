@@ -181,6 +181,7 @@ impl ShaderCache {
             importance_sampling: false,
             cylinder_targeting: false,
             frame_coverage: false,
+            cylinder_replay: false,
             flatten_z_per_iter: false,
             solid_enabled: false,
             probe: false,
@@ -385,6 +386,7 @@ impl ShaderCache {
                     && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD);
                 constants.importance_sampling = config.importance.enabled;
                 constants.frame_coverage = config.auto_exposure;
+                constants.cylinder_replay = false;
                 constants
             }
         } else {
@@ -413,6 +415,9 @@ impl ShaderCache {
                 // targeting it can be read straight off the config
                 // here -- it needs no knowledge of the view.
                 frame_coverage: config.auto_exposure,
+                // Like targeting itself, decided by the renderer:
+                // it depends on the enumeration having run.
+                cylinder_replay: false,
                 flatten_z_per_iter: matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD)
                     && !config.preserve_z,
                 solid_enabled: config.solid_strength > 0.0

@@ -307,6 +307,13 @@ pub struct ShaderConstants {
     /// docs/projects/flame-deep-zoom.md stage 1.
     pub importance_sampling: bool,
 
+    /// Whether the forced prefix is REPLAYED symbol by symbol rather
+    /// than applied as one composed matrix
+    /// (`docs/projects/flame-deep-zoom.md`). Set when the flame has a
+    /// map that is bounded but not affine, where no single matrix
+    /// exists. Only read when `cylinder_targeting` is on.
+    pub cylinder_replay: bool,
+
     /// Whether the frame-coverage counters are compiled in (auto
     /// exposure — `docs/projects/flame-deep-zoom.md`). Drives
     /// `FRAME_COVERAGE`; when false the binding, the per-thread
@@ -428,6 +435,7 @@ impl Default for ShaderConstants {
             importance_sampling: false,
             cylinder_targeting: false,
             frame_coverage: false,
+            cylinder_replay: false,
             flatten_z_per_iter: false,
             solid_enabled: false,
             probe: false,
@@ -659,6 +667,7 @@ impl ShaderConstants {
             importance_sampling: false,
             cylinder_targeting: false,
             frame_coverage: false,
+            cylinder_replay: false,
             // Per-iteration Z flatten — only meaningful in 3D, and
             // only when preserve_z is false (JWF/Apo default).
             flatten_z_per_iter: matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD)
@@ -1668,6 +1677,9 @@ impl ShaderBuilder {
         // the tone map can be told what share of the work the viewport
         // holds (docs/projects/flame-deep-zoom.md).
         processor.set("FRAME_COVERAGE", constants.frame_coverage);
+        // CYLINDER_REPLAY picks which arm of the forced prefix is
+        // emitted: the composed matrix, or the symbol walk.
+        processor.set("CYLINDER_REPLAY", constants.cylinder_replay);
         // FLATTEN_Z_PER_ITER used to insert a blanket `current.z = 0.0;`
         // at the end of each iteration under preserve_z=false. That
         // destroyed the z compounding JWF gets through unconditional
@@ -1940,6 +1952,7 @@ impl ShaderBuilder {
             importance_sampling: false,
             cylinder_targeting: false,
             frame_coverage: false,
+            cylinder_replay: false,
             flatten_z_per_iter: false,
             solid_enabled: false,
             probe: false,
@@ -3762,6 +3775,28 @@ mod tests {
             assert!(
                 !off.lines().any(|l| l.trim().starts_with("{{")),
                 "3d={render_3d}: an unresolved template marker survived"
+            );
+
+            // With targeting on but REPLAY off, the composed arm is
+            // emitted and the symbol walk must not be: the two read
+            // incompatible buffer layouts, and emitting the wrong one
+            // renders an empty frame.
+            for needle in ["ct_stride", "ct_sym", "ct_len"] {
+                assert!(
+                    !with.contains(needle),
+                    "3d={render_3d}: `{needle}` leaked into the composed arm"
+                );
+            }
+            let mut replay = ShaderConstants::default();
+            replay.cylinder_targeting = true;
+            replay.cylinder_replay = true;
+            let walked =
+                builder.build_from_template(&flame, &active, render_3d, false, false, true, &replay);
+            assert!(walked.contains("fn ct_stride"), "3d={render_3d}: no replay accessor");
+            assert!(walked.contains("ct_sym"), "3d={render_3d}: the replay does not read symbols");
+            assert!(
+                !walked.contains("cylinders[ct_w + 4u]"),
+                "3d={render_3d}: the composed arm leaked into the replay"
             );
 
             assert!(with.contains("@binding(15) var<storage, read> cylinders"), "3d={render_3d}: no binding");
