@@ -1199,7 +1199,90 @@ The cheap and the decisive first. Each item names its plan.
    the first time. On the CPU only: 6x the beam's cost at 11% pixel
    noise, 103x at 2.5%, so shipping it means a progressive render
    and that is a design decision rather than a gate.
-8. **`BigFloat` exp, sin, cos**, and the Taylor rung's remainders,
-   for Disc, Blob and the non-integer roots.
+8. ~~**`BigFloat` exp, sin, cos**~~ -- done 2026-09-18, §3g. The
+   type has `exp`, `sin_cos` and `powf` now, each holding 248 bits
+   of 256 against its own identities, and implements
+   `Transcendental` -- so `big_kernel_inverse` STOPS BEING A
+   TRANSCRIPTION: `kernel_inverse_gen` at `BigFloat` is the same
+   body the f64 walk runs. Five of the seven kernels could not take
+   a prefix step before and all seven can now; `blob` hands over at
+   level 9/27/54 across 2^16 to 2^64 where it read 0/0/0, and
+   `hemisphere` at 7/19/41. Two places the transcription DISAGREED
+   with f64 came out with it, both found by asserting parity rather
+   than by looking.
 9. **3D** (D5 here), once a solid exists that a deep zoom would
    show.
+
+## 3g. `BigFloat` learns exp and sin, and a transcription dies, 2026-09-18
+
+Item 8 of §9. The type had `sqrt`, `ln` and `atan2`; it now has
+`exp`, `sin_cos` and `powf`, and implements `Transcendental`.
+
+**The implementation is argument reduction plus a series plus
+reconstruction, and the reconstruction is where it can lose.** `exp`
+writes `x = k ln2 + r`, halves `r` to under `2^-32` and squares back;
+`sin_cos` reduces modulo `2 pi` at FULL width, halves the same way,
+and rebuilds with the double-angle formulas. Each of those thirty-odd
+steps DOUBLES the relative error, so a series summed at the caller's
+width comes back thirty bits short of it -- measured, 222 bits of
+256. One guard limb fixes it: 248 of 256, which is the accumulated
+rounding and nothing more.
+
+The gate is identities, not `f64`. Agreeing with `f64` says the first
+seventeen digits are right and the whole point of this type is the
+ones after them, so `exp(a)exp(b) = exp(a+b)`, `sin² + cos² = 1`,
+`sin 2a = 2 sin a cos a` and `exp(ln x) = x` are asked at the full
+width. (The first of those read 55 bits until the sum `a + b` was
+formed in `BigFloat` rather than in f64: `0.3 + 0.7` is
+`0.9999999999999999`, and the test's own arithmetic was the error.)
+
+**What it bought: `big_kernel_inverse` stops being a transcription.**
+It was a hand-written body covering two kernels of seven -- a
+`spherical` and an integer-distance root, both buildable from
+multiplication and one reciprocal -- and the other five declined, so
+the prefix stopped at level 0 on exactly the kernels a curved flame
+is made of. `kernel_inverse_gen` at `BigFloat` is now the
+implementation, and there is one derivation rather than two.
+
+Handover level at 2^16 / 2^32 / 2^64, and how many of the sampled
+`(point, map)` pairs the prefix can step through:
+
+| kernel | before | after | steps |
+|---|---|---|---|
+| spherical | 22 / 59 / 98 | 22 / 59 / 98 | 867 / 867 |
+| bubble | 0 / 0 / 0 | 5 / 5 / 5 | 289 → 563 / 1445 |
+| hemisphere | 0 / 0 / 0 | 7 / 19 / 41 | 289 → 459 / 867 |
+| disc | 0 / 0 / 0 | 0 / 0 / 0 | 289 → 593 / 867 |
+| blob | 0 / 0 / 0 | 9 / 27 / 54 | 578 → 867 / 867 |
+
+`spherical` is the control and does not move. `blob` and
+`hemisphere` follow the zoom, which is what a deep view needs.
+`bubble` settles at five because its inverse EXPANDS and the
+objective's two errors balance there at every zoom. `disc` still
+reads zero and it is not this rung: its steps went 289 to 593 like
+the others, but at that fixture's own attractor point both of its
+branches are outside the image -- which the f64 walk agrees about --
+so there is no child to hand over to.
+
+**Two disagreements came out with the transcription, and both were
+found by asserting parity rather than by looking.** The gate now
+asks that the `BigFloat` step exist exactly where the f64 one does,
+over a grid of the ball and every map:
+
+- the transcription declined the ORIGIN under an inversion, and the
+  f64 walk takes it -- both bodies clamp the denominator to
+  `f64::MIN_POSITIVE`, so `0/eps` is zero and the origin maps to
+  itself;
+- gating the big step by `kernel_inverse_domain`, which the first
+  version of this did, is STRICTER than the f64 walk: `disc` at the
+  origin is inside the image and outside the domain. The domain test
+  answers "may a derivative be taken here", which is a different
+  question from "is there a step", and using one for the other made
+  the two sides disagree about a point the walk steps through
+  perfectly well.
+
+**Open.** The Taylor rung's remainders for these kernels were
+already measured, by `measure_third`'s sampled Hessian over the ball
+-- that arrived with the trapezoid in §3c and did not wait for this.
+What is still hand-written is `BigComplex`, the escape engine's own
+complex type, which has its own `ln` and no relation to any of this.
