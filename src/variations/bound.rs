@@ -162,22 +162,62 @@ pub static SPHERICAL_BOUND: BoundDef = BoundDef {
 // bubble
 // ===========================================================================
 
-/// `p / (|p|²/4 + 1)` — bounded everywhere.
+/// `p / (|p|²/4 + 1)` — bounded everywhere, and contractive away
+/// from the origin.
 ///
 /// # Derivation
 ///
-/// `|V(p)| = t/(t²/4 + 1) = 4t/(t² + 4)`, maximised at `t = 2` where
-/// it equals 1. So the image of ANY input disc lies in the unit disc
-/// about the origin, whatever the input is, and the bound needs
-/// neither the input's position nor a derivative.
+/// Two bounds, and the tighter one wins.
 ///
-/// Tighter bounds exist — `4t/(t²+4)` is monotone away from `t = 2`,
-/// so a disc that stays on one side of it maps into an annulus — but
-/// this one is exact where it matters (a flame using `bubble` at
-/// depth is inside the unit disc anyway) and cannot be got wrong.
+/// **The global one.** `|V(p)| = t/(t²/4 + 1) = 4t/(t² + 4)` is
+/// maximised at `t = 2` where it equals 1, so the image of ANY input
+/// disc lies in the unit disc about the origin.
+///
+/// **The Lipschitz one**, which is the one the enumeration needs. For
+/// `s = 1 + t²/4`, `Dg = I/s − ppᵀ/(2s²)`, with eigenvalues `1/s`
+/// across the radius and `(2 − t²/2)/(2s²)` along it. Both are bounded
+/// above by 1 and both fall off like `1/t²`, so a disc away from the
+/// origin is genuinely contracted:
+///
+/// - the across-radius term is decreasing in `t`, so its supremum is
+///   at the disc's nearest approach to the origin;
+/// - the along-radius term, written in `v = 1 + t²/4`, is
+///   `(v − 2)/v²` past `t = 2`, whose derivative `(4 − v)/v³`
+///   vanishes at `v = 4`. So past `t = 2` it never exceeds **1/8**,
+///   and below `t = 2` it is decreasing and again largest at the
+///   nearest approach.
+///
+/// **Why both are kept.** The global bound alone is sound but useless
+/// to a deep zoom: it claims the unit disc no matter how small the
+/// input, so a word ending in `bubble` never shrinks, the enumeration
+/// never reaches its stopping rule, and every word survives to the
+/// depth cap. A bound can be perfectly correct and still make the
+/// thing that consumes it useless — which is why the contract is a
+/// disc rather than a yes/no, and why this one reports whichever of
+/// the two discs is smaller.
 pub static BUBBLE_BOUND: BoundDef = BoundDef {
     name: "bubble",
-    planar: |_p, w, _b| Some(Ball::new([0.0, 0.0], w.abs())),
+    planar: |_p, w, b| {
+        let (near, far) = b.radial_span();
+        let s = 1.0 + near * near / 4.0;
+        // Across the radius: decreasing, so the nearest point decides.
+        let mut l = 1.0 / s;
+        // Along it: decreasing below t = 2 and never past 1/8 above.
+        l = l.max((2.0 - near * near / 2.0).abs() / (2.0 * s * s));
+        if far * far > 4.0 {
+            l = l.max(0.125);
+        }
+        let sc = 1.0 + (b.c[0] * b.c[0] + b.c[1] * b.c[1]) / 4.0;
+        let lip = Ball::new([w * b.c[0] / sc, w * b.c[1] / sc], w.abs() * l * b.r);
+        let global = Ball::new([0.0, 0.0], w.abs());
+        // Both are sound, so taking either is sound; take the one
+        // that claims less.
+        if lip.r < global.r {
+            Some(lip)
+        } else {
+            Some(global)
+        }
+    },
 };
 
 // ===========================================================================
@@ -492,45 +532,58 @@ mod tests {
         }
     }
 
-    /// The direction of the whole contract: growing the input disc
-    /// must never SHRINK the claimed output disc.
+    /// Two sound discs need not nest, and the enumeration does not
+    /// need them to.
     ///
-    /// A bound that tightened as its input grew would be reporting
-    /// something other than a containment, and the failure it would
-    /// cause downstream — a word dropped that did reach the view — is
-    /// invisible in the render.
+    /// This test replaced one that asserted the opposite — that
+    /// growing the input disc never shrinks the claim — which looked
+    /// like the contract and was not. `bubble` reports whichever of
+    /// its two derivations claims less, so a larger input can cross
+    /// over from the Lipschitz disc to the global one and come back
+    /// with a SMALLER reach. Both discs contain the image, so both
+    /// are correct.
+    ///
+    /// The pruning that consumes these bounds is still sound, and for
+    /// a reason that has nothing to do with nesting: a child's TRUE
+    /// image is a subset of its parent's true image, which is inside
+    /// the parent's claim. So if the parent's claim misses the view,
+    /// the child's image misses it too, whatever disc the child's own
+    /// bound would have named.
+    ///
+    /// What every bound must do is contain the image, and only the
+    /// GPU gate can check that.
     #[test]
-    fn a_bigger_input_never_claims_a_smaller_image() {
+    fn a_claim_is_finite_and_non_negative() {
         let p = params(&[("power", 2.0), ("dist", 1.0)]);
         for d in BOUNDS {
             for centre in [[0.0, 0.0], [1.0, 0.0], [3.0, -2.0]] {
-                let mut prev: Option<Ball> = None;
-                for r in [0.01f64, 0.05, 0.2, 0.5, 1.0] {
+                for r in [0.0f64, 0.01, 0.2, 1.0, 50.0] {
                     let Some(out) = (d.planar)(&p, 1.0, Ball::new(centre, r)) else {
                         continue;
                     };
-                    if let Some(prev) = prev {
-                        // Compare the reach from the origin, since a
-                        // bound may recentre its disc.
-                        let reach = |b: &Ball| {
-                            (b.c[0] * b.c[0] + b.c[1] * b.c[1]).sqrt() + b.r
-                        };
-                        assert!(
-                            reach(&out) >= reach(&prev) - 1e-9,
-                            "{}: input radius {r} claims a smaller image than the disc inside it",
-                            d.name
-                        );
-                    }
-                    prev = Some(out);
+                    assert!(
+                        out.r >= 0.0 && out.r.is_finite(),
+                        "{}: claimed radius {} at input radius {r}",
+                        d.name,
+                        out.r
+                    );
+                    assert!(
+                        out.c[0].is_finite() && out.c[1].is_finite(),
+                        "{}: claimed centre {:?} at input radius {r}",
+                        d.name,
+                        out.c
+                    );
                 }
             }
         }
     }
 
-    /// `bubble` maps the whole plane into the unit disc, so the bound
-    /// must not depend on where it is asked.
+    /// `bubble` never claims more than the unit disc, and on a small
+    /// disc away from the origin it claims far less — which is the
+    /// difference between a bound the enumeration can use and one it
+    /// cannot.
     #[test]
-    fn bubble_is_bounded_wherever_it_is_asked() {
+    fn bubble_is_bounded_and_contracts_away_from_the_origin() {
         let p = params(&[]);
         for b in [
             Ball::new([0.0, 0.0], 0.1),
@@ -538,8 +591,20 @@ mod tests {
             Ball::new([0.0, 0.0], 1e30),
         ] {
             let out = (BUBBLE_BOUND.planar)(&p, 1.0, b).expect("bubble is always bounded");
-            assert_eq!(out.r, 1.0, "bubble's image is the unit disc at weight one");
+            assert!(out.r <= 1.0, "bubble's image is inside the unit disc, got {}", out.r);
         }
+
+        // The case the enumeration lives on: a small disc far from
+        // the origin must come back SMALLER than it went in, or a
+        // word ending in `bubble` never reaches the stopping rule.
+        let small = Ball::new([3.0, 0.0], 1e-3);
+        let out = (BUBBLE_BOUND.planar)(&p, 1.0, small).unwrap();
+        assert!(
+            out.r < small.r,
+            "bubble must contract a small distant disc, got {} from {}",
+            out.r,
+            small.r
+        );
     }
 
     /// `julian`'s sign cases, which is where its bound can be wrong.
