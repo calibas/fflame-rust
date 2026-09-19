@@ -3150,11 +3150,32 @@ pub trait SeedPoint3: Clone {
     fn apply_affine3(&self, a: &Affine3) -> Self;
     fn distance_to(&self, p: [f64; 3]) -> f64;
     fn to_f64(&self) -> [f64; 3];
+
+    /// One inverse step of any solid map, at this point's own
+    /// precision (item 9 of the delta plan's order of work).
+    ///
+    /// The chain took `apply_affine3` alone and stopped the moment it
+    /// met a nonlinear map, so every nonlinear solid handed over at
+    /// level 0 -- which is the plane's state before its own handover
+    /// learned to carry a Jacobian. `None` where the step does not
+    /// exist: outside the kernel's image, at a pole, or at a map this
+    /// point's type cannot take.
+    fn apply_map3(&self, m: &Map3, aux: f64) -> Option<Self>;
 }
 
 impl SeedPoint3 for [f64; 3] {
     fn apply_affine3(&self, a: &Affine3) -> Self {
         a.apply(*self)
+    }
+
+    fn apply_map3(&self, m: &Map3, aux: f64) -> Option<Self> {
+        let q = match m {
+            Map3::Affine(a) => a.apply(*self),
+            Map3::NonlinearInverse(r) => r.apply_inverse_aux(*self, aux).0,
+            // The walk only ever inverts.
+            Map3::Nonlinear(_) => return None,
+        };
+        q.iter().all(|v| v.is_finite()).then_some(q)
     }
 
     fn distance_to(&self, p: [f64; 3]) -> f64 {
@@ -3285,9 +3306,22 @@ pub fn seed_chain3<P: SeedPoint3>(
         }
         None => (target, 1.0, Affine3::IDENTITY.m),
     };
-    // The reference/delta split is affine (plan §8.5): a nonlinear
-    // solid hands over at level 0 and the walk starts from the delta.
-    let affine = ifs.maps.iter().all(|m| m.inverse.is_affine());
+    // Whether every map's derivative along the slice is a 3x3 the
+    // chain can carry. It is, unless a QUATERNION is present: its
+    // inverse moves the slice's scalar, so the next level's input
+    // scalar depends on this level's position and a 3x3 leaves that
+    // dependence out (`NonlinearMap3::aux_is_carried`).
+    //
+    // This used to read `all(is_affine)`, and every nonlinear solid
+    // therefore handed over at level 0 at every zoom -- measured, 0
+    // against the affine tetrahedron's 11/19/35/52 across 2^8 to
+    // 2^64. A `julia3D` has a perfectly good Jacobian; the chain
+    // simply had no way to ask for one.
+    let carries = ifs
+        .maps
+        .iter()
+        .all(|m| m.inverse.is_affine() || m.inverse.nonlinear().is_some_and(|r| r.aux_is_carried()));
+    let aux0 = ifs.aux_centre;
 
     let r0 = q0.distance_to(ball);
     let mut live = vec![Cand {
@@ -3365,8 +3399,8 @@ pub fn seed_chain3<P: SeedPoint3>(
             break;
         }
         // A single pixel already fills the cap: no sample can reach a
-        // deeper link. A nonlinear map has no matrix to carry a delta.
-        if !affine || mats.iter().any(|m| frobenius3(*m) * finest >= cap) {
+        // deeper link.
+        if !carries || mats.iter().any(|m| frobenius3(*m) * finest >= cap) {
             break;
         }
 
@@ -3383,9 +3417,17 @@ pub fn seed_chain3<P: SeedPoint3>(
                 if !admits(ifs, i, last) {
                     continue;
                 }
-                let inv = map.inverse.as_affine().expect("checked affine above");
-                let q = c.q.apply_affine3(&inv);
-                let sigma = c.sigma * map.sigma_min;
+                // The derivative is taken at THIS candidate's own
+                // position, which for an affine map is its constant
+                // matrix and for a nonlinear one is the thing that
+                // makes the carry local. A map with no derivative
+                // here -- a pole, or a point outside the kernel's
+                // image -- drops the child rather than the chain:
+                // its siblings may still carry.
+                let here = c.q.to_f64();
+                let Some(jm) = map.inverse.jacobian(here, aux0) else { continue };
+                let Some(q) = c.q.apply_map3(&map.inverse, aux0) else { continue };
+                let sigma = c.sigma * map.sigma_min * map.inverse.local_sigma_factor3(here, aux0);
                 let r = q.distance_to(ball);
                 let mut child = c.clone();
                 child.q = q;
@@ -3394,7 +3436,7 @@ pub fn seed_chain3<P: SeedPoint3>(
                 child.r = r;
                 child.address.push(i as u32);
                 next.push(child);
-                next_mats.push(compose3(&inv, *m));
+                next_mats.push(compose_m3(jm, *m));
             }
         }
         // The same ranking the walk uses — and the matrices have to
@@ -3619,15 +3661,18 @@ fn view_agrees(
 }
 
 /// Compose an inverse map's LINEAR part onto a delta matrix.
-fn compose3(inv: &Affine3, m: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
+/// Two raw 3x3s, `a · b` -- what a nonlinear carry composes, since a
+/// Jacobian has no translation to keep beside it.
+fn compose_m3(a: [[f64; 3]; 3], b: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
     let mut out = [[0.0; 3]; 3];
     for (i, row) in out.iter_mut().enumerate() {
         for (j, cell) in row.iter_mut().enumerate() {
-            *cell = (0..3).map(|k| inv.m[i][k] * m[k][j]).sum();
+            *cell = (0..3).map(|k| a[i][k] * b[k][j]).sum();
         }
     }
     out
 }
+
 
 fn apply3(m: [[f64; 3]; 3], d: [f64; 3]) -> [f64; 3] {
     [

@@ -466,6 +466,169 @@ pub fn cpow_delta<T: Real>(z: &[T; 2], w: &[T; 2], d: &[T; 2], n: u32) -> [T; 2]
 /// `Dual<T>` and reads the gradients off the result. `None` when any
 /// component is not finite, which is how a kernel's pole and the
 /// edge of its image report themselves without a separate rule.
+/// A [`Dual`] with THREE derivative slots, for a map of three
+/// variables.
+///
+/// [`Dual`] carries two because the plane needs two. The solid needs
+/// three, and the alternative to a second type was making the slot
+/// count a const generic -- which every caller would then have to
+/// name, in a codebase where all but one of them is planar.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Dual3<T> {
+    pub v: T,
+    pub d: [T; 3],
+}
+
+impl<T: Real> Dual3<T> {
+    pub fn constant(v: T) -> Self {
+        let z = v.zero();
+        Self { d: [z.clone(), z.clone(), z], v }
+    }
+
+    /// `v`, differentiated with respect to slot `k`.
+    pub fn variable(v: T, k: usize) -> Self {
+        let mut out = Self::constant(v);
+        out.d[k] = out.v.one();
+        out
+    }
+}
+
+impl<T: Real> Real for Dual3<T> {
+    fn lit(&self, v: f64) -> Self {
+        Self::constant(self.v.lit(v))
+    }
+    fn to_f64(&self) -> f64 {
+        self.v.to_f64()
+    }
+    fn add(&self, o: &Self) -> Self {
+        Self {
+            v: self.v.add(&o.v),
+            d: [self.d[0].add(&o.d[0]), self.d[1].add(&o.d[1]), self.d[2].add(&o.d[2])],
+        }
+    }
+    fn sub(&self, o: &Self) -> Self {
+        Self {
+            v: self.v.sub(&o.v),
+            d: [self.d[0].sub(&o.d[0]), self.d[1].sub(&o.d[1]), self.d[2].sub(&o.d[2])],
+        }
+    }
+    fn mul(&self, o: &Self) -> Self {
+        Self {
+            v: self.v.mul(&o.v),
+            d: [
+                self.d[0].mul(&o.v).add(&self.v.mul(&o.d[0])),
+                self.d[1].mul(&o.v).add(&self.v.mul(&o.d[1])),
+                self.d[2].mul(&o.v).add(&self.v.mul(&o.d[2])),
+            ],
+        }
+    }
+    fn div(&self, o: &Self) -> Self {
+        let inv = o.v.recip();
+        let inv2 = inv.mul(&inv);
+        Self {
+            v: self.v.mul(&inv),
+            d: [
+                self.d[0].mul(&o.v).sub(&self.v.mul(&o.d[0])).mul(&inv2),
+                self.d[1].mul(&o.v).sub(&self.v.mul(&o.d[1])).mul(&inv2),
+                self.d[2].mul(&o.v).sub(&self.v.mul(&o.d[2])).mul(&inv2),
+            ],
+        }
+    }
+    fn neg(&self) -> Self {
+        Self {
+            v: self.v.neg(),
+            d: [self.d[0].neg(), self.d[1].neg(), self.d[2].neg()],
+        }
+    }
+    fn sqrt(&self) -> Self {
+        let r = self.v.sqrt();
+        // `1/(2√v)`, and at v = 0 the derivative is infinite -- which
+        // the caller reads as "no Jacobian here", the same answer the
+        // plane's `Dual` gives.
+        let k = r.add(&r).recip();
+        Self {
+            v: r,
+            d: [self.d[0].mul(&k), self.d[1].mul(&k), self.d[2].mul(&k)],
+        }
+    }
+    fn cmp_f64(&self, v: f64) -> std::cmp::Ordering {
+        self.v.cmp_f64(v)
+    }
+    fn is_finite(&self) -> bool {
+        self.v.is_finite() && self.d.iter().all(|x| x.is_finite())
+    }
+}
+
+impl<T: Transcendental> Transcendental for Dual3<T> {
+    fn exp(&self) -> Self {
+        let e = self.v.exp();
+        Self {
+            v: e.clone(),
+            d: [self.d[0].mul(&e), self.d[1].mul(&e), self.d[2].mul(&e)],
+        }
+    }
+    fn ln(&self) -> Self {
+        let inv = self.v.recip();
+        Self {
+            v: self.v.ln(),
+            d: [self.d[0].mul(&inv), self.d[1].mul(&inv), self.d[2].mul(&inv)],
+        }
+    }
+    fn sin(&self) -> Self {
+        let (s, c) = self.v.sin_cos();
+        Self {
+            v: s,
+            d: [self.d[0].mul(&c), self.d[1].mul(&c), self.d[2].mul(&c)],
+        }
+    }
+    fn cos(&self) -> Self {
+        let (s, c) = self.v.sin_cos();
+        let m = s.neg();
+        Self {
+            v: c,
+            d: [self.d[0].mul(&m), self.d[1].mul(&m), self.d[2].mul(&m)],
+        }
+    }
+    fn atan2(y: &Self, x: &Self) -> Self {
+        // d atan2(y, x) = (x dy − y dx) / (x² + y²).
+        let den = x.v.mul(&x.v).add(&y.v.mul(&y.v)).recip();
+        Self {
+            v: T::atan2(&y.v, &x.v),
+            d: [
+                x.v.mul(&y.d[0]).sub(&y.v.mul(&x.d[0])).mul(&den),
+                x.v.mul(&y.d[1]).sub(&y.v.mul(&x.d[1])).mul(&den),
+                x.v.mul(&y.d[2]).sub(&y.v.mul(&x.d[2])).mul(&den),
+            ],
+        }
+    }
+}
+
+/// The Jacobian of a map of three variables, by [`Dual3`].
+///
+/// `J[i][j] = ∂out_i/∂in_j`. `None` where any entry is not finite --
+/// a pole, a branch cut, or a point the map does not reach.
+pub fn jacobian3<F>(at: [f64; 3], f: F) -> Option<[[f64; 3]; 3]>
+where
+    F: Fn([Dual3<f64>; 3]) -> [Dual3<f64>; 3],
+{
+    let arg = [
+        Dual3::variable(at[0], 0),
+        Dual3::variable(at[1], 1),
+        Dual3::variable(at[2], 2),
+    ];
+    let out = f(arg);
+    let mut j = [[0.0f64; 3]; 3];
+    for i in 0..3 {
+        for k in 0..3 {
+            j[i][k] = out[i].d[k];
+            if !j[i][k].is_finite() {
+                return None;
+            }
+        }
+    }
+    Some(j)
+}
+
 pub fn jacobian2<T, F>(p: [T; 2], f: F) -> Option<[[T; 2]; 2]>
 where
     T: Real,

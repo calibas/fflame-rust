@@ -4376,6 +4376,37 @@ pub fn pack_seeds(
 /// The 3D twin, and for the same reason: the target is the only thing
 /// that needs digits, and only until the chain hands over.
 impl crate::scene::ifs_estimate::SeedPoint3 for [super::bigfloat::BigFloat; 3] {
+    /// One inverse step at arbitrary precision -- the solid twin of
+    /// the plane's [`big_kernel_inverse`], and the reason item 8 came
+    /// first: `NonlinearMap3::apply_inverse_gen` needs `BigFloat` to
+    /// be a `Transcendental`, and until `exp`, `sin` and `cos` landed
+    /// it was not one.
+    ///
+    /// `None` where the f64 walk would decline too: the sentinel the
+    /// generic body returns outside a kernel's image is read by the
+    /// same `> 1e29` test `apply_inverse_aux` uses.
+    fn apply_map3(
+        &self,
+        m: &crate::scene::ifs_analysis::Map3,
+        aux: f64,
+    ) -> Option<Self> {
+        use crate::scene::ifs_analysis::Map3;
+        use crate::scene::ifs_estimate::SeedPoint3;
+        let out = match m {
+            Map3::Affine(a) => self.apply_affine3(a),
+            Map3::NonlinearInverse(r) => {
+                let a = super::bigfloat::BigFloat::from_f64(aux, self[0].n_limbs());
+                r.apply_inverse_gen(self, &a).0
+            }
+            // The walk only ever inverts.
+            Map3::Nonlinear(_) => return None,
+        };
+        let f = [out[0].to_f64(), out[1].to_f64(), out[2].to_f64()];
+        f.iter()
+            .all(|v| v.is_finite() && v.abs() < 1e29)
+            .then_some(out)
+    }
+
     fn apply_affine3(&self, a: &crate::scene::ifs_analysis::Affine3) -> Self {
         let n = self[0].n_limbs().max(self[1].n_limbs()).max(self[2].n_limbs());
         let big = |v: f64| super::bigfloat::BigFloat::from_f64(v, n);
@@ -13830,6 +13861,471 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         }
     }
 
+    /// What stops a SOLID prefix from descending, measured per set.
+    ///
+    /// Item 9 of the delta plan's order of work, and the measurement
+    /// that localises it. `seed_chain3` walks the view's target down
+    /// the beam and hands each ray a delta; how far it gets is the
+    /// chain's depth, and a nonlinear solid used to get NOWHERE --
+    /// the chain refused any map that was not affine, so every
+    /// `julia3D`, `julia3Dz` and quaternion solid handed over at level
+    /// 0 at every zoom while the affine tetrahedron reached 52.
+    ///
+    /// That refusal is gone: `Map3::jacobian` differentiates the same
+    /// generic body the walk runs, `SeedPoint3::apply_map3` takes the
+    /// step at f64 or `BigFloat`, and the chain composes the Jacobian
+    /// exactly as the plane's `seed_beam` composes its basis.
+    ///
+    /// **It is not what was limiting them.** Measured after, depth at
+    /// 2^8 / 2^32 / 2^64 for beams 1, 4 and 8:
+    ///
+    /// ```text
+    ///   tetrahedron   11 / 35 / 52   1 / 1 / 1   1 / 1 / 1
+    ///   julia3D        0 /  0 /  0   1 / 1 / 1   1 / 1 / 1
+    ///   julia3Dz       0 /  0 /  0   1 / 1 / 1   1 / 1 / 1
+    ///   quaternion     0 /  0 /  0   0 / 0 / 0   0 / 0 / 0
+    /// ```
+    ///
+    /// A nonlinear solid takes ONE step now where it took none, and
+    /// stops. What stops it is the chain's view-agreement rule, not
+    /// the affine restriction: a link may prune a branch only if every
+    /// sample it serves would prune it too, and a sample of a link
+    /// sits anywhere within `cap` of its reference -- a quarter of the
+    /// ball, at EVERY level, because a chain serves a whole range of
+    /// delta sizes rather than one view's. The plane's beam tests the
+    /// same thing against its own composed reach, which SHRINKS with
+    /// depth; the solid's cannot, and the bound is tight for the
+    /// largest delta the link serves rather than loose.
+    ///
+    /// The same rule is why a WIDER beam makes the tetrahedron's chain
+    /// shorter, 52 to 1: more candidates to agree about. A beam of one
+    /// is the solid default for that reason.
+    ///
+    /// So descending a nonlinear solid needs what the plane's item 5
+    /// needed -- a walk where each lineage carries its own delta and
+    /// rebases when ITS offset grows, rather than a shared chain with
+    /// one cap for all of them. That is D5 proper, and this is the
+    /// measurement that says the cheap half of it is done and the
+    /// expensive half is the whole delta walk again.
+    ///
+    /// The quaternion reads zero at every beam and that is deliberate:
+    /// its inverse moves the slice's scalar, so no 3×3 describes its
+    /// step and `NonlinearMap3::aux_is_carried` declines rather than
+    /// carrying a derivative with a term missing.
+    #[test]
+    fn what_stops_a_solid_prefix_from_descending() {
+        let guard = global_registry();
+        let cases: Vec<(&str, Flame, bool)> = vec![
+            ("tetrahedron (affine)", tetrahedron_flame(), true),
+            ("julia3D pair", julia3d_pair_flame(), false),
+            ("julia3Dz pair", julia3dz_pair_flame(), false),
+            (
+                "quaternion pair",
+                quaternion_ifs_flame(&[[-0.2, 0.6, 0.2, 0.0], [0.3, -0.4, 0.1, 0.0]]),
+                false,
+            ),
+        ];
+        println!("  {:<22} {:>6}  depth at 2^8/2^32/2^64, beams 1, 4, 8", "set", "maps");
+        for (name, flame, affine) in cases {
+            let ifs3 = crate::scene::ifs_analysis::analyse_3d(&flame, &guard)
+                .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            assert_eq!(
+                affine,
+                ifs3.maps.iter().all(|m| m.inverse.is_affine()),
+                "{name} is not the arm it is labelled as"
+            );
+            let mut target = ifs3.ball.centre;
+            for k in 0..80u32 {
+                target = ifs3.maps[(k as usize) % ifs3.maps.len()].forward.apply(target);
+            }
+            assert!(target.iter().all(|v| v.is_finite()), "{name}: the orbit left space");
+            let mut depths = Vec::new();
+            for beam in [1u32, 4, 8] {
+                for &zoom in &[8.0f64, 32.0, 64.0] {
+                    let px = 4.0 / 2f64.powf(zoom) / 128.0;
+                    let chain = crate::scene::ifs_estimate::seed_chain3(
+                        &ifs3,
+                        target,
+                        px,
+                        zoom as u32 + 64,
+                        beam,
+                    );
+                    depths.push(chain.levels.len().saturating_sub(1));
+                }
+            }
+            println!("  {name:<22} {:>6}  {depths:?}", ifs3.maps.len());
+            let quaternion = name.starts_with("quaternion");
+            if affine {
+                // The shipped case, and the one that must not move:
+                // beam 1 descends, and deeper zooms descend further.
+                assert!(
+                    depths[0] > 5 && depths[2] > depths[0],
+                    "{name}: the affine chain stopped following the zoom ({depths:?})"
+                );
+            } else if quaternion {
+                // Declines by design: no 3x3 describes a step that
+                // moves the slice's scalar.
+                assert!(
+                    depths.iter().all(|&d| d == 0),
+                    "{name}: a quaternion carried a delta it cannot describe ({depths:?})"
+                );
+            } else {
+                // The step that used to be impossible. It is one step,
+                // and the doc above says what stops the second.
+                assert!(
+                    depths[3] >= 1,
+                    "{name}: a nonlinear solid takes no prefix step at all, which is what \
+                     removing the affine restriction was for ({depths:?})"
+                );
+            }
+        }
+        drop(guard);
+    }
+
+    /// Where the centre ray of `cfg`'s camera meets the surface, in
+    /// world coordinates -- the point a user zooming into what they
+    /// see would be zooming toward.
+    ///
+    /// A solid IFS attractor with INTERIOR has nothing to zoom into at
+    /// a bulk point: the camera frames closer and closer and ends up
+    /// inside the object, every ray starting behind the surface. The
+    /// affine sets this project ships are measure-zero -- a
+    /// tetrahedron, a sponge -- so any attractor point is on the
+    /// boundary and the distinction never came up. A `julia3D` pair is
+    /// a blob, and it does.
+    pub(super) fn solid_centre_hit(
+        cfg: &crate::config::FractalConfig,
+        ifs3: &crate::scene::ifs_analysis::Ifs3,
+        levels: u32,
+    ) -> Option<[f64; 3]> {
+        let cam = solid_camera(&cfg.escape, ifs3);
+        let target = super::target_at_precision(&cfg.escape, ifs3)?;
+        let target = [target[0].to_f64(), target[1].to_f64(), target[2].to_f64()];
+        let finest = 2.0 * (cam.fov as f64 * 0.5).tan() * cam.distance / 256.0;
+        let chain = crate::scene::ifs_estimate::seed_chain3(
+            ifs3,
+            super::target_at_precision(&cfg.escape, ifs3)?,
+            finest,
+            64,
+            1,
+        );
+        let mut dir = cam.forward;
+        let n = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+        for d in dir.iter_mut() {
+            *d /= n;
+        }
+        let to_ball = [
+            target[0] - ifs3.ball.centre[0],
+            target[1] - ifs3.ball.centre[1],
+            target[2] - ifs3.ball.centre[2],
+        ];
+        let oc = [
+            cam.eye_rel[0] + to_ball[0],
+            cam.eye_rel[1] + to_ball[1],
+            cam.eye_rel[2] + to_ball[2],
+        ];
+        let b = oc[0] * dir[0] + oc[1] * dir[1] + oc[2] * dir[2];
+        let cc = oc[0] * oc[0] + oc[1] * oc[1] + oc[2] * oc[2]
+            - ifs3.ball.radius * ifs3.ball.radius;
+        let disc = b * b - cc;
+        if disc < 0.0 {
+            return None;
+        }
+        let root = disc.sqrt();
+        let mut t = (-b - root).max(0.0);
+        let t_max = -b + root;
+        // A tenth of the finest pixel: this wants the SURFACE, not a
+        // pixel-accurate first hit.
+        let eps = finest * 0.1;
+        for _ in 0..4096 {
+            if t > t_max {
+                return None;
+            }
+            let q = [
+                cam.eye_rel[0] + dir[0] * t,
+                cam.eye_rel[1] + dir[1] * t,
+                cam.eye_rel[2] + dir[2] * t,
+            ];
+            let d = crate::scene::ifs_estimate::estimate_seeded3(ifs3, &chain, q, levels, 1)
+                .distance;
+            if d < eps {
+                return Some([target[0] + q[0], target[1] + q[1], target[2] + q[2]]);
+            }
+            t += d.max(eps);
+        }
+        None
+    }
+
+    /// PROBE, item 9: how deep a NONLINEAR solid agrees, and what the
+    /// level-0 handover costs it.
+    ///
+    /// [`how_deep_a_solid_render_agrees_with_the_reference`] measures
+    /// the affine tetrahedron and reads 2^80. `seed_chain3` hands a
+    /// NONLINEAR solid over at level 0 by construction -- "the
+    /// reference/delta split is affine" -- so a nonlinear solid's
+    /// every ray starts from the target's own f32 position, which near
+    /// a coordinate of order one is quantised at 6e-8. This is the
+    /// same comparison on the sets that have no chain.
+    ///
+    /// The reference is f64 against the shader's f32, so it is
+    /// authoritative until f64 itself stops resolving a pixel from an
+    /// O(1) target -- around 2^40 -- which is far past where the f32
+    /// wall is expected. Past that the two lose accuracy together and
+    /// the comparison stops meaning anything; the zooms here stay
+    /// inside it.
+    #[test]
+    #[ignore = "needs a GPU; a survey"]
+    fn probe_how_deep_a_nonlinear_solid_agrees() {
+        const N: u32 = 96;
+        let (device, queue) = device();
+        for (name, flame) in [
+            ("tetrahedron (affine, control)", tetrahedron_flame()),
+            ("julia3D pair", julia3d_pair_flame()),
+            ("julia3Dz pair", julia3dz_pair_flame()),
+            (
+                "quaternion pair",
+                quaternion_ifs_flame(&[[-0.2, 0.6, 0.2, 0.0], [0.3, -0.4, 0.1, 0.0]]),
+            ),
+        ] {
+            let guard = global_registry();
+            let Ok(ifs3) = crate::scene::ifs_analysis::analyse_3d(&flame, &guard) else {
+                println!("  {name}: not a solid IFS");
+                continue;
+            };
+            drop(guard);
+            // The point the CENTRE RAY hits at zoom 0 -- where a user
+            // zooming into what they see would be zooming toward. An
+            // attractor point is the wrong choice on a set with
+            // interior: the camera ends up inside the object and every
+            // ray starts behind the surface (measured: 0% agreement
+            // from 2^8 on all three nonlinear sets, with the reference
+            // reporting all 9216 pixels hit).
+            let mut base = config_for(flame.clone());
+            base.escape.formula = "ifs_flame_3d".to_string();
+            let Some(target) = solid_centre_hit(&base, &ifs3, 40) else {
+                println!("  {name}: the centre ray misses the set");
+                continue;
+            };
+            base.escape.cam_target_x = format!("{:?}", target[0]);
+            base.escape.cam_target_y = format!("{:?}", target[1]);
+            base.escape.cam_target_z = format!("{:?}", target[2]);
+            println!(
+                "  === {name} at {target:?} ===\n  zoom  levels   agree   links  \
+                 (silhouette / interior)"
+            );
+            for &zoom in &[0.0f64, 16.0, 24.0, 32.0, 40.0, 44.0, 48.0, 56.0] {
+                let (levels, pct, hits, edge, inside, links) =
+                    solid_zoom_agreement(&device, &queue, &base, &ifs3, zoom, N);
+                println!(
+                    "  2^{zoom:<4} {levels:<7} {pct:>5.1}%  {links:>5}   ({edge} / {inside})  \
+                     {hits} hit"
+                );
+            }
+        }
+    }
+
+    /// One zoom of a solid render measured against the CPU f64
+    /// reference: the render, the same rays marched on the CPU, and
+    /// where the two disagree.
+    ///
+    /// Extracted from [`how_deep_a_solid_render_agrees_with_the_reference`]
+    /// so a second set can be measured the same way without a second
+    /// copy of the marcher -- two copies of a hundred lines of ray
+    /// arithmetic would drift, and the whole authority of this
+    /// comparison is that the reference marches the way the shader
+    /// does.
+    ///
+    /// Returns `(levels, agreement %, hits, silhouette disagreements,
+    /// interior disagreements, chain links)`. The split between the
+    /// last two is the point: a precision fault shows at the
+    /// SILHOUETTE, where a pixel is a hair from the surface either
+    /// way; a structural one -- a wrong link, a squared length, an
+    /// absolute floor -- shows INSIDE it.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn solid_zoom_agreement(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        base: &crate::config::FractalConfig,
+        ifs3: &crate::scene::ifs_analysis::Ifs3,
+        zoom: f64,
+        n: u32,
+    ) -> (u32, f64, usize, usize, usize, usize) {
+        let N = n;
+        let flame = base.flame.clone();
+        let _ = &flame;
+        let levels = (zoom as u32 + 24).min(256);
+        let mut c = base.clone();
+        c.escape.formula = "ifs_flame_3d".to_string();
+        // The DISTANCE colouring, with a mid-palette interior: a
+        // hit is lit whatever address it has. The address
+        // colouring maps some addresses near black, and "lit"
+        // would then be measuring the palette rather than the
+        // geometry.
+        c.escape.coloring = "ifs_distance".to_string();
+        c.escape.coloring_params.insert("interior".to_string(), 0.5);
+        c.escape.coloring_params.insert("bands".to_string(), 0.0);
+        c.escape.coloring_params.insert("edge".to_string(), 1.0);
+        c.escape.formula_params.insert("levels".to_string(), levels as f32);
+        // Lighting OFF, as flat ambient. This test asks where the
+        // SURFACE is, and it reads that off "is the pixel lit" --
+        // so a surface turned away from the key light and sitting
+        // in a crevice would be counted as absent, which is a
+        // statement about the rig rather than about the geometry.
+        // (Measured: it read 68% agreement at 2^16, where the
+        // geometry is exact.)
+        c.solid_shading.shading_strength = 1.0;
+        c.solid_shading.ambient = 1.0;
+        c.solid_shading.diffuse = 0.0;
+        c.solid_shading.specular = 0.0;
+        c.solid_shading.ssao_strength = 0.0;
+        c.escape.zoom_log2 = zoom;
+
+        let job = crate::renderer::RenderJob::new(&c, N, N);
+        let rgba = pollster::block_on(crate::renderer::render(
+            device,
+            queue,
+            job,
+            &mut crate::renderer::NoProgress,
+        ))
+        .expect("render")
+        .rgba_data;
+
+        // The same rays, marched on the CPU. Transcribed from the
+        // solid template rather than approximated -- a reference
+        // that marches differently measures the difference between
+        // two marchers, not the precision of one -- and seeded
+        // from the same chain, because the shader's total depth is
+        // its link plus its level count and a reference that
+        // stopped shallower would read the difference in DEPTH as
+        // a difference in precision.
+        let cam = solid_camera(&c.escape, ifs3);
+        let finest = 2.0 * (cam.fov as f64 * 0.5).tan() * cam.distance / N as f64;
+        let chain = crate::scene::ifs_estimate::seed_chain3(
+            ifs3,
+            super::target_at_precision(&c.escape, ifs3).expect("target parses"),
+            finest,
+            (zoom as u32 + 64).min(super::MAX_CHAIN_LINKS as u32),
+            1,
+        );
+        let tan_half = (cam.fov as f64 * 0.5).tan();
+        let steps = 96u32;
+        {
+            let d = cam.eye_rel[0]
+                .hypot(cam.eye_rel[1])
+                .hypot(cam.eye_rel[2]);
+            println!(
+                "        cap {:.4}, eye |delta| {:.3e}, link {}, finest {:.3e}",
+                chain.cap,
+                d,
+                chain.level_for(d),
+                finest
+            );
+        }
+        let mut refhit = vec![false; (N * N) as usize];
+        let mut agree = 0usize;
+        let mut hits = 0usize;
+        for y in 0..N {
+            for x in 0..N {
+                let u = (x as f64 + 0.5) / N as f64 - 0.5;
+                let v = (y as f64 + 0.5) / N as f64 - 0.5;
+                let mut dir = [0.0f64; 3];
+                for k in 0..3 {
+                    dir[k] = cam.forward[k] + cam.right[k] * (u * 2.0 * tan_half)
+                        - cam.up[k] * (v * 2.0 * tan_half);
+                }
+                let n = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+                for d in dir.iter_mut() {
+                    *d /= n;
+                }
+
+                // Everything below is an offset from the TARGET,
+                // exactly as the shader has it.
+                let eye_rel = cam.eye_rel;
+                let to_ball = [
+                    cam.target[0] - ifs3.ball.centre[0],
+                    cam.target[1] - ifs3.ball.centre[1],
+                    cam.target[2] - ifs3.ball.centre[2],
+                ];
+                let oc = [
+                    eye_rel[0] + to_ball[0],
+                    eye_rel[1] + to_ball[1],
+                    eye_rel[2] + to_ball[2],
+                ];
+                let b = oc[0] * dir[0] + oc[1] * dir[1] + oc[2] * dir[2];
+                let cc = oc[0] * oc[0] + oc[1] * oc[1] + oc[2] * oc[2]
+                    - ifs3.ball.radius * ifs3.ball.radius;
+                let disc = b * b - cc;
+                let mut hit = false;
+                if disc >= 0.0 {
+                    let root = disc.sqrt();
+                    let mut t = (-b - root).max(0.0);
+                    let t_max = -b + root;
+                    let px_at = 2.0 * tan_half / N as f64;
+                    for _ in 0..steps {
+                        if t > t_max {
+                            break;
+                        }
+                        let q = [
+                            eye_rel[0] + dir[0] * t,
+                            eye_rel[1] + dir[1] * t,
+                            eye_rel[2] + dir[2] * t,
+                        ];
+                        let d = crate::scene::ifs_estimate::estimate_seeded3(
+                            ifs3, &chain, q, levels, 1,
+                        )
+                        .distance;
+                        // The floor is only against t = 0; a
+                        // larger one would find the surface early
+                        // once the whole view is smaller than it,
+                        // which is the shader bug this test found.
+                        if d < (px_at * t).max(1e-300) {
+                            hit = true;
+                            break;
+                        }
+                        t += d;
+                    }
+                }
+                refhit[(y * N + x) as usize] = hit;
+                if hit {
+                    hits += 1;
+                }
+                let i = ((y * N + x) * 4) as usize;
+                let lit = rgba[i] as u32 + rgba[i + 1] as u32 + rgba[i + 2] as u32 > 24;
+                if lit == hit {
+                    agree += 1;
+                }
+            }
+        }
+        let total = (N * N) as usize;
+        let pct = 100.0 * agree as f64 / total as f64;
+        // Where the disagreement sits. A precision fault shows at
+        // the SILHOUETTE, where a pixel is a hair from the
+        // surface either way; a structural fault is spread through
+        // the interior.
+        let mut edge_dis = 0usize;
+        let mut interior_dis = 0usize;
+        for y in 1..N - 1 {
+            for x in 1..N - 1 {
+                let at = |xx: u32, yy: u32| refhit[(yy * N + xx) as usize];
+                let me = at(x, y);
+                let boundary = [(1i32, 0i32), (-1, 0), (0, 1), (0, -1)]
+                    .iter()
+                    .any(|(dx, dy)| at((x as i32 + dx) as u32, (y as i32 + dy) as u32) != me);
+                let i = ((y * N + x) * 4) as usize;
+                let lit = rgba[i] as u32 + rgba[i + 1] as u32 + rgba[i + 2] as u32 > 24;
+                if lit != me {
+                    if boundary {
+                        edge_dis += 1;
+                    } else {
+                        interior_dis += 1;
+                    }
+                }
+            }
+        }
+        let _ = &refhit;
+        (levels, pct, hits, edge_dis, interior_dis, chain.levels.len())
+    }
+
     /// How deep a SOLID zoom agrees with the reference — asked of the
     /// picture, not of the arithmetic.
     ///
@@ -13865,6 +14361,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         drop(guard);
 
         let (device, queue) = device();
+        // The target is the caller's: (6,5,3)/7, the fixed point of
+        // S1.S2.S3, written as decimal strings so it survives the
+        // parse at any width.
+        let mut base = config_for(flame.clone());
+        base.escape.cam_target_x = super::tests::decimal(6, 7, 60);
+        base.escape.cam_target_y = super::tests::decimal(5, 7, 60);
+        base.escape.cam_target_z = super::tests::decimal(3, 7, 60);
         println!("  zoom  levels   agree   (hit / miss on the reference)");
         // Gated to 2^80; printed past it, because what happens past
         // it is a graceful loss of precision rather than a cliff and
@@ -13873,179 +14376,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let mut worst_gated = 100.0f64;
         let mut worst_interior = 0usize;
         for &zoom in &[0.0f64, 16.0, 32.0, 48.0, 64.0, 80.0, 96.0, 112.0, 140.0] {
-            let levels = (zoom as u32 + 24).min(256);
-            let mut c = config_for(flame.clone());
-            c.escape.formula = "ifs_flame_3d".to_string();
-            // The DISTANCE colouring, with a mid-palette interior: a
-            // hit is lit whatever address it has. The address
-            // colouring maps some addresses near black, and "lit"
-            // would then be measuring the palette rather than the
-            // geometry.
-            c.escape.coloring = "ifs_distance".to_string();
-            c.escape.coloring_params.insert("interior".to_string(), 0.5);
-            c.escape.coloring_params.insert("bands".to_string(), 0.0);
-            c.escape.coloring_params.insert("edge".to_string(), 1.0);
-            c.escape.formula_params.insert("levels".to_string(), levels as f32);
-            // Lighting OFF, as flat ambient. This test asks where the
-            // SURFACE is, and it reads that off "is the pixel lit" --
-            // so a surface turned away from the key light and sitting
-            // in a crevice would be counted as absent, which is a
-            // statement about the rig rather than about the geometry.
-            // (Measured: it read 68% agreement at 2^16, where the
-            // geometry is exact.)
-            c.solid_shading.shading_strength = 1.0;
-            c.solid_shading.ambient = 1.0;
-            c.solid_shading.diffuse = 0.0;
-            c.solid_shading.specular = 0.0;
-            c.solid_shading.ssao_strength = 0.0;
-            c.escape.cam_target_x = super::tests::decimal(6, 7, 60);
-            c.escape.cam_target_y = super::tests::decimal(5, 7, 60);
-            c.escape.cam_target_z = super::tests::decimal(3, 7, 60);
-            c.escape.zoom_log2 = zoom;
-
-            let job = crate::renderer::RenderJob::new(&c, N, N);
-            let rgba = pollster::block_on(crate::renderer::render(
-                &device,
-                &queue,
-                job,
-                &mut crate::renderer::NoProgress,
-            ))
-            .expect("render")
-            .rgba_data;
-
-            // The same rays, marched on the CPU. Transcribed from the
-            // solid template rather than approximated -- a reference
-            // that marches differently measures the difference between
-            // two marchers, not the precision of one -- and seeded
-            // from the same chain, because the shader's total depth is
-            // its link plus its level count and a reference that
-            // stopped shallower would read the difference in DEPTH as
-            // a difference in precision.
-            let cam = solid_camera(&c.escape, &ifs3);
-            let finest = 2.0 * (cam.fov as f64 * 0.5).tan() * cam.distance / N as f64;
-            let chain = crate::scene::ifs_estimate::seed_chain3(
-                &ifs3,
-                super::target_at_precision(&c.escape, &ifs3).expect("target parses"),
-                finest,
-                (zoom as u32 + 64).min(super::MAX_CHAIN_LINKS as u32),
-                1,
-            );
-            let tan_half = (cam.fov as f64 * 0.5).tan();
-            let steps = 96u32;
-            {
-                let d = cam.eye_rel[0]
-                    .hypot(cam.eye_rel[1])
-                    .hypot(cam.eye_rel[2]);
-                println!(
-                    "        chain {} links, cap {:.4}, eye |delta| {:.3e}, link {}, finest {:.3e}",
-                    chain.levels.len(),
-                    chain.cap,
-                    d,
-                    chain.level_for(d),
-                    finest
-                );
-            }
-            let mut refhit = vec![false; (N * N) as usize];
-            let mut agree = 0usize;
-            let mut hits = 0usize;
-            for y in 0..N {
-                for x in 0..N {
-                    let u = (x as f64 + 0.5) / N as f64 - 0.5;
-                    let v = (y as f64 + 0.5) / N as f64 - 0.5;
-                    let mut dir = [0.0f64; 3];
-                    for k in 0..3 {
-                        dir[k] = cam.forward[k] + cam.right[k] * (u * 2.0 * tan_half)
-                            - cam.up[k] * (v * 2.0 * tan_half);
-                    }
-                    let n = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
-                    for d in dir.iter_mut() {
-                        *d /= n;
-                    }
-
-                    // Everything below is an offset from the TARGET,
-                    // exactly as the shader has it.
-                    let eye_rel = cam.eye_rel;
-                    let to_ball = [
-                        cam.target[0] - ifs3.ball.centre[0],
-                        cam.target[1] - ifs3.ball.centre[1],
-                        cam.target[2] - ifs3.ball.centre[2],
-                    ];
-                    let oc = [
-                        eye_rel[0] + to_ball[0],
-                        eye_rel[1] + to_ball[1],
-                        eye_rel[2] + to_ball[2],
-                    ];
-                    let b = oc[0] * dir[0] + oc[1] * dir[1] + oc[2] * dir[2];
-                    let cc = oc[0] * oc[0] + oc[1] * oc[1] + oc[2] * oc[2]
-                        - ifs3.ball.radius * ifs3.ball.radius;
-                    let disc = b * b - cc;
-                    let mut hit = false;
-                    if disc >= 0.0 {
-                        let root = disc.sqrt();
-                        let mut t = (-b - root).max(0.0);
-                        let t_max = -b + root;
-                        let px_at = 2.0 * tan_half / N as f64;
-                        for _ in 0..steps {
-                            if t > t_max {
-                                break;
-                            }
-                            let q = [
-                                eye_rel[0] + dir[0] * t,
-                                eye_rel[1] + dir[1] * t,
-                                eye_rel[2] + dir[2] * t,
-                            ];
-                            let d = crate::scene::ifs_estimate::estimate_seeded3(
-                                &ifs3, &chain, q, levels, 1,
-                            )
-                            .distance;
-                            // The floor is only against t = 0; a
-                            // larger one would find the surface early
-                            // once the whole view is smaller than it,
-                            // which is the shader bug this test found.
-                            if d < (px_at * t).max(1e-300) {
-                                hit = true;
-                                break;
-                            }
-                            t += d;
-                        }
-                    }
-                    refhit[(y * N + x) as usize] = hit;
-                    if hit {
-                        hits += 1;
-                    }
-                    let i = ((y * N + x) * 4) as usize;
-                    let lit = rgba[i] as u32 + rgba[i + 1] as u32 + rgba[i + 2] as u32 > 24;
-                    if lit == hit {
-                        agree += 1;
-                    }
-                }
-            }
-            let total = (N * N) as usize;
-            let pct = 100.0 * agree as f64 / total as f64;
-            // Where the disagreement sits. A precision fault shows at
-            // the SILHOUETTE, where a pixel is a hair from the
-            // surface either way; a structural fault is spread through
-            // the interior.
-            let mut edge_dis = 0usize;
-            let mut interior_dis = 0usize;
-            for y in 1..N - 1 {
-                for x in 1..N - 1 {
-                    let at = |xx: u32, yy: u32| refhit[(yy * N + xx) as usize];
-                    let me = at(x, y);
-                    let boundary = [(1i32, 0i32), (-1, 0), (0, 1), (0, -1)]
-                        .iter()
-                        .any(|(dx, dy)| at((x as i32 + dx) as u32, (y as i32 + dy) as u32) != me);
-                    let i = ((y * N + x) * 4) as usize;
-                    let lit = rgba[i] as u32 + rgba[i + 1] as u32 + rgba[i + 2] as u32 > 24;
-                    if lit != me {
-                        if boundary {
-                            edge_dis += 1;
-                        } else {
-                            interior_dis += 1;
-                        }
-                    }
-                }
-            }
+            let (levels, pct, hits, edge_dis, interior_dis, links) =
+                solid_zoom_agreement(&device, &queue, &base, &ifs3, zoom, N);
+            println!("        chain {links} links");
             println!(
                 "        disagreement: {edge_dis} at the silhouette, {interior_dis} inside"
             );
@@ -14055,7 +14388,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             }
             println!(
                 "  2^{zoom:<4} {levels:<7} {pct:>5.1}%   ({hits} hit / {} miss)",
-                total - hits
+                (N * N) as usize - hits
             );
         }
         // Two bounds, because they catch different things. The
