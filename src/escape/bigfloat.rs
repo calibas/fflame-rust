@@ -65,6 +65,46 @@ impl BigFloat {
         }
     }
 
+    /// The same value at a different width: zero limbs appended
+    /// below when widening, the low limbs dropped when narrowing.
+    ///
+    /// Widening is EXACT -- the value is `mag · 2^exp` and prepending
+    /// `k` zero limbs while subtracting `64k` from the exponent is
+    /// the same number, still normalized. Narrowing truncates, which
+    /// is the rounding this type does everywhere else too.
+    ///
+    /// This exists for the transcendentals' GUARD LIMB. `exp` halves
+    /// its argument until it is under `2^-32` and squares the series
+    /// back, and `sin_cos` does the same with the double-angle
+    /// formulas; each of those thirty-odd steps doubles the relative
+    /// error, so a series summed at the caller's width comes back
+    /// thirty bits short of it. Measured: 222 bits of 256 without a
+    /// guard limb, 248 with one.
+    pub fn with_limbs(&self, n: usize) -> Self {
+        let have = self.n_limbs();
+        if n == have {
+            return self.clone();
+        }
+        if self.is_zero() {
+            return Self::zero(n);
+        }
+        let mut limbs;
+        let exp;
+        if n > have {
+            let k = n - have;
+            limbs = vec![0u64; k];
+            limbs.extend_from_slice(&self.limbs);
+            exp = self.exp.saturating_sub(64 * k as i64);
+        } else {
+            let k = have - n;
+            limbs = self.limbs[k..].to_vec();
+            exp = self.exp.saturating_add(64 * k as i64);
+        }
+        let mut out = Self { neg: self.neg, exp, limbs };
+        out.normalize();
+        out
+    }
+
     pub fn from_f64(v: f64, n_limbs: usize) -> Self {
         if v == 0.0 || !v.is_finite() {
             return Self::zero(n_limbs);
@@ -406,6 +446,170 @@ impl BigFloat {
         ln2(n).mul(&Self::from_f64(k as f64, n)).add(&ln_m)
     }
 
+    /// `e^x` to the format's width.
+    ///
+    /// `x = k ln2 + r` with `|r| <= ln2/2`, then `r` is halved `m`
+    /// times until it is under `2^-32`, the Taylor series is summed,
+    /// and the result is squared back `m` times. Halving costs one
+    /// squaring each and buys a factor of two in the series argument,
+    /// so the term count falls like `1/m` while the squarings grow
+    /// like `m` -- the balance is shallow and thirty-two bits is well
+    /// inside it at every width this type is used at.
+    ///
+    /// Squaring AMPLIFIES the error: `m` squarings multiply it by
+    /// `2^m`, so the series is summed to the width plus `m` bits of
+    /// headroom rather than to the width. The gate that catches
+    /// getting that wrong is `the_transcendentals_hold_their_width`,
+    /// which asks for 200 bits and would read 168 without it.
+    pub fn exp(&self) -> Self {
+        let out = self.n_limbs();
+        // One guard limb: the squarings below double the relative
+        // error once each, and sixty-four spare bits cover every `m`
+        // this reduction can reach.
+        let n = out + 1;
+        let x = self.with_limbs(n);
+        let one = Self::from_f64(1.0, n);
+        if x.is_zero() {
+            return one.with_limbs(out);
+        }
+        let l2 = ln2(n);
+        // k = round(x / ln2). The quotient is O(1) whenever the
+        // result is representable at all -- `exp` past 2^63 is not a
+        // number any caller here wants -- so f64 is the right type
+        // for it and the remainder is formed at full width.
+        let k = (x.mul(&l2.recip()).to_f64()).round();
+        if !k.is_finite() {
+            return Self::zero(out);
+        }
+        let r = x.sub(&l2.mul(&Self::from_f64(k, n)));
+        // Halve until |r| < 2^-32.
+        let mut m = 0u32;
+        let mut t = r;
+        while t.mag_exp().is_some_and(|e| e > -32) && m < 64 {
+            t = t.mul_pow2(-1);
+            m += 1;
+        }
+        // The series, to the width plus the headroom the squarings
+        // will eat.
+        let target = -(64 * n as i64) - m as i64 - 8;
+        let mut sum = one.clone();
+        let mut term = one;
+        let mut j = 1u32;
+        loop {
+            term = term.mul(&t).div_small(j);
+            if term.is_zero() {
+                break;
+            }
+            sum = sum.add(&term);
+            if term.mag_exp().is_some_and(|e| e < target) || j > 100_000 {
+                break;
+            }
+            j += 1;
+        }
+        for _ in 0..m {
+            sum = sum.mul(&sum);
+        }
+        sum.mul_pow2(k as i64).with_limbs(out)
+    }
+
+    /// `x^y` for a positive base: `exp(y ln x)`.
+    ///
+    /// A zero base gives zero, which is right for the positive
+    /// exponents the kernels raise a radius to and is the same answer
+    /// `f64::powf` gives there.
+    pub fn powf(&self, y: &Self) -> Self {
+        if self.is_zero() {
+            return Self::zero(self.n_limbs());
+        }
+        self.abs().ln().mul(y).exp()
+    }
+
+    /// `(sin x, cos x)` to the format's width, both at once because
+    /// the reduction and the series are shared.
+    ///
+    /// `x` is reduced modulo `2 pi` -- at FULL width, which is the
+    /// whole reason this exists: a reference orbit's angle is a
+    /// number whose leading digits cancel, and reducing it in f64
+    /// would keep none of the ones that matter. Then the argument is
+    /// halved to under `2^-32` and the double-angle formulas rebuild
+    /// it, exactly as `exp` squares its way back.
+    ///
+    /// **The reduction is where a big float earns its keep, and it is
+    /// also where it can still lose.** `x mod 2 pi` is a
+    /// cancellation: the quotient is computed here in f64, so an `x`
+    /// past `2^53 · 2pi` reduces against a quotient that is itself
+    /// rounded and the answer is noise. Callers at that magnitude are
+    /// out of scope -- and out of scope everywhere, since
+    /// `CLAUDE.md`'s own note records three mutually incompatible
+    /// answers for `sin(1e20 pi)` across f32 platforms.
+    pub fn sin_cos(&self) -> (Self, Self) {
+        let out = self.n_limbs();
+        // One guard limb, for the doubling steps -- see
+        // [`Self::with_limbs`].
+        let n = out + 1;
+        let one = Self::from_f64(1.0, n);
+        if self.is_zero() {
+            return (Self::zero(out), one.with_limbs(out));
+        }
+        let two_pi = pi(n).mul_pow2(1);
+        // Reduce modulo 2pi when the argument is large enough for it
+        // to matter; below that the halving handles the range.
+        let mut x = self.with_limbs(n);
+        if x.cmp_abs(&two_pi) != std::cmp::Ordering::Less {
+            let q = x.mul(&two_pi.recip()).to_f64().trunc();
+            if !q.is_finite() {
+                return (Self::zero(out), one.with_limbs(out));
+            }
+            x = x.sub(&two_pi.mul(&Self::from_f64(q, n)));
+        }
+        let mut m = 0u32;
+        while x.mag_exp().is_some_and(|e| e > -32) && m < 64 {
+            x = x.mul_pow2(-1);
+            m += 1;
+        }
+        let target = -(64 * n as i64) - m as i64 - 8;
+        // sin and cos from one alternating series each, sharing x^2.
+        let x2 = x.mul(&x);
+        let mut sin = x.clone();
+        let mut cos = one.clone();
+        let mut ts = x;
+        let mut tc = one.clone();
+        let mut j = 1u32;
+        loop {
+            // sin's next term: -t x^2 / ((2j)(2j+1)); cos's:
+            // -t x^2 / ((2j-1)(2j)).
+            tc = tc.mul(&x2).div_small(2 * j - 1).div_small(2 * j).neg();
+            cos = cos.add(&tc);
+            ts = ts.mul(&x2).div_small(2 * j).div_small(2 * j + 1).neg();
+            sin = sin.add(&ts);
+            let done = |t: &Self| t.is_zero() || t.mag_exp().is_some_and(|e| e < target);
+            if (done(&ts) && done(&tc)) || j > 100_000 {
+                break;
+            }
+            j += 1;
+        }
+        for _ in 0..m {
+            // sin(2a) = 2 sin a cos a; cos(2a) = 1 - 2 sin^2 a, whose
+            // form avoids the cancellation `cos^2 - sin^2` has when
+            // the angle is near pi/4.
+            let s2 = sin.mul(&cos).mul_pow2(1);
+            let c2 = one.sub(&sin.mul(&sin).mul_pow2(1));
+            sin = s2;
+            cos = c2;
+        }
+        (sin.with_limbs(out), cos.with_limbs(out))
+    }
+
+    /// `sin x`, when the cosine is not wanted.
+    pub fn sin(&self) -> Self {
+        self.sin_cos().0
+    }
+
+    /// `cos x`.
+    pub fn cos(&self) -> Self {
+        self.sin_cos().1
+    }
+
     /// Principal-value `atan2(y, x)` in (-pi, pi], to the format's
     /// width: reduce to |t| <= tan(pi/16) by two half-angle steps
     /// (each one square root), then the alternating odd series.
@@ -508,6 +712,46 @@ impl crate::scene::ifs_real::Real for BigFloat {
     }
     fn is_finite(&self) -> bool {
         true
+    }
+}
+
+/// The kernels' own bodies, at arbitrary precision
+/// (`ifs-general.md` D2, and item 8 of the delta plan's order of
+/// work).
+///
+/// With this the reference walk stops having a hand-written
+/// transcription per kernel: `kernel_inverse_gen::<BigFloat>` IS the
+/// f64 body, at whatever width the zoom asks for, and a `disc`, a
+/// `blob` or a fractional root gets the same deep handover a
+/// `spherical` has had since the beginning.
+///
+/// `powf` is the trait's default, `exp(e ln x)`, because that is what
+/// this type's `exp` and `ln` are for.
+impl crate::scene::ifs_real::Transcendental for BigFloat {
+    fn exp(&self) -> Self {
+        BigFloat::exp(self)
+    }
+    /// A non-positive argument gives zero rather than panicking, for
+    /// the same reason [`Real::sqrt`](crate::scene::ifs_real::Real::sqrt)
+    /// does: a kernel body clamps by value first, and a value that
+    /// rounds to a hair below zero there is a zero.
+    fn ln(&self) -> Self {
+        if self.neg || self.is_zero() {
+            return Self::zero(self.n_limbs());
+        }
+        BigFloat::ln(self)
+    }
+    fn sin(&self) -> Self {
+        BigFloat::sin(self)
+    }
+    fn cos(&self) -> Self {
+        BigFloat::cos(self)
+    }
+    fn atan2(y: &Self, x: &Self) -> Self {
+        BigFloat::atan2(y, x)
+    }
+    fn sin_cos(&self) -> (Self, Self) {
+        BigFloat::sin_cos(self)
     }
 }
 
@@ -693,6 +937,101 @@ mod tests {
         assert!(!back.is_zero());
         let log2 = back.to_f64().log2();
         assert!((log2 - tiny_exp as f64).abs() < 0.5, "got 2^{log2}");
+    }
+
+    /// `exp`, `sin` and `cos` hold the width they are asked for, and
+    /// they hold it where an f64 cannot reach.
+    ///
+    /// Two checks, because agreeing with `f64` only says the first
+    /// seventeen digits are right and the whole point of this type is
+    /// the ones after them.
+    ///
+    /// *Against f64*, at arguments f64 handles well: within a few
+    /// ulps, which is all f64 itself is worth.
+    ///
+    /// *Against IDENTITIES*, at the full width: `exp(a)·exp(b) =
+    /// exp(a+b)`, `sin² + cos² = 1`, `sin(2a) = 2 sin a cos a`. An
+    /// identity is a reference that costs nothing to state and is
+    /// exact at every width, and it catches the two mistakes this
+    /// code can make -- too few series terms, and too little headroom
+    /// before the squaring or doubling steps amplify the error. The
+    /// second is real: at 200 bits with no headroom the identities
+    /// read 168.
+    #[test]
+    fn the_transcendentals_hold_their_width() {
+        // Four limbs: 256 bits, and the identities should hold to
+        // nearly all of them.
+        const N: usize = 4;
+        const BITS: i64 = 64 * N as i64;
+        let big = |v: f64| BigFloat::from_f64(v, N);
+        let one = big(1.0);
+
+        // Against f64.
+        for &x in &[0.0f64, 1e-9, 0.5, 1.0, -1.0, 2.5, -7.25, 13.0, 30.0, -30.0] {
+            let got = big(x).exp().to_f64();
+            let want = x.exp();
+            let rel = if want == 0.0 { got.abs() } else { (got / want - 1.0).abs() };
+            assert!(rel < 1e-14, "exp({x}) = {got:e}, not {want:e} (rel {rel:.2e})");
+            let (s, c) = big(x).sin_cos();
+            assert!(
+                (s.to_f64() - x.sin()).abs() < 1e-14 && (c.to_f64() - x.cos()).abs() < 1e-14,
+                "sin_cos({x}) = ({}, {}), not ({}, {})",
+                s.to_f64(),
+                c.to_f64(),
+                x.sin(),
+                x.cos()
+            );
+        }
+        // And past where f64's own reduction is trustworthy, which is
+        // the case this type exists for: the answer is checked by
+        // identity below, not against f64 here.
+        for &x in &[1e9f64, 1e15] {
+            let (s, c) = big(x).sin_cos();
+            let sum = s.mul(&s).add(&c.mul(&c)).sub(&one);
+            let bits = sum.mag_exp().map_or(i64::MIN, |e| -e);
+            assert!(
+                bits > BITS - 40,
+                "sin^2+cos^2 at x = {x:e} holds only {bits} bits of {BITS}"
+            );
+        }
+
+        // Identities, at width.
+        //
+        // `mag_exp` of the residue is its exponent, so `-mag_exp` is
+        // how many bits below one it sits -- the number of correct
+        // bits, directly.
+        let held = |r: &BigFloat| r.mag_exp().map_or(i64::MAX, |e| -e);
+        let mut worst = i64::MAX;
+        for &(a, b) in &[(0.3f64, 0.7f64), (1.0, -2.5), (-4.0, 9.0), (11.5, 0.125)] {
+            let lhs = big(a).exp().mul(&big(b).exp());
+            // The sum is formed HERE, not in f64: `0.3 + 0.7` is
+            // 0.9999999999999999, and asking the identity against
+            // that reads 55 bits of a perfectly good 227 -- the
+            // test's own arithmetic, not the function's.
+            let rhs = big(a).add(&big(b)).exp();
+            // Relative: divide the difference by the value, or a
+            // large `exp` looks accurate for being large.
+            let rel = lhs.sub(&rhs).mul(&rhs.recip());
+            worst = worst.min(held(&rel));
+        }
+        for &x in &[0.1f64, 1.0, 2.0, 3.0, -5.5, 100.0] {
+            let (s, c) = big(x).sin_cos();
+            worst = worst.min(held(&s.mul(&s).add(&c.mul(&c)).sub(&one)));
+            let (s2, _) = big(2.0 * x).sin_cos();
+            worst = worst.min(held(&s2.sub(&s.mul(&c).mul_pow2(1))));
+        }
+        for &x in &[0.5f64, 2.0, 7.0, 1234.5] {
+            // exp and ln are each other's, which is the pair the
+            // kernels' `powf` goes through.
+            let r = big(x).ln().exp();
+            worst = worst.min(held(&r.sub(&big(x)).mul(&big(x).recip())));
+        }
+        println!("  identities hold {worst} bits of {BITS} at {N} limbs");
+        assert!(
+            worst > BITS - 24,
+            "the identities hold only {worst} bits of {BITS} -- the series is short or the \
+             squaring has no headroom"
+        );
     }
 
     #[test]

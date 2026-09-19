@@ -4410,76 +4410,47 @@ impl crate::scene::ifs_estimate::SeedPoint3 for [super::bigfloat::BigFloat; 3] {
 /// engine. Only the POSITION is big: the map coefficients stay f64,
 /// and so does the distance the walk compares against the ball, which
 /// is O(1) however precise the point is.
-/// Rung 1 of `ifs-nonlinear-perturbation.md` §3, at arbitrary
-/// precision: the kernels whose inverse is RATIONAL, so that a
-/// `BigFloat` can take the step with multiplication and one
-/// reciprocal and nothing else.
+/// The kernel's inverse at arbitrary precision -- the SAME body the
+/// f64 walk runs, instantiated at `BigFloat`.
 ///
-/// - `spherical`, whose inverse is `v/|v|²`.
-/// - a root of integer distance, `|v|^{|n|/d}·e^{i·n·arg v}` with
-///   `|d| = 1`. Write `w = v^{|n|}`, which is repeated squaring:
-///   `|v|^{|n|}·e^{i·|n|·φ}`. The exponent and the angle are then
-///   fixed separately, because the two operations available move
-///   one each. `z/|z|²` reciprocates the MAGNITUDE and keeps the
-///   argument, so `d < 0` applies it and nothing else does.
-///   Conjugation reflects the ANGLE and keeps the magnitude, so
-///   `n < 0` applies it and `d` has no say. Reading `z/|z|²` as a
-///   complex reciprocal instead -- which reflects the angle too --
-///   is a sign error in exactly the `n > 0, d < 0` corner, and is
-///   what `the_big_kernel_inverse_is_the_f64_one` caught.
+/// This used to be a hand transcription, and it covered two kernels
+/// of seven: `spherical` and a root of integer distance, both of
+/// which can be built from multiplication and one reciprocal. The
+/// other five wanted `exp`, `sin` or `cos`, which this type did not
+/// have, so the handover stopped early on a `disc`, a `blob`, a
+/// `bubble`, a `hemisphere` or a fractional root -- exactly the
+/// kernels a curved flame is made of.
 ///
-/// Everything else -- a fractional root, `disc`, `blob` (sin/cos),
-/// `bubble`, `hemisphere` (sqrt) -- returns `None`, and the handover
-/// stops where it stopped before. `BigFloat` has no `exp`, `sin` or
-/// `sqrt` to build them from yet.
+/// `BigFloat` implements
+/// [`Transcendental`](crate::scene::ifs_real::Transcendental) now
+/// (item 8 of the delta plan's order of work), so there is nothing
+/// left to transcribe: `kernel_inverse_gen` at `BigFloat` is the
+/// definition, and a sign error cannot live in one of two copies
+/// because there is one copy.
+///
+/// **The sentinel decides, exactly as it does at f64.** The generic
+/// body returns 1e30 where a `v` has no preimage on this branch, and
+/// [`NonlinearMap2::apply_inverse`](crate::scene::ifs_analysis::NonlinearMap2::apply_inverse)
+/// reads that as "no step" by the same `> 1e29` test this uses. The
+/// DOMAIN test is a different question -- whether a derivative may be
+/// taken here -- and gating the step by it is stricter than the f64
+/// walk: `disc` at the origin is inside the image and outside the
+/// domain, and the two sides then disagreed about a point the walk
+/// can perfectly well step through.
 fn big_kernel_inverse(
     kernel: crate::scene::ifs_analysis::Kernel,
+    branch: u32,
     v: &[super::bigfloat::BigFloat; 2],
 ) -> Option<[super::bigfloat::BigFloat; 2]> {
-    use crate::scene::ifs_analysis::Kernel;
-    use super::bigfloat::BigComplex;
-    let z = BigComplex { re: v[0].clone(), im: v[1].clone() };
-    if z.is_zero() {
+    use crate::scene::ifs_analysis::kernel_inverse_gen;
+    if !v[0].to_f64().is_finite() || !v[1].to_f64().is_finite() {
         return None;
     }
-    let invert = |c: &BigComplex| -> Option<BigComplex> {
-        let n2 = c.norm_sqr();
-        if n2.is_zero() {
-            return None;
-        }
-        let inv = n2.recip();
-        Some(BigComplex { re: c.re.mul(&inv), im: c.im.mul(&inv) })
-    };
-    let out = match kernel {
-        Kernel::Spherical => invert(&z)?,
-        Kernel::Root { n, d } if d.abs() == 1.0 && n != 0 => {
-            let mut acc: Option<BigComplex> = None;
-            let mut base = z.clone();
-            let mut e = n.unsigned_abs();
-            while e > 0 {
-                if e & 1 == 1 {
-                    acc = Some(match acc {
-                        Some(a) => a.mul(&base),
-                        None => base.clone(),
-                    });
-                }
-                base = base.mul(&base);
-                e >>= 1;
-            }
-            let mut w = acc?;
-            if d < 0.0 {
-                w = invert(&w)?;
-            }
-            if n < 0 {
-                w = BigComplex { re: w.re, im: w.im.neg() };
-            }
-            w
-        }
-        _ => return None,
-    };
-    let out = [out.re, out.im];
-    out[0].to_f64().is_finite().then_some(())?;
-    out[1].to_f64().is_finite().then_some(())?;
+    let out = kernel_inverse_gen(&kernel, v, branch);
+    let f = [out[0].to_f64(), out[1].to_f64()];
+    if !f[0].is_finite() || !f[1].is_finite() || f[0].abs() > 1e29 || f[1].abs() > 1e29 {
+        return None;
+    }
     Some(out)
 }
 
@@ -4490,9 +4461,9 @@ impl crate::scene::ifs_estimate::SeedPoint for [super::bigfloat::BigFloat; 2] {
         match m {
             Map2::Affine(a) => Some(self.apply_affine(a)),
             Map2::NonlinearInverse(r) => {
-                let (kernel, _branch, pre_inv, post) = r.parts();
+                let (kernel, branch, pre_inv, post) = r.parts();
                 let v = self.apply_affine(&post);
-                let u = big_kernel_inverse(kernel, &v)?;
+                let u = big_kernel_inverse(kernel, branch, &v)?;
                 Some(u.apply_affine(pre_inv))
             }
             // The walk only ever inverts.
@@ -6323,6 +6294,12 @@ mod tests {
             let centre = [on_set[0] + 0.4 * span, on_set[1]];
             let basis = view_basis(span, span, 0.0);
             let px = span / 512.0;
+            use crate::scene::ifs_estimate::SeedPoint as _;
+            let steps: Vec<bool> = ifs
+                .maps
+                .iter()
+                .map(|m| centre.clone().apply_map(&m.inverse).is_some())
+                .collect();
             let seeds = crate::scene::ifs_estimate::seed_beam(
                 &ifs,
                 centre,
@@ -12318,30 +12295,169 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         );
     }
 
-    /// Rung 1 at arbitrary precision is the same map as the f64 one.
+    /// What the arbitrary-precision kernels bought: the prefix takes
+    /// a step wherever the f64 walk does, on every kernel.
     ///
-    /// `big_kernel_inverse` rebuilds `|v|^{|n|/d}·e^{i·n·arg v}` out of
-    /// integer powers, an inversion and a conjugation, because a
-    /// `BigFloat` has multiplication and a reciprocal and no `exp` or
-    /// `atan2` to take the direct route with. Which of the two it
-    /// applies depends on the signs of `n` and `d` separately -- both
-    /// negative is NEITHER, which is the case a sign slip gets wrong
-    /// -- so every combination is checked against the f64 formula it
-    /// has to reproduce.
+    /// The prefix walks the view's centre in `BigFloat` and hands each
+    /// pixel a delta in f32. Before item 8 of the delta plan's order
+    /// of work it could only step through `spherical` and
+    /// integer-distance roots -- `big_kernel_inverse` was a hand
+    /// transcription and the other five kernels wanted `exp`, `sin` or
+    /// `cos`, which the type did not have -- so on a `bubble`, a
+    /// `hemisphere`, a `disc`, a `blob` or a fractional root the
+    /// prefix stopped at level 0 and the pixel started from an
+    /// absolute f32 position at the view's own scale.
+    ///
+    /// **The property asserted is agreement, not depth.** The
+    /// `BigFloat` step must exist exactly where the f64 one does: a
+    /// step it declines that f64 takes is the old gap, and a step it
+    /// takes that f64 declines would be a domain test that has come
+    /// apart between the two. How DEEP the prefix then goes is the
+    /// objective's decision and the set's geometry, not this rung's
+    /// -- measured below and reported, not pinned.
+    ///
+    /// Measured 2026-09-18, handover level at 2^16 / 2^32 / 2^64,
+    /// before this rung and after:
+    ///
+    /// ```text
+    ///                before        after        steps that exist
+    ///   spherical    22 / 59 / 98  22 / 59 / 98   867 / 867
+    ///   bubble        0 /  0 /  0   5 /  5 /  5   289 -> 563 / 1445
+    ///   hemisphere    0 /  0 /  0   7 / 19 / 41   289 -> 459 /  867
+    ///   disc          0 /  0 /  0   0 /  0 /  0   289 -> 593 /  867
+    ///   blob          0 /  0 /  0   9 / 27 / 54   578 -> 867 /  867
+    /// ```
+    ///
+    /// `spherical` is the control and does not move: it was covered
+    /// before. `blob` and `hemisphere` follow the zoom, which is what
+    /// a deep view needs. `bubble` settles at five because its
+    /// inverse EXPANDS -- the objective weighs the linearisation's
+    /// growing error against f32's shrinking one, and five is where
+    /// their sum is least at every zoom. `disc` still reads zero and
+    /// it is NOT this rung: its steps went 289 to 593 like the
+    /// others, but at this fixture's own attractor point both of its
+    /// branches are outside the image, which the f64 walk agrees
+    /// about, so there is no child to hand over to at all.
+    #[test]
+    fn the_big_prefix_steps_wherever_the_f64_walk_does() {
+        use crate::scene::ifs_estimate::SeedPoint as _;
+        for (name, flame) in [
+            ("spherical", spherical_ifs_flame()),
+            ("bubble", bubble_ifs_flame()),
+            ("hemisphere", hemisphere_ifs_flame()),
+            ("disc", disc_ifs_flame()),
+            ("blob", blob_ifs_flame()),
+        ] {
+            let guard = global_registry();
+            let ifs = crate::scene::ifs_analysis::analyse_2d(&flame, &guard).expect("qualifies");
+            drop(guard);
+            let (bc, br) = (ifs.ball.centre, ifs.ball.radius);
+            let (mut agreed, mut taken) = (0usize, 0usize);
+            const N: i32 = 16;
+            for i in 0..=N {
+                for j in 0..=N {
+                    let q = [
+                        bc[0] + br * (2.0 * i as f64 / N as f64 - 1.0),
+                        bc[1] + br * (2.0 * j as f64 / N as f64 - 1.0),
+                    ];
+                    for m in ifs.maps.iter() {
+                        let f64_step = {
+                            let u = m.inverse.apply(q);
+                            u[0].is_finite() && u[1].is_finite() && u[0].abs() < 1e29
+                                && u[1].abs() < 1e29
+                        };
+                        let big = [
+                            crate::escape::bigfloat::BigFloat::from_f64(q[0], 4),
+                            crate::escape::bigfloat::BigFloat::from_f64(q[1], 4),
+                        ];
+                        let big_step = big.apply_map(&m.inverse).is_some();
+                        assert_eq!(
+                            big_step, f64_step,
+                            "{name} at {q:?}: the BigFloat prefix says {big_step} and the f64 \
+                             walk says {f64_step}"
+                        );
+                        agreed += 1;
+                        taken += usize::from(big_step);
+                    }
+                }
+            }
+            assert!(
+                taken * 8 > agreed,
+                "{name}: only {taken} of {agreed} steps exist at all -- this fixture cannot say \
+                 whether the prefix works"
+            );
+
+            // And the handover the objective then chooses, reported.
+            let mut target = bc;
+            for k in 0..60u32 {
+                target = ifs.maps[(k as usize) % ifs.maps.len()].forward.apply(target);
+            }
+            let mut levels = Vec::new();
+            for &zoom in &[16.0f64, 32.0, 64.0] {
+                let span = 4.0 / 2f64.powf(zoom);
+                let n = crate::escape::fixedpoint::limbs_for_zoom(zoom).max(2);
+                let centre = [
+                    crate::escape::bigfloat::BigFloat::from_f64(target[0], n),
+                    crate::escape::bigfloat::BigFloat::from_f64(target[1], n),
+                ];
+                let seeds = crate::scene::ifs_estimate::seed_beam(
+                    &ifs,
+                    centre,
+                    [[span, 0.0], [0.0, -span]],
+                    span / 128.0,
+                    zoom as u32 + 64,
+                    BEAM,
+                );
+                levels.push(seeds.level);
+            }
+            println!(
+                "  {name:<12} {taken}/{agreed} steps exist, both sides agreeing | handover \
+                 {levels:?} at 2^16/2^32/2^64"
+            );
+        }
+    }
+
+    /// The arbitrary-precision inverse is the f64 inverse, for EVERY
+    /// kernel and every branch.
+    ///
+    /// It used to cover two of seven. `big_kernel_inverse` was a hand
+    /// transcription that rebuilt a root out of integer powers, an
+    /// inversion and a conjugation, because `BigFloat` had
+    /// multiplication and a reciprocal and no `exp` or `sin` -- so
+    /// `disc`, `blob`, `bubble`, `hemisphere` and any fractional root
+    /// declined, and the handover stopped early on exactly the
+    /// kernels a curved flame is made of.
+    ///
+    /// `BigFloat` implements `Transcendental` now, so the generic
+    /// body IS the implementation and there is no transcription left
+    /// to disagree with itself. What this gate checks is therefore a
+    /// different thing than it used to: not that two derivations
+    /// match, but that the ONE derivation evaluated at two widths
+    /// gives the same number -- which is what a big float is for, and
+    /// which catches a `sin` or an `exp` that is quietly wrong in the
+    /// digits f64 cannot see.
     #[test]
     fn the_big_kernel_inverse_is_the_f64_one() {
         use crate::scene::ifs_analysis::Kernel;
         use crate::scene::ifs_estimate::SeedPoint;
         let big = |v: f64| crate::escape::bigfloat::BigFloat::from_f64(v, 6);
-        let rung1 = [
-            Kernel::Spherical,
-            Kernel::Root { n: 2, d: 1.0 },
-            Kernel::Root { n: 3, d: 1.0 },
-            Kernel::Root { n: -3, d: 1.0 },
-            Kernel::Root { n: 1, d: -1.0 },
-            Kernel::Root { n: 5, d: -1.0 },
-            Kernel::Root { n: -5, d: -1.0 },
-            Kernel::Root { n: 15, d: -1.0 },
+        // Every kernel, with the branch counts the walk gives them.
+        let kernels: Vec<(Kernel, u32)> = vec![
+            (Kernel::Spherical, 1),
+            (Kernel::Root { n: 2, d: 1.0 }, 2),
+            (Kernel::Root { n: 3, d: 1.0 }, 3),
+            (Kernel::Root { n: -3, d: 1.0 }, 3),
+            (Kernel::Root { n: 1, d: -1.0 }, 1),
+            (Kernel::Root { n: 5, d: -1.0 }, 5),
+            (Kernel::Root { n: -5, d: -1.0 }, 5),
+            (Kernel::Root { n: 15, d: -1.0 }, 15),
+            // The ones that used to decline.
+            (Kernel::Root { n: 2, d: 3.0 }, 2),
+            (Kernel::Root { n: -3, d: 1.5 }, 3),
+            (Kernel::Bubble, 2),
+            (Kernel::Hemisphere, 1),
+            (Kernel::Disc, 4),
+            (Kernel::Blob { high: 1.4, low: 0.3, waves: 3.0 }, 1),
         ];
         let points = [
             [0.7, 0.3],
@@ -12353,43 +12469,62 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             [-1.0, 0.0],
             [0.0, -1.0],
             [2.6, -3.1],
+            [0.42, 0.13],
+            [-0.6, 0.15],
         ];
-        for k in rung1 {
-            for v in points {
-                let want = k.inverse(v, 0);
-                let got = super::big_kernel_inverse(k, &[big(v[0]), big(v[1])])
-                    .unwrap_or_else(|| panic!("{k:?} at {v:?} should be on rung 1"));
-                let got = [got[0].to_f64(), got[1].to_f64()];
-                let scale = want[0].abs().max(want[1].abs()).max(1e-12);
-                assert!(
-                    (got[0] - want[0]).abs() / scale < 1e-12
-                        && (got[1] - want[1]).abs() / scale < 1e-12,
-                    "{k:?} at {v:?}: big {got:?}, f64 {want:?}"
-                );
+        let mut compared = 0usize;
+        let mut worst = 0.0f64;
+        for (k, branches) in kernels {
+            for branch in 0..branches {
+                for v in points {
+                    let Some(got) = super::big_kernel_inverse(k, branch, &[big(v[0]), big(v[1])])
+                    else {
+                        // Outside the kernel's image on this branch --
+                        // the f64 walk declines there too, and the two
+                        // must decline together.
+                        assert!(
+                            !crate::scene::ifs_analysis::kernel_inverse_domain(&k, v, branch),
+                            "{k:?} branch {branch} at {v:?}: big declined a point f64 takes"
+                        );
+                        continue;
+                    };
+                    let want = k.inverse(v, branch);
+                    let got = [got[0].to_f64(), got[1].to_f64()];
+                    let scale = want[0].abs().max(want[1].abs()).max(1e-12);
+                    let e = ((got[0] - want[0]).abs()).max((got[1] - want[1]).abs()) / scale;
+                    // f64's own error is the floor here: the big value
+                    // is the more accurate of the two and is being
+                    // compared against the less.
+                    assert!(
+                        e < 1e-11,
+                        "{k:?} branch {branch} at {v:?}: big {got:?}, f64 {want:?} ({e:.2e})"
+                    );
+                    worst = worst.max(e);
+                    compared += 1;
+                }
             }
         }
+        println!("  {compared} kernel/branch/point triples, worst {worst:.2e} from f64");
+        assert!(compared > 300, "only {compared} triples compared");
 
-        // And everything else declines, so the handover stops rather
-        // than walking a map it cannot take.
-        let off_ladder = [
-            Kernel::Bubble,
-            Kernel::Hemisphere,
-            Kernel::Disc,
-            Kernel::Blob { high: 1.4, low: 0.3, waves: 3.0 },
-            // a fractional root: |v|^(2/3) needs an exp
-            Kernel::Root { n: 2, d: 3.0 },
-            Kernel::Root { n: 0, d: 1.0 },
-        ];
-        for k in off_ladder {
-            assert!(
-                super::big_kernel_inverse(k, &[big(0.4), big(0.2)]).is_none(),
-                "{k:?} is not on rung 1 and must decline"
-            );
+        // The origin under an inversion, which the hand transcription
+        // used to DECLINE and the f64 walk does not: both bodies
+        // clamp the denominator to `f64::MIN_POSITIVE`, so `0/eps` is
+        // zero and the origin maps to itself. That is one more place
+        // the two derivations disagreed, found by taking the domain
+        // test off the big step and asserting parity instead.
+        for (a, b) in [
+            (Kernel::Spherical, [0.0f64, 0.0]),
+            (Kernel::Root { n: 2, d: 1.0 }, [0.0, 0.0]),
+        ] {
+            let got = super::big_kernel_inverse(a, 0, &[big(b[0]), big(b[1])]);
+            let want = a.inverse(b, 0);
+            let takes = want[0].is_finite()
+                && want[1].is_finite()
+                && want[0].abs() < 1e29
+                && want[1].abs() < 1e29;
+            assert_eq!(got.is_some(), takes, "{a:?} at the origin: big {got:?}, f64 {want:?}");
         }
-        // The origin has no preimage under an inversion.
-        assert!(
-            super::big_kernel_inverse(Kernel::Spherical, &[big(0.0), big(0.0)]).is_none()
-        );
 
         // Whole maps, affines and weight included, against the f64
         // walk's own step.
