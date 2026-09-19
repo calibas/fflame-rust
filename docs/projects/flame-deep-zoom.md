@@ -100,7 +100,7 @@ discovered trick as-is: biased, uncorrected, structure-changing —
 useful as an aesthetic study and as the demand signal for the rest.
 Candidate embedded example script. Nothing below depends on it.
 
-### Stage 1 — biased selection + windowed correction (the core)
+### Stage 1 — biased selection + windowed correction (the core) — BUILT 2026-09-18, §11
 
 Engine-side mechanism, deliberately policy-free — it takes an
 arbitrary biased table q and makes it unbiased; *how* q is chosen is
@@ -271,7 +271,7 @@ CONTRACT, so a sample's offset only shrinks, and there is one lineage
 with no ranking, no rebase and no remainder. Every hard part of the
 inverse delta walk is an artefact of walking the expanding direction.
 
-### Stage 1 -- nothing exists, and nothing is needed
+### Stage 1 -- built, 2026-09-18 (§11)
 
 The hooks are where §3 said: `select_transform_const` /
 `select_transform_xaos` in `shaders/core/utilities.wgsl` are the only
@@ -337,3 +337,131 @@ and it is the cheapest item on the branch.
 Stage 1; then stage 2 reading `reference_beam`, with the Lipschitz
 fallback built alongside it; then stage 3 as forward forms. Stage 0
 can ship as a script at any point. Stage 4 stays a contingency.
+
+## 11. Stage 1, built and measured, 2026-09-18
+
+The mechanism is in and correct; its payoff is not demonstrated. Both
+halves of that are the point of this section.
+
+### What landed
+
+`FractalConfig::importance` (`enabled`, a per-transform `bias`
+vector, the window `m`), `scene::importance::build_table` turning it
+into the two tables the kernel reads, a `bias_table` storage buffer at
+the free `@binding(11)`, and an `IMPORTANCE_SAMPLING` template flag
+gating biased selection, the window's product, the warm-up and the
+deposit. Off, the feature contributes no code at all.
+
+The ratio is `(1/b_i)·(Σ_j b_j w_j x[prev][j]) / (Σ_j w_j x[prev][j])`
+-- the per-transform factor undone times the row normalisers' own
+ratio, with the xaos entry cancelling, which is what lets one formula
+serve both selection arms. The sparsity pattern is preserved by
+construction, since every bias factor is forced strictly positive.
+
+### Two things the measurements changed
+
+**The warm-up darkened the picture, and `q ≡ p` is what found it.**
+The gate deposits at window positions `m..2m` -- `m+1` of every `2m`
+iterations -- while the tone map normalises by
+`total_iters / pixel_count`, which counts iterations and not deposits.
+Rendered at `q ≡ p`, where nothing is biased and nothing should move,
+the mean colour sat 0.038 below the truth at `m = 8` and stayed there
+at 16 and 32, because the rate is about one half whatever `m` is. The
+deposit now carries an exact `2m/(m+1)`. Without the neutral render
+this would have been invisible -- it looks exactly like the
+correction being imperfect.
+
+**Rounding the deposit's SCALE beats rounding every channel**, which
+is not what the theory says. The histogram is u32 and the shipped
+path truncates, so a corrected weight under `1/color_scale` would
+vanish; stochastic rounding keeps it in expectation. Per-channel
+rounding is unbiased in isolation, but the reference it has to agree
+with truncates its colour channels too, so matching that convention
+is what agrees: measured at `q ≡ p`, mean colour against the feature
+off is 0.0048 rounding the scale and 0.0130 rounding every channel.
+Scale-only also keeps the deposit EXACT at `m = 1`, which is what
+lets the neutrality gate assert bit-identity rather than a tolerance.
+
+### The gates
+
+| | |
+|---|---|
+| off ⇒ no feature code in the WGSL | asserted, both selection arms, 2D and 3D |
+| the whole dump diff | the `Params` pad renamed plus 106 blank lines; **not one code line** |
+| `q ≡ p` ⇒ bit-identical render | 0 of 65536 bytes differ |
+| the ratio takes `q` back to `p` | `q_i·r_i = p_i` per transform, per xaos row |
+| the bias moves no admissible edge | asserted over a sparse xaos with zero, negative and NaN factors |
+| the correction renders the true measure | 0.010 against the uncorrected 0.207 -- 95% recovered |
+| shipped renders | 330 of 330 visual tests unchanged |
+
+### The window has an OPTIMUM, which §2 does not say
+
+§2 gives a lower bound on `m` from contraction and treats larger as
+simply more correct. Measured on a gasket at a 4× bias, mean colour
+error against the unbiased truth:
+
+| `m` | 4 | 8 | 16 | 32 |
+|---|---|---|---|---|
+| error | 0.037 | **0.008** | 0.015 | 0.119 |
+
+A clean U. Too short and the deposited weight covers fewer choices
+than the observable needs; too long and the typical product,
+`exp(m·E_q[ln r])`, falls under the histogram's own resolution and
+the estimate rides on a rare heavy tail -- 0.16 at `m = 8` against
+6e-4 at `m = 32`. Sixteen times the samples brings `m = 32` only from
+0.119 to 0.056 while `m = 8` sits still at 0.008, which is what says
+one is variance and the other is converged. **The lower bound is a
+lower bound; the upper one is variance, and nothing in §2 bounds it.**
+
+### ...and the payoff is NOT demonstrated
+
+This is the part that matters for what comes next. The correction
+restores the true measure exactly, so the deposited density -- and so
+the brightness at a given exposure -- is identical by construction.
+Counting lit pixels finds a ratio of 1.01 and is right to. What could
+improve is NOISE, so each configuration was rendered twice on
+different RNG streams, on the gasket at `S₀`'s own fixed point, which
+is the most favourable case there is:
+
+| zoom | unbiased | biased 4× | ratio |
+|---|---|---|---|
+| 2^2 | 0.0024 | 0.0148 | 6.08 |
+| 2^4 | 0.0029 | 0.0108 | 3.70 |
+| 2^6 | nothing lit on either side | | |
+
+**Four to six times noisier, not quieter.** The weight's own variance
+costs more than the redirection saves at every zoom where the
+comparison can be made, and past 2^6 it cannot be made: the view
+holds so little of the measure that both sides render black, and
+compensating the exposure by the gasket's own dimension does not
+bring it back.
+
+Three readings, and the probe states all three rather than picking
+one:
+
+- **a fixed per-transform bias is still a polynomial share of the
+  orbit.** It moves the constant, and the constant is swamped by the
+  weight variance. Stage 2's forced prefix changes the asymptotics
+  instead, and carries the prefix's own `∏p` as the weight rather
+  than a product of ratios -- so it has no window, no epoch and no
+  accumulated variance at all. This measurement is an argument for
+  going straight there;
+- **the policy may simply be wrong.** A 4× boost on one transform is
+  a guess; open question 1 says the admissible-prefix measure is the
+  principled bias. This fixture cannot tell "the mechanism does not
+  pay" from "nobody has chosen a good `q`";
+- **the fixture may be too kind to the unbiased game.** A gasket is
+  self-similar, so every neighbourhood is reachable by a short
+  address; a real flame's deep view may need a long and improbable
+  one, which is where redirection is worth most.
+
+So stage 1 ships as a mechanism with a measured cost and no measured
+benefit, off by default, and the honest next step is stage 2 rather
+than a policy layer on top of this.
+
+### Not built
+
+The `ConfigPath` entries (so scripting and undo reach it) and the UI
+section. Both are policy surface, and §9's open question 1 is still
+open; a `.fflame` carries the settings and the CLI renders them
+today, which is enough to measure with.

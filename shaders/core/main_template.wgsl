@@ -84,6 +84,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var prev_xform_idx = select_transform_const(rng_nextf(&rng));
 {{/if}}
 
+{{#if IMPORTANCE_SAMPLING}}
+    // The window's likelihood ratio and how many choices it covers
+    // (docs/projects/flame-deep-zoom.md stage 1). `is_weight` is the
+    // product of `p/q` over the choices since the last epoch reset,
+    // which is what a deposit carries instead of 1.
+    var is_weight = 1.0;
+    var is_window = 0u;
+    // A stream of its own for the stochastic deposit below. Drawing
+    // from the walk's own `rng` would shift every later draw, so
+    // turning the feature on would reshuffle which points the opacity
+    // test plots -- a change to the picture for a reason that has
+    // nothing to do with the mechanism. Offset by a constant so two
+    // threads with adjacent seeds do not share a stream.
+    var is_rng = rng_init(thread_id, params.seed ^ 0x9E3779B9u);
+{{/if}}
 {{#if HAS_ANALYTIC_BLUR}}
     // Residual analytic-blur state, persists ACROSS iterations: after a blur
     // transform fires, the next `residual_remaining` plots are routed through
@@ -108,12 +123,33 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Select random transform
         let rand_val = rng_nextf(&rng);
 {{#if XAOS_ENABLED}}
+{{#if IMPORTANCE_SAMPLING}}
+        // Biased selection: `q` in place of the true weights, with the
+        // ratio `p/q` for THIS transition folded into the window's
+        // product below. The row is the actual previous transform, so
+        // the ratio is exact whatever the epoch boundary did.
+        let is_prev_row = prev_xform_idx;
+        let xform_idx = select_transform_biased_xaos(rand_val, prev_xform_idx);
+{{else}}
         // Xaos: probability modified by transition weights from previous transform
         let xform_idx = select_transform_xaos(rand_val, prev_xform_idx);
+{{/if}}
         prev_xform_idx = xform_idx;
+{{else}}
+{{#if IMPORTANCE_SAMPLING}}
+        // Without xaos the choice is unconditional, so every row of
+        // the ratio matrix is the same and row zero is the one to
+        // read -- which is why this arm needs no `prev`.
+        let is_prev_row = 0u;
+        let xform_idx = select_transform_biased(rand_val);
 {{else}}
         // Standard: uses hard-coded NUM_TRANSFORMS for loop unrolling
         let xform_idx = select_transform_const(rand_val);
+{{/if}}
+{{/if}}
+{{#if IMPORTANCE_SAMPLING}}
+        is_weight = is_weight * bias_ratio(is_prev_row, xform_idx);
+        is_window = is_window + 1u;
 {{/if}}
         let xform = transforms[xform_idx];
 
@@ -121,6 +157,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Note: We still apply the transform even when opacity=0 - opacity affects
         // visibility only, not IFS dynamics. Transform must update position for correct chaos game.
         var should_plot = rng_nextf(&rng) < xform.opacity;
+{{#if IMPORTANCE_SAMPLING}}
+        // Warm-up: the product has to cover at least `m` choices
+        // before it is the right weight, because it is only over the
+        // last `m` that contraction has fixed the point's position to
+        // sub-pixel precision. Half of each 2m epoch deposits, which
+        // is the price of windowing -- and a cheap one at depth,
+        // where a BIASED deposit lands in the viewport nearly always
+        // against an unbiased one nearly never.
+        should_plot = should_plot && is_window >= params.importance_window;
+{{/if}}
 
         // doHide flag (JWildfire's pVarTP.doHide), reset each iteration. The
         // cut_* family of CanHide variations set it via the `hide` pointer
@@ -322,6 +368,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             point_w = 0.0;
 {{/if}}
             fuse = params.burn_in;
+{{#if IMPORTANCE_SAMPLING}}
+            // A respawned point is a new orbit, so its window covers
+            // nothing yet. Carrying the old product would weight a
+            // fresh position by choices that never touched it.
+            is_weight = 1.0;
+            is_window = 0u;
+{{/if}}
             continue;
         }
 
@@ -387,6 +440,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     break;
                 }
             }
+        }
+{{/if}}
+
+{{#if IMPORTANCE_SAMPLING}}
+        // End of the epoch: start a fresh window. Resetting rather
+        // than keeping a ring buffer is what bounds the variance by
+        // construction -- the product over an orbit's whole history
+        // has variance that grows without bound, and is unnecessary
+        // because older choices only select position WITHIN a
+        // sub-pixel.
+        if (is_window >= 2u * params.importance_window) {
+            is_weight = 1.0;
+            is_window = 0u;
         }
 {{/if}}
 
@@ -606,6 +672,33 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             var density_weight = src_weight;
 {{else}}
             var density_weight = 1.0;
+{{/if}}
+{{#if IMPORTANCE_SAMPLING}}
+            // The window's likelihood ratio, which is what makes the
+            // biased selection unbiased. One more factor into the
+            // channel depth-density compensation and the far fade
+            // already use -- and colour recovery is Σcolour/Σdensity,
+            // so a factor common to all four channels cannot tint
+            // anything.
+            //
+            // ...times the WARM-UP's own rate. The gate deposits at
+            // window positions m..2m, which is `m+1` of every `2m`
+            // iterations, while the tone map normalises by
+            // `total_iters / pixel_count` -- it counts iterations, not
+            // deposits. Without this the picture is simply darker:
+            // measured at q ≡ p, where nothing is biased and nothing
+            // should move, the mean colour sat 0.038 below the truth
+            // at a window of 8 and stayed there at 16 and 32, because
+            // the rate is about one half whatever `m` is.
+            //
+            // Exact rather than approximate: the epoch is
+            // deterministic, so the rate is a ratio of integers. A
+            // respawn resets the epoch early and makes the true rate
+            // a hair lower, which is a bad-value event and rare
+            // enough to leave alone.
+            let is_m = max(params.importance_window, 1u);
+            density_weight = density_weight * is_weight
+                * (f32(2u * is_m) / f32(is_m + 1u));
 {{/if}}
 
 
@@ -960,11 +1053,43 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // Convert colors to u32 using global scale. All four
                 // channels carry the same density_weight so the color
                 // recovery ratio Σcolor/Σdensity is weight-invariant.
+{{#if IMPORTANCE_SAMPLING}}
+                // The deposit's SCALE rounds stochastically. The
+                // histogram is u32, so the shipped path truncates,
+                // and a corrected weight below `1/color_scale` would
+                // vanish rather than being rare-and-large -- exactly
+                // the bias the correction exists to remove.
+                //
+                // Rounding each CHANNEL instead was tried and is
+                // WORSE, which is not what the theory says and is why
+                // it is recorded: per-channel rounding is unbiased in
+                // isolation, but the reference it has to agree with
+                // truncates its colour channels too, so matching that
+                // convention is what agrees. Measured at q = p, mean
+                // colour against the feature off: 0.0048 rounding the
+                // scale, 0.0130 rounding every channel.
+                //
+                // Scale-only also keeps the deposit EXACT at a window
+                // of 1, where the rate factor below is 1 and the
+                // scale is `color_scale` on the nose -- which is what
+                // lets `a_neutral_bias_renders_what_the_feature_off_renders`
+                // assert bit-identity rather than a tolerance.
+                let weighted_scale = color_scale * density_weight;
+                // One draw for all four channels, so Sigma colour /
+                // Sigma density -- the ratio colour recovery reads --
+                // rounds the same way in numerator and denominator.
+                let is_scale = f32(is_deposit(weighted_scale, rng_nextf(&is_rng)));
+                let r_u32 = u32(clamp(final_color.r, 0.0, 1.0) * is_scale);
+                let g_u32 = u32(clamp(final_color.g, 0.0, 1.0) * is_scale);
+                let b_u32 = u32(clamp(final_color.b, 0.0, 1.0) * is_scale);
+                let density_u32 = u32(is_scale);
+{{else}}
                 let weighted_scale = color_scale * density_weight;
                 let r_u32 = u32(clamp(final_color.r, 0.0, 1.0) * weighted_scale);
                 let g_u32 = u32(clamp(final_color.g, 0.0, 1.0) * weighted_scale);
                 let b_u32 = u32(clamp(final_color.b, 0.0, 1.0) * weighted_scale);
                 let density_u32 = u32(weighted_scale);  // Density includes scale (u32 prevents overflow)
+{{/if}}
 
                 // Atomic add to histogram (4 separate u32 words)
                 atomicAdd(&histogram[base_idx + 0u], r_u32);

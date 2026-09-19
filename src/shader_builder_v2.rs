@@ -297,6 +297,16 @@ pub struct ShaderConstants {
     /// cache's constants-changed check.
     pub has_post_symmetry: bool,
 
+    /// Whether biased transform selection runs for this flame
+    /// (`FractalConfig::importance.enabled`). Drives
+    /// `IMPORTANCE_SAMPLING` — when false the binding, the biased
+    /// selection functions, the window state and the stochastic
+    /// deposit are all stripped and the shader is byte-identical to a
+    /// build without the feature. Tracked here so toggling it triggers
+    /// a rebuild via the cache's constants-changed check. See
+    /// docs/projects/flame-deep-zoom.md stage 1.
+    pub importance_sampling: bool,
+
     /// Whether the analytic-blur feature is active for this flame
     /// (`Flame::analytic_blur_active`). Drives `HAS_ANALYTIC_BLUR` — when
     /// false, all mean-splat routing is stripped and the shader is
@@ -399,6 +409,7 @@ impl Default for ShaderConstants {
             has_attachments: false,
             has_post_symmetry: false,
             has_analytic_blur: false,
+            importance_sampling: false,
             flatten_z_per_iter: false,
             solid_enabled: false,
             probe: false,
@@ -625,6 +636,9 @@ impl ShaderConstants {
             has_attachments: flame.has_attachments(),
             has_post_symmetry: flame.post_symmetry.ty != crate::scene::transforms::PostSymmetryType::None,
             has_analytic_blur: flame.analytic_blur_active(registry, render_mode),
+            // Not derivable from a flame: the bias lives on the
+            // CONFIG, so a caller that has one sets this after.
+            importance_sampling: false,
             // Per-iteration Z flatten — only meaningful in 3D, and
             // only when preserve_z is false (JWF/Apo default).
             flatten_z_per_iter: matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD)
@@ -1615,6 +1629,16 @@ impl ShaderBuilder {
         // call sites above use — which is the point of putting it in
         // the template rather than generating it separately.
         processor.set("PROBE", constants.probe);
+        // IMPORTANCE_SAMPLING gates biased transform selection and the
+        // windowed likelihood-ratio correction that makes it unbiased
+        // (docs/projects/flame-deep-zoom.md stage 1). Off strips the
+        // binding, both biased selection functions, the per-thread
+        // window state and the stochastic deposit -- the shader is the
+        // text it was before the feature existed, which
+        // `importance_sampling_off_is_byte_identical` asserts. Sourced
+        // from `constants` so toggling it rebuilds through the cache's
+        // constants-changed check.
+        processor.set("IMPORTANCE_SAMPLING", constants.importance_sampling);
         // FLATTEN_Z_PER_ITER used to insert a blanket `current.z = 0.0;`
         // at the end of each iteration under preserve_z=false. That
         // destroyed the z compounding JWF gets through unconditional
@@ -1836,8 +1860,11 @@ impl ShaderBuilder {
         shader.push_str(include_str!("../shaders/core/complex.wgsl"));
         shader.push('\n');
 
-        // 9. Utilities
-        shader.push_str(include_str!("../shaders/core/utilities.wgsl"));
+        // 9. Utilities — through the processor, which utilities.wgsl did
+        //    not need until the biased selection functions arrived behind
+        //    IMPORTANCE_SAMPLING. A file with no markers comes out byte
+        //    for byte, so routing it here moved nothing.
+        shader.push_str(&processor.process(include_str!("../shaders/core/utilities.wgsl")));
         shader.push('\n');
 
         // 10. Path filter utilities (only needed when path features enabled)
@@ -1881,6 +1908,7 @@ impl ShaderBuilder {
             has_post_symmetry: false,
             // The blur is a plot-time device; a map has no plot.
             has_analytic_blur: false,
+            importance_sampling: false,
             flatten_z_per_iter: false,
             solid_enabled: false,
             probe: false,
@@ -3597,6 +3625,108 @@ mod tests {
         keys.sort_unstable();
         keys.dedup();
         assert_eq!(keys.len(), total, "duplicate switch keys in get_inlined_var_param:\n{body}");
+    }
+
+    /// Stage 1's hard requirement: with `importance_sampling = false`
+    /// the emitted WGSL contains NO CODE from the feature — no
+    /// binding, no biased selection functions, no window state, no
+    /// stochastic deposit.
+    ///
+    /// The regenerated canonical dumps are the other half of this and
+    /// say how exact it is. Against the eight dumps taken before the
+    /// feature, the whole diff is: the `Params` field `_pad_shadow0`
+    /// renamed to `importance_window` with its three-line comment (the
+    /// uniform layout is fixed and always declared, as the solid
+    /// fields are), and 106 blank lines where the stripped `{{#if}}`
+    /// blocks used to be. **Not one code line moved** — which is the
+    /// guarantee, since a blank line cannot change a picture and the
+    /// template processor has left one behind at every block it strips
+    /// since the first one.
+    ///
+    /// The bar is high because of where the code sits. The window's
+    /// product is accumulated in the chaos game's innermost loop and
+    /// the deposit is the splat every sample makes, so the feature
+    /// touches the two hottest lines in the renderer. Anything that
+    /// leaked past the flag would cost every flame, biased or not,
+    /// and would move every picture that has ever been rendered.
+    ///
+    /// The `Params` struct's `importance_window` field is exempt, as
+    /// the solid fields are: the uniform layout is fixed and always
+    /// declared, and declaring a field nobody reads costs nothing.
+    #[test]
+    fn importance_sampling_off_is_byte_identical() {
+        use crate::scene::transforms::{Flame, Transform};
+        let registry = crate::variations::global_registry().clone();
+        let builder = ShaderBuilder::new(registry);
+
+        let mut flame = Flame::new();
+        let mut xform = Transform::new();
+        xform.variations.insert("linear".to_string(), 1.0);
+        flame.transforms.push(xform);
+        let mut active = HashMap::new();
+        active.insert("linear".to_string(), 1.0);
+
+        let base = ShaderConstants::default();
+        let mut on = ShaderConstants::default();
+        on.importance_sampling = true;
+
+        // Both selection arms, since the feature has a different body
+        // in each: with xaos the ratio is row-conditional, without it
+        // the walk reads row zero and needs no `prev` at all.
+        for xaos in [false, true] {
+            let off = builder.build_from_template(&flame, &active, false, false, xaos, true, &base);
+            let with = builder.build_from_template(&flame, &active, false, false, xaos, true, &on);
+
+            assert!(
+                !off.contains("bias_table"),
+                "xaos={xaos}: the binding leaked into a shader with the feature off"
+            );
+            assert!(
+                !off.contains("is_weight"),
+                "xaos={xaos}: the window state leaked into a shader with the feature off"
+            );
+            assert!(
+                !off.contains("select_transform_biased"),
+                "xaos={xaos}: a biased selection function leaked in with the feature off"
+            );
+            assert!(
+                !off.contains("is_rng"),
+                "xaos={xaos}: the deposit's own RNG leaked in with the feature off"
+            );
+            assert!(
+                !off.lines().any(|l| l.trim().starts_with("{{")),
+                "xaos={xaos}: an unresolved template marker survived — utilities.wgsl now \
+                 goes through the processor and a typo there would show up as literal text"
+            );
+
+            // ...and with it on, every piece is present.
+            assert!(with.contains("@binding(11) var<storage, read> bias_table"), "xaos={xaos}: no binding");
+            assert!(with.contains("fn bias_ratio"), "xaos={xaos}: no ratio accessor");
+            assert!(with.contains("is_weight = is_weight * bias_ratio"), "xaos={xaos}: no accumulation");
+            assert!(with.contains("params.importance_window"), "xaos={xaos}: no window gate");
+            assert!(with.contains("rng_nextf(&is_rng)"), "xaos={xaos}: no stochastic deposit");
+            let want = if xaos { "select_transform_biased_xaos(" } else { "select_transform_biased(" };
+            assert!(with.contains(want), "xaos={xaos}: the walk does not call {want}");
+            // The UNBIASED selection must be gone from the walk when
+            // the feature is on — two selections in one loop would be
+            // two draws from the RNG and a different picture.
+            let called = if xaos { "= select_transform_xaos(" } else { "= select_transform_const(" };
+            let calls = with.matches(called).count();
+            // `select_transform_const` also seeds `prev_xform_idx`
+            // under xaos, which is not the loop's own selection.
+            let expect = usize::from(xaos && called.contains("const"));
+            assert_eq!(
+                calls, expect,
+                "xaos={xaos}: the unbiased selection is still called {calls} times in a biased walk"
+            );
+        }
+
+        // The feature is 2D and 3D alike — nothing about a likelihood
+        // ratio is dimensional.
+        let off3 = builder.build_from_template(&flame, &active, true, false, false, true, &base);
+        let on3 = builder.build_from_template(&flame, &active, true, false, false, true, &on);
+        assert_ne!(off3, on3, "the 3D build ignored the flag");
+        assert!(on3.contains("is_weight"), "no window state in the 3D build");
     }
 
     /// Solid rendering hard requirement: with `solid_enabled = false` the

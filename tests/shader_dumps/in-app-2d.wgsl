@@ -132,7 +132,10 @@ struct Params {
     shadow_center_z: f32,
     shadow_radius: f32,
     shadow_count: u32,
-    _pad_shadow0: u32,
+    // The biased-selection correction window `m`, carved from the
+    // first shadow pad so no offset moves. Mirror in
+    // src/gpu/buffers.rs. Read only under IMPORTANCE_SAMPLING.
+    importance_window: u32,
     _pad_shadow1: u32,
     _pad_shadow2: u32,
     shadow_dirs: array<vec4<f32>, 4>,
@@ -231,6 +234,7 @@ struct AttachmentList {
 // Per-normal-transform attachment lists. Indexed by the normal's
 // xform_id (0..num_transforms). See AttachmentList struct above.
 @group(0) @binding(10) var<storage, read> attachments: array<AttachmentList>;
+
 
 // Per-subflame metadata: where each subflame's normals + finals live
 // inside the *unified* `transforms[]` buffer. Indexed by
@@ -537,6 +541,8 @@ fn select_transform_const(rand_val: f32) -> u32 {
 
     return NUM_TRANSFORMS - 1u;
 }
+
+
 
 // Select transform with xaos (chaos) weighting
 // Uses hard-coded NUM_TRANSFORMS for loop unrolling
@@ -1079,6 +1085,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 
 
+
     // Per-thread state initialization for stateful variations that need
     // values beyond zero-fill (var<private> thread_state is already zeroed
     // by WGSL spec; this block runs the wgsl_state_init fragments declared
@@ -1094,8 +1101,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Select random transform
         let rand_val = rng_nextf(&rng);
 
+
         // Standard: uses hard-coded NUM_TRANSFORMS for loop unrolling
         let xform_idx = select_transform_const(rand_val);
+
+
 
         let xform = transforms[xform_idx];
 
@@ -1103,6 +1113,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Note: We still apply the transform even when opacity=0 - opacity affects
         // visibility only, not IFS dynamics. Transform must update position for correct chaos game.
         var should_plot = rng_nextf(&rng) < xform.opacity;
+
 
         // doHide flag (JWildfire's pVarTP.doHide), reset each iteration. The
         // cut_* family of CanHide variations set it via the `hide` pointer
@@ -1179,6 +1190,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 
             fuse = params.burn_in;
+
             continue;
         }
 
@@ -1200,6 +1212,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 
         // Note: COLOR_MODE == 2 (PathMap) uses the full shader with path tracking
+
+
 
 
 
@@ -1272,6 +1286,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 
 
+
             // Convert to pixel coordinates
 
             let pixel = world_to_pixel(plot_pos);
@@ -1315,11 +1330,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // Convert colors to u32 using global scale. All four
                 // channels carry the same density_weight so the color
                 // recovery ratio Σcolor/Σdensity is weight-invariant.
+
                 let weighted_scale = color_scale * density_weight;
                 let r_u32 = u32(clamp(final_color.r, 0.0, 1.0) * weighted_scale);
                 let g_u32 = u32(clamp(final_color.g, 0.0, 1.0) * weighted_scale);
                 let b_u32 = u32(clamp(final_color.b, 0.0, 1.0) * weighted_scale);
                 let density_u32 = u32(weighted_scale);  // Density includes scale (u32 prevents overflow)
+
 
                 // Atomic add to histogram (4 separate u32 words)
                 atomicAdd(&histogram[base_idx + 0u], r_u32);

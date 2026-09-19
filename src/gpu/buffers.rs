@@ -895,7 +895,16 @@ pub struct GpuParams {
     pub shadow_center_z: f32,
     pub shadow_radius: f32,
     pub shadow_count: u32,
-    pub _pad_shadow: [u32; 3],
+    /// The correction window `m` for biased selection
+    /// (docs/projects/flame-deep-zoom.md stage 1). Carved from the
+    /// first of the three shadow pads, so the struct's size and every
+    /// later field's offset are unchanged -- there is no layout churn
+    /// to get wrong, which is the whole reason it sits here rather
+    /// than at the end.
+    ///
+    /// Read only under the IMPORTANCE_SAMPLING builder flag.
+    pub importance_window: u32,
+    pub _pad_shadow: [u32; 2],
     // xyz = world-space direction TO each light, w unused.
     pub shadow_dirs: [[f32; 4]; 4],
 }
@@ -1269,6 +1278,16 @@ pub struct FlameBuffers {
     pub xaos_buffer: Option<Buffer>,
     pub dummy_xaos_buffer: Buffer,
 
+    // Biased selection weights and their likelihood ratios
+    // (docs/projects/flame-deep-zoom.md stage 1). Layout is
+    // `scene::importance::build_table`'s: N biased weights, then the
+    // N×N ratio matrix. None when the feature is off, and the dummy
+    // is bound then — the shader does not declare the binding at all
+    // in that case, but the bind group layout is one layout for both,
+    // so something has to sit in the slot.
+    pub bias_buffer: Option<Buffer>,
+    pub dummy_bias_buffer: Buffer,
+
     // Analytic-blur per-transform mean-splat buffers, allocated at LOW
     // resolution (`ceil(W/D)×ceil(H/D) × 4 × u32 × slots`). The chaos game
     // splats means straight to low res (mean ÷ D) — there is no full-res blur
@@ -1360,6 +1379,7 @@ impl FlameBuffers {
         if let Some(b) = &self.path_buffer { b.destroy(); }
         if let Some(b) = &self.path_filter_buffer { b.destroy(); }
         if let Some(b) = &self.xaos_buffer { b.destroy(); }
+        if let Some(b) = &self.bias_buffer { b.destroy(); }
         if let Some(b) = &self.accum_depth_buffer { b.destroy(); }
         if let Some(b) = &self.blur_splat_buffer { b.destroy(); }
         if let Some(b) = &self.blur_convolved_buffer { b.destroy(); }
@@ -1377,6 +1397,7 @@ impl FlameBuffers {
         self.dummy_path_buffer.destroy();
         self.dummy_filter_buffer.destroy();
         self.dummy_xaos_buffer.destroy();
+        self.dummy_bias_buffer.destroy();
         self.dummy_blur_buffer.destroy();
         self.blur_kernel_weights_buffer.destroy();
         self.blur_convolve_params_buffer.destroy();
@@ -1503,7 +1524,8 @@ impl FlameBuffers {
             shadow_center_z: 0.0,
             shadow_radius: 1.0,
             shadow_count: 0,
-            _pad_shadow: [0; 3],
+            importance_window: 0,
+            _pad_shadow: [0; 2],
             shadow_dirs: [[0.0; 4]; 4],
         };
 
@@ -1651,6 +1673,12 @@ impl FlameBuffers {
 
         // Dummy xaos buffer for binding when xaos is disabled
         // Minimum size: 4 bytes (single f32)
+        let dummy_bias_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Dummy Importance Bias Buffer"),
+            size: 4,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let dummy_xaos_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Dummy Xaos Buffer"),
             size: 4,  // Single f32
@@ -1848,6 +1876,8 @@ impl FlameBuffers {
             dummy_path_buffer,
             dummy_filter_buffer,
             xaos_buffer: None,  // Created on demand when xaos is used
+            bias_buffer: None,  // Created on demand when the bias is enabled
+            dummy_bias_buffer,
             dummy_xaos_buffer,
             blur_splat_buffer: None,  // Created on demand when analytic blur is active
             blur_convolved_buffer: None,
@@ -2701,6 +2731,57 @@ impl FlameBuffers {
 
     /// Update xaos weights from flame
     /// Only writes if xaos buffer is enabled
+    /// The bias table binding: the real buffer when the feature is
+    /// on, the dummy otherwise.
+    pub fn bias_binding(&self) -> &Buffer {
+        self.bias_buffer.as_ref().unwrap_or(&self.dummy_bias_buffer)
+    }
+
+    /// Size and fill the bias table for `flame` under `settings`,
+    /// creating or dropping the buffer as the feature turns on and
+    /// off. Returns true when the bind groups need rebuilding.
+    ///
+    /// The table is `N + N·N` floats, which at the 128-transform cap
+    /// is 64 KB and at a typical five is 120 bytes — the same shape
+    /// and the same order of size as the xaos buffer beside it.
+    pub fn update_bias(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        flame: &Flame,
+        settings: &crate::config::fractal_config::ImportanceSettings,
+    ) -> bool {
+        if !settings.enabled {
+            if self.bias_buffer.is_some() {
+                if let Some(b) = self.bias_buffer.take() {
+                    b.destroy();
+                }
+                return true;
+            }
+            return false;
+        }
+        let table = crate::scene::importance::build_table(flame, settings);
+        let want = (table.len() * std::mem::size_of::<f32>()) as u64;
+        let mut rebuilt = false;
+        let fits = self.bias_buffer.as_ref().is_some_and(|b| b.size() >= want);
+        if !fits {
+            if let Some(b) = self.bias_buffer.take() {
+                b.destroy();
+            }
+            self.bias_buffer = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Importance Bias Buffer"),
+                size: want.max(4),
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            rebuilt = true;
+        }
+        if let Some(b) = &self.bias_buffer {
+            queue.write_buffer(b, 0, bytemuck::cast_slice(&table));
+        }
+        rebuilt
+    }
+
     pub fn update_xaos(&self, queue: &Queue, flame: &Flame) {
         if let Some(ref xaos_buffer) = self.xaos_buffer {
             if let Some(flat) = flame.xaos_flat() {

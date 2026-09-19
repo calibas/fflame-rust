@@ -362,6 +362,129 @@ pub struct FractalConfig {
     /// Optional: Deterministic RNG for reproducible renders
     #[serde(default)]
     pub deterministic_rng: bool,
+
+    /// Importance-sampled transform selection
+    /// ([flame-deep-zoom.md](../../docs/projects/flame-deep-zoom.md)
+    /// stage 1). Off by default and skipped when off, so no existing
+    /// config gains a field and the shader is byte-identical.
+    #[serde(default, skip_serializing_if = "ImportanceSettings::is_default")]
+    pub importance: ImportanceSettings,
+}
+
+/// Biased transform selection with a windowed likelihood-ratio
+/// correction -- stage 1 of
+/// [flame-deep-zoom.md](../../docs/projects/flame-deep-zoom.md).
+///
+/// The chaos game samples the invariant measure over the WHOLE
+/// attractor, so the fraction of samples landing in a deep viewport
+/// falls off polynomially with zoom: the image starves long before
+/// anything numerical breaks. Boosting a transform's selection weight
+/// redirects iterations toward where the camera is looking, and on its
+/// own that is importance sampling with the correction dropped -- it
+/// works, and it changes the picture, because in a flame the density
+/// IS the image.
+///
+/// The correction is the likelihood ratio of the orbit's recent
+/// choices, `w = ∏ p(choice)/q(choice)`, deposited instead of 1. With
+/// it the rendered measure is the true one however aggressive the
+/// bias.
+///
+/// **This struct is the MECHANISM, not the policy.** It takes an
+/// arbitrary bias vector and makes it unbiased; choosing the vector
+/// (by hand, slaved to the zoom, or from stage 2's cylinder measure)
+/// is layered on top.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImportanceSettings {
+    /// Whether biased selection and its correction run at all. Off is
+    /// a byte-identical shader, not a neutral one.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub enabled: bool,
+
+    /// Per-transform bias factors, multiplied into the selection
+    /// weight. `1.0` is neutral; empty means every transform is
+    /// neutral, which is what `enabled` alone gives.
+    ///
+    /// Indexed by transform, and a shorter vector leaves the rest
+    /// neutral -- so adding a transform does not invalidate the
+    /// vector, and neither does deleting one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bias: Vec<f32>,
+
+    /// The correction window `m`: how many of the orbit's most recent
+    /// choices the deposited weight accounts for.
+    ///
+    /// The product over the orbit's ENTIRE history is the textbook
+    /// estimator and its variance grows without bound. It is also
+    /// unnecessary: contraction means the last `m` choices fix the
+    /// point's position to sub-pixel precision, and older choices only
+    /// select position WITHIN a sub-pixel. So a product over the last
+    /// `m` is correct below pixel resolution provided
+    ///
+    /// ```text
+    /// m ≥ log(pixel_size / attractor_size) / log(λ_max)
+    /// ```
+    ///
+    /// with `λ_max` the flame's largest per-transform Lipschitz
+    /// constant. **That constant does not exist yet** -- it is item 1
+    /// of the deep-zoom plan's §7, the shared piece the escape-time
+    /// plan also wants -- so this is a number the caller sets rather
+    /// than one the engine derives, and the default is a value that
+    /// covers a contraction of ½ at a hundredfold zoom. Deriving it
+    /// is what §7 item 1 unblocks.
+    ///
+    /// Under xaos there is a second requirement the formula above does
+    /// not state: `m` must also exceed the transition chain's mixing
+    /// time, because the weight is conditioned on the transform
+    /// BEFORE the window and the true chain's `m`-step distribution
+    /// has to have forgotten it.
+    #[serde(default = "default_importance_window", skip_serializing_if = "is_default_importance_window")]
+    pub window: u32,
+}
+
+fn default_importance_window() -> u32 {
+    16
+}
+
+fn is_default_importance_window(v: &u32) -> bool {
+    *v == default_importance_window()
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+
+impl Default for ImportanceSettings {
+    fn default() -> Self {
+        Self { enabled: false, bias: Vec::new(), window: default_importance_window() }
+    }
+}
+
+impl ImportanceSettings {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The bias factor for transform `i`: the vector's entry, or
+    /// neutral past its end.
+    ///
+    /// A non-positive or non-finite factor is neutral too. A zero
+    /// would make the transform unselectable, which CHANGES THE
+    /// SUPPORT -- the one thing importance sampling may not do, since
+    /// the attractor's point set depends on which weights are
+    /// positive and not on their values.
+    pub fn factor(&self, i: usize) -> f64 {
+        match self.bias.get(i) {
+            Some(&v) if v.is_finite() && v > 0.0 => v as f64,
+            _ => 1.0,
+        }
+    }
+
+    /// Whether this actually biases anything. `enabled` with an
+    /// all-neutral vector is the mechanism running with `q ≡ p`, which
+    /// is a render identical to off and is what the gate uses.
+    pub fn biases(&self) -> bool {
+        self.enabled && self.bias.iter().any(|v| v.is_finite() && *v > 0.0 && *v != 1.0)
+    }
 }
 
 fn default_zoom() -> f32 {
@@ -783,6 +906,7 @@ impl Default for FractalConfig {
             density_effects: Vec::new(),
             color_effects: Vec::new(),
             deterministic_rng: false,
+            importance: ImportanceSettings::default(),
         }
     }
 }

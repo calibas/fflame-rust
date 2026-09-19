@@ -160,12 +160,27 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
-                // (binding 11 was the legacy subflame_transforms buffer
-                // — removed in v2 of the subflame variation work.
-                // Subflame xforms now share the parent's `transforms`
-                // buffer at @binding(0). Slot 11 is intentionally left
-                // unbound to preserve binding numbering with existing
-                // shaders.)
+                // Biased selection weights + likelihood ratios
+                // (docs/projects/flame-deep-zoom.md stage 1). Slot 11
+                // was the legacy subflame_transforms buffer, removed in
+                // v2 of the subflame work and empty since; this takes
+                // it rather than extending the layout.
+                //
+                // The LAYOUT always carries this entry, but the SHADER
+                // declares the binding only under IMPORTANCE_SAMPLING
+                // — that is what keeps the WGSL byte-identical when the
+                // feature is off, and a layout entry a shader does not
+                // reference is allowed.
+                BindGroupLayoutEntry {
+                    binding: 11,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
                 // Subflame metadata: array<SubflameMeta> with per-subflame
                 // (normals_offset/count, finals_offset/count, render_mode).
                 // Indexed by `subflame_id` (variation param). Storage rather
@@ -768,7 +783,11 @@ impl FlamePipelines {
                     binding: 10,
                     resource: buffers.attachments_buffer.as_entire_binding(),
                 },
-                // (binding 11 dropped — see layout comment.)
+                // Biased selection table (real or dummy).
+                BindGroupEntry {
+                    binding: 11,
+                    resource: buffers.bias_binding().as_entire_binding(),
+                },
                 // Subflame metadata uniform.
                 BindGroupEntry {
                     binding: 12,
