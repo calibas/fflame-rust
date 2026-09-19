@@ -369,6 +369,20 @@ pub struct FractalConfig {
     /// config gains a field and the shader is byte-identical.
     #[serde(default, skip_serializing_if = "ImportanceSettings::is_default")]
     pub importance: ImportanceSettings,
+
+    /// Cylinder targeting: force an enumerated prefix at plot time so
+    /// every sample lands in the viewport
+    /// ([flame-deep-zoom.md](../../docs/projects/flame-deep-zoom.md)
+    /// stage 2).
+    ///
+    /// Off by default and skipped when off. This only PERMITS it: a
+    /// flame the enumeration cannot take (nonlinear, xaos, expanding)
+    /// or a view too shallow for the prefix to pay renders the
+    /// ordinary way whatever this says, and the renderer decides per
+    /// view because which words reach the frame is a property of the
+    /// zoom and not of the flame.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub cylinder_targeting: bool,
 }
 
 /// Biased transform selection with a windowed likelihood-ratio
@@ -907,6 +921,7 @@ impl Default for FractalConfig {
             color_effects: Vec::new(),
             deterministic_rng: false,
             importance: ImportanceSettings::default(),
+            cylinder_targeting: false,
         }
     }
 }

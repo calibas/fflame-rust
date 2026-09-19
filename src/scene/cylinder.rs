@@ -311,6 +311,284 @@ impl Cylinders {
     }
 }
 
+/// How many floats one packed word occupies: the composed affine
+/// (six), the colour fold's two coefficients, the cumulative
+/// probability, and three to round the stride to a `vec4` multiple.
+pub const WORD_FLOATS: usize = 12;
+
+/// Pack the enumeration for the kernel.
+///
+/// **A word becomes ONE affine, not a sequence of symbols.** Every
+/// map is affine here, so `S_a = S_{a_k} ∘ … ∘ S_{a_1}` composes to a
+/// single 2×2 and a translation on the CPU — so forcing a prefix of
+/// eighteen transforms costs the kernel one matrix multiply, not
+/// eighteen. That is the deep-zoom plan's stage 3 note arriving
+/// early: "compose the camera zoom with the (contracting) forced
+/// prefix at f64 on the CPU into one well-conditioned map".
+///
+/// The COLOUR folds the same way. flam3's rule is
+/// `c ← c·h + g` per transform with `h = (1+s)/2` and
+/// `g = colour·(1−s)/2`, an affine map of `c`, so a whole word is
+/// `c ← c·H + G` with
+///
+/// ```text
+/// H = ∏ h_j          G = Σ_i g_i · ∏_{j>i} h_j
+/// ```
+///
+/// the inner product running over the maps applied AFTER `i`, since
+/// those are the ones that still act on `g_i`. Two numbers per word,
+/// and the plotted colour is exact rather than approximated.
+///
+/// Layout, `WORD_FLOATS` per word:
+///
+/// ```text
+/// 0..4   m00, m01, m10, m11      the composed 2×2
+/// 4..6   t0, t1                  its translation
+/// 6..8   H, G                    the colour fold
+/// 8      cdf                     cumulative p_a / mass, ascending
+/// 9..12  spare (stride)
+/// ```
+///
+/// The CDF is cumulative and its last entry is exactly 1, so the
+/// kernel's search cannot fall off the end however the floats
+/// rounded.
+pub fn pack(cyl: &Cylinders, flame: &Flame, registry: &crate::variations::VariationRegistry) -> Vec<f32> {
+    let maps: Vec<Affine2> = flame
+        .transforms
+        .iter()
+        .map(|t| {
+            crate::scene::ifs_analysis::transform_affine_2d(t, registry)
+                .unwrap_or(Affine2 { m: [[1.0, 0.0], [0.0, 1.0]], t: [0.0, 0.0] })
+        })
+        .collect();
+
+    let mut out = vec![0.0f32; cyl.words.len() * WORD_FLOATS];
+    let mut acc = 0.0f64;
+    for (w, c) in cyl.words.iter().enumerate() {
+        // Compose oldest-first: the word is stored in the order the
+        // chaos game applies it, so each new map goes on the OUTSIDE.
+        let mut m = Affine2 { m: [[1.0, 0.0], [0.0, 1.0]], t: [0.0, 0.0] };
+        let mut h_prod = 1.0f64;
+        let mut g_acc = 0.0f64;
+        for &sym in &c.word {
+            let i = sym as usize;
+            m = maps[i].then_after(&m);
+            let t = &flame.transforms[i];
+            let s = t.color_speed as f64;
+            let h = (1.0 + s) * 0.5;
+            let g = t.color as f64 * (1.0 - s) * 0.5;
+            // `g_acc` is the sum so far; this map acts on all of it,
+            // then adds its own term.
+            g_acc = g_acc * h + g;
+            h_prod *= h;
+        }
+        acc += c.prob / cyl.mass.max(f64::MIN_POSITIVE);
+        let base = w * WORD_FLOATS;
+        out[base] = m.m[0][0] as f32;
+        out[base + 1] = m.m[0][1] as f32;
+        out[base + 2] = m.m[1][0] as f32;
+        out[base + 3] = m.m[1][1] as f32;
+        out[base + 4] = m.t[0] as f32;
+        out[base + 5] = m.t[1] as f32;
+        out[base + 6] = h_prod as f32;
+        out[base + 7] = g_acc as f32;
+        out[base + 8] = acc as f32;
+    }
+    // The last entry is exactly one, whatever the sum rounded to, so
+    // a uniform draw always finds a word.
+    if let Some(last) = cyl.words.len().checked_sub(1) {
+        out[last * WORD_FLOATS + 8] = 1.0;
+    }
+    out
+}
+
+/// The gates that need a GPU: a targeted render is the untargeted
+/// render, and it gets there with far fewer wasted samples.
+#[cfg(test)]
+mod gpu_tests {
+    use super::*;
+    use crate::config::FractalConfig;
+    use crate::scene::transforms::Transform;
+
+    fn device() -> (wgpu::Device, wgpu::Queue) {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .expect("adapter");
+        let al = adapter.limits();
+        let mut limits = wgpu::Limits::default();
+        limits.max_storage_buffers_per_shader_stage = al.max_storage_buffers_per_shader_stage;
+        limits.max_storage_buffer_binding_size = al.max_storage_buffer_binding_size;
+        limits.max_buffer_size = al.max_buffer_size;
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("cylinder test"),
+            required_features: wgpu::Features::CLEAR_TEXTURE,
+            required_limits: limits,
+            ..Default::default()
+        }))
+        .expect("device")
+    }
+
+    fn gasket_config() -> FractalConfig {
+        let mut cfg = FractalConfig::default();
+        cfg.flame.transforms.clear();
+        for (i, (e, f)) in [(0.0f32, 0.0f32), (0.5, 0.0), (0.25, 0.5)].into_iter().enumerate() {
+            let mut t = Transform::default();
+            t.a = 0.5;
+            t.d = 0.5;
+            t.e = e;
+            t.f = f;
+            t.weight = 1.0;
+            t.color = i as f32 / 2.0;
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("linear", 1.0);
+            cfg.flame.transforms.push(t);
+        }
+        cfg.deterministic_rng = true;
+        // The origin is S0's fixed point, so the view is on the set at
+        // every scale.
+        cfg.pan_x = 0.0;
+        cfg.pan_y = 0.0;
+        cfg
+    }
+
+    fn render(cfg: &FractalConfig, n: u32, iters: u64) -> Vec<u8> {
+        let (device, queue) = device();
+        let job = crate::renderer::RenderJob::new(cfg, n, n).with_iterations(iters);
+        pollster::block_on(crate::renderer::render(
+            &device,
+            &queue,
+            job,
+            &mut crate::renderer::NoProgress,
+        ))
+        .expect("render")
+        .rgba_data
+    }
+
+    /// A targeted render is the untargeted render — the same picture,
+    /// from a fraction of the samples.
+    ///
+    /// This is the estimator's claim, end to end: sampling a word
+    /// with probability `p_a/P(A_V)`, carrying a point of the free
+    /// orbit through it and plotting there has expectation `μ|_V`, so
+    /// the picture must be the one the ordinary chaos game draws.
+    ///
+    /// Compared as a PICTURE rather than per pixel — the two draw
+    /// from the same distribution by different routes and each has
+    /// its own noise — so: which pixels are lit, and how bright they
+    /// are on average. The untargeted reference gets sixteen times
+    /// the iterations, because at these zooms it is starved and a
+    /// fair-budget comparison would be against noise rather than
+    /// against the answer.
+    ///
+    /// Measured on a gasket at `S₀`'s fixed point:
+    ///
+    /// ```text
+    ///   zoom   P(A_V)    speedup   lit ref / tgt   overlap   brightness
+    ///   2^2    1.00e0         0.5     562 /  564    100.0%   0.228 / 0.227
+    ///   2^4    1.11e-1        3.0     246 /  246    100.0%   0.044 / 0.044
+    /// ```
+    ///
+    /// Identical, from a sixteenth of the work.
+    ///
+    /// The 2^2 row is the DECLINE path, and it is here on purpose:
+    /// its speedup is 0.5, so the renderer refuses to target and the
+    /// two renders differ only by their iteration count. A decline
+    /// that silently drew something else would show up here as
+    /// clearly as a forced prefix that named the wrong word.
+    ///
+    /// **Past 2^4 there is nothing to compare against, and that is a
+    /// finding rather than a limit of the gate.** Both renders go
+    /// completely empty — max channel zero, not merely dark — and
+    /// raising the exposure by four thousand does not bring either
+    /// back. It is not the sample count: the enumeration's own gate
+    /// measures 0.6% of a 400,000-point chaos sample inside the view
+    /// at 2^6, so the samples are there. It is the tone map, which
+    /// normalises by `total_iters / pixel_count` and so exposes a
+    /// frame holding one percent of the measure as though it held all
+    /// of it.
+    ///
+    /// **That is the starvation symptom in this renderer**, and it is
+    /// a question about EXPOSURE rather than about sampling — the
+    /// same wall stage 1's probe hit from the other side. Targeting
+    /// is the first thing that knows `P(A_V)` exactly, which is
+    /// precisely the number an automatic compensation would need, so
+    /// the fix is now available; making it is a policy change and not
+    /// part of this mechanism.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_targeted_render_is_the_untargeted_render() {
+        const N: u32 = 96;
+        let stats = |rgba: &[u8]| -> (Vec<bool>, f64) {
+            let lit: Vec<bool> = rgba
+                .chunks(4)
+                .map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24)
+                .collect();
+            let (mut acc, mut n) = (0.0f64, 0.0f64);
+            for (p, l) in rgba.chunks(4).zip(&lit) {
+                if !*l {
+                    continue;
+                }
+                acc += (p[0] as f64 + p[1] as f64 + p[2] as f64) / 765.0;
+                n += 1.0;
+            }
+            (lit, if n > 0.0 { acc / n } else { 0.0 })
+        };
+
+        let reg = crate::variations::global_registry();
+        println!("  zoom   P(A_V)    speedup   lit ref / tgt   overlap   brightness");
+        for zoom_pow in [2i32, 4] {
+            let mut base = gasket_config();
+            base.zoom = 2f32.powi(zoom_pow);
+            let plan = Cylinders::plan(
+                &base.flame,
+                &reg,
+                View::of(base.zoom as f64, [base.pan_x as f64, base.pan_y as f64], N, N),
+            )
+            .expect("a gasket is affine");
+            let mut tgt = base.clone();
+            tgt.cylinder_targeting = true;
+
+            let (lit_r, bright_r) = stats(&render(&base, N, 64_000_000));
+            let (lit_t, bright_t) = stats(&render(&tgt, N, 4_000_000));
+
+            let nr = lit_r.iter().filter(|b| **b).count();
+            let nt = lit_t.iter().filter(|b| **b).count();
+            let both = lit_r.iter().zip(&lit_t).filter(|(a, b)| **a && **b).count();
+            let overlap = both as f64 / nr.max(1) as f64;
+            println!(
+                "  2^{zoom_pow:<4} {:.2e}  {:>7.1}   {nr:>4} / {nt:>4}   {:>6.1}%   {bright_r:.3} / {bright_t:.3}",
+                plan.mass,
+                plan.speedup(),
+                overlap * 100.0
+            );
+
+            assert!(nr > 100 && nt > 100, "2^{zoom_pow}: {nr} / {nt} lit -- nothing to compare");
+            assert!(
+                overlap > 0.95,
+                "2^{zoom_pow}: the targeted render covers only {:.1}% of the reference's lit \
+                 pixels -- it is drawing a different set, so the forced prefix is not the \
+                 word the enumeration named",
+                overlap * 100.0
+            );
+            assert!(
+                (bright_t / bright_r - 1.0).abs() < 0.2,
+                "2^{zoom_pow}: the targeted render is {:.3}x the reference's brightness -- the \
+                 iteration count is not being inflated by 1/P(A_V), so the deposit's weight is \
+                 wrong",
+                bright_t / bright_r
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -638,6 +916,110 @@ mod tests {
             "by 2^20 the speedup is only {prev:.1e}x -- the asymptotics are not what this \
              stage exists for"
         );
+    }
+
+    /// The packed affine IS the word replayed, and the packed colour
+    /// fold IS the colour folded per transform.
+    ///
+    /// This is the error-prone part of the stage: a composition taken
+    /// in the wrong order still produces a plausible picture, of a
+    /// different flame. So both are checked against a direct replay
+    /// rather than against a derivation — the point, pushed through
+    /// the maps one at a time, against the one matrix the kernel
+    /// will use.
+    ///
+    /// The colour is checked the same way because it folds the same
+    /// way: flam3's `c ← c·h + g` per transform is an affine map of
+    /// `c`, so a word is `c ← c·H + G`, and getting `G`'s inner
+    /// product over the WRONG end of the word is the same class of
+    /// mistake with the same plausible-looking result.
+    #[test]
+    fn the_packed_word_is_the_word_replayed() {
+        let reg = global_registry();
+        let mut flame = gasket();
+        // Distinct colours and a non-zero speed, so a fold taken the
+        // wrong way round cannot come out right by symmetry.
+        for (i, t) in flame.transforms.iter_mut().enumerate() {
+            t.color = [0.1f32, 0.55, 0.9][i];
+            t.color_speed = [0.0f32, 0.3, 0.6][i];
+        }
+        let maps: Vec<Affine2> = flame
+            .transforms
+            .iter()
+            .map(|t| crate::scene::ifs_analysis::transform_affine_2d(t, &reg).expect("affine"))
+            .collect();
+
+        let probes = [[0.3f64, 0.2], [-0.4, 0.7], [0.0, 0.0], [0.62, 0.11]];
+        let mut checked = 0usize;
+        // Shallow, where the view straddles pieces and there are
+        // several short words, through deep, where there is one word
+        // of eighteen symbols -- a composition order that is wrong
+        // shows up at length and a CDF that is wrong shows up at
+        // breadth.
+        for zoom_pow in [1i32, 2, 4, 8, 16, 20] {
+        let cyl = Cylinders::plan(&flame, &reg, View::of(2f64.powi(zoom_pow), ON_SET, 96, 96))
+            .expect("affine");
+        let packed = pack(&cyl, &flame, &reg);
+        assert_eq!(packed.len(), cyl.words.len() * WORD_FLOATS);
+
+        for (w, c) in cyl.words.iter().enumerate() {
+            let b = w * WORD_FLOATS;
+            let m = Affine2 {
+                m: [
+                    [packed[b] as f64, packed[b + 1] as f64],
+                    [packed[b + 2] as f64, packed[b + 3] as f64],
+                ],
+                t: [packed[b + 4] as f64, packed[b + 5] as f64],
+            };
+            let (big_h, big_g) = (packed[b + 6] as f64, packed[b + 7] as f64);
+
+            for p in probes {
+                // Replay: apply the word's maps one at a time, in the
+                // order the chaos game would.
+                let mut q = p;
+                for &sym in &c.word {
+                    q = maps[sym as usize].apply(q);
+                }
+                let got = m.apply(p);
+                let e = (got[0] - q[0]).hypot(got[1] - q[1]);
+                assert!(
+                    e < 1e-6,
+                    "word {:?}: the composed affine puts {p:?} at {got:?} where the replay \
+                     puts it at {q:?} ({e:.2e})",
+                    c.word
+                );
+                checked += 1;
+            }
+
+            for c0 in [0.0f64, 0.25, 0.5, 1.0] {
+                let mut col = c0;
+                for &sym in &c.word {
+                    let t = &flame.transforms[sym as usize];
+                    let s = t.color_speed as f64;
+                    col = col * ((1.0 + s) * 0.5) + t.color as f64 * (1.0 - s) * 0.5;
+                }
+                let got = c0 * big_h + big_g;
+                assert!(
+                    (got - col).abs() < 1e-6,
+                    "word {:?}: the folded colour from {c0} is {got} where the replay gives \
+                     {col} -- H and G are over the wrong end of the word",
+                    c.word
+                );
+                checked += 1;
+            }
+        }
+        // The CDF is ascending and ends at exactly one, so a uniform
+        // draw always finds a word however the floats rounded.
+        let mut prev = 0.0f32;
+        for w in 0..cyl.words.len() {
+            let v = packed[w * WORD_FLOATS + 8];
+            assert!(v >= prev, "the CDF went backwards at word {w}: {v} after {prev}");
+            prev = v;
+        }
+        assert_eq!(prev, 1.0, "the CDF ends at {prev}, so a draw near one finds nothing");
+        }
+        // Six zooms, one to three words each, eight comparisons a word.
+        assert!(checked >= 80, "only {checked} comparisons");
     }
 
     /// The refusals are refusals, not silent wrong answers.

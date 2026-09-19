@@ -466,6 +466,89 @@ section. Both are policy surface, and §9's open question 1 is still
 open; a `.fflame` carries the settings and the CLI renders them
 today, which is enough to measure with.
 
+## 13. Stage 2's kernel half, 2026-09-18
+
+The forced prefix runs. A targeted render is the untargeted render,
+from a sixteenth of the iterations.
+
+### A word is ONE affine
+
+Every map here is affine, so `S_a = S_{a_k} ∘ … ∘ S_{a_1}` composes
+on the CPU to a single 2×2 and a translation — forcing a prefix of
+eighteen transforms costs the kernel one matrix multiply, not
+eighteen. That is stage 3's note arriving early, and it is what makes
+the kernel half small.
+
+The COLOUR folds the same way: flam3's `c ← c·h + g` per transform is
+an affine map of `c`, so a whole word is `c ← c·H + G` with
+`H = ∏ h_j` and `G = Σ_i g_i ∏_{j>i} h_j`. Two more numbers per word,
+and the plotted colour is exact rather than approximated.
+
+At the plot, the kernel applies the word to `current`, plots, and
+RESTORES — so the final chain, post-symmetry, the depth effects and
+the deposit all act on the forced point with no change of their own,
+and the free orbit carries on from where it was. Feeding the forced
+point forward would collapse the walk into the one cylinder the word
+names.
+
+### The weight is an iteration count, not a deposit
+
+The estimator says each forced sample carries `P(A_V)`. Depositing
+that would be hopeless: at 2^20 it is 2.6e-9, and the u32 histogram
+would round every deposit to zero but for a one-in-a-hundred-million
+tail — handing the whole advantage back to quantisation, which is
+exactly the trap stage 1 fell into from the other side.
+
+So the deposit carries ONE, at full resolution, and the tone map is
+told the render did `N / P(A_V)` iterations. That is the same
+statement — a forced render is doing the work of that many unbiased
+iterations — and saying it there costs nothing.
+
+### What it measures
+
+| zoom | P(A_V) | speedup | lit ref / tgt | overlap | brightness |
+|---|---|---|---|---|---|
+| 2^2 | 1.00e0 | 0.5 | 562 / 564 | 100.0% | 0.228 / 0.227 |
+| 2^4 | 1.11e-1 | 3.0 | 246 / 246 | 100.0% | 0.044 / 0.044 |
+
+Identical pictures, from a sixteenth of the work. The 2^2 row is the
+DECLINE path on purpose: its speedup is 0.5, so the renderer refuses
+to target and the two differ only by iteration count — a decline that
+silently drew something else would show here as clearly as a forced
+prefix naming the wrong word.
+
+Off, the feature contributes **no code at all**: the whole
+canonical-dump diff is 40 blank lines where the stripped `{{#if}}`
+blocks were, and all 330 visual tests are unchanged.
+
+### An ordering bug worth recording
+
+For one build the render came out as the plain one — the buffer
+uploaded, the shader never asking for it. `constants_from_config`
+hard-codes the flag off because it has no frame size and does not run
+the enumeration, and the renderer's override ran AFTER the shader was
+built. The verdict is threaded as a parameter now, exactly as
+`census` is beside it, and the enumeration runs first. It was visible
+only because the gate compared against a reference; a brightness
+check alone would have called it a pass.
+
+### Past 2^4 there is nothing to compare against, and it is not the sampling
+
+Both renders go completely empty at 2^6 — max channel zero, not
+merely dark — and raising the exposure by four thousand brings
+neither back. The samples are there: the enumeration's own gate
+measures 0.6% of a 400,000-point chaos sample inside that view. It is
+the tone map, which normalises by `total_iters / pixel_count` and so
+exposes a frame holding one percent of the measure as though it held
+all of it.
+
+**That is the starvation symptom in this renderer**, and it is a
+question about EXPOSURE rather than about sampling — the same wall
+stage 1's probe hit from the other side, reached here by a different
+route. Targeting is the first thing that knows `P(A_V)` exactly,
+which is precisely the number an automatic compensation would need.
+Making it is a policy change and the obvious next one.
+
 ## 12. Stage 2's enumeration, built and measured, 2026-09-18
 
 The CPU half: `scene::cylinder` enumerates the words whose image

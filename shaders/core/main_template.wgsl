@@ -84,6 +84,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var prev_xform_idx = select_transform_const(rng_nextf(&rng));
 {{/if}}
 
+{{#if CYLINDER_TARGETING}}
+    // A stream of its own for the word draw, so turning targeting on
+    // does not shift the chaos game's own sequence -- the free orbit
+    // has to be the same orbit it would have been.
+    var ct_rng = rng_init(thread_id, params.seed ^ 0x85EBCA6Bu);
+{{/if}}
 {{#if IMPORTANCE_SAMPLING}}
     // The window's likelihood ratio and how many choices it covers
     // (docs/projects/flame-deep-zoom.md stage 1). `is_weight` is the
@@ -461,6 +467,41 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if (fuse > 0u) {
             fuse = fuse - 1u;
         } else {
+{{#if CYLINDER_TARGETING}}
+            // The FORCED PREFIX (docs/projects/flame-deep-zoom.md
+            // stage 2). The free orbit above is the true chaos game
+            // and has `current ~ mu`; this carries that point through
+            // one enumerated word, whose image is inside the
+            // viewport, and plots THERE. Every sample lands in frame,
+            // where the unbiased game's share falls off polynomially
+            // with the zoom.
+            //
+            // The word is one affine and one colour fold, composed on
+            // the CPU, so a prefix of any length costs the same here.
+            //
+            // Applied to `current` and restored after the plot rather
+            // than threaded through as a second point: everything
+            // between -- the final chain, post-symmetry, the depth
+            // effects, the deposit -- then acts on the forced point
+            // with no change of its own, and the free orbit carries
+            // on from where it was.
+            let ct_saved = current;
+            let ct_saved_color = color_index;
+            {
+                let ct_w = ct_pick(rng_nextf(&ct_rng)) * 12u;
+                let ct_p = current.xy;
+                let ct_x = cylinders[ct_w] * ct_p.x + cylinders[ct_w + 1u] * ct_p.y
+                    + cylinders[ct_w + 4u];
+                let ct_y = cylinders[ct_w + 2u] * ct_p.x + cylinders[ct_w + 3u] * ct_p.y
+                    + cylinders[ct_w + 5u];
+{{#if RENDER_3D}}
+                current = vec3<f32>(ct_x, ct_y, current.z);
+{{else}}
+                current = vec2<f32>(ct_x, ct_y);
+{{/if}}
+                color_index = color_index * cylinders[ct_w + 6u] + cylinders[ct_w + 7u];
+            }
+{{/if}}
 {{#if HAS_ATTACHMENTS}}
             // FINAL CHAIN — pure plot-time filter. Each Final's variations
             // and affine reshape what gets plotted but DON'T feed forward.
@@ -1133,6 +1174,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             }  // end for (sym_k = 0..sym_count) — post-symmetry loop
 {{#if HAS_PLOT_EMIT}}
             }  // end for (src_i) — multi-emit source loop
+{{/if}}
+{{#if CYLINDER_TARGETING}}
+            // ...and the free orbit carries on from where it was. The
+            // forced point was a detour for the plot alone: feeding
+            // it forward would collapse the walk into the one cylinder
+            // the word names, and the next sample needs `current ~ mu`
+            // again.
+            current = ct_saved;
+            color_index = ct_saved_color;
 {{/if}}
         }
 

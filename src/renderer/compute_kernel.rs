@@ -264,6 +264,12 @@ pub struct FlameRenderer {
     /// so the incremental shader-constants path can see it.
     /// See docs/projects/flame-deep-zoom.md stage 1.
     importance: crate::config::fractal_config::ImportanceSettings,
+    /// The enumerated cylinders for the CURRENT view, when it is
+    /// worth targeting (docs/projects/flame-deep-zoom.md stage 2).
+    /// `None` whenever the flame cannot be targeted or the view is
+    /// too shallow for it to pay -- which is most of the time, and is
+    /// the state that leaves the shader byte-identical.
+    cylinders: Option<crate::scene::cylinder::Cylinders>,
     surface_thickness: f32, // Solid rendering: depth shell (world units)
     needs_depth_prime: bool, // Next compute batch records depth only (set on reset while solid)
     solid_shading: crate::config::SolidShadingSettings, // Phase 1 lighting (shade pass); active() => depth capture even at solid_strength 0
@@ -419,6 +425,7 @@ impl FlameRenderer {
             fog_start: crate::config::DEFAULT_FOG_START,
             solid_strength: crate::config::DEFAULT_SOLID_STRENGTH,
             importance: Default::default(),
+            cylinders: None,
             surface_thickness: crate::config::DEFAULT_SURFACE_THICKNESS,
             needs_depth_prime: false,
             solid_shading: crate::config::SolidShadingSettings::default(),
@@ -598,6 +605,7 @@ impl FlameRenderer {
             // Mirrored from the config on load, like `solid_strength`:
             // this path is the incremental one and has no config.
             importance_sampling: self.importance.enabled,
+            cylinder_targeting: self.cylinders.is_some(),
             flatten_z_per_iter: matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD)
                 && !preserve_z,
             solid_enabled: (self.solid_strength > 0.0 || self.solid_shading.active())
@@ -1043,7 +1051,18 @@ impl FlameRenderer {
         // dispatched samples; scale the normalization density by the
         // MEASURED accepted fraction (1.0 when solid is off) so solids
         // tone-map at the brightness their surviving samples deserve.
-        let sample_density = ((self.samples_in_buffer as f32) * self.solid_density_fraction
+        // Cylinder targeting (docs/projects/flame-deep-zoom.md stage
+        // 2) deposits weight ONE per forced sample rather than the
+        // estimator's `P(A_V)`, because `P(A_V)` is 2.6e-9 at a zoom
+        // of 2^20 and the u32 histogram would round every deposit to
+        // zero but for a one-in-a-hundred-million tail -- handing the
+        // whole advantage back to quantisation. The weight is applied
+        // HERE instead, as an iteration count: a forced render is
+        // doing the work of `N / P(A_V)` unbiased iterations, and
+        // saying so is what makes its brightness match theirs.
+        let sample_density = ((self.samples_in_buffer as f32)
+            * self.solid_density_fraction
+            * self.cylinder_iteration_scale() as f32
             / total_pixels.max(1.0))
             .max(1e-6);
         let offset = std::mem::offset_of!(TonemapParams, sample_density) as u64;
@@ -1707,7 +1726,19 @@ impl FlameRenderer {
         // Determine if path features are needed (PathMap mode or path filters active)
         let path_features_enabled = config.color_mode == ColorMode::PathMap
             || !self.path_filters.is_empty();
-        let shaders_changed = self.pipelines.ensure_shaders_current_with_config(device, config, path_features_enabled, self.census);
+        // The enumeration decides whether the shader is built with
+        // the forced prefix in it, so it has to run FIRST. It was
+        // below this for one commit and the render came out as the
+        // plain one -- the buffer uploaded, the shader never asking
+        // for it.
+        let cyl_changed = self.update_cylinders(device, queue, config);
+        let shaders_changed = self.pipelines.ensure_shaders_current_with_config(
+            device,
+            config,
+            path_features_enabled,
+            self.census,
+            self.cylinders.is_some(),
+        );
         if shaders_changed {
             log::info!("Shaders recompiled during preset load - recreating bind group");
             // Recreate compute bind group with new pipeline
@@ -1745,7 +1776,7 @@ impl FlameRenderer {
         // 1c. Refresh analytic-blur slot list (buffers (re)allocate in
         // maybe_rebuild_blur_kernels on the next compute_pass).
         self.update_blur_buffers(&config.flame);
-        if xaos_buffer_changed || bias_buffer_changed {
+        if xaos_buffer_changed || bias_buffer_changed || cyl_changed {
             // Recreate bind group with the new xaos or bias buffer
             self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
             self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
@@ -3035,6 +3066,68 @@ impl FlameRenderer {
         self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
         self.blur_convolve_bind_group = self.pipelines.create_blur_convolve_bind_group(device, &self.buffers);
         self.blur_upscale_bind_group = self.pipelines.create_blur_upscale_bind_group(device, &self.buffers);
+    }
+
+    /// Enumerate and upload the cylinders that reach this view, or
+    /// drop them.
+    ///
+    /// **Targeting is declined unless it pays.** Below about 2^2 the
+    /// whole attractor fits the frame, every sample of the ordinary
+    /// chaos game is already useful, and the forced prefix is pure
+    /// overhead -- `Cylinders::speedup` reads under one there and
+    /// this leaves the feature off. It is a decision about the view,
+    /// so it is remade whenever the view moves.
+    fn update_cylinders(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        config: &FractalConfig,
+    ) -> bool {
+        use crate::scene::cylinder::{Cylinders, View};
+        let registry = crate::variations::global_registry();
+        let view = View::of(
+            config.zoom.max(1e-6) as f64,
+            [config.pan_x as f64, config.pan_y as f64],
+            self.width.max(1),
+            self.height.max(1),
+        );
+        let planned = if config.cylinder_targeting {
+            Cylinders::plan(&config.flame, &registry, view)
+                .ok()
+                .filter(|c| c.speedup() > 1.0)
+        } else {
+            None
+        };
+        let packed = planned
+            .as_ref()
+            .map(|c| crate::scene::cylinder::pack(c, &config.flame, &registry));
+        let changed = self.buffers.update_cylinders(device, queue, packed.as_deref());
+        let was = self.cylinders.is_some();
+        self.cylinders = planned;
+        // The SHADER changes when targeting starts or stops, so the
+        // constants have to be seen to change even if the buffer did
+        // not resize.
+        changed || was != self.cylinders.is_some()
+    }
+
+    /// The factor the tone map's iteration count is inflated by.
+    ///
+    /// A forced sample carries weight `P(A_V)`, and depositing that
+    /// directly would be hopeless: at a zoom of 2^20 it is 2.6e-9, so
+    /// the u32 histogram would round every deposit to zero but for a
+    /// one-in-a-hundred-million tail -- handing the whole advantage
+    /// back to quantisation. So the deposit carries ONE, at full
+    /// resolution, and the tone map is told the render did
+    /// `N / P(A_V)` iterations instead of `N`.
+    ///
+    /// That is the same statement: the forced render is doing the
+    /// work of that many unbiased iterations, and saying so is what
+    /// makes its brightness match theirs.
+    pub fn cylinder_iteration_scale(&self) -> f64 {
+        match &self.cylinders {
+            Some(c) if c.mass > 0.0 => 1.0 / c.mass,
+            _ => 1.0,
+        }
     }
 
     fn update_xaos_buffer(&mut self, device: &Device, queue: &Queue, flame: &crate::scene::transforms::Flame) -> bool {

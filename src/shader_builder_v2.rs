@@ -307,6 +307,14 @@ pub struct ShaderConstants {
     /// docs/projects/flame-deep-zoom.md stage 1.
     pub importance_sampling: bool,
 
+    /// Whether cylinder targeting runs for this flame and view
+    /// (`docs/projects/flame-deep-zoom.md` stage 2). Drives
+    /// `CYLINDER_TARGETING` — when false the binding, the word draw
+    /// and the forced prefix are stripped. Tracked here so entering
+    /// and leaving targeting triggers a rebuild through the cache's
+    /// constants-changed check.
+    pub cylinder_targeting: bool,
+
     /// Whether the analytic-blur feature is active for this flame
     /// (`Flame::analytic_blur_active`). Drives `HAS_ANALYTIC_BLUR` — when
     /// false, all mean-splat routing is stripped and the shader is
@@ -410,6 +418,7 @@ impl Default for ShaderConstants {
             has_post_symmetry: false,
             has_analytic_blur: false,
             importance_sampling: false,
+            cylinder_targeting: false,
             flatten_z_per_iter: false,
             solid_enabled: false,
             probe: false,
@@ -639,6 +648,7 @@ impl ShaderConstants {
             // Not derivable from a flame: the bias lives on the
             // CONFIG, so a caller that has one sets this after.
             importance_sampling: false,
+            cylinder_targeting: false,
             // Per-iteration Z flatten — only meaningful in 3D, and
             // only when preserve_z is false (JWF/Apo default).
             flatten_z_per_iter: matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD)
@@ -1639,6 +1649,11 @@ impl ShaderBuilder {
         // from `constants` so toggling it rebuilds through the cache's
         // constants-changed check.
         processor.set("IMPORTANCE_SAMPLING", constants.importance_sampling);
+        // CYLINDER_TARGETING forces an enumerated prefix at plot time
+        // so every sample lands in the viewport
+        // (docs/projects/flame-deep-zoom.md stage 2). Off strips the
+        // binding, the draw and the prefix.
+        processor.set("CYLINDER_TARGETING", constants.cylinder_targeting);
         // FLATTEN_Z_PER_ITER used to insert a blanket `current.z = 0.0;`
         // at the end of each iteration under preserve_z=false. That
         // destroyed the z compounding JWF gets through unconditional
@@ -1909,6 +1924,7 @@ impl ShaderBuilder {
             // The blur is a plot-time device; a map has no plot.
             has_analytic_blur: false,
             importance_sampling: false,
+            cylinder_targeting: false,
             flatten_z_per_iter: false,
             solid_enabled: false,
             probe: false,
@@ -3625,6 +3641,62 @@ mod tests {
         keys.sort_unstable();
         keys.dedup();
         assert_eq!(keys.len(), total, "duplicate switch keys in get_inlined_var_param:\n{body}");
+    }
+
+    /// Stage 2's hard requirement, the same as stage 1's: with
+    /// `cylinder_targeting = false` the emitted WGSL contains NO CODE
+    /// from the feature.
+    ///
+    /// It sits at the plot, which every sample of every flame passes
+    /// through, so anything that leaked past the flag would cost and
+    /// move every render there has ever been.
+    #[test]
+    fn cylinder_targeting_off_is_byte_identical() {
+        use crate::scene::transforms::{Flame, Transform};
+        let registry = crate::variations::global_registry().clone();
+        let builder = ShaderBuilder::new(registry);
+
+        let mut flame = Flame::new();
+        let mut xform = Transform::new();
+        xform.variations.insert("linear".to_string(), 1.0);
+        flame.transforms.push(xform);
+        let mut active = HashMap::new();
+        active.insert("linear".to_string(), 1.0);
+
+        let base = ShaderConstants::default();
+        let mut on = ShaderConstants::default();
+        on.cylinder_targeting = true;
+
+        for render_3d in [false, true] {
+            let off = builder.build_from_template(&flame, &active, render_3d, false, false, true, &base);
+            let with = builder.build_from_template(&flame, &active, render_3d, false, false, true, &on);
+
+            for needle in ["cylinders", "ct_pick", "ct_saved", "ct_rng"] {
+                assert!(
+                    !off.contains(needle),
+                    "3d={render_3d}: `{needle}` leaked into a shader with targeting off"
+                );
+            }
+            assert!(
+                !off.lines().any(|l| l.trim().starts_with("{{")),
+                "3d={render_3d}: an unresolved template marker survived"
+            );
+
+            assert!(with.contains("@binding(15) var<storage, read> cylinders"), "3d={render_3d}: no binding");
+            assert!(with.contains("fn ct_pick"), "3d={render_3d}: no word draw");
+            assert!(with.contains("let ct_saved = current;"), "3d={render_3d}: the free orbit is not saved");
+            assert!(with.contains("current = ct_saved;"), "3d={render_3d}: the free orbit is not restored");
+            // The restore must come AFTER the plot, or the forced
+            // point never reaches the histogram.
+            let save = with.find("let ct_saved = current;").expect("save");
+            let restore = with.find("current = ct_saved;").expect("restore");
+            let deposit = with.find("atomicAdd(&histogram[base_idx + 0u]").expect("deposit");
+            assert!(
+                save < deposit && deposit < restore,
+                "3d={render_3d}: the forced prefix does not bracket the deposit (save {save}, \
+                 deposit {deposit}, restore {restore}) -- the plot is of the wrong point"
+            );
+        }
     }
 
     /// Stage 1's hard requirement: with `importance_sampling = false`
