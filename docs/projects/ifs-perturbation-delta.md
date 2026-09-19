@@ -1125,6 +1125,10 @@ The risks, ranked:
 
 The cheap and the decisive first. Each item names its plan.
 
+**Superseded from item 10 on by §10**, the review of 2026-09-18: the
+destinations are the deep-zoom and general plans, and the inverse
+delta walk of items 5 and 9 is parked rather than extended.
+
 1. ~~**R1 to R5**~~ -- done 2026-09-17, §2a, forced levels included
    and reviewed twice. Near the set the objective is within a third
    of a pixel everywhere tested, right in three of six cases and one
@@ -1210,7 +1214,7 @@ The cheap and the decisive first. Each item names its plan.
    `hemisphere` at 7/19/41. Two places the transcription DISAGREED
    with f64 came out with it, both found by asserting parity rather
    than by looking.
-9. **3D** (D5 here) -- the cheap half done 2026-09-18, §3h, and the
+9. ~~**3D**~~ -- PARKED 2026-09-18, §10. The cheap half was done, §3h, and the
    expensive half localised. `seed_chain3` refused any map that was
    not affine, so EVERY nonlinear solid handed over at level 0 at
    every zoom. That refusal is gone -- `Map3::jacobian`
@@ -1391,3 +1395,159 @@ the frame, because their attractors are blobs with smooth surfaces
 rather than the measure-zero sets the affine solids are. That is a
 fixture question and not an engine one, but D5's payoff is still
 waiting on a solid whose SURFACE has structure at depth.
+
+## 10. Review, and the redirection, 2026-09-18
+
+Items 5 to 9 were built in the order §9 listed them. A review of
+what they achieved against the branch's actual destinations --
+[flame-deep-zoom.md](flame-deep-zoom.md) and
+[ifs-general.md](ifs-general.md) -- found that the order had drifted
+from the purpose, and this section records what was found and what
+replaces §9 from here.
+
+### What the review found
+
+**G5 was never run.** It is the one gate written for the grand
+julian, the set §1 names as this plan's reason, and it is listed in
+§6 and mentioned once in §3b as "still open". Every GPU comparison
+in §3d is on the dragon, the gasket, a bubble set and a julia dust.
+Item 5 was marked done without it.
+
+**On those sets the shipped walk was already fine.** G6 shows the
+SHIPPED walk holding to 2^64 on the gasket at 0.0028 px of drift.
+The headline "sixty times closer" is 1.6e-3 px against 2.7e-5 px:
+invisible against more invisible. The affine sets never needed a
+delta form; their basis carry was exact already.
+
+**On the grand julian itself, measured for this review** (a
+temporary probe, not committed): all three of its maps are `julian`
+at `dist −1`, which has no polynomial difference form, so every one
+of them is on the Taylor rung -- and their sampled third-derivative
+bounds are 5.8e11, 6.2e20 and 1.4e29. So:
+
+| zoom | `carries()` | level-1 rows carrying | deepest level with any carry |
+|---|---|---|---|
+| 2^10 | declined | 0 / 3 | 0 of 21 |
+| 2^20 | declined | 0 / 3 | 2 of 21 |
+| 2^30 | taken | 2 / 3 | 6 of 21 |
+| 2^36 | taken | 3 / 3 | 6 of 21 |
+| 2^44 | taken | 3 / 3 | 12 of 21 |
+
+The first design's objective was already choosing levels 3 to 11 on
+this set (§2a). So on its motivating case the delta walk hands over
+at about the depth the objective already picked, by a heavier route,
+and at shallower zooms it does nothing at all. Two design choices
+produce that:
+
+- **the Taylor remainder is the ball's worst point, times four.**
+  `measure_third` samples the whole ball, and an inversion's third
+  derivative near its pole is enormous, so the bound says "rebase
+  now" everywhere on any inversion set -- the class this plan exists
+  for. That is why the disc "barely carries" (§3e), the julia dust is
+  declined at every zoom, and the grand julian carries six levels.
+- **§3's third rebase criterion was half-built.** It proposed
+  re-anchoring a cancelling lineage on a SIBLING's row; what landed
+  is `Rebase::Cancelled` straight to absolute f32, and because a
+  level-0 absolute rebase is worse than the seeded handover (§3d,
+  25x), the response was `carries()` -- a per-view switch that throws
+  the whole mechanism away exactly where it is needed. D2 as written
+  -- a lineage that cannot carry rebases into the SEEDED walk at the
+  objective's level -- was never assembled.
+
+**Nothing user-visible shipped from items 5 to 9.** The delta walk is
+off by default; the Monte Carlo measure is CPU-only; sums unlock zero
+corpus flames; the solid prefix went from 0 to 1 link. Meanwhile the
+corpus census says 87 of 109 transforms name a variation with no
+inverse -- the catalogue is the wall, and that lever was not touched.
+
+### The destinations, and why the inverse direction was the wrong end
+
+[flame-deep-zoom.md](flame-deep-zoom.md) renders the CHAOS GAME at
+depth. Its stage 2 enumerates the symbol prefixes whose composed
+image touches the viewport, forces samples through them, and weights
+each by the prefix's `∏p`; its stage 3 carries a sample's offset
+through the forced prefix in the FORWARD direction. Nothing in it is
+a distance field, a beam ranking or a rebase.
+
+A forced prefix and the inverse walk are **the same tree walked from
+opposite ends** -- a prefix whose image touches the viewport is a
+beam candidate at that level with a non-positive bound. That is why
+so much of this plan transfers. But the directions differ in the one
+way that decides everything here:
+
+- **Forward, through a forced prefix, the maps contract.** δ only
+  shrinks. One lineage, no ranking, no siblings, no cap, no
+  oscillation, no remainder. Every hard part of the delta walk --
+  `view_agrees`, `carries()`, the 1e29 bounds, the re-anchor that
+  never got built, G3's oscillation -- is an artefact of the INVERSE
+  direction, where maps expand and every level has several
+  preimages. Stage 3 is a strictly simpler problem than the one
+  items 5 to 9 solved.
+- **Forward needs only forward maps, which every variation has.**
+  The inverse needs an `InverseDef`, which twenty-two variations
+  have. Forward cylinder enumeration needs a Lipschitz bound per
+  variation, not an inverse, so it reaches the catalogue by
+  construction where the inverse walk reaches it one `InverseDef` at
+  a time. The inverse keeps one real advantage -- sets whose forward
+  maps EXPAND, like the grand julian, where a forward image bound
+  blows up -- so both belong and neither is universal.
+
+### What transfers
+
+| built here | serves |
+|---|---|
+| `Real` / `Transcendental` / `Dual` / `Dual3` and the generic kernel bodies (item 3, §3h) | forward difference forms and Jacobians at any precision; the `InverseDef` shape reach is built from |
+| `BigFloat` transcendentals (item 8) | the forced prefix's reference orbit at depth |
+| the ball, composed bases, `σ·(r − R)`, and `reference_beam` keeping every child (§3b) | **stage 2's branch-and-bound, already written**: the beam from the viewport centre IS the cylinder enumeration |
+| xaos as a Markov chain (item 4) | stage 2's admissible prefixes with row-normalised probabilities, verbatim |
+| the measure walk's `∏p` and its coarse pass | the forced sample's weight, and the measure plan's D8 answer to whether a forward pass is needed at all |
+| the difference-form algebra (§3a) | the same technique; several forms carry over literally, a kernel's inverse form being its inverse variation's forward form |
+
+### What is parked
+
+Not deleted yet -- the cleanup is the LAST item below, in case a
+piece turns out to be wanted -- but not extended, not turned on, and
+not on the path:
+
+- the inverse-direction delta walk on the GPU: `IFS_DELTA_WALK`,
+  `IfsRefRowGpu` and `pack_reference`, the rebase machinery, the
+  Taylor rung's sampled remainders, `carries()`. If mode D at depth
+  on inversion sets is wanted again, the missing pieces are known --
+  a LOCAL remainder at the row's own `Z` over the view's reach, and
+  the sibling re-anchor -- but that is a mode-D question, not a path
+  to either destination;
+- the GPU half of sums by Newton (`IFS_NEWTON`): the chaos game has
+  every forward body already, a forced prefix needs forward maps,
+  and the census said zero flames were unlocked. The CPU half stays,
+  since `Map2::Sum` is a map the beam can enumerate;
+- item 9's solid delta walk. D5 proper serves nothing on either
+  path.
+
+### The order of work, from here
+
+Replaces §9's tail. Each item names the plan it lives in.
+
+10. **Stage 1 of the deep zoom** -- biased selection with the
+    windowed correction ([flame-deep-zoom.md](flame-deep-zoom.md)
+    stage 1). A template flag, two small tables, one multiply into
+    `density_weight`. Needs none of this plan; ships user-visible
+    value at ~100x zoom; off is byte-identical WGSL and `q ≡ p` on is
+    a bit-identical render. **First**, because it is the demand
+    signal for everything after and the cheapest thing on the list.
+11. **Stage 2 from the inverse walk's beam.** `reference_beam`
+    already enumerates the tree with bounds and `∏p`; the
+    forced-prefix sampler reads it. Where the walk has no inverse
+    for a variation, fall back to forward branch-and-bound with a
+    Lipschitz bound -- the deep-zoom plan's §7 item 1, the shared
+    piece both plans named and nobody built, and the reach lever for
+    ifs-general too.
+12. **`InverseDef`s for the corpus's real blockers**
+    ([ifs-general.md](ifs-general.md) §8, the corpus meter).
+    Interleaved with 11 as the meter says; a day each on the
+    generic-body machinery.
+13. **Stage 3 as forward difference forms**, per kernel, generic --
+    the easy version of §3a, with contraction on its side. Affine
+    prefixes need none of it: compose at f64 on the CPU, as the plan
+    says.
+14. **Cleanup** of the parked pieces above, last, once 10 to 13 have
+    shown which of them nothing wants.

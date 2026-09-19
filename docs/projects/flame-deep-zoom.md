@@ -1,10 +1,14 @@
 # Deep Zoom for Flames — importance-sampled chaos game
 
-**Status:** Planning — no code, no branch scheduled. Sibling of
+**Status:** the destination of the `ifs-distance` branch as of
+2026-09-18 ([ifs-perturbation-delta.md](ifs-perturbation-delta.md)
+§10). No stage has code yet, but stages 2 and 3 have most of their
+infrastructure built under the inverse-walk plans -- §10 below says
+what exists per stage and where. Stage 1 is next. Sibling of
 [escape-time-fractals.md](escape-time-fractals.md): that plan is
 per-pixel fragment rendering; this one is a sampling upgrade to the
-existing chaos game. They share two pieces of infrastructure (§7) and
-nothing else.
+existing chaos game. They share two pieces of infrastructure (§7),
+and the inverse-walk plans share a good deal more (§10).
 
 **Origin:** a discovered trick — slaving the weight of a
 point-contracting transform to the zoom level redirects iterations
@@ -255,3 +259,81 @@ construction), visual harness.
    yes — same channel).
 5. Does stage 0 ship as an embedded example script in 0.5.x, ahead
    of any engine work?
+
+## 10. What exists now, per stage, 2026-09-18
+
+Written when the inverse-walk work was reviewed against this plan
+([ifs-perturbation-delta.md](ifs-perturbation-delta.md) §10). The
+review's structural point, which decides the order below: a forced
+prefix and the inverse walk are the same tree walked from opposite
+ends, and the forward direction is the easy one -- the maps
+CONTRACT, so a sample's offset only shrinks, and there is one lineage
+with no ranking, no rebase and no remainder. Every hard part of the
+inverse delta walk is an artefact of walking the expanding direction.
+
+### Stage 1 -- nothing exists, and nothing is needed
+
+The hooks are where §3 said: `select_transform_const` /
+`select_transform_xaos` in `shaders/core/utilities.wgsl` are the only
+places a transform is chosen, and `density_weight` in
+`shaders/core/main_template.wgsl` is the per-sample channel every
+deposit already multiplies. The xaos buffer layout is the ratio
+matrix's layout. None of the inverse-walk machinery is involved, and
+this stage is first for exactly that reason: it is the demand signal
+and it is the cheapest item on the branch.
+
+### Stage 2 -- the enumeration is written; the sampler is not
+
+- **The tree with bounds.** `reference_beam` in
+  `src/scene/ifs_estimate.rs` walks the view centre's inverse orbit
+  in `BigFloat`, keeps EVERY child of every kept row at every level,
+  and carries per row the composed basis, `σ·(r − R)` in pixels, the
+  parent index and the map. A row with a non-positive bound is a
+  prefix whose image touches the viewport. That is the
+  branch-and-bound, and it prunes exactly by the composed-image test
+  §4 asked for.
+- **The prefix probabilities under xaos.** `XaosGraph` in
+  `src/scene/ifs_analysis.rs` and `MeasureMaps::step_probability` in
+  `ifs_estimate.rs` are the row-normalised chain with its stationary
+  distribution; the measure walk composes `∏p` along an address
+  already, and a root's probability is split across its forward
+  branches there (measure plan §5d), which a forced prefix through a
+  root needs too.
+- **The weight's units.** The measure walk's coarse pass and its
+  `density` are what a forced sample's `∏p` deposit is measured
+  against, so the unbiasedness gate of §6 has a reference.
+- **Not written:** the sampler itself -- a burn-in at true weights,
+  then the forced prefix applied FORWARD on the GPU, deposited with
+  `∏p` -- and the CPU side that chooses prefixes proportional to
+  cylinder measure. Also not written: the fallback for a variation
+  with no `InverseDef`, which is forward branch-and-bound from the
+  ball with a per-variation Lipschitz bound (§7 item 1). The inverse
+  walk enumerates only where every variation has an inverse; the
+  corpus meter says that is three flames in forty-five today, so the
+  fallback is not optional and it is the reach lever for
+  [ifs-general.md](ifs-general.md) as well.
+
+### Stage 3 -- the algebra exists in the inverse direction
+
+- **The scalar-generic kernels.** `Real`, `Transcendental`, `Dual`,
+  `Dual3` in `src/scene/ifs_real.rs`; the planar and solid kernels
+  are one body each over them, and `BigFloat` implements both traits
+  -- so a forced prefix's reference orbit can be walked at any width
+  and the forward Jacobian is a `Dual` pushed through the same body.
+- **The difference-form technique.** `kernel_difference_gen` computes
+  `m⁻¹(Z + δ) − m⁻¹(Z)` with every term `O(δ)`, gated to 1.4e-14
+  over thirty decades of `δ/|Z|` against a 512-bit subtraction. The
+  FORWARD forms this stage needs are the same construction on the
+  forward bodies -- and for the polynomial pairs they are literally
+  the same functions, since a kernel's inverse form is its inverse
+  variation's forward form. Simpler than the inverse ones: a
+  contracting map needs no cap, no re-anchor and no remainder.
+- **Affine prefixes need none of it**, as the stage always said:
+  compose the prefix and the zoom at f64 on the CPU into one
+  well-conditioned map, as `seed_beam`'s basis carry does.
+
+### Order
+
+Stage 1; then stage 2 reading `reference_beam`, with the Lipschitz
+fallback built alongside it; then stage 3 as forward forms. Stage 0
+can ship as a script at any point. Stage 4 stays a contingency.
