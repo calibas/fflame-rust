@@ -1713,6 +1713,171 @@ fn qroot(q: [f64; 4], n: f64, k: u32, d: f64) -> [f64; 4] {
     [sn * nhat[0], sn * nhat[1], sn * nhat[2], rad * ang.cos()]
 }
 
+/// An [`Affine3`] applied over any [`Real`] -- the 3D twin of
+/// [`affine_apply_gen`], and the same reason: a composition a `Dual`
+/// can be pushed through.
+pub fn affine3_apply_gen<T: Real>(a: &Affine3, p: &[T; 3]) -> [T; 3] {
+    let row = |i: usize| {
+        p[0]
+            .mul(&p[0].lit(a.m[i][0]))
+            .add(&p[1].mul(&p[0].lit(a.m[i][1])))
+            .add(&p[2].mul(&p[0].lit(a.m[i][2])))
+            .add(&p[0].lit(a.t[i]))
+    };
+    [row(0), row(1), row(2)]
+}
+
+/// The Hamilton product over any [`Real`], with the same association
+/// as [`qmul`] so a `Dual` of it is the derivative of THAT arithmetic
+/// and an f64 of it is bit-identical to it.
+fn qmul_gen<T: Real>(a: &[T; 4], b: &[T; 4]) -> [T; 4] {
+    let cross = [
+        a[1].mul(&b[2]).sub(&a[2].mul(&b[1])),
+        a[2].mul(&b[0]).sub(&a[0].mul(&b[2])),
+        a[0].mul(&b[1]).sub(&a[1].mul(&b[0])),
+    ];
+    [
+        a[3].mul(&b[0]).add(&b[3].mul(&a[0])).add(&cross[0]),
+        a[3].mul(&b[1]).add(&b[3].mul(&a[1])).add(&cross[1]),
+        a[3].mul(&b[2]).add(&b[3].mul(&a[2])).add(&cross[2]),
+        a[3].mul(&b[3]).sub(
+            &a[0].mul(&b[0]).add(&a[1].mul(&b[1])).add(&a[2].mul(&b[2])),
+        ),
+    ]
+}
+
+/// [`qpow`] over any [`Real`]: an integer power by Hamilton products,
+/// the negative case through the conjugate over `|q|²`.
+fn qpow_gen<T: Real>(q: &[T; 4], n: f64) -> [T; 4] {
+    let k = n.round() as i32;
+    let m2 = q[0]
+        .sqr()
+        .add(&q[1].sqr())
+        .add(&q[2].sqr())
+        .add(&q[3].sqr());
+    let zero = q[0].zero();
+    let mut base = if k < 0 {
+        if m2.cmp_f64(1e-300) == std::cmp::Ordering::Less {
+            return [zero.clone(), zero.clone(), zero.clone(), zero];
+        }
+        // Divided, not multiplied by a reciprocal: the two differ by
+        // an ulp and the body this replaced divides.
+        [
+            q[0].neg().div(&m2),
+            q[1].neg().div(&m2),
+            q[2].neg().div(&m2),
+            q[3].div(&m2),
+        ]
+    } else {
+        q.clone()
+    };
+    let mut e = k.unsigned_abs();
+    let mut out = [zero.clone(), zero.clone(), zero, base[0].one()];
+    while e > 0 {
+        if e & 1 == 1 {
+            out = qmul_gen(&out, &base);
+        }
+        base = qmul_gen(&base, &base);
+        e >>= 1;
+    }
+    out
+}
+
+/// The solid kernels' inverse, over any [`Transcendental`]
+/// (`ifs-general.md` D8).
+///
+/// The 3D twin of [`kernel_inverse_gen`], and written for the same
+/// two reasons: a `Dual` of it is [`Map3::jacobian`] with no second
+/// derivation to keep in step, and a `BigFloat` of it is the solid
+/// prefix at arbitrary precision.
+///
+/// The `aux` scalar goes in and comes out. Root3 and RootZ3 PASS IT
+/// THROUGH untouched, which is what makes their delta carry a 3×3
+/// matrix and nothing more; the quaternion's inverse moves it, so a
+/// carry that is only 3×3 describes the quaternion's step on the
+/// slice and not its step in ℝ⁴. See [`Map3::jacobian`], which
+/// declines for that reason.
+pub fn kernel3_inverse_gen<T: Transcendental>(
+    k: &Kernel3,
+    v: &[T; 3],
+    aux: &T,
+) -> ([T; 3], T) {
+    let n = k.power() as f64;
+    let nf = v[0].lit(n);
+    let rxy = v[0].hypot(&v[1]);
+    let theta = T::atan2(&v[1], &v[0]).mul(&nf);
+    match *k {
+        Kernel3::Quaternion { d, c, depth, .. } => {
+            let q = if depth {
+                [v[0].clone(), v[1].clone(), aux.clone(), v[2].clone()]
+            } else {
+                [v[0].clone(), v[1].clone(), v[2].clone(), aux.clone()]
+            };
+            let mag = q[0]
+                .sqr()
+                .add(&q[1].sqr())
+                .add(&q[2].sqr())
+                .add(&q[3].sqr())
+                .sqrt();
+            let p = qpow_gen(&q, n);
+            let scale = if mag.cmp_f64(1e-300) == std::cmp::Ordering::Greater {
+                mag.powf(&nf.div(&nf.lit(d))).div(&mag.powf(&nf))
+            } else {
+                nf.zero()
+            };
+            (
+                [
+                    p[0].mul(&scale).add(&nf.lit(c[0])),
+                    p[1].mul(&scale).add(&nf.lit(c[1])),
+                    p[2].mul(&scale).add(&nf.lit(c[2])),
+                ],
+                p[3].mul(&scale).add(&nf.lit(c[3])),
+            )
+        }
+        Kernel3::Root3 { .. } => {
+            let rho_out = rxy.sqr().add(&v[2].sqr()).sqrt();
+            if rho_out.to_f64() == 0.0 {
+                let z = nf.zero();
+                return ([z.clone(), z.clone(), z], aux.clone());
+            }
+            let rho = rho_out.powf(&nf);
+            // `x / rho` and `x · (1/rho)` differ by an ulp, and the
+            // body this replaced divides -- which the bit-identity
+            // gate caught in 71 of 1152 outputs.
+            let (cos_e, sin_e) = (rxy.div(&rho_out), v[2].div(&rho_out));
+            let sqrt_r2d = rho.mul(&cos_e);
+            let zz = rho.mul(&sin_e);
+            let (st, ct) = theta.sin_cos();
+            (
+                [
+                    sqrt_r2d.mul(&ct),
+                    sqrt_r2d.mul(&st),
+                    zz.mul(&nf.lit(n.abs())),
+                ],
+                aux.clone(),
+            )
+        }
+        Kernel3::RootZ3 { .. } => {
+            if rxy.to_f64() == 0.0 {
+                let z = nf.zero();
+                return ([z.clone(), z.clone(), z], aux.clone());
+            }
+            let sqrt_r2d = rxy.powf(&nf);
+            let (st, ct) = theta.sin_cos();
+            (
+                [
+                    sqrt_r2d.mul(&ct),
+                    sqrt_r2d.mul(&st),
+                    v[2]
+                        .mul(&nf.lit(n.abs()))
+                        .mul(&rxy.powf(&nf.lit(n - 1.0))),
+                ],
+                aux.clone(),
+            )
+        }
+    }
+}
+
 impl Kernel3 {
     pub fn power(&self) -> i32 {
         match *self {
@@ -1758,41 +1923,60 @@ impl Kernel3 {
     }
 
     /// The inverse kernel on `v` with the scalar `aux`, single-valued.
+    /// The kernel's inverse at `v` with scalar `aux`, and the scalar
+    /// that comes out with it.
+    ///
+    /// One body -- [`kernel3_inverse_gen`] at f64 -- as the plane's
+    /// [`Kernel::inverse`] is [`kernel_inverse_gen`] at f64. It was a
+    /// second transcription until `ifs-general.md` D8, and
+    /// [`the_solid_kernels_generic_body_is_the_one_it_replaced`] pins
+    /// the two BIT-identical, against a table taken from the old body
+    /// before it was deleted.
+    ///
+    /// [`the_solid_kernels_generic_body_is_the_one_it_replaced`]: tests::the_solid_kernels_generic_body_is_the_one_it_replaced
     pub fn inverse(&self, v: [f64; 3], aux: f64) -> ([f64; 3], f64) {
-        let n = self.power() as f64;
-        let rxy = v[0].hypot(v[1]);
-        let theta = n * v[1].atan2(v[0]);
-        match *self {
-            Kernel3::Quaternion { d, c, depth, .. } => {
-                // The polynomial: the root's radius exponent d/n undone
-                // by n/d on the magnitude, the angle by n. The result
-                // is reassembled first, which for `depth` puts the
-                // carried coordinate back in the k slot.
-                let q = if depth { [v[0], v[1], aux, v[2]] } else { [v[0], v[1], v[2], aux] };
-                let mag = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
-                let p = qpow(q, n);
-                let scale = if mag > 1e-300 { mag.powf(n / d) / mag.powf(n) } else { 0.0 };
-                ([p[0] * scale + c[0], p[1] * scale + c[1], p[2] * scale + c[2]], p[3] * scale + c[3])
-            }
-            Kernel3::Root3 { .. } => {
-                let rho_out = (rxy * rxy + v[2] * v[2]).sqrt();
-                if rho_out == 0.0 {
-                    return ([0.0; 3], aux);
-                }
-                let rho = rho_out.powf(n);
-                let (cos_e, sin_e) = (rxy / rho_out, v[2] / rho_out);
-                let sqrt_r2d = rho * cos_e;
-                let zz = rho * sin_e;
-                ([sqrt_r2d * theta.cos(), sqrt_r2d * theta.sin(), zz * n.abs()], aux)
-            }
-            Kernel3::RootZ3 { .. } => {
-                if rxy == 0.0 {
-                    return ([0.0; 3], aux);
-                }
-                let sqrt_r2d = rxy.powf(n);
-                ([sqrt_r2d * theta.cos(), sqrt_r2d * theta.sin(), v[2] * n.abs() * rxy.powf(n - 1.0)], aux)
+        kernel3_inverse_gen(self, &v, &aux)
+    }
+
+    /// The kernels the solid gates run over.
+    #[cfg(test)]
+    pub fn gate_fixtures() -> Vec<Kernel3> {
+        vec![
+            Kernel3::Root3 { n: 2 },
+            Kernel3::Root3 { n: 3 },
+            Kernel3::Root3 { n: -2 },
+            Kernel3::RootZ3 { n: 2 },
+            Kernel3::RootZ3 { n: -3 },
+            Kernel3::Quaternion { n: 2, d: 1.0, c: [-0.2, 0.6, 0.1, 0.0], depth: false },
+            Kernel3::Quaternion { n: 3, d: 2.0, c: [0.1, -0.3, 0.0, 0.2], depth: true },
+            Kernel3::Quaternion { n: -2, d: 1.0, c: [0.0, 0.0, 0.0, 0.0], depth: false },
+        ]
+    }
+
+    /// The points they run at: ordinary, on each axis, at the origin,
+    /// and large and small enough to reach the guards.
+    #[cfg(test)]
+    pub fn gate_points() -> Vec<([f64; 3], f64)> {
+        let mut out = Vec::new();
+        for v in [
+            [0.7, 0.3, -0.2],
+            [-1.4, 0.9, 0.5],
+            [0.05, -0.02, 0.01],
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, 0.0, -1.0],
+            [2.6, -3.1, 1.7],
+            [1e-8, 1e-8, 1e-8],
+            [3.0, 4.0, 12.0],
+        ] {
+            for aux in [0.0f64, 0.4, -0.7] {
+                out.push((v, aux));
             }
         }
+        out
     }
 
     /// The factor on the constant σ_min at the point whose image is
@@ -1910,6 +2094,36 @@ impl NonlinearMap3 {
         self.apply_inverse_aux(q, 0.0).0
     }
 
+    /// This map's whole inverse over any [`Transcendental`]:
+    /// `pre⁻¹(K⁻¹(post⁻¹(q)/w))`, the composition
+    /// [`Self::apply_inverse_aux`] performs, in one expression.
+    ///
+    /// `aux` goes in as a CONSTANT: the pixel's delta lives in the 3D
+    /// slice and the slice's scalar does not move with it, so a
+    /// derivative taken here is a derivative along the slice, which is
+    /// the one the walk carries.
+    pub fn apply_inverse_gen<T: Transcendental>(&self, q: &[T; 3], aux: &T) -> ([T; 3], T) {
+        let v = affine3_apply_gen(&self.post_inv, q);
+        let w = q[0].lit(self.w);
+        let z = [v[0].div(&w), v[1].div(&w), v[2].div(&w)];
+        let (u, a) = kernel3_inverse_gen(&self.kernel, &z, &aux.div(&w));
+        (affine3_apply_gen(&self.pre_inv, &u), a)
+    }
+
+    /// Whether the scalar this map's inverse hands on is the one it
+    /// was given.
+    ///
+    /// `Root3` and `RootZ3` pass `aux` through untouched, so a
+    /// composed step along the slice is described completely by a
+    /// 3×3 matrix. The quaternion's inverse MOVES it -- the scalar is
+    /// the fourth component of `qⁿ + c` -- so the next level's input
+    /// scalar depends on this level's position, and a 3×3 carry
+    /// leaves that dependence out. The walk declines rather than
+    /// carrying an incomplete derivative.
+    pub fn aux_is_carried(&self) -> bool {
+        !matches!(self.kernel, Kernel3::Quaternion { .. })
+    }
+
     pub fn local_sigma_factor(&self, q: [f64; 3], aux: f64) -> f64 {
         let (v, a) = self.before_kernel(q, aux);
         self.kernel.local_sigma_factor(v, a)
@@ -1973,6 +2187,42 @@ impl Map3 {
 
     pub fn is_affine(&self) -> bool {
         matches!(self, Map3::Affine(_))
+    }
+
+    /// The Jacobian of [`Self::apply`] at `q`, where the walk has one
+    /// (`ifs-general.md` D8, and item 9 of the delta plan's order of
+    /// work).
+    ///
+    /// By [`Dual3`] through [`NonlinearMap3::apply_inverse_gen`], so
+    /// it is the derivative of the composition the walk actually runs
+    /// and not of a chain rule written out beside it.
+    ///
+    /// `None` for a forward map -- the walk only ever inverts -- and
+    /// `None` for a quaternion, whose inverse moves the slice's scalar
+    /// and so is not described by a 3×3 (see
+    /// [`NonlinearMap3::aux_is_carried`]).
+    pub fn jacobian(&self, q: [f64; 3], aux: f64) -> Option<[[f64; 3]; 3]> {
+        match self {
+            Map3::Affine(a) => Some(a.m),
+            Map3::Nonlinear(_) => None,
+            Map3::NonlinearInverse(r) => {
+                if !r.aux_is_carried() {
+                    return None;
+                }
+                let a = crate::scene::ifs_real::Dual3::constant(aux);
+                crate::scene::ifs_real::jacobian3(q, |z| r.apply_inverse_gen(&z, &a).0)
+            }
+        }
+    }
+
+    /// The factor on this map's constant σ_min at `q`: one for an
+    /// affine, the kernel's local factor for an inverted nonlinear
+    /// map -- the 3D twin of [`Map2::local_sigma`].
+    pub fn local_sigma_factor3(&self, q: [f64; 3], aux: f64) -> f64 {
+        match self {
+            Map3::NonlinearInverse(r) => r.local_sigma_factor(q, aux),
+            _ => 1.0,
+        }
     }
 
     pub fn nonlinear(&self) -> Option<&NonlinearMap3> {
@@ -4315,6 +4565,330 @@ mod generic_kernel_tests {
 
 #[cfg(test)]
 mod tests {
+    /// The solid Jacobian is the derivative of the solid inverse.
+    ///
+    /// [`Map3::jacobian`] pushes [`Dual3`](crate::scene::ifs_real::Dual3)
+    /// through the same composition the walk runs, so the thing it
+    /// differentiates is the thing that moves. Checked against central
+    /// differences, which is a weaker instrument -- it loses half its
+    /// digits near a pole, which is exactly why the plane stopped
+    /// using it (D2) -- so the tolerance is the difference's, not the
+    /// dual's.
+    ///
+    /// A quaternion declines, and that is asserted rather than
+    /// tolerated: its inverse moves the slice's scalar, so no 3×3
+    /// describes its step and a walk that carried one would be
+    /// carrying a derivative that is missing a term.
+    #[test]
+    fn the_solid_jacobian_is_the_derivative_of_the_solid_inverse() {
+        use super::{Kernel3, Map3, NonlinearMap3};
+        let id = Affine3::IDENTITY;
+        let tilt = Affine3 {
+            m: [[0.9, 0.2, 0.0], [-0.2, 0.9, 0.1], [0.0, -0.1, 0.95]],
+            t: [0.15, -0.1, 0.05],
+        };
+        let mk = |kernel: Kernel3| -> Map3 {
+            let pre = tilt;
+            let post = tilt;
+            Map3::NonlinearInverse(NonlinearMap3 {
+                kernel,
+                pre,
+                post,
+                pre_inv: pre.inverse().expect("invertible"),
+                post_inv: post.inverse().expect("invertible"),
+                w: 0.8,
+            })
+        };
+        let points = [
+            [0.7, 0.3, -0.2],
+            [-1.4, 0.9, 0.5],
+            [0.35, -0.6, 0.15],
+            [2.6, -3.1, 1.7],
+        ];
+        let (mut compared, mut worst) = (0usize, 0.0f64);
+        for kernel in [
+            Kernel3::Root3 { n: 2 },
+            Kernel3::Root3 { n: 3 },
+            Kernel3::Root3 { n: -2 },
+            Kernel3::RootZ3 { n: 2 },
+            Kernel3::RootZ3 { n: -3 },
+        ] {
+            let m = mk(kernel);
+            for q in points {
+                for aux in [0.0f64, 0.4] {
+                    let Some(j) = m.jacobian(q, aux) else { continue };
+                    let step = 1e-6 * q[0].abs().max(q[1].abs()).max(q[2].abs()).max(1.0);
+                    let inv = m.nonlinear().expect("nonlinear");
+                    for k in 0..3 {
+                        let (mut a, mut b) = (q, q);
+                        a[k] += step;
+                        b[k] -= step;
+                        let fa = inv.apply_inverse_aux(a, aux).0;
+                        let fb = inv.apply_inverse_aux(b, aux).0;
+                        for i in 0..3 {
+                            let fd = (fa[i] - fb[i]) / (2.0 * step);
+                            let scale = fd.abs().max(j[i][k].abs()).max(1e-6);
+                            let e = (j[i][k] - fd).abs() / scale;
+                            worst = worst.max(e);
+                            assert!(
+                                e < 2e-5,
+                                "{kernel:?} at {q:?} aux {aux}: J[{i}][{k}] = {} but the \
+                                 difference says {fd} ({e:.2e})",
+                                j[i][k]
+                            );
+                            compared += 1;
+                        }
+                    }
+                }
+            }
+        }
+        println!("  {compared} entries, worst {worst:.2e} from a central difference");
+        assert!(compared > 200, "only {compared} entries compared");
+
+        // And the quaternion declines, for the stated reason.
+        for depth in [false, true] {
+            let m = mk(Kernel3::Quaternion { n: 2, d: 1.0, c: [-0.2, 0.6, 0.1, 0.0], depth });
+            assert!(
+                m.jacobian([0.4, 0.2, -0.1], 0.3).is_none(),
+                "a quaternion handed back a 3x3 for a step that moves the slice's scalar"
+            );
+        }
+    }
+
+    /// D8's move is bit-identical: the generic solid kernel is the
+    /// f64 body it replaced.
+    ///
+    /// `Kernel3::inverse` was a second transcription of the same
+    /// arithmetic that `kernel3_inverse_gen` now holds once. A
+    /// rewrite of a numerical body is the kind of change that alters
+    /// a picture in the last two digits and is noticed a month later,
+    /// so this does not compare to a tolerance: the table below is the
+    /// OLD body's output, bit for bit, taken before it was deleted.
+    ///
+    /// Eight kernels -- three `Root3`, two `RootZ3`, three
+    /// `Quaternion` including a `depth` slice and a negative power --
+    /// at thirty-six `(v, aux)` points each, chosen to reach every
+    /// guard: the origin, each axis, a point at 1e-8 where the
+    /// magnitude guards live, and ordinary points.
+    #[test]
+    fn the_solid_kernels_generic_body_is_the_one_it_replaced() {
+        const WANT: &[u64] = &[
+        0x3fda77d197d9a9aa, 0x3fdbca9c12a48bc0, 0xbfd4284f4f12c1f8, 0x0000000000000000, 0x3fda77d197d9a9aa, 0x3fdbca9c12a48bc0,
+        0xbfd4284f4f12c1f8, 0x3fd999999999999a, 0x3fda77d197d9a9aa, 0x3fdbca9c12a48bc0, 0xbfd4284f4f12c1f8, 0xbfe6666666666666,
+        0x3ff3365f3cc49212, 0xc0050cd332ff7150, 0x3ffbce16ceb9c8b8, 0x0000000000000000, 0x3ff3365f3cc49212, 0xc0050cd332ff7150,
+        0x3ffbce16ceb9c8b8, 0x3fd999999999999a, 0x3ff3365f3cc49212, 0xc0050cd332ff7150, 0x3ffbce16ceb9c8b8, 0xbfe6666666666666,
+        0x3f617f4e99b9715c, 0xbf60aa01b6f9c14c, 0x3f51f2a13c62d574, 0x0000000000000000, 0x3f617f4e99b9715c, 0xbf60aa01b6f9c14c,
+        0x3f51f2a13c62d574, 0x3fd999999999999a, 0x3f617f4e99b9715c, 0xbf60aa01b6f9c14c, 0x3f51f2a13c62d574, 0xbfe6666666666666,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0x3ff0000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x3ff0000000000000, 0x0000000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0x3ff0000000000000, 0x0000000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0xbff0000000000000, 0x3ca1a62633145c07, 0x0000000000000000, 0x0000000000000000, 0xbff0000000000000, 0x3ca1a62633145c07,
+        0x0000000000000000, 0x3fd999999999999a, 0xbff0000000000000, 0x3ca1a62633145c07, 0x0000000000000000, 0xbfe6666666666666,
+        0x0000000000000000, 0x0000000000000000, 0x4000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+        0x4000000000000000, 0x3fd999999999999a, 0x0000000000000000, 0x0000000000000000, 0x4000000000000000, 0xbfe6666666666666,
+        0x3ff0000000000000, 0xbcb1a62633145c07, 0x0000000000000000, 0x0000000000000000, 0x3ff0000000000000, 0xbcb1a62633145c07,
+        0x0000000000000000, 0x3fd999999999999a, 0x3ff0000000000000, 0xbcb1a62633145c07, 0x0000000000000000, 0xbfe6666666666666,
+        0x0000000000000000, 0x0000000000000000, 0xc000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+        0xc000000000000000, 0x3fd999999999999a, 0x0000000000000000, 0x0000000000000000, 0xc000000000000000, 0xbfe6666666666666,
+        0xc008bb1783481560, 0xc0317c3168f1d76f, 0x402dd7b66b0c612a, 0x0000000000000000, 0xc008bb1783481560, 0xc0317c3168f1d76f,
+        0x402dd7b66b0c612a, 0x3fd999999999999a, 0xc008bb1783481560, 0xc0317c3168f1d76f, 0x402dd7b66b0c612a, 0xbfe6666666666666,
+        0x39537834b1d84fd4, 0x3cb1a682d37e40ed, 0x3cb8f623bc6e4df7, 0x0000000000000000, 0x39537834b1d84fd4, 0x3cb1a682d37e40ed,
+        0x3cb8f623bc6e4df7, 0x3fd999999999999a, 0x39537834b1d84fd4, 0x3cb1a682d37e40ed, 0x3cb8f623bc6e4df7, 0xbfe6666666666666,
+        0xc032333333333332, 0x404f333333333334, 0x4073800000000000, 0x0000000000000000, 0xc032333333333332, 0x404f333333333334,
+        0x4073800000000000, 0x3fd999999999999a, 0xc032333333333332, 0x404f333333333334, 0x4073800000000000, 0xbfe6666666666666,
+        0x3fc5124a6f282ee3, 0x3fdc52c4777d7e34, 0xbfd7ced916872b03, 0x0000000000000000, 0x3fc5124a6f282ee3, 0x3fdc52c4777d7e34,
+        0xbfd7ced916872b03, 0x3fd999999999999a, 0x3fc5124a6f282ee3, 0x3fdc52c4777d7e34, 0xbfd7ced916872b03, 0xbfe6666666666666,
+        0x3fe6f4d41340af9e, 0x4013e63807282b3b, 0x40121eb851eb851d, 0x0000000000000000, 0x3fe6f4d41340af9e, 0x4013e63807282b3b,
+        0x40121eb851eb851d, 0x3fd999999999999a, 0x3fe6f4d41340af9e, 0x4013e63807282b3b, 0x40121eb851eb851d, 0xbfe6666666666666,
+        0x3f11a07e19ad7ca0, 0xbf234107c566dad7, 0x3f1797cc39ffd611, 0x0000000000000000, 0x3f11a07e19ad7ca0, 0xbf234107c566dad7,
+        0x3f1797cc39ffd611, 0x3fd999999999999a, 0x3f11a07e19ad7ca0, 0xbf234107c566dad7, 0x3f1797cc39ffd611, 0xbfe6666666666666,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0x3ff0000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x3ff0000000000000, 0x0000000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0x3ff0000000000000, 0x0000000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0xbcaa79394c9e8a0a, 0xbff0000000000000, 0x0000000000000000, 0x0000000000000000, 0xbcaa79394c9e8a0a, 0xbff0000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0xbcaa79394c9e8a0a, 0xbff0000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0x0000000000000000, 0x0000000000000000, 0x4008000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+        0x4008000000000000, 0x3fd999999999999a, 0x0000000000000000, 0x0000000000000000, 0x4008000000000000, 0xbfe6666666666666,
+        0xbff0000000000000, 0x3cba79394c9e8a0a, 0x0000000000000000, 0x0000000000000000, 0xbff0000000000000, 0x3cba79394c9e8a0a,
+        0x0000000000000000, 0x3fd999999999999a, 0xbff0000000000000, 0x3cba79394c9e8a0a, 0x0000000000000000, 0xbfe6666666666666,
+        0x0000000000000000, 0x0000000000000000, 0xc008000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+        0xc008000000000000, 0x3fd999999999999a, 0x0000000000000000, 0x0000000000000000, 0xc008000000000000, 0xbfe6666666666666,
+        0xc050e0ca7e37212f, 0xc043754fb3acbe70, 0x40588e76c8b43959, 0x0000000000000000, 0xc050e0ca7e37212f, 0xc043754fb3acbe70,
+        0x40588e76c8b43959, 0x3fd999999999999a, 0xc050e0ca7e37212f, 0xc043754fb3acbe70, 0x40588e76c8b43959, 0xbfe6666666666666,
+        0xbb0d03a3e67cd5fd, 0x3b0d03a3e67cd5fe, 0x3b25c2baecdda07e, 0x0000000000000000, 0xbb0d03a3e67cd5fd, 0x3b0d03a3e67cd5fe,
+        0x3b25c2baecdda07e, 0x3fd999999999999a, 0xbb0d03a3e67cd5fd, 0x3b0d03a3e67cd5fe, 0x3b25c2baecdda07e, 0xbfe6666666666666,
+        0xc088b75c28f5c28f, 0x4072970a3d70a3db, 0x40b7c40000000000, 0x0000000000000000, 0xc088b75c28f5c28f, 0x4072970a3d70a3db,
+        0x40b7c40000000000, 0x3fd999999999999a, 0xc088b75c28f5c28f, 0x4072970a3d70a3db, 0x40b7c40000000000, 0xbfe6666666666666,
+        0x3ff136bffcbb1cd3, 0xbff2131662f7ab11, 0xbfea38295b65eafb, 0x0000000000000000, 0x3ff136bffcbb1cd3, 0xbff2131662f7ab11,
+        0xbfea38295b65eafb, 0x3fd999999999999a, 0x3ff136bffcbb1cd3, 0xbff2131662f7ab11, 0xbfea38295b65eafb, 0xbfe6666666666666,
+        0x3fc0da2c158d1bee, 0x3fd276d50807af51, 0x3fc863a9f8f43fc1, 0x0000000000000000, 0x3fc0da2c158d1bee, 0x3fd276d50807af51,
+        0x3fc863a9f8f43fc1, 0x3fd999999999999a, 0x3fc0da2c158d1bee, 0x3fd276d50807af51, 0x3fc863a9f8f43fc1, 0xbfe6666666666666,
+        0x406daa4fad75fca5, 0x406c40ad683f9b48, 0x405e6dd4f94be5ed, 0x0000000000000000, 0x406daa4fad75fca5, 0x406c40ad683f9b48,
+        0x405e6dd4f94be5ed, 0x3fd999999999999a, 0x406daa4fad75fca5, 0x406c40ad683f9b48, 0x405e6dd4f94be5ed, 0xbfe6666666666666,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0x3ff0000000000000, 0x8000000000000000, 0x0000000000000000, 0x0000000000000000, 0x3ff0000000000000, 0x8000000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0x3ff0000000000000, 0x8000000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0xbff0000000000000, 0xbca1a62633145c07, 0x0000000000000000, 0x0000000000000000, 0xbff0000000000000, 0xbca1a62633145c07,
+        0x0000000000000000, 0x3fd999999999999a, 0xbff0000000000000, 0xbca1a62633145c07, 0x0000000000000000, 0xbfe6666666666666,
+        0x0000000000000000, 0x8000000000000000, 0x4000000000000000, 0x0000000000000000, 0x0000000000000000, 0x8000000000000000,
+        0x4000000000000000, 0x3fd999999999999a, 0x0000000000000000, 0x8000000000000000, 0x4000000000000000, 0xbfe6666666666666,
+        0x3ff0000000000000, 0x3cb1a62633145c07, 0x0000000000000000, 0x0000000000000000, 0x3ff0000000000000, 0x3cb1a62633145c07,
+        0x0000000000000000, 0x3fd999999999999a, 0x3ff0000000000000, 0x3cb1a62633145c07, 0x0000000000000000, 0xbfe6666666666666,
+        0x0000000000000000, 0x8000000000000000, 0xc000000000000000, 0x0000000000000000, 0x0000000000000000, 0x8000000000000000,
+        0xc000000000000000, 0x3fd999999999999a, 0x0000000000000000, 0x8000000000000000, 0xc000000000000000, 0xbfe6666666666666,
+        0xbf81113dbb049580, 0x3fa82242a126d19e, 0x3fa4985a2de1596b, 0x0000000000000000, 0xbf81113dbb049580, 0x3fa82242a126d19e,
+        0x3fa4985a2de1596b, 0x3fd999999999999a, 0xbf81113dbb049580, 0x3fa82242a126d19e, 0x3fa4985a2de1596b, 0xbfe6666666666666,
+        0x3fc554e561241e1b, 0xc32356a97f1c30dc, 0x432b594b2169e500, 0x0000000000000000, 0x3fc554e561241e1b, 0xc32356a97f1c30dc,
+        0x432b594b2169e500, 0x3fd999999999999a, 0x3fc554e561241e1b, 0xc32356a97f1c30dc, 0x432b594b2169e500, 0xbfe6666666666666,
+        0xbf44e17e911806e5, 0xbf61e5da33392a7d, 0x3f865f50c007751b, 0x0000000000000000, 0xbf44e17e911806e5, 0xbf61e5da33392a7d,
+        0x3f865f50c007751b, 0x3fd999999999999a, 0xbf44e17e911806e5, 0xbf61e5da33392a7d, 0x3f865f50c007751b, 0xbfe6666666666666,
+        0x3fd9999999999998, 0x3fdae147ae147ae1, 0xbfd37f12b43c02d7, 0x0000000000000000, 0x3fd9999999999998, 0x3fdae147ae147ae1,
+        0xbfd37f12b43c02d7, 0x3fd999999999999a, 0x3fd9999999999998, 0x3fdae147ae147ae1, 0xbfd37f12b43c02d7, 0xbfe6666666666666,
+        0x3ff2666666666662, 0xc00428f5c28f5c29, 0x3ffaa11a4635b927, 0x0000000000000000, 0x3ff2666666666662, 0xc00428f5c28f5c29,
+        0x3ffaa11a4635b927, 0x3fd999999999999a, 0x3ff2666666666662, 0xc00428f5c28f5c29, 0x3ffaa11a4635b927, 0xbfe6666666666666,
+        0x3f613404ea4a8c17, 0xbf60624dd2f1a9fe, 0x3f51a56756258fbc, 0x0000000000000000, 0x3f613404ea4a8c17, 0xbf60624dd2f1a9fe,
+        0x3f51a56756258fbc, 0x3fd999999999999a, 0x3f613404ea4a8c17, 0xbf60624dd2f1a9fe, 0x3f51a56756258fbc, 0xbfe6666666666666,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0x3ff0000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x3ff0000000000000, 0x0000000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0x3ff0000000000000, 0x0000000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0xbff0000000000000, 0x3ca1a62633145c07, 0x0000000000000000, 0x0000000000000000, 0xbff0000000000000, 0x3ca1a62633145c07,
+        0x0000000000000000, 0x3fd999999999999a, 0xbff0000000000000, 0x3ca1a62633145c07, 0x0000000000000000, 0xbfe6666666666666,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0x3ff0000000000000, 0xbcb1a62633145c07, 0x0000000000000000, 0x0000000000000000, 0x3ff0000000000000, 0xbcb1a62633145c07,
+        0x0000000000000000, 0x3fd999999999999a, 0x3ff0000000000000, 0xbcb1a62633145c07, 0x0000000000000000, 0xbfe6666666666666,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0xc006ccccccccccca, 0xc0301eb851eb851f, 0x402b834078ef90f0, 0x0000000000000000, 0xc006ccccccccccca, 0xc0301eb851eb851f,
+        0x402b834078ef90f0, 0x3fd999999999999a, 0xc006ccccccccccca, 0xc0301eb851eb851f, 0x402b834078ef90f0, 0xbfe6666666666666,
+        0x394fcb2c8ea9e7fd, 0x3cacd2b297d889be, 0x3cb46186f2001a75, 0x0000000000000000, 0x394fcb2c8ea9e7fd, 0x3cacd2b297d889be,
+        0x3cb46186f2001a75, 0x3fd999999999999a, 0x394fcb2c8ea9e7fd, 0x3cacd2b297d889be, 0x3cb46186f2001a75, 0xbfe6666666666666,
+        0xc01bfffffffffffe, 0x4038000000000001, 0x405e000000000000, 0x0000000000000000, 0xc01bfffffffffffe, 0x4038000000000001,
+        0x405e000000000000, 0x3fd999999999999a, 0xc01bfffffffffffe, 0x4038000000000001, 0x405e000000000000, 0xbfe6666666666666,
+        0x3fe941dda264536d, 0xc000f990ccb973eb, 0xbffc8996ad81fa89, 0x0000000000000000, 0x3fe941dda264536d, 0xc000f990ccb973eb,
+        0xbffc8996ad81fa89, 0x3fd999999999999a, 0x3fe941dda264536d, 0xc000f990ccb973eb, 0xbffc8996ad81fa89, 0xbfe6666666666666,
+        0x3f9fb3b5b46a2e5a, 0xbfcb7af389aa6f94, 0x3fc905ec11783016, 0x0000000000000000, 0x3f9fb3b5b46a2e5a, 0xbfcb7af389aa6f94,
+        0x3fc905ec11783016, 0x3fd999999999999a, 0x3f9fb3b5b46a2e5a, 0xbfcb7af389aa6f94, 0x3fc905ec11783016, 0xbfe6666666666666,
+        0x40a4d245978f39a5, 0x40b6be4c0412998e, 0x40abde5d2570eea0, 0x0000000000000000, 0x40a4d245978f39a5, 0x40b6be4c0412998e,
+        0x40abde5d2570eea0, 0x3fd999999999999a, 0x40a4d245978f39a5, 0x40b6be4c0412998e, 0x40abde5d2570eea0, 0xbfe6666666666666,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0x3ff0000000000000, 0x8000000000000000, 0x0000000000000000, 0x0000000000000000, 0x3ff0000000000000, 0x8000000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0x3ff0000000000000, 0x8000000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0xbcaa79394c9e8a0a, 0x3ff0000000000000, 0x0000000000000000, 0x0000000000000000, 0xbcaa79394c9e8a0a, 0x3ff0000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0xbcaa79394c9e8a0a, 0x3ff0000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0xbff0000000000000, 0xbcba79394c9e8a0a, 0x0000000000000000, 0x0000000000000000, 0xbff0000000000000, 0xbcba79394c9e8a0a,
+        0x0000000000000000, 0x3fd999999999999a, 0xbff0000000000000, 0xbcba79394c9e8a0a, 0x0000000000000000, 0xbfe6666666666666,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0xbf8aca08684b85f7, 0x3f7ee26c05352be2, 0x3f937cfdc048fb78, 0x0000000000000000, 0xbf8aca08684b85f7, 0x3f7ee26c05352be2,
+        0x3f937cfdc048fb78, 0x3fd999999999999a, 0xbf8aca08684b85f7, 0x3f7ee26c05352be2, 0x3f937cfdc048fb78, 0xbfe6666666666666,
+        0xc4ca784379d99db1, 0xc4ca784379d99db2, 0x44e3da329b633645, 0x0000000000000000, 0xc4ca784379d99db1, 0xc4ca784379d99db2,
+        0x44e3da329b633645, 0x3fd999999999999a, 0xc4ca784379d99db1, 0xc4ca784379d99db2, 0x44e3da329b633645, 0xbfe6666666666666,
+        0xbf7eabbcb1cc9646, 0xbf6711947cfa26a7, 0x3fad7dbf487fcb93, 0x0000000000000000, 0xbf7eabbcb1cc9646, 0xbf6711947cfa26a7,
+        0x3fad7dbf487fcb93, 0x3fd999999999999a, 0xbf7eabbcb1cc9646, 0xbf6711947cfa26a7, 0x3fad7dbf487fcb93, 0xbfe6666666666666,
+        0xbfc999999999999a, 0x3fe3333333333333, 0x3fb999999999999a, 0xbfe3d70a3d70a3d7, 0x3fd70a3d70a3d709, 0x3feae147ae147ae1,
+        0xbfaeb851eb851ebc, 0xbfdd70a3d70a3d70, 0xbff2e147ae147ae1, 0x3fc70a3d70a3d70a, 0x3fd851eb851eb852, 0xbfc0a3d70a3d70a6,
+        0xbfc999999999999a, 0x3fe3333333333333, 0x3fb999999999999a, 0xc00828f5c28f5c28, 0xbff51eb851eb851e, 0x3ff51eb851eb851f,
+        0x3fe0000000000000, 0xc006e147ae147ae0, 0x3ffc28f5c28f5c28, 0xbfe51eb851eb851f, 0xbfe3333333333333, 0xc0043d70a3d70a3d,
+        0xbfc999999999999a, 0x3fe3333333333333, 0x3fb999999999999a, 0xbf689374bc6a7efb, 0xbfc47ae147ae147b, 0x3fe2b020c49ba5e3,
+        0x3fbba5e353f7ceda, 0x3fc4189374bc6a80, 0xbfd147ae147ae148, 0x3fe4189374bc6a7f, 0x3fb604189374bc6b, 0x3fdf2b020c49ba5d,
+        0xbfc999999999999a, 0x3fe3333333333333, 0x3fb999999999999a, 0x0000000000000000, 0xbfc999999999999a, 0x3fe3333333333333,
+        0x3fb999999999999a, 0x3fc47ae147ae147c, 0xbfc999999999999a, 0x3fe3333333333333, 0x3fb999999999999a, 0x3fdf5c28f5c28f5b,
+        0xbfc999999999999a, 0x3fe3333333333333, 0x3fb999999999999a, 0xbff0000000000000, 0x3fe3333333333334, 0x3fe3333333333333,
+        0x3fb999999999999a, 0xbfeae147ae147ae1, 0xbff9999999999999, 0x3fe3333333333333, 0x3fb999999999999a, 0xbfe051eb851eb852,
+        0xbfc999999999999a, 0x3fe3333333333333, 0x3fb999999999999a, 0xbff0000000000000, 0xbfc999999999999a, 0x3ff6666666666666,
+        0x3fb999999999999a, 0xbfeae147ae147ae1, 0xbfc999999999999a, 0xbfe9999999999999, 0x3fb999999999999a, 0xbfe051eb851eb852,
+        0xbfc999999999999a, 0x3fe3333333333333, 0x3fb999999999999a, 0xbff0000000000000, 0xbfc999999999999a, 0x3fe3333333333333,
+        0x3feccccccccccccd, 0xbfeae147ae147ae1, 0xbfc999999999999a, 0x3fe3333333333333, 0xbff4cccccccccccc, 0xbfe051eb851eb852,
+        0xbfc999999999999a, 0x3fe3333333333333, 0x3fb999999999999a, 0xbff0000000000000, 0xbff0000000000000, 0x3fe3333333333333,
+        0x3fb999999999999a, 0xbfeae147ae147ae1, 0x3ff3333333333333, 0x3fe3333333333333, 0x3fb999999999999a, 0xbfe051eb851eb852,
+        0xbfc999999999999a, 0x3fe3333333333333, 0x3fb999999999999a, 0xbff0000000000000, 0xbfc999999999999a, 0x3fe3333333333333,
+        0xbfe6666666666667, 0xbfeae147ae147ae1, 0xbfc999999999999a, 0x3fe3333333333333, 0x3ff8000000000000, 0xbfe051eb851eb852,
+        0xbfc999999999999a, 0x3fe3333333333333, 0x3fb999999999999a, 0xc033428f5c28f5c3, 0x3ffe147ae147ae15, 0xbffe147ae147ae16,
+        0x3ff75c28f5c28f5d, 0xc03319999999999a, 0xc00eb851eb851eb8, 0x4013c28f5c28f5c2, 0xc0023d70a3d70a3d, 0xc032c51eb851eb86,
+        0xbfc999999999999a, 0x3fe3333333333333, 0x3fb999999999999a, 0xbcb59e05f1e2674e, 0xbfc99999886b8db2, 0x3fe33333377eb62d,
+        0x3fb99999bbf5b16a, 0x3fc47ae147ae1471, 0xbfc99999b7aa2e70, 0x3fe333332baf0dfd, 0x3fb999995d786fed, 0x3fdf5c28f5c28f56,
+        0xbfc999999999999a, 0x3fe3333333333333, 0x3fb999999999999a, 0xc065200000000000, 0x400199999999999a, 0x400e666666666667,
+        0x4023666666666667, 0xc0651ae147ae147b, 0xc011999999999999, 0xc014000000000000, 0xc030b33333333332, 0xc0651051eb851eb8,
+        0xbfd71835c836f6e6, 0xbfdfd72cfe08ed78, 0x0000000000000000, 0x3fe5f8bf37751ba2, 0xbfdb10cbd8c22c2a, 0xbfe0c56d82900226,
+        0xbfd31f8a6d3bc177, 0x3fe735bcfc18dcda, 0xbfe07a598e4658c0, 0xbfe2088cc7f2434a, 0x3fe3ad8cc1798bf3, 0x3fe9291dde912342,
+        0x3ff559ea4fb3dfde, 0xbff17f49d426d566, 0x0000000000000000, 0xbff8f23a6296a1e8, 0x3ff61b2cc6d20d15, 0xbff1fb86d795a953,
+        0xbfd76f83a1651644, 0xbff97d63850577c4, 0x3ff7866c5b562af8, 0xbff2e50b24c605ae, 0x3fe5ecd2c1bc915e, 0xbffa87d05c529e4f,
+        0x3fb700f761138c24, 0xbfd2f0bc93f29841, 0x0000000000000000, 0x3fc8bdc277265e03, 0x3fb17ca1d4ed5096, 0xbfd26380d2bb924c,
+        0xbfd039ef89589209, 0x3fc7297cde60194b, 0x3fadc425a7203955, 0xbfd220d8ec32404e, 0x3fe2c12bda909aa3, 0x3fc66218b4779211,
+        0x3fb999999999999a, 0xbfd3333333333333, 0x0000000000000000, 0x3fc999999999999a, 0x3fb999999999999a, 0xbfd3333333333333,
+        0xbfd030dc4ea03a73, 0x3fc999999999999a, 0x3fb999999999999a, 0xbfd3333333333333, 0x3fe2bdbe460916e0, 0x3fc999999999999a,
+        0xbfeccccccccccccd, 0xbfd3333333333333, 0x0000000000000000, 0x3fc999999999999a, 0xbfee02794f50379d, 0xbfd3333333333333,
+        0xbfda9156cecf88a7, 0x3fc999999999999a, 0xbff013cb9469da0b, 0xbfd3333333333333, 0x3fe8bf8da6d1a1e6, 0x3fc999999999999a,
+        0x3fb999999999999a, 0xbff4cccccccccccd, 0x0000000000000000, 0x3fc999999999999a, 0x3fb999999999999a, 0xbff567a30e0e8235,
+        0xbfda9156cecf88a7, 0x3fc999999999999a, 0x3fb999999999999a, 0xbff67a31fad04072, 0x3fe8bf8da6d1a1e6, 0x3fc999999999999a,
+        0x3fb999999999999a, 0xbfd3333333333333, 0x0000000000000000, 0x3ff3333333333333, 0x3fb999999999999a, 0xbfd3333333333333,
+        0x3ff042e37a2b29b5, 0x3fe5497ec4376150, 0x3fb999999999999a, 0xbfd3333333333333, 0xbff4d8525efa72e3, 0xbfc3023076dd11f0,
+        0x3ff199999999999a, 0xbfd3333333333333, 0x0000000000000000, 0x3fc999999999999a, 0x3ff2346fdadb4f02, 0xbfd3333333333333,
+        0xbfda9156cecf88a7, 0x3fc999999999999a, 0x3ff346fec79d0d3f, 0xbfd3333333333333, 0x3fe8bf8da6d1a1e6, 0x3fc999999999999a,
+        0x3fb999999999999a, 0xbfd3333333333333, 0x0000000000000000, 0xbfe999999999999a, 0x3fb999999999999a, 0xbfd3333333333333,
+        0x3ff042e37a2b29b5, 0xbfd0f963eed52906, 0x3fb999999999999a, 0xbfd3333333333333, 0xbff4d8525efa72e3, 0x3fe18d58ea841149,
+        0xc0009edc53bb5d94, 0x40025ee3406355fa, 0x0000000000000000, 0xc020b1643373db2b, 0xc000df5ec033d4ce, 0x4002abcd86a432e6,
+        0xbfd5c03599d9646e, 0xc020c37c9182fb5e, 0xc001621dc657b27a, 0x400347b1490a09f8, 0x3fe394fc9e7612ea, 0xc020e848f908c8f8,
+        0x3fb99999999a1515, 0xbfd3333333331454, 0x0000000000000000, 0x3fc99999999864e6, 0x3fb999997e6fad8a, 0xbfd3333339fdae37,
+        0xbfd030dc4ea03a68, 0x3fc9999970dab782, 0x3fb9999975aa6cfd, 0xbfd333333c2efe5a, 0x3fe2bdbe460916dd, 0x3fc9999963b2d6ae,
+        0x403a264a855dd38c, 0x40413764e171c03b, 0x0000000000000000, 0x4031dd7515200d21, 0x403a1ef0ab3dd973, 0x4041327e50071980,
+        0x400bc16df0af330a, 0x4031bacfe46612e0, 0x403a0fd0ab68ebbb, 0x40412868face7b05, 0xc0183b2254e3a1fb, 0x4031738378f23eb2,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbff9ce739ce739ce, 0xbfed744d6c3939bb, 0xbfd93f1dca7a317c,
+        0x3fd0d4be86fc20fe, 0xbfe831d1e20a6f69, 0x3fe973d5b26aabff, 0x3fd5d1004fc925b6, 0xbfcd16ab150c3249, 0xbfbb02c36ef90a1c,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbfd5312a6254c4ab, 0x3fbc5a727233fce4, 0xbfb23a250045fe01,
+        0xbfa4409ae3dbfdc8, 0xbfd219bda20c9e03, 0xbfc45d0c70bf445d, 0x3fba2e7db5883353, 0x3fad173657ecaacf, 0xbfca491696c2a54e,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xc074d55555555554, 0xbff81695ca4afb56, 0x3fe34544a1d595de,
+        0xbfd34544a1d595de, 0x4017a2f62e7ff9d3, 0x3fd26eb8221e36ee, 0xbfbd7df369c9f17d, 0x3fad7df369c9f17d, 0x40000799baed79d3,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+        0x0000000000000000, 0x4018fffffffffffe, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x40005397829cbc15,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbff0000000000000, 0xbfe3066473abfc58, 0x0000000000000000,
+        0x0000000000000000, 0xbfe3f9e9797495c3, 0x3fe42de4b7b64b35, 0x0000000000000000, 0x0000000000000000, 0xbfcd6771d87ea81c,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbff0000000000000, 0x0000000000000000, 0xbfe3066473abfc58,
+        0x0000000000000000, 0xbfe3f9e9797495c3, 0x0000000000000000, 0x3fe42de4b7b64b35, 0x0000000000000000, 0xbfcd6771d87ea81c,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbff0000000000000, 0x0000000000000000, 0x0000000000000000,
+        0xbfe3066473abfc58, 0xbfe3f9e9797495c3, 0x0000000000000000, 0x0000000000000000, 0x3fe42de4b7b64b35, 0xbfcd6771d87ea81c,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbff0000000000000, 0x3fe3066473abfc58, 0x0000000000000000,
+        0x0000000000000000, 0xbfe3f9e9797495c3, 0xbfe42de4b7b64b35, 0x0000000000000000, 0x0000000000000000, 0xbfcd6771d87ea81c,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbff0000000000000, 0x0000000000000000, 0x0000000000000000,
+        0x3fe3066473abfc58, 0xbfe3f9e9797495c3, 0x0000000000000000, 0x0000000000000000, 0xbfe42de4b7b64b35, 0xbfcd6771d87ea81c,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbfaa956658ca0909, 0xbf7697278f43474f, 0x3f7aef4cb4a8d504,
+        0xbf6d8a96317f5d3e, 0xbfa9ee1db73625d7, 0x3f831c9212e5f74c, 0xbf86c97316885816, 0x3f78fdfa18b69229, 0xbfa8a33fd3ca91fa,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xc327af4c4a80aaa8, 0xbe94f8b588e368d7, 0xbe94f8b588e368d7,
+        0xbe94f8b588e368d7, 0x4018ffffffffffd5, 0x3e6f4deee2b9b53e, 0x3e6f4deee2b9b53e, 0x3e6f4deee2b9b53e, 0x40005397829cbc0e,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbf783c977ab2bede, 0xbf15fc8a4dc2c300, 0xbf1d50b867ae5955,
+        0xbf35fc8a4dc2c300, 0xbf782aff39e04926, 0x3f2329d0391d776b, 0x3f298d15a17c9f3a, 0x3f4329d0391d776b, 0xbf7806e1ed18a8c0,
+        ];
+        let mut got = Vec::new();
+        for k in super::Kernel3::gate_fixtures() {
+            for (v, aux) in super::Kernel3::gate_points() {
+                let (q, a) = k.inverse(v, aux);
+                got.extend_from_slice(&[q[0].to_bits(), q[1].to_bits(), q[2].to_bits(), a.to_bits()]);
+            }
+        }
+        assert_eq!(got.len(), WANT.len(), "the fixture list changed shape");
+        let mut differ = Vec::new();
+        for (i, (g, w)) in got.iter().zip(WANT).enumerate() {
+            if g != w {
+                differ.push((i, *g, *w));
+            }
+        }
+        assert!(
+            differ.is_empty(),
+            "{} of {} outputs differ from the body this replaced; first three: {:?}",
+            differ.len(),
+            got.len(),
+            &differ[..differ.len().min(3)]
+        );
+    }
+
     use super::*;
     use crate::variations::global_registry;
     use std::collections::HashMap;

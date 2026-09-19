@@ -1210,8 +1210,16 @@ The cheap and the decisive first. Each item names its plan.
    `hemisphere` at 7/19/41. Two places the transcription DISAGREED
    with f64 came out with it, both found by asserting parity rather
    than by looking.
-9. **3D** (D5 here), once a solid exists that a deep zoom would
-   show.
+9. **3D** (D5 here) -- the cheap half done 2026-09-18, §3h, and the
+   expensive half localised. `seed_chain3` refused any map that was
+   not affine, so EVERY nonlinear solid handed over at level 0 at
+   every zoom. That refusal is gone -- `Map3::jacobian`
+   differentiates the generic solid kernel, `SeedPoint3::apply_map3`
+   takes the step at f64 or `BigFloat` -- and a `julia3D` now takes
+   one prefix step where it took none. It stops at one, and the
+   thing stopping it is the chain's view-agreement rule rather than
+   the affine restriction, which is the measurement that says the
+   rest of D5 is the whole delta walk again rather than a patch.
 
 ## 3g. `BigFloat` learns exp and sin, and a transcription dies, 2026-09-18
 
@@ -1286,3 +1294,100 @@ already measured, by `measure_third`'s sampled Hessian over the ball
 -- that arrived with the trapezoid in §3c and did not wait for this.
 What is still hand-written is `BigComplex`, the escape engine's own
 complex type, which has its own `ln` and no relation to any of this.
+
+## 3h. The solid prefix stops refusing, and what actually stops it, 2026-09-18
+
+Item 9. D5 is conditional -- "only once a solid that needs it
+exists" -- so the first question was whether one does. Measured:
+
+```text
+  set                  maps  affine  chain depth at 2^8 / 2^16 / 2^32 / 2^64
+  tetrahedron             4    true   11 / 19 / 35 / 52
+  julia3D pair            3   false    0 /  0 /  0 /  0
+  julia3Dz pair           3   false    0 /  0 /  0 /  0
+  quaternion pair         2   false    0 /  0 /  0 /  0
+```
+
+`seed_chain3` carried its delta with `map.inverse.as_affine().expect("checked
+affine above")` and broke out of the walk the moment any map was not
+affine. So a nonlinear solid's every ray started from the target's own
+f32 position -- the plane's state before its handover learned to carry
+a Jacobian, and the plane measured what that costs at 3.3 pixels at
+2^20 and 835 at 2^28.
+
+**No shipped preset is a nonlinear solid IFS**, which is why this
+never bit. The two shipped solid presets are affine (a tetrahedron, a
+sponge) and the shipped "Quaternion Julia" is
+`quaternion_julia_solid`, a forward escape-time distance estimate with
+no inverse walk in it at all. A user can build a `julia3D` solid in
+the app today; nothing ships one.
+
+**What landed, and D8 came with it.** `Kernel3::inverse` was a second
+transcription of arithmetic the plane had already made generic, so it
+became `kernel3_inverse_gen` over `Real`/`Transcendental` --
+BIT-IDENTICAL to the body it replaced, gated against a table of 1152
+outputs taken from the old body before it was deleted. Two places the
+first draft differed by an ulp were found that way and both were the
+same mistake: `x · (1/y)` where the original wrote `x / y`.
+
+On top of it: `Dual3` and `jacobian3` (the plane's `Dual` carries two
+slots; a solid map needs three), `Map3::jacobian` by pushing `Dual3`
+through the generic inverse, `SeedPoint3::apply_map3` at f64 and at
+`BigFloat` -- the latter only possible because item 8 made `BigFloat`
+a `Transcendental` -- and a `seed_chain3` that composes the Jacobian
+at each candidate's own position instead of demanding a constant
+matrix.
+
+**The quaternion declines, and that is the honest answer rather than a
+gap.** Its inverse moves the slice's scalar: `aux` goes in as the
+fourth component of `q` and comes out as the fourth component of
+`qⁿ + c`, so the next level's input scalar depends on this level's
+position and a 3×3 carry leaves that dependence out.
+`NonlinearMap3::aux_is_carried` says so and the chain skips it. D5's
+"no shader change to the 3×3 carry" is true for Root3 and RootZ3 and
+is not true for the quaternion; a 4×4 carry is what it would need.
+
+**And it was not the affine restriction that was limiting them.**
+Depth at 2^8 / 2^32 / 2^64, for beams 1, 4 and 8, after:
+
+| set | beam 1 | beam 4 | beam 8 |
+|---|---|---|---|
+| tetrahedron | 11 / 35 / 52 | 1 / 1 / 1 | 1 / 1 / 1 |
+| julia3D | 0 / 0 / 0 | 1 / 1 / 1 | 1 / 1 / 1 |
+| julia3Dz | 0 / 0 / 0 | 1 / 1 / 1 | 1 / 1 / 1 |
+| quaternion | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 |
+
+A nonlinear solid takes ONE step now where it took none, and stops.
+What stops it is the chain's view-agreement rule: a link may prune a
+branch only if every sample it serves would prune it too, and a sample
+of a link sits anywhere within `cap` of its reference -- a quarter of
+the ball, at EVERY level, because a chain serves a whole range of
+delta sizes rather than one view's. The plane's beam tests the same
+property against its own composed reach, which SHRINKS with depth; the
+solid's cannot, and its bound is tight for the largest delta the link
+serves rather than loose. The same rule is why a wider beam makes the
+tetrahedron's chain SHORTER, 52 to 1 -- more candidates to agree
+about -- and why a beam of one is the solid default.
+
+So descending a nonlinear solid needs what the plane's item 5 needed:
+a walk where each lineage carries its own delta and rebases when ITS
+offset grows, not a shared chain with one cap for all of them. That is
+D5 proper. The measurement above is what says so, and the gate
+`what_stops_a_solid_prefix_from_descending` keeps it honest -- it
+asserts the affine chain still descends, that a nonlinear one takes
+its step, and that a quaternion still declines.
+
+**A refactor came with it.**
+`how_deep_a_solid_render_agrees_with_the_reference`'s per-zoom body --
+a hundred lines of ray arithmetic transcribed from the solid template
+-- became `solid_zoom_agreement`, so a second set can be measured the
+same way without a second copy that would drift. The whole authority
+of that comparison is that the reference marches the way the shader
+does.
+
+**Open.** A nonlinear solid at depth also wants something to LOOK at:
+measured on these three fixtures, a surface point zoomed into fills
+the frame, because their attractors are blobs with smooth surfaces
+rather than the measure-zero sets the affine solids are. That is a
+fixture question and not an engine one, but D5's payoff is still
+waiting on a solid whose SURFACE has structure at depth.

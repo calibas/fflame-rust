@@ -214,9 +214,15 @@ living in `defs/julia.rs`, `defs/spherical.rs` and so on; the
   of the 159 census flames and the shipped presets that qualify, by
   reason for those that do not, in the census doc's table. No rung
   is done until its row is measured.
-- **D8. 3D is the same trait at `[T; 3]`.** `Kernel3`'s three
-  kernels become `InverseDef`s with a solid body; `Space` picks
-  which body a variation supplies, as the per-space role does now.
+- **D8. 3D is the same trait at `[T; 3]`.** -- half done
+  2026-09-18, the delta plan's §3h. `kernel3_inverse_gen` is the
+  three solid kernels over `Real`/`Transcendental`, bit-identical to
+  the transcription it replaced, and `Kernel3::inverse` is it at f64
+  -- so `Map3::jacobian` is a `Dual3` pushed through the same body
+  and the solid prefix walks at `BigFloat`. What is NOT done is the
+  registry half: `Kernel3` is still a taxonomy here rather than
+  three `InverseDef`s with a solid body, and `Space` still does not
+  pick which body a variation supplies.
 
 ## 4. What changes, and what does not
 
