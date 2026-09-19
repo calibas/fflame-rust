@@ -493,6 +493,22 @@ view:
   fly_invert_y: "Invert Y axis"
 
   # Depth Effects (collapsible section)
+  deep_zoom: "Deep Zoom"
+  auto_exposure: "Auto exposure"
+  tooltip_auto_exposure: "Expose the picture for the samples that land in THIS frame instead of for every iteration the chaos game runs. Zoomed in, most of the attractor is off-screen, and without this the samples that did land get divided by a count dominated by ones that did not -- so the image fades as you go deeper even though it is still fully sampled. Off by default because it changes the brightness of almost any view."
+  coverage_reading: "Measured coverage: %{percent}% of plotted samples land in frame"
+  cylinder_targeting: "Cylinder targeting"
+  tooltip_cylinder_targeting: "Force a prefix of transforms chosen so every sample lands in the viewport, and correct the weight exactly. The picture is unchanged; it arrives far sooner. Affine flames only for now, and the renderer declines whenever it would cost more than it saves."
+  targeting_off: "Not running."
+  targeting_active: "Running: %{words} word(s), depth %{depth}, about %{speedup}x fewer wasted samples."
+  targeting_not_worth_it: "Not used here -- at this zoom it would be %{speedup}x, a loss. Zoom in further."
+  targeting_declined: "Not available: %{reason}"
+  no_cyl_not_affine: "transform %{index} is not a plain affine map (needs a per-variation Lipschitz bound, not built yet)"
+  no_cyl_xaos: "the flame uses xaos, so the first symbol's probability depends on the previous transform"
+  no_cyl_expanding: "transform %{index} expands rather than contracts, so a word's image never shrinks"
+  no_cyl_empty: "the flame has no transforms with weight"
+  no_cyl_off_attractor: "the view is off the attractor entirely -- there is nothing here to target"
+  no_cyl_too_many: "the view straddles too many pieces (%{count}); rendering the ordinary way is better"
   depth_effects: "Depth Effects"
 
   # Depth of Field

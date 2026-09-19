@@ -3358,6 +3358,16 @@ impl App {
         self.metrics.record_submit_time(t_submit.elapsed().as_secs_f64() * 1000.0);
 
 
+        // Tell the UI what deep zoom decided this frame. Free: both
+        // halves are already-measured renderer state, and the panel
+        // needs them to report a DECISION rather than a request.
+        if let Some(ref renderer) = self.flame_renderer {
+            self.egui_layer.update_deep_zoom(crate::ui::DeepZoom {
+                coverage: renderer.frame_coverage_fraction(),
+                targeting: renderer.targeting_state().clone(),
+            });
+        }
+
         // Update density histogram for Levels controls (every ~30 frames)
         // Skip during animation playback to avoid frame drops from GPU readback
         if !self.animation_controller.is_playing() {

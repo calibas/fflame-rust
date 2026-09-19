@@ -342,6 +342,9 @@ pub struct PanelContext<'a> {
     // Histogram for density visualization (levels now in ConfigManager)
     pub density_histogram: &'a crate::renderer::DensityHistogram,
 
+    // What deep zoom decided for this view (informational only).
+    pub deep_zoom: &'a super::DeepZoom,
+
     // Xaos editor state
     pub xaos_editor_state: &'a mut super::xaos_editor::XaosEditorState,
 
@@ -1176,6 +1179,7 @@ impl<'a> PanelViewer<'a> {
             self.context.flame,
             self.context.fly_mode_active,
             self.context.fly_mode_toggle_requested,
+            self.context.deep_zoom,
         );
     }
 

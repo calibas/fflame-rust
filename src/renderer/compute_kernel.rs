@@ -112,6 +112,28 @@ impl PathEntry {
 
 use crate::variations::analytic_blur::BlurSlotInfo;
 
+/// What cylinder targeting is doing for the current view.
+///
+/// Reported so the panel can say which of the four it is rather
+/// than leaving a ticked checkbox that silently does nothing —
+/// declining is the COMMON case (any nonlinear flame, any shallow
+/// view) and a user has no way to guess why.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum TargetingState {
+    /// Not asked for.
+    #[default]
+    Off,
+    /// Asked for, but this flame cannot be enumerated.
+    Declined(crate::scene::cylinder::NoCylinders),
+    /// Asked for and enumerable, but it would cost more than it
+    /// saves — a view shallow enough that the ordinary chaos game
+    /// already lands most of its samples in frame.
+    NotWorthIt { speedup: f64 },
+    /// Running.
+    Active { words: usize, depth: usize, speedup: f64, mass: f64 },
+}
+
+
 pub struct FlameRenderer {
     /// Reachability-census mode (see `src/census/`). Set only by
     /// `enable_census`, read into `ShaderConstants::census`. Never a
@@ -289,6 +311,9 @@ pub struct FlameRenderer {
     /// rather than for every iteration the chaos game ran. Only ever
     /// moves off 1.0 when `auto_exposure` is on.
     frame_coverage_fraction: f32,
+    /// What targeting decided for the current view — reported to the
+    /// panel, never read by the render path (which asks `cylinders`).
+    targeting_state: TargetingState,
     /// Whether this render is auto-exposing. Mirrors
     /// `FractalConfig::auto_exposure`; decides both whether the shader
     /// carries the counters and whether the fraction is read back.
@@ -451,6 +476,7 @@ impl FlameRenderer {
             dof_dirty: true,
             solid_density_fraction: 1.0,
             frame_coverage_fraction: 1.0,
+            targeting_state: TargetingState::default(),
             auto_exposure: false,
             filter_radius: 0.0,
             filter_blur_edges: 0.0,
@@ -1726,6 +1752,11 @@ impl FlameRenderer {
                 self.solid_density_fraction = self.solid_density_fraction * 0.7 + measured * 0.3;
             }
         }
+    }
+
+    /// What cylinder targeting is doing for the current view.
+    pub fn targeting_state(&self) -> &TargetingState {
+        &self.targeting_state
     }
 
     /// The measured share of plot attempts that landed in frame,
@@ -3210,10 +3241,27 @@ impl FlameRenderer {
             self.height.max(1),
         );
         let planned = if config.cylinder_targeting {
-            Cylinders::plan(&config.flame, &registry, view)
-                .ok()
-                .filter(|c| c.speedup() > 1.0)
+            match Cylinders::plan(&config.flame, &registry, view) {
+                Err(why) => {
+                    self.targeting_state = TargetingState::Declined(why);
+                    None
+                }
+                Ok(c) if c.speedup() <= 1.0 => {
+                    self.targeting_state = TargetingState::NotWorthIt { speedup: c.speedup() };
+                    None
+                }
+                Ok(c) => {
+                    self.targeting_state = TargetingState::Active {
+                        words: c.words.len(),
+                        depth: c.depth,
+                        speedup: c.speedup(),
+                        mass: c.mass,
+                    };
+                    Some(c)
+                }
+            }
         } else {
+            self.targeting_state = TargetingState::Off;
             None
         };
         let packed = planned

@@ -255,6 +255,12 @@ pub enum Control {
     /// A real display-time view for the simulation is a feature, not a
     /// bug fix; when it exists this arm becomes `Show`.
     ViewNavigation,
+    /// The deep-zoom section: auto exposure and cylinder targeting.
+    /// Both are properties of the CHAOS GAME -- one counts the plot
+    /// attempts that land in frame, the other forces a prefix of
+    /// transforms -- so neither means anything in a mode that has no
+    /// chaos game to instrument.
+    DeepZoom,
     /// Colour mode, and what hangs off it: speed blend, path style,
     /// path capture and tracking. Neither generator reads the mode,
     /// and choosing PathMap allocates a path buffer, forces a flame
@@ -273,7 +279,12 @@ pub fn control(c: Control, m: RenderMode, tone: ToneMapMode) -> Vis {
     use Control as C;
     let flame = !matches!(m, RenderMode::Escape | RenderMode::Simulation);
     match c {
-        C::ChaosGame | C::TonemapPresets | C::SpatialFilter | C::DensityLevels | C::ColorMode => {
+        C::ChaosGame
+        | C::TonemapPresets
+        | C::SpatialFilter
+        | C::DensityLevels
+        | C::DeepZoom
+        | C::ColorMode => {
             if flame {
                 Vis::Show
             } else {
@@ -523,6 +534,7 @@ mod tests {
         Control::AlphaBlendCurve,
         Control::SpatialFilter,
         Control::DensityLevels,
+        Control::DeepZoom,
         Control::ColorMode,
         Control::ViewNavigation,
     ];
@@ -638,6 +650,7 @@ mod tests {
             assert!(hidden(Control::TonemapPresets), "{m:?} presets");
             assert!(hidden(Control::SpatialFilter), "{m:?} spatial filter");
             assert!(hidden(Control::DensityLevels), "{m:?} levels");
+            assert!(hidden(Control::DeepZoom), "{m:?} deep zoom");
             assert!(hidden(Control::ColorMode), "{m:?} colour mode");
             if m == RenderMode::Simulation {
                 assert!(hidden(Control::ViewNavigation), "sim viewport navigation");
