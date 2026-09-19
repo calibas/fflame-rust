@@ -9,6 +9,7 @@ pub fn render_view_content(
     flame: &Flame,
     fly_mode_active: bool,
     fly_mode_toggle_requested: &mut bool,
+    deep_zoom: &super::DeepZoom,
 ) {
     use crate::config::slider::LazyUndoUi;
 
@@ -37,6 +38,93 @@ pub fn render_view_content(
     });
 
     ui.separator();
+
+    // ── Deep zoom ────────────────────────────────────────────────
+    // Both controls are REQUESTS; the renderer decides per view and
+    // the readout says what it decided. A ticked box that silently
+    // does nothing is the failure mode worth designing against here,
+    // because declining is the common case.
+    if crate::ui::visibility::control(
+        crate::ui::visibility::Control::DeepZoom,
+        config.render_mode,
+        config.tonemap_mode,
+    )
+    .is_show()
+    {
+        egui::CollapsingHeader::new(t!("view.deep_zoom").as_ref())
+            .default_open(false)
+            .show(ui, |ui| {
+                let mut auto_exposure = config.auto_exposure;
+                if ui
+                    .checkbox(&mut auto_exposure, t!("view.auto_exposure").as_ref())
+                    .on_hover_text(t!("view.tooltip_auto_exposure"))
+                    .changed()
+                {
+                    let _ =
+                        config_manager.update_param(ConfigPath::AutoExposure, auto_exposure.into());
+                }
+                if config.auto_exposure {
+                    // The measured number, not the request. Shown as a
+                    // percentage because that is what it is: the share
+                    // of plotted samples the frame is holding.
+                    ui.label(t!(
+                        "view.coverage_reading",
+                        percent = format!("{:.3}", deep_zoom.coverage * 100.0)
+                    ));
+                }
+
+                ui.add_space(4.0);
+
+                let mut targeting = config.cylinder_targeting;
+                if ui
+                    .checkbox(&mut targeting, t!("view.cylinder_targeting").as_ref())
+                    .on_hover_text(t!("view.tooltip_cylinder_targeting"))
+                    .changed()
+                {
+                    let _ = config_manager
+                        .update_param(ConfigPath::CylinderTargeting, targeting.into());
+                }
+                if config.cylinder_targeting {
+                    use crate::renderer::TargetingState as TS;
+                    let line = match &deep_zoom.targeting {
+                        TS::Off => t!("view.targeting_off").to_string(),
+                        TS::NotWorthIt { speedup } => {
+                            t!("view.targeting_not_worth_it", speedup = format!("{speedup:.2}"))
+                                .to_string()
+                        }
+                        TS::Active { words, depth, speedup, .. } => t!(
+                            "view.targeting_active",
+                            words = words.to_string(),
+                            depth = depth.to_string(),
+                            speedup = format!("{speedup:.0}")
+                        )
+                        .to_string(),
+                        TS::Declined(why) => {
+                            use crate::scene::cylinder::NoCylinders as NC;
+                            let reason = match why {
+                                NC::NotAffine(i) => {
+                                    t!("view.no_cyl_not_affine", index = i.to_string()).to_string()
+                                }
+                                NC::Xaos => t!("view.no_cyl_xaos").to_string(),
+                                NC::NotContractive(i) => {
+                                    t!("view.no_cyl_expanding", index = i.to_string()).to_string()
+                                }
+                                NC::Empty => t!("view.no_cyl_empty").to_string(),
+                                NC::ViewIsEmpty => t!("view.no_cyl_off_attractor").to_string(),
+                                NC::TooManyWords(n) => {
+                                    t!("view.no_cyl_too_many", count = n.to_string()).to_string()
+                                }
+                            };
+                            t!("view.targeting_declined", reason = reason).to_string()
+                        }
+                    };
+                    ui.label(line);
+                }
+            });
+    }
+
+    ui.separator();
+
 
     ui.label(t!("view.pan")).on_hover_text(t!("view.tooltip_pan"));
     ui.horizontal(|ui| {

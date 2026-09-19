@@ -759,6 +759,28 @@ use egui_wgpu::{Renderer as EguiRenderer, RendererOptions};
 use egui_winit::State as EguiWinitState;
 use winit::{event::WindowEvent, window::Window};
 
+/// What the deep-zoom machinery is doing, for the View panel to
+/// report (docs/projects/flame-deep-zoom.md).
+///
+/// Both halves are MEASURED rather than requested: a ticked checkbox
+/// does not mean targeting is running (the renderer declines per
+/// view) and does not mean the exposure moved (the counters need
+/// landings). Reporting the decision is the difference between a
+/// control and a control you can believe.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeepZoom {
+    /// Measured share of plot attempts landing in frame. 1.0 when
+    /// auto exposure is off, or before anything has been measured.
+    pub coverage: f32,
+    pub targeting: crate::renderer::TargetingState,
+}
+
+impl Default for DeepZoom {
+    fn default() -> Self {
+        Self { coverage: 1.0, targeting: crate::renderer::TargetingState::Off }
+    }
+}
+
 pub struct EguiLayer {
     state: EguiWinitState,
     pub ctx: egui_dock::egui::Context,
@@ -847,6 +869,11 @@ pub struct EguiLayer {
 
     // Histogram for density visualization (levels now in ConfigManager)
     density_histogram: crate::renderer::DensityHistogram,
+
+    // What the deep-zoom machinery decided for the current view
+    // (docs/projects/flame-deep-zoom.md). Set by App each frame; read
+    // only to DESCRIBE what is happening, never to drive it.
+    deep_zoom: DeepZoom,
 
     // Xaos editor state
     xaos_editor_state: xaos_editor::XaosEditorState,
@@ -997,6 +1024,7 @@ impl EguiLayer {
             cloud_palette_state: CloudPaletteState::default(),
             api_connectivity: crate::api::ApiConnectivity::Unknown,
             density_histogram: crate::renderer::DensityHistogram::default(),
+            deep_zoom: DeepZoom::default(),
             xaos_editor_state: xaos_editor::XaosEditorState::default(),
             signal_panel_state: signal_panel::SignalPanelState::new(),
             touch_tracker: panel_viewer::TouchTracker::default(),
@@ -1777,6 +1805,7 @@ impl EguiLayer {
 
                         // Histogram for density visualization (levels now in ConfigManager)
                         density_histogram: &self.density_histogram,
+                        deep_zoom: &self.deep_zoom,
 
                         // Xaos editor state
                         xaos_editor_state: &mut self.xaos_editor_state,
@@ -2516,6 +2545,11 @@ impl EguiLayer {
         if let Some(ref mut panel) = self.fractal_browser_panel {
             panel.switch_to_tab(tab);
         }
+    }
+
+    /// Tell the UI what deep zoom is doing this frame.
+    pub fn update_deep_zoom(&mut self, deep_zoom: DeepZoom) {
+        self.deep_zoom = deep_zoom;
     }
 
     /// Update the density histogram from computed data

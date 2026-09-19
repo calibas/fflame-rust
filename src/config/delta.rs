@@ -56,6 +56,14 @@ pub enum ConfigPath {
     UseCurve,
     // Levels controls (density-to-opacity mapping)
     LevelsEnabled,
+    /// Auto exposure: normalise the tone map by the density of the
+    /// pixels in frame rather than by total iterations
+    /// (docs/projects/flame-deep-zoom.md §14).
+    AutoExposure,
+    /// Cylinder targeting: force an enumerated prefix so every sample
+    /// lands in the viewport (docs/projects/flame-deep-zoom.md stage
+    /// 2). A REQUEST -- the renderer still declines per view.
+    CylinderTargeting,
     LevelsLow,
     LevelsHigh,
     LevelsGamma,
@@ -730,6 +738,8 @@ impl Display for ConfigPath {
             ConfigPath::TonemapCurve => write!(f, "Tone Curve"),
             ConfigPath::UseCurve => write!(f, "Use Tone Curve"),
             ConfigPath::LevelsEnabled => write!(f, "Levels Enabled"),
+            ConfigPath::AutoExposure => write!(f, "Auto Exposure"),
+            ConfigPath::CylinderTargeting => write!(f, "Cylinder Targeting"),
             ConfigPath::LevelsLow => write!(f, "Levels Low"),
             ConfigPath::LevelsHigh => write!(f, "Levels High"),
             ConfigPath::LevelsGamma => write!(f, "Levels Midtones"),
@@ -1228,6 +1238,8 @@ impl ConfigPath {
             ConfigPath::TonemapCurve => I18nKey::simple("history.param.tone_curve"),
             ConfigPath::UseCurve => I18nKey::simple("history.param.use_tone_curve"),
             ConfigPath::LevelsEnabled => I18nKey::simple("history.param.levels_enabled"),
+            ConfigPath::AutoExposure => I18nKey::simple("history.param.auto_exposure"),
+            ConfigPath::CylinderTargeting => I18nKey::simple("history.param.cylinder_targeting"),
             ConfigPath::LevelsLow => I18nKey::simple("history.param.levels_low"),
             ConfigPath::LevelsHigh => I18nKey::simple("history.param.levels_high"),
             ConfigPath::LevelsGamma => I18nKey::simple("history.param.levels_midtones"),
@@ -2677,7 +2689,12 @@ impl ConfigPath {
             | ConfigPath::PostSymmetryRotation
             | ConfigPath::PreserveZ
             | ConfigPath::MaxIterations
-            | ConfigPath::DeterministicRng => UpdateType::IterationReset,
+            | ConfigPath::DeterministicRng
+            // Both change the compute shader (FRAME_COVERAGE /
+            // CYLINDER_TARGETING) and what the accumulator holds,
+            // so neither is a tone-map-only refresh.
+            | ConfigPath::AutoExposure
+            | ConfigPath::CylinderTargeting => UpdateType::IterationReset,
 
             // Escape-time: the fragment renderer re-renders the frame;
             // no flame-style reset/accumulate distinction exists there.
@@ -2859,6 +2876,8 @@ impl ConfigPath {
             ConfigPath::TonemapCurve => "TonemapCurve".to_string(),
             ConfigPath::UseCurve => "UseCurve".to_string(),
             ConfigPath::LevelsEnabled => "LevelsEnabled".to_string(),
+            ConfigPath::AutoExposure => "AutoExposure".to_string(),
+            ConfigPath::CylinderTargeting => "CylinderTargeting".to_string(),
             ConfigPath::LevelsLow => "LevelsLow".to_string(),
             ConfigPath::LevelsHigh => "LevelsHigh".to_string(),
             ConfigPath::LevelsGamma => "LevelsGamma".to_string(),
@@ -3223,6 +3242,8 @@ impl ConfigPath {
             "TonemapCurve" => return Some(ConfigPath::TonemapCurve),
             "UseCurve" => return Some(ConfigPath::UseCurve),
             "LevelsEnabled" => return Some(ConfigPath::LevelsEnabled),
+            "AutoExposure" => return Some(ConfigPath::AutoExposure),
+            "CylinderTargeting" => return Some(ConfigPath::CylinderTargeting),
             "LevelsLow" => return Some(ConfigPath::LevelsLow),
             "LevelsHigh" => return Some(ConfigPath::LevelsHigh),
             "LevelsGamma" => return Some(ConfigPath::LevelsGamma),
@@ -3921,6 +3942,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         // Boolean parameters
         ConfigPath::UseCurve
         | ConfigPath::LevelsEnabled
+        | ConfigPath::AutoExposure
+        | ConfigPath::CylinderTargeting
         | ConfigPath::UseDynamicBlend
         | ConfigPath::DeterministicRng
         | ConfigPath::PaletteReverse
@@ -4552,6 +4575,8 @@ mod tests {
             ConfigPath::TonemapCurve,
             ConfigPath::UseCurve,
             ConfigPath::LevelsEnabled,
+            ConfigPath::AutoExposure,
+            ConfigPath::CylinderTargeting,
             ConfigPath::LevelsLow,
             ConfigPath::LevelsHigh,
             ConfigPath::LevelsGamma,
