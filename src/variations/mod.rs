@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 pub mod definition;
+pub mod bound;
 pub mod inverse;
 pub mod defs;
 pub mod docs;

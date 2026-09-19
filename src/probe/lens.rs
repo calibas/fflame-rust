@@ -147,6 +147,14 @@ fn split_to_fit(batches: Vec<Batch>, points: usize, max_words: usize) -> Vec<Bat
     out
 }
 
+/// A device for the forward-bound gate, which needs the probe's
+/// limits (the flame compute bind group exceeds WebGPU's floor of
+/// eight storage buffers) without running a survey.
+pub(crate) async fn open_device_for_bounds(
+) -> Result<(wgpu::Device, wgpu::Queue), String> {
+    super::run::open_device("forward bounds").await
+}
+
 /// Evaluate every shipped variation over the screen grid.
 pub async fn run(grid: u32, mut on_batch: impl FnMut(usize, usize)) -> Result<Vec<LensMap>, String> {
     let (device, queue) = super::run::open_device("lens survey").await?;
@@ -167,20 +175,30 @@ pub async fn run(grid: u32, mut on_batch: impl FnMut(usize, usize)) -> Result<Ve
     let mut maps = Vec::new();
     for (i, batch) in batches.iter().enumerate() {
         on_batch(i + 1, total);
-        maps.extend(run_batch(&device, &queue, batch, &points, dim)?);
+        maps.extend(run_batch(&device, &queue, batch, &lens_flame(batch), &points, dim)?);
     }
     Ok(maps)
 }
 
-fn run_batch(
+/// Evaluate `batch`'s variations at `points`, through the flame the
+/// caller supplies.
+///
+/// The flame is an argument rather than [`lens_flame`]'s own because
+/// the survey is not the only caller: the forward-bound gate
+/// (`variations::bound`) needs the same evaluation at specific
+/// variation PARAMETERS, and building its own flame is the only way
+/// to set them. Everything else — the probe shader, the init pass,
+/// the readback — is identical, and sharing it is what makes that
+/// gate a test of the shipped WGSL rather than of a second opinion
+/// about it.
+pub(crate) fn run_batch(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     batch: &Batch,
+    flame: &Flame,
     points: &[[f32; 2]],
     dim: u32,
 ) -> Result<Vec<LensMap>, String> {
-    let flame = lens_flame(batch);
-
     let mut config = FractalConfig::default();
     config.flame = flame.clone();
     config.render_mode = RenderMode::TwoD;
