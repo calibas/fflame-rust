@@ -202,6 +202,12 @@ pub struct FlameRenderer {
     last_batch_samples: u64,
     /// Attractor-bounds readback (shadow-map auto-fit).
     bounds_stats: crate::renderer::density_stats::BoundsTracker,
+    /// Readback for the frame-coverage counters (auto exposure). A
+    /// second `BoundsTracker` rather than a new type: it already reads
+    /// an 8-word window off an arbitrary buffer, async for the
+    /// interactive path and blocking for exports, which is exactly the
+    /// pair of paths this needs.
+    coverage_stats: crate::renderer::density_stats::BoundsTracker,
 
     /// The sticky variation superset — Layer B of
     /// docs/projects/sticky-shader-compilation.md. Renderer state, never
@@ -277,6 +283,16 @@ pub struct FlameRenderer {
     dof_pass: crate::renderer::dof_pass::DofPass, // Post-process DoF (solid mode; at-splat DoF compiles out under SOLID)
     dof_dirty: bool, // DoF input (shade output / accumulator) changed since the last DoF dispatch
     solid_density_fraction: f32, // Measured accepted/dispatched fraction (1.0 = no correction); scales tonemap sample_density
+    /// Measured share of plot attempts that landed inside the frame
+    /// (1.0 = no correction). Scales the tonemap's `sample_density` so
+    /// a zoomed-in view is exposed for the work the VIEWPORT holds
+    /// rather than for every iteration the chaos game ran. Only ever
+    /// moves off 1.0 when `auto_exposure` is on.
+    frame_coverage_fraction: f32,
+    /// Whether this render is auto-exposing. Mirrors
+    /// `FractalConfig::auto_exposure`; decides both whether the shader
+    /// carries the counters and whether the fraction is read back.
+    auto_exposure: bool,
     filter_radius: f32, // Spatial filter (Apo's `filter`): Gaussian sigma in pixels on histogram, 0 = off
     filter_blur_edges: f32, // Bilateral edge-handling [0..1]: 0 = preserve edges (default), 1 = uniform Gaussian
     background_r: f32, // Background color R (for depth fog)
@@ -391,6 +407,7 @@ impl FlameRenderer {
             samples_in_buffer: 0,
             last_batch_samples: 0,
             bounds_stats: crate::renderer::density_stats::BoundsTracker::new(device),
+            coverage_stats: crate::renderer::density_stats::BoundsTracker::new(device),
             sticky: crate::renderer::sticky::StickyVariations::new(),
             measured_bounds: None,
             bounds_dirty: false,
@@ -433,6 +450,8 @@ impl FlameRenderer {
             dof_pass: crate::renderer::dof_pass::DofPass::new(device),
             dof_dirty: true,
             solid_density_fraction: 1.0,
+            frame_coverage_fraction: 1.0,
+            auto_exposure: false,
             filter_radius: 0.0,
             filter_blur_edges: 0.0,
             background_r: 0.0,
@@ -606,6 +625,7 @@ impl FlameRenderer {
             // this path is the incremental one and has no config.
             importance_sampling: self.importance.enabled,
             cylinder_targeting: self.cylinders.is_some(),
+            frame_coverage: self.auto_exposure,
             flatten_z_per_iter: matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD)
                 && !preserve_z,
             solid_enabled: (self.solid_strength > 0.0 || self.solid_shading.active())
@@ -1060,8 +1080,21 @@ impl FlameRenderer {
         // HERE instead, as an iteration count: a forced render is
         // doing the work of `N / P(A_V)` unbiased iterations, and
         // saying so is what makes its brightness match theirs.
+        // Auto exposure (docs/projects/flame-deep-zoom.md): the
+        // shipped normalisation assumes the frame holds all the work.
+        // A deep view does not -- most of the attractor is off-screen
+        // -- so the measured in-frame share scales the count down to
+        // the work the viewport actually received. 1.0 when off.
+        //
+        // Note this is the exact INVERSE of the cylinder factor beside
+        // it, and for a targeted render the two cancel: every forced
+        // sample lands in frame, so its coverage is 1 and its exposure
+        // is the plain `samples / pixels`. That cancellation is not a
+        // coincidence -- it is the two halves (the estimator's weight,
+        // and the exposure policy) agreeing.
         let sample_density = ((self.samples_in_buffer as f32)
             * self.solid_density_fraction
+            * self.frame_coverage_fraction
             * self.cylinder_iteration_scale() as f32
             / total_pixels.max(1.0))
             .max(1e-6);
@@ -1652,6 +1685,25 @@ impl FlameRenderer {
                 occ_words = Some((words[6], words[7]));
             }
         }
+        // Frame coverage (auto exposure). Independent of everything
+        // above: its counters live in their own buffer, not the
+        // histogram tail, so no render mode or region has to be on.
+        if self.auto_exposure {
+            if let Some(words) =
+                self.coverage_stats.tick(device, encoder, &self.buffers.coverage_buffer, 0)
+            {
+                if let Some(measured) = Self::coverage_from(words[0], words[1]) {
+                    // EMA, for the same reason the solid renorm has
+                    // one: a brightness scalar that jumps with each
+                    // measurement pumps the image while it converges.
+                    self.frame_coverage_fraction =
+                        self.frame_coverage_fraction * 0.7 + measured * 0.3;
+                }
+            }
+        } else {
+            self.frame_coverage_fraction = 1.0;
+        }
+
         let active = self.solid_strength > 0.0
             && matches!(self.current_render_mode, crate::scene::transforms::RenderMode::ThreeD)
             && self.buffers.solid_depth_region;
@@ -1676,9 +1728,66 @@ impl FlameRenderer {
         }
     }
 
+    /// The measured share of plot attempts that landed in frame,
+    /// which is the factor auto exposure scaled the tone map by. 1.0
+    /// when the feature is off, and 1.0 before anything has been
+    /// measured.
+    pub fn frame_coverage_fraction(&self) -> f32 {
+        self.frame_coverage_fraction
+    }
+
+    /// Turn the two coverage counters into a usable fraction, or
+    /// `None` when they say nothing trustworthy.
+    ///
+    /// Refused in three cases, each of which would otherwise move the
+    /// exposure on no evidence:
+    ///
+    /// - **no attempts yet** — the first frame after a reset, where
+    ///   dividing by zero is the least of it;
+    /// - **too few landings** — under 32, the ratio is dominated by
+    ///   its own shot noise, and a frame holding a handful of samples
+    ///   has no exposure that makes it a picture. Refusing leaves the
+    ///   last good value (or the 1.0 identity) rather than setting the
+    ///   brightness from a coin flip;
+    /// - **saturation** — the counters are u32 and a long enough batch
+    ///   would wrap. Freezing at the last good value beats acting on a
+    ///   wrapped ratio, which is the same call the solid renorm makes.
+    ///
+    /// The floor is nominal rather than a policy: a minimum-hits rule
+    /// is the honest bound on how far this will brighten, so the clamp
+    /// only has to stop a zero reaching the divide. A magnitude floor
+    /// was tried first at 1e-6 and was quietly binding at a zoom of
+    /// 2^14, which is inside the range the feature is FOR.
+    fn coverage_from(hits: u32, attempts: u32) -> Option<f32> {
+        if attempts == 0 || hits < 32 || attempts >= 3_000_000_000 {
+            return None;
+        }
+        Some((hits as f32 / attempts as f32).clamp(1e-9, 1.0))
+    }
+
     /// Exact (blocking) density-fraction measurement for one-shot renders
     /// (CLI export) — sets the fraction the final tonemap will use.
     pub fn apply_exact_density_fraction(&mut self, device: &Device, queue: &Queue) {
+        // Frame coverage first, and unconditionally: it is not tied to
+        // solid rendering, and a one-shot render has exactly one
+        // chance to measure it before the final tonemap.
+        if self.auto_exposure {
+            if let Some(words) =
+                self.coverage_stats.read_blocking(device, queue, &self.buffers.coverage_buffer, 0)
+            {
+                if let Some(measured) = Self::coverage_from(words[0], words[1]) {
+                    self.frame_coverage_fraction = measured;
+                    log::info!(
+                        "auto exposure: frame coverage = {:.3e} ({} of {} plot attempts in frame)",
+                        measured,
+                        words[0],
+                        words[1]
+                    );
+                }
+            }
+        } else {
+            self.frame_coverage_fraction = 1.0;
+        }
         let active = self.solid_strength > 0.0
             && matches!(self.current_render_mode, crate::scene::transforms::RenderMode::ThreeD)
             && self.buffers.solid_depth_region;
@@ -1770,6 +1879,15 @@ impl FlameRenderer {
         // shader-constants path sees the flag, and uploaded here
         // because the table is a function of the flame's weights and
         // xaos as well as of the settings.
+        // Auto exposure: remembered so `update_density_stats` knows
+        // whether to read the counters back, and so the shader builder
+        // is asked for a shader that keeps them.
+        if self.auto_exposure != config.auto_exposure {
+            self.auto_exposure = config.auto_exposure;
+            // Leaving the feature must put the exposure back rather
+            // than freeze it at the last measured value.
+            self.frame_coverage_fraction = 1.0;
+        }
         self.importance = config.importance.clone();
         let bias_buffer_changed =
             self.buffers.update_bias(device, queue, &config.flame, &config.importance);

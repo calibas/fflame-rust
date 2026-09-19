@@ -125,6 +125,11 @@ pub struct RenderOutput {
     pub rgba_data: Vec<u8>,
     pub total_iterations: u64,
     pub render_time_ms: f64,
+    /// The share of plot attempts that landed inside the frame, as
+    /// auto exposure measured it (`FractalConfig::auto_exposure`).
+    /// 1.0 when the feature is off, and always 1.0 for the two
+    /// non-flame generators, which have no chaos game to miss with.
+    pub frame_coverage: f32,
 }
 
 /// Progress callback for long-running renders
@@ -666,6 +671,7 @@ pub async fn render_with(
         rgba_data,
         total_iterations: total_rendered,
         render_time_ms,
+        frame_coverage: renderer.frame_coverage_fraction(),
     })
 }
 
@@ -871,6 +877,7 @@ async fn render_sim(
         // record to make the picture reproducible.
         total_iterations: job.config.sim.steps as u64,
         render_time_ms,
+        frame_coverage: 1.0,
     })
 }
 
@@ -1170,5 +1177,6 @@ async fn render_escape(
         // per-pixel ceiling, not a chaos-game sample count.
         total_iterations: job.config.escape.max_iter as u64,
         render_time_ms,
+        frame_coverage: 1.0,
     })
 }

@@ -445,7 +445,16 @@ mod gpu_tests {
             t.e = e;
             t.f = f;
             t.weight = 1.0;
-            t.color = i as f32 / 2.0;
+            // NOT `i / 2`, which gives transform 0 the colour 0.0.
+            // flam3's colour rule drives the coordinate toward the
+            // colour of whatever transform ran last, so a word of many
+            // consecutive S0s -- which is exactly what a deep zoom
+            // toward S0's fixed point selects for -- lands at 0.0, the
+            // BLACK end of the palette. The render then has full
+            // density everywhere and is invisible anyway, which reads
+            // exactly like starvation and is not (see
+            // `auto_exposure_makes_a_deep_view_visible`).
+            t.color = 0.5 + i as f32 / 4.0;
             t.variations.clear();
             t.variation_order.clear();
             t.set_variation("linear", 1.0);
@@ -459,7 +468,7 @@ mod gpu_tests {
         cfg
     }
 
-    fn render(cfg: &FractalConfig, n: u32, iters: u64) -> Vec<u8> {
+    fn render_out(cfg: &FractalConfig, n: u32, iters: u64) -> crate::renderer::RenderOutput {
         let (device, queue) = device();
         let job = crate::renderer::RenderJob::new(cfg, n, n).with_iterations(iters);
         pollster::block_on(crate::renderer::render(
@@ -469,7 +478,153 @@ mod gpu_tests {
             &mut crate::renderer::NoProgress,
         ))
         .expect("render")
-        .rgba_data
+    }
+
+    fn render(cfg: &FractalConfig, n: u32, iters: u64) -> Vec<u8> {
+        render_out(cfg, n, iters).rgba_data
+    }
+
+    /// What share of the gasket's chaos game a zoomed view holds, on
+    /// the CPU: the number the GPU counters are supposed to agree
+    /// with. Same three maps, same equal weights, a square frame of
+    /// half-extent `2/zoom` about the origin.
+    fn cpu_coverage(zoom: f64, pan: f64, n: usize) -> f64 {
+        let maps = [[0.0f64, 0.0], [0.5, 0.0], [0.25, 0.5]];
+        let mut st = 0x2545_F491_4F6C_DD1Du64;
+        let mut rnd = move || {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (st >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let half = 2.0 / zoom;
+        let (mut p, mut hits) = ([0.0f64, 0.0], 0usize);
+        for i in 0..n + 200 {
+            let m = maps[((rnd() * 3.0) as usize).min(2)];
+            p = [0.5 * p[0] + m[0], 0.5 * p[1] + m[1]];
+            if i >= 200 && (p[0] - pan).abs() <= half && (p[1] - pan).abs() <= half {
+                hits += 1;
+            }
+        }
+        hits as f64 / n as f64
+    }
+
+    /// Auto exposure makes a deep view visible, and the number it uses
+    /// is the real one.
+    ///
+    /// The shipped tone map normalises by `total_iters / pixel_count`,
+    /// which assumes the frame holds all the work. A zoomed view does
+    /// not: most of the attractor is off-screen, so the samples that
+    /// DID land get divided by a count dominated by ones that did not,
+    /// and the picture fades as the zoom deepens.
+    ///
+    /// Two things are asserted, because the feature is worth nothing
+    /// unless both hold:
+    ///
+    /// - the measured coverage matches an independent CPU chaos game,
+    ///   so the counters mean what they claim;
+    /// - a view that has gone dark without it is exposed with it.
+    ///
+    /// Measured on a gasket at a generic point of the set, 96x96,
+    /// 64M iterations:
+    ///
+    /// ```text
+    ///   zoom   coverage gpu / cpu      max off / on   mean off / on
+    ///   2^2     7.22e-1 /  7.22e-1        234 / 252   0.0499 / 0.0539
+    ///   2^4     1.12e-1 /  1.11e-1        143 / 235   0.0322 / 0.0539
+    ///   2^6     8.28e-3 /  8.25e-3        101 / 255   0.0132 / 0.0394
+    ///   2^8     9.02e-4 /  9.03e-4         60 / 255   0.0080 / 0.0393
+    ///   2^10    1.04e-4 /  1.03e-4         37 / 255   0.0047 / 0.0374
+    ///   2^12    8.28e-6 /  8.22e-6         28 / 255   0.0015 / 0.0176
+    /// ```
+    ///
+    /// **A GENERIC point of the set, deliberately.** Aimed at `S₀`'s
+    /// fixed point instead, the deep view is all-black for a reason
+    /// that has nothing to do with exposure: the cylinder a corner
+    /// zoom selects is the all-`S₀` word, flam3's colour rule walks
+    /// the colour coordinate to transform 0's colour, and at the
+    /// fixture's original `0.0` that is the black end of the palette.
+    /// Full density, no light. That is what
+    /// `gasket_config`'s colours are now chosen to avoid, and it is
+    /// worth knowing because it mimics starvation exactly -- max
+    /// channel zero, unmoved by any exposure -- while being a
+    /// completely different fault.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn auto_exposure_makes_a_deep_view_visible() {
+        const N: u32 = 96;
+        const ITERS: u64 = 64_000_000;
+        // A generic point of the set rather than a fixed point of one
+        // of the maps, so the view keeps sampling the whole attractor
+        // as it descends.
+        const PAN: f32 = 0.25;
+
+        let stat = |rgba: &[u8]| -> (u8, f64) {
+            let mx = rgba.chunks(4).map(|p| p[0].max(p[1]).max(p[2])).max().unwrap_or(0);
+            let sum: u64 = rgba.chunks(4).map(|p| p[0] as u64 + p[1] as u64 + p[2] as u64).sum();
+            (mx, sum as f64 / 765.0 / (N * N) as f64)
+        };
+
+        println!("  zoom   coverage gpu / cpu      max off / on   mean off / on");
+        let mut rescued = 0;
+        for zoom_pow in [2i32, 4, 6, 8, 10, 12] {
+            let mut off = gasket_config();
+            off.zoom = 2f32.powi(zoom_pow);
+            off.pan_x = PAN;
+            off.pan_y = PAN;
+            let mut on = off.clone();
+            on.auto_exposure = true;
+
+            let r_off = render_out(&off, N, ITERS);
+            let r_on = render_out(&on, N, ITERS);
+            let (mx_off, mean_off) = stat(&r_off.rgba_data);
+            let (mx_on, mean_on) = stat(&r_on.rgba_data);
+            let cpu = cpu_coverage(2f64.powi(zoom_pow), PAN as f64, 4_000_000);
+
+            println!(
+                "  2^{zoom_pow:<4} {:>9.2e} / {cpu:>9.2e}     {mx_off:>4} / {mx_on:<4}   {mean_off:.4} / {mean_on:.4}",
+                r_on.frame_coverage
+            );
+
+            // Off must measure nothing: the counters are not compiled
+            // in, so the fraction stays at its 1.0 identity.
+            assert_eq!(
+                r_off.frame_coverage, 1.0,
+                "2^{zoom_pow}: a render with auto exposure off reported a coverage -- the \
+                 counters are running when the flag says they are not"
+            );
+            assert!(
+                r_on.frame_coverage <= 1.0,
+                "2^{zoom_pow}: coverage {:.2e} exceeds 1 -- more attempts landed than were made",
+                r_on.frame_coverage
+            );
+
+            // The measurement has to be the real one. Loose, because
+            // the two use different RNGs and different burn-ins; this
+            // is catching an off-by-a-factor, not a rounding
+            // difference. Only where the CPU estimate itself has
+            // enough hits to be worth comparing against.
+            if cpu * 4_000_000.0 > 1000.0 {
+                let ratio = r_on.frame_coverage as f64 / cpu;
+                assert!(
+                    (0.8..1.25).contains(&ratio),
+                    "2^{zoom_pow}: GPU coverage {:.2e} against an independent CPU chaos game's \
+                     {cpu:.2e} ({ratio:.2}x) -- the counters are not measuring what they claim",
+                    r_on.frame_coverage
+                );
+            }
+
+            // The rescue: a view the shipped normalisation has taken
+            // well below full scale comes back to it.
+            if mx_off < 96 && mx_on > 224 && mean_on > mean_off * 2.0 {
+                rescued += 1;
+            }
+        }
+
+        assert!(
+            rescued >= 3,
+            "auto exposure rescued {rescued} of the deep zooms -- either the views are no \
+             longer being dimmed by the iteration-count normalisation, or the measured \
+             coverage is not reaching the tone map"
+        );
     }
 
     /// A targeted render is the untargeted render — the same picture,
@@ -492,36 +647,37 @@ mod gpu_tests {
     ///
     /// ```text
     ///   zoom   P(A_V)    speedup   lit ref / tgt   overlap   brightness
-    ///   2^2    1.00e0         0.5     562 /  564    100.0%   0.228 / 0.227
-    ///   2^4    1.11e-1        3.0     246 /  246    100.0%   0.044 / 0.044
+    ///   2^2    1.00e0        0.5    594 /  603     100.0%   0.514 / 0.508
+    ///   2^4    1.11e-1       3.0    595 /  603      99.8%   0.266 / 0.263
+    ///   2^6    1.23e-2      16.2    600 /  594      99.0%   0.153 / 0.154
+    ///   2^8    1.37e-3     104.1    596 /  594      99.7%   0.093 / 0.093
+    ///   2^10   1.52e-4     729.0    588 /  594      99.5%   0.056 / 0.057
     /// ```
     ///
-    /// Identical, from a sixteenth of the work.
+    /// The same picture at seven hundred times the rate.
     ///
-    /// The 2^2 row is the DECLINE path, and it is here on purpose:
-    /// its speedup is 0.5, so the renderer refuses to target and the
-    /// two renders differ only by their iteration count. A decline
-    /// that silently drew something else would show up here as
-    /// clearly as a forced prefix that named the wrong word.
+    /// **Why it stops at 2^10: the REFERENCE gives out, not the
+    /// target.** At 2^12 the unbiased render lights 252 pixels to the
+    /// targeted one's 378 and the overlap falls to 78% — the targeted
+    /// render is drawing structure its starved reference never
+    /// reaches, which is the direction the whole stage exists to
+    /// produce and is also exactly what makes it unverifiable. There
+    /// is no comparison past the point where nothing else can draw
+    /// the picture.
     ///
-    /// **Past 2^4 there is nothing to compare against, and that is a
-    /// finding rather than a limit of the gate.** Both renders go
-    /// completely empty — max channel zero, not merely dark — and
-    /// raising the exposure by four thousand does not bring either
-    /// back. It is not the sample count: the enumeration's own gate
-    /// measures 0.6% of a 400,000-point chaos sample inside the view
-    /// at 2^6, so the samples are there. It is the tone map, which
-    /// normalises by `total_iters / pixel_count` and so exposes a
-    /// frame holding one percent of the measure as though it held all
-    /// of it.
-    ///
-    /// **That is the starvation symptom in this renderer**, and it is
-    /// a question about EXPOSURE rather than about sampling — the
-    /// same wall stage 1's probe hit from the other side. Targeting
-    /// is the first thing that knows `P(A_V)` exactly, which is
-    /// precisely the number an automatic compensation would need, so
-    /// the fix is now available; making it is a policy change and not
-    /// part of this mechanism.
+    /// **An earlier version of this gate stopped at 2^4 and blamed
+    /// the tone map. That was wrong.** The renders past 2^4 came out
+    /// with max channel zero, unmoved by four thousand times the
+    /// exposure, which reads exactly like starvation — and it was the
+    /// PALETTE. A zoom toward `S₀`'s fixed point selects the all-`S₀`
+    /// word, flam3's colour rule walks the colour coordinate to
+    /// transform 0's colour, and the fixture gave transform 0 the
+    /// colour `0.0`: the black end of the palette. Full density, no
+    /// light. `gasket_config` now starts its colours at 0.5, and six
+    /// zoom levels that were thought to be out of reach were there
+    /// the whole time. The iteration-count normalisation IS a real
+    /// limit on deep views — that is what `auto_exposure` addresses —
+    /// but it was not what made this gate dark.
     #[test]
     #[ignore = "needs a GPU"]
     fn a_targeted_render_is_the_untargeted_render() {
@@ -544,7 +700,7 @@ mod gpu_tests {
 
         let reg = crate::variations::global_registry();
         println!("  zoom   P(A_V)    speedup   lit ref / tgt   overlap   brightness");
-        for zoom_pow in [2i32, 4] {
+        for zoom_pow in [2i32, 4, 6, 8, 10] {
             let mut base = gasket_config();
             base.zoom = 2f32.powi(zoom_pow);
             let plan = Cylinders::plan(

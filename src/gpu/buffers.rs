@@ -1295,6 +1295,14 @@ pub struct FlameBuffers {
     pub cylinder_buffer: Option<Buffer>,
     pub dummy_cylinder_buffer: Buffer,
 
+    // Frame-coverage counters for auto exposure: two u32s, [0] plot
+    // attempts that landed in frame and [1] plot attempts. Always
+    // allocated -- it is 32 bytes, and a buffer that is always there
+    // keeps the bind-group layout uniform whether or not the shader
+    // declares it. Cleared with the histogram, so the count always
+    // describes exactly the dispatches the histogram holds.
+    pub coverage_buffer: Buffer,
+
     // Analytic-blur per-transform mean-splat buffers, allocated at LOW
     // resolution (`ceil(W/D)×ceil(H/D) × 4 × u32 × slots`). The chaos game
     // splats means straight to low res (mean ÷ D) — there is no full-res blur
@@ -1388,6 +1396,7 @@ impl FlameBuffers {
         if let Some(b) = &self.xaos_buffer { b.destroy(); }
         if let Some(b) = &self.bias_buffer { b.destroy(); }
         if let Some(b) = &self.cylinder_buffer { b.destroy(); }
+        self.coverage_buffer.destroy();
         if let Some(b) = &self.accum_depth_buffer { b.destroy(); }
         if let Some(b) = &self.blur_splat_buffer { b.destroy(); }
         if let Some(b) = &self.blur_convolved_buffer { b.destroy(); }
@@ -1682,6 +1691,14 @@ impl FlameBuffers {
 
         // Dummy xaos buffer for binding when xaos is disabled
         // Minimum size: 4 bytes (single f32)
+        // 32 bytes rather than 8: `BoundsTracker` reads a fixed
+        // 8-word window, and reusing it costs nothing here.
+        let coverage_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Frame Coverage Counters"),
+            size: 32,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
         let dummy_cylinder_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Dummy Cylinder Buffer"),
             size: 48,
@@ -1895,6 +1912,7 @@ impl FlameBuffers {
             dummy_bias_buffer,
             cylinder_buffer: None,  // Created on demand when a view is targeted
             dummy_cylinder_buffer,
+            coverage_buffer,
             dummy_xaos_buffer,
             blur_splat_buffer: None,  // Created on demand when analytic blur is active
             blur_convolved_buffer: None,
@@ -2132,6 +2150,11 @@ impl FlameBuffers {
     /// progressive accumulation, where depth persists across batches and
     /// the occlusion test tightens as the run converges.
     pub fn clear_histogram(&self, encoder: &mut CommandEncoder, reset_depth: bool) {
+        // The coverage counters describe the dispatches the histogram
+        // holds, so they are zeroed on exactly the same schedule. That
+        // is also what keeps them clear of u32 saturation on a long
+        // run -- a batch is far short of 4.3e9 plot attempts.
+        encoder.clear_buffer(&self.coverage_buffer, 0, None);
         if self.census_region {
             // RGBD only — the census tail accumulates across the whole
             // run and survives every clear (the runner reads it once at

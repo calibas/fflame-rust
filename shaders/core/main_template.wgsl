@@ -121,6 +121,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // with no custom-init variations.
 //__STATE_INIT_BLOCK__
 
+{{#if FRAME_COVERAGE}}
+    // Frame-coverage tallies for this thread (see header.wgsl binding
+    // 16). Registers, flushed once after the loop.
+    var fc_in: u32 = 0u;
+    var fc_att: u32 = 0u;
+{{/if}}
+
     // Iterate
     for (var i = 0u; i < params.iterations_per_thread; i++) {
         // Save old position for speed calculation
@@ -921,6 +928,24 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 {{/if}}
 {{/if}}
 
+{{#if FRAME_COVERAGE}}
+            // Frame coverage: count this plot attempt, and whether it
+            // landed. Gated on `should_plot` so that only the
+            // GEOMETRIC miss is measured -- a sample the opacity draw
+            // or the importance window already suppressed is in
+            // neither the numerator nor the denominator. Folding an
+            // artistic weight in here is exactly what made the solid
+            // renorm's far-fade and depth-compensation dials shift
+            // global brightness before it was narrowed to occlusion
+            // alone.
+            if (should_plot) {
+                fc_att = fc_att + 1u;
+                if (pixel.x >= 0 && pixel.x < i32(params.width) &&
+                    pixel.y >= 0 && pixel.y < i32(params.height)) {
+                    fc_in = fc_in + 1u;
+                }
+            }
+{{/if}}
             // Check bounds and opacity (only plot if both pass)
             if (pixel.x >= 0 && pixel.x < i32(params.width) &&
                 pixel.y >= 0 && pixel.y < i32(params.height) && should_plot) {
@@ -1200,6 +1225,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         current.z = 0.0;
 {{/if}}
     }
+{{#if FRAME_COVERAGE}}
+    // One pair of atomics per thread rather than per iteration: the
+    // contention is negligible and the count is exact.
+    if (fc_att > 0u) {
+        atomicAdd(&coverage[0], fc_in);
+        atomicAdd(&coverage[1], fc_att);
+    }
+{{/if}}
 }
 {{#if PROBE}}
 // PROBE-BLOCK-BEGIN

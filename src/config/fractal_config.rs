@@ -383,6 +383,26 @@ pub struct FractalConfig {
     /// zoom and not of the flame.
     #[serde(default, skip_serializing_if = "is_false")]
     pub cylinder_targeting: bool,
+
+    /// Auto exposure: normalise the tone map by the density of the
+    /// pixels actually IN FRAME rather than by total iterations
+    /// (`docs/projects/flame-deep-zoom.md`).
+    ///
+    /// The shipped normalisation is `total_iters / pixel_count`, which
+    /// assumes the frame holds all the work. A zoomed-in view does
+    /// not: most of the attractor is off-screen, so the tone map
+    /// divides the samples that DID land by a count dominated by ones
+    /// that did not, and the picture goes black long before it runs
+    /// out of samples.
+    ///
+    /// **Off by default, and deliberately so.** Coverage is below one
+    /// for nearly every flame -- some samples always fly off-frame --
+    /// so switching this on changes the brightness of essentially
+    /// every render ever made. It is a mechanism here; when it should
+    /// engage on its own is a separate decision, and one worth taking
+    /// with the coverage curve in hand rather than in advance.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub auto_exposure: bool,
 }
 
 /// Biased transform selection with a windowed likelihood-ratio
@@ -922,6 +942,7 @@ impl Default for FractalConfig {
             deterministic_rng: false,
             importance: ImportanceSettings::default(),
             cylinder_targeting: false,
+            auto_exposure: false,
         }
     }
 }

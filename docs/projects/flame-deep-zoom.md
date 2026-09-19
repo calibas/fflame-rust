@@ -469,7 +469,8 @@ today, which is enough to measure with.
 ## 13. Stage 2's kernel half, 2026-09-18
 
 The forced prefix runs. A targeted render is the untargeted render,
-from a sixteenth of the iterations.
+from a sixteenth of the iterations — verified to a zoom of 2^10, at a
+speedup of 729x.
 
 ### A word is ONE affine
 
@@ -508,14 +509,25 @@ iterations — and saying it there costs nothing.
 
 | zoom | P(A_V) | speedup | lit ref / tgt | overlap | brightness |
 |---|---|---|---|---|---|
-| 2^2 | 1.00e0 | 0.5 | 562 / 564 | 100.0% | 0.228 / 0.227 |
-| 2^4 | 1.11e-1 | 3.0 | 246 / 246 | 100.0% | 0.044 / 0.044 |
+| 2^2 | 1.00e0 | 0.5 | 594 / 603 | 100.0% | 0.514 / 0.508 |
+| 2^4 | 1.11e-1 | 3.0 | 595 / 603 | 99.8% | 0.266 / 0.263 |
+| 2^6 | 1.23e-2 | 16.2 | 600 / 594 | 99.0% | 0.153 / 0.154 |
+| 2^8 | 1.37e-3 | 104.1 | 596 / 594 | 99.7% | 0.093 / 0.093 |
+| 2^10 | 1.52e-4 | 729.0 | 588 / 594 | 99.5% | 0.056 / 0.057 |
 
-Identical pictures, from a sixteenth of the work. The 2^2 row is the
+The same picture at seven hundred times the rate. The 2^2 row is the
 DECLINE path on purpose: its speedup is 0.5, so the renderer refuses
 to target and the two differ only by iteration count — a decline that
 silently drew something else would show here as clearly as a forced
 prefix naming the wrong word.
+
+It stops at 2^10 because the REFERENCE gives out, not the target. At
+2^12 the unbiased render lights 252 pixels to the targeted one's 378
+and the overlap falls to 78%: the targeted render is drawing
+structure its starved reference never reaches, which is the direction
+the stage exists to produce and is also exactly what makes it
+unverifiable. There is no comparison past the point where nothing
+else can draw the picture.
 
 Off, the feature contributes **no code at all**: the whole
 canonical-dump diff is 40 blank lines where the stripped `{{#if}}`
@@ -532,22 +544,42 @@ built. The verdict is threaded as a parameter now, exactly as
 only because the gate compared against a reference; a brightness
 check alone would have called it a pass.
 
-### Past 2^4 there is nothing to compare against, and it is not the sampling
+### The wrong diagnosis, and what it actually was
 
-Both renders go completely empty at 2^6 — max channel zero, not
-merely dark — and raising the exposure by four thousand brings
-neither back. The samples are there: the enumeration's own gate
-measures 0.6% of a 400,000-point chaos sample inside that view. It is
-the tone map, which normalises by `total_iters / pixel_count` and so
-exposes a frame holding one percent of the measure as though it held
-all of it.
+This section previously read *"Past 2^4 there is nothing to compare
+against, and it is not the sampling"*, and attributed it to the tone
+map's `total_iters / pixel_count` normalisation. **That was wrong,
+and the way it was wrong is worth keeping.**
 
-**That is the starvation symptom in this renderer**, and it is a
-question about EXPOSURE rather than about sampling — the same wall
-stage 1's probe hit from the other side, reached here by a different
-route. Targeting is the first thing that knows `P(A_V)` exactly,
-which is precisely the number an automatic compensation would need.
-Making it is a policy change and the obvious next one.
+The evidence looked airtight: past 2^4 both renders came out with max
+channel ZERO — not merely dark — and four thousand times the exposure
+brought neither back, while the enumeration could show the samples
+were landing in the view. Every one of those observations was true.
+The conclusion did not follow.
+
+It was the PALETTE. The fixture zooms toward `S₀`'s fixed point, so
+the cylinder a deep view selects is the all-`S₀` word; flam3's colour
+rule walks the colour coordinate toward the colour of whatever
+transform ran last; and the fixture gave transform 0 the colour
+`0.0`, which is the black end of the palette. Full density, correctly
+deposited, rendered black. Moving the fixture's colours off zero
+(`gasket_config` starts at 0.5 now) brought back **six zoom levels
+that were thought to be out of reach**, and the table above is the
+result.
+
+The lesson is that a black render has more than one cause and they
+present identically. "Max channel zero, unmoved by exposure" reads as
+starvation, and a colour coordinate pinned at the palette's black end
+produces exactly that signature with a completely healthy histogram
+underneath. The discriminator that would have caught it in one step:
+compare the render against a CPU chaos game's PIXEL OCCUPANCY, not
+its sample count. The CPU said 594 distinct pixels at every zoom
+while the GPU said one — a contradiction no exposure theory explains.
+
+The iteration-count normalisation IS a real limit on deep views —
+that is what §14 is about, and it is measured there on a fixture that
+does not have this defect. It simply was not what made this gate
+dark.
 
 ## 12. Stage 2's enumeration, built and measured, 2026-09-18
 
@@ -646,3 +678,104 @@ unchanged and the bookkeeping can follow.
 
 `NoCylinders` names which one turned a flame away, so the panel can
 say so rather than silently rendering the ordinary way.
+
+## 14. Auto exposure, built and measured, 2026-09-19
+
+The tone map normalises by `sample_density = total_iters /
+pixel_count` — which assumes the frame holds all the work. A zoomed
+view does not: most of the attractor is off-screen, so the samples
+that DID land get divided by a count dominated by ones that did not,
+and the picture fades as the zoom deepens. `auto_exposure` measures
+the share that landed and scales the normalisation by it.
+
+### Reusing the solid renorm, not Density Levels
+
+Density Levels was the obvious candidate and is the wrong half of the
+right idea. Its OUTPUT is opacity — `apply_levels` reaches
+`fractal_alpha` and nothing else, as `tonemap.wgsl` says in as many
+words — and a deep view is not a transparency problem. Its INPUT
+(`DensityHistogram`: accumulator readback, percentiles, mean density)
+is real measurement infrastructure, but it is a full-frame readback
+producing percentiles nobody here needs.
+
+The closer precedent was already a term in the line being changed:
+`solid_density_fraction`. Solid rendering hit the structurally
+identical problem — occlusion culls most dispatched samples, so
+`total_iters/pixel_count` overstates what reached the image — and
+fixed it by measuring the surviving fraction on the GPU and
+multiplying it into `sample_density`, with an EMA-smoothed
+interactive path and a blocking exact path for one-shot renders.
+Frame coverage is the same sentence with a different numerator, and
+it reuses `BoundsTracker` outright for both paths.
+
+    sample_density = samples_in_buffer
+                   * solid_density_fraction
+                   * frame_coverage_fraction     <- new
+                   * cylinder_iteration_scale()
+                   / pixel_count
+
+### The counters
+
+Two u32 words in their own 32-byte buffer at `@binding(16)`: plot
+attempts that landed in frame, and plot attempts. Gated on the same
+`should_plot` the plot itself uses, so only the GEOMETRIC miss is
+measured — a sample already suppressed by opacity or the importance
+window is in neither the numerator nor the denominator. That
+narrowing is the solid renorm's hard-won lesson: folding an artistic
+weight into the fraction makes that dial shift global brightness.
+
+They are counted per thread in registers and flushed ONCE after the
+iteration loop, deliberately not subsampled. Solid can subsample one
+thread in 1024 because its fraction is order-one; at depth the
+in-frame count is small by definition, and sampling a thousandth of
+it would read zero exactly where the number is needed. Two atomics
+per thread instead of two per iteration costs nothing.
+
+### What it measures
+
+Gasket, generic point of the set, 96x96, 64M iterations:
+
+| zoom | coverage gpu / cpu | max off / on | mean off / on |
+|---|---|---|---|
+| 2^2 | 7.22e-1 / 7.22e-1 | 234 / 252 | 0.0814 / 0.0878 |
+| 2^4 | 1.12e-1 / 1.11e-1 | 167 / 255 | 0.0642 / 0.1065 |
+| 2^6 | 8.28e-3 / 8.25e-3 | 101 / 255 | 0.0265 / 0.0788 |
+| 2^8 | 9.02e-4 / 9.10e-4 | 60 / 255 | 0.0160 / 0.0785 |
+| 2^10 | 1.04e-4 / 1.07e-4 | 37 / 255 | 0.0094 / 0.0749 |
+| 2^12 | 8.28e-6 / 9.50e-6 | 28 / 255 | 0.0029 / 0.0352 |
+
+The `cpu` column is an independent chaos game on the CPU counting
+in-rectangle hits. It agrees to two or three figures at every zoom,
+which is what makes the fraction trustworthy rather than merely
+plausible; the gate asserts it.
+
+Without the correction the image fades monotonically — max channel
+234 down to 28 — while the structure is still fully sampled. With it,
+a 2^10 view is exposed to full scale from the same iterations.
+
+### Off by default, deliberately
+
+Coverage is below one for nearly every flame: some samples always fly
+off-frame. Switching this on by default would change the brightness
+of essentially every render ever made, so it does not. When it should
+engage on its own is a separate decision and a better one to take
+with the coverage curve in hand than in advance. Off, the feature
+contributes no code at all — the whole canonical-dump diff is 48
+blank lines where the stripped `{{#if}}` blocks were, zero non-blank
+lines, and all 330 visual tests are unchanged.
+
+### Where it gives up
+
+`coverage_from` refuses to report on fewer than 32 landings. Below
+that the ratio is dominated by its own shot noise and a frame holding
+a handful of samples has no exposure that makes it a picture;
+refusing leaves the last good value rather than setting the
+brightness from a coin flip. A magnitude floor was tried first — a
+clamp at 1e-6 — and was quietly binding at 2^14, which is inside the
+range the feature is FOR. A minimum-hits rule is the honest bound;
+the clamp now only stops a zero reaching the divide.
+
+The tiled high-resolution exporter allocates the buffer so the
+layout is uniform but does not auto-expose: it renders many views and
+coverage is a property of one view.
+

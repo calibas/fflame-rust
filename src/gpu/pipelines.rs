@@ -160,6 +160,19 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
+                // Frame-coverage counters (auto exposure). Declared by
+                // the shader only under FRAME_COVERAGE; the layout
+                // always carries it.
+                BindGroupLayoutEntry {
+                    binding: 16,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
                 // Enumerated cylinders (docs/projects/flame-deep-zoom.md
                 // stage 2). Declared by the shader only under
                 // CYLINDER_TARGETING; the layout always carries it.
@@ -802,6 +815,11 @@ impl FlamePipelines {
                 BindGroupEntry {
                     binding: 10,
                     resource: buffers.attachments_buffer.as_entire_binding(),
+                },
+                // Frame-coverage counters.
+                BindGroupEntry {
+                    binding: 16,
+                    resource: buffers.coverage_buffer.as_entire_binding(),
                 },
                 // Cylinder table (real or dummy).
                 BindGroupEntry {
