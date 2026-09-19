@@ -299,6 +299,12 @@ impl Cylinders {
         // depth and the antichain comes out sorted — which makes the
         // completeness check below a statement about levels rather
         // than about a traversal.
+        // `word` is in the order the chaos game APPLIES the maps,
+        // so extending it means prepending — see the comment at the
+        // extension. The disc is carried alongside only to prune
+        // against; it is recomputed from the root each time, because
+        // there is no way to extend it incrementally once the new map
+        // goes on the inside.
         struct Node {
             word: Vec<u32>,
             prob: f64,
@@ -313,6 +319,25 @@ impl Cylinders {
         }];
         let mut kept: Vec<Cylinder> = Vec::new();
 
+        // The disc a word's image lies in: push the root through the
+        // word's maps, in the order the chaos game applies them.
+        //
+        // Recomputed from the root for every candidate rather than
+        // extended from the parent, and that is the whole point of
+        // this function's shape. See `Node` below.
+        let disc_of = |word: &[u32]| -> Option<Ball> {
+            let mut b = Ball::new(root_c, root_r);
+            for &sym in word {
+                b = crate::scene::ifs_ball::transform_ball_2d(
+                    &flame.transforms[sym as usize],
+                    registry,
+                    b,
+                )
+                .ok()?;
+            }
+            Some(b)
+        };
+
         for _depth in 0..MAX_DEPTH {
             if frontier.is_empty() {
                 break;
@@ -320,23 +345,38 @@ impl Cylinders {
             let mut next: Vec<Node> = Vec::new();
             for node in frontier.drain(..) {
                 for (i, t) in flame.transforms.iter().enumerate() {
+                    let _ = t;
                     let w = weights[i];
                     if !(w > 0.0) {
                         continue;
                     }
-                    // The one call that unifies affine and bounded
-                    // maps: for an affine transform it is exact, for
-                    // a bounded one it is an over-estimate, and the
-                    // enumeration cannot tell the difference.
-                    let Ok(img) = crate::scene::ifs_ball::transform_ball_2d(
-                        t,
-                        registry,
-                        Ball::new(node.centre, node.radius),
-                    ) else {
-                        // A bound that refuses at THIS disc (a radial
-                        // map over the origin). Keeping the parent is
-                        // the sound answer: its disc already contains
-                        // every child's image.
+                    // **The new symbol is applied FIRST, not last.**
+                    //
+                    // A word is `S_{a_k} ∘ … ∘ S_{a_1}` and the chaos
+                    // game applies `a_1` first, so prepending a symbol
+                    // makes the new map the INNERMOST one. That is
+                    // what makes the child's image a subset of the
+                    // parent's: `S_a(S_j(B)) ⊆ S_a(B)` because
+                    // `S_j(B) ⊆ B`, and the pruning below is sound
+                    // only because of it.
+                    //
+                    // Appending instead — applying the new map on the
+                    // OUTSIDE — was the original shape and it is
+                    // wrong: the child is then the parent's disc under
+                    // a different map, which lands somewhere else
+                    // entirely and is not contained in the parent at
+                    // all. Pruning on "the child is inside the parent"
+                    // then discards branches that do reach the view,
+                    // and their share of the measure never gets drawn.
+                    //
+                    // It is invisible at a fixed point, where the word
+                    // is `S_i^k` and the two conventions agree, which
+                    // is exactly why every gate here passed while a
+                    // generic point of a real flame went empty.
+                    let mut word = Vec::with_capacity(node.word.len() + 1);
+                    word.push(i as u32);
+                    word.extend_from_slice(&node.word);
+                    let Some(img) = disc_of(&word) else {
                         continue;
                     };
                     let centre = img.c;
@@ -353,8 +393,6 @@ impl Cylinders {
                     if d > radius + view.radius {
                         continue;
                     }
-                    let mut word = node.word.clone();
-                    word.push(i as u32);
                     let prob = node.prob * (w / total_w);
                     // Small enough: the image fits the view, so
                     // forcing this word puts a sample in the frame
@@ -831,6 +869,75 @@ mod gpu_tests {
              longer being dimmed by the iteration-count normalisation, or the measured \
              coverage is not reaching the tone map"
         );
+    }
+
+    /// The picture matches at a GENERIC point too, not only at a
+    /// fixed point.
+    ///
+    /// The render-level companion to
+    /// `a_generic_point_of_the_attractor_enumerates`. Both existing
+    /// picture gates aim at `S₀`'s fixed point, which is the one
+    /// place the enumeration's pruning was accidentally correct, so
+    /// neither of them could fail when it was wrong everywhere else.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_generic_point_renders_the_same_picture() {
+        const N: u32 = 96;
+        let mut p = [0.0f64, 0.0];
+        {
+            let f = gasket_config();
+            for k in 0..60 {
+                let t = &f.flame.transforms[[0usize, 1, 2, 1, 0, 2][k % 6]];
+                p = [
+                    t.a as f64 * p[0] + t.b as f64 * p[1] + t.e as f64,
+                    t.c as f64 * p[0] + t.d as f64 * p[1] + t.f as f64,
+                ];
+            }
+        }
+        let lit_of = |rgba: &[u8]| -> Vec<bool> {
+            rgba.chunks(4).map(|q| q[0] as u32 + q[1] as u32 + q[2] as u32 > 24).collect()
+        };
+
+        let reg = crate::variations::global_registry();
+        println!("  zoom   speedup   lit ref / tgt   overlap");
+        let mut checked = 0;
+        for zoom_pow in [4i32, 6, 8] {
+            let mut base = gasket_config();
+            base.zoom = 2f32.powi(zoom_pow);
+            base.pan_x = p[0] as f32;
+            base.pan_y = p[1] as f32;
+            let plan = Cylinders::plan(
+                &base.flame,
+                &reg,
+                View::of(base.zoom as f64, [base.pan_x as f64, base.pan_y as f64], N, N),
+            )
+            .expect("a generic attractor point enumerates");
+
+            let mut tgt = base.clone();
+            tgt.cylinder_targeting = true;
+            let lit_r = lit_of(&render(&base, N, 64_000_000));
+            let lit_t = lit_of(&render(&tgt, N, 4_000_000));
+            let nr = lit_r.iter().filter(|b| **b).count();
+            let nt = lit_t.iter().filter(|b| **b).count();
+            let both = lit_r.iter().zip(&lit_t).filter(|(a, b)| **a && **b).count();
+            let overlap = both as f64 / nr.max(1) as f64;
+            println!(
+                "  2^{zoom_pow:<4} {:>7.1}   {nr:>4} / {nt:>4}   {:>6.1}%",
+                plan.speedup(),
+                overlap * 100.0
+            );
+            if plan.speedup() <= 1.0 {
+                continue;
+            }
+            checked += 1;
+            assert!(nr > 50 && nt > 50, "2^{zoom_pow}: {nr} / {nt} lit");
+            assert!(
+                overlap > 0.90,
+                "2^{zoom_pow}: overlap {:.1}% at a generic point",
+                overlap * 100.0
+            );
+        }
+        assert!(checked > 0, "nothing was actually targeted");
     }
 
     /// A REPLAYED word is the untargeted render too — the same
@@ -1481,6 +1588,58 @@ mod tests {
         }
         // Six zooms, one to three words each, eight comparisons a word.
         assert!(checked >= 80, "only {checked} comparisons");
+    }
+
+    /// A GENERIC point of the attractor enumerates, not just a fixed
+    /// point of one of the maps.
+    ///
+    /// **This is the gate that was missing, and its absence hid a
+    /// real bug for three commits.** Every fixture here sat on `S₀`'s
+    /// fixed point, where the word is `S₀^k` and a word extended on
+    /// the outside happens to nest exactly as one extended on the
+    /// inside does. The enumeration was extending on the OUTSIDE and
+    /// pruning as though the children nested, which is false in
+    /// general — so everywhere except a fixed point it discarded
+    /// branches that reached the view, and the view came back empty.
+    ///
+    /// Reported from the app as "I can only keep zooming in on a
+    /// single point the whole fractal converges on", which is
+    /// precisely the shape of the bug.
+    #[test]
+    fn a_generic_point_of_the_attractor_enumerates() {
+        let reg = global_registry();
+        let f = gasket();
+
+        // A point of the attractor that is NOT a fixed point of any
+        // map: follow a repeating address long enough to land on the
+        // set. Every map here is affine, so this is exact arithmetic.
+        let mut p = [0.0f64, 0.0];
+        for k in 0..60 {
+            let t = &f.transforms[[0usize, 1, 2, 1, 0, 2][k % 6]];
+            p = [
+                t.a as f64 * p[0] + t.b as f64 * p[1] + t.e as f64,
+                t.c as f64 * p[0] + t.d as f64 * p[1] + t.f as f64,
+            ];
+        }
+        for zoom_pow in [4i32, 6, 8, 10] {
+            let view = View::of(2f64.powi(zoom_pow), p, 96, 96);
+            let plan = Cylinders::plan(&f, &reg, view).unwrap_or_else(|e| {
+                panic!(
+                    "2^{zoom_pow} at a generic attractor point {p:?} refused with {e:?} -- \
+                     the enumeration is losing the branch that reaches the view"
+                )
+            });
+            // 2^4 is still a shallow view of a unit-sized attractor,
+            // so declining there is right; the claim is that the
+            // payoff arrives, not that it is always present.
+            if zoom_pow >= 6 {
+                assert!(
+                    plan.speedup() > 1.0,
+                    "2^{zoom_pow}: speedup {:.2} at a generic point -- the enumeration                      reaches the view but finds no saving, which it should by this depth",
+                    plan.speedup()
+                );
+            }
+        }
     }
 
     /// The refusals are refusals, not silent wrong answers.
