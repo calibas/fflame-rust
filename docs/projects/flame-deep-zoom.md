@@ -133,7 +133,7 @@ UI/script policy layered on top (open question 1).
   WGSL byte-identical when off; q ≡ p makes it a measured no-op
   when on.
 
-### Stage 2 — cylinder targeting (the free lunch)
+### Stage 2 — cylinder targeting (the free lunch) — enumeration built 2026-09-18, §12
 
 The viewport ∩ attractor corresponds to a set of *symbol prefixes*:
 sequences (i₁…i_k) whose composed map has an image touching the
@@ -465,3 +465,101 @@ The `ConfigPath` entries (so scripting and undo reach it) and the UI
 section. Both are policy surface, and §9's open question 1 is still
 open; a `.fflame` carries the settings and the CLI renders them
 today, which is enough to measure with.
+
+## 12. Stage 2's enumeration, built and measured, 2026-09-18
+
+The CPU half: `scene::cylinder` enumerates the words whose image
+reaches the viewport, with the probabilities the forced sampler
+needs. The kernel half — burn in, force a word, plot — is next.
+
+### The identity, stated so it can be checked
+
+`μ = Σ_i p_i (S_i)_* μ` unrolled along a complete antichain `A`, a
+prefix-free set every infinite path crosses exactly once:
+
+```text
+μ|_V = Σ_{a ∈ A_V} p_a · (S_a)_* μ |_V,   A_V = {a ∈ A : S_a(B) ∩ V ≠ ∅}
+```
+
+Sample `a` with probability `p_a / P(A_V)`, draw `x ~ μ` from the
+true chaos game, plot `S_a(x)` with weight `P(A_V)`. **Exact, for
+any `A_V` built this way**, however loose the bound that built it: a
+loose bound admits words whose image does not really reach `V`, and
+their samples land outside and are not seen. Efficiency, never
+correctness.
+
+The contrast with stage 1 is the whole point. The weight is one
+number for the view rather than a product accumulated along an orbit,
+so there is no window, no epoch and **no weight variance at all** —
+which is what stage 1's 6x noise penalty was.
+
+### What it measures
+
+On a gasket centred at `S₀`'s own fixed point, so the view is on the
+set at every scale:
+
+| zoom | words | depth | P(A_V) | speedup |
+|---|---|---|---|---|
+| 2^1 | 3 | 1 | 1.00e0 | 0.5x |
+| 2^3 | 1 | 1 | 3.33e-1 | 1.5x |
+| 2^6 | 1 | 4 | 1.23e-2 | 16.2x |
+| 2^9 | 1 | 7 | 4.57e-4 | 273x |
+| 2^12 | 1 | 10 | 1.69e-5 | 5,368x |
+| 2^16 | 1 | 14 | 2.09e-7 | 318,865x |
+| 2^20 | 1 | 18 | 2.58e-9 | 20,390,552x |
+
+`speedup` is `1/(mass·(depth+1))`: every sample lands in view at a
+cost of `depth+1` map applications, against the unbiased game's one
+application of which a `mass` fraction is useful. **That is the
+change of asymptotics** — `1/mass` grows like `zoom^D` while `depth`
+grows like `log zoom` — and it is what stage 1 could not do.
+
+**Below 2^2 it is a LOSS**, which is the right answer: the whole
+attractor fits the view, every sample is already useful, and the
+prefix is pure overhead. The renderer has to be able to decline.
+
+Only ONE word survives from 2^3 on: a view that small sits inside a
+single cylinder, so the branching is transient. The `MAX_WORDS` cap
+is for a viewport straddling many pieces, not for the common case.
+
+### What is gated
+
+| | |
+|---|---|
+| the kept mass bounds the measure in view | `P(A_V)` against a 400k chaos sample, ratio 2.00 to 2.02 across six zooms |
+| the antichain is prefix-free | no kept word is a prefix of another, three zooms |
+| a word's image contains where its points land | the sample pushed through each word, against the claimed disc |
+| both stopping rules | every kept word reaches the view AND fits inside it |
+| the speedup grows, and the depth tracks the zoom | asserted per octave |
+| the refusals refuse | nonlinear by index, xaos, expanding, off-attractor |
+
+The mass/sampled ratio being a constant 2.00 is the bound's own
+looseness and nothing else: the view is tested as the disc through
+the frame's corners, which is `√2` wider than the frame in each
+direction. Two forced samples per useful one, at every depth.
+
+### Two fixture errors worth recording
+
+The first centre was `(0.25, 0.25)`, an arbitrary point. A gasket is
+measure zero, so a generic point is not in it, and the view came up
+EMPTY past 2^16 — the enumeration was right and the fixture was
+wrong. The centre is `S₀`'s fixed point now, which is in the set at
+every scale by construction.
+
+And the first speedup gate asserted monotone growth from 2^1, where
+targeting is a loss and the value is flat. Asserting growth where
+there is nothing to gain would have been asserting noise.
+
+### Deliberately not here
+
+**Affine transforms only, and no xaos.** Both are about the bound
+rather than the identity. A nonlinear map's image bound needs a
+Lipschitz constant per variation — §7 item 1, the shared piece the
+escape-time plan also wants, still unbuilt — and an enumeration on a
+guessed constant would be wrong rather than loose. Under xaos the
+first symbol's probability is conditional on the burn-in's last
+transform, so the sampling table is per-predecessor; the identity is
+unchanged and the bookkeeping can follow.
+
+`NoCylinders` names which one turned a flame away, so the panel can
+say so rather than silently rendering the ordinary way.
