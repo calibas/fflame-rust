@@ -260,6 +260,10 @@ pub struct FlameRenderer {
     fog_strength: f32, // Depth fog: exponential fog density (0.0 = disabled)
     fog_start: f32, // Depth fog: distance where fog begins
     solid_strength: f32, // Solid rendering: occlusion strength (0 = off)
+    /// Biased selection and its correction, mirrored from the config
+    /// so the incremental shader-constants path can see it.
+    /// See docs/projects/flame-deep-zoom.md stage 1.
+    importance: crate::config::fractal_config::ImportanceSettings,
     surface_thickness: f32, // Solid rendering: depth shell (world units)
     needs_depth_prime: bool, // Next compute batch records depth only (set on reset while solid)
     solid_shading: crate::config::SolidShadingSettings, // Phase 1 lighting (shade pass); active() => depth capture even at solid_strength 0
@@ -414,6 +418,7 @@ impl FlameRenderer {
             fog_strength: crate::config::DEFAULT_FOG_STRENGTH,
             fog_start: crate::config::DEFAULT_FOG_START,
             solid_strength: crate::config::DEFAULT_SOLID_STRENGTH,
+            importance: Default::default(),
             surface_thickness: crate::config::DEFAULT_SURFACE_THICKNESS,
             needs_depth_prime: false,
             solid_shading: crate::config::SolidShadingSettings::default(),
@@ -590,6 +595,9 @@ impl FlameRenderer {
             has_attachments: flame.has_attachments(),
             has_post_symmetry: flame.post_symmetry.ty != crate::scene::transforms::PostSymmetryType::None,
             has_analytic_blur: flame.analytic_blur_active(&crate::variations::global_registry(), render_mode),
+            // Mirrored from the config on load, like `solid_strength`:
+            // this path is the incremental one and has no config.
+            importance_sampling: self.importance.enabled,
             flatten_z_per_iter: matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD)
                 && !preserve_z,
             solid_enabled: (self.solid_strength > 0.0 || self.solid_shading.active())
@@ -720,7 +728,9 @@ impl FlameRenderer {
             shadow_center_z: sh_fit.0[2],
             shadow_radius: sh_fit.1,
             shadow_count: sh_dirs.0,
-            _pad_shadow: [0; 3],
+            // The correction window, from the mirrored settings.
+            importance_window: self.importance.window.max(1),
+            _pad_shadow: [0; 2],
             shadow_dirs: sh_dirs.1,
         };
         self.buffers.update_params(queue, &params);
@@ -1724,11 +1734,19 @@ impl FlameRenderer {
 
         // 1b. Update xaos buffer (create/drop as needed)
         let xaos_buffer_changed = self.update_xaos_buffer(device, queue, &config.flame);
+        // 1b2. Biased selection (docs/projects/flame-deep-zoom.md
+        // stage 1). Mirrored onto the kernel so the incremental
+        // shader-constants path sees the flag, and uploaded here
+        // because the table is a function of the flame's weights and
+        // xaos as well as of the settings.
+        self.importance = config.importance.clone();
+        let bias_buffer_changed =
+            self.buffers.update_bias(device, queue, &config.flame, &config.importance);
         // 1c. Refresh analytic-blur slot list (buffers (re)allocate in
         // maybe_rebuild_blur_kernels on the next compute_pass).
         self.update_blur_buffers(&config.flame);
-        if xaos_buffer_changed {
-            // Recreate bind group with new xaos buffer
+        if xaos_buffer_changed || bias_buffer_changed {
+            // Recreate bind group with the new xaos or bias buffer
             self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
             self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
         }
@@ -1887,7 +1905,9 @@ impl FlameRenderer {
             shadow_center_z: sh_fit.0[2],
             shadow_radius: sh_fit.1,
             shadow_count: sh_dirs.0,
-            _pad_shadow: [0; 3],
+            // The correction window, from the mirrored settings.
+            importance_window: self.importance.window.max(1),
+            _pad_shadow: [0; 2],
             shadow_dirs: sh_dirs.1,
         };
         self.buffers.update_params(queue, &params);
@@ -1995,11 +2015,16 @@ impl FlameRenderer {
 
         // Update xaos buffer (create/drop as needed)
         let xaos_buffer_changed = self.update_xaos_buffer(device, queue, flame);
+        // The bias table depends on the flame's weights and xaos too,
+        // so a flame-only update has to rebuild it — against the
+        // settings last mirrored from a config.
+        let importance = self.importance.clone();
+        let bias_buffer_changed = self.buffers.update_bias(device, queue, flame, &importance);
         // Refresh analytic-blur slot list (buffers (re)allocate in
         // maybe_rebuild_blur_kernels on the next compute_pass).
         self.update_blur_buffers(flame);
-        if xaos_buffer_changed {
-            // Recreate bind group with new xaos buffer
+        if xaos_buffer_changed || bias_buffer_changed {
+            // Recreate bind group with the new xaos or bias buffer
             self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
             self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
         }
@@ -2090,7 +2115,9 @@ impl FlameRenderer {
             shadow_center_z: sh_fit.0[2],
             shadow_radius: sh_fit.1,
             shadow_count: sh_dirs.0,
-            _pad_shadow: [0; 3],
+            // The correction window, from the mirrored settings.
+            importance_window: self.importance.window.max(1),
+            _pad_shadow: [0; 2],
             shadow_dirs: sh_dirs.1,
         };
 
@@ -2393,7 +2420,9 @@ impl FlameRenderer {
             shadow_center_z: sh_fit.0[2],
             shadow_radius: sh_fit.1,
             shadow_count: sh_dirs.0,
-            _pad_shadow: [0; 3],
+            // The correction window, from the mirrored settings.
+            importance_window: self.importance.window.max(1),
+            _pad_shadow: [0; 2],
             shadow_dirs: sh_dirs.1,
         };
         self.buffers.update_params(queue, &params);
@@ -2761,7 +2790,9 @@ impl FlameRenderer {
             shadow_center_z: sh_fit.0[2],
             shadow_radius: sh_fit.1,
             shadow_count: sh_dirs.0,
-            _pad_shadow: [0; 3],
+            // The correction window, from the mirrored settings.
+            importance_window: self.importance.window.max(1),
+            _pad_shadow: [0; 2],
             shadow_dirs: sh_dirs.1,
         };
         self.buffers.update_params(queue, &params);

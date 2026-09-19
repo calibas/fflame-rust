@@ -178,6 +178,7 @@ impl ShaderCache {
             // arrive via `constants_from_config` on config load, which
             // triggers a rebuild if they differ.
             has_analytic_blur: flame.analytic_blur_active(&crate::variations::global_registry(), RenderMode::TwoD),
+            importance_sampling: false,
             flatten_z_per_iter: false,
             solid_enabled: false,
             probe: false,
@@ -380,6 +381,7 @@ impl ShaderCache {
                 );
                 constants.solid_enabled = config.solid_strength > 0.0
                     && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD);
+                constants.importance_sampling = config.importance.enabled;
                 constants
             }
         } else {
@@ -402,6 +404,7 @@ impl ShaderCache {
                 has_attachments: config.flame.has_attachments(),
                 has_post_symmetry: config.flame.post_symmetry.ty != crate::scene::transforms::PostSymmetryType::None,
                 has_analytic_blur: config.flame.analytic_blur_active(&registry, config.render_mode),
+                importance_sampling: config.importance.enabled,
                 flatten_z_per_iter: matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD)
                     && !config.preserve_z,
                 solid_enabled: config.solid_strength > 0.0

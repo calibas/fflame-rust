@@ -119,6 +119,12 @@ pub struct HighResExporter {
     sample_counter_buffer: Buffer,
     variation_params_buffer: Buffer,
     xaos_buffer: Buffer,  // Xaos transition weights (identity if not used)
+    // Biased selection weights + likelihood ratios
+    // (docs/projects/flame-deep-zoom.md stage 1). Always allocated
+    // and filled neutrally when the feature is off, because an
+    // export must render what the app renders -- the same table,
+    // from the same `build_table`.
+    bias_buffer: Buffer,
     attachments_buffer: Buffer,  // Per-normal Linked + Final attachment lists
     subflame_metadata_buffer: Buffer,  // binding 12: per-subflame metadata
     // Dummy path-tracking buffers — the unified shader's `header.wgsl`
@@ -506,6 +512,20 @@ impl HighResExporter {
             let identity: Vec<f32> = vec![1.0; (num_transforms * num_transforms) as usize];
             queue.write_buffer(&xaos_buffer, 0, bytemuck::cast_slice(&identity));
         }
+
+        // Biased selection table. `build_table` with the config's own
+        // settings, so an export of a biased flame is the picture the
+        // app showed; with the feature off the settings are neutral
+        // and the table is the true weights with ratios of one.
+        let bias_table =
+            crate::scene::importance::build_table(&config.flame, &config.importance);
+        let bias_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Export Importance Bias Buffer"),
+            size: ((bias_table.len() * 4) as u64).max(4),
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&bias_buffer, 0, bytemuck::cast_slice(&bias_table));
 
         // Per-normal attachment lists (Linked + Final chains). The GPU
         // struct stride matches the per-flame `attachment_cap` — must
@@ -898,8 +918,21 @@ impl HighResExporter {
                     },
                     count: None,
                 },
-                // binding 12: subflame metadata (array<SubflameMeta>). Binding 11
-                // is intentionally unbound (legacy subflame_transforms, removed).
+                // binding 11: biased selection table. Was the legacy
+                // subflame_transforms slot, empty since v2 of the
+                // subflame work. The layout always carries it; the
+                // shader declares it only under IMPORTANCE_SAMPLING.
+                BindGroupLayoutEntry {
+                    binding: 11,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 12: subflame metadata (array<SubflameMeta>).
                 BindGroupLayoutEntry {
                     binding: 12,
                     visibility: ShaderStages::COMPUTE,
@@ -1385,6 +1418,7 @@ impl HighResExporter {
             sample_counter_buffer,
             variation_params_buffer,
             xaos_buffer,
+            bias_buffer,
             attachments_buffer,
             subflame_metadata_buffer,
             dummy_path_buffer,
@@ -1539,6 +1573,10 @@ impl HighResExporter {
                 BindGroupEntry {
                     binding: 10,
                     resource: self.attachments_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 11,
+                    resource: self.bias_buffer.as_entire_binding(),
                 },
                 BindGroupEntry {
                     binding: 12,
@@ -1770,7 +1808,8 @@ impl HighResExporter {
                 shadow_center_z: 0.0,
                 shadow_radius: 1.0,
                 shadow_count: 0,
-                _pad_shadow: [0; 3],
+                importance_window: config.importance.window.max(1),
+            _pad_shadow: [0; 2],
                 shadow_dirs: [[0.0; 4]; 4],
             };
             self.queue

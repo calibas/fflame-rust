@@ -1527,13 +1527,20 @@ not on the path:
 
 Replaces §9's tail. Each item names the plan it lives in.
 
-10. **Stage 1 of the deep zoom** -- biased selection with the
-    windowed correction ([flame-deep-zoom.md](flame-deep-zoom.md)
-    stage 1). A template flag, two small tables, one multiply into
-    `density_weight`. Needs none of this plan; ships user-visible
-    value at ~100x zoom; off is byte-identical WGSL and `q ≡ p` on is
-    a bit-identical render. **First**, because it is the demand
-    signal for everything after and the cheapest thing on the list.
+10. ~~**Stage 1 of the deep zoom**~~ -- done 2026-09-18,
+    [flame-deep-zoom.md](flame-deep-zoom.md) §11. The mechanism is
+    in and correct: off contributes no code, `q ≡ p` is
+    bit-identical, and the correction recovers 95% of an imposed
+    bias. Two things the measurements changed -- the warm-up was
+    darkening the picture because the tone map counts iterations and
+    not deposits, and rounding the deposit's SCALE beats rounding
+    every channel because the reference truncates colour too. The
+    window turns out to have an OPTIMUM rather than a lower bound.
+    **Its payoff is NOT demonstrated**: on the most favourable
+    fixture there is the biased render is four to six times noisier,
+    because a fixed bias moves a constant that the weight variance
+    swamps. That is an argument for going to stage 2, where the
+    weight is a prefix's own `∏p` with no window at all.
 11. **Stage 2 from the inverse walk's beam.** `reference_beam`
     already enumerates the tree with bounds and `∏p`; the
     forced-prefix sampler reads it. Where the walk has no inverse

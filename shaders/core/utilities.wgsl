@@ -53,6 +53,56 @@ fn select_transform_const(rand_val: f32) -> u32 {
     return NUM_TRANSFORMS - 1u;
 }
 
+{{#if IMPORTANCE_SAMPLING}}
+// The two selections above against the BIASED weights `q` -- stage 1
+// of docs/projects/flame-deep-zoom.md. Identical in shape; only the
+// weight source differs, because that is the whole of the bias: the
+// support is untouched (q is positive exactly where the weight is)
+// and only the density on it changes, which the deposited likelihood
+// ratio then corrects.
+fn select_transform_biased(rand_val: f32) -> u32 {
+    var cumulative = 0.0;
+    var total_weight = 0.0;
+
+    for (var i = 0u; i < NUM_TRANSFORMS; i++) {
+        total_weight += bias_weight(i);
+    }
+
+    let ttarget = rand_val * total_weight;
+
+    for (var i = 0u; i < NUM_TRANSFORMS; i++) {
+        cumulative += bias_weight(i);
+        if (ttarget <= cumulative) {
+            return i;
+        }
+    }
+
+    return NUM_TRANSFORMS - 1u;
+}
+
+fn select_transform_biased_xaos(rand_val: f32, prev_xform: u32) -> u32 {
+    var cumulative = 0.0;
+    var total_weight = 0.0;
+
+    let xaos_base = prev_xform * NUM_TRANSFORMS;
+
+    for (var i = 0u; i < NUM_TRANSFORMS; i++) {
+        total_weight += bias_weight(i) * xaos_weights[xaos_base + i];
+    }
+
+    let threshold = rand_val * total_weight;
+
+    for (var i = 0u; i < NUM_TRANSFORMS; i++) {
+        cumulative += bias_weight(i) * xaos_weights[xaos_base + i];
+        if (threshold <= cumulative) {
+            return i;
+        }
+    }
+
+    return NUM_TRANSFORMS - 1u;
+}
+{{/if}}
+
 // Select transform with xaos (chaos) weighting
 // Uses hard-coded NUM_TRANSFORMS for loop unrolling
 // prev_xform: Index of the transform that was just applied

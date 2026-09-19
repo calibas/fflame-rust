@@ -125,7 +125,10 @@ struct Params {
     shadow_center_z: f32,
     shadow_radius: f32,
     shadow_count: u32,
-    _pad_shadow0: u32,
+    // The biased-selection correction window `m`, carved from the
+    // first shadow pad so no offset moves. Mirror in
+    // src/gpu/buffers.rs. Read only under IMPORTANCE_SAMPLING.
+    importance_window: u32,
     _pad_shadow1: u32,
     _pad_shadow2: u32,
     shadow_dirs: array<vec4<f32>, 4>,
@@ -307,6 +310,55 @@ fn shadow_map_splat(p: vec3<f32>) {
 // Per-normal-transform attachment lists. Indexed by the normal's
 // xform_id (0..num_transforms). See AttachmentList struct above.
 @group(0) @binding(10) var<storage, read> attachments: array<AttachmentList>;
+{{#if IMPORTANCE_SAMPLING}}
+// Biased selection weights and their likelihood ratios -- stage 1 of
+// docs/projects/flame-deep-zoom.md. Two regions, N = num_transforms:
+//
+//   [0, N)            q[i]  -- the BIASED selection weight, bias × weight
+//   [N, N + N*N)      r[prev*N + i] = p(prev→i) / q(prev→i)
+//
+// The ratio is a matrix because under xaos the true and biased
+// probabilities are both row-conditional and their row normalizers
+// differ; without xaos every row is the same and the walk reads row
+// zero, which is why the shader needs no `prev` in that arm.
+//
+// Declared only under the flag: with it off this file is the text it
+// has always been, which is what `importance_sampling_off_is_byte_identical`
+// asserts.
+@group(0) @binding(11) var<storage, read> bias_table: array<f32>;
+
+// The biased weight of transform `i`, falling back to the true weight
+// if the table is short (a flame edited between upload and dispatch).
+fn bias_weight(i: u32) -> f32 {
+    if (i < arrayLength(&bias_table)) {
+        return bias_table[i];
+    }
+    return transforms[i].weight;
+}
+
+// The deposit's SCALE, rounded stochastically to the histogram's u32
+// resolution: `floor(v)`, plus one with probability `fract(v)`.
+//
+// Unbiased -- its expectation is `v` exactly -- where the shipped
+// path's `u32(v)` truncates and loses every deposit under one. A
+// corrected weight is routinely under one, so truncating would throw
+// away exactly the samples the correction exists to keep.
+fn is_deposit(v: f32, u: f32) -> u32 {
+    let fl = floor(v);
+    return u32(fl + select(0.0, 1.0, u < (v - fl)));
+}
+
+// `p(prev→i) / q(prev→i)`, the factor this choice contributes to the
+// window's likelihood ratio.
+fn bias_ratio(prev: u32, i: u32) -> f32 {
+    let n = NUM_TRANSFORMS;
+    let idx = n + prev * n + i;
+    if (idx < arrayLength(&bias_table)) {
+        return bias_table[idx];
+    }
+    return 1.0;
+}
+{{/if}}
 
 // Per-subflame metadata: where each subflame's normals + finals live
 // inside the *unified* `transforms[]` buffer. Indexed by
