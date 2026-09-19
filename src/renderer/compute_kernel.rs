@@ -3272,34 +3272,45 @@ impl FlameRenderer {
     /// reaches it, and the enumeration is a property of the view
     /// above all.
     ///
-    /// Skipped entirely when the fingerprint is unchanged, which is
-    /// almost every frame of an accumulating render.
-    pub fn sync_cylinders(&mut self, device: &Device, queue: &Queue, config: &FractalConfig) {
+    /// Returns **true when the caller must follow with a full
+    /// `load_config`**, which happens only when targeting starts,
+    /// stops, or crosses between the composed and replayed arms —
+    /// the three cases that change the SHADER.
+    ///
+    /// It does not rebuild the shader itself, and that restraint is
+    /// the whole correction here. An earlier version called
+    /// `ensure_shaders_current_with_config` directly, which looks
+    /// harmless and is not: `load_config` compiles against the
+    /// STICKY-ADOPTED flame (the retained superset, carried at weight
+    /// zero) and packs the variation-params buffer against that same
+    /// local index map. Rebuilding from the raw config produced a
+    /// shader whose variation indices did not match the buffer, so
+    /// `get_param` read the wrong slots and every flame collapsed to
+    /// a single pixel at the origin — on load, and again on every pan,
+    /// with a toggle of anything that forced a real reload appearing
+    /// to "fix" it.
+    ///
+    /// Only `load_config` knows how to do all of that consistently,
+    /// so this asks for one rather than half-doing it.
+    #[must_use]
+    pub fn sync_cylinders(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        config: &FractalConfig,
+    ) -> bool {
         let key = self.enumeration_key(config);
         if self.cylinder_key == Some(key) {
-            return;
+            return false;
         }
         self.cylinder_key = Some(key);
+        // `composable` and not just `is_some`: the two arms read
+        // different buffer layouts, so crossing between them needs the
+        // rebuild exactly as starting or stopping does.
+        let before = self.cylinders.as_ref().map(|c| c.composable);
         self.update_cylinders(device, queue, config);
-        // Starting or stopping targeting, or crossing between the
-        // composed and replayed arms, changes the SHADER. Rebuilding
-        // here rather than leaving it to the next config load is the
-        // whole point: otherwise the buffer and the kernel disagree
-        // about the layout, which renders an empty frame.
-        let path_features_enabled = config.color_mode == ColorMode::PathMap
-            || !self.path_filters.is_empty();
-        if self.pipelines.ensure_shaders_current_with_config(
-            device,
-            config,
-            path_features_enabled,
-            self.census,
-            self.cylinders.is_some(),
-            self.cylinders.as_ref().is_some_and(|c| !c.composable),
-        ) {
-            self.compute_bind_group =
-                self.pipelines.create_compute_bind_group(device, &self.buffers);
-            self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
-        }
+        let after = self.cylinders.as_ref().map(|c| c.composable);
+        before != after
     }
 
     /// Enumerate and upload the cylinders that reach this view, or
