@@ -1288,6 +1288,13 @@ pub struct FlameBuffers {
     pub bias_buffer: Option<Buffer>,
     pub dummy_bias_buffer: Buffer,
 
+    // The enumerated cylinders (docs/projects/flame-deep-zoom.md
+    // stage 2), packed by `scene::cylinder::pack`. None when the view
+    // is not being targeted, which is the common case -- targeting is
+    // for depth and a shallow view has nothing to target.
+    pub cylinder_buffer: Option<Buffer>,
+    pub dummy_cylinder_buffer: Buffer,
+
     // Analytic-blur per-transform mean-splat buffers, allocated at LOW
     // resolution (`ceil(W/D)×ceil(H/D) × 4 × u32 × slots`). The chaos game
     // splats means straight to low res (mean ÷ D) — there is no full-res blur
@@ -1380,6 +1387,7 @@ impl FlameBuffers {
         if let Some(b) = &self.path_filter_buffer { b.destroy(); }
         if let Some(b) = &self.xaos_buffer { b.destroy(); }
         if let Some(b) = &self.bias_buffer { b.destroy(); }
+        if let Some(b) = &self.cylinder_buffer { b.destroy(); }
         if let Some(b) = &self.accum_depth_buffer { b.destroy(); }
         if let Some(b) = &self.blur_splat_buffer { b.destroy(); }
         if let Some(b) = &self.blur_convolved_buffer { b.destroy(); }
@@ -1398,6 +1406,7 @@ impl FlameBuffers {
         self.dummy_filter_buffer.destroy();
         self.dummy_xaos_buffer.destroy();
         self.dummy_bias_buffer.destroy();
+        self.dummy_cylinder_buffer.destroy();
         self.dummy_blur_buffer.destroy();
         self.blur_kernel_weights_buffer.destroy();
         self.blur_convolve_params_buffer.destroy();
@@ -1673,6 +1682,12 @@ impl FlameBuffers {
 
         // Dummy xaos buffer for binding when xaos is disabled
         // Minimum size: 4 bytes (single f32)
+        let dummy_cylinder_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Dummy Cylinder Buffer"),
+            size: 48,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let dummy_bias_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Dummy Importance Bias Buffer"),
             size: 4,
@@ -1878,6 +1893,8 @@ impl FlameBuffers {
             xaos_buffer: None,  // Created on demand when xaos is used
             bias_buffer: None,  // Created on demand when the bias is enabled
             dummy_bias_buffer,
+            cylinder_buffer: None,  // Created on demand when a view is targeted
+            dummy_cylinder_buffer,
             dummy_xaos_buffer,
             blur_splat_buffer: None,  // Created on demand when analytic blur is active
             blur_convolved_buffer: None,
@@ -2731,6 +2748,47 @@ impl FlameBuffers {
 
     /// Update xaos weights from flame
     /// Only writes if xaos buffer is enabled
+    /// The cylinder table binding: the real buffer when a view is
+    /// targeted, the dummy otherwise.
+    pub fn cylinder_binding(&self) -> &Buffer {
+        self.cylinder_buffer.as_ref().unwrap_or(&self.dummy_cylinder_buffer)
+    }
+
+    /// Upload a packed cylinder table, or drop it. Returns true when
+    /// the bind groups need rebuilding.
+    pub fn update_cylinders(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        packed: Option<&[f32]>,
+    ) -> bool {
+        let Some(table) = packed.filter(|t| !t.is_empty()) else {
+            if let Some(b) = self.cylinder_buffer.take() {
+                b.destroy();
+                return true;
+            }
+            return false;
+        };
+        let want = (table.len() * std::mem::size_of::<f32>()) as u64;
+        let mut rebuilt = false;
+        if !self.cylinder_buffer.as_ref().is_some_and(|b| b.size() >= want) {
+            if let Some(b) = self.cylinder_buffer.take() {
+                b.destroy();
+            }
+            self.cylinder_buffer = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Cylinder Buffer"),
+                size: want.max(48),
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            rebuilt = true;
+        }
+        if let Some(b) = &self.cylinder_buffer {
+            queue.write_buffer(b, 0, bytemuck::cast_slice(table));
+        }
+        rebuilt
+    }
+
     /// The bias table binding: the real buffer when the feature is
     /// on, the dummy otherwise.
     pub fn bias_binding(&self) -> &Buffer {

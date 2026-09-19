@@ -125,6 +125,10 @@ pub struct HighResExporter {
     // export must render what the app renders -- the same table,
     // from the same `build_table`.
     bias_buffer: Buffer,
+    // Enumerated cylinders. Always allocated so the layout is
+    // uniform; the tiled exporter renders many views and the
+    // enumeration is per view, so it does not target yet.
+    cylinder_buffer: Buffer,
     attachments_buffer: Buffer,  // Per-normal Linked + Final attachment lists
     subflame_metadata_buffer: Buffer,  // binding 12: per-subflame metadata
     // Dummy path-tracking buffers — the unified shader's `header.wgsl`
@@ -527,6 +531,13 @@ impl HighResExporter {
         });
         queue.write_buffer(&bias_buffer, 0, bytemuck::cast_slice(&bias_table));
 
+        let cylinder_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Export Cylinder Buffer"),
+            size: 48,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         // Per-normal attachment lists (Linked + Final chains). The GPU
         // struct stride matches the per-flame `attachment_cap` — must
         // agree with the value the shader was built with.
@@ -910,6 +921,18 @@ impl HighResExporter {
                 // binding 10: per-normal attachment lists (Linked + Final chains)
                 BindGroupLayoutEntry {
                     binding: 10,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 15: enumerated cylinders. The shader
+                // declares it only under CYLINDER_TARGETING.
+                BindGroupLayoutEntry {
+                    binding: 15,
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::Buffer {
                         ty: BufferBindingType::Storage { read_only: true },
@@ -1419,6 +1442,7 @@ impl HighResExporter {
             variation_params_buffer,
             xaos_buffer,
             bias_buffer,
+            cylinder_buffer,
             attachments_buffer,
             subflame_metadata_buffer,
             dummy_path_buffer,
@@ -1577,6 +1601,10 @@ impl HighResExporter {
                 BindGroupEntry {
                     binding: 11,
                     resource: self.bias_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 15,
+                    resource: self.cylinder_buffer.as_entire_binding(),
                 },
                 BindGroupEntry {
                     binding: 12,

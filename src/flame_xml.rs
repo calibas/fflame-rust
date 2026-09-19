@@ -551,6 +551,7 @@ fn parse_flame_element(
         gamma_threshold,  // Use parsed Apophysis gamma_threshold
         deterministic_rng: false,
         importance: crate::config::fractal_config::ImportanceSettings::default(),
+        cylinder_targeting: false,
         blend_factor: 0.1,
         use_dynamic_blend: true,
         alpha_blend_low: crate::config::defaults::DEFAULT_ALPHA_BLEND_LOW,

@@ -360,6 +360,49 @@ fn bias_ratio(prev: u32, i: u32) -> f32 {
 }
 {{/if}}
 
+{{#if CYLINDER_TARGETING}}
+// The enumerated cylinders -- stage 2 of
+// docs/projects/flame-deep-zoom.md. Twelve floats a word, packed by
+// `scene::cylinder::pack`:
+//
+//   0..4  the composed 2x2      4..6  its translation
+//   6..8  the colour fold H, G  8     the cumulative probability
+//
+// A word is ONE affine because every map here is affine, so forcing a
+// prefix of eighteen transforms costs one matrix multiply rather than
+// eighteen. The colour folds the same way: flam3's `c <- c*h + g` per
+// transform is an affine map of `c`, so a whole word is `c <- c*H + G`.
+@group(0) @binding(15) var<storage, read> cylinders: array<f32>;
+
+fn ct_count() -> u32 {
+    return arrayLength(&cylinders) / 12u;
+}
+
+// The word a uniform draw selects, by binary search on the cumulative
+// probability -- which is `p_a / P(A_V)`, so the draw is exactly the
+// `pi(a) = p_a / P(A_V)` the estimator wants.
+fn ct_pick(u: f32) -> u32 {
+    let n = ct_count();
+    if (n <= 1u) {
+        return 0u;
+    }
+    var lo = 0u;
+    var hi = n - 1u;
+    loop {
+        if (lo >= hi) {
+            break;
+        }
+        let mid = (lo + hi) / 2u;
+        if (u <= cylinders[mid * 12u + 8u]) {
+            hi = mid;
+        } else {
+            lo = mid + 1u;
+        }
+    }
+    return lo;
+}
+{{/if}}
+
 // Per-subflame metadata: where each subflame's normals + finals live
 // inside the *unified* `transforms[]` buffer. Indexed by
 // `subflame_id` (the variation parameter). Pre-v2 there was a

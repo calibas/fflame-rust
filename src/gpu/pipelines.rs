@@ -160,6 +160,19 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
+                // Enumerated cylinders (docs/projects/flame-deep-zoom.md
+                // stage 2). Declared by the shader only under
+                // CYLINDER_TARGETING; the layout always carries it.
+                BindGroupLayoutEntry {
+                    binding: 15,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
                 // Biased selection weights + likelihood ratios
                 // (docs/projects/flame-deep-zoom.md stage 1). Slot 11
                 // was the legacy subflame_transforms buffer, removed in
@@ -674,11 +687,18 @@ impl FlamePipelines {
         config: &crate::config::FractalConfig,
         path_features_enabled: bool,
         census: bool,
+        cylinder_targeting: bool,
     ) -> bool {
         // Census is renderer state, not config state — a .fflame cannot
         // ask to be instrumented. Threaded from FlameRenderer::census.
         let mut constants = crate::shader_cache::ShaderCache::constants_from_config(config);
         constants.census = census;
+        // Targeting is a property of the VIEW as well as the flame —
+        // the enumeration has to succeed AND be worth it — so the
+        // renderer decides and threads the verdict, exactly as it
+        // does for the census. `constants_from_config` cannot know:
+        // it has no frame size and does not run the enumeration.
+        constants.cylinder_targeting = cylinder_targeting;
         self.shader_cache.ensure_current_full(
             device,
             &self.compute_bind_group_layout,
@@ -782,6 +802,11 @@ impl FlamePipelines {
                 BindGroupEntry {
                     binding: 10,
                     resource: buffers.attachments_buffer.as_entire_binding(),
+                },
+                // Cylinder table (real or dummy).
+                BindGroupEntry {
+                    binding: 15,
+                    resource: buffers.cylinder_binding().as_entire_binding(),
                 },
                 // Biased selection table (real or dummy).
                 BindGroupEntry {

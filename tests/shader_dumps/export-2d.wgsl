@@ -258,6 +258,8 @@ struct SampleCounter {
 @group(0) @binding(10) var<storage, read> attachments: array<AttachmentList>;
 
 
+
+
 // Per-subflame metadata: where each subflame's normals + finals live
 // inside the *unified* `transforms[]` buffer. Indexed by
 // `subflame_id` (the variation parameter). Pre-v2 there was a
@@ -1108,6 +1110,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 
 
+
     // Per-thread state initialization for stateful variations that need
     // values beyond zero-fill (var<private> thread_state is already zeroed
     // by WGSL spec; this block runs the wgsl_state_init fragments declared
@@ -1246,6 +1249,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             fuse = fuse - 1u;
         } else {
 
+
             // No attachments: skip the chain — plot the post-Linked
             // (== post-Normal) point directly.
             let final_pos = current;
@@ -1359,6 +1363,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
             }
             }  // end for (sym_k = 0..sym_count) — post-symmetry loop
+
 
         }
 
