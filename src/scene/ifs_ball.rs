@@ -245,8 +245,21 @@ fn one(
     // A bound written by hand first: there are five, they are tighter
     // than anything derived, and they are the reference the evaluator
     // is checked against.
+    //
+    // **A hand bound that DECLINES falls through rather than ending
+    // the search.** Each of the five answers only where its
+    // derivation holds -- `julian`'s wants a disc clear of the
+    // origin, because the map's Lipschitz constant blows up there --
+    // and returning `Declines` from here treated "my proof does not
+    // cover this disc" as "nothing can bound this", which is a
+    // different claim. Two hand-picked zoom flames were refused with
+    // "`julian` has no bound at these parameters" while the evaluator
+    // sitting right below would have answered for most of the discs
+    // the enumeration actually asks about.
     if let Some(def) = bound::for_name(name) {
-        return (def.planar)(&pf, w, b).ok_or_else(|| NoBall::Declines(name.to_string()));
+        if let Some(out) = (def.planar)(&pf, w, b) {
+            return Ok(out);
+        }
     }
 
     // Otherwise derive one from the variation's shipped WGSL
@@ -291,9 +304,14 @@ fn one(
         };
     }
     // The web build has no WGSL front end to parse with, so the hand
-    // bounds are all it has. See `variations::mod`.
+    // bounds are all it has -- and there a decline really is the end
+    // of the search. See `variations::mod`.
     #[cfg(target_arch = "wasm32")]
-    Err(NoBall::Unbounded(name.to_string()))
+    Err(if bound::for_name(name).is_some() {
+        NoBall::Declines(name.to_string())
+    } else {
+        NoBall::Unbounded(name.to_string())
+    })
 }
 
 #[cfg(test)]

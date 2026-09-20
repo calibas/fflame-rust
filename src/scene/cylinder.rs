@@ -529,13 +529,30 @@ fn invariant_ball(
     // point plus a little slop. So the chaos game runs through the
     // bounds themselves, round-robin rather than at random, and lands
     // wherever the maps are pulling.
-    let mut seed = [0.0f64, 0.0];
-    for k in 0..64 {
-        match bounders[k % bounders.len()].apply(Ball::new(seed, 0.0)) {
-            Ok(img) if img.c[0].is_finite() && img.c[1].is_finite() => seed = img.c,
-            _ => break,
+    // **Several starts, because the origin is exactly where the
+    // inversive family is undefined.** `spherical` is `p/|p|²` and
+    // `julian` with a negative `dist` is `|p|^(-1/2)`; both are
+    // unbounded at zero, so a walk that begins there dies on its
+    // first step and the flame is refused for want of a starting
+    // point rather than for anything about its attractor.
+    let mut seeds: Vec<[f64; 2]> = Vec::new();
+    for start in [[0.0f64, 0.0], [1.0, 0.0], [0.6, -0.8], [-0.35, 0.42], [2.5, 1.5]] {
+        let mut p = start;
+        let mut ok = true;
+        for k in 0..64 {
+            match bounders[k % bounders.len()].apply(Ball::new(p, 0.0)) {
+                Ok(img) if img.c[0].is_finite() && img.c[1].is_finite() => p = img.c,
+                _ => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if ok {
+            seeds.push(p);
         }
     }
+    seeds.push([0.0, 0.0]);
 
     // Grow a disc at that centre until it holds its own images.
     //
@@ -546,7 +563,7 @@ fn invariant_ball(
     // when `s` is close to 1 -- and every candidate is CHECKED before
     // it is returned, so a bad extrapolation costs an iteration
     // rather than correctness.
-    for centre in [seed, [0.0, 0.0]] {
+    for centre in seeds {
         let mut r = 0.0f64;
         let mut prev_step = f64::INFINITY;
         for _ in 0..64 {
@@ -2316,6 +2333,285 @@ mod tests {
         assert!(r < 3.0, "radius {r} is far larger than the attractor");
     }
 
+    /// **Does a word's disc keep shrinking all the way down?**
+    ///
+    /// The enumeration cuts a word when its disc fits the view, so
+    /// everything depends on discs shrinking at roughly the map's own
+    /// contraction rate. An exact affine does: `affine_ball` uses
+    /// `sigma_max`, which is the truth. A DERIVED bound does not have
+    /// to — interval arithmetic over-estimates, and if it
+    /// over-estimated by a constant factor per level the error would
+    /// compound geometrically and a deep word's disc would be
+    /// hundreds of times too big. That is exactly what "the view
+    /// straddles too many pieces" would look like from the outside.
+    ///
+    /// So: walk one word down and print the ratio each level.
+    #[test]
+    #[ignore = "prints a measurement"]
+    fn does_a_derived_disc_keep_shrinking() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+
+        let build = |extra: f32| {
+            let mut f = crate::scene::transforms::Flame::new();
+            f.transforms.clear();
+            for (e, g) in [(0.0f32, 0.0f32), (0.5, 0.0), (0.25, 0.5)] {
+                let mut t = Transform::default();
+                t.a = 0.5;
+                t.d = 0.5;
+                t.e = e;
+                t.f = g;
+                t.weight = 1.0;
+                t.variations.clear();
+                t.variation_order.clear();
+                t.set_variation("linear", 1.0);
+                if extra != 0.0 {
+                    t.set_variation("sinusoidal", extra);
+                }
+                f.transforms.push(t);
+            }
+            f
+        };
+
+        for (label, extra) in [("affine only", 0.0f32), ("+ sinusoidal", 0.05)] {
+            let flame = build(extra);
+            let bounders: Vec<_> = flame
+                .transforms
+                .iter()
+                .map(|t| crate::scene::ifs_ball::Bounder::new(t, reg).unwrap())
+                .collect();
+            let (c, r) = invariant_ball(&flame, reg).expect("root");
+            println!();
+            println!("  {label}: root r = {r:.6}");
+            let mut b = Ball::new(c, r);
+            let mut prev = b.r;
+            for depth in 1..=24 {
+                // The word that a deep zoom actually selects: the same
+                // symbol over and over, toward one fixed point.
+                let Ok(next) = bounders[0].apply(b) else {
+                    println!("    depth {depth:>2}: refused");
+                    break;
+                };
+                b = next;
+                if depth <= 6 || depth % 6 == 0 {
+                    println!(
+                        "    depth {depth:>2}:  r = {:>12.3e}   ratio {:.4}",
+                        b.r,
+                        b.r / prev
+                    );
+                }
+                prev = b.r;
+            }
+        }
+    }
+
+    /// **Why each flame in a zoom corpus can or cannot be targeted.**
+    ///
+    /// Reads `output/flame-zoom/*.fflame` — hand-picked flames people
+    /// actually want to zoom, as opposed to randomiser output — and
+    /// prints, per flame, the two numbers that decide it:
+    ///
+    /// * the CONTRACTION of each map, measured on the root ball, and
+    ///   the depth the slowest one needs to reach a deep view. The
+    ///   enumeration caps at `MAX_DEPTH`, so a map at 0.95 cannot
+    ///   reach 1e-6 however patient it is.
+    ///
+    /// * the SIMILARITY DIMENSION `D` solving `Σ sᵢᴰ = 1`. Above 2 the
+    ///   pieces must overlap — the attractor fills area instead of
+    ///   being sparse — and the number of cylinders meeting a small
+    ///   view GROWS as the view shrinks. That is `TooManyWords`, and
+    ///   no larger cap fixes it.
+    #[test]
+    #[ignore = "reads output/flame-zoom"]
+    fn why_each_zoom_flame_does_or_does_not_target() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let dir = std::path::Path::new("output/flame-zoom");
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            println!("  no output/flame-zoom — nothing to measure");
+            return;
+        };
+        let mut files: Vec<_> = rd.flatten().map(|e| e.path()).collect();
+        files.sort();
+
+        for path in files {
+            if path.extension().and_then(|x| x.to_str()) != Some("fflame") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let Ok(cfg) = serde_json::from_str::<crate::config::FractalConfig>(&text) else {
+                println!("  {:?}: not a config", path.file_stem().unwrap_or_default());
+                continue;
+            };
+            let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+            println!();
+            println!("  == {name}   zoom {:.4e}", cfg.zoom);
+
+            // Contraction of each map, on whatever root we can find.
+            let root = invariant_ball(&cfg.flame, reg);
+            let mut sigmas: Vec<f64> = Vec::new();
+            match &root {
+                Ok((c, r)) => {
+                    println!("     root ball  c=[{:.4}, {:.4}]  r={:.5}", c[0], c[1], r);
+                    for (i, t) in cfg.flame.transforms.iter().enumerate() {
+                        if t.weight <= 0.0 {
+                            continue;
+                        }
+                        match crate::scene::ifs_ball::transform_ball_2d(t, reg, Ball::new(*c, *r)) {
+                            Ok(img) => {
+                                let s = img.r / r;
+                                sigmas.push(s);
+                                let vars: Vec<&str> =
+                                    t.ordered_variation_names(reg).iter().map(|_| "").collect();
+                                let _ = vars;
+                                println!(
+                                    "     xform {i}  w={:.3}  contraction {:.4}{}",
+                                    t.weight,
+                                    s,
+                                    if s >= 1.0 { "   NOT CONTRACTIVE" } else { "" }
+                                );
+                            }
+                            Err(why) => println!("     xform {i}  w={:.3}  {why}", t.weight),
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("     no root ball: {e:?}");
+                    // How close to the origin does the orbit go? A
+                    // disc holding the attractor must hold every point
+                    // the orbit visits, so if this gets small then
+                    // every candidate disc contains the origin -- and
+                    // the origin is exactly where the inversive
+                    // bodies are unbounded. That is the disc being
+                    // the wrong SHAPE, not the flame being wild.
+                    let bs: Vec<_> = cfg
+                        .flame
+                        .transforms
+                        .iter()
+                        .filter(|t| t.weight > 0.0)
+                        .filter_map(|t| crate::scene::ifs_ball::Bounder::new(t, reg).ok())
+                        .collect();
+                    if !bs.is_empty() {
+                        let (mut lo, mut hi) = (f64::INFINITY, 0.0f64);
+                        let mut p = [1.0f64, 0.0];
+                        let mut steps = 0;
+                        for k in 0..4000 {
+                            match bs[k % bs.len()].apply(Ball::new(p, 0.0)) {
+                                Ok(img) if img.c[0].is_finite() && img.c[1].is_finite() => {
+                                    p = img.c;
+                                    let m = (p[0] * p[0] + p[1] * p[1]).sqrt();
+                                    if k > 32 {
+                                        lo = lo.min(m);
+                                        hi = hi.max(m);
+                                    }
+                                    steps += 1;
+                                }
+                                _ => break,
+                            }
+                        }
+                        println!(
+                            "     orbit over {steps} steps: |p| in [{lo:.2e}, {hi:.2e}]"
+                        );
+                    }
+                    for (i, t) in cfg.flame.transforms.iter().enumerate() {
+                        if t.weight <= 0.0 {
+                            continue;
+                        }
+                        if let Err(why) =
+                            crate::scene::ifs_ball::transform_ball_2d(t, reg, Ball::new([0.0, 0.0], 1.0))
+                        {
+                            println!("     xform {i}  {why}");
+                        }
+                    }
+                }
+            }
+
+            if !sigmas.is_empty() && sigmas.iter().all(|s| *s < 1.0) {
+                // Σ sᵢᴰ = 1, by bisection.
+                let (mut lo, mut hi) = (0.01f64, 80.0f64);
+                for _ in 0..200 {
+                    let mid = 0.5 * (lo + hi);
+                    let v: f64 = sigmas.iter().map(|s| s.powf(mid)).sum();
+                    if v > 1.0 {
+                        lo = mid;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                let slowest = sigmas.iter().cloned().fold(0.0f64, f64::max);
+                let depth = (1e-6f64).ln() / slowest.ln();
+                println!(
+                    "     dimension D = {lo:.3}{}   slowest {slowest:.4} needs depth {depth:.0} for a 1e-6 view (cap {MAX_DEPTH})",
+                    if lo > 2.0 { " OVERLAPS (>2)" } else { "" }
+                );
+            }
+
+            // **Is a deep refusal about the flame or about the spot?**
+            //
+            // `ViewIsEmpty` at a deeper zoom can mean two very
+            // different things: the enumeration broke, or the point
+            // the view is centred on genuinely has nothing at that
+            // scale -- a fractal is mostly holes, and zooming 1000x
+            // further into a point that was covered before may land
+            // in one. Re-ask centred on a point KNOWN to be on the
+            // attractor, found by running the chaos game through the
+            // bounds, and the two come apart.
+            if let Ok((rc, rr)) = &root {
+                let mut seed = *rc;
+                let bs: Vec<_> = cfg
+                    .flame
+                    .transforms
+                    .iter()
+                    .filter(|t| t.weight > 0.0)
+                    .filter_map(|t| crate::scene::ifs_ball::Bounder::new(t, reg).ok())
+                    .collect();
+                for k in 0..128 {
+                    if let Ok(img) = bs[k % bs.len()].apply(Ball::new(seed, 0.0)) {
+                        seed = img.c;
+                    }
+                }
+                let _ = rr;
+                for mult in [1e3f64, 1e9, 1e15] {
+                    let view = View::of(
+                        (cfg.zoom.max(1e-6) as f64) * mult,
+                        seed,
+                        512,
+                        512,
+                    );
+                    match Cylinders::plan(&cfg.flame, reg, view) {
+                        Ok(c) => println!(
+                            "     ON-SET x{mult:<6.0e} OK   {:>5} words, depth {}, speedup {:.3e}",
+                            c.words.len(),
+                            c.depth,
+                            c.speedup()
+                        ),
+                        Err(e) => println!("     ON-SET x{mult:<6.0e} {e:?}"),
+                    }
+                }
+            }
+
+            // And what the enumeration actually says, at the flame's
+            // own framing and deeper.
+            for mult in [1.0f64, 1e3, 1e6] {
+                let view = View::of(
+                    (cfg.zoom.max(1e-6) as f64) * mult,
+                    [cfg.pan_x, cfg.pan_y],
+                    512,
+                    512,
+                );
+                match Cylinders::plan(&cfg.flame, reg, view) {
+                    Ok(c) => println!(
+                        "     zoom x{mult:<6.0e} OK   {:>5} words, depth {}, speedup {:.3e}",
+                        c.words.len(),
+                        c.depth,
+                        c.speedup()
+                    ),
+                    Err(e) => println!("     zoom x{mult:<6.0e} {e:?}"),
+                }
+            }
+        }
+    }
+
     /// **What one `plan` costs, and where the time goes.**
     ///
     /// `plan` runs on every pan and every zoom step, so its cost is
@@ -2535,6 +2831,7 @@ mod tests {
         let mut paying = 0usize;
         let mut enumerated = 0usize;
         let mut why: BTreeMap<String, usize> = BTreeMap::new();
+        let mut named: BTreeMap<String, Vec<String>> = BTreeMap::new();
         let mut best: Vec<(f64, String)> = Vec::new();
 
         for path in &files {
@@ -2560,6 +2857,15 @@ mod tests {
                         Err(e) => last = format!("{e:?}"),
                     }
                 }
+                println!(
+                    "    {:<34} {:>3} xf  {}",
+                    stem,
+                    cfg.flame.transforms.len(),
+                    match &found {
+                        Some(sp) => format!("ENUMERATES, speedup {sp:.3e}"),
+                        None => last.split(['{', '(']).next().unwrap_or("?").trim().to_string(),
+                    }
+                );
                 match found {
                     Some(s) => {
                         enumerated += 1;
@@ -2570,7 +2876,8 @@ mod tests {
                     }
                     None => {
                         let k = last.split(['{', '(']).next().unwrap_or("?").trim().to_string();
-                        *why.entry(k).or_default() += 1;
+                        *why.entry(k.clone()).or_default() += 1;
+                        named.entry(k).or_default().push(stem.clone());
                     }
                 }
             }
@@ -2585,7 +2892,8 @@ mod tests {
         let mut v: Vec<_> = why.into_iter().collect();
         v.sort_by_key(|(k, n)| (std::cmp::Reverse(*n), k.clone()));
         for (k, n) in &v {
-            println!("    {n:>4}  {k}");
+            let who = named.get(k).map(|w| w.join(", ")).unwrap_or_default();
+            println!("    {n:>4}  {k:<18}  {who}");
         }
         best.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
         println!();
