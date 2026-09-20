@@ -332,41 +332,59 @@ impl std::fmt::Display for Refusal {
     }
 }
 
-/// A cached, parsed probe module plus the handle of each variation
-/// body inside it.
-struct Modules {
-    modules: Vec<naga::Module>,
-    /// variation name -> (module index, function handle)
-    index: std::collections::HashMap<String, (usize, naga::Handle<naga::Function>)>,
+/// A parsed probe module plus the handle of one variation's body
+/// inside it.
+pub struct Body {
+    module: naga::Module,
+    handle: naga::Handle<naga::Function>,
 }
 
-static MODULES: std::sync::OnceLock<Modules> = std::sync::OnceLock::new();
-
-/// Parse every shipped variation's body once.
+/// **Parsed on first use, one variation at a time.**
 ///
-/// Batched through the probe's own planner, so the module each body
-/// lands in is the one the GPU would compile — helpers and all.
-fn modules() -> &'static Modules {
-    MODULES.get_or_init(|| {
-        use crate::probe::batch::{builtin_targets, plan_batches};
-        let mut modules = Vec::new();
-        let mut index = std::collections::HashMap::new();
-        for batch in plan_batches(&builtin_targets()) {
-            let src = crate::probe::shader::build(&batch, false);
-            let Ok(module) = naga::front::wgsl::parse_str(&src) else {
-                continue;
-            };
-            let mi = modules.len();
-            for (h, f) in module.functions.iter() {
-                let Some(name) = f.name.as_deref() else { continue };
-                if let Some(v) = name.strip_prefix("variation_") {
-                    index.insert(v.to_string(), (mi, h));
-                }
-            }
-            modules.push(module);
-        }
-        Modules { modules, index }
-    })
+/// This used to build and parse EVERY shipped variation up front,
+/// batched through the probe's own planner so each body landed in the
+/// module the GPU would compile. Correct, and it cost 201 ms on the
+/// first call — paid on the UI thread, the first time a pan engaged
+/// targeting, to bound the two or three variations the flame
+/// actually uses.
+///
+/// A batch of one builds the same way, so the body still sees its
+/// helpers; it is simply the only one in the module. A flame pays for
+/// its own variations and nothing else, and the corpus-wide tests pay
+/// the same total as before, spread out.
+static MODULES: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<String, Option<&'static Body>>>,
+> = std::sync::OnceLock::new();
+
+fn body_for(name: &str) -> Option<&'static Body> {
+    let cache = MODULES.get_or_init(Default::default);
+    if let Some(hit) = cache.lock().ok()?.get(name) {
+        return *hit;
+    }
+
+    let built = (|| {
+        use crate::probe::batch::{builtin_targets, Batch};
+        let target = builtin_targets().into_iter().find(|t| t.name == name)?;
+        let slots = target.slots;
+        let batch = Batch { targets: vec![target], slots };
+        let src = crate::probe::shader::build(&batch, false);
+        let module = naga::front::wgsl::parse_str(&src).ok()?;
+        let want = format!("variation_{name}");
+        let handle = module
+            .functions
+            .iter()
+            .find(|(_, f)| f.name.as_deref() == Some(want.as_str()))
+            .map(|(h, _)| h)?;
+        // Leaked deliberately: at most one per shipped variation, each
+        // parsed once, and the evaluator hands out `&'static` borrows
+        // of it.
+        Some(&*Box::leak(Box::new(Body { module, handle })))
+    })();
+
+    if let Ok(mut c) = cache.lock() {
+        c.insert(name.to_string(), built);
+    }
+    built
 }
 
 /// Every variation's `wgsl_init`, parsed on its own.
@@ -478,10 +496,9 @@ fn derive_box(
     weight: f64,
     input: [Interval; 2],
 ) -> Result<[Interval; 2], Refusal> {
-    let m = modules();
-    let &(mi, handle) = m.index.get(name).ok_or(Refusal::NoBody)?;
-    let module = &m.modules[mi];
-    let func = &module.functions[handle];
+    let body = body_for(name).ok_or(Refusal::NoBody)?;
+    let module = &body.module;
+    let func = &module.functions[body.handle];
 
     // A 2D body may still read `p.z` through a lifted vec3 in some
     // helper; the plane has no z, so it is exactly zero.

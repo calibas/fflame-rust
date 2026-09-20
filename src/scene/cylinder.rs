@@ -276,6 +276,22 @@ impl Cylinders {
             return Err(NoCylinders::Empty);
         }
 
+        // **One bounder per transform, built once.**
+        //
+        // Everything below pushes discs through these thousands of
+        // times; resolving the variation names per disc made a deep
+        // view cost tens of milliseconds of pure name lookup. See
+        // `ifs_ball::Bounder`.
+        let mut bounders = Vec::with_capacity(n);
+        for (i, t) in flame.transforms.iter().enumerate() {
+            match crate::scene::ifs_ball::Bounder::new(t, registry) {
+                Ok(b) => bounders.push(b),
+                Err(why) => {
+                    return Err(NoCylinders::Unbounded { index: i, why: why.to_string() })
+                }
+            }
+        }
+
         // The ball every map sends into itself: the enumeration's
         // root, and what `S_a(B)` is the image of.
         let (root_c, root_r) = invariant_ball(flame, registry)?;
@@ -288,12 +304,9 @@ impl Cylinders {
             if weights[i] <= 0.0 {
                 continue;
             }
-            let img = crate::scene::ifs_ball::transform_ball_2d(
-                t,
-                registry,
-                Ball::new(root_c, root_r),
-            )
-            .map_err(|why| NoCylinders::Unbounded { index: i, why: why.to_string() })?;
+            let img = bounders[i]
+                .apply(Ball::new(root_c, root_r))
+                .map_err(|why| NoCylinders::Unbounded { index: i, why: why.to_string() })?;
             if !(img.r < root_r) {
                 return Err(NoCylinders::NotContractive(i));
             }
@@ -332,12 +345,7 @@ impl Cylinders {
         let disc_of = |word: &[u32]| -> Option<Ball> {
             let mut b = Ball::new(root_c, root_r);
             for &sym in word {
-                b = crate::scene::ifs_ball::transform_ball_2d(
-                    &flame.transforms[sym as usize],
-                    registry,
-                    b,
-                )
-                .ok()?;
+                b = bounders[sym as usize].apply(b).ok()?;
             }
             Some(b)
         };
@@ -467,37 +475,103 @@ fn invariant_ball(
     flame: &Flame,
     registry: &crate::variations::VariationRegistry,
 ) -> Result<([f64; 2], f64), NoCylinders> {
-    // Whether the BOUNDS keep this disc invariant. Asked even of
-    // `analyse_2d`'s own answer, which is the subtlety: that analysis
-    // understands the kernel variations through their `InverseDef`s,
-    // so it happily returns a ball for a flame whose forward bound is
-    // much cruder -- `spherical` near the origin, say. Its ball is
-    // then correct for the walks and NOT invariant under what the
-    // enumeration will actually push with, and taking it on trust
-    // produced a root that the very next contraction check rejected.
-    let invariant = |c: [f64; 2], r: f64| -> bool {
-        flame.transforms.iter().filter(|t| t.weight > 0.0).all(|t| {
-            match crate::scene::ifs_ball::transform_ball_2d(t, registry, Ball::new(c, r)) {
-                Ok(img) => {
-                    let d = ((img.c[0] - c[0]).powi(2) + (img.c[1] - c[1]).powi(2)).sqrt();
-                    d + img.r <= r
-                }
-                Err(_) => false,
-            }
-        })
+    let bounders: Vec<crate::scene::ifs_ball::Bounder> = flame
+        .transforms
+        .iter()
+        .filter(|t| t.weight > 0.0)
+        .filter_map(|t| crate::scene::ifs_ball::Bounder::new(t, registry).ok())
+        .collect();
+    if bounders.is_empty() {
+        return Err(NoCylinders::NoInvariantBall);
+    }
+
+    // How far the images of `disc(c, r)` reach from `c`. The disc is
+    // invariant exactly when this is `<= r`.
+    //
+    // Asked through the BOUNDS even of `analyse_2d`'s own answer,
+    // which is the subtlety: that analysis understands the kernel
+    // variations through their `InverseDef`s, so it happily returns a
+    // ball for a flame whose forward bound is much cruder --
+    // `spherical` near the origin, say. Its ball is then correct for
+    // the walks and NOT invariant under what the enumeration will
+    // actually push with, and taking it on trust produced a root that
+    // the very next contraction check rejected.
+    let reach = |c: [f64; 2], r: f64| -> Option<f64> {
+        let mut need = 0.0f64;
+        for b in &bounders {
+            let img = b.apply(Ball::new(c, r)).ok()?;
+            let d = ((img.c[0] - c[0]).powi(2) + (img.c[1] - c[1]).powi(2)).sqrt();
+            need = need.max(d + img.r);
+        }
+        need.is_finite().then_some(need)
     };
 
     if let Ok(ifs) = crate::scene::ifs_analysis::analyse_2d(flame, registry) {
-        if invariant(ifs.ball.centre, ifs.ball.radius) {
+        if reach(ifs.ball.centre, ifs.ball.radius).is_some_and(|n| n <= ifs.ball.radius) {
             return Ok((ifs.ball.centre, ifs.ball.radius));
         }
     }
-    let mut r = 0.125f64;
-    for _ in 0..40 {
-        if invariant([0.0, 0.0], r) {
-            return Ok(([0.0, 0.0], r));
+
+    // **A point on the attractor, to centre the search on.**
+    //
+    // The old fallback only ever tried discs around the ORIGIN,
+    // doubling the radius. For a flame whose attractor sits away from
+    // the origin that asks the wrong question: an origin-centred disc
+    // must be large enough to span the gap as well as the set, and a
+    // disc that large is far less likely to be invariant -- a
+    // nonlinear body that is gentle on the attractor can be wild out
+    // at the origin. Flames that were perfectly well behaved were
+    // refused with "no disc around the origin contains the
+    // attractor", which was true and beside the point.
+    //
+    // There is no CPU evaluator for a variation, but there is a
+    // bound, and a bound applied to a degenerate disc is the image
+    // point plus a little slop. So the chaos game runs through the
+    // bounds themselves, round-robin rather than at random, and lands
+    // wherever the maps are pulling.
+    let mut seed = [0.0f64, 0.0];
+    for k in 0..64 {
+        match bounders[k % bounders.len()].apply(Ball::new(seed, 0.0)) {
+            Ok(img) if img.c[0].is_finite() && img.c[1].is_finite() => seed = img.c,
+            _ => break,
         }
-        r *= 2.0;
+    }
+
+    // Grow a disc at that centre until it holds its own images.
+    //
+    // `reach` is increasing in `r`, and for contractive maps it is
+    // roughly `D + s·r`, so iterating `r <- reach(r)` walks up to the
+    // least fixed point `D/(1−s)` geometrically. Extrapolating that
+    // geometry gets there in a handful of steps instead of hundreds
+    // when `s` is close to 1 -- and every candidate is CHECKED before
+    // it is returned, so a bad extrapolation costs an iteration
+    // rather than correctness.
+    for centre in [seed, [0.0, 0.0]] {
+        let mut r = 0.0f64;
+        let mut prev_step = f64::INFINITY;
+        for _ in 0..64 {
+            let Some(need) = reach(centre, r) else { break };
+            if need <= r {
+                return Ok((centre, r));
+            }
+            let step = need - r;
+            // The contraction factor this step implies. Below 1 the
+            // series converges and its tail sums in closed form.
+            let ratio = step / prev_step;
+            let guess = if (0.0..1.0).contains(&ratio) {
+                need + step * ratio / (1.0 - ratio)
+            } else {
+                need
+            };
+            prev_step = step;
+            // A little slack, so the fixed point is crossed rather
+            // than approached forever.
+            let next = (guess * 1.0009375).max(need).max(1e-9);
+            if !next.is_finite() || next > 1e12 {
+                break;
+            }
+            r = next;
+        }
     }
     Err(NoCylinders::NoInvariantBall)
 }
@@ -2184,6 +2258,247 @@ mod tests {
             println!("    {n:>4}  {name}");
         }
         println!("    ({} distinct)", blockers.len());
+    }
+
+    /// **An attractor nowhere near the origin still gets a root
+    /// ball, and a tight one.**
+    ///
+    /// The fallback used to try discs centred at the origin only, so
+    /// a flame living at (40, -25) needed a radius of about 48 just
+    /// to be reached — and a disc that large is much less likely to
+    /// hold its own images, especially once a nonlinear body that is
+    /// gentle on the attractor gets evaluated way out at the origin.
+    /// Such flames were refused with `NoInvariantBall`, which read as
+    /// "this fractal is unsupported" and meant "we looked in the
+    /// wrong place".
+    ///
+    /// The radius assertion is the real content. Finding SOME ball is
+    /// easy; finding one that is not mostly empty space is what keeps
+    /// the enumeration from wasting its depth budget crossing the gap
+    /// between the origin and the set.
+    #[test]
+    fn an_off_origin_attractor_gets_a_tight_root_ball() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let far = [40.0f32, -25.0f32];
+        let mut flame = crate::scene::transforms::Flame::new();
+        flame.transforms.clear();
+        for (dx, dy) in [(0.0f32, 0.0f32), (0.5, 0.0), (0.25, 0.5)] {
+            let mut t = Transform::default();
+            // Half-scale maps whose fixed points sit around `far`.
+            t.a = 0.5;
+            t.d = 0.5;
+            t.e = far[0] * 0.5 + dx;
+            t.f = far[1] * 0.5 + dy;
+            t.weight = 1.0;
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("linear", 1.0);
+            flame.transforms.push(t);
+        }
+
+        let (c, r) = invariant_ball(&flame, reg).expect("a ball around the attractor");
+
+        // It is a ball, and it is invariant -- the property the
+        // enumeration actually relies on.
+        for t in &flame.transforms {
+            let img = crate::scene::ifs_ball::transform_ball_2d(t, reg, Ball::new(c, r))
+                .expect("bounded");
+            let d = ((img.c[0] - c[0]).powi(2) + (img.c[1] - c[1]).powi(2)).sqrt();
+            assert!(d + img.r <= r * (1.0 + 1e-9), "not invariant: {d} + {} > {r}", img.r);
+        }
+
+        // And it is near the set, not near the origin. The attractor
+        // spans well under a unit here, so anything past a few units
+        // means the search is still centred on the wrong point.
+        let off = ((c[0] - far[0] as f64).powi(2) + (c[1] - far[1] as f64).powi(2)).sqrt();
+        assert!(off < 2.0, "centre {c:?} is {off} from the attractor at {far:?}");
+        assert!(r < 3.0, "radius {r} is far larger than the attractor");
+    }
+
+    /// **What one `plan` costs, and where the time goes.**
+    ///
+    /// `plan` runs on every pan and every zoom step, so its cost is
+    /// felt directly as interface latency — this is not a batch job.
+    #[test]
+    #[ignore = "prints a measurement"]
+    fn what_a_plan_costs() {
+        use std::time::Instant;
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+
+        // One `transform_ball_2d` on an affine transform, and one on
+        // a transform whose bound has to be DERIVED from the WGSL.
+        let mut affine = Transform::default();
+        affine.a = 0.5;
+        affine.d = 0.5;
+        affine.weight = 1.0;
+        affine.variations.clear();
+        affine.variation_order.clear();
+        affine.set_variation("linear", 1.0);
+
+        let mut derived = affine.clone();
+        derived.variations.clear();
+        derived.variation_order.clear();
+        derived.set_variation("sinusoidal", 1.0);
+
+        // One that REFUSES, which is the path that also pays for the
+        // k=3 subdivision retry.
+        let mut refuses = affine.clone();
+        refuses.variations.clear();
+        refuses.variation_order.clear();
+        refuses.set_variation("curl", 1.0);
+
+        let b = Ball::new([0.1, 0.2], 0.3);
+
+        // **Warm the module cache first.** `modules()` parses every
+        // shipped variation's WGSL through the probe's shader builder
+        // on first touch, and folding that into the first timed call
+        // makes an 8 us operation read as 1 ms.
+        let pf0 = |_: &str| 0.0f64;
+        let t0 = Instant::now();
+        let _ = crate::variations::derive::derive("sinusoidal", &pf0, 1.0, b);
+        println!("  first derive of the session   {:>10.1} us  (parses the corpus)",
+                 t0.elapsed().as_secs_f64() * 1e6);
+
+        for (label, t) in [("affine", &affine), ("derived", &derived), ("refuses", &refuses)] {
+            let _ = crate::scene::ifs_ball::transform_ball_2d(t, reg, b);
+            let n = 200;
+            let t0 = Instant::now();
+            for _ in 0..n {
+                let _ = crate::scene::ifs_ball::transform_ball_2d(t, reg, b);
+            }
+            let each = t0.elapsed().as_secs_f64() / n as f64;
+            println!("  transform_ball_2d({label:>8})  {:>10.1} us", each * 1e6);
+        }
+
+        // And the derive call ALONE, without the per-call scaffolding
+        // `transform_ball_2d` puts around it.
+        let pf = |_: &str| 0.0f64;
+        for name in ["sinusoidal", "spherical", "julian", "curl"] {
+            // Each name parses its own module on first touch now, so
+            // warm this one before timing it.
+            let _ = crate::variations::derive::derive(name, &pf, 1.0, b);
+            let n = 200;
+            let t0 = Instant::now();
+            let mut ok = true;
+            for _ in 0..n {
+                ok = crate::variations::derive::derive(name, &pf, 1.0, b).is_ok();
+            }
+            let each = t0.elapsed().as_secs_f64() / n as f64;
+            println!(
+                "  derive({name:>12})            {:>10.1} us  {}",
+                each * 1e6,
+                if ok { "ok" } else { "refused" }
+            );
+        }
+        // The two lookups `one()` does before it ever reaches derive.
+        {
+            let n = 2000;
+            let t0 = Instant::now();
+            for _ in 0..n {
+                let _ = crate::scene::ifs_analysis::affine_role(
+                    "sinusoidal",
+                    1.0,
+                    &derived,
+                    reg,
+                    crate::scene::ifs_analysis::Space::Planar,
+                );
+            }
+            println!(
+                "  affine_role(sinusoidal)       {:>10.1} us",
+                t0.elapsed().as_secs_f64() / n as f64 * 1e6
+            );
+            let t0 = Instant::now();
+            for _ in 0..n {
+                let _ = crate::variations::bound::for_name("sinusoidal");
+            }
+            println!(
+                "  bound::for_name(sinusoidal)   {:>10.1} us",
+                t0.elapsed().as_secs_f64() / n as f64 * 1e6
+            );
+            let pf2 = |p: &str| {
+                derived.get_variation_param_or_default("sinusoidal", p, reg) as f64
+            };
+            let t0 = Instant::now();
+            for _ in 0..n {
+                let _ = crate::variations::derive::derive("sinusoidal", &pf2, 1.0, b);
+            }
+            println!(
+                "  derive w/ the real param fn   {:>10.1} us",
+                t0.elapsed().as_secs_f64() / n as f64 * 1e6
+            );
+        }
+
+        // The naming lookup alone, which every call redoes.
+        {
+            let n = 2000;
+            let t0 = Instant::now();
+            for _ in 0..n {
+                let _ = derived.ordered_variation_names(reg);
+            }
+            println!(
+                "  ordered_variation_names()     {:>10.1} us",
+                t0.elapsed().as_secs_f64() / n as f64 * 1e6
+            );
+        }
+
+        println!();
+        // A whole plan, at the depths the interface actually reaches.
+        let gasket = || {
+            let mut f = crate::scene::transforms::Flame::new();
+            f.transforms.clear();
+            for (e, g) in [(0.0f32, 0.0f32), (0.5, 0.0), (0.25, 0.5)] {
+                let mut t = Transform::default();
+                t.a = 0.5;
+                t.d = 0.5;
+                t.e = e;
+                t.f = g;
+                t.weight = 1.0;
+                t.variations.clear();
+                t.variation_order.clear();
+                t.set_variation("linear", 1.0);
+                f.transforms.push(t);
+            }
+            f
+        };
+        let flame = gasket();
+        for mult in [1.0f64, 1e3, 1e6, 1e9] {
+            let view = View::of(mult, [0.0, 0.0], 512, 512);
+            let t0 = Instant::now();
+            let r = Cylinders::plan(&flame, reg, view);
+            let dt = t0.elapsed().as_secs_f64();
+            match r {
+                Ok(c) => println!(
+                    "  plan(gasket, zoom {mult:>8.0e})  {:>8.1} ms  {:>5} words  depth {}",
+                    dt * 1e3,
+                    c.words.len(),
+                    c.depth
+                ),
+                Err(e) => println!("  plan(gasket, zoom {mult:>8.0e})  {:>8.1} ms  {e:?}", dt * 1e3),
+            }
+        }
+
+        println!();
+        // The same, with a transform whose bound is derived rather
+        // than read off a matrix.
+        let mut nonaffine = gasket();
+        nonaffine.transforms[2].set_variation("sinusoidal", 0.02);
+        for mult in [1.0f64, 1e3, 1e6] {
+            let view = View::of(mult, [0.0, 0.0], 512, 512);
+            let t0 = Instant::now();
+            let r = Cylinders::plan(&nonaffine, reg, view);
+            let dt = t0.elapsed().as_secs_f64();
+            match r {
+                Ok(c) => println!(
+                    "  plan(derived, zoom {mult:>7.0e})  {:>8.1} ms  {:>5} words  depth {}",
+                    dt * 1e3,
+                    c.words.len(),
+                    c.depth
+                ),
+                Err(e) => println!("  plan(derived, zoom {mult:>7.0e})  {:>8.1} ms  {e:?}", dt * 1e3),
+            }
+        }
     }
 
     /// **The number the whole forward-bounds plan exists to move:

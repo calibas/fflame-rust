@@ -97,70 +97,113 @@ pub fn transform_ball_2d(
     registry: &VariationRegistry,
     input: Ball,
 ) -> Result<Ball, NoBall> {
-    let order = t.ordered_variation_names(registry);
+    Bounder::new(t, registry)?.apply(input)
+}
 
-    // Stage 1: the transform's own affine.
-    let affine = Affine2 {
-        m: [[t.a as f64, t.b as f64], [t.c as f64, t.d as f64]],
-        t: [t.e as f64, t.f as f64],
-    };
-    let mut b = affine_ball(&affine, input);
+/// **One transform's bound, with the naming work done once.**
+///
+/// `transform_ball_2d` used to redo, on every disc it was handed, the
+/// part of the job that depends only on the TRANSFORM: resolving the
+/// active variation names in dispatch order and splitting them by
+/// phase. `ordered_variation_names` walks all 647 registered names
+/// cloning Strings, and measured at 12.2 us of a 13 us call — about
+/// ninety per cent of every bound evaluation, spent rediscovering
+/// something that had not changed.
+///
+/// That was invisible while the enumeration refused most flames
+/// early. Once derived bounds let them through to the expansion loop,
+/// `plan` started calling this thousands of times per pan, and a
+/// deep view cost tens of milliseconds of pure name lookup.
+///
+/// Build one per transform, apply it to as many discs as you like.
+pub struct Bounder<'a> {
+    t: &'a Transform,
+    registry: &'a VariationRegistry,
+    affine: Affine2,
+    /// `(name, weight)` per phase, in dispatch order.
+    pre: Vec<(String, f64)>,
+    normal: Vec<(String, f64)>,
+    post: Vec<(String, f64)>,
+    post_affine: Option<Affine2>,
+}
 
-    // Split the active variations by the phase the dispatcher runs
-    // them in. `Any` is normal unless a priority moves it, which is
-    // the same rule the shader builder and `variation_stage` use.
-    let mut pre: Vec<&String> = Vec::new();
-    let mut normal: Vec<&String> = Vec::new();
-    let mut post: Vec<&String> = Vec::new();
-    for name in &order {
-        let w = t.variations.get(name).copied().unwrap_or(0.0) as f64;
-        if w == 0.0 {
-            continue;
+impl<'a> Bounder<'a> {
+    pub fn new(t: &'a Transform, registry: &'a VariationRegistry) -> Result<Self, NoBall> {
+        let order = t.ordered_variation_names(registry);
+
+        // Split the active variations by the phase the dispatcher
+        // runs them in. `Any` is normal unless a priority moves it,
+        // which is the same rule the shader builder and
+        // `variation_stage` use.
+        let mut pre = Vec::new();
+        let mut normal = Vec::new();
+        let mut post = Vec::new();
+        for name in &order {
+            let w = t.variations.get(name).copied().unwrap_or(0.0) as f64;
+            if w == 0.0 {
+                continue;
+            }
+            let phase = registry.get(name).map(|i| i.phase.clone());
+            let moved = t.variation_priorities.get(name).copied().unwrap_or(0) != 0;
+            match phase {
+                Some(VariationPhase::Pre) => pre.push((name.clone(), w)),
+                Some(VariationPhase::Post) => post.push((name.clone(), w)),
+                Some(VariationPhase::Any) if moved => return Err(NoBall::Priority(name.clone())),
+                _ => normal.push((name.clone(), w)),
+            }
         }
-        let phase = registry.get(name).map(|i| i.phase.clone());
-        let moved = t.variation_priorities.get(name).copied().unwrap_or(0) != 0;
-        match phase {
-            Some(VariationPhase::Pre) => pre.push(name),
-            Some(VariationPhase::Post) => post.push(name),
-            Some(VariationPhase::Any) if moved => return Err(NoBall::Priority(name.clone())),
-            _ => normal.push(name),
+
+        Ok(Self {
+            t,
+            registry,
+            affine: Affine2 {
+                m: [[t.a as f64, t.b as f64], [t.c as f64, t.d as f64]],
+                t: [t.e as f64, t.f as f64],
+            },
+            pre,
+            normal,
+            post,
+            post_affine: t.post_affine_enabled.then(|| Affine2 {
+                m: [
+                    [t.post_a as f64, t.post_b as f64],
+                    [t.post_c as f64, t.post_d as f64],
+                ],
+                t: [t.post_e as f64, t.post_f as f64],
+            }),
+        })
+    }
+
+    /// Where this transform sends `input`, as a disc containing the
+    /// image.
+    pub fn apply(&self, input: Ball) -> Result<Ball, NoBall> {
+        // Stage 1: the transform's own affine.
+        let mut b = affine_ball(&self.affine, input);
+
+        // Stage 2: the pre-phase chain. No weight is applied by the
+        // dispatcher here; a body that wants its own reads it itself.
+        for (name, w) in &self.pre {
+            b = one(name, *w, self.t, self.registry, b, Chain::Replace)?;
         }
-    }
 
-    // Stage 2: the pre-phase chain. No weight is applied by the
-    // dispatcher here; a body that wants its own reads it itself.
-    for name in pre {
-        let w = t.variations.get(name).copied().unwrap_or(0.0) as f64;
-        b = one(name, w, t, registry, b, Chain::Replace)?;
-    }
+        // Stage 3: the normal-phase sum. Centres add, radii add.
+        let mut sum = Ball::new([0.0, 0.0], 0.0);
+        for (name, w) in &self.normal {
+            let part = one(name, *w, self.t, self.registry, b, Chain::Sum)?;
+            sum.c[0] += part.c[0];
+            sum.c[1] += part.c[1];
+            sum.r += part.r;
+        }
+        b = sum;
 
-    // Stage 3: the normal-phase sum. Centres add, radii add.
-    let mut sum = Ball::new([0.0, 0.0], 0.0);
-    for name in &normal {
-        let w = t.variations.get(*name).copied().unwrap_or(0.0) as f64;
-        let part = one(name, w, t, registry, b, Chain::Sum)?;
-        sum.c[0] += part.c[0];
-        sum.c[1] += part.c[1];
-        sum.r += part.r;
+        // Stage 4: the post-phase chain, then the post-affine.
+        for (name, w) in &self.post {
+            b = one(name, *w, self.t, self.registry, b, Chain::Replace)?;
+        }
+        if let Some(pa) = &self.post_affine {
+            b = affine_ball(pa, b);
+        }
+        Ok(b)
     }
-    b = sum;
-
-    // Stage 4: the post-phase chain, then the post-affine.
-    for name in post {
-        let w = t.variations.get(name).copied().unwrap_or(0.0) as f64;
-        b = one(name, w, t, registry, b, Chain::Replace)?;
-    }
-    if t.post_affine_enabled {
-        let post_affine = Affine2 {
-            m: [
-                [t.post_a as f64, t.post_b as f64],
-                [t.post_c as f64, t.post_d as f64],
-            ],
-            t: [t.post_e as f64, t.post_f as f64],
-        };
-        b = affine_ball(&post_affine, b);
-    }
-    Ok(b)
 }
 
 /// Whether this variation's answer replaces the disc or is summed
