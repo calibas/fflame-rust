@@ -413,8 +413,18 @@ fn project_3d_full(p: vec3<f32>) -> Projection3D {
 
 // Convert 2D fractal coords to pixel coords
 fn world_to_pixel(p: vec2<f32>) -> vec2<i32> {
+{{#if CYLINDER_RELATIVE}}
+    // Cylinder targeting, relative mode: the forced prefix already
+    // delivered the point as an offset FROM the view centre, with the
+    // centre subtracted in f64 on the CPU (see `scene::cylinder::pack`).
+    // Subtracting the pan again would both double-count it and
+    // reintroduce the f32 cancellation the relative packing exists to
+    // avoid. The two changes are one change.
+    var transformed = p;
+{{else}}
     // Apply view transform: pan, rotation, and zoom
     var transformed = p - vec2<f32>(params.pan_x, params.pan_y);
+{{/if}}
 
     // Apply rotation
     let cos_r = cos(params.rotation);

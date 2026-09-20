@@ -48,7 +48,9 @@ struct TonemapParams {
     levels_enabled: u32,  // 0 = Levels off (Apo-matching, alpha bypasses opacity remap), 1 = on
     // Two trailing scalar u32s rather than `vec2<u32>`: keep std140/std430
     // layout aligned to the Rust packing — see comment on the Rust side.
-    _pad_levels_0: u32,
+    // The in-frame mean density Levels is measured against; see the
+    // Rust field for why it is not `sample_density`.
+    levels_density: f32,
     _pad_levels_1: u32,
 }
 
@@ -297,7 +299,7 @@ fn apply_levels(density: f32) -> f32 {
     let low = tonemap_params.levels_low;
     let high = tonemap_params.levels_high;
     let gamma = tonemap_params.levels_gamma;
-    let mean = tonemap_params.sample_density;
+    let mean = tonemap_params.levels_density;
 
     // First frame / empty buffer: no clipping (let base_alpha decide)
     if (mean <= 0.0) {

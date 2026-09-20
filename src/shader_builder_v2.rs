@@ -307,6 +307,12 @@ pub struct ShaderConstants {
     /// docs/projects/flame-deep-zoom.md stage 1.
     pub importance_sampling: bool,
 
+    /// Whether the forced prefix plots in VIEW-RELATIVE coordinates
+    /// (`docs/projects/flame-deep-zoom.md`). Only ever set together
+    /// with the composed arm, and only for a flame whose plot path
+    /// has nothing else that works in world coordinates.
+    pub cylinder_relative: bool,
+
     /// Whether the forced prefix is REPLAYED symbol by symbol rather
     /// than applied as one composed matrix
     /// (`docs/projects/flame-deep-zoom.md`). Set when the flame has a
@@ -436,6 +442,7 @@ impl Default for ShaderConstants {
             cylinder_targeting: false,
             frame_coverage: false,
             cylinder_replay: false,
+            cylinder_relative: false,
             flatten_z_per_iter: false,
             solid_enabled: false,
             probe: false,
@@ -668,6 +675,7 @@ impl ShaderConstants {
             cylinder_targeting: false,
             frame_coverage: false,
             cylinder_replay: false,
+            cylinder_relative: false,
             // Per-iteration Z flatten — only meaningful in 3D, and
             // only when preserve_z is false (JWF/Apo default).
             flatten_z_per_iter: matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD)
@@ -1680,6 +1688,9 @@ impl ShaderBuilder {
         // CYLINDER_REPLAY picks which arm of the forced prefix is
         // emitted: the composed matrix, or the symbol walk.
         processor.set("CYLINDER_REPLAY", constants.cylinder_replay);
+        // CYLINDER_RELATIVE moves the forced plot into view-relative
+        // coordinates so a deep zoom is not quantised by f32.
+        processor.set("CYLINDER_RELATIVE", constants.cylinder_relative);
         // FLATTEN_Z_PER_ITER used to insert a blanket `current.z = 0.0;`
         // at the end of each iteration under preserve_z=false. That
         // destroyed the z compounding JWF gets through unconditional
@@ -1953,6 +1964,7 @@ impl ShaderBuilder {
             cylinder_targeting: false,
             frame_coverage: false,
             cylinder_replay: false,
+            cylinder_relative: false,
             flatten_z_per_iter: false,
             solid_enabled: false,
             probe: false,

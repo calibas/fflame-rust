@@ -2710,7 +2710,13 @@ impl HighResExporter {
                 crate::scene::tonemap::HighlightMode::Filmic => 3,
             },
             levels_enabled: if config.levels_enabled { 1 } else { 0 },
-            _pad_levels: [0; 2],
+            // Equal to `sample_density` on every path that builds these
+            // directly: none of them targets, so there is no
+            // inflation to undo. The two differ only in the
+            // interactive/headless path that `refresh_sample_density`
+            // writes per frame.
+            levels_density: sample_density,
+            _pad_levels: 0,
         }
     }
 
@@ -3340,7 +3346,13 @@ impl HighResExporter {
             // the opaque export exactly. Respect the flame's setting in both
             // modes (matches FlameRenderer::set_transparent_mode after its fix).
             levels_enabled: if config.levels_enabled { 1 } else { 0 },
-            _pad_levels: [0; 2],
+            // Equal to `sample_density` on every path that builds these
+            // directly: none of them targets, so there is no
+            // inflation to undo. The two differ only in the
+            // interactive/headless path that `refresh_sample_density`
+            // writes per frame.
+            levels_density: sample_density,
+            _pad_levels: 0,
         };
 
         self.queue.write_buffer(

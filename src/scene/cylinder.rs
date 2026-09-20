@@ -181,6 +181,10 @@ pub struct Cylinders {
     /// multiply. False when any map is merely bounded, where the
     /// kernel has to walk the word's symbols instead.
     pub composable: bool,
+    /// The view this was enumerated for. Kept because the packing
+    /// needs it: a word's translation is expressed RELATIVE to this
+    /// point, which is what keeps a deep zoom out of f32's teeth.
+    pub view_centre: [f64; 2],
 }
 
 impl Cylinders {
@@ -440,7 +444,7 @@ impl Cylinders {
         }
         let mass: f64 = kept.iter().map(|c| c.prob).sum();
         let depth = kept.iter().map(|c| c.word.len()).max().unwrap_or(0);
-        Ok(Self { words: kept, mass, depth, composable })
+        Ok(Self { words: kept, mass, depth, composable, view_centre: view.centre })
     }
 }
 
@@ -575,8 +579,26 @@ pub fn pack(cyl: &Cylinders, flame: &Flame, registry: &crate::variations::Variat
         out[base + 1] = m.m[0][1] as f32;
         out[base + 2] = m.m[1][0] as f32;
         out[base + 3] = m.m[1][1] as f32;
-        out[base + 4] = m.t[0] as f32;
-        out[base + 5] = m.t[1] as f32;
+        // **Relative to the view centre, and subtracted in f64.**
+        //
+        // `t` is where the word sends the origin, which at depth is
+        // the view centre to within the word's own tiny radius. The
+        // kernel then computes `M·x + t` in f32, where `M·x` is the
+        // whole picture -- 1e-5 and smaller -- and `t` is order 0.3.
+        // One f32 ulp at 0.3 is 3e-8, so past about 1e5 zoom the add
+        // quantises the picture onto a lattice and the fractal
+        // structure is simply gone. Measured on a two-map fern: clean
+        // at 86k, visibly striped at 692k, nothing but a diagonal dot
+        // grid at 5.5M.
+        //
+        // Subtracting the centre HERE, in f64, makes every number the
+        // kernel touches small, so f32's relative precision applies to
+        // the detail instead of to the distance from the origin. The
+        // plot then works in view-relative coordinates, which is why
+        // `world_to_pixel` must skip its own pan subtraction under
+        // `CYLINDER_RELATIVE` -- the two changes are one change.
+        out[base + 4] = (m.t[0] - cyl.view_centre[0]) as f32;
+        out[base + 5] = (m.t[1] - cyl.view_centre[1]) as f32;
         out[base + 6] = h_prod as f32;
         out[base + 7] = g_acc as f32;
         out[base + 8] = acc as f32;
@@ -705,6 +727,16 @@ mod gpu_tests {
             cfg.flame.transforms.push(t);
         }
         cfg.deterministic_rng = true;
+        // **Levels OFF for the picture gates.** These compare a forced
+        // render against an unbiased one, and Levels is an alpha remap
+        // relative to the mean density of the pixels IN FRAME -- a
+        // quantity the two renders legitimately disagree about, since
+        // the forced one puts everything in view and the reference at
+        // depth puts almost none of it there. Leaving it on makes the
+        // brightness comparison depend on that second mechanism
+        // instead of on the deposit's weight, which is what is
+        // actually being tested.
+        cfg.levels_enabled = false;
         // The origin is S0's fixed point, so the view is on the set at
         // every scale.
         cfg.pan_x = 0.0;
@@ -814,6 +846,18 @@ mod gpu_tests {
             off.zoom = 2f32.powi(zoom_pow);
             off.pan_x = PAN;
             off.pan_y = PAN;
+            // **Levels ON here, unlike the picture gates**, because
+            // this is where the starvation actually shows. Measured
+            // with Levels off, a deep view does NOT fade -- the log
+            // mapping saturates and `max` stays at 255 whatever the
+            // zoom. What fades is the ALPHA: Levels clips opacity
+            // against a mean density computed as though every
+            // iteration landed in frame, and at depth almost none do.
+            // So auto exposure's visible effect is mostly through
+            // Levels rather than through brightness, and a gate that
+            // turned Levels off would be measuring a feature doing
+            // nothing.
+            off.levels_enabled = true;
             let mut on = off.clone();
             on.auto_exposure = true;
 
@@ -1037,6 +1081,111 @@ mod gpu_tests {
             );
         }
         assert!(ran > 0, "no zoom in the sweep actually exercised the replay");
+    }
+
+    /// A deep zoom resolves STRUCTURE, not an f32 lattice.
+    ///
+    /// The forced prefix computes `M_a·x + t_a`, where `M_a·x` is the
+    /// whole picture — 1e-5 and smaller — and `t_a` is where the word
+    /// sends the origin, which at depth is the view centre. Away from
+    /// the origin that centre is an ordinary number like 0.27, whose
+    /// f32 ulp is 3e-8, so past about 1e5 zoom the add rounds the
+    /// picture onto a lattice and the fractal structure is gone.
+    /// Measured on this fixture before the fix: clean at 86k, visibly
+    /// striped at 692k, a diagonal grid of isolated dots at 5.5M.
+    ///
+    /// `pack` subtracts the view centre in f64, so the kernel only
+    /// ever touches small numbers and f32's RELATIVE precision applies
+    /// to the detail instead of to the distance from the origin.
+    ///
+    /// **Lit-pixel counts cannot see this** — a lattice of dots has
+    /// plenty of lit pixels — so what is measured is CONNECTEDNESS:
+    /// the share of lit pixels with a lit neighbour. Real structure
+    /// is connected; a quantisation lattice is isolated dots, and the
+    /// two are miles apart on this number.
+    ///
+    /// The fixture is deliberately NOT the gasket at the origin, the
+    /// fixture every other test here uses. f32 is finely spaced near
+    /// zero, so the origin is the one place this bug cannot appear —
+    /// the same blind spot that hid the enumeration's word-order bug.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_deep_zoom_resolves_structure_and_not_a_lattice() {
+        const N: u32 = 300;
+        // Two similitudes with an attractor well away from the origin
+        // (a Barnsley-style fern), and the view on the fixed point of
+        // the dominant map, which is where a deep zoom can actually
+        // land.
+        let mut cfg = FractalConfig::default();
+        cfg.flame.transforms.clear();
+        for (a, b, c, d, e, f) in [
+            (0.4262196f32, 0.4407327, -0.4407333, 0.42621973, -0.20342615, 0.08565312),
+            (0.7153461, -0.022982832, 0.022982799, 0.715347, 0.03961471, 0.07494647),
+        ] {
+            let mut t = crate::scene::transforms::Transform::default();
+            t.a = a; t.b = b; t.c = c; t.d = d; t.e = e; t.f = f;
+            t.weight = 1.0;
+            // NOT the default 0.0: flam3's colour rule walks the
+            // coordinate toward the last transform's colour, and 0.0
+            // is the black end of the palette. A deep zoom selects
+            // long runs of one symbol, so the whole frame would come
+            // back black with a perfectly healthy histogram under it
+            // -- the same trap `gasket_config` documents.
+            t.color = 0.6;
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("linear", 1.0);
+            cfg.flame.transforms.push(t);
+        }
+        cfg.flame.transforms[1].color = 0.95;
+        cfg.deterministic_rng = true;
+        cfg.auto_exposure = true;
+        cfg.cylinder_targeting = true;
+        cfg.pan_x = 0.11714635;
+        cfg.pan_y = 0.272749;
+
+        println!("  zoom        lit   connected");
+        let mut deep = 0;
+        for zoom in [1.0e5f32, 1.0e6, 1.0e7] {
+            cfg.zoom = zoom;
+            let rgba = render(&cfg, N, 48_000_000);
+            let lit: Vec<bool> = rgba
+                .chunks(4)
+                .map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24)
+                .collect();
+            let n = N as usize;
+            let (mut total, mut joined) = (0usize, 0usize);
+            for y in 0..n {
+                for x in 0..n {
+                    if !lit[y * n + x] {
+                        continue;
+                    }
+                    total += 1;
+                    let has = (x > 0 && lit[y * n + x - 1])
+                        || (x + 1 < n && lit[y * n + x + 1])
+                        || (y > 0 && lit[(y - 1) * n + x])
+                        || (y + 1 < n && lit[(y + 1) * n + x]);
+                    if has {
+                        joined += 1;
+                    }
+                }
+            }
+            let frac = joined as f64 / total.max(1) as f64;
+            println!("  {zoom:<10.0e}  {total:>5}  {:>8.3}", frac);
+            assert!(
+                total > 500,
+                "zoom {zoom:e}: only {total} lit pixels -- the view found nothing to draw"
+            );
+            assert!(
+                frac > 0.85,
+                "zoom {zoom:e}: only {:.1}% of lit pixels have a lit neighbour. That is a \\
+                 quantisation lattice, not fractal structure -- the forced prefix is being \\
+                 computed in absolute coordinates again",
+                frac * 100.0
+            );
+            deep += 1;
+        }
+        assert!(deep == 3, "the ladder did not run");
     }
 
     /// The per-frame sync asks for a reload only when the SHADER
