@@ -219,7 +219,10 @@ need. Windowing (stage 1) is expected to make this moot.
 Named in both plans so neither builds it privately:
 
 1. **The Lipschitz / largest-singular-value extension of the
-   contractiveness machinery.** The existing metric
+   contractiveness machinery.** *Planned 2026-09-19 as
+   [forward-bounds.md](forward-bounds.md): derived from each
+   variation's WGSL by interval arithmetic over naga's IR, because
+   the corpus meter says hand-deriving is a treadmill.* The existing metric
    (`flame.contractiveness()`, `mean_log_scale` in
    `src/script/api.rs`) is log-scale/determinant-flavored. Escape-time
    mode C needs the singular-value form to gate its pass count; this
