@@ -1,6 +1,7 @@
 # Forward Bounds — deriving a variation's disc bound from its WGSL
 
-**Status:** planned 2026-09-19, nothing built. The shared piece both
+**Status:** phase 1 built and measured 2026-09-19 (§11). Planned
+2026-09-19. The shared piece both
 [flame-deep-zoom.md](flame-deep-zoom.md) (§7 item 1) and
 [ifs-general.md](ifs-general.md) (§8, "forward reach without an
 inverse") named and neither built, now with a plan of its own because
@@ -286,3 +287,95 @@ Zero new dependencies: naga is already linked. One new module
 a retry in `plan`, and the gate extensions in §6. The hand bounds
 stay: they are tighter, they are the tightness reference, and the
 evaluator's first job is to agree with them.
+
+---
+
+## 11. Phase 1, built and measured, 2026-09-19
+
+`src/variations/derive.rs`. **170 of 647 bodies derive a bound**, and
+the 173 that do so at any of the gate's discs were checked against the
+shipped shader across **145,800 GPU evaluations with zero escapes**.
+
+### What the plan got right
+
+naga carried the whole extraction. `probe::shader::build` yields a
+module that parses first time, with every helper (`cmul`, `csqrt`,
+`ff_atan2`, `rng_nextf`) beside the bodies, and the evaluator compiled
+against the real IR without a single surprise in its shape. The
+environment is as small as §4b claimed.
+
+### Two things it got wrong, both worth more than the code
+
+**The weight chain was off by one step.** `transforms[i].variations[j]`
+is three hops — table, transform, weight array — and collapsing the
+first two made the chain arrive one index early, so the real
+`[variation_id]` fell through to arithmetic on an opaque. Worth **71
+bodies** of spurious refusal, and invisible except as a suspiciously
+popular refusal reason.
+
+**Init-derived slots were deferred and should not have been.** They
+are the second-largest refusal at **122 bodies**, and the fix is
+fifteen lines: the `wgsl_init` bodies are self-contained, so they parse
+alone and evaluate with the user parameters as exact intervals. The
+plan filed them under phase 1 and then the implementation postponed
+them; the census said no.
+
+Together those two took the count from 158 to 170, and moved the
+refusals from *my gaps* to *the language*.
+
+### The gate earned its place on the first run
+
+`derived_bounds_contain_the_real_wgsl` found an unsoundness
+immediately, in `r_circleblur`: the shader sent `(0.8, 0)` to a point
+`1.65` from the origin while the derived disc claimed radius `1.41`.
+
+The cause was **caching a local's value by expression handle**. Every
+other expression in naga's IR is pure, so a handle names one value
+forever — but a `var` is reassigned, and `bx = round(bx * rad)`
+followed by `bx = bx + …` reads the same `LocalVariable` handle either
+side of a store. The cached read returned the value from *before* the
+store, silently dropping everything assigned after it, which makes the
+bound too TIGHT: the one direction that corrupts a render.
+
+Nothing but a containment check against the real shader would have
+caught that. Not the unit rules — every interval rule was correct.
+Not a tightness comparison — the disc looked plausible. It took a
+point that escaped, and the fix is confirmed by putting the caching
+back behind an env var and watching the gate fail with the same point.
+
+### Where the remaining 477 go
+
+    159  a branch                 phase 2
+    159  a select                 phase 2
+     70  a store to a component   phase 2 (a local's lane, `out[0] = …`)
+     28  a switch                 phase 2
+     20  a loop                   phase 2
+     12  per-thread state         refused for good
+     11  no rule for an intrinsic  (Acosh 6, bitwise 5)
+      6  a pole                   refused for good, and correctly
+      4  an unmodelled expression
+      2  reads `subflame_metadata`
+      2  arithmetic on the weights
+      2  leaves the domain of log
+
+Phase 2 is 436 of them — branches, selects, component stores, switches
+and loops — which is close to the survey's prediction and confirms the
+phase ordering. The permanent refusals are 18.
+
+### Cost, and one decision deferred
+
+`naga` is not re-exported by `wgpu` on wasm32, which is built without
+the WGSL front end, so `derive` is desktop-only. Nothing depends on it
+yet, so this costs nothing today; **phase 3 has to decide** whether
+the web bundle carries its own parser (a real download cost for a
+feature the web app may never ask for) or whether wasm keeps the hand
+bounds. It is called out here so it is not discovered at wiring time.
+
+### Gates
+
+| | |
+|---|---|
+| every derived bound contains the real shader's output | 173 bodies, 145,800 evaluations, 0 escapes; fails on the caching bug |
+| the interval rules contain their functions | sampled, no GPU, catches a transcribed rule |
+| the weight chain is the only chain | asserts `variations` is the only field of `transforms` any body reads |
+| a zero-crossing denominator is a pole | the rule that makes `curl` refuse honestly |

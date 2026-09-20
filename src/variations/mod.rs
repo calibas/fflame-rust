@@ -3,6 +3,15 @@ use serde::{Deserialize, Serialize};
 
 pub mod definition;
 pub mod bound;
+// Desktop only: `wgpu` on wasm32 is built without the WGSL front end,
+// so `wgpu::naga` is not re-exported there and the evaluator has
+// nothing to parse with. Giving the web bundle its own `naga` is a
+// real download cost for a feature the web app may never ask for, so
+// it is a decision for phase 3 (when `ifs_ball` starts calling this)
+// rather than one to make by accident here. Until then the hand
+// bounds are what wasm has, exactly as before.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod derive;
 pub mod inverse;
 pub mod defs;
 pub mod docs;
