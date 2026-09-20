@@ -71,6 +71,18 @@ pub struct Interval {
 /// already marginal.
 const WIDEN: f64 = 8.0 * (1.0 / 8_388_608.0);
 
+/// Every value a 32-bit integer can hold, read either as signed or
+/// unsigned.
+///
+/// The bound for any bitwise result. A hash like
+/// `h = (h ^ (h >> 13u)) * 1274126177u` has no useful interval —
+/// avalanche is the point — but it has an exact RANGE, and the bodies
+/// that use one (the truchet and julia families) immediately divide
+/// it down to a fraction, where a full-width 32-bit range becomes an
+/// ordinary small number again. Sound whichever way the bits are
+/// interpreted, which is why it spans both signs.
+const INT32_RANGE: Interval = Interval { lo: -2147483648.0, hi: 4294967295.0 };
+
 impl Interval {
     pub fn new(lo: f64, hi: f64) -> Self {
         debug_assert!(!lo.is_nan() && !hi.is_nan());
@@ -402,25 +414,85 @@ pub fn derive(
     weight: f64,
     ball: Ball,
 ) -> Result<Ball, Refusal> {
+    derive_subdivided(name, params, weight, ball, 1)
+}
+
+/// The same, over a `k × k` grid of sub-boxes whose union is taken.
+///
+/// Interval arithmetic over-estimates whenever a value appears more
+/// than once — `x − x` is `[−2r, 2r]`, not `0` — and the error grows
+/// with the width of the input. Splitting the input and unioning the
+/// pieces shrinks it: each cell is narrower, so each cell's answer is
+/// tighter, and the union of exact-enough answers beats one loose
+/// one. The cost is `k²` evaluations.
+///
+/// **A cell that refuses refuses the whole thing.** The union has to
+/// cover every input, so a pole in one corner is a pole for the
+/// disc — subdivision can only prove that the OTHER cells were fine,
+/// never that the bad one does not matter.
+pub fn derive_subdivided(
+    name: &str,
+    params: ParamFn,
+    weight: f64,
+    ball: Ball,
+    k: usize,
+) -> Result<Ball, Refusal> {
+    let k = k.max(1);
+    let step = 2.0 * ball.r / k as f64;
+    let mut acc: Option<[Interval; 2]> = None;
+    for iy in 0..k {
+        for ix in 0..k {
+            let lo_x = ball.c[0] - ball.r + step * ix as f64;
+            let lo_y = ball.c[1] - ball.r + step * iy as f64;
+            let cell = [
+                Interval::new(lo_x, lo_x + step),
+                Interval::new(lo_y, lo_y + step),
+            ];
+            let out = derive_box(name, params, weight, cell)?;
+            acc = Some(match acc {
+                None => out,
+                Some(a) => [a[0].union(out[0]), a[1].union(out[1])],
+            });
+        }
+    }
+    let out = acc.ok_or(Refusal::Shape("no cells"))?;
+    box_to_disc(out)
+}
+
+fn box_to_disc(out: [Interval; 2]) -> Result<Ball, Refusal> {
+    let (x, y) = (out[0], out[1]);
+    if !x.finite() || !y.finite() {
+        return Err(Refusal::Unbounded);
+    }
+    let cx = 0.5 * (x.lo + x.hi);
+    let cy = 0.5 * (y.lo + y.hi);
+    let hx = 0.5 * (x.hi - x.lo);
+    let hy = 0.5 * (y.hi - y.lo);
+    Ok(Ball::new([cx, cy], (hx * hx + hy * hy).sqrt()))
+}
+
+/// One evaluation of the body over one input box.
+fn derive_box(
+    name: &str,
+    params: ParamFn,
+    weight: f64,
+    input: [Interval; 2],
+) -> Result<[Interval; 2], Refusal> {
     let m = modules();
     let &(mi, handle) = m.index.get(name).ok_or(Refusal::NoBody)?;
     let module = &m.modules[mi];
     let func = &module.functions[handle];
 
-    let input = vec![
-        Interval::new(ball.c[0] - ball.r, ball.c[0] + ball.r),
-        Interval::new(ball.c[1] - ball.r, ball.c[1] + ball.r),
-        // A 2D body may still read `p.z` through a lifted vec3 in
-        // some helper; the plane has no z, so it is exactly zero.
-        Interval::point(0.0),
-    ];
+    // A 2D body may still read `p.z` through a lifted vec3 in some
+    // helper; the plane has no z, so it is exactly zero.
+    let point = vec![input[0], input[1], Interval::point(0.0)];
 
     // Argument 0 is the point. Everything after it -- `xform_id`,
     // `variation_id`, the RNG pointer, a `NeedsAccum` body's running
     // sum -- is carried opaquely, so a body that only PASSES them to
     // an intercepted call works, and one that does arithmetic on them
     // refuses by name instead of being given a made-up number.
-    let mut args = vec![IVal::Vec(input)];
+    let mut args = vec![IVal::Vec(point)];
     for a in func.arguments.iter().skip(1) {
         args.push(IVal::Opaque(match a.name.as_deref() {
             Some("xform_id") => "the transform index",
@@ -437,16 +509,7 @@ pub fn derive(
     if lanes.len() < 2 {
         return Err(Refusal::Shape("body did not return a vector"));
     }
-    let (x, y) = (lanes[0], lanes[1]);
-    if !x.finite() || !y.finite() {
-        return Err(Refusal::Unbounded);
-    }
-    // Box -> disc: centre it and take half the diagonal.
-    let cx = 0.5 * (x.lo + x.hi);
-    let cy = 0.5 * (y.lo + y.hi);
-    let hx = 0.5 * (x.hi - x.lo);
-    let hy = 0.5 * (y.hi - y.lo);
-    Ok(Ball::new([cx, cy], (hx * hx + hy * hy).sqrt()))
+    Ok([lanes[0], lanes[1]])
 }
 
 /// A condition's value, where the evaluator can tell.
@@ -516,6 +579,22 @@ struct Frame {
     args: Vec<IVal>,
     exprs: std::collections::HashMap<usize, IVal>,
     locals: Locals,
+    /// **States the body MIGHT have left a loop in.**
+    ///
+    /// `if (i >= max_loop) { break; }` with a condition the evaluator
+    /// cannot decide is a loop that might end here and might not. The
+    /// `If` handler over-approximates by continuing down the other
+    /// path, which is right for what happens NEXT — but the state at
+    /// the break is a real exit state, and dropping it means the loop
+    /// reports only the state after its last iteration.
+    ///
+    /// That is an under-estimate, the one direction a forward bound
+    /// may never go: `iconattractor_js` rotates its point once per
+    /// degree and breaks out early, and reading only the 24th
+    /// rotation put the shader's real output outside the derived
+    /// disc. Each enclosing `Loop` drains what its own body pushed
+    /// and unions it into the exit.
+    maybe_exits: Vec<Locals>,
     /// Every value the body might return. A body with one `return`
     /// puts one here; one that returns from inside a branch the
     /// evaluator could not decide puts several, and the answer is
@@ -582,6 +661,7 @@ impl<'a> Eval<'a> {
             args: args.to_vec(),
             exprs: std::collections::HashMap::new(),
             locals: Locals::new(),
+            maybe_exits: Vec::new(),
             returns: Vec::new(),
         };
         // **Declaration initialisers, before anything runs.**
@@ -686,6 +766,31 @@ impl<'a> Eval<'a> {
                             // Only when BOTH arms left the block does
                             // control certainly leave it.
                             match (&fa, &fb) {
+                                // One arm may have broken out and the
+                                // other did not. Keep going down the
+                                // other path, but remember where the
+                                // first one stopped, or the loop will
+                                // report an iteration count the shader
+                                // never reached.
+                                (Flow::Break, Flow::Fell) => {
+                                    frame.maybe_exits.push(after_a)
+                                }
+                                (Flow::Fell, Flow::Break) => {
+                                    frame.maybe_exits.push(after_b)
+                                }
+                                // A `continue` on an undecided branch
+                                // has no such repair: falling through
+                                // runs the rest of the body, which the
+                                // real iteration skipped, and the
+                                // state that comes out is not a
+                                // superset of either path. Refuse
+                                // instead of guessing. No shipped body
+                                // reaches this today.
+                                (Flow::Continue, _) | (_, Flow::Continue) => {
+                                    return Err(Refusal::Construct(
+                                        "a continue on a branch that could not be decided",
+                                    ))
+                                }
                                 (Flow::Fell, _) | (_, Flow::Fell) => {}
                                 (Flow::Break, _) | (_, Flow::Break) => {
                                     return Ok(Flow::Break)
@@ -712,6 +817,9 @@ impl<'a> Eval<'a> {
                     let before = frame.locals.clone();
                     let mut exits: Vec<Locals> = Vec::new();
                     let mut settled = false;
+                    // Anything already pending belongs to a loop
+                    // further out; only what this body adds is ours.
+                    let mark = frame.maybe_exits.len();
                     for _ in 0..Self::LOOP_CAP {
                         let flow = self.block(func, body, frame)?;
                         if matches!(flow, Flow::Break) {
@@ -748,6 +856,7 @@ impl<'a> Eval<'a> {
                     if !settled {
                         return Err(Refusal::LoopUnsettled);
                     }
+                    exits.extend(frame.maybe_exits.drain(mark..));
                     let mut acc = exits.pop().unwrap_or_else(|| before.clone());
                     for e in &exits {
                         acc = join_locals(&before, &acc, e)?;
@@ -773,6 +882,36 @@ impl<'a> Eval<'a> {
         Ok(Flow::Fell)
     }
 
+    /// The name of an expression's shape, for a refusal that has to
+    /// say what it could not handle. `Debug` would carry handles and
+    /// make two refusals of the same kind look different.
+    fn kind(e: &naga::Expression) -> &'static str {
+        use naga::Expression as E;
+        match e {
+            E::Literal(_) => "a literal",
+            E::Constant(_) => "a constant",
+            E::Override(_) => "an override",
+            E::ZeroValue(_) => "a zero value",
+            E::Compose { .. } => "a compose",
+            E::Access { .. } => "an access",
+            E::AccessIndex { .. } => "an indexed access",
+            E::Splat { .. } => "a splat",
+            E::Swizzle { .. } => "a swizzle",
+            E::FunctionArgument(_) => "a function argument",
+            E::GlobalVariable(_) => "a global",
+            E::LocalVariable(_) => "a local",
+            E::Load { .. } => "a load",
+            E::Unary { .. } => "a unary op",
+            E::Binary { .. } => "a binary op",
+            E::Select { .. } => "a select",
+            E::Relational { .. } => "a relational op",
+            E::Math { .. } => "an intrinsic",
+            E::As { .. } => "a cast",
+            E::CallResult(_) => "a call result",
+            _ => "something unmodelled",
+        }
+    }
+
     /// Assign to a local, or to one lane of one.
     ///
     /// `out[0] = …` and `p.x = …` are both an `Access` on a
@@ -785,6 +924,7 @@ impl<'a> Eval<'a> {
         v: IVal,
         frame: &mut Frame,
     ) -> Result<(), Refusal> {
+        use naga::Expression as E;
         match &func.expressions[pointer] {
             naga::Expression::LocalVariable(lh) => {
                 frame.locals.insert(lh.index(), v);
@@ -803,7 +943,37 @@ impl<'a> Eval<'a> {
                 };
                 self.store_lane(func, *base, lane, v, frame)
             }
-            _ => Err(Refusal::Construct("a store through something other than a local")),
+            // **A write to an out-parameter this evaluator holds
+            // opaquely, which is a write it can throw away.**
+            //
+            // 50 bodies take `vc: ptr<function, f32>` -- the colour
+            // out-parameter of the dc_* family -- or `hide:
+            // ptr<function, bool>`, and assign to it. Where the point
+            // lands does not depend on either, and the top-level
+            // caller discards them, so the store changes nothing this
+            // is computing.
+            //
+            // Discarding is only sound because the pointer is opaque,
+            // and that is the condition tested rather than the
+            // parameter's name. An opaque argument is one of the
+            // entry point's own (`vc`, `hide`, `rng`, `xform_id`), so
+            // it cannot alias a local being tracked; and a later read
+            // back through it loads the SAME opaque, so a body that
+            // did feed its colour into its geometry refuses on the
+            // arithmetic instead of quietly using a stale value. A
+            // pointer to one of our own locals arrives as that
+            // local's value, not as an opaque, and still refuses
+            // below.
+            E::FunctionArgument(i) => match frame.args.get(*i as usize) {
+                Some(IVal::Opaque(_)) => Ok(()),
+                _ => Err(Refusal::Intrinsic(
+                    "a store through a pointer to a tracked value".into(),
+                )),
+            },
+            other => Err(Refusal::Intrinsic(format!(
+                "a store through {}",
+                Self::kind(other)
+            ))),
         }
     }
 
@@ -816,7 +986,10 @@ impl<'a> Eval<'a> {
         frame: &mut Frame,
     ) -> Result<(), Refusal> {
         let naga::Expression::LocalVariable(lh) = &func.expressions[base] else {
-            return Err(Refusal::Construct("a store through a nested access"));
+            return Err(Refusal::Intrinsic(format!(
+                "a lane store whose base is {}",
+                Self::kind(&func.expressions[base])
+            )));
         };
         let key = lh.index();
         let cur = frame.locals.get(&key).cloned();
@@ -997,7 +1170,15 @@ impl<'a> Eval<'a> {
                         IVal::Bool(_) => return Err(Refusal::Shape("negated a bool")),
                         IVal::Opaque(w) => return Err(Refusal::Opaque(w)),
                     },
-                    _ => return Err(Refusal::Intrinsic("a bitwise/logical unary".into())),
+                    naga::UnaryOperator::LogicalNot => match v {
+                        IVal::Bool(b) => IVal::Bool(b.map(|x| !x)),
+                        _ => return Err(Refusal::Shape("negated a non-bool")),
+                    },
+                    naga::UnaryOperator::BitwiseNot => match v {
+                        IVal::Int(k) => IVal::Int(!k & 0xFFFF_FFFF),
+                        _ => IVal::Scalar(INT32_RANGE),
+                    },
+                    _ => return Err(Refusal::Intrinsic("a logical unary".into())),
                 }
             }
             E::Binary { op, left, right } => {
@@ -1126,7 +1307,7 @@ impl<'a> Eval<'a> {
             .iter()
             .map(|p| Interval::point((self.params)(&p.name)))
             .collect();
-        drop(info);
+        let _ = info;
         drop(reg);
 
         let (module, handle) = init_module(self.name).ok_or(Refusal::InitSlot)?;
@@ -1224,12 +1405,28 @@ impl<'a> Eval<'a> {
         if let (IVal::Int(x), IVal::Int(y)) = (&a, &b) {
             // Exact integer arithmetic, so a slot index stays a slot
             // index through `2u * n + 1u`.
+            // Exact while it cannot wrap. WGSL's integers wrap at 32
+            // bits, so a product that leaves the range is a value
+            // this cannot name -- and naming it anyway is how a slot
+            // index or a loop bound would come out wrong.
+            let exact = |v: i64| -> IVal {
+                if (-2147483648..=4294967295).contains(&v) {
+                    IVal::Int(v)
+                } else {
+                    IVal::Scalar(INT32_RANGE)
+                }
+            };
             return Ok(match op {
-                B::Add => IVal::Int(x + y),
-                B::Subtract => IVal::Int(x - y),
-                B::Multiply => IVal::Int(x * y),
+                B::Add => exact(x + y),
+                B::Subtract => exact(x - y),
+                B::Multiply => exact(x.saturating_mul(*y)),
                 B::Divide if *y != 0 => IVal::Int(x / y),
                 B::Modulo if *y != 0 => IVal::Int(x % y),
+                B::And => IVal::Int(x & y),
+                B::InclusiveOr => IVal::Int(x | y),
+                B::ExclusiveOr => IVal::Int(x ^ y),
+                B::ShiftLeft => exact(x.checked_shl(*y as u32).unwrap_or(i64::MAX)),
+                B::ShiftRight => IVal::Int(x >> y.clamp(&0, &63)),
                 _ => return Err(Refusal::Intrinsic("an integer operator".into())),
             });
         }
@@ -1250,7 +1447,13 @@ impl<'a> Eval<'a> {
                     let m = y.abs().hi;
                     Interval::new(-m, m)
                 }
-                _ => return Err(Refusal::Intrinsic("a bitwise operator".into())),
+                // A bitwise operation on something this cannot pin
+                // down: the result is some 32-bit pattern, and the
+                // range of those is all that can honestly be said.
+                B::And | B::InclusiveOr | B::ExclusiveOr | B::ShiftLeft | B::ShiftRight => {
+                    INT32_RANGE
+                }
+                _ => return Err(Refusal::Intrinsic("an operator".into())),
             })
         };
         Ok(match (a, b) {
@@ -1358,6 +1561,20 @@ impl<'a> Eval<'a> {
                 ),
                 M::Sinh => x.monotone(f64::sinh),
                 M::Tanh => x.monotone(f64::tanh),
+                // Increasing on its whole domain, which starts at 1.
+                M::Acosh => {
+                    if x.lo < 1.0 {
+                        return Err(Refusal::Domain("acosh"));
+                    }
+                    x.monotone(f64::acosh)
+                }
+                M::Asinh => x.monotone(f64::asinh),
+                M::Atanh => {
+                    if x.lo <= -1.0 || x.hi >= 1.0 {
+                        return Err(Refusal::Domain("atanh"));
+                    }
+                    x.monotone(f64::atanh)
+                }
                 M::Cosh => {
                     // Even, with its minimum at zero.
                     let a = x.abs();
@@ -1451,10 +1668,48 @@ fn sqrt_iv(x: Interval) -> Result<Interval, Refusal> {
     Ok(Interval::new(x.lo.max(0.0).sqrt(), x.hi.max(0.0).sqrt()).widen())
 }
 
-fn pow_iv(b: Interval, e: Interval) -> Result<Interval, Refusal> {
+fn pow_iv(mut b: Interval, e: Interval) -> Result<Interval, Refusal> {
+    // **A lower end negative by no more than the widening could have
+    // made it is treated as zero**, the same call `sqrt_iv` makes and
+    // for the same reason. `widen` is absolute, so a mathematically
+    // non-negative `dot(p, p)` of [0, 4] comes back as [-eps, 4+eps],
+    // and the julia family raises exactly that to a fractional power.
+    // Refusing it cost `juliascope` and `julia3D` six corpus flames
+    // between them.
+    //
+    // Where the interval genuinely straddles zero by more than the
+    // slop this does not fire, and a truly negative base is NaN on
+    // the GPU — a value no disc contains and bad-value recovery
+    // removes from the render anyway.
+    if b.lo < 0.0 && b.hi > 0.0 && -b.lo <= b.hi * 4.0 * WIDEN {
+        b.lo = 0.0;
+    }
     if b.lo < 0.0 {
-        // A negative base with a non-integer exponent is NaN on the
-        // GPU; refuse rather than guess which it was.
+        // A negative base is NaN on the GPU unless the exponent is a
+        // whole number -- and when it is, the answer is ordinary:
+        // even powers fold to the positive side, odd ones keep the
+        // sign and stay monotone. Refusing the whole case cost the
+        // julia family, which raises a signed radius to a parameter
+        // that is usually an integer.
+        if e.lo == e.hi && e.lo.fract() == 0.0 && e.lo.abs() < 64.0 {
+            let n = e.lo as i32;
+            if n >= 0 && n % 2 == 0 {
+                let a = b.lo.abs().powi(n);
+                let c = b.hi.abs().powi(n);
+                let lo = if b.lo <= 0.0 && b.hi >= 0.0 { 0.0 } else { a.min(c) };
+                return Ok(Interval::new(lo, a.max(c)).widen());
+            }
+            if n >= 0 {
+                return Ok(Interval::new(b.lo.powi(n), b.hi.powi(n)).widen());
+            }
+            // A negative power is a division, so a base spanning zero
+            // is a pole like any other.
+            if b.lo <= 0.0 && b.hi >= 0.0 {
+                return Err(Refusal::Pole);
+            }
+            let (a, c) = (b.lo.powi(n), b.hi.powi(n));
+            return Ok(Interval::new(a.min(c), a.max(c)).widen());
+        }
         return Err(Refusal::Domain("pow with a negative base"));
     }
     let c = [
@@ -1503,6 +1758,58 @@ mod tests {
                     i.parameters.iter().find(|q| q.name == p).map(|q| q.default_value as f64)
                 })
                 .unwrap_or(0.0)
+        }
+    }
+
+    /// **Which refusals subdivision actually removes.**
+    ///
+    /// Interval arithmetic's error grows with the width of the input,
+    /// so a refusal at `k = 1` may be the body's real behaviour or
+    /// may be the dependency problem — `x − x` is `[−2r, 2r]` and a
+    /// denominator built that way straddles zero when the true value
+    /// never does. The two look identical from inside. Splitting the
+    /// input tells them apart: a refusal that survives a finer grid
+    /// is the map, and one that disappears was the arithmetic.
+    ///
+    /// This decides how much subdivision the enumeration should buy,
+    /// and it is the phase-3 measurement the plan asks for first,
+    /// because a spurious pole is a flame refused for nothing.
+    #[test]
+    #[ignore = "a census, not a gate"]
+    fn what_subdivision_recovers() {
+        use std::collections::BTreeMap;
+        let reg = crate::variations::global_registry();
+        let names: Vec<String> = reg.ordered_names.clone();
+        drop(reg);
+
+        // A disc where a radial body's denominator is genuinely at
+        // risk (it reaches the origin) and one where it is not.
+        for ball in [Ball::new([0.0, 0.0], 0.4), Ball::new([0.6, -0.4], 0.25)] {
+            let mut rows: BTreeMap<String, [usize; 3]> = BTreeMap::new();
+            let mut ok = [0usize; 3];
+            for (col, k) in [1usize, 3, 8].into_iter().enumerate() {
+                for name in &names {
+                    let pf = params_of(name);
+                    match derive_subdivided(name, &pf, 1.0, ball, k) {
+                        Ok(_) => ok[col] += 1,
+                        Err(e) => {
+                            let key = match &e {
+                                Refusal::Intrinsic(_) => "no interval rule".to_string(),
+                                other => format!("{other}"),
+                            };
+                            rows.entry(key).or_insert([0; 3])[col] += 1;
+                        }
+                    }
+                }
+            }
+            println!();
+            println!("  disc c{:?} r{}:", ball.c, ball.r);
+            println!("    derive   k=1 {:>4}   k=3 {:>4}   k=8 {:>4}", ok[0], ok[1], ok[2]);
+            let mut v: Vec<_> = rows.into_iter().collect();
+            v.sort_by_key(|(k, n)| (std::cmp::Reverse(n[0]), k.clone()));
+            for (k, n) in v.iter().take(8) {
+                println!("    {:<44} {:>4} {:>4} {:>4}", k, n[0], n[1], n[2]);
+            }
         }
     }
 

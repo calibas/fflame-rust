@@ -1990,6 +1990,23 @@ mod tests {
         }
     }
 
+    /// Whether this one variation can be bounded at all, on a
+    /// transform that carries it alone. The set cover needs a
+    /// per-VARIATION answer, and `transform_ball_2d` gives a
+    /// per-transform one.
+    fn single_variation_bounds(
+        name: &str,
+        t: &crate::scene::transforms::Transform,
+        reg: &crate::variations::VariationRegistry,
+    ) -> bool {
+        let mut solo = t.clone();
+        solo.variations.clear();
+        solo.variation_order.clear();
+        solo.set_variation(name, t.variations.get(name).copied().unwrap_or(1.0));
+        crate::scene::ifs_ball::transform_ball_2d(&solo, reg, Ball::new([0.0, 0.0], 1.0))
+            .is_ok()
+    }
+
     /// **The corpus meter: what actually blocks targeting, ranked.**
     ///
     /// "How do we support more flames" has a measured answer, and
@@ -2050,6 +2067,20 @@ mod tests {
                     if t.weight <= 0.0 {
                         continue;
                     }
+                    // **The real question, asked of the real code.**
+                    // Not "is there a hand-written bound" -- a bound
+                    // derived from the WGSL counts exactly as much --
+                    // so this pushes a disc through the transform the
+                    // way the enumeration does and records what came
+                    // back.
+                    if let Err(why) = crate::scene::ifs_ball::transform_ball_2d(
+                        t,
+                        reg,
+                        Ball::new([0.0, 0.0], 1.0),
+                    ) {
+                        blocks.insert("a variation has no forward bound");
+                        names.insert(format!("{why}"));
+                    }
                     for name in t.ordered_variation_names(reg) {
                         if t.variations.get(&name).copied().unwrap_or(0.0) == 0.0 {
                             continue;
@@ -2059,18 +2090,6 @@ mod tests {
                             || info.has_feature(crate::variations::Feature::WritesRgb)
                         {
                             blocks.insert("colour is not affine (a DC/RGB variation)");
-                        }
-                        let affine = crate::scene::ifs_analysis::affine_role(
-                            &name,
-                            1.0,
-                            t,
-                            reg,
-                            crate::scene::ifs_analysis::Space::Planar,
-                        )
-                        .is_some();
-                        if !affine && crate::variations::bound::for_name(&name).is_none() {
-                            blocks.insert("a variation has no forward bound");
-                            names.insert(name.clone());
                         }
                     }
                 }
@@ -2124,7 +2143,9 @@ mod tests {
                                 &name, 1.0, t, reg,
                                 crate::scene::ifs_analysis::Space::Planar,
                             ).is_some();
-                            if !affine && crate::variations::bound::for_name(&name).is_none() {
+                            let bounded = crate::variations::bound::for_name(&name).is_some()
+                                || single_variation_bounds(&name, t, reg);
+                            if !affine && !bounded {
                                 miss.insert(name.clone());
                             }
                         }
@@ -2163,6 +2184,100 @@ mod tests {
             println!("    {n:>4}  {name}");
         }
         println!("    ({} distinct)", blockers.len());
+    }
+
+    /// **The number the whole forward-bounds plan exists to move:
+    /// how many real flames can actually be targeted.**
+    ///
+    /// The blocker meter above probes one worst-case disc at the
+    /// origin, which is where a radial body's denominator is most
+    /// likely to vanish, so it RANKS well and under-reports. This
+    /// asks the question the renderer asks: run `Cylinders::plan` on
+    /// each corpus flame at its own framing, zoomed in far enough for
+    /// targeting to pay, and see what comes back.
+    #[test]
+    #[ignore = "reads output/*.flame"]
+    fn how_many_corpus_flames_enumerate() {
+        use std::collections::BTreeMap;
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        if let Ok(rd) = std::fs::read_dir("output") {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.extension().and_then(|x| x.to_str()) == Some("flame") {
+                    files.push(p);
+                }
+            }
+        }
+        files.sort();
+        if files.is_empty() {
+            println!("  no corpus in output/ -- nothing to measure");
+            return;
+        }
+
+        let mut total = 0usize;
+        let mut paying = 0usize;
+        let mut enumerated = 0usize;
+        let mut why: BTreeMap<String, usize> = BTreeMap::new();
+        let mut best: Vec<(f64, String)> = Vec::new();
+
+        for path in &files {
+            let Ok(text) = std::fs::read_to_string(path) else { continue };
+            let Ok(configs) = crate::flame_xml::parse_flame_xml(&text) else { continue };
+            let stem = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+            for cfg in configs {
+                total += 1;
+                // Deep enough that targeting is worth having.
+                let mut found: Option<f64> = None;
+                let mut last = String::new();
+                for mult in [64.0f64, 1024.0, 16384.0] {
+                    let view = View::of(
+                        (cfg.zoom.max(1e-6) as f64) * mult,
+                        [cfg.pan_x, cfg.pan_y],
+                        512,
+                        512,
+                    );
+                    match Cylinders::plan(&cfg.flame, reg, view) {
+                        Ok(c) => {
+                            found = Some(found.unwrap_or(0.0).max(c.speedup()));
+                        }
+                        Err(e) => last = format!("{e:?}"),
+                    }
+                }
+                match found {
+                    Some(s) => {
+                        enumerated += 1;
+                        if s > 1.0 {
+                            paying += 1;
+                            best.push((s, stem.clone()));
+                        }
+                    }
+                    None => {
+                        let k = last.split(['{', '(']).next().unwrap_or("?").trim().to_string();
+                        *why.entry(k).or_default() += 1;
+                    }
+                }
+            }
+        }
+
+        println!();
+        println!("  {total} corpus flames:");
+        println!("    {enumerated:>4} enumerate at some depth");
+        println!("    {paying:>4} of those reach a speedup above 1");
+        println!();
+        println!("  refusals at every depth tried:");
+        let mut v: Vec<_> = why.into_iter().collect();
+        v.sort_by_key(|(k, n)| (std::cmp::Reverse(*n), k.clone()));
+        for (k, n) in &v {
+            println!("    {n:>4}  {k}");
+        }
+        best.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        println!();
+        println!("  best speedups:");
+        for (s, n) in best.iter().take(8) {
+            println!("    {s:>12.3e}  {n}");
+        }
     }
 
     /// The refusals are refusals, not silent wrong answers.
