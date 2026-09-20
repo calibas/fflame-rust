@@ -1990,6 +1990,181 @@ mod tests {
         }
     }
 
+    /// **The corpus meter: what actually blocks targeting, ranked.**
+    ///
+    /// "How do we support more flames" has a measured answer, and
+    /// guessing at it is how the forward-bound registry ends up full
+    /// of variations nobody's flame uses.
+    ///
+    /// Every `.flame` in `output/` is checked against each blocker
+    /// INDEPENDENTLY rather than by running `plan` and taking its
+    /// first refusal. That distinction is the whole point: `plan`
+    /// tests colour before boundedness, so a flame with both is
+    /// filed under colour and the bound it also needs never shows up
+    /// in the tally. What is wanted is the marginal unlock — how many
+    /// flames a given fix actually frees — and only the independent
+    /// form gives that.
+    ///
+    /// Ignored, like `how_often_a_real_flame_sums_a_kernel_with_an_affine`
+    /// which it is modelled on, because it reads a directory that is
+    /// not in the repository. Run it before adding a bound; add the
+    /// one at the top.
+    #[test]
+    #[ignore = "reads output/*.flame"]
+    fn what_blocks_targeting_across_the_corpus() {
+        use std::collections::{BTreeMap, BTreeSet};
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        if let Ok(rd) = std::fs::read_dir("output") {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.extension().and_then(|x| x.to_str()) == Some("flame") {
+                    files.push(p);
+                }
+            }
+        }
+        files.sort();
+        if files.is_empty() {
+            println!("  no corpus in output/ — nothing to measure");
+            return;
+        }
+
+        // Per flame: the set of independent blockers.
+        let mut per_flame: Vec<BTreeSet<&'static str>> = Vec::new();
+        let mut blockers: BTreeMap<String, usize> = BTreeMap::new();
+        let mut total = 0usize;
+
+        for path in &files {
+            let Ok(text) = std::fs::read_to_string(path) else { continue };
+            let Ok(configs) = crate::flame_xml::parse_flame_xml(&text) else { continue };
+            for cfg in configs {
+                total += 1;
+                let mut blocks: BTreeSet<&'static str> = BTreeSet::new();
+                if cfg.flame.has_xaos() {
+                    blocks.insert("xaos");
+                }
+                let mut names: BTreeSet<String> = BTreeSet::new();
+                for t in &cfg.flame.transforms {
+                    if t.weight <= 0.0 {
+                        continue;
+                    }
+                    for name in t.ordered_variation_names(reg) {
+                        if t.variations.get(&name).copied().unwrap_or(0.0) == 0.0 {
+                            continue;
+                        }
+                        let Some(info) = reg.get(&name) else { continue };
+                        if info.has_feature(crate::variations::Feature::WritesColor)
+                            || info.has_feature(crate::variations::Feature::WritesRgb)
+                        {
+                            blocks.insert("colour is not affine (a DC/RGB variation)");
+                        }
+                        let affine = crate::scene::ifs_analysis::affine_role(
+                            &name,
+                            1.0,
+                            t,
+                            reg,
+                            crate::scene::ifs_analysis::Space::Planar,
+                        )
+                        .is_some();
+                        if !affine && crate::variations::bound::for_name(&name).is_none() {
+                            blocks.insert("a variation has no forward bound");
+                            names.insert(name.clone());
+                        }
+                    }
+                }
+                for n in names {
+                    *blockers.entry(n).or_default() += 1;
+                }
+                per_flame.push(blocks);
+            }
+        }
+
+        let clear = per_flame.iter().filter(|b| b.is_empty()).count();
+        println!("\n  {total} flames from {} files; {clear} have no blocker at all.\n", files.len());
+
+        // How many flames each blocker touches, and how many it is
+        // the ONLY thing standing in the way of.
+        let mut touch: BTreeMap<&'static str, usize> = BTreeMap::new();
+        let mut sole: BTreeMap<&'static str, usize> = BTreeMap::new();
+        for b in &per_flame {
+            for k in b {
+                *touch.entry(k).or_default() += 1;
+                if b.len() == 1 {
+                    *sole.entry(k).or_default() += 1;
+                }
+            }
+        }
+        println!("  blocker                                 blocks  sole cause");
+        let mut rows: Vec<_> = touch.iter().collect();
+        rows.sort_by_key(|(k, n)| (std::cmp::Reverse(**n), *k));
+        for (k, n) in rows {
+            println!("    {k:<38} {n:>4}   {:>4}", sole.get(*k).copied().unwrap_or(0));
+        }
+
+        // **Greedy set cover.** A flame needs EVERY one of its
+        // variations bounded, so the unlock is not additive: bounding
+        // the commonest blocker frees nothing if each of its flames
+        // also carries a rarer one. This is the number that decides
+        // whether hand-deriving bounds is a plan or a treadmill.
+        {
+            let mut need: Vec<BTreeSet<String>> = Vec::new();
+            for path in &files {
+                let Ok(text) = std::fs::read_to_string(path) else { continue };
+                let Ok(configs) = crate::flame_xml::parse_flame_xml(&text) else { continue };
+                for cfg in configs {
+                    let mut miss: BTreeSet<String> = BTreeSet::new();
+                    for t in &cfg.flame.transforms {
+                        if t.weight <= 0.0 { continue; }
+                        for name in t.ordered_variation_names(reg) {
+                            if t.variations.get(&name).copied().unwrap_or(0.0) == 0.0 { continue; }
+                            if reg.get(&name).is_none() { continue; }
+                            let affine = crate::scene::ifs_analysis::affine_role(
+                                &name, 1.0, t, reg,
+                                crate::scene::ifs_analysis::Space::Planar,
+                            ).is_some();
+                            if !affine && crate::variations::bound::for_name(&name).is_none() {
+                                miss.insert(name.clone());
+                            }
+                        }
+                    }
+                    need.push(miss);
+                }
+            }
+            println!();
+            println!("  greedy set cover -- bounds added, flames freed of the bound blocker:");
+            let mut have: BTreeSet<String> = BTreeSet::new();
+            for step in 1..=14 {
+                let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+                for m in &need {
+                    if m.is_subset(&have) { continue; }
+                    for v in m.difference(&have) {
+                        *counts.entry(v.clone()).or_default() += 1;
+                    }
+                }
+                let mut best: Option<(String, usize)> = None;
+                for (v, c) in &counts {
+                    if best.as_ref().map_or(true, |(_, bc)| c > bc) {
+                        best = Some((v.clone(), *c));
+                    }
+                }
+                let Some((v, _)) = best else { break };
+                have.insert(v.clone());
+                let freed = need.iter().filter(|m| m.is_subset(&have)).count();
+                println!("    +{step:<2} {v:<22} -> {freed:>3} of {} flames clear", need.len());
+            }
+        }
+
+        println!("\n  variations with no forward bound, by flames blocked:");
+        let mut by_var: Vec<_> = blockers.iter().collect();
+        by_var.sort_by_key(|(name, n)| (std::cmp::Reverse(**n), (*name).clone()));
+        for (name, n) in by_var.iter().take(20) {
+            println!("    {n:>4}  {name}");
+        }
+        println!("    ({} distinct)", blockers.len());
+    }
+
     /// The refusals are refusals, not silent wrong answers.
     #[test]
     fn a_flame_that_cannot_be_targeted_says_so() {
