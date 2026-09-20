@@ -88,6 +88,7 @@ pub fn render_view_content(
                     use crate::renderer::TargetingState as TS;
                     let line = match &deep_zoom.targeting {
                         TS::Off => t!("view.targeting_off").to_string(),
+                        TS::NotPlanar => t!("view.targeting_not_planar").to_string(),
                         TS::NotWorthIt { speedup } => {
                             t!("view.targeting_not_worth_it", speedup = format!("{speedup:.2}"))
                                 .to_string()

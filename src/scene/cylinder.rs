@@ -1406,6 +1406,65 @@ mod gpu_tests {
     /// The per-frame sync asks for a reload only when the SHADER
     /// changes, and never for an ordinary pan.
     ///
+    /// **A ticked box never reports "Not running."**
+    ///
+    /// The panel draws its status line only when cylinder targeting
+    /// is switched ON, so `TargetingState::Off` reaching it is always
+    /// a lie: the user did ask. It happened for every 3D flame,
+    /// because the enumeration is planar and `sync_cylinders` folded
+    /// "wrong render mode" into the same state as "not asked for".
+    /// The flame was fine — `linear3d-modified-zoomed` plans 8 words
+    /// at depth 61 for a 117x speedup — and the app said nothing at
+    /// all about why it would not use them.
+    ///
+    /// This pins the distinction rather than the wording: whatever
+    /// `Off` comes to mean, it must not be what a ticked box gets.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_ticked_box_always_says_why_not() {
+        use crate::renderer::TargetingState as TS;
+        let (device, queue) = device();
+
+        let mut cfg = gasket_config();
+        cfg.cylinder_targeting = true;
+        cfg.zoom = 64.0;
+        cfg.render_mode = crate::scene::transforms::RenderMode::ThreeD;
+
+        let mut r = crate::renderer::FlameRenderer::with_palette_size(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            96,
+            96,
+            &cfg.flame,
+            cfg.palette_size,
+        );
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("not-planar gate"),
+        });
+        r.load_config(&device, &mut enc, &queue, &cfg, &cfg.palette, 1, 0);
+        queue.submit(Some(enc.finish()));
+
+        r.sync_cylinders(&device, &queue, &cfg);
+        assert_eq!(
+            *r.targeting_state(),
+            TS::NotPlanar,
+            "a 3D flame with targeting ON must say the enumeration is 2D-only, not go silent"
+        );
+
+        // ...and switching the box off is the one case that may.
+        cfg.cylinder_targeting = false;
+        r.sync_cylinders(&device, &queue, &cfg);
+        assert_eq!(*r.targeting_state(), TS::Off);
+
+        // The same flame in 2D is not refused for the render mode.
+        cfg.cylinder_targeting = true;
+        cfg.render_mode = crate::scene::transforms::RenderMode::TwoD;
+        r.sync_cylinders(&device, &queue, &cfg);
+        assert_ne!(*r.targeting_state(), TS::NotPlanar);
+        assert_ne!(*r.targeting_state(), TS::Off);
+    }
+
     /// **The gate for a bug the whole suite missed.** `sync_cylinders`
     /// used to rebuild the shader itself, from the raw config —
     /// while `load_config` compiles against the sticky-adopted flame
