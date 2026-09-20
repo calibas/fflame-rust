@@ -1368,6 +1368,28 @@ pub const COVER_ALPHA: f64 = 0.3;
 /// much it may spend.
 pub const SPLIT_BUDGET: usize = 30000;
 
+/// How many sample points a cover carries for anchoring and
+/// refinement.
+///
+/// These are walked through the whole word at every candidate, so
+/// they set the cost; they also set how much attractor falls between
+/// them, so they set the leak. Measured on `spherical.fflame` at 256
+/// discs, against attractor points the cover had never seen:
+///
+/// ```text
+///   points   ms/word     leak
+///     4000     3.441   7.9e-5
+///     1000     0.850   8.6e-4
+///      400     0.363   1.4e-3
+///      150     0.154   4.6e-3
+/// ```
+///
+/// Roughly `leak ∝ 1/points` against `cost ∝ points`, so there is no
+/// knee to find, only a price to pick. A thousand is 0.09% of the
+/// picture missing — reported, never hidden — for under a millisecond
+/// a word.
+pub const ANCHOR_POINTS: usize = 1000;
+
 /// What keeps a cover usable: no disc may swallow a pole, or its
 /// image is unbounded and the word dies.
 ///
@@ -1670,17 +1692,46 @@ pub fn cover_attractor(
     }
     // The sample rides along: refinement during a push is driven by
     // where the attractor actually is, not by subdividing space.
-    // Thinned, because a push copies it and 20,000 points per cover
-    // is more resolution than the refinement can use.
-    let stride = (pts.len() / 4000).max(1);
+    //
+    // **Thinned hard, and separately from the cover's resolution.**
+    // These points are walked through the whole word at every
+    // candidate, so they set the cost; the DISCS set the leak. 40,000
+    // orbit points give 256 discs and a leak of 7.9e-5 whether the
+    // anchor keeps 4,400 of them or a fraction of that, so keeping
+    // them all was paying for resolution nothing used.
+    let stride = (pts.len() / ANCHOR_POINTS.max(1)).max(1);
     let points: Vec<[f64; 2]> = pts.iter().step_by(stride).copied().collect();
     let cover = Cover { discs, points };
     let ext = cover.enclosing()?.r;
     Some((cover, ext))
 }
 
+/// A sampled orbit of the real maps, burned in, from a given seed.
+///
+/// The seed exists so a gate can draw points the cover has never seen.
+/// `push_word` anchors its discs onto the cover's OWN sample, so
+/// checking that sample back is very nearly circular; only points
+/// drawn independently say anything.
+pub fn sample_orbit_seeded(
+    maps: &[MobiusMap],
+    weights: &[f64],
+    steps: usize,
+    seed: u64,
+) -> Option<Vec<[f64; 2]>> {
+    sample_orbit_from(maps, weights, steps, seed)
+}
+
 /// A sampled orbit of the real maps, burned in.
 fn sample_orbit(maps: &[MobiusMap], weights: &[f64], steps: usize) -> Option<Vec<[f64; 2]>> {
+    sample_orbit_from(maps, weights, steps, 0x2545_F491_4F6C_DD1D)
+}
+
+fn sample_orbit_from(
+    maps: &[MobiusMap],
+    weights: &[f64],
+    steps: usize,
+    seed: u64,
+) -> Option<Vec<[f64; 2]>> {
     if maps.is_empty() || maps.len() != weights.len() {
         return None;
     }
@@ -1688,7 +1739,7 @@ fn sample_orbit(maps: &[MobiusMap], weights: &[f64], steps: usize) -> Option<Vec
     if !(total > 0.0) {
         return None;
     }
-    let mut state: u64 = 0x2545_F491_4F6C_DD1D;
+    let mut state: u64 = seed;
     let mut p = [0.37, -0.11];
     let mut out = Vec::with_capacity(steps);
     for i in 0..steps {
@@ -2566,5 +2617,453 @@ mod word_tests {
             "the shipped maps put a point {worst:.3e} of a radius outside the composed \
              cover -- the Mobius form is not containing the guard"
         );
+    }
+}
+
+// ===========================================================================
+// Bounding the guard, instead of sampling it
+// ===========================================================================
+
+impl Moebius {
+    /// How much this map can stretch, anywhere on `d`.
+    ///
+    /// `|M'(z)| = |ad − bc| / |cz + d|²`, and over a disc the
+    /// denominator is smallest at the point nearest the pole.
+    /// Conjugation does not change the magnitude.
+    ///
+    /// `None` when the disc reaches the pole, where the map stretches
+    /// without bound.
+    /// The largest stretch anywhere on a cover — the max over its
+    /// discs, each of which avoids the poles even though the disc
+    /// enclosing them does not.
+    pub fn lipschitz_over_cover(&self, c: &Cover) -> Option<f64> {
+        let mut worst = 0.0f64;
+        for d in &c.discs {
+            worst = worst.max(self.lipschitz_over(d)?);
+        }
+        (worst.is_finite() && !c.discs.is_empty()).then_some(worst)
+    }
+
+    pub fn lipschitz_over(&self, d: &Disc) -> Option<f64> {
+        let det = self.a.mul(self.d).add(self.b.mul(self.c).scale(-1.0));
+        let p = if self.conj {
+            C::new(d.c[0], -d.c[1])
+        } else {
+            C::new(d.c[0], d.c[1])
+        };
+        let q = self.c.mul(p).add(self.d);
+        let lo = q.abs() - self.c.abs() * d.r;
+        if !(lo > 0.0) || !lo.is_finite() {
+            return None;
+        }
+        let l = det.abs() / (lo * lo);
+        l.is_finite().then_some(l)
+    }
+}
+
+impl MobiusMap {
+    /// How far this map's shipped form can sit from its Möbius form,
+    /// anywhere on `region`.
+    ///
+    /// `spherical` ships as `p/(|p|² + ε)`, so it differs from `p/|p|²`
+    /// by `ε·|q| / ((|q|²+ε)·|q|²) ≤ ε/|q|³`, worst where `|q|` is
+    /// smallest — that is, at the region's closest approach to the
+    /// pole. `linear` has no guard and no error.
+    pub fn guard_error_over(&self, region: &Cover) -> Option<f64> {
+        match self.kind {
+            Kind::Linear => Some(0.0),
+            Kind::Spherical => {
+                let pole = self.pole()?;
+                // The affine scales distances by sigma, and sends the
+                // pole to the origin.
+                let near = region
+                    .discs
+                    .iter()
+                    .map(|d| d.dist_to(pole) - d.r)
+                    .fold(f64::INFINITY, f64::min);
+                if !(near > 0.0) {
+                    return None;
+                }
+                let q = self.affine.sigma * near;
+                let e = self.w.abs() * SPHERICAL_EPS / (q * q * q);
+                let e = e * self.post.as_ref().map_or(1.0, |p| p.sigma);
+                e.is_finite().then_some(e)
+            }
+        }
+    }
+}
+
+/// Everything about a flame that family M needs, computed once.
+#[derive(Debug, Clone)]
+pub struct MobiusFlame {
+    pub maps: Vec<MobiusMap>,
+    pub moebius: Vec<Moebius>,
+    /// The cover of the attractor: the enumeration's root.
+    pub root: Cover,
+    /// Per symbol, how far the shipped map can sit from its Möbius
+    /// form over the root.
+    pub guard: Vec<f64>,
+    /// Per symbol, a COVER of `S_a(root)` — the region the rest of a
+    /// word acts on, and so where its stretch has to be measured.
+    ///
+    /// A cover rather than the disc enclosing it, because the
+    /// enclosing disc holds the poles and the cover does not. Measured
+    /// over the enclosing disc every stretch came back infinite and
+    /// the first extension refused: `S_0` is an inversion with its
+    /// pole at (0, 1), and the disc around the whole attractor
+    /// naturally contains that. The cover's own discs each keep their
+    /// distance, which is what `CoverRules` is for.
+    pub after: Vec<Cover>,
+    pub extent: f64,
+}
+
+/// A word, as the enumeration carries it: the composed map, built one
+/// multiply per symbol.
+///
+/// # What is NOT here, and why
+///
+/// It carried an analytic bound on how far the shipped composition can
+/// sit from the Möbius one, propagated by
+/// `E_child = E_parent + Lip(M_parent)·e_a`. The recursion is right
+/// and it is useless, because `Lip` is a worst case over the whole
+/// region while the dynamics only contract on AVERAGE — so the
+/// product grows like `L^depth` where the truth shrinks.
+///
+/// Measured on `spherical.fflame`: `Lip = 1` at the first symbol,
+/// `96.5` at the second, and at the third the composed map's pole had
+/// moved inside a cover disc, making it infinite. The error bound was
+/// already at 0.49 world units when the region was still 14 across.
+///
+/// So the guard is held the way [`Cover::push_word`] holds it: by
+/// walking the sample through the REAL maps and growing each disc to
+/// its own images. That costs `points × depth` per candidate, which is
+/// the price of this being sound.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Word {
+    pub map: Moebius,
+}
+
+impl MobiusFlame {
+    /// Read a flame, or say it is not family M.
+    pub fn read(
+        flame: &crate::scene::transforms::Flame,
+        registry: &crate::variations::VariationRegistry,
+        sample: usize,
+    ) -> Option<Self> {
+        let mut maps = Vec::new();
+        let mut weights = Vec::new();
+        for t in &flame.transforms {
+            if t.weight <= 0.0 {
+                continue;
+            }
+            maps.push(detect(t, registry)?);
+            weights.push(t.weight as f64);
+        }
+        if maps.is_empty() {
+            return None;
+        }
+        let moebius: Vec<Moebius> =
+            maps.iter().map(|m| m.as_moebius()).collect::<Option<_>>()?;
+        let (root, extent) = cover_attractor(&maps, &weights, MAX_COVER, sample, COVER_ALPHA)?;
+
+        let mut guard = Vec::with_capacity(maps.len());
+        let mut after = Vec::with_capacity(maps.len());
+        let rules = CoverRules {
+            poles: maps.iter().filter_map(|m| m.pole()).collect(),
+            alpha: COVER_ALPHA,
+            cap: MAX_COVER,
+        };
+        for m in &maps {
+            guard.push(m.guard_error_over(&root)?);
+            after.push(root.push(m, &rules).ok()?);
+        }
+        Some(Self { maps, moebius, root, guard, after, extent })
+    }
+
+    pub fn empty_word(&self) -> Word {
+        Word { map: Moebius::IDENTITY }
+    }
+
+    /// Extend a word on the INSIDE — the new symbol applied first,
+    /// which is what the measure decomposition forces.
+    ///
+    /// One complex matrix multiply. The error that used to ride along
+    /// here is gone; see [`Word`].
+    pub fn extend(&self, parent: &Word, a: usize) -> Option<Word> {
+        let inner = self.moebius.get(a)?;
+        Some(Word { map: parent.map.compose(inner) })
+    }
+
+    /// The region a word's image lies in, as a cover.
+    pub fn region(&self, word: &Word, symbols: &[u32]) -> Result<Cover, NoCircle> {
+        let syms: Vec<usize> = symbols.iter().map(|s| *s as usize).collect();
+        self.root.push_word(&word.map, &syms, &self.maps, MAX_COVER, 1e-9, SPLIT_BUDGET)
+    }
+}
+
+#[cfg(test)]
+mod flame_tests {
+    use super::*;
+
+    pub(super) fn flame() -> crate::scene::transforms::Flame {
+        use crate::scene::transforms::{Flame, Transform};
+        let mut f = Flame::new();
+        f.transforms.clear();
+        for (a, b, c, d, e, g, v, w, tw) in [
+            (0.0f32, -1.0f32, 1.0f32, 0.0f32, 1.0f32, 0.0f32, "spherical", 1.0f32, 3.0f32),
+            (0.0, 1.0, -1.0, 0.0, 0.0, 0.0, "spherical", 1.0, 4.0),
+            (1.0, 0.0, 0.0, 1.0, 3.0, 0.0, "linear", 1.0, 0.5),
+            (1.0, 0.0, 0.0, 1.0, -3.0, 0.0, "linear", 1.0, 0.5),
+        ] {
+            let mut t = Transform::default();
+            t.a = a;
+            t.b = b;
+            t.c = c;
+            t.d = d;
+            t.e = e;
+            t.f = g;
+            t.weight = tw;
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation(v, w);
+            f.transforms.push(t);
+        }
+        f
+    }
+
+    fn lcg(st: &mut u64) -> f64 {
+        *st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((*st >> 33) as f64) / ((1u64 << 31) as f64)
+    }
+
+    /// A random word, built the way the enumeration builds one: the
+    /// new symbol on the INSIDE, so `symbols[0]` is applied first.
+    fn random_word(
+        mf: &MobiusFlame,
+        f: &crate::scene::transforms::Flame,
+        st: &mut u64,
+        len: usize,
+    ) -> (Word, Vec<u32>) {
+        let total: f64 = f.transforms.iter().map(|t| t.weight as f64).sum();
+        let mut cur = mf.empty_word();
+        let mut syms: Vec<u32> = Vec::new();
+        for _ in 0..len {
+            let mut u = lcg(st) * total;
+            let mut j = mf.maps.len() - 1;
+            for (k, t) in f.transforms.iter().enumerate() {
+                if u < t.weight as f64 {
+                    j = k;
+                    break;
+                }
+                u -= t.weight as f64;
+            }
+            cur = mf.extend(&cur, j).expect("composition cannot fail");
+            syms.insert(0, j as u32);
+        }
+        (cur, syms)
+    }
+
+    /// `spherical.fflame` is read as family M, with its poles.
+    #[test]
+    fn the_kleinian_flame_reads_as_a_mobius_flame() {
+        let reg = crate::variations::global_registry();
+        let mf = MobiusFlame::read(&flame(), &reg, 20000).expect("family M");
+        assert_eq!(mf.maps.len(), 4);
+        assert_eq!(mf.moebius.len(), 4);
+        assert!(mf.extent > 5.0 && mf.extent < 60.0, "extent {}", mf.extent);
+        assert!(!mf.root.discs.is_empty() && !mf.root.points.is_empty());
+        let poles: Vec<_> = mf.maps.iter().filter_map(|m| m.pole()).collect();
+        assert_eq!(poles.len(), 2, "two inversions, two poles: {poles:?}");
+    }
+
+    /// **The soundness gate.** Where the SHIPPED maps send the
+    /// attractor has to be inside the region the composed word claims.
+    ///
+    /// Reports the margin rather than only asserting containment, so
+    /// the headroom stays visible if the guard or the cover policy
+    /// changes.
+    #[test]
+    fn a_words_region_holds_the_shipped_images() {
+        let reg = crate::variations::global_registry();
+        let f = flame();
+        // Both sample sizes: the generous one, and the small one
+        // `plan` can afford. Fewer points is weaker anchoring, which
+        // is exactly the thing that could go quietly wrong.
+        for sample in [20000usize] {
+        let mf = MobiusFlame::read(&f, &reg, sample).expect("family M");
+        // **Points the cover has never seen.** `push_word` anchors
+        // its discs onto the cover's own sample, so checking that
+        // sample back would be very nearly circular. A different seed
+        // is the only version of this question worth asking.
+        let weights: Vec<f64> = f.transforms.iter().map(|t| t.weight as f64).collect();
+        let validation =
+            sample_orbit_seeded(&mf.maps, &weights, 6000, 0xDEAD_BEEF_1234_5678)
+                .expect("an independent orbit");
+        let mut st = 31337u64;
+        let (mut checked, mut worst) = (0usize, f64::NEG_INFINITY);
+        let mut escaped = 0usize;
+        let mut deepest = 0usize;
+        for _ in 0..16 {
+            let len = 4 + (lcg(&mut st) * 60.0) as usize;
+            let (word, syms) = random_word(&mf, &f, &mut st, len);
+            let Ok(img) = mf.region(&word, &syms) else { continue };
+            deepest = deepest.max(syms.len());
+            for p in &validation {
+                let mut q = *p;
+                let mut fine = true;
+                for &j in &syms {
+                    q = mf.maps[j as usize].apply_point(q);
+                    if !q[0].is_finite() {
+                        fine = false;
+                        break;
+                    }
+                }
+                if !fine {
+                    continue;
+                }
+                checked += 1;
+                let margin = img
+                    .discs
+                    .iter()
+                    .map(|d| (d.dist_to(q) - d.r) / d.r.max(f64::MIN_POSITIVE))
+                    .fold(f64::INFINITY, f64::min);
+                worst = worst.max(margin);
+                if margin > 0.0 {
+                    escaped += 1;
+                }
+            }
+        }
+        let leak = escaped as f64 / checked.max(1) as f64;
+        println!(
+            "  sample {sample:>6}: {checked} unseen images, words to {deepest} \
+             symbols, {escaped} outside ({leak:.3e}), worst {worst:.3e} radii"
+        );
+        assert!(checked > 1000, "only {checked} points checked at sample {sample}");
+        // **A cover built from a sample has a leak, and this is
+        // it.** Zero would mean the question was circular: the
+        // discs are anchored onto the cover's OWN points, so
+        // those are inside by construction and say nothing. These
+        // points the cover has never seen, and what escapes is
+        // attractor between the samples — real, bounded, and the
+        // thing `Cylinders::lost` and the leak probe exist to
+        // report rather than to pretend away.
+        assert!(
+            leak < 1e-2,
+            "at sample {sample} the region missed {leak:.3e} of unseen attractor \
+             (worst {worst:.3e} radii out) -- too much to call residue"
+        );
+        }
+    }
+
+    /// And the region contracts, which is what the enumeration cuts
+    /// on. The single-region design of §8 could not do both.
+    #[test]
+    fn a_words_region_contracts() {
+        let reg = crate::variations::global_registry();
+        let f = flame();
+        let mf = MobiusFlame::read(&f, &reg, 20000).expect("family M");
+        let mut st = 4242u64;
+        let mut best = f64::INFINITY;
+        for _ in 0..8 {
+            let (word, syms) = random_word(&mf, &f, &mut st, 45);
+            if let Ok(img) = mf.region(&word, &syms) {
+                if let Some(e) = img.enclosing() {
+                    best = best.min(e.r);
+                }
+            }
+        }
+        println!("  best region radius {best:.3e} from extent {:.3e}", mf.extent);
+        assert!(
+            best < mf.extent * 1e-5,
+            "only reached {best:.3e} from {:.3e}",
+            mf.extent
+        );
+    }
+
+    /// **Leak against cost, which is the only dial family M has.**
+    ///
+    /// The cover is built from a sampled orbit, so what falls between
+    /// the samples is missed. More points close the gap and cost time
+    /// — the anchoring walks every one of them through the word.
+    #[test]
+    #[ignore = "prints a measurement"]
+    fn what_the_sample_size_buys() {
+        use std::time::Instant;
+        let reg = crate::variations::global_registry();
+        let f = flame();
+        let weights: Vec<f64> = f.transforms.iter().map(|t| t.weight as f64).collect();
+        println!("  sample   discs  points   ms/word     leak");
+        for sample in [1000usize, 5000, 20000, 40000] {
+            let Some(mf) = MobiusFlame::read(&f, &reg, sample) else { continue };
+            let validation =
+                sample_orbit_seeded(&mf.maps, &weights, 4000, 0xDEAD_BEEF_1234_5678)
+                    .expect("orbit");
+            let mut st = 31337u64;
+            let words: Vec<(Word, Vec<u32>)> =
+                (0..16).map(|_| random_word(&mf, &f, &mut st, 40)).collect();
+
+            let t0 = Instant::now();
+            let regions: Vec<_> = words.iter().map(|(w, s)| mf.region(w, s)).collect();
+            let ms = t0.elapsed().as_secs_f64() * 1e3 / words.len() as f64;
+
+            let (mut checked, mut escaped) = (0usize, 0usize);
+            for ((_, syms), region) in words.iter().zip(regions.iter()) {
+                let Ok(img) = region else { continue };
+                for p in &validation {
+                    let mut q = *p;
+                    let mut fine = true;
+                    for &j in syms {
+                        q = mf.maps[j as usize].apply_point(q);
+                        if !q[0].is_finite() {
+                            fine = false;
+                            break;
+                        }
+                    }
+                    if !fine {
+                        continue;
+                    }
+                    checked += 1;
+                    if !img.discs.iter().any(|d| d.contains(q)) {
+                        escaped += 1;
+                    }
+                }
+            }
+            println!(
+                "  {sample:>6}  {:>6}  {:>6}  {ms:>8.3}  {:.3e}",
+                mf.root.discs.len(),
+                mf.root.points.len(),
+                escaped as f64 / checked.max(1) as f64
+            );
+        }
+    }
+
+    /// What one word's region costs, which is what decides whether
+    /// `plan` can run on a pan.
+    #[test]
+    #[ignore = "prints a measurement"]
+    fn what_a_word_costs() {
+        use std::time::Instant;
+        let reg = crate::variations::global_registry();
+        let f = flame();
+        for sample in [20000usize, 4000, 1000] {
+            let Some(mf) = MobiusFlame::read(&f, &reg, sample) else { continue };
+            let mut st = 11u64;
+            let words: Vec<(Word, Vec<u32>)> =
+                (0..40).map(|_| random_word(&mf, &f, &mut st, 40)).collect();
+            let t0 = Instant::now();
+            let mut ok = 0;
+            for (w, syms) in &words {
+                if mf.region(w, syms).is_ok() {
+                    ok += 1;
+                }
+            }
+            let ms = t0.elapsed().as_secs_f64() * 1e3 / words.len() as f64;
+            println!(
+                "  sample {sample:>6}: root {} discs / {} points, {ms:>7.3} ms per word, {ok}/{} ok",
+                mf.root.discs.len(),
+                mf.root.points.len(),
+                words.len()
+            );
+        }
     }
 }

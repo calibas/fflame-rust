@@ -540,3 +540,71 @@ composed matrix carried per node, and `lost` for words the refinement
 budget cannot save. Then the picture gate — `spherical.fflame`
 enumerating at its saved framing and deeper, matching the untargeted
 render to within the reported leak.
+
+
+## 11. The analytic bound, and why the sample stays
+
+The point walk in §10 costs `points × depth` per candidate, which
+projected to seconds per pan. The obvious replacement is to BOUND the
+guard rather than sample it:
+
+```text
+E_child  =  E_parent  +  Lip(M_parent) · e_a
+```
+
+which is right, and useless. `Lip` is a worst case over the whole
+region while the dynamics only contract on AVERAGE, so the product
+grows like `L^depth` where the truth shrinks. Measured on
+`spherical.fflame`: `Lip = 1` at the first symbol, **96.5** at the
+second, and at the third the composed map's pole had moved inside a
+cover disc and it was infinite. The error bound had already reached
+0.49 world units while the region was still 14 across.
+
+Measuring `Lip` over the cover's own discs rather than the disc
+enclosing them bought exactly one symbol — the enclosing disc holds
+the poles and the cover does not, but the composed pole moves, and it
+soon lands inside a cover disc anyway.
+
+Recorded rather than deleted, because it is the obvious idea and the
+next person will have it too.
+
+## 12. The gate was circular, and the honest one has a leak
+
+`push_word` anchors its discs onto the cover's **own** sample, so
+checking that sample back is very nearly tautological. Re-run against
+attractor points drawn from an independent seed, the picture changes:
+
+    sample  20000, anchor 4000:   5.8e-4 of unseen images outside
+    sample   1000, anchor 4000:   3.0e-2
+
+So the cover does leak, and the leak is sampling residue — attractor
+that falls between the points. Which is what this design has said all
+along it would do; it had simply never been measured, because the
+measurement had been asking itself.
+
+The dial, at 256 discs, against points the cover had never seen:
+
+    anchor points   ms/word     leak
+             4000     3.441   7.9e-5
+             1000     0.850   8.6e-4
+              400     0.363   1.4e-3
+              150     0.154   4.6e-3
+
+Roughly `leak ∝ 1/points` against `cost ∝ points` — no knee to find,
+only a price to pick. **1000 points**: 0.09% of the picture missing,
+under a millisecond a word. At a few hundred candidates that is a few
+tenths of a second per plan, which is a deep-zoom mode rather than a
+pan.
+
+`a_words_region_holds_the_shipped_images` now draws its validation
+from a different seed and asserts the LEAK is small rather than
+pretending it is zero, which is the only version of the question
+worth asking.
+
+## 13. Still to do for phase 1
+
+Wiring into `plan`: family-M detection, `MobiusFlame` as the root, the
+composed matrix carried per node, and the sampling leak reported
+through `Cylinders::lost` — it is not word-dropping loss, so it may
+want its own field rather than to be folded in. Then the picture gate
+on `spherical.fflame`.
