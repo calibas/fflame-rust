@@ -34,12 +34,19 @@
 //! that. A construct the walk does not model is a REFUSAL that names
 //! it, never a wrong disc.
 //!
-//! # What phase 1 does not do
+//! # Control flow (phase 2)
 //!
-//! Branches and loops: [`Refusal::Construct`] names them, and the
-//! survey says that is 332 and 68 of 647 bodies. Phase 2 joins arms
-//! and unrolls. Per-thread state and 3D-only bodies are refused for
-//! good.
+//! A condition evaluates to yes, no, or **maybe**. Yes and no take
+//! the arm they name; maybe evaluates BOTH from the same incoming
+//! state and unions every local either one assigned, which is sound
+//! because the union contains whichever arm the GPU actually took.
+//! Loops iterate with the same join until their exit condition is
+//! definitely true, and refuse if it has not settled at the cap.
+//!
+//! Per-thread state and genuine poles stay refused for good: the
+//! first because a per-call bound cannot know what a previous
+//! iteration stored, the second because the map really is
+//! unbounded there.
 
 use super::bound::Ball;
 use super::inverse::ParamFn;
@@ -285,6 +292,9 @@ pub enum Refusal {
     /// computed by a `wgsl_init` function that the probe module does
     /// not carry.
     InitSlot,
+    /// A loop whose exit condition never became definitely true
+    /// within the unroll cap.
+    LoopUnsettled,
     /// The value came out with a shape the evaluator did not expect.
     Shape(&'static str),
     /// The result was unbounded without a single identifiable cause.
@@ -303,6 +313,7 @@ impl std::fmt::Display for Refusal {
             Self::State => write!(f, "reads per-thread state"),
             Self::Opaque(w) => write!(f, "does arithmetic on {w}"),
             Self::InitSlot => write!(f, "reads an init-derived parameter slot"),
+            Self::LoopUnsettled => write!(f, "a loop that did not settle within the cap"),
             Self::Shape(s) => write!(f, "unexpected value shape: {s}"),
             Self::Unbounded => write!(f, "the result is unbounded"),
         }
@@ -438,6 +449,37 @@ pub fn derive(
     Ok(Ball::new([cx, cy], (hx * hx + hy * hy).sqrt()))
 }
 
+/// A condition's value, where the evaluator can tell.
+fn as_bool(v: &IVal) -> Option<bool> {
+    match v {
+        IVal::Bool(b) => *b,
+        // A numeric used as a condition is not something WGSL allows,
+        // so this only guards against a shape slip.
+        _ => None,
+    }
+}
+
+/// `x < y` over two ranges: definitely, definitely not, or unknown.
+fn cmp_lt(x: Interval, y: Interval) -> Option<bool> {
+    if x.hi < y.lo {
+        Some(true)
+    } else if x.lo >= y.hi {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+fn cmp_le(x: Interval, y: Interval) -> Option<bool> {
+    if x.hi <= y.lo {
+        Some(true)
+    } else if x.lo > y.hi {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 /// Tags for the `transforms[i].variations[j]` access chain. The
 /// measurement behind the shortcut: across 647 bodies, `variations`
 /// is the ONLY field of `transforms` any of them reads (107 do), so
@@ -473,7 +515,65 @@ struct Eval<'a> {
 struct Frame {
     args: Vec<IVal>,
     exprs: std::collections::HashMap<usize, IVal>,
-    locals: std::collections::HashMap<usize, IVal>,
+    locals: Locals,
+    /// Every value the body might return. A body with one `return`
+    /// puts one here; one that returns from inside a branch the
+    /// evaluator could not decide puts several, and the answer is
+    /// their union.
+    returns: Vec<IVal>,
+}
+
+type Locals = std::collections::HashMap<usize, IVal>;
+
+/// The union of two values, for joining branch arms and loop
+/// iterations.
+fn join(a: &IVal, b: &IVal) -> Result<IVal, Refusal> {
+    Ok(match (a, b) {
+        (IVal::Scalar(x), IVal::Scalar(y)) => IVal::Scalar(x.union(*y)),
+        (IVal::Int(x), IVal::Int(y)) if x == y => IVal::Int(*x),
+        (IVal::Int(x), IVal::Int(y)) => IVal::Scalar(
+            Interval::point(*x as f64).union(Interval::point(*y as f64)),
+        ),
+        (IVal::Scalar(x), IVal::Int(y)) | (IVal::Int(y), IVal::Scalar(x)) => {
+            IVal::Scalar(x.union(Interval::point(*y as f64)))
+        }
+        (IVal::Vec(x), IVal::Vec(y)) => {
+            let n = x.len().max(y.len());
+            let mut out = Vec::with_capacity(n);
+            for i in 0..n {
+                match (x.get(i), y.get(i)) {
+                    (Some(p), Some(q)) => out.push(p.union(*q)),
+                    (Some(p), None) | (None, Some(p)) => out.push(*p),
+                    (None, None) => {}
+                }
+            }
+            IVal::Vec(out)
+        }
+        (IVal::Bool(x), IVal::Bool(y)) => {
+            IVal::Bool(if x == y { *x } else { None })
+        }
+        (IVal::Opaque(x), IVal::Opaque(y)) if x == y => IVal::Opaque(x),
+        // Two different opaques, or a shape mismatch: nothing useful
+        // can be said, and saying something would be the unsound move.
+        _ => return Err(Refusal::Shape("joined two incompatible values")),
+    })
+}
+
+/// Join two post-branch local tables against the state they both
+/// started from. A local only one arm wrote still has the incoming
+/// value on the other path, which is what `before` supplies.
+fn join_locals(before: &Locals, a: &Locals, b: &Locals) -> Result<Locals, Refusal> {
+    let mut out = Locals::new();
+    for k in a.keys().chain(b.keys()) {
+        if out.contains_key(k) {
+            continue;
+        }
+        let zero = IVal::Scalar(Interval::point(0.0));
+        let va = a.get(k).or_else(|| before.get(k)).unwrap_or(&zero);
+        let vb = b.get(k).or_else(|| before.get(k)).unwrap_or(&zero);
+        out.insert(*k, join(va, vb)?);
+    }
+    Ok(out)
 }
 
 impl<'a> Eval<'a> {
@@ -481,13 +581,42 @@ impl<'a> Eval<'a> {
         let mut frame = Frame {
             args: args.to_vec(),
             exprs: std::collections::HashMap::new(),
-            locals: std::collections::HashMap::new(),
+            locals: Locals::new(),
+            returns: Vec::new(),
         };
-        match self.block(func, &func.body, &mut frame)? {
-            Flow::Return(v) => v.ok_or(Refusal::Shape("returned nothing")),
-            Flow::Fell => Err(Refusal::Shape("fell off the end without returning")),
+        // **Declaration initialisers, before anything runs.**
+        // `var inv = 1.0;` is a `LocalVariable` carrying an `init`
+        // expression, not a `Store`, so a body that only assigns the
+        // local inside one arm of a branch leaves it looking
+        // unwritten on the other path. Defaulting that to zero is not
+        // merely imprecise, it is WRONG -- `yin_yang` joined its
+        // `inv` of -1 against a phantom 0 instead of the declared 1,
+        // and every output came back on the wrong side of the origin.
+        for (h, local) in func.local_variables.iter() {
+            if let Some(init) = local.init {
+                let v = self.expr(func, init, &mut frame)?;
+                frame.locals.insert(h.index(), v);
+            }
         }
+
+        self.block(func, &func.body, &mut frame)?;
+        let mut it = frame.returns.into_iter();
+        let first = it.next().ok_or(Refusal::Shape("returned nothing"))?;
+        let mut acc = first;
+        for v in it {
+            acc = join(&acc, &v)?;
+        }
+        Ok(acc)
     }
+
+    /// How deep a loop is unrolled before the evaluator gives up.
+    ///
+    /// A loop with a literal or parameter bound has an exact `Int`
+    /// counter, so its exit condition becomes definitely true on the
+    /// right iteration and it never approaches this. The cap is for
+    /// the ones whose bound the evaluator cannot pin down, where the
+    /// honest answer is a refusal rather than a disc from a guess.
+    const LOOP_CAP: usize = 64;
 
     fn block(
         &mut self,
@@ -499,35 +628,134 @@ impl<'a> Eval<'a> {
             match st {
                 naga::Statement::Emit(range) => {
                     for h in range.clone() {
-                        let v = self.expr(func, h, frame)?;
+                        // **Always recomputed, never read from the
+                        // cache.** An `Emit` means "these values are
+                        // computed here", and inside a loop or a
+                        // re-entered arm the same handle stands for a
+                        // different value each time. Serving the
+                        // cached one is how a stale value reaches a
+                        // bound and makes it too tight -- the same
+                        // fault `r_circleblur` caught for locals.
+                        let e = &func.expressions[h];
+                        let v = self.expr_inner(func, e, frame)?;
                         frame.exprs.insert(h.index(), v);
                     }
                 }
                 naga::Statement::Store { pointer, value } => {
                     let v = self.expr(func, *value, frame)?;
-                    // The pointer is a LocalVariable expression.
-                    match &func.expressions[*pointer] {
-                        naga::Expression::LocalVariable(lh) => {
-                            frame.locals.insert(lh.index(), v);
-                        }
-                        _ => return Err(Refusal::Construct("a store to something other than a local")),
-                    }
+                    self.store(func, *pointer, v, frame)?;
                 }
                 naga::Statement::Return { value } => {
-                    let v = match value {
-                        Some(h) => Some(self.expr(func, *h, frame)?),
-                        None => None,
-                    };
-                    return Ok(Flow::Return(v));
+                    if let Some(h) = value {
+                        let v = self.expr(func, *h, frame)?;
+                        frame.returns.push(v);
+                    }
+                    return Ok(Flow::Return);
                 }
-                naga::Statement::Block(b) => {
-                    if let Flow::Return(v) = self.block(func, b, frame)? {
-                        return Ok(Flow::Return(v));
+                naga::Statement::Block(b) => match self.block(func, b, frame)? {
+                    Flow::Fell => {}
+                    other => return Ok(other),
+                },
+                naga::Statement::If { condition, accept, reject } => {
+                    let c = self.expr(func, *condition, frame)?;
+                    match as_bool(&c) {
+                        Some(true) => match self.block(func, accept, frame)? {
+                            Flow::Fell => {}
+                            other => return Ok(other),
+                        },
+                        Some(false) => match self.block(func, reject, frame)? {
+                            Flow::Fell => {}
+                            other => return Ok(other),
+                        },
+                        None => {
+                            // Both arms, from the same incoming state,
+                            // and the union of what either assigned.
+                            // A `return` inside one of them has
+                            // already put its value in `frame.returns`,
+                            // so the caller's answer accounts for it
+                            // and execution continues down the other
+                            // path -- an over-approximation, which is
+                            // the safe direction.
+                            let before = frame.locals.clone();
+                            let fa = self.block(func, accept, frame)?;
+                            let after_a =
+                                std::mem::replace(&mut frame.locals, before.clone());
+                            let fb = self.block(func, reject, frame)?;
+                            let after_b = frame.locals.clone();
+                            frame.locals = join_locals(&before, &after_a, &after_b)?;
+                            // Only when BOTH arms left the block does
+                            // control certainly leave it.
+                            match (&fa, &fb) {
+                                (Flow::Fell, _) | (_, Flow::Fell) => {}
+                                (Flow::Break, _) | (_, Flow::Break) => {
+                                    return Ok(Flow::Break)
+                                }
+                                _ => return Ok(Flow::Return),
+                            }
+                        }
                     }
                 }
-                naga::Statement::If { .. } => return Err(Refusal::Construct("a branch")),
-                naga::Statement::Switch { .. } => return Err(Refusal::Construct("a switch")),
-                naga::Statement::Loop { .. } => return Err(Refusal::Construct("a loop")),
+                naga::Statement::Switch { selector, cases } => {
+                    // Sound without deciding the selector: every case
+                    // body from the same incoming state, all unioned.
+                    let _ = self.expr(func, *selector, frame)?;
+                    let before = frame.locals.clone();
+                    let mut acc = before.clone();
+                    for case in cases.iter() {
+                        frame.locals = before.clone();
+                        self.block(func, &case.body, frame)?;
+                        acc = join_locals(&before, &acc, &frame.locals)?;
+                    }
+                    frame.locals = acc;
+                }
+                naga::Statement::Loop { body, continuing, break_if } => {
+                    let before = frame.locals.clone();
+                    let mut exits: Vec<Locals> = Vec::new();
+                    let mut settled = false;
+                    for _ in 0..Self::LOOP_CAP {
+                        let flow = self.block(func, body, frame)?;
+                        if matches!(flow, Flow::Break) {
+                            exits.push(frame.locals.clone());
+                            settled = true;
+                            break;
+                        }
+                        if matches!(flow, Flow::Return) {
+                            exits.push(frame.locals.clone());
+                            settled = true;
+                            break;
+                        }
+                        self.block(func, continuing, frame)?;
+                        match break_if {
+                            Some(h) => {
+                                let c = self.expr(func, *h, frame)?;
+                                match as_bool(&c) {
+                                    Some(true) => {
+                                        exits.push(frame.locals.clone());
+                                        settled = true;
+                                    }
+                                    // Might have left here; record the
+                                    // state and carry on.
+                                    None => exits.push(frame.locals.clone()),
+                                    Some(false) => {}
+                                }
+                                if settled {
+                                    break;
+                                }
+                            }
+                            None => {}
+                        }
+                    }
+                    if !settled {
+                        return Err(Refusal::LoopUnsettled);
+                    }
+                    let mut acc = exits.pop().unwrap_or_else(|| before.clone());
+                    for e in &exits {
+                        acc = join_locals(&before, &acc, e)?;
+                    }
+                    frame.locals = acc;
+                }
+                naga::Statement::Break => return Ok(Flow::Break),
+                naga::Statement::Continue => return Ok(Flow::Continue),
                 naga::Statement::Call { function, arguments, result } => {
                     let mut vals = Vec::with_capacity(arguments.len());
                     for a in arguments {
@@ -538,13 +766,87 @@ impl<'a> Eval<'a> {
                         frame.exprs.insert(r.index(), v);
                     }
                 }
-                naga::Statement::Break | naga::Statement::Continue => {
-                    return Err(Refusal::Construct("a break or continue"))
-                }
+                naga::Statement::Kill => return Ok(Flow::Return),
                 _ => return Err(Refusal::Construct("an unmodelled statement")),
             }
         }
         Ok(Flow::Fell)
+    }
+
+    /// Assign to a local, or to one lane of one.
+    ///
+    /// `out[0] = …` and `p.x = …` are both an `Access` on a
+    /// `LocalVariable`, and 70 bodies do it; treating only whole-local
+    /// stores was most of what stood between phase 1 and them.
+    fn store(
+        &mut self,
+        func: &naga::Function,
+        pointer: naga::Handle<naga::Expression>,
+        v: IVal,
+        frame: &mut Frame,
+    ) -> Result<(), Refusal> {
+        match &func.expressions[pointer] {
+            naga::Expression::LocalVariable(lh) => {
+                frame.locals.insert(lh.index(), v);
+                Ok(())
+            }
+            naga::Expression::AccessIndex { base, index } => {
+                self.store_lane(func, *base, Some(*index as usize), v, frame)
+            }
+            naga::Expression::Access { base, index } => {
+                let i = self.expr(func, *index, frame)?;
+                let lane = match i {
+                    IVal::Int(k) if k >= 0 => Some(k as usize),
+                    // A lane the evaluator cannot pin down: widen
+                    // every lane rather than guess which one moved.
+                    _ => None,
+                };
+                self.store_lane(func, *base, lane, v, frame)
+            }
+            _ => Err(Refusal::Construct("a store through something other than a local")),
+        }
+    }
+
+    fn store_lane(
+        &mut self,
+        func: &naga::Function,
+        base: naga::Handle<naga::Expression>,
+        lane: Option<usize>,
+        v: IVal,
+        frame: &mut Frame,
+    ) -> Result<(), Refusal> {
+        let naga::Expression::LocalVariable(lh) = &func.expressions[base] else {
+            return Err(Refusal::Construct("a store through a nested access"));
+        };
+        let key = lh.index();
+        let cur = frame.locals.get(&key).cloned();
+        let mut lanes = match cur {
+            Some(IVal::Vec(l)) => l,
+            Some(IVal::Scalar(s)) => vec![s],
+            _ => Vec::new(),
+        };
+        let val = v.scalar().unwrap_or(Interval::UNBOUNDED);
+        match lane {
+            Some(k) => {
+                while lanes.len() <= k {
+                    lanes.push(Interval::point(0.0));
+                }
+                lanes[k] = val;
+            }
+            None => {
+                // Unknown lane: every one could be the one that
+                // changed, so every one takes the union.
+                if lanes.is_empty() {
+                    lanes.push(val);
+                } else {
+                    for l in lanes.iter_mut() {
+                        *l = l.union(val);
+                    }
+                }
+            }
+        }
+        frame.locals.insert(key, IVal::Vec(lanes));
+        Ok(())
     }
 
     fn expr(
@@ -562,10 +864,19 @@ impl<'a> Eval<'a> {
         // the store, which silently drops everything assigned after
         // — a bound that is too TIGHT, and `r_circleblur` escaped its
         // disc by exactly that.
-        let cacheable = !matches!(
-            e,
-            naga::Expression::LocalVariable(_) | naga::Expression::Load { .. }
-        );
+        // **Only `LocalVariable` is uncacheable, and the line is
+        // exact.** An `Emit` always recomputes and overwrites, so any
+        // expression it covers -- including the `Load` behind a
+        // `let` -- is refreshed at the point the source says it is
+        // computed, and caching it is what makes `let r1 = r2;` mean
+        // r2's value THEN rather than after a later assignment. A
+        // `LocalVariable` is a pointer, never emitted and so never
+        // refreshed, and caching that is what made `bx = bx + …` read
+        // the value from before the preceding store.
+        //
+        // Both directions were caught by the same gate, one in each
+        // phase, and both made a bound too tight.
+        let cacheable = !matches!(e, naga::Expression::LocalVariable(_));
         if cacheable {
             if let Some(v) = frame.exprs.get(&h.index()) {
                 return Ok(v.clone());
@@ -628,10 +939,14 @@ impl<'a> Eval<'a> {
                     return Ok(v);
                 }
                 let lanes = b.lanes()?;
+                // A lane past what the evaluator has tracked is a
+                // lane nothing has written, and WGSL zero-initialises
+                // a local. Erroring instead was the single largest
+                // refusal after phase 2 landed -- 107 bodies -- and
+                // every one of them was reading a component of a
+                // `var` it had only partly assigned.
                 IVal::Scalar(
-                    *lanes
-                        .get(*index as usize)
-                        .ok_or(Refusal::Shape("component out of range"))?,
+                    lanes.get(*index as usize).copied().unwrap_or(Interval::point(0.0)),
                 )
             }
             E::Access { base, index } => {
@@ -648,9 +963,7 @@ impl<'a> Eval<'a> {
                 let lanes = b.lanes()?;
                 match i {
                     IVal::Int(k) => IVal::Scalar(
-                        *lanes
-                            .get(k as usize)
-                            .ok_or(Refusal::Shape("dynamic index out of range"))?,
+                        lanes.get(k as usize).copied().unwrap_or(Interval::point(0.0)),
                     ),
                     // A non-constant index: the union of every lane is
                     // sound and is all that can be said.
@@ -689,10 +1002,36 @@ impl<'a> Eval<'a> {
             }
             E::Binary { op, left, right } => {
                 let a = self.expr(func, *left, frame)?;
-                let b = self.expr(func, *right, frame)?;
-                self.binary(*op, a, b)?
+                // **A value times ITSELF is a square, not a product
+                // of two independent ranges.** Interval arithmetic
+                // has no memory that both factors move together, so
+                // `x * x` over `[-1, 1]` comes out `[-1, 1]` when it
+                // is really `[0, 1]` -- and a denominator like
+                // `x*x + y*y + 1e-6` then straddles zero and reports
+                // a pole that does not exist. Recognising the
+                // identical operand costs one handle comparison and
+                // removes that whole class of false refusal.
+                if matches!(op, naga::BinaryOperator::Multiply) && left == right {
+                    self.map_lanes(&a, |x| square(x))?
+                } else {
+                    let b = self.expr(func, *right, frame)?;
+                    self.binary(*op, a, b)?
+                }
             }
             E::Math { fun, arg, arg1, arg2, arg3 } => {
+                // `dot(p, p)` -- the squared length, and by far the
+                // commonest expression in the catalogue -- is the
+                // same identical-operand case as `x * x`, one level
+                // up. Without it every radial variation reports a
+                // pole at the first division.
+                if matches!(fun, naga::MathFunction::Dot) && arg1.as_ref() == Some(arg) {
+                    let v = self.expr(func, *arg, frame)?;
+                    let mut acc = Interval::point(0.0);
+                    for l in v.lanes()? {
+                        acc = acc.add(square(l));
+                    }
+                    return Ok(IVal::Scalar(acc));
+                }
                 let mut args = vec![self.expr(func, *arg, frame)?];
                 for a in [arg1, arg2, arg3].into_iter().flatten() {
                     args.push(self.expr(func, *a, frame)?);
@@ -705,7 +1044,18 @@ impl<'a> Eval<'a> {
                 // land on, so the interval passes through.
                 self.expr(func, *expr, frame)?
             }
-            E::Select { .. } => return Err(Refusal::Construct("a select")),
+            E::Select { condition, accept, reject } => {
+                let c = self.expr(func, *condition, frame)?;
+                match as_bool(&c) {
+                    Some(true) => self.expr(func, *accept, frame)?,
+                    Some(false) => self.expr(func, *reject, frame)?,
+                    None => {
+                        let a = self.expr(func, *accept, frame)?;
+                        let b = self.expr(func, *reject, frame)?;
+                        join(&a, &b)?
+                    }
+                }
+            }
             // The `Call` statement ran first and cached the value
             // under this handle; reaching here means it did not.
             E::CallResult(_) => return Err(Refusal::Shape("a call result with no call")),
@@ -717,6 +1067,9 @@ impl<'a> Eval<'a> {
                     return Err(Refusal::UnknownCall(format!("global `{gname}`")));
                 }
             }
+            // `any`/`all` over a vector comparison. Deciding these
+            // would need the componentwise predicate; undecided is
+            // sound and both arms get taken.
             E::Relational { .. } => IVal::Bool(None),
             _ => return Err(Refusal::Construct("an unmodelled expression")),
         })
@@ -791,6 +1144,21 @@ impl<'a> Eval<'a> {
             .ok_or(Refusal::InitSlot)
     }
 
+    /// Apply a scalar rule to every lane, keeping the shape.
+    fn map_lanes(
+        &self,
+        v: &IVal,
+        f: impl Fn(Interval) -> Interval,
+    ) -> Result<IVal, Refusal> {
+        Ok(match v {
+            IVal::Scalar(x) => IVal::Scalar(f(*x)),
+            IVal::Int(k) => IVal::Scalar(f(Interval::point(*k as f64))),
+            IVal::Vec(l) => IVal::Vec(l.iter().map(|x| f(*x)).collect()),
+            IVal::Opaque(w) => return Err(Refusal::Opaque(w)),
+            IVal::Bool(_) => return Err(Refusal::Shape("arithmetic on a bool")),
+        })
+    }
+
     fn binary(
         &self,
         op: naga::BinaryOperator,
@@ -798,14 +1166,60 @@ impl<'a> Eval<'a> {
         b: IVal,
     ) -> Result<IVal, Refusal> {
         use naga::BinaryOperator as B;
-        // Comparisons are indeterminate in general; phase 1 refuses
-        // the constructs that would consume them anyway.
+        // A comparison between two ranges answers yes, no, or
+        // MAYBE, and deciding it where the ranges do not overlap is
+        // most of what keeps a branch from doubling the result:
+        // `if (p.y < 0.0)` over a disc entirely below the axis takes
+        // one arm, not the union of both.
+        if matches!(op, B::LogicalAnd | B::LogicalOr) {
+            let (x, y) = (as_bool(&a), as_bool(&b));
+            return Ok(IVal::Bool(match op {
+                B::LogicalAnd => match (x, y) {
+                    (Some(false), _) | (_, Some(false)) => Some(false),
+                    (Some(true), Some(true)) => Some(true),
+                    _ => None,
+                },
+                _ => match (x, y) {
+                    (Some(true), _) | (_, Some(true)) => Some(true),
+                    (Some(false), Some(false)) => Some(false),
+                    _ => None,
+                },
+            }));
+        }
         if matches!(
             op,
             B::Equal | B::NotEqual | B::Less | B::LessEqual | B::Greater | B::GreaterEqual
-                | B::LogicalAnd | B::LogicalOr
         ) {
-            return Ok(IVal::Bool(None));
+            let (x, y) = match (a.scalar(), b.scalar()) {
+                (Ok(x), Ok(y)) => (x, y),
+                // Comparing something the evaluator carries without a
+                // value: undecided, and both arms will be taken.
+                _ => return Ok(IVal::Bool(None)),
+            };
+            return Ok(IVal::Bool(match op {
+                B::Less => cmp_lt(x, y),
+                B::LessEqual => cmp_le(x, y),
+                B::Greater => cmp_lt(y, x),
+                B::GreaterEqual => cmp_le(y, x),
+                B::Equal => {
+                    if x.lo == x.hi && y.lo == y.hi && x.lo == y.lo {
+                        Some(true)
+                    } else if x.hi < y.lo || y.hi < x.lo {
+                        Some(false)
+                    } else {
+                        None
+                    }
+                }
+                _ => {
+                    if x.hi < y.lo || y.hi < x.lo {
+                        Some(true)
+                    } else if x.lo == x.hi && y.lo == y.hi && x.lo == y.lo {
+                        Some(false)
+                    } else {
+                        None
+                    }
+                }
+            }));
         }
         if let (IVal::Int(x), IVal::Int(y)) = (&a, &b) {
             // Exact integer arithmetic, so a slot index stays a slot
@@ -1017,6 +1431,15 @@ impl<'a> Eval<'a> {
     }
 }
 
+/// `x²` over a range, which is never negative however the range
+/// straddles zero.
+fn square(x: Interval) -> Interval {
+    let a = x.lo * x.lo;
+    let b = x.hi * x.hi;
+    let lo = if x.lo <= 0.0 && x.hi >= 0.0 { 0.0 } else { a.min(b) };
+    Interval::new(lo, a.max(b)).widen()
+}
+
 fn sqrt_iv(x: Interval) -> Result<Interval, Refusal> {
     if x.hi < 0.0 {
         return Err(Refusal::Domain("sqrt"));
@@ -1055,8 +1478,16 @@ fn pow_iv(b: Interval, e: Interval) -> Result<Interval, Refusal> {
     Ok(Interval::new(lo, hi).widen())
 }
 
+/// How a block ended.
+///
+/// `Return` carries no value: a returned value goes into
+/// [`Frame::returns`] instead, because a return inside a MAYBE branch
+/// is only one of the things that might have happened and the
+/// function's answer is the union of all of them.
 enum Flow {
-    Return(Option<IVal>),
+    Return,
+    Break,
+    Continue,
     Fell,
 }
 

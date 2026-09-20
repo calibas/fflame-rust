@@ -1,7 +1,7 @@
 # Forward Bounds — deriving a variation's disc bound from its WGSL
 
-**Status:** phase 1 built and measured 2026-09-19 (§11). Planned
-2026-09-19. The shared piece both
+**Status:** phases 1 and 2 built and measured 2026-09-19 (§11, §12).
+Planned 2026-09-19. The shared piece both
 [flame-deep-zoom.md](flame-deep-zoom.md) (§7 item 1) and
 [ifs-general.md](ifs-general.md) (§8, "forward reach without an
 inverse") named and neither built, now with a plan of its own because
@@ -379,3 +379,100 @@ bounds. It is called out here so it is not discovered at wiring time.
 | the interval rules contain their functions | sampled, no GPU, catches a transcribed rule |
 | the weight chain is the only chain | asserts `variations` is the only field of `transforms` any body reads |
 | a zero-crossing denominator is a pole | the rule that makes `curl` refuse honestly |
+
+---
+
+## 12. Phase 2, built and measured, 2026-09-19
+
+Branches, selects, switches, loops and component stores.
+**432 of 647 bodies derive**, up from 170, and the 450 that derive at
+any of the gate's discs hold against the shipped shader across
+**361,581 GPU evaluations with zero escapes**.
+
+### The join is the whole of it
+
+A condition answers yes, no or maybe. Deciding it where the ranges do
+not overlap is what keeps a branch from doubling the result —
+`if (p.y < 0.0)` over a disc entirely below the axis takes one arm —
+and a maybe evaluates both from the same incoming state and unions
+every local either one assigned. A `return` inside a maybe arm goes
+into a list; the function's answer is the union of everything it
+might have returned, and execution continues down the other path,
+which over-approximates in the safe direction.
+
+Loops iterate under the same join until their exit is definitely
+true. A counter bounded by a literal or a parameter is an exact
+`Int`, so it exits on the right iteration; anything still moving at
+the cap refuses.
+
+### Two refinements worth more than the control flow
+
+**`x * x` is a square.** Interval arithmetic has no memory that both
+factors move together, so `x * x` over `[-1, 1]` comes out `[-1, 1]`
+when it is `[0, 1]` — and a denominator like `x*x + y*y + 1e-6` then
+straddles zero and reports a pole that does not exist. Recognising
+the identical operand costs one handle comparison, and the same trick
+on `dot(p, p)` — the commonest expression in the catalogue — matters
+even more, because without it every radial variation refuses at its
+first division. Worth 74 bodies.
+
+**An unwritten lane is zero, not an error.** Reading a component of a
+`var` the body had only partly assigned was the largest refusal the
+moment phase 2 landed, at 107 bodies, and all of them were legitimate
+— WGSL zero-initialises a local.
+
+### The gate caught two more, and they are opposites
+
+Both were found only by containment against the real shader, and both
+made a bound too TIGHT.
+
+**`yin_yang`: declaration initialisers were ignored.** `var inv = 1.0;`
+is a `LocalVariable` carrying an `init` expression, not a `Store`, so
+a body that assigns the local inside one arm of a branch looks
+unwritten on the other path. Joining its `-1` against a phantom zero
+instead of the declared `1` put every output on the wrong side of the
+origin. Locals are now pre-populated from their initialisers before
+the body runs.
+
+**`scry2`: the phase-1 cache fix was too broad.** Phase 1 stopped
+caching `LocalVariable` *and* `Load` after `r_circleblur` read a stale
+local. But `let r1 = r2;` is a `Load`, and its value must be r2's
+value AT THAT POINT — leaving it uncached made `r1` re-read `r2`
+after a later `r2 = r2 * r2`, so `d = r1 * (r2 + inv_w)` used the
+squared value twice. At a point input the derived output was exactly
+`1/p.x` times the shader's.
+
+The rule that is actually right is narrower than either: **`Emit`
+always recomputes**, so every expression it covers — including the
+`Load` behind a `let` — is refreshed where the source says it is
+computed and caching it is correct. Only `LocalVariable`, a pointer
+that is never emitted and so never refreshed, must stay uncached.
+One bug in each direction, from the same gate, in successive phases.
+
+### Where the remaining 215 go
+
+    50  a store through something other than a local
+    48  no interval rule for an intrinsic   (bitwise 21, unary 19, Acosh 7)
+    46  a pole
+    21  per-thread state
+     8  outside the domain of log
+     7  pow with a negative base
+     7  an unmodelled expression
+     5  arithmetic on a raw RNG word
+     4  arithmetic on the variation weights
+     4  a join of incompatible shapes
+     3  a non-constant parameter slot
+
+The bitwise operators are integer hashing inside the noise family and
+want an integer-range rule rather than an interval one. The 46 poles
+are the interesting number: some are genuine — `curl` really is
+unbounded — and some are the dependency problem the plan's §5
+anticipated, which subdivision is for. Telling those apart is
+phase 3's first measurement, because a spurious pole is a flame
+refused for nothing.
+
+### Gates
+
+Unchanged in shape, larger in reach: 450 bodies and 361,581
+evaluations, plus the five hand bounds still checked separately and
+still agreeing.
