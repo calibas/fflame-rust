@@ -2849,6 +2849,311 @@ mod tests {
         );
     }
 
+    /// **Is it the family, or is it that flame?**
+    ///
+    /// `spherical.fflame`'s measure does not concentrate — the words
+    /// holding 90% of a view's measure go 3, 10, 41, 146, 579, 1818
+    /// as the depth grows, and cylinder targeting needs that number
+    /// to settle. But that flame also has two pure TRANSLATIONS,
+    /// which is why its attractor is unbounded, and nothing says
+    /// every inversive flame is like it.
+    ///
+    /// A Schottky configuration is the opposite extreme: inversions
+    /// in mutually DISJOINT circles, each mapping the outside of its
+    /// own circle into the inside. The images are then disjoint, the
+    /// limit set is a Cantor set, and every point has one address.
+    /// That is what cylinder targeting was built for, and it is the
+    /// fair test of whether family M is useful machinery or just
+    /// correct machinery.
+    ///
+    /// Built here rather than loaded: it is a statement about the
+    /// geometry, not about any file.
+    fn schottky_flame(rho: f32) -> crate::scene::transforms::Flame {
+        use crate::scene::transforms::{Flame, Transform};
+        let mut f = Flame::new();
+        f.transforms.clear();
+        // Four circles of radius `rho` at the compass points, at
+        // distance 1 from the origin — mutually disjoint while
+        // `rho < 1/√2`.
+        for (cx, cy) in [(1.0f32, 0.0f32), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+            let mut t = Transform::default();
+            // Inversion in the circle (c, rho) is
+            // `p -> c + rho²·(p − c)/|p − c|²`: translate the centre to
+            // the origin, invert, scale by rho², translate back.
+            t.a = 1.0;
+            t.d = 1.0;
+            t.e = -cx;
+            t.f = -cy;
+            t.weight = 1.0;
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("spherical", rho * rho);
+            t.post_affine_enabled = true;
+            t.post_a = 1.0;
+            t.post_d = 1.0;
+            t.post_e = cx;
+            t.post_f = cy;
+            f.transforms.push(t);
+        }
+        f
+    }
+
+    #[test]
+    #[ignore = "prints a measurement"]
+    fn a_schottky_flame_localizes_where_the_kleinian_one_does_not() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let f = schottky_flame(0.4);
+        let mf = crate::scene::mobius::MobiusFlame::read(
+            &f,
+            reg,
+            crate::scene::mobius::ROOT_SAMPLE,
+        )
+        .expect("family M");
+        println!(
+            "  cover: {} discs, extent {:.4e}, leak {:.3e}",
+            mf.root.discs.len(),
+            mf.extent,
+            mf.leak
+        );
+
+        let x = mf.root.points[mf.root.points.len() / 2];
+        let weights: Vec<f64> = f.transforms.iter().map(|t| t.weight as f64).collect();
+        let total: f64 = weights.iter().sum();
+
+        // How the measure spreads over words, the same question asked
+        // of the other flame.
+        const HIST: usize = 20;
+        let view_r = 3e-2f64;
+        let mut st: u64 = 555;
+        let mut lcg = move || {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((st >> 33) as f64) / ((1u64 << 31) as f64)
+        };
+        let mut p = [0.3f64, 0.2];
+        let mut hist: std::collections::VecDeque<u32> = std::collections::VecDeque::new();
+        let mut in_view: Vec<Vec<u32>> = Vec::new();
+        for i in 0..3_000_000usize {
+            let mut u = lcg() * total;
+            let mut j = weights.len() - 1;
+            for (k, w) in weights.iter().enumerate() {
+                if u < *w {
+                    j = k;
+                    break;
+                }
+                u -= *w;
+            }
+            p = mf.maps[j].apply_point(p);
+            if !p[0].is_finite() {
+                p = [0.3, 0.2];
+                hist.clear();
+                continue;
+            }
+            hist.push_back(j as u32);
+            if hist.len() > HIST {
+                hist.pop_front();
+            }
+            if i > 2000 && hist.len() == HIST && (p[0] - x[0]).hypot(p[1] - x[1]) <= view_r {
+                in_view.push(hist.iter().copied().collect());
+            }
+        }
+        println!("  {} samples in a view of radius {view_r:.0e}", in_view.len());
+        if in_view.len() < 100 {
+            println!("  too few to say anything");
+            return;
+        }
+        println!("  depth   distinct   words for 90%");
+        for k in [2usize, 4, 6, 8, 10, 12, 16, 20] {
+            let mut counts: std::collections::HashMap<Vec<u32>, usize> =
+                std::collections::HashMap::new();
+            for h in &in_view {
+                *counts.entry(h[HIST - k..].to_vec()).or_default() += 1;
+            }
+            let mut v: Vec<usize> = counts.values().copied().collect();
+            v.sort_unstable_by(|a, b| b.cmp(a));
+            let tot: usize = v.iter().sum();
+            let (mut acc, mut need) = (0usize, v.len());
+            for (i, c) in v.iter().enumerate() {
+                acc += c;
+                if acc as f64 >= 0.9 * tot as f64 {
+                    need = i + 1;
+                    break;
+                }
+            }
+            println!("  {k:>5}   {:>8}   {need:>13}", v.len());
+        }
+
+        println!();
+        // Does a word's REGION shrink the way its cylinder does? The
+        // enumeration cuts on the region, so if it does not, nothing
+        // is ever kept and the beam drops everything.
+        println!("  depth   region radius   (cylinder should be ~0.16^k)");
+        let mut cur = mf.empty_word();
+        let mut syms: Vec<u32> = Vec::new();
+        for k in 1..=8usize {
+            let Some(next) = mf.extend(&cur, k % mf.maps.len()) else { break };
+            cur = next;
+            syms.insert(0, (k % mf.maps.len()) as u32);
+            match mf.region(&cur, &syms) {
+                Ok(c) => println!(
+                    "  {k:>5}   {:>13.4e}   ({} discs)",
+                    c.enclosing().map_or(f64::NAN, |d| d.r),
+                    c.discs.len()
+                ),
+                Err(e) => {
+                    println!("  {k:>5}   {e:?}");
+                    break;
+                }
+            }
+        }
+
+        println!();
+        for zoom in [1e2f64, 1e4, 1e6, 1e8] {
+            let view = View::of(zoom, x, 512, 512);
+            let t0 = std::time::Instant::now();
+            let r = Cylinders::plan(&f, reg, view);
+            let ms = t0.elapsed().as_secs_f64() * 1e3;
+            match r {
+                Ok(c) => println!(
+                    "   zoom {zoom:>7.0e}  {ms:>7.1} ms  {:>4} words, depth {:>3}, \
+                     speedup {:.3e}, lost {:.3e}",
+                    c.words.len(),
+                    c.depth,
+                    c.speedup(),
+                    c.lost
+                ),
+                Err(e) => println!("   zoom {zoom:>7.0e}  {ms:>7.1} ms  {e:?}"),
+            }
+        }
+    }
+
+    /// **How loose is the bound, in words?**
+    ///
+    /// The enumeration keeps a word when its computed region meets
+    /// the view. The truth is whether its image carries any measure
+    /// there. This counts both, at a view big enough that the orbit
+    /// gives real statistics:
+    ///
+    /// * `bound`  — words of length k whose region meets the view;
+    /// * `truth`  — words of length k that some orbit sample in the
+    ///   view actually belongs to.
+    ///
+    /// Their ratio is the looseness, and it decides the next move. If
+    /// it is near one, the flame simply overlaps and no better bound
+    /// helps. If it is orders, the cover's resolution is the dial.
+    #[test]
+    #[ignore = "reads output/flame-zoom"]
+    fn how_loose_is_the_region_in_words() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let Ok(text) = std::fs::read_to_string("output/flame-zoom/spherical.fflame") else {
+            println!("  no corpus");
+            return;
+        };
+        let cfg: crate::config::FractalConfig =
+            serde_json::from_str(&text).expect("a config");
+        let mf = crate::scene::mobius::MobiusFlame::read(
+            &cfg.flame,
+            reg,
+            crate::scene::mobius::ROOT_SAMPLE,
+        )
+        .expect("family M");
+        let n = mf.maps.len();
+        let x = mf.root.points[mf.root.points.len() / 2];
+        let weights: Vec<f64> = cfg
+            .flame
+            .transforms
+            .iter()
+            .filter(|t| t.weight > 0.0)
+            .map(|t| t.weight as f64)
+            .collect();
+        let total: f64 = weights.iter().sum();
+
+        const HIST: usize = 8;
+        for view_r in [3e-1f64, 1e-1, 3e-2] {
+            // --- truth: words the orbit actually uses to reach here
+            let mut st: u64 = 777;
+            let mut lcg = move || {
+                st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                ((st >> 33) as f64) / ((1u64 << 31) as f64)
+            };
+            let mut p = [0.3f64, 0.2];
+            let mut hist: std::collections::VecDeque<u32> = std::collections::VecDeque::new();
+            let mut seen: Vec<std::collections::HashSet<Vec<u32>>> =
+                vec![std::collections::HashSet::new(); HIST + 1];
+            let mut hits = 0usize;
+            let mut plotted = 0usize;
+            for i in 0..3_000_000usize {
+                let mut u = lcg() * total;
+                let mut j = weights.len() - 1;
+                for (k, w) in weights.iter().enumerate() {
+                    if u < *w {
+                        j = k;
+                        break;
+                    }
+                    u -= *w;
+                }
+                p = mf.maps[j].apply_point(p);
+                if !p[0].is_finite() {
+                    p = [0.3, 0.2];
+                    hist.clear();
+                    continue;
+                }
+                hist.push_back(j as u32);
+                if hist.len() > HIST {
+                    hist.pop_front();
+                }
+                if i > 2000 && hist.len() == HIST {
+                    plotted += 1;
+                    if (p[0] - x[0]).hypot(p[1] - x[1]) <= view_r {
+                        hits += 1;
+                        let h: Vec<u32> = hist.iter().copied().collect();
+                        for k in 1..=HIST {
+                            seen[k].insert(h[HIST - k..].to_vec());
+                        }
+                    }
+                }
+            }
+
+            // --- bound: words whose computed region meets the view
+            let view = View { centre: x, radius: view_r };
+            println!(
+                "  view radius {view_r:.1e}: {hits} of {plotted} samples inside ({:.2e})",
+                hits as f64 / plotted.max(1) as f64
+            );
+            println!("    k   words    truth   bound   looseness");
+            let mut level: Vec<(Vec<u32>, crate::scene::mobius::Word)> =
+                vec![(Vec::new(), mf.empty_word())];
+            for k in 1..=6usize {
+                let mut next = Vec::new();
+                for (word, parent) in &level {
+                    for i in 0..n {
+                        let mut w = Vec::with_capacity(word.len() + 1);
+                        w.push(i as u32);
+                        w.extend_from_slice(word);
+                        let Some(cw) = mf.extend(parent, i) else { continue };
+                        let Ok(cover) = mf.region(&cw, &w) else { continue };
+                        if cover.meets_disc(view.centre, view.radius) {
+                            next.push((w, cw));
+                        }
+                    }
+                }
+                let truth = seen[k].len();
+                println!(
+                    "   {k:>2}   {:>5}   {truth:>6}   {:>5}   {:>9.1}x",
+                    n.pow(k as u32),
+                    next.len(),
+                    next.len() as f64 / truth.max(1) as f64
+                );
+                level = next;
+                if level.is_empty() {
+                    break;
+                }
+            }
+            println!();
+        }
+    }
+
     /// **Do this flame's cylinders localize at all?**
     ///
     /// Targeting replaces "run the chaos game and hope a sample lands
@@ -2903,7 +3208,10 @@ mod tests {
         for zoom_i in 0..1 {
             let _ = zoom_i;
         }
-        let view_r = 2.828e-3f64; // zoom 1e3, as in the depth test
+        // Big enough that the orbit gives real statistics: at 2.8e-3
+        // only 32 of four million samples landed inside, and 32
+        // samples cannot tell "few words" from "many".
+        let view_r = 3e-2f64;
         for i in 0..n_steps {
             let mut u = lcg() * total;
             let mut j = weights.len() - 1;
@@ -2940,7 +3248,7 @@ mod tests {
             return;
         }
         println!("  depth   distinct words   top word share   words for 90%");
-        for k in [4usize, 8, 12, 16, 20, 24] {
+        for k in [2usize, 4, 6, 8, 10, 12, 16, 20] {
             let mut counts: std::collections::HashMap<Vec<u32>, usize> =
                 std::collections::HashMap::new();
             for h in &in_view {

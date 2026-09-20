@@ -679,3 +679,90 @@ That measurement decides the next move: a tighter region (the cover's
 resolution is the dial) or a different enumeration (best-first by
 probability rather than breadth-first, which matches the fact that the
 measure concentrates on typical words while the count does not).
+
+
+## 15. The open question, settled: it is the measure, not the bound
+
+§14 left one question — is the 8.5% the cover's looseness or the
+flame's structure? Three measurements, and the answer is both, with
+the second one decisive.
+
+### The bound is loose, and resolution barely helps
+
+Words of length k whose region meets a view, against words the orbit
+actually uses to reach it:
+
+    view radius 3e-2 (1.5e-3 of the measure)
+      k   words    truth   bound   looseness
+      2      16       12      16         1.3x
+      4     256       75     241         3.2x
+      6    4096      220    3155        14.3x
+
+Loose, and worsening with depth. But it is not the cover's
+resolution: raising `MAX_COVER` from 256 to 2048 changed **nothing**
+(the greedy build stops when the sample is covered, so the cap was
+never binding), and shrinking `COVER_ALPHA` by ten — ten times smaller
+discs — moved 13.9x to 10.1x. A 27% gain for an order of magnitude of
+work.
+
+What the extra words are is not a mystery: they are words whose region
+genuinely reaches the view and whose measure is negligible. The bound
+is not wrong about them. There are simply a lot of them.
+
+### The measure does not concentrate
+
+Which is the real obstacle. For the same view, how many words hold 90%
+of the measure that reaches it:
+
+    depth   distinct words   words for 90%
+        2               13               3
+        4               79              10
+        6              258              41
+        8              567             146
+       10             1183             579
+       12             2422            1818
+       16             5404            4800   (6046 samples; saturating)
+
+It roughly triples every two levels and never settles. Cylinder
+targeting exists because for an ordinary flame this number is ONE —
+the view sits inside a single cylinder, and forcing that word puts
+every sample in frame. Here the view's measure is spread over
+thousands of words by the depth its cylinders reach the view's size.
+
+That is the same wall `random1` hit with its similarity dimension of
+3.25, reached from the other direction: `spherical.fflame` has two
+pure translations, its attractor is unbounded, and its pieces overlap
+so heavily that a point has no address worth forcing.
+
+### The control was degenerate
+
+A Schottky configuration — inversions in four mutually disjoint
+circles — should be the opposite extreme and the fair test of the
+machinery. It is not, because `spherical` makes each map an
+**involution**: `S_i ∘ S_i` is the identity, so the enumeration's
+words fold in on themselves and the regions oscillate instead of
+shrinking:
+
+    depth      1      2      3      4      5      6      7       8
+    radius  2.47   28.9   20.2   56.9   32.1   0.46   5.18  2.3e-4
+
+A real Schottky test needs loxodromic generators, which a flame cannot
+express with `spherical` alone — `spherical` is inversion in a circle,
+and nothing else here composes two of them into one transform.
+
+### Where that leaves family M
+
+The geometry is right, exact, and gated. The enumeration on top of it
+is not useful yet, and the reason is not a defect in the geometry:
+
+- for `spherical.fflame`, the measure does not concentrate, and no
+  bound however tight fixes that;
+- the one flame family that WOULD concentrate cannot be built from the
+  variations that exist, because they give involutions.
+
+So the next move is not more geometry. It is either a flame that suits
+the machinery — which may mean a new variation, a Möbius transform
+with two parameters rather than a bare inversion — or accepting that
+the inversive corpus flames are targeted partially, with the missing
+fraction reported, and deciding whether 8.5% is a picture worth
+drawing.
