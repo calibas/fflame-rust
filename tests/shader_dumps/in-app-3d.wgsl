@@ -139,6 +139,8 @@ struct Params {
     _pad_shadow1: u32,
     _pad_shadow2: u32,
     shadow_dirs: array<vec4<f32>, 4>,
+    // [cx, cy, r, unused]; off when r <= 0. See GpuParams::leak_probe.
+    leak_probe: vec4<f32>,
 }
 
 // Plot-time symmetry. Matches `GpuPostSymmetry` in src/gpu/buffers.rs.
