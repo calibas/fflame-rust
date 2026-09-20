@@ -246,6 +246,18 @@ is marginal on the physics rather than blocked on the machinery.
    `a_targeted_render_is_the_untargeted_render` with `lost = 0`, and
    a hand-built flame with a deliberate 1e-3 tail shows `lost` and
    the kernel counter agreeing to sampling error.
+
+   *Accounting done, 2026-09-20.* `Cylinders::lost` is plumbed to the
+   panel and `every_working_flame_loses_nothing` holds it at zero over
+   64 successful enumerations. Note what that gate also says: **no
+   flame can produce a non-zero `lost` today**, because a transform
+   that fails to bound is refused by `plan` up front rather than
+   dropped word by word. So the cross-check against the kernel counter
+   has nothing to measure until phase 1 builds the leaky region that
+   creates the loss. The counter is therefore built and tested against
+   a *deliberately undersized* root disc on a flame that works, which
+   validates the instrument on a known answer before phase 1 relies
+   on it.
 1. **Family M.** Gate: `spherical.fflame` enumerates at its saved
    framing and 1e6 deeper, and the targeted render matches the
    untargeted one to within `lost`. A second gate on an
@@ -273,6 +285,12 @@ flames, and family M covers a whole style, not one file.
   problem; the words genuinely multiply.
 
 ## 6. Decisions before phase 0
+
+**Settled 2026-09-20; the recommendation was taken in all four cases.**
+A: fixed hole radius, shown in the panel beside the measured leak.
+B: `lost` is never hidden. C: family M first. D: `julian` alone in
+phase 2.
+
 
 **A. The leak policy.** Fixed hole radius (1e-3 of the attractor
 scale, `R` from the hole boundary's image) versus a target loss
