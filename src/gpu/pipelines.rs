@@ -702,6 +702,7 @@ impl FlamePipelines {
         census: bool,
         cylinder_targeting: bool,
         cylinder_replay: bool,
+        cylinder_relative: bool,
     ) -> bool {
         // Census is renderer state, not config state — a .fflame cannot
         // ask to be instrumented. Threaded from FlameRenderer::census.
@@ -720,6 +721,7 @@ impl FlamePipelines {
         // picture -- silent unless a gate compares against a
         // reference.
         constants.cylinder_replay = cylinder_replay;
+        constants.cylinder_relative = cylinder_relative;
         self.shader_cache.ensure_current_full(
             device,
             &self.compute_bind_group_layout,

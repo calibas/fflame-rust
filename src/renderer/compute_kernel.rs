@@ -314,6 +314,10 @@ pub struct FlameRenderer {
     /// What targeting decided for the current view — reported to the
     /// panel, never read by the render path (which asks `cylinders`).
     targeting_state: TargetingState,
+    /// Whether the current shader plots in view-relative coordinates.
+    /// Decided with the enumeration, because it depends on both the
+    /// flame and whether targeting is running at all.
+    cylinder_relative: bool,
     /// Fingerprint of everything the enumeration depends on, so the
     /// per-frame sync can skip the work when nothing moved.
     cylinder_key: Option<u64>,
@@ -480,6 +484,7 @@ impl FlameRenderer {
             solid_density_fraction: 1.0,
             frame_coverage_fraction: 1.0,
             targeting_state: TargetingState::default(),
+            cylinder_relative: false,
             cylinder_key: None,
             auto_exposure: false,
             filter_radius: 0.0,
@@ -656,6 +661,7 @@ impl FlameRenderer {
             importance_sampling: self.importance.enabled,
             cylinder_targeting: self.cylinders.is_some(),
             cylinder_replay: self.cylinders.as_ref().is_some_and(|c| !c.composable),
+            cylinder_relative: self.cylinder_relative,
             frame_coverage: self.auto_exposure,
             flatten_z_per_iter: matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD)
                 && !preserve_z,
@@ -1134,6 +1140,20 @@ impl FlameRenderer {
             &self.buffers.tonemap_params_buffer,
             offset,
             bytemuck::bytes_of(&sample_density),
+        );
+        // Levels measures against the frame's REAL mean, which is this
+        // same number without the targeting inflation. Written HERE,
+        // beside its twin and from the same expression, because the
+        // whole-struct uploads that also set these fields compute a
+        // simpler `sample_density` of their own -- leaving this one
+        // stale was worth 15 grey levels across the visual suite.
+        let levels_density =
+            (sample_density / self.cylinder_iteration_scale() as f32).max(1e-6);
+        let offset = std::mem::offset_of!(TonemapParams, levels_density) as u64;
+        queue.write_buffer(
+            &self.buffers.tonemap_params_buffer,
+            offset,
+            bytemuck::bytes_of(&levels_density),
         );
     }
 
@@ -1759,6 +1779,39 @@ impl FlameRenderer {
         }
     }
 
+    /// Whether the forced plot can work in VIEW-RELATIVE coordinates.
+    ///
+    /// Relative packing is what keeps a deep zoom out of f32's teeth,
+    /// but it changes what `current` MEANS between the forced prefix
+    /// and the deposit: an offset from the view centre rather than a
+    /// world position. Everything that reads it in that window has to
+    /// be fine with that, and three things are not —
+    ///
+    /// - a **final** transform applies an affine defined in world
+    ///   coordinates, so it would be applied to the wrong point;
+    /// - **post-symmetry** rotates about the world origin, which is
+    ///   not the view centre;
+    /// - the **analytic blur** residual re-enters `world_to_pixel`
+    ///   with its own world-space offset.
+    ///
+    /// — so a flame with any of them keeps absolute packing and the
+    /// precision limit that comes with it. It is a narrowing rather
+    /// than a refusal: the picture is unchanged either way, and only
+    /// the depth at which it stops resolving differs.
+    ///
+    /// Composed arm only. The replay arm runs the transforms
+    /// themselves, in world coordinates, so there is no single
+    /// translation to shift.
+    fn relative_is_safe(&self, config: &FractalConfig) -> bool {
+        let Some(cyl) = &self.cylinders else { return false };
+        let registry = crate::variations::global_registry();
+        cyl.composable
+            && !config.flame.has_attachments()
+            && config.flame.post_symmetry.ty
+                == crate::scene::transforms::PostSymmetryType::None
+            && !config.flame.analytic_blur_active(&registry, config.render_mode)
+    }
+
     /// What cylinder targeting is doing for the current view.
     pub fn targeting_state(&self) -> &TargetingState {
         &self.targeting_state
@@ -1885,6 +1938,7 @@ impl FlameRenderer {
             self.census,
             self.cylinders.is_some(),
             self.cylinders.as_ref().is_some_and(|c| !c.composable),
+            self.cylinder_relative,
         );
         if shaders_changed {
             log::info!("Shaders recompiled during preset load - recreating bind group");
@@ -2352,7 +2406,13 @@ impl FlameRenderer {
             levels_gamma: 1.0,
             highlight_mode: self.highlight_mode,
             levels_enabled: 0,
-            _pad_levels: [0; 2],
+            // Equal to `sample_density` on every path that builds these
+            // directly: none of them targets, so there is no
+            // inflation to undo. The two differ only in the
+            // interactive/headless path that `refresh_sample_density`
+            // writes per frame.
+            levels_density: sample_density,
+            _pad_levels: 0,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -2654,7 +2714,13 @@ impl FlameRenderer {
             levels_gamma: 1.0,
             highlight_mode: self.highlight_mode,
             levels_enabled: 0,
-            _pad_levels: [0; 2],
+            // Equal to `sample_density` on every path that builds these
+            // directly: none of them targets, so there is no
+            // inflation to undo. The two differ only in the
+            // interactive/headless path that `refresh_sample_density`
+            // writes per frame.
+            levels_density: sample_density,
+            _pad_levels: 0,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -2748,7 +2814,13 @@ impl FlameRenderer {
             levels_gamma: config.levels_gamma,
             highlight_mode: self.highlight_mode,
             levels_enabled: if config.effective_levels_enabled() { 1 } else { 0 },
-            _pad_levels: [0; 2],
+            // Equal to `sample_density` on every path that builds these
+            // directly: none of them targets, so there is no
+            // inflation to undo. The two differ only in the
+            // interactive/headless path that `refresh_sample_density`
+            // writes per frame.
+            levels_density: sample_density,
+            _pad_levels: 0,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -2854,7 +2926,13 @@ impl FlameRenderer {
             levels_gamma,
             highlight_mode: self.highlight_mode,
             levels_enabled: if levels_enabled { 1 } else { 0 },
-            _pad_levels: [0; 2],
+            // Equal to `sample_density` on every path that builds these
+            // directly: none of them targets, so there is no
+            // inflation to undo. The two differ only in the
+            // interactive/headless path that `refresh_sample_density`
+            // writes per frame.
+            levels_density: sample_density,
+            _pad_levels: 0,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -3381,6 +3459,8 @@ impl FlameRenderer {
         let was = self.cylinders.as_ref().map(|c| c.composable);
         self.cylinders = planned;
         let now = self.cylinders.as_ref().map(|c| c.composable);
+        // After the assignment: the predicate asks `self.cylinders`.
+        self.cylinder_relative = self.relative_is_safe(config);
         // The SHADER changes when targeting starts or stops, so the
         // constants have to be seen to change even if the buffer did
         // not resize.

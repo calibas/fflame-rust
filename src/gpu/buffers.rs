@@ -1069,7 +1069,25 @@ pub struct TonemapParams {
     pub levels_gamma: f32,  // Gamma/midpoint for density curve (1.0 = linear)
     pub highlight_mode: u32,  // 0 = Clip (per-channel clamp, Apophysis), 1 = MaxNorm (hue-preserving)
     pub levels_enabled: u32,  // 0 = Levels off (Apo-matching), 1 = on
-    pub _pad_levels: [u32; 2],  // Pad trailing chunk to 16 bytes for std140 alignment
+    /// Mean density of the pixels actually IN FRAME, which is what
+    /// Levels is expressed in multiples of.
+    ///
+    /// NOT `sample_density`, and the difference is why this field
+    /// exists. Cylinder targeting inflates `sample_density` by
+    /// `1/P(A_V)` so a forced render tone-maps to the brightness of
+    /// the unbiased one it stands in for -- 6.7e7 at a zoom of 1e5 on
+    /// a two-map fern. Levels divides per-pixel density by its mean,
+    /// so it saw every pixel as 1e-8 of the mean, clipped the opacity
+    /// to zero, and made the frame transparent: the brightness right
+    /// and the picture gone, with exposure unable to touch it because
+    /// the loss was in ALPHA.
+    ///
+    /// Brightness keeps the inflated count; Levels gets the real one,
+    /// `sample_density / cylinder_iteration_scale`. They are equal
+    /// whenever targeting is off, which is every render that existed
+    /// before it.
+    pub levels_density: f32,
+    pub _pad_levels: u32,  // Pad trailing chunk to 16 bytes for std140 alignment
 }
 
 /// Mirrored by `TonemapParams` in `shaders/tonemap.wgsl`, whose
@@ -1117,7 +1135,8 @@ impl Default for TonemapParams {
             levels_gamma: crate::config::defaults::DEFAULT_LEVELS_GAMMA,
             highlight_mode: 0,  // Clip (Apophysis-compatible)
             levels_enabled: 0,  // Levels off — Apo-matching default
-            _pad_levels: [0; 2],
+            levels_density: 1.0,
+            _pad_levels: 0,
         }
     }
 }

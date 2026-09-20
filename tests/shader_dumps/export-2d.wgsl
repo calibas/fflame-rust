@@ -880,8 +880,10 @@ fn project_3d_full(p: vec3<f32>) -> Projection3D {
 
 // Convert 2D fractal coords to pixel coords
 fn world_to_pixel(p: vec2<f32>) -> vec2<i32> {
+
     // Apply view transform: pan, rotation, and zoom
     var transformed = p - vec2<f32>(params.pan_x, params.pan_y);
+
 
     // Apply rotation
     let cos_r = cos(params.rotation);
