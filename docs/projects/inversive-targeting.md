@@ -411,3 +411,80 @@ a compromised picture.
 Nothing is wired into `plan` yet, deliberately — the root policy is
 the part in question, and building the integration against a policy
 that is about to change would be work done twice.
+
+
+## 9. Family M, option (b): the cover works
+
+**Chosen 2026-09-20, built and measured.** Nothing cut, eight orders
+of contraction, and a performance problem that is now the only thing
+between this and a render.
+
+### The numbers
+
+Covering `spherical.fflame`'s attractor and pushing along random
+80-symbol words:
+
+    cover of 246 discs, extent 1.427e1
+    seed 7:     80 steps   20:1.34e-2  40:1.41e-4  60:7.25e-6  80:9.32e-7
+    seed 99:    80 steps   20:5.48e0   40:1.32e-3  60:8.55e-7  80:8.11e-5
+    seed 12345: 80 steps   20:4.34e-3  40:7.08e-6  60:2.87e-6  80:3.33e-6
+    seed 555:   80 steps   20:2.31e-1  40:6.51e-4  60:7.66e-5  80:7.27e-7
+
+    attractor covered to 2.1e-3
+
+Compare §8: the single region managed **nothing** without cutting 3%
+of the picture away. This tracks the true cylinder image, and the
+2.1e-3 is sampling residue rather than fractal deliberately discarded.
+
+### Three things the measurements forced
+
+**The cover must be sized by distance to the nearest pole.** A uniform
+cover of 48 discs gives discs about 2 across while the attractor
+passes within 4.8e-2 of a pole, so the near-pole discs swallow it and
+the first push refuses. Measured: `ReachesPole` at step 1, every seed.
+
+**The same constraint has to survive merging.** Merging 246 pole-aware
+discs down to 48 rebuilt precisely the discs the construction had
+avoided, and the walk died at step 2. `CoverRules` is carried so that
+every operation respects it, and merging stops when nothing legal
+remains — the cap is a target, not a guarantee.
+
+**Refinement has to follow the attractor, not the disc.** Splitting a
+disc geometrically (seven pieces at 0.65 of the radius) needs about
+ten levels to refine by a hundred, which is 7¹⁰ pieces; the budget was
+gone before the first symbol finished. The attractor near a pole is a
+thin fractal, not a filled disc, so the cover carries a thinned orbit
+sample and refines onto the points. A piece holding no sample point is
+dropped — an honest leak, of the kind `Cylinders::lost` and the leak
+probe exist to report.
+
+### The performance problem
+
+Greedy merging (globally tightest pair) is quadratic per merge and
+cubic overall, and refinement can hand it thirty thousand discs: **129
+seconds** for one 80-symbol walk. Ordering by a coarse grid and
+merging along it is `n log n` per pass and halves the count each time:
+**2.0 seconds** for four such walks, with the same contraction and the
+same coverage. 65× and the results are unchanged.
+
+That is still about 6 ms per push, and `plan`'s `disc_of` recomputes
+from the root for every candidate — `M × depth` pushes each. Too slow
+for a pan by a wide margin.
+
+**The fix is already implied by the geometry.** Every family-M map is
+`z ↦ (a·ẑ + b)/(c·ẑ + d)`, so a WORD composes to a single such map: a
+2×2 complex matrix and a conjugation parity, composed in O(1) per
+symbol. A child word is then the parent's matrix times one more
+factor, `disc_of` becomes one cover push instead of `depth` of them,
+and the cost per candidate drops from `M × depth` to `M`. This is the
+same trick `pack` already plays for the affine case, where a word
+becomes one matrix rather than a sequence the kernel walks.
+
+### What is left
+
+1. Möbius composition, so a word is one map. (The performance fix.)
+2. Wire into `plan`: family-M detection, the cover as the root, and
+   `lost` for words the refinement budget cannot save.
+3. The picture gate: `spherical.fflame` enumerating at its saved
+   framing and deeper, matching the untargeted render to within the
+   reported leak.

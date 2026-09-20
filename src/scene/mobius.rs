@@ -1249,3 +1249,664 @@ mod root_tests {
         assert!(leak < 1e-2, "the root region misses {leak:.3e} of the attractor");
     }
 }
+
+// ===========================================================================
+// Covering the attractor, instead of enclosing it
+// ===========================================================================
+
+impl MobiusMap {
+    /// Push one disc through, exactly, insisting the image is bounded.
+    ///
+    /// A disc holding the pole inverts to the COMPLEMENT of a disc,
+    /// which is not something a cover can carry. For a cover that is
+    /// the right answer rather than a limitation: the discs are small
+    /// and sit on the attractor, which keeps its distance from every
+    /// pole, so one of them holding a pole means the cover is too
+    /// coarse there — a fact worth hearing, not papering over.
+    pub fn push_disc(&self, d: &Disc) -> Result<Disc, NoCircle> {
+        let a = &self.affine;
+        let mut out = d.similarity(a.m, a.t, a.sigma);
+        out = match self.kind {
+            Kind::Linear => {
+                let w = self.w;
+                out.similarity([[w, 0.0], [0.0, w]], [0.0, 0.0], w)
+            }
+            Kind::Spherical => {
+                // The guard's discrepancy over this circle, from its
+                // own closest approach to the pole.
+                let standoff = out.rim_standoff().min(
+                    (out.centre_norm() - out.r).abs().max(0.0),
+                );
+                if standoff <= SPHERICAL_EPS.sqrt() {
+                    return Err(NoCircle::ReachesPole);
+                }
+                let (img, flips) = out.invert_raw(self.w)?;
+                if flips {
+                    return Err(NoCircle::ReachesPole);
+                }
+                let slop = self.w.abs() * SPHERICAL_EPS / (standoff * standoff * standoff);
+                if !slop.is_finite() {
+                    return Err(NoCircle::NotFinite);
+                }
+                Disc::new(img.c, img.r + slop)
+            }
+        };
+        if let Some(p) = &self.post {
+            out = out.similarity(p.m, p.t, p.sigma);
+        }
+        if !out.finite() {
+            return Err(NoCircle::NotFinite);
+        }
+        Ok(out)
+    }
+}
+
+/// **A union of small discs covering the attractor**, in place of one
+/// big region enclosing it.
+///
+/// Why: `docs/projects/inversive-targeting.md` §8. A single disc minus
+/// a hole per pole is exact but hopeless — its near-pole annulus is
+/// attractor-free space that blows up to `1/h` at every inversion, so
+/// the bound is pinned while the true cylinder image falls by five
+/// orders. The fix is not a better bound on `S_w(R₀)`; it is to stop
+/// asking about `R₀`. Cover `A` by discs small enough to sit inside
+/// each map's linear regime, and `S_w(A) ⊆ ⋃ S_w(D_j)` tracks the real
+/// contraction, with nothing cut away.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Cover {
+    pub discs: Vec<Disc>,
+    /// A sample of the attractor, carried along and pushed with the
+    /// discs.
+    ///
+    /// **Refinement has to follow the attractor, not the disc.** A
+    /// disc whose image comes too near a pole must be replaced by
+    /// smaller ones, and splitting it geometrically — seven pieces at
+    /// 0.65 of the radius — needs about ten levels to refine by a
+    /// hundred, which is 7¹⁰ pieces. Measured: the budget was gone
+    /// before the first symbol finished.
+    ///
+    /// The attractor near a pole is a thin fractal, not a filled
+    /// disc, so covering the points is enormously cheaper than
+    /// covering the space they live in. These are those points.
+    pub points: Vec<[f64; 2]>,
+}
+
+/// How many discs a cover may hold. Pushed through a word they
+/// separate, and merging the closest back together keeps the cost per
+/// symbol flat — merging is sound, since the disc enclosing two discs
+/// contains both.
+pub const MAX_COVER: usize = 256;
+
+/// How far toward the nearest pole a covering disc may reach.
+///
+/// Measured, sweeping it against the cap over five random 80-symbol
+/// words on `spherical.fflame`:
+///
+/// ```text
+///   alpha   cap    discs   median steps   best radius / extent
+///   0.30    256     246      3            1.00e0    (no contraction)
+///   0.10    256     256      9            1.38e-1
+///   0.03    256     256     80            1.45e-8
+///   0.01    256     256     80            1.49e-8
+/// ```
+///
+/// The cliff between 0.1 and 0.03 is the same one the single-region
+/// design ran into from the other side, and this is which side of it
+/// to stand on: a disc reaching a third of the way to a pole has an
+/// image that reaches a third of the way to the NEXT one, and three
+/// symbols later one of them lands on it. A hundredth leaves room for
+/// eighty.
+///
+/// Note the cap does not want to be large. More discs is more chances
+/// that one of them straddles a pole after a push, and at `alpha =
+/// 0.03` raising it from 256 to 1024 cut the median run from 80 steps
+/// to 11.
+pub const COVER_ALPHA: f64 = 0.3;
+
+/// Discs a cover may hold mid-push, before merging brings it back to
+/// [`MAX_COVER`]. Splitting is what pays for a pole, and this is how
+/// much it may spend.
+pub const SPLIT_BUDGET: usize = 30000;
+
+/// What keeps a cover usable: no disc may swallow a pole, or its
+/// image is unbounded and the word dies.
+///
+/// Carried alongside the cover because it constrains MERGING as much
+/// as construction. Merging 246 pole-aware discs down to 48 without
+/// it rebuilt exactly the discs the adaptive construction had just
+/// avoided, and the walk died at step 2 — the constraint has to
+/// survive every operation, not only the first.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoverRules {
+    /// Every map's pole, since any of them may be the next symbol.
+    pub poles: Vec<[f64; 2]>,
+    /// A disc may reach this fraction of the way to the nearest pole.
+    pub alpha: f64,
+    pub cap: usize,
+}
+
+impl CoverRules {
+    /// Whether a disc keeps its distance from every pole.
+    pub fn allows(&self, d: &Disc) -> bool {
+        if !d.finite() {
+            return false;
+        }
+        self.poles.iter().all(|q| d.dist_to(*q) * self.alpha >= d.r)
+    }
+}
+
+impl Cover {
+    /// The disc containing the whole union. What the enumeration
+    /// compares against the view.
+    pub fn enclosing(&self) -> Option<Disc> {
+        if self.discs.is_empty() {
+            return None;
+        }
+        let n = self.discs.len() as f64;
+        let c = [
+            self.discs.iter().map(|d| d.c[0]).sum::<f64>() / n,
+            self.discs.iter().map(|d| d.c[1]).sum::<f64>() / n,
+        ];
+        let r = self
+            .discs
+            .iter()
+            .map(|d| d.dist_to(c) + d.r)
+            .fold(0.0f64, f64::max);
+        r.is_finite().then(|| Disc::new(c, r))
+    }
+
+    /// Whether any member meets `D(c, r)`.
+    pub fn meets_disc(&self, c: [f64; 2], r: f64) -> bool {
+        self.discs.iter().any(|d| d.meets(c, r))
+    }
+
+    /// Push every disc through, **refining the ones whose image would
+    /// come too near a pole**, then merge back down to the cap.
+    ///
+    /// Refinement replaces a disc with smaller ones centred on the
+    /// sample points it holds. A disc holding no sample point is
+    /// dropped: the attractor, as far as 20,000 orbit points can say,
+    /// is not there. That is a real leak and it is the accounted kind
+    /// — `Cylinders::lost` beside it, the leak probe measuring it on
+    /// the render.
+    ///
+    /// Terminates because the sample is finite: each level halves the
+    /// radius and a disc eventually holds one point or none.
+    pub fn push(&self, m: &MobiusMap, rules: &CoverRules) -> Result<Self, NoCircle> {
+        // The points go through exactly, and cost almost nothing.
+        let mut points = Vec::with_capacity(self.points.len());
+        for p in &self.points {
+            let q = m.apply_point(*p);
+            if q[0].is_finite() && q[1].is_finite() {
+                points.push(q);
+            }
+        }
+
+        let mut discs: Vec<Disc> = Vec::with_capacity(self.discs.len());
+        // (disc, the source points it holds). A work list, so a
+        // refined piece can be refined again.
+        let mut todo: Vec<(Disc, Vec<[f64; 2]>)> = Vec::with_capacity(self.discs.len());
+        for d in &self.discs {
+            let mine: Vec<[f64; 2]> =
+                self.points.iter().copied().filter(|p| d.contains(*p)).collect();
+            todo.push((*d, mine));
+        }
+        let mut spent = 0usize;
+        while let Some((d, mine)) = todo.pop() {
+            match m.push_disc(&d) {
+                Ok(img) if rules.allows(&img) => {
+                    discs.push(img);
+                    continue;
+                }
+                _ => {}
+            }
+            // Too big. Nothing of the attractor in it, so far as the
+            // sample knows — drop it.
+            if mine.is_empty() {
+                continue;
+            }
+            spent += 1;
+            if spent > SPLIT_BUDGET {
+                return Err(NoCircle::ReachesPole);
+            }
+            let r = d.r * 0.5;
+            // Below this the sample cannot tell us anything more: a
+            // disc holding one point, shrunk far enough, is a point.
+            if !(r > 0.0) || (mine.len() == 1 && r < 1e-13) {
+                return Err(NoCircle::ReachesPole);
+            }
+            // One smaller disc per point it holds, deduplicated by
+            // dropping points already covered by a piece placed here.
+            let mut pieces: Vec<(Disc, Vec<[f64; 2]>)> = Vec::new();
+            for p in &mine {
+                if pieces.iter().any(|(q, _)| q.contains(*p)) {
+                    continue;
+                }
+                let piece = Disc::new(*p, r);
+                let held: Vec<[f64; 2]> =
+                    mine.iter().copied().filter(|q| piece.contains(*q)).collect();
+                pieces.push((piece, held));
+            }
+            todo.extend(pieces);
+        }
+        let mut out = Self { discs, points };
+        out.merge_to(rules);
+        Ok(out)
+    }
+
+    fn union_disc(a: &Disc, b: &Disc) -> Disc {
+        let d = a.dist_to(b.c);
+        if d + b.r <= a.r {
+            *a
+        } else if d + a.r <= b.r {
+            *b
+        } else {
+            let r = 0.5 * (d + a.r + b.r);
+            // The centre slides along the line between them so the new
+            // disc just holds both.
+            let t = if d > 0.0 { (r - a.r) / d } else { 0.0 };
+            Disc::new([a.c[0] + (b.c[0] - a.c[0]) * t, a.c[1] + (b.c[1] - a.c[1]) * t], r)
+        }
+    }
+
+    /// Merge neighbouring discs until at most `cap` remain, or no
+    /// legal merge is left.
+    ///
+    /// Sound in the safe direction — a merged disc contains both — and
+    /// it is what stops a cover growing without bound over a long
+    /// word. **It stops when nothing legal remains**, so the cap is a
+    /// target rather than a guarantee: a cover pressed up against the
+    /// poles stays large rather than merging itself into uselessness.
+    ///
+    /// # Why not greedy
+    ///
+    /// Taking the globally tightest pair each time is the obvious
+    /// rule and it is quadratic per merge, so cubic overall. The
+    /// refinement above can hand this thirty thousand discs, and
+    /// measured, a single walk of eighty symbols took 129 seconds —
+    /// about a thousand times too slow to run on a pan.
+    ///
+    /// Sorting by cell and merging along that order is `n log n` per
+    /// pass and halves the count each time. The result is a little
+    /// looser than greedy; the enumeration cares about the enclosing
+    /// radius, which barely notices.
+    fn merge_to(&mut self, rules: &CoverRules) {
+        let mut guard = 0;
+        while self.discs.len() > rules.cap && guard < 64 {
+            guard += 1;
+            let before = self.discs.len();
+            // Order by a coarse grid so neighbours end up adjacent.
+            // The cell is sized to the pass: big enough that a pass
+            // actually pairs things up.
+            let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+            for d in &self.discs {
+                for k in 0..2 {
+                    lo[k] = lo[k].min(d.c[k]);
+                    hi[k] = hi[k].max(d.c[k]);
+                }
+            }
+            let span = (hi[0] - lo[0]).max(hi[1] - lo[1]).max(f64::MIN_POSITIVE);
+            let side = (self.discs.len() as f64).sqrt().max(2.0);
+            let cell = span / side;
+            let key = |d: &Disc| -> (i64, i64) {
+                (
+                    ((d.c[0] - lo[0]) / cell) as i64,
+                    ((d.c[1] - lo[1]) / cell) as i64,
+                )
+            };
+            self.discs.sort_by(|a, b| {
+                key(a).cmp(&key(b)).then(
+                    a.c[0].partial_cmp(&b.c[0]).unwrap_or(std::cmp::Ordering::Equal),
+                )
+            });
+            let mut out: Vec<Disc> = Vec::with_capacity(self.discs.len() / 2 + 1);
+            let mut k = 0;
+            while k < self.discs.len() {
+                if k + 1 < self.discs.len() && out.len() + (self.discs.len() - k) / 2 >= rules.cap
+                {
+                    let u = Self::union_disc(&self.discs[k], &self.discs[k + 1]);
+                    if rules.allows(&u) {
+                        out.push(u);
+                        k += 2;
+                        continue;
+                    }
+                }
+                out.push(self.discs[k]);
+                k += 1;
+            }
+            self.discs = out;
+            // A pass that changed nothing means nothing legal is left.
+            if self.discs.len() == before {
+                break;
+            }
+        }
+    }
+}
+
+/// Build a cover of the attractor by running the real maps.
+///
+/// **Every disc is sized by its distance to the nearest pole**, which
+/// is the whole difference between a cover that works and one that
+/// does not. A uniform cover of 48 discs over this attractor gives
+/// discs about 2 across, while the attractor passes within 4.8e-2 of
+/// a pole — so the near-pole discs swallow it, their images are
+/// unbounded, and the first push refuses. Measured, before this was
+/// adaptive: `ReachesPole` at step 1, every seed.
+///
+/// So `r(p) = alpha · dist(p, nearest pole)`, and the discs get
+/// finer as they approach one, in the same geometric cascade the
+/// attractor itself makes. Greedy: walk the sample, and whenever a
+/// point is not yet covered, place a disc on it.
+///
+/// The residue — attractor the sample never visited, between the
+/// discs — is what the leak probe measures on a real render, and what
+/// `Cylinders::lost` sits beside.
+pub fn cover_attractor(
+    maps: &[MobiusMap],
+    weights: &[f64],
+    cap: usize,
+    steps: usize,
+    alpha: f64,
+) -> Option<(Cover, f64)> {
+    let pts = sample_orbit(maps, weights, steps)?;
+    let poles: Vec<[f64; 2]> = maps.iter().filter_map(|m| m.pole()).collect();
+
+    // The radius this point may have: near enough to a pole that the
+    // disc stays clear of it.
+    let scale = |p: &[f64; 2]| -> f64 {
+        let mut d = f64::INFINITY;
+        for q in &poles {
+            d = d.min(((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)).sqrt());
+        }
+        if d.is_finite() {
+            d * alpha
+        } else {
+            // No poles at all: an ordinary similarity IFS, where the
+            // only constraint is not to be the whole attractor.
+            f64::INFINITY
+        }
+    };
+    let fallback = {
+        let n = pts.len() as f64;
+        let c = [
+            pts.iter().map(|p| p[0]).sum::<f64>() / n,
+            pts.iter().map(|p| p[1]).sum::<f64>() / n,
+        ];
+        pts.iter()
+            .map(|p| ((p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2)).sqrt())
+            .fold(0.0f64, f64::max)
+            / 8.0
+    };
+
+    let mut discs: Vec<Disc> = Vec::new();
+    for p in &pts {
+        if discs.iter().any(|d| d.contains(*p)) {
+            continue;
+        }
+        let r = scale(p).min(fallback);
+        if !(r > 0.0) || !r.is_finite() {
+            continue;
+        }
+        discs.push(Disc::new(*p, r));
+        if discs.len() >= cap {
+            break;
+        }
+    }
+    // A second pass: anything the first pass left uncovered, because
+    // a disc placed later would have caught it.
+    for p in &pts {
+        if discs.len() >= cap {
+            break;
+        }
+        if !discs.iter().any(|d| d.contains(*p)) {
+            let r = scale(p).min(fallback);
+            if r > 0.0 && r.is_finite() {
+                discs.push(Disc::new(*p, r));
+            }
+        }
+    }
+    if discs.is_empty() {
+        return None;
+    }
+    // The sample rides along: refinement during a push is driven by
+    // where the attractor actually is, not by subdividing space.
+    // Thinned, because a push copies it and 20,000 points per cover
+    // is more resolution than the refinement can use.
+    let stride = (pts.len() / 4000).max(1);
+    let points: Vec<[f64; 2]> = pts.iter().step_by(stride).copied().collect();
+    let cover = Cover { discs, points };
+    let ext = cover.enclosing()?.r;
+    Some((cover, ext))
+}
+
+/// A sampled orbit of the real maps, burned in.
+fn sample_orbit(maps: &[MobiusMap], weights: &[f64], steps: usize) -> Option<Vec<[f64; 2]>> {
+    if maps.is_empty() || maps.len() != weights.len() {
+        return None;
+    }
+    let total: f64 = weights.iter().sum();
+    if !(total > 0.0) {
+        return None;
+    }
+    let mut state: u64 = 0x2545_F491_4F6C_DD1D;
+    let mut p = [0.37, -0.11];
+    let mut out = Vec::with_capacity(steps);
+    for i in 0..steps {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let mut u = ((state >> 33) as f64) / ((1u64 << 31) as f64) * total;
+        let mut j = maps.len() - 1;
+        for (k, w) in weights.iter().enumerate() {
+            if u < *w {
+                j = k;
+                break;
+            }
+            u -= *w;
+        }
+        let q = maps[j].apply_point(p);
+        if !q[0].is_finite() || !q[1].is_finite() || q[0].abs().max(q[1].abs()) > 1e12 {
+            p = [0.37, -0.11];
+            continue;
+        }
+        p = q;
+        if i > 64 {
+            out.push(p);
+        }
+    }
+    (out.len() >= 64).then_some(out)
+}
+
+#[cfg(test)]
+mod cover_tests {
+    use super::*;
+    use crate::scene::transforms::Transform;
+
+    fn kleinian() -> (Vec<MobiusMap>, Vec<f64>) {
+        let reg = crate::variations::global_registry();
+        let mk = |a: f32, b: f32, c: f32, d: f32, e: f32, f: f32, v: &str, w: f32| {
+            let mut t = Transform::default();
+            t.a = a;
+            t.b = b;
+            t.c = c;
+            t.d = d;
+            t.e = e;
+            t.f = f;
+            t.weight = 1.0;
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation(v, w);
+            detect(&t, &reg).expect("a Mobius map")
+        };
+        (
+            vec![
+                mk(0.0, -1.0, 1.0, 0.0, 1.0, 0.0, "spherical", 1.0),
+                mk(0.0, 1.0, -1.0, 0.0, 0.0, 0.0, "spherical", 1.0),
+                mk(1.0, 0.0, 0.0, 1.0, 3.0, 0.0, "linear", 1.0),
+                mk(1.0, 0.0, 0.0, 1.0, -3.0, 0.0, "linear", 1.0),
+            ],
+            vec![3.0, 4.0, 0.5, 0.5],
+        )
+    }
+
+    /// **The measurement option (b) was chosen on.**
+    ///
+    /// A cover of the attractor, pushed along a random word, has to
+    /// shrink the way the true cylinder image does — from the
+    /// attractor's own scale down by orders. The single-region bound
+    /// managed none of it without cutting three per cent of the
+    /// picture away.
+    #[test]
+    fn a_cover_follows_the_true_contraction() {
+        let (maps, w) = kleinian();
+        let (cover, ext) =
+            cover_attractor(&maps, &w, MAX_COVER, 20000, COVER_ALPHA).expect("a cover");
+        let rules = CoverRules {
+            poles: maps.iter().filter_map(|m| m.pole()).collect(),
+            alpha: COVER_ALPHA,
+            cap: MAX_COVER,
+        };
+        println!("  cover of {} discs, extent {ext:.4e}", cover.discs.len());
+        let total: f64 = w.iter().sum();
+        let mut worst = f64::INFINITY;
+        for seed in [7u64, 99, 12345, 555] {
+            let mut st = seed;
+            let mut cur = cover.clone();
+            let mut best = cur.enclosing().unwrap().r;
+            let mut steps = 0;
+            let mut line = Vec::new();
+            for k in 0..80 {
+                st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                let mut u = ((st >> 33) as f64) / ((1u64 << 31) as f64) * total;
+                let mut j = maps.len() - 1;
+                for (i, ww) in w.iter().enumerate() {
+                    if u < *ww {
+                        j = i;
+                        break;
+                    }
+                    u -= *ww;
+                }
+                match cur.push(&maps[j], &rules) {
+                    Ok(n) => {
+                        cur = n;
+                        let r = cur.enclosing().unwrap().r;
+                        best = best.min(r);
+                        steps += 1;
+                        if k % 20 == 19 {
+                            line.push(format!("{}:{:.2e}/{}", k + 1, r, cur.discs.len()));
+                        }
+                    }
+                    Err(e) => {
+                        line.push(format!("{}:{e:?}", k + 1));
+                        break;
+                    }
+                }
+            }
+            println!("  seed {seed}: {steps} steps  {}", line.join("  "));
+            worst = worst.min(best);
+        }
+        // Eight orders is what the sweep measured; asserting six
+        // leaves room for the walk to be unlucky without the claim
+        // going soft. The single-region design managed NONE of this
+        // without cutting three per cent of the picture away.
+        assert!(
+            worst < ext * 1e-6,
+            "the best any word managed was {worst:.3e} from {ext:.3e} -- a cover is not \
+             following the contraction either"
+        );
+    }
+
+    /// Diagnostic: which (alpha, cap) lets a word run?
+    #[test]
+    #[ignore = "prints a measurement"]
+    fn sweep_cover_parameters() {
+        let (maps, w) = kleinian();
+        let total: f64 = w.iter().sum();
+        let poles: Vec<[f64; 2]> = maps.iter().filter_map(|m| m.pole()).collect();
+        println!("  alpha  cap   discs   median steps   best radius / extent");
+        for alpha in [0.3f64, 0.1, 0.03, 0.01] {
+            for cap in [256usize, 1024, 4096] {
+                let Some((cover, ext)) = cover_attractor(&maps, &w, cap, 20000, alpha) else {
+                    println!("   {alpha:<6} {cap:<5} no cover");
+                    continue;
+                };
+                let rules = CoverRules { poles: poles.clone(), alpha, cap };
+                let mut steps_all = Vec::new();
+                let mut best_all: f64 = f64::INFINITY;
+                for seed in [7u64, 99, 12345, 555, 31337] {
+                    let mut st = seed;
+                    let mut cur = cover.clone();
+                    let mut best = ext;
+                    let mut steps = 0usize;
+                    for _ in 0..80 {
+                        st = st
+                            .wrapping_mul(6364136223846793005)
+                            .wrapping_add(1442695040888963407);
+                        let mut u = ((st >> 33) as f64) / ((1u64 << 31) as f64) * total;
+                        let mut j = maps.len() - 1;
+                        for (i, ww) in w.iter().enumerate() {
+                            if u < *ww {
+                                j = i;
+                                break;
+                            }
+                            u -= *ww;
+                        }
+                        match cur.push(&maps[j], &rules) {
+                            Ok(n) => {
+                                cur = n;
+                                best = best.min(cur.enclosing().map_or(ext, |d| d.r));
+                                steps += 1;
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    steps_all.push(steps);
+                    best_all = best_all.min(best);
+                }
+                steps_all.sort_unstable();
+                println!(
+                    "   {alpha:<6} {cap:<5} {:<7} {:<14} {:.3e}",
+                    cover.discs.len(),
+                    steps_all[steps_all.len() / 2],
+                    best_all / ext
+                );
+            }
+        }
+    }
+
+    /// The cover really covers: orbit points land inside it.
+    #[test]
+    fn the_cover_holds_the_attractor() {
+        let (maps, w) = kleinian();
+        let (cover, _) =
+            cover_attractor(&maps, &w, MAX_COVER, 20000, COVER_ALPHA).expect("a cover");
+        let pts = sample_orbit(&maps, &w, 120000).expect("an orbit");
+        let inside = pts
+            .iter()
+            .filter(|p| cover.discs.iter().any(|d| d.contains(**p)))
+            .count();
+        let leak = 1.0 - inside as f64 / pts.len() as f64;
+        println!("  {} points, leak {leak:.3e}", pts.len());
+        assert!(leak < 1e-2, "the cover misses {leak:.3e} of the attractor");
+    }
+
+    /// Merging keeps the count flat and never loses a point.
+    #[test]
+    fn merging_contains_what_it_merges() {
+        let mut c = Cover {
+            points: vec![],
+            discs: (0..20)
+                .map(|i| Disc::new([i as f64 * 0.3, (i % 3) as f64 * 0.2], 0.05 + 0.01 * i as f64))
+                .collect(),
+        };
+        let before = c.discs.clone();
+        c.merge_to(&CoverRules { poles: vec![], alpha: 1.0, cap: 5 });
+        assert_eq!(c.discs.len(), 5);
+        for d in &before {
+            // Every original disc sits inside some merged one.
+            assert!(
+                c.discs.iter().any(|m| m.dist_to(d.c) + d.r <= m.r * (1.0 + 1e-9) + 1e-12),
+                "{d:?} was lost by merging into {:?}",
+                c.discs
+            );
+        }
+    }
+}
