@@ -508,6 +508,91 @@ mod gpu_tests {
     }
 }
 
+/// What shape are the variation bodies, for the purpose of deriving
+/// a bound from them automatically?
+///
+/// The corpus meter says hand-derived bounds are a treadmill -- 14 of
+/// them free 42% of the corpus and there are 55 distinct blockers --
+/// so the question becomes whether a bound can be COMPUTED from the
+/// shipped WGSL instead of written by hand. Interval arithmetic
+/// through the body would do it soundly and for every variation at
+/// once, and its cost is decided by how much of the language the
+/// bodies actually use.
+///
+/// This counts that. Ignored; it is a survey, not a gate.
+#[cfg(test)]
+mod shape_survey {
+    #[test]
+    #[ignore = "a survey, not a gate"]
+    fn how_much_wgsl_would_an_interval_evaluator_need() {
+        use std::collections::BTreeMap;
+        let mut straight = 0usize;
+        let mut branchy = 0usize;
+        let mut loopy = 0usize;
+        let mut stateful = 0usize;
+        let mut total = 0usize;
+        let mut calls: BTreeMap<String, usize> = BTreeMap::new();
+
+        for def in crate::variations::defs::ALL_VARIATIONS {
+            let body = def.wgsl_2d;
+            if body.trim().is_empty() {
+                continue;
+            }
+            total += 1;
+            let has_loop = body.contains("for (") || body.contains("while (");
+            let has_if = body.contains("if (") || body.contains("select(");
+            let has_state = body.contains("get_state")
+                || body.contains("set_state")
+                || body.contains("rng_next");
+            if has_loop {
+                loopy += 1;
+            } else if has_if {
+                branchy += 1;
+            } else {
+                straight += 1;
+            }
+            if has_state {
+                stateful += 1;
+            }
+            // Every `name(` that is not a declaration.
+            let mut i = 0;
+            let b = body.as_bytes();
+            while i < b.len() {
+                if b[i] == b'(' {
+                    let mut j = i;
+                    while j > 0
+                        && (b[j - 1].is_ascii_alphanumeric() || b[j - 1] == b'_')
+                    {
+                        j -= 1;
+                    }
+                    if j < i {
+                        let f = &body[j..i];
+                        if !matches!(f, "fn" | "if" | "for" | "while" | "return" | "let" | "var") {
+                            *calls.entry(f.to_string()).or_default() += 1;
+                        }
+                    }
+                }
+                i += 1;
+            }
+        }
+
+        println!();
+        println!("  {total} variations with a 2D body:");
+        println!("    {straight:>4}  straight-line arithmetic");
+        println!("    {branchy:>4}  with a branch or select");
+        println!("    {loopy:>4}  with a loop");
+        println!("    {stateful:>4}  read rng or per-thread state (any of the above)");
+        println!();
+        println!("  intrinsics and helpers used, by how many bodies call them:");
+        let mut rows: Vec<_> = calls.iter().collect();
+        rows.sort_by_key(|(f, n)| (std::cmp::Reverse(**n), (*f).clone()));
+        for (f, n) in rows.iter().take(40) {
+            println!("    {n:>5}  {f}");
+        }
+        println!("    ({} distinct callees in all)", calls.len());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
