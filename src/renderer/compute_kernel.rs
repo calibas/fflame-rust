@@ -123,6 +123,15 @@ pub enum TargetingState {
     /// Not asked for.
     #[default]
     Off,
+    /// Asked for, and the flame might well be enumerable — but the
+    /// enumeration is PLANAR and this is not a 2D render.
+    ///
+    /// Distinct from `Off` because the panel draws its line only
+    /// when the box is ticked, so folding this into `Off` printed
+    /// "Not running." to someone who had just ticked it. The
+    /// difference between "you did not ask" and "you asked and the
+    /// answer is no" is the whole content of the message.
+    NotPlanar,
     /// Asked for, but this flame cannot be enumerated.
     Declined(crate::scene::cylinder::NoCylinders),
     /// Asked for and enumerable, but it would cost more than it
@@ -3463,7 +3472,11 @@ impl FlameRenderer {
                 }
             }
         } else {
-            self.targeting_state = TargetingState::Off;
+            self.targeting_state = if config.cylinder_targeting {
+                TargetingState::NotPlanar
+            } else {
+                TargetingState::Off
+            };
             None
         };
         // Two packings, because there are two kernels: a flame
