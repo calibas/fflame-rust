@@ -273,7 +273,8 @@ is marginal on the physics rather than blocked on the machinery.
    a *deliberately undersized* root disc on a flame that works, which
    validates the instrument on a known answer before phase 1 relies
    on it.
-1. **Family M.** Gate: `spherical.fflame` enumerates at its saved
+1. **Family M.** *Geometry built and measured, 2026-09-20; the root
+   policy is BLOCKED on a decision — see §8.* Gate: `spherical.fflame` enumerates at its saved
    framing and 1e6 deeper, and the targeted render matches the
    untargeted one to within `lost`. A second gate on an
    Indra's-Pearls-style two-inversion flame with a known limit set.
@@ -332,3 +333,81 @@ refuses and it says which of the three it is: unbounded attractor
 (§1a), thick tail (§1b), or weak contraction (§1c). Those are the
 three ways a flame can be outside this design, and each has a
 different answer.
+
+
+## 8. Family M: the geometry works, the root does not
+
+**Built and tested:** `src/scene/mobius.rs`. `Region` is an outer disc
+minus a hole per pole, closed under similarities and under inversion,
+with the pole's hole turning into the next outer disc. Seventeen
+tests, of which two carry the weight: containment against the
+**shipped** body (guard included), and `inverting_twice_is_the_identity`
+— an involution, which only an exact map survives. `detect` reads the
+four maps of `spherical.fflame` with their poles.
+
+**And it does not enumerate**, for a reason worth writing down.
+
+### The measurement
+
+Walking a random weighted word of 200 symbols from the root, against
+the hole radius:
+
+    hole    min region radius     leaked measure
+    0.01        2.62e1  pinned        0
+    0.05        2.00e1  pinned        0
+    0.10        1.00e1  pinned        8.3e-4
+    0.15        6.67e0  pinned        9.6e-3
+    0.20        5.05e-8 CONTRACTS     3.0e-2
+    0.25        1.39e-7 CONTRACTS     5.7e-2
+    0.30        1.68e-3               1.2e-1
+
+Below the transition the region is **pinned at `~1/h`**: it holds
+points within `h` of the pole, they map out to `1/h`, and that happens
+again at every step forever. Above it the region finally misses the
+pole's neighbourhood, and eight orders of contraction appear at once.
+
+The attractor comes within **4.8e-2** of the nearer pole. So the holes
+that make the enumeration work are holes that cut the attractor, and
+the leak column is the price: **3% of the picture** at the transition.
+
+### Why this is not forced
+
+The true cylinder images shrink perfectly well. Taking 40,000
+attractor points and applying a random word to all of them:
+
+    trial 0:  5:1.40e1  15:7.80e0  25:4.92e-2  35:1.18e-4
+    trial 2:  5:1.02e1  15:4.49e0  25:2.87e-2  35:2.33e-5
+    trial 3:  5:1.01e1  15:5.98e0  25:9.57e-3  35:1.89e-4
+    trial 1:  5:9.70e0  15:1.78e0  25:1.06e0   35:6.36e-2   (slow one)
+
+From 13.8 down to 1e-4 by depth 35, with nothing cut. **The flame is
+enumerable; one disc minus a few holes is just too coarse to follow
+it.** `S_w(A)` shrinks because `A` is invariant and fractal; `S_w(R₀)`
+does not, because `R₀` is a disc-with-holes whose near-pole annulus is
+attractor-free space that blows up to `1/h` every step.
+
+### The fork
+
+**(a) Accept the loss.** Set the hole at the transition — about
+`1.5e-2` of the extent for this flame, not the `1e-3` decision A
+assumed — and let the panel say `MISSING 3.0% of the fractal`. Cheap:
+the remaining work is wiring `plan`, perhaps a day. But 3% is a lot to
+lose, and the transition point is flame-specific, so a fixed fraction
+is the wrong knob — the measurement has overtaken decision A.
+
+**(b) Cover the attractor instead.** Replace the single root region
+with a **union of M small discs** fitted to the measured orbit. Then
+`S_w(A) ⊆ ⋃ S_w(D_j)`, every `D_j` is small enough to be in the
+map's linear regime, and the bound tracks the true contraction with
+nothing cut. Costs M pushes per word — at M ≈ 64 and 4096 words that
+is ~250k pushes of a few microseconds, which is affordable. It is a
+different root, not a different geometry: everything in `mobius.rs`
+is reused unchanged.
+
+(b) is the one that actually delivers deep zoom on these flames, and
+it is maybe two to three days rather than one. (a) is a day and ships
+a compromised picture.
+
+Nothing is wired into `plan` yet, deliberately — the root policy is
+the part in question, and building the integration against a policy
+that is about to change would be work done twice.
