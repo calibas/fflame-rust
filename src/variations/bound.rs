@@ -432,6 +432,7 @@ mod gpu_tests {
         let (device, queue) =
             pollster::block_on(lens::open_device_for_bounds()).expect("gpu");
 
+        let mut violations: std::collections::BTreeMap<String, (usize, String)> = Default::default();
         let mut checked = 0usize;
         println!("  variation   params                  balls  points  worst fill");
         for def in BOUNDS {
@@ -590,6 +591,181 @@ mod shape_survey {
             println!("    {n:>5}  {f}");
         }
         println!("    ({} distinct callees in all)", calls.len());
+    }
+}
+
+// Desktop only, with the evaluator it exercises.
+#[cfg(not(target_arch = "wasm32"))]
+/// The gate that decides whether DERIVED bounds can be trusted:
+/// every one of them, against the shipped shader, on the GPU.
+#[cfg(test)]
+mod derived_gate {
+    use super::*;
+    use crate::probe::batch::{Batch, Target};
+    use crate::probe::lens;
+    use crate::scene::transforms::{Flame, Transform};
+
+    fn target_for(name: &str) -> Option<Target> {
+        let reg = crate::variations::global_registry();
+        let info = reg.get(name)?;
+        Some(Target {
+            name: info.name.clone(),
+            slots: info.slot_count(),
+            needs_init: info.init_param_count > 0,
+            phase: info.phase.clone(),
+        })
+    }
+
+    fn flame_for(targets: &[Target]) -> Flame {
+        let mut flame = Flame::new();
+        flame.transforms.clear();
+        for t in targets {
+            let mut xf = Transform::new();
+            xf.a = 1.0;
+            xf.b = 0.0;
+            xf.e = 0.0;
+            xf.c = 0.0;
+            xf.d = 1.0;
+            xf.f = 0.0;
+            xf.g = 0.0;
+            xf.weight = 1.0;
+            if t.needs_carrier() {
+                xf.set_variation(crate::probe::flame::CARRIER, 1.0);
+            }
+            xf.set_variation(&t.name, 1.0);
+            flame.transforms.push(xf);
+        }
+        flame
+    }
+
+    fn points_in(b: &Ball, rings: usize, per_ring: usize) -> Vec<[f32; 2]> {
+        let mut out = vec![[b.c[0] as f32, b.c[1] as f32]];
+        for i in 1..=rings {
+            let rr = b.r * i as f64 / rings as f64;
+            for k in 0..per_ring {
+                let a = std::f64::consts::TAU * k as f64 / per_ring as f64;
+                out.push([(b.c[0] + rr * a.cos()) as f32, (b.c[1] + rr * a.sin()) as f32]);
+            }
+        }
+        out
+    }
+
+    fn default_params(name: &str) -> impl Fn(&str) -> f64 + '_ {
+        move |p: &str| {
+            let reg = crate::variations::global_registry();
+            reg.get(name)
+                .and_then(|i| {
+                    i.parameters.iter().find(|q| q.name == p).map(|q| q.default_value as f64)
+                })
+                .unwrap_or(0.0)
+        }
+    }
+
+    /// **Every derived bound contains what the shader actually
+    /// computes.**
+    ///
+    /// The whole case for deriving bounds rests here. An interval rule
+    /// that is subtly wrong produces a disc that is too SMALL, the
+    /// enumeration drops a word that did reach the viewport, and the
+    /// measure it carried vanishes from the render silently — the one
+    /// failure the contract exists to prevent. Sampling cannot prove a
+    /// bound sound, but it is what catches a transcribed rule, and it
+    /// checks against the shipped WGSL rather than a second opinion
+    /// about it.
+    ///
+    /// Batched by disc rather than by variation: the lens evaluates a
+    /// batch of targets at one set of points, so a dozen discs over
+    /// every derivable body is a few dozen dispatches.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn derived_bounds_contain_the_real_wgsl() {
+        let (device, queue) = lens::open_device_for_bounds_blocking();
+
+        // Which bodies derive at all, at the discs below.
+        let discs: Vec<Ball> = {
+            let mut v = Vec::new();
+            for c in [[0.0, 0.0], [0.35, -0.2], [1.5, 0.0], [-3.0, 2.0]] {
+                for r in [0.05, 0.3, 1.0] {
+                    v.push(Ball::new(c, r));
+                }
+            }
+            v
+        };
+
+        let names: Vec<String> = {
+            let reg = crate::variations::global_registry();
+            reg.ordered_names.clone()
+        };
+
+        let mut checked = 0usize;
+        let mut bodies = std::collections::BTreeSet::new();
+        let mut worst = 0.0f64;
+        let mut worst_name = String::new();
+
+        for disc in &discs {
+            // Everything that derives AT THIS DISC.
+            let mut targets: Vec<Target> = Vec::new();
+            let mut claims: Vec<Ball> = Vec::new();
+            for name in &names {
+                let pf = default_params(name);
+                let Ok(claim) = crate::variations::derive::derive(name, &pf, 1.0, *disc) else {
+                    continue;
+                };
+                if !claim.r.is_finite() || claim.r > 1.0e12 {
+                    continue;
+                }
+                let Some(t) = target_for(name) else { continue };
+                targets.push(t);
+                claims.push(claim);
+            }
+            if targets.is_empty() {
+                continue;
+            }
+
+            let points = points_in(disc, 5, 16);
+            for (chunk, cl) in targets.chunks(24).zip(claims.chunks(24)) {
+                let batch = Batch {
+                    slots: chunk.iter().map(|t| t.slots).sum(),
+                    targets: chunk.to_vec(),
+                };
+                let flame = flame_for(chunk);
+                let maps = match lens::run_batch(&device, &queue, &batch, &flame, &points, 512) {
+                    Ok(m) => m,
+                    Err(e) => panic!("lens dispatch failed: {e}"),
+                };
+                for (map, claim) in maps.iter().zip(cl) {
+                    bodies.insert(map.name.clone());
+                    for (i, o) in map.points.iter().enumerate() {
+                        let o64 = [o[0] as f64, o[1] as f64];
+                        if !o64[0].is_finite() || !o64[1].is_finite() {
+                            // Bad-value recovery discards these; a
+                            // bound says nothing about them.
+                            continue;
+                        }
+                        assert!(
+                            claim.contains(o64, 1e-3),
+                            "`{}` at input {disc:?}: the shader sent {:?} to {o64:?}, OUTSIDE                              the derived disc {claim:?}. A derived bound that under-estimates                              drops words the enumeration needed, and the measure they carry                              never reaches the render.",
+                            map.name,
+                            points[i]
+                        );
+                        let d = ((o64[0] - claim.c[0]).powi(2) + (o64[1] - claim.c[1]).powi(2))
+                            .sqrt();
+                        let fill = if claim.r > 0.0 { d / claim.r } else { 0.0 };
+                        if fill > worst {
+                            worst = fill;
+                            worst_name = map.name.clone();
+                        }
+                        checked += 1;
+                    }
+                }
+            }
+        }
+
+        println!();
+        println!("  {} bodies derived a bound and were checked", bodies.len());
+        println!("  {checked} shader evaluations, all inside their disc");
+        println!("  tightest observed: `{worst_name}` filled {worst:.3} of its radius");
+        assert!(bodies.len() > 100, "only {} bodies checked", bodies.len());
     }
 }
 

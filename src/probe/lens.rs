@@ -147,6 +147,11 @@ fn split_to_fit(batches: Vec<Batch>, points: usize, max_words: usize) -> Vec<Bat
     out
 }
 
+/// Blocking wrapper, for the gates that are not async.
+pub(crate) fn open_device_for_bounds_blocking() -> (wgpu::Device, wgpu::Queue) {
+    pollster::block_on(open_device_for_bounds()).expect("gpu")
+}
+
 /// A device for the forward-bound gate, which needs the probe's
 /// limits (the flame compute bind group exceeds WebGPU's floor of
 /// eight storage buffers) without running a survey.
