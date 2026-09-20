@@ -957,6 +957,35 @@ impl FractalConfig {
     /// CLI export, thumbnails, video -- agree with it, instead of
     /// passing the raw flag and relying on the arithmetic happening to
     /// come out the same.
+    /// How far the view controls will zoom in.
+    ///
+    /// The cap exists because a deep view of a flame is STARVED: the
+    /// chaos game's share of any small region falls off with the zoom,
+    /// so past a point the ordinary renderer draws a black frame and
+    /// the control is only letting you break the picture. 1,000 was
+    /// that point once; measurement puts it further out, so the
+    /// ordinary limit is 10,000 now.
+    ///
+    /// **Cylinder targeting removes the reason for a cap**, because it
+    /// forces every sample into the viewport and the share stops
+    /// falling off — so with it on, this is not a limit anyone should
+    /// hit. The value is large and finite rather than infinite so the
+    /// view arithmetic stays well defined (`2/zoom` must not be zero
+    /// and `zoom * 1.5` must not be `inf`).
+    ///
+    /// It is NOT a claim that any zoom resolves. The real wall is that
+    /// `pan_x`/`pan_y` are f32: past about 1e8 an ulp of the pan is
+    /// wider than the view, so the centre cannot be addressed at all.
+    /// That is a coordinate problem, not a sampling one, and raising
+    /// this does not solve it.
+    pub fn max_view_zoom(&self) -> f32 {
+        if self.cylinder_targeting {
+            1.0e30
+        } else {
+            10_000.0
+        }
+    }
+
     pub fn effective_levels_enabled(&self) -> bool {
         self.levels_enabled && !self.render_mode.is_non_flame()
     }
@@ -1374,6 +1403,23 @@ fn fixup_flame_ids(flame: &mut Flame) {
 
 #[cfg(test)]
 mod tests {
+    /// The view's zoom limit follows the one thing that makes a deep
+    /// view resolvable.
+    #[test]
+    fn targeting_lifts_the_zoom_limit() {
+        let mut c = FractalConfig::default();
+        assert_eq!(c.max_view_zoom(), 10_000.0, "the ordinary cap");
+        c.cylinder_targeting = true;
+        assert!(
+            c.max_view_zoom() > 1.0e20,
+            "targeting forces every sample into the viewport, so the cap that existed to              stop you reaching a starved black frame no longer applies"
+        );
+        // Finite, so `2/zoom` is not zero and `zoom * 1.5` is not inf.
+        assert!(c.max_view_zoom().is_finite());
+        assert!((2.0f32 / c.max_view_zoom()) > 0.0);
+        assert!((c.max_view_zoom() * 1.5).is_finite());
+    }
+
     use super::*;
 
     #[test]

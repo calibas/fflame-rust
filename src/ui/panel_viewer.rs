@@ -613,7 +613,7 @@ pub fn zoom_fractal_view(
                 let point_y = config.pan_y + fractal_offset_y;
 
                 // Apply zoom and adjust pan so that point stays under the cursor
-                let new_zoom = (config.zoom * zoom_factor).clamp(0.01, 1000.0);
+                let new_zoom = (config.zoom * zoom_factor).clamp(0.01, config.max_view_zoom());
                 let new_fractal_offset_x = rotated_offset_x / (scale * new_zoom);
                 let new_fractal_offset_y = rotated_offset_y / (scale * new_zoom);
                 let new_pan_x = point_x - new_fractal_offset_x;
@@ -629,7 +629,7 @@ pub fn zoom_fractal_view(
                 );
             } else {
                 // No mouse position, zoom to center
-                let new_zoom = (config.zoom * zoom_factor).clamp(0.01, 1000.0);
+                let new_zoom = (config.zoom * zoom_factor).clamp(0.01, config.max_view_zoom());
                 let _ = config_manager.update_param(
                     crate::config::ConfigPath::Zoom,
                     new_zoom.into(),
@@ -637,7 +637,7 @@ pub fn zoom_fractal_view(
             }
         } else {
             // Zooming out - always zoom from center
-            let new_zoom = (config.zoom * zoom_factor).clamp(0.01, 1000.0);
+            let new_zoom = (config.zoom * zoom_factor).clamp(0.01, config.max_view_zoom());
             let _ = config_manager.update_param(
                 crate::config::ConfigPath::Zoom,
                 new_zoom.into(),
@@ -1746,7 +1746,7 @@ impl<'a> PanelViewer<'a> {
             return;
         }
 
-        let new_zoom = (config.zoom * zoom_delta).clamp(0.01, 1000.0);
+        let new_zoom = (config.zoom * zoom_delta).clamp(0.01, config.max_view_zoom());
 
         // Start with current pan, then apply zoom-toward-center adjustment
         let mut new_pan_x = config.pan_x;
