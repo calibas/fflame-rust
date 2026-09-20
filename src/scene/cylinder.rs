@@ -844,8 +844,8 @@ mod gpu_tests {
         for zoom_pow in [2i32, 4, 6, 8, 10, 12] {
             let mut off = gasket_config();
             off.zoom = 2f32.powi(zoom_pow);
-            off.pan_x = PAN;
-            off.pan_y = PAN;
+            off.pan_x = PAN as f64;
+            off.pan_y = PAN as f64;
             // **Levels ON here, unlike the picture gates**, because
             // this is where the starvation actually shows. Measured
             // with Levels off, a deep view does NOT fade -- the log
@@ -948,12 +948,12 @@ mod gpu_tests {
         for zoom_pow in [4i32, 6, 8] {
             let mut base = gasket_config();
             base.zoom = 2f32.powi(zoom_pow);
-            base.pan_x = p[0] as f32;
-            base.pan_y = p[1] as f32;
+            base.pan_x = p[0];
+            base.pan_y = p[1];
             let plan = Cylinders::plan(
                 &base.flame,
                 &reg,
-                View::of(base.zoom as f64, [base.pan_x as f64, base.pan_y as f64], N, N),
+                View::of(base.zoom as f64, [base.pan_x, base.pan_y], N, N),
             )
             .expect("a generic attractor point enumerates");
 
@@ -1039,7 +1039,7 @@ mod gpu_tests {
             let plan = Cylinders::plan(
                 &base.flame,
                 &reg,
-                View::of(base.zoom as f64, [base.pan_x as f64, base.pan_y as f64], N, N),
+                View::of(base.zoom as f64, [base.pan_x, base.pan_y], N, N),
             )
             .expect("a bounded flame enumerates");
             assert!(!plan.composable, "this fixture must exercise the REPLAY arm");
@@ -1141,12 +1141,28 @@ mod gpu_tests {
         cfg.deterministic_rng = true;
         cfg.auto_exposure = true;
         cfg.cylinder_targeting = true;
-        cfg.pan_x = 0.11714635;
-        cfg.pan_y = 0.272749;
+        // **The centre is solved, not typed in.** It is the fixed
+        // point of the dominant map -- the one place a deep zoom can
+        // land -- and it has to be the fixed point of the map as
+        // STORED, in f32, widened to f64. A centre computed from the
+        // decimal coefficients instead sits 6.4e-9 away, which is
+        // inside the viewport at 1e8 and outside it at 1e9, so the
+        // enumeration finds nothing and the whole ladder reads as a
+        // precision failure that is really a typo.
+        let t = &cfg.flame.transforms[1];
+        let (a, b, c, d) = (t.a as f64, t.b as f64, t.c as f64, t.d as f64);
+        let (e, f) = (t.e as f64, t.f as f64);
+        let det = (1.0 - a) * (1.0 - d) - b * c;
+        cfg.pan_x = ((1.0 - d) * e + b * f) / det;
+        cfg.pan_y = (c * e + (1.0 - a) * f) / det;
 
         println!("  zoom        lit   connected");
         let mut deep = 0;
-        for zoom in [1.0e5f32, 1.0e6, 1.0e7] {
+        // Past 1e8 only an f64 pan can even ADDRESS the view: one f32
+        // ulp near 0.27 is 3e-8, wider than the whole frame there.
+        // The far end is set by f64 in turn -- measured, structure
+        // survives to 1e17 and the frame is empty by 1e18.
+        for zoom in [1.0e5f32, 1.0e7, 1.0e10, 1.0e13] {
             cfg.zoom = zoom;
             let rgba = render(&cfg, N, 48_000_000);
             let lit: Vec<bool> = rgba
@@ -1185,7 +1201,7 @@ mod gpu_tests {
             );
             deep += 1;
         }
-        assert!(deep == 3, "the ladder did not run");
+        assert!(deep == 4, "the ladder did not run");
     }
 
     /// Panning and zooming with targeting on never submits a
@@ -1255,8 +1271,8 @@ mod gpu_tests {
             (262144.0, 0.0),
         ] {
             cfg.zoom = zoom;
-            cfg.pan_x = pan;
-            cfg.pan_y = pan;
+            cfg.pan_x = pan as f64;
+            cfg.pan_y = pan as f64;
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("rebind gate frame"),
             });
@@ -1265,7 +1281,7 @@ mod gpu_tests {
             }
             words.push(r.targeting_state().clone());
             r.compute_pass(
-                &mut enc, &queue, &device, 64, 1, 0, cfg.zoom, cfg.pan_x, cfg.pan_y, 0.0,
+                &mut enc, &queue, &device, 64, 1, 0, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, 0.0,
                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, cfg.speed_factor, true, false,
             );
             queue.submit(Some(enc.finish()));
@@ -1349,7 +1365,7 @@ mod gpu_tests {
         // no shader change to make, and asking for one here is what
         // broke the app.
         for (dx, dz) in [(0.01f32, 1.0f32), (-0.2, 1.0), (0.0, 8.0), (0.0, 4096.0)] {
-            cfg.pan_x += dx;
+            cfg.pan_x += dx as f64;
             cfg.zoom *= dz;
             assert!(
                 !r.sync_cylinders(&device, &queue, &cfg),
@@ -1450,7 +1466,7 @@ mod gpu_tests {
             let plan = Cylinders::plan(
                 &base.flame,
                 &reg,
-                View::of(base.zoom as f64, [base.pan_x as f64, base.pan_y as f64], N, N),
+                View::of(base.zoom as f64, [base.pan_x, base.pan_y], N, N),
             )
             .expect("a gasket is affine");
             let mut tgt = base.clone();

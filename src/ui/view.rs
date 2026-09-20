@@ -178,7 +178,7 @@ pub fn render_view_content(
     ui.horizontal(|ui| {
         ui.add_space(36.0);
         if ui.button("  ^  ").clicked() {
-            let (dx, dy) = config.screen_delta_to_pan_frame(0.0, -pan_step);
+            let (dx, dy) = config.screen_delta_to_pan_frame(0.0, -pan_step as f64);
             let _ = config_manager.update_param(
                 ConfigPath::Pan,
                 (config.pan_x + dx, config.pan_y + dy).into()
@@ -187,21 +187,21 @@ pub fn render_view_content(
     });
     ui.horizontal(|ui| {
         if ui.button("  <  ").clicked() {
-            let (dx, dy) = config.screen_delta_to_pan_frame(-pan_step, 0.0);
+            let (dx, dy) = config.screen_delta_to_pan_frame(-pan_step as f64, 0.0);
             let _ = config_manager.update_param(
                 ConfigPath::Pan,
                 (config.pan_x + dx, config.pan_y + dy).into()
             );
         }
         if ui.button("  v  ").clicked() {
-            let (dx, dy) = config.screen_delta_to_pan_frame(0.0, pan_step);
+            let (dx, dy) = config.screen_delta_to_pan_frame(0.0, pan_step as f64);
             let _ = config_manager.update_param(
                 ConfigPath::Pan,
                 (config.pan_x + dx, config.pan_y + dy).into()
             );
         }
         if ui.button("  >  ").clicked() {
-            let (dx, dy) = config.screen_delta_to_pan_frame(pan_step, 0.0);
+            let (dx, dy) = config.screen_delta_to_pan_frame(pan_step as f64, 0.0);
             let _ = config_manager.update_param(
                 ConfigPath::Pan,
                 (config.pan_x + dx, config.pan_y + dy).into()

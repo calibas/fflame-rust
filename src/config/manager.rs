@@ -1711,8 +1711,10 @@ impl ConfigManager {
             // View
             ConfigPath::Zoom => Ok(config.zoom.into()),
             ConfigPath::Pan => Ok((config.pan_x, config.pan_y).into()),
-            ConfigPath::PanX => Ok(config.pan_x.into()),
-            ConfigPath::PanY => Ok(config.pan_y.into()),
+            // Named rather than `.into()`: there is no `From<f64>`
+            // on purpose -- see the note beside the impls.
+            ConfigPath::PanX => Ok(ConfigValue::Double(config.pan_x)),
+            ConfigPath::PanY => Ok(ConfigValue::Double(config.pan_y)),
             ConfigPath::Rotation => Ok(config.rotation.into()),
             ConfigPath::CameraRotationX => Ok(config.camera_rotation_x.into()),
             ConfigPath::CameraRotationY => Ok(config.camera_rotation_y.into()),
@@ -2621,7 +2623,7 @@ impl ConfigManager {
                 self.current.zoom = value.try_into()?;
             }
             ConfigPath::Pan => {
-                let (x, y): (f32, f32) = value.try_into()?;
+                let (x, y): (f64, f64) = value.try_into()?;
                 self.current.pan_x = x;
                 self.current.pan_y = y;
             }
@@ -4478,6 +4480,20 @@ impl TryFrom<ConfigValue> for f32 {
     }
 }
 
+impl TryFrom<ConfigValue> for f64 {
+    type Error = ConfigError;
+    fn try_from(v: ConfigValue) -> Result<Self, Self::Error> {
+        match v {
+            ConfigValue::Double(f) => Ok(f),
+            // A `Float` widens, so an animation track or a script
+            // that only knows f32 can still drive the pan -- it just
+            // cannot express a deep one.
+            ConfigValue::Float(f) => Ok(f as f64),
+            _ => Err(ConfigError::TypeMismatch),
+        }
+    }
+}
+
 impl TryFrom<ConfigValue> for i32 {
     type Error = ConfigError;
     fn try_from(v: ConfigValue) -> Result<Self, Self::Error> {
@@ -4528,7 +4544,7 @@ impl TryFrom<ConfigValue> for bool {
     }
 }
 
-impl TryFrom<ConfigValue> for (f32, f32) {
+impl TryFrom<ConfigValue> for (f64, f64) {
     type Error = ConfigError;
     fn try_from(v: ConfigValue) -> Result<Self, Self::Error> {
         match v {

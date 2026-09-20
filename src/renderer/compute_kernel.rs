@@ -2076,7 +2076,7 @@ impl FlameRenderer {
         // Update transform tracking
         self.num_transforms = config.flame.transforms.len() as u32;
 
-        self.frozen_shadow_fit = Some(self.shadow_placement(config.zoom, config.pan_x, config.pan_y, config.camera_rotation_x, config.camera_rotation_y, config.camera_bank, [config.camera_x, config.camera_y, config.camera_z]));
+        self.frozen_shadow_fit = Some(self.shadow_placement(config.zoom, config.pan_x as f32, config.pan_y as f32, config.camera_rotation_x, config.camera_rotation_y, config.camera_bank, [config.camera_x, config.camera_y, config.camera_z]));
         self.frozen_fit_measured = self.measured_bounds.is_some();
         self.fit_refit_done = false;
         let sh_fit = self.frozen_shadow_fit.unwrap();
@@ -2101,8 +2101,8 @@ impl FlameRenderer {
             },
             splat_size: 1.0,
             zoom: config.zoom,
-            pan_x: config.pan_x,
-            pan_y: config.pan_y,
+            pan_x: config.pan_x as f32,
+            pan_y: config.pan_y as f32,
             rotation: config.rotation,
             speed_factor: config.speed_factor,
             perspective_strength: self.perspective_strength,

@@ -51,9 +51,33 @@ pub struct FractalConfig {
     #[serde(default = "default_zoom")]
     pub zoom: f32,
     #[serde(default)]
-    pub pan_x: f32,
+    /// View centre, in the fractal plane. **f64, unlike every other
+    /// view field**, because it is the only ABSOLUTE position among
+    /// them and absolute positions are what a deep zoom destroys.
+    ///
+    /// The forced-prefix packing already subtracts this centre in f64
+    /// (`scene::cylinder::pack`) so the kernel only touches small
+    /// numbers. That subtraction was exact and the input was not: an
+    /// f32 centre quantises to 3e-8 near 0.27, which is wider than
+    /// the whole viewport past a zoom of about 1e8, so the centre
+    /// could not be ADDRESSED however well the render was sampled.
+    ///
+    /// f64 moves that wall to roughly 1e11-1e13, where the word's own
+    /// composed translation runs out. Past that the answer is exact
+    /// decimal strings feeding `escape::fixedpoint`, and the seam for
+    /// it is an additive optional field rather than another change to
+    /// this one.
+    ///
+    /// `zoom` stays f32 deliberately: it is a SCALE, so only its
+    /// relative precision matters, and f32 has seven digits of that
+    /// at any magnitude.
+    ///
+    /// Serde-compatible both ways — a JSON number parses into f64
+    /// whatever it was written as — so no config migration and no
+    /// version bump.
+    pub pan_x: f64,
     #[serde(default)]
-    pub pan_y: f32,
+    pub pan_y: f64,
     #[serde(default)]
     pub rotation: f32,  // 2D rotation (around Z axis)
 
@@ -1003,9 +1027,13 @@ impl FractalConfig {
     /// (mouse drag, arrow keys, zoom-to-cursor, pinch) must go
     /// through this so the inputs stay consistent with the
     /// pipelines and with each other.
-    pub fn screen_delta_to_pan_frame(&self, dx: f32, dy: f32) -> (f32, f32) {
-        let cos_r = (-self.rotation).cos();
-        let sin_r = (-self.rotation).sin();
+    /// f64 in and out, so the caller's `pan + delta` stays in the
+    /// pan's own precision. The DELTA itself never needs it -- a
+    /// one-pixel drag is small but perfectly representable at any
+    /// depth -- it is the accumulator that does.
+    pub fn screen_delta_to_pan_frame(&self, dx: f64, dy: f64) -> (f64, f64) {
+        let cos_r = (-self.rotation as f64).cos();
+        let sin_r = (-self.rotation as f64).sin();
         (dx * cos_r - dy * sin_r, dx * sin_r + dy * cos_r)
     }
 

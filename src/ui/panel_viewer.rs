@@ -525,7 +525,7 @@ pub fn pan_fractal_view(
     let dy = -drag_delta.y * scale;
 
     // Screen space → pan frame (rotation-aware in 2D, identity in 3D)
-    let (fractal_dx, fractal_dy) = config.screen_delta_to_pan_frame(dx, dy);
+    let (fractal_dx, fractal_dy) = config.screen_delta_to_pan_frame(dx as f64, dy as f64);
 
     let new_pan_x = config.pan_x + fractal_dx;
     let new_pan_y = config.pan_y + fractal_dy;
@@ -603,10 +603,10 @@ pub fn zoom_fractal_view(
                 // identity in 3D). Same offset serves both zoom
                 // levels — the conversion doesn't depend on zoom.
                 let (rotated_offset_x, rotated_offset_y) =
-                    config.screen_delta_to_pan_frame(mouse_offset_x, mouse_offset_y);
+                    config.screen_delta_to_pan_frame(mouse_offset_x as f64, mouse_offset_y as f64);
 
-                let fractal_offset_x = rotated_offset_x / (scale * config.zoom);
-                let fractal_offset_y = rotated_offset_y / (scale * config.zoom);
+                let fractal_offset_x = rotated_offset_x / (scale * config.zoom) as f64;
+                let fractal_offset_y = rotated_offset_y / (scale * config.zoom) as f64;
 
                 // Calculate the point in fractal space that the mouse is pointing at
                 let point_x = config.pan_x + fractal_offset_x;
@@ -614,8 +614,8 @@ pub fn zoom_fractal_view(
 
                 // Apply zoom and adjust pan so that point stays under the cursor
                 let new_zoom = (config.zoom * zoom_factor).clamp(0.01, config.max_view_zoom());
-                let new_fractal_offset_x = rotated_offset_x / (scale * new_zoom);
-                let new_fractal_offset_y = rotated_offset_y / (scale * new_zoom);
+                let new_fractal_offset_x = rotated_offset_x / (scale * new_zoom) as f64;
+                let new_fractal_offset_y = rotated_offset_y / (scale * new_zoom) as f64;
                 let new_pan_x = point_x - new_fractal_offset_x;
                 let new_pan_y = point_y - new_fractal_offset_y;
 
@@ -1761,13 +1761,13 @@ impl<'a> PanelViewer<'a> {
 
             let scale = f32::min(panel_size.x, panel_size.y) * 0.25;
             // Screen space → pan frame (rotation-aware in 2D, identity in 3D)
-            let (rot_x, rot_y) = config.screen_delta_to_pan_frame(offset_x, offset_y);
+            let (rot_x, rot_y) = config.screen_delta_to_pan_frame(offset_x as f64, offset_y as f64);
 
-            let point_x = config.pan_x + rot_x / (scale * config.zoom);
-            let point_y = config.pan_y + rot_y / (scale * config.zoom);
+            let point_x = config.pan_x + rot_x / (scale * config.zoom) as f64;
+            let point_y = config.pan_y + rot_y / (scale * config.zoom) as f64;
 
-            new_pan_x = point_x - rot_x / (scale * new_zoom);
-            new_pan_y = point_y - rot_y / (scale * new_zoom);
+            new_pan_x = point_x - rot_x / (scale * new_zoom) as f64;
+            new_pan_y = point_y - rot_y / (scale * new_zoom) as f64;
         }
 
         // Apply two-finger translation on top of the zoom pan adjustment
@@ -1777,7 +1777,7 @@ impl<'a> PanelViewer<'a> {
             let dx = -translation.x * drag_scale;
             let dy = -translation.y * drag_scale;
 
-            let (pan_dx, pan_dy) = config.screen_delta_to_pan_frame(dx, dy);
+            let (pan_dx, pan_dy) = config.screen_delta_to_pan_frame(dx as f64, dy as f64);
             new_pan_x += pan_dx;
             new_pan_y += pan_dy;
         }

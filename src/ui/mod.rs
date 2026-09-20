@@ -700,7 +700,7 @@ pub struct PathClickInfo {
     /// Actual pixel with valid path data (may differ if click was empty)
     pub found_pixel: (u32, u32),
     /// Fractal space coordinates of the found pixel
-    pub fractal_coords: (f32, f32),
+    pub fractal_coords: (f64, f64),
     /// Distance from click to found pixel (0 if exact match)
     pub search_distance: f32,
     /// Path data at the found pixel
