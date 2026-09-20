@@ -328,7 +328,8 @@ between them:
 - **Forward reach without an inverse.** A forced prefix needs
   forward maps, which every variation has, and a Lipschitz bound per
   variation over the ball, which none supplies yet -- the deep-zoom
-  plan's §7 item 1. Where that bound exists the deep zoom's stage 2
+  plan's §7 item 1, now planned as
+  [forward-bounds.md](forward-bounds.md). Where that bound exists the deep zoom's stage 2
   can enumerate cylinders by forward branch-and-bound with no
   `InverseDef` at all. It does not help the inverse WALKS (mode D,
   the measure), which still need the inverse; it is the reach lever
