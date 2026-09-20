@@ -3386,8 +3386,29 @@ impl FlameRenderer {
         // different buffer layouts, so crossing between them needs the
         // rebuild exactly as starting or stopping does.
         let before = self.cylinders.as_ref().map(|c| c.composable);
-        self.update_cylinders(device, queue, config);
+        let buffers_changed = self.update_cylinders(device, queue, config);
         let after = self.cylinders.as_ref().map(|c| c.composable);
+
+        // **The bind group must follow the buffer.** A pan that
+        // changes how many words reach the view resizes the cylinder
+        // table, and resizing DESTROYS the old buffer and creates a
+        // new one. The bind group still referenced the dead one, so
+        // the next submit failed validation with "Buffer with
+        // 'Cylinder Buffer' label has been destroyed" and the renderer
+        // stayed broken until targeting was toggled off and on --
+        // which worked only because that runs a full `load_config`,
+        // and load_config has always rebuilt the bind group on this
+        // same flag.
+        //
+        // Rebinding is safe to do here, unlike recompiling: it just
+        // points the group at the current buffers, and touches neither
+        // the shader nor the sticky-adopted packing that the shader
+        // has to agree with.
+        if buffers_changed {
+            self.compute_bind_group =
+                self.pipelines.create_compute_bind_group(device, &self.buffers);
+            self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
+        }
         before != after
     }
 
