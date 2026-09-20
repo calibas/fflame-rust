@@ -4021,8 +4021,8 @@ pub fn coarse_measure_for(
     let mut config = crate::config::FractalConfig::default();
     config.flame = flame.clone();
     config.render_mode = crate::scene::transforms::RenderMode::TwoD;
-    config.pan_x = ball_centre[0] as f32;
-    config.pan_y = ball_centre[1] as f32;
+    config.pan_x = ball_centre[0];
+    config.pan_y = ball_centre[1];
     config.zoom = (2.0 / ball_radius) as f32;
     config.rotation = 0.0;
     config.color_mode = crate::scene::palette::ColorMode::Palette;
@@ -4050,7 +4050,7 @@ pub fn coarse_measure_for(
         });
         let n = renderer.compute_pass(
             &mut enc, queue, device, WORKGROUPS, 256, 20,
-            config.zoom, config.pan_x, config.pan_y, config.rotation,
+            config.zoom, config.pan_x as f32, config.pan_y as f32, config.rotation,
             0.0, 0.0, 0.0, 0.0, 0.0, 0.0, config.speed_factor,
             b == 0, b == 0,
         );
@@ -11699,8 +11699,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             let mut f = crate::config::FractalConfig::default();
             f.flame = flame;
             f.flame.name = name.to_string();
-            f.pan_x = ifs.ball.centre[0] as f32;
-            f.pan_y = ifs.ball.centre[1] as f32;
+            f.pan_x = ifs.ball.centre[0];
+            f.pan_y = ifs.ball.centre[1];
             f.zoom = (4.0 / (ifs.ball.radius * 2.4)) as f32;
             f.max_iterations = 400;
             let job = crate::renderer::RenderJob::new(&f, 448, 448);

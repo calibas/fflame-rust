@@ -1403,7 +1403,7 @@ fn write_single_flame(out: &mut String, config: &FractalConfig, flame: &Flame) {
     out.push_str(&xml_escape_attr(&flame.name));
     out.push_str(&format!("\" version=\"{}\"", xml_escape_attr(&version)));
     out.push_str(&format!(" size=\"{} {}\"", size.0, size.1));
-    out.push_str(&format!(" center=\"{} {}\"", fmt_f32(config.pan_x), fmt_f32(config.pan_y)));
+    out.push_str(&format!(" center=\"{} {}\"", fmt_f32(config.pan_x as f32), fmt_f32(config.pan_y as f32)));
     out.push_str(&format!(" scale=\"{}\"", fmt_f32(apo_scale)));
     if rotate_deg.abs() > 1e-6 {
         out.push_str(&format!(" rotate=\"{}\"", fmt_f32(rotate_deg)));

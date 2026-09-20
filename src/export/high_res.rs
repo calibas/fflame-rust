@@ -1420,8 +1420,8 @@ impl HighResExporter {
         let aspect = width.max(height).max(1) as f32 / width.min(height).max(1) as f32;
         let mut fit_center = shadow_cam_pos;
         for k in 0..3 {
-            fit_center[k] += config.pan_x * shadow_cam_rows[0][k]
-                + config.pan_y * shadow_cam_rows[1][k];
+            fit_center[k] += config.pan_x as f32 * shadow_cam_rows[0][k]
+                + config.pan_y as f32 * shadow_cam_rows[1][k];
         }
         let shadow_fit = (
             fit_center,
@@ -1509,8 +1509,8 @@ impl HighResExporter {
             shadow_view: (
                 config.zoom,
                 config.rotation,
-                config.pan_x,
-                config.pan_y,
+                config.pan_x as f32,
+                config.pan_y as f32,
                 config.perspective_strength,
             ),
             solid_density_fraction: 1.0,
@@ -1813,8 +1813,8 @@ impl HighResExporter {
                 },
                 splat_size: 1.0,
                 zoom: config.zoom,
-                pan_x: config.pan_x,
-                pan_y: config.pan_y,
+                pan_x: config.pan_x as f32,
+                pan_y: config.pan_y as f32,
                 rotation: config.rotation,
                 speed_factor: config.speed_factor,
                 perspective_strength: config.perspective_strength,
@@ -2972,8 +2972,8 @@ impl HighResExporter {
                     &config.solid_shading,
                     config.zoom,
                     config.rotation,
-                    config.pan_x,
-                    config.pan_y,
+                    config.pan_x as f32,
+                    config.pan_y as f32,
                     config.perspective_strength,
                     self.surface_thickness,
                     self.width,
@@ -3206,8 +3206,8 @@ impl HighResExporter {
                 &config.solid_shading,
                 config.zoom,
                 config.rotation,
-                config.pan_x,
-                config.pan_y,
+                config.pan_x as f32,
+                config.pan_y as f32,
                 config.perspective_strength,
                 self.surface_thickness,
                 self.width,

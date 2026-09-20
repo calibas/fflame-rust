@@ -1770,7 +1770,14 @@ pub enum ConfigValue {
     String(String),
     /// Ordered list of strings — used for `variation_order` reordering.
     StringList(Vec<String>),
-    Vec2(f32, f32),  // For pan coordinates and other 2D values
+    /// The pan, and only the pan -- which is why it is f64. See
+    /// `FractalConfig::pan_x`.
+    Vec2(f64, f64),
+    /// A single f64 component, for `PanX`/`PanY`. `Float` stays f32
+    /// for the several hundred parameters that are genuinely f32; a
+    /// separate variant keeps the widening to the two paths that need
+    /// it instead of rippling through all of them.
+    Double(f64),
     ColorRgb([f32; 3]),
     ToneMapMode(ToneMapMode),
     HighlightMode(crate::scene::tonemap::HighlightMode),
@@ -1788,11 +1795,18 @@ impl ConfigValue {
     /// Check if two values are approximately equal (for floats)
     pub fn approx_eq(&self, other: &Self) -> bool {
         const EPSILON_F32: f32 = 1e-6;
+        const EPSILON_F64: f64 = 1e-15;
 
         match (self, other) {
             (ConfigValue::Float(a), ConfigValue::Float(b)) => (a - b).abs() < EPSILON_F32,
+            // The pan's own epsilon is far tighter than f32's,
+            // because at a deep zoom two centres 1e-6 apart are
+            // thousands of pixels apart. Coalescing undo entries on
+            // an f32 epsilon would silently merge pans that are not
+            // remotely the same view.
+            (ConfigValue::Double(a), ConfigValue::Double(b)) => (a - b).abs() < EPSILON_F64,
             (ConfigValue::Vec2(x1, y1), ConfigValue::Vec2(x2, y2)) => {
-                (x1 - x2).abs() < EPSILON_F32 && (y1 - y2).abs() < EPSILON_F32
+                (x1 - x2).abs() < EPSILON_F64 && (y1 - y2).abs() < EPSILON_F64
             }
             (ConfigValue::ColorRgb(a), ConfigValue::ColorRgb(b)) => a
                 .iter()
@@ -1820,13 +1834,16 @@ impl Display for ConfigValue {
         match self {
             ConfigValue::Unit => write!(f, "()"),
             ConfigValue::Float(v) => write!(f, "{:.3}", v),
+            // More digits than `Float`: a pan is a position, and
+            // three decimals of one is not a view.
+            ConfigValue::Double(v) => write!(f, "{v:.9}"),
             ConfigValue::Int(v) => write!(f, "{}", v),
             ConfigValue::UInt(v) => write!(f, "{}", v),
             ConfigValue::UInt64(v) => write!(f, "{}", v),
             ConfigValue::Bool(v) => write!(f, "{}", v),
             ConfigValue::String(v) => write!(f, "{}", v),
             ConfigValue::StringList(v) => write!(f, "[{}]", v.join(", ")),
-            ConfigValue::Vec2(x, y) => write!(f, "({:.3}, {:.3})", x, y),
+            ConfigValue::Vec2(x, y) => write!(f, "({x:.9}, {y:.9})"),
             ConfigValue::ColorRgb([r, g, b]) => {
                 write!(f, "RGB({:.2}, {:.2}, {:.2})", r, g, b)
             }
@@ -1860,6 +1877,14 @@ impl From<f32> for ConfigValue {
         ConfigValue::Float(v)
     }
 }
+
+// **Deliberately no `From<f64>`.** An untyped float literal infers
+// f64, so adding one silently turns every `2.0.into()` in the
+// codebase from `Float` into `Double` -- and the several hundred
+// genuinely-f32 parameters then fail with a type mismatch at
+// RUNTIME, not at compile time. The two paths that want a `Double`
+// name it. (The tuple impl below is safe for the opposite reason:
+// `Vec2` has exactly one user, the pan.)
 
 impl From<i32> for ConfigValue {
     fn from(v: i32) -> Self {
@@ -1903,8 +1928,8 @@ impl From<&str> for ConfigValue {
     }
 }
 
-impl From<(f32, f32)> for ConfigValue {
-    fn from((x, y): (f32, f32)) -> Self {
+impl From<(f64, f64)> for ConfigValue {
+    fn from((x, y): (f64, f64)) -> Self {
         ConfigValue::Vec2(x, y)
     }
 }
@@ -3918,8 +3943,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         ConfigPath::Pan => {
             if let Value::Array(arr) = json {
                 if arr.len() == 2 {
-                    let x = arr[0].as_f64()? as f32;
-                    let y = arr[1].as_f64()? as f32;
+                    let x = arr[0].as_f64()?;
+                    let y = arr[1].as_f64()?;
                     return Some(ConfigValue::Vec2(x, y));
                 }
             }

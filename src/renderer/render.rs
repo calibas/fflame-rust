@@ -394,7 +394,7 @@ pub async fn render_with(
             renderer.compute_pass(
                 &mut enc, queue, device, NUM_WORKGROUPS,
                 job.iterations_per_thread, job.burn_in,
-                job.config.zoom, job.config.pan_x, job.config.pan_y, job.config.rotation,
+                job.config.zoom, job.config.pan_x as f32, job.config.pan_y as f32, job.config.rotation,
                 job.config.camera_rotation_x, job.config.camera_rotation_y, job.config.camera_bank,
                 job.config.camera_x, job.config.camera_y, job.config.camera_z,
                 job.config.speed_factor, true, false,
@@ -403,7 +403,7 @@ pub async fn render_with(
         }
         let changed = renderer.refresh_shadow_placement_blocking(
             device, queue,
-            job.config.zoom, job.config.pan_x, job.config.pan_y,
+            job.config.zoom, job.config.pan_x as f32, job.config.pan_y as f32,
             job.config.camera_rotation_x, job.config.camera_rotation_y, job.config.camera_bank,
             [job.config.camera_x, job.config.camera_y, job.config.camera_z],
         );
@@ -413,7 +413,7 @@ pub async fn render_with(
         });
         renderer.reset(
             &mut enc, queue, job.iterations_per_thread,
-            job.config.zoom, job.config.pan_x, job.config.pan_y, job.config.rotation,
+            job.config.zoom, job.config.pan_x as f32, job.config.pan_y as f32, job.config.rotation,
             job.config.camera_rotation_x, job.config.camera_rotation_y, job.config.camera_bank,
             job.config.camera_x, job.config.camera_y, job.config.camera_z,
             job.config.speed_factor,
@@ -446,8 +446,8 @@ pub async fn render_with(
             job.iterations_per_thread,
             job.burn_in,
             job.config.zoom,
-            job.config.pan_x,
-            job.config.pan_y,
+            job.config.pan_x as f32,
+            job.config.pan_y as f32,
             job.config.rotation,
             job.config.camera_rotation_x,
             job.config.camera_rotation_y,
@@ -550,8 +550,8 @@ pub async fn render_with(
         &mut tonemap_encoder,
         job.config.zoom,
         job.config.rotation,
-        job.config.pan_x,
-        job.config.pan_y,
+        job.config.pan_x as f32,
+        job.config.pan_y as f32,
         job.config.camera_rotation_x,
         job.config.camera_rotation_y,
         job.config.camera_bank,

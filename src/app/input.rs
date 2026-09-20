@@ -153,7 +153,7 @@ impl App {
         match event.physical_key {
             PhysicalKey::Code(KeyCode::ArrowUp) => {
                 // Up in screen space: (0, -1), convert to pan frame
-                let (dx, dy) = config.screen_delta_to_pan_frame(0.0, -pan_step);
+                let (dx, dy) = config.screen_delta_to_pan_frame(0.0, -pan_step as f64);
                 let new_pan_x = config.pan_x + dx;
                 let new_pan_y = config.pan_y + dy;
                 let _ = self.config_manager.update_param(
@@ -164,7 +164,7 @@ impl App {
             }
             PhysicalKey::Code(KeyCode::ArrowDown) => {
                 // Down in screen space: (0, 1), convert to pan frame
-                let (dx, dy) = config.screen_delta_to_pan_frame(0.0, pan_step);
+                let (dx, dy) = config.screen_delta_to_pan_frame(0.0, pan_step as f64);
                 let new_pan_x = config.pan_x + dx;
                 let new_pan_y = config.pan_y + dy;
                 let _ = self.config_manager.update_param(
@@ -175,7 +175,7 @@ impl App {
             }
             PhysicalKey::Code(KeyCode::ArrowLeft) => {
                 // Left in screen space: (-1, 0), convert to pan frame
-                let (dx, dy) = config.screen_delta_to_pan_frame(-pan_step, 0.0);
+                let (dx, dy) = config.screen_delta_to_pan_frame(-pan_step as f64, 0.0);
                 let new_pan_x = config.pan_x + dx;
                 let new_pan_y = config.pan_y + dy;
                 let _ = self.config_manager.update_param(
@@ -186,7 +186,7 @@ impl App {
             }
             PhysicalKey::Code(KeyCode::ArrowRight) => {
                 // Right in screen space: (1, 0), convert to pan frame
-                let (dx, dy) = config.screen_delta_to_pan_frame(pan_step, 0.0);
+                let (dx, dy) = config.screen_delta_to_pan_frame(pan_step as f64, 0.0);
                 let new_pan_x = config.pan_x + dx;
                 let new_pan_y = config.pan_y + dy;
                 let _ = self.config_manager.update_param(

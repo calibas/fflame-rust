@@ -628,8 +628,13 @@ fn apply_config_value(
             config.pan_x = *x;
             config.pan_y = *y;
         }
-        (ConfigPath::PanX, ConfigValue::Float(v)) => config.pan_x = *v,
-        (ConfigPath::PanY, ConfigValue::Float(v)) => config.pan_y = *v,
+        // `Double` first, then `Float` widened: a track written
+        // before the pan was f64 still drives it, it just cannot
+        // express a deep one.
+        (ConfigPath::PanX, ConfigValue::Double(v)) => config.pan_x = *v,
+        (ConfigPath::PanY, ConfigValue::Double(v)) => config.pan_y = *v,
+        (ConfigPath::PanX, ConfigValue::Float(v)) => config.pan_x = *v as f64,
+        (ConfigPath::PanY, ConfigValue::Float(v)) => config.pan_y = *v as f64,
         (ConfigPath::Rotation, ConfigValue::Float(v)) => config.rotation = *v,
         (ConfigPath::CameraRotationX, ConfigValue::Float(v)) => config.camera_rotation_x = *v,
         (ConfigPath::CameraRotationY, ConfigValue::Float(v)) => config.camera_rotation_y = *v,
