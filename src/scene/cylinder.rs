@@ -1188,6 +1188,114 @@ mod gpu_tests {
         assert!(deep == 3, "the ladder did not run");
     }
 
+    /// Panning and zooming with targeting on never submits a
+    /// destroyed buffer.
+    ///
+    /// The cylinder table is resized whenever the number of words
+    /// reaching the view changes, and a resize DESTROYS the old
+    /// buffer. The bind group has to be rebuilt to match, or the next
+    /// submit fails validation with "Buffer with 'Cylinder Buffer'
+    /// label has been destroyed" and the renderer stays broken until
+    /// something forces a full reload.
+    ///
+    /// **A picture comparison cannot see this**, which is why it
+    /// reached the app: every other gate here renders once from a
+    /// fresh renderer, so no buffer is ever resized under a live bind
+    /// group. What catches it is a wgpu VALIDATION SCOPE around the
+    /// app's real sequence — load, then move the view repeatedly,
+    /// submitting each time.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn moving_the_view_never_submits_a_destroyed_buffer() {
+        let (device, queue) = device();
+        let mut cfg = gasket_config();
+        cfg.cylinder_targeting = true;
+        cfg.zoom = 64.0;
+
+        let mut r = crate::renderer::FlameRenderer::with_palette_size(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            96,
+            96,
+            &cfg.flame,
+            cfg.palette_size,
+        );
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("rebind gate load"),
+        });
+        r.load_config(&device, &mut enc, &queue, &cfg, &cfg.palette, 1, 0);
+        queue.submit(Some(enc.finish()));
+
+        // Recorded rather than panicked in the callback: it can fire
+        // from a poll on another thread, where a panic would unwind
+        // the wrong stack and report nothing useful.
+        let seen: std::sync::Arc<std::sync::Mutex<Option<String>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+        let sink = seen.clone();
+        device.on_uncaptured_error(std::sync::Arc::new(move |e| {
+            let mut g = sink.lock().unwrap();
+            if g.is_none() {
+                *g = Some(format!("{e}"));
+            }
+        }));
+
+        // A sweep that genuinely changes how many words reach the
+        // view, in both directions, so the table grows and shrinks.
+        let mut words = Vec::new();
+        for (zoom, pan) in [
+            (64.0f32, 0.0f32),
+            (256.0, 0.0),
+            (4096.0, 0.0),
+            (4096.0, 0.25),
+            (1024.0, 0.25),
+            (65536.0, 0.25),
+            (65536.0, 0.0),
+            (16.0, 0.0),
+            (262144.0, 0.0),
+        ] {
+            cfg.zoom = zoom;
+            cfg.pan_x = pan;
+            cfg.pan_y = pan;
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("rebind gate frame"),
+            });
+            if r.sync_cylinders(&device, &queue, &cfg) {
+                r.load_config(&device, &mut enc, &queue, &cfg, &cfg.palette, 1, 0);
+            }
+            words.push(r.targeting_state().clone());
+            r.compute_pass(
+                &mut enc, &queue, &device, 64, 1, 0, cfg.zoom, cfg.pan_x, cfg.pan_y, 0.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, cfg.speed_factor, true, false,
+            );
+            queue.submit(Some(enc.finish()));
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        }
+
+        let err = seen.lock().unwrap().clone();
+        assert!(
+            err.is_none(),
+            "moving the view with targeting on raised a wgpu error: {}",
+            err.unwrap_or_default()
+        );
+
+        // The sweep has to have actually resized the table, or it
+        // proved nothing. Count the distinct word counts it visited.
+        let mut counts: Vec<usize> = words
+            .iter()
+            .filter_map(|s| match s {
+                crate::renderer::TargetingState::Active { words, .. } => Some(*words),
+                _ => None,
+            })
+            .collect();
+        counts.sort_unstable();
+        counts.dedup();
+        assert!(
+            counts.len() > 1,
+            "the sweep never changed the word count, so it never resized the buffer: {counts:?}"
+        );
+    }
+
     /// The per-frame sync asks for a reload only when the SHADER
     /// changes, and never for an ordinary pan.
     ///
