@@ -1866,6 +1866,7 @@ impl HighResExporter {
                 importance_window: config.importance.window.max(1),
             _pad_shadow: [0; 2],
                 shadow_dirs: [[0.0; 4]; 4],
+                leak_probe: [0.0; 4],
             };
             self.queue
                 .write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));

@@ -132,6 +132,8 @@ struct Params {
     _pad_shadow1: u32,
     _pad_shadow2: u32,
     shadow_dirs: array<vec4<f32>, 4>,
+    // [cx, cy, r, unused]; off when r <= 0. See GpuParams::leak_probe.
+    leak_probe: vec4<f32>,
 }
 
 // Plot-time symmetry. Matches `GpuPostSymmetry` in src/gpu/buffers.rs.
@@ -362,8 +364,10 @@ fn bias_ratio(prev: u32, i: u32) -> f32 {
 
 {{#if FRAME_COVERAGE}}
 // Frame-coverage counters (auto exposure --
-// docs/projects/flame-deep-zoom.md). Two words: [0] plot attempts that
-// landed INSIDE the frame, [1] plot attempts. Their ratio is the share
+// docs/projects/flame-deep-zoom.md). Three words: [0] plot attempts that
+// landed INSIDE the frame, [1] plot attempts, and [2] plot attempts
+// whose WORLD position fell outside `params.leak_probe` -- see there.
+// Their ratio is the share
 // of the flame's deposited work the viewport actually holds, which is
 // what the tone map's `sample_density` has to be scaled by when the
 // view is a deep zoom and most of the attractor is off-screen.

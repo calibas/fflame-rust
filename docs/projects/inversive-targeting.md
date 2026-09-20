@@ -247,6 +247,21 @@ is marginal on the physics rather than blocked on the machinery.
    a hand-built flame with a deliberate 1e-3 tail shows `lost` and
    the kernel counter agreeing to sampling error.
 
+   *Done, 2026-09-20.* The counter is `GpuParams::leak_probe` plus
+   `coverage[2]`: an ordinary untargeted render counts, in world
+   space, every plot attempt outside a claimed disc. Calibrated by
+   `the_leak_probe_agrees_that_the_root_ball_holds_everything` in both
+   directions — exactly zero at the gasket's root ball, 97.9% at a
+   quarter of its radius. That zero is itself new information:
+   `invariant_ball` proves its answer with forward BOUNDS, and until
+   now nothing had checked the conclusion against the shader that
+   actually runs.
+
+   It also caught the transient immediately: at `burn_in = 0` the
+   probe reads 6.1e-3, because the chaos game starts at a random point
+   and the first iterations of every thread deposit points genuinely
+   outside any invariant region. Real, and not a hole in the ball.
+
    *Accounting done, 2026-09-20.* `Cylinders::lost` is plumbed to the
    panel and `every_working_flame_loses_nothing` holds it at zero over
    64 successful enumerations. Note what that gate also says: **no

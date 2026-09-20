@@ -703,6 +703,7 @@ impl FlamePipelines {
         cylinder_targeting: bool,
         cylinder_replay: bool,
         cylinder_relative: bool,
+        leak_probe: bool,
     ) -> bool {
         // Census is renderer state, not config state — a .fflame cannot
         // ask to be instrumented. Threaded from FlameRenderer::census.
@@ -722,6 +723,12 @@ impl FlamePipelines {
         // reference.
         constants.cylinder_replay = cylinder_replay;
         constants.cylinder_relative = cylinder_relative;
+        // The leak probe rides the frame-coverage counters, and like
+        // the two above it is renderer state: a `.fflame` cannot ask
+        // to be measured. Without this the probe is set, the params
+        // carry the region, and the shader simply has no counters to
+        // add to -- which reads as "no leak" rather than as an error.
+        constants.frame_coverage = constants.frame_coverage || leak_probe;
         self.shader_cache.ensure_current_full(
             device,
             &self.compute_bind_group_layout,

@@ -907,6 +907,20 @@ pub struct GpuParams {
     pub _pad_shadow: [u32; 2],
     // xyz = world-space direction TO each light, w unused.
     pub shadow_dirs: [[f32; 4]; 4],
+    /// **The leak probe: `[cx, cy, r, unused]`, off when `r <= 0`.**
+    ///
+    /// A region the render is asked to check itself against. Every
+    /// plot attempt outside the disc `D((cx, cy), r)` is counted into
+    /// `coverage[2]`, so an ORDINARY untargeted render measures what
+    /// share of the attractor's deposited work falls outside a claimed
+    /// region — the one number the enumeration cannot compute for
+    /// itself, because `Cylinders::lost` only sees words it tried to
+    /// bound, never the measure that was never in the root region at
+    /// all (`docs/projects/inversive-targeting.md` §1b).
+    ///
+    /// Appended after `shadow_dirs`, which is 16-byte aligned, so no
+    /// existing field's offset moves.
+    pub leak_probe: [f32; 4],
 }
 
 /// Plot-time symmetry params packed for the GPU uniform. Mirrors the
@@ -1564,6 +1578,7 @@ impl FlameBuffers {
             importance_window: 0,
             _pad_shadow: [0; 2],
             shadow_dirs: [[0.0; 4]; 4],
+            leak_probe: [0.0; 4],
         };
 
         let params_buffer = device.create_buffer_init(&util::BufferInitDescriptor {

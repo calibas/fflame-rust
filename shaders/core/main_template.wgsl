@@ -126,6 +126,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // 16). Registers, flushed once after the loop.
     var fc_in: u32 = 0u;
     var fc_att: u32 = 0u;
+    // Plot attempts landing outside params.leak_probe's disc.
+    var fc_leak: u32 = 0u;
 {{/if}}
 
     // Iterate
@@ -1008,6 +1010,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     pixel.y >= 0 && pixel.y < i32(params.height)) {
                     fc_in = fc_in + 1u;
                 }
+                // The leak probe, in WORLD space and so independent of
+                // the viewport: does this sample lie inside the region
+                // the enumeration assumed? Only the geometric position
+                // matters, so it rides the same `should_plot` gate as
+                // the coverage pair above.
+                if (params.leak_probe.z > 0.0) {
+                    let lk = current.xy - params.leak_probe.xy;
+                    if (dot(lk, lk) > params.leak_probe.z * params.leak_probe.z) {
+                        fc_leak = fc_leak + 1u;
+                    }
+                }
             }
 {{/if}}
             // Check bounds and opacity (only plot if both pass)
@@ -1295,6 +1308,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (fc_att > 0u) {
         atomicAdd(&coverage[0], fc_in);
         atomicAdd(&coverage[1], fc_att);
+        if (fc_leak > 0u) {
+            atomicAdd(&coverage[2], fc_leak);
+        }
     }
 {{/if}}
 }

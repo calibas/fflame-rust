@@ -1434,9 +1434,6 @@ mod gpu_tests {
         );
     }
 
-    /// The per-frame sync asks for a reload only when the SHADER
-    /// changes, and never for an ordinary pan.
-    ///
     /// **A ticked box never reports "Not running."**
     ///
     /// The panel draws its status line only when cylinder targeting
@@ -1496,6 +1493,91 @@ mod gpu_tests {
         assert_ne!(*r.targeting_state(), TS::Off);
     }
 
+    /// **The root ball really does hold the attractor — asked of the
+    /// shader, not of the bounds.**
+    ///
+    /// `invariant_ball` proves its answer with forward BOUNDS, and a
+    /// bound is only as good as the reasoning behind it. Nothing has
+    /// ever checked the conclusion against the thing that actually
+    /// runs. The leak probe does: an ordinary untargeted render
+    /// counts, in world space, every plot attempt that falls outside
+    /// a claimed disc.
+    ///
+    /// Two directions, because a counter that always reads zero would
+    /// pass the first half on its own:
+    ///
+    /// * at the root ball, the count must be EXACTLY zero — every
+    ///   sample the real chaos game deposits is inside;
+    /// * at a quarter of that radius, it must be clearly non-zero, or
+    ///   the instrument is not measuring anything.
+    ///
+    /// This is the phase-0 validation from
+    /// `docs/projects/inversive-targeting.md`: the leaky regions of
+    /// phase 1 will rely on this number, so it is calibrated here
+    /// against an answer already known.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_leak_probe_agrees_that_the_root_ball_holds_everything() {
+        let (device, queue) = device();
+        let guard = crate::variations::global_registry();
+        let cfg = gasket_config();
+        let (root_c, root_r) =
+            invariant_ball(&cfg.flame, &guard).expect("the gasket has a root ball");
+        drop(guard);
+
+        // **Burn-in matters here and nowhere else in this file.** The
+        // chaos game starts at a random point and only approaches the
+        // attractor; with none, the first iterations of every thread
+        // deposit points that are genuinely outside any invariant
+        // region, and the probe correctly reports them (measured:
+        // 6.1e-3 of attempts at burn_in = 0). That is the transient,
+        // not a hole in the root ball.
+        let measure = |c: [f64; 2], r: f64, burn: u32| -> f32 {
+            let mut rr = crate::renderer::FlameRenderer::with_palette_size(
+                &device,
+                &queue,
+                wgpu::TextureFormat::Rgba8Unorm,
+                128,
+                128,
+                &cfg.flame,
+                cfg.palette_size,
+            );
+            rr.set_leak_probe(Some((c, r)));
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("leak probe"),
+            });
+            rr.load_config(&device, &mut enc, &queue, &cfg, &cfg.palette, 64, burn);
+            rr.compute_pass(
+                &mut enc, &queue, &device, 256, 64, burn, cfg.zoom, cfg.pan_x as f32,
+                cfg.pan_y as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, cfg.speed_factor,
+                true, false,
+            );
+            queue.submit(Some(enc.finish()));
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            rr.apply_exact_density_fraction(&device, &queue);
+            rr.leak_fraction().expect("the probe was set, so a fraction must come back")
+        };
+
+        let inside = measure(root_c, root_r, 30);
+        println!("  at the root ball (r = {root_r:.4}): {inside:.3e} of plot attempts outside");
+        assert_eq!(
+            inside, 0.0,
+            "the root ball is supposed to be invariant, but the real chaos game put \
+             {inside:.3e} of its samples outside it"
+        );
+
+        let quarter = measure(root_c, root_r * 0.25, 30);
+        println!("  at a quarter of it:            {quarter:.3e} outside");
+        assert!(
+            quarter > 1e-3,
+            "a disc a quarter the size should obviously leak, but the probe read \
+             {quarter:.3e} -- it is not measuring anything"
+        );
+    }
+
+    /// The per-frame sync asks for a reload only when the SHADER
+    /// changes, and never for an ordinary pan.
+    ///
     /// **The gate for a bug the whole suite missed.** `sync_cylinders`
     /// used to rebuild the shader itself, from the raw config —
     /// while `load_config` compiles against the sticky-adopted flame

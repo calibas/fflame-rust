@@ -326,6 +326,13 @@ pub struct FlameRenderer {
     /// rather than for every iteration the chaos game ran. Only ever
     /// moves off 1.0 when `auto_exposure` is on.
     frame_coverage_fraction: f32,
+    /// The region an ordinary render is asked to check itself
+    /// against: `[cx, cy, r, unused]`, off when `r <= 0`. See
+    /// [`crate::gpu::buffers::GpuParams::leak_probe`].
+    leak_probe: [f32; 4],
+    /// Share of plot attempts that fell outside it, from the last
+    /// readback. `None` until one has been read.
+    leak_fraction: Option<f32>,
     /// What targeting decided for the current view — reported to the
     /// panel, never read by the render path (which asks `cylinders`).
     targeting_state: TargetingState,
@@ -498,6 +505,8 @@ impl FlameRenderer {
             dof_dirty: true,
             solid_density_fraction: 1.0,
             frame_coverage_fraction: 1.0,
+            leak_probe: [0.0; 4],
+            leak_fraction: None,
             targeting_state: TargetingState::default(),
             cylinder_relative: false,
             cylinder_key: None,
@@ -677,7 +686,7 @@ impl FlameRenderer {
             cylinder_targeting: self.cylinders.is_some(),
             cylinder_replay: self.cylinders.as_ref().is_some_and(|c| !c.composable),
             cylinder_relative: self.cylinder_relative,
-            frame_coverage: self.auto_exposure,
+            frame_coverage: self.auto_exposure || self.leak_probe[2] > 0.0,
             flatten_z_per_iter: matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD)
                 && !preserve_z,
             solid_enabled: (self.solid_strength > 0.0 || self.solid_shading.active())
@@ -812,6 +821,7 @@ impl FlameRenderer {
             importance_window: self.importance.window.max(1),
             _pad_shadow: [0; 2],
             shadow_dirs: sh_dirs.1,
+            leak_probe: self.leak_probe,
         };
         self.buffers.update_params(queue, &params);
 
@@ -1754,19 +1764,27 @@ impl FlameRenderer {
         // Frame coverage (auto exposure). Independent of everything
         // above: its counters live in their own buffer, not the
         // histogram tail, so no render mode or region has to be on.
-        if self.auto_exposure {
+        if self.auto_exposure || self.leak_probe[2] > 0.0 {
             if let Some(words) =
                 self.coverage_stats.tick(device, encoder, &self.buffers.coverage_buffer, 0)
             {
-                if let Some(measured) = Self::coverage_from(words[0], words[1]) {
-                    // EMA, for the same reason the solid renorm has
-                    // one: a brightness scalar that jumps with each
-                    // measurement pumps the image while it converges.
-                    self.frame_coverage_fraction =
-                        self.frame_coverage_fraction * 0.7 + measured * 0.3;
+                if self.auto_exposure {
+                    if let Some(measured) = Self::coverage_from(words[0], words[1]) {
+                        // EMA, for the same reason the solid renorm has
+                        // one: a brightness scalar that jumps with each
+                        // measurement pumps the image while it converges.
+                        self.frame_coverage_fraction =
+                            self.frame_coverage_fraction * 0.7 + measured * 0.3;
+                    }
+                }
+                // No EMA: this is a measurement reported as-is, not a
+                // scalar multiplying the picture.
+                if self.leak_probe[2] > 0.0 && words[1] > 0 {
+                    self.leak_fraction = Some(words[2] as f32 / words[1] as f32);
                 }
             }
-        } else {
+        }
+        if !self.auto_exposure {
             self.frame_coverage_fraction = 1.0;
         }
 
@@ -1840,6 +1858,31 @@ impl FlameRenderer {
         self.frame_coverage_fraction
     }
 
+    /// **Ask an ordinary render to measure what falls outside a disc.**
+    ///
+    /// The enumeration cannot compute this for itself:
+    /// `Cylinders::lost` counts words whose bound FAILED, and says
+    /// nothing about measure that was never inside the root region to
+    /// begin with. Only the real chaos game knows that, so this asks
+    /// it — the counting rides the frame-coverage path, which the
+    /// probe switches on for as long as it is set.
+    ///
+    /// Takes effect on the next params upload; read the answer with
+    /// [`Self::leak_fraction`] after a render. `None` clears it.
+    pub fn set_leak_probe(&mut self, region: Option<([f64; 2], f64)>) {
+        self.leak_probe = match region {
+            Some((c, r)) if r > 0.0 => [c[0] as f32, c[1] as f32, r as f32, 0.0],
+            _ => [0.0; 4],
+        };
+        self.leak_fraction = None;
+    }
+
+    /// Share of plot attempts outside [`Self::set_leak_probe`]'s disc,
+    /// or `None` if no probe is set or none has been read back yet.
+    pub fn leak_fraction(&self) -> Option<f32> {
+        self.leak_fraction
+    }
+
     /// Turn the two coverage counters into a usable fraction, or
     /// `None` when they say nothing trustworthy.
     ///
@@ -1874,11 +1917,15 @@ impl FlameRenderer {
     pub fn apply_exact_density_fraction(&mut self, device: &Device, queue: &Queue) {
         // Frame coverage first, and unconditionally: it is not tied to
         // solid rendering, and a one-shot render has exactly one
-        // chance to measure it before the final tonemap.
-        if self.auto_exposure {
+        // chance to measure it before the final tonemap. The leak
+        // probe reads the same words and has the same one chance.
+        if self.auto_exposure || self.leak_probe[2] > 0.0 {
             if let Some(words) =
                 self.coverage_stats.read_blocking(device, queue, &self.buffers.coverage_buffer, 0)
             {
+                if self.leak_probe[2] > 0.0 && words[1] > 0 {
+                    self.leak_fraction = Some(words[2] as f32 / words[1] as f32);
+                }
                 if let Some(measured) = Self::coverage_from(words[0], words[1]) {
                     self.frame_coverage_fraction = measured;
                     log::info!(
@@ -1954,6 +2001,7 @@ impl FlameRenderer {
             self.cylinders.is_some(),
             self.cylinders.as_ref().is_some_and(|c| !c.composable),
             self.cylinder_relative,
+            self.leak_probe[2] > 0.0,
         );
         if shaders_changed {
             log::info!("Shaders recompiled during preset load - recreating bind group");
@@ -2165,6 +2213,7 @@ impl FlameRenderer {
             importance_window: self.importance.window.max(1),
             _pad_shadow: [0; 2],
             shadow_dirs: sh_dirs.1,
+            leak_probe: self.leak_probe,
         };
         self.buffers.update_params(queue, &params);
 
@@ -2375,6 +2424,7 @@ impl FlameRenderer {
             importance_window: self.importance.window.max(1),
             _pad_shadow: [0; 2],
             shadow_dirs: sh_dirs.1,
+            leak_probe: self.leak_probe,
         };
 
         self.buffers.update_params(queue, &params);
@@ -2686,6 +2736,7 @@ impl FlameRenderer {
             importance_window: self.importance.window.max(1),
             _pad_shadow: [0; 2],
             shadow_dirs: sh_dirs.1,
+            leak_probe: self.leak_probe,
         };
         self.buffers.update_params(queue, &params);
     }
@@ -3074,6 +3125,7 @@ impl FlameRenderer {
             importance_window: self.importance.window.max(1),
             _pad_shadow: [0; 2],
             shadow_dirs: sh_dirs.1,
+            leak_probe: self.leak_probe,
         };
         self.buffers.update_params(queue, &params);
     }
