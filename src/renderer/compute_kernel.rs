@@ -139,7 +139,13 @@ pub enum TargetingState {
     /// already lands most of its samples in frame.
     NotWorthIt { speedup: f64 },
     /// Running.
-    Active { words: usize, depth: usize, speedup: f64, mass: f64 },
+    ///
+    /// `lost` is the share of the attractor's measure the enumeration
+    /// could not account for — see [`crate::scene::cylinder::Cylinders::lost`].
+    /// Zero for every flame that targets today; the panel says so
+    /// when it is not, because a picture missing part of its
+    /// attractor has to admit it.
+    Active { words: usize, depth: usize, speedup: f64, mass: f64, lost: f64 },
 }
 
 
@@ -3467,6 +3473,7 @@ impl FlameRenderer {
                         depth: c.depth,
                         speedup: c.speedup(),
                         mass: c.mass,
+                        lost: c.lost,
                     };
                     Some(c)
                 }

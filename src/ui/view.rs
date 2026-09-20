@@ -93,13 +93,30 @@ pub fn render_view_content(
                             t!("view.targeting_not_worth_it", speedup = format!("{speedup:.2}"))
                                 .to_string()
                         }
-                        TS::Active { words, depth, speedup, .. } => t!(
-                            "view.targeting_active",
-                            words = words.to_string(),
-                            depth = depth.to_string(),
-                            speedup = format!("{speedup:.0}")
-                        )
-                        .to_string(),
+                        TS::Active { words, depth, speedup, lost, .. } => {
+                            let mut line = t!(
+                                "view.targeting_active",
+                                words = words.to_string(),
+                                depth = depth.to_string(),
+                                speedup = format!("{speedup:.0}")
+                            )
+                            .to_string();
+                            // Never folded into the sentence above: a
+                            // render that is missing part of its
+                            // attractor says so in its own clause, or
+                            // it does not really say it.
+                            if *lost > 0.0 {
+                                line.push(' ');
+                                line.push_str(
+                                    &t!(
+                                        "view.targeting_lost",
+                                        percent = format!("{:.3}", lost * 100.0)
+                                    )
+                                    .to_string(),
+                                );
+                            }
+                            line
+                        }
                         TS::Declined(why) => {
                             use crate::scene::cylinder::NoCylinders as NC;
                             let reason = match why {

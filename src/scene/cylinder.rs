@@ -173,6 +173,28 @@ pub struct Cylinders {
     /// sample carries, and the share of the invariant measure the
     /// viewport holds.
     pub mass: f64,
+    /// **The share of the invariant measure this enumeration could
+    /// not account for.**
+    ///
+    /// A word whose region cannot be bounded — a pole inside it, a
+    /// variation with no forward bound at those parameters — is
+    /// dropped, and every word extending it with it. Its `prob` is
+    /// exactly the measure of that whole subtree, so adding it here
+    /// once is the complete cost.
+    ///
+    /// Zero for every flame that targets today, and the gate
+    /// `every_working_flame_loses_nothing` keeps it that way. It is
+    /// non-zero only for the leaky regions the inversive family
+    /// needs (`docs/projects/inversive-targeting.md`), where the
+    /// alternative is refusing the flame outright.
+    ///
+    /// **The render stays unbiased CONDITIONAL on the kept set.** The
+    /// forced sampler draws from `words` with probability
+    /// `p_a / mass`, so what it draws is right; the lost measure is
+    /// simply absent from the picture, and this is how much of it
+    /// there is. Never hidden from the user — a render that is
+    /// missing a part of the attractor has to say so.
+    pub lost: f64,
     /// The deepest word kept, which is what the prefix costs per
     /// plotted sample.
     pub depth: usize,
@@ -335,6 +357,8 @@ impl Cylinders {
             radius: root_r,
         }];
         let mut kept: Vec<Cylinder> = Vec::new();
+        // Measure that fell out of the enumeration; see `Cylinders::lost`.
+        let mut lost = 0.0f64;
 
         // The disc a word's image lies in: push the root through the
         // word's maps, in the order the chaos game applies them.
@@ -388,7 +412,15 @@ impl Cylinders {
                     let mut word = Vec::with_capacity(node.word.len() + 1);
                     word.push(i as u32);
                     word.extend_from_slice(&node.word);
+                    // Computed before the bound is attempted, because
+                    // a bound that fails still has to say how much
+                    // measure went with it.
+                    let prob = node.prob * (w / total_w);
                     let Some(img) = disc_of(&word) else {
+                        // **Not a silent drop any more.** This word
+                        // and its whole subtree leave the antichain,
+                        // and `prob` is that subtree's measure.
+                        lost += prob;
                         continue;
                     };
                     let centre = img.c;
@@ -405,7 +437,6 @@ impl Cylinders {
                     if d > radius + view.radius {
                         continue;
                     }
-                    let prob = node.prob * (w / total_w);
                     // Small enough: the image fits the view, so
                     // forcing this word puts a sample in the frame
                     // and subdividing further would only lengthen the
@@ -452,7 +483,7 @@ impl Cylinders {
         }
         let mass: f64 = kept.iter().map(|c| c.prob).sum();
         let depth = kept.iter().map(|c| c.word.len()).max().unwrap_or(0);
-        Ok(Self { words: kept, mass, depth, composable, view_centre: view.centre })
+        Ok(Self { words: kept, mass, lost, depth, composable, view_centre: view.centre })
     }
 }
 
@@ -2464,6 +2495,106 @@ mod tests {
         }
     }
 
+    /// **Nothing that works today loses any measure.**
+    ///
+    /// `Cylinders::lost` exists for the leaky regions the inversive
+    /// family needs, where the alternative is refusing the flame
+    /// outright. It must stay exactly zero everywhere else, because a
+    /// non-zero value means the picture is missing part of its
+    /// attractor — and before this field existed, a word whose bound
+    /// failed was dropped with no trace at all.
+    ///
+    /// Also the arithmetic: `mass` and `lost` are disjoint shares of
+    /// the same unit measure, so they cannot sum past 1.
+    #[test]
+    #[ignore = "reads output/*.flame and output/flame-zoom"]
+    fn every_working_flame_loses_nothing() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let mut checked = 0usize;
+        let mut offenders: Vec<String> = Vec::new();
+
+        let mut configs: Vec<(String, crate::config::FractalConfig)> = Vec::new();
+        for dir in ["output", "output/flame-zoom"] {
+            let Ok(rd) = std::fs::read_dir(dir) else { continue };
+            let mut paths: Vec<_> = rd.flatten().map(|e| e.path()).collect();
+            paths.sort();
+            for p in paths {
+                let Ok(text) = std::fs::read_to_string(&p) else { continue };
+                let stem = p.file_stem().unwrap_or_default().to_string_lossy().to_string();
+                match p.extension().and_then(|x| x.to_str()) {
+                    Some("fflame") => {
+                        if let Ok(c) = serde_json::from_str::<crate::config::FractalConfig>(&text) {
+                            configs.push((stem, c));
+                        }
+                    }
+                    Some("flame") => {
+                        if let Ok(cs) = crate::flame_xml::parse_flame_xml(&text) {
+                            for (i, c) in cs.into_iter().enumerate() {
+                                configs.push((format!("{stem}#{i}"), c));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if configs.is_empty() {
+            println!("  no corpus — nothing to check");
+            return;
+        }
+
+        for (name, cfg) in &configs {
+            // Its own framing and several depths, plus a view centred
+            // on the attractor so the deep enumerations are exercised
+            // rather than short-circuited by an empty view.
+            let mut centres = vec![[cfg.pan_x, cfg.pan_y]];
+            if let Ok((c, _)) = invariant_ball(&cfg.flame, reg) {
+                let bs: Vec<_> = cfg
+                    .flame
+                    .transforms
+                    .iter()
+                    .filter(|t| t.weight > 0.0)
+                    .filter_map(|t| crate::scene::ifs_ball::Bounder::new(t, reg).ok())
+                    .collect();
+                if !bs.is_empty() {
+                    let mut p = c;
+                    for k in 0..96 {
+                        if let Ok(img) = bs[k % bs.len()].apply(Ball::new(p, 0.0)) {
+                            p = img.c;
+                        }
+                    }
+                    centres.push(p);
+                }
+            }
+            for centre in centres {
+                for mult in [1.0f64, 1e3, 1e6, 1e9] {
+                    let view =
+                        View::of((cfg.zoom.max(1e-6) as f64) * mult, centre, 512, 512);
+                    if let Ok(c) = Cylinders::plan(&cfg.flame, reg, view) {
+                        checked += 1;
+                        assert!(
+                            c.mass + c.lost <= 1.0 + 1e-9,
+                            "{name}: mass {} + lost {} exceeds the unit measure",
+                            c.mass,
+                            c.lost
+                        );
+                        if c.lost != 0.0 {
+                            offenders.push(format!("{name} at x{mult:.0e}: lost {:.3e}", c.lost));
+                        }
+                    }
+                }
+            }
+        }
+
+        println!("  {checked} successful enumerations across {} flames", configs.len());
+        assert!(
+            offenders.is_empty(),
+            "these enumerate but silently drop measure, which nothing should do yet:\n  {}",
+            offenders.join("\n  ")
+        );
+    }
+
     /// **Why each flame in a zoom corpus can or cannot be targeted.**
     ///
     /// Reads `output/flame-zoom/*.fflame` — hand-picked flames people
@@ -2660,10 +2791,11 @@ mod tests {
                 );
                 match Cylinders::plan(&cfg.flame, reg, view) {
                     Ok(c) => println!(
-                        "     zoom x{mult:<6.0e} OK   {:>5} words, depth {}, speedup {:.3e}",
+                        "     zoom x{mult:<6.0e} OK   {:>5} words, depth {}, speedup {:.3e}, lost {:.3e}",
                         c.words.len(),
                         c.depth,
-                        c.speedup()
+                        c.speedup(),
+                        c.lost
                     ),
                     Err(e) => println!("     zoom x{mult:<6.0e} {e:?}"),
                 }
