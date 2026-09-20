@@ -195,6 +195,17 @@ pub struct Cylinders {
     /// there is. Never hidden from the user — a render that is
     /// missing a part of the attractor has to say so.
     pub lost: f64,
+    /// **Attractor the enumeration's region never covered**, for a
+    /// flame whose root is a sampled COVER rather than a proven ball.
+    ///
+    /// Distinct from [`Self::lost`], which is measure belonging to
+    /// words that were dropped. This is measure belonging to words
+    /// that were KEPT, in the gaps between the sample points the
+    /// cover was built from — see
+    /// `docs/projects/inversive-targeting.md` §12. Zero for every
+    /// flame with a real invariant ball, which is every flame that
+    /// targeted before family M existed.
+    pub sampling_leak: f64,
     /// The deepest word kept, which is what the prefix costs per
     /// plotted sample.
     pub depth: usize,
@@ -270,6 +281,20 @@ impl Cylinders {
             }
         }
 
+        // **Family M first**: a flame built from similarities,
+        // `linear` and `spherical` is a Möbius IFS, and none of the
+        // machinery below applies to it. Its maps have poles, so no
+        // disc is invariant and `invariant_ball` cannot succeed; they
+        // are not contractions, so the check below would refuse them;
+        // and a disc bound through an inversion never shrinks, so the
+        // enumeration would not terminate even if it started. See
+        // `docs/projects/inversive-targeting.md`.
+        let mobius = crate::scene::mobius::MobiusFlame::read(
+            flame,
+            registry,
+            crate::scene::mobius::ROOT_SAMPLE,
+        );
+
         // Each transform's selection probability, and whether the
         // whole flame is affine -- which decides whether a word can
         // be composed into one matrix or has to be replayed symbol by
@@ -278,7 +303,9 @@ impl Cylinders {
         let mut total_w = 0.0f64;
         let mut composable = true;
         for (i, t) in flame.transforms.iter().enumerate() {
-            if crate::scene::ifs_analysis::transform_affine_2d(t, registry).is_err() {
+            if mobius.is_none()
+                && crate::scene::ifs_analysis::transform_affine_2d(t, registry).is_err()
+            {
                 composable = false;
                 // It still has to be BOUNDED, or there is nothing to
                 // push a disc with. Ask at a disc that is certainly
@@ -306,6 +333,9 @@ impl Cylinders {
         // `ifs_ball::Bounder`.
         let mut bounders = Vec::with_capacity(n);
         for (i, t) in flame.transforms.iter().enumerate() {
+            if mobius.is_some() {
+                break;
+            }
             match crate::scene::ifs_ball::Bounder::new(t, registry) {
                 Ok(b) => bounders.push(b),
                 Err(why) => {
@@ -315,17 +345,35 @@ impl Cylinders {
         }
 
         // The ball every map sends into itself: the enumeration's
-        // root, and what `S_a(B)` is the image of.
-        let (root_c, root_r) = invariant_ball(flame, registry)?;
+        // root, and what `S_a(B)` is the image of. For family M there
+        // is no such ball — that is the whole problem the cover
+        // solves — so the root is the cover's extent instead.
+        let (root_c, root_r, sampling_leak) = match &mobius {
+            Some(mf) => {
+                let e = mf.root.enclosing().ok_or(NoCylinders::NoInvariantBall)?;
+                (e.c, e.r, mf.leak)
+            }
+            None => {
+                let (c, r) = invariant_ball(flame, registry)?;
+                (c, r, 0.0)
+            }
+        };
 
         // Contraction, measured on the root rather than read off a
         // matrix. For an affine map the two agree (`σ_max` exactly);
         // for a bounded one there is no matrix to read, and what the
         // enumeration actually needs is that a word's disc shrinks.
+        //
+        // Skipped for family M, where it is the wrong question:
+        // `spherical` is not a Euclidean contraction anywhere, and a
+        // disc bound through it never shrinks. What contracts is a
+        // WORD, measured at −0.30 per step, and the cover is what can
+        // see it.
         for (i, t) in flame.transforms.iter().enumerate() {
-            if weights[i] <= 0.0 {
+            if mobius.is_some() || weights[i] <= 0.0 {
                 continue;
             }
+            let _ = t;
             let img = bounders[i]
                 .apply(Ball::new(root_c, root_r))
                 .map_err(|why| NoCylinders::Unbounded { index: i, why: why.to_string() })?;
@@ -349,12 +397,17 @@ impl Cylinders {
             prob: f64,
             centre: [f64; 2],
             radius: f64,
+            /// Family M only: the whole word as one Möbius map, so a
+            /// child costs a complex matrix multiply rather than a
+            /// walk from the root.
+            mob: Option<crate::scene::mobius::Word>,
         }
         let mut frontier = vec![Node {
             word: Vec::new(),
             prob: 1.0,
             centre: root_c,
             radius: root_r,
+            mob: mobius.as_ref().map(|mf| mf.empty_word()),
         }];
         let mut kept: Vec<Cylinder> = Vec::new();
         // Measure that fell out of the enumeration; see `Cylinders::lost`.
@@ -412,11 +465,49 @@ impl Cylinders {
                     let mut word = Vec::with_capacity(node.word.len() + 1);
                     word.push(i as u32);
                     word.extend_from_slice(&node.word);
+                    // Family M: extend the composed map, then ask it
+                    // for the region in one push.
+                    let child_mob = match (&mobius, &node.mob) {
+                        (Some(mf), Some(parent)) => match mf.extend(parent, i) {
+                            Some(w) => Some(w),
+                            None => {
+                                lost += node.prob * (w / total_w);
+                                continue;
+                            }
+                        },
+                        _ => None,
+                    };
                     // Computed before the bound is attempted, because
                     // a bound that fails still has to say how much
                     // measure went with it.
                     let prob = node.prob * (w / total_w);
-                    let Some(img) = disc_of(&word) else {
+                    // **The view test has to see the COVER, not the
+                    // disc around it.**
+                    //
+                    // A family-M word's region is a scatter of small
+                    // discs over the attractor, and the disc enclosing
+                    // them is the attractor's own extent for the first
+                    // twenty symbols — the contraction does not bite
+                    // before then. Tested through that enclosing disc,
+                    // every child meets the view, nothing prunes, and
+                    // the frontier grows like the branching factor to
+                    // the depth: measured, `TooManyWords(4096)` at
+                    // every zoom after five seconds. Asking the discs
+                    // themselves is the same question asked where the
+                    // structure is.
+                    let mut cover = None;
+                    let region = match (&mobius, &child_mob) {
+                        (Some(mf), Some(cw)) => match mf.region(cw, &word) {
+                            Ok(c) => {
+                                let e = c.enclosing().map(|d| Ball::new(d.c, d.r));
+                                cover = Some(c);
+                                e
+                            }
+                            Err(_) => None,
+                        },
+                        _ => disc_of(&word),
+                    };
+                    let Some(img) = region else {
                         // **Not a silent drop any more.** This word
                         // and its whole subtree leave the antichain,
                         // and `prob` is that subtree's measure.
@@ -431,10 +522,16 @@ impl Cylinders {
                     // the antichain complete -- the word is still a
                     // member of `A`, it simply contributes nothing to
                     // `V` and so is never sampled.
-                    let d = ((centre[0] - view.centre[0]).powi(2)
-                        + (centre[1] - view.centre[1]).powi(2))
-                    .sqrt();
-                    if d > radius + view.radius {
+                    let meets = match &cover {
+                        Some(c) => c.meets_disc(view.centre, view.radius),
+                        None => {
+                            let d = ((centre[0] - view.centre[0]).powi(2)
+                                + (centre[1] - view.centre[1]).powi(2))
+                            .sqrt();
+                            d <= radius + view.radius
+                        }
+                    };
+                    if !meets {
                         continue;
                     }
                     // Small enough: the image fits the view, so
@@ -447,20 +544,62 @@ impl Cylinders {
                             return Err(NoCylinders::TooManyWords(kept.len()));
                         }
                     } else {
-                        // The FRONTIER is capped too, not just the
-                        // kept antichain. With affine contractive
-                        // maps the frontier shrinks on its own and
-                        // this never fires; with a bound that does
-                        // not shrink -- `spherical`'s crude
-                        // near-origin disc, say -- nothing terminates
-                        // and the frontier grows like the branching
-                        // factor to the depth. Without this cap that
-                        // is not a slow answer, it is a hang.
-                        if next.len() >= MAX_WORDS {
-                            return Err(NoCylinders::TooManyWords(next.len()));
-                        }
-                        next.push(Node { word, prob, centre, radius });
+                        next.push(Node { word, prob, centre, radius, mob: child_mob });
                     }
+                }
+            }
+            // **The frontier is a beam, and what falls off it is
+            // counted.**
+            //
+            // With contractive maps the frontier narrows by itself:
+            // the images are disjoint, a small view is inside one of
+            // them, and everything else prunes at the first level.
+            // A Möbius IFS is not like that. Measured on
+            // `spherical.fflame`, centred on its own attractor, the
+            // frontier went 4, 16, 63, 240, 887, 3113 — the branching
+            // factor to the depth, with almost nothing pruned — while
+            // the widest region GREW from 17 to 2.8e5.
+            //
+            // Both halves of that are real. Words contract on
+            // AVERAGE, which is what the Lyapunov exponent says and
+            // what a random weighted word does; the enumeration walks
+            // ALL of them, and the expanding ones stay large, so they
+            // keep meeting the view and keep branching forever.
+            //
+            // What saves it is that those words carry almost no
+            // measure. Keeping the most probable `MAX_WORDS` and
+            // charging the rest to `lost` is the measure decomposition
+            // truncated where it stops mattering — and because it is
+            // charged rather than discarded, the panel can say how
+            // much of the picture went with it.
+            //
+            // The beam is much narrower for family M, and has to be:
+            // every node there costs a cover push, which is hundreds
+            // of microseconds, where an affine flame's node costs a
+            // matrix multiply. A wide beam at full depth is
+            // `beam × symbols × depth` pushes, and at 4096 that is
+            // twenty minutes for one plan.
+            //
+            // **Family M only.** Everywhere else an overfull frontier
+            // is still `TooManyWords`, because for a flame with a
+            // real invariant ball it means the view straddles more
+            // pieces than the antichain can hold, and answering that
+            // with a beam would turn a clear refusal into a picture
+            // quietly missing most of itself. Family M has no such
+            // ball and no such alternative.
+            let Some(beam) = mobius.as_ref().map(|_| crate::scene::mobius::BEAM) else {
+                if next.len() >= MAX_WORDS {
+                    return Err(NoCylinders::TooManyWords(next.len()));
+                }
+                frontier = next;
+                continue;
+            };
+            if next.len() > beam {
+                next.sort_by(|a, b| {
+                    b.prob.partial_cmp(&a.prob).unwrap_or(std::cmp::Ordering::Equal)
+                });
+                for node in next.drain(beam..) {
+                    lost += node.prob;
                 }
             }
             frontier = next;
@@ -483,7 +622,15 @@ impl Cylinders {
         }
         let mass: f64 = kept.iter().map(|c| c.prob).sum();
         let depth = kept.iter().map(|c| c.word.len()).max().unwrap_or(0);
-        Ok(Self { words: kept, mass, lost, depth, composable, view_centre: view.centre })
+        Ok(Self {
+            words: kept,
+            mass,
+            lost,
+            sampling_leak,
+            depth,
+            composable,
+            view_centre: view.centre,
+        })
     }
 }
 
@@ -2595,6 +2742,7 @@ mod tests {
         let reg = &*guard;
         let mut checked = 0usize;
         let mut offenders: Vec<String> = Vec::new();
+        let mut reported: Vec<String> = Vec::new();
 
         let mut configs: Vec<(String, crate::config::FractalConfig)> = Vec::new();
         for dir in ["output", "output/flame-zoom"] {
@@ -2661,8 +2809,25 @@ mod tests {
                             c.mass,
                             c.lost
                         );
+                        // Family M drops measure BY DESIGN — it has
+                        // no invariant ball and a narrow beam — so it
+                        // is reported rather than failed. Everything
+                        // else must still lose nothing, which is the
+                        // regression this gate exists for.
+                        let family_m = crate::scene::mobius::MobiusFlame::read(
+                            &cfg.flame,
+                            reg,
+                            256,
+                        )
+                        .is_some();
                         if c.lost != 0.0 {
-                            offenders.push(format!("{name} at x{mult:.0e}: lost {:.3e}", c.lost));
+                            let line =
+                                format!("{name} at x{mult:.0e}: lost {:.3e}", c.lost);
+                            if family_m {
+                                reported.push(line);
+                            } else {
+                                offenders.push(line);
+                            }
                         }
                     }
                 }
@@ -2670,11 +2835,281 @@ mod tests {
         }
 
         println!("  {checked} successful enumerations across {} flames", configs.len());
+        if !reported.is_empty() {
+            println!("  family M, which drops measure by design:");
+            for line in &reported {
+                println!("    {line}");
+            }
+        }
         assert!(
             offenders.is_empty(),
-            "these enumerate but silently drop measure, which nothing should do yet:\n  {}",
+            "these enumerate but silently drop measure, and nothing outside family M \
+             should:\n  {}",
             offenders.join("\n  ")
         );
+    }
+
+    /// **Do this flame's cylinders localize at all?**
+    ///
+    /// Targeting replaces "run the chaos game and hope a sample lands
+    /// in the view" with "force a word whose whole image is in the
+    /// view". That only pays if the measure reaching the view is
+    /// carried by FEW words. This counts them, from the real orbit:
+    /// how many distinct length-k prefixes are shared by the samples
+    /// that land in the view, and what share of the view's measure
+    /// the commonest few hold.
+    ///
+    /// For a gasket the answer is one word per depth. For an IFS
+    /// whose pieces overlap it is many, and no enumeration can help.
+    #[test]
+    #[ignore = "reads output/flame-zoom"]
+    fn do_the_kleinian_cylinders_localize() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let Ok(text) = std::fs::read_to_string("output/flame-zoom/spherical.fflame") else {
+            println!("  no corpus");
+            return;
+        };
+        let cfg: crate::config::FractalConfig =
+            serde_json::from_str(&text).expect("a config");
+        let mf = crate::scene::mobius::MobiusFlame::read(
+            &cfg.flame,
+            reg,
+            crate::scene::mobius::ROOT_SAMPLE,
+        )
+        .expect("family M");
+        let x = mf.root.points[mf.root.points.len() / 2];
+        let weights: Vec<f64> = cfg
+            .flame
+            .transforms
+            .iter()
+            .filter(|t| t.weight > 0.0)
+            .map(|t| t.weight as f64)
+            .collect();
+        let total: f64 = weights.iter().sum();
+
+        // A long run, remembering each sample's recent symbol history.
+        const HIST: usize = 24;
+        let mut st: u64 = 20240920;
+        let mut lcg = move || {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((st >> 33) as f64) / ((1u64 << 31) as f64)
+        };
+        let mut p = [0.3f64, 0.2];
+        let mut hist: std::collections::VecDeque<u32> = std::collections::VecDeque::new();
+        let n_steps = 4_000_000usize;
+        let mut in_view: Vec<Vec<u32>> = Vec::new();
+        let mut plotted = 0usize;
+        for zoom_i in 0..1 {
+            let _ = zoom_i;
+        }
+        let view_r = 2.828e-3f64; // zoom 1e3, as in the depth test
+        for i in 0..n_steps {
+            let mut u = lcg() * total;
+            let mut j = weights.len() - 1;
+            for (k, w) in weights.iter().enumerate() {
+                if u < *w {
+                    j = k;
+                    break;
+                }
+                u -= *w;
+            }
+            p = mf.maps[j].apply_point(p);
+            if !p[0].is_finite() || !p[1].is_finite() {
+                p = [0.3, 0.2];
+                hist.clear();
+                continue;
+            }
+            hist.push_back(j as u32);
+            if hist.len() > HIST {
+                hist.pop_front();
+            }
+            if i > 1000 && hist.len() == HIST {
+                plotted += 1;
+                if (p[0] - x[0]).hypot(p[1] - x[1]) <= view_r {
+                    in_view.push(hist.iter().copied().collect());
+                }
+            }
+        }
+        println!(
+            "  {plotted} samples, {} in a view of radius {view_r:.3e} ({:.3e})",
+            in_view.len(),
+            in_view.len() as f64 / plotted.max(1) as f64
+        );
+        if in_view.is_empty() {
+            return;
+        }
+        println!("  depth   distinct words   top word share   words for 90%");
+        for k in [4usize, 8, 12, 16, 20, 24] {
+            let mut counts: std::collections::HashMap<Vec<u32>, usize> =
+                std::collections::HashMap::new();
+            for h in &in_view {
+                // The LAST k symbols, in application order, are the
+                // word whose image this sample is in.
+                let w: Vec<u32> = h[HIST - k..].to_vec();
+                *counts.entry(w).or_default() += 1;
+            }
+            let mut v: Vec<usize> = counts.values().copied().collect();
+            v.sort_unstable_by(|a, b| b.cmp(a));
+            let tot: usize = v.iter().sum();
+            let mut acc = 0usize;
+            let mut need = v.len();
+            for (i, c) in v.iter().enumerate() {
+                acc += c;
+                if acc as f64 >= 0.9 * tot as f64 {
+                    need = i + 1;
+                    break;
+                }
+            }
+            println!(
+                "  {k:>5}   {:>14}   {:>14.3}   {need:>12}",
+                v.len(),
+                v[0] as f64 / tot as f64
+            );
+        }
+    }
+
+    /// **Does the frontier settle, or does it branch forever?**
+    ///
+    /// The enumeration only works if most words MISS the view, so
+    /// that the frontier stays narrow while the depth grows. For a
+    /// gasket that happens at the first level: the three images are
+    /// disjoint and a small view is inside exactly one. For a flame
+    /// whose pieces overlap, every word meets everything and the
+    /// frontier is the branching factor to the depth.
+    ///
+    /// This replicates the BFS and prints the width at each level,
+    /// which is the difference between "the cover is too coarse" and
+    /// "this IFS overlaps".
+    #[test]
+    #[ignore = "reads output/flame-zoom"]
+    fn how_wide_is_the_kleinian_frontier() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let Ok(text) = std::fs::read_to_string("output/flame-zoom/spherical.fflame") else {
+            println!("  no corpus");
+            return;
+        };
+        let cfg: crate::config::FractalConfig =
+            serde_json::from_str(&text).expect("a config");
+        let mf = crate::scene::mobius::MobiusFlame::read(
+            &cfg.flame,
+            reg,
+            crate::scene::mobius::ROOT_SAMPLE,
+        )
+        .expect("family M");
+        let n = mf.maps.len();
+        let x = mf.root.points[mf.root.points.len() / 2];
+
+        for zoom in [1e3f64, 1e7, 1e11] {
+            let view = View::of(zoom, x, 512, 512);
+            println!(
+                "  zoom {zoom:.0e}, view radius {:.3e}, centred on the set",
+                view.radius
+            );
+            let mut frontier: Vec<(Vec<u32>, crate::scene::mobius::Word)> =
+                vec![(Vec::new(), mf.empty_word())];
+            let mut kept = 0usize;
+            for depth in 1..=24 {
+                let mut next = Vec::new();
+                for (word, parent) in &frontier {
+                    for i in 0..n {
+                        let mut w = Vec::with_capacity(word.len() + 1);
+                        w.push(i as u32);
+                        w.extend_from_slice(word);
+                        let Some(cw) = mf.extend(parent, i) else { continue };
+                        let Ok(cover) = mf.region(&cw, &w) else { continue };
+                        if !cover.meets_disc(view.centre, view.radius) {
+                            continue;
+                        }
+                        let r = cover.enclosing().map_or(f64::INFINITY, |d| d.r);
+                        if r <= view.radius {
+                            kept += 1;
+                        } else {
+                            next.push((w, cw));
+                        }
+                    }
+                }
+                let widest = next
+                    .iter()
+                    .filter_map(|(w, cw)| mf.region(cw, w).ok())
+                    .filter_map(|c| c.enclosing())
+                    .map(|d| d.r)
+                    .fold(0.0f64, f64::max);
+                println!(
+                    "   depth {depth:>2}: frontier {:>6}, kept {kept:>5}, widest region {widest:.3e}",
+                    next.len()
+                );
+                frontier = next;
+                if frontier.is_empty() || frontier.len() > 20000 {
+                    break;
+                }
+            }
+            println!();
+        }
+    }
+
+    /// **The Kleinian flame, at the depths targeting is for.**
+    ///
+    /// `spherical.fflame` has no invariant disc — its maps are
+    /// inversions, so every disc containing the attractor contains a
+    /// pole — and before family M it was refused outright. This asks
+    /// what it does now, on the set, as the view shrinks.
+    #[test]
+    #[ignore = "reads output/flame-zoom"]
+    fn the_kleinian_flame_at_depth() {
+        use std::time::Instant;
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let path = "output/flame-zoom/spherical.fflame";
+        let Ok(text) = std::fs::read_to_string(path) else {
+            println!("  no {path}");
+            return;
+        };
+        let cfg: crate::config::FractalConfig =
+            serde_json::from_str(&text).expect("a config");
+
+        let mf = crate::scene::mobius::MobiusFlame::read(
+            &cfg.flame,
+            reg,
+            crate::scene::mobius::ROOT_SAMPLE,
+        )
+        .expect("family M");
+        println!(
+            "  cover: {} discs, {} anchor points, extent {:.4e}, leak {:.3e}",
+            mf.root.discs.len(),
+            mf.root.points.len(),
+            mf.extent,
+            mf.leak
+        );
+
+        // A point on the attractor: one the cover's own weighted
+        // orbit actually visited. A round-robin walk is not that —
+        // applying each map in turn means applying the translations
+        // every fourth step, which marches out into the unbounded
+        // tail. Measured, it landed at |p| = 91 and every view there
+        // was empty, correctly.
+        let p = mf.root.points[mf.root.points.len() / 2];
+        println!("  view centred on the set at [{:.4}, {:.4}]", p[0], p[1]);
+
+        for zoom in [1e1f64, 1e3, 1e5, 1e7, 1e9, 1e12] {
+            let view = View::of(zoom, p, 512, 512);
+            let t0 = Instant::now();
+            let r = Cylinders::plan(&cfg.flame, reg, view);
+            let ms = t0.elapsed().as_secs_f64() * 1e3;
+            match r {
+                Ok(c) => println!(
+                    "   zoom {zoom:>8.0e}  {ms:>8.1} ms  {:>5} words, depth {:>3}, \
+                     speedup {:.3e}, lost {:.3e}, leak {:.3e}",
+                    c.words.len(),
+                    c.depth,
+                    c.speedup(),
+                    c.lost,
+                    c.sampling_leak
+                ),
+                Err(e) => println!("   zoom {zoom:>8.0e}  {ms:>8.1} ms  {e:?}"),
+            }
+        }
     }
 
     /// **Why each flame in a zoom corpus can or cannot be targeted.**
