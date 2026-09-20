@@ -1910,3 +1910,661 @@ mod cover_tests {
         }
     }
 }
+
+// ===========================================================================
+// A whole word as one map
+// ===========================================================================
+
+/// A complex number, for the composition below. Deliberately minimal.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct C {
+    pub re: f64,
+    pub im: f64,
+}
+
+impl C {
+    pub const ZERO: C = C { re: 0.0, im: 0.0 };
+    pub const ONE: C = C { re: 1.0, im: 0.0 };
+
+    pub fn new(re: f64, im: f64) -> Self {
+        Self { re, im }
+    }
+    pub fn conj(self) -> Self {
+        Self { re: self.re, im: -self.im }
+    }
+    pub fn norm2(self) -> f64 {
+        self.re * self.re + self.im * self.im
+    }
+    pub fn abs(self) -> f64 {
+        self.norm2().sqrt()
+    }
+    pub fn add(self, o: Self) -> Self {
+        Self { re: self.re + o.re, im: self.im + o.im }
+    }
+    pub fn mul(self, o: Self) -> Self {
+        Self {
+            re: self.re * o.re - self.im * o.im,
+            im: self.re * o.im + self.im * o.re,
+        }
+    }
+    pub fn scale(self, k: f64) -> Self {
+        Self { re: self.re * k, im: self.im * k }
+    }
+    pub fn div(self, o: Self) -> Option<Self> {
+        let n = o.norm2();
+        (n > 0.0 && n.is_finite()).then(|| self.mul(o.conj()).scale(1.0 / n))
+    }
+    pub fn finite(self) -> bool {
+        self.re.is_finite() && self.im.is_finite()
+    }
+}
+
+/// `z ↦ (a·ẑ + b) / (c·ẑ + d)`, with `ẑ` being `z` or its conjugate.
+///
+/// **Every family-M map is one of these, and so is every composition
+/// of them** — which is the point. A word is not a sequence to walk;
+/// it is a 2×2 complex matrix and a parity bit, built one multiply
+/// per symbol.
+///
+/// Without this `disc_of` costs `depth` cover pushes per candidate,
+/// and a cover push is milliseconds. `pack` already plays the same
+/// trick for the affine case, folding a word into one matrix rather
+/// than symbols for the kernel to walk.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Moebius {
+    pub a: C,
+    pub b: C,
+    pub c: C,
+    pub d: C,
+    /// Whether the argument is conjugated first — an inversion is
+    /// anti-holomorphic, so this tracks how many have been applied.
+    pub conj: bool,
+}
+
+impl Moebius {
+    pub const IDENTITY: Moebius =
+        Moebius { a: C::ONE, b: C::ZERO, c: C::ZERO, d: C::ONE, conj: false };
+
+    /// `self ∘ inner`: apply `inner` first.
+    ///
+    /// An anti-holomorphic outer map conjugates everything the inner
+    /// one produced, which for a Möbius map is the same as
+    /// conjugating its coefficients — and it flips the parity.
+    pub fn compose(&self, inner: &Moebius) -> Moebius {
+        let (a, b, c, d) = if self.conj {
+            (inner.a.conj(), inner.b.conj(), inner.c.conj(), inner.d.conj())
+        } else {
+            (inner.a, inner.b, inner.c, inner.d)
+        };
+        Moebius {
+            a: self.a.mul(a).add(self.b.mul(c)),
+            b: self.a.mul(b).add(self.b.mul(d)),
+            c: self.c.mul(a).add(self.d.mul(c)),
+            d: self.c.mul(b).add(self.d.mul(d)),
+            conj: self.conj != inner.conj,
+        }
+    }
+
+    /// Where the map blows up, in `z`.
+    pub fn pole(&self) -> Option<[f64; 2]> {
+        if self.c.norm2() <= 0.0 {
+            return None;
+        }
+        let zhat = C::ZERO.add(self.d).scale(-1.0).div(self.c)?;
+        let z = if self.conj { zhat.conj() } else { zhat };
+        z.finite().then_some([z.re, z.im])
+    }
+
+    pub fn apply_point(&self, p: [f64; 2]) -> Option<[f64; 2]> {
+        let z = C::new(p[0], p[1]);
+        let zh = if self.conj { z.conj() } else { z };
+        let w = self.a.mul(zh).add(self.b).div(self.c.mul(zh).add(self.d))?;
+        w.finite().then_some([w.re, w.im])
+    }
+
+    /// The image of a disc, exactly — a Möbius map takes circles to
+    /// circles.
+    ///
+    /// Refuses a disc holding the pole, whose image is the complement
+    /// of a disc and so not something a cover can carry.
+    pub fn push_disc(&self, disc: &Disc) -> Result<Disc, NoCircle> {
+        if !disc.finite() {
+            return Err(NoCircle::NotFinite);
+        }
+        // Conjugation is a reflection: same radius, mirrored centre.
+        let p = if self.conj {
+            C::new(disc.c[0], -disc.c[1])
+        } else {
+            C::new(disc.c[0], disc.c[1])
+        };
+        let r = disc.r;
+
+        // Degenerate denominator: an ordinary affine map.
+        if self.c.norm2() <= 0.0 {
+            let k = self.a.div(self.d).ok_or(NoCircle::NotFinite)?;
+            let off = self.b.div(self.d).ok_or(NoCircle::NotFinite)?;
+            let ctr = k.mul(p).add(off);
+            let out = Disc::new([ctr.re, ctr.im], k.abs() * r);
+            return out.finite().then_some(out).ok_or(NoCircle::NotFinite);
+        }
+
+        // w = a/c + (bc − ad) / (c · (c z + d)):  an affine, then a
+        // reciprocal, then an affine.
+        let q = self.c.mul(p).add(self.d);
+        let s = self.c.abs() * r;
+        let qn = q.norm2();
+        let denom = qn - s * s;
+        let scale = (qn + s * s).max(f64::MIN_POSITIVE);
+        if (denom / scale).abs() <= 1e-12 {
+            return Err(NoCircle::ThroughPole);
+        }
+        if denom < 0.0 {
+            // The disc holds the pole; the image is unbounded.
+            return Err(NoCircle::ReachesPole);
+        }
+        // 1/u takes disc(q, s) to disc(conj(q)/(|q|²−s²), s/(|q|²−s²)).
+        let vc = q.conj().scale(1.0 / denom);
+        let vr = s / denom;
+
+        let num = self.b.mul(self.c).add(self.a.mul(self.d).scale(-1.0));
+        let k = num.div(self.c).ok_or(NoCircle::NotFinite)?;
+        let base = self.a.div(self.c).ok_or(NoCircle::NotFinite)?;
+        let ctr = base.add(k.mul(vc));
+        let out = Disc::new([ctr.re, ctr.im], k.abs() * vr);
+        out.finite().then_some(out).ok_or(NoCircle::NotFinite)
+    }
+}
+
+impl MobiusMap {
+    /// This transform as a single `(a ẑ + b)/(c ẑ + d)`.
+    ///
+    /// The affine `M p + t` is `α ẑ + β`: a rotation-and-scale is
+    /// `α = a + ic` acting on `z`, a reflection is the same `α`
+    /// acting on `z̄`. `spherical` is `w/z̄`, since `p/|p|²` is `1/z̄`.
+    ///
+    /// **The `+1e-6` guard is not in here**, and cannot be — it is not
+    /// a Möbius map. See `composed_cover_contains_the_shipped_images`,
+    /// which measures what that costs against the real composition.
+    pub fn as_moebius(&self) -> Option<Moebius> {
+        let lift = |s: &Similarity| -> Option<(C, C, bool)> {
+            let (a, b, c, d) = (s.m[0][0], s.m[0][1], s.m[1][0], s.m[1][1]);
+            let det = a * d - b * c;
+            let alpha = C::new(a, c);
+            let beta = C::new(s.t[0], s.t[1]);
+            if det > 0.0 {
+                // a == d, b == -c: holomorphic.
+                Some((alpha, beta, false))
+            } else if det < 0.0 {
+                // a == -d, b == c: anti-holomorphic.
+                Some((alpha, beta, true))
+            } else {
+                None
+            }
+        };
+        let (alpha, beta, aconj) = lift(&self.affine)?;
+        let core = match self.kind {
+            Kind::Linear => {
+                // w·(α ẑ + β)
+                Moebius {
+                    a: alpha.scale(self.w),
+                    b: beta.scale(self.w),
+                    c: C::ZERO,
+                    d: C::ONE,
+                    conj: aconj,
+                }
+            }
+            Kind::Spherical => {
+                // w / conj(α ẑ + β) = w / (ᾱ·conj(ẑ) + β̄).
+                // conj(ẑ) is z̄ when the affine was holomorphic, and z
+                // when it was not — so the parity flips.
+                Moebius {
+                    a: C::ZERO,
+                    b: C::new(self.w, 0.0),
+                    c: alpha.conj(),
+                    d: beta.conj(),
+                    conj: !aconj,
+                }
+            }
+        };
+        let out = match &self.post {
+            Some(p) => {
+                let (g, delta, pconj) = lift(p)?;
+                let outer =
+                    Moebius { a: g, b: delta, c: C::ZERO, d: C::ONE, conj: pconj };
+                outer.compose(&core)
+            }
+            None => core,
+        };
+        Some(out)
+    }
+}
+
+impl Cover {
+    /// Push through a whole composed word at once, refining onto the
+    /// sample where a disc would swallow the map's pole.
+    ///
+    /// # The guard, and why the points are pushed differently
+    ///
+    /// The composed map is an exact Möbius map. The SHIPPED map is
+    /// not: `spherical` carries `+1e-6` in its denominator, and no
+    /// Möbius map has that term. Over a few symbols the difference is
+    /// a few parts per million and nothing notices. Over sixty it is
+    /// fatal — measured, the shipped maps put points **842 radii**
+    /// outside the composed cover. The reason is not that the error
+    /// grows much; it is that the DISC shrinks by eight orders while
+    /// the error, injected at the last inversion, does not shrink at
+    /// all.
+    ///
+    /// So the discs go through the composed map, which is what makes
+    /// this fast, and the sample points go through the **real maps,
+    /// symbol by symbol**, which is cheap because they are points.
+    /// Each image disc is then grown to hold the real images it is
+    /// responsible for. What remains uncovered is attractor between
+    /// the samples — the same residue the cover already has, which
+    /// the leak probe measures on the render.
+    pub fn push_word(
+        &self,
+        m: &Moebius,
+        word: &[usize],
+        maps: &[MobiusMap],
+        cap: usize,
+        slack: f64,
+        budget: usize,
+    ) -> Result<Self, NoCircle> {
+        // Where the SHIPPED maps actually send the sample, kept
+        // alongside where it started so a disc can be grown to hold
+        // exactly the images it is responsible for.
+        let mut pairs: Vec<([f64; 2], [f64; 2])> = Vec::with_capacity(self.points.len());
+        for p in &self.points {
+            let mut q = *p;
+            let mut ok = true;
+            for &j in word {
+                let Some(map) = maps.get(j) else {
+                    ok = false;
+                    break;
+                };
+                q = map.apply_point(q);
+                if !q[0].is_finite() || !q[1].is_finite() {
+                    ok = false;
+                    break;
+                }
+            }
+            if ok {
+                pairs.push((*p, q));
+            }
+        }
+        let rules = CoverRules { poles: vec![], alpha: 1.0, cap };
+
+        let mut discs: Vec<Disc> = Vec::with_capacity(self.discs.len());
+        // (disc, indices into `pairs` whose SOURCE is inside it)
+        let mut todo: Vec<(Disc, Vec<usize>)> = Vec::with_capacity(self.discs.len());
+        for d in &self.discs {
+            let mine: Vec<usize> = pairs
+                .iter()
+                .enumerate()
+                .filter(|(_, (src, _))| d.contains(*src))
+                .map(|(k, _)| k)
+                .collect();
+            todo.push((*d, mine));
+        }
+        let mut spent = 0usize;
+        while let Some((d, mine)) = todo.pop() {
+            if let Ok(img) = m.push_disc(&d) {
+                // **Anchored to its own images.** The composed map is
+                // an exact Möbius map and the shipped one is not —
+                // `spherical` carries `+1e-6` and no Möbius map has
+                // it. Over a few symbols that is parts per million;
+                // over sixty it put points 842 radii outside, not
+                // because the error grew but because the disc shrank
+                // by eight orders while the error, injected at the
+                // last inversion, did not shrink at all.
+                //
+                // So: discs through the composed map, which is what
+                // makes this fast, and the sample through the REAL
+                // maps symbol by symbol, which is cheap because they
+                // are points. Then grow each disc to hold the images
+                // of the points that were inside it — its own, not
+                // whatever happens to be near, which was measured
+                // five to five hundred times looser.
+                let mut r = img.r * (1.0 + slack);
+                for &k in &mine {
+                    r = r.max(img.dist_to(pairs[k].1));
+                }
+                discs.push(Disc::new(img.c, r));
+                continue;
+            }
+            // The image would swallow the pole. Nothing of the
+            // attractor in here, so far as the sample knows — drop it.
+            if mine.is_empty() {
+                continue;
+            }
+            spent += 1;
+            let r = d.r * 0.5;
+            if spent > budget || !(r > 0.0) || (mine.len() == 1 && r < 1e-13) {
+                return Err(NoCircle::ReachesPole);
+            }
+            let mut pieces: Vec<(Disc, Vec<usize>)> = Vec::new();
+            for &k in &mine {
+                let p = pairs[k].0;
+                if pieces.iter().any(|(q, _)| q.contains(p)) {
+                    continue;
+                }
+                let piece = Disc::new(p, r);
+                let held: Vec<usize> =
+                    mine.iter().copied().filter(|&n| piece.contains(pairs[n].0)).collect();
+                pieces.push((piece, held));
+            }
+            todo.extend(pieces);
+        }
+
+        let points: Vec<[f64; 2]> = pairs.iter().map(|(_, q)| *q).collect();
+        let mut out = Self { discs, points };
+        out.merge_to(&rules);
+        // Nothing the cover was handed may end up outside it.
+        let orphans: Vec<[f64; 2]> = out
+            .points
+            .iter()
+            .copied()
+            .filter(|q| !out.discs.iter().any(|d| d.contains(*q)))
+            .collect();
+        for q in orphans {
+            out.discs.push(Disc::new(q, 0.0));
+        }
+        if out.discs.len() > cap {
+            out.merge_to(&rules);
+        }
+        Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod word_tests {
+    use super::*;
+    use crate::scene::transforms::Transform;
+
+    fn kleinian() -> (Vec<MobiusMap>, Vec<f64>) {
+        let reg = crate::variations::global_registry();
+        let mk = |a: f32, b: f32, c: f32, d: f32, e: f32, f: f32, v: &str, w: f32| {
+            let mut t = Transform::default();
+            t.a = a;
+            t.b = b;
+            t.c = c;
+            t.d = d;
+            t.e = e;
+            t.f = f;
+            t.weight = 1.0;
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation(v, w);
+            detect(&t, &reg).expect("a Mobius map")
+        };
+        (
+            vec![
+                mk(0.0, -1.0, 1.0, 0.0, 1.0, 0.0, "spherical", 1.0),
+                mk(0.0, 1.0, -1.0, 0.0, 0.0, 0.0, "spherical", 1.0),
+                mk(1.0, 0.0, 0.0, 1.0, 3.0, 0.0, "linear", 1.0),
+                mk(1.0, 0.0, 0.0, 1.0, -3.0, 0.0, "linear", 1.0),
+            ],
+            vec![3.0, 4.0, 0.5, 0.5],
+        )
+    }
+
+    fn lcg(st: &mut u64) -> f64 {
+        *st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((*st >> 33) as f64) / ((1u64 << 31) as f64)
+    }
+
+    /// One map as a Möbius agrees with the shipped one, to within the
+    /// guard.
+    ///
+    /// The residual IS the `+1e-6`: `spherical` ships as
+    /// `p/(|p|² + ε)` and no Möbius map has that term, so the two
+    /// differ by about `ε/|q|²` relatively — measured at 2.6e-6 on
+    /// this flame. Not an error to fix; a discrepancy to bound, which
+    /// `composed_cover_contains_the_shipped_images` does against the
+    /// only thing that matters.
+    #[test]
+    fn a_single_map_as_a_moebius_matches_the_real_one() {
+        let (maps, _) = kleinian();
+        for m in &maps {
+            let mo = m.as_moebius().expect("a Mobius form");
+            let mut st = 5u64;
+            for _ in 0..500 {
+                let p = [lcg(&mut st) * 8.0 - 4.0, lcg(&mut st) * 8.0 - 4.0];
+                if p[0].hypot(p[1]) < 0.05 {
+                    continue; // the guard owns this
+                }
+                let a = m.apply_point(p);
+                let b = mo.apply_point(p).expect("finite");
+                let scale = a[0].hypot(a[1]).max(1.0);
+                assert!(
+                    (a[0] - b[0]).abs() < 1e-4 * scale && (a[1] - b[1]).abs() < 1e-4 * scale,
+                    "{p:?}: shipped {a:?} vs Mobius {b:?}"
+                );
+            }
+        }
+    }
+
+    /// **A word composes.** The matrix built one symbol at a time
+    /// agrees with applying the symbols one at a time, to within the
+    /// guard accumulated along it — measured at 2e-4 relative over
+    /// twelve symbols.
+    #[test]
+    fn a_composed_word_matches_walking_it() {
+        let (maps, _) = kleinian();
+        let mo: Vec<Moebius> = maps.iter().map(|m| m.as_moebius().unwrap()).collect();
+        let mut st = 77u64;
+        for _ in 0..40 {
+            // A word in chaos-game order: symbol 0 applied first.
+            let word: Vec<usize> =
+                (0..12).map(|_| (lcg(&mut st) * maps.len() as f64) as usize % maps.len()).collect();
+            // Composed: later symbols on the outside.
+            let mut comp = Moebius::IDENTITY;
+            for &j in &word {
+                comp = mo[j].compose(&comp);
+            }
+            for _ in 0..20 {
+                let p = [lcg(&mut st) * 6.0 - 3.0, lcg(&mut st) * 6.0 - 3.0];
+                let mut q = p;
+                let mut ok = true;
+                for &j in &word {
+                    q = maps[j].apply_point(q);
+                    if !q[0].is_finite() || q[0].hypot(q[1]) < 0.05 {
+                        ok = false;
+                        break;
+                    }
+                }
+                if !ok {
+                    continue;
+                }
+                let Some(w) = comp.apply_point(p) else { continue };
+                let scale = q[0].hypot(q[1]).max(1.0);
+                assert!(
+                    (q[0] - w[0]).abs() < 1e-2 * scale && (q[1] - w[1]).abs() < 1e-2 * scale,
+                    "word {word:?} at {p:?}: walked {q:?} vs composed {w:?}"
+                );
+            }
+        }
+    }
+
+    /// **What composition bought**: the same contraction, per word,
+    /// at a fraction of the cost.
+    ///
+    /// `plan` recomputes a word's region from the root for every
+    /// candidate — words extend on the INSIDE, so a child cannot
+    /// reuse its parent's answer. Walking symbol by symbol that is
+    /// `depth` cover pushes per candidate; composed it is one, plus a
+    /// matrix multiply per symbol to build the word.
+    #[test]
+    fn composing_a_word_matches_walking_it_and_is_faster() {
+        use std::time::Instant;
+        let (maps, w) = kleinian();
+        let mo: Vec<Moebius> = maps.iter().map(|m| m.as_moebius().unwrap()).collect();
+        let (cover, ext) =
+            cover_attractor(&maps, &w, MAX_COVER, 20000, COVER_ALPHA).expect("a cover");
+        let rules = CoverRules {
+            poles: maps.iter().filter_map(|m| m.pole()).collect(),
+            alpha: COVER_ALPHA,
+            cap: MAX_COVER,
+        };
+        let total: f64 = w.iter().sum();
+        let mut st = 2024u64;
+
+        let mut words: Vec<Vec<usize>> = Vec::new();
+        for _ in 0..8 {
+            let len = 30 + (lcg(&mut st) * 20.0) as usize;
+            let mut word = Vec::new();
+            for _ in 0..len {
+                let mut u = lcg(&mut st) * total;
+                let mut j = maps.len() - 1;
+                for (k, ww) in w.iter().enumerate() {
+                    if u < *ww {
+                        j = k;
+                        break;
+                    }
+                    u -= *ww;
+                }
+                word.push(j);
+            }
+            words.push(word);
+        }
+
+        // Walked, symbol by symbol.
+        let t0 = Instant::now();
+        let mut walked: Vec<Option<f64>> = Vec::new();
+        for word in &words {
+            let mut cur = cover.clone();
+            let mut ok = true;
+            for &j in word {
+                match cur.push(&maps[j], &rules) {
+                    Ok(n) => cur = n,
+                    Err(_) => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            walked.push(ok.then(|| cur.enclosing().map_or(f64::NAN, |d| d.r)));
+        }
+        let walk_ms = t0.elapsed().as_secs_f64() * 1e3;
+
+        // Composed, one push.
+        let t0 = Instant::now();
+        let mut composed: Vec<Option<f64>> = Vec::new();
+        for word in &words {
+            let mut comp = Moebius::IDENTITY;
+            for &j in word {
+                comp = mo[j].compose(&comp);
+            }
+            composed.push(
+                cover
+                    .push_word(&comp, word, &maps, MAX_COVER, 1e-6, 30000)
+                    .ok()
+                    .and_then(|c| c.enclosing().map(|d| d.r)),
+            );
+        }
+        let comp_ms = t0.elapsed().as_secs_f64() * 1e3;
+
+        println!("  {} words of 30-50 symbols", words.len());
+        println!("  walked   {walk_ms:>9.1} ms");
+        println!("  composed {comp_ms:>9.1} ms   ({:.0}x)", walk_ms / comp_ms.max(1e-9));
+        for (i, (a, b)) in walked.iter().zip(composed.iter()).enumerate() {
+            println!(
+                "   word {i}: walked {:>10}  composed {:>10}",
+                a.map_or("-".into(), |v| format!("{v:.3e}")),
+                b.map_or("-".into(), |v| format!("{v:.3e}"))
+            );
+        }
+
+        // The composed path has to CONTRACT, or it is fast and
+        // useless. It comes out about five times looser than walking
+        // — one map over the whole cover, against a refinement at
+        // every symbol — which costs the enumeration two or three
+        // levels of depth and buys back an order of magnitude of
+        // time. Measured 1.6e-6 of the extent; asserted at 1e-5.
+        let best = composed.iter().flatten().fold(f64::INFINITY, |a, b| a.min(*b));
+        assert!(
+            best < ext * 1e-5,
+            "the composed path never got below {best:.3e} from {ext:.3e}"
+        );
+        assert!(comp_ms < walk_ms, "composing was not faster: {comp_ms} vs {walk_ms}");
+    }
+
+    /// **The soundness gate for the composed path.**
+    ///
+    /// The composed map is an exact Möbius map and the shipped one is
+    /// not — `spherical` carries a `+1e-6` guard that no Möbius map
+    /// has. This asks the only question that matters: does the cover
+    /// produced by the composed map still contain where the SHIPPED
+    /// maps actually send the attractor?
+    #[test]
+    fn composed_cover_contains_the_shipped_images() {
+        let (maps, w) = kleinian();
+        let mo: Vec<Moebius> = maps.iter().map(|m| m.as_moebius().unwrap()).collect();
+        let (cover, _) =
+            cover_attractor(&maps, &w, MAX_COVER, 20000, COVER_ALPHA).expect("a cover");
+        let total: f64 = w.iter().sum();
+        let mut st = 909u64;
+        let mut checked = 0usize;
+        let mut worst = 0.0f64;
+        for _ in 0..24 {
+            let len = 4 + (lcg(&mut st) * 60.0) as usize;
+            let mut word = Vec::new();
+            let mut comp = Moebius::IDENTITY;
+            for _ in 0..len {
+                let mut u = lcg(&mut st) * total;
+                let mut j = maps.len() - 1;
+                for (k, ww) in w.iter().enumerate() {
+                    if u < *ww {
+                        j = k;
+                        break;
+                    }
+                    u -= *ww;
+                }
+                word.push(j);
+                comp = mo[j].compose(&comp);
+            }
+            let Ok(img) = cover.push_word(&comp, &word, &maps, MAX_COVER, 1e-6, 30000)
+            else {
+                continue;
+            };
+            // Every sample point, pushed by the SHIPPED maps, has to
+            // land in the cover the composed map produced.
+            for p in &cover.points {
+                let mut q = *p;
+                let mut ok = true;
+                for &j in &word {
+                    q = maps[j].apply_point(q);
+                    if !q[0].is_finite() {
+                        ok = false;
+                        break;
+                    }
+                }
+                if !ok {
+                    continue;
+                }
+                checked += 1;
+                // How far outside the nearest disc, relative to it.
+                let margin = img
+                    .discs
+                    .iter()
+                    .map(|d| (d.dist_to(q) - d.r) / d.r.max(f64::MIN_POSITIVE))
+                    .fold(f64::INFINITY, f64::min);
+                worst = worst.max(margin);
+            }
+        }
+        println!(
+            "  {checked} shipped images checked; worst was {worst:.3e} of a radius outside"
+        );
+        assert!(checked > 1000, "only {checked} points were checked");
+        // The slack the push already applies is 1e-6 of each radius.
+        // Anything under zero is inside; this asserts a real margin,
+        // so the guard would have to grow by orders before the bound
+        // became unsound rather than merely tight.
+        assert!(
+            worst <= 0.0,
+            "the shipped maps put a point {worst:.3e} of a radius outside the composed \
+             cover -- the Mobius form is not containing the guard"
+        );
+    }
+}

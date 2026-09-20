@@ -488,3 +488,55 @@ becomes one matrix rather than a sequence the kernel walks.
 3. The picture gate: `spherical.fflame` enumerating at its saved
    framing and deeper, matching the untargeted render to within the
    reported leak.
+
+
+## 10. Composition: a word is one map
+
+**Built and measured, 2026-09-20.** The performance fix §9 asked for.
+
+Every family-M map is `z ↦ (a·ẑ + b)/(c·ẑ + d)`, and so is every
+composition of them, so a word is a 2×2 complex matrix and a parity
+bit built one multiply per symbol rather than a sequence to walk.
+`disc_of` costs one cover push per candidate instead of `depth` of
+them.
+
+    8 words of 30-50 symbols
+    walked     697.0 ms
+    composed    30.4 ms    (23x)
+
+### The guard nearly sank it
+
+The composed map is an exact Möbius map. The shipped one is not —
+`spherical` is `p/(|p|² + 1e-6)` and no Möbius map carries that term.
+Over twelve symbols the two agree to 2e-4 relative and nothing
+notices. Over sixty, the shipped maps put points **842 radii outside**
+the composed cover.
+
+The reason is worth keeping: it is not that the error grows. It is
+that the **disc shrinks by eight orders while the error does not**.
+Injected at the last inversion, nothing afterwards contracts it.
+
+So the discs go through the composed map, which is what makes this
+fast, and the sample points go through the **real maps, symbol by
+symbol**, which is cheap because they are points — then each image
+disc is grown to hold the images of the points that were inside its
+source. Tying each disc to its OWN points rather than to whatever
+image is near it was worth five to five hundred times in tightness.
+
+`composed_cover_contains_the_shipped_images` is the gate: 119,616
+shipped images against composed covers over words of 4 to 64 symbols,
+worst margin **0.0 radii outside**. It reports the margin rather than
+only asserting containment, so the headroom is visible if the guard or
+the policy ever changes.
+
+The composed path comes out about five times looser than walking — one
+map over the whole cover against a refinement at every symbol. That is
+two or three extra levels of depth for an order of magnitude of time.
+
+### What is left for phase 1
+
+Wiring into `plan`: family-M detection, the cover as the root, the
+composed matrix carried per node, and `lost` for words the refinement
+budget cannot save. Then the picture gate — `spherical.fflame`
+enumerating at its saved framing and deeper, matching the untargeted
+render to within the reported leak.
