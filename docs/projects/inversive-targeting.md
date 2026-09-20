@@ -608,3 +608,74 @@ composed matrix carried per node, and the sampling leak reported
 through `Cylinders::lost` — it is not word-dropping loss, so it may
 want its own field rather than to be folded in. Then the picture gate
 on `spherical.fflame`.
+
+
+## 14. Wired into `plan`, and what it costs
+
+`Cylinders::plan` now tries `MobiusFlame::read` first, and when a flame
+is family M it skips the affine check, the invariant ball and the
+contraction check — none of which can succeed for an inversion — and
+enumerates on the cover, carrying each node's word as one composed
+matrix.
+
+`spherical.fflame` gets past `NoInvariantBall` for the first time.
+
+### Three things that had to be fixed to get there
+
+**Family M must require an inversion.** `detect` accepts `linear` over
+a similarity, so a plain affine flame — a gasket — reads as a Möbius
+IFS, and it silently started taking this path: sampled cover, leak,
+cover push per node, in place of an exact disc bound and a matrix
+multiply. Caught by the gasket's speedup curve moving and by a flame
+that should be refused no longer being refused.
+
+**The view test has to see the cover, not the disc around it.** A
+family-M word's region is a scatter of small discs; the disc enclosing
+them is the attractor's own extent for the first twenty symbols.
+
+**The frontier has to be a beam.** Measured on `spherical.fflame`
+centred on its own attractor, the frontier went 4, 16, 63, 240, 887,
+3113, 10752, 35696 — the branching factor to the depth, with almost
+nothing pruned — while the widest region GREW from 17 to 2.8e5.
+
+Both halves of that are real. Words contract on AVERAGE, which is what
+the Lyapunov exponent says and what a random weighted word does; the
+enumeration walks ALL of them, and the expanding ones stay large, keep
+meeting the view, and keep branching. What saves it is that they carry
+almost no measure, so the frontier keeps the most probable `BEAM` and
+charges the rest to `lost`.
+
+The beam is family-M only. Everywhere else an overfull frontier is
+still `TooManyWords`: for a flame with a real invariant ball it means
+the view straddles more pieces than the antichain can hold, and
+answering that with a beam would turn a clear refusal into a picture
+quietly missing most of itself.
+
+### Where it stands
+
+    spherical.fflame, its own framing:
+      zoom x1e0    lost 9.927e-1
+      zoom x1e3    lost 8.483e-2
+      zoom x1e6    lost 8.483e-2
+      zoom x1e9    lost 8.483e-2
+
+    on a hand-picked attractor point, beam 96:
+      36 s per plan, 96 words, depth 96, lost 9.76e-1
+
+**8.5% of the picture missing at depth, and tens of seconds per plan.**
+Not shippable. The geometry is done and sound; the enumeration is not.
+
+### The open question
+
+Is the 8.5% the cover's looseness or the flame's structure? Counting
+the distinct length-k words that carry orbit samples into the view
+gave 18 at depth 8 and ~30 at depth 20 — which would be tiny, and
+would mean the bound is loose by orders — but only 32 of four million
+samples reached the view, so the count is a lower bound on nothing
+much. Settling it needs a run with enough samples IN the view, which
+means a bigger view or a much longer run.
+
+That measurement decides the next move: a tighter region (the cover's
+resolution is the dial) or a different enumeration (best-first by
+probability rather than breadth-first, which matches the fact that the
+measure concentrates on typical words while the count does not).

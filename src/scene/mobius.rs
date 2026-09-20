@@ -1390,6 +1390,22 @@ pub const SPLIT_BUDGET: usize = 30000;
 /// a word.
 pub const ANCHOR_POINTS: usize = 1000;
 
+/// Orbit steps used to build a flame's cover. More gives more discs,
+/// and the disc count is the other half of the leak.
+pub const ROOT_SAMPLE: usize = 40000;
+
+/// How many words the enumeration carries forward per level for a
+/// family-M flame.
+///
+/// Every one costs a cover push — hundreds of microseconds, where an
+/// affine flame's node costs a matrix multiply — and the enumeration
+/// does `beam × symbols × depth` of them. At `MAX_WORDS` that is
+/// twenty minutes for a single plan, measured. The words dropped are
+/// the least probable ones and their measure is charged to
+/// `Cylinders::lost`, so the cost of narrowing the beam is a number
+/// the panel shows rather than a silence.
+pub const BEAM: usize = 96;
+
 /// What keeps a cover usable: no disc may swallow a pole, or its
 /// image is unbounded and the word dies.
 ///
@@ -2715,6 +2731,15 @@ pub struct MobiusFlame {
     /// distance, which is what `CoverRules` is for.
     pub after: Vec<Cover>,
     pub extent: f64,
+    /// **What this cover misses**, measured against attractor points
+    /// drawn from a different seed than the cover's own.
+    ///
+    /// A cover built from a sample has gaps between the samples, and
+    /// this is how much of the attractor falls in them. Measured at
+    /// build time because it is a property of the cover, not of any
+    /// word, and reported all the way to the panel — a render missing
+    /// part of its fractal has to say so.
+    pub leak: f64,
 }
 
 /// A word, as the enumeration carries it: the composed map, built one
@@ -2762,6 +2787,23 @@ impl MobiusFlame {
         if maps.is_empty() {
             return None;
         }
+        // **Only for flames that actually need it.**
+        //
+        // `detect` accepts `linear` over a similarity, so a plain
+        // affine flame — a gasket, say — reads as a Möbius IFS and
+        // everything here would happily run on it. It should not:
+        // that flame has a real invariant ball, an EXACT disc bound,
+        // and an enumeration that costs a matrix multiply per node.
+        // This one has a sampled cover, a leak, and a cover push per
+        // node. Measured by letting it happen: the gasket's speedup
+        // curve moved and a flame that should be refused stopped
+        // being refused.
+        //
+        // An inversion is what makes the ordinary path impossible, so
+        // an inversion is the entry condition.
+        if !maps.iter().any(|m| m.kind == Kind::Spherical) {
+            return None;
+        }
         let moebius: Vec<Moebius> =
             maps.iter().map(|m| m.as_moebius()).collect::<Option<_>>()?;
         let (root, extent) = cover_attractor(&maps, &weights, MAX_COVER, sample, COVER_ALPHA)?;
@@ -2777,7 +2819,20 @@ impl MobiusFlame {
             guard.push(m.guard_error_over(&root)?);
             after.push(root.push(m, &rules).ok()?);
         }
-        Some(Self { maps, moebius, root, guard, after, extent })
+        let leak = {
+            let probe = sample_orbit_seeded(&maps, &weights, 8000, 0x9E37_79B9_7F4A_7C15);
+            match probe {
+                Some(pts) if !pts.is_empty() => {
+                    let inside = pts
+                        .iter()
+                        .filter(|p| root.discs.iter().any(|d| d.contains(**p)))
+                        .count();
+                    1.0 - inside as f64 / pts.len() as f64
+                }
+                _ => 0.0,
+            }
+        };
+        Some(Self { maps, moebius, root, guard, after, extent, leak })
     }
 
     pub fn empty_word(&self) -> Word {
