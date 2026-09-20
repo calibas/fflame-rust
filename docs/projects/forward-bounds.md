@@ -476,3 +476,161 @@ refused for nothing.
 Unchanged in shape, larger in reach: 450 bodies and 361,581
 evaluations, plus the five hand bounds still checked separately and
 still agreeing.
+
+## 13. Phase 3, built and measured, 2026-09-19
+
+**514 of 647 bodies, wired into the renderer — and the number that
+matters went from 37 blocked flames to 28, while the number that
+actually renders moved by one.** Phase 3 was supposed to be
+integration; it turned into the phase that found out what integration
+was worth.
+
+### Subdivision: measured, and mostly not the answer
+
+§5 said a spurious pole is the dependency problem and subdivision is
+the cure. Measured across the corpus it is barely that. Splitting the
+input box `k×k` and unioning the outputs:
+
+    k        bodies bounded (origin disc)   poles
+    1                              350        46
+    3                              365        44
+    8                              365        43
+
+Sixty-four times the work for three more bodies. `curl` and `rays`
+refuse at every `k`, because their poles are real — `curl` divides by
+`(1 + c₁x + c₂(x²−y²))²+…` which genuinely vanishes.
+
+But `elliptic` comes back at `k=3`, and it is the textbook case: it
+divides by half the sum of the distances to `(±1, 0)`, which the
+ellipse property puts at `≥ 1` and which intervals read as possibly
+zero because they cannot see the two square roots are linked. So
+subdivision ships as a **retry on refusal at `k=3`**, not as a
+blanket. The common path pays nothing and the one body that needs it
+gets it.
+
+### What the gate caught this time
+
+A fourth unsoundness, and the most general one yet.
+
+    `iconattractor_js` at input Ball { c: [1.5, 0.0], r: 0.05 }:
+    the shader sent [1.453806, 0.019134] to [-1.717208, -0.043104],
+    OUTSIDE the derived disc Ball { c: [-12.48, 0.28], r: 10.56 }
+
+`if (i >= max_loop) { break; }` with a condition the evaluator cannot
+decide. The `If` handler over-approximated by continuing down the
+other path — right for what happens next — and **threw away the state
+at the break**. So the loop reported only the state after its last
+iteration. `iconattractor_js` rotates its point once per degree and
+breaks out early; reading only the 24th rotation put the real output
+outside the disc by a hair, in the one direction a forward bound may
+never go.
+
+The fix is a `maybe_exits` list on the frame: an undecided branch that
+may have broken pushes its state, and each enclosing `Loop` drains
+what its own body pushed and unions it into the exit. The same hole
+for `continue` has no such repair — falling through runs statements
+the real iteration skipped, and the result is not a superset of either
+path — so that refuses by name. No shipped body reaches it.
+
+**Four unsoundnesses, four found by the same gate, none findable by a
+tightness check.** Caching a local; a missing declaration initialiser;
+caching too little; and now a dropped loop exit.
+
+### The rules that moved the number
+
+    456  phase 2's evaluator, plus bitwise, LogicalNot, integer pow
+    504  + discard a store through an OPAQUE out-parameter  (+48)
+    509  + Acosh / Asinh / Atanh                             (+5)
+    514  + pow's negative lower end clamped like sqrt's      (+5)
+
+The first is the phase-2 ledger's biggest line and turned out to be
+one rule. 50 bodies take `vc: ptr<function, f32>` — the colour
+out-parameter of the `dc_*` family — and assign to it. Where the point
+lands does not depend on the colour, and the caller discards it, so
+the store can be thrown away. Soundness rests on the pointer being
+**opaque**, not on its name: an opaque argument is one of the entry
+point's own, so it cannot alias a tracked local, and a read back
+through it loads the same opaque and refuses on the arithmetic. One
+body does read its colour back, and refuses. That is the rule working.
+
+The `pow` clamp is the same call `sqrt_iv` already made. `widen` is
+absolute, so a mathematically non-negative `dot(p, p)` of `[0, 4]`
+comes back as `[-ε, 4+ε]`, and the julia family raises exactly that to
+a fractional power. Refusing it cost `juliascope` and `julia3D` six
+corpus flames between them.
+
+Every intrinsic in the shipped corpus now has a rule.
+
+### What deriving costs
+
+The soundness gate says a derived disc contains the real output. It
+says nothing about how much bigger it is, and a bound twice as wide
+halves the depth the enumeration reaches. The five hand bounds are the
+only place both answers exist for one body:
+
+    variation      hand r    derived r     ratio   worst at
+    spherical     500.000   762698.520  1525.40x   c=[0,0] r=0.25
+    bubble          0.023        0.065     2.87x   c=[-2,1] r=0.05
+    julian          0.224        0.376     1.68x   c=[0,0] r=0.05
+    pre_blur        3.050        4.313     1.41x   c=[-2,1] r=0.05
+    blur            1.000        1.414     1.41x   c=[0,0] r=0.05
+
+**Away from a pole, the evaluator is within about 3× of a bound
+derived by hand.** At a pole it is hopeless: `spherical`'s worst case
+is the disc centred exactly on its singularity, where the hand bound's
+eigenvalue argument sees a supremum and interval arithmetic sees a
+division by something containing zero. That is the whole shape of the
+trade — write bounds by hand for the poles, derive everything else.
+
+### The number this was all for
+
+The co-occurrence meter improved a lot:
+
+    blocker                        blocks  sole cause
+    a variation has no forward bound   28          10   (was 37)
+    colour is not affine (dc_*/rgb)    23           7
+    xaos                                8           3
+
+And it is misleading, which is the real finding of phase 3. `plan`
+fails on the **first** blocker it hits, not on the union of them. Ask
+it directly — run `Cylinders::plan` on each corpus flame at its own
+framing, 64× / 1024× / 16384× deep:
+
+    45 corpus flames:
+         2 enumerate at some depth
+         1 reaches a speedup above 1     (blur_test, 9.9e3×)
+
+    refused at every depth:
+        20  ColourNotAffine
+         9  Unbounded
+         8  Xaos
+         5  TooManyWords
+         1  NoInvariantBall
+
+So: forward bounds were worth building — 9 flames still blocked on a
+bound, down from what would have been 28 — but **colour is now the
+dominant blocker by a factor of two**, and no further evaluator rule
+touches it. The remaining `Unbounded` nine are `rays`, `curl`,
+`subflame_wf`, `lorenz_js` and kin: genuine poles, a shader global the
+probe module does not carry, and arithmetic on the running sum. Those
+want hand bounds, one at a time, and there are nine of them.
+
+`TooManyWords` at 5 is a new category and not a refusal in the same
+sense — those flames enumerate, the antichain just grows past the cap
+before the view is covered. Worth a look when the blockers above it
+are gone.
+
+### Phase 4 is colour, and the meter says so
+
+Written into the plan as "blocks 23 flames, never sole cause", which
+was true of co-occurrence and false of practice. It is the first
+blocker for 20 of 45. The replay arm already computes the DC register
+and throws it away.
+
+### Gates
+
+536 bodies, 443,148 shader evaluations, every one inside its disc. The
+five hand bounds still checked separately and still agreeing. Plus
+`what_deriving_a_bound_costs`, which prints the table above rather
+than asserting a threshold that would have to be loosened the first
+time a rule changed.

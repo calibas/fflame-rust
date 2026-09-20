@@ -109,6 +109,71 @@ pub static BOUNDS: &[&BoundDef] = &[
     &BLUR_BOUND,
 ];
 
+/// **What deriving a bound costs, against the five written by hand.**
+///
+/// The soundness gate says a derived disc always CONTAINS the real
+/// output. It says nothing about how much bigger it is, and a bound
+/// twice as wide as it needs to be halves the depth the enumeration
+/// reaches before the word count explodes. The hand bounds are the
+/// only place both answers exist for the same body, so they are the
+/// only place the price can be read.
+///
+/// Not an assertion with a threshold: the ratio is a property of the
+/// bodies, and a number printed where the next person can see it is
+/// worth more than a bound on it that would have to be loosened the
+/// first time a rule changed.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+#[ignore = "prints a measurement"]
+fn what_deriving_a_bound_costs() {
+    let reg = crate::variations::global_registry();
+    println!();
+    println!("  {:<12}  {:>10}  {:>10}  {:>8}", "variation", "hand r", "derived r", "ratio");
+    for def in BOUNDS {
+        let Some(info) = reg.get(def.name) else { continue };
+        let pf = |p: &str| {
+            info.parameters
+                .iter()
+                .find(|q| q.name == p)
+                .map(|q| q.default_value as f64)
+                .unwrap_or(0.0)
+        };
+        let mut worst: Option<(f64, f64, Ball)> = None;
+        for c in [[0.0, 0.0], [1.5, 0.0], [0.3, -0.7], [-2.0, 1.0]] {
+            for r in [0.05, 0.25, 1.0] {
+                let input = Ball::new(c, r);
+                let Some(hand) = (def.planar)(&pf, 1.0, input) else { continue };
+                let Ok(der) = crate::variations::derive::derive(def.name, &pf, 1.0, input)
+                else {
+                    continue;
+                };
+                // Compare the radius each claims AROUND ITS OWN
+                // centre, widened by how far the centres disagree, so
+                // a derived disc that is offset is not scored as if it
+                // were merely large.
+                let dc = ((der.c[0] - hand.c[0]).powi(2) + (der.c[1] - hand.c[1]).powi(2)).sqrt();
+                let eff = der.r + dc;
+                let ratio = eff / hand.r.max(1e-30);
+                if worst.map_or(true, |(_, w, _)| ratio > w) {
+                    worst = Some((hand.r, ratio, input));
+                }
+            }
+        }
+        match worst {
+            Some((h, ratio, at)) => println!(
+                "  {:<12}  {:>10.4}  {:>10.4}  {:>7.2}x   worst at c={:?} r={}",
+                def.name,
+                h,
+                h * ratio,
+                ratio,
+                at.c,
+                at.r
+            ),
+            None => println!("  {:<12}  {:>10}", def.name, "no overlap"),
+        }
+    }
+}
+
 /// The bound registered for `name`.
 pub fn for_name(name: &str) -> Option<&'static BoundDef> {
     BOUNDS.iter().copied().find(|d| d.name == name)

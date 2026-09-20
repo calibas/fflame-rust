@@ -197,11 +197,60 @@ fn one(
             }
         });
     }
-    let Some(def) = bound::for_name(name) else {
-        return Err(NoBall::Unbounded(name.to_string()));
-    };
     let pf = |p: &str| t.get_variation_param_or_default(name, p, registry) as f64;
-    (def.planar)(&pf, w, b).ok_or_else(|| NoBall::Declines(name.to_string()))
+
+    // A bound written by hand first: there are five, they are tighter
+    // than anything derived, and they are the reference the evaluator
+    // is checked against.
+    if let Some(def) = bound::for_name(name) {
+        return (def.planar)(&pf, w, b).ok_or_else(|| NoBall::Declines(name.to_string()));
+    }
+
+    // Otherwise derive one from the variation's shipped WGSL
+    // (`docs/projects/forward-bounds.md`).
+    //
+    // **The weight is applied here, not there.** A derived bound is
+    // of the body alone -- `V(p)` -- because that is what the WGSL
+    // computes. The dispatcher multiplies a `Normal`-phase
+    // variation's result by the weight before summing it, so the
+    // caller has to; a `Pre` or `Post` one is applied with no weight
+    // of its own, and the few that want theirs read it inside the
+    // body where the evaluator already resolves it.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        // **Retry once on a finer grid before giving up.**
+        //
+        // Interval arithmetic's error grows with the width of its
+        // input, so a refusal can be the body's real behaviour or
+        // just the dependency problem -- `elliptic` divides by half
+        // the sum of the distances to (±1, 0), which is at least 1 by
+        // the ellipse property and which intervals read as possibly
+        // zero because they cannot see the two square roots are
+        // linked. Splitting the input tells the two apart: `elliptic`
+        // comes back at k=3, and `curl` and `rays`, whose poles are
+        // real, refuse at every k.
+        //
+        // Only on refusal, so the common path pays nothing, and once,
+        // because the measurement says a finer grid than this buys
+        // almost nothing (k=8 recovered three more bodies of 647 for
+        // sixty-four times the work).
+        let derived = crate::variations::derive::derive(name, &pf, w, b)
+            .or_else(|_| crate::variations::derive::derive_subdivided(name, &pf, w, b, 3));
+        return match derived {
+            Ok(out) => Ok(match chain {
+                Chain::Sum => Ball::new(
+                    [out.c[0] * w, out.c[1] * w],
+                    out.r * w.abs(),
+                ),
+                Chain::Replace => out,
+            }),
+            Err(why) => Err(NoBall::Unbounded(format!("{name} ({why})"))),
+        };
+    }
+    // The web build has no WGSL front end to parse with, so the hand
+    // bounds are all it has. See `variations::mod`.
+    #[cfg(target_arch = "wasm32")]
+    Err(NoBall::Unbounded(name.to_string()))
 }
 
 #[cfg(test)]
@@ -315,8 +364,13 @@ mod tests {
         assert!((b.r - 0.5).abs() < 1e-6, "{b:?}");
     }
 
-    /// An unknown nonlinear variation still refuses, and names
-    /// itself.
+    /// A variation with no bound still refuses, and the refusal
+    /// names both the variation and why.
+    ///
+    /// `waves` reads the per-transform variation weights directly, so
+    /// neither a hand bound nor the WGSL evaluator can answer for it
+    /// — and the targeting panel shows this string to the user, so
+    /// "waves" alone would not tell them what to change.
     #[test]
     fn an_unbounded_variation_names_itself() {
         let r = crate::variations::global_registry();
@@ -325,7 +379,10 @@ mod tests {
         t.variation_order.clear();
         t.set_variation("waves", 1.0);
         match transform_ball_2d(&t, &r, Ball::new([0.0, 0.0], 1.0)) {
-            Err(NoBall::Unbounded(n)) => assert_eq!(n, "waves"),
+            Err(NoBall::Unbounded(n)) => {
+                assert!(n.starts_with("waves"), "{n}");
+                assert!(n.contains("weights"), "{n}");
+            }
             other => panic!("expected an unbounded refusal, got {other:?}"),
         }
     }
