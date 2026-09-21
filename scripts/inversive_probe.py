@@ -287,6 +287,111 @@ def truncation(xs, pts, which, c_out):
         print(f"     {h:<9.0e}  {in_hole.mean():>12.3e}  {R_need:>10.3e}  {beyond.mean():>13.3e}  {lost:>12.3e}")
 
 
+# ------------------------------------------------------------- localize
+def inverse_pairs(xs, pts, rng):
+    """Which ordered pairs (i, j) satisfy S_j(S_i(p)) == p on the
+    attractor, detected numerically rather than assumed.  A map with a
+    random branch is many-valued and is never anyone's inverse here."""
+    sample = pts[rng.integers(len(pts), size=200)]
+    scale = np.linalg.norm(sample, axis=1).max() + 1.0
+    pairs = set()
+    for i, xi in enumerate(xs):
+        if xi.branches > 1:
+            continue
+        for j, xj in enumerate(xs):
+            if xj.branches > 1:
+                continue
+            err = 0.0
+            for p in sample:
+                q = xj.apply(xi.apply(p, 0), 0)
+                if not np.all(np.isfinite(q)):
+                    err = np.inf
+                    break
+                err = max(err, np.linalg.norm(q - p))
+            if err < 1e-6 * scale:
+                pairs.add((i, j))
+    return pairs
+
+
+def reduce_word(word, pairs):
+    """Free reduction: cancel adjacent (a, b) with S_b o S_a = id.
+    `word` is in application order, so adjacency in the list is
+    adjacency in the composition."""
+    out = []
+    for sym in word:
+        if out and (out[-1][0], sym[0]) in pairs and out[-1][1] == 0 and sym[1] == 0:
+            out.pop()
+        else:
+            out.append(sym)
+    return tuple(out)
+
+
+def localize(xs, name, rng, steps=4_000_000, hist=20):
+    """**Does the measure reaching a view concentrate on few words?**
+
+    That is the one thing cylinder targeting depends on, and the one
+    thing the first measurement did not ask.  For samples that land in
+    a view, count the distinct words (the last k symbols, application
+    order) that carry them, raw and reduced, and how many words hold
+    90% of that measure.  A gasket needs one word per depth.  A flame
+    whose pieces overlap needs ever more, and no bound on any region
+    changes that."""
+    w = np.array([x.w for x in xs]); w /= w.sum()
+    # Pre-draw the choices: the loop is sequential but the dice are not.
+    choice = rng.choice(len(xs), size=steps, p=w)
+    branch = np.array([rng.integers(xs[j].branches) for j in choice])
+    p = rng.uniform(-1, 1, 2)
+    pts = np.zeros((steps, 2))
+    ok = np.zeros(steps, bool)
+    for i in range(steps):
+        q = xs[choice[i]].apply(p, branch[i])
+        if not np.all(np.isfinite(q)) or np.abs(q).max() > 1e6:
+            p = rng.uniform(-1, 1, 2)
+            continue
+        p = q
+        pts[i] = p
+        ok[i] = i > 2000
+    pairs = inverse_pairs(xs, pts[ok], rng)
+    inv_desc = ", ".join(f"S{j}oS{i}=id" for i, j in sorted(pairs)) or "none"
+    print(f"     inverse pairs: {inv_desc}")
+
+    idx = np.flatnonzero(ok)
+    centre_of = pts[ok].mean(axis=0)
+    extent = np.linalg.norm(pts[ok] - centre_of, axis=1).max()
+    print(f"     extent {extent:.3e}")
+
+    for which_c, ci in enumerate([idx[len(idx) // 2], idx[len(idx) // 3]]):
+        x = pts[ci]
+        print(f"     view centre {which_c}: [{x[0]:.4f}, {x[1]:.4f}]")
+        d = np.linalg.norm(pts - x, axis=1)
+        for r in (1e-1, 3e-2, 1e-2):
+            inside = np.flatnonzero(ok & (d <= r) & (np.arange(steps) >= hist))
+            print(f"       radius {r:.0e}: {len(inside)} samples ({len(inside)/len(idx):.2e} of the measure)")
+            if len(inside) < 200:
+                print("         too few to say anything")
+                continue
+            print("         depth   raw words  raw for 90%   reduced words  reduced for 90%")
+            for k in (2, 4, 6, 8, 10, 12, 14, 16, 18, 20):
+                if k > hist:
+                    break
+                raw = {}
+                red = {}
+                for i in inside:
+                    word = tuple((int(choice[t]), int(branch[t])) for t in range(i - k + 1, i + 1))
+                    raw[word] = raw.get(word, 0) + 1
+                    rw = reduce_word(word, pairs)
+                    red[rw] = red.get(rw, 0) + 1
+                def need90(counts):
+                    v = sorted(counts.values(), reverse=True)
+                    tot = sum(v); acc = 0
+                    for n, c in enumerate(v, 1):
+                        acc += c
+                        if acc >= 0.9 * tot:
+                            return n
+                    return len(v)
+                print(f"         {k:>5}   {len(raw):>9}   {need90(raw):>11}   {len(red):>13}   {need90(red):>15}")
+
+
 def main(paths):
     rng = np.random.default_rng(7)
     for path in paths:
@@ -324,4 +429,13 @@ def main(paths):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    args = sys.argv[1:]
+    if args and args[0] == "--localize":
+        rng = np.random.default_rng(7)
+        for path in args[1:]:
+            d, xs = load(path)
+            name = path.replace("\\", "/").split("/")[-1].replace(".fflame", "")
+            print(f"\n== {name}")
+            localize(xs, name, rng)
+    else:
+        main(args)

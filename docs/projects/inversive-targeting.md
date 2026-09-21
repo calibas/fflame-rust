@@ -822,3 +822,77 @@ only; this one walks all of them.
 
 That is a concrete, testable next step — and it is a change to the
 word expansion, not to any of the geometry below it.
+
+
+## 17. The measurement that should have come first
+
+`scripts/inversive_probe.py --localize`: run the real maps, and for
+samples landing in a view, count the distinct words (last k symbols)
+that carry them — raw, and **reduced** with adjacent inverse pairs
+cancelled, the pairs found numerically rather than assumed. Four
+million steps per flame, two view centres, three radii. The number
+that matters is "words for 90% of the view's measure" at the depth
+where a typical cylinder is the view's size (`λ·k = ln(r/extent)`).
+
+    control (random2, 2 affine maps, λ = −0.35)
+      r=1e-2, matched depth ≈ 7:   depth 6 → 1 word,  depth 8 → 4
+
+    spherical.fflame (λ = −0.30, core extent ~14)
+      inverse pairs found: only the translations, S3∘S2 = S2∘S3 = id
+      r=1e-1, matched depth ≈ 16:
+        depth   raw for 90%   reduced for 90%
+          8           237               169
+         10          1473              1064
+         12          6835              5659
+         16         22579             22287   (29,023 samples: saturated)
+
+    grand-julian (λ = −1.15, core extent ~25; words are (map, branch))
+      no inverse pairs (julian is many-valued)
+      r=1e-1, matched depth ≈ 5:   depth 4 →  48,  depth 6 → 1979
+      r=3e-2, matched depth ≈ 6:   depth 4 →  14,  depth 6 →  443
+      r=1e-2, matched depth ≈ 7:   depth 6 →  43,  depth 8 →  396
+      (second centre: 90, 2786 / 3, 126 / 1, 34, 308)
+
+Three verdicts.
+
+**The control localizes**: one to four words at the matched depth,
+bounded as the view shrinks. That is what cylinder targeting needs
+and it is what an ordinary flame gives.
+
+**`spherical.fflame` does not, and reduction does not rescue it.**
+Cancelling the translation pair removes about a quarter of the words
+and none of the growth; the two inversions are not self-inverse once
+their affines are in front of them (checked numerically: no
+`S0∘S0` or `S1∘S1` pair). Two levels ABOVE the matched depth the
+measure already needs thousands of words where the control needs one;
+at the matched depth it needs more than the sample can resolve. The
+fold-back hypothesis of §16 is rejected for this flame. Its overlap is
+genuine, and this — not the invariant ball, not the bound — is why
+making it more contractive only trades `NoInvariantBall` for
+`TooManyWords`.
+
+**`grand-julian` sits in between, and may be workable.** Tens to a few
+hundred branch-resolved words hold 90% of the view's measure at the
+matched depth, and — the part that matters — that figure is of the
+same order across three view radii spanning a decade. A bounded
+antichain of order 10²–10³ is inside `MAX_WORDS`. It is an order of
+magnitude worse than the control and an order better than
+`spherical`.
+
+### What this means for the code
+
+`mobius.rs` has no customer. The flame it was built for cannot be
+targeted by any enumeration, reduced or not, and the Schottky flames
+that would suit it are not in the corpus. The reusable part is the
+`Cover` (adaptive, pole-aware, refined onto the sample); the Möbius
+composition and the abandoned `Region` are not. Recommendation: prune
+to `Cover` or remove outright — the doc keeps the findings and git
+keeps the code.
+
+The viable target is **family J**, `grand-julian`, whose blocker was
+never geometry: `julian`'s random branch means a word cannot shrink
+unless the branch is part of it (§2), which is a kernel change (§3.2).
+Before building any of it, the same two questions this section
+answered for M: the cost per candidate with a bound-based cover push
+(no composition to lean on, so `M × depth` per candidate — the number
+that sank M), and a picture gate to aim at.
