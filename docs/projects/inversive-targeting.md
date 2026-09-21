@@ -896,3 +896,74 @@ Before building any of it, the same two questions this section
 answered for M: the cost per candidate with a bound-based cover push
 (no composition to lean on, so `M × depth` per candidate — the number
 that sank M), and a picture gate to aim at.
+
+
+## 18. The customer exists: the Schottky flames
+
+`output/flame-zoom/schottky{1,2}.fflame` — four `mobius` transforms
+each, decomposed from the `schottky_group` variation by its own
+script: two circle-pairing generators and their inverses. Both read as
+family M with `det = 1` on every map and the inverse pairs `0↔2`,
+`1↔3` found numerically. Their isometric circles OVERLAP (distance
+1.697 against radii summing to 2.0), so they sit past the strict
+Schottky condition and the group may carry relations; the results
+below hold anyway.
+
+### The geometry was right; the enumeration walks the wrong words
+
+The same random word, region radius by depth:
+
+    schottky1   raw                  4:6.97   8:3.40    12:13.0    16:0.649   20:0.567   24:0.567
+                backtrack-avoiding   4:6.97   8:0.762   12:0.0856  16:3.9e-4  20:1.3e-6  24:8.8e-8
+    schottky2   raw                  4:19.1   8:20.3    12:6.14    16:1.97    20:32.2    24:32.2
+                backtrack-avoiding   4:19.1   8:3.64    12:0.0877  16:2.0e-5  20:2.7e-5  24:4.3e-6
+
+Same cover, same maps. A word that never follows a generator with its
+inverse contracts by eight orders in twenty-four symbols; a raw one
+stalls. The native `schottky_group` variation walks with the Indra's
+Pearls backtrack rule; a decomposed flame picks uniformly and does
+not. This is the fold-back of §16, confirmed where it was supposed to
+matter.
+
+### And the measure concentrates on reduced words
+
+`--localize` on four million steps, reduced-word contraction rate
+≈ −0.8 per symbol, so the matched depth is 4–5 at `r = 1e-1`, ~6 at
+`3e-2`, ~7–8 at `1e-2`. Words holding 90% of the view's measure at
+those depths, two centres each:
+
+    schottky1        raw          reduced
+      r=1e-1        54–400        7–22
+      r=3e-2        321–376       10–14
+      r=1e-2        301–1780      9–42
+
+    schottky2        raw          reduced
+      r=1e-1        87–5299       16–117
+      r=3e-2        488–893       41–76      (thin samples)
+
+Reduced: **of order ten**, bounded across a decade of view radius, two
+centres, both flames — the control was one to four. Raw: hundreds to
+thousands and growing. That is the difference between an antichain
+and a frontier that never closes.
+
+### Verdict
+
+Family M has a customer, and it was never the geometry that failed.
+`mobius.rs` stays. What has to change is the word expansion:
+`a·a⁻¹·w` has the same map as `w`, so its measure belongs to `w`'s
+cylinder and must be credited there — otherwise the targeted render
+cannot match the untargeted one. Two ways, and the choice is open:
+
+- **Re-weight reduced words analytically.** The mass of all raw words
+  reducing to `u` is `p_u` times a return-probability series
+  (classical cogrowth; O(1) per node). Exact for a free group;
+  undercounts if the group has further relations, which past-tangency
+  circles may give it.
+- **Merge nodes by composed map.** Hash the normalized Möbius matrix;
+  equal maps are the same cylinder and their probabilities sum. Exact
+  for any relations, not just backtracks; the frontier is keyed by map
+  rather than by level.
+
+The second is correct without assuming freeness, which these flames
+do not have. The picture gate — `schottky1` targeted against
+untargeted — decides.

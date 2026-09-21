@@ -58,11 +58,26 @@ def v_disc(p, prm, branch):
     pr = math.pi * r
     return np.array([tp * math.sin(pr), tp * math.cos(pr)])
 
-VARS = {"linear": v_linear, "spherical": v_spherical, "julian": v_julian, "disc": v_disc}
+def v_mobius(p, prm, branch):
+    # defs/extended.rs: (Az + B)/(Cz + D) with the shipped +1e-10 guard.
+    g = lambda k, dflt: float(prm.get("mobius." + k, dflt))
+    ra, ia = g("re_a", 0.1), g("im_a", 0.2)
+    rb, ib = g("re_b", 0.2), g("im_b", -0.12)
+    rc, ic = g("re_c", -0.15), g("im_c", -0.15)
+    rd, id_ = g("re_d", 0.21), g("im_d", 0.1)
+    x, y = p[0], p[1]
+    re_u = ra * x - ia * y + rb
+    im_u = ra * y + ia * x + ib
+    re_v = rc * x - ic * y + rd
+    im_v = rc * y + ic * x + id_
+    den = re_v * re_v + im_v * im_v + 1e-10
+    return np.array([(re_u * re_v + im_u * im_v) / den, (im_u * re_v - re_u * im_v) / den])
+
+VARS = {"linear": v_linear, "spherical": v_spherical, "julian": v_julian, "disc": v_disc, "mobius": v_mobius}
 # Post-phase identity in 2D; contributes nothing to the normal sum.
 IGNORE = {"flatten"}
 # Variations with a pole at affine^-1(0).
-INVERSIVE = {"spherical", "julian"}
+INVERSIVE = {"spherical", "julian", "mobius"}
 
 
 class Xform:
