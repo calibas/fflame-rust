@@ -1064,3 +1064,85 @@ geometrically and the extra symbols of a folded word sit INSIDE, where
 their contribution is most damped, so the error shrinks with depth;
 the gate's brightness agrees to ~12%. Worth revisiting if colour ever
 looks wrong on a shallow targeted render.
+
+
+## 20. Family J, scoped: the blocker was atan2, not the arm
+
+§2 said a word through `julian` cannot shrink unless the arm is part
+of the word: the body picks one of `|power|` arms with a random draw,
+so a bound covering every draw covers an annulus — `O(1)` however
+small the input. Scoping family J meant testing that.
+
+So the evaluator gained a forced arm (`Eval::rng`, `derive_branch`),
+pinning the draw to that arm's slice a hundredth in from each end —
+the evaluator widens every interval it makes, and an arm boundary is
+exactly where widening would hand back two arms. Then measured it.
+
+**The bound did not shrink at all**: 1.095 to 1.336 for inputs from
+3e-1 down to 1e-3. The arm was never the problem.
+
+`M::Atan2` returned `[-π, π]` unconditionally — the whole turn for any
+input whatsoever. Every radial variation computes an angle and then a
+sine and cosine of it, so a full-turn angle makes the image an annulus
+however small the input, and no amount of arm-pinning could help.
+
+`atan2` is continuous except across the negative real axis, so away
+from the cut its extremes are at the box's corners. Two cases still
+take the whole turn and are now the only ones that do: a box holding
+the origin, where every angle really occurs, and one straddling the
+cut, where the range wraps and an interval cannot say so.
+
+With that fixed:
+
+    input r     free bound     arm 0        arm 1
+    3e-1            1.690e0    2.921e-1    2.921e-1
+    1e-1            1.473e0    9.414e-2    9.415e-2
+    3e-2            1.409e0    2.811e-2    2.812e-2
+    1e-2            1.392e0    9.369e-3    9.378e-3
+    1e-3            1.385e0    9.398e-4    9.492e-4
+
+The pinned arm tracks its input at about 0.94× and contracts. The free
+bound sits at 1.39 forever, which is correct — it does cover every arm
+— and `the_arms_together_cover_the_free_bound` checks that pinning is
+a refinement rather than a different answer (worst overhang 0.0).
+
+### Worth more than family J
+
+It was the loosest rule in the evaluator, and it touches every radial
+variation:
+
+    bodies that derive                514 → 517
+    corpus flames blocked on a bound   28 → 26
+    corpus flames with no blocker       7 → 8
+
+The counts understate it: what actually changed is TIGHTNESS on the
+bodies that already derived, which is what decides whether a word
+shrinks.
+
+### What family J still needs
+
+The bound works. The rest is:
+
+1. **The alphabet becomes `(transform, arm)`**, with probability
+   `p_a / |power|` per arm. `grand-julian` goes from 3 symbols to 25
+   (powers 2, 15, 8). At the measured −1.15 per step that is still a
+   small antichain — §17 put it at tens to a few hundred
+   branch-resolved words, bounded across a decade of view radius.
+2. **`Bounder` has to carry the arm.** Today `one()` calls
+   `derive(name, …)` with no arm; family J needs the arm threaded from
+   the enumeration down to `derive_branch`. `JULIAN_BOUND`, the hand
+   bound, must either take an arm too or step aside for the derived
+   one when an arm is pinned.
+3. **The kernel must force the arm on replay.** `pack_words` carries a
+   symbol per step; it would carry `(transform, arm)`, and the
+   variation's WGSL would read a forced value instead of drawing —
+   `select(floor(|power| · rng_nextf(rng)), forced, forced >= 0)`,
+   compiled out under the existing replay flag so untargeted shaders
+   stay byte-identical (`canonical_shader_dumps` enforces that).
+4. **A picture gate on `grand-julian`**, matched on in-frame samples,
+   as family M's is.
+
+Steps 1 and 2 are CPU-side and testable without touching the shader —
+the same order that worked for family M, where the geometry was proven
+before the kernel was involved. Step 3 is the only part that changes a
+shipping shader.

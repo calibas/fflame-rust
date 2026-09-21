@@ -435,6 +435,25 @@ pub fn derive(
     derive_subdivided(name, params, weight, ball, 1)
 }
 
+/// The same, with the variation's random arm pinned.
+///
+/// For a many-valued body — `julian` and the rest of the julia family
+/// — this is the difference between a bound that shrinks and one that
+/// cannot. See [`Branch`].
+pub fn derive_branch(
+    name: &str,
+    params: ParamFn,
+    weight: f64,
+    ball: Ball,
+    branch: Branch,
+) -> Result<Ball, Refusal> {
+    let cell = [
+        Interval::new(ball.c[0] - ball.r, ball.c[0] + ball.r),
+        Interval::new(ball.c[1] - ball.r, ball.c[1] + ball.r),
+    ];
+    box_to_disc(derive_box_branched(name, params, weight, cell, Some(branch))?)
+}
+
 /// The same, over a `k × k` grid of sub-boxes whose union is taken.
 ///
 /// Interval arithmetic over-estimates whenever a value appears more
@@ -490,11 +509,40 @@ fn box_to_disc(out: [Interval; 2]) -> Result<Ball, Refusal> {
 }
 
 /// One evaluation of the body over one input box.
+/// Which arm of a many-valued variation to bound, as `(index, count)`.
+///
+/// The body picks its arm with `floor(count · rng_nextf())`, so
+/// pinning the draw to that arm's slice pins the arm. The slice is
+/// taken a hundredth in from each end: the evaluator widens every
+/// interval it produces, and an arm boundary is exactly where that
+/// widening would cross into the next arm and hand back two.
+pub type Branch = (u32, u32);
+
+fn rng_for(branch: Option<Branch>) -> Interval {
+    match branch {
+        Some((k, n)) if n > 0 => {
+            let n = n as f64;
+            Interval::new((k as f64 + 0.01) / n, (k as f64 + 0.99) / n)
+        }
+        _ => Interval::new(0.0, 1.0),
+    }
+}
+
 fn derive_box(
     name: &str,
     params: ParamFn,
     weight: f64,
     input: [Interval; 2],
+) -> Result<[Interval; 2], Refusal> {
+    derive_box_branched(name, params, weight, input, None)
+}
+
+fn derive_box_branched(
+    name: &str,
+    params: ParamFn,
+    weight: f64,
+    input: [Interval; 2],
+    branch: Option<Branch>,
 ) -> Result<[Interval; 2], Refusal> {
     let body = body_for(name).ok_or(Refusal::NoBody)?;
     let module = &body.module;
@@ -520,7 +568,7 @@ fn derive_box(
         }));
     }
 
-    let mut ev = Eval { module, params, weight, name };
+    let mut ev = Eval { module, params, weight, name, rng: rng_for(branch) };
     let out = ev.call(func, &args)?;
     let lanes = out.lanes()?;
     if lanes.len() < 2 {
@@ -589,6 +637,16 @@ struct Eval<'a> {
     params: ParamFn<'a>,
     weight: f64,
     name: &'a str,
+    /// What `rng_nextf` is allowed to return.
+    ///
+    /// `[0, 1)` for an ordinary bound, which is why a stochastic
+    /// variation is usually the easy case: the answer covers every
+    /// draw. For `julian` and its kin that is exactly the problem —
+    /// the draw picks which ARM the point lands on, so covering every
+    /// draw means covering a whole annulus, and the bound is `O(1)`
+    /// however small the input. Narrowing this to one arm's slice is
+    /// what lets a word through such a variation shrink at all.
+    rng: Interval,
 }
 
 /// Locals and evaluated expressions for one function activation.
@@ -1293,9 +1351,7 @@ impl<'a> Eval<'a> {
                 };
                 self.param_slot(*slot as usize)
             }
-            // Uniform on [0, 1). The whole reason the stochastic
-            // variations are the easy case here.
-            "rng_nextf" => Ok(IVal::Scalar(Interval::new(0.0, 1.0))),
+            "rng_nextf" => Ok(IVal::Scalar(self.rng)),
             "rng_next" => Ok(IVal::Opaque("a raw RNG word")),
             "get_state" | "set_state" => Err(Refusal::State),
             _ => self.call(callee, args),
@@ -1333,6 +1389,7 @@ impl<'a> Eval<'a> {
             params: self.params,
             weight: self.weight,
             name: self.name,
+            rng: self.rng,
         };
         let out = ev.call(&module.functions[handle], &[IVal::Vec(user)])?;
         let lanes = out.lanes()?;
@@ -1614,11 +1671,7 @@ impl<'a> Eval<'a> {
                     }
                     x.monotone(f64::acos)
                 }
-                M::Atan2 => {
-                    // The angle, whatever the quadrant.
-                    let _ = get(1, i)?;
-                    Interval::new(-std::f64::consts::PI, std::f64::consts::PI)
-                }
+                M::Atan2 => atan2_iv(x, get(1, i)?),
                 M::Pow => {
                     let e = get(1, i)?;
                     pow_iv(x, e)?
@@ -1672,6 +1725,52 @@ fn square(x: Interval) -> Interval {
     let b = x.hi * x.hi;
     let lo = if x.lo <= 0.0 && x.hi >= 0.0 { 0.0 } else { a.min(b) };
     Interval::new(lo, a.max(b)).widen()
+}
+
+/// The angles `atan2(y, x)` takes over a box, and only those.
+///
+/// **This used to return the whole turn, always.** Sound, and the
+/// single loosest rule in the evaluator: every radial variation
+/// computes an angle and then a sine and cosine of it, so a full-turn
+/// angle makes the image an annulus however small the input. Measured
+/// on `julian`, it was the whole reason a bound there could not shrink
+/// — the arm the random draw picks was blamed for years and is not at
+/// fault.
+///
+/// `atan2` is continuous except across the negative real axis, so
+/// away from that cut the extremes are at the box's corners. Two
+/// cases have to give up and take the turn: a box holding the origin,
+/// where every angle really does occur, and one straddling the cut,
+/// where the range wraps and an interval cannot say so.
+///
+/// Note the ORDER: `atan2(y, x)` takes the ordinate first, which is
+/// how the shader calls it and the opposite of how a box is usually
+/// written.
+fn atan2_iv(y: Interval, x: Interval) -> Interval {
+    let whole = Interval::new(-std::f64::consts::PI, std::f64::consts::PI);
+    let spans_y = y.lo <= 0.0 && y.hi >= 0.0;
+    if spans_y && x.lo <= 0.0 && x.hi >= 0.0 {
+        return whole; // holds the origin
+    }
+    if spans_y && x.hi < 0.0 {
+        return whole; // straddles the branch cut
+    }
+    let mut lo = f64::INFINITY;
+    let mut hi = f64::NEG_INFINITY;
+    for yy in [y.lo, y.hi] {
+        for xx in [x.lo, x.hi] {
+            let a = yy.atan2(xx);
+            if !a.is_finite() {
+                return whole;
+            }
+            lo = lo.min(a);
+            hi = hi.max(a);
+        }
+    }
+    if lo > hi {
+        return whole;
+    }
+    Interval::new(lo, hi).widen()
 }
 
 fn sqrt_iv(x: Interval) -> Result<Interval, Refusal> {
@@ -1966,5 +2065,96 @@ mod tests {
         // ...and away from zero it is ordinary.
         let q = a.div(Interval::new(2.0, 4.0));
         assert!(q.lo <= 0.25 && q.hi >= 1.0, "{q:?}");
+    }
+}
+
+#[cfg(test)]
+mod branch_tests {
+    use super::*;
+
+    /// **Does pinning the arm make a julia bound shrink?**
+    ///
+    /// `grand-julian` is refused today with "`julian` has no forward
+    /// bound", and §2 of `docs/projects/inversive-targeting.md` says
+    /// why: the body picks one of `|power|` arms with a random draw,
+    /// so a bound that covers every draw covers a whole annulus about
+    /// the origin — `O(1)` however small the input. A word through it
+    /// cannot shrink.
+    ///
+    /// This is the measurement that decides whether family J is worth
+    /// building: with the arm pinned, does the same body bound a small
+    /// disc by a small disc?
+    #[test]
+    fn pinning_the_arm_makes_julian_shrink() {
+        let reg = crate::variations::global_registry();
+        let info = reg.get("julian").expect("julian");
+        // `grand-julian`'s first transform: power 2, dist -1.
+        let pf = |q: &str| -> f64 {
+            match q {
+                "power" => 2.0,
+                "dist" => -1.0,
+                _ => info
+                    .parameters
+                    .iter()
+                    .find(|p| p.name == q)
+                    .map_or(0.0, |p| p.default_value as f64),
+            }
+        };
+        println!("  julian, power 2, dist -1 -- image radius for a disc at distance 1");
+        println!("     input r     free bound     arm 0        arm 1");
+        let mut any_shrunk = false;
+        for r in [3e-1f64, 1e-1, 3e-2, 1e-2, 3e-3, 1e-3] {
+            let ball = Ball::new([1.0, 0.3], r);
+            let free = derive("julian", &pf, 1.0, ball)
+                .map(|b| format!("{:.3e}", b.r))
+                .unwrap_or_else(|e| format!("{e}"));
+            let mut arms = Vec::new();
+            for k in 0..2u32 {
+                arms.push(
+                    derive_branch("julian", &pf, 1.0, ball, (k, 2))
+                        .map(|b| {
+                            if b.r < r {
+                                any_shrunk = true;
+                            }
+                            format!("{:.3e}", b.r)
+                        })
+                        .unwrap_or_else(|e| format!("{e}")),
+                );
+            }
+            println!("     {r:<10.0e} {free:>12}  {:>10}  {:>10}", arms[0], arms[1]);
+        }
+        assert!(
+            any_shrunk,
+            "pinning the arm never produced an image smaller than its input -- \
+             family J would not terminate either"
+        );
+    }
+
+    /// The pinned arms together cover the free bound: pinning is a
+    /// refinement, not a different answer.
+    #[test]
+    fn the_arms_together_cover_the_free_bound() {
+        let pf = |q: &str| -> f64 {
+            match q {
+                "power" => 5.0,
+                "dist" => 1.0,
+                _ => 0.0,
+            }
+        };
+        let ball = Ball::new([0.7, -0.4], 0.05);
+        let free = derive("julian", &pf, 1.0, ball).expect("a free bound");
+        let mut worst = 0.0f64;
+        for k in 0..5u32 {
+            let arm = derive_branch("julian", &pf, 1.0, ball, (k, 5)).expect("an arm");
+            // Every point of the arm's disc must be inside the free
+            // one, which covers all arms at once.
+            let d = ((arm.c[0] - free.c[0]).powi(2) + (arm.c[1] - free.c[1]).powi(2)).sqrt();
+            worst = worst.max(d + arm.r - free.r);
+        }
+        println!("  free radius {:.4e}, worst arm overhang {worst:.3e}", free.r);
+        assert!(
+            worst <= free.r * 1e-6 + 1e-9,
+            "an arm escaped the bound that is supposed to cover every arm, by {worst:.3e}"
+        );
     }
 }
