@@ -89,6 +89,47 @@ pub const MAX_DEPTH: usize = 96;
 /// ordinary way rather than to enumerate ten thousand words.
 pub const MAX_WORDS: usize = 4096;
 
+/// Where the arm lives inside a word's symbol.
+///
+/// A symbol used to be a transform index and nothing else. For a
+/// variation whose draw picks one of several images — `julian` and its
+/// kin, see `bound::ARMED` — the arm has to be part of the word, or
+/// the bound covers every arm at once and is an annulus whose radius
+/// does not depend on the input.
+///
+/// Packed into one number rather than carried alongside, so a word
+/// stays a `Vec<u32>` and the kernel still reads one value per step.
+/// Transforms are capped at 128, so eight bits hold one; arms are
+/// capped at [`crate::variations::bound::MAX_ARMS`], so the whole
+/// symbol fits in sixteen and survives the trip through an `f32`
+/// exactly.
+///
+/// **Arm zero encodes to the bare transform index**, which is what
+/// every word written before arms existed already holds.
+pub const ARM_SHIFT: u32 = 8;
+
+pub fn sym_of(transform: u32, arm: u32) -> u32 {
+    transform | (arm << ARM_SHIFT)
+}
+
+pub fn sym_transform(sym: u32) -> u32 {
+    sym & ((1 << ARM_SHIFT) - 1)
+}
+
+pub fn sym_arm(sym: u32) -> u32 {
+    sym >> ARM_SHIFT
+}
+
+/// Whether `plan` may put arms in the alphabet.
+///
+/// OFF. The CPU half works — `grand-julian` goes from unbounded to
+/// contracting once the arm is pinned — but the kernel replays a word
+/// by applying its transforms, and it does not yet know how to force
+/// the arm, so a plan full of arms would render as if every arm were
+/// the one the dice chose. Turning this on without the shader change
+/// would draw a wrong picture rather than a slow one.
+pub const ARMS_ENABLED: bool = false;
+
 /// Family M: the most probability increments the map-keyed walk will
 /// deliver before giving up and charging the rest to
 /// [`Cylinders::lost`]. A pop is cheap unless it reaches a map for the
@@ -543,6 +584,27 @@ impl Cylinders {
         registry: &crate::variations::VariationRegistry,
         view: View,
     ) -> Result<Self, NoCylinders> {
+        Self::plan_inner(flame, registry, view, ARMS_ENABLED)
+    }
+
+    /// The same, with the arms of many-valued variations in the
+    /// alphabet whatever [`ARMS_ENABLED`] says.
+    ///
+    /// For measuring family J before the kernel can replay an arm.
+    pub fn plan_armed(
+        flame: &Flame,
+        registry: &crate::variations::VariationRegistry,
+        view: View,
+    ) -> Result<Self, NoCylinders> {
+        Self::plan_inner(flame, registry, view, true)
+    }
+
+    fn plan_inner(
+        flame: &Flame,
+        registry: &crate::variations::VariationRegistry,
+        view: View,
+        use_arms: bool,
+    ) -> Result<Self, NoCylinders> {
         let n = flame.transforms.len();
         if n == 0 {
             return Err(NoCylinders::Empty);
@@ -732,10 +794,32 @@ impl Cylinders {
         // Recomputed from the root for every candidate rather than
         // extended from the parent, and that is the whole point of
         // this function's shape. See `Node` below.
+        // **The alphabet.** One symbol per transform normally; one per
+        // (transform, arm) when a variation's draw picks among several
+        // images and `ARMS_ENABLED` says to enumerate them. A
+        // transform's weight divides evenly among its arms, because
+        // the draw is uniform over them — that is what
+        // `floor(n · rng_nextf())` means.
+        let mut alphabet: Vec<(u32, f64)> = Vec::new();
+        for (i, w) in weights.iter().enumerate() {
+            if !(*w > 0.0) {
+                continue;
+            }
+            let arms = if use_arms { bounders[i].arms().max(1) } else { 1 };
+            for a in 0..arms {
+                alphabet.push((sym_of(i as u32, a), w / arms as f64));
+            }
+        }
+        if alphabet.is_empty() {
+            return Err(NoCylinders::Empty);
+        }
+
         let disc_of = |word: &[u32]| -> Option<Ball> {
             let mut b = Ball::new(root_c, root_r);
             for &sym in word {
-                b = bounders[sym as usize].apply(b).ok()?;
+                b = bounders[sym_transform(sym) as usize]
+                    .apply_arm(b, sym_arm(sym))
+                    .ok()?;
             }
             Some(b)
         };
@@ -746,12 +830,8 @@ impl Cylinders {
             }
             let mut next: Vec<Node> = Vec::new();
             for node in frontier.drain(..) {
-                for (i, t) in flame.transforms.iter().enumerate() {
-                    let _ = t;
-                    let w = weights[i];
-                    if !(w > 0.0) {
-                        continue;
-                    }
+                for &(sym, w) in &alphabet {
+                    let i = sym_transform(sym) as usize;
                     // **The new symbol is applied FIRST, not last.**
                     //
                     // A word is `S_{a_k} ∘ … ∘ S_{a_1}` and the chaos
@@ -776,7 +856,7 @@ impl Cylinders {
                     // is exactly why every gate here passed while a
                     // generic point of a real flame went empty.
                     let mut word = Vec::with_capacity(node.word.len() + 1);
-                    word.push(i as u32);
+                    word.push(sym);
                     word.extend_from_slice(&node.word);
                     // Family M: extend the composed map, then ask it
                     // for the region in one push.
@@ -1144,7 +1224,7 @@ pub fn pack(cyl: &Cylinders, flame: &Flame, registry: &crate::variations::Variat
         let mut h_prod = 1.0f64;
         let mut g_acc = 0.0f64;
         for &sym in &c.word {
-            let i = sym as usize;
+            let i = sym_transform(sym) as usize;
             m = maps[i].then_after(&m);
             let t = &flame.transforms[i];
             let s = t.color_speed as f64;
@@ -1225,7 +1305,7 @@ pub fn pack_words(cyl: &Cylinders, flame: &Flame) -> Vec<f32> {
         let mut h_prod = 1.0f64;
         let mut g_acc = 0.0f64;
         for &sym in &c.word {
-            let t = &flame.transforms[sym as usize];
+            let t = &flame.transforms[sym_transform(sym) as usize];
             let s = t.color_speed as f64;
             let h = (1.0 + s) * 0.5;
             let g = t.color as f64 * (1.0 - s) * 0.5;
@@ -2551,7 +2631,7 @@ mod tests {
                 // the chaos game applies it in.
                 let mut q = *p;
                 for &s in &c.word {
-                    q = maps[s as usize].apply(q);
+                    q = maps[sym_transform(s) as usize].apply(q);
                 }
                 let d = (q[0] - c.centre[0]).hypot(q[1] - c.centre[1]);
                 assert!(
@@ -2748,7 +2828,7 @@ mod tests {
                 // order the chaos game would.
                 let mut q = p;
                 for &sym in &c.word {
-                    q = maps[sym as usize].apply(q);
+                    q = maps[sym_transform(sym) as usize].apply(q);
                 }
                 let got = m.apply(p);
                 let e = (got[0] - q[0]).hypot(got[1] - q[1]);
@@ -2764,7 +2844,7 @@ mod tests {
             for c0 in [0.0f64, 0.25, 0.5, 1.0] {
                 let mut col = c0;
                 for &sym in &c.word {
-                    let t = &flame.transforms[sym as usize];
+                    let t = &flame.transforms[sym_transform(sym) as usize];
                     let s = t.color_speed as f64;
                     col = col * ((1.0 + s) * 0.5) + t.color as f64 * (1.0 - s) * 0.5;
                 }
@@ -3502,6 +3582,92 @@ mod tests {
                         c.lost
                     ),
                     Err(e) => println!("   zoom {zoom:>7.0e}  {ms:>8.1} ms  {e:?}"),
+                }
+            }
+            println!();
+        }
+    }
+
+    /// **Does `grand-julian` enumerate once arms are in the alphabet?**
+    ///
+    /// The whole of family J's CPU half, asked end to end. Today the
+    /// flame is refused outright — `julian` bounded over every arm is
+    /// an annulus whose radius does not depend on the input. With one
+    /// symbol per `(transform, arm)` the bound shrinks, so the
+    /// question is whether the antichain is small enough to be worth
+    /// forcing and cheap enough to compute.
+    ///
+    /// `grand-julian` has arms 2, 15 and 8, so its alphabet is 25
+    /// symbols against 3 — the branching factor is eight times wider,
+    /// and it has to pay for itself in depth.
+    #[test]
+    #[ignore = "reads output/flame-zoom"]
+    fn grand_julian_enumerates_with_arms() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        for name in ["grand-julian", "julian-disc"] {
+            let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame"))
+            else {
+                continue;
+            };
+            let cfg: crate::config::FractalConfig =
+                serde_json::from_str(&text).expect("a config");
+            let arms: Vec<u32> = cfg
+                .flame
+                .transforms
+                .iter()
+                .filter(|t| t.weight > 0.0)
+                .filter_map(|t| crate::scene::ifs_ball::Bounder::new(t, reg).ok())
+                .map(|b| b.arms())
+                .collect();
+            println!(
+                "== {name}: arms {arms:?}, alphabet {}",
+                arms.iter().sum::<u32>()
+            );
+
+            // On the set: walk the flame's own maps as points, arm 0,
+            // which is a legitimate orbit whichever arm it picks.
+            let bounders: Vec<_> = cfg
+                .flame
+                .transforms
+                .iter()
+                .filter(|t| t.weight > 0.0)
+                .filter_map(|t| crate::scene::ifs_ball::Bounder::new(t, reg).ok())
+                .collect();
+            let mut p = [0.31f64, 0.17];
+            for k in 0..64 {
+                let j = k % bounders.len();
+                match bounders[j].apply_arm(Ball::new(p, 0.0), (k as u32) % arms[j].max(1)) {
+                    Ok(b) if b.c[0].is_finite() && b.c[1].is_finite() => p = b.c,
+                    _ => break,
+                }
+            }
+            println!("   view on the set at [{:.4}, {:.4}]", p[0], p[1]);
+
+            for zoom in [1e0f64, 1e2, 1e4, 1e6] {
+                let view = View::of(zoom, p, 512, 512);
+                for (label, armed) in [("plain", false), ("armed", true)] {
+                    let t0 = std::time::Instant::now();
+                    let r = if armed {
+                        Cylinders::plan_armed(&cfg.flame, reg, view)
+                    } else {
+                        Cylinders::plan(&cfg.flame, reg, view)
+                    };
+                    let ms = t0.elapsed().as_secs_f64() * 1e3;
+                    match r {
+                        Ok(c) => println!(
+                            "   zoom {zoom:>6.0e} {label:<6} {ms:>7.1} ms  {:>5} words, \
+                             depth {:>2}, mass {:.2e}, speedup {:.3e}, lost {:.2e}",
+                            c.words.len(),
+                            c.depth,
+                            c.mass,
+                            c.speedup(),
+                            c.lost
+                        ),
+                        Err(e) => {
+                            println!("   zoom {zoom:>6.0e} {label:<6} {ms:>7.1} ms  {e:?}")
+                        }
+                    }
                 }
             }
             println!();

@@ -1146,3 +1146,80 @@ Steps 1 and 2 are CPU-side and testable without touching the shader —
 the same order that worked for family M, where the geometry was proven
 before the kernel was involved. Step 3 is the only part that changes a
 shipping shader.
+
+
+## 21. Family J, built so far — and the step that was missing
+
+### Done
+
+**Arms reach the bound** (§20's measurement, now plumbed). Which
+variations have arms is a table, `bound::ARMED`, not a feature:
+`Feature::NeedsRng` cannot answer it, because `blur` draws too and its
+draw is continuous — pinning it would UNDER-estimate where the point
+can go, the one direction a forward bound may never err. `julian` and
+`juliascope`, `ceil(|power|)` arms, capped at 64.
+
+`Bounder` knows which of its variations is armed and refuses to guess
+when two are; `apply_arm` bounds one arm, `apply` still bounds them
+all. A pinned arm skips the hand bound, since the five hand bounds
+answer for every arm at once.
+
+**Arms reach the alphabet.** A symbol is `(transform, arm)` packed as
+`transform | arm << 8`; arm zero is the bare transform index, so every
+word written before arms existed is still valid. `ARMS_ENABLED` is
+off, because the kernel cannot force an arm yet and a plan full of
+arms would draw a wrong picture rather than a slow one.
+
+Measured, on whole transforms:
+
+    grand-julian: arms [2, 15, 8]
+      unresolved    dies at step 2, "julian has no forward bound"
+      arm-resolved  1e-3 → 1.35e-3 → 1.87e-5 → 5.61e-6 → 7.07e-6
+
+### The step I left out
+
+Asked to enumerate with arms, `grand-julian` still refuses — and not
+because of arms. The refusal is `plan`'s up-front bound check and then
+`invariant_ball`, both of which bound every arm at once and both of
+which meet the origin, where `julian` with `dist = -1` is genuinely
+unbounded. The flame reports `NoInvariantBall`, exactly as
+`spherical.fflame` does: its attractor spans `|p| ∈ [1.7e-1, 2.7e1]`,
+so every disc containing it contains the pole.
+
+**Family J needs the leaky cover root too.** That is what §3.2 meant
+by "family M's machinery with a bound in place of an exact circle",
+and it is the part I under-weighted when I framed this as four steps.
+
+### What the generalisation actually costs
+
+`Cover` is coupled to `MobiusMap` in two places, and only two:
+
+- `Cover::push(&MobiusMap, …)` — pushes each disc, refines onto the
+  sample where the image would swallow a pole.
+- `cover_attractor(&[MobiusMap], …)` — runs a CPU chaos game
+  (`apply_point`) and reads each map's `pole()` to size the discs.
+
+Both generalise, and one design idea makes it cheap. **`CoverRules`
+does not need to know where the poles are.** It avoids them today by
+being told; but a disc is fine exactly when its push SUCCEEDS and
+stays finite, and any bound can answer that without knowing what a
+pole is. Replacing "is this disc clear of the poles" with "does this
+disc push" makes `Cover` map-agnostic, and then:
+
+- the point walk is `Bounder::apply_arm(Ball(p, 0))`, whose centre is
+  the image point;
+- the push is `Bounder::apply_arm(disc, arm)`;
+- nothing needs a pole.
+
+At that point `Cover` is no longer Möbius-specific and probably should
+not live in `mobius.rs`.
+
+### The remaining shape
+
+1. ✅ arms in the bound
+2. ✅ arms in the alphabet
+3. ⬜ **the cover root, generalised to push by a `Bounder`** — the
+   substantial one
+4. ⬜ the kernel forcing the arm on replay (the only shipping-shader
+   change)
+5. ⬜ a picture gate on `grand-julian`, matched on in-frame samples
