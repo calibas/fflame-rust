@@ -3508,6 +3508,96 @@ mod tests {
         }
     }
 
+    /// **Does an arm-resolved word contract for `grand-julian`?**
+    ///
+    /// Family J's question, asked of whole transforms rather than of
+    /// one variation. `grand-julian` is three `julian` transforms with
+    /// `dist = -1` and powers 2, 15 and 8 — twenty-five arms between
+    /// them — and it is refused today because `julian` bounded over
+    /// every arm is an annulus whose radius does not depend on the
+    /// input.
+    ///
+    /// This walks a random word twice: once with the arms unresolved
+    /// (what `plan` does today) and once with an arm chosen per
+    /// symbol (what family J would do). If the second does not shrink,
+    /// there is nothing to build.
+    #[test]
+    #[ignore = "reads output/flame-zoom"]
+    fn an_arm_resolved_word_contracts_for_grand_julian() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        for name in ["grand-julian", "julian-disc"] {
+            let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame"))
+            else {
+                continue;
+            };
+            let cfg: crate::config::FractalConfig =
+                serde_json::from_str(&text).expect("a config");
+            let bounders: Vec<crate::scene::ifs_ball::Bounder> = cfg
+                .flame
+                .transforms
+                .iter()
+                .filter(|t| t.weight > 0.0)
+                .filter_map(|t| crate::scene::ifs_ball::Bounder::new(t, reg).ok())
+                .collect();
+            if bounders.is_empty() {
+                println!("  {name}: no bounders");
+                continue;
+            }
+            let arms: Vec<u32> = bounders.iter().map(|b| b.arms()).collect();
+            println!(
+                "== {name}: arms per transform {arms:?} (alphabet {})",
+                arms.iter().sum::<u32>()
+            );
+
+            // A disc on the attractor, found by walking the flame's
+            // own maps as points.
+            let mut p = [0.31f64, 0.17];
+            let mut st = 9u64;
+            let mut lcg = move || {
+                st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                (st >> 33) as usize
+            };
+            let start = Ball::new(p, 1e-3);
+            let _ = &mut p;
+
+            for (label, resolve) in [("unresolved", false), ("arm-resolved", true)] {
+                let mut b = start;
+                let mut line = Vec::new();
+                let mut ok = true;
+                for k in 1..=16usize {
+                    let j = lcg() % bounders.len();
+                    let r = if resolve {
+                        let a = (lcg() as u32) % arms[j].max(1);
+                        bounders[j].apply_arm(b, a)
+                    } else {
+                        bounders[j].apply(b)
+                    };
+                    match r {
+                        Ok(next) => {
+                            b = next;
+                            if k % 4 == 0 {
+                                line.push(format!("{k}:{:.2e}", b.r));
+                            }
+                        }
+                        Err(e) => {
+                            line.push(format!("{k}:{e}"));
+                            ok = false;
+                            break;
+                        }
+                    }
+                }
+                println!(
+                    "   {label:<13} start {:.1e} -> {}{}",
+                    start.r,
+                    line.join("  "),
+                    if ok { "" } else { "  (stopped)" }
+                );
+            }
+            println!();
+        }
+    }
+
     /// **Does an equal map stay equal, forty symbols down?**
     ///
     /// Merging cylinders by their composed map only works if two words

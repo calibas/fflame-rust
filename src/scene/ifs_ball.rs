@@ -125,6 +125,14 @@ pub struct Bounder<'a> {
     normal: Vec<(String, f64)>,
     post: Vec<(String, f64)>,
     post_affine: Option<Affine2>,
+    /// The one variation here whose draw picks an ARM, and how many
+    /// arms it has.
+    ///
+    /// `None` when nothing is armed, which is every ordinary
+    /// transform. Also `None` when TWO are — their arms would
+    /// multiply, and an alphabet that is the product of two
+    /// variations' arms is not something to enter into by accident.
+    armed: Option<(String, u32)>,
 }
 
 impl<'a> Bounder<'a> {
@@ -153,9 +161,27 @@ impl<'a> Bounder<'a> {
             }
         }
 
+        // Which variation, if any, has arms to enumerate.
+        let mut armed: Option<(String, u32)> = None;
+        let mut armed_count = 0usize;
+        for (name, _) in pre.iter().chain(normal.iter()).chain(post.iter()) {
+            if let Some(def) = crate::variations::bound::arms_for(name) {
+                let pf = |q: &str| t.get_variation_param_or_default(name, q, registry) as f64;
+                let n = (def.arms)(&pf);
+                if n > 1 {
+                    armed_count += 1;
+                    armed = Some((name.clone(), n));
+                }
+            }
+        }
+        if armed_count > 1 {
+            armed = None;
+        }
+
         Ok(Self {
             t,
             registry,
+            armed,
             affine: Affine2 {
                 m: [[t.a as f64, t.b as f64], [t.c as f64, t.d as f64]],
                 t: [t.e as f64, t.f as f64],
@@ -173,22 +199,58 @@ impl<'a> Bounder<'a> {
         })
     }
 
+    /// How many images this transform gives one input: one for an
+    /// ordinary transform, more when a variation's draw picks an arm.
+    pub fn arms(&self) -> u32 {
+        self.armed.as_ref().map_or(1, |(_, n)| *n)
+    }
+
+    /// The name of the armed variation, if there is one.
+    pub fn armed_name(&self) -> Option<&str> {
+        self.armed.as_ref().map(|(n, _)| n.as_str())
+    }
+
+    /// Where this transform sends `input` **along one arm**.
+    ///
+    /// The difference between this and [`Self::apply`] is the whole of
+    /// family J. `apply` bounds every arm at once, and for `julian`
+    /// that is an annulus about the origin whose radius does not
+    /// depend on the input at all — measured at 1.39 for inputs from
+    /// 0.3 down to 0.001. One arm of the same body tracks its input
+    /// at about 0.94×, so a word through it shrinks.
+    pub fn apply_arm(&self, input: Ball, arm: u32) -> Result<Ball, NoBall> {
+        self.apply_inner(input, Some(arm))
+    }
+
     /// Where this transform sends `input`, as a disc containing the
     /// image.
     pub fn apply(&self, input: Ball) -> Result<Ball, NoBall> {
+        self.apply_inner(input, None)
+    }
+
+    fn apply_inner(&self, input: Ball, arm: Option<u32>) -> Result<Ball, NoBall> {
+        // The arm belongs to exactly one variation; everything else
+        // is bounded over all its behaviour as usual.
+        let arm_for = |name: &str| -> Option<u32> {
+            match (&self.armed, arm) {
+                (Some((armed, n)), Some(k)) if armed == name => Some(k % (*n).max(1)),
+                _ => None,
+            }
+        };
+
         // Stage 1: the transform's own affine.
         let mut b = affine_ball(&self.affine, input);
 
         // Stage 2: the pre-phase chain. No weight is applied by the
         // dispatcher here; a body that wants its own reads it itself.
         for (name, w) in &self.pre {
-            b = one(name, *w, self.t, self.registry, b, Chain::Replace)?;
+            b = one(name, *w, self.t, self.registry, b, Chain::Replace, arm_for(name))?;
         }
 
         // Stage 3: the normal-phase sum. Centres add, radii add.
         let mut sum = Ball::new([0.0, 0.0], 0.0);
         for (name, w) in &self.normal {
-            let part = one(name, *w, self.t, self.registry, b, Chain::Sum)?;
+            let part = one(name, *w, self.t, self.registry, b, Chain::Sum, arm_for(name))?;
             sum.c[0] += part.c[0];
             sum.c[1] += part.c[1];
             sum.r += part.r;
@@ -197,7 +259,7 @@ impl<'a> Bounder<'a> {
 
         // Stage 4: the post-phase chain, then the post-affine.
         for (name, w) in &self.post {
-            b = one(name, *w, self.t, self.registry, b, Chain::Replace)?;
+            b = one(name, *w, self.t, self.registry, b, Chain::Replace, arm_for(name))?;
         }
         if let Some(pa) = &self.post_affine {
             b = affine_ball(pa, b);
@@ -225,6 +287,7 @@ fn one(
     registry: &VariationRegistry,
     b: Ball,
     chain: Chain,
+    arm: Option<u32>,
 ) -> Result<Ball, NoBall> {
     if let Some(role) = affine_role(name, w, t, registry, Space::Planar) {
         return Ok(match role {
@@ -256,9 +319,15 @@ fn one(
     // "`julian` has no bound at these parameters" while the evaluator
     // sitting right below would have answered for most of the discs
     // the enumeration actually asks about.
-    if let Some(def) = bound::for_name(name) {
-        if let Some(out) = (def.planar)(&pf, w, b) {
-            return Ok(out);
+    // **A pinned arm skips the hand bound.** The five written by hand
+    // answer for every arm at once, which is the right answer to a
+    // different question and the whole reason `julian` could not
+    // shrink. Only the evaluator can be told which arm to take.
+    if arm.is_none() {
+        if let Some(def) = bound::for_name(name) {
+            if let Some(out) = (def.planar)(&pf, w, b) {
+                return Ok(out);
+            }
         }
     }
 
@@ -290,8 +359,16 @@ fn one(
         // because the measurement says a finer grid than this buys
         // almost nothing (k=8 recovered three more bodies of 647 for
         // sixty-four times the work).
-        let derived = crate::variations::derive::derive(name, &pf, w, b)
-            .or_else(|_| crate::variations::derive::derive_subdivided(name, &pf, w, b, 3));
+        let derived = match arm {
+            Some(k) => {
+                let n = crate::variations::bound::arms_for(name)
+                    .map_or(1, |d| (d.arms)(&pf))
+                    .max(1);
+                crate::variations::derive::derive_branch(name, &pf, w, b, (k % n, n))
+            }
+            None => crate::variations::derive::derive(name, &pf, w, b)
+                .or_else(|_| crate::variations::derive::derive_subdivided(name, &pf, w, b, 3)),
+        };
         return match derived {
             Ok(out) => Ok(match chain {
                 Chain::Sum => Ball::new(
