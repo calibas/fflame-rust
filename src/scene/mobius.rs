@@ -1617,13 +1617,44 @@ pub const BEAM: usize = 96;
 #[derive(Debug, Clone, PartialEq)]
 pub struct CoverRules {
     /// Every map's pole, since any of them may be the next symbol.
+    ///
+    /// **Empty is allowed and is the general case.** Knowing where the
+    /// poles are is a luxury only a Möbius map affords: its pole is
+    /// `−d/c` and can be written down. A bound cannot say where it
+    /// will blow up — but it does not need to, because a disc is fine
+    /// exactly when its push SUCCEEDS and stays finite, and every
+    /// bound can answer that. When this is empty, `merge_growth` is
+    /// what keeps a merge from quietly building the disc that cannot
+    /// be pushed.
     pub poles: Vec<[f64; 2]>,
     /// A disc may reach this fraction of the way to the nearest pole.
     pub alpha: f64,
     pub cap: usize,
+    /// The most a merge may grow the larger of the two discs it
+    /// replaces.
+    ///
+    /// Unbounded when the poles are known, since `allows` is then the
+    /// real check. Without them, merging is only safe where it is
+    /// nearly free: two discs that are almost the same disc can be
+    /// joined without changing what pushes, and two that are far apart
+    /// cannot. The alternative was to validate every candidate merge
+    /// by pushing it under every map, which for a flame with
+    /// twenty-five arms is twenty-five pushes per candidate.
+    pub merge_growth: f64,
 }
 
 impl CoverRules {
+    /// The Möbius rule: poles are known, so keep clear of them.
+    pub fn with_poles(poles: Vec<[f64; 2]>, alpha: f64, cap: usize) -> Self {
+        Self { poles, alpha, cap, merge_growth: f64::INFINITY }
+    }
+
+    /// The general rule: nothing is known about where a map blows up,
+    /// so merges stay nearly free and the push itself is the test.
+    pub fn by_pushing(cap: usize, merge_growth: f64) -> Self {
+        Self { poles: Vec::new(), alpha: 1.0, cap, merge_growth }
+    }
+
     /// Whether a disc keeps its distance from every pole.
     pub fn allows(&self, d: &Disc) -> bool {
         if !d.finite() {
@@ -1671,11 +1702,34 @@ impl Cover {
     /// Terminates because the sample is finite: each level halves the
     /// radius and a disc eventually holds one point or none.
     pub fn push(&self, m: &MobiusMap, rules: &CoverRules) -> Result<Self, NoCircle> {
+        self.push_by(
+            |p| {
+                let q = m.apply_point(p);
+                (q[0].is_finite() && q[1].is_finite()).then_some(q)
+            },
+            |d| m.push_disc(d).ok(),
+            rules,
+        )
+    }
+
+    /// The same, through any map that can push a point and a disc.
+    ///
+    /// **The only two things `Cover` ever asked of a Möbius map.** A
+    /// `Bounder` can do both — `apply_arm` on a zero-radius ball is
+    /// the image point — so the same cover, the same refinement onto
+    /// the sample and the same accounting serve a flame whose maps are
+    /// merely BOUNDED rather than exactly known. That is what family J
+    /// needs, and it needs nothing else from here.
+    pub fn push_by(
+        &self,
+        point_of: impl Fn([f64; 2]) -> Option<[f64; 2]>,
+        disc_of: impl Fn(&Disc) -> Option<Disc>,
+        rules: &CoverRules,
+    ) -> Result<Self, NoCircle> {
         // The points go through exactly, and cost almost nothing.
         let mut points = Vec::with_capacity(self.points.len());
         for p in &self.points {
-            let q = m.apply_point(*p);
-            if q[0].is_finite() && q[1].is_finite() {
+            if let Some(q) = point_of(*p) {
                 points.push(q);
             }
         }
@@ -1691,8 +1745,8 @@ impl Cover {
         }
         let mut spent = 0usize;
         while let Some((d, mine)) = todo.pop() {
-            match m.push_disc(&d) {
-                Ok(img) if rules.allows(&img) => {
+            match disc_of(&d) {
+                Some(img) if img.finite() && rules.allows(&img) => {
                     discs.push(img);
                     continue;
                 }
@@ -1803,7 +1857,13 @@ impl Cover {
                 if k + 1 < self.discs.len() && out.len() + (self.discs.len() - k) / 2 >= rules.cap
                 {
                     let u = Self::union_disc(&self.discs[k], &self.discs[k + 1]);
-                    if rules.allows(&u) {
+                    // Without poles to steer by, a merge is safe only
+                    // where it is nearly free: two discs that are
+                    // almost the same disc push the same way, and two
+                    // far apart do not.
+                    let bigger = self.discs[k].r.max(self.discs[k + 1].r);
+                    let cheap = u.r <= rules.merge_growth * bigger.max(f64::MIN_POSITIVE);
+                    if cheap && rules.allows(&u) {
                         out.push(u);
                         k += 2;
                         continue;
@@ -1922,6 +1982,78 @@ pub fn cover_attractor(
     Some((cover, ext))
 }
 
+/// Build a cover of a sampled attractor **without being told where
+/// any map blows up**.
+///
+/// [`cover_attractor`] sizes each disc by its distance to the nearest
+/// pole, which only a Möbius map can supply. This asks the map
+/// instead: start a disc at a fraction of the attractor's extent and
+/// halve it until it pushes. A disc that never pushes, however small,
+/// holds a point the enumeration cannot follow — it is dropped and
+/// counted, which is the same accounted leak the cover already has
+/// between its samples.
+///
+/// `pushes` must answer for EVERY map that could come next, since the
+/// cover has to survive whichever symbol the enumeration picks.
+pub fn cover_by_pushing(
+    pts: &[[f64; 2]],
+    cap: usize,
+    start_frac: f64,
+    anchor_points: usize,
+    pushes: impl Fn(&Disc) -> bool,
+) -> Option<(Cover, f64, f64)> {
+    if pts.len() < 8 {
+        return None;
+    }
+    let n = pts.len() as f64;
+    let centre = [
+        pts.iter().map(|p| p[0]).sum::<f64>() / n,
+        pts.iter().map(|p| p[1]).sum::<f64>() / n,
+    ];
+    let extent = pts
+        .iter()
+        .map(|p| ((p[0] - centre[0]).powi(2) + (p[1] - centre[1]).powi(2)).sqrt())
+        .fold(0.0f64, f64::max);
+    if !(extent > 0.0) || !extent.is_finite() {
+        return None;
+    }
+
+    let mut discs: Vec<Disc> = Vec::new();
+    let mut dropped = 0usize;
+    for p in pts {
+        if discs.iter().any(|d| d.contains(*p)) {
+            continue;
+        }
+        if discs.len() >= cap {
+            dropped += 1;
+            continue;
+        }
+        let mut r = start_frac * extent;
+        let mut placed = false;
+        // Sixty halvings take any starting radius below 1e-18 of it,
+        // which is past anything the sample can distinguish.
+        for _ in 0..60 {
+            let d = Disc::new(*p, r);
+            if pushes(&d) {
+                discs.push(d);
+                placed = true;
+                break;
+            }
+            r *= 0.5;
+        }
+        if !placed {
+            dropped += 1;
+        }
+    }
+    if discs.is_empty() {
+        return None;
+    }
+    let leak = dropped as f64 / pts.len() as f64;
+    let stride = (pts.len() / anchor_points.max(1)).max(1);
+    let points: Vec<[f64; 2]> = pts.iter().step_by(stride).copied().collect();
+    Some((Cover { discs, points }, extent, leak))
+}
+
 /// A sampled orbit of the real maps, burned in, from a given seed.
 ///
 /// The seed exists so a gate can draw points the cover has never seen.
@@ -2026,11 +2158,7 @@ mod cover_tests {
         let (maps, w) = kleinian();
         let (cover, ext) =
             cover_attractor(&maps, &w, MAX_COVER, 20000, COVER_ALPHA).expect("a cover");
-        let rules = CoverRules {
-            poles: maps.iter().filter_map(|m| m.pole()).collect(),
-            alpha: COVER_ALPHA,
-            cap: MAX_COVER,
-        };
+        let rules = CoverRules::with_poles(maps.iter().filter_map(|m| m.pole()).collect(), COVER_ALPHA, MAX_COVER);
         println!("  cover of {} discs, extent {ext:.4e}", cover.discs.len());
         let total: f64 = w.iter().sum();
         let mut worst = f64::INFINITY;
@@ -2095,7 +2223,7 @@ mod cover_tests {
                     println!("   {alpha:<6} {cap:<5} no cover");
                     continue;
                 };
-                let rules = CoverRules { poles: poles.clone(), alpha, cap };
+                let rules = CoverRules::with_poles(poles.clone(), alpha, cap);
                 let mut steps_all = Vec::new();
                 let mut best_all: f64 = f64::INFINITY;
                 for seed in [7u64, 99, 12345, 555, 31337] {
@@ -2165,7 +2293,7 @@ mod cover_tests {
                 .collect(),
         };
         let before = c.discs.clone();
-        c.merge_to(&CoverRules { poles: vec![], alpha: 1.0, cap: 5 });
+        c.merge_to(&CoverRules::by_pushing(5, f64::INFINITY));
         assert_eq!(c.discs.len(), 5);
         for d in &before {
             // Every original disc sits inside some merged one.
@@ -2472,7 +2600,7 @@ impl Cover {
                 pairs.push((*p, q));
             }
         }
-        let rules = CoverRules { poles: vec![], alpha: 1.0, cap };
+        let rules = CoverRules::by_pushing(cap, f64::INFINITY);
 
         let mut discs: Vec<Disc> = Vec::with_capacity(self.discs.len());
         // (disc, indices into `pairs` whose SOURCE is inside it)
@@ -2681,11 +2809,7 @@ mod word_tests {
         let mo: Vec<Moebius> = maps.iter().map(|m| m.as_moebius().unwrap()).collect();
         let (cover, ext) =
             cover_attractor(&maps, &w, MAX_COVER, 20000, COVER_ALPHA).expect("a cover");
-        let rules = CoverRules {
-            poles: maps.iter().filter_map(|m| m.pole()).collect(),
-            alpha: COVER_ALPHA,
-            cap: MAX_COVER,
-        };
+        let rules = CoverRules::with_poles(maps.iter().filter_map(|m| m.pole()).collect(), COVER_ALPHA, MAX_COVER);
         let total: f64 = w.iter().sum();
         let mut st = 2024u64;
 
@@ -3061,11 +3185,7 @@ pub fn is_family_m(
 
         let mut guard = Vec::with_capacity(maps.len());
         let mut after = Vec::with_capacity(maps.len());
-        let rules = CoverRules {
-            poles: maps.iter().filter_map(|m| m.pole()).collect(),
-            alpha: COVER_ALPHA,
-            cap: MAX_COVER,
-        };
+        let rules = CoverRules::with_poles(maps.iter().filter_map(|m| m.pole()).collect(), COVER_ALPHA, MAX_COVER);
         for m in &maps {
             guard.push(m.guard_error_over(&root)?);
             after.push(root.push(m, &rules).ok()?);

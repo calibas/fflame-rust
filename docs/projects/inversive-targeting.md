@@ -1223,3 +1223,71 @@ not live in `mobius.rs`.
 4. ⬜ the kernel forcing the arm on replay (the only shipping-shader
    change)
 5. ⬜ a picture gate on `grand-julian`, matched on in-frame samples
+
+
+## 22. Step 3: the cover generalises, and is needed exactly once
+
+### The generalisation
+
+`Cover` asked exactly two things of a Möbius map — push a point, push
+a disc — so `push_by` takes those as closures and `push` is a thin
+wrapper over it. A `Bounder` can do both: `apply_arm` on a zero-radius
+ball is the image point. Family M's 27 tests pass unchanged.
+
+**`CoverRules` no longer has to know where the poles are**, which was
+the whole obstacle. Knowing a pole is a luxury only a Möbius map
+affords (`−d/c`, written down); a bound cannot say where it will blow
+up, and it does not need to, because a disc is fine exactly when its
+push SUCCEEDS and stays finite. With poles known nothing changes.
+Without them, `merge_growth` keeps a merge from quietly building the
+disc that cannot be pushed — two discs that are nearly the same disc
+push the same way, two far apart do not. The alternative was
+validating every candidate merge by pushing it under every symbol,
+which for twenty-five arms is twenty-five pushes per candidate.
+
+`cover_by_pushing` builds one the same way: start each disc at a
+fraction of the extent and halve until it pushes. A disc that never
+pushes holds a point the enumeration cannot follow, and is dropped and
+counted.
+
+    grand-julian: alphabet 25, extent 2.27e1, 66 discs, leak 0.00e0
+      contracts 22.7 → 1.47e-5 → 1.09e-5 → 5.42e-6 → 1.93e-6
+    julian-disc:  alphabet 51, 256 discs (capped), leak 3.42e-1
+
+### The cost, and the way round it
+
+A push is **5.06 ms**, and `julian` is not a group — there is no
+folding a word into one map the way family M does. A candidate at
+depth 20 would cost 100 ms, which is exactly the wall family M hit
+before composition.
+
+**Except the cover is only needed once.** It exists to get past the
+pole, and measured on both flames, one ball suffices **from step 1**:
+after a single symbol the image is a ball — radius 0.119 and 0.237 —
+that every symbol can push. Collapsing a cover to its enclosing disc
+only grows the region, so it is sound, and checking that the collapsed
+disc still pushes is what makes it safe.
+
+So family J is affordable with no composition trick at all:
+
+1. build the cover once;
+2. push it once per symbol, collapse each image to a ball — those are
+   the root images, about 125 ms of setup per plan;
+3. walk the ORDINARY Ball path from there, at 14 µs a symbol.
+
+After the setup the enumeration costs what an affine flame's does.
+
+### Open
+
+`julian-disc`'s cover leaks 34% at a 256-disc cap, so its construction
+wants more discs or a smaller starting radius. Measured rather than
+guessed at, and it does not block `grand-julian`.
+
+### Remaining
+
+1. ✅ arms in the bound
+2. ✅ arms in the alphabet
+3. ✅ the cover, generalised — and needed only for the root images
+4. ⬜ `plan` using the root images, then the ordinary walk
+5. ⬜ the kernel forcing the arm on replay
+6. ⬜ a picture gate on `grand-julian`
