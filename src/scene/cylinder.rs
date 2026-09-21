@@ -158,6 +158,108 @@ pub const MEASURE_FLOOR: f64 = 1e-12;
 /// that actually goes wrong.
 pub const MOBIUS_TIME_BUDGET: std::time::Duration = std::time::Duration::from_millis(1000);
 
+/// Family J: how many discs the root cover may hold.
+///
+/// A flame like `grand-julian` has NO invariant disc — `julian` with
+/// `dist = -1` is `|p|^(-1/2)`, unbounded at the origin, and the
+/// attractor surrounds the origin, so every disc containing it
+/// contains the pole. What exists instead is a COVER: many small discs
+/// that between them hold the attractor and individually keep away
+/// from the pole. Family M met the same wall first and this is the
+/// same machinery, generalised in `mobius::Cover::push_by`.
+pub const ROOT_COVER_DISCS: usize = 512;
+
+/// Family J: each root disc starts at this fraction of the sampled
+/// attractor's extent and halves until it can be pushed.
+pub const ROOT_COVER_START: f64 = 0.05;
+
+/// Family J: orbit points kept to refine a pushed cover against, out
+/// of [`ROOT_COVER_SAMPLE`] sampled.
+pub const ROOT_COVER_ANCHORS: usize = 400;
+
+/// Family J: how long an orbit is run through the BOUNDS, as points,
+/// to find where the attractor is.
+pub const ROOT_COVER_SAMPLE: usize = 20_000;
+
+/// Family J: the most of the sampled orbit the root cover may leave
+/// outside itself before the flame is refused.
+///
+/// This is not a quality knob. A point outside the cover is a point
+/// whose images the root images do not contain, so the antichain
+/// would be missing measure it does not know about — and the render
+/// would quietly under-weight a piece of the picture. Measured,
+/// `grand-julian` leaks 0.0 and `julian-disc` leaks 0.34 at a
+/// 256-disc cap; the second one is refused, correctly, until its
+/// cover is built better.
+pub const ROOT_COVER_LEAK: f64 = 0.02;
+
+/// Family J: the most a pushed disc's radius may be, as a multiple of
+/// the attractor's extent, before the disc is split instead of
+/// accepted.
+///
+/// The true image of the attractor lies INSIDE the attractor, so an
+/// image bound several times the extent is a bound that has wandered
+/// off — and near a pole it wanders off long before it stops being
+/// finite. One extent is the generous reading of "still describes the
+/// attractor".
+pub const ROOT_IMAGE_CAP: f64 = 1.0;
+
+/// Family J: how wide the frontier beam is.
+///
+/// Wider than family M's, and it has to be. A Schottky flame has four
+/// symbols, so a level offers `4 × beam` candidates and a beam of 96
+/// barely bites; `grand-julian` has twenty-five, so a level offers
+/// `25 × beam` and the beam decides almost everything. Measured, at
+/// 96 the branch that actually contains a deep view is dropped before
+/// it is distinguishable and the plan comes back `ViewIsEmpty`.
+pub const ROOT_BEAM: usize = 96;
+
+/// Family J: the most angular pieces one symbol's root image may be
+/// cut into.
+///
+/// **A root image is an annular SECTOR, and how wide the sector is
+/// decides whether a ball can hold it.** `julian` with `n` arms
+/// divides the angle by `n`, so arm `k`'s image of the attractor is a
+/// `360/n`-degree sector of an annulus around the origin — which is
+/// where the map's own pole is. Measured on `grand-julian`: the
+/// fifteen-arm transform gives 24° sectors whose enclosing balls sit
+/// 0.08 clear of the origin and walk fine, while the two-arm
+/// transform gives a 180° sector whose enclosing ball must contain
+/// the origin, and no amount of refining the cover changes that — it
+/// is geometry, not looseness. The fix is to stop insisting on ONE
+/// ball: cut the sector by angle into pieces that each clear the
+/// pole. The enumeration already carries a bag-shaped region for
+/// family M, so this costs pieces-per-symbol bound evaluations and no
+/// new machinery.
+pub const ROOT_PIECES: usize = 128;
+
+/// Family J: how long a word the root images are walked through to
+/// see whether the ordinary Ball walk will terminate from them.
+pub const ROOT_PROBE_DEPTH: usize = 12;
+
+/// Family J: how many such words are tried.
+pub const ROOT_PROBE_WORDS: usize = 32;
+
+/// Family J: what fraction of the attractor's extent a probe word's
+/// disc has to fall below to count as having contracted.
+pub const ROOT_PROBE_SHRINK: f64 = 1e-2;
+
+/// Family J: the fraction of probe words that have to contract before
+/// the flame is accepted.
+///
+/// **This is the test that keeps the cover root from being tried on
+/// flames it cannot help**, and it asks the question the enumeration
+/// actually cares about. The obvious gate — demand that a root image
+/// be small — is the wrong one: `julian` with power 2 maps the plane
+/// two-to-one, so arm 0's image is a WEDGE of the attractor and its
+/// enclosing ball is the size of the attractor by nature. Measured,
+/// `grand-julian`'s first symbol gives 2.7e1 against an extent of
+/// 1.9e1 and then falls to 1.5e-5 by depth six; `spherical`'s gives
+/// 1.9e1 and stays there, because a disc bound through an inversion
+/// never shrinks. Walking a few words is what tells those two apart,
+/// and it costs a few hundred bound evaluations.
+pub const ROOT_PROBE_PASS: f64 = 0.5;
+
 /// Why a flame cannot be cylinder-targeted.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NoCylinders {
@@ -603,7 +705,7 @@ impl Cylinders {
         flame: &Flame,
         registry: &crate::variations::VariationRegistry,
         view: View,
-        use_arms: bool,
+        family_j: bool,
     ) -> Result<Self, NoCylinders> {
         let n = flame.transforms.len();
         if n == 0 {
@@ -669,19 +771,31 @@ impl Cylinders {
         let mut weights: Vec<f64> = Vec::with_capacity(n);
         let mut total_w = 0.0f64;
         let mut composable = true;
+        let mut probe_failure: Option<NoCylinders> = None;
         for (i, t) in flame.transforms.iter().enumerate() {
             if mobius.is_none()
                 && crate::scene::ifs_analysis::transform_affine_2d(t, registry).is_err()
             {
                 composable = false;
                 // It still has to be BOUNDED, or there is nothing to
-                // push a disc with. Ask at a disc that is certainly
-                // in range; a variation that refuses only at specific
-                // inputs is caught again during expansion.
-                if let Err(why) =
-                    crate::scene::ifs_ball::transform_ball_2d(t, registry, Ball::new([0.0, 0.0], 1.0))
-                {
-                    return Err(NoCylinders::Unbounded { index: i, why: why.to_string() });
+                // push a disc with. Asked at a disc that is certainly
+                // in range — which for an inversive flame is a disc
+                // holding the pole, where the answer is "unbounded"
+                // and the flame is refused before anything has looked
+                // at where its attractor actually is. So the refusal
+                // is REMEMBERED rather than returned: a root built
+                // from a cover never asks this question, and only if
+                // no root can be found at all does this become the
+                // reason.
+                if probe_failure.is_none() {
+                    if let Err(why) = crate::scene::ifs_ball::transform_ball_2d(
+                        t,
+                        registry,
+                        Ball::new([0.0, 0.0], 1.0),
+                    ) {
+                        probe_failure =
+                            Some(NoCylinders::Unbounded { index: i, why: why.to_string() });
+                    }
                 }
             }
             let w = (t.weight as f64).max(0.0);
@@ -690,6 +804,15 @@ impl Cylinders {
         }
         if !(total_w > 0.0) {
             return Err(NoCylinders::Empty);
+        }
+        // Deferring the probe is for the cover root's benefit alone.
+        // Without it the answer is what it always was, returned where
+        // it always was, so no flame outside family J sees a
+        // different refusal or a different order of refusals.
+        if !family_j {
+            if let Some(why) = probe_failure.take() {
+                return Err(why);
+            }
         }
 
         // **One bounder per transform, built once.**
@@ -719,18 +842,52 @@ impl Cylinders {
             return Self::plan_mobius(mf, &weights, total_w, view, mf.leak);
         }
 
-        // The ball every map sends into itself: the enumeration's
-        // root, and what `S_a(B)` is the image of. For family M there
-        // is no such ball — that is the whole problem the cover
-        // solves — so the root is the cover's extent instead.
-        let (root_c, root_r, sampling_leak) = match &mobius {
-            Some(mf) => {
-                let e = mf.root.enclosing().ok_or(NoCylinders::NoInvariantBall)?;
-                (e.c, e.r, mf.leak)
+        // **The alphabet.** One symbol per transform normally; one per
+        // (transform, arm) when a variation's draw picks among several
+        // images and `ARMS_ENABLED` says to enumerate them. A
+        // transform's weight divides evenly among its arms, because
+        // the draw is uniform over them — that is what
+        // `floor(n · rng_nextf())` means.
+        let mut alphabet: Vec<(u32, f64)> = Vec::new();
+        for (i, w) in weights.iter().enumerate() {
+            if !(*w > 0.0) {
+                continue;
             }
-            None => {
-                let (c, r) = invariant_ball(flame, registry)?;
-                (c, r, 0.0)
+            let arms = if family_j { bounders[i].arms().max(1) } else { 1 };
+            for a in 0..arms {
+                alphabet.push((sym_of(i as u32, a), w / arms as f64));
+            }
+        }
+        if alphabet.is_empty() {
+            return Err(NoCylinders::Empty);
+        }
+
+        // The ball every map sends into itself: the enumeration's
+        // root, and what `S_a(B)` is the image of.
+        //
+        // When no such ball exists — every disc holding the attractor
+        // holds a pole — the root is a COVER instead, and what the
+        // enumeration starts from is the cover pushed once per symbol.
+        // Measured, one ball suffices from the very first step, so
+        // only the root pays the cover's price and the walk below is
+        // the ordinary cheap one. See
+        // `docs/projects/inversive-targeting.md` §22.
+        let mut root_images: Option<std::collections::HashMap<u32, Vec<Ball>>> = None;
+        let (root_c, root_r, sampling_leak) = match invariant_ball(flame, registry) {
+            Ok((c, r)) => (c, r, 0.0),
+            Err(no_ball) => {
+                let cover_root = if family_j {
+                    bounded_root_images(&bounders, &weights, &alphabet)
+                } else {
+                    Err("not enabled".to_string())
+                };
+                match cover_root {
+                    Ok((enclosing, images, leak)) => {
+                        root_images = Some(images);
+                        (enclosing.c, enclosing.r, leak)
+                    }
+                    Err(_why) => return Err(probe_failure.unwrap_or(no_ball)),
+                }
             }
         };
 
@@ -745,7 +902,7 @@ impl Cylinders {
         // WORD, measured at −0.30 per step, and the cover is what can
         // see it.
         for (i, t) in flame.transforms.iter().enumerate() {
-            if mobius.is_some() || weights[i] <= 0.0 {
+            if mobius.is_some() || root_images.is_some() || weights[i] <= 0.0 {
                 continue;
             }
             let _ = t;
@@ -794,26 +951,6 @@ impl Cylinders {
         // Recomputed from the root for every candidate rather than
         // extended from the parent, and that is the whole point of
         // this function's shape. See `Node` below.
-        // **The alphabet.** One symbol per transform normally; one per
-        // (transform, arm) when a variation's draw picks among several
-        // images and `ARMS_ENABLED` says to enumerate them. A
-        // transform's weight divides evenly among its arms, because
-        // the draw is uniform over them — that is what
-        // `floor(n · rng_nextf())` means.
-        let mut alphabet: Vec<(u32, f64)> = Vec::new();
-        for (i, w) in weights.iter().enumerate() {
-            if !(*w > 0.0) {
-                continue;
-            }
-            let arms = if use_arms { bounders[i].arms().max(1) } else { 1 };
-            for a in 0..arms {
-                alphabet.push((sym_of(i as u32, a), w / arms as f64));
-            }
-        }
-        if alphabet.is_empty() {
-            return Err(NoCylinders::Empty);
-        }
-
         let disc_of = |word: &[u32]| -> Option<Ball> {
             let mut b = Ball::new(root_c, root_r);
             for &sym in word {
@@ -822,6 +959,83 @@ impl Cylinders {
                     .ok()?;
             }
             Some(b)
+        };
+
+        // **Family J's region is a BAG of balls**, because the root
+        // image of one symbol is an annular sector that no single ball
+        // holds without swallowing the pole (see [`ROOT_PIECES`]). The
+        // first symbol picks the bag; the rest of the word pushes
+        // every piece. A piece that cannot be pushed takes the whole
+        // word with it, which the caller charges to `lost` — dropping
+        // it silently would leave a hole in the region and the pruning
+        // below would then be unsound.
+        //
+        // **And it collapses back to one ball the moment it can.** A
+        // bag of a hundred pieces costs a hundred bound evaluations
+        // per symbol, and a word twenty long costs two thousand — the
+        // difference between a plan and a hang. The pieces exist only
+        // to keep the pole out; once the word has contracted far
+        // enough that one ball round the whole bag clears every pole,
+        // there is nothing left for them to do, and collapsing only
+        // GROWS the region so containment survives it.
+        let first_arm: Vec<u32> = {
+            let mut seen = Vec::new();
+            let mut out = Vec::new();
+            for &(sym, _) in &alphabet {
+                let t = sym_transform(sym);
+                if !seen.contains(&t) {
+                    seen.push(t);
+                    out.push(sym);
+                }
+            }
+            out
+        };
+        let clears = |b: &Ball| -> bool {
+            first_arm.iter().all(|&sym| {
+                matches!(
+                    bounders[sym_transform(sym) as usize].apply_arm(*b, sym_arm(sym)),
+                    Ok(r) if r.r.is_finite() && r.c[0].is_finite()
+                )
+            })
+        };
+        let bag_of = |word: &[u32]| -> Option<Vec<Ball>> {
+            let images = root_images.as_ref()?;
+            let mut rest = word.iter();
+            let mut bag = images.get(rest.next()?)?.clone();
+            for &sym in rest {
+                let b = &bounders[sym_transform(sym) as usize];
+                let arm = sym_arm(sym);
+                let mut next = Vec::with_capacity(bag.len());
+                for piece in &bag {
+                    match b.apply_arm(*piece, arm) {
+                        Ok(img) if img.r.is_finite() && img.c[0].is_finite() => next.push(img),
+                        // **One piece of a hundred reaching a pole
+                        // must not take the word with it.** The
+                        // pieces are an artifact of the cover, not of
+                        // the flame: a piece that blows up holds a
+                        // pole the true image does not, and refusing
+                        // the whole word for it killed every word
+                        // past depth seven -- measured, that is why a
+                        // 1e4 view came back `ViewIsEmpty` while a
+                        // 1e2 view planned. Dropping it shrinks the
+                        // region, which is the same approximation the
+                        // cover already makes between its samples,
+                        // and it is charged to the same leak.
+                        _ => {}
+                    }
+                }
+                if next.is_empty() {
+                    return None;
+                }
+                bag = next;
+                if bag.len() > 1 {
+                    if let Some(one) = enclosing_ball(&bag).filter(&clears) {
+                        bag.clear();
+                        bag.push(one);
+                    }
+                }
+            }
+            Some(bag)
         };
 
         for _depth in 0..MAX_DEPTH {
@@ -889,6 +1103,7 @@ impl Cylinders {
                     // themselves is the same question asked where the
                     // structure is.
                     let mut cover = None;
+                    let mut bag: Option<Vec<Ball>> = None;
                     let region = match (&mobius, &child_mob) {
                         (Some(mf), Some(cw)) => match mf.region(cw, &word) {
                             Ok(c) => {
@@ -897,6 +1112,14 @@ impl Cylinders {
                                 e
                             }
                             Err(_) => None,
+                        },
+                        _ if root_images.is_some() => match bag_of(&word) {
+                            Some(b) => {
+                                let e = enclosing_ball(&b);
+                                bag = Some(b);
+                                e
+                            }
+                            None => None,
                         },
                         _ => disc_of(&word),
                     };
@@ -915,14 +1138,18 @@ impl Cylinders {
                     // the antichain complete -- the word is still a
                     // member of `A`, it simply contributes nothing to
                     // `V` and so is never sampled.
-                    let meets = match &cover {
-                        Some(c) => c.meets_disc(view.centre, view.radius),
-                        None => {
-                            let d = ((centre[0] - view.centre[0]).powi(2)
-                                + (centre[1] - view.centre[1]).powi(2))
-                            .sqrt();
-                            d <= radius + view.radius
-                        }
+                    let hits = |c: [f64; 2], r: f64| {
+                        ((c[0] - view.centre[0]).powi(2) + (c[1] - view.centre[1]).powi(2)).sqrt()
+                            <= r + view.radius
+                    };
+                    let meets = match (&cover, &bag) {
+                        (Some(c), _) => c.meets_disc(view.centre, view.radius),
+                        // Same question as below, asked where the
+                        // structure is: the sector's enclosing ball
+                        // spans the hole it was cut to avoid, so
+                        // testing through it would keep every child.
+                        (None, Some(b)) => b.iter().any(|p| hits(p.c, p.r)),
+                        _ => hits(centre, radius),
                     };
                     if !meets {
                         continue;
@@ -973,14 +1200,24 @@ impl Cylinders {
             // `beam × symbols × depth` pushes, and at 4096 that is
             // twenty minutes for one plan.
             //
-            // **Family M only.** Everywhere else an overfull frontier
-            // is still `TooManyWords`, because for a flame with a
-            // real invariant ball it means the view straddles more
-            // pieces than the antichain can hold, and answering that
-            // with a beam would turn a clear refusal into a picture
-            // quietly missing most of itself. Family M has no such
-            // ball and no such alternative.
-            let Some(beam) = mobius.as_ref().map(|_| crate::scene::mobius::BEAM) else {
+            // **For the flames with no invariant ball.** Everywhere
+            // else an overfull frontier is still `TooManyWords`,
+            // because for a flame with a real invariant ball it means
+            // the view straddles more pieces than the antichain can
+            // hold, and answering that with a beam would turn a clear
+            // refusal into a picture quietly missing most of itself.
+            // A flame rooted in a cover has no such ball and no such
+            // alternative — measured, `grand-julian`'s frontier
+            // reaches 25981 without it, which is the branching factor
+            // to the depth and the same symptom `spherical.fflame`
+            // showed above.
+            let Some(beam) = (mobius.is_some() || root_images.is_some()).then(|| {
+                if root_images.is_some() {
+                    ROOT_BEAM
+                } else {
+                    crate::scene::mobius::BEAM
+                }
+            }) else {
                 if next.len() >= MAX_WORDS {
                     return Err(NoCylinders::TooManyWords(next.len()));
                 }
@@ -1042,6 +1279,356 @@ impl Cylinders {
 /// that the obvious way to find a good centre — run the chaos game
 /// and look — needs a CPU evaluation of the variations, and there
 /// isn't one: the bodies are WGSL.
+/// The ball holding a bag of balls, or `None` if the bag is empty or
+/// any of it is not finite.
+fn enclosing_ball(bag: &[Ball]) -> Option<Ball> {
+    let mut it = bag.iter();
+    let first = *it.next()?;
+    if !first.r.is_finite() || !first.c[0].is_finite() || !first.c[1].is_finite() {
+        return None;
+    }
+    let mut out = crate::scene::mobius::Disc::new(first.c, first.r);
+    for b in it {
+        if !b.r.is_finite() || !b.c[0].is_finite() || !b.c[1].is_finite() {
+            return None;
+        }
+        out = crate::scene::mobius::Cover::union_disc(
+            &out,
+            &crate::scene::mobius::Disc::new(b.c, b.r),
+        );
+    }
+    Some(Ball::new(out.c, out.r))
+}
+
+/// Cut a pushed cover into as few balls as possible, each of which
+/// every symbol can push.
+///
+/// **By recursive bisection, because nothing here knows where the map
+/// blows up.** That is the premise of the whole pole-free path: a
+/// Möbius map can name its pole, a bound cannot, and the only
+/// available question is whether a given ball pushes. So the cut is
+/// geometric and blind — split the discs at the median of their
+/// widest axis, and recurse on each half until it pushes. Sorting by
+/// angle was tried first and is worse: the shape being cut is an
+/// annular sector, its centroid is not the hole's centre, and wedges
+/// taken about the centroid still span the hole.
+///
+/// One ball is tried first, so a symbol that never needed cutting
+/// pays one push per symbol and the common case is unchanged.
+fn walkable_pieces(
+    discs: &[crate::scene::mobius::Disc],
+    max_pieces: usize,
+    walkable: impl Fn(&Ball) -> bool,
+) -> Option<Vec<Ball>> {
+    fn recurse(
+        discs: &[crate::scene::mobius::Disc],
+        budget: &mut usize,
+        walkable: &impl Fn(&Ball) -> bool,
+        out: &mut Vec<Ball>,
+    ) -> bool {
+        let Some(whole) = enclosing_ball(
+            &discs.iter().map(|d| Ball::new(d.c, d.r)).collect::<Vec<_>>(),
+        ) else {
+            return false;
+        };
+        if walkable(&whole) {
+            if *budget == 0 {
+                return false;
+            }
+            *budget -= 1;
+            out.push(whole);
+            return true;
+        }
+        // A single disc that cannot be pushed is one the cover should
+        // never have placed, and there is nothing left to cut.
+        if discs.len() < 2 {
+            return false;
+        }
+        let xs = (
+            discs.iter().map(|d| d.c[0]).fold(f64::INFINITY, f64::min),
+            discs.iter().map(|d| d.c[0]).fold(f64::NEG_INFINITY, f64::max),
+        );
+        let ys = (
+            discs.iter().map(|d| d.c[1]).fold(f64::INFINITY, f64::min),
+            discs.iter().map(|d| d.c[1]).fold(f64::NEG_INFINITY, f64::max),
+        );
+        let axis = usize::from(ys.1 - ys.0 > xs.1 - xs.0);
+        let mut sorted: Vec<crate::scene::mobius::Disc> = discs.to_vec();
+        sorted.sort_by(|a, b| {
+            a.c[axis].partial_cmp(&b.c[axis]).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let (lo, hi) = sorted.split_at(sorted.len() / 2);
+        // The two halves overlap nowhere, so between them they hold
+        // every disc and the union of the pieces still covers.
+        recurse(lo, budget, walkable, out) && recurse(hi, budget, walkable, out)
+    }
+
+    if discs.is_empty() {
+        return None;
+    }
+    let mut out = Vec::new();
+    let mut budget = max_pieces;
+    recurse(discs, &mut budget, &walkable, &mut out).then_some(out)
+}
+
+/// **A root for a flame that has no invariant disc**, built from a
+/// cover and then collapsed back to one ball per symbol.
+///
+/// The enumeration needs to start from a region containing the
+/// attractor and push it through words. When no disc qualifies, a
+/// cover does — but a cover is expensive to push (measured at 5 ms a
+/// step for `grand-julian`'s twenty-five arms) and `julian` is not a
+/// group, so unlike family M there is no folding a word into one map.
+/// A cover at every depth would cost `discs × depth` bound
+/// evaluations per candidate, which is the wall family M hit.
+///
+/// **The cover is only needed once.** It exists to get past the pole,
+/// and once a single symbol has been applied the image is a small
+/// ball again — measured at radius 0.119 for `grand-julian`, against
+/// an attractor extent of 22.7. So: build the cover, push it once per
+/// symbol, collapse each image to its enclosing ball, and hand those
+/// to the ordinary Ball walk, which costs what an affine flame's
+/// does. Collapsing only GROWS a region, so containment survives it;
+/// the check that each collapsed ball can still be pushed by every
+/// symbol is what makes it safe to walk from.
+///
+/// Returns the cover's own enclosing disc (the root node's region,
+/// used only for pruning the empty word), the image ball per symbol,
+/// and the fraction of the sampled orbit the cover failed to hold.
+fn bounded_root_images(
+    bounders: &[crate::scene::ifs_ball::Bounder],
+    weights: &[f64],
+    alphabet: &[(u32, f64)],
+) -> Result<(Ball, std::collections::HashMap<u32, Vec<Ball>>, f64), String> {
+    use crate::scene::mobius::{cover_by_pushing, CoverRules, Disc};
+
+    let total: f64 = weights.iter().sum();
+    if !(total > 0.0) {
+        return Err("no weight".into());
+    }
+
+    // Where the attractor is, found by running the chaos game through
+    // the BOUNDS as points: a zero-radius ball's image centre is the
+    // image of the point, so the same machinery that bounds discs can
+    // also just iterate. Deterministic, because a plan that changed
+    // shape between two identical frames would be untestable.
+    let mut st = 0x9E37_79B9_7F4A_7C15u64;
+    let mut lcg = move || {
+        st = st
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        ((st >> 33) as f64) / ((1u64 << 31) as f64)
+    };
+    let mut p = [0.31f64, 0.17];
+    let mut pts: Vec<[f64; 2]> = Vec::with_capacity(ROOT_COVER_SAMPLE);
+    for k in 0..ROOT_COVER_SAMPLE {
+        let mut u = lcg() * total;
+        let mut j = weights.len() - 1;
+        for (i, w) in weights.iter().enumerate() {
+            if u < *w {
+                j = i;
+                break;
+            }
+            u -= *w;
+        }
+        let arms = bounders[j].arms().max(1);
+        let a = ((lcg() * arms as f64) as u32).min(arms - 1);
+        match bounders[j].apply_arm(Ball::new(p, 0.0), a) {
+            Ok(b) if b.c[0].is_finite() && b.c[1].is_finite() => p = b.c,
+            _ => {
+                // The orbit walked into a pole. Reseed rather than
+                // give up: that is what the kernel's own bad-value
+                // recovery does, and the point of this walk is to
+                // find where the attractor LIVES.
+                p = [0.31, 0.17];
+                continue;
+            }
+        }
+        if k > ROOT_COVER_SAMPLE / 100 {
+            pts.push(p);
+        }
+    }
+    if pts.len() < 1000 {
+        return Err(format!("the orbit did not settle ({} points)", pts.len()));
+    }
+
+    // How far the sample reaches, measured here rather than read back
+    // out of the cover, because the size cap below is what the cover
+    // has to be built AGAINST.
+    let n = pts.len() as f64;
+    let centre = [
+        pts.iter().map(|p| p[0]).sum::<f64>() / n,
+        pts.iter().map(|p| p[1]).sum::<f64>() / n,
+    ];
+    let extent = pts
+        .iter()
+        .map(|p| ((p[0] - centre[0]).powi(2) + (p[1] - centre[1]).powi(2)).sqrt())
+        .fold(0.0f64, f64::max);
+    if !(extent > 0.0) || !extent.is_finite() {
+        return Err("the orbit has no extent".into());
+    }
+
+    // **A disc is usable when its images can themselves be pushed.**
+    //
+    // Finiteness is not enough and neither is size: measured on
+    // `grand-julian`, an image disc well inside a generous size cap
+    // still contained the pole, and once that has happened the
+    // enumeration cannot take a single further step from it. So the
+    // test is one level deeper — push the disc, then check the image
+    // can be pushed in turn.
+    //
+    // `clears` asks one arm per transform rather than all twenty-five
+    // symbols, because every arm of one `julian` shares its pole and
+    // the answers agree; that makes this |T| evaluations instead of
+    // |A| and the difference is between a hundred milliseconds and a
+    // second. It is a CONSTRUCTION heuristic — the pieces handed to
+    // the walk are checked against the whole alphabet below, and a
+    // flame is refused if that check fails.
+    let max_image_r = ROOT_IMAGE_CAP * extent;
+    let first_arm: Vec<u32> = {
+        let mut seen = Vec::new();
+        let mut out = Vec::new();
+        for &(sym, _) in alphabet {
+            let t = sym_transform(sym);
+            if !seen.contains(&t) {
+                seen.push(t);
+                out.push(sym);
+            }
+        }
+        out
+    };
+    let clears = |c: [f64; 2], r: f64| -> bool {
+        first_arm.iter().all(|&sym| {
+            matches!(
+                bounders[sym_transform(sym) as usize]
+                    .apply_arm(Ball::new(c, r), sym_arm(sym)),
+                Ok(b) if b.r.is_finite() && b.c[0].is_finite()
+            )
+        })
+    };
+    let accepts = |d: &Disc| -> bool { d.r <= max_image_r && clears(d.c, d.r) };
+    let pushes = |d: &Disc| -> bool {
+        alphabet.iter().all(|&(sym, _)| {
+            matches!(
+                bounders[sym_transform(sym) as usize]
+                    .apply_arm(Ball::new(d.c, d.r), sym_arm(sym)),
+                Ok(b) if accepts(&Disc::new(b.c, b.r))
+            )
+        })
+    };
+    let (cover, cover_extent, leak) = cover_by_pushing(
+        &pts,
+        ROOT_COVER_DISCS,
+        ROOT_COVER_START,
+        ROOT_COVER_ANCHORS,
+        pushes,
+    )
+    .ok_or_else(|| "no cover could be built".to_string())?;
+    debug_assert!((cover_extent - extent).abs() <= 1e-9 * extent.max(1.0));
+    if !(leak <= ROOT_COVER_LEAK) {
+        return Err(format!("the cover leaks {leak:.2e} of the orbit"));
+    }
+    let enclosing = cover
+        .enclosing()
+        .ok_or_else(|| "the cover has no enclosing disc".to_string())?;
+
+    // One push per symbol, then collapse.
+    let rules = CoverRules::by_pushing(ROOT_COVER_DISCS, 4.0, max_image_r);
+    let mut images = std::collections::HashMap::with_capacity(alphabet.len());
+    for &(sym, _) in alphabet {
+        let b = &bounders[sym_transform(sym) as usize];
+        let arm = sym_arm(sym);
+        let pushed = cover
+            .push_by(
+                |q| {
+                    b.apply_arm(Ball::new(q, 0.0), arm)
+                        .ok()
+                        .map(|r| r.c)
+                        .filter(|c| c[0].is_finite() && c[1].is_finite())
+                },
+                |d| {
+                    b.apply_arm(Ball::new(d.c, d.r), arm)
+                        .ok()
+                        .filter(|r| r.r.is_finite())
+                        .map(|r| Disc::new(r.c, r.r))
+                },
+                &accepts,
+                &rules,
+            )
+            .map_err(|e| format!("symbol {sym} could not push the cover: {e:?}"))?;
+        // Walkable means every symbol can push it to something
+        // finite, which is all the ordinary Ball walk needs. Size is
+        // not asked here — the contraction probe below is the test
+        // for that, and it asks about words rather than one step.
+        let walkable = |b: &Ball| -> bool {
+            b.r.is_finite()
+                && b.c[0].is_finite()
+                && b.c[1].is_finite()
+                && alphabet.iter().all(|&(s2, _)| {
+                    matches!(
+                        bounders[sym_transform(s2) as usize].apply_arm(*b, sym_arm(s2)),
+                        Ok(r) if r.r.is_finite() && r.c[0].is_finite()
+                    )
+                })
+        };
+        let pieces = walkable_pieces(&pushed.discs, ROOT_PIECES, walkable).ok_or_else(|| {
+            format!(
+                "symbol {sym}'s image cannot be cut into {ROOT_PIECES} pieces that clear the pole"
+            )
+        })?;
+        images.insert(sym, pieces);
+    }
+
+    // **Do words shrink from here?** The root images escape the pole;
+    // whether the enumeration terminates is a separate question, and
+    // it is the one that separates `grand-julian` from `spherical`.
+    let mut contracted = 0usize;
+    let mut worst = 0.0f64;
+    for _ in 0..ROOT_PROBE_WORDS {
+        let first = alphabet[((lcg() * alphabet.len() as f64) as usize).min(alphabet.len() - 1)].0;
+        let mut bag = images[&first].clone();
+        let mut alive = true;
+        for _ in 1..ROOT_PROBE_DEPTH {
+            let sym =
+                alphabet[((lcg() * alphabet.len() as f64) as usize).min(alphabet.len() - 1)].0;
+            let b = &bounders[sym_transform(sym) as usize];
+            let arm = sym_arm(sym);
+            let mut next = Vec::with_capacity(bag.len());
+            for piece in &bag {
+                match b.apply_arm(*piece, arm) {
+                    Ok(img) if img.r.is_finite() && img.c[0].is_finite() => next.push(img),
+                    // A word that cannot be followed is one the
+                    // enumeration prunes, not one that fails to
+                    // contract.
+                    _ => {
+                        alive = false;
+                        break;
+                    }
+                }
+            }
+            if !alive {
+                break;
+            }
+            bag = next;
+        }
+        if alive {
+            let r = enclosing_ball(&bag).map_or(f64::INFINITY, |b| b.r);
+            worst = worst.max(r / extent);
+            if r < ROOT_PROBE_SHRINK * extent {
+                contracted += 1;
+            }
+        }
+    }
+    if (contracted as f64) < ROOT_PROBE_PASS * ROOT_PROBE_WORDS as f64 {
+        return Err(format!(
+            "only {contracted} of {ROOT_PROBE_WORDS} probe words contracted \
+             (worst ended at {worst:.2e} of the extent), so the walk would not terminate"
+        ));
+    }
+
+    Ok((Ball::new(enclosing.c, enclosing.r), images, leak))
+}
+
 fn invariant_ball(
     flame: &Flame,
     registry: &crate::variations::VariationRegistry,
@@ -3701,7 +4288,7 @@ mod tests {
             );
 
             // Push it along a word, and time one push.
-            let rules = crate::scene::mobius::CoverRules::by_pushing(256, 4.0);
+            let rules = crate::scene::mobius::CoverRules::by_pushing(256, 4.0, f64::INFINITY);
             let mut cur = cover.clone();
             let mut collapse_at: Option<(usize, f64)> = None;
             let mut line = Vec::new();
@@ -3717,6 +4304,7 @@ mod tests {
                     |d| b.apply_arm(Ball::new(d.c, d.r), a).ok()
                         .filter(|r| r.r.is_finite())
                         .map(|r| Disc::new(r.c, r.r)),
+                    |_| true,
                     &rules,
                 );
                 match next {
@@ -3765,6 +4353,278 @@ mod tests {
                 None => println!("   the cover never collapsed to one ball"),
             }
             println!();
+        }
+    }
+
+    /// **Symbol by symbol: does the root cover's image collapse to a
+    /// usable ball, and if not, why not?**
+    ///
+    /// The whole cover-root idea rests on one claim — that a single
+    /// symbol is enough to get clear of the pole, after which a ball
+    /// suffices. The aggregate answer was no for `grand-julian`, and
+    /// an aggregate no says nothing about whether the idea is wrong or
+    /// three of twenty-five symbols are awkward. This prints the
+    /// table.
+    #[test]
+    #[ignore = "reads output/flame-zoom"]
+    fn which_symbols_collapse_to_a_ball() {
+        use crate::scene::mobius::{cover_by_pushing, CoverRules, Disc};
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        for name in ["grand-julian", "julian-disc"] {
+            let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame"))
+            else {
+                continue;
+            };
+            let cfg: crate::config::FractalConfig =
+                serde_json::from_str(&text).expect("a config");
+            let bounders: Vec<_> = cfg
+                .flame
+                .transforms
+                .iter()
+                .filter_map(|t| crate::scene::ifs_ball::Bounder::new(t, reg).ok())
+                .collect();
+            let weights: Vec<f64> =
+                cfg.flame.transforms.iter().map(|t| (t.weight as f64).max(0.0)).collect();
+            if bounders.len() != weights.len() {
+                continue;
+            }
+            let mut alphabet: Vec<(u32, f64)> = Vec::new();
+            for (i, w) in weights.iter().enumerate() {
+                if !(*w > 0.0) {
+                    continue;
+                }
+                let arms = bounders[i].arms().max(1);
+                for a in 0..arms {
+                    alphabet.push((sym_of(i as u32, a), w / arms as f64));
+                }
+            }
+
+            // The same orbit the real thing samples.
+            let total: f64 = weights.iter().sum();
+            let mut st = 0x9E37_79B9_7F4A_7C15u64;
+            let mut lcg = move || {
+                st = st
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                ((st >> 33) as f64) / ((1u64 << 31) as f64)
+            };
+            let mut p = [0.31f64, 0.17];
+            let mut pts: Vec<[f64; 2]> = Vec::new();
+            for k in 0..ROOT_COVER_SAMPLE {
+                let mut u = lcg() * total;
+                let mut j = weights.len() - 1;
+                for (i, w) in weights.iter().enumerate() {
+                    if u < *w {
+                        j = i;
+                        break;
+                    }
+                    u -= *w;
+                }
+                let arms = bounders[j].arms().max(1);
+                let a = ((lcg() * arms as f64) as u32).min(arms - 1);
+                match bounders[j].apply_arm(Ball::new(p, 0.0), a) {
+                    Ok(b) if b.c[0].is_finite() && b.c[1].is_finite() => p = b.c,
+                    _ => {
+                        p = [0.31, 0.17];
+                        continue;
+                    }
+                }
+                if k > ROOT_COVER_SAMPLE / 100 {
+                    pts.push(p);
+                }
+            }
+            let n = pts.len() as f64;
+            let centre = [
+                pts.iter().map(|q| q[0]).sum::<f64>() / n,
+                pts.iter().map(|q| q[1]).sum::<f64>() / n,
+            ];
+            let extent = pts
+                .iter()
+                .map(|q| {
+                    ((q[0] - centre[0]).powi(2) + (q[1] - centre[1]).powi(2)).sqrt()
+                })
+                .fold(0.0f64, f64::max);
+            println!("== {name}: extent {extent:.3e}, alphabet {}", alphabet.len());
+            let rmin = pts
+                .iter()
+                .map(|q| (q[0] * q[0] + q[1] * q[1]).sqrt())
+                .fold(f64::INFINITY, f64::min);
+            for (cap_frac, disc_cap) in [
+                (1.0f64, 256usize),
+                (0.3, 256),
+                (0.1, 256),
+                (0.03, 512),
+                (0.01, 1024),
+                (0.003, 2048),
+            ] {
+            let max_image_r = cap_frac * extent;
+            let pushes = |d: &Disc| -> bool {
+                alphabet.iter().all(|&(sym, _)| {
+                    matches!(
+                        bounders[sym_transform(sym) as usize]
+                            .apply_arm(Ball::new(d.c, d.r), sym_arm(sym)),
+                        Ok(b) if b.r <= max_image_r && b.c[0].is_finite()
+                    )
+                })
+            };
+            let t_build = std::time::Instant::now();
+            let Some((cover, _, leak)) = cover_by_pushing(
+                &pts,
+                disc_cap,
+                ROOT_COVER_START,
+                ROOT_COVER_ANCHORS,
+                pushes,
+            ) else {
+                println!("   cap {cap_frac:>6.3}: no cover");
+                continue;
+            };
+            let build_ms = t_build.elapsed().as_secs_f64() * 1e3;
+            let _ = rmin;
+
+            let rules = CoverRules::by_pushing(disc_cap, 4.0, max_image_r);
+            let mut good = 0usize;
+            let mut lost_w = 0.0f64;
+            let mut biggest = 0.0f64;
+            let total_w: f64 = alphabet.iter().map(|x| x.1).sum();
+            let t_push = std::time::Instant::now();
+            for &(sym, _) in &alphabet {
+                let b = &bounders[sym_transform(sym) as usize];
+                let arm = sym_arm(sym);
+                let t0 = std::time::Instant::now();
+                let pushed = cover.push_by(
+                    |q| {
+                        b.apply_arm(Ball::new(q, 0.0), arm)
+                            .ok()
+                            .map(|r| r.c)
+                            .filter(|c| c[0].is_finite() && c[1].is_finite())
+                    },
+                    |d| {
+                        b.apply_arm(Ball::new(d.c, d.r), arm)
+                            .ok()
+                            .filter(|r| r.r.is_finite())
+                            .map(|r| Disc::new(r.c, r.r))
+                    },
+                    |_| true,
+                    &rules,
+                );
+                let _ = t0;
+                let mut bad_w = 0.0f64;
+                match pushed.ok().and_then(|c| c.enclosing()) {
+                    Some(e) => {
+                        let ball = Ball::new(e.c, e.r);
+                        let walkable = e.r.is_finite()
+                            && alphabet.iter().all(|&(s2, _)| {
+                                matches!(
+                                    bounders[sym_transform(s2) as usize]
+                                        .apply_arm(ball, sym_arm(s2)),
+                                    Ok(r) if r.r.is_finite()
+                                )
+                            });
+                        if walkable {
+                            good += 1;
+                            biggest = biggest.max(e.r / extent);
+                        } else {
+                            bad_w = 1.0;
+                        }
+                    }
+                    None => bad_w = 1.0,
+                }
+                if bad_w > 0.0 {
+                    lost_w += alphabet.iter().find(|x| x.0 == sym).map_or(0.0, |x| x.1);
+                }
+            }
+            let push_ms = t_push.elapsed().as_secs_f64() * 1e3;
+            println!(
+                "   cap {cap_frac:>6.3}: {:>4} discs, leak {leak:.2e}, build {build_ms:>5.0} ms, \
+                 {} of {} walkable (measure lost {:.3}), biggest {:.2e} of extent, \
+                 push {push_ms:>5.0} ms",
+                cover.discs.len(),
+                good,
+                alphabet.len(),
+                lost_w / total_w,
+                biggest
+            );
+            }
+            println!();
+        }
+    }
+
+    /// **What the root cover says about each flame that has no
+    /// invariant disc.**
+    ///
+    /// [`bounded_root_images`] has five ways to give up and each one
+    /// is a measurement: the orbit not settling, the cover leaking,
+    /// a symbol unable to push the cover, an image that collapses to
+    /// nothing smaller than the attractor, and an image ball that
+    /// cannot itself be pushed. Which one fires tells you whether the
+    /// flame is unreachable or the constants are wrong, and those are
+    /// completely different problems.
+    #[test]
+    #[ignore = "reads output/flame-zoom"]
+    fn what_the_root_cover_says() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        for name in ["grand-julian", "julian-disc", "spherical", "random1"] {
+            let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame"))
+            else {
+                continue;
+            };
+            let cfg: crate::config::FractalConfig =
+                serde_json::from_str(&text).expect("a config");
+            let mut bounders = Vec::new();
+            let mut weights = Vec::new();
+            let mut ok = true;
+            for t in &cfg.flame.transforms {
+                match crate::scene::ifs_ball::Bounder::new(t, reg) {
+                    Ok(b) => {
+                        bounders.push(b);
+                        weights.push((t.weight as f64).max(0.0));
+                    }
+                    Err(e) => {
+                        println!("== {name}: no bounder: {e}");
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if !ok {
+                continue;
+            }
+            let mut alphabet: Vec<(u32, f64)> = Vec::new();
+            for (i, w) in weights.iter().enumerate() {
+                if !(*w > 0.0) {
+                    continue;
+                }
+                let arms = bounders[i].arms().max(1);
+                for a in 0..arms {
+                    alphabet.push((sym_of(i as u32, a), w / arms as f64));
+                }
+            }
+            let t0 = std::time::Instant::now();
+            let r = bounded_root_images(&bounders, &weights, &alphabet);
+            let ms = t0.elapsed().as_secs_f64() * 1e3;
+            match r {
+                Ok((root, images, leak)) => {
+                    let mut rs: Vec<f64> = images
+                        .values()
+                        .filter_map(|bag| enclosing_ball(bag).map(|b| b.r))
+                        .collect();
+                    rs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                    let pieces: usize = images.values().map(|b| b.len()).sum();
+                    println!(
+                        "== {name}: OK in {ms:.0} ms — root {:.3e} at [{:.3}, {:.3}], \
+                         {} images in {pieces} pieces, radii {:.3e}..{:.3e}, leak {leak:.2e}",
+                        root.r,
+                        root.c[0],
+                        root.c[1],
+                        images.len(),
+                        rs[0],
+                        rs[rs.len() - 1]
+                    );
+                }
+                Err(why) => println!("== {name}: refused in {ms:.0} ms — {why}"),
+            }
         }
     }
 
