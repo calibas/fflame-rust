@@ -3588,6 +3588,186 @@ mod tests {
         }
     }
 
+    /// **A cover for a flame whose maps are only BOUNDED, and what a
+    /// push through it costs.**
+    ///
+    /// `grand-julian` has no invariant disc — `julian` with
+    /// `dist = -1` is `|p|^(-1/2)`, unbounded at the origin, and the
+    /// attractor spans `|p| ∈ [1.7e-1, 2.7e1]` so every disc holding
+    /// it holds the pole. Family M met the same wall and answered it
+    /// with a cover; `Cover::push_by` now takes any map that can push
+    /// a point and a disc, and a `Bounder` can do both.
+    ///
+    /// The question this asks is not whether it works — it is what it
+    /// COSTS. Family M could fold a word into one matrix; `julian` is
+    /// not a group and there is nothing to fold, so a candidate costs
+    /// `discs × depth` bound evaluations. That number decides whether
+    /// family J is affordable at all, and it is better to know it now
+    /// than after the enumeration is written around it.
+    #[test]
+    #[ignore = "reads output/flame-zoom"]
+    fn what_a_bounded_cover_costs_for_grand_julian() {
+        use std::time::Instant;
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        for name in ["grand-julian", "julian-disc"] {
+            let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame"))
+            else {
+                continue;
+            };
+            let cfg: crate::config::FractalConfig =
+                serde_json::from_str(&text).expect("a config");
+            let bounders: Vec<crate::scene::ifs_ball::Bounder> = cfg
+                .flame
+                .transforms
+                .iter()
+                .filter(|t| t.weight > 0.0)
+                .filter_map(|t| crate::scene::ifs_ball::Bounder::new(t, reg).ok())
+                .collect();
+            if bounders.is_empty() {
+                continue;
+            }
+            let arms: Vec<u32> = bounders.iter().map(|b| b.arms()).collect();
+            let weights: Vec<f64> = cfg
+                .flame
+                .transforms
+                .iter()
+                .filter(|t| t.weight > 0.0)
+                .map(|t| t.weight as f64)
+                .collect();
+            let total: f64 = weights.iter().sum();
+            let alphabet: Vec<(usize, u32)> = (0..bounders.len())
+                .flat_map(|i| (0..arms[i]).map(move |a| (i, a)))
+                .collect();
+
+            // A sampled orbit, run through the bounds as points.
+            let mut st = 5u64;
+            let mut lcg = move || {
+                st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                ((st >> 33) as f64) / ((1u64 << 31) as f64)
+            };
+            let mut p = [0.31f64, 0.17];
+            let mut pts: Vec<[f64; 2]> = Vec::new();
+            for k in 0..20000 {
+                let mut u = lcg() * total;
+                let mut j = weights.len() - 1;
+                for (i, w) in weights.iter().enumerate() {
+                    if u < *w {
+                        j = i;
+                        break;
+                    }
+                    u -= *w;
+                }
+                let a = (lcg() * arms[j] as f64) as u32 % arms[j].max(1);
+                match bounders[j].apply_arm(Ball::new(p, 0.0), a) {
+                    Ok(b) if b.c[0].is_finite() && b.c[1].is_finite() => p = b.c,
+                    _ => {
+                        p = [0.31, 0.17];
+                        continue;
+                    }
+                }
+                if k > 200 {
+                    pts.push(p);
+                }
+            }
+            if pts.len() < 1000 {
+                println!("  {name}: orbit did not settle");
+                continue;
+            }
+
+            // A disc is fine when every symbol can push it.
+            use crate::scene::mobius::Disc;
+            let pushes = |d: &Disc| -> bool {
+                alphabet.iter().all(|&(i, a)| {
+                    matches!(
+                        bounders[i].apply_arm(Ball::new(d.c, d.r), a),
+                        Ok(b) if b.r.is_finite() && b.r < 1e6
+                    )
+                })
+            };
+            let t0 = Instant::now();
+            let built = crate::scene::mobius::cover_by_pushing(&pts, 256, 0.05, 400, pushes);
+            let build_ms = t0.elapsed().as_secs_f64() * 1e3;
+            let Some((cover, extent, leak)) = built else {
+                println!("  {name}: no cover");
+                continue;
+            };
+            println!(
+                "== {name}: alphabet {}, extent {extent:.3e}, cover {} discs / {} points, \
+                 leak {leak:.2e}, built in {build_ms:.0} ms",
+                alphabet.len(),
+                cover.discs.len(),
+                cover.points.len()
+            );
+
+            // Push it along a word, and time one push.
+            let rules = crate::scene::mobius::CoverRules::by_pushing(256, 4.0);
+            let mut cur = cover.clone();
+            let mut collapse_at: Option<(usize, f64)> = None;
+            let mut line = Vec::new();
+            let t0 = Instant::now();
+            let mut steps = 0usize;
+            for k in 1..=24usize {
+                let (i, a) = alphabet[(lcg() * alphabet.len() as f64) as usize
+                    % alphabet.len()];
+                let b = &bounders[i];
+                let next = cur.push_by(
+                    |q| b.apply_arm(Ball::new(q, 0.0), a).ok().map(|r| r.c)
+                        .filter(|c| c[0].is_finite() && c[1].is_finite()),
+                    |d| b.apply_arm(Ball::new(d.c, d.r), a).ok()
+                        .filter(|r| r.r.is_finite())
+                        .map(|r| Disc::new(r.c, r.r)),
+                    &rules,
+                );
+                match next {
+                    Ok(n) => {
+                        cur = n;
+                        steps += 1;
+                        // **When does a single ball suffice again?**
+                        // The cover exists only to get past the pole;
+                        // once the whole image is somewhere every
+                        // symbol can push, it can collapse to one disc
+                        // and the walk costs one bound call a symbol
+                        // instead of one per disc.
+                        if collapse_at.is_none() {
+                            if let Some(e) = cur.enclosing() {
+                                if pushes(&e) {
+                                    collapse_at = Some((k, e.r));
+                                }
+                            }
+                        }
+                        if k % 6 == 0 {
+                            line.push(format!(
+                                "{k}:{:.2e}/{}",
+                                cur.enclosing().map_or(f64::NAN, |d| d.r),
+                                cur.discs.len()
+                            ));
+                        }
+                    }
+                    Err(e) => {
+                        line.push(format!("{k}:{e:?}"));
+                        break;
+                    }
+                }
+            }
+            let ms = t0.elapsed().as_secs_f64() * 1e3;
+            println!(
+                "   {} steps in {ms:.0} ms ({:.2} ms per push)  {}",
+                steps,
+                ms / steps.max(1) as f64,
+                line.join("  ")
+            );
+            match collapse_at {
+                Some((k, r)) => println!(
+                    "   one ball suffices from step {k} (radius {r:.3e}) --                      after that a symbol costs ONE bound call, not {}",
+                    cover.discs.len()
+                ),
+                None => println!("   the cover never collapsed to one ball"),
+            }
+            println!();
+        }
+    }
+
     /// **Does `grand-julian` enumerate once arms are in the alphabet?**
     ///
     /// The whole of family J's CPU half, asked end to end. Today the
