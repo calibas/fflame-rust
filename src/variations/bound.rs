@@ -174,6 +174,67 @@ fn what_deriving_a_bound_costs() {
     }
 }
 
+/// A variation whose randomness picks one of finitely many IMAGES,
+/// rather than smearing the point continuously.
+///
+/// # Why this is a table and not a feature
+///
+/// `Feature::NeedsRng` cannot answer it. `blur` draws too, and its
+/// draw is continuous — there is no finite set of images to enumerate
+/// and pinning its draw would under-estimate where the point can go,
+/// which is the one direction a forward bound may never err. `julian`
+/// draws to choose an ARM, and enumerating arms is exact.
+///
+/// The distinction is per variation and known only to whoever read
+/// the body, so it is written down here beside the hand bounds rather
+/// than inferred.
+pub struct ArmedDef {
+    pub name: &'static str,
+    /// How many images one input has, from the variation's
+    /// parameters.
+    pub arms: fn(ParamFn) -> u32,
+}
+
+/// The variations whose draw picks an arm. Append-only, like
+/// [`BOUNDS`].
+pub static ARMED: &[&ArmedDef] = &[&JULIAN_ARMS, &JULIASCOPE_ARMS];
+
+/// `trunc_val = floor(|power| · rng_nextf())`, so the draw lands on
+/// `0 ..= ceil(|power|) − 1`.
+pub static JULIAN_ARMS: ArmedDef = ArmedDef {
+    name: "julian",
+    arms: |p| arm_count_from_power(p("power")),
+};
+
+/// `rnd = i32(f32(|power|) · rng_nextf())`, the same count by a
+/// different spelling.
+pub static JULIASCOPE_ARMS: ArmedDef = ArmedDef {
+    name: "juliascope",
+    arms: |p| arm_count_from_power(p("power")),
+};
+
+fn arm_count_from_power(power: f64) -> u32 {
+    let n = power.abs().ceil();
+    if !n.is_finite() || n < 1.0 {
+        1
+    } else {
+        (n as u32).min(MAX_ARMS)
+    }
+}
+
+/// The most arms one variation may contribute to the alphabet.
+///
+/// An arm is a symbol, and the enumeration's branching factor is the
+/// sum over transforms. A `julian` at power 200 would make every node
+/// two hundred children wide on its own; refusing to enumerate that
+/// finely is better than an antichain nobody can afford.
+pub const MAX_ARMS: u32 = 64;
+
+/// The arm table entry for `name`.
+pub fn arms_for(name: &str) -> Option<&'static ArmedDef> {
+    ARMED.iter().copied().find(|d| d.name == name)
+}
+
 /// The bound registered for `name`.
 pub fn for_name(name: &str) -> Option<&'static BoundDef> {
     BOUNDS.iter().copied().find(|d| d.name == name)
