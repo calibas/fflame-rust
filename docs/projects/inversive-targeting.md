@@ -1291,3 +1291,114 @@ guessed at, and it does not block `grand-julian`.
 4. ⬜ `plan` using the root images, then the ordinary walk
 5. ⬜ the kernel forcing the arm on replay
 6. ⬜ a picture gate on `grand-julian`
+
+## 23. Step 4: `grand-julian` plans — and the four things that had to
+give first
+
+The step as planned was one sentence: use the root images, then walk
+the ordinary Ball path. Four separate things were wrong with that, and
+each was found by a measurement rather than by reading.
+
+**The up-front probe refused the flame before anything looked at it.**
+`plan_inner` asked every non-affine transform for a bound on a disc of
+radius 1 around the origin. For an inversive flame that is a disc
+holding the pole, the answer is "unbounded", and `grand-julian` never
+reached the machinery built for it. The refusal is now remembered and
+only returned if no root can be found at all — and, for anything
+outside family J, returned in exactly the place and order it always
+was, so no other flame sees a different answer.
+
+**One ball per symbol does not exist, and cover tightness is not why.**
+The first attempt collapsed each pushed cover to its enclosing ball.
+For `grand-julian` symbol 0 that ball came back at 8.46e1 against an
+attractor extent of 1.87e1 — and tightening the cover from 97 discs to
+2048 moved it to 2.72e1 and no further:
+
+    cap    discs  leak      build   walkable        biggest
+    1.000     97  0.00e0     27ms   15 of 25        5.93e-3
+    0.300    128  0.00e0     36ms   18 of 25        1.54e-2
+    0.030    476  0.00e0    148ms   21 of 25        1.37e-2
+    0.003   2048  1.54e-1    723ms  22 of 25        8.74e-3
+
+The per-symbol table says why. `julian` with `n` arms divides the angle
+by `n`, so arm `k`'s image of the attractor is a `360/n`-degree sector
+of an annulus AROUND THE ORIGIN, which is where the map's own pole is.
+The fifteen-arm transform gives 24° sectors whose balls sit 0.08 clear
+of the origin and walk fine; the two-arm transform gives a 180° sector
+whose enclosing ball must contain the origin. That is geometry. No
+cover refines its way out of it.
+
+So the region is a BAG of balls, cut by recursive median bisection
+until each piece pushes — pole-agnostic, because the whole premise of
+this path is that a bound cannot say where it blows up. (Cutting by
+angle about the centroid was tried first and is worse: the centroid of
+an annular sector is not the hole's centre, so wedges taken about it
+still span the hole.) The enumeration already carried a bag-shaped
+region for family M, so this cost pieces-per-symbol bound evaluations
+and no new machinery.
+
+**Splitting has to be driven by walkability, not by size.** Giving
+`CoverRules` a maximum image radius was not enough: an image disc well
+inside a generous cap still swallowed the pole, and once that has
+happened no amount of cutting the result up afterwards recovers — the
+SOURCE disc has to be split. `Cover::push_by` now takes the caller's
+own `accept` predicate alongside `rules`, and family J passes "the
+image can itself be pushed", asked of one arm per transform because
+every arm of one `julian` shares its pole.
+
+With that, the root exists:
+
+    grand-julian: root 1.92e1, 25 images in 219 pieces,
+                  radii 6.4e-2..2.6e1, leak 4.0e-4, 2.5 s
+
+and the two flames that should be refused are refused for the right
+reason. `spherical` fails the contraction probe — 0 of 32 probe words
+contracted, the worst ending at 39.5× the extent — which is the direct
+statement that a disc bound through an inversion never shrinks. The
+probe replaced an earlier "a root image must be small" gate, which was
+asking the wrong question: `julian`'s first image is a wedge of the
+attractor and is SUPPOSED to be the size of the attractor.
+
+**`TooManyWords` was the frontier, not the antichain.** The beam that
+answers a frontier growing like the branching factor to the depth was
+gated to family M, with a comment reasoning that everywhere else an
+overfull frontier means a straddled view and deserves a clear refusal.
+That reasoning turns on the flame having a real invariant ball, and a
+flame rooted in a cover has none — `grand-julian`'s frontier reaches
+25981 without the beam, which is the same symptom `spherical.fflame`
+showed in §15.
+
+**And one piece of a hundred must not take the word with it.** With the
+beam on, a 1e2 view planned and everything deeper came back
+`ViewIsEmpty`. The cause was `bag_of` refusing the whole word when any
+single piece failed to push: past depth seven, with ~100 pieces, that
+is every word. A piece that blows up holds a pole the true image does
+not — it is an artifact of the cover, not of the flame — so it is
+dropped, which shrinks the region by the same approximation the cover
+already makes between its samples.
+
+    grand-julian at its own framing, view on the set:
+      zoom 1e0   TooManyWords(4097)
+      zoom 1e2   28 words, depth 4, speedup 9.1e3, lost 2.0e-1
+      zoom 1e4   ViewIsEmpty
+      zoom 1e6   ViewIsEmpty
+
+So it plans, and where it plans the speedup is real. Two things are
+open and neither is guessed at:
+
+1. **Deep views still come back empty.** It is not beam width —
+   measured, 96 to 1024 changed nothing except taking 59 s. Something
+   stops the regions covering the view point between 1e2 and 1e4, and
+   the next thing to measure is whether the surviving bag still
+   contains a known orbit point at each depth, which would separate a
+   dropped piece from a genuine prune.
+2. **A plan costs 5–17 s.** Unusable in-app whatever else is true. The
+   root is 2.5 s of it and depends only on the flame, so it wants the
+   same caching the family-M settle delay already implies; the rest is
+   `disc_of` recomputing from the root for every candidate, which is
+   `O(depth²)` over a walk that now reaches depth 96.
+
+`julian-disc` is still refused: its cover leaks 32–41% of the orbit at
+every disc cap tried, because transform 0 carries 97% of the measure
+and the orbit reaches `|p| = 3.1e-4`. `ARMS_ENABLED` stays off; nothing
+here reaches a render.

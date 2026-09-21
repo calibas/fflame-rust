@@ -1641,23 +1641,36 @@ pub struct CoverRules {
     /// by pushing it under every map, which for a flame with
     /// twenty-five arms is twenty-five pushes per candidate.
     pub merge_growth: f64,
+    /// The largest image disc a push may produce before the source
+    /// disc is split instead.
+    ///
+    /// **Without poles this is the only thing that makes refinement
+    /// happen.** `allows` otherwise asks one question — is the image
+    /// finite — and near a pole the answer is yes long after the
+    /// image has stopped being useful: `grand-julian`'s root image
+    /// came back at 8.46e1 against an attractor extent of 1.87e1,
+    /// because a disc that pokes a little closer to the origin than
+    /// the attractor does maps to a huge annulus and nothing objected.
+    /// With poles known, `alpha` plays this role and this is
+    /// unbounded.
+    pub max_image_r: f64,
 }
 
 impl CoverRules {
     /// The Möbius rule: poles are known, so keep clear of them.
     pub fn with_poles(poles: Vec<[f64; 2]>, alpha: f64, cap: usize) -> Self {
-        Self { poles, alpha, cap, merge_growth: f64::INFINITY }
+        Self { poles, alpha, cap, merge_growth: f64::INFINITY, max_image_r: f64::INFINITY }
     }
 
     /// The general rule: nothing is known about where a map blows up,
     /// so merges stay nearly free and the push itself is the test.
-    pub fn by_pushing(cap: usize, merge_growth: f64) -> Self {
-        Self { poles: Vec::new(), alpha: 1.0, cap, merge_growth }
+    pub fn by_pushing(cap: usize, merge_growth: f64, max_image_r: f64) -> Self {
+        Self { poles: Vec::new(), alpha: 1.0, cap, merge_growth, max_image_r }
     }
 
     /// Whether a disc keeps its distance from every pole.
     pub fn allows(&self, d: &Disc) -> bool {
-        if !d.finite() {
+        if !d.finite() || !(d.r <= self.max_image_r) {
             return false;
         }
         self.poles.iter().all(|q| d.dist_to(*q) * self.alpha >= d.r)
@@ -1708,6 +1721,7 @@ impl Cover {
                 (q[0].is_finite() && q[1].is_finite()).then_some(q)
             },
             |d| m.push_disc(d).ok(),
+            |_| true,
             rules,
         )
     }
@@ -1720,10 +1734,22 @@ impl Cover {
     /// the sample and the same accounting serve a flame whose maps are
     /// merely BOUNDED rather than exactly known. That is what family J
     /// needs, and it needs nothing else from here.
+    ///
+    /// `accept` is the caller's own opinion of an image disc, asked
+    /// after `rules`. **Without poles it is the only thing that can
+    /// force refinement where it is needed.** `rules` can compare an
+    /// image's radius against a number, but the question that decides
+    /// whether an image is usable is whether the NEXT map can push it
+    /// — and that is a question only the caller can answer. Measured
+    /// on `grand-julian`, an image disc inside a generous size cap
+    /// still swallowed the pole, and no amount of cutting the result
+    /// up afterwards recovers from that: the source disc has to be
+    /// split instead, which is what returning `false` here does.
     pub fn push_by(
         &self,
         point_of: impl Fn([f64; 2]) -> Option<[f64; 2]>,
         disc_of: impl Fn(&Disc) -> Option<Disc>,
+        accept: impl Fn(&Disc) -> bool,
         rules: &CoverRules,
     ) -> Result<Self, NoCircle> {
         // The points go through exactly, and cost almost nothing.
@@ -1746,7 +1772,7 @@ impl Cover {
         let mut spent = 0usize;
         while let Some((d, mine)) = todo.pop() {
             match disc_of(&d) {
-                Some(img) if img.finite() && rules.allows(&img) => {
+                Some(img) if img.finite() && rules.allows(&img) && accept(&img) => {
                     discs.push(img);
                     continue;
                 }
@@ -1786,7 +1812,7 @@ impl Cover {
         Ok(out)
     }
 
-    fn union_disc(a: &Disc, b: &Disc) -> Disc {
+    pub(crate) fn union_disc(a: &Disc, b: &Disc) -> Disc {
         let d = a.dist_to(b.c);
         if d + b.r <= a.r {
             *a
@@ -2293,7 +2319,7 @@ mod cover_tests {
                 .collect(),
         };
         let before = c.discs.clone();
-        c.merge_to(&CoverRules::by_pushing(5, f64::INFINITY));
+        c.merge_to(&CoverRules::by_pushing(5, f64::INFINITY, f64::INFINITY));
         assert_eq!(c.discs.len(), 5);
         for d in &before {
             // Every original disc sits inside some merged one.
@@ -2600,7 +2626,7 @@ impl Cover {
                 pairs.push((*p, q));
             }
         }
-        let rules = CoverRules::by_pushing(cap, f64::INFINITY);
+        let rules = CoverRules::by_pushing(cap, f64::INFINITY, f64::INFINITY);
 
         let mut discs: Vec<Disc> = Vec::with_capacity(self.discs.len());
         // (disc, indices into `pairs` whose SOURCE is inside it)
