@@ -500,6 +500,7 @@ view:
   cylinder_targeting: "Cylinder targeting"
   tooltip_cylinder_targeting: "Force a prefix of transforms chosen so every sample lands in the viewport, and correct the weight exactly. The picture is unchanged; it arrives far sooner. Affine flames only for now, and the renderer declines whenever it would cost more than it saves."
   targeting_off: "Not running."
+  no_cyl_timed_out: "the search ran out of time after %{nodes} pieces -- this flame is too costly to target at this depth"
   targeting_lost: "MISSING %{percent}% of the fractal -- parts of it could not be bounded and are not drawn."
   targeting_not_planar: "Not available: the enumeration is 2D only, and this flame is in 3D mode. Switch to 2D under Mode to use it."
   targeting_active: "Running: %{words} word(s), depth %{depth}, about %{speedup}x fewer wasted samples."

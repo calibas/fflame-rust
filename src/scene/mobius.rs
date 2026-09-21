@@ -941,6 +941,97 @@ mod detect_tests {
 // The root region, and keeping the walk inside it
 // ===========================================================================
 
+/// A [`Moebius`] reduced to something hashable, so that two words
+/// carrying the same map can be recognised as the same cylinder.
+///
+/// # Why a key and not equality
+///
+/// A Möbius map is PROJECTIVE: `(a, b, c, d)` and `(λa, λb, λc, λd)`
+/// are the same map for any non-zero `λ`. Composition scales the
+/// coefficients freely — after forty symbols of a loxodromic generator
+/// they span many orders of magnitude — so comparing them directly
+/// answers the wrong question. Dividing through by the largest entry
+/// removes the freedom and leaves every remaining entry in the unit
+/// disc, which is also what makes a fixed quantum meaningful.
+///
+/// The `conj` parity is part of the identity: an anti-holomorphic map
+/// is never a holomorphic one however its coefficients land.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct MapKey {
+    q: [i64; 8],
+    conj: bool,
+}
+
+/// Quantum for [`MapKey`]. Coefficients are normalised into the unit
+/// disc first, so this is an absolute tolerance on a number of size
+/// one — about eleven significant digits, chosen by measuring how far
+/// two genuinely-equal words drift apart by depth 60 (see
+/// `equal_words_keep_equal_keys`).
+pub const KEY_QUANTUM: f64 = 1e-11;
+
+impl Moebius {
+    /// Divide through by the largest-magnitude coefficient, so the
+    /// projective freedom is gone and every entry is in the unit disc.
+    pub fn normalized(&self) -> Option<Moebius> {
+        let all = [self.a, self.b, self.c, self.d];
+        let mut best = 0usize;
+        let mut bn = 0.0f64;
+        for (i, z) in all.iter().enumerate() {
+            let n = z.norm2();
+            if n > bn {
+                bn = n;
+                best = i;
+            }
+        }
+        if !(bn > 0.0) || !bn.is_finite() {
+            return None;
+        }
+        let k = all[best];
+        let out = Moebius {
+            a: self.a.div(k)?,
+            b: self.b.div(k)?,
+            c: self.c.div(k)?,
+            d: self.d.div(k)?,
+            conj: self.conj,
+        };
+        (out.a.finite() && out.b.finite() && out.c.finite() && out.d.finite()).then_some(out)
+    }
+
+    /// The hashable identity of this map, or `None` when it is
+    /// degenerate enough that no key would mean anything.
+    pub fn key(&self) -> Option<MapKey> {
+        let n = self.normalized()?;
+        let q = |z: C| -> [i64; 2] {
+            [
+                (z.re / KEY_QUANTUM).round() as i64,
+                (z.im / KEY_QUANTUM).round() as i64,
+            ]
+        };
+        let (a, b, c, d) = (q(n.a), q(n.b), q(n.c), q(n.d));
+        Some(MapKey {
+            q: [a[0], a[1], b[0], b[1], c[0], c[1], d[0], d[1]],
+            conj: n.conj,
+        })
+    }
+
+    /// How far two maps are from being the same map, as a relative
+    /// figure on normalised coefficients. The measurement the quantum
+    /// is chosen from.
+    pub fn projective_distance(&self, other: &Moebius) -> Option<f64> {
+        if self.conj != other.conj {
+            return Some(f64::INFINITY);
+        }
+        let (x, y) = (self.normalized()?, other.normalized()?);
+        let d = |p: C, q: C| (p.re - q.re).abs().max((p.im - q.im).abs());
+        Some(
+            d(x.a, y.a)
+                .max(d(x.b, y.b))
+                .max(d(x.c, y.c))
+                .max(d(x.d, y.d)),
+        )
+    }
+}
+
 impl MobiusMap {
     /// The map applied to a single point — the shipped composition,
     /// which for these two variations is short enough to run on the
@@ -1472,7 +1563,7 @@ pub const SPLIT_BUDGET: usize = 30000;
 /// knee to find, only a price to pick. A thousand is 0.09% of the
 /// picture missing — reported, never hidden — for under a millisecond
 /// a word.
-pub const ANCHOR_POINTS: usize = 1000;
+pub const ANCHOR_POINTS: usize = 150;
 
 /// Orbit steps used to build a flame's cover. More gives more discs,
 /// and the disc count is the other half of the leak.
@@ -1501,7 +1592,7 @@ pub const ROOT_SAMPLE: usize = 40000;
 /// the panel can print, which is a better answer than a frozen window
 /// and a fractal with nine tenths missing. The module stays, tested,
 /// for a flame that suits it.
-pub const ENABLED: bool = false;
+pub const ENABLED: bool = true;
 
 /// How many words the enumeration carries forward per level for a
 /// family-M flame.
@@ -2897,7 +2988,36 @@ pub struct Word {
 }
 
 impl MobiusFlame {
-    /// Read a flame, or say it is not family M.
+    /// Whether this flame would take the family-M path, without paying
+/// for the cover.
+///
+/// `MobiusFlame::read` runs a chaos game and builds an adaptive cover,
+/// which is far too expensive to ask once a frame. This asks only what
+/// `detect` can see, which is enough to know whether an enumeration
+/// would be the cheap kind or the dear kind.
+pub fn is_family_m(
+    flame: &crate::scene::transforms::Flame,
+    registry: &crate::variations::VariationRegistry,
+) -> bool {
+    if !ENABLED {
+        return false;
+    }
+    let mut any_inversive = false;
+    for t in &flame.transforms {
+        if t.weight <= 0.0 {
+            continue;
+        }
+        match detect(t, registry) {
+            Some(m) => {
+                any_inversive |= matches!(m.kind, Kind::Spherical | Kind::Mobius { .. })
+            }
+            None => return false,
+        }
+    }
+    any_inversive
+}
+
+/// Read a flame, or say it is not family M.
     pub fn read(
         flame: &crate::scene::transforms::Flame,
         registry: &crate::variations::VariationRegistry,
