@@ -89,6 +89,34 @@ pub const MAX_DEPTH: usize = 96;
 /// ordinary way rather than to enumerate ten thousand words.
 pub const MAX_WORDS: usize = 4096;
 
+/// Family M: the most probability increments the map-keyed walk will
+/// deliver before giving up and charging the rest to
+/// [`Cylinders::lost`]. A pop is cheap unless it reaches a map for the
+/// first time, so this bounds the walk without bounding the useful
+/// work.
+pub const MAX_POPS: usize = 2_000_000;
+
+/// Family M: the most distinct MAPS the walk will hold. Each costs one
+/// region, which is the expensive thing here.
+pub const MAX_NODES: usize = 100_000;
+
+/// Family M: measure below which an increment is charged to
+/// [`Cylinders::lost`] rather than followed. A map re-reached by ever
+/// longer words receives a geometrically shrinking series of these,
+/// and this is where the series is cut.
+pub const MEASURE_FLOOR: f64 = 1e-12;
+
+/// Family M: how long the map-keyed walk may take before it stops and
+/// charges what is left to [`Cylinders::lost`].
+///
+/// **A wall-clock budget, because the symptom is wall-clock.** `plan`
+/// runs on the UI thread on every pan, and the node and pop caps do
+/// not bound time: a flame whose cover is large pays milliseconds per
+/// region, and `schottky2` spent a hundred seconds inside caps that
+/// were never reached. This is the one limit that is about the thing
+/// that actually goes wrong.
+pub const MOBIUS_TIME_BUDGET: std::time::Duration = std::time::Duration::from_millis(1000);
+
 /// Why a flame cannot be cylinder-targeted.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NoCylinders {
@@ -119,6 +147,14 @@ pub enum NoCylinders {
     /// No word's image reaches the viewport: the view is off the
     /// attractor entirely, and there is nothing to target.
     ViewIsEmpty,
+    /// The walk ran out of its time budget before it found anything.
+    ///
+    /// Distinct from [`Self::ViewIsEmpty`], which says there is
+    /// nothing there. This says we did not look long enough, which is
+    /// a different thing to tell someone — and reporting it as an
+    /// empty view was exactly the sort of true-but-useless message
+    /// that sent this project chasing the wrong problem before.
+    TimedOut { nodes: usize },
     /// The enumeration hit [`MAX_WORDS`] — the viewport straddles too
     /// many pieces for targeting to be worth it.
     TooManyWords(usize),
@@ -239,6 +275,267 @@ impl Cylinders {
         1.0 / (self.mass * (self.depth as f64 + 1.0))
     }
 
+    /// **The family-M enumeration: cylinders keyed by their map.**
+    ///
+    /// The ordinary expansion walks WORDS. For a Möbius IFS that is
+    /// the wrong index: the flame's alphabet holds each generator and
+    /// its inverse, so `a·a⁻¹·w` is the same map as `w`, and a
+    /// word-indexed walk treats them as different cylinders. Measured
+    /// on `schottky1`, a raw random word's region stalls at 0.567
+    /// while a backtrack-avoiding one reaches 8.8e-8 — the same
+    /// geometry, the same cover, eight orders apart.
+    ///
+    /// Merging by map is not an optimisation, it is the correct
+    /// index. The measure decomposition
+    /// `μ = Σ_w p_w (S_w)_* μ` groups by MAP: every word carrying the
+    /// same `S_w` contributes the same push-forward, so their
+    /// probabilities add and their regions are computed once. Measured
+    /// at depth 8: 9,842 distinct maps from 65,536 words, which is the
+    /// free-group reduced count — merging by map IS reduction, and it
+    /// stays correct when the group has extra relations, which these
+    /// flames do (their isometric circles overlap).
+    ///
+    /// # Why increments, and not a breadth-first sweep
+    ///
+    /// `w` has length `k` and `a·a⁻¹·w` has length `k+2`, so a
+    /// level-synchronous walk meets them at different levels and can
+    /// never merge them. This walks PROBABILITY INCREMENTS in
+    /// decreasing order instead: each pop carries some measure to a
+    /// map, and a map re-reached later simply receives more. A node's
+    /// region is computed once, when it is first reached — which is
+    /// also when its shortest word is known, and the shortest word is
+    /// the cheapest prefix for the kernel to replay.
+    ///
+    /// Increments below `MEASURE_FLOOR` are charged to
+    /// [`Cylinders::lost`] rather than followed, so the truncation is
+    /// a number the panel shows.
+    fn plan_mobius(
+        mf: &crate::scene::mobius::MobiusFlame,
+        weights: &[f64],
+        total_w: f64,
+        view: View,
+        sampling_leak: f64,
+    ) -> Result<Self, NoCylinders> {
+        use crate::scene::mobius::{MapKey, Word};
+        use std::collections::HashMap;
+
+        /// What the walk decided about a map, once.
+        enum Verdict {
+            /// Its region fits the view: a cylinder, at this index.
+            Emit(usize),
+            /// Its region misses the view. Every extension misses too,
+            /// because a child's image is a subset of its parent's.
+            Miss,
+            /// Bigger than the view and meeting it: keep going.
+            Expand,
+        }
+        struct Node {
+            word: Vec<u32>,
+            map: Word,
+            verdict: Verdict,
+        }
+
+        let mut nodes: Vec<Node> = Vec::new();
+        // **Increments coalesce before they are delivered.**
+        //
+        // A map is re-reached by every word that folds to it, and the
+        // series is geometric — so delivering each arrival separately
+        // means popping the same node hundreds of times for ever
+        // smaller amounts. Measured before this: four million pops for
+        // seven thousand nodes, 543 apiece, and the walk ran out of
+        // budget at depth 13 with the frontier already turning over.
+        //
+        // Instead each node carries what it is owed. A pop takes the
+        // whole outstanding amount at once, and a node is only queued
+        // when it goes from owed-nothing to owed-something. The heap
+        // key can then be stale — the amount may have grown after the
+        // push — which costs some ordering and no correctness.
+        let mut pending: Vec<f64> = Vec::new();
+        let mut queued: Vec<bool> = Vec::new();
+        let mut seen: HashMap<MapKey, usize> = HashMap::new();
+        let mut kept: Vec<Cylinder> = Vec::new();
+        let mut lost = 0.0f64;
+
+        // Increments to deliver, largest first. `f64` has no `Ord`, so
+        // the heap carries the bits of a known-finite positive float,
+        // whose ordering as an integer is the ordering as a float.
+        let mut heap: std::collections::BinaryHeap<(u64, usize)> =
+            std::collections::BinaryHeap::new();
+        let bits = |p: f64| -> u64 { p.to_bits() };
+        let unbits = |b: u64| -> f64 { f64::from_bits(b) };
+
+        let root = Word { map: crate::scene::mobius::Moebius::IDENTITY };
+        let root_key = root.map.key().ok_or(NoCylinders::NoInvariantBall)?;
+        nodes.push(Node { word: Vec::new(), map: root, verdict: Verdict::Expand });
+        pending.push(1.0);
+        queued.push(true);
+        seen.insert(root_key, 0);
+        heap.push((bits(1.0), 0));
+
+        let started = std::time::Instant::now();
+        let mut regions_computed = 0usize;
+        let mut timed_out = false;
+        let mut pops = 0usize;
+        let mut by_depth: Vec<[usize; 3]> = vec![[0; 3]; MAX_DEPTH + 2];
+        while let Some((_, idx)) = heap.pop() {
+            queued[idx] = false;
+            let inc = std::mem::replace(&mut pending[idx], 0.0);
+            if inc <= 0.0 {
+                continue;
+            }
+            pops += 1;
+            // Checked every so often rather than every pop: `Instant::now`
+            // is not free, and a pop that only adds a number is cheap
+            // enough that asking the clock would dominate it.
+            if pops > MAX_POPS
+                || (pops % 256 == 0 && started.elapsed() > MOBIUS_TIME_BUDGET)
+            {
+                lost += inc;
+                timed_out = true;
+                heap.clear();
+                for p in pending.iter_mut() {
+                    lost += std::mem::take(p);
+                }
+                break;
+            }
+
+            // A map is classified once, when it is first reached; the
+            // region is the expensive part and is never recomputed.
+            match nodes[idx].verdict {
+                Verdict::Miss => continue,
+                Verdict::Emit(ci) => {
+                    kept[ci].prob += inc;
+                    continue;
+                }
+                Verdict::Expand => {}
+            }
+
+            for (a, wa) in weights.iter().enumerate() {
+                if !(*wa > 0.0) {
+                    continue;
+                }
+                let child_inc = inc * (wa / total_w);
+                if child_inc < MEASURE_FLOOR {
+                    lost += child_inc;
+                    continue;
+                }
+                let Some(cmap) = mf.extend(&nodes[idx].map, a) else {
+                    lost += child_inc;
+                    continue;
+                };
+                let Some(key) = cmap.map.key() else {
+                    lost += child_inc;
+                    continue;
+                };
+                if let Some(&existing) = seen.get(&key) {
+                    // The same map by a different word: same cylinder,
+                    // more measure. This is the whole point.
+                    match nodes[existing].verdict {
+                        Verdict::Emit(ci) => kept[ci].prob += child_inc,
+                        Verdict::Miss => {}
+                        Verdict::Expand => {
+                            pending[existing] += child_inc;
+                            if !queued[existing] {
+                                queued[existing] = true;
+                                heap.push((bits(pending[existing]), existing));
+                            }
+                        }
+                    }
+                    continue;
+                }
+
+                let mut word = Vec::with_capacity(nodes[idx].word.len() + 1);
+                word.push(a as u32);
+                word.extend_from_slice(&nodes[idx].word);
+                if word.len() > MAX_DEPTH {
+                    lost += child_inc;
+                    continue;
+                }
+                regions_computed += 1;
+                let Ok(cover) = mf.region(&cmap, &word) else {
+                    lost += child_inc;
+                    continue;
+                };
+                let Some(enc) = cover.enclosing() else {
+                    lost += child_inc;
+                    continue;
+                };
+                let verdict = if !cover.meets_disc(view.centre, view.radius) {
+                    Verdict::Miss
+                } else if enc.r <= view.radius {
+                    if kept.len() >= MAX_WORDS {
+                        lost += child_inc;
+                        continue;
+                    }
+                    kept.push(Cylinder {
+                        word: word.clone(),
+                        prob: child_inc,
+                        centre: enc.c,
+                        radius: enc.r,
+                    });
+                    Verdict::Emit(kept.len() - 1)
+                } else {
+                    Verdict::Expand
+                };
+                by_depth[word.len().min(MAX_DEPTH + 1)][match verdict {
+                    Verdict::Miss => 0,
+                    Verdict::Emit(_) => 1,
+                    Verdict::Expand => 2,
+                }] += 1;
+                let expand = matches!(verdict, Verdict::Expand);
+                nodes.push(Node { word, map: cmap, verdict });
+                pending.push(0.0);
+                queued.push(false);
+                let ni = nodes.len() - 1;
+                seen.insert(key, ni);
+                if expand {
+                    pending[ni] = child_inc;
+                    queued[ni] = true;
+                    heap.push((bits(child_inc), ni));
+                }
+                if nodes.len() >= MAX_NODES {
+                    lost += child_inc;
+                    break;
+                }
+            }
+        }
+
+        if std::env::var("CYL_STATS").is_ok() {
+            println!(
+                "     family M: {} nodes, {} regions, {} cylinders, {} pops, lost {:.3e}",
+                nodes.len(),
+                regions_computed,
+                kept.len(),
+                pops,
+                lost
+            );
+            println!("       depth   miss   emit   expand");
+            for (d, c) in by_depth.iter().enumerate() {
+                if c[0] + c[1] + c[2] > 0 {
+                    println!("       {d:>5}  {:>5}  {:>5}  {:>6}", c[0], c[1], c[2]);
+                }
+            }
+        }
+        if kept.is_empty() {
+            return Err(if timed_out {
+                NoCylinders::TimedOut { nodes: nodes.len() }
+            } else {
+                NoCylinders::ViewIsEmpty
+            });
+        }
+        let mass: f64 = kept.iter().map(|c| c.prob).sum();
+        let depth = kept.iter().map(|c| c.word.len()).max().unwrap_or(0);
+        Ok(Self {
+            words: kept,
+            mass,
+            lost,
+            sampling_leak,
+            depth,
+            composable: false,
+            view_centre: view.centre,
+        })
+    }
+
     /// Enumerate the words whose image reaches `view`, or say why the
     /// flame cannot be targeted.
     pub fn plan(
@@ -350,6 +647,14 @@ impl Cylinders {
                     return Err(NoCylinders::Unbounded { index: i, why: why.to_string() })
                 }
             }
+        }
+
+        // Family M does not use the word walk below at all: its
+        // cylinders are keyed by MAP, not by word, because the flame's
+        // alphabet holds each generator and its inverse. See
+        // `plan_mobius`.
+        if let Some(mf) = &mobius {
+            return Self::plan_mobius(mf, &weights, total_w, view, mf.leak);
         }
 
         // The ball every map sends into itself: the enumeration's
@@ -1733,6 +2038,137 @@ mod gpu_tests {
     /// The per-frame sync asks for a reload only when the SHADER
     /// changes, and never for an ordinary pan.
     ///
+    /// **The picture gate for family M.**
+    ///
+    /// Everything else in this module measures regions and word
+    /// counts. This asks the only question that decides whether any
+    /// of it ships: does a TARGETED render of an inversive flame draw
+    /// the same picture as an unbiased one?
+    ///
+    /// `schottky1` is four `mobius` transforms — two circle-pairing
+    /// generators and their inverses, decomposed from the
+    /// `schottky_group` variation. It is the flame family M exists
+    /// for, and until the map-keyed walk it could not be enumerated
+    /// at all: a word-indexed expansion treats `a·a⁻¹·w` as a
+    /// different cylinder from `w`, and the regions stall.
+    ///
+    /// Compared the way the affine gate compares: which pixels are
+    /// lit, and how bright the lit ones are on average. A forced
+    /// render puts every sample in frame, so it is far less noisy
+    /// than the reference at the same iteration count — the claim is
+    /// that they agree about the SHAPE and the exposure, not that
+    /// they are bit-identical.
+    #[test]
+    #[ignore = "needs a GPU and reads output/flame-zoom"]
+    fn a_targeted_schottky_render_is_the_untargeted_render() {
+        const N: u32 = 96;
+        let stats = |rgba: &[u8]| -> (Vec<bool>, f64) {
+            let lit: Vec<bool> = rgba
+                .chunks(4)
+                .map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24)
+                .collect();
+            let (mut acc, mut n) = (0.0f64, 0.0f64);
+            for (p, l) in rgba.chunks(4).zip(&lit) {
+                if !*l {
+                    continue;
+                }
+                acc += (p[0] as f64 + p[1] as f64 + p[2] as f64) / 765.0;
+                n += 1.0;
+            }
+            (lit, if n > 0.0 { acc / n } else { 0.0 })
+        };
+
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let Ok(text) = std::fs::read_to_string("output/flame-zoom/schottky1.fflame") else {
+            println!("  no schottky1.fflame");
+            return;
+        };
+        let mut base: crate::config::FractalConfig =
+            serde_json::from_str(&text).expect("a config");
+        base.deterministic_rng = true;
+        base.levels_enabled = false;
+
+        // On the set, so the view is not looking at empty space.
+        let mf = crate::scene::mobius::MobiusFlame::read(
+            &base.flame,
+            reg,
+            crate::scene::mobius::ROOT_SAMPLE,
+        )
+        .expect("family M");
+        let x = mf.root.points[mf.root.points.len() / 2];
+        base.pan_x = x[0];
+        base.pan_y = x[1];
+
+        println!("  zoom     words  depth   mass      speedup    lit ref/tgt   overlap  bright");
+        let mut checked = 0usize;
+        for zoom in [1e2f64, 1e3, 1e4] {
+            base.zoom = zoom as f32;
+            let plan = match Cylinders::plan(
+                &base.flame,
+                reg,
+                View::of(zoom, [base.pan_x, base.pan_y], N, N),
+            ) {
+                Ok(p) => p,
+                Err(e) => {
+                    println!("  {zoom:>7.0e}  {e:?}");
+                    continue;
+                }
+            };
+            if plan.speedup() <= 1.0 {
+                println!("  {zoom:>7.0e}  speedup {:.2} -- not worth forcing", plan.speedup());
+                continue;
+            }
+            // **Matched on IN-FRAME samples, not on iterations.**
+            //
+            // The reference lands `iters · mass` of its samples in the
+            // view; the forced one lands all of them, but each costs
+            // `depth + 1` map applications. Comparing at equal
+            // ITERATIONS gave the reference ten times the samples and
+            // the gate read that as the targeted render drawing half
+            // the picture.
+            let mut refc = base.clone();
+            refc.cylinder_targeting = false;
+            let mut tgt = base.clone();
+            tgt.cylinder_targeting = true;
+
+            let iters_ref = 120_000_000u64;
+            let iters_tgt = (((iters_ref as f64) * plan.mass * (plan.depth as f64 + 1.0))
+                as u64)
+                .clamp(4_000_000, 400_000_000);
+            let a = render(&refc, N, iters_ref);
+            let b = render(&tgt, N, iters_tgt);
+            let (la, ba) = stats(&a);
+            let (lb, bb) = stats(&b);
+            let lit_a = la.iter().filter(|v| **v).count();
+            let lit_b = lb.iter().filter(|v| **v).count();
+            let both = la.iter().zip(&lb).filter(|(p, q)| **p && **q).count();
+            let overlap = both as f64 / lit_a.max(1) as f64;
+            println!(
+                "  {zoom:>7.0e}  {:>5}  {:>5}  {:.2e}  {:.3e}   {lit_a:>4}/{lit_b:<4}   {overlap:>6.3}  {ba:.3}/{bb:.3}  (tgt iters {iters_tgt:.2e})",
+                plan.words.len(),
+                plan.depth,
+                plan.mass,
+                plan.speedup()
+            );
+            if lit_a < 40 {
+                println!("         reference too sparse to compare");
+                continue;
+            }
+            checked += 1;
+            assert!(
+                overlap > 0.6,
+                "at zoom {zoom:.0e} the targeted render lit only {overlap:.3} of what the \
+                 reference did -- it is drawing a different picture"
+            );
+            assert!(
+                (ba - bb).abs() < 0.35 * ba.max(bb).max(1e-6),
+                "at zoom {zoom:.0e} brightness disagrees: reference {ba:.3}, targeted {bb:.3}"
+            );
+        }
+        assert!(checked > 0, "no zoom produced a comparable pair");
+    }
+
     /// **The gate for a bug the whole suite missed.** `sync_cylinders`
     /// used to rebuild the shader itself, from the raw config —
     /// while `load_config` compiles against the sticky-adopted flame
@@ -3013,6 +3449,184 @@ mod tests {
                 ),
                 Err(e) => println!("   zoom {zoom:>7.0e}  {ms:>7.1} ms  {e:?}"),
             }
+        }
+    }
+
+    /// **What the map-keyed walk does on the Schottky flames.**
+    ///
+    /// The numbers that decide whether family M ships: how long a plan
+    /// takes, how big the antichain is, how much measure is lost, and
+    /// whether the speedup is worth the prefix.
+    #[test]
+    #[ignore = "reads output/flame-zoom"]
+    fn the_map_keyed_walk_on_the_schottky_flames() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        for name in ["schottky1", "schottky2"] {
+            let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame"))
+            else {
+                continue;
+            };
+            let cfg: crate::config::FractalConfig =
+                serde_json::from_str(&text).expect("a config");
+            let Some(mf) = crate::scene::mobius::MobiusFlame::read(
+                &cfg.flame,
+                reg,
+                crate::scene::mobius::ROOT_SAMPLE,
+            ) else {
+                println!("  {name}: not family M");
+                continue;
+            };
+            let x = mf.root.points[mf.root.points.len() / 2];
+            println!(
+                "== {name}   extent {:.3e}, cover {} discs, leak {:.3e}, on-set [{:.4}, {:.4}]",
+                mf.extent,
+                mf.root.discs.len(),
+                mf.leak,
+                x[0],
+                x[1]
+            );
+            for zoom in [1e1f64, 1e3, 1e5, 1e7, 1e9, 1e12] {
+                let view = View::of(zoom, x, 512, 512);
+                let t0 = std::time::Instant::now();
+                let r = Cylinders::plan(&cfg.flame, reg, view);
+                let ms = t0.elapsed().as_secs_f64() * 1e3;
+                match r {
+                    Ok(c) => println!(
+                        "   zoom {zoom:>7.0e}  {ms:>8.1} ms  {:>5} words, depth {:>3}, \
+                         mass {:.3e}, speedup {:.3e}, lost {:.3e}",
+                        c.words.len(),
+                        c.depth,
+                        c.mass,
+                        c.speedup(),
+                        c.lost
+                    ),
+                    Err(e) => println!("   zoom {zoom:>7.0e}  {ms:>8.1} ms  {e:?}"),
+                }
+            }
+            println!();
+        }
+    }
+
+    /// **Does an equal map stay equal, forty symbols down?**
+    ///
+    /// Merging cylinders by their composed map only works if two words
+    /// carrying the same map produce the same key. `w` and
+    /// `a·a⁻¹·w` are the same map exactly, in arithmetic; in f64 they
+    /// are two different products of forty matrices whose entries have
+    /// grown by orders of magnitude. If they drift past the quantum,
+    /// the merge silently stops merging and the enumeration is back
+    /// where it was — with no symptom except being slow.
+    ///
+    /// So: measure the drift before building anything on it.
+    #[test]
+    #[ignore = "reads output/flame-zoom"]
+    fn equal_words_keep_equal_keys() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        for name in ["schottky1", "schottky2"] {
+            let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame"))
+            else {
+                continue;
+            };
+            let cfg: crate::config::FractalConfig =
+                serde_json::from_str(&text).expect("a config");
+            let Some(mf) = crate::scene::mobius::MobiusFlame::read(
+                &cfg.flame,
+                reg,
+                4096,
+            ) else {
+                println!("  {name}: not family M");
+                continue;
+            };
+            // Inverse pairs, numerically.
+            let mut inv: Vec<(usize, usize)> = Vec::new();
+            for i in 0..mf.maps.len() {
+                for j in 0..mf.maps.len() {
+                    let ok = mf.root.points.iter().take(48).all(|p| {
+                        let q = mf.maps[j].apply_point(mf.maps[i].apply_point(*p));
+                        (q[0] - p[0]).hypot(q[1] - p[1]) <= 1e-6 * (1.0 + p[0].hypot(p[1]))
+                    });
+                    if ok {
+                        inv.push((i, j));
+                    }
+                }
+            }
+            println!("== {name}   inverse pairs {inv:?}");
+            println!("     depth   drift(w vs a.a'.w)   key match   distinct maps / words");
+
+            let mut st = 4242u64;
+            let mut lcg = move || {
+                st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                (st >> 33) as usize
+            };
+            for depth in [10usize, 20, 30, 40, 60, 80] {
+                // A reduced word of this length.
+                let mut syms: Vec<usize> = Vec::new();
+                let mut last: Option<usize> = None;
+                while syms.len() < depth {
+                    let mut j = lcg() % mf.maps.len();
+                    let mut tries = 0;
+                    while last.is_some_and(|l| inv.contains(&(l, j))) && tries < 8 {
+                        j = lcg() % mf.maps.len();
+                        tries += 1;
+                    }
+                    last = Some(j);
+                    syms.push(j);
+                }
+                // Both words, composed the way `plan` composes them:
+                // the new symbol goes on the INSIDE.
+                let compose = |word: &[usize]| {
+                    let mut w = mf.empty_word();
+                    for &j in word.iter().rev() {
+                        w = mf.extend(&w, j).expect("composition");
+                    }
+                    w
+                };
+                let plain = compose(&syms);
+                // Insert a·a⁻¹ in the middle: same map, two longer.
+                let (a, ai) = inv[0];
+                let mut padded = syms.clone();
+                let mid = padded.len() / 2;
+                padded.splice(mid..mid, [ai, a]);
+                let folded = compose(&padded);
+
+                let drift = plain
+                    .map
+                    .projective_distance(&folded.map)
+                    .unwrap_or(f64::INFINITY);
+                let same = plain.map.key().is_some() && plain.map.key() == folded.map.key();
+
+                // How much merging is on offer at this depth: distinct
+                // maps among all words of length `d`, for small `d`.
+                let d = depth.min(8);
+                let mut maps = std::collections::HashSet::new();
+                let mut count = 0usize;
+                let n = mf.maps.len();
+                let mut stack: Vec<(usize, crate::scene::mobius::Word)> =
+                    vec![(0, mf.empty_word())];
+                while let Some((k, w)) = stack.pop() {
+                    if k == d {
+                        count += 1;
+                        if let Some(key) = w.map.key() {
+                            maps.insert(key);
+                        }
+                        continue;
+                    }
+                    for j in 0..n {
+                        if let Some(c) = mf.extend(&w, j) {
+                            stack.push((k + 1, c));
+                        }
+                    }
+                }
+                println!(
+                    "     {depth:>5}   {drift:>18.3e}   {:>9}   {:>7} / {:<7} (at depth {d})",
+                    if same { "yes" } else { "NO" },
+                    maps.len(),
+                    count
+                );
+            }
+            println!();
         }
     }
 

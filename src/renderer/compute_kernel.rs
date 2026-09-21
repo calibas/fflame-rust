@@ -333,6 +333,9 @@ pub struct FlameRenderer {
     /// Share of plot attempts that fell outside it, from the last
     /// readback. `None` until one has been read.
     leak_fraction: Option<f32>,
+    /// A view change seen but not yet planned for, and when it was
+    /// first seen. See `targeting_settle_delay`.
+    cylinder_key_pending: Option<(u64, std::time::Instant)>,
     /// What targeting decided for the current view — reported to the
     /// panel, never read by the render path (which asks `cylinders`).
     targeting_state: TargetingState,
@@ -508,6 +511,7 @@ impl FlameRenderer {
             leak_probe: [0.0; 4],
             leak_fraction: None,
             targeting_state: TargetingState::default(),
+            cylinder_key_pending: None,
             cylinder_relative: false,
             cylinder_key: None,
             auto_exposure: false,
@@ -1843,6 +1847,27 @@ impl FlameRenderer {
             && config.flame.post_symmetry.ty
                 == crate::scene::transforms::PostSymmetryType::None
             && !config.flame.analytic_blur_active(&registry, config.render_mode)
+    }
+
+    /// How long the view must hold still before an expensive
+    /// enumeration is attempted.
+    ///
+    /// Zero for the ordinary affine path, which costs well under a
+    /// millisecond and can simply run. The Möbius family is three
+    /// orders dearer and has to wait.
+    fn targeting_settle_delay(config: &FractalConfig) -> std::time::Duration {
+        if !config.cylinder_targeting {
+            return std::time::Duration::ZERO;
+        }
+        let reg = crate::variations::global_registry();
+        if crate::scene::mobius::MobiusFlame::is_family_m(&config.flame, &reg) {
+            std::time::Duration::from_millis(250)
+        } else {
+            // The affine and bounded paths cost well under a
+            // millisecond; making them wait would only add latency to
+            // something that was never the problem.
+            std::time::Duration::ZERO
+        }
     }
 
     /// What cylinder targeting is doing for the current view.
@@ -3448,6 +3473,37 @@ impl FlameRenderer {
         if self.cylinder_key == Some(key) {
             return false;
         }
+
+        // **Do not plan while the view is still moving.**
+        //
+        // An expensive enumeration — the Möbius family costs up to a
+        // second — would otherwise run on the UI thread on every frame
+        // of a drag, which is the freeze this whole feature was
+        // reported for. Waiting for the view to hold still costs
+        // nothing that matters: the unbiased game renders the moving
+        // view perfectly well, and targeting is for the picture you
+        // stop on.
+        //
+        // Using the PREVIOUS plan instead was the other option and is
+        // worse: a plan carries the view it was made for, so forcing
+        // its words against a view that has moved puts the samples
+        // somewhere other than the frame.
+        let now = std::time::Instant::now();
+        let settle = Self::targeting_settle_delay(config);
+        if !settle.is_zero() {
+            match self.cylinder_key_pending {
+                Some((k, since)) if k == key => {
+                    if now.duration_since(since) < settle {
+                        return false;
+                    }
+                }
+                _ => {
+                    self.cylinder_key_pending = Some((key, now));
+                    return false;
+                }
+            }
+        }
+        self.cylinder_key_pending = None;
         self.cylinder_key = Some(key);
         // `composable` and not just `is_some`: the two arms read
         // different buffer layouts, so crossing between them needs the

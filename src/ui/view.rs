@@ -134,6 +134,10 @@ pub fn render_view_content(
                                 }
                                 NC::Empty => t!("view.no_cyl_empty").to_string(),
                                 NC::ViewIsEmpty => t!("view.no_cyl_off_attractor").to_string(),
+                                NC::TimedOut { nodes } => {
+                                    t!("view.no_cyl_timed_out", nodes = nodes.to_string())
+                                        .to_string()
+                                }
                                 NC::TooManyWords(n) => {
                                     t!("view.no_cyl_too_many", count = n.to_string()).to_string()
                                 }

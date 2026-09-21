@@ -967,3 +967,100 @@ cannot match the untargeted one. Two ways, and the choice is open:
 The second is correct without assuming freeness, which these flames
 do not have. The picture gate — `schottky1` targeted against
 untargeted — decides.
+
+
+## 19. Built: cylinders keyed by map
+
+The second option of §18, and it works. `schottky1` is targeted, the
+picture gate passes, and family M is on.
+
+### The change
+
+`plan_mobius` replaces the word walk for family M. Cylinders are keyed
+by their composed MAP, not by their word, because the flame's alphabet
+holds each generator and its inverse and a word-indexed walk treats
+`a·a⁻¹·w` as a different cylinder from `w`. The measure
+decomposition groups by map — equal maps push forward identically, so
+their probabilities add and their regions are computed once.
+
+Three things had to be right.
+
+**The key.** Möbius maps are projective, so coefficients are compared
+after dividing through by the largest. Measured before building
+anything on it: the drift between `w` and `a·a⁻¹·w` is **1e-15 at
+depth 80 and not growing** — normalising cancels the scale growth — so
+the 1e-11 quantum has four orders of headroom. At depth 8, 9,842
+distinct maps from 65,536 words, which is the free-group reduced
+count: **merging by map is reduction**, and it stays right when the
+group has extra relations, which these flames have.
+
+**Increments, not levels.** `w` has length `k` and `a·a⁻¹·w` has
+`k+2`, so a level-synchronous walk meets them at different levels and
+can never merge them. This delivers probability increments largest
+first; a map re-reached later simply receives more, and its region is
+computed once, when its shortest word is known.
+
+**Coalescing.** Each map is re-reached by a geometric series of
+arrivals. Delivering them one at a time cost **four million pops for
+seven thousand nodes** — 543 apiece — and the walk ran out of budget at
+depth 13 with the frontier already turning over. Letting a node carry
+what it is owed and taking the whole amount in one pop: 214,000 pops,
+21 apiece, and `lost` falls from 1.4e-1 to **6.9e-8**.
+
+### Where it lands
+
+    schottky1, on the set          plan     words  depth   speedup    lost
+      zoom 1e3                     728 ms    1751     18   6.9e1     6.9e-8
+      zoom 1e5                    1005 ms    3212     23   6.5e3     4.5e-6
+      zoom 1e7                     952 ms     534     23   2.8e6     6.9e-8
+      zoom 1e9                     855 ms      18     23   5.8e8     6.0e-8
+
+    schottky2                     ~1050 ms   TimedOut { nodes: 11905 }
+
+The frontier peaks at depth 12 and drains to nothing by 19 — it
+converges, which is what the word walk never did.
+
+### The picture gate
+
+`a_targeted_schottky_render_is_the_untargeted_render`, matched on
+IN-FRAME samples rather than iterations (the reference lands
+`iters · mass` of its samples in the view; a forced sample costs
+`depth + 1` map applications, and comparing at equal iterations gave
+the reference ten times the samples and read as the targeted render
+drawing half the picture):
+
+    zoom    words  depth   mass      speedup   lit ref/tgt  overlap  bright
+    1e2      2840     19  1.82e-2   2.7e0       2913/2249    0.620   0.536/0.512
+    1e3      1751     18  7.58e-4   6.9e1        975/952     0.749   0.571/0.652
+    1e4      3504     23  5.07e-5   8.2e2        415/1310    0.911   0.589/0.658
+
+Agreement improves with depth, which is the right direction: at 1e4
+the targeted render lights 1310 pixels against the reference's 415 —
+it resolves structure the unbiased game cannot reach.
+
+### Two limits, both bounded and both reported
+
+**Time.** `plan` runs on the UI thread, and node and pop caps do not
+bound wall-clock: `schottky2` spent a hundred seconds inside caps it
+never reached. `MOBIUS_TIME_BUDGET` is one second, and a walk cut
+short with nothing to show reports `TimedOut { nodes }` rather than
+`ViewIsEmpty` — "we did not look long enough" is a different thing to
+say than "there is nothing there".
+
+**Latency.** A second per view change is still a hitch on every frame
+of a drag. Expensive flames now wait for the view to hold still for
+250 ms before planning; cheap ones (affine, bounded) do not wait at
+all, which is why `is_family_m` exists — it answers from `detect`
+alone, without building a cover. Using the PREVIOUS plan while moving
+was the other option and is worse: a plan carries the view it was made
+for, so its words would put samples outside the frame.
+
+### Known approximation
+
+Merging by map merges words of different lengths, and `pack_words`
+folds colour along the word — so a merged cylinder carries its
+representative's colour fold, not the mixture. The fold converges
+geometrically and the extra symbols of a folded word sit INSIDE, where
+their contribution is most damped, so the error shrinks with depth;
+the gate's brightness agrees to ~12%. Worth revisiting if colour ever
+looks wrong on a shallow targeted render.
