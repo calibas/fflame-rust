@@ -289,11 +289,19 @@ impl Cylinders {
         // and a disc bound through an inversion never shrinks, so the
         // enumeration would not terminate even if it started. See
         // `docs/projects/inversive-targeting.md`.
-        let mobius = crate::scene::mobius::MobiusFlame::read(
-            flame,
-            registry,
-            crate::scene::mobius::ROOT_SAMPLE,
-        );
+        // Gated OFF -- see `mobius::ENABLED` for the measurements.
+        // The module stays fully exercised by its own tests; this is
+        // the one place that decides whether a real render may wait on
+        // it, and today it may not.
+        let mobius = crate::scene::mobius::ENABLED
+            .then(|| {
+                crate::scene::mobius::MobiusFlame::read(
+                    flame,
+                    registry,
+                    crate::scene::mobius::ROOT_SAMPLE,
+                )
+            })
+            .flatten();
 
         // Each transform's selection probability, and whether the
         // whole flame is affine -- which decides whether a word can
@@ -2847,6 +2855,165 @@ mod tests {
              should:\n  {}",
             offenders.join("\n  ")
         );
+    }
+
+    /// **The fair test family M never had.**
+    ///
+    /// Every earlier attempt used `spherical`, which is inversion in a
+    /// circle and therefore an INVOLUTION: `S_i ∘ S_i` is the
+    /// identity, so words fold back on themselves and regions
+    /// oscillate instead of shrinking. I concluded from that that no
+    /// shipped variation gives a loxodromic generator. That was wrong
+    /// — `mobius` has been in the registry the whole time, and its
+    /// body is exactly `(Az + B)/(Cz + D)`, the map this module
+    /// composes.
+    ///
+    /// A Schottky group needs generators that pair DISJOINT discs:
+    /// `g` maps the outside of `D_a` onto the inside of `D_b`, and
+    /// `g⁻¹` does the reverse. Then every point of the limit set has
+    /// one address, the cylinders nest, and the measure concentrates
+    /// — which is the condition cylinder targeting has always needed
+    /// and `spherical.fflame` does not meet.
+    ///
+    /// Built from two generators and their inverses, four maps, in the
+    /// classical form: `g(z) = (az + b)/(cz + d)` with `ad − bc = 1`
+    /// and `|a + d| > 2`, which is loxodromic.
+    fn loxodromic_flame() -> crate::scene::transforms::Flame {
+        use crate::scene::transforms::{Flame, Transform};
+        let mut f = Flame::new();
+        f.transforms.clear();
+        // **The Schottky condition is about the ISOMETRIC CIRCLES,
+        // not about the traces.** For `g = (az+b)/(cz+d)` with
+        // `ad − bc = 1`, `g` has its isometric circle at `−d/c` and
+        // `g⁻¹` at `a/c`, both of radius `1/|c|`. The group is
+        // Schottky when all four are mutually disjoint; then `g` maps
+        // the outside of its circle onto the inside of its partner's,
+        // the level-one pieces are disjoint, and the cylinders nest.
+        //
+        // A first attempt picked loxodromic matrices and checked only
+        // the traces. Its circles were [−2,0], [1,3], [0,1], [−1,0] —
+        // overlapping — and the regions oscillated exactly as the
+        // involution flame's had.
+        //
+        // These put the four circles at ±2 and ±2i, all of radius 1,
+        // pairwise 2.83 apart:
+        //   g1 = [[2, 3], [1, 2]]      circles at −2 and 2
+        //   g2 = [[2i, −5], [1, 2i]]   circles at −2i and 2i
+        // both with determinant 1 and |trace| = 4, so both loxodromic.
+        let gens: [[(f64, f64); 4]; 4] = [
+            [(2.0, 0.0), (3.0, 0.0), (1.0, 0.0), (2.0, 0.0)],
+            [(2.0, 0.0), (-3.0, 0.0), (-1.0, 0.0), (2.0, 0.0)],
+            [(0.0, 2.0), (-5.0, 0.0), (1.0, 0.0), (0.0, 2.0)],
+            [(0.0, 2.0), (5.0, 0.0), (-1.0, 0.0), (0.0, 2.0)],
+        ];
+        for [(ar, ai), (br, bi), (cr, ci), (dr, di)] in gens {
+            let mut t = Transform::default();
+            t.a = 1.0;
+            t.d = 1.0;
+            t.weight = 1.0;
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("mobius", 1.0);
+            for (k, v) in [
+                ("re_a", ar),
+                ("im_a", ai),
+                ("re_b", br),
+                ("im_b", bi),
+                ("re_c", cr),
+                ("im_c", ci),
+                ("re_d", dr),
+                ("im_d", di),
+            ] {
+                t.variation_params.insert(format!("mobius.{k}"), v as f32);
+            }
+            f.transforms.push(t);
+        }
+        f
+    }
+
+    #[test]
+    #[ignore = "prints a measurement"]
+    fn a_loxodromic_flame_is_the_fair_test() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let f = loxodromic_flame();
+
+        // It has to READ as family M first.
+        for (i, t) in f.transforms.iter().enumerate() {
+            match crate::scene::mobius::detect(t, reg) {
+                Some(m) => println!(
+                    "  xform {i}: {:?}, pole {:?}",
+                    m.kind,
+                    m.pole().map(|p| [format!("{:.4}", p[0]), format!("{:.4}", p[1])])
+                ),
+                None => {
+                    println!("  xform {i}: NOT read as family M");
+                    return;
+                }
+            }
+        }
+        let Some(mf) = crate::scene::mobius::MobiusFlame::read(
+            &f,
+            reg,
+            crate::scene::mobius::ROOT_SAMPLE,
+        ) else {
+            println!("  MobiusFlame::read declined");
+            return;
+        };
+        println!(
+            "  cover: {} discs, extent {:.4e}, leak {:.3e}",
+            mf.root.discs.len(),
+            mf.extent,
+            mf.leak
+        );
+
+        // Do its regions SHRINK, where the involution flame's
+        // oscillated?
+        println!("  depth   region radius   discs");
+        let mut cur = mf.empty_word();
+        let mut syms: Vec<u32> = Vec::new();
+        let mut st = 13u64;
+        for k in 1..=14usize {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let j = ((st >> 33) as usize) % mf.maps.len();
+            let Some(next) = mf.extend(&cur, j) else {
+                println!("  {k:>5}   extend refused");
+                break;
+            };
+            cur = next;
+            syms.insert(0, j as u32);
+            match mf.region(&cur, &syms) {
+                Ok(c) => println!(
+                    "  {k:>5}   {:>13.4e}   {}",
+                    c.enclosing().map_or(f64::NAN, |d| d.r),
+                    c.discs.len()
+                ),
+                Err(e) => {
+                    println!("  {k:>5}   {e:?}");
+                    break;
+                }
+            }
+        }
+
+        println!();
+        let x = mf.root.points[mf.root.points.len() / 2];
+        for zoom in [1e2f64, 1e4, 1e6] {
+            let view = View::of(zoom, x, 512, 512);
+            let t0 = std::time::Instant::now();
+            let r = Cylinders::plan(&f, reg, view);
+            let ms = t0.elapsed().as_secs_f64() * 1e3;
+            match r {
+                Ok(c) => println!(
+                    "   zoom {zoom:>7.0e}  {ms:>7.1} ms  {:>4} words, depth {:>3}, \
+                     speedup {:.3e}, lost {:.3e}",
+                    c.words.len(),
+                    c.depth,
+                    c.speedup(),
+                    c.lost
+                ),
+                Err(e) => println!("   zoom {zoom:>7.0e}  {ms:>7.1} ms  {e:?}"),
+            }
+        }
     }
 
     /// **Is it the family, or is it that flame?**

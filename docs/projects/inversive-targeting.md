@@ -766,3 +766,59 @@ with two parameters rather than a bare inversion — or accepting that
 the inversive corpus flames are targeted partially, with the missing
 fraction reported, and deciding whether 8.5% is a picture worth
 drawing.
+
+
+## 16. Turned off, and the variation that was there all along
+
+**Reported from the app: the window freezing for up to a minute on
+`spherical.fflame` with targeting on.** That is this work. `plan` runs
+on the UI thread on every pan and every zoom, and the family-M path
+costs 30 to 36 seconds — which §14 measured and I wired in anyway.
+
+`mobius::ENABLED` is now `false`, gated in `plan` so the module stays
+fully exercised by its own tests. The flame goes back to refusing in
+**0.6 ms** with a reason the panel prints, which is a better answer
+than a frozen window and a fractal missing nine tenths of itself.
+
+### The correction that matters
+
+§15 concluded that a fair test of family M needs a loxodromic
+generator, which "no shipped variation provides". **That was wrong,
+and asserted rather than checked.** `mobius` has been in the registry
+the whole time — `src/variations/defs/extended.rs`, eralex61's, body
+exactly `(Az + B)/(Cz + D)` with eight real coefficients. It is now a
+`Kind::Mobius` and `detect` reads it, poles and all.
+
+What is true is narrower: **no corpus flame uses it.** So the
+machinery has a customer that could exist and currently does not.
+
+### And the fair test still fails
+
+Two attempts, both instructive.
+
+A group built from loxodromic matrices chosen by their TRACES: regions
+oscillated (21.3, 21.4, 50.2, 21.4, … 582, …) exactly as the
+involution flame's had. The Schottky condition is not about traces.
+For `g = (az+b)/(cz+d)` with `ad − bc = 1`, `g` has its isometric
+circle at `−d/c` and `g⁻¹` at `a/c`, both of radius `1/|c|`, and the
+group is Schottky when all four are mutually disjoint. Mine were
+`[−2,0]`, `[1,3]`, `[0,1]`, `[−1,0]` — overlapping.
+
+A genuine one, circles at `±2` and `±2i` of radius 1, pairwise 2.83
+apart, both generators of determinant 1 and `|trace| = 4`:
+
+    g1 = [[2, 3], [1, 2]]       g2 = [[2i, −5], [1, 2i]]
+
+The cover is tight — 12 discs, leak **0.000** — and the regions still
+do not shrink: 4.56, 19.6, 12.0, 19.6, 4.56, 12.6, 4.56, 21.4, 13.4,
+38.7, 13.4, 13.3, 12.4, 13.3. `lost` 0.959.
+
+So the obstacle survives even a textbook Schottky group, which means
+it is not the flames and not the geometry. The remaining suspect is
+the enumeration itself: the IFS contains each generator AND its
+inverse, so `[g, g⁻¹]` is the identity and every other word folds back
+to the whole attractor. A Schottky enumeration walks REDUCED words
+only; this one walks all of them.
+
+That is a concrete, testable next step — and it is a change to the
+word expansion, not to any of the geometry below it.
