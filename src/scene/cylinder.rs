@@ -3016,6 +3016,152 @@ mod tests {
         }
     }
 
+    /// **The real Schottky flames, decomposed from `schottky_group`.**
+    ///
+    /// `output/flame-zoom/schottky{1,2}.fflame` are four `mobius`
+    /// transforms each: two circle-pairing generators and their
+    /// inverses. The native `schottky_group` variation walks these
+    /// with the Indra's Pearls backtrack-avoid — reduced words. A
+    /// decomposed flame picks uniformly and walks everything,
+    /// `a·a⁻¹` included, which is the fold-back case §16 suspected.
+    ///
+    /// Three questions, in order: does the file read as family M and
+    /// are its four isometric circles disjoint (the Schottky
+    /// condition); do regions contract along a raw random word; and
+    /// do they along a backtrack-avoiding one.
+    #[test]
+    #[ignore = "reads output/flame-zoom"]
+    fn the_real_schottky_flames() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        for name in ["schottky1", "schottky2"] {
+            let path = format!("output/flame-zoom/{name}.fflame");
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                println!("  no {path}");
+                continue;
+            };
+            let cfg: crate::config::FractalConfig =
+                serde_json::from_str(&text).expect("a config");
+            println!("== {name}");
+            let Some(mf) = crate::scene::mobius::MobiusFlame::read(
+                &cfg.flame,
+                reg,
+                crate::scene::mobius::ROOT_SAMPLE,
+            ) else {
+                println!("  MobiusFlame::read declined");
+                continue;
+            };
+            println!(
+                "  cover: {} discs, extent {:.4e}, leak {:.3e}",
+                mf.root.discs.len(),
+                mf.extent,
+                mf.leak
+            );
+            // Isometric circles: for det-1 (az+b)/(cz+d), the map's
+            // own at -d/c and its inverse's at a/c, both radius 1/|c|.
+            let mut circles: Vec<([f64; 2], f64)> = Vec::new();
+            for (i, m) in mf.moebius.iter().enumerate() {
+                let det = m.a.mul(m.d).add(m.b.mul(m.c).scale(-1.0));
+                let cabs = m.c.abs();
+                if cabs <= 0.0 {
+                    println!("  map {i}: c = 0 (affine), det {:.3}", det.abs());
+                    continue;
+                }
+                let r = det.abs().sqrt() / cabs;
+                let p = m.d.scale(-1.0).div(m.c).unwrap();
+                println!(
+                    "  map {i}: det {:.3}{}  isometric circle centre [{:.3}, {:.3}] r {:.3}",
+                    det.abs(),
+                    if m.conj { " (anti)" } else { "" },
+                    p.re,
+                    p.im,
+                    r
+                );
+                circles.push(([p.re, p.im], r));
+            }
+            let mut disjoint = true;
+            for i in 0..circles.len() {
+                for j in (i + 1)..circles.len() {
+                    let (a, b) = (circles[i], circles[j]);
+                    let d = (a.0[0] - b.0[0]).hypot(a.0[1] - b.0[1]);
+                    if d < a.1 + b.1 {
+                        disjoint = false;
+                        println!(
+                            "  circles {i} and {j} OVERLAP: distance {d:.3} < {:.3}",
+                            a.1 + b.1
+                        );
+                    }
+                }
+            }
+            println!("  Schottky condition (all circles disjoint): {disjoint}");
+
+            // Which pairs are inverses, numerically.
+            let mut inv: Vec<(usize, usize)> = Vec::new();
+            for i in 0..mf.maps.len() {
+                for j in 0..mf.maps.len() {
+                    let mut ok = true;
+                    for p in mf.root.points.iter().take(64) {
+                        let q = mf.maps[j].apply_point(mf.maps[i].apply_point(*p));
+                        if (q[0] - p[0]).hypot(q[1] - p[1]) > 1e-6 * (1.0 + p[0].hypot(p[1])) {
+                            ok = false;
+                            break;
+                        }
+                    }
+                    if ok {
+                        inv.push((i, j));
+                    }
+                }
+            }
+            println!("  inverse pairs: {inv:?}");
+
+            // Regions along a raw random word, and along one that never
+            // follows a symbol with its inverse.
+            for (label, avoid) in [("raw", false), ("backtrack-avoiding", true)] {
+                let mut st = 99u64;
+                let mut lcg = move || {
+                    st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    ((st >> 33) as usize)
+                };
+                let mut cur = mf.empty_word();
+                let mut syms: Vec<u32> = Vec::new();
+                let mut last: Option<usize> = None;
+                let mut line = Vec::new();
+                for k in 1..=24usize {
+                    let mut j = lcg() % mf.maps.len();
+                    if avoid {
+                        while let Some(l) = last {
+                            if inv.contains(&(l, j)) {
+                                j = lcg() % mf.maps.len();
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    last = Some(j);
+                    let Some(next) = mf.extend(&cur, j) else { break };
+                    cur = next;
+                    // Inside: the new symbol is applied FIRST, but a
+                    // backtrack is a backtrack in either convention.
+                    syms.insert(0, j as u32);
+                    if k % 4 == 0 {
+                        match mf.region(&cur, &syms) {
+                            Ok(c) => line.push(format!(
+                                "{k}:{:.2e}",
+                                c.enclosing().map_or(f64::NAN, |d| d.r)
+                            )),
+                            Err(e) => {
+                                line.push(format!("{k}:{e:?}"));
+                                break;
+                            }
+                        }
+                    }
+                }
+                println!("  {label:<20} {}", line.join("  "));
+            }
+            println!();
+        }
+    }
+
     /// **Is it the family, or is it that flame?**
     ///
     /// `spherical.fflame`'s measure does not concentrate — the words
