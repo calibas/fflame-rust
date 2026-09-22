@@ -1792,3 +1792,43 @@ node. Recorded, not built.
    samples and extend to 400 only near the cut threshold -- about 2x.
 3. **Replays on the GPU**: the maps already exist as WGSL; thousands of
    children x 400 samples x depth is what a GPU is for. Large.
+
+## 29. A standby plan, not a margin
+
+The plan asked for was a margin: plan a disc wider than the view, so a
+small pan or zoom needs no new plan. `what_a_margin_costs` measured what
+that costs the picture you STOP on -- the share of forced sampling that
+lands in the actual view:
+
+    margin (radius)    1.0    1.25   1.5    2.0    3.0
+    grand-julian 1e2   0.96   0.57   0.28   0.19   0.09
+    grand-julian 1e3   0.93   0.74   0.61   0.38   0.23
+    grand-julian 1e6   0.95   0.71   0.51   0.25   0.15
+    saved view x546    0.93   0.70   0.65   0.46   0.30
+
+Coverage stayed 0.99 or better at every margin, and plan times did not
+change. But a 1.5x margin would make the picture fill in 1.5x to 3.5x
+slower for as long as you look at it -- too high a price for something
+that only matters while moving.
+
+So the margin is a STANDBY plan. The view gets a tight plan, as before;
+once it lands, a second plan for a disc twice the view's radius is made
+in the background and held, not shown. When the view moves outside the
+plan on screen but inside the standby -- a pan of up to one view radius,
+a zoom out of up to 2x -- the standby is swapped in on that frame, and
+the picture stays complete while a tight plan for the new view is made
+after the view settles. Its low efficiency applies only while moving,
+when the accumulation restarts every frame anyway. A tight job cancels
+a standby job in flight; the panel's "Generating" line counts only tight
+plans.
+
+    a_standby_plan_covers_a_move (grand-julian, x1e3, 256x256):
+      first tight plan 1.10 s, standby ready 0.58 s after it
+      half-radius pan: standby swapped in on the first frame, 0.8 ms
+      tight plan for the new view 0.77 s later, new standby 0.61 s
+      pan of 5 radii: no swap; planned as before
+
+A slight zoom IN stays inside the tight plan's own disc, which is still
+complete there, so nothing is swapped; the tighter plan follows after
+the view settles. Affine flames are untouched: their plans cost under a
+millisecond and are made every frame.

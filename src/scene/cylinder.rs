@@ -3223,6 +3223,97 @@ mod gpu_tests {
         assert!(matches!(r.targeting_state(), TS::Active { .. }), "{:?}", r.targeting_state());
     }
 
+    /// **The standby plan keeps a moving view complete.**
+    ///
+    /// Once a tight plan lands, a plan for a disc twice the view's radius
+    /// is made in reserve. A pan of half a view radius must swap it in
+    /// on that very frame -- no settle delay, no plan to wait for -- and
+    /// signal a reset; the tight plan for the new view follows. A pan
+    /// far outside the standby must not use it.
+    #[test]
+    #[ignore = "needs a GPU and reads output/flame-zoom"]
+    fn a_standby_plan_covers_a_move() {
+        use crate::renderer::TargetingState as TS;
+        use std::time::{Duration, Instant};
+        let Ok(text) = std::fs::read_to_string("output/flame-zoom/grand-julian.fflame") else {
+            println!("  no grand-julian.fflame");
+            return;
+        };
+        let (device, queue) = device();
+        let mut cfg: FractalConfig = serde_json::from_str(&text).expect("a config");
+        cfg.cylinder_targeting = true;
+        cfg.render_mode = crate::scene::transforms::RenderMode::TwoD;
+        {
+            let guard = crate::variations::global_registry();
+            let b = crate::scene::backward::Backward::read(&cfg.flame, &guard).expect("armed");
+            let x = b.sample_point(0.75);
+            cfg.pan_x = x[0];
+            cfg.pan_y = x[1];
+        }
+        cfg.zoom = 1e3;
+        const N: u32 = 256;
+        let mut r = crate::renderer::FlameRenderer::with_palette_size(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            N,
+            N,
+            &cfg.flame,
+            cfg.palette_size,
+        );
+        r.set_background_planning(true);
+        let load = |r: &mut crate::renderer::FlameRenderer, cfg: &FractalConfig| {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("standby gate"),
+            });
+            r.load_config(&device, &mut enc, &queue, cfg, &cfg.palette, 1, 0);
+            queue.submit(Some(enc.finish()));
+        };
+        let frame = |r: &mut crate::renderer::FlameRenderer, cfg: &FractalConfig| -> Duration {
+            let s = Instant::now();
+            if r.sync_cylinders(&device, &queue, cfg) {
+                load(r, cfg);
+            }
+            s.elapsed()
+        };
+        let wait = |r: &mut crate::renderer::FlameRenderer, cfg: &FractalConfig, what: &str, done: &dyn Fn(&mut crate::renderer::FlameRenderer) -> bool| {
+            let t0 = Instant::now();
+            loop {
+                frame(r, cfg);
+                if done(r) {
+                    println!("  {what}: {:.2} s", t0.elapsed().as_secs_f64());
+                    return;
+                }
+                assert!(t0.elapsed() < Duration::from_secs(60), "{what}: nothing in 60 s");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+
+        load(&mut r, &cfg);
+        wait(&mut r, &cfg, "first tight plan", &|r| r.take_plan_arrived());
+        wait(&mut r, &cfg, "standby ready", &|r| r.has_standby_plan());
+
+        // A pan of half a view radius: inside the standby's disc.
+        let radius = View::of(cfg.zoom as f64, [cfg.pan_x, cfg.pan_y], N, N).radius;
+        cfg.pan_x += 0.5 * radius;
+        let took = frame(&mut r, &cfg);
+        assert!(r.take_plan_arrived(), "the standby was not swapped in on the frame the view moved");
+        assert!(!r.has_standby_plan(), "a swapped-in standby is still held");
+        assert!(matches!(r.targeting_state(), TS::Active { .. }), "{:?}", r.targeting_state());
+        assert!(took < Duration::from_millis(100), "the swap blocked for {took:?}");
+        println!("  swap on the first frame after a half-radius pan: {:.1} ms", took.as_secs_f64() * 1e3);
+        wait(&mut r, &cfg, "tight plan for the new view", &|r| r.take_plan_arrived());
+        wait(&mut r, &cfg, "standby around the new view", &|r| r.has_standby_plan());
+
+        // A pan far outside the standby: no swap; the old plan draws
+        // while a new one is made.
+        cfg.pan_x += 5.0 * radius;
+        frame(&mut r, &cfg);
+        assert!(!r.take_plan_arrived(), "a standby was swapped in for a view it does not cover");
+        wait(&mut r, &cfg, "tight plan after a long pan", &|r| r.take_plan_arrived());
+        assert!(matches!(r.targeting_state(), TS::Active { .. }), "{:?}", r.targeting_state());
+    }
+
     /// **The gate for a bug the whole suite missed.** `sync_cylinders`
     /// used to rebuild the shader itself, from the raw config —
     /// while `load_config` compiles against the sticky-adopted flame
