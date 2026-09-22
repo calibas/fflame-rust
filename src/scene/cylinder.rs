@@ -3016,6 +3016,67 @@ mod gpu_tests {
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
+    /// **A saved view, targeted against untargeted**: `FFLAME=path`.
+    /// Writes both renders next to the file as `<name>-ref.png` and
+    /// `<name>-tgt.png`, and prints how they agree.
+    #[test]
+    #[ignore = "needs a GPU and reads $FFLAME"]
+    fn a_saved_view_targeted_against_untargeted() {
+        let Ok(path) = std::env::var("FFLAME") else { return };
+        const N: u32 = 384;
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let mut base: FractalConfig =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("file")).expect("config");
+        base.deterministic_rng = true;
+        base.levels_enabled = false;
+        let plan = Cylinders::plan(&base.flame, reg, View::of(base.zoom as f64, [base.pan_x, base.pan_y], N, N))
+            .expect("a plan");
+        let mut refc = base.clone();
+        refc.cylinder_targeting = false;
+        let mut tgt = base.clone();
+        tgt.cylinder_targeting = true;
+        let iters_ref: u64 = std::env::var("REF_ITERS").ok().and_then(|v| v.parse().ok()).unwrap_or(4_000_000_000);
+        let iters_tgt = (((iters_ref as f64) * plan.mass * (plan.depth as f64 + 1.0)
+            / plan.efficiency.max(0.05)) as u64)
+            .clamp(20_000_000, 2_000_000_000);
+        let a = render_out(&refc, N, iters_ref).rgba_data;
+        let b = render_out(&tgt, N, iters_tgt).rgba_data;
+        let stem = path.trim_end_matches(".fflame");
+        let save = |name: &str, data: &[u8]| {
+            image::save_buffer(format!("{stem}-{name}.png"), data, N, N, image::ColorType::Rgba8).expect("png");
+        };
+        save("ref", &a);
+        save("tgt", &b);
+        let lum = |p: &[u8]| (p[0] as f64 + p[1] as f64 + p[2] as f64) / 765.0;
+        let lit = |d: &[u8]| d.chunks(4).map(|p| lum(p) > 0.03).collect::<Vec<_>>();
+        let (la, lb) = (lit(&a), lit(&b));
+        let na = la.iter().filter(|v| **v).count();
+        let nb = lb.iter().filter(|v| **v).count();
+        let both = la.iter().zip(&lb).filter(|(x, y)| **x && **y).count();
+        // Where the reference is lit and the target is DARK: holes.
+        let holes = la.iter().zip(&lb).filter(|(x, y)| **x && !**y).count();
+        // Mean brightness over pixels lit in both.
+        let (mut sa, mut sb, mut n) = (0.0f64, 0.0f64, 0.0f64);
+        for (pa, pb) in a.chunks(4).zip(b.chunks(4)) {
+            if lum(pa) > 0.03 && lum(pb) > 0.03 {
+                sa += lum(pa);
+                sb += lum(pb);
+                n += 1.0;
+            }
+        }
+        println!(
+            "plan {} words depth {}, mass {:.2e}, eff {:.2}, speedup {:.2e}\n\
+             ref iters {iters_ref:.2e}, tgt iters {iters_tgt:.2e}\n\
+             lit ref {na} tgt {nb}; overlap {:.3} of ref; holes (ref lit, tgt dark) {:.3} of ref\n\
+             brightness over shared pixels ref {:.3} tgt {:.3}\n\
+             wrote {stem}-ref.png and {stem}-tgt.png",
+            plan.words.len(), plan.depth, plan.mass, plan.efficiency, plan.speedup(),
+            both as f64 / na.max(1) as f64, holes as f64 / na.max(1) as f64,
+            sa / n.max(1.0), sb / n.max(1.0)
+        );
+    }
+
     /// **The gate for a bug the whole suite missed.** `sync_cylinders`
     /// used to rebuild the shader itself, from the raw config —
     /// while `load_config` compiles against the sticky-adopted flame
