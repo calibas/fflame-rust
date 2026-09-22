@@ -768,7 +768,7 @@ impl App {
 
         let flame = initial_config.flame.clone();
 
-        let flame_renderer = FlameRenderer::with_palette_size(
+        let mut flame_renderer = FlameRenderer::with_palette_size(
             &gpu.device,
             &gpu.queue,
             gpu.config.format,
@@ -777,6 +777,8 @@ impl App {
             &flame,
             initial_config.palette_size,
         );
+        // The app plans deep-zoom cylinders off the UI thread.
+        flame_renderer.set_background_planning(true);
 
         // ConfigManager loads SystemSettings automatically
         let config_manager = ConfigManager::new(initial_config.clone());
@@ -1150,6 +1152,9 @@ impl App {
                                             &config.flame,
                                             config.palette_size,
                                         ));
+                                        if let Some(r) = app.flame_renderer.as_mut() {
+                                            r.set_background_planning(true);
+                                        }
                                         app.effect_chain = crate::renderer::effect_chain::EffectChainRunner::new(
                                             &app.gpu.device,
                                             app.gpu.size.width,
@@ -3000,6 +3005,57 @@ impl App {
             let is_exporting = self.export_status.lock()
                 .map(|s| s.active)
                 .unwrap_or(false);
+            // Keep the cylinder enumeration current with the view --
+            // EVERY frame, not only while iterating: a plan made on the
+            // background thread has to be picked up even if the render
+            // it restarts had already finished.
+            //
+            // A true return means targeting started, stopped, or changed
+            // arm, which changes the SHADER -- and the only path that
+            // rebuilds it consistently with the sticky superset and the
+            // variation-params packing is a full load.
+            if !is_non_flame && !is_exporting {
+                if renderer.sync_cylinders(&self.gpu.device, &self.gpu.queue, &final_config) {
+                    renderer.load_config(
+                        &self.gpu.device,
+                        &mut render_encoder,
+                        &self.gpu.queue,
+                        &final_config,
+                        &final_config.palette,
+                        self.config_manager.system_settings().iterations_per_thread,
+                        self.config_manager.system_settings().burn_in,
+                    );
+                }
+                // A new plan arrived: what was accumulated was drawn
+                // under the previous one (or none) and carries a
+                // different weight, so the picture starts again.
+                if renderer.take_plan_arrived() {
+                    renderer.reset(
+                        &mut render_encoder,
+                        &self.gpu.queue,
+                        self.config_manager.system_settings().iterations_per_thread,
+                        final_config.zoom,
+                        final_config.pan_x as f32,
+                        final_config.pan_y as f32,
+                        final_config.rotation,
+                        final_config.camera_rotation_x,
+                        final_config.camera_rotation_y,
+                        final_config.camera_bank,
+                        final_config.camera_x,
+                        final_config.camera_y,
+                        final_config.camera_z,
+                        final_config.speed_factor,
+                    );
+                    self.frames_since_accumulation = 0;
+                    self.rendering_complete = false;
+                }
+                // Keep frames coming while a plan is being made, so it
+                // is picked up the moment it lands.
+                if renderer.planning_elapsed().is_some() {
+                    self.window.request_redraw();
+                }
+            }
+
             let max_iterations = Some(final_config.max_iterations);
             let should_iterate = !is_non_flame && !self.paused && !is_exporting && (
                 is_controller_playing ||
@@ -3155,29 +3211,6 @@ impl App {
                 // During normal accumulation, batch to reduce GPU overhead
                 let batch_size = if use_overwrite { 1 } else { self.accumulation_batch_size };
                 let should_accumulate = self.frames_since_accumulation >= batch_size;
-
-                // Keep the cylinder enumeration current with the
-                // view. Cheap when nothing moved; the view moves
-                // without a config load, which is why this cannot
-                // live in `load_config` alone.
-                //
-                // A true return means targeting started, stopped, or
-                // changed arm, which changes the SHADER -- and the
-                // only path that rebuilds it consistently with the
-                // sticky superset and the variation-params packing is
-                // a full load. Rare: it needs the view to cross the
-                // pay threshold with the feature switched on.
-                if renderer.sync_cylinders(&self.gpu.device, &self.gpu.queue, &final_config) {
-                    renderer.load_config(
-                        &self.gpu.device,
-                        &mut render_encoder,
-                        &self.gpu.queue,
-                        &final_config,
-                        &final_config.palette,
-                        self.config_manager.system_settings().iterations_per_thread,
-                        self.config_manager.system_settings().burn_in,
-                    );
-                }
 
                 let t_compute = Instant::now();
                 // 1. Compute new samples with fresh random seed
@@ -3388,6 +3421,7 @@ impl App {
             self.egui_layer.update_deep_zoom(crate::ui::DeepZoom {
                 coverage: renderer.frame_coverage_fraction(),
                 targeting: renderer.targeting_state().clone(),
+                planning: renderer.planning_elapsed().map(|d| d.as_secs_f32()),
             });
         }
 

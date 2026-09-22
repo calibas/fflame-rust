@@ -149,6 +149,23 @@ pub enum TargetingState {
 }
 
 
+/// A cylinder plan being made on a background thread. See
+/// `FlameRenderer::sync_cylinders`.
+#[cfg(not(target_arch = "wasm32"))]
+struct PlanJob {
+    /// The enumeration key the plan is for; a result for any other key
+    /// is stale and is discarded.
+    key: u64,
+    /// The flame part of that key, recorded with the plan once applied.
+    flame_key: u64,
+    started: std::time::Instant,
+    /// Set when the view moves on: the planner stops at its next node.
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    rx: std::sync::mpsc::Receiver<
+        Result<crate::scene::cylinder::Cylinders, crate::scene::cylinder::NoCylinders>,
+    >,
+}
+
 pub struct FlameRenderer {
     /// Reachability-census mode (see `src/census/`). Set only by
     /// `enable_census`, read into `ShaderConstants::census`. Never a
@@ -346,6 +363,23 @@ pub struct FlameRenderer {
     /// Fingerprint of everything the enumeration depends on, so the
     /// per-frame sync can skip the work when nothing moved.
     cylinder_key: Option<u64>,
+    /// Plan the expensive flames on a background thread. Set by the app;
+    /// the headless paths (CLI, export, tests) plan inline and see the
+    /// plan before the first sample.
+    background_planning: bool,
+    /// The plan being made, if one is.
+    #[cfg(not(target_arch = "wasm32"))]
+    plan_job: Option<PlanJob>,
+    /// A background plan has just been applied. The accumulation holds
+    /// samples drawn under the previous plan (or none), which carry a
+    /// different weight, so the app resets on this.
+    plan_arrived: bool,
+    /// The flame half of the key the plan on screen was made for. A plan
+    /// for another FLAME is dropped at once -- its words can name
+    /// transforms that no longer exist -- where one for another VIEW is
+    /// kept drawing until its successor arrives, since it still plots in
+    /// the right place.
+    applied_flame_key: Option<u64>,
     /// Whether this render is auto-exposing. Mirrors
     /// `FractalConfig::auto_exposure`; decides both whether the shader
     /// carries the counters and whether the fraction is read back.
@@ -514,6 +548,11 @@ impl FlameRenderer {
             cylinder_key_pending: None,
             cylinder_relative: false,
             cylinder_key: None,
+            background_planning: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            plan_job: None,
+            plan_arrived: false,
+            applied_flame_key: None,
             auto_exposure: false,
             filter_radius: 0.0,
             filter_blur_edges: 0.0,
@@ -2026,8 +2065,27 @@ impl FlameRenderer {
         // below this for one commit and the render came out as the
         // plain one -- the buffer uploaded, the shader never asking
         // for it.
-        let cyl_changed = self.update_cylinders(device, queue, config);
-        self.cylinder_key = Some(self.enumeration_key(config));
+        let key = self.enumeration_key(config);
+        let cyl_changed = if self.cylinder_key == Some(key) {
+            // Already planned for exactly this flame and view: the reload
+            // `sync_cylinders` asks for after a plan lands comes here, and
+            // planning again was the second of two identical plans on the
+            // UI thread.
+            false
+        } else if self.plans_in_background(config) {
+            // Left to the worker, which `sync_cylinders` starts on the
+            // next frame. A plan for another flame cannot stay on screen
+            // meanwhile.
+            self.drop_stale_flame_plan(device, queue, config)
+        } else {
+            #[cfg(not(target_arch = "wasm32"))]
+            self.cancel_plan_job();
+            let changed = self.update_cylinders(device, queue, config);
+            self.cylinder_key = Some(key);
+            self.applied_flame_key = Some(Self::flame_key(config));
+            changed
+        };
+        self.cylinder_relative = self.relative_is_safe(config);
         let shaders_changed = self.pipelines.ensure_shaders_current_with_config(
             device,
             config,
@@ -3422,6 +3480,23 @@ impl FlameRenderer {
         config.pan_y.to_bits().hash(&mut h);
         self.width.hash(&mut h);
         self.height.hash(&mut h);
+        Self::flame_key(config).hash(&mut h);
+        h.finish()
+    }
+
+    /// The part of the enumeration key that is the FLAME.
+    ///
+    /// **Zero-weight variations are left out.** `load_config` plans
+    /// against the sticky-adopted flame, which carries retained
+    /// variations at weight zero, and `sync_cylinders` against the raw
+    /// one. Hashing the zero weights made the two keys differ, so every
+    /// reload was followed by a replan on the next frame -- and the
+    /// inverse walk's per-flame analysis flipped between the two
+    /// flames, rebuilding its index each time. Nothing the planner
+    /// reads depends on a variation at weight zero.
+    fn flame_key(config: &FractalConfig) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
         config.flame.has_xaos().hash(&mut h);
         for t in &config.flame.transforms {
             for v in [
@@ -3431,12 +3506,21 @@ impl FlameRenderer {
                 v.to_bits().hash(&mut h);
             }
             t.post_affine_enabled.hash(&mut h);
-            let mut vars: Vec<(&str, u32)> =
-                t.variations.iter().map(|(k, v)| (k.as_str(), v.to_bits())).collect();
+            let live = |name: &str| t.variations.get(name).is_some_and(|w| *w != 0.0);
+            let mut vars: Vec<(&str, u32)> = t
+                .variations
+                .iter()
+                .filter(|(_, v)| **v != 0.0)
+                .map(|(k, v)| (k.as_str(), v.to_bits()))
+                .collect();
             vars.sort_unstable();
             vars.hash(&mut h);
-            let mut ps: Vec<(&str, u32)> =
-                t.variation_params.iter().map(|(k, v)| (k.as_str(), v.to_bits())).collect();
+            let mut ps: Vec<(&str, u32)> = t
+                .variation_params
+                .iter()
+                .filter(|(k, _)| live(k.split('.').next().unwrap_or("")))
+                .map(|(k, v)| (k.as_str(), v.to_bits()))
+                .collect();
             ps.sort_unstable();
             ps.hash(&mut h);
         }
@@ -3480,6 +3564,13 @@ impl FlameRenderer {
         config: &FractalConfig,
     ) -> bool {
         let key = self.enumeration_key(config);
+
+        // A plan from the background: applied if it is for this key,
+        // waited for if it is still coming.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(reload) = self.poll_plan_job(device, queue, config, key) {
+            return reload;
+        }
         if self.cylinder_key == Some(key) {
             return false;
         }
@@ -3514,12 +3605,27 @@ impl FlameRenderer {
             }
         }
         self.cylinder_key_pending = None;
+
+        // **Planned on a background thread** where the plan is the
+        // expensive kind. The plan on screen keeps drawing meanwhile if
+        // only the view moved -- the replay arm plots in world
+        // coordinates, so an old plan still puts its samples in the
+        // right place, over part of the new frame -- and the panel says
+        // a plan is being generated.
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.plans_in_background(config) {
+            return self.start_plan_job(device, queue, config, key);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.cancel_plan_job();
+
         self.cylinder_key = Some(key);
         // `composable` and not just `is_some`: the two arms read
         // different buffer layouts, so crossing between them needs the
         // rebuild exactly as starting or stopping does.
         let before = self.cylinders.as_ref().map(|c| c.composable);
         let buffers_changed = self.update_cylinders(device, queue, config);
+        self.applied_flame_key = Some(Self::flame_key(config));
         let after = self.cylinders.as_ref().map(|c| c.composable);
 
         // **The bind group must follow the buffer.** A pan that
@@ -3560,14 +3666,6 @@ impl FlameRenderer {
         queue: &Queue,
         config: &FractalConfig,
     ) -> bool {
-        use crate::scene::cylinder::{Cylinders, View};
-        let registry = crate::variations::global_registry();
-        let view = View::of(
-            config.zoom.max(1e-6) as f64,
-            [config.pan_x as f64, config.pan_y as f64],
-            self.width.max(1),
-            self.height.max(1),
-        );
         // The enumeration is PLANAR -- it asks whether a word's
         // image disc meets a disc in the xy plane -- and in 3D what
         // reaches the frame depends on the camera and the point's z,
@@ -3575,8 +3673,36 @@ impl FlameRenderer {
         // only, rather than quietly answering a question it was not
         // asked.
         let two_d = matches!(config.render_mode, crate::scene::transforms::RenderMode::TwoD);
-        let planned = if config.cylinder_targeting && two_d {
-            match Cylinders::plan(&config.flame, &registry, view) {
+        let outcome = (config.cylinder_targeting && two_d).then(|| {
+            let registry = crate::variations::global_registry();
+            crate::scene::cylinder::Cylinders::plan(&config.flame, &registry, self.cylinder_view(config))
+        });
+        self.apply_plan(device, queue, config, outcome)
+    }
+
+    /// The view a plan is made for.
+    fn cylinder_view(&self, config: &FractalConfig) -> crate::scene::cylinder::View {
+        crate::scene::cylinder::View::of(
+            config.zoom.max(1e-6) as f64,
+            [config.pan_x as f64, config.pan_y as f64],
+            self.width.max(1),
+            self.height.max(1),
+        )
+    }
+
+    /// Put a plan -- or none, for `outcome == None` -- on screen:
+    /// the panel's state, the packed word table, the buffers.
+    fn apply_plan(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        config: &FractalConfig,
+        outcome: Option<Result<crate::scene::cylinder::Cylinders, crate::scene::cylinder::NoCylinders>>,
+    ) -> bool {
+        let registry = crate::variations::global_registry();
+        let two_d = matches!(config.render_mode, crate::scene::transforms::RenderMode::TwoD);
+        let planned = if let Some(outcome) = outcome {
+            match outcome {
                 Err(why) => {
                     self.targeting_state = TargetingState::Declined(why);
                     None
@@ -3597,9 +3723,11 @@ impl FlameRenderer {
                 }
             }
         } else {
-            self.targeting_state = if config.cylinder_targeting {
+            self.targeting_state = if config.cylinder_targeting && !two_d {
                 TargetingState::NotPlanar
             } else {
+                // Off, or asked for and dropped while a plan for this
+                // flame is generated.
                 TargetingState::Off
             };
             None
@@ -3624,6 +3752,168 @@ impl FlameRenderer {
         // constants have to be seen to change even if the buffer did
         // not resize.
         changed || was != now
+    }
+
+    /// Plan on a background thread (the app). The headless paths leave
+    /// this off and plan inline, so their first sample already uses the
+    /// plan. No threads on the web: there it stays inline.
+    pub fn set_background_planning(&mut self, on: bool) {
+        self.background_planning = on && cfg!(not(target_arch = "wasm32"));
+    }
+
+    /// How long the plan now being generated has been running, if one
+    /// is. The panel shows it.
+    pub fn planning_elapsed(&self) -> Option<std::time::Duration> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.plan_job.as_ref().map(|j| j.started.elapsed())
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            None
+        }
+    }
+
+    /// Whether a background plan was applied since the last call. The
+    /// accumulation must be reset when it was: see `plan_arrived`.
+    pub fn take_plan_arrived(&mut self) -> bool {
+        std::mem::take(&mut self.plan_arrived)
+    }
+
+    /// Whether this config's plan is made on the worker: background
+    /// planning on, targeting asked for in 2D, and a flame whose plan is
+    /// the expensive kind -- the ones that already wait for the view to
+    /// settle. The affine path costs well under a millisecond and stays
+    /// inline, where a thread per drag frame would only add overhead.
+    fn plans_in_background(&self, config: &FractalConfig) -> bool {
+        self.background_planning
+            && config.cylinder_targeting
+            && matches!(config.render_mode, crate::scene::transforms::RenderMode::TwoD)
+            && !Self::targeting_settle_delay(config).is_zero()
+    }
+
+    /// Drop the plan on screen if it was made for another flame. Returns
+    /// whether the buffers changed.
+    fn drop_stale_flame_plan(&mut self, device: &Device, queue: &Queue, config: &FractalConfig) -> bool {
+        if self.cylinders.is_none() || self.applied_flame_key == Some(Self::flame_key(config)) {
+            return false;
+        }
+        self.applied_flame_key = None;
+        self.apply_plan(device, queue, config, None)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn cancel_plan_job(&mut self) {
+        if let Some(job) = self.plan_job.take() {
+            job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// The worker's side of `sync_cylinders`. `Some(reload)` when this
+    /// frame is settled by the job -- it landed and was applied, or it is
+    /// still coming for this key; `None` when there is no job for this
+    /// key and the caller carries on.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn poll_plan_job(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        config: &FractalConfig,
+        key: u64,
+    ) -> Option<bool> {
+        use std::sync::mpsc::TryRecvError;
+        let job = self.plan_job.as_ref()?;
+        let outcome = match job.rx.try_recv() {
+            Err(TryRecvError::Empty) => return (job.key == key).then_some(false),
+            Ok(r) => r,
+            // The planner panicked. Said so, once, rather than retried
+            // on every frame.
+            Err(TryRecvError::Disconnected) => Err(crate::scene::cylinder::NoCylinders::Unbounded {
+                index: 0,
+                why: "the planner failed on this view".to_string(),
+            }),
+        };
+        let job = self.plan_job.take()?;
+        if job.key != key {
+            // Made for a view the user has left.
+            return None;
+        }
+        let before = self.cylinders.as_ref().map(|c| c.composable);
+        let buffers_changed = self.apply_plan(device, queue, config, Some(outcome));
+        let after = self.cylinders.as_ref().map(|c| c.composable);
+        self.cylinder_key = Some(key);
+        self.applied_flame_key = Some(job.flame_key);
+        self.plan_arrived = true;
+        log::info!("cylinder plan ready after {:.2} s", job.started.elapsed().as_secs_f64());
+        if buffers_changed {
+            self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+            self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
+        }
+        Some(before != after)
+    }
+
+    /// Start planning `key` on a worker thread, cancelling any plan for
+    /// another key. Returns whether the shader must change now -- which
+    /// it must when the plan on screen was for another flame and is
+    /// dropped.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn start_plan_job(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, key: u64) -> bool {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::Arc;
+        if self.plan_job.as_ref().is_some_and(|j| j.key == key) {
+            return false;
+        }
+        self.cancel_plan_job();
+        let before = self.cylinders.as_ref().map(|c| c.composable);
+        if self.drop_stale_flame_plan(device, queue, config) {
+            self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+            self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
+        }
+        let reload = before != self.cylinders.as_ref().map(|c| c.composable);
+
+        let flame = config.flame.clone();
+        let view = self.cylinder_view(config);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = cancel.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let spawned = std::thread::Builder::new().name("cylinder-plan".into()).spawn(move || {
+            let registry = crate::variations::global_registry();
+            let result = crate::scene::cylinder::Cylinders::plan_opts(
+                &flame,
+                &registry,
+                view,
+                crate::scene::backward::PlanOptions {
+                    budget: crate::scene::backward::TIME_BUDGET,
+                    cancel: Some(&flag),
+                },
+            );
+            // A cancelled job's receiver is gone; nothing to tell.
+            let _ = tx.send(result);
+        });
+        match spawned {
+            Ok(_) => {
+                self.plan_job = Some(PlanJob {
+                    key,
+                    flame_key: Self::flame_key(config),
+                    started: std::time::Instant::now(),
+                    cancel,
+                    rx,
+                });
+                reload
+            }
+            Err(e) => {
+                // No thread: plan here, as before.
+                log::warn!("could not start the cylinder planner thread ({e}); planning inline");
+                self.cylinder_key = Some(key);
+                let buffers_changed = self.update_cylinders(device, queue, config);
+                self.applied_flame_key = Some(Self::flame_key(config));
+                if buffers_changed {
+                    self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+                    self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
+                }
+                before != self.cylinders.as_ref().map(|c| c.composable)
+            }
+        }
     }
 
     /// The factor the tone map's iteration count is inflated by.

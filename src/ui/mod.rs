@@ -773,11 +773,15 @@ pub struct DeepZoom {
     /// auto exposure is off, or before anything has been measured.
     pub coverage: f32,
     pub targeting: crate::renderer::TargetingState,
+    /// Seconds the plan now being generated has been running, if one
+    /// is. The panel says so; `targeting` meanwhile describes the plan
+    /// still on screen.
+    pub planning: Option<f32>,
 }
 
 impl Default for DeepZoom {
     fn default() -> Self {
-        Self { coverage: 1.0, targeting: crate::renderer::TargetingState::Off }
+        Self { coverage: 1.0, targeting: crate::renderer::TargetingState::Off, planning: None }
     }
 }
 
