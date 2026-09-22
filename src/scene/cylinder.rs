@@ -120,15 +120,17 @@ pub fn sym_arm(sym: u32) -> u32 {
     sym >> ARM_SHIFT
 }
 
-/// Whether `plan` may put arms in the alphabet.
+/// Whether a many-valued variation's arms are in the alphabet, so a
+/// word names which image the replay must take.
 ///
-/// OFF. The CPU half works — `grand-julian` goes from unbounded to
-/// contracting once the arm is pinned — but the kernel replays a word
-/// by applying its transforms, and it does not yet know how to force
-/// the arm, so a plan full of arms would render as if every arm were
-/// the one the dice chose. Turning this on without the shader change
-/// would draw a wrong picture rather than a slow one.
-pub const ARMS_ENABLED: bool = false;
+/// ON. The planner for an armed flame is the inverse walk
+/// (`backward.rs`), the replay masks the transform out of the symbol
+/// and sets `ct_forced_arm` before applying it, and the armed
+/// variations' draws are wrapped by the shader builder to read it --
+/// only under `CYLINDER_REPLAY`, so an untargeted shader is
+/// byte-identical to what it was. The picture gate is
+/// `a_targeted_grand_julian_render_is_the_untargeted_render`.
+pub const ARMS_ENABLED: bool = true;
 
 /// Family M: the most probability increments the map-keyed walk will
 /// deliver before giving up and charging the rest to
@@ -750,17 +752,50 @@ impl Cylinders {
             }
         }
 
-        // **The inverse walk first, for family J.** A flame the
+        // **Armed**: some transform draws among several images, so a
+        // word has to say which. Everything below that is specific to
+        // arms is keyed on this and not on `family_j`, so a flame
+        // without arms takes exactly the path it always took.
+        let armed = family_j
+            && flame.transforms.iter().any(|t| {
+                t.weight > 0.0
+                    && t.variations.iter().any(|(n, w)| {
+                        *w != 0.0 && crate::variations::bound::arms_for(n).is_some()
+                    })
+            });
+
+        // **The inverse walk first, for an armed flame.** A flame the
         // inverse-walk analysis accepts is planned by pulling the view
         // back through its inverses (`backward.rs`), which is exact
         // where the forward bound below is structurally loose -- see
         // `docs/projects/inversive-targeting.md` §24. A flame it
-        // refuses falls through to the forward machinery, so nothing
-        // that planned before plans differently now.
-        if family_j {
-            if let Ok(b) = crate::scene::backward::Backward::read(flame, registry) {
-                return b.plan(view);
-            }
+        // refuses falls through to the forward machinery.
+        if armed {
+            // The inverse walk is the ONLY planner for an armed flame.
+            // The forward cover/bag walk it replaced (§23) is
+            // structurally unable to contract here and measured 17 to
+            // 60 seconds a plan -- on the UI thread, on every pan -- so
+            // a flame the inverse walk refuses is refused, with its
+            // reason, rather than handed to it.
+            return match crate::scene::backward::Backward::cached(flame, registry) {
+                Ok(b) => b.plan(view),
+                Err(why) => {
+                    let index = flame
+                        .transforms
+                        .iter()
+                        .position(|t| {
+                            t.weight > 0.0
+                                && t.variations.iter().any(|(n, w)| {
+                                    *w != 0.0 && crate::variations::bound::arms_for(n).is_some()
+                                })
+                        })
+                        .unwrap_or(0);
+                    Err(NoCylinders::Unbounded {
+                        index,
+                        why: format!("the inverse walk cannot plan this flame: {why}"),
+                    })
+                }
+            };
         }
 
         // **Family M first**: a flame built from similarities,
@@ -830,7 +865,7 @@ impl Cylinders {
         // Without it the answer is what it always was, returned where
         // it always was, so no flame outside family J sees a
         // different refusal or a different order of refusals.
-        if !family_j {
+        if !armed {
             if let Some(why) = probe_failure.take() {
                 return Err(why);
             }
@@ -874,7 +909,7 @@ impl Cylinders {
             if !(*w > 0.0) {
                 continue;
             }
-            let arms = if family_j { bounders[i].arms().max(1) } else { 1 };
+            let arms = if armed { bounders[i].arms().max(1) } else { 1 };
             for a in 0..arms {
                 alphabet.push((sym_of(i as u32, a), w / arms as f64));
             }
@@ -897,7 +932,7 @@ impl Cylinders {
         let (root_c, root_r, sampling_leak) = match invariant_ball(flame, registry) {
             Ok((c, r)) => (c, r, 0.0),
             Err(no_ball) => {
-                let cover_root = if family_j {
+                let cover_root = if armed {
                     bounded_root_images(&bounders, &weights, &alphabet)
                 } else {
                     Err("not enabled".to_string())
@@ -2858,6 +2893,129 @@ mod gpu_tests {
         assert!(checked > 0, "no zoom produced a comparable pair");
     }
 
+    /// **The picture gate for family J.**
+    ///
+    /// `grand-julian` is three `julian` transforms with 2, 15 and 8
+    /// arms. Its plan comes from the inverse walk, its words carry
+    /// arms, and the replay forces each one: this asks whether the
+    /// result is the same picture the free chaos game draws. Compared
+    /// as the family-M gate compares -- which pixels are lit and how
+    /// bright -- at matched in-frame samples.
+    #[test]
+    #[ignore = "needs a GPU and reads output/flame-zoom"]
+    fn a_targeted_grand_julian_render_is_the_untargeted_render() {
+        const N: u32 = 96;
+        let stats = |rgba: &[u8]| -> (Vec<bool>, f64) {
+            let lit: Vec<bool> = rgba
+                .chunks(4)
+                .map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24)
+                .collect();
+            let (mut acc, mut n) = (0.0f64, 0.0f64);
+            for (p, l) in rgba.chunks(4).zip(&lit) {
+                if !*l {
+                    continue;
+                }
+                acc += (p[0] as f64 + p[1] as f64 + p[2] as f64) / 765.0;
+                n += 1.0;
+            }
+            (lit, if n > 0.0 { acc / n } else { 0.0 })
+        };
+
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let Ok(text) = std::fs::read_to_string("output/flame-zoom/grand-julian.fflame") else {
+            println!("  no grand-julian.fflame");
+            return;
+        };
+        let mut base: crate::config::FractalConfig =
+            serde_json::from_str(&text).expect("a config");
+        base.deterministic_rng = true;
+        base.levels_enabled = false;
+
+        // On the set: a point of the attractor the planner sampled.
+        let b = crate::scene::backward::Backward::read(&base.flame, reg).expect("armed");
+        let x = b.sample_point(0.75);
+        base.pan_x = x[0];
+        base.pan_y = x[1];
+
+        println!("  zoom     words  depth   mass      eff   speedup    lit ref/tgt   overlap  bright");
+        let mut checked = 0usize;
+        let mut failures: Vec<String> = Vec::new();
+        for zoom in [1e2f64, 1e4, 1e6] {
+            base.zoom = zoom as f32;
+            let plan = match Cylinders::plan(
+                &base.flame,
+                reg,
+                View::of(zoom, [base.pan_x, base.pan_y], N, N),
+            ) {
+                Ok(p) => p,
+                Err(e) => {
+                    println!("  {zoom:>7.0e}  {e:?}");
+                    continue;
+                }
+            };
+            if plan.speedup() <= 1.0 {
+                println!("  {zoom:>7.0e}  speedup {:.2} -- not worth forcing", plan.speedup());
+                continue;
+            }
+            let mut refc = base.clone();
+            refc.cylinder_targeting = false;
+            let mut tgt = base.clone();
+            tgt.cylinder_targeting = true;
+
+            // Matched on in-frame samples: the reference lands
+            // `iters · mass` of its samples in the view; the forced one
+            // lands `efficiency` of them, each costing `depth + 1`.
+            let iters_ref = 120_000_000u64;
+            let iters_tgt = (((iters_ref as f64) * plan.mass * (plan.depth as f64 + 1.0)
+                / plan.efficiency.max(0.05)) as u64)
+                .clamp(4_000_000, 400_000_000);
+            let ra = render_out(&refc, N, iters_ref);
+            let rb = render_out(&tgt, N, iters_tgt);
+            let (a, b) = (ra.rgba_data, rb.rgba_data);
+            let (la, ba) = stats(&a);
+            let (lb, bb) = stats(&b);
+            let lit_a = la.iter().filter(|v| **v).count();
+            let lit_b = lb.iter().filter(|v| **v).count();
+            let both = la.iter().zip(&lb).filter(|(p, q)| **p && **q).count();
+            let overlap = both as f64 / lit_a.max(1) as f64;
+            println!(
+                "  {zoom:>7.0e}  {:>5}  {:>5}  {:.2e}  {:.2}  {:.3e}   {lit_a:>4}/{lit_b:<4}   {overlap:>6.3}  {ba:.3}/{bb:.3}  (tgt iters {iters_tgt:.2e}; frame coverage ref {:.2e} tgt {:.2e})",
+                plan.words.len(),
+                plan.depth,
+                plan.mass,
+                plan.efficiency,
+                plan.speedup(),
+                ra.frame_coverage,
+                rb.frame_coverage
+            );
+            if lit_a < 40 {
+                println!("         reference too sparse to compare");
+                continue;
+            }
+            checked += 1;
+            if overlap <= 0.6 {
+                failures.push(format!(
+                    "at zoom {zoom:.0e} the targeted render lit only {overlap:.3} of what the \
+                     reference did -- it is drawing a different picture"
+                ));
+            }
+            // Brightness is only comparable against a DENSE reference:
+            // a starved one has a sample or two per lit pixel, and its
+            // mean is whatever the log map does to that. The overlap
+            // stays meaningful there -- with far more in-frame samples,
+            // the targeted render must light everything the reference
+            // managed to.
+            if lit_a >= 1000 && (ba - bb).abs() >= 0.35 * ba.max(bb).max(1e-6) {
+                failures.push(format!(
+                    "at zoom {zoom:.0e} brightness disagrees: reference {ba:.3}, targeted {bb:.3}"
+                ));
+            }
+        }
+        assert!(checked > 0, "no zoom produced a comparable pair");
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
     /// **The gate for a bug the whole suite missed.** `sync_cylinders`
     /// used to rebuild the shader itself, from the raw config —
     /// while `load_config` compiles against the sticky-adopted flame
@@ -3871,6 +4029,7 @@ mod tests {
     #[test]
     #[ignore = "reads output/*.flame and output/flame-zoom"]
     fn every_working_flame_loses_nothing() {
+        const ARMED_LOST_CEILING: f64 = 1e-2;
         let guard = crate::variations::global_registry();
         let reg = &*guard;
         let mut checked = 0usize;
@@ -3953,10 +4112,24 @@ mod tests {
                             256,
                         )
                         .is_some();
+                        // So does the inverse walk that plans an ARMED
+                        // flame: its beam and measure floor charge
+                        // what they drop to `lost` (backward.rs), so
+                        // the loss is accounted, not silent. It gets a
+                        // ceiling rather than a pass -- measured at
+                        // 1e-4 to 3e-3 across the corpus, and a
+                        // regression in the walk would show as more.
+                        let armed = cfg.flame.transforms.iter().any(|t| {
+                            t.weight > 0.0
+                                && t.variations.iter().any(|(n, w)| {
+                                    *w != 0.0
+                                        && crate::variations::bound::arms_for(n).is_some()
+                                })
+                        });
                         if c.lost != 0.0 {
                             let line =
                                 format!("{name} at x{mult:.0e}: lost {:.3e}", c.lost);
-                            if family_m {
+                            if family_m || (armed && c.lost < ARMED_LOST_CEILING) {
                                 reported.push(line);
                             } else {
                                 offenders.push(line);
@@ -3969,7 +4142,7 @@ mod tests {
 
         println!("  {checked} successful enumerations across {} flames", configs.len());
         if !reported.is_empty() {
-            println!("  family M, which drops measure by design:");
+            println!("  family M and armed flames, which drop measure by design:");
             for line in &reported {
                 println!("    {line}");
             }

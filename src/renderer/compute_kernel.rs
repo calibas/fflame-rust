@@ -1860,7 +1860,17 @@ impl FlameRenderer {
             return std::time::Duration::ZERO;
         }
         let reg = crate::variations::global_registry();
-        if crate::scene::mobius::MobiusFlame::is_family_m(&config.flame, &reg) {
+        // An armed flame is planned by the inverse walk, which costs
+        // about a hundred milliseconds a pan and would stutter a drag
+        // planned on every event; like family M, it waits for the view
+        // to settle.
+        let armed = config.flame.transforms.iter().any(|t| {
+            t.weight > 0.0
+                && t.variations.iter().any(|(n, w)| {
+                    *w != 0.0 && crate::variations::bound::arms_for(n).is_some()
+                })
+        });
+        if armed || crate::scene::mobius::MobiusFlame::is_family_m(&config.flame, &reg) {
             std::time::Duration::from_millis(250)
         } else {
             // The affine and bounded paths cost well under a
