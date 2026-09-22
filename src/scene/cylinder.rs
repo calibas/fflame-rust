@@ -385,6 +385,13 @@ pub struct Cylinders {
     /// flame with a real invariant ball, which is every flame that
     /// targeted before family M existed.
     pub sampling_leak: f64,
+    /// The fraction of forced samples that land in the frame, weighted
+    /// by the words' probabilities. One everywhere except the inverse
+    /// walk, which verifies each word by replaying it forward on a
+    /// sample of the attractor and reports what it measured. Below
+    /// one is WASTE, not error: the kernel discards a plot outside the
+    /// frame, so the picture is unchanged and the speedup is scaled.
+    pub efficiency: f64,
     /// The deepest word kept, which is what the prefix costs per
     /// plotted sample.
     pub depth: usize,
@@ -673,6 +680,7 @@ impl Cylinders {
             mass,
             lost,
             sampling_leak,
+            efficiency: 1.0,
             depth,
             composable: false,
             view_centre: view.centre,
@@ -739,6 +747,19 @@ impl Cylinders {
                         return Err(NoCylinders::ColourNotAffine);
                     }
                 }
+            }
+        }
+
+        // **The inverse walk first, for family J.** A flame the
+        // inverse-walk analysis accepts is planned by pulling the view
+        // back through its inverses (`backward.rs`), which is exact
+        // where the forward bound below is structurally loose -- see
+        // `docs/projects/inversive-targeting.md` §24. A flame it
+        // refuses falls through to the forward machinery, so nothing
+        // that planned before plans differently now.
+        if family_j {
+            if let Ok(b) = crate::scene::backward::Backward::read(flame, registry) {
+                return b.plan(view);
             }
         }
 
@@ -1257,6 +1278,7 @@ impl Cylinders {
             mass,
             lost,
             sampling_leak,
+            efficiency: 1.0,
             depth,
             composable,
             view_centre: view.centre,
@@ -5431,6 +5453,43 @@ mod tests {
                     antichain[zi].1,
                     open[zi].len()
                 );
+            }
+        }
+    }
+
+    /// **Does the inverse-walk analysis accept the family-J flames?**
+    #[test]
+    #[ignore = "reads output/flame-zoom"]
+    fn does_analyse_2d_accept_family_j() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        for name in ["grand-julian", "julian-disc", "spherical", "random1"] {
+            let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame"))
+            else {
+                continue;
+            };
+            let cfg: crate::config::FractalConfig =
+                serde_json::from_str(&text).expect("a config");
+            let t0 = std::time::Instant::now();
+            match crate::scene::ifs_analysis::analyse_2d(&cfg.flame, reg) {
+                Ok(ifs) => {
+                    let mut per: Vec<(usize, u32)> = Vec::new();
+                    for m in &ifs.maps {
+                        let b = m.forward.nonlinear().map_or(0, |n| n.branch);
+                        per.push((m.transform_index, b));
+                    }
+                    println!(
+                        "{name}: OK in {:.1} ms — {} maps (transform, branch) {:?}, ball {:.3e} at [{:.3}, {:.3}], xaos {}",
+                        t0.elapsed().as_secs_f64() * 1e3,
+                        ifs.maps.len(),
+                        per,
+                        ifs.ball.radius,
+                        ifs.ball.centre[0],
+                        ifs.ball.centre[1],
+                        ifs.xaos.is_some()
+                    );
+                }
+                Err(errs) => println!("{name}: refused — {errs:?}"),
             }
         }
     }
