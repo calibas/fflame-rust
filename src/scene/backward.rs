@@ -91,7 +91,37 @@ pub const SAMPLE: usize = 100_000;
 pub const GRID_CELLS: usize = 1024;
 
 /// How many sample points a cut is verified against.
-pub const VERIFY: usize = 100;
+pub const VERIFY: usize = 400;
+
+/// A node whose children, between them, account for less than this
+/// fraction of the node's own share of the view is forced ITSELF, and
+/// its children are discarded.
+///
+/// **This is what makes the plan complete by construction.** Every
+/// earlier failure was a child that was never formed -- starved of
+/// points, pruned wrongly, cut off by a cap -- and each one was a hole
+/// in the picture that no count could see. But the invariance equation
+/// is exact: a word's share of the view is `Σ_a p_a` times its
+/// children's shares, over EVERY symbol. So the children found can be
+/// checked against their parent, and when they come up short the
+/// parent is forced instead. A shallower word is less efficient --
+/// more of its forced samples land outside the frame and are discarded
+/// -- but it draws everything beneath it, including whatever the walk
+/// failed to find. Holes become waste.
+pub const COMPLETE_ENOUGH: f64 = 0.9;
+
+/// The fewest of a node's own region points its check must rest on.
+///
+/// **The check counts points, it does not compare estimates.** The
+/// first version compared the node's replay share against the sum of
+/// its children's, two 400-sample estimates each ~15% noisy against a
+/// 0.9 threshold; a false trigger deep in the tree forced its whole
+/// ancestry, and at the saved view it forced a depth-1 word holding 37%
+/// of the attractor -- complete, and untargeted. But every region point
+/// records the child that produced it, so the question "do the
+/// surviving children cover this node" is a count over the node's own
+/// points, exact for the sample.
+pub const CHECK_POINTS: usize = 40;
 
 /// The fraction of replayed sample points that must land in the
 /// frame for a word to be cut there rather than walked deeper. Below
@@ -126,14 +156,14 @@ pub const SEED_CANDIDATES: usize = 4096;
 /// candidate search. A strided subset of the points is still
 /// distributed by measure, and the cells it names are the ones the
 /// region's measure lives in.
-pub const CELLS_FROM: usize = 256;
+pub const CELLS_FROM: usize = 1024;
 
 /// The most candidates one child takes from the index, and how many
 /// it takes from each cell. Round-robin across the cells, so the
 /// candidates cover the region rather than whichever cell sorts
 /// first -- taken first-come, the survivors clustered in one corner
 /// and the child's own cells named nothing else.
-pub const CAND_CAP: usize = 256;
+pub const CAND_CAP: usize = 1024;
 pub const PER_CELL: usize = 2;
 
 /// How many candidates are tested exactly before deciding whether the
@@ -171,6 +201,9 @@ pub struct Trace {
     pub empty: usize,
     /// Index children with no candidates in the parent's cells.
     pub nocand: usize,
+    /// Nodes forced as they stood: incomplete children, off the
+    /// beam, or out of time.
+    pub forced: usize,
     /// A word suffix to follow: every child whose word ends with it
     /// reports what became of it.
     pub watch: Option<Vec<u32>>,
@@ -208,6 +241,13 @@ impl Index {
         }
     }
 
+    /// The span of `entries` filed under `cell`.
+    fn bounds(&self, cell: Cell) -> (usize, usize) {
+        let lo = self.entries.partition_point(|e| e.0 < cell);
+        let hi = lo + self.entries[lo..].partition_point(|e| e.0 <= cell);
+        (lo, hi)
+    }
+
     /// Every index under `cell`.
     fn all(&self, cell: Cell, out: &mut Vec<u32>) {
         let lo = self.entries.partition_point(|e| e.0 < cell);
@@ -235,6 +275,19 @@ pub struct Backward {
     transforms: Vec<TransformInfo>,
     alphabet: Vec<Sym>,
     sample: Vec<[f64; 2]>,
+    /// The alphabet index of the symbol that produced each sample point
+    /// from the one before it, or `u32::MAX` after a reseed.
+    ///
+    /// **The sample is one orbit, so every point's past is recorded.**
+    /// A region's sample points therefore split among the region's
+    /// children EXACTLY: point `i` lies in child `a` if symbol `a`
+    /// produced it, and its predecessor `i - 1` is then a point of that
+    /// child's region. The split is in proportion to the children's
+    /// shares, so every child holding more than one part in the
+    /// region's point count is found by construction -- where searching
+    /// the landing index by cell found them only when the cells were
+    /// right.
+    made_by: Vec<u32>,
     centre: [f64; 2],
     extent: f64,
     cell: f64,
@@ -359,6 +412,8 @@ impl Backward {
         let mut x = [0.31f64, 0.17];
         let burn = SAMPLE / 20;
         let mut sample = Vec::with_capacity(SAMPLE);
+        let mut made_by: Vec<u32> = Vec::with_capacity(SAMPLE);
+        let mut reseeded = true;
         for k in 0..SAMPLE + burn {
             let mut u = lcg() * total;
             let mut t = &transforms[transforms.len() - 1];
@@ -375,11 +430,20 @@ impl Backward {
                 x = y;
             } else {
                 x = [0.31, 0.17];
+                reseeded = true;
                 continue;
             }
             if k >= burn {
+                let ai = alphabet
+                    .iter()
+                    .position(|a| a.sym == sym_of(t.index as u32, arm))
+                    .map_or(u32::MAX, |i| i as u32);
+                // The first point kept, and the first after a reseed,
+                // have no recorded predecessor in the sample.
+                made_by.push(if reseeded || sample.is_empty() { u32::MAX } else { ai });
                 sample.push(x);
             }
+            reseeded = false;
         }
         if sample.len() < 1000 {
             return Err("the orbit did not settle".into());
@@ -409,7 +473,7 @@ impl Backward {
             }
             landing.push(Index::build(entries));
         }
-        Ok(Self { ifs, transforms, alphabet, sample, centre, extent, cell, grid, landing })
+        Ok(Self { ifs, transforms, alphabet, sample, made_by, centre, extent, cell, grid, landing })
     }
 
     /// How far the sample reaches from its centre.
@@ -574,19 +638,43 @@ impl Backward {
     /// cells -- an index lands in exactly one cell per symbol -- so
     /// nothing needs deduplicating, and the search stops as soon as it
     /// has enough.
-    fn gather(index: &Index, cells: &[Cell], neighbours: bool, per_cell: usize, cap: usize) -> Vec<u32> {
-        let mut out: Vec<u32> = Vec::with_capacity(cap.min(256));
-        let reach = if neighbours { 1 } else { 0 };
+    fn gather(index: &Index, cells: &[Cell], neighbours: bool, _per_cell: usize, cap: usize) -> Vec<u32> {
+        // **By measure, across the whole region.** Every cell's list is
+        // a μ-distributed sample, so the concatenation of all of them is
+        // the region's measure, and taking every k-th entry of it is a
+        // fair sample that neither favours the front of the cell order
+        // nor spends as much on an empty cell as on a dense one. Both
+        // mistakes were made and measured: filling the cap from the
+        // first cells took the region's leftmost strip (70% complete at
+        // a view straddling an arm boundary), and two points per cell
+        // sampled by AREA and starved the ring the measure lives on
+        // (42%). Counting a cell is two binary searches, so the whole
+        // region is counted before anything is taken.
+        let reach: i32 = if neighbours { 1 } else { 0 };
+        let mut seen: Vec<Cell> = Vec::with_capacity(cells.len() * 9);
         for &(cx, cy) in cells {
             for dx in -reach..=reach {
                 for dy in -reach..=reach {
-                    index.some((cx + dx, cy + dy), per_cell, &mut out);
-                    if out.len() >= cap {
-                        out.truncate(cap);
-                        return out;
-                    }
+                    seen.push((cx + dx, cy + dy));
                 }
             }
+        }
+        seen.sort_unstable();
+        seen.dedup();
+        let ranges: Vec<(usize, usize)> = seen.iter().map(|&c| index.bounds(c)).filter(|r| r.1 > r.0).collect();
+        let total: usize = ranges.iter().map(|r| r.1 - r.0).sum();
+        let step = total.div_ceil(cap.max(1)).max(1);
+        let mut out: Vec<u32> = Vec::with_capacity(total.min(cap));
+        let mut k = 0usize;
+        for (lo, hi) in ranges {
+            // Resume the global stride inside this cell.
+            let first = (step - k % step) % step;
+            let mut i = lo + first;
+            while i < hi {
+                out.push(index.entries[i].1);
+                i += step;
+            }
+            k += hi - lo;
         }
         out
     }
@@ -660,12 +748,17 @@ impl Backward {
             if frontier.is_empty() {
                 break;
             }
-            // Out of time: what is still on the frontier is measure
-            // the plan will not deliver, and says so.
+            // Out of time: what is still on the frontier is FORCED as it
+            // stands. Dropping it was a hole; forcing it is waste.
             if started.elapsed() > TIME_BUDGET {
                 for n in frontier.drain(..) {
-                    lost += n.prob;
-                    tr.beam += 1;
+                    if n.word.is_empty() || !(n.eff > 0.0) {
+                        continue;
+                    }
+                    let (_, cc, r) = self.replay(&n.word, view);
+                    kept_mass += n.prob;
+                    kept.push((Cylinder { word: n.word, prob: n.prob, centre: cc, radius: r }, n.eff));
+                    tr.forced += 1;
                 }
                 break;
             }
@@ -694,6 +787,8 @@ impl Backward {
                 // **Children**: one per symbol the region's points
                 // came through.
                 let mut children: Vec<(usize, Pts)> = Vec::new(); // (alphabet index, points)
+                // Exact children from the orbit, by alphabet index.
+                let mut from_orbit: Vec<Vec<u32>> = vec![Vec::new(); self.alphabet.len()];
                 match &node.pts {
                     Pts::Cloud(cloud) => {
                         for (ai, a) in self.alphabet.iter().enumerate() {
@@ -727,6 +822,12 @@ impl Backward {
                         }
                     }
                     Pts::Index(idx) => {
+                        for &i in idx {
+                            let ai = self.made_by[i as usize];
+                            if ai != u32::MAX && i > 0 {
+                                from_orbit[ai as usize].push(i - 1);
+                            }
+                        }
                         let stride = (idx.len() / CELLS_FROM).max(1);
                         let mut cells: Vec<Cell> = idx.iter().step_by(stride).map(|&i| self.cell_of(self.sample[i as usize])).collect();
                         cells.sort_unstable();
@@ -739,7 +840,7 @@ impl Backward {
                         let per_cell = PER_CELL.max(CAND_CAP.div_ceil(looked.max(1)));
                         for (ai, _a) in self.alphabet.iter().enumerate() {
                             let cands = Self::gather(&self.landing[ai], &cells, neighbours, per_cell, CAND_CAP);
-                            if cands.is_empty() {
+                            if cands.is_empty() && from_orbit[ai].is_empty() {
                                 tr.nocand += 1;
                                 continue;
                             }
@@ -750,18 +851,24 @@ impl Backward {
                     }
                 }
 
+                // Everything a node decides about its children is held
+                // here until the node has been checked for completeness.
+                let mut node_kept: Vec<(Cylinder, f64)> = Vec::new();
+                let mut node_next: Vec<Node> = Vec::new();
+                let mut node_lost = 0.0f64;
+                // Σ_a p_a · eff(a·w): what the children found account
+                // for of this node's share of the view.
+                let mut accounted = 0.0f64;
+                // Which children survived -- carried or kept -- by
+                // alphabet index, for the point count below.
+                let mut survived = vec![false; self.alphabet.len()];
                 for (ai, pts) in children {
+                    let orbit_hits = std::mem::take(&mut from_orbit[ai]);
                     let a = &self.alphabet[ai];
                     let prob = node.prob * a.prob;
                     let mut word = Vec::with_capacity(node.word.len() + 1);
                     word.push(a.sym);
                     word.extend_from_slice(&node.word);
-                    if prob < MEASURE_FLOOR * kept_mass {
-                        watched(tr, &word, depth, "FLOOR", format!("prob {prob:.2e} kept {kept_mass:.2e}"));
-                        lost += prob;
-                        tr.floor += 1;
-                        continue;
-                    }
                     // The exact test on a capped set of candidates.
                     let pts = match pts {
                         Pts::Index(cands) => {
@@ -777,13 +884,16 @@ impl Backward {
                             // are. Otherwise every candidate is tested
                             // -- a probe that finds nothing is not
                             // evidence of absence at a low hit rate.
-                            let probe = picked.len().min(PROBE);
-                            let landed = picked[..probe].iter().filter(|&&i| self.lands(&word, self.sample[i as usize], view)).count();
-                            let hits: Vec<u32> = if landed == probe {
-                                picked
-                            } else {
-                                picked.iter().copied().filter(|&i| self.lands(&word, self.sample[i as usize], view)).collect()
-                            };
+                            let mut hits: Vec<u32> = picked
+                                .iter()
+                                .copied()
+                                .filter(|&i| self.lands(&word, self.sample[i as usize], view))
+                                .collect();
+                            // The orbit's points need no check: they are
+                            // in the child's region by construction.
+                            hits.extend_from_slice(&orbit_hits);
+                            hits.sort_unstable();
+                            hits.dedup();
                             if hits.is_empty() {
                                 tr.empty += 1;
                                 watched(tr, &word, depth, "EMPTY", format!("{n_cands} candidates, none land"));
@@ -804,23 +914,79 @@ impl Backward {
                     // deeper than they fit, the tree grew into the
                     // beam, and a 1e6 plan kept 1e-14 of a view whose
                     // measure was 4e-9.
-                    let last = depth == MAX_DEPTH;
+                    // **The floor stops the walk, not the word.** A word
+                    // below it still holds its share of the view, and
+                    // under a near-neutral map like `t0` (derivative
+                    // about 1 where the attractor lives) a cylinder on
+                    // the view's edge keeps an efficiency of 0.4-0.8 for
+                    // many levels, splitting all the way down: dropping
+                    // those at the floor lost 15% of a view whose
+                    // `lost` said the plan was fine. Below the floor the
+                    // word is KEPT if enough of it lands in the frame --
+                    // efficiency under one is waste, not a wrong picture
+                    // -- and charged to `lost` only for what it held.
+                    // Below the floor, or at the depth cap, the walk
+                    // stops -- and the word is FORCED if any of it lands,
+                    // never dropped.
+                    let last = depth == MAX_DEPTH || prob < MEASURE_FLOOR * kept_mass;
                     let (eff, cc, r) = self.replay(&word, view);
+                    accounted += a.prob * eff;
+                    if !(eff > 0.0) && last {
+                        // Nothing of this child lands in the replay and
+                        // the walk has stopped. Charged at the bound.
+                        watched(tr, &word, depth, "ZERO", format!("prob {prob:.2e}"));
+                        node_lost += prob / VERIFY as f64;
+                        tr.floor += 1;
+                        continue;
+                    }
                     watched(tr, &word, depth, if eff >= CUT_EFFICIENCY { "CUT" } else { "replayed" }, format!("{} pts spread {spread:.2e} eff {eff:.2} prob {prob:.2e}", qs.len()));
-                    if eff >= CUT_EFFICIENCY || (last && eff >= LAST_EFFICIENCY) {
-                        tr.cut += 1;
-                        kept_mass += prob;
-                        kept.push((Cylinder { word, prob, centre: cc, radius: r }, eff));
+                    survived[ai] = true;
+                    if eff >= CUT_EFFICIENCY || (last && eff > 0.0) {
+                        node_kept.push((Cylinder { word, prob, centre: cc, radius: r }, eff));
                         continue;
                     }
-                    if last {
-                        lost += prob;
-                        continue;
-                    }
-                    tr.not_yet += 1;
                     watched(tr, &word, depth, "carried", format!("{} pts spread {spread:.2e} prob {prob:.2e} indexed {}", qs.len(), matches!(pts, Pts::Index(_))));
-                    next.push(Node { word, pts, prob, eff });
+                    node_next.push(Node { word, pts, prob, eff });
                 }
+
+                // **Complete, or forced.** See `COMPLETE_ENOUGH`.
+                let _ = accounted;
+                // The share of the node's own points whose producing
+                // child survived.
+                let covered = match &node.pts {
+                    Pts::Index(idx) => {
+                        let mut valid = 0usize;
+                        let mut ok = 0usize;
+                        for &i in idx {
+                            let ai = self.made_by[i as usize];
+                            if ai == u32::MAX || i == 0 {
+                                continue;
+                            }
+                            valid += 1;
+                            if survived[ai as usize] {
+                                ok += 1;
+                            }
+                        }
+                        (valid >= CHECK_POINTS).then(|| ok as f64 / valid as f64)
+                    }
+                    Pts::Cloud(_) => None,
+                };
+                if !node.word.is_empty() && node.eff > 0.0 && covered.is_some_and(|c| c < COMPLETE_ENOUGH) {
+                    watched(tr, &node.word, depth, "FORCED", format!("children cover {:.3} of its points", covered.unwrap_or(0.0)));
+                    let (_, cc, r) = self.replay(&node.word, view);
+                    kept_mass += node.prob;
+                    kept.push((Cylinder { word: node.word, prob: node.prob, centre: cc, radius: r }, node.eff));
+                    tr.forced += 1;
+                    continue;
+                }
+                for (c, e) in node_kept {
+                    kept_mass += c.prob;
+                    tr.cut += 1;
+                    kept.push((c, e));
+                }
+                tr.not_yet += node_next.len();
+                next.extend(node_next);
+                lost += node_lost;
             }
             if next.len() > 1 {
                 // **Ranked by what a node holds of the VIEW**, not by
@@ -848,13 +1014,24 @@ impl Backward {
                     keep -= 1;
                 }
                 let keep = keep.min(BEAM);
+                // A node whose share the replay could not resolve (zero
+                // hits) has not been measured, not measured as nothing:
+                // at shallow depth that is most of them. The beam ranks
+                // measured nodes; unmeasured ones are always carried.
+                // Ranked last and forced off the beam, they became
+                // depth-1 words holding a third of the attractor.
+                let mut unmeasured: Vec<Node> = Vec::new();
+                let mut rest: Vec<Node> = Vec::new();
                 for n in next.drain(keep..) {
+                    if n.eff > 0.0 { rest.push(n) } else { unmeasured.push(n) }
+                }
+                next.extend(unmeasured);
+                for n in rest {
+                    // Off the beam: forced as it stands, not dropped.
                     watched(tr, &n.word, depth, "BEAM", format!("prob {:.2e} eff {:.2}", n.prob, n.eff));
-                    // What a dropped node held of the view is its
-                    // probability times its efficiency, and a replay
-                    // that landed nothing bounds that at one part in
-                    // `VERIFY` of the probability.
-                    lost += n.prob * n.eff.max(1.0 / VERIFY as f64);
+                    let (_, cc, r) = self.replay(&n.word, view);
+                    kept_mass += n.prob;
+                    kept.push((Cylinder { word: n.word, prob: n.prob, centre: cc, radius: r }, n.eff));
                     tr.beam += 1;
                 }
             }
@@ -863,13 +1040,9 @@ impl Backward {
 
         // More words than the kernel's table holds: keep the ones
         // carrying the most measure and charge the rest.
-        if kept.len() > MAX_WORDS {
-            kept.sort_by(|a, b| b.0.prob.partial_cmp(&a.0.prob).unwrap_or(std::cmp::Ordering::Equal));
-            for (c, _) in kept.drain(MAX_WORDS..) {
-                lost += c.prob;
-                tr.beam += 1;
-            }
-        }
+        // No truncation: the kernel's word table is sized to fit and
+        // binary-searched, and dropping words was a hole.
+        let _ = MAX_WORDS;
         // Several preimage branches of one transform share a word; the
         // draw wants each word once.
         kept.sort_by(|a, b| a.0.word.cmp(&b.0.word));
@@ -1080,6 +1253,65 @@ mod tests {
                     println!("   planned under the watch: {}", under.join(" "));
                 }
             }
+        }
+    }
+
+    /// **The completeness check at a saved view**: `FFLAME=path`.
+    #[test]
+    #[ignore = "reads $FFLAME"]
+    fn is_this_view_complete() {
+        let Ok(path) = std::env::var("FFLAME") else { return };
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let cfg: crate::config::FractalConfig =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("file")).expect("config");
+        let b = Backward::read(&cfg.flame, reg).expect("armed");
+        let total: f64 = b.transforms.iter().map(|t| t.weight).sum();
+        let view = View::of(cfg.zoom as f64, [cfg.pan_x as f64, cfg.pan_y as f64], 1280, 720);
+        let t0 = std::time::Instant::now();
+        let mut tr = Trace::default();
+        tr.watch = std::env::var("WATCH").ok().map(|w| {
+            w.split(',').map(|t| { let (a, b) = t.split_once('.').unwrap(); sym_of(a.parse().unwrap(), b.parse().unwrap()) }).collect()
+        });
+        let plan = b.plan_with(view, &mut tr);
+        for line in tr.watched.iter().take(4000) { println!("   watch: {line}"); }
+        println!("view r {:.3e} at [{:.5},{:.5}], {:.0} ms, trace {:?}", view.radius, view.centre[0], view.centre[1], t0.elapsed().as_secs_f64()*1e3,
+            (tr.pruned, tr.floor, tr.beam, tr.cut, tr.not_yet, tr.seeded, tr.empty, tr.nocand));
+        let plan = match plan { Ok(p) => p, Err(e) => { println!("plan: {e:?}"); return; } };
+        let mut st = 0xC0FFEE_u64;
+        let mut lcg = move || { st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407); ((st >> 33) as f64) / ((1u64 << 31) as f64) };
+        let mut x = [0.31f64, 0.17];
+        let mut hist: Vec<u32> = Vec::new();
+        let longest = plan.words.iter().map(|w| w.word.len()).max().unwrap_or(1);
+        let shortest = plan.words.iter().map(|w| w.word.len()).min().unwrap_or(1);
+        let (mut in_view, mut covered) = (0usize, 0usize);
+        let mut missed: std::collections::HashMap<Vec<u32>, usize> = Default::default();
+        for k in 0..400_000_000usize {
+            let mut u = lcg() * total;
+            let mut t = &b.transforms[b.transforms.len() - 1];
+            for c in &b.transforms { if u < c.weight { t = c; break; } u -= c.weight; }
+            let arm = ((lcg() * t.arms as f64) as u32).min(t.arms - 1);
+            let y = forward(&b.ifs.maps[t.map], x, arm);
+            if !finite(y) || y[0].abs() > 1e12 { x = [0.31, 0.17]; hist.clear(); continue; }
+            x = y;
+            hist.push(sym_of(t.index as u32, arm));
+            if hist.len() > longest + 4 { hist.remove(0); }
+            if k < 1000 || (x[0] - view.centre[0]).hypot(x[1] - view.centre[1]) > view.radius { continue; }
+            in_view += 1;
+            if plan.words.iter().any(|w| { let k = w.word.len(); hist.len() >= k && hist[hist.len() - k..] == w.word[..] }) {
+                covered += 1;
+            } else {
+                *missed.entry(hist[hist.len().saturating_sub(12)..].to_vec()).or_default() += 1;
+            }
+            if in_view >= 3000 { break; }
+        }
+        println!("plan {} words depth {}..{}, eff {:.2}, mass {:.2e}, lost {:.2e}; {in_view} in view, covered {:.3}",
+            plan.words.len(), shortest, plan.depth, plan.efficiency, plan.mass, plan.lost, covered as f64 / in_view.max(1) as f64);
+        let mut m: Vec<_> = missed.into_iter().collect();
+        m.sort_by(|a, b| b.1.cmp(&a.1));
+        for (w, n) in m.iter().take(8) {
+            let syms: Vec<String> = w.iter().map(|s| format!("t{}a{}", sym_transform(*s), sym_arm(*s))).collect();
+            println!("   missed {n:>5}: ...{}", syms.join(" "));
         }
     }
 

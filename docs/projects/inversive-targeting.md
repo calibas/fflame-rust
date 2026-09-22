@@ -1635,3 +1635,59 @@ the inverse walk or refused with its reason; the bag walk is never
 reached from an armed flame. That test also now admits armed flames'
 accounted `lost` (1e-4 to 3e-3 measured) under a 1e-2 ceiling, as it
 already did for family M.
+
+## 27. Complete by construction: holes become waste
+
+A saved view (`output/grand-julian-missing-pieces.fflame`, zoom 546,
+straddling the boundary between two of `t2`'s arm sectors) showed half
+the picture missing in the app. The CPU completeness test put the
+committed planner at 70% there. Every cause was the same shape: a
+branch holding part of the view was DROPPED -- by the beam, the measure
+floor, the time budget, the word cap, or simply never formed because
+the node's capped point set did not name the cells its child lived in.
+`lost` could see only some of those, and none of the ones that mattered.
+
+The rule now is that nothing holding view measure is ever dropped.
+Anything the walk cannot resolve further is FORCED as it stands: off
+the beam, out of time, at the depth cap, below the floor. A shallower
+word is less efficient -- more forced samples land outside the frame
+and are discarded by the kernel -- but it draws everything beneath it.
+The kernel's word table has no hard size (the buffer grows, the pick is
+a binary search), so `MAX_WORDS` no longer truncates this planner.
+
+Two things make that rule cheap rather than a collapse to untargeted:
+
+- **The orbit's split.** The sample is one orbit, so each point records
+  the symbol that produced it and its predecessor. A region's points
+  split EXACTLY among its children, in proportion to their shares, so
+  every child holding more than a sliver of its parent is found by
+  construction; the landing index then tops the children up.
+- **An exact completeness check.** A node is forced in place of its
+  children when fewer than 90% of its own points belong to a child
+  that survived. A first version compared replay estimates instead --
+  two ~15%-noisy numbers against 0.9 -- and its false triggers forced
+  whole ancestries: a depth-1 word holding 37% of the attractor.
+
+Two smaller fixes the same investigation found: `gather` sampled by
+AREA (two points per cell, filled from the first cells in sort order),
+which starved the dense rings the measure lives on; it now takes every
+k-th entry of the concatenated cell lists, which is by measure. And the
+beam ranked unmeasured nodes (zero replay hits, below the replay's
+resolution at shallow depth) last, so they fell off it; they are now
+always carried.
+
+    view                  coverage   efficiency   plan
+    saved view (x546)     0.998      0.72         2.6 s
+    test 1e2              0.997      0.93         2.6 s
+    test 1e3              0.984      0.92         1.9 s
+    test 1e4..1e8         1.000*     0.79-0.92    1.7-3.6 s
+                                     (* where the CPU test has samples)
+
+    saved view on the GPU, targeted vs untargeted at 4e9 iterations:
+    overlap 0.978, brightness 0.414 / 0.406, targeted denser
+
+Performance was set aside on purpose: the plan now takes 2-3.5 s on the
+UI thread after the settle delay. The 1.5 s time budget still applies,
+but hitting it now forces the frontier rather than dropping it, so a
+slow plan costs efficiency, not pieces of the picture. The next step is
+moving the plan off the UI thread.
