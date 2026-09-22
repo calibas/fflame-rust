@@ -1832,3 +1832,35 @@ A slight zoom IN stays inside the tight plan's own disc, which is still
 complete there, so nothing is swapped; the tighter plan follows after
 the view settles. Affine flames are untouched: their plans cost under a
 millisecond and are made every frame.
+
+## 30. Sequential replays
+
+After §28 the replays were 64% of a plan's CPU: every child ran its word
+on all 400 verification points. The number a replay produces does two
+jobs -- whether a child is kept (share of at least `CUT_EFFICIENCY`, 0.9)
+or carried, and the beam's ranking -- and neither touches completeness,
+which is a count of points (§27). A child landing 30% in frame is
+carried after 100 points as surely as after 400.
+
+So a replay runs the first 100 of the 400 points (spread evenly through
+them) and runs the rest only when the share so far is strictly between
+0.8 and 0.97 -- close enough to 0.9 that a hundred points could decide
+wrongly (their standard deviation there is 0.03).
+
+    view                replay CPU        plan        coverage
+    saved view x546     4.9 s -> 1.5 s    853 -> 479 ms   0.991 (same)
+    grand-julian 1e3    2.6 s -> 0.8 s    496 -> 319 ms   0.994 (same)
+    grand-julian 1e6    2.0 s -> 0.65 s   583 -> 438 ms
+
+True in-frame efficiency, measured with full 400-point replays
+(`what_a_margin_costs`, margin 1.0): 0.945-0.971, against 0.927-0.964
+before -- a hundred points sometimes cut a word a level earlier, and it
+fits.
+
+The candidate cap was tried lower now that the orbit split and the
+thin-child search find most points (§27-§28): at 512 the saved view fell
+to 0.981 coverage for 15% less time, at 256 to 0.962. It stays at 1024.
+
+What remains per plan (saved view): candidate checks 1.8 s, replays
+1.5 s, gather 1.0 s of CPU. The next step is the GPU:
+[gpu-cylinder-planning.md](gpu-cylinder-planning.md).

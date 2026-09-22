@@ -217,11 +217,64 @@ pub struct PlanOptions<'a> {
     pub cancel: Option<&'a AtomicBool>,
 }
 
+/// The budget where a plan must block: the web, which has no threads and
+/// plans on the UI thread. Raising [`TIME_BUDGET`] to 20 s for the
+/// background thread would otherwise have let a single-core web plan
+/// freeze the page that long. Hitting it forces the frontier, so the
+/// plan is complete and less efficient, never incomplete.
+pub const INLINE_BUDGET: std::time::Duration = std::time::Duration::from_millis(1500);
+
 impl Default for PlanOptions<'_> {
     fn default() -> Self {
-        Self { budget: TIME_BUDGET, cancel: None }
+        let budget = if cfg!(target_arch = "wasm32") { INLINE_BUDGET } else { TIME_BUDGET };
+        Self { budget, cancel: None }
     }
 }
+
+/// The points a replay has run so far. See `Backward::replay_counted`.
+#[derive(Default)]
+struct ReplayAcc {
+    hit: usize,
+    total: usize,
+    sum: [f64; 2],
+    landed: Vec<[f64; 2]>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Pass {
+    First,
+    Rest,
+}
+
+/// What a replay found: the share of the points that landed in the view,
+/// where they sit, and how many points it took to say so.
+struct Replay {
+    eff: f64,
+    centre: [f64; 2],
+    radius: f64,
+    used: usize,
+}
+
+impl ReplayAcc {
+    fn finish(self, view: View) -> Replay {
+        if self.hit == 0 {
+            return Replay { eff: 0.0, centre: view.centre, radius: view.radius, used: self.total };
+        }
+        let c = [self.sum[0] / self.hit as f64, self.sum[1] / self.hit as f64];
+        let r = self.landed.iter().map(|p| (p[0] - c[0]).hypot(p[1] - c[1])).fold(0.0, f64::max);
+        Replay { eff: self.hit as f64 / self.total.max(1) as f64, centre: c, radius: r, used: self.total }
+    }
+}
+
+/// How many of the `VERIFY` points a replay runs first. See
+/// `Backward::replay_counted`.
+pub const REPLAY_FIRST: usize = 100;
+
+/// A first pass whose share falls strictly inside this band runs the
+/// rest of the `VERIFY` points: close enough to `CUT_EFFICIENCY` (0.9)
+/// that a hundred points could decide it wrongly. At 0.9 a hundred
+/// points have a standard deviation of 0.03.
+pub const REPLAY_EXTEND: (f64, f64) = (0.8, 0.97);
 
 /// Why children left the walk, counted.
 #[derive(Debug, Default, Clone)]
@@ -730,28 +783,61 @@ impl Backward {
     /// Replay a word forward on the verification sample: the
     /// fraction landing in the view, and where the landed points sit.
     fn replay(&self, word: &[u32], view: View) -> (f64, [f64; 2], f64) {
+        let r = self.replay_counted(word, view);
+        (r.eff, r.centre, r.radius)
+    }
+
+    /// The replay on all `VERIFY` points, for measurements that want the
+    /// full count.
+    fn replay_full(&self, word: &[u32], view: View) -> (f64, [f64; 2], f64) {
+        let mut acc = ReplayAcc::default();
+        self.replay_pass(word, view, Pass::First, &mut acc);
+        self.replay_pass(word, view, Pass::Rest, &mut acc);
+        let r = acc.finish(view);
+        (r.eff, r.centre, r.radius)
+    }
+
+    /// **A sequential replay.** The first `REPLAY_FIRST` of the
+    /// `VERIFY` points -- spread evenly through them -- and the rest only
+    /// when the share so far is close enough to `CUT_EFFICIENCY` that
+    /// noise could flip the decision.
+    ///
+    /// The number a replay produces decides only whether a child is kept
+    /// or carried, and ranks the beam; neither touches completeness,
+    /// which is a count of points. A child landing 30% in frame is
+    /// carried after a hundred points as surely as after four hundred,
+    /// and replays were 64% of a plan's work.
+    fn replay_counted(&self, word: &[u32], view: View) -> Replay {
+        let mut acc = ReplayAcc::default();
+        self.replay_pass(word, view, Pass::First, &mut acc);
+        let e = acc.hit as f64 / acc.total.max(1) as f64;
+        if e > REPLAY_EXTEND.0 && e < REPLAY_EXTEND.1 {
+            self.replay_pass(word, view, Pass::Rest, &mut acc);
+        }
+        acc.finish(view)
+    }
+
+    /// Run one pass of a replay into `acc`: every `VERIFY / REPLAY_FIRST`-th
+    /// verification point for the first pass, the others for the rest.
+    fn replay_pass(&self, word: &[u32], view: View, pass: Pass, acc: &mut ReplayAcc) {
         let stride = (self.sample.len() / VERIFY).max(1);
-        let mut hit = 0usize;
-        let mut total = 0usize;
-        let mut sum = [0.0f64; 2];
-        let mut landed: Vec<[f64; 2]> = Vec::new();
-        for p0 in self.sample.iter().step_by(stride) {
-            total += 1;
+        let every = (VERIFY / REPLAY_FIRST).max(1);
+        for k in 0..VERIFY {
+            let first = k % every == 0;
+            if first != (pass == Pass::First) {
+                continue;
+            }
+            let Some(p0) = self.sample.get(k * stride) else { break };
+            acc.total += 1;
             if let Some(p) = self.forward_along(word, *p0) {
                 if (p[0] - view.centre[0]).hypot(p[1] - view.centre[1]) <= view.radius {
-                    hit += 1;
-                    sum[0] += p[0];
-                    sum[1] += p[1];
-                    landed.push(p);
+                    acc.hit += 1;
+                    acc.sum[0] += p[0];
+                    acc.sum[1] += p[1];
+                    acc.landed.push(p);
                 }
             }
         }
-        if hit == 0 {
-            return (0.0, view.centre, view.radius);
-        }
-        let c = [sum[0] / hit as f64, sum[1] / hit as f64];
-        let r = landed.iter().map(|p| (p[0] - c[0]).hypot(p[1] - c[1])).fold(0.0, f64::max);
-        (hit as f64 / total.max(1) as f64, c, r)
     }
 
     /// Up to `cap` sample indices filed under `cells` (and their
@@ -931,8 +1017,9 @@ impl Backward {
             // never dropped. See `MEASURE_FLOOR`.
             let last = depth == MAX_DEPTH || prob < MEASURE_FLOOR * floor_mass;
             let t_replay = std::time::Instant::now();
-            tr.n_replay += VERIFY;
-            let (eff, cc, r) = self.replay(&word, view);
+            let rp = self.replay_counted(&word, view);
+            tr.n_replay += rp.used;
+            let (eff, cc, r) = (rp.eff, rp.centre, rp.radius);
             tr.t_replay += t_replay.elapsed();
             // A child the walk stops at is FORCED even when its replay
             // landed nothing: zero hits in `VERIFY` samples means under
@@ -1565,7 +1652,7 @@ mod tests {
                 // In-frame efficiency against the real view.
                 let (mut num, mut den) = (0.0f64, 0.0f64);
                 for w in &plan.words {
-                    let (eff, _, _) = b.replay(&w.word, view);
+                    let (eff, _, _) = b.replay_full(&w.word, view);
                     num += w.prob * eff;
                     den += w.prob;
                 }
