@@ -1402,3 +1402,103 @@ open and neither is guessed at:
 every disc cap tried, because transform 0 carries 97% of the measure
 and the orbit reaches `|p| = 3.1e-4`. `ARMS_ENABLED` stays off; nothing
 here reaches a render.
+
+## 24. Is it possible? Yes — and the forward bound is the wrong tool
+
+Asked directly, and answered by three measurements, none of which had
+been made before.
+
+**How loose is the bound against the true cylinder, per step?**
+Pushing the same sampled orbit through the same random word as points
+gives the truth; the ratio to the bag's enclosing radius is:
+
+    depth   0     1     2     3     4     5     6     7     8     9    10
+    ratio  1.4   2.9   6.2   13    28    85   278   775  5e3  4e4  7e5
+
+Two to three times looser per step, compounding, and then a FLOOR: the
+bag's radius sits at ~3e-6 from depth 9 on while the truth reaches
+1e-15. The floor is `WIDEN = 8·2^-23` in the interval evaluator — it
+bounds an f32 computation and says so — and it caps any forward plan at
+roughly zoom 1e6.
+
+**Where does the true word go missing?** A sampled orbit's last `k`
+symbols are a word whose cylinder contains the orbit's point by
+construction. Followed through the expansion, beam removed:
+
+    depth 3: bag 1 piece, enclosing 2.11e-1
+    depth 4: bag 1 piece, enclosing 2.22e-1
+    depth 5: bag 1 piece, enclosing 1.80e-1
+    depth 6: DIED (every piece hit a pole)
+
+The bound for the measure-typical word does not contract at all, while
+random words in the previous table did. The difference is that random
+words were drawn uniformly over the 25-symbol alphabet (8% `t0`) and
+the measure is 75% `t0` — and `t0 = z^(-1/2)` EXPANDS wherever
+|w| < 0.63, which is where the attractor lives. A ball bound has to take
+the worst derivative over the ball, so it cannot contract until the
+ball is already small, and it cannot get small without contracting.
+That is structural: a perfect conformal ball bound would have the same
+problem, and the interval evaluator's looseness only makes it worse.
+The frontier went 1, 5, 51, 409, 2716, 20173, 149245 — seven times a
+level — and every one of the `ViewIsEmpty` results, the 24k-word
+frontiers and the 17-second plans is this and nothing else. The beam
+never mattered; the cover gap hypothesis was tested and is false (both
+view points sit inside a root bag).
+
+**Does the measure concentrate?** This is the question that decides
+everything, and the forward bound cannot answer it here. The inverse
+maps can. Every map in the flame is `julian ∘ rotation`; `julian`'s
+inverse is single-valued, and for a given OUTPUT point only one arm of
+each transform can have produced it, because the arms' images are
+disjoint sectors. So the words whose cylinder contains a point form a
+tree of branching at most three — one per transform — that can be
+walked backwards with exact arithmetic and no bound at all. Walked from
+eleven orbit points, at three on-attractor tolerances, to depth 24:
+
+    words containing the point, every depth, every point:   1
+    mass of that word at depth 5:                           1.5e-7
+    derivative product below 1e-6 by depth:                 8..17
+
+**The word is unique.** The three transforms' images are nested annuli
+of very different widths — `t1 = 0.2·z^(-1/15)` lands in a ring of
+width 0.07, `t2 = 0.3·z^(-1/8)` in one of width 0.2, `t0` spans 0.18
+to 2.5 — so a point's radius pins which transform produced it, and its
+angle pins the arm. A deep view of `grand-julian` is reached by ONE
+word, and forcing it puts every sample in the frame: at zoom 1e3 the
+speedup is `1/(1.5e-7 · 6) ≈ 1e6`. This is not merely possible; it is
+the ideal case for cylinder targeting. The forward walk found 28 words
+with `lost` 0.2 at 1e2 and nothing deeper because its bounds were
+five orders of magnitude too loose to see a unique word.
+
+**What this means for the plan.** The cover root, the pieces, the bag,
+the family-J beam — steps 3 and 4 — are the forward approach and are
+superseded for family J. The generalised `Cover` stays (family M uses
+it) and the measurements stay; the bag walk should not be extended.
+The planner for an invertible-per-arm flame is the backward walk
+itself: pull the VIEW back through the inverse maps, prune pre-images
+that miss the attractor, cut when the pulled-back region covers it.
+The prototype above ran in 0.04 s for 24 depths at three tolerances.
+
+What it needs to become real, in order:
+
+1. A region rather than a point pulled back — a disc through a
+   conformal inverse, outer-bounded for pruning and inner-bounded for
+   the cut (Koebe gives both for a univalent map). The pullback grows
+   under an expanding inverse, which is the right direction.
+2. The attractor-membership test against a sampled attractor. This is
+   a genuine approximation, the same class as the cover's leak, and a
+   missed word is a HOLE in the view, not a wrong pixel — so it wants
+   a plan-time check: replay each word forward on sample points and
+   count what lands in the frame. That count is `lost`.
+3. The kernel forcing the arm — step 5, unchanged. `pack_words`
+   already ships the full symbol; the shader indexes `transforms[sym]`
+   and the armed variations draw their own arm.
+4. The f32 ceiling: the kernel replays symbol by symbol in f32, so
+   error compounds at roughly depth × 1e-7 relative. Zoom 1e6 is
+   fine; 1e8 is not, whatever the planner does.
+
+`ARMS_ENABLED` stays off. The diagnostics that produced every number
+above are `how_loose_is_the_bag_against_the_truth`,
+`where_does_the_true_word_go_missing`,
+`is_the_deep_view_failure_a_cover_gap` and
+`does_the_measure_concentrate_backwards` in `cylinder.rs`.
