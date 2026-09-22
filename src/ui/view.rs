@@ -86,6 +86,19 @@ pub fn render_view_content(
                 }
                 if config.cylinder_targeting {
                     use crate::renderer::TargetingState as TS;
+                    if let Some(secs) = deep_zoom.planning {
+                        ui.horizontal(|ui| {
+                            ui.add(egui::Spinner::new());
+                            ui.label(t!(
+                                "view.targeting_generating",
+                                secs = format!("{secs:.1}")
+                            ));
+                        });
+                        // The plan below is the one still drawing.
+                        if matches!(deep_zoom.targeting, TS::Active { .. }) {
+                            ui.label(t!("view.targeting_previous_plan"));
+                        }
+                    }
                     let line = match &deep_zoom.targeting {
                         TS::Off => t!("view.targeting_off").to_string(),
                         TS::NotPlanar => t!("view.targeting_not_planar").to_string(),
@@ -145,7 +158,11 @@ pub fn render_view_content(
                             t!("view.targeting_declined", reason = reason).to_string()
                         }
                     };
-                    ui.label(line);
+                    // "Not running" beside "Generating" says the same
+                    // thing twice, and less.
+                    if !(deep_zoom.planning.is_some() && matches!(deep_zoom.targeting, TS::Off)) {
+                        ui.label(line);
+                    }
                 }
             });
     }

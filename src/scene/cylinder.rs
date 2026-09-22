@@ -696,7 +696,7 @@ impl Cylinders {
         registry: &crate::variations::VariationRegistry,
         view: View,
     ) -> Result<Self, NoCylinders> {
-        Self::plan_inner(flame, registry, view, ARMS_ENABLED)
+        Self::plan_inner(flame, registry, view, ARMS_ENABLED, Default::default())
     }
 
     /// The same, with the arms of many-valued variations in the
@@ -708,7 +708,19 @@ impl Cylinders {
         registry: &crate::variations::VariationRegistry,
         view: View,
     ) -> Result<Self, NoCylinders> {
-        Self::plan_inner(flame, registry, view, true)
+        Self::plan_inner(flame, registry, view, true, Default::default())
+    }
+
+    /// [`Self::plan`] with a budget and a cancel flag for the inverse
+    /// walk -- what the app's background planner needs. The other
+    /// planners are fast or carry their own budgets and ignore both.
+    pub fn plan_opts(
+        flame: &Flame,
+        registry: &crate::variations::VariationRegistry,
+        view: View,
+        opts: crate::scene::backward::PlanOptions,
+    ) -> Result<Self, NoCylinders> {
+        Self::plan_inner(flame, registry, view, ARMS_ENABLED, opts)
     }
 
     fn plan_inner(
@@ -716,6 +728,7 @@ impl Cylinders {
         registry: &crate::variations::VariationRegistry,
         view: View,
         family_j: bool,
+        opts: crate::scene::backward::PlanOptions,
     ) -> Result<Self, NoCylinders> {
         let n = flame.transforms.len();
         if n == 0 {
@@ -778,7 +791,7 @@ impl Cylinders {
             // a flame the inverse walk refuses is refused, with its
             // reason, rather than handed to it.
             return match crate::scene::backward::Backward::cached(flame, registry) {
-                Ok(b) => b.plan(view),
+                Ok(b) => b.plan_opts(view, opts),
                 Err(why) => {
                     let index = flame
                         .transforms
@@ -3075,6 +3088,139 @@ mod gpu_tests {
             both as f64 / na.max(1) as f64, holes as f64 / na.max(1) as f64,
             sa / n.max(1.0), sb / n.max(1.0)
         );
+    }
+
+    /// **Planning on a background thread, driven the way the app drives
+    /// it.**
+    ///
+    /// `sync_cylinders` once a frame, with background planning on:
+    ///
+    /// - the first plan is generated off the caller's thread and lands
+    ///   with `take_plan_arrived`, which is the app's cue to reset;
+    /// - a VIEW-only move keeps the previous plan drawing while the next
+    ///   is generated, and the panel sees `planning_elapsed`;
+    /// - a FLAME edit drops the plan at once -- its words may name
+    ///   transforms that no longer exist -- and plans again;
+    /// - `load_config` after a plan lands does not plan a second time.
+    #[test]
+    #[ignore = "needs a GPU and reads output/flame-zoom"]
+    fn a_plan_is_made_in_the_background() {
+        use crate::renderer::TargetingState as TS;
+        use std::time::{Duration, Instant};
+        let Ok(text) = std::fs::read_to_string("output/flame-zoom/grand-julian.fflame") else {
+            println!("  no grand-julian.fflame");
+            return;
+        };
+        let (device, queue) = device();
+        let mut cfg: FractalConfig = serde_json::from_str(&text).expect("a config");
+        cfg.cylinder_targeting = true;
+        cfg.render_mode = crate::scene::transforms::RenderMode::TwoD;
+        {
+            let guard = crate::variations::global_registry();
+            let b = crate::scene::backward::Backward::read(&cfg.flame, &guard).expect("armed");
+            let x = b.sample_point(0.75);
+            cfg.pan_x = x[0];
+            cfg.pan_y = x[1];
+        }
+        cfg.zoom = 1e3;
+
+        let mut r = crate::renderer::FlameRenderer::with_palette_size(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            256,
+            256,
+            &cfg.flame,
+            cfg.palette_size,
+        );
+        r.set_background_planning(true);
+        let load = |r: &mut crate::renderer::FlameRenderer, cfg: &FractalConfig| {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("background plan gate"),
+            });
+            r.load_config(&device, &mut enc, &queue, cfg, &cfg.palette, 1, 0);
+            queue.submit(Some(enc.finish()));
+        };
+        // Frames until a plan lands; returns the longest single sync, so
+        // the test can say whether the caller's thread ever blocked.
+        let run_until_arrived = |r: &mut crate::renderer::FlameRenderer, cfg: &FractalConfig, saw_planning: &mut bool| -> Duration {
+            let t0 = Instant::now();
+            let mut longest = Duration::ZERO;
+            loop {
+                let s = Instant::now();
+                if r.sync_cylinders(&device, &queue, cfg) {
+                    load(r, cfg);
+                }
+                longest = longest.max(s.elapsed());
+                if r.planning_elapsed().is_some() {
+                    *saw_planning = true;
+                }
+                if r.take_plan_arrived() {
+                    return longest;
+                }
+                assert!(t0.elapsed() < Duration::from_secs(90), "no plan arrived in 90 s");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+
+        load(&mut r, &cfg);
+        let mut saw = false;
+        let t0 = Instant::now();
+        let longest = run_until_arrived(&mut r, &cfg, &mut saw);
+        println!(
+            "  first plan: {:.2} s, longest sync on the caller {:.1} ms, state {:?}",
+            t0.elapsed().as_secs_f64(),
+            longest.as_secs_f64() * 1e3,
+            r.targeting_state()
+        );
+        assert!(saw, "the panel never saw a plan being generated");
+        assert!(matches!(r.targeting_state(), TS::Active { .. }), "{:?}", r.targeting_state());
+        assert!(
+            longest < Duration::from_millis(250),
+            "a sync blocked the caller for {longest:?} -- the plan is not in the background"
+        );
+        // The reload after arrival must not plan again.
+        let s = Instant::now();
+        load(&mut r, &cfg);
+        assert!(r.planning_elapsed().is_none(), "load_config started a second plan");
+        println!("  reload after arrival: {:.1} ms", s.elapsed().as_secs_f64() * 1e3);
+
+        // A view-only move: the old plan stays on screen while the next
+        // is generated.
+        cfg.zoom *= 1.5;
+        let mut saw = false;
+        let mut kept_during = false;
+        let t0 = Instant::now();
+        loop {
+            if r.sync_cylinders(&device, &queue, &cfg) {
+                load(&mut r, &cfg);
+            }
+            if r.planning_elapsed().is_some() {
+                saw = true;
+                kept_during |= matches!(r.targeting_state(), TS::Active { .. });
+            }
+            if r.take_plan_arrived() {
+                break;
+            }
+            assert!(t0.elapsed() < Duration::from_secs(90), "no plan after a zoom");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        println!("  after a zoom: {:.2} s, state {:?}", t0.elapsed().as_secs_f64(), r.targeting_state());
+        assert!(saw && kept_during, "a view-only move must keep the previous plan while planning");
+
+        // A flame edit: the plan is dropped at once.
+        cfg.flame.transforms[1].weight *= 1.25;
+        load(&mut r, &cfg);
+        assert!(
+            matches!(r.targeting_state(), TS::Off),
+            "a flame edit must drop the old plan at once, not keep drawing it: {:?}",
+            r.targeting_state()
+        );
+        let mut saw = false;
+        let t0 = Instant::now();
+        run_until_arrived(&mut r, &cfg, &mut saw);
+        println!("  after an edit: {:.2} s, state {:?}", t0.elapsed().as_secs_f64(), r.targeting_state());
+        assert!(matches!(r.targeting_state(), TS::Active { .. }), "{:?}", r.targeting_state());
     }
 
     /// **The gate for a bug the whole suite missed.** `sync_cylinders`

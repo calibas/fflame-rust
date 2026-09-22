@@ -1691,3 +1691,104 @@ UI thread after the settle delay. The 1.5 s time budget still applies,
 but hitting it now forces the frontier rather than dropping it, so a
 slow plan costs efficiency, not pieces of the picture. The next step is
 moving the plan off the UI thread.
+
+## 28. Planning off the UI thread, and what caching can and cannot buy
+
+**Background planning.** The app plans the expensive flames (armed,
+family M) on a worker thread; `FlameRenderer::set_background_planning`
+turns it on, and the headless paths (CLI, export, tests) still plan
+inline so their first sample uses the plan. While a plan is generated,
+the plan on screen keeps drawing if only the VIEW moved -- the replay
+arm plots in world coordinates, so an old plan still puts its samples
+in the right place, over part of the new frame -- and is dropped at
+once if the FLAME changed, since its words may name transforms that no
+longer exist. A plan that lands resets accumulation (samples under the
+previous plan carry a different weight). A stale plan is cancelled
+through a flag the walk checks once per node. The Deep Zoom panel shows
+a spinner and "Generating a plan for this view... N s", plus a note
+when the previous plan is still drawing. Measured by
+`a_plan_is_made_in_the_background`: the longest `sync_cylinders` on the
+caller was 18 ms while plans ran.
+
+Three wastes surfaced on the way, all fixed:
+
+- **Every shader-changing plan ran twice**: `sync_cylinders` planned and
+  asked for a reload, and `load_config` planned again. It now skips a
+  plan that is already current.
+- **The key thrashed on sticky variations.** `load_config` plans against
+  the sticky-adopted flame (retained variations at weight zero) and the
+  per-frame sync against the raw one; hashing zero weights made the two
+  keys differ, so every reload was followed by a replan, and the
+  inverse walk's per-flame cache flipped between the two flames at
+  400 ms a rebuild. Both keys now ignore zero-weight variations.
+- **The 1.5 s budget** existed for the UI thread; it is now a 20 s safety
+  net, and hitting it forces the frontier (complete, less efficient).
+
+**Where a plan's time went** (`where_a_plan_spends_its_time`), before:
+
+    grand-julian x1e3    23.9 s   check candidates 15.8 s, replay 6.3 s
+    saved view (x546)    25.3 s   check candidates 16.5 s, replay 6.4 s
+
+**Checking candidates was 90% wasted**: it happened before deciding
+whether a child was kept (needs no points) or carried (needs them), and
+~90% of children are kept. Children are now replayed first and checked
+only if carried. **Nodes of a level are expanded in parallel** (rayon;
+12 cores here), merged in frontier order so a plan is the same however
+the threads ran. The measure floor moved 1e-5 -> 1e-4, which stops the
+walk before thinly sampled levels and was both faster and MORE complete.
+And a carried child left thin (under 64 points) is searched again,
+wider: at a 1e3 view a node with ~1000 sample points in its region was
+carried with 15, and 1.7% of the view went missing beneath it.
+
+    view                coverage   efficiency   plan (was)
+    saved view x546     0.991      0.93         0.83 s  (25.3 s)
+    test 1e2            0.998      0.97         0.36 s
+    test 1e3            0.994      0.95         0.40 s  (23.9 s)
+    test 1e4            1.000      0.94         0.71 s
+    test 1e6 / 1e8      --         0.93-0.95    0.53-0.78 s  (19.1 s)
+
+    background, grand-julian: first plan 1.08 s, after a zoom 0.87 s,
+    after a flame edit 1.28 s; GPU comparison at the saved view:
+    overlap 0.967, brightness 0.417 / 0.409, no structure missing.
+
+**What is cached.** The per-flame analysis -- 100k-point orbit sample,
+its producing symbols, the grid and landing indexes -- is built once
+per flame (~400 ms) and shared across threads and views.
+
+**What a view-independent map would cost** (`what_could_a_cache_reuse`).
+The attractor's box-counting dimension is ~1.15, but that is not the
+number that matters: a single 1e3 view holds ~4,000 words, because this
+flame's pieces overlap many times over (`t0` alone is two-to-one).
+Tiling the attractor at 1e3 takes ~2,800 such views, so a map complete
+to 1e3 is on the order of 10^7 words, and to 1e6 some 10^10 -- each
+needing sample image points to be useful. Not storable, and building it
+is planning every view. A map is only affordable to ~1e2, where a plan
+already takes ~0.1-0.3 s.
+
+**What a word cache would save.** Between a view and a nearby one, the
+share of the second plan's expanded nodes the first had expanded:
+
+    move            at 1e3   at 1e6
+    pan 1/4 view     27%      34%
+    pan 1 view       10%      19%
+    zoom in 1.5x     20%      14%
+    zoom in 4x        3%       7%
+    zoom out 2x      26%      16%
+
+Most of a plan's nodes sit near the depth where words fit the view, and
+that depth is view-specific. A cache keyed by word would save 1.1x to
+1.5x on typical moves -- real, but small against what parallelism and
+the reorder bought, and it would need the region points of every cached
+node. Recorded, not built.
+
+**What would still pay**, in order:
+
+1. **Plan with a margin**: plan for a view ~1.5x the screen's radius.
+   A pan or zoom that stays inside it needs no plan at all -- the old
+   plan is still complete there -- so the picture between plans is
+   whole rather than drawn over only part of the frame; the cost is
+   efficiency, up to ~2.25x until the tighter plan lands.
+2. **Cheaper replays** (now the dominant cost, ~70% of CPU): replay 100
+   samples and extend to 400 only near the cut threshold -- about 2x.
+3. **Replays on the GPU**: the maps already exist as WGSL; thousands of
+   children x 400 samples x depth is what a GPU is for. Large.
