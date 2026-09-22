@@ -3147,11 +3147,17 @@ mod gpu_tests {
             let t0 = Instant::now();
             let mut longest = Duration::ZERO;
             loop {
+                // The PLANNING call alone. A true return is followed by a
+                // `load_config` that recompiles the shader when targeting
+                // starts -- a once-per-start cost that has nothing to do
+                // with planning, and that other GPU tests running
+                // alongside can stretch past any fixed bound.
                 let s = Instant::now();
-                if r.sync_cylinders(&device, &queue, cfg) {
+                let reload = r.sync_cylinders(&device, &queue, cfg);
+                longest = longest.max(s.elapsed());
+                if reload {
                     load(r, cfg);
                 }
-                longest = longest.max(s.elapsed());
                 if r.planning_elapsed().is_some() {
                     *saw_planning = true;
                 }
