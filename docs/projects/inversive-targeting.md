@@ -1502,3 +1502,52 @@ above are `how_loose_is_the_bag_against_the_truth`,
 `where_does_the_true_word_go_missing`,
 `is_the_deep_view_failure_a_cover_gap` and
 `does_the_measure_concentrate_backwards` in `cylinder.rs`.
+
+## 25. Built: the planner by the inverse walk
+
+`src/scene/backward.rs`. It is not a new walk: `ifs_analysis::analyse_2d`
+already gives every transform's inverse, its exact Jacobian by dual
+numbers and one map per preimage branch, and `ifs_estimate::
+estimate_measure` is the same walk with a different stop rule. This
+one pulls the VIEW back through the inverses, carrying the composed
+inverse Jacobian as a first-order region: prune when the region (with
+margin) holds no point of the sampled attractor, trigger a cut when its
+inscribed disc has grown far enough, and VERIFY every cut by replaying
+the word forward on the sample — the fraction that lands in the frame
+is the word's efficiency, exact for the sample and immune to the
+region's distortion. The arm is recovered by trying each forward
+branch and keeping the one that lands on the point.
+
+Two things had to be added after the first run. A relative measure
+floor: at zoom 1e2 the typical word cut by depth 6 and the beam then
+carried 256 words of probability 1e-40 to the depth cap and replayed
+each — fifteen seconds for `lost` of 1e-38. And a cheaper cut trigger:
+waiting for the first-order region to fully cover the attractor walked
+words twice the exact cut depth, because the smallest singular value
+under-reads an anisotropic region; the replay decides anyway, so the
+trigger only says when to ask.
+
+    grand-julian, view on the set:
+      zoom 1e2    15 ms   12 words  depth  6..20  eff 1.00  speedup 2.7e2   lost 1e-11
+      zoom 1e3    36 ms   13 words  depth 10..23  eff 1.00  speedup 8.0e4   lost 2e-13
+      zoom 1e4     5 ms    3 words  depth 12..13  eff 1.00  speedup 3.9e5   lost 0
+      zoom 1e6     6 ms    2 words  depth 16..17  eff 0.93  speedup 1.6e7   lost 0
+      zoom 1e8     9 ms    3 words  depth 22..23  eff 1.00  speedup 1.0e11  lost 2e-20
+
+    through plan_armed at the other view: 15–77 ms, 4–32 words,
+    speedup 1.6 at 1e0 (correctly not worth it) to 3.0e11 at 1e6.
+
+Against §23: the forward walk took 17 s to find 28 words with `lost`
+0.2 at 1e2 and nothing at all deeper.
+
+**What it does not do yet.** `julian-disc` comes back with efficiency
+0.00 at 1e6 and 1e8 and every word at the depth cap: its `disc`
+transform has three preimage branches that share one symbol, and the
+walk's bookkeeping for a many-branched INVERSE (as opposed to a
+many-armed forward) is evidently wrong. `random1`, which has an
+invariant ball and is planned exactly by the forward path, plans here
+too but slowly (1–3 s) with `lost` up to 5e-2 — its measure spreads
+over many overlapping words and the beam bites; not the customer, but
+a measurement worth having. Nothing reaches a render: `ARMS_ENABLED`
+is still off, and the kernel cannot force an arm. That is the next
+step, and it is the last one between this and the app.
