@@ -1487,6 +1487,7 @@ impl ShaderBuilder {
         flame: &crate::scene::transforms::Flame,
         active_variations: &[(String, u32)],
         render_3d: bool,
+        forced_arms: bool,
     ) -> String {
         // Inline helper: dispatches the per-flame WGSL specializer for
         // variations that opt in. Returning `None` means "use the static
@@ -1563,6 +1564,23 @@ impl ShaderBuilder {
                 }
             };
             let Some(source) = source else { continue };
+            // A replayed word names the ARM a many-valued variation
+            // must take, and the variation's body is where the draw
+            // happens; under a replay build the draw is wrapped so it
+            // reads the forced arm. Only then -- an untargeted build
+            // emits the body untouched, and the shader dumps say so.
+            let forced;
+            let source = if forced_arms {
+                match crate::variations::bound::force_arms(name, source) {
+                    Some(f) => {
+                        forced = f;
+                        forced.as_str()
+                    }
+                    None => source,
+                }
+            } else {
+                source
+            };
 
             for (fn_name, block) in split_wgsl_top_level_fns(source) {
                 if let Some((prev_block, prev_var)) = emitted.get(&fn_name) {
@@ -1754,7 +1772,12 @@ impl ShaderBuilder {
         shader.push('\n');
 
         // 5. Core variations from embedded VariationDef WGSL (only active ones)
-        shader.push_str(&self.generate_variation_code(flame, &active, render_3d));
+        shader.push_str(&self.generate_variation_code(
+            flame,
+            &active,
+            render_3d,
+            constants.cylinder_replay,
+        ));
         shader.push('\n');
 
         // 6b. Reachability-census helpers — module-scope functions the
@@ -4058,7 +4081,7 @@ mod tests {
             // Per-flame specializer needs a flame for context. Test
             // doesn't use synth, so any flame works — default is fine.
             let flame = crate::scene::transforms::Flame::default();
-            let code = builder.generate_variation_code(&flame, &active, render_3d);
+            let code = builder.generate_variation_code(&flame, &active, render_3d, false);
             let n_helper = code.matches("fn pg_disc_noise(").count();
             let n_var_2d = code.matches("fn variation_pointgrid_wf(").count();
             let n_var_3d = code.matches("fn variation_pointgrid3d_wf(").count();

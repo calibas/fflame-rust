@@ -193,6 +193,23 @@ pub struct ArmedDef {
     /// How many images one input has, from the variation's
     /// parameters.
     pub arms: fn(ParamFn) -> u32,
+    /// The exact text of the draw in the variation's WGSL -- the
+    /// expression whose value is the arm -- and what replaces it when
+    /// a replay must force the arm. The replacement wraps the draw in
+    /// a helper the template defines only under `CYLINDER_REPLAY`, so
+    /// an untargeted shader is byte-identical to what it always was
+    /// and a targeted one reads the forced arm where the dice were.
+    /// The draw is still evaluated (WGSL `select` is not a branch),
+    /// so the replay's own RNG stream advances exactly as before.
+    pub draw: &'static str,
+    pub forced: &'static str,
+}
+
+/// `src` with every occurrence of the variation's draw replaced by its
+/// forced form, or `None` if the variation has no arms.
+pub fn force_arms(name: &str, src: &str) -> Option<String> {
+    let def = arms_for(name)?;
+    Some(src.replace(def.draw, def.forced))
 }
 
 /// The variations whose draw picks an arm. Append-only, like
@@ -204,6 +221,8 @@ pub static ARMED: &[&ArmedDef] = &[&JULIAN_ARMS, &JULIASCOPE_ARMS];
 pub static JULIAN_ARMS: ArmedDef = ArmedDef {
     name: "julian",
     arms: |p| arm_count_from_power(p("power")),
+    draw: "floor(abs(power) * rng_nextf(rng))",
+    forced: "ff_forced_arm_f(floor(abs(power) * rng_nextf(rng)))",
 };
 
 /// `rnd = i32(f32(|power|) · rng_nextf())`, the same count by a
@@ -211,6 +230,8 @@ pub static JULIAN_ARMS: ArmedDef = ArmedDef {
 pub static JULIASCOPE_ARMS: ArmedDef = ArmedDef {
     name: "juliascope",
     arms: |p| arm_count_from_power(p("power")),
+    draw: "i32(f32(absp) * rng_nextf(rng))",
+    forced: "ff_forced_arm_i(i32(f32(absp) * rng_nextf(rng)))",
 };
 
 fn arm_count_from_power(power: f64) -> u32 {
@@ -1042,5 +1063,62 @@ mod tests {
         let out = (PRE_BLUR_BOUND.planar)(&p, 0.5, Ball::new([1.0, 2.0], 0.25)).unwrap();
         assert_eq!(out.c, [1.0, 2.0]);
         assert!((out.r - (0.25 + 1.5)).abs() < 1e-12, "got {}", out.r);
+    }
+}
+
+#[cfg(test)]
+mod armed_draw_tests {
+    use super::*;
+
+    /// Every armed variation's `draw` occurs in BOTH its shader bodies,
+    /// so forcing the arm rewrites something rather than silently
+    /// nothing. A body edited without this table would otherwise ship
+    /// a replay that ignores the planner's arm and draws a wrong
+    /// picture that looks like a choice.
+    #[test]
+    fn every_armed_draw_is_in_its_bodies() {
+        let reg = crate::variations::global_registry();
+        for def in ARMED {
+            let info = reg.get(def.name).unwrap_or_else(|| panic!("{} is registered", def.name));
+            let two = info.wgsl_source.as_deref().unwrap_or("");
+            let three = info.wgsl_source_3d.as_deref().unwrap_or("");
+            assert!(two.contains(def.draw), "`{}`'s 2D body does not contain its draw `{}`", def.name, def.draw);
+            assert!(three.contains(def.draw), "`{}`'s 3D body does not contain its draw `{}`", def.name, def.draw);
+            assert!(def.forced.contains(def.draw), "`{}`'s forced form must still evaluate the draw", def.name);
+        }
+    }
+}
+
+#[cfg(test)]
+mod forced_arm_build_tests {
+    /// Under a replay build the armed variation's body reads the forced
+    /// arm; under any other build it is byte-for-byte the static body.
+    #[test]
+    fn the_forced_arm_reaches_the_built_shader_only_under_replay() {
+        use crate::shader_builder_v2::{ShaderBuilder, ShaderConstants};
+        let mut flame = crate::scene::transforms::Flame::new();
+        let mut xf = crate::scene::transforms::Transform::new();
+        xf.set_variation("julian", 1.0);
+        flame.transforms.push(xf);
+        let mut active = std::collections::HashMap::new();
+        active.insert("julian".to_string(), 1.0f32);
+        let builder = ShaderBuilder::new(crate::variations::global_registry().clone());
+        let build = |targeting: bool, replay: bool| {
+            let constants = ShaderConstants {
+                num_transforms: 1,
+                cylinder_targeting: targeting,
+                cylinder_replay: replay,
+                ..ShaderConstants::default()
+            };
+            builder.build_from_template(&flame, &active, false, false, false, true, &constants)
+        };
+        let plain = build(false, false);
+        assert!(!plain.contains("ff_forced_arm"), "an untargeted build must not mention the forced arm");
+        let replay = build(true, true);
+        assert!(replay.contains("var<private> ct_forced_arm"), "the replay build declares the forced arm");
+        assert!(
+            replay.contains("ff_forced_arm_f(floor(abs(power) * rng_nextf(rng)))"),
+            "julian's draw is wrapped in the replay build"
+        );
     }
 }

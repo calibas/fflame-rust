@@ -1551,3 +1551,87 @@ over many overlapping words and the beam bites; not the customer, but
 a measurement worth having. Nothing reaches a render: `ARMS_ENABLED`
 is still off, and the kernel cannot force an arm. That is the next
 step, and it is the last one between this and the app.
+
+## 26. Step 5: the kernel forces the arm, and the planner is rewritten
+around what it took to be complete
+
+**The kernel.** `pack_words` already shipped the full symbol; the
+shader indexed `transforms[sym]`. Now the replay masks the transform
+out of the low byte and sets `ct_forced_arm` (a `var<private>`, -1
+between symbols) before applying it, and each armed variation's draw
+is wrapped by the shader builder -- `floor(abs(power) * rng_nextf(rng))`
+becomes `ff_forced_arm_f(...)` -- from a table in `bound.rs` that
+names the draw's exact text and its forced form. The wrap happens only
+under `CYLINDER_REPLAY`: an untargeted build is byte-identical, and the
+canonical shader dumps say so (a blank line moved once, and the gate
+caught it). `ARMS_ENABLED` is on. `every_armed_draw_is_in_its_bodies`
+and `the_forced_arm_reaches_the_built_shader_only_under_replay` are
+the gates on the table and the wrap.
+
+**The first picture was wrong, and the planner was why.** Overlap 0.46
+at 1e2. A completeness test settled where the fault lay: run the chaos
+game on the CPU with each sample's symbol history, keep what lands in
+the view, and count how many have a planned word as their last `k`
+symbols. 34%. `lost` was 1e-11; it cannot see a branch that was never
+formed. The rest of this section is the sequence of representations
+of a word's region that failed, each named by that test, and the one
+that did not.
+
+A centre point with a Jacobian: dropped the `t1`/`t2` children at
+depth six because the region had outgrown first order and its centre
+sat outside the ring. A cloud of 64 view points pulled back: 0.75,
+then the same three arms -- `t2a4`, `t2a6`, `t1a7` -- missing through
+jitter, boundary refinement and a wider beam, because area is the
+wrong thing to sample when the measure sits on ring sectors of area
+5e-3 inside regions of area 200. Densifying by measure fired only for
+thin nodes and never for the one that needed it. A watch on that one
+subtree showed pulled-back off-ring points with spread 3.4e9 blinding
+the cut, and at another zoom the same branch, twelve points all off
+the attractor, pruned -- a prune charges nothing.
+
+**What works: the attractor sample, indexed.** 100k points, μ-
+distributed and exactly on the attractor, landed once through every
+symbol and filed by grid cell (a flat sorted list; 400 ms per flame,
+cached). A child's candidates are index lists over its parent's
+cells, a capped handful verified by replay. The view cloud keeps one
+job -- the descent from a view too small to hold sample points -- with
+its children admitted by "does anything land in this cell under that
+symbol", which refuses the near-origin junk and keeps sparse regions.
+Then three more things the test named: the candidate budget is per
+child, not per cell (a node on one cell starved); a probe of eight that
+finds nothing decides nothing (at an 8% hit rate it dropped 60% of a
+view under one word); and the beam ranks by probability TIMES
+efficiency, because probability is a cylinder's whole measure and at
+depth seven of a 1e6 plan the node holding the view was dropped for
+it (`lost` 2.15e-8 against a kept mass of 3e-14). The spread trigger
+for the cut went too: it waited for regions to reach far outliers that
+carry no measure, five levels past where words fit.
+
+    completeness   1e2 0.95   1e3 0.93   1e4 1.00 (7 samples)
+    plan           1e2 85 ms  1e3 115  1e4 133  1e6 127  1e8 156
+    mass at 1e6    3.6e-10 at depth 9..18   (3e-14 at 21..31 before)
+
+    picture gate   1e2 overlap 0.92, brightness 0.39/0.32
+                   1e4 overlap 1.00 against a 23-pixel reference
+
+**What is still approximate, stated.** Completeness is bounded by
+the points per node (256): a child holding under half a percent of its
+parent is sometimes missed, and the ~5% the test measures is that.
+`lost` now charges a dropped node its probability times the larger of
+its efficiency and one part in a hundred, which is a bound rather than
+a measurement. The reference render is too starved past 1e3 to compare
+brightness, so the deep views are validated by the CPU test alone.
+`julian-disc` is untouched. The plan costs ~130 ms a pan, and armed
+flames now take the family-M settle delay so a drag is not planned on
+every event.
+
+**And one regression the gates caught after the fact.** With
+`ARMS_ENABLED` on, an armed flame the inverse walk refuses (a final
+transform, two kernels in one transform) fell through to the §23
+forward cover/bag walk -- 17 to 60 seconds a plan, on the UI thread.
+The cylinder gate sat for an hour on `every_working_flame_loses_nothing`,
+which plans every flame in `output/`. An armed flame is now planned by
+the inverse walk or refused with its reason; the bag walk is never
+reached from an armed flame. That test also now admits armed flames'
+accounted `lost` (1e-4 to 3e-3 measured) under a 1e-2 ceiling, as it
+already did for family M.

@@ -12,7 +12,26 @@
 // Uses hard-coded constants (compiled at shader build time):
 //   NUM_TRANSFORMS, COLOR_MODE, HAS_POST_AFFINE
 // These enable dead code elimination and loop unrolling optimizations.
+{{#if CYLINDER_REPLAY}}
 
+// The arm a replayed symbol forces on a many-valued variation, or -1
+// between symbols so the free orbit draws its own. A word's symbol
+// carries the transform in its low byte and the arm above it (see
+// `cylinder::sym_of`); the replay sets this before applying the
+// transform and clears it after, and an armed variation's draw is
+// wrapped by the shader builder to read it. Private, because the
+// forced prefix and the free orbit run on the same thread and the
+// same variation function.
+var<private> ct_forced_arm: i32 = -1;
+
+fn ff_forced_arm_f(drawn: f32) -> f32 {
+    return select(drawn, f32(ct_forced_arm), ct_forced_arm >= 0);
+}
+
+fn ff_forced_arm_i(drawn: i32) -> i32 {
+    return select(drawn, ct_forced_arm, ct_forced_arm >= 0);
+}
+{{/if}}
 @compute @workgroup_size(64, 1, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let thread_id = global_id.x;
@@ -514,7 +533,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let ct_b = ct_base(ct_i);
                 let ct_len = u32(cylinders[ct_b + 3u]);
                 for (var ct_k = 0u; ct_k < ct_len; ct_k = ct_k + 1u) {
-                    let ct_sym = u32(cylinders[ct_b + 4u + ct_k]);
+                    let ct_word = u32(cylinders[ct_b + 4u + ct_k]);
+                    // The transform in the low byte; the arm, if the
+                    // transform's variation is many-valued, above it.
+                    let ct_sym = ct_word & 255u;
+                    ct_forced_arm = i32(ct_word >> 8u);
                     let ct_xf = transforms[ct_sym];
                     let ct_aff = apply_affine(ct_xf, current);
                     var ct_hide = false;
@@ -554,6 +577,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                         }
                     }
                 }
+                ct_forced_arm = -1;
                 color_index = color_index * cylinders[ct_b + 1u] + cylinders[ct_b + 2u];
 {{else}}
                 // COMPOSED. Every map in the word is affine, so the
