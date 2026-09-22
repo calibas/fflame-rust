@@ -1530,6 +1530,85 @@ mod tests {
         }
     }
 
+    /// **What a margin costs.** Plan for a disc `m` times the view's
+    /// radius, then ask of the ACTUAL view: what share of the forced
+    /// sampling lands in it (the efficiency the render sees), and
+    /// whether the plan still covers it. `FFLAME=path` adds a saved view.
+    #[test]
+    #[ignore = "reads output/flame-zoom"]
+    fn what_a_margin_costs() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let text = std::fs::read_to_string("output/flame-zoom/grand-julian.fflame").expect("grand-julian");
+        let gj: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
+        let b = Backward::read(&gj.flame, reg).expect("armed");
+        let mut views: Vec<(String, View)> = Vec::new();
+        for z in [1e2f64, 1e3, 1e6] {
+            views.push((format!("grand-julian x{z:.0e}"), View::of(z, b.sample_point(0.75), 1280, 720)));
+        }
+        if let Ok(path) = std::env::var("FFLAME") {
+            let c: crate::config::FractalConfig =
+                serde_json::from_str(&std::fs::read_to_string(&path).expect("file")).expect("config");
+            views.push((path, View::of(c.zoom as f64, [c.pan_x as f64, c.pan_y as f64], 1280, 720)));
+        }
+        let total: f64 = b.transforms.iter().map(|t| t.weight).sum();
+        for (name, view) in views {
+            println!("== {name}");
+            for m in [1.0f64, 1.25, 1.5, 2.0, 2.25, 3.0] {
+                let planned = View { centre: view.centre, radius: view.radius * m };
+                let t0 = std::time::Instant::now();
+                let Ok(plan) = b.plan(planned) else {
+                    println!("   margin {m:.2}: no plan");
+                    continue;
+                };
+                let ms = t0.elapsed().as_secs_f64() * 1e3;
+                // In-frame efficiency against the real view.
+                let (mut num, mut den) = (0.0f64, 0.0f64);
+                for w in &plan.words {
+                    let (eff, _, _) = b.replay(&w.word, view);
+                    num += w.prob * eff;
+                    den += w.prob;
+                }
+                // Coverage of the real view, where the CPU game reaches it.
+                let mut st = 0xC0FFEE_u64;
+                let mut lcg = move || {
+                    st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    ((st >> 33) as f64) / ((1u64 << 31) as f64)
+                };
+                let mut x = [0.31f64, 0.17];
+                let mut hist: Vec<u32> = Vec::new();
+                let longest = plan.words.iter().map(|w| w.word.len()).max().unwrap_or(1);
+                let (mut inv, mut cov) = (0usize, 0usize);
+                for k in 0..40_000_000usize {
+                    let mut u = lcg() * total;
+                    let mut t = &b.transforms[b.transforms.len() - 1];
+                    for c in &b.transforms {
+                        if u < c.weight { t = c; break; }
+                        u -= c.weight;
+                    }
+                    let arm = ((lcg() * t.arms as f64) as u32).min(t.arms - 1);
+                    let y = forward(&b.ifs.maps[t.map], x, arm);
+                    if !finite(y) || y[0].abs() > 1e12 { x = [0.31, 0.17]; hist.clear(); continue; }
+                    x = y;
+                    hist.push(sym_of(t.index as u32, arm));
+                    if hist.len() > longest + 2 { hist.remove(0); }
+                    if k < 1000 || (x[0] - view.centre[0]).hypot(x[1] - view.centre[1]) > view.radius { continue; }
+                    inv += 1;
+                    if plan.words.iter().any(|w| { let n = w.word.len(); hist.len() >= n && hist[hist.len() - n..] == w.word[..] }) {
+                        cov += 1;
+                    }
+                    if inv >= 1500 { break; }
+                }
+                let coverage = if inv >= 100 { format!("{:.3}", cov as f64 / inv as f64) } else { "--".into() };
+                println!(
+                    "   margin {m:.2}: {:>5} words, plan {ms:>5.0} ms, in-frame efficiency {:.3}, coverage {coverage}",
+                    plan.words.len(),
+                    num / den.max(f64::MIN_POSITIVE)
+                );
+            }
+        }
+    }
+
     /// **The completeness check at a saved view**: `FFLAME=path`.
     #[test]
     #[ignore = "reads $FFLAME"]
