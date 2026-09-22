@@ -4550,6 +4550,891 @@ mod tests {
         }
     }
 
+    /// **How loose is the family-J bound against the TRUE cylinder,
+    /// per step?**
+    ///
+    /// The question that decides whether this can reach a deep view.
+    /// A bound that over-estimates by a constant factor per step
+    /// compounds: at 2x a step, a depth-20 word is a million times
+    /// too big, and a view that needs depth 20 is unreachable however
+    /// cleverly the walk is run. The truth is available cheaply —
+    /// push the SAME sampled orbit through the same word as points
+    /// and measure its spread — so the ratio can be read off directly
+    /// rather than inferred from where the enumeration gives up.
+    #[test]
+    #[ignore = "reads output/flame-zoom"]
+    fn how_loose_is_the_bag_against_the_truth() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let text = std::fs::read_to_string("output/flame-zoom/grand-julian.fflame")
+            .expect("output/flame-zoom/grand-julian.fflame");
+        let cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("a config");
+        let bounders: Vec<_> = cfg
+            .flame
+            .transforms
+            .iter()
+            .filter_map(|t| crate::scene::ifs_ball::Bounder::new(t, reg).ok())
+            .collect();
+        let weights: Vec<f64> =
+            cfg.flame.transforms.iter().map(|t| (t.weight as f64).max(0.0)).collect();
+        assert_eq!(bounders.len(), weights.len());
+        let mut alphabet: Vec<(u32, f64)> = Vec::new();
+        for (i, w) in weights.iter().enumerate() {
+            let arms = bounders[i].arms().max(1);
+            for a in 0..arms {
+                alphabet.push((sym_of(i as u32, a), w / arms as f64));
+            }
+        }
+        let (_, images, _) =
+            bounded_root_images(&bounders, &weights, &alphabet).expect("a root");
+
+        // The attractor, sampled the same way the root was.
+        let total: f64 = weights.iter().sum();
+        let mut st = 0x9E37_79B9_7F4A_7C15u64;
+        let mut lcg = move || {
+            st = st
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((st >> 33) as f64) / ((1u64 << 31) as f64)
+        };
+        let mut p = [0.31f64, 0.17];
+        let mut pts: Vec<[f64; 2]> = Vec::new();
+        for k in 0..6000 {
+            let mut u = lcg() * total;
+            let mut j = weights.len() - 1;
+            for (i, w) in weights.iter().enumerate() {
+                if u < *w {
+                    j = i;
+                    break;
+                }
+                u -= *w;
+            }
+            let arms = bounders[j].arms().max(1);
+            let a = ((lcg() * arms as f64) as u32).min(arms - 1);
+            match bounders[j].apply_arm(Ball::new(p, 0.0), a) {
+                Ok(b) if b.c[0].is_finite() && b.c[1].is_finite() => p = b.c,
+                _ => {
+                    p = [0.31, 0.17];
+                    continue;
+                }
+            }
+            if k > 1000 {
+                pts.push(p);
+            }
+        }
+        let spread = |q: &[[f64; 2]]| -> f64 {
+            let n = q.len() as f64;
+            let c = [
+                q.iter().map(|x| x[0]).sum::<f64>() / n,
+                q.iter().map(|x| x[1]).sum::<f64>() / n,
+            ];
+            q.iter()
+                .map(|x| ((x[0] - c[0]).powi(2) + (x[1] - c[1]).powi(2)).sqrt())
+                .fold(0.0, f64::max)
+        };
+        let extent = spread(&pts);
+        let first_arm: Vec<u32> = {
+            let mut seen = Vec::new();
+            let mut out = Vec::new();
+            for &(sym, _) in &alphabet {
+                let t = sym_transform(sym);
+                if !seen.contains(&t) {
+                    seen.push(t);
+                    out.push(sym);
+                }
+            }
+            out
+        };
+        let clears = |b: &Ball| -> bool {
+            first_arm.iter().all(|&sym| {
+                matches!(
+                    bounders[sym_transform(sym) as usize].apply_arm(*b, sym_arm(sym)),
+                    Ok(r) if r.r.is_finite() && r.c[0].is_finite()
+                )
+            })
+        };
+
+        println!("grand-julian: extent {extent:.3e}; per depth: bound radius / true radius");
+        // Words are applied first-symbol-first, exactly as `bag_of`
+        // and the chaos game do.
+        let mut ratios: Vec<Vec<f64>> = vec![Vec::new(); 21];
+        for wi in 0..12 {
+            let n = alphabet.len();
+            let word: Vec<u32> =
+                (0..20).map(|_| alphabet[((lcg() * n as f64) as usize).min(n - 1)].0).collect();
+            let mut bag = images[&word[0]].clone();
+            let mut truth: Vec<[f64; 2]> = pts.iter().step_by(4).copied().collect();
+            let b0 = &bounders[sym_transform(word[0]) as usize];
+            truth = truth
+                .iter()
+                .filter_map(|q| b0.apply_arm(Ball::new(*q, 0.0), sym_arm(word[0])).ok())
+                .filter(|r| r.c[0].is_finite() && r.c[1].is_finite())
+                .map(|r| r.c)
+                .collect();
+            let mut line = Vec::new();
+            for (k, &sym) in word.iter().enumerate() {
+                if k > 0 {
+                    let b = &bounders[sym_transform(sym) as usize];
+                    let arm = sym_arm(sym);
+                    let mut next = Vec::with_capacity(bag.len());
+                    for piece in &bag {
+                        if let Ok(img) = b.apply_arm(*piece, arm) {
+                            if img.r.is_finite() && img.c[0].is_finite() {
+                                next.push(img);
+                            }
+                        }
+                    }
+                    if next.is_empty() {
+                        line.push(format!("{k}:dead"));
+                        break;
+                    }
+                    bag = next;
+                    if bag.len() > 1 {
+                        if let Some(one) = enclosing_ball(&bag).filter(&clears) {
+                            bag = vec![one];
+                        }
+                    }
+                    truth = truth
+                        .iter()
+                        .filter_map(|q| b.apply_arm(Ball::new(*q, 0.0), arm).ok())
+                        .filter(|r| r.c[0].is_finite() && r.c[1].is_finite())
+                        .map(|r| r.c)
+                        .collect();
+                }
+                if truth.len() < 8 {
+                    line.push(format!("{k}:truth-lost"));
+                    break;
+                }
+                let br = enclosing_ball(&bag).map_or(f64::NAN, |b| b.r);
+                let tr = spread(&truth);
+                let ratio = br / tr.max(1e-300);
+                ratios[k].push(ratio);
+                if k % 2 == 1 || k == 0 {
+                    line.push(format!(
+                        "{k}:{:.0e}/{:.0e}={:.0e}{}",
+                        br,
+                        tr,
+                        ratio,
+                        if bag.len() > 1 { format!("[{}]", bag.len()) } else { String::new() }
+                    ));
+                }
+            }
+            println!("  word {wi:>2}: {}", line.join(" "));
+        }
+        println!();
+        println!("  depth  median(bound/true)  n");
+        for (k, r) in ratios.iter().enumerate() {
+            if r.is_empty() {
+                continue;
+            }
+            let mut v = r.clone();
+            v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            println!("  {k:>5}  {:>17.2e}  {}", v[v.len() / 2], v.len());
+        }
+    }
+
+    /// **Is the deep-view failure a cover gap?**
+    ///
+    /// `grand_julian_enumerates_with_arms` centres its view on a point
+    /// reached by a fixed cyclic orbit — legitimate, but not one the
+    /// root cover was built from. If that point sits in a gap between
+    /// the cover's discs, a 1e2 view still meets some bag by sheer
+    /// size and a 1e4 view meets none, which is exactly the pattern
+    /// measured. Two checks: does any root piece contain that point,
+    /// and does a view centred on a point the cover WAS built from
+    /// plan at the depths the other one could not.
+    #[test]
+    #[ignore = "reads output/flame-zoom"]
+    fn is_the_deep_view_failure_a_cover_gap() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let text = std::fs::read_to_string("output/flame-zoom/grand-julian.fflame")
+            .expect("output/flame-zoom/grand-julian.fflame");
+        let cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("a config");
+        let bounders: Vec<_> = cfg
+            .flame
+            .transforms
+            .iter()
+            .filter_map(|t| crate::scene::ifs_ball::Bounder::new(t, reg).ok())
+            .collect();
+        let weights: Vec<f64> =
+            cfg.flame.transforms.iter().map(|t| (t.weight as f64).max(0.0)).collect();
+        let arms: Vec<u32> = bounders.iter().map(|b| b.arms()).collect();
+        let mut alphabet: Vec<(u32, f64)> = Vec::new();
+        for (i, w) in weights.iter().enumerate() {
+            for a in 0..arms[i].max(1) {
+                alphabet.push((sym_of(i as u32, a), w / arms[i].max(1) as f64));
+            }
+        }
+        let (_, images, _) =
+            bounded_root_images(&bounders, &weights, &alphabet).expect("a root");
+
+        // The other test's point, and the symbol that produced it.
+        let mut p = [0.31f64, 0.17];
+        let mut last = 0u32;
+        for k in 0..64 {
+            let j = k % bounders.len();
+            let a = (k as u32) % arms[j].max(1);
+            match bounders[j].apply_arm(Ball::new(p, 0.0), a) {
+                Ok(b) if b.c[0].is_finite() && b.c[1].is_finite() => {
+                    p = b.c;
+                    last = sym_of(j as u32, a);
+                }
+                _ => break,
+            }
+        }
+        let inside = |q: [f64; 2]| -> Vec<u32> {
+            let mut v: Vec<u32> = images
+                .iter()
+                .filter(|(_, bag)| {
+                    bag.iter().any(|b| {
+                        ((q[0] - b.c[0]).powi(2) + (q[1] - b.c[1]).powi(2)).sqrt() <= b.r
+                    })
+                })
+                .map(|(s, _)| *s)
+                .collect();
+            v.sort();
+            v
+        };
+        println!(
+            "cyclic-orbit point [{:.4}, {:.4}], last symbol {last}: inside root bags {:?}",
+            p[0],
+            p[1],
+            inside(p)
+        );
+
+        // A point the cover was built from: the same orbit the root
+        // samples, taken a long way in.
+        let total: f64 = weights.iter().sum();
+        let mut st = 0x9E37_79B9_7F4A_7C15u64;
+        let mut lcg = move || {
+            st = st
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((st >> 33) as f64) / ((1u64 << 31) as f64)
+        };
+        let mut q = [0.31f64, 0.17];
+        let mut qlast = 0u32;
+        for _ in 0..5000 {
+            let mut u = lcg() * total;
+            let mut j = weights.len() - 1;
+            for (i, w) in weights.iter().enumerate() {
+                if u < *w {
+                    j = i;
+                    break;
+                }
+                u -= *w;
+            }
+            let a = ((lcg() * arms[j] as f64) as u32).min(arms[j] - 1);
+            if let Ok(b) = bounders[j].apply_arm(Ball::new(q, 0.0), a) {
+                if b.c[0].is_finite() && b.c[1].is_finite() {
+                    q = b.c;
+                    qlast = sym_of(j as u32, a);
+                }
+            }
+        }
+        println!(
+            "sampled-orbit point [{:.4}, {:.4}], last symbol {qlast}: inside root bags {:?}",
+            q[0],
+            q[1],
+            inside(q)
+        );
+
+        for (label, centre) in [("cyclic", p), ("sampled", q)] {
+            for zoom in [1e2f64, 1e3, 1e4, 1e5, 1e6] {
+                let view = View::of(zoom, centre, 512, 512);
+                let t0 = std::time::Instant::now();
+                let r = Cylinders::plan_armed(&cfg.flame, reg, view);
+                let ms = t0.elapsed().as_secs_f64() * 1e3;
+                match r {
+                    Ok(c) => println!(
+                        "  {label:<8} zoom {zoom:>6.0e} {ms:>8.0} ms  {:>5} words, depth {:>2}, \
+                         mass {:.2e}, speedup {:.2e}, lost {:.2e}",
+                        c.words.len(),
+                        c.depth,
+                        c.mass,
+                        c.speedup(),
+                        c.lost
+                    ),
+                    Err(e) => println!("  {label:<8} zoom {zoom:>6.0e} {ms:>8.0} ms  {e:?}"),
+                }
+            }
+        }
+    }
+
+    /// **Follow the one word known to contain the view point through
+    /// the walk, and report where it goes missing.**
+    ///
+    /// A sampled orbit's last `k` symbols are a word whose cylinder
+    /// contains the orbit's current point — not by a bound, by
+    /// construction. Centre the view there, run the same expansion
+    /// `plan_inner` runs with the beam removed, and at every depth
+    /// ask: is that word still on the frontier? If it is dropped, the
+    /// reason is one of three, and they point at completely different
+    /// fixes: its bag stopped meeting the view (the bound is UNSOUND,
+    /// since the truth is inside it), its bag died (every piece hit a
+    /// pole), or the frontier grew past what any beam would keep.
+    #[test]
+    #[ignore = "reads output/flame-zoom"]
+    fn where_does_the_true_word_go_missing() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let text = std::fs::read_to_string("output/flame-zoom/grand-julian.fflame")
+            .expect("output/flame-zoom/grand-julian.fflame");
+        let cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("a config");
+        let bounders: Vec<_> = cfg
+            .flame
+            .transforms
+            .iter()
+            .filter_map(|t| crate::scene::ifs_ball::Bounder::new(t, reg).ok())
+            .collect();
+        let weights: Vec<f64> =
+            cfg.flame.transforms.iter().map(|t| (t.weight as f64).max(0.0)).collect();
+        let arms: Vec<u32> = bounders.iter().map(|b| b.arms()).collect();
+        let mut alphabet: Vec<(u32, f64)> = Vec::new();
+        for (i, w) in weights.iter().enumerate() {
+            for a in 0..arms[i].max(1) {
+                alphabet.push((sym_of(i as u32, a), w / arms[i].max(1) as f64));
+            }
+        }
+        let total_w: f64 = weights.iter().sum();
+        let (root, images, _) =
+            bounded_root_images(&bounders, &weights, &alphabet).expect("a root");
+
+        // The orbit, with its symbol history.
+        let mut st = 0x9E37_79B9_7F4A_7C15u64;
+        let mut lcg = move || {
+            st = st
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((st >> 33) as f64) / ((1u64 << 31) as f64)
+        };
+        let mut q = [0.31f64, 0.17];
+        let mut history: Vec<u32> = Vec::new();
+        for _ in 0..5000 {
+            let mut u = lcg() * total_w;
+            let mut j = weights.len() - 1;
+            for (i, w) in weights.iter().enumerate() {
+                if u < *w {
+                    j = i;
+                    break;
+                }
+                u -= *w;
+            }
+            let a = ((lcg() * arms[j] as f64) as u32).min(arms[j] - 1);
+            if let Ok(b) = bounders[j].apply_arm(Ball::new(q, 0.0), a) {
+                if b.c[0].is_finite() && b.c[1].is_finite() {
+                    q = b.c;
+                    history.push(sym_of(j as u32, a));
+                }
+            }
+        }
+        // The true word at depth k, in application order, is the last
+        // k symbols of the history.
+        let true_word = |k: usize| -> Vec<u32> { history[history.len() - k..].to_vec() };
+
+        let first_arm: Vec<u32> = {
+            let mut seen = Vec::new();
+            let mut out = Vec::new();
+            for &(sym, _) in &alphabet {
+                let t = sym_transform(sym);
+                if !seen.contains(&t) {
+                    seen.push(t);
+                    out.push(sym);
+                }
+            }
+            out
+        };
+        let clears = |b: &Ball| -> bool {
+            first_arm.iter().all(|&sym| {
+                matches!(
+                    bounders[sym_transform(sym) as usize].apply_arm(*b, sym_arm(sym)),
+                    Ok(r) if r.r.is_finite() && r.c[0].is_finite()
+                )
+            })
+        };
+        let bag_of = |word: &[u32]| -> Option<Vec<Ball>> {
+            let mut rest = word.iter();
+            let mut bag = images.get(rest.next()?)?.clone();
+            for &sym in rest {
+                let b = &bounders[sym_transform(sym) as usize];
+                let arm = sym_arm(sym);
+                let mut next = Vec::with_capacity(bag.len());
+                for piece in &bag {
+                    if let Ok(img) = b.apply_arm(*piece, arm) {
+                        if img.r.is_finite() && img.c[0].is_finite() {
+                            next.push(img);
+                        }
+                    }
+                }
+                if next.is_empty() {
+                    return None;
+                }
+                bag = next;
+                if bag.len() > 1 {
+                    if let Some(one) = enclosing_ball(&bag).filter(&clears) {
+                        bag = vec![one];
+                    }
+                }
+            }
+            Some(bag)
+        };
+
+        for zoom in [1e3f64, 1e4] {
+            let view = View::of(zoom, q, 512, 512);
+            println!(
+                "== zoom {zoom:.0e}: view radius {:.3e} at [{:.4}, {:.4}]",
+                view.radius, q[0], q[1]
+            );
+            let hits = |c: [f64; 2], r: f64| {
+                ((c[0] - view.centre[0]).powi(2) + (c[1] - view.centre[1]).powi(2)).sqrt()
+                    <= r + view.radius
+            };
+            // (word, prob)
+            let mut frontier: Vec<(Vec<u32>, f64)> = vec![(Vec::new(), 1.0)];
+            let mut kept = 0usize;
+            let mut kept_mass = 0.0f64;
+            let mut lost_died = 0.0f64;
+            let _ = root;
+            for depth in 1..=14usize {
+                let tw = true_word(depth);
+                let mut next: Vec<(Vec<u32>, f64)> = Vec::new();
+                let (mut died, mut missed, mut cut) = (0usize, 0usize, 0usize);
+                let mut true_fate = "not expanded (parent gone)";
+                let mut true_detail = String::new();
+                for (pw, pp) in &frontier {
+                    for &(sym, w) in &alphabet {
+                        let mut word = Vec::with_capacity(pw.len() + 1);
+                        word.push(sym);
+                        word.extend_from_slice(pw);
+                        let prob = pp * (w / total_w);
+                        let is_true = word == tw;
+                        match bag_of(&word) {
+                            None => {
+                                died += 1;
+                                lost_died += prob;
+                                if is_true {
+                                    true_fate = "DIED (every piece hit a pole)";
+                                }
+                            }
+                            Some(bag) => {
+                                let e = enclosing_ball(&bag).unwrap();
+                                let meets = bag.iter().any(|p| hits(p.c, p.r));
+                                if is_true {
+                                    let dq = bag
+                                        .iter()
+                                        .map(|b| {
+                                            ((q[0] - b.c[0]).powi(2) + (q[1] - b.c[1]).powi(2))
+                                                .sqrt()
+                                                - b.r
+                                        })
+                                        .fold(f64::INFINITY, f64::min);
+                                    true_detail = format!(
+                                        "bag {} pieces, enclosing {:.2e}, nearest piece edge to q {:+.2e}",
+                                        bag.len(),
+                                        e.r,
+                                        dq
+                                    );
+                                }
+                                if !meets {
+                                    missed += 1;
+                                    if is_true {
+                                        true_fate = "MISSED the view (bound unsound)";
+                                    }
+                                } else if e.r <= view.radius {
+                                    cut += 1;
+                                    kept += 1;
+                                    kept_mass += prob;
+                                    if is_true {
+                                        true_fate = "CUT (kept, fits the view)";
+                                    }
+                                } else {
+                                    next.push((word, prob));
+                                    if is_true {
+                                        true_fate = "on the frontier";
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                println!(
+                    "  depth {depth:>2}: frontier in {:>6}, died {died:>6}, missed {missed:>6}, \
+                     cut {cut:>5}, frontier out {:>6} | kept {kept} mass {kept_mass:.2e} | \
+                     true word: {true_fate}  {true_detail}",
+                    frontier.len(),
+                    next.len()
+                );
+                if next.len() > 20000 {
+                    println!("  (frontier past 20000, stopping)");
+                    break;
+                }
+                frontier = next;
+                if frontier.is_empty() {
+                    break;
+                }
+            }
+            println!("  lost to dead bags {lost_died:.2e}");
+        }
+    }
+
+    /// **Does the measure concentrate around a deep point of
+    /// `grand-julian`? Asked exactly, by walking the inverse maps.**
+    ///
+    /// Forward bounds cannot answer this here — they are too loose to
+    /// separate "many words reach this view" from "many bounds do".
+    /// But every map in this flame is `julian ∘ rotation`, whose
+    /// inverse is single-valued: given an OUTPUT point, only one arm
+    /// of each transform can have produced it, because the arms'
+    /// images are disjoint sectors. So the words whose cylinder
+    /// contains a point form a tree of branching at most three (one
+    /// per transform), not twenty-five, and it can be walked
+    /// backwards from the point with exact arithmetic and no bound at
+    /// all. The only approximation is "the pre-image lies on the
+    /// attractor", tested against a sample at three tolerances.
+    ///
+    /// Reports, per depth, how many words contain the point and the
+    /// measure they carry; then, cutting each path where its own
+    /// derivative product says the cylinder fits the view, the
+    /// antichain size and mass at each zoom. The derivative is taken
+    /// at one point, so the cut depth is optimistic; the counts at a
+    /// fixed depth are exact.
+    #[test]
+    #[ignore = "reads output/flame-zoom"]
+    fn does_the_measure_concentrate_backwards() {
+        let text = std::fs::read_to_string("output/flame-zoom/grand-julian.fflame")
+            .expect("output/flame-zoom/grand-julian.fflame");
+        let cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("a config");
+        struct Map {
+            aff: [f64; 6],
+            inv: [f64; 6],
+            wj: f64,
+            power: f64,
+            dist: f64,
+            weight: f64,
+        }
+        let maps: Vec<Map> = cfg
+            .flame
+            .transforms
+            .iter()
+            .map(|t| {
+                let (a, b, c, d, e, f) = (
+                    t.a as f64, t.b as f64, t.c as f64, t.d as f64, t.e as f64, t.f as f64,
+                );
+                let det = a * d - b * c;
+                Map {
+                    aff: [a, b, c, d, e, f],
+                    inv: [
+                        d / det,
+                        -b / det,
+                        -c / det,
+                        a / det,
+                        -(d * e - b * f) / det,
+                        -(a * f - c * e) / det,
+                    ],
+                    wj: *t.variations.get("julian").unwrap_or(&0.0) as f64,
+                    power: *t.variation_params.get("julian.power").unwrap_or(&1.0) as f64,
+                    dist: *t.variation_params.get("julian.dist").unwrap_or(&1.0) as f64,
+                    weight: t.weight as f64,
+                }
+            })
+            .collect();
+        let total_w: f64 = maps.iter().map(|m| m.weight).sum();
+        let fwd = |m: &Map, x: [f64; 2], arm: u32| -> [f64; 2] {
+            let w = [
+                m.aff[0] * x[0] + m.aff[1] * x[1] + m.aff[4],
+                m.aff[2] * x[0] + m.aff[3] * x[1] + m.aff[5],
+            ];
+            let r = (w[0] * w[0] + w[1] * w[1]).powf(m.dist / (2.0 * m.power));
+            let t = (w[1].atan2(w[0]) + 2.0 * std::f64::consts::PI * arm as f64) / m.power;
+            [m.wj * r * t.cos(), m.wj * r * t.sin()]
+        };
+        // Inverse: the arm is DETERMINED by the output's angle.
+        let inv = |m: &Map, z: [f64; 2]| -> Option<([f64; 2], u32, f64)> {
+            let rho = (z[0] * z[0] + z[1] * z[1]).sqrt() / m.wj;
+            if !(rho > 0.0) || !rho.is_finite() {
+                return None;
+            }
+            let phi = z[1].atan2(z[0]);
+            let n = m.power;
+            let two_pi = 2.0 * std::f64::consts::PI;
+            let mut a = (n * phi / two_pi).round();
+            a = a.rem_euclid(n);
+            let mut theta = n * phi - two_pi * a;
+            theta = (theta + std::f64::consts::PI).rem_euclid(two_pi) - std::f64::consts::PI;
+            let rw = rho.powf(n / m.dist);
+            let w = [rw * theta.cos(), rw * theta.sin()];
+            let x = [
+                m.inv[0] * w[0] + m.inv[1] * w[1] + m.inv[4],
+                m.inv[2] * w[0] + m.inv[3] * w[1] + m.inv[5],
+            ];
+            // |S'| at x: rotation is conformal with scale 1, then
+            // wj · |α| · |w|^(α−1).
+            let alpha = m.dist / m.power;
+            let deriv = m.wj * alpha.abs() * rw.powf(alpha - 1.0);
+            Some((x, a as u32, deriv))
+        };
+
+        // The attractor, sampled; and a point on it with history.
+        let mut st = 0x9E37_79B9_7F4A_7C15u64;
+        let mut lcg = move || {
+            st = st
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((st >> 33) as f64) / ((1u64 << 31) as f64)
+        };
+        let mut x = [0.31f64, 0.17];
+        let mut pts: Vec<[f64; 2]> = Vec::new();
+        for k in 0..200_000 {
+            let mut u = lcg() * total_w;
+            let mut j = maps.len() - 1;
+            for (i, m) in maps.iter().enumerate() {
+                if u < m.weight {
+                    j = i;
+                    break;
+                }
+                u -= m.weight;
+            }
+            let arm = ((lcg() * maps[j].power) as u32).min(maps[j].power as u32 - 1);
+            let y = fwd(&maps[j], x, arm);
+            if y[0].is_finite() && y[1].is_finite() {
+                x = y;
+            } else {
+                x = [0.31, 0.17];
+                continue;
+            }
+            if k > 1000 {
+                pts.push(x);
+            }
+        }
+        let q = x;
+        let n = pts.len() as f64;
+        let centre = [
+            pts.iter().map(|p| p[0]).sum::<f64>() / n,
+            pts.iter().map(|p| p[1]).sum::<f64>() / n,
+        ];
+        let extent = pts
+            .iter()
+            .map(|p| ((p[0] - centre[0]).powi(2) + (p[1] - centre[1]).powi(2)).sqrt())
+            .fold(0.0, f64::max);
+        // Sanity: the inverse really inverts the forward map.
+        {
+            let m = &maps[0];
+            let y = fwd(m, [0.4, -0.2], 1);
+            let (back, arm, _) = inv(m, y).unwrap();
+            assert!((back[0] - 0.4).abs() < 1e-9 && (back[1] + 0.2).abs() < 1e-9, "{back:?}");
+            assert_eq!(arm, 1);
+        }
+        // A grid over the sample, for the on-attractor test.
+        let cell = 0.02f64;
+        let mut grid: std::collections::HashMap<(i64, i64), Vec<[f64; 2]>> =
+            std::collections::HashMap::new();
+        for p in &pts {
+            grid.entry(((p[0] / cell).floor() as i64, ((p[1] / cell).floor()) as i64))
+                .or_default()
+                .push(*p);
+        }
+        let near = |p: [f64; 2], delta: f64| -> bool {
+            let reach = (delta / cell).ceil() as i64;
+            let (cx, cy) = ((p[0] / cell).floor() as i64, (p[1] / cell).floor() as i64);
+            for dx in -reach..=reach {
+                for dy in -reach..=reach {
+                    if let Some(v) = grid.get(&(cx + dx, cy + dy)) {
+                        if v.iter().any(|s| {
+                            ((s[0] - p[0]).powi(2) + (s[1] - p[1]).powi(2)).sqrt() <= delta
+                        }) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            false
+        };
+        println!(
+            "grand-julian: {} sample points, extent {extent:.3e}, q = [{:.4}, {:.4}]",
+            pts.len(),
+            q[0],
+            q[1]
+        );
+        // Cross-check the hand-written map against the real bounder's
+        // point push, arm by arm.
+        {
+            let guard = crate::variations::global_registry();
+            let reg = &*guard;
+            let mut worst = 0.0f64;
+            for (i, t) in cfg.flame.transforms.iter().enumerate() {
+                let b = crate::scene::ifs_ball::Bounder::new(t, reg).expect("bounder");
+                for arm in 0..maps[i].power as u32 {
+                    for x in [[0.4, -0.2], [-1.3, 0.7], [0.05, 0.9], [2.0, 2.0]] {
+                        let mine = fwd(&maps[i], x, arm);
+                        let theirs = b.apply_arm(Ball::new(x, 0.0), arm).expect("push").c;
+                        let d = ((mine[0] - theirs[0]).powi(2) + (mine[1] - theirs[1]).powi(2))
+                            .sqrt();
+                        worst = worst.max(d);
+                    }
+                }
+            }
+            println!("hand-written map vs bounder point push: worst disagreement {worst:.2e}");
+            assert!(worst < 1e-5, "the hand-written map is not the flame's");
+        }
+        // Why only one pre-image? Show all three at the first depths.
+        {
+            let nearest = |p: [f64; 2]| -> f64 {
+                pts.iter()
+                    .map(|s| ((s[0] - p[0]).powi(2) + (s[1] - p[1]).powi(2)).sqrt())
+                    .fold(f64::INFINITY, f64::min)
+            };
+            let mut p = q;
+            for depth in 1..=4 {
+                let mut line = Vec::new();
+                let mut chosen = None;
+                for (i, m) in maps.iter().enumerate() {
+                    match inv(m, p) {
+                        Some((pre, arm, _)) => {
+                            let d = nearest(pre);
+                            line.push(format!(
+                                "t{i} arm {arm}: pre [{:+.3}, {:+.3}] |pre| {:.3} nearest-sample {:.2e}",
+                                pre[0],
+                                pre[1],
+                                (pre[0] * pre[0] + pre[1] * pre[1]).sqrt(),
+                                d
+                            ));
+                            if d < 0.03 && chosen.is_none() {
+                                chosen = Some(pre);
+                            }
+                        }
+                        None => line.push(format!("t{i}: no inverse")),
+                    }
+                }
+                println!("  depth {depth}: {}", line.join(" | "));
+                match chosen {
+                    Some(c) => p = c,
+                    None => break,
+                }
+            }
+        }
+
+        // The same walk from several other points of the orbit, so the
+        // answer is about the flame and not about one point.
+        {
+            let delta = 0.03f64;
+            let mut st2 = 12345u64;
+            let mut lcg2 = move || {
+                st2 = st2
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                ((st2 >> 33) as f64) / ((1u64 << 31) as f64)
+            };
+            println!("== ten other orbit points, tolerance {delta}: max words at any depth <= 20, and depth where the derivative product first falls below 1e-6");
+            for _ in 0..10 {
+                let p0 = pts[(lcg2() * pts.len() as f64) as usize % pts.len()];
+                let mut level: Vec<([f64; 2], f64)> = vec![(p0, 1.0)];
+                let mut widest = 0usize;
+                let mut cut_depth = None;
+                for depth in 1..=20usize {
+                    let mut next = Vec::new();
+                    for &(p, d) in &level {
+                        for m in &maps {
+                            if let Some((pre, _, deriv)) = inv(m, p) {
+                                if pre[0].is_finite() && near(pre, delta) {
+                                    next.push((pre, d * deriv));
+                                }
+                            }
+                        }
+                    }
+                    if next.is_empty() {
+                        break;
+                    }
+                    widest = widest.max(next.len());
+                    if cut_depth.is_none() && next.iter().all(|x| x.1 < 1e-6) {
+                        cut_depth = Some(depth);
+                    }
+                    level = next;
+                }
+                println!(
+                    "  [{:+.3}, {:+.3}] |p| {:.3}: widest level {widest}, all paths below 1e-6 by depth {:?}",
+                    p0[0],
+                    p0[1],
+                    (p0[0] * p0[0] + p0[1] * p0[1]).sqrt(),
+                    cut_depth
+                );
+            }
+        }
+        for delta in [0.01f64, 0.03, 0.1] {
+            println!("== on-attractor tolerance {delta}");
+            // (pre-image, prob, derivative product)
+            let mut level: Vec<([f64; 2], f64, f64)> = vec![(q, 1.0, 1.0)];
+            let mut cut: Vec<(usize, f64, f64)> = Vec::new(); // (depth, prob, D)
+            let zooms = [1e3f64, 1e4, 1e6];
+            let mut antichain: Vec<(usize, f64)> = vec![(0, 0.0); zooms.len()];
+            let mut open: Vec<Vec<([f64; 2], f64, f64)>> = vec![level.clone(); zooms.len()];
+            let _ = &mut cut;
+            println!("  depth  words   mass        D range");
+            for depth in 1..=24usize {
+                let mut next = Vec::new();
+                for &(p, prob, d) in &level {
+                    for m in &maps {
+                        if let Some((pre, _arm, deriv)) = inv(m, p) {
+                            if pre[0].is_finite() && near(pre, delta) {
+                                let pw = prob * (m.weight / total_w) / m.power;
+                                next.push((pre, pw, d * deriv));
+                            }
+                        }
+                    }
+                }
+                if next.is_empty() {
+                    println!("  {depth:>5}  (no pre-images on the attractor)");
+                    break;
+                }
+                let mass: f64 = next.iter().map(|x| x.1).sum();
+                let dmin = next.iter().map(|x| x.2).fold(f64::INFINITY, f64::min);
+                let dmax = next.iter().map(|x| x.2).fold(0.0, f64::max);
+                println!(
+                    "  {depth:>5}  {:>6}  {mass:.3e}  {:.1e}..{:.1e}",
+                    next.len(),
+                    dmin,
+                    dmax
+                );
+                // Antichains: cut a path when its cylinder estimate fits.
+                for (zi, &zoom) in zooms.iter().enumerate() {
+                    let view_r = extent / zoom;
+                    let mut still = Vec::new();
+                    let prev = std::mem::take(&mut open[zi]);
+                    for &(p, prob, d) in &prev {
+                        for m in &maps {
+                            if let Some((pre, _arm, deriv)) = inv(m, p) {
+                                if pre[0].is_finite() && near(pre, delta) {
+                                    let pw = prob * (m.weight / total_w) / m.power;
+                                    let dd = d * deriv;
+                                    if dd * extent <= view_r {
+                                        antichain[zi].0 += 1;
+                                        antichain[zi].1 += pw;
+                                    } else {
+                                        still.push((pre, pw, dd));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    open[zi] = still;
+                }
+                if next.len() > 200_000 {
+                    println!("  (past 200000 words, stopping)");
+                    break;
+                }
+                level = next;
+            }
+            for (zi, &zoom) in zooms.iter().enumerate() {
+                println!(
+                    "  zoom {zoom:.0e}: antichain {} words, mass {:.3e}, still open {}",
+                    antichain[zi].0,
+                    antichain[zi].1,
+                    open[zi].len()
+                );
+            }
+        }
+    }
+
     /// **What the root cover says about each flame that has no
     /// invariant disc.**
     ///
