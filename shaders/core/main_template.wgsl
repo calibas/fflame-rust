@@ -13,24 +13,9 @@
 //   NUM_TRANSFORMS, COLOR_MODE, HAS_POST_AFFINE
 // These enable dead code elimination and loop unrolling optimizations.
 {{#if CYLINDER_REPLAY}}
-
-// The arm a replayed symbol forces on a many-valued variation, or -1
-// between symbols so the free orbit draws its own. A word's symbol
-// carries the transform in its low byte and the arm above it (see
-// `cylinder::sym_of`); the replay sets this before applying the
-// transform and clears it after, and an armed variation's draw is
-// wrapped by the shader builder to read it. Private, because the
-// forced prefix and the free orbit run on the same thread and the
-// same variation function.
-var<private> ct_forced_arm: i32 = -1;
-
-fn ff_forced_arm_f(drawn: f32) -> f32 {
-    return select(drawn, f32(ct_forced_arm), ct_forced_arm >= 0);
-}
-
-fn ff_forced_arm_i(drawn: i32) -> i32 {
-    return select(drawn, ct_forced_arm, ct_forced_arm >= 0);
-}
+// The forced arm and `ct_apply_symbol` come from `replay.wgsl`,
+// appended to the definitions -- shared with the planner's GPU kernel
+// so the two apply a word identically.
 {{/if}}
 @compute @workgroup_size(64, 1, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -533,49 +518,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let ct_b = ct_base(ct_i);
                 let ct_len = u32(cylinders[ct_b + 3u]);
                 for (var ct_k = 0u; ct_k < ct_len; ct_k = ct_k + 1u) {
-                    let ct_word = u32(cylinders[ct_b + 4u + ct_k]);
                     // The transform in the low byte; the arm, if the
                     // transform's variation is many-valued, above it.
-                    let ct_sym = ct_word & 255u;
-                    ct_forced_arm = i32(ct_word >> 8u);
-                    let ct_xf = transforms[ct_sym];
-                    let ct_aff = apply_affine(ct_xf, current);
-                    var ct_hide = false;
-{{#if HAS_ANALYTIC_BLUR}}
-{{#if RENDER_3D}}
-                    var ct_blur = vec3<f32>(0.0, 0.0, 0.0);
-{{else}}
-                    var ct_blur = vec2<f32>(0.0, 0.0);
-{{/if}}
-{{/if}}
-{{#if HAS_DC}}
-                    // Fresh registers: writing the iteration's own
-                    // `vc`/`vrc` here would leak the forced prefix's
-                    // colour into the plot, which takes its colour
-                    // from the fold below instead.
-                    var ct_vc: f32 = color_index;
-{{/if}}
-{{#if HAS_RGB}}
-                    var ct_vrc: vec3<f32> = vec3<f32>(-1.0e30);
-{{/if}}
-{{#if HAS_DC}}
-{{#if HAS_RGB}}
-                    current = apply_variations(ct_xf, ct_sym, ct_aff, &ct_rng, &ct_vc, &ct_vrc, &ct_hide{{#if HAS_ANALYTIC_BLUR}}, &ct_blur{{/if}});
-{{else}}
-                    current = apply_variations(ct_xf, ct_sym, ct_aff, &ct_rng, &ct_vc, &ct_hide{{#if HAS_ANALYTIC_BLUR}}, &ct_blur{{/if}});
-{{/if}}
-{{else}}
-{{#if HAS_RGB}}
-                    current = apply_variations(ct_xf, ct_sym, ct_aff, &ct_rng, &ct_vrc, &ct_hide{{#if HAS_ANALYTIC_BLUR}}, &ct_blur{{/if}});
-{{else}}
-                    current = apply_variations(ct_xf, ct_sym, ct_aff, &ct_rng, &ct_hide{{#if HAS_ANALYTIC_BLUR}}, &ct_blur{{/if}});
-{{/if}}
-{{/if}}
-                    if (HAS_POST_AFFINE) {
-                        if (ct_xf.post_enabled > 0.5) {
-                            current = apply_post_affine(ct_xf, current);
-                        }
-                    }
+                    // `replay.wgsl`, shared with the planner's kernel.
+                    current = ct_apply_symbol(current, u32(cylinders[ct_b + 4u + ct_k]), &ct_rng, color_index);
                 }
                 ct_forced_arm = -1;
                 color_index = color_index * cylinders[ct_b + 1u] + cylinders[ct_b + 2u];

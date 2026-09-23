@@ -1,8 +1,8 @@
 # Planning cylinders on the GPU (plan, 2026-09-22)
 
-A plan, not a record: **no code has been written for any of this.** It
-asks for decisions at the end (§11), and phase 0 is a measurement whose
-result can stop the whole thing.
+Written as a plan before any code. The decisions (§11) were taken and
+are recorded in §12; phases 0 and 1 are built and measured in §13, and
+the rest of the document is the plan as it was written.
 
 Background: [inversive-targeting.md](inversive-targeting.md) §24–§30
 describe the planner this would accelerate -- the inverse walk over an
@@ -332,3 +332,132 @@ floor.
 4. **The mode-D measure walk** (§3.3) is a different route to the same
    deep zoom. Not needed to decide now; worth a conversation before too
    much more is built on either side.
+
+---
+
+## 12. Decisions taken
+
+1. **Design A**: GPU arithmetic only, the tree stays on the CPU.
+2. **Desktop first.**
+3. **Phase 0's bar** was left open ("not sure"). Taken as: go on if the
+   GPU does a plan's arithmetic at least 3x faster than the twelve CPU
+   cores, round trips included, and gives the CPU's answers.
+4. **Escape-time and deep zoom.** The theory put forward: the flames
+   that convert to escape time are the ones that can be deep-zoomed.
+   For armed flames today the two sets coincide by construction -- the
+   inverse walk starts from `analyse_2d`, the same analysis mode D
+   needs, and refuses whatever it refuses. Whether the sets coincide
+   beyond that is a corpus measurement, due after the GPU phases.
+
+---
+
+## 13. Phases 0 and 1, measured (2026-09-22)
+
+**Built:** `shaders/core/plan_eval.wgsl` (the entry point),
+`ShaderBuilder::build_plan_eval`, `src/scene/plan_gpu.rs` (`PlanGpu`:
+`evaluate` answers in-disc per point, `endpoints` returns where each
+point lands), and the test `the_gpu_answers_as_the_cpu_does` in
+`backward.rs`. Real words from real grand-julian plans -- every kept
+word and every expanded node's word -- applied to the 400 verification
+points and to 256 random sample points each, on both sides.
+
+**One function for both.** Applying one forced symbol now lives in
+`shaders/core/replay.wgsl` (`ct_apply_symbol`, with the forced arm and
+its two helpers), appended to the definitions only when
+`CYLINDER_REPLAY` is on. The render's replay arm and the planner's
+kernel both call it, so the risk in §10 ("a second copy of the replay
+loop") is closed rather than managed: a word cannot land in the view
+for the planner and somewhere else for the picture. Untargeted shaders
+are byte-identical (the file is not appended). The planner's kernel
+used to treat a symbol's hide flag as a miss; the render discards it
+(the plot is gated by the free iteration's own hide), and the shared
+function does what the render does. No flame the analysis accepts has
+a hiding variation, so this changed no answer.
+
+**Two things had to be found first.**
+
+- **Eight storage buffers per stage** (WebGPU's default): the flame's
+  group 0 takes four, so the planner's jobs, words and point indices
+  share one buffer (`plan_data`).
+- **Derived parameter slots.** julian's `cpower` (and every
+  `wgsl_init` variation's derived slots) are filled by the render's
+  init pass. Without it every word sent every point to radius one and
+  the kernel reported no hits at all. `PlanGpu::new` runs the same
+  pass.
+
+### 13.1 Speed
+
+GTX 1660 SUPER against the planner's own CPU path on twelve threads
+(rayon), whole batches of a plan's words at once, best of five:
+
+| zoom | points | symbol applications | GPU | CPU, 12 threads | ratio |
+|---|---|---|---|---|---|
+| 1e2 | 1.71M | 16.9M | 5.3 ms | 187 ms | 35x |
+| 1e6 (run first) | 1.90M | 27.2M | 6.4 ms | 294 ms | 46x |
+| 1e4 (run second) | 2.81M | 36.7M | 9.1 ms | 393 ms | 43x |
+
+The GPU's own work (submit to mapped) is 1.6-3 ms of that; packing the
+jobs on the CPU is 2.5-4 ms and reading back under 1 ms. **Only the first
+view a test runs times cleanly**: after the CPU comparison has held
+twelve cores for a second, the next view's batches measured 2-3x slower
+in whichever order the views ran, packing included, so the slowdown is
+the machine's state and not the words (running the views in reverse
+order moved it with them). One small job's round trip: 0.14-0.33 ms.
+
+**The bar is passed by an order of magnitude**: 35-46x against 3x.
+
+### 13.2 Agreement
+
+The plan's gate was per-point agreement of 99.9%. Measured:
+
+| zoom | per point | f32 step at the centre | moved >= 0.1 r | same keep/carry call |
+|---|---|---|---|---|
+| 1e2 | 0.99991 | 1.5e-6 r (0.00 px) | 1.8e-6 | 1.0000 |
+| 1e3 | 0.99923 | 1.5e-5 r (0.01 px) | 3.5e-5 | 0.9996 |
+| 1e4 | 0.99437 | 1.5e-4 r (0.11 px) | 1.4e-6 | 0.9944 |
+| 1e6 | 0.91055 | 1.5e-2 r (10.7 px) | 2.1e-5 | 0.9154 |
+
+Per point fails at 1e4, and **per point was the wrong gate.** With the
+GPU's end points read back (`PlanGpu::endpoints`) against the CPU's:
+
+- **Every disagreement below 0.1 r is at the rim.** 156, 2415 and
+  15798 of them at 1e2, 1e3 and 1e4, and each one sits within twice its
+  own displacement of the view disc's edge. The displacement is f32
+  rounding: under 1e-3 r at 1e4. The f32 render puts those points on
+  the GPU's side of the rim too, so there the GPU is the more faithful
+  answer, not the less. The rim of the disc is outside the frame except
+  at the corners.
+- **Different points** (moved 0.1 r or more): 3, 115, 4 and 40 per
+  million-odd, at most 3.5e-5 of all points. These are branches taken
+  the other way (julian's `atan2` cut, most likely): the same class of
+  event the render's own f32 replay has.
+- **Replay shares** differ by more than 1/100 for 2-5% of words, up to
+  0.235 at 1e3 and 0.85 at 1e4. These are words whose entire image is a
+  speck on the rim -- measured image spreads of 8e-5 to 2e-3 r against
+  displacements of 6e-6 to 7e-5 r -- so the rim's rounding moves a large
+  share of a tiny image. That moves an efficiency estimate and nothing
+  else; what changes a plan is the keep-or-carry call it makes at
+  `CUT_EFFICIENCY`, which agrees for 99.4% of words or better wherever
+  the render resolves a pixel.
+
+**The gate as restated and asserted**, where one f32 step is smaller
+than a pixel (1e2-1e4 here): points that land somewhere else under
+1e-4 of all points; every disagreement that moved less than 0.1 r at
+the rim; the keep-or-carry call the same for 99% of words. At 1e6 one
+f32 step is ten pixels -- past the render's own ceiling for this view
+(§6), so it is reported and not gated. The real test of the GPU's
+answers is phase 2's: plans made with them must pass the same
+completeness gates the CPU's plans pass.
+
+### 13.3 What phase 2 inherits
+
+- **Packing is as big as the GPU's work.** 2.5-4 ms to pack a batch
+  against 1.6-3 ms on the GPU. Phase 2 packs each level's jobs as the
+  walk produces them; the point indices are the bulk and are already
+  flat vectors on the CPU side.
+- **Round trips are cheap on desktop** (0.14-0.33 ms), so a level can
+  afford the two §5.3 plans for: replays, then checks.
+- **Replays want positions, not just shares**: the planner's replay
+  records where the landed points sit (centre and radius). The
+  `endpoints` mode returns them; phase 2 decides whether to reduce on
+  the GPU or read positions back.

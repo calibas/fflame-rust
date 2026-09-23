@@ -7,6 +7,7 @@ pub mod ifs_real;
 pub mod importance;
 pub mod cylinder;
 pub mod backward;
+pub mod plan_gpu;
 pub mod xaos;
 pub mod presets;
 pub mod palette;
