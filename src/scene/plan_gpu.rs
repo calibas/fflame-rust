@@ -11,8 +11,15 @@
 //! The planner keeps every decision; this only answers questions. A
 //! batch is a list of [`EvalJob`]s -- a word and the sample indices to
 //! apply it to -- and the answer is one byte per point, in job order.
+//!
+//! **Phase 4: the gathers too.** With the walk's indexes uploaded
+//! ([`PlanGpu::attach`]), a gather -- the candidates a child takes from an
+//! index over its node's cells -- runs here as well
+//! (`shaders/core/plan_gather.wgsl`), in the same submission as the
+//! replays, and its candidates are checked where they were gathered: they
+//! never cross to the CPU, only the ones that land come back.
 
-use crate::scene::backward::{Backward, Evaluate};
+use crate::scene::backward::{gather_on_cpu, Backward, Evaluate, GatherJob, Gathered, IndexTables};
 use crate::scene::cylinder::View;
 use crate::scene::transforms::Flame;
 use wgpu::util::DeviceExt;
@@ -43,16 +50,54 @@ enum Mode {
     Endpoint = 1,
 }
 
-/// The per-batch buffers, grown to fit and reused.
-struct Batch {
-    data: wgpu::Buffer,
-    out: wgpu::Buffer,
-    stage: wgpu::Buffer,
-    view: wgpu::Buffer,
-    group1: wgpu::BindGroup,
-    /// Capacities, in u32s.
-    cap_data: usize,
-    cap_out: usize,
+/// Mirrors `GatherView` in `plan_gather.wgsl`.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct GpuGatherView {
+    jobs: u32,
+    pairs: u32,
+    slots: u32,
+    row_pairs: u32,
+    row_slots: u32,
+    row_jobs: u32,
+    cells_base: u32,
+    _pad: u32,
+}
+
+/// A buffer grown to fit and reused: a power of two of u32s, at least
+/// 1024.
+struct Grow {
+    buf: Option<wgpu::Buffer>,
+    cap: usize,
+    label: &'static str,
+    usage: wgpu::BufferUsages,
+}
+
+impl Grow {
+    fn new(label: &'static str, usage: wgpu::BufferUsages) -> Self {
+        Self { buf: None, cap: 0, label, usage }
+    }
+
+    /// A buffer holding at least `words` u32s.
+    fn get(&mut self, device: &wgpu::Device, words: usize) -> wgpu::Buffer {
+        if self.buf.is_none() || self.cap < words {
+            self.cap = words.next_power_of_two().max(1024);
+            self.buf = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(self.label),
+                size: (self.cap * 4) as u64,
+                usage: self.usage,
+                mapped_at_creation: false,
+            }));
+        }
+        self.buf.clone().expect("made")
+    }
+}
+
+/// The walk's indexes on the GPU. See [`IndexTables`].
+struct IndexBuffers {
+    cells: wgpu::Buffer,
+    idx: wgpu::Buffer,
+    offsets: Vec<u32>,
 }
 
 /// Where the last batch spent its time, in milliseconds.
@@ -79,11 +124,30 @@ pub struct PlanGpu {
     points_len: usize,
     device: wgpu::Device,
     queue: wgpu::Queue,
+    /// `plan_eval`, and `plan_eval_gathered` for the gathered candidates.
     pipeline: wgpu::ComputePipeline,
+    gathered: wgpu::ComputePipeline,
     layout1: wgpu::BindGroupLayout,
     group0: wgpu::BindGroup,
     points: wgpu::Buffer,
-    batch: Option<Batch>,
+    /// The gather's passes and their bind group layout.
+    g_layout: wgpu::BindGroupLayout,
+    g_ranges: wgpu::ComputePipeline,
+    g_scan: wgpu::ComputePipeline,
+    g_fill: wgpu::ComputePipeline,
+    /// The walk's indexes, once [`PlanGpu::attach`]ed.
+    index: Option<IndexBuffers>,
+    data: Grow,
+    out: Grow,
+    stage: Grow,
+    gdata: Grow,
+    gpairs: Grow,
+    gcands: Grow,
+    edata: Grow,
+    eout: Grow,
+    view: wgpu::Buffer,
+    gview: wgpu::Buffer,
+    eview: wgpu::Buffer,
     /// The flame's group-0 buffers, held so the bind group stays valid.
     _flame_buffers: Vec<wgpu::Buffer>,
 }
@@ -129,7 +193,7 @@ impl PlanGpu {
         });
         let layout1 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Plan Eval Batch Layout"),
-            entries: &[storage(0, true), storage(1, true), storage(2, false), uniform(3)],
+            entries: &[storage(0, true), storage(1, true), storage(2, false), uniform(3), storage(4, true)],
         });
         let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Plan Eval"),
@@ -230,14 +294,74 @@ impl PlanGpu {
         let pts: Vec<[f32; 2]> = sample.iter().map(|p| [p[0] as f32, p[1] as f32]).collect();
         let points = init("Plan Eval Points", bytemuck::cast_slice(&pts), st);
 
+        // **The gather** (phase 4): its own module -- it reads the walk's
+        // indexes, not the flame -- and its own bind group.
+        let gather_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Plan Gather"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/core/plan_gather.wgsl").into()),
+        });
+        let g_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Plan Gather Layout"),
+            entries: &[storage(0, true), storage(1, true), storage(2, true), storage(3, false), storage(4, false), uniform(5)],
+        });
+        let g_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Plan Gather"),
+            bind_group_layouts: &[Some(&g_layout)],
+            immediate_size: 0,
+        });
+        let g_pipe = |entry: &str| {
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some(entry),
+                layout: Some(&g_pl),
+                module: &gather_module,
+                entry_point: Some(entry),
+                compilation_options: Default::default(),
+                cache: None,
+            })
+        };
+        let (g_ranges, g_scan, g_fill) = (g_pipe("gather_ranges"), g_pipe("gather_scan"), g_pipe("gather_fill"));
+        let gathered = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Plan Eval Gathered"),
+            layout: Some(&pl),
+            module: &module,
+            entry_point: Some("plan_eval_gathered"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        use wgpu::BufferUsages as U;
+        let fixed = |label: &str, bytes: usize| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: bytes as u64,
+                usage: U::UNIFORM | U::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+
         Self {
             device: device.clone(),
             queue: queue.clone(),
             pipeline,
+            gathered,
             layout1,
             group0,
             points,
-            batch: None,
+            g_layout,
+            g_ranges,
+            g_scan,
+            g_fill,
+            index: None,
+            data: Grow::new("Plan Eval Data", U::STORAGE | U::COPY_DST),
+            out: Grow::new("Plan Eval Out", U::STORAGE | U::COPY_SRC),
+            stage: Grow::new("Plan Eval Stage", U::MAP_READ | U::COPY_DST),
+            gdata: Grow::new("Plan Gather Data", U::STORAGE | U::COPY_DST),
+            gpairs: Grow::new("Plan Gather Pairs", U::STORAGE),
+            gcands: Grow::new("Plan Gather Candidates", U::STORAGE | U::COPY_SRC),
+            edata: Grow::new("Plan Eval Gathered Data", U::STORAGE | U::COPY_DST),
+            eout: Grow::new("Plan Eval Gathered Out", U::STORAGE | U::COPY_SRC),
+            view: fixed("Plan Eval View", std::mem::size_of::<GpuPlanView>()),
+            gview: fixed("Plan Gather View", std::mem::size_of::<GpuGatherView>()),
+            eview: fixed("Plan Eval Gathered View", std::mem::size_of::<GpuPlanView>()),
             last: RunTimes::default(),
             totals: RunTimes::default(),
             batches: 0,
@@ -246,37 +370,25 @@ impl PlanGpu {
         }
     }
 
-    /// Make sure the batch buffers hold `data` and `out` u32s.
-    fn ensure_batch(&mut self, data: usize, out: usize) {
-        if self.batch.as_ref().is_some_and(|b| b.cap_data >= data && b.cap_out >= out) {
-            return;
-        }
-        let cap_data = data.next_power_of_two().max(1024);
-        let cap_out = out.next_power_of_two().max(1024);
-        let buf = |label: &str, words: usize, usage: wgpu::BufferUsages| {
-            self.device.create_buffer(&wgpu::BufferDescriptor {
+    /// **Upload the walk's indexes**, so gathers run here. Until this is
+    /// called, `gather_lands` gathers on the CPU.
+    pub fn attach(&mut self, b: &Backward) {
+        let t: IndexTables = b.index_tables();
+        let init = |label: &str, bytes: &[u8]| {
+            self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
-                size: (words * 4) as u64,
-                usage,
-                mapped_at_creation: false,
+                contents: bytes,
+                usage: wgpu::BufferUsages::STORAGE,
             })
         };
-        use wgpu::BufferUsages as U;
-        let data_buf = buf("Plan Eval Data", cap_data, U::STORAGE | U::COPY_DST);
-        let out_buf = buf("Plan Eval Out", cap_out, U::STORAGE | U::COPY_SRC);
-        let stage = buf("Plan Eval Stage", cap_out, U::MAP_READ | U::COPY_DST);
-        let view = buf("Plan Eval View", std::mem::size_of::<GpuPlanView>() / 4, U::UNIFORM | U::COPY_DST);
-        let group1 = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Plan Eval Batch"),
-            layout: &self.layout1,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.points.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: data_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: out_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: view.as_entire_binding() },
-            ],
-        });
-        self.batch = Some(Batch { data: data_buf, out: out_buf, stage, view, group1, cap_data, cap_out });
+        let cells = init("Plan Gather Index Cells", bytemuck::cast_slice(&t.cells));
+        let idx = init("Plan Gather Index Entries", bytemuck::cast_slice(&t.idx));
+        self.index = Some(IndexBuffers { cells, idx, offsets: t.offsets });
+    }
+
+    /// Whether gathers run here. See [`Self::attach`].
+    pub fn gathers_here(&self) -> bool {
+        self.index.is_some()
     }
 
     /// Apply each job's word to each of its points; one byte per point, in
@@ -301,18 +413,12 @@ impl PlanGpu {
         })
     }
 
-    /// One batch: pack, dispatch, and hand the raw output words to `read`
-    /// while they are still mapped.
-    fn run<T>(&mut self, view: View, jobs: &[EvalJob], mode: Mode, read: impl FnOnce(&[u32]) -> Vec<T>) -> Vec<T> {
-        let entries: usize = jobs.iter().map(|j| j.points.len()).sum();
-        if entries == 0 {
-            return Vec::new();
-        }
-        let per = if mode == Mode::Endpoint { 2 } else { 1 };
-        let t_pack = web_time::Instant::now();
-        // Jobs with no points are left out: the kernel finds a thread's
-        // job by the first entry, and an empty run would shadow the next.
+    /// Pack plain jobs: the job table, the words, the point indices. Jobs
+    /// with no points are left out: the kernel finds a thread's job by the
+    /// first entry, and an empty run would shadow the next.
+    fn pack_plain(jobs: &[EvalJob]) -> (Vec<u32>, u32, u32, u32) {
         let live: Vec<&EvalJob> = jobs.iter().filter(|j| !j.points.is_empty()).collect();
+        let entries: usize = live.iter().map(|j| j.points.len()).sum();
         let words_len: usize = live.iter().map(|j| j.word.len()).sum();
         let words_base = 4 * live.len();
         let idx_base = words_base + words_len;
@@ -329,55 +435,113 @@ impl PlanGpu {
         for j in &live {
             data.extend_from_slice(j.points);
         }
+        (data, live.len() as u32, words_base as u32, idx_base as u32)
+    }
 
-        self.ensure_batch(data.len(), per * entries);
-        let groups = entries.div_ceil(64) as u32;
-        let (gx, gy) = if groups <= MAX_GROUPS { (groups, 1) } else { (MAX_GROUPS, groups.div_ceil(MAX_GROUPS)) };
+    /// The eval pipelines' group 1: points, a job table, an output, a view,
+    /// and the gathered candidates (read by the gathered pass only).
+    fn group1(&mut self, data: &wgpu::Buffer, out: &wgpu::Buffer, view: &wgpu::Buffer) -> wgpu::BindGroup {
+        let gcands = self.gcands.get(&self.device, 2);
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Plan Eval Batch"),
+            layout: &self.layout1,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.points.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: data.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: out.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: view.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: gcands.as_entire_binding() },
+            ],
+        })
+    }
+
+    /// One batch: pack, dispatch, and hand the raw output words to `read`
+    /// while they are still mapped.
+    fn run<T>(&mut self, view: View, jobs: &[EvalJob], mode: Mode, read: impl FnOnce(&[u32]) -> Vec<T>) -> Vec<T> {
+        let entries: usize = jobs.iter().map(|j| j.points.len()).sum();
+        if entries == 0 {
+            return Vec::new();
+        }
+        let per = if mode == Mode::Endpoint { 2 } else { 1 };
+        let t_pack = web_time::Instant::now();
+        let (data, n_jobs, words_base, idx_base) = Self::pack_plain(jobs);
+        let (gx, gy, row) = grid(entries, 64);
         let pv = GpuPlanView {
             centre: [view.centre[0] as f32, view.centre[1] as f32],
             radius: view.radius as f32,
             entries: entries as u32,
-            jobs: live.len() as u32,
-            row: gx * 64,
-            words_base: words_base as u32,
-            idx_base: idx_base as u32,
+            jobs: n_jobs,
+            row,
+            words_base,
+            idx_base,
             mode: mode as u32,
             _pad: [0; 3],
         };
-        let b = self.batch.as_ref().expect("ensured");
-        self.queue.write_buffer(&b.data, 0, bytemuck::cast_slice(&data));
-        self.queue.write_buffer(&b.view, 0, bytemuck::bytes_of(&pv));
+        let data_buf = self.data.get(&self.device, data.len());
+        let out_buf = self.out.get(&self.device, per * entries);
+        let view_buf = self.view.clone();
+        self.queue.write_buffer(&data_buf, 0, bytemuck::cast_slice(&data));
+        self.queue.write_buffer(&view_buf, 0, bytemuck::bytes_of(&pv));
+        let group1 = self.group1(&data_buf, &out_buf, &view_buf);
         let pack = t_pack.elapsed().as_secs_f64() * 1e3;
-        let t_wait = web_time::Instant::now();
         let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Plan Eval") });
         {
             let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("Plan Eval"), timestamp_writes: None });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.group0, &[]);
-            pass.set_bind_group(1, &b.group1, &[]);
+            pass.set_bind_group(1, &group1, &[]);
             pass.dispatch_workgroups(gx, gy, 1);
         }
-        let bytes = (per * entries * 4) as u64;
-        enc.copy_buffer_to_buffer(&b.out, 0, &b.stage, 0, bytes);
-        self.queue.submit(std::iter::once(enc.finish()));
-        let slice = b.stage.slice(..bytes);
+        let n = per * entries;
+        self.finish(enc, &[(&out_buf, n)], pack, |w| {
+            match w {
+                Some(w) => read(w),
+                None => read(&vec![0; n]),
+            }
+        })
+    }
+
+    /// Copy `copies` (buffer, u32 count) into the staging buffer back to
+    /// back, submit, wait, and hand the words to `read` while mapped --
+    /// `None` if the map failed.
+    fn finish<T>(
+        &mut self,
+        mut enc: wgpu::CommandEncoder,
+        copies: &[(&wgpu::Buffer, usize)],
+        pack: f64,
+        read: impl FnOnce(Option<&[u32]>) -> T,
+    ) -> T {
+        let t_wait = web_time::Instant::now();
+        let total: usize = copies.iter().map(|c| c.1).sum();
+        let stage = self.stage.get(&self.device, total.max(1));
+        let mut at = 0u64;
+        for (buf, n) in copies {
+            let bytes = (*n * 4) as u64;
+            if bytes > 0 {
+                enc.copy_buffer_to_buffer(buf, 0, &stage, at, bytes);
+            }
+            at += bytes;
+        }
+        let index = self.queue.submit(std::iter::once(enc.finish()));
+        let bytes = (total.max(1) * 4) as u64;
+        let slice = stage.slice(..bytes);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx.send(r);
         });
-        let _ = self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        let _ = self.device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: None });
         let ok = rx.recv().map(|r| r.is_ok()).unwrap_or(false);
         let wait = t_wait.elapsed().as_secs_f64() * 1e3;
         let t_read = web_time::Instant::now();
         let out = if ok {
             let view = slice.get_mapped_range();
-            read(bytemuck::cast_slice::<u8, u32>(&view))
+            let r = read(Some(&bytemuck::cast_slice::<u8, u32>(&view)[..total]));
+            drop(view);
+            stage.unmap();
+            r
         } else {
-            read(&vec![0; per * entries])
+            read(None)
         };
-        if ok {
-            b.stage.unmap();
-        }
         self.last = RunTimes { pack, wait, read: t_read.elapsed().as_secs_f64() * 1e3 };
         self.totals.pack += self.last.pack;
         self.totals.wait += self.last.wait;
@@ -385,7 +549,194 @@ impl PlanGpu {
         self.batches += 1;
         out
     }
+
+    /// **Plain jobs and gathers in one submission** (phase 4): the plain
+    /// jobs' pass, the three gather passes, and the check of the gathered
+    /// candidates -- which never leave the GPU. Back come the plain
+    /// answers, each gather's candidate count, and the candidates that
+    /// landed.
+    fn fused(&mut self, view: View, jobs: &[EvalJob], gathers: &[GatherJob], b: &Backward) -> (Vec<u8>, Vec<Gathered>) {
+        let t_pack = web_time::Instant::now();
+        let (ix_cells, ix_idx, offsets) = {
+            let ix = self.index.as_ref().expect("attached");
+            (ix.cells.clone(), ix.idx.clone(), ix.offsets.clone())
+        };
+
+        // The gather table, and each distinct cell list once: a node's
+        // children all gather over the node's cells.
+        let mut table: Vec<u32> = Vec::with_capacity(8 * gathers.len());
+        let mut cells: Vec<u32> = Vec::new();
+        let mut placed: std::collections::HashMap<(usize, usize), u32> = std::collections::HashMap::new();
+        let (mut pairs, mut slots) = (0usize, 0usize);
+        for g in gathers {
+            let cell_off = *placed.entry((g.seen.as_ptr() as usize, g.seen.len())).or_insert_with(|| {
+                let at = (cells.len() / 2) as u32;
+                for &(x, y) in g.seen {
+                    cells.push(x as u32);
+                    cells.push(y as u32);
+                }
+                at
+            });
+            let k = b.index_slot(g.index);
+            let (lo, hi) = (offsets[k], offsets[k + 1]);
+            table.extend_from_slice(&[lo, hi, cell_off, g.seen.len() as u32, pairs as u32, g.cap as u32, slots as u32, 0]);
+            pairs += g.seen.len();
+            slots += g.cap;
+        }
+        let cells_base = table.len() as u32;
+        table.extend_from_slice(&cells);
+        let n_gathers = gathers.len();
+
+        // The gathered check's table: word, and where the job's slots
+        // start.
+        let words_len: usize = gathers.iter().map(|g| g.word.len()).sum();
+        let mut etable: Vec<u32> = Vec::with_capacity(4 * n_gathers + words_len);
+        let (mut word_at, mut slot_at) = (0u32, 0u32);
+        for g in gathers {
+            etable.extend_from_slice(&[word_at, g.word.len() as u32, slot_at, 0]);
+            word_at += g.word.len() as u32;
+            slot_at += g.cap as u32;
+        }
+        let e_words_base = etable.len() as u32;
+        for g in gathers {
+            etable.extend_from_slice(g.word);
+        }
+
+        let (px, py, prow) = grid(pairs.max(1), 64);
+        let (sx, sy, srow) = grid(slots.max(1), 64);
+        let (jx, jy, jrow) = grid(n_gathers.max(1), 1);
+        let gv = GpuGatherView {
+            jobs: n_gathers as u32,
+            pairs: pairs as u32,
+            slots: slots as u32,
+            row_pairs: prow,
+            row_slots: srow,
+            row_jobs: jrow,
+            cells_base,
+            _pad: 0,
+        };
+        let ev = GpuPlanView {
+            centre: [view.centre[0] as f32, view.centre[1] as f32],
+            radius: view.radius as f32,
+            entries: slots as u32,
+            jobs: n_gathers as u32,
+            row: srow,
+            words_base: e_words_base,
+            idx_base: 0,
+            mode: 0,
+            _pad: [0; 3],
+        };
+        let gdata = self.gdata.get(&self.device, table.len());
+        let gpairs = self.gpairs.get(&self.device, 3 * pairs.max(1));
+        let gcands = self.gcands.get(&self.device, 2 * n_gathers + slots);
+        let edata = self.edata.get(&self.device, etable.len());
+        let eout = self.eout.get(&self.device, slots.max(1));
+        self.queue.write_buffer(&gdata, 0, bytemuck::cast_slice(&table));
+        self.queue.write_buffer(&self.gview, 0, bytemuck::bytes_of(&gv));
+        self.queue.write_buffer(&edata, 0, bytemuck::cast_slice(&etable));
+        self.queue.write_buffer(&self.eview, 0, bytemuck::bytes_of(&ev));
+        let g_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Plan Gather"),
+            layout: &self.g_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: ix_cells.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: ix_idx.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: gdata.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: gpairs.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: gcands.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5, resource: self.gview.as_entire_binding() },
+            ],
+        });
+        let eview = self.eview.clone();
+        let e_group = self.group1(&edata, &eout, &eview);
+
+        // The plain jobs, if any, in the same submission.
+        let entries: usize = jobs.iter().map(|j| j.points.len()).sum();
+        let plain = if entries > 0 {
+            let (data, n_jobs, words_base, idx_base) = Self::pack_plain(jobs);
+            let (gx, gy, row) = grid(entries, 64);
+            let pv = GpuPlanView {
+                centre: [view.centre[0] as f32, view.centre[1] as f32],
+                radius: view.radius as f32,
+                entries: entries as u32,
+                jobs: n_jobs,
+                row,
+                words_base,
+                idx_base,
+                mode: Mode::Disc as u32,
+                _pad: [0; 3],
+            };
+            let data_buf = self.data.get(&self.device, data.len());
+            let out_buf = self.out.get(&self.device, entries);
+            let view_buf = self.view.clone();
+            self.queue.write_buffer(&data_buf, 0, bytemuck::cast_slice(&data));
+            self.queue.write_buffer(&view_buf, 0, bytemuck::bytes_of(&pv));
+            let group1 = self.group1(&data_buf, &out_buf, &view_buf);
+            Some((group1, out_buf, gx, gy))
+        } else {
+            None
+        };
+        let pack = t_pack.elapsed().as_secs_f64() * 1e3;
+
+        let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Plan Fused") });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("Plan Fused"), timestamp_writes: None });
+            if let Some((group1, _, gx, gy)) = &plain {
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &self.group0, &[]);
+                pass.set_bind_group(1, group1, &[]);
+                pass.dispatch_workgroups(*gx, *gy, 1);
+            }
+            pass.set_bind_group(0, &g_group, &[]);
+            if pairs > 0 {
+                pass.set_pipeline(&self.g_ranges);
+                pass.dispatch_workgroups(px, py, 1);
+            }
+            pass.set_pipeline(&self.g_scan);
+            pass.dispatch_workgroups(jx, jy, 1);
+            pass.set_pipeline(&self.g_fill);
+            pass.dispatch_workgroups(sx, sy, 1);
+            pass.set_pipeline(&self.gathered);
+            pass.set_bind_group(0, &self.group0, &[]);
+            pass.set_bind_group(1, &e_group, &[]);
+            pass.dispatch_workgroups(sx, sy, 1);
+        }
+        let empty = self.out.get(&self.device, 1);
+        let plain_out = plain.as_ref().map(|p| p.1.clone()).unwrap_or(empty);
+        let copies = [(&plain_out, entries), (&gcands, 2 * n_gathers), (&eout, slots)];
+        self.finish(enc, &copies, pack, |w| {
+            let Some(w) = w else {
+                return (vec![0; entries], vec![Gathered::default(); n_gathers]);
+            };
+            let answers: Vec<u8> = w[..entries].iter().map(|v| (*v != 0) as u8).collect();
+            let header = &w[entries..entries + 2 * n_gathers];
+            let out = &w[entries + 2 * n_gathers..];
+            let mut at = 0usize;
+            let gathered = gathers
+                .iter()
+                .enumerate()
+                .map(|(g, job)| {
+                    let n = header[2 * g] as usize;
+                    let hits = out[at..at + n].iter().copied().filter(|v| *v != NONE).collect();
+                    at += job.cap;
+                    Gathered { cands: n, hits }
+                })
+                .collect();
+            (answers, gathered)
+        })
+    }
 }
+
+/// Workgroups for `threads` threads of `per` each, in two dimensions past
+/// WebGPU's per-dimension limit, and the threads in one row.
+fn grid(threads: usize, per: u32) -> (u32, u32, u32) {
+    let groups = (threads as u32).div_ceil(per).max(1);
+    let (gx, gy) = if groups <= MAX_GROUPS { (groups, 1) } else { (MAX_GROUPS, groups.div_ceil(MAX_GROUPS)) };
+    (gx, gy, gx * per)
+}
+
+/// A slot or an answer that holds nothing.
+const NONE: u32 = u32::MAX;
 
 impl Evaluate for PlanGpu {
     fn lands(&mut self, b: &Backward, view: View, jobs: &[EvalJob]) -> Vec<u8> {
@@ -395,6 +746,14 @@ impl Evaluate for PlanGpu {
 
     fn speculative(&self) -> bool {
         true
+    }
+
+    fn gather_lands(&mut self, b: &Backward, view: View, jobs: &[EvalJob], gathers: &[GatherJob]) -> (Vec<u8>, Vec<Gathered>) {
+        if gathers.is_empty() || !self.gathers_here() {
+            return gather_on_cpu(self, b, view, jobs, gathers);
+        }
+        assert_eq!(b.sample().len(), self.points_len, "a plan's GPU evaluator is for another sample");
+        self.fused(view, jobs, gathers, b)
     }
 }
 
@@ -429,7 +788,8 @@ impl GpuPlanner {
         // A kernel that fails validation is a CPU plan, not a panic in
         // the planner thread.
         let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let gpu = PlanGpu::new(&self.device, &self.queue, flame, b.sample());
+        let mut gpu = PlanGpu::new(&self.device, &self.queue, flame, b.sample());
+        gpu.attach(b);
         if let Some(err) = pollster::block_on(scope.pop()) {
             log::warn!("the GPU planner's kernel did not build for this flame; planning on the CPU: {err}");
             self.failed = Some(key);

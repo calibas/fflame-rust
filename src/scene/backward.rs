@@ -279,6 +279,83 @@ pub trait Evaluate {
     fn speculative(&self) -> bool {
         false
     }
+
+    /// Plain `jobs` and `gathers`, asked together: one round trip where
+    /// round trips cost. A gather is `Backward::gather_seen` -- the
+    /// candidates, exactly -- and a check of each against its word. The
+    /// answers to `jobs` come back as `lands` gives them; each gather
+    /// comes back as its candidate count and the candidates that landed,
+    /// in candidate order.
+    ///
+    /// This default gathers on the CPU and asks `lands` for the lot, so
+    /// an evaluator that only answers `lands` plans exactly as before.
+    fn gather_lands(&mut self, b: &Backward, view: View, jobs: &[EvalJob], gathers: &[GatherJob]) -> (Vec<u8>, Vec<Gathered>) {
+        gather_on_cpu(self, b, view, jobs, gathers)
+    }
+}
+
+/// `Evaluate::gather_lands` with the gathers made on the CPU and every
+/// question put to `eval.lands`.
+pub fn gather_on_cpu<E: Evaluate + ?Sized>(
+    eval: &mut E,
+    b: &Backward,
+    view: View,
+    jobs: &[EvalJob],
+    gathers: &[GatherJob],
+) -> (Vec<u8>, Vec<Gathered>) {
+    let cands: Vec<Vec<u32>> = map_all(gathers, |g| Backward::gather_seen(b.index(g.index), g.seen, g.cap));
+    let mut all: Vec<EvalJob> = jobs.iter().map(|j| EvalJob { word: j.word, points: j.points }).collect();
+    all.extend(gathers.iter().zip(&cands).map(|(g, c)| EvalJob { word: g.word, points: c }));
+    let mut answers = eval.lands(b, view, &all);
+    let n: usize = jobs.iter().map(|j| j.points.len()).sum();
+    let mut at = n;
+    let gathered = cands
+        .iter()
+        .map(|c| {
+            let got = &answers[at..at + c.len()];
+            at += c.len();
+            Gathered { cands: c.len(), hits: c.iter().zip(got).filter(|(_, g)| **g == 1).map(|(i, _)| *i).collect() }
+        })
+        .collect();
+    answers.truncate(n);
+    (answers, gathered)
+}
+
+/// Every index the walk gathers from, concatenated for the GPU: the
+/// landing indexes in alphabet order, then the grid. Index k's entries are
+/// `offsets[k]..offsets[k + 1]`, sorted by cell as `Index` keeps them.
+pub struct IndexTables {
+    pub cells: Vec<[i32; 2]>,
+    pub idx: Vec<u32>,
+    pub offsets: Vec<u32>,
+}
+
+/// Which of the walk's indexes a gather reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IndexId {
+    /// Sample indices by the cell they land in under this alphabet entry.
+    Landing(usize),
+    /// Sample indices by the cell they lie in.
+    Grid,
+}
+
+/// A gather and a check in one: the candidates `Backward::gather_seen`
+/// takes from `index` over the cells `seen` (at most `cap`), and which of
+/// them `word` sends into the view.
+pub struct GatherJob<'a> {
+    pub word: &'a [u32],
+    pub index: IndexId,
+    /// Sorted and deduplicated, neighbours already added: `expand_cells`.
+    pub seen: &'a [Cell],
+    pub cap: usize,
+}
+
+/// What a gather found: how many candidates it took, and the ones that
+/// landed, in candidate order.
+#[derive(Default, Clone, Debug, PartialEq, Eq)]
+pub struct Gathered {
+    pub cands: usize,
+    pub hits: Vec<u32>,
 }
 
 /// The CPU's answers: `Backward::lands`, in f64, over the jobs in
@@ -396,7 +473,8 @@ pub struct Trace {
     pub watched: Vec<String>,
 }
 
-type Cell = (i32, i32);
+/// A grid cell: `floor(p / cell)` in x and y.
+pub type Cell = (i32, i32);
 
 /// Sample indices filed by cell: one flat sorted list, ranged by
 /// binary search. A hash map of a million small vectors was most of
@@ -470,11 +548,12 @@ struct Child {
     hits: Vec<u32>,
     /// Thin after its check, so searched again, wider.
     topped: bool,
-    /// Neither the node's points nor the index put a single sample point
-    /// in this child's region. It is replayed like any other: a replay
-    /// that lands keeps or carries it, and only a replay that lands
-    /// nothing drops it. See `Backward::children_of`.
-    unseen: bool,
+    /// How many candidates its gather took. An index child with none and
+    /// no orbit points is UNSEEN: neither the node's points nor the index
+    /// put a single sample point in its region. It is replayed like any
+    /// other -- a replay that lands keeps or carries it, and only a replay
+    /// that lands nothing drops it. See `Backward::children_of`.
+    n_cands: usize,
     /// Its candidates' answers, asked ahead of need. See
     /// `Evaluate::speculative`.
     spec: Option<Vec<u32>>,
@@ -513,6 +592,9 @@ struct Open {
     node: Node,
     children: Vec<Child>,
     trace: Trace,
+    /// The cells its children gather over: `expand_cells` of the node's
+    /// own, once per node rather than once per child.
+    seen: Vec<Cell>,
 }
 
 /// What expanding one node produced. See `Backward::expand_level`.
@@ -966,25 +1048,11 @@ impl Backward {
     }
 
 
-    /// Up to `cap` sample indices filed under `cells` (and their
-    /// neighbours, if asked) in `index`. The lists are disjoint across
-    /// cells -- an index lands in exactly one cell per symbol -- so
-    /// nothing needs deduplicating, and the search stops as soon as it
-    /// has enough.
-    fn gather(index: &Index, cells: &[Cell], neighbours: bool, _per_cell: usize, cap: usize) -> Vec<u32> {
-        // **By measure, across the whole region.** Every cell's list is
-        // a μ-distributed sample, so the concatenation of all of them is
-        // the region's measure, and taking every k-th entry of it is a
-        // fair sample that neither favours the front of the cell order
-        // nor spends as much on an empty cell as on a dense one. Both
-        // mistakes were made and measured: filling the cap from the
-        // first cells took the region's leftmost strip (70% complete at
-        // a view straddling an arm boundary), and two points per cell
-        // sampled by AREA and starved the ring the measure lives on
-        // (42%). Counting a cell is two binary searches, so the whole
-        // region is counted before anything is taken.
+    /// The cells a gather reads: `cells` and, if asked, their eight
+    /// neighbours, sorted and deduplicated.
+    fn expand_cells(cells: &[Cell], neighbours: bool) -> Vec<Cell> {
         let reach: i32 = if neighbours { 1 } else { 0 };
-        let mut seen: Vec<Cell> = Vec::with_capacity(cells.len() * 9);
+        let mut seen: Vec<Cell> = Vec::with_capacity(cells.len() * if neighbours { 9 } else { 1 });
         for &(cx, cy) in cells {
             for dx in -reach..=reach {
                 for dy in -reach..=reach {
@@ -994,6 +1062,27 @@ impl Backward {
         }
         seen.sort_unstable();
         seen.dedup();
+        seen
+    }
+
+    /// Up to `cap` sample indices filed under the cells `seen` in `index`.
+    /// The lists are disjoint across cells -- an index lands in exactly
+    /// one cell per symbol -- so nothing needs deduplicating.
+    ///
+    /// **By measure, across the whole region.** Every cell's list is a
+    /// μ-distributed sample, so the concatenation of all of them is the
+    /// region's measure, and taking every k-th entry of it is a fair
+    /// sample that neither favours the front of the cell order nor spends
+    /// as much on an empty cell as on a dense one. Both mistakes were made
+    /// and measured: filling the cap from the first cells took the
+    /// region's leftmost strip (70% complete at a view straddling an arm
+    /// boundary), and two points per cell sampled by AREA and starved the
+    /// ring the measure lives on (42%). Counting a cell is two binary
+    /// searches, so the whole region is counted before anything is taken.
+    ///
+    /// The GPU does exactly this (`plan_gather.wgsl`); a plan must not
+    /// depend on which one gathered.
+    fn gather_seen(index: &Index, seen: &[Cell], cap: usize) -> Vec<u32> {
         let ranges: Vec<(usize, usize)> = seen.iter().map(|&c| index.bounds(c)).filter(|r| r.1 > r.0).collect();
         let total: usize = ranges.iter().map(|r| r.1 - r.0).sum();
         let step = total.div_ceil(cap.max(1)).max(1);
@@ -1012,12 +1101,43 @@ impl Backward {
         out
     }
 
+    /// The walk's indexes, concatenated for the GPU. See [`IndexTables`].
+    pub fn index_tables(&self) -> IndexTables {
+        let n: usize = self.landing.iter().map(|i| i.entries.len()).sum::<usize>() + self.grid.entries.len();
+        let mut t = IndexTables { cells: Vec::with_capacity(n), idx: Vec::with_capacity(n), offsets: vec![0] };
+        for index in self.landing.iter().chain(std::iter::once(&self.grid)) {
+            for &((x, y), i) in &index.entries {
+                t.cells.push([x, y]);
+                t.idx.push(i);
+            }
+            t.offsets.push(t.cells.len() as u32);
+        }
+        t
+    }
+
+    /// Where `id` sits in [`IndexTables::offsets`].
+    pub fn index_slot(&self, id: IndexId) -> usize {
+        match id {
+            IndexId::Landing(ai) => ai,
+            IndexId::Grid => self.landing.len(),
+        }
+    }
+
+    /// The index a gather names.
+    fn index(&self, id: IndexId) -> &Index {
+        match id {
+            IndexId::Landing(ai) => &self.landing[ai],
+            IndexId::Grid => &self.grid,
+        }
+    }
+
     /// A node's children: one per symbol its region's points came
     /// through, each with its candidates. Reads only `self` and the node,
     /// so the nodes of a level find theirs in parallel.
-    fn children_of(&self, o: &mut Open, depth: usize, floor_mass: f64) {
+    fn children_of(&self, o: &mut Open, depth: usize, floor_mass: f64, gather_now: bool) {
         let tr = &mut o.trace;
         let node = &o.node;
+        let mut seen: Vec<Cell> = Vec::new();
         let junk_r = JUNK_EXTENTS * self.extent;
         let is_junk = |q: [f64; 2]| (q[0] - self.centre[0]).hypot(q[1] - self.centre[1]) > junk_r;
         let mut found: Vec<(usize, Pts)> = Vec::new(); // (alphabet index, candidates)
@@ -1067,11 +1187,7 @@ impl Backward {
                 cells.sort_unstable();
                 cells.dedup();
                 let neighbours = idx.len() < NEIGHBOURS_BELOW;
-                // The budget is per child: a node on one or two cells
-                // still gets its full share, and a node on many gets a
-                // few from each.
-                let looked = cells.len() * if neighbours { 9 } else { 1 };
-                let per_cell = PER_CELL.max(CAND_CAP.div_ceil(looked.max(1)));
+                seen = Self::expand_cells(&cells, neighbours);
                 // **A child the sample does not see is replayed, not
                 // dropped.** One whose region holds none of the node's
                 // points and none of the index's candidates can still hold
@@ -1083,8 +1199,12 @@ impl Backward {
                 // 0.06% of the node apiece and mostly unseen, were
                 // dropped: up to 3% a level, compounding, and invisible
                 // to the completeness check, which counts points.
+                //
+                // Gathered here on the CPU; an evaluator that gathers
+                // (`Evaluate::speculative`) does it with the replays.
                 for (ai, _a) in self.alphabet.iter().enumerate() {
-                    let cands = Self::gather(&self.landing[ai], &cells, neighbours, per_cell, CAND_CAP);
+                    let cands =
+                        if gather_now { Self::gather_seen(&self.landing[ai], &seen, CAND_CAP) } else { Vec::new() };
                     found.push((ai, Pts::Index(cands)));
                 }
             }
@@ -1097,7 +1217,10 @@ impl Backward {
                 let mut word = Vec::with_capacity(node.word.len() + 1);
                 word.push(a.sym);
                 word.extend_from_slice(&node.word);
-                let unseen = matches!(&pts, Pts::Index(c) if c.is_empty()) && from_orbit[ai].is_empty();
+                let n_cands = match &pts {
+                    Pts::Index(c) => c.len(),
+                    Pts::Cloud(_) => 0,
+                };
                 Child {
                     ai,
                     word,
@@ -1109,13 +1232,14 @@ impl Backward {
                     total: 0,
                     hits: Vec::new(),
                     topped: false,
-                    unseen,
+                    n_cands,
                     spec: None,
                     fate: Fate::Undecided,
                 }
             })
             .collect();
         o.children = children;
+        o.seen = seen;
     }
 
     /// **Expand a whole level, in batches.** Each node's children are
@@ -1154,34 +1278,41 @@ impl Backward {
                 if record {
                     trace.expanded.push(node.word.clone());
                 }
-                Open { node, children: Vec::new(), trace }
+                Open { node, children: Vec::new(), trace, seen: Vec::new() }
             })
             .collect();
+        let speculate = eval.speculative();
 
         // **1. Seeds.** A cloud region is seeded from the grid the moment
         // sample points lie in it: the candidates are the sample points
         // in the cells the cloud occupies, checked exactly.
         let t = Instant::now();
-        let seeds: Vec<Vec<u32>> = map_all(&opens, |o| match &o.node.pts {
+        let seen: Vec<Option<Vec<Cell>>> = map_all(&opens, |o| match &o.node.pts {
             Pts::Cloud(cloud) => {
                 let mut cells: Vec<Cell> = cloud.iter().map(|p| self.cell_of(*p)).collect();
                 cells.sort_unstable();
                 cells.dedup();
-                Self::gather(&self.grid, &cells, true, 16, SEED_CANDIDATES)
+                Some(Self::expand_cells(&cells, true))
             }
-            Pts::Index(_) => Vec::new(),
+            Pts::Index(_) => None,
         });
-        let answers = {
-            let jobs: Vec<EvalJob> =
-                opens.iter().zip(&seeds).map(|(o, c)| EvalJob { word: &o.node.word, points: c }).collect();
-            eval.lands(self, view, &jobs)
+        let seeded = {
+            let gathers: Vec<GatherJob> = opens
+                .iter()
+                .zip(&seen)
+                .filter_map(|(o, s)| {
+                    s.as_ref().map(|s| GatherJob { word: &o.node.word, index: IndexId::Grid, seen: s, cap: SEED_CANDIDATES })
+                })
+                .collect();
+            eval.gather_lands(self, view, &[], &gathers).1
         };
-        let mut at = 0usize;
-        for (o, cands) in opens.iter_mut().zip(&seeds) {
-            let got = &answers[at..at + cands.len()];
-            at += cands.len();
+        let mut seeded = seeded.into_iter();
+        for (o, s) in opens.iter_mut().zip(&seen) {
+            if s.is_none() {
+                continue;
+            }
+            let hits = seeded.next().expect("one answer per gather").hits;
             let Pts::Cloud(cloud) = &o.node.pts else { continue };
-            let hits: Vec<u32> = cands.iter().zip(got).filter(|(_, g)| **g == 1).map(|(i, _)| *i).collect();
             if hits.len() >= MIN_SEED {
                 let n = cloud.len();
                 watched(&mut o.trace, &o.node.word, "SEEDED", &|| format!("{} sample points replace {n} cloud points", hits.len()));
@@ -1189,7 +1320,7 @@ impl Backward {
                 o.trace.seeded += 1;
             }
         }
-        drop(seeds);
+        drop(seen);
         tr.t_seed += t.elapsed();
         if cancelled() {
             return None;
@@ -1197,7 +1328,7 @@ impl Backward {
 
         // **2. Children.** The gathers are the cost; nodes in parallel.
         let t = Instant::now();
-        each_mut(&mut opens, |o| self.children_of(o, depth, floor_mass));
+        each_mut(&mut opens, |o| self.children_of(o, depth, floor_mass, !speculate));
         tr.t_gather += t.elapsed();
         if cancelled() {
             return None;
@@ -1207,7 +1338,6 @@ impl Backward {
         // for every child, then the rest for the children whose share is
         // too close to the cut to trust. See `REPLAY_FIRST`.
         let t = Instant::now();
-        let speculate = eval.speculative();
         let in_band = |c: &Child| {
             let e = c.hit as f64 / c.total.max(1) as f64;
             e > REPLAY_EXTEND.0 && e < REPLAY_EXTEND.1
@@ -1215,16 +1345,28 @@ impl Backward {
         let landed = |g: &[u8]| g.iter().filter(|g| **g == 1).count();
         let (n1, n2) = (self.verify_first.len(), self.verify_rest.len());
         if speculate {
-            // One batch: both passes and the checks, for every child.
-            let answers = {
+            // One batch: both passes for every child, and every index
+            // child's gather and check.
+            let (answers, gathered) = {
                 let mut jobs: Vec<EvalJob> = Vec::new();
-                for c in opens.iter().flat_map(|o| o.children.iter()) {
-                    jobs.push(EvalJob { word: &c.word, points: &self.verify_first });
-                    jobs.push(EvalJob { word: &c.word, points: &self.verify_rest });
-                    jobs.push(EvalJob { word: &c.word, points: c.cands() });
+                let mut gathers: Vec<GatherJob> = Vec::new();
+                for o in &opens {
+                    for c in &o.children {
+                        jobs.push(EvalJob { word: &c.word, points: &self.verify_first });
+                        jobs.push(EvalJob { word: &c.word, points: &self.verify_rest });
+                        if matches!(c.pts, Pts::Index(_)) {
+                            gathers.push(GatherJob {
+                                word: &c.word,
+                                index: IndexId::Landing(c.ai),
+                                seen: &o.seen,
+                                cap: CAND_CAP,
+                            });
+                        }
+                    }
                 }
-                eval.lands(self, view, &jobs)
+                eval.gather_lands(self, view, &jobs, &gathers)
             };
+            let mut gathered = gathered.into_iter();
             let mut at = 0usize;
             for c in opens.iter_mut().flat_map(|o| o.children.iter_mut()) {
                 c.hit = landed(&answers[at..at + n1]);
@@ -1236,13 +1378,11 @@ impl Backward {
                     c.hit += rest;
                     c.total += n2;
                 }
-                let spec: Vec<u32> = {
-                    let cands = c.cands();
-                    let got = &answers[at..at + cands.len()];
-                    at += cands.len();
-                    cands.iter().zip(got).filter(|(_, g)| **g == 1).map(|(i, _)| *i).collect()
-                };
-                c.spec = Some(spec);
+                if matches!(c.pts, Pts::Index(_)) {
+                    let g = gathered.next().expect("one answer per gather");
+                    c.n_cands = g.cands;
+                    c.spec = Some(g.hits);
+                }
             }
         } else {
             let answers = {
@@ -1291,7 +1431,8 @@ impl Backward {
             for c in &mut o.children {
                 let eff = c.eff();
                 let prob = c.prob;
-                if c.unseen && !(eff > 0.0) {
+                let unseen = matches!(c.pts, Pts::Index(_)) && c.n_cands == 0 && c.orbit_hits.is_empty();
+                if unseen && !(eff > 0.0) {
                     c.fate = Fate::Dropped;
                     o.trace.nocand += 1;
                     continue;
@@ -1328,7 +1469,7 @@ impl Backward {
                 for c in &mut o.children {
                     let spec = c.spec.take();
                     if checking(c) {
-                        o.trace.n_verify += c.cands().len();
+                        o.trace.n_verify += c.n_cands;
                         c.hits = spec.unwrap_or_default();
                     }
                 }
@@ -1370,7 +1511,9 @@ impl Backward {
                 }
             }
         }
-        let wide: Vec<Vec<Vec<u32>>> = map_all(&opens, |o| {
+        // The parent's cells, all of them, and their neighbours: once per
+        // node with a thin child.
+        let wide: Vec<Vec<Cell>> = map_all(&opens, |o| {
             let Pts::Index(parent) = &o.node.pts else { return Vec::new() };
             if !o.children.iter().any(|c| c.topped) {
                 return Vec::new();
@@ -1378,26 +1521,29 @@ impl Backward {
             let mut cells: Vec<Cell> = parent.iter().map(|&i| self.cell_of(self.sample[i as usize])).collect();
             cells.sort_unstable();
             cells.dedup();
-            o.children
-                .iter()
-                .map(|c| if c.topped { Self::gather(&self.landing[c.ai], &cells, true, PER_CELL, TOPUP_CAP) } else { Vec::new() })
-                .collect()
+            Self::expand_cells(&cells, true)
         });
-        let answers = {
-            let jobs: Vec<EvalJob> = opens
+        let topped = {
+            let gathers: Vec<GatherJob> = opens
                 .iter()
                 .zip(&wide)
-                .flat_map(|(o, w)| o.children.iter().zip(w.iter()).map(|(c, pts)| EvalJob { word: &c.word, points: pts }))
+                .flat_map(|(o, w)| {
+                    o.children.iter().filter(|c| c.topped).map(move |c| GatherJob {
+                        word: &c.word,
+                        index: IndexId::Landing(c.ai),
+                        seen: w,
+                        cap: TOPUP_CAP,
+                    })
+                })
                 .collect();
-            eval.lands(self, view, &jobs)
+            eval.gather_lands(self, view, &[], &gathers).1
         };
-        let mut at = 0usize;
-        for (o, w) in opens.iter_mut().zip(&wide) {
-            for (c, pts) in o.children.iter_mut().zip(w.iter()) {
-                let got = &answers[at..at + pts.len()];
-                at += pts.len();
-                o.trace.n_verify += pts.len();
-                c.hits.extend(pts.iter().zip(got).filter(|(_, g)| **g == 1).map(|(i, _)| *i));
+        let mut topped = topped.into_iter();
+        for o in &mut opens {
+            for c in o.children.iter_mut().filter(|c| c.topped) {
+                let g = topped.next().expect("one answer per gather");
+                o.trace.n_verify += g.cands;
+                c.hits.extend(g.hits);
             }
         }
         drop(wide);
@@ -1421,7 +1567,7 @@ impl Backward {
     /// fold), and computing them needed positions an evaluator does not
     /// return.
     fn close(&self, o: Open, depth: usize, view: View, watch: Option<&[u32]>) -> Expanded {
-        let Open { node, children, mut trace } = o;
+        let Open { node, children, mut trace, .. } = o;
         let watched = |t: &mut Trace, word: &[u32], what: &str, detail: &dyn Fn() -> String| {
             if let Some(line) = watch_line(watch, word, depth, what, detail) {
                 t.watched.push(line);
@@ -1442,7 +1588,7 @@ impl Backward {
         let mut survived = vec![false; self.alphabet.len()];
         for c in children {
             let eff = c.eff();
-            let n_cands = c.cands().len();
+            let n_cands = c.n_cands;
             let Child { ai, word, prob, pts, orbit_hits, mut hits, fate, .. } = c;
             let pts = match fate {
                 Fate::Dropped => continue,
@@ -1978,6 +2124,20 @@ mod tests {
             fn speculative(&self) -> bool {
                 self.inner.speculative()
             }
+            fn gather_lands(
+                &mut self,
+                b: &Backward,
+                view: View,
+                jobs: &[EvalJob],
+                gathers: &[GatherJob],
+            ) -> (Vec<u8>, Vec<Gathered>) {
+                let t = std::time::Instant::now();
+                let r = self.inner.gather_lands(b, view, jobs, gathers);
+                self.spent += t.elapsed();
+                self.batches += 1;
+                self.points += r.0.len() + r.1.iter().map(|g| g.cands).sum::<usize>();
+                r
+            }
         }
 
         for (name, cfg, zoom) in cases {
@@ -1994,6 +2154,8 @@ mod tests {
             println!("== {name}: read {:.0} ms", ms(read));
             let mut cpu = CpuEval;
             let gpu = planner.for_flame(&cfg.flame, &b).expect("the kernel builds");
+            gpu.totals = Default::default();
+            gpu.batches = 0;
             for (label, inner) in [("CPU", &mut cpu as &mut dyn Evaluate), ("GPU", gpu as &mut dyn Evaluate)] {
                 let mut timed = Timed { inner, spent: Default::default(), batches: 0, points: 0 };
                 let mut tr = Trace::default();
@@ -2017,6 +2179,11 @@ mod tests {
                     ms(other)
                 );
             }
+            let g = planner.for_flame(&cfg.flame, &b).expect("built");
+            println!(
+                "   GPU batches: {} -- pack {:.0} ms, submit to mapped {:.0} ms, read {:.0} ms",
+                g.batches, g.totals.pack, g.totals.wait, g.totals.read
+            );
         }
     }
 
@@ -2317,6 +2484,84 @@ mod tests {
             }
         }
         println!("total: CPU {cpu_total:.0} ms, GPU {gpu_total:.0} ms, {:.1}x", cpu_total / gpu_total);
+    }
+
+    /// **Phase 4: the GPU gathers exactly what the CPU gathers.** Random
+    /// gather jobs -- cell lists from runs of the sample with and without
+    /// neighbours, every landing index and the grid, caps from 1 to past
+    /// the total, and an empty cell list -- through `PlanGpu::gather_lands`
+    /// (gathered and checked on the GPU) and `gather_on_cpu` over the same
+    /// `PlanGpu` (gathered on the CPU, checked on the GPU). Same arithmetic
+    /// for the checks, so the hits agree exactly iff the candidates do.
+    #[test]
+    #[ignore = "needs a GPU and reads output/flame-zoom"]
+    fn the_gpu_gathers_as_the_cpu_does() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let text = std::fs::read_to_string("output/flame-zoom/grand-julian.fflame").expect("grand-julian");
+        let gj: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
+        let b = Backward::read(&gj.flame, reg).expect("armed");
+        let (device, queue) = test_device();
+        let mut planner = crate::scene::plan_gpu::GpuPlanner::new(&device, &queue);
+        let gpu = planner.for_flame(&gj.flame, &b).expect("the kernel builds");
+        assert!(gpu.gathers_here());
+
+        let mut st = 0xFEED_u64;
+        let mut rnd = move |n: usize| {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((st >> 33) as usize) % n.max(1)
+        };
+        // About half the attractor: the median distance from a point of it
+        // (the extent is the farthest, and outliers make it huge). Some
+        // candidates land and some do not.
+        let centre = b.sample_point(0.3);
+        let mut d: Vec<f64> = b.sample.iter().map(|p| (p[0] - centre[0]).hypot(p[1] - centre[1])).collect();
+        d.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let view = View { centre, radius: d[d.len() / 2] };
+        let mut seen_lists: Vec<Vec<Cell>> = Vec::new();
+        for k in 0..40 {
+            let start = rnd(b.sample.len() - 2000);
+            let len = [1usize, 3, 20, 200, 1500][k % 5];
+            let mut cells: Vec<Cell> = (start..start + len).map(|i| b.cell_of(b.sample[i])).collect();
+            cells.sort_unstable();
+            cells.dedup();
+            seen_lists.push(Backward::expand_cells(&cells, k % 2 == 0));
+        }
+        seen_lists.push(Vec::new());
+        let words: Vec<Vec<u32>> = (0..seen_lists.len())
+            .map(|_| (0..1 + rnd(6)).map(|_| b.alphabet[rnd(b.alphabet.len())].sym).collect())
+            .collect();
+        let mut gathers: Vec<GatherJob> = Vec::new();
+        for (k, (seen, word)) in seen_lists.iter().zip(&words).enumerate() {
+            for index in [IndexId::Landing(rnd(b.alphabet.len())), IndexId::Landing(k % b.alphabet.len()), IndexId::Grid] {
+                let cap = [1usize, 7, 64, CAND_CAP, TOPUP_CAP][rnd(5)];
+                gathers.push(GatherJob { word, index, seen, cap });
+            }
+        }
+        let replay: Vec<EvalJob> = words.iter().take(5).map(|w| EvalJob { word: w, points: &b.verify_first }).collect();
+
+        let (a_gpu, g_gpu) = gpu.gather_lands(&b, view, &replay, &gathers);
+        let (a_cpu, g_cpu) = gather_on_cpu(gpu, &b, view, &replay, &gathers);
+        assert_eq!(a_gpu, a_cpu, "the plain answers differ");
+        let mut total = 0usize;
+        let mut hits = 0usize;
+        for (k, (x, y)) in g_gpu.iter().zip(&g_cpu).enumerate() {
+            assert_eq!(x.cands, y.cands, "gather {k} ({:?}, {} cells, cap {}): candidate count", gathers[k].index, gathers[k].seen.len(), gathers[k].cap);
+            assert_eq!(x.hits, y.hits, "gather {k}: the hits differ");
+            total += x.cands;
+            hits += x.hits.len();
+        }
+        println!("{} gathers, {total} candidates, {hits} landed: identical", gathers.len());
+        // The same, answered in f64 on the CPU: rounding may move a few.
+        let (a_f64, g_f64) = gather_on_cpu(&mut CpuEval, &b, view, &replay, &gathers);
+        let hits_f64: usize = g_f64.iter().map(|g| g.hits.len()).sum();
+        println!(
+            "f64: {hits_f64} landed; plain answers {} of {} land on the GPU, {} in f64",
+            a_gpu.iter().filter(|x| **x == 1).count(),
+            a_gpu.len(),
+            a_f64.iter().filter(|x| **x == 1).count()
+        );
+        assert!(total > 10_000 && hits > 0 && hits < total, "the test gathered too little to mean anything");
     }
 
     /// **Phase 0 and 1 of `gpu-cylinder-planning.md`: does the GPU give
