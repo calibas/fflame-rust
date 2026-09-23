@@ -731,3 +731,170 @@ replays' batch, and about nine in ten children are kept and never use
 theirs. Deciding keep-or-carry on the GPU, between the replay and the
 check in the same submission, and returning replay counts rather than a
 byte per point, is the next step if plans need to be faster.
+
+---
+
+## 17. Phase 3: the web (2026-09-23)
+
+Before this phase the web planned inline, on the page's only thread: the
+analysis (a 100k-point sample and one index per alphabet symbol, ~0.4 s
+on the desktop) and then the walk, single-threaded, under a 1.5 s budget
+that forced the frontier when it ran out. The page froze for all of it.
+It also could not have worked at all: the walk and the renderer's settle
+timer read `std::time::Instant`, which panics in a browser. Ticking
+targeting on an armed flame on the web would have crashed the page.
+
+**Built: one walk, as a future.**
+
+- **`Backward::walk`** is the walk as an `async fn`. The desktop drives
+  it straight through (`drive`, with `Blocking` evaluators that answer at
+  once), so its plans are unchanged -- all 25 `dump_plans` views bit for
+  bit, CPU and GPU. The web polls it once a frame.
+- **`Slicer`**: the walk ticks between pieces of work -- nodes, steps,
+  levels -- and a tick past the poll's budget yields, to resume next
+  frame. `Slicer::never` never yields. On the web a level's per-node work
+  runs in order with ticks; on the desktop, in parallel as before.
+- **`AskEval`**: the evaluator as the walk awaits it. `PlanGpu` answers
+  asynchronously: a batch is submitted, the walk yields, and resumes when
+  the browser has mapped the answer back. Its batches are split into
+  submit, wait and read (`Readback`), and the desktop's `Evaluate` path
+  blocks on the same pieces.
+- **The analysis is sliced too** (`Backward::read_sliced`), and three
+  pieces too big for a frame were cut down: each index is now built by a
+  radix sort, which gives exactly the comparison sort's order in a few
+  milliseconds (`a_radix_index_is_sorted_as_tuples_are`), where sorting
+  took 14-20 ms per index; the GPU's indexes are uploaded 4 MB at a time;
+  and a level's speculative batch is asked in pieces of at most
+  `FUSED_WORDS` (1M) answer words -- the widest level's was 10M, and
+  reading it back took a frame by itself. The desktop pieces its batches
+  the same way, so the two platforms still plan alike.
+- **`Cylinders::plan_sliced`**: the web's entry. An armed flame's plan is
+  built and walked as above; any other plans as `plan` does.
+- **The renderer** (`compute_kernel.rs`): a plan job is now one type on
+  both platforms -- a worker thread and a channel on the desktop, a
+  future on the web, polled for `WEB_PLAN_SLICE` (6 ms) each frame -- so
+  the tight plan, the standby, cancelling and stale plans are one piece of
+  code. The web plans on the GPU by default; the panel's "generating"
+  line and the standby now work there too. The app keeps frames coming
+  while any plan runs, since on the web each frame is what advances it.
+  The settle timer reads `web_time::Instant`.
+
+**Measured natively** (`a_web_plan_takes_a_slice_a_frame`: the web's path
+on the desktop, one poll per 16.7 ms frame, analysis built cold, GTX 1660
+SUPER). A poll is timed less the planner's kernel compile
+(`Slicer::compiled`, 10-26 ms): a native driver compiles on the calling
+thread, a browser in its GPU process -- see below for what that costs
+there. One run:
+
+| view | frames | poll p95 | poll max | plan |
+|---|---|---|---|---|
+| grand-julian 1e3 | 145 (2.5 s) | 9.5 ms | 13.7 ms | = desktop's |
+| grand-julian 1e6 | 125 (2.1 s) | 7.8 ms | 8.9 ms | = desktop's |
+| saved view (x546) | 133 (2.3 s) | 6.8 ms | 10.4 ms | = desktop's |
+
+Over four runs the longest poll was 13.7 ms: the 6 ms budget and the
+piece that crosses it. Of the polls over 12 ms, one held a piece over
+8 ms (8.8 ms: the tail of one landing index, and its sort); the rest
+were the budget and a shorter piece. The plan is the one the desktop's
+worker makes with the same evaluator, word for word.
+
+**Cut down after the browser's traces.** The first browser run found
+pieces the native gate had not, because the browser's arithmetic is
+slower and a piece that is 5 ms natively is 12 there. `Slicer::traced`
+records every gap between ticks over 8 ms with the two tick sites, and
+each was cut:
+
+- **Setting up the GPU planner**: `GpuPlanner::for_flame_sliced` and
+  `PlanGpu::attach_sliced` tick between building the kernel and each
+  4 MB piece of the upload.
+- **The indexes' tables** (`Backward::index_tables_sliced`).
+- **The analysis.** `analyse_2d_maps` is `analyse_2d` without the holes
+  and third-derivative bounds, which only escape mode D reads; the
+  planner never did. The invariant ball's numeric search is sliced
+  (`analyse_2d_maps_sliced`, a tick every 1024 samples, 256 chains and
+  every round). The arithmetic is the same, so the escape engine's
+  analysis is unchanged, and the visual suite says so.
+
+**The web's job, on the desktop.** `FlameRenderer::set_plan_in_task`
+makes the desktop plan as the web does -- a task on the UI thread,
+polled for `WEB_PLAN_SLICE` each frame -- so the renderer's whole job
+machinery on the web's path (tight plan, standby, swap, cancel by drop)
+runs under the native tests. `the_web_plan_job_plans_a_slice_a_frame` is
+`a_standby_plan_covers_a_move` in that mode, and gates every frame after
+the first plan at 16 ms: the longest such frame of each run was 7-14 ms
+over 28 runs (the budget, the piece that crosses it, and about 2 ms to
+apply a plan when one lands). The frames
+before the first plan include building the planner's kernel, which no
+tick can split: a native driver compiles it on the calling thread
+(11-21 ms, once 30), where a browser compiles it in its GPU process.
+Those are reported, not gated.
+
+Found on the way: a desktop plan job that was dropped -- replaced, or
+dropped with its renderer -- left its worker thread planning on for a
+view nobody would see. A job now cancels on drop. (The one run with a
+frame after the first plan over 16 ms -- 30 ms -- was before this fix,
+with the thread-mode test's leftover standby still planning in the same
+process; none since.)
+
+**In the browser** (`tests/visual/wasm/test_plan.py`, driving
+`tests/visual/wasm/plan.html`): the web build's own plan -- `PlanBench`
+in `wasm_api.rs`, its own WebGPU device, `plan_sliced` polled once per
+animation frame for 6 ms. Chrome on Windows (Dawn on D3D12), same GPU. A
+case is cold when the analysis is built from nothing. One run:
+
+| case | words | plan | frames | step p50 | step max | frame interval max |
+|---|---|---|---|---|---|---|
+| saved view, cold | 10357 | 1.85 s | 189 | 5.2 ms | 10.4 ms | **49.9 ms** |
+| saved view, warm | 10357 | 1.08 s | 114 | 1.3 ms | 6.4 ms | 10.2 ms |
+| 10x deeper, warm | 9971 | 1.05 s | 109 | 1.1 ms | 13.0 ms | 10.2 ms |
+| random1, cold | 294 | 0.46 s | 47 | 0.4 ms | 7.1 ms | 10.1 ms |
+| random1 100x, warm | 3534 | 1.18 s | 124 | 1.1 ms | 7.4 ms | 10.2 ms |
+
+A step is the planner's share of a frame; the gate is none over 16 ms,
+and over four runs the longest was 13.0. Where the page used to freeze
+for the whole plan -- or, reading `std::time::Instant`, crash -- it now
+plans in 0.5-1.9 s at the display's frame rate (intervals p50 9.3-9.9
+ms).
+
+**The one long frame is the kernel compile, in the GPU process.** The
+first cold case of every run has one frame of 38-50 ms, in the flame's
+first plan of the session. (random1's cold case, fourth in the run, had
+none there, for a reason not pinned down; traced as the first case of a
+session it had one, below.) The browser's Long Animation Frame entry puts it in a
+`requestAnimationFrame` callback of `fractal_flame_wgpu.js` -- the
+editor's own render loop, which the module's start function boots on
+the page beside the bench -- not the bench's step, which in that frame
+took under a millisecond. A Chrome trace (over the DevTools socket, with
+Dawn's categories) says why:
+
+- The planner's six compute pipelines compile on the GPU process's main
+  thread, synchronously, each through DXC: Plan Eval 44 ms, Plan Eval
+  Gathered 43, the three gather passes 12-18 each, the init pass 7 --
+  about 150 ms, in two command-buffer flushes of 63 and 92 ms. wgpu has
+  only `create_compute_pipeline`; Dawn's `createComputePipelineAsync`,
+  which compiles on a worker thread, is out of reach (wgpu 29 has no
+  async creation, and its WebGPU device handle is private).
+- That thread also decodes the editor's commands. The editor's next frame
+  blocks in `CommandBufferProxyImpl::WaitForToken` for 36-48 ms, waiting
+  behind the compile. random1's cold case, traced as a session's first,
+  is the same: six compiles, ~142 ms, one frame of 40 ms.
+- Later plans of the same flame build the same kernels on a new device
+  and show no long frame; the browser appears to cache the compiled
+  shaders for the session.
+
+So compiling "off the page's thread" moves the cost; it does not remove
+it. The gate is met for everything the planner does on the page's
+thread, and missed by one frame per flame per session, which the
+planner cannot slice away. (The render's own pipelines take the same
+synchronous path whenever a flame's shader is built; what they cost in
+the browser was not measured here.) What would help, none of it done:
+
+- **Async pipeline creation** -- the real fix. It needs wgpu to expose
+  it, or a patch.
+- **Fewer, merged kernels.** Plan Eval and Plan Eval Gathered compile
+  the flame's code twice; one entry point choosing its points by a
+  uniform would save ~43 ms of GPU-process time. The hitch is bounded
+  below by one compile of the flame's code, ~44 ms, so this shortens the
+  busy stretch rather than the frame.
+- **Compiling the planner's kernels when the flame loads**, beside the
+  render's, rather than on a frame of their own mid-plan.

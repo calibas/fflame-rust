@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Plan Bench</title>
+    <style>
+        body { margin: 0; background: #000; color: #fff; font-family: monospace; }
+        #status { position: absolute; top: 10px; left: 10px; }
+        canvas { display: none; }
+    </style>
+</head>
+<body>
+    <!-- The module's start function looks for it; the bench does not use it. -->
+    <canvas id="canvas" width="800" height="600"></canvas>
+    <div id="status">Loading WASM...</div>
+
+    <script type="module">
+        // The browser's gate for phase 3 of docs/projects/gpu-cylinder-planning.md:
+        // a cylinder plan made as the app makes one on the web, one step per
+        // animation frame. Every step and every frame interval is timed.
+        import init, { PlanBench } from '../../../pkg/fractal_flame_wgpu.js';
+
+        window.benchReady = false;
+        window.benchError = null;
+        try {
+            if (!navigator.gpu) {
+                throw new Error('WebGPU not supported');
+            }
+            await init();
+            window.benchReady = true;
+            document.getElementById('status').textContent = 'ready';
+        } catch (err) {
+            window.benchError = String(err);
+            document.getElementById('status').textContent = 'failed: ' + err;
+        }
+
+        window.runPlan = async function (configJson, zoomMult, sliceMs, cold) {
+            const bench = await PlanBench.create(configJson);
+            // Long frames as the browser attributes them (Long Animation
+            // Frames, Chrome 123+: any frame over 50 ms): whose script ran,
+            // and for how long -- so a long frame interval can be told
+            // apart as ours or the browser's own.
+            const loaf = [];
+            let observer = null;
+            if (PerformanceObserver.supportedEntryTypes.includes('long-animation-frame')) {
+                observer = new PerformanceObserver((list) => {
+                    for (const e of list.getEntries()) {
+                        loaf.push({
+                            start: e.startTime,
+                            duration: e.duration,
+                            blocking: e.blockingDuration,
+                            render: e.renderStart ? e.startTime + e.duration - e.renderStart : 0,
+                            scripts: e.scripts.map((s) => ({
+                                invoker: s.invoker,
+                                duration: s.duration,
+                                source: (s.sourceFunctionName || '') + ' ' + (s.sourceURL || '').split('/').pop(),
+                            })),
+                        });
+                    }
+                });
+                observer.observe({ type: 'long-animation-frame', buffered: false });
+            }
+            bench.start(zoomMult, sliceMs, cold, true);
+            const steps = [];
+            const frames = [];
+            const t0 = performance.now();
+            let last = t0;
+            return await new Promise((resolve) => {
+                function frame(now) {
+                    frames.push(now - last);
+                    last = now;
+                    const a = performance.now();
+                    const done = bench.step();
+                    steps.push(performance.now() - a);
+                    if (done) {
+                        if (observer) {
+                            for (const e of observer.takeRecords()) loaf.push({ start: e.startTime, duration: e.duration, blocking: e.blockingDuration, scripts: [] });
+                            observer.disconnect();
+                        }
+                        resolve({
+                            loaf: loaf.map((e) => ({ ...e, start: e.start - t0 })),
+                            steps,
+                            frames,
+                            total: performance.now() - t0,
+                            words: bench.words(),
+                            error: bench.error(),
+                            trace: bench.trace(),
+                        });
+                    } else {
+                        requestAnimationFrame(frame);
+                    }
+                }
+                requestAnimationFrame(frame);
+            });
+        };
+    </script>
+</body>
+</html>

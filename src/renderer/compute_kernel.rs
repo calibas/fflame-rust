@@ -149,9 +149,10 @@ pub enum TargetingState {
 }
 
 
-/// A cylinder plan being made on a background thread. See
+/// A cylinder plan being made in the background -- on a worker thread on
+/// the desktop, and on the web as a future polled a slice at a time each
+/// frame (`gpu-cylinder-planning.md` phase 3). See
 /// `FlameRenderer::sync_cylinders`.
-#[cfg(not(target_arch = "wasm32"))]
 struct PlanJob {
     kind: PlanKind,
     /// The disc the plan is made for: the view itself for a tight plan,
@@ -162,16 +163,85 @@ struct PlanJob {
     key: u64,
     /// The flame part of that key, recorded with the plan once applied.
     flame_key: u64,
-    started: std::time::Instant,
-    /// Set when the view moves on: the planner stops at its next node.
-    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    rx: std::sync::mpsc::Receiver<
-        Result<crate::scene::cylinder::Cylinders, crate::scene::cylinder::NoCylinders>,
-    >,
+    started: web_time::Instant,
+    runner: Runner,
+}
+
+/// What makes a job's plan.
+enum Runner {
+    /// A worker thread: the desktop's. `cancel` is set when the view moves
+    /// on, and the planner stops at its next batch.
+    #[cfg(not(target_arch = "wasm32"))]
+    Thread { cancel: std::sync::Arc<std::sync::atomic::AtomicBool>, rx: std::sync::mpsc::Receiver<PlanOutcome> },
+    /// The plan as a future, polled each frame for `slicer`'s budget or
+    /// until it waits on the GPU: the web's, and the desktop's when
+    /// [`FlameRenderer::set_plan_in_task`] asks, which is how the web's
+    /// path is tested. Dropping the job drops it.
+    Task {
+        task: std::pin::Pin<Box<dyn std::future::Future<Output = PlanOutcome>>>,
+        slicer: std::rc::Rc<crate::scene::backward::Slicer>,
+    },
+}
+
+type PlanOutcome = Result<crate::scene::cylinder::Cylinders, crate::scene::cylinder::NoCylinders>;
+
+/// The GPU planner a job plans with: shared with the worker threads on the
+/// desktop, with the page's own tasks on the web.
+#[cfg(not(target_arch = "wasm32"))]
+type SharedPlanner = std::sync::Arc<std::sync::Mutex<crate::scene::plan_gpu::GpuPlanner>>;
+#[cfg(target_arch = "wasm32")]
+type SharedPlanner = std::rc::Rc<std::cell::RefCell<crate::scene::plan_gpu::GpuPlanner>>;
+
+/// How much of a frame a web plan may take: its poll runs the walk until
+/// this is spent, or until the walk waits on the GPU.
+const WEB_PLAN_SLICE: std::time::Duration = std::time::Duration::from_millis(6);
+
+impl PlanJob {
+    /// The plan, once it is made; `None` while it is still coming.
+    fn try_take(&mut self) -> Option<PlanOutcome> {
+        match &mut self.runner {
+            #[cfg(not(target_arch = "wasm32"))]
+            Runner::Thread { rx, .. } => {
+                use std::sync::mpsc::TryRecvError;
+                match rx.try_recv() {
+                    Err(TryRecvError::Empty) => None,
+                    Ok(r) => Some(r),
+                    // The planner panicked. Said so, once, rather than
+                    // retried on every frame.
+                    Err(TryRecvError::Disconnected) => Some(Err(crate::scene::cylinder::NoCylinders::Unbounded {
+                        index: 0,
+                        why: "the planner failed on this view".to_string(),
+                    })),
+                }
+            }
+            Runner::Task { task, slicer } => {
+                slicer.begin();
+                let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+                match task.as_mut().poll(&mut cx) {
+                    std::task::Poll::Ready(r) => Some(r),
+                    std::task::Poll::Pending => None,
+                }
+            }
+        }
+    }
+
+}
+
+/// A job dropped is a job stopped: replaced by the next view's, or
+/// dropped with its renderer. A task stops by being dropped; a thread is
+/// told to, and stops at its next batch. Without this a thread planned on
+/// for a view nobody would see, competing for the CPU and the GPU with
+/// whatever came next -- a renderer's standby outliving the renderer.
+impl Drop for PlanJob {
+    fn drop(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Runner::Thread { cancel, .. } = &self.runner {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
 }
 
 /// Which plan a background job is making.
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum PlanKind {
     /// For the view: what the picture you stop on is drawn with.
@@ -182,7 +252,6 @@ enum PlanKind {
 
 /// A plan made for a wider disc than the view, held until the view
 /// leaves the plan on screen.
-#[cfg(not(target_arch = "wasm32"))]
 struct Standby {
     view: crate::scene::cylinder::View,
     flame_key: u64,
@@ -205,11 +274,9 @@ struct Standby {
 /// lower efficiency only ever applies while the view is moving, when
 /// the accumulation restarts every frame anyway. Coverage at every
 /// margin measured was 0.99 or better.
-#[cfg(not(target_arch = "wasm32"))]
 const STANDBY_MARGIN: f64 = 2.0;
 
 /// Whether disc `inner` lies wholly inside disc `outer`.
-#[cfg(not(target_arch = "wasm32"))]
 fn disc_contains(outer: crate::scene::cylinder::View, inner: crate::scene::cylinder::View) -> bool {
     let d = (outer.centre[0] - inner.centre[0]).hypot(outer.centre[1] - inner.centre[1]);
     d + inner.radius <= outer.radius
@@ -401,7 +468,7 @@ pub struct FlameRenderer {
     leak_fraction: Option<f32>,
     /// A view change seen but not yet planned for, and when it was
     /// first seen. See `targeting_settle_delay`.
-    cylinder_key_pending: Option<(u64, std::time::Instant)>,
+    cylinder_key_pending: Option<(u64, web_time::Instant)>,
     /// What targeting decided for the current view — reported to the
     /// panel, never read by the render path (which asks `cylinders`).
     targeting_state: TargetingState,
@@ -417,8 +484,7 @@ pub struct FlameRenderer {
     /// plan before the first sample.
     background_planning: bool,
     /// The plan being made, if one is.
-    #[cfg(not(target_arch = "wasm32"))]
-    plan_job: Option<PlanJob>,
+        plan_job: Option<PlanJob>,
     /// A background plan has just been applied. The accumulation holds
     /// samples drawn under the previous plan (or none), which carry a
     /// different weight, so the app resets on this.
@@ -433,16 +499,17 @@ pub struct FlameRenderer {
     /// stays inside it is still fully covered by the plan.
     applied_view: Option<crate::scene::cylinder::View>,
     /// The plan held in reserve. See [`STANDBY_MARGIN`].
-    #[cfg(not(target_arch = "wasm32"))]
-    standby: Option<Standby>,
+        standby: Option<Standby>,
     /// The planner threads' GPU evaluator (`gpu-cylinder-planning.md`),
     /// made on the first background plan and shared with every one after.
-    #[cfg(not(target_arch = "wasm32"))]
-    gpu_planner: Option<std::sync::Arc<std::sync::Mutex<crate::scene::plan_gpu::GpuPlanner>>>,
+    gpu_planner: Option<SharedPlanner>,
     /// Whether background plans ask the GPU. On, unless
     /// `FFLAME_PLAN_CPU` is set or [`Self::set_plan_on_gpu`] turned it off.
-    #[cfg(not(target_arch = "wasm32"))]
-    plan_on_gpu: bool,
+        plan_on_gpu: bool,
+    /// Plan in a task polled each frame rather than on a worker thread:
+    /// always on the web; on the desktop only when asked, to test the
+    /// web's path. See [`Runner`].
+    plan_in_task: bool,
     /// Whether this render is auto-exposing. Mirrors
     /// `FractalConfig::auto_exposure`; decides both whether the shader
     /// carries the counters and whether the fraction is read back.
@@ -612,17 +679,14 @@ impl FlameRenderer {
             cylinder_relative: false,
             cylinder_key: None,
             background_planning: false,
-            #[cfg(not(target_arch = "wasm32"))]
             plan_job: None,
             plan_arrived: false,
             applied_flame_key: None,
             applied_view: None,
-            #[cfg(not(target_arch = "wasm32"))]
             standby: None,
-            #[cfg(not(target_arch = "wasm32"))]
             gpu_planner: None,
-            #[cfg(not(target_arch = "wasm32"))]
-            plan_on_gpu: std::env::var_os("FFLAME_PLAN_CPU").is_none(),
+            plan_on_gpu: cfg!(target_arch = "wasm32") || std::env::var_os("FFLAME_PLAN_CPU").is_none(),
+            plan_in_task: cfg!(target_arch = "wasm32"),
             auto_exposure: false,
             filter_radius: 0.0,
             filter_blur_edges: 0.0,
@@ -2148,7 +2212,6 @@ impl FlameRenderer {
             // meanwhile.
             self.drop_stale_flame_plan(device, queue, config)
         } else {
-            #[cfg(not(target_arch = "wasm32"))]
             self.cancel_plan_job();
             let changed = self.update_cylinders(device, queue, config);
             self.cylinder_key = Some(key);
@@ -3637,7 +3700,6 @@ impl FlameRenderer {
 
         // A plan from the background: applied if it is for this key,
         // waited for if it is still coming.
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some(reload) = self.poll_plan_job(device, queue, config, key) {
             return reload;
         }
@@ -3648,7 +3710,6 @@ impl FlameRenderer {
         // The view moved off the plan on screen: the standby, if it
         // covers the new view, is swapped in on this frame rather than
         // after the view settles and a plan is made.
-        #[cfg(not(target_arch = "wasm32"))]
         if self.plans_in_background(config) {
             if let Some(reload) = self.swap_in_standby(device, queue, config) {
                 return reload;
@@ -3669,7 +3730,7 @@ impl FlameRenderer {
         // worse: a plan carries the view it was made for, so forcing
         // its words against a view that has moved puts the samples
         // somewhere other than the frame.
-        let now = std::time::Instant::now();
+        let now = web_time::Instant::now();
         let settle = Self::targeting_settle_delay(config);
         if !settle.is_zero() {
             match self.cylinder_key_pending {
@@ -3692,11 +3753,9 @@ impl FlameRenderer {
         // coordinates, so an old plan still puts its samples in the
         // right place, over part of the new frame -- and the panel says
         // a plan is being generated.
-        #[cfg(not(target_arch = "wasm32"))]
         if self.plans_in_background(config) {
             return self.start_plan_job(device, queue, config, key);
         }
-        #[cfg(not(target_arch = "wasm32"))]
         self.cancel_plan_job();
 
         self.cylinder_key = Some(key);
@@ -3853,51 +3912,42 @@ impl FlameRenderer {
     /// this off and plan inline, so their first sample already uses the
     /// plan. No threads on the web: there it stays inline.
     pub fn set_background_planning(&mut self, on: bool) {
-        self.background_planning = on && cfg!(not(target_arch = "wasm32"));
+        self.background_planning = on;
     }
 
     /// Make background plans on the GPU (the default) or on the CPU.
     /// The plans are the same either way to f32 rounding at the view's
     /// rim; the GPU makes them faster.
     pub fn set_plan_on_gpu(&mut self, on: bool) {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.plan_on_gpu = on;
-        }
-        let _ = on;
+        self.plan_on_gpu = on;
     }
 
-    /// The GPU evaluator to hand a planner thread, made on first use.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn gpu_planner(
-        &mut self,
-        device: &Device,
-        queue: &Queue,
-    ) -> Option<std::sync::Arc<std::sync::Mutex<crate::scene::plan_gpu::GpuPlanner>>> {
+    /// Make background plans as the web makes them -- a task on this
+    /// thread, polled a slice at a time each frame -- rather than on a
+    /// worker thread. The web always does; on the desktop this is for
+    /// testing the web's path.
+    pub fn set_plan_in_task(&mut self, on: bool) {
+        self.plan_in_task = on || cfg!(target_arch = "wasm32");
+    }
+
+    /// The GPU evaluator to hand a plan, made on first use.
+    fn gpu_planner(&mut self, device: &Device, queue: &Queue) -> Option<SharedPlanner> {
         if !self.plan_on_gpu {
             return None;
         }
-        Some(
-            self.gpu_planner
-                .get_or_insert_with(|| {
-                    std::sync::Arc::new(std::sync::Mutex::new(crate::scene::plan_gpu::GpuPlanner::new(device, queue)))
-                })
-                .clone(),
-        )
+        let make = || crate::scene::plan_gpu::GpuPlanner::new(device, queue);
+        #[cfg(not(target_arch = "wasm32"))]
+        let shared = self.gpu_planner.get_or_insert_with(|| std::sync::Arc::new(std::sync::Mutex::new(make())));
+        #[cfg(target_arch = "wasm32")]
+        let shared = self.gpu_planner.get_or_insert_with(|| std::rc::Rc::new(std::cell::RefCell::new(make())));
+        Some(shared.clone())
     }
 
     /// How long the plan now being generated has been running, if one
     /// is. The panel shows it.
     pub fn planning_elapsed(&self) -> Option<std::time::Duration> {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            // A standby is idle-time work the panel need not mention.
-            self.plan_job.as_ref().filter(|j| j.kind == PlanKind::Tight).map(|j| j.started.elapsed())
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            None
-        }
+        // A standby is idle-time work the panel need not mention.
+        self.plan_job.as_ref().filter(|j| j.kind == PlanKind::Tight).map(|j| j.started.elapsed())
     }
 
     /// Whether a background plan was applied since the last call. The
@@ -3909,14 +3959,7 @@ impl FlameRenderer {
     /// Whether a plan of either kind -- the view's own, or the standby
     /// around it -- is being made.
     pub fn plans_running(&self) -> bool {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.plan_job.is_some()
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            false
-        }
+        self.plan_job.is_some()
     }
 
     /// Whether this config's plan is made on the worker: background
@@ -3935,7 +3978,6 @@ impl FlameRenderer {
     /// whether the buffers changed.
     fn drop_stale_flame_plan(&mut self, device: &Device, queue: &Queue, config: &FractalConfig) -> bool {
         let flame_key = Self::flame_key(config);
-        #[cfg(not(target_arch = "wasm32"))]
         if self.standby.as_ref().is_some_and(|s| s.flame_key != flame_key) {
             self.standby = None;
         }
@@ -3949,22 +3991,14 @@ impl FlameRenderer {
 
     /// Whether a standby plan is held. For the gates.
     pub fn has_standby_plan(&self) -> bool {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.standby.is_some()
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            false
-        }
+        self.standby.is_some()
     }
 
     /// The view moved. If the plan on screen no longer contains it but
     /// the standby does, swap the standby in now, so the picture stays
     /// complete while a tight plan for the new view is made. `Some`
     /// (whether the shader must change) when it swapped.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn swap_in_standby(&mut self, device: &Device, queue: &Queue, config: &FractalConfig) -> Option<bool> {
+        fn swap_in_standby(&mut self, device: &Device, queue: &Queue, config: &FractalConfig) -> Option<bool> {
         let view = self.cylinder_view(config);
         let flame_key = Self::flame_key(config);
         let on_screen_covers = self.cylinders.is_some()
@@ -3995,39 +4029,26 @@ impl FlameRenderer {
         Some(before != after)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn cancel_plan_job(&mut self) {
-        if let Some(job) = self.plan_job.take() {
-            job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
-        }
+        // Dropping it stops it.
+        self.plan_job = None;
     }
 
     /// The worker's side of `sync_cylinders`. `Some(reload)` when this
     /// frame is settled by the job -- it landed and was applied, or it is
     /// still coming for this key; `None` when there is no job for this
     /// key and the caller carries on.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn poll_plan_job(
+        fn poll_plan_job(
         &mut self,
         device: &Device,
         queue: &Queue,
         config: &FractalConfig,
         key: u64,
     ) -> Option<bool> {
-        use std::sync::mpsc::TryRecvError;
-        let job = self.plan_job.as_ref()?;
-        let outcome = match job.rx.try_recv() {
+        let job = self.plan_job.as_mut()?;
+        let Some(outcome) = job.try_take() else {
             // A standby never settles a frame: the view is already drawn.
-            Err(TryRecvError::Empty) => {
-                return (job.kind == PlanKind::Tight && job.key == key).then_some(false)
-            }
-            Ok(r) => r,
-            // The planner panicked. Said so, once, rather than retried
-            // on every frame.
-            Err(TryRecvError::Disconnected) => Err(crate::scene::cylinder::NoCylinders::Unbounded {
-                index: 0,
-                why: "the planner failed on this view".to_string(),
-            }),
+            return (job.kind == PlanKind::Tight && job.key == key).then_some(false);
         };
         let job = self.plan_job.take()?;
         if job.kind == PlanKind::Standby {
@@ -4071,7 +4092,62 @@ impl FlameRenderer {
         Some(before != after)
     }
 
-    /// Start a planner thread for `view`.
+    /// Start planning `view` in a task on this thread: a future, polled a
+    /// slice at a time each frame by `poll_plan_job`. The web's way, and
+    /// the desktop's when [`Self::set_plan_in_task`] asks.
+    fn spawn_task(
+        &self,
+        config: &FractalConfig,
+        kind: PlanKind,
+        view: crate::scene::cylinder::View,
+        key: u64,
+        gpu: Option<SharedPlanner>,
+    ) -> PlanJob {
+        let flame = config.flame.clone();
+        let slicer = std::rc::Rc::new(crate::scene::backward::Slicer::every(WEB_PLAN_SLICE));
+        let s = slicer.clone();
+        let task = Box::pin(async move {
+            // A copy, not the lock: the task lives across frames, and a
+            // read guard held that long would stall any writer.
+            let registry = crate::variations::global_registry().clone();
+            match gpu {
+                Some(g) => {
+                    // One job at a time, and a job is dropped before the
+                    // next starts, so this is never contended.
+                    #[cfg(target_arch = "wasm32")]
+                    let mut g = g.borrow_mut();
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let mut g = g.lock().unwrap_or_else(|e| e.into_inner());
+                    crate::scene::cylinder::Cylinders::plan_sliced(&flame, &registry, view, Some(&mut g), &s).await
+                }
+                None => crate::scene::cylinder::Cylinders::plan_sliced(&flame, &registry, view, None, &s).await,
+            }
+        });
+        PlanJob {
+            kind,
+            view,
+            key,
+            flame_key: Self::flame_key(config),
+            started: web_time::Instant::now(),
+            runner: Runner::Task { task, slicer },
+        }
+    }
+
+    /// Start planning `view`: a task on the web, a worker thread on the
+    /// desktop unless asked for a task.
+    #[cfg(target_arch = "wasm32")]
+    fn spawn_plan(
+        &self,
+        config: &FractalConfig,
+        kind: PlanKind,
+        view: crate::scene::cylinder::View,
+        key: u64,
+        gpu: Option<SharedPlanner>,
+    ) -> std::io::Result<PlanJob> {
+        Ok(self.spawn_task(config, kind, view, key, gpu))
+    }
+
+    /// Start a planner thread for `view` (or a task, if asked).
     #[cfg(not(target_arch = "wasm32"))]
     fn spawn_plan(
         &self,
@@ -4079,8 +4155,11 @@ impl FlameRenderer {
         kind: PlanKind,
         view: crate::scene::cylinder::View,
         key: u64,
-        gpu: Option<std::sync::Arc<std::sync::Mutex<crate::scene::plan_gpu::GpuPlanner>>>,
+        gpu: Option<SharedPlanner>,
     ) -> std::io::Result<PlanJob> {
+        if self.plan_in_task {
+            return Ok(self.spawn_task(config, kind, view, key, gpu));
+        }
         use std::sync::atomic::AtomicBool;
         use std::sync::Arc;
         let flame = config.flame.clone();
@@ -4107,9 +4186,8 @@ impl FlameRenderer {
             view,
             key,
             flame_key: Self::flame_key(config),
-            started: std::time::Instant::now(),
-            cancel,
-            rx,
+            started: web_time::Instant::now(),
+            runner: Runner::Thread { cancel, rx },
         })
     }
 
@@ -4117,8 +4195,7 @@ impl FlameRenderer {
     /// another key. Returns whether the shader must change now -- which
     /// it must when the plan on screen was for another flame and is
     /// dropped.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn start_plan_job(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, key: u64) -> bool {
+        fn start_plan_job(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, key: u64) -> bool {
         if self.plan_job.as_ref().is_some_and(|j| j.kind == PlanKind::Tight && j.key == key) {
             return false;
         }

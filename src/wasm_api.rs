@@ -427,3 +427,141 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
 
     Ok(result)
 }
+
+/// **The browser's gate for phase 3 of `gpu-cylinder-planning.md`.** A
+/// cylinder plan made as the app makes one on the web -- a future polled a
+/// slice at a time, the GPU's answers awaited across frames -- with the
+/// page driving it one step per animation frame, so the page can time
+/// every step and every frame. `tests/visual/wasm/test_plan.py` runs it.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct PlanBench {
+    config: FractalConfig,
+    gpu: std::rc::Rc<std::cell::RefCell<crate::scene::plan_gpu::GpuPlanner>>,
+    slicer: std::rc::Rc<crate::scene::backward::Slicer>,
+    task: Option<
+        std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                    Output = Result<crate::scene::cylinder::Cylinders, crate::scene::cylinder::NoCylinders>,
+                >,
+            >,
+        >,
+    >,
+    result: Option<Result<usize, String>>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl PlanBench {
+    /// A bench for `config_json`, on a WebGPU device of its own.
+    pub async fn create(config_json: String) -> Result<PlanBench, JsValue> {
+        use egui_wgpu::wgpu;
+        let config = FractalConfig::from_json(&config_json)
+            .map_err(|e| JsValue::from_str(&format!("Failed to parse config: {e}")))?;
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::BROWSER_WEBGPU,
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+                compatible_surface: None,
+            })
+            .await
+            .map_err(|e| JsValue::from_str(&format!("no adapter: {e:?}")))?;
+        let adapter_limits = adapter.limits();
+        let mut limits = wgpu::Limits::downlevel_webgl2_defaults();
+        limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
+        limits.max_buffer_size = adapter_limits.max_buffer_size;
+        limits.max_storage_buffers_per_shader_stage = adapter_limits.max_storage_buffers_per_shader_stage;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("Plan Bench"),
+                required_features: wgpu::Features::empty(),
+                required_limits: limits,
+                memory_hints: wgpu::MemoryHints::Performance,
+                experimental_features: Default::default(),
+                trace: Default::default(),
+            })
+            .await
+            .map_err(|e| JsValue::from_str(&format!("no device: {e:?}")))?;
+        Ok(PlanBench {
+            config,
+            gpu: std::rc::Rc::new(std::cell::RefCell::new(crate::scene::plan_gpu::GpuPlanner::new(&device, &queue))),
+            slicer: std::rc::Rc::new(crate::scene::backward::Slicer::never()),
+            task: None,
+            result: None,
+        })
+    }
+
+    /// Start planning the config's view at `zoom_mult` times its zoom, a
+    /// step running for `slice_ms`. `cold` forgets the cached analysis, so
+    /// the plan builds it. Drops any plan in progress.
+    pub fn start(&mut self, zoom_mult: f64, slice_ms: f64, cold: bool, trace: bool) {
+        self.task = None;
+        self.result = None;
+        if cold {
+            crate::scene::backward::Backward::forget_cached();
+        }
+        let view = crate::scene::cylinder::View::of(
+            self.config.zoom as f64 * zoom_mult,
+            [self.config.pan_x, self.config.pan_y],
+            1280,
+            720,
+        );
+        let budget = std::time::Duration::from_secs_f64(slice_ms.max(0.1) / 1e3);
+        let slicer = std::rc::Rc::new(if trace {
+            crate::scene::backward::Slicer::traced(budget)
+        } else {
+            crate::scene::backward::Slicer::every(budget)
+        });
+        self.slicer = slicer.clone();
+        let flame = self.config.flame.clone();
+        let gpu = self.gpu.clone();
+        self.task = Some(Box::pin(async move {
+            let registry = crate::variations::global_registry().clone();
+            let mut g = gpu.borrow_mut();
+            crate::scene::cylinder::Cylinders::plan_sliced(&flame, &registry, view, Some(&mut g), &slicer).await
+        }));
+    }
+
+    /// One step: the plan runs for its slice, or until it waits on the
+    /// GPU. True once the plan is made (or failed).
+    pub fn step(&mut self) -> bool {
+        let Some(task) = self.task.as_mut() else { return true };
+        self.slicer.begin();
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        match task.as_mut().poll(&mut cx) {
+            std::task::Poll::Ready(r) => {
+                self.result = Some(r.map(|c| c.words.len()).map_err(|e| format!("{e:?}")));
+                self.task = None;
+                true
+            }
+            std::task::Poll::Pending => false,
+        }
+    }
+
+    /// The finished plan's word count, or -1.
+    pub fn words(&self) -> i32 {
+        match &self.result {
+            Some(Ok(n)) => *n as i32,
+            _ => -1,
+        }
+    }
+
+    /// The gaps between the walk's ticks longer than 8 ms, with where they
+    /// ran, one per line: a traced plan's (`start(..., trace = true)`).
+    pub fn trace(&self) -> String {
+        self.slicer.gaps().join("\n")
+    }
+
+    /// Why the plan failed, if it did.
+    pub fn error(&self) -> String {
+        match &self.result {
+            Some(Err(e)) => e.clone(),
+            _ => String::new(),
+        }
+    }
+}

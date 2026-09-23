@@ -3413,6 +3413,39 @@ pub enum Space {
 /// panel can list them: a flame with two non-affine transforms should
 /// say so once, not make the user fix one to discover the next.
 pub fn analyse_2d(flame: &Flame, registry: &VariationRegistry) -> Result<Ifs2, Vec<Disqualification>> {
+    analyse_2d_with(flame, registry, true)
+}
+
+/// [`analyse_2d`] without what only the escape engine reads: the
+/// inversions' hole radii and the Taylor rung's remainders (`set_holes`).
+/// For the inverse walk (`backward.rs`), which applies the maps and never
+/// bounds them. The remainders are sampled over the ball and were most of
+/// the analysis -- 22 ms of random1's 26 -- which a web frame cannot hold.
+pub fn analyse_2d_maps(flame: &Flame, registry: &VariationRegistry) -> Result<Ifs2, Vec<Disqualification>> {
+    analyse_2d_with(flame, registry, false)
+}
+
+/// [`analyse_2d_maps`], yielding at `slicer`'s ticks: the invariant ball
+/// is a numeric search of a few milliseconds natively, more than a web
+/// frame's share in the browser. The same arithmetic either way.
+pub async fn analyse_2d_maps_sliced(
+    flame: &Flame,
+    registry: &VariationRegistry,
+    slicer: &super::slice::Slicer,
+) -> Result<Ifs2, Vec<Disqualification>> {
+    analyse_2d_with_sliced(flame, registry, false, slicer).await
+}
+
+fn analyse_2d_with(flame: &Flame, registry: &VariationRegistry, holes: bool) -> Result<Ifs2, Vec<Disqualification>> {
+    super::slice::drive(analyse_2d_with_sliced(flame, registry, holes, &super::slice::Slicer::never()))
+}
+
+async fn analyse_2d_with_sliced(
+    flame: &Flame,
+    registry: &VariationRegistry,
+    holes: bool,
+    slicer: &super::slice::Slicer,
+) -> Result<Ifs2, Vec<Disqualification>> {
     let order = flame.active_variation_names_ordered(registry);
     let maps = collect(flame, |t| transform_map_2d_ordered(t, registry, &order).map(|a| (a, a.inverse(), a.singular_values())));
     // The final transform stays affine (J4).
@@ -3427,7 +3460,7 @@ pub fn analyse_2d(flame: &Flame, registry: &VariationRegistry) -> Result<Ifs2, V
     // The ball first, on the unexpanded maps -- a forward map does
     // not depend on the branch -- because a disc's branch count is
     // read off it (D2).
-    let Some(ball) = ball_2d(&maps) else {
+    let Some(ball) = ball_2d(&maps, slicer).await else {
         errs.push(Disqualification::NoBall);
         return Err(errs);
     };
@@ -3466,7 +3499,9 @@ pub fn analyse_2d(flame: &Flame, registry: &VariationRegistry) -> Result<Ifs2, V
         })
         .collect();
     let mut maps = maps;
-    set_holes(&mut maps, &ball);
+    if holes {
+        set_holes(&mut maps, &ball);
+    }
     let xaos = XaosGraph::of(flame, &maps);
     Ok(Ifs { maps, final_map, frame_radius: ball.radius, ball, aux_centre, xaos })
 }
@@ -3699,7 +3734,7 @@ const BALL_REFINEMENTS: usize = 64;
 /// the distance walk reads it as having escaped at level 0. Growing
 /// the ball is always safe (any radius above the bound still satisfies
 /// `S(B) subset B`) and costs 1e-9 of relative tightness.
-fn ball_2d(maps: &[IfsMap<Map2>]) -> Option<Ball<[f64; 2]>> {
+async fn ball_2d(maps: &[IfsMap<Map2>], slicer: &super::slice::Slicer) -> Option<Ball<[f64; 2]>> {
     if maps.iter().all(|m| m.forward.is_affine()) {
         let affine: Vec<IfsMap<Affine2>> = maps
             .iter()
@@ -3713,7 +3748,7 @@ fn ball_2d(maps: &[IfsMap<Map2>]) -> Option<Ball<[f64; 2]>> {
             .collect();
         return Some(ball_2d_affine(&affine));
     }
-    ball_2d_numeric(maps)
+    ball_2d_numeric(maps, slicer).await
 }
 
 /// A ball every map sends into itself, found numerically (J5), for
@@ -3727,7 +3762,7 @@ fn ball_2d(maps: &[IfsMap<Map2>]) -> Option<Ball<[f64; 2]>> {
 /// margin of 5% then covers the sampling. A radius that has not
 /// settled in sixty rounds is no ball: the maps do not keep the set
 /// bounded.
-fn ball_2d_numeric(maps: &[IfsMap<Map2>]) -> Option<Ball<[f64; 2]>> {
+async fn ball_2d_numeric(maps: &[IfsMap<Map2>], slicer: &super::slice::Slicer) -> Option<Ball<[f64; 2]>> {
     // A fixed-seed LCG: the ball must be the same ball every time.
     let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
     let mut next = || {
@@ -3768,6 +3803,9 @@ fn ball_2d_numeric(maps: &[IfsMap<Map2>]) -> Option<Ball<[f64; 2]>> {
         }
         if i >= 200 {
             sample.push(p);
+        }
+        if i % 1024 == 0 {
+            slicer.tick().await;
         }
     }
     if sample.len() < 1000 {
@@ -3818,6 +3856,9 @@ fn ball_2d_numeric(maps: &[IfsMap<Map2>]) -> Option<Ball<[f64; 2]>> {
                 if step >= 4 {
                     pts.push(q);
                 }
+            }
+            if chain % 256 == 0 {
+                slicer.tick().await;
             }
         }
         if pts.len() < 1000 {
@@ -3882,6 +3923,7 @@ fn ball_2d_numeric(maps: &[IfsMap<Map2>]) -> Option<Ball<[f64; 2]>> {
         // shipped julia presets were framed on came from the plain
         // iteration and an overshoot moves them.
         radius = if round < 60 { reach } else { reach * 1.05 };
+        slicer.tick().await;
     }
     None
 }

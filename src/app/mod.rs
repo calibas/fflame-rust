@@ -3050,8 +3050,9 @@ impl App {
                     self.rendering_complete = false;
                 }
                 // Keep frames coming while a plan is being made, so it
-                // is picked up the moment it lands.
-                if renderer.planning_elapsed().is_some() {
+                // is picked up the moment it lands -- and, on the web,
+                // because each frame is what runs the next slice of it.
+                if renderer.plans_running() {
                     self.window.request_redraw();
                 }
             }
