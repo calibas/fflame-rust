@@ -7,6 +7,7 @@ pub mod ifs_real;
 pub mod importance;
 pub mod cylinder;
 pub mod backward;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod plan_gpu;
 pub mod xaos;
 pub mod presets;

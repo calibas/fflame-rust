@@ -435,6 +435,14 @@ pub struct FlameRenderer {
     /// The plan held in reserve. See [`STANDBY_MARGIN`].
     #[cfg(not(target_arch = "wasm32"))]
     standby: Option<Standby>,
+    /// The planner threads' GPU evaluator (`gpu-cylinder-planning.md`),
+    /// made on the first background plan and shared with every one after.
+    #[cfg(not(target_arch = "wasm32"))]
+    gpu_planner: Option<std::sync::Arc<std::sync::Mutex<crate::scene::plan_gpu::GpuPlanner>>>,
+    /// Whether background plans ask the GPU. On, unless
+    /// `FFLAME_PLAN_CPU` is set or [`Self::set_plan_on_gpu`] turned it off.
+    #[cfg(not(target_arch = "wasm32"))]
+    plan_on_gpu: bool,
     /// Whether this render is auto-exposing. Mirrors
     /// `FractalConfig::auto_exposure`; decides both whether the shader
     /// carries the counters and whether the fraction is read back.
@@ -611,6 +619,10 @@ impl FlameRenderer {
             applied_view: None,
             #[cfg(not(target_arch = "wasm32"))]
             standby: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            gpu_planner: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            plan_on_gpu: std::env::var_os("FFLAME_PLAN_CPU").is_none(),
             auto_exposure: false,
             filter_radius: 0.0,
             filter_blur_edges: 0.0,
@@ -3741,9 +3753,22 @@ impl FlameRenderer {
         // only, rather than quietly answering a question it was not
         // asked.
         let two_d = matches!(config.render_mode, crate::scene::transforms::RenderMode::TwoD);
+        let view = self.cylinder_view(config);
+        // Inline plans (export, the command line, tests) ask the GPU too.
+        #[cfg(not(target_arch = "wasm32"))]
+        let gpu = if config.cylinder_targeting && two_d { self.gpu_planner(device, queue) } else { None };
         let outcome = (config.cylinder_targeting && two_d).then(|| {
             let registry = crate::variations::global_registry();
-            crate::scene::cylinder::Cylinders::plan(&config.flame, &registry, self.cylinder_view(config))
+            crate::scene::cylinder::Cylinders::plan_opts(
+                &config.flame,
+                &registry,
+                view,
+                crate::scene::backward::PlanOptions {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    gpu: gpu.as_deref(),
+                    ..Default::default()
+                },
+            )
         });
         let changed = self.apply_plan(device, queue, config, outcome);
         self.applied_view = self.cylinders.is_some().then(|| self.cylinder_view(config));
@@ -3831,6 +3856,36 @@ impl FlameRenderer {
         self.background_planning = on && cfg!(not(target_arch = "wasm32"));
     }
 
+    /// Make background plans on the GPU (the default) or on the CPU.
+    /// The plans are the same either way to f32 rounding at the view's
+    /// rim; the GPU makes them faster.
+    pub fn set_plan_on_gpu(&mut self, on: bool) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.plan_on_gpu = on;
+        }
+        let _ = on;
+    }
+
+    /// The GPU evaluator to hand a planner thread, made on first use.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn gpu_planner(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+    ) -> Option<std::sync::Arc<std::sync::Mutex<crate::scene::plan_gpu::GpuPlanner>>> {
+        if !self.plan_on_gpu {
+            return None;
+        }
+        Some(
+            self.gpu_planner
+                .get_or_insert_with(|| {
+                    std::sync::Arc::new(std::sync::Mutex::new(crate::scene::plan_gpu::GpuPlanner::new(device, queue)))
+                })
+                .clone(),
+        )
+    }
+
     /// How long the plan now being generated has been running, if one
     /// is. The panel shows it.
     pub fn planning_elapsed(&self) -> Option<std::time::Duration> {
@@ -3849,6 +3904,19 @@ impl FlameRenderer {
     /// accumulation must be reset when it was: see `plan_arrived`.
     pub fn take_plan_arrived(&mut self) -> bool {
         std::mem::take(&mut self.plan_arrived)
+    }
+
+    /// Whether a plan of either kind -- the view's own, or the standby
+    /// around it -- is being made.
+    pub fn plans_running(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.plan_job.is_some()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            false
+        }
     }
 
     /// Whether this config's plan is made on the worker: background
@@ -3997,7 +4065,8 @@ impl FlameRenderer {
                 centre: job.view.centre,
                 radius: job.view.radius * STANDBY_MARGIN,
             };
-            self.plan_job = self.spawn_plan(config, PlanKind::Standby, wide, 0).ok();
+            let gpu = self.gpu_planner(device, queue);
+            self.plan_job = self.spawn_plan(config, PlanKind::Standby, wide, 0, gpu).ok();
         }
         Some(before != after)
     }
@@ -4010,6 +4079,7 @@ impl FlameRenderer {
         kind: PlanKind,
         view: crate::scene::cylinder::View,
         key: u64,
+        gpu: Option<std::sync::Arc<std::sync::Mutex<crate::scene::plan_gpu::GpuPlanner>>>,
     ) -> std::io::Result<PlanJob> {
         use std::sync::atomic::AtomicBool;
         use std::sync::Arc;
@@ -4026,6 +4096,7 @@ impl FlameRenderer {
                 crate::scene::backward::PlanOptions {
                     budget: crate::scene::backward::TIME_BUDGET,
                     cancel: Some(&flag),
+                    gpu: gpu.as_deref(),
                 },
             );
             // A cancelled job's receiver is gone; nothing to tell.
@@ -4060,7 +4131,8 @@ impl FlameRenderer {
         }
         let reload = before != self.cylinders.as_ref().map(|c| c.composable);
 
-        match self.spawn_plan(config, PlanKind::Tight, self.cylinder_view(config), key) {
+        let gpu = self.gpu_planner(device, queue);
+        match self.spawn_plan(config, PlanKind::Tight, self.cylinder_view(config), key, gpu) {
             Ok(job) => {
                 self.plan_job = Some(job);
                 reload
