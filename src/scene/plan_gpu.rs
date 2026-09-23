@@ -19,7 +19,11 @@
 //! replays, and its candidates are checked where they were gathered: they
 //! never cross to the CPU, only the ones that land come back.
 
-use crate::scene::backward::{gather_on_cpu, Backward, Evaluate, GatherJob, Gathered, IndexTables};
+use crate::scene::backward::{Backward, GatherJob, Gathered, IndexTables};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::scene::backward::{gather_on_cpu, Evaluate};
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::Arc;
 use crate::scene::cylinder::View;
 use crate::scene::transforms::Flame;
 use wgpu::util::DeviceExt;
@@ -373,16 +377,35 @@ impl PlanGpu {
     /// **Upload the walk's indexes**, so gathers run here. Until this is
     /// called, `gather_lands` gathers on the CPU.
     pub fn attach(&mut self, b: &Backward) {
-        let t: IndexTables = b.index_tables();
-        let init = |label: &str, bytes: &[u8]| {
-            self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        crate::scene::backward::drive(self.attach_sliced(b, &crate::scene::backward::Slicer::never()));
+    }
+
+    /// [`Self::attach`], yielding at `slicer`'s ticks: the tables are
+    /// tens of megabytes to build and upload, more than a web frame.
+    pub async fn attach_sliced(&mut self, b: &Backward, slicer: &crate::scene::backward::Slicer) {
+        let t: IndexTables = b.index_tables_sliced(slicer).await;
+        slicer.tick().await;
+        // Written a few megabytes at a time: the cells alone are ~20 MB,
+        // and one copy of them was a web frame.
+        const PIECE: usize = 4 << 20;
+        let make = |label: &'static str, bytes: usize| {
+            self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(label),
-                contents: bytes,
-                usage: wgpu::BufferUsages::STORAGE,
+                size: bytes.max(4) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
             })
         };
-        let cells = init("Plan Gather Index Cells", bytemuck::cast_slice(&t.cells));
-        let idx = init("Plan Gather Index Entries", bytemuck::cast_slice(&t.idx));
+        let cell_bytes: &[u8] = bytemuck::cast_slice(&t.cells);
+        let idx_bytes: &[u8] = bytemuck::cast_slice(&t.idx);
+        let cells = make("Plan Gather Index Cells", cell_bytes.len());
+        let idx = make("Plan Gather Index Entries", idx_bytes.len());
+        for (buf, bytes) in [(&cells, cell_bytes), (&idx, idx_bytes)] {
+            for (k, piece) in bytes.chunks(PIECE).enumerate() {
+                self.queue.write_buffer(buf, (k * PIECE) as u64, piece);
+                slicer.tick().await;
+            }
+        }
         self.index = Some(IndexBuffers { cells, idx, offsets: t.offsets });
     }
 
@@ -394,6 +417,7 @@ impl PlanGpu {
     /// Apply each job's word to each of its points; one byte per point, in
     /// job order, 1 where the result lands in `view`. Blocks until the
     /// answer is back -- the planner calls it from its own thread.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn evaluate(&mut self, view: View, jobs: &[EvalJob]) -> Vec<u8> {
         self.run(view, jobs, Mode::Disc, |w| w.iter().map(|w| (*w != 0) as u8).collect())
     }
@@ -401,6 +425,7 @@ impl PlanGpu {
     /// Apply each job's word to each of its points; where each lands, in
     /// job order, or `None` where the word sent it to a bad value or hid
     /// it. In f32, as the render has it.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn endpoints(&mut self, jobs: &[EvalJob]) -> Vec<Option<[f32; 2]>> {
         let view = View { centre: [0.0, 0.0], radius: 0.0 };
         self.run(view, jobs, Mode::Endpoint, |w| {
@@ -456,11 +481,23 @@ impl PlanGpu {
     }
 
     /// One batch: pack, dispatch, and hand the raw output words to `read`
-    /// while they are still mapped.
+    /// while they are still mapped. Blocks.
+    #[cfg(not(target_arch = "wasm32"))]
     fn run<T>(&mut self, view: View, jobs: &[EvalJob], mode: Mode, read: impl FnOnce(&[u32]) -> Vec<T>) -> Vec<T> {
+        let Some((r, n)) = self.run_submit(view, jobs, mode) else { return Vec::new() };
+        self.wait(&r);
+        self.take(r, |w| match w {
+            Some(w) => read(w),
+            None => read(&vec![0; n]),
+        })
+    }
+
+    /// Pack and submit one plain batch; `None` if it has no points. The
+    /// readback and the number of answer words.
+    fn run_submit(&mut self, view: View, jobs: &[EvalJob], mode: Mode) -> Option<(Readback, usize)> {
         let entries: usize = jobs.iter().map(|j| j.points.len()).sum();
         if entries == 0 {
-            return Vec::new();
+            return None;
         }
         let per = if mode == Mode::Endpoint { 2 } else { 1 };
         let t_pack = web_time::Instant::now();
@@ -493,25 +530,14 @@ impl PlanGpu {
             pass.dispatch_workgroups(gx, gy, 1);
         }
         let n = per * entries;
-        self.finish(enc, &[(&out_buf, n)], pack, |w| {
-            match w {
-                Some(w) => read(w),
-                None => read(&vec![0; n]),
-            }
-        })
+        Some((self.submit(enc, &[(&out_buf, n)], pack), n))
     }
 
     /// Copy `copies` (buffer, u32 count) into the staging buffer back to
-    /// back, submit, wait, and hand the words to `read` while mapped --
-    /// `None` if the map failed.
-    fn finish<T>(
-        &mut self,
-        mut enc: wgpu::CommandEncoder,
-        copies: &[(&wgpu::Buffer, usize)],
-        pack: f64,
-        read: impl FnOnce(Option<&[u32]>) -> T,
-    ) -> T {
-        let t_wait = web_time::Instant::now();
+    /// back, submit, and ask for the staging buffer to be mapped. The
+    /// answer is in when [`Readback::arrived`]; the desktop waits for it
+    /// with [`Self::wait`], the web's walk awaits it.
+    fn submit(&mut self, mut enc: wgpu::CommandEncoder, copies: &[(&wgpu::Buffer, usize)], pack: f64) -> Readback {
         let total: usize = copies.iter().map(|c| c.1).sum();
         let stage = self.stage.get(&self.device, total.max(1));
         let mut at = 0u64;
@@ -522,27 +548,38 @@ impl PlanGpu {
             }
             at += bytes;
         }
+        let t_wait = web_time::Instant::now();
         let index = self.queue.submit(std::iter::once(enc.finish()));
-        let bytes = (total.max(1) * 4) as u64;
-        let slice = stage.slice(..bytes);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
+        let state = Arc::new(AtomicU8::new(PENDING));
+        let flag = state.clone();
+        stage.slice(..(total.max(1) * 4) as u64).map_async(wgpu::MapMode::Read, move |r| {
+            flag.store(if r.is_ok() { MAPPED } else { FAILED }, Ordering::Release);
         });
-        let _ = self.device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: None });
-        let ok = rx.recv().map(|r| r.is_ok()).unwrap_or(false);
-        let wait = t_wait.elapsed().as_secs_f64() * 1e3;
+        Readback { stage, total, state, index, pack, t_wait }
+    }
+
+    /// Block until `r` is in. The desktop's; the web awaits instead.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn wait(&self, r: &Readback) {
+        let _ = self.device.poll(wgpu::PollType::Wait { submission_index: Some(r.index.clone()), timeout: None });
+    }
+
+    /// Hand the words of an arrived readback to `read` while they are
+    /// mapped -- `None` if the map failed -- and account the time.
+    fn take<T>(&mut self, r: Readback, read: impl FnOnce(Option<&[u32]>) -> T) -> T {
+        let wait = r.t_wait.elapsed().as_secs_f64() * 1e3;
         let t_read = web_time::Instant::now();
-        let out = if ok {
+        let out = if r.state.load(Ordering::Acquire) == MAPPED {
+            let slice = r.stage.slice(..(r.total.max(1) * 4) as u64);
             let view = slice.get_mapped_range();
-            let r = read(Some(&bytemuck::cast_slice::<u8, u32>(&view)[..total]));
+            let v = read(Some(&bytemuck::cast_slice::<u8, u32>(&view)[..r.total]));
             drop(view);
-            stage.unmap();
-            r
+            r.stage.unmap();
+            v
         } else {
             read(None)
         };
-        self.last = RunTimes { pack, wait, read: t_read.elapsed().as_secs_f64() * 1e3 };
+        self.last = RunTimes { pack: r.pack, wait, read: t_read.elapsed().as_secs_f64() * 1e3 };
         self.totals.pack += self.last.pack;
         self.totals.wait += self.last.wait;
         self.totals.read += self.last.read;
@@ -555,7 +592,15 @@ impl PlanGpu {
     /// candidates -- which never leave the GPU. Back come the plain
     /// answers, each gather's candidate count, and the candidates that
     /// landed.
+    #[cfg(not(target_arch = "wasm32"))]
     fn fused(&mut self, view: View, jobs: &[EvalJob], gathers: &[GatherJob], b: &Backward) -> (Vec<u8>, Vec<Gathered>) {
+        let (r, parse) = self.fused_submit(view, jobs, gathers, b);
+        self.wait(&r);
+        self.take(r, |w| parse.read(w))
+    }
+
+    /// Pack and submit a fused batch. See [`Self::fused`].
+    fn fused_submit(&mut self, view: View, jobs: &[EvalJob], gathers: &[GatherJob], b: &Backward) -> (Readback, FusedParse) {
         let t_pack = web_time::Instant::now();
         let (ix_cells, ix_idx, offsets) = {
             let ix = self.index.as_ref().expect("attached");
@@ -704,26 +749,93 @@ impl PlanGpu {
         let empty = self.out.get(&self.device, 1);
         let plain_out = plain.as_ref().map(|p| p.1.clone()).unwrap_or(empty);
         let copies = [(&plain_out, entries), (&gcands, 2 * n_gathers), (&eout, slots)];
-        self.finish(enc, &copies, pack, |w| {
-            let Some(w) = w else {
-                return (vec![0; entries], vec![Gathered::default(); n_gathers]);
-            };
-            let answers: Vec<u8> = w[..entries].iter().map(|v| (*v != 0) as u8).collect();
-            let header = &w[entries..entries + 2 * n_gathers];
-            let out = &w[entries + 2 * n_gathers..];
-            let mut at = 0usize;
-            let gathered = gathers
-                .iter()
-                .enumerate()
-                .map(|(g, job)| {
-                    let n = header[2 * g] as usize;
-                    let hits = out[at..at + n].iter().copied().filter(|v| *v != NONE).collect();
-                    at += job.cap;
-                    Gathered { cands: n, hits }
-                })
-                .collect();
-            (answers, gathered)
-        })
+        let parse = FusedParse { entries, caps: gathers.iter().map(|g| g.cap).collect() };
+        (self.submit(enc, &copies, pack), parse)
+    }
+}
+
+/// A submitted batch whose answer is coming: the staging buffer and how
+/// many words of it are the answer, whether its map has come back, and
+/// the times so far.
+struct Readback {
+    stage: wgpu::Buffer,
+    total: usize,
+    state: Arc<AtomicU8>,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    index: wgpu::SubmissionIndex,
+    pack: f64,
+    t_wait: web_time::Instant,
+}
+
+const PENDING: u8 = 0;
+const MAPPED: u8 = 1;
+const FAILED: u8 = 2;
+
+impl Readback {
+    /// The map has come back, mapped or failed. The web's walk awaits
+    /// this: the browser runs the map's callback between frames. On the
+    /// desktop each poll nudges the device, without blocking, so a test
+    /// can run the web's path frame by frame.
+    fn arrived(&self, device: &wgpu::Device) -> Arrived {
+        let _ = device;
+        Arrived {
+            state: self.state.clone(),
+            #[cfg(not(target_arch = "wasm32"))]
+            device: device.clone(),
+        }
+    }
+}
+
+/// See [`Readback::arrived`]. Polled once a frame by the driver; nothing
+/// needs waking.
+struct Arrived {
+    state: Arc<AtomicU8>,
+    #[cfg(not(target_arch = "wasm32"))]
+    device: wgpu::Device,
+}
+
+impl std::future::Future for Arrived {
+    type Output = ();
+    fn poll(self: std::pin::Pin<&mut Self>, _cx: &mut std::task::Context<'_>) -> std::task::Poll<()> {
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = self.device.poll(wgpu::PollType::Poll);
+        if self.state.load(Ordering::Acquire) == PENDING {
+            std::task::Poll::Pending
+        } else {
+            std::task::Poll::Ready(())
+        }
+    }
+}
+
+/// How to read a fused batch's words: the plain answers, then per gather
+/// its count and step, then its `cap` slots.
+struct FusedParse {
+    entries: usize,
+    caps: Vec<usize>,
+}
+
+impl FusedParse {
+    fn read(&self, w: Option<&[u32]>) -> (Vec<u8>, Vec<Gathered>) {
+        let (entries, n_gathers) = (self.entries, self.caps.len());
+        let Some(w) = w else {
+            return (vec![0; entries], vec![Gathered::default(); n_gathers]);
+        };
+        let answers: Vec<u8> = w[..entries].iter().map(|v| (*v != 0) as u8).collect();
+        let header = &w[entries..entries + 2 * n_gathers];
+        let out = &w[entries + 2 * n_gathers..];
+        let mut at = 0usize;
+        let gathered = self
+            .caps
+            .iter()
+            .enumerate()
+            .map(|(g, cap)| {
+                let n = header[2 * g] as usize;
+                let hits = out[at..at + n].iter().copied().filter(|v| *v != NONE).collect();
+                at += cap;
+                Gathered { cands: n, hits }
+            })
+            .collect();
+        (answers, gathered)
     }
 }
 
@@ -738,6 +850,7 @@ fn grid(threads: usize, per: u32) -> (u32, u32, u32) {
 /// A slot or an answer that holds nothing.
 const NONE: u32 = u32::MAX;
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Evaluate for PlanGpu {
     fn lands(&mut self, b: &Backward, view: View, jobs: &[EvalJob]) -> Vec<u8> {
         assert_eq!(b.sample().len(), self.points_len, "a plan's GPU evaluator is for another sample");
@@ -754,6 +867,57 @@ impl Evaluate for PlanGpu {
         }
         assert_eq!(b.sample().len(), self.points_len, "a plan's GPU evaluator is for another sample");
         self.fused(view, jobs, gathers, b)
+    }
+}
+
+/// **The GPU's answers, awaited**: a batch is submitted and the walk
+/// yields until it has been mapped back, a frame or so later on the web.
+/// The web's only evaluator; on the desktop the tests run the web's path
+/// with it (the app's worker blocks instead, through `Evaluate`). Every
+/// gather runs here -- `GpuPlanner` always attaches the indexes.
+impl crate::scene::backward::AskEval for PlanGpu {
+    fn speculative(&self) -> bool {
+        true
+    }
+
+    fn lands<'a>(
+        &'a mut self,
+        _b: &'a Backward,
+        view: View,
+        jobs: &'a [EvalJob<'a>],
+    ) -> crate::scene::backward::Ask<'a, Vec<u8>> {
+        Box::pin(async move {
+            let Some((r, n)) = self.run_submit(view, jobs, Mode::Disc) else { return Vec::new() };
+            r.arrived(&self.device).await;
+            self.take(r, |w| match w {
+                Some(w) => w.iter().map(|v| (*v != 0) as u8).collect(),
+                None => vec![0; n],
+            })
+        })
+    }
+
+    fn gather_lands<'a>(
+        &'a mut self,
+        b: &'a Backward,
+        view: View,
+        jobs: &'a [EvalJob<'a>],
+        gathers: &'a [GatherJob<'a>],
+    ) -> crate::scene::backward::Ask<'a, (Vec<u8>, Vec<Gathered>)> {
+        Box::pin(async move {
+            if gathers.is_empty() {
+                let Some((r, n)) = self.run_submit(view, jobs, Mode::Disc) else { return (Vec::new(), Vec::new()) };
+                r.arrived(&self.device).await;
+                let a = self.take(r, |w| match w {
+                    Some(w) => w.iter().map(|v| (*v != 0) as u8).collect(),
+                    None => vec![0; n],
+                });
+                return (a, Vec::new());
+            }
+            assert!(self.gathers_here(), "the web's GPU planner gathers on the GPU");
+            let (r, parse) = self.fused_submit(view, jobs, gathers, b);
+            r.arrived(&self.device).await;
+            self.take(r, |w| parse.read(w))
+        })
     }
 }
 
@@ -786,10 +950,14 @@ impl GpuPlanner {
         }
         self.current = None;
         // A kernel that fails validation is a CPU plan, not a panic in
-        // the planner thread.
+        // the planner thread. (The web cannot block on the scope; a kernel
+        // that failed there reports through the device's error handler,
+        // and its answers come back empty.)
+        #[cfg(not(target_arch = "wasm32"))]
         let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let mut gpu = PlanGpu::new(&self.device, &self.queue, flame, b.sample());
         gpu.attach(b);
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(err) = pollster::block_on(scope.pop()) {
             log::warn!("the GPU planner's kernel did not build for this flame; planning on the CPU: {err}");
             self.failed = Some(key);
@@ -797,6 +965,53 @@ impl GpuPlanner {
         }
         self.failed = None;
         self.current = Some((key, gpu));
+        self.current.as_mut().map(|(_, g)| g)
+    }
+
+    /// [`Self::for_flame`], yielding at `slicer`'s ticks between building
+    /// the kernel and uploading the indexes: the web's. It cannot wait on
+    /// a validation scope there; a kernel that fails reports through the
+    /// device's error handler and answers nothing. (The desktop, testing
+    /// the web's path, can, and does as `for_flame` does.)
+    ///
+    /// Building the kernel is one piece no tick can split. A native driver
+    /// compiles it here, measured at 10-26 ms, and says so to
+    /// [`Slicer::compiled`](crate::scene::slice::Slicer::compiled). A
+    /// browser compiles it in its GPU process -- not in the page's step,
+    /// but on the thread that serves the page's rendering, so the page's
+    /// next frame can wait for it (`gpu-cylinder-planning.md` §17).
+    pub async fn for_flame_sliced(
+        &mut self,
+        flame: &Flame,
+        b: &Backward,
+        slicer: &crate::scene::backward::Slicer,
+    ) -> Option<&mut PlanGpu> {
+        let key = Backward::flame_key(flame);
+        if self.failed == Some(key) {
+            return None;
+        }
+        if !self.current.as_ref().is_some_and(|(k, g)| *k == key && g.points_len == b.sample().len()) {
+            self.current = None;
+            #[cfg(not(target_arch = "wasm32"))]
+            let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+            #[cfg(not(target_arch = "wasm32"))]
+            let built = web_time::Instant::now();
+            let mut gpu = PlanGpu::new(&self.device, &self.queue, flame, b.sample());
+            #[cfg(not(target_arch = "wasm32"))]
+            slicer.add_compiled(built.elapsed());
+            // Popped before the tick: a scope open across a yield would
+            // catch whatever else the thread does meanwhile.
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(err) = pollster::block_on(scope.pop()) {
+                log::warn!("the GPU planner's kernel did not build for this flame; planning on the CPU: {err}");
+                self.failed = Some(key);
+                return None;
+            }
+            slicer.tick().await;
+            gpu.attach_sliced(b, slicer).await;
+            self.failed = None;
+            self.current = Some((key, gpu));
+        }
         self.current.as_mut().map(|(_, g)| g)
     }
 }

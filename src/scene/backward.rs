@@ -52,7 +52,7 @@
 //! sample point to a region that does.
 
 use super::cylinder::{sym_arm, sym_of, sym_transform, Cylinder, Cylinders, NoCylinders, View, MAX_DEPTH, MAX_WORDS};
-use super::ifs_analysis::{analyse_2d, Ifs2, IfsMap, Kernel, Map2};
+use super::ifs_analysis::{analyse_2d_maps_sliced, Ifs2, IfsMap, Kernel, Map2};
 use super::transforms::Flame;
 use crate::variations::VariationRegistry;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -79,6 +79,11 @@ pub const BEAM: usize = 2048;
 /// view. Above it, it is carried on from the points its replay landed.
 /// See `close`.
 pub const FORCE_WASTE: f64 = 0.01;
+
+/// The most answer words one speculative batch asks for (a child's
+/// replays and, for an index child, its gather's slots). A level wider
+/// than this is asked in several, each read back on its own.
+pub const FUSED_WORDS: usize = 1 << 20;
 
 /// The most points a pulled-back cloud keeps. The view's own cloud is 64;
 /// following every branch of an inverse can multiply it.
@@ -397,6 +402,79 @@ impl Evaluate for CpuEval {
     }
 }
 
+/// A boxed future the walk awaits. Not `Send`: a plan runs on one thread
+/// -- a worker's on the desktop, the page's own on the web.
+pub type Ask<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + 'a>>;
+
+/// **The walk's evaluator, as the walk awaits it** (phase 3 of
+/// `gpu-cylinder-planning.md`). On the desktop every answer is ready at
+/// once ([`Blocking`]); on the web the GPU's come back on a later frame,
+/// and the walk, being a future, simply resumes there.
+pub trait AskEval {
+    fn speculative(&self) -> bool;
+    fn lands<'a>(&'a mut self, b: &'a Backward, view: View, jobs: &'a [EvalJob<'a>]) -> Ask<'a, Vec<u8>>;
+    fn gather_lands<'a>(
+        &'a mut self,
+        b: &'a Backward,
+        view: View,
+        jobs: &'a [EvalJob<'a>],
+        gathers: &'a [GatherJob<'a>],
+    ) -> Ask<'a, (Vec<u8>, Vec<Gathered>)>;
+}
+
+/// A synchronous [`Evaluate`], answered at once.
+pub struct Blocking<'e>(pub &'e mut dyn Evaluate);
+
+impl AskEval for Blocking<'_> {
+    fn speculative(&self) -> bool {
+        self.0.speculative()
+    }
+
+    fn lands<'a>(&'a mut self, b: &'a Backward, view: View, jobs: &'a [EvalJob<'a>]) -> Ask<'a, Vec<u8>> {
+        let r = self.0.lands(b, view, jobs);
+        Box::pin(std::future::ready(r))
+    }
+
+    fn gather_lands<'a>(
+        &'a mut self,
+        b: &'a Backward,
+        view: View,
+        jobs: &'a [EvalJob<'a>],
+        gathers: &'a [GatherJob<'a>],
+    ) -> Ask<'a, (Vec<u8>, Vec<Gathered>)> {
+        let r = self.0.gather_lands(b, view, jobs, gathers);
+        Box::pin(std::future::ready(r))
+    }
+}
+
+pub use super::slice::{drive, Slicer, Tick};
+
+/// [`map_all`], sliced: in order with ticks between items where the
+/// slicer slices, in parallel where it does not.
+async fn map_sliced<T: Sync, U: Send>(items: &[T], f: impl Fn(&T) -> U + Sync + Send, slicer: &Slicer) -> Vec<U> {
+    if !slicer.slices() {
+        return map_all(items, f);
+    }
+    let mut out = Vec::with_capacity(items.len());
+    for it in items {
+        out.push(f(it));
+        slicer.tick().await;
+    }
+    out
+}
+
+/// [`each_mut`], sliced. See [`map_sliced`].
+async fn each_sliced<T: Send>(items: &mut [T], f: impl Fn(&mut T) + Sync + Send, slicer: &Slicer) {
+    if !slicer.slices() {
+        each_mut(items, f);
+        return;
+    }
+    for it in items.iter_mut() {
+        f(it);
+        slicer.tick().await;
+    }
+}
+
 /// `f` over every item, in parallel where there are threads; results in
 /// order.
 fn map_all<T: Sync, U: Send>(items: &[T], f: impl Fn(&T) -> U + Sync + Send) -> Vec<U> {
@@ -496,8 +574,51 @@ struct Index {
 }
 
 impl Index {
+    /// Sorted by cell, then sample index: `(Cell, u32)`'s own order.
+    ///
+    /// **By radix.** The entries arrive in sample order, so a STABLE sort
+    /// by cell alone gives exactly that order, and a least-significant-
+    /// digit radix sort of the cell's 64 bits, sixteen at a time -- with
+    /// a digit every entry shares skipped -- is at most four passes.
+    /// Comparison-sorting 100k tuples was the largest single piece of
+    /// building the walk: 14-20 ms each, one per alphabet symbol, which a
+    /// web frame cannot hold.
     fn build(mut entries: Vec<(Cell, u32)>) -> Self {
-        entries.sort_unstable();
+        if !entries.windows(2).all(|w| w[0].1 < w[1].1) {
+            entries.sort_unstable();
+            return Self { entries };
+        }
+        let key = |c: Cell| (((c.0 as u32) ^ 0x8000_0000) as u64) << 32 | ((c.1 as u32) ^ 0x8000_0000) as u64;
+        let keys: Vec<u64> = entries.iter().map(|e| key(e.0)).collect();
+        let n = entries.len();
+        let mut perm: Vec<u32> = (0..n as u32).collect();
+        let mut next: Vec<u32> = vec![0; n];
+        let mut count = vec![0usize; 1 << 16];
+        for pass in 0..4 {
+            let shift = 16 * pass;
+            let digit = |i: u32| ((keys[i as usize] >> shift) & 0xFFFF) as usize;
+            let first = keys.first().map_or(0, |k| (k >> shift) & 0xFFFF);
+            if keys.iter().all(|k| (k >> shift) & 0xFFFF == first) {
+                continue;
+            }
+            count.iter_mut().for_each(|c| *c = 0);
+            for &i in &perm {
+                count[digit(i)] += 1;
+            }
+            let mut at = 0usize;
+            for c in count.iter_mut() {
+                let k = *c;
+                *c = at;
+                at += k;
+            }
+            for &i in &perm {
+                let d = digit(i);
+                next[count[d]] = i;
+                count[d] += 1;
+            }
+            std::mem::swap(&mut perm, &mut next);
+        }
+        let entries = perm.iter().map(|&i| entries[i as usize]).collect();
         Self { entries }
     }
 
@@ -759,6 +880,25 @@ impl Backward {
     /// second to build and depends on nothing but the flame, and
     /// `plan` runs on every pan.
     pub fn cached(flame: &Flame, registry: &VariationRegistry) -> Result<Arc<Self>, String> {
+        drive(Self::cached_sliced(flame, registry, &Slicer::never()))
+    }
+
+    /// Forget the cached analysis, so the next plan builds it again. For the
+    /// tests that time the build.
+    pub fn forget_cached() {
+        if let Ok(mut c) = CACHE.lock() {
+            *c = None;
+        }
+    }
+
+    /// [`Self::cached`], yielding at `slicer`'s ticks while it builds: the
+    /// build is a quarter of a second on the desktop, which the web cannot
+    /// spend in one frame.
+    pub async fn cached_sliced(
+        flame: &Flame,
+        registry: &VariationRegistry,
+        slicer: &Slicer,
+    ) -> Result<Arc<Self>, String> {
         let key = Self::flame_key(flame);
         if let Some(b) = CACHE
             .lock()
@@ -770,7 +910,7 @@ impl Backward {
         // Built outside the lock: a second thread asking for the same
         // flame meanwhile builds its own rather than waiting, which
         // costs a duplicate build once and never a deadlock.
-        let b = Arc::new(Self::read(flame, registry)?);
+        let b = Arc::new(Self::read_sliced(flame, registry, slicer).await?);
         if let Ok(mut c) = CACHE.lock() {
             *c = Some((key, b.clone()));
         }
@@ -806,9 +946,17 @@ impl Backward {
     /// Analyse the flame, sample its attractor and index it. `Err`
     /// names what the inverse walk cannot do for this flame.
     pub fn read(flame: &Flame, registry: &VariationRegistry) -> Result<Self, String> {
-        let ifs = analyse_2d(flame, registry).map_err(|errs| {
+        drive(Self::read_sliced(flame, registry, &Slicer::never()))
+    }
+
+    /// [`Self::read`], yielding at `slicer`'s ticks.
+    pub async fn read_sliced(flame: &Flame, registry: &VariationRegistry, slicer: &Slicer) -> Result<Self, String> {
+        slicer.tick().await;
+        // The maps alone: the escape engine's bounds are never read here.
+        let ifs = analyse_2d_maps_sliced(flame, registry, slicer).await.map_err(|errs| {
             errs.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ")
         })?;
+        slicer.tick().await;
         if ifs.final_map.is_some() {
             return Err("a final transform is not pulled back yet".into());
         }
@@ -892,6 +1040,9 @@ impl Backward {
                 sample.push(x);
             }
             reseeded = false;
+            if k % 4096 == 0 {
+                slicer.tick().await;
+            }
         }
         if sample.len() < 1000 {
             return Err("the orbit did not settle".into());
@@ -907,7 +1058,9 @@ impl Backward {
         }
         let cell = 2.0 * extent / GRID_CELLS as f64;
         let key = |p: [f64; 2]| -> Cell { ((p[0] / cell).floor() as i32, (p[1] / cell).floor() as i32) };
+        slicer.tick().await;
         let grid = Index::build(sample.iter().enumerate().map(|(i, p)| (key(*p), i as u32)).collect());
+        slicer.tick().await;
         // **The index.** Every sample point landed through every
         // symbol, filed by the cell it lands in.
         let mut landing: Vec<Index> = Vec::with_capacity(alphabet.len());
@@ -918,8 +1071,13 @@ impl Backward {
                 if finite(y) && y[0].abs() < 1e12 && y[1].abs() < 1e12 {
                     entries.push((key(y), i as u32));
                 }
+                if i % 8192 == 0 {
+                    slicer.tick().await;
+                }
             }
+            // One index's sort: 100k entries, a few milliseconds.
             landing.push(Index::build(entries));
+            slicer.tick().await;
         }
         let stride = (sample.len() / VERIFY).max(1);
         let every = (VERIFY / REPLAY_FIRST).max(1);
@@ -1124,6 +1282,12 @@ impl Backward {
 
     /// The walk's indexes, concatenated for the GPU. See [`IndexTables`].
     pub fn index_tables(&self) -> IndexTables {
+        drive(self.index_tables_sliced(&Slicer::never()))
+    }
+
+    /// [`Self::index_tables`], yielding between indexes: the whole is a few
+    /// million entries.
+    pub async fn index_tables_sliced(&self, slicer: &Slicer) -> IndexTables {
         let n: usize = self.landing.iter().map(|i| i.entries.len()).sum::<usize>() + self.grid.entries.len();
         let mut t = IndexTables { cells: Vec::with_capacity(n), idx: Vec::with_capacity(n), offsets: vec![0] };
         for index in self.landing.iter().chain(std::iter::once(&self.grid)) {
@@ -1132,6 +1296,7 @@ impl Backward {
                 t.idx.push(i);
             }
             t.offsets.push(t.cells.len() as u32);
+            slicer.tick().await;
         }
         t
     }
@@ -1291,7 +1456,7 @@ impl Backward {
     ///
     /// `None` when cancelled between batches.
     #[allow(clippy::too_many_arguments)]
-    fn expand_level(
+    async fn expand_level(
         &self,
         frontier: Vec<Node>,
         depth: usize,
@@ -1299,11 +1464,12 @@ impl Backward {
         floor_mass: f64,
         watch: Option<&[u32]>,
         record: bool,
-        eval: &mut dyn Evaluate,
+        eval: &mut dyn AskEval,
         tr: &mut Trace,
         cancelled: &dyn Fn() -> bool,
+        slicer: &Slicer,
     ) -> Option<Vec<Expanded>> {
-        use std::time::Instant;
+        use web_time::Instant;
         let watched = |t: &mut Trace, word: &[u32], what: &str, detail: &dyn Fn() -> String| {
             if let Some(line) = watch_line(watch, word, depth, what, detail) {
                 t.watched.push(line);
@@ -1326,15 +1492,20 @@ impl Backward {
         // sample points lie in it: the candidates are the sample points
         // in the cells the cloud occupies, checked exactly.
         let t = Instant::now();
-        let seen: Vec<Option<Vec<Cell>>> = map_all(&opens, |o| match &o.node.pts {
-            Pts::Cloud(cloud) => {
-                let mut cells: Vec<Cell> = cloud.iter().map(|p| self.cell_of(*p)).collect();
-                cells.sort_unstable();
-                cells.dedup();
-                Some(Self::expand_cells(&cells, true))
-            }
-            Pts::Index(_) => None,
-        });
+        let seen: Vec<Option<Vec<Cell>>> = map_sliced(
+            &opens,
+            |o| match &o.node.pts {
+                Pts::Cloud(cloud) => {
+                    let mut cells: Vec<Cell> = cloud.iter().map(|p| self.cell_of(*p)).collect();
+                    cells.sort_unstable();
+                    cells.dedup();
+                    Some(Self::expand_cells(&cells, true))
+                }
+                Pts::Index(_) => None,
+            },
+            slicer,
+        )
+        .await;
         let seeded = {
             let gathers: Vec<GatherJob> = opens
                 .iter()
@@ -1343,7 +1514,7 @@ impl Backward {
                     s.as_ref().map(|s| GatherJob { word: &o.node.word, index: IndexId::Grid, seen: s, cap: SEED_CANDIDATES })
                 })
                 .collect();
-            eval.gather_lands(self, view, &[], &gathers).1
+            eval.gather_lands(self, view, &[], &gathers).await.1
         };
         let mut seeded = seeded.into_iter();
         for (o, s) in opens.iter_mut().zip(&seen) {
@@ -1364,14 +1535,16 @@ impl Backward {
         if cancelled() {
             return None;
         }
+        slicer.tick().await;
 
         // **2. Children.** The gathers are the cost; nodes in parallel.
         let t = Instant::now();
-        each_mut(&mut opens, |o| self.children_of(o, depth, floor_mass, !speculate));
+        each_sliced(&mut opens, |o| self.children_of(o, depth, floor_mass, !speculate), slicer).await;
         tr.t_gather += t.elapsed();
         if cancelled() {
             return None;
         }
+        slicer.tick().await;
 
         // **3. Replays**: the first `REPLAY_FIRST` verification points
         // for every child, then the rest for the children whose share is
@@ -1395,47 +1568,67 @@ impl Backward {
         };
         let (n1, n2) = (self.verify_first.len(), self.verify_rest.len());
         if speculate {
-            // One batch: both passes for every child, and every index
-            // child's gather and check.
-            let (answers, gathered) = {
-                let mut jobs: Vec<EvalJob> = Vec::new();
-                let mut gathers: Vec<GatherJob> = Vec::new();
-                for o in &opens {
-                    for c in &o.children {
+            // Both passes for every child, and every index child's gather
+            // and check, in as few batches as `FUSED_WORDS` allows: one
+            // for most levels. A level's widest batch was ten million
+            // words, and reading it back took a web frame on its own.
+            let order: Vec<(usize, usize)> = opens
+                .iter()
+                .enumerate()
+                .flat_map(|(oi, o)| (0..o.children.len()).map(move |ci| (oi, ci)))
+                .collect();
+            let words_of = |c: &Child| n1 + n2 + if matches!(c.pts, Pts::Index(_)) { CAND_CAP } else { 0 };
+            let mut start = 0usize;
+            while start < order.len() {
+                let mut end = start;
+                let mut words = 0usize;
+                while end < order.len() {
+                    let (oi, ci) = order[end];
+                    let w = words_of(&opens[oi].children[ci]);
+                    if end > start && words + w > FUSED_WORDS {
+                        break;
+                    }
+                    words += w;
+                    end += 1;
+                }
+                let (answers, gathered) = {
+                    let mut jobs: Vec<EvalJob> = Vec::new();
+                    let mut gathers: Vec<GatherJob> = Vec::new();
+                    for &(oi, ci) in &order[start..end] {
+                        let o = &opens[oi];
+                        let c = &o.children[ci];
                         jobs.push(EvalJob { word: &c.word, points: &self.verify_first });
                         jobs.push(EvalJob { word: &c.word, points: &self.verify_rest });
                         if matches!(c.pts, Pts::Index(_)) {
-                            gathers.push(GatherJob {
-                                word: &c.word,
-                                index: IndexId::Landing(c.ai),
-                                seen: &o.seen,
-                                cap: CAND_CAP,
-                            });
+                            gathers.push(GatherJob { word: &c.word, index: IndexId::Landing(c.ai), seen: &o.seen, cap: CAND_CAP });
                         }
                     }
+                    eval.gather_lands(self, view, &jobs, &gathers).await
+                };
+                let mut gathered = gathered.into_iter();
+                let mut at = 0usize;
+                for &(oi, ci) in &order[start..end] {
+                    let c = &mut opens[oi].children[ci];
+                    if matches!(c.pts, Pts::Index(_)) {
+                        let g = gathered.next().expect("one answer per gather");
+                        c.n_cands = g.cands;
+                        c.spec = Some(g.hits);
+                    }
+                    let first = &answers[at..at + n1];
+                    c.hit = landed(first);
+                    c.total = n1;
+                    c.replay_hits = which(first, &self.verify_first);
+                    at += n1;
+                    let rest = &answers[at..at + n2];
+                    at += n2;
+                    if in_band(c) {
+                        c.hit += landed(rest);
+                        c.total += n2;
+                        c.replay_hits.extend(which(rest, &self.verify_rest));
+                    }
                 }
-                eval.gather_lands(self, view, &jobs, &gathers)
-            };
-            let mut gathered = gathered.into_iter();
-            let mut at = 0usize;
-            for c in opens.iter_mut().flat_map(|o| o.children.iter_mut()) {
-                if matches!(c.pts, Pts::Index(_)) {
-                    let g = gathered.next().expect("one answer per gather");
-                    c.n_cands = g.cands;
-                    c.spec = Some(g.hits);
-                }
-                let first = &answers[at..at + n1];
-                c.hit = landed(first);
-                c.total = n1;
-                c.replay_hits = which(first, &self.verify_first);
-                at += n1;
-                let rest = &answers[at..at + n2];
-                at += n2;
-                if in_band(c) {
-                    c.hit += landed(rest);
-                    c.total += n2;
-                    c.replay_hits.extend(which(rest, &self.verify_rest));
-                }
+                start = end;
+                slicer.tick().await;
             }
         } else {
             let answers = {
@@ -1443,7 +1636,7 @@ impl Backward {
                     .iter()
                     .flat_map(|o| o.children.iter().map(|c| EvalJob { word: &c.word, points: &self.verify_first }))
                     .collect();
-                eval.lands(self, view, &jobs)
+                eval.lands(self, view, &jobs).await
             };
             for (k, c) in opens.iter_mut().flat_map(|o| o.children.iter_mut()).enumerate() {
                 let first = &answers[k * n1..(k + 1) * n1];
@@ -1458,7 +1651,7 @@ impl Backward {
                     .filter(|c| in_band(c))
                     .map(|c| EvalJob { word: &c.word, points: &self.verify_rest })
                     .collect();
-                eval.lands(self, view, &jobs)
+                eval.lands(self, view, &jobs).await
             };
             let mut k = 0usize;
             for c in opens.iter_mut().flat_map(|o| o.children.iter_mut()) {
@@ -1480,6 +1673,7 @@ impl Backward {
         if cancelled() {
             return None;
         }
+        slicer.tick().await;
 
         // **4. Kept or carried.** Below the floor, or at the depth cap,
         // the walk stops -- and the word is FORCED if any of it lands,
@@ -1539,7 +1733,7 @@ impl Backward {
                     .filter(|c| checking(c))
                     .map(|c| EvalJob { word: &c.word, points: c.cands() })
                     .collect();
-                eval.lands(self, view, &jobs)
+                eval.lands(self, view, &jobs).await
             };
             let mut at = 0usize;
             for o in &mut opens {
@@ -1570,16 +1764,21 @@ impl Backward {
         }
         // The parent's cells, all of them, and their neighbours: once per
         // node with a thin child.
-        let wide: Vec<Vec<Cell>> = map_all(&opens, |o| {
-            let Pts::Index(parent) = &o.node.pts else { return Vec::new() };
-            if !o.children.iter().any(|c| c.topped) {
-                return Vec::new();
-            }
-            let mut cells: Vec<Cell> = parent.iter().map(|&i| self.cell_of(self.sample[i as usize])).collect();
-            cells.sort_unstable();
-            cells.dedup();
-            Self::expand_cells(&cells, true)
-        });
+        let wide: Vec<Vec<Cell>> = map_sliced(
+            &opens,
+            |o| {
+                let Pts::Index(parent) = &o.node.pts else { return Vec::new() };
+                if !o.children.iter().any(|c| c.topped) {
+                    return Vec::new();
+                }
+                let mut cells: Vec<Cell> = parent.iter().map(|&i| self.cell_of(self.sample[i as usize])).collect();
+                cells.sort_unstable();
+                cells.dedup();
+                Self::expand_cells(&cells, true)
+            },
+            slicer,
+        )
+        .await;
         let topped = {
             let gathers: Vec<GatherJob> = opens
                 .iter()
@@ -1593,7 +1792,7 @@ impl Backward {
                     })
                 })
                 .collect();
-            eval.gather_lands(self, view, &[], &gathers).1
+            eval.gather_lands(self, view, &[], &gathers).await.1
         };
         let mut topped = topped.into_iter();
         for o in &mut opens {
@@ -1608,9 +1807,15 @@ impl Backward {
         if cancelled() {
             return None;
         }
+        slicer.tick().await;
 
         // **7. Each node decided**, its children in their order.
-        Some(opens.into_iter().map(|o| self.close(o, depth, view, watch, floor_mass)).collect())
+        let mut out = Vec::with_capacity(opens.len());
+        for o in opens {
+            out.push(self.close(o, depth, view, watch, floor_mass));
+            slicer.tick().await;
+        }
+        Some(out)
     }
 
     /// Settle a node once its children's questions are answered: which
@@ -1787,7 +1992,7 @@ impl Backward {
                 let mut tr = Trace::default();
                 eval.totals = Default::default();
                 eval.batches = 0;
-                let t0 = std::time::Instant::now();
+                let t0 = web_time::Instant::now();
                 let r = self.plan_with_eval(view, &mut tr, opts, eval);
                 {
                     log::debug!(
@@ -1817,6 +2022,20 @@ impl Backward {
     }
 
     fn plan_with_eval(&self, view: View, tr: &mut Trace, opts: PlanOptions, eval: &mut dyn Evaluate) -> Result<Cylinders, NoCylinders> {
+        drive(self.walk(view, tr, opts, &mut Blocking(eval), &Slicer::never()))
+    }
+
+    /// **The walk, as a future**: the one the desktop drives straight
+    /// through ([`drive`]) and the web polls once a frame, resuming where
+    /// the last frame's slice ran out or a GPU answer was still coming.
+    pub async fn walk(
+        &self,
+        view: View,
+        tr: &mut Trace,
+        opts: PlanOptions<'_>,
+        eval: &mut dyn AskEval,
+        slicer: &Slicer,
+    ) -> Result<Cylinders, NoCylinders> {
         let cancelled = || opts.cancel.is_some_and(|c| c.load(Ordering::Relaxed));
         let watch = tr.watch.clone();
         let record = tr.record_expanded;
@@ -1833,7 +2052,7 @@ impl Backward {
         let mut kept: Vec<(Cylinder, f64)> = Vec::new();
         let mut kept_mass = 0.0f64;
         let mut lost = 0.0f64;
-        let started = std::time::Instant::now();
+        let started = web_time::Instant::now();
 
         for depth in 1..=MAX_DEPTH {
             if frontier.is_empty() {
@@ -1866,17 +2085,21 @@ impl Backward {
             // plan is the same however the threads ran and whichever
             // evaluator answered.
             let floor_mass = kept_mass;
-            let Some(results) = self.expand_level(
-                std::mem::take(&mut frontier),
-                depth,
-                view,
-                floor_mass,
-                watch.as_deref(),
-                record,
-                eval,
-                tr,
-                &cancelled,
-            ) else {
+            let Some(results) = self
+                .expand_level(
+                    std::mem::take(&mut frontier),
+                    depth,
+                    view,
+                    floor_mass,
+                    watch.as_deref(),
+                    record,
+                    eval,
+                    tr,
+                    &cancelled,
+                    slicer,
+                )
+                .await
+            else {
                 return Err(NoCylinders::ViewIsEmpty);
             };
 
@@ -1940,6 +2163,7 @@ impl Backward {
                 }
             }
             frontier = next;
+            slicer.tick().await;
         }
 
         // More words than the kernel's table holds: keep the ones
@@ -2619,7 +2843,7 @@ mod tests {
         }
         let replay: Vec<EvalJob> = words.iter().take(5).map(|w| EvalJob { word: w, points: &b.verify_first }).collect();
 
-        let (a_gpu, g_gpu) = gpu.gather_lands(&b, view, &replay, &gathers);
+        let (a_gpu, g_gpu) = Evaluate::gather_lands(gpu, &b, view, &replay, &gathers);
         let (a_cpu, g_cpu) = gather_on_cpu(gpu, &b, view, &replay, &gathers);
         assert_eq!(a_gpu, a_cpu, "the plain answers differ");
         let mut total = 0usize;
@@ -2641,6 +2865,119 @@ mod tests {
             a_f64.iter().filter(|x| **x == 1).count()
         );
         assert!(total > 10_000 && hits > 0 && hits < total, "the test gathered too little to mean anything");
+    }
+
+    /// The radix-built index is in `(Cell, u32)`'s own order, exactly --
+    /// including cells far out and negative, as landings can be.
+    #[test]
+    fn a_radix_index_is_sorted_as_tuples_are() {
+        let mut st = 0x1D_u64;
+        let mut rnd = move || {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (st >> 33) as i64
+        };
+        for spread in [3i64, 1000, 1 << 30] {
+            let entries: Vec<(Cell, u32)> = (0..20_000u32)
+                .filter(|i| i % 7 != 3)
+                .map(|i| (((rnd() % spread - spread / 2) as i32, (rnd() % spread - spread / 2) as i32), i))
+                .collect();
+            let mut want = entries.clone();
+            want.sort_unstable();
+            assert_eq!(Index::build(entries).entries, want, "spread {spread}");
+        }
+    }
+
+    /// **Phase 3's gate, natively**: the web's plan -- `plan_sliced`, the
+    /// awaitable GPU evaluator, a slice of `WEB_SLICE` -- polled once per
+    /// "frame" on this thread as the page polls it, with the rest of a
+    /// 60 Hz frame slept between polls. The analysis is built cold, so its
+    /// slicing is timed too. Every poll is timed, less the planner's kernel
+    /// compile, which a browser does off the page's thread
+    /// ([`Slicer::compiled`]); the plan must be the one the desktop's
+    /// worker makes with the same evaluator.
+    #[test]
+    #[ignore = "needs a GPU and reads output/flame-zoom"]
+    fn a_web_plan_takes_a_slice_a_frame() {
+        use std::future::Future;
+        use std::time::{Duration, Instant};
+        const WEB_SLICE: Duration = Duration::from_millis(6);
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let text = std::fs::read_to_string("output/flame-zoom/grand-julian.fflame").expect("grand-julian");
+        let gj: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
+        let b = Backward::read(&gj.flame, reg).expect("armed");
+        let (device, queue) = test_device();
+        let mut views: Vec<(String, View)> = Vec::new();
+        for z in [1e3f64, 1e6] {
+            views.push((format!("x{z:.0e}"), View::of(z, b.sample_point(0.75), 1280, 720)));
+        }
+        if let Ok(t) = std::fs::read_to_string("output/grand-julian-missing-pieces.fflame") {
+            let c: crate::config::FractalConfig = serde_json::from_str(&t).expect("config");
+            views.push(("missing-pieces".into(), View::of(c.zoom as f64, [c.pan_x as f64, c.pan_y as f64], 1280, 720)));
+        }
+        let mut worst = 0.0f64;
+        for (name, view) in views {
+            // The desktop's plan: the worker's evaluator, blocking.
+            let mut planner = crate::scene::plan_gpu::GpuPlanner::new(&device, &queue);
+            let want = {
+                let eval = planner.for_flame(&gj.flame, &b).expect("the kernel builds");
+                b.plan_eval(view, PlanOptions::default(), eval).expect("a plan")
+            };
+
+            // The web's: cold, sliced, polled a frame at a time.
+            Backward::forget_cached();
+            let mut web_planner = crate::scene::plan_gpu::GpuPlanner::new(&device, &queue);
+            let slicer = Slicer::traced(WEB_SLICE);
+            let t0 = Instant::now();
+            let mut polls: Vec<f64> = Vec::new();
+            let mut compiled = 0.0f64;
+            let got = {
+                let fut = crate::scene::cylinder::Cylinders::plan_sliced(&gj.flame, reg, view, Some(&mut web_planner), &slicer);
+                let mut fut = std::pin::pin!(fut);
+                let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+                loop {
+                    slicer.begin();
+                    let t = Instant::now();
+                    let (c0, g0) = (slicer.compiled(), slicer.gaps().len());
+                    let r = fut.as_mut().poll(&mut cx);
+                    let ms = t.elapsed().as_secs_f64() * 1e3;
+                    let c = (slicer.compiled() - c0).as_secs_f64() * 1e3;
+                    compiled += c;
+                    polls.push(ms - c);
+                    if ms - c > 12.0 {
+                        println!("   poll #{}: {ms:.1} ms ({c:.1} compiling) {:?}", polls.len() - 1, &slicer.gaps()[g0..]);
+                    }
+                    if let std::task::Poll::Ready(r) = r {
+                        break r;
+                    }
+                    // The rest of the frame: the page renders, the browser
+                    // runs the GPU's callbacks.
+                    std::thread::sleep(Duration::from_secs_f64((16.7 - ms).max(1.0) / 1e3));
+                }
+            };
+            let got = got.expect("a web plan");
+            let total = t0.elapsed().as_secs_f64();
+            let mut sorted = polls.clone();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let p95 = sorted[(sorted.len() as f64 * 0.95) as usize];
+            let max = *sorted.last().unwrap();
+            let over = polls.iter().filter(|p| **p > 16.0).count();
+            println!(
+                "== {name}: {} frames ({total:.2} s), poll p95 {p95:.1} ms, max {max:.1} ms, {over} over 16 ms | {} words | kernel compiled natively in {compiled:.1} ms, not counted",
+                polls.len(),
+                got.words.len()
+            );
+            // The longest polls, and where in the plan they fell.
+            let mut idx: Vec<usize> = (0..polls.len()).collect();
+            idx.sort_by(|a, c| polls[*c].partial_cmp(&polls[*a]).unwrap());
+            let top: Vec<String> = idx.iter().take(5).map(|&i| format!("#{i}: {:.1} ms", polls[i])).collect();
+            println!("   longest: {}", top.join(", "));
+            let same = got.words.len() == want.words.len()
+                && got.words.iter().zip(&want.words).all(|(a, c)| a.word == c.word && a.prob.to_bits() == c.prob.to_bits());
+            assert!(same, "{name}: the web's plan is not the desktop's ({} words against {})", got.words.len(), want.words.len());
+            worst = worst.max(max);
+        }
+        assert!(worst < 16.0, "a poll took {worst:.1} ms: past a 60 Hz frame");
     }
 
     /// **Phase 0 and 1 of `gpu-cylinder-planning.md`: does the GPU give
@@ -3232,3 +3569,4 @@ mod tests {
         }
     }
 }
+

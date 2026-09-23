@@ -723,15 +723,10 @@ impl Cylinders {
         Self::plan_inner(flame, registry, view, ARMS_ENABLED, opts)
     }
 
-    fn plan_inner(
-        flame: &Flame,
-        registry: &crate::variations::VariationRegistry,
-        view: View,
-        family_j: bool,
-        opts: crate::scene::backward::PlanOptions,
-    ) -> Result<Self, NoCylinders> {
-        let n = flame.transforms.len();
-        if n == 0 {
+    /// What refuses any plan before a planner is chosen: no transforms,
+    /// xaos, or a colour that is not affine.
+    fn plannable(flame: &Flame, registry: &crate::variations::VariationRegistry) -> Result<(), NoCylinders> {
+        if flame.transforms.is_empty() {
             return Err(NoCylinders::Empty);
         }
         if flame.has_xaos() {
@@ -744,38 +739,103 @@ impl Cylinders {
         // `WritesColor` or `WritesRgb` variation breaks that, and the
         // forced sample would land in the right place wearing the
         // wrong colour -- a bug that looks like an artistic choice.
-        {
-            let reg = registry;
-            for t in &flame.transforms {
-                if t.weight <= 0.0 {
+        let reg = registry;
+        for t in &flame.transforms {
+            if t.weight <= 0.0 {
+                continue;
+            }
+            for name in t.ordered_variation_names(reg) {
+                if t.variations.get(&name).copied().unwrap_or(0.0) == 0.0 {
                     continue;
                 }
-                for name in t.ordered_variation_names(reg) {
-                    if t.variations.get(&name).copied().unwrap_or(0.0) == 0.0 {
-                        continue;
-                    }
-                    let writes = reg.get(&name).is_some_and(|i| {
-                        i.has_feature(crate::variations::Feature::WritesColor)
-                            || i.has_feature(crate::variations::Feature::WritesRgb)
-                    });
-                    if writes {
-                        return Err(NoCylinders::ColourNotAffine);
-                    }
+                let writes = reg.get(&name).is_some_and(|i| {
+                    i.has_feature(crate::variations::Feature::WritesColor)
+                        || i.has_feature(crate::variations::Feature::WritesRgb)
+                });
+                if writes {
+                    return Err(NoCylinders::ColourNotAffine);
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Whether some transform draws among several images -- a flame the
+    /// inverse walk plans.
+    fn armed(flame: &Flame) -> bool {
+        flame.transforms.iter().any(|t| {
+            t.weight > 0.0
+                && t.variations.iter().any(|(n, w)| *w != 0.0 && crate::variations::bound::arms_for(n).is_some())
+        })
+    }
+
+    /// Why an armed flame gets no plan: the inverse walk refused it.
+    fn walk_refused(flame: &Flame, why: &str) -> NoCylinders {
+        let index = flame
+            .transforms
+            .iter()
+            .position(|t| {
+                t.weight > 0.0
+                    && t.variations.iter().any(|(n, w)| *w != 0.0 && crate::variations::bound::arms_for(n).is_some())
+            })
+            .unwrap_or(0);
+        NoCylinders::Unbounded { index, why: format!("the inverse walk cannot plan this flame: {why}") }
+    }
+
+    /// **A plan as a future** -- the web's way to plan (phase 3 of
+    /// `gpu-cylinder-planning.md`), polled once a frame. An armed flame's
+    /// inverse walk -- building its sample and index, then walking its
+    /// levels -- yields at `slicer`'s ticks and while `gpu` answers; any
+    /// other flame is planned as [`Self::plan`] plans it, at once. The
+    /// same plan as `plan` makes with the same evaluator.
+    pub async fn plan_sliced(
+        flame: &Flame,
+        registry: &crate::variations::VariationRegistry,
+        view: View,
+        gpu: Option<&mut crate::scene::plan_gpu::GpuPlanner>,
+        slicer: &crate::scene::backward::Slicer,
+    ) -> Result<Self, NoCylinders> {
+        use crate::scene::backward::{Backward, Blocking, CpuEval, PlanOptions, Trace, TIME_BUDGET};
+        slicer.tick().await;
+        if !(ARMS_ENABLED && Self::armed(flame)) {
+            return Self::plan(flame, registry, view);
+        }
+        Self::plannable(flame, registry)?;
+        let b = match Backward::cached_sliced(flame, registry, slicer).await {
+            Ok(b) => b,
+            Err(why) => return Err(Self::walk_refused(flame, &why)),
+        };
+        // Nothing blocks, so the web's plan needs no inline budget; the
+        // desktop's safety net applies.
+        let opts = PlanOptions { budget: TIME_BUDGET, ..Default::default() };
+        let mut tr = Trace::default();
+        slicer.tick().await;
+        let eval = match gpu {
+            Some(g) => g.for_flame_sliced(flame, &b, slicer).await,
+            None => None,
+        };
+        match eval {
+            Some(eval) => b.walk(view, &mut tr, opts, eval, slicer).await,
+            None => b.walk(view, &mut tr, opts, &mut Blocking(&mut CpuEval), slicer).await,
+        }
+    }
+
+    fn plan_inner(
+        flame: &Flame,
+        registry: &crate::variations::VariationRegistry,
+        view: View,
+        family_j: bool,
+        opts: crate::scene::backward::PlanOptions,
+    ) -> Result<Self, NoCylinders> {
+        let n = flame.transforms.len();
+        Self::plannable(flame, registry)?;
+        let _ = n;
 
         // **Armed**: some transform draws among several images, so a
         // word has to say which. Everything below that is specific to
         // arms is keyed on this and not on `family_j`, so a flame
         // without arms takes exactly the path it always took.
-        let armed = family_j
-            && flame.transforms.iter().any(|t| {
-                t.weight > 0.0
-                    && t.variations.iter().any(|(n, w)| {
-                        *w != 0.0 && crate::variations::bound::arms_for(n).is_some()
-                    })
-            });
+        let armed = family_j && Self::armed(flame);
 
         // **The inverse walk first, for an armed flame.** A flame the
         // inverse-walk analysis accepts is planned by pulling the view
@@ -792,22 +852,7 @@ impl Cylinders {
             // reason, rather than handed to it.
             return match crate::scene::backward::Backward::cached(flame, registry) {
                 Ok(b) => b.plan_for(flame, view, opts),
-                Err(why) => {
-                    let index = flame
-                        .transforms
-                        .iter()
-                        .position(|t| {
-                            t.weight > 0.0
-                                && t.variations.iter().any(|(n, w)| {
-                                    *w != 0.0 && crate::variations::bound::arms_for(n).is_some()
-                                })
-                        })
-                        .unwrap_or(0);
-                    Err(NoCylinders::Unbounded {
-                        index,
-                        why: format!("the inverse walk cannot plan this flame: {why}"),
-                    })
-                }
+                Err(why) => Err(Self::walk_refused(flame, &why)),
             };
         }
 
@@ -3550,11 +3595,41 @@ mod gpu_tests {
     #[test]
     #[ignore = "needs a GPU and reads output/flame-zoom"]
     fn a_standby_plan_covers_a_move() {
+        standby_flow(false);
+    }
+
+    /// **The web's plan job, on the desktop**: the same flow as
+    /// `a_standby_plan_covers_a_move` with plans made as the web makes
+    /// them -- a task polled a slice at a time each frame
+    /// (`gpu-cylinder-planning.md` phase 3) -- and no frame's planning
+    /// allowed past a 60 Hz frame.
+    #[test]
+    #[ignore = "needs a GPU; reads output/flame-zoom"]
+    fn the_web_plan_job_plans_a_slice_a_frame() {
+        let [cold, warm] = standby_flow(true);
+        // Until the first plan is up the frames include building the
+        // planner's kernel, one piece no tick can split: a native driver
+        // compiles it on this thread, 11-21 ms measured, where a browser
+        // compiles it in its GPU process instead (and what that costs is
+        // the browser's own gate's to measure: tests/visual/wasm/
+        // test_plan.py, gpu-cylinder-planning.md §17). Reported, not gated.
+        println!(
+            "  longest sync_cylinders in task mode: {:.1} ms to the first plan (kernel build included), {:.1} ms after",
+            cold.as_secs_f64() * 1e3,
+            warm.as_secs_f64() * 1e3
+        );
+        assert!(warm < std::time::Duration::from_millis(16), "a frame's planning took {warm:?}");
+    }
+
+    /// The standby flow, with plans on a worker thread or in a task.
+    /// Returns the longest single `sync_cylinders` up to the first plan,
+    /// and after it.
+    fn standby_flow(task: bool) -> [std::time::Duration; 2] {
         use crate::renderer::TargetingState as TS;
         use std::time::{Duration, Instant};
         let Ok(text) = std::fs::read_to_string("output/flame-zoom/grand-julian.fflame") else {
             println!("  no grand-julian.fflame");
-            return;
+            return [Duration::ZERO; 2];
         };
         let (device, queue) = device();
         let mut cfg: FractalConfig = serde_json::from_str(&text).expect("a config");
@@ -3579,6 +3654,9 @@ mod gpu_tests {
             cfg.palette_size,
         );
         r.set_background_planning(true);
+        r.set_plan_in_task(task);
+        let longest = std::cell::Cell::new([Duration::ZERO; 2]);
+        let warm = std::cell::Cell::new(false);
         let load = |r: &mut crate::renderer::FlameRenderer, cfg: &FractalConfig| {
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("standby gate"),
@@ -3588,7 +3666,14 @@ mod gpu_tests {
         };
         let frame = |r: &mut crate::renderer::FlameRenderer, cfg: &FractalConfig| -> Duration {
             let s = Instant::now();
-            if r.sync_cylinders(&device, &queue, cfg) {
+            let reload = r.sync_cylinders(&device, &queue, cfg);
+            // The planning alone: a reload recompiles the shader, which
+            // is not the planner's time.
+            let mut l = longest.get();
+            let i = warm.get() as usize;
+            l[i] = l[i].max(s.elapsed());
+            longest.set(l);
+            if reload {
                 load(r, cfg);
             }
             s.elapsed()
@@ -3608,6 +3693,7 @@ mod gpu_tests {
 
         load(&mut r, &cfg);
         wait(&mut r, &cfg, "first tight plan", &|r| r.take_plan_arrived());
+        warm.set(true);
         wait(&mut r, &cfg, "standby ready", &|r| r.has_standby_plan());
 
         // A pan of half a view radius: inside the standby's disc.
@@ -3629,6 +3715,7 @@ mod gpu_tests {
         assert!(!r.take_plan_arrived(), "a standby was swapped in for a view it does not cover");
         wait(&mut r, &cfg, "tight plan after a long pan", &|r| r.take_plan_arrived());
         assert!(matches!(r.targeting_state(), TS::Active { .. }), "{:?}", r.targeting_state());
+        longest.get()
     }
 
     /// **The gate for a bug the whole suite missed.** `sync_cylinders`
