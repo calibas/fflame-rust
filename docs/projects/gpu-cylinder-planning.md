@@ -2,8 +2,8 @@
 
 Written as a plan before any code. The decisions (§11) were taken and
 are recorded in §12; phases 0 and 1 are built and measured in §13, phase
-2 in §14, the escape-time theory is measured in §15, and the rest of the
-document is the plan as it was written.
+2 in §14, the escape-time theory is measured in §15, phase 4 in §16,
+and the rest of the document is the plan as it was written.
 
 Background: [inversive-targeting.md](inversive-targeting.md) §24–§30
 describe the planner this would accelerate -- the inverse walk over an
@@ -660,3 +660,77 @@ counterexample. Closing them is concrete: route analysable flames over
 the forward cap to the inverse walk, let the cloud phase seed where a
 neutral map will not widen a region, and teach the planar analysis
 Möbius maps.
+
+---
+
+## 16. Phase 4: gathers on the GPU (2026-09-23)
+
+After phase 2 and `inversive-targeting.md` §31, gathering candidates on
+the CPU was the largest part of a GPU plan: 50-60 ms of wall time on
+twelve cores. Profiled, 85% of it was binary searches -- about 3.5
+million cell lookups per plan, each two searches in a 100k-entry index,
+one per cell per alphabet symbol -- and the rest the cell lists and the
+fill.
+
+**Built.**
+
+- **The gather, split** (`backward.rs`): `expand_cells` (a node's cells,
+  with neighbours, sorted and deduplicated) is now made once per node
+  instead of once per child, and `gather_seen` takes the candidates from
+  one index over those cells.
+- **`Evaluate::gather_lands`**: plain jobs and gathers asked together. A
+  gather is `gather_seen` plus a check of each candidate against the
+  child's word; back come its candidate count and the candidates that
+  landed. The default (`gather_on_cpu`) gathers on the CPU and asks
+  `lands` for everything, so the CPU walk is unchanged.
+- **The walk** asks with `gather_lands` wherever it gathered: seeds, and
+  top-ups. On a speculative evaluator a level's children are not gathered
+  in step 2 at all: their gathers ride in the replays' batch.
+- **On the GPU** (`shaders/core/plan_gather.wgsl`, `PlanGpu::attach`,
+  `PlanGpu::fused`): the walk's indexes -- every landing index and the
+  grid, concatenated, ~30 MB for grand-julian -- are uploaded once per
+  flame. One submission then runs the replays, `gather_ranges` (a thread
+  per cell of each gather: its run, by two binary searches),
+  `gather_scan` (a workgroup per gather: the runs' positions, the total,
+  the step), `gather_fill` (a thread per output slot: the entry at
+  `slot * step`), and `plan_eval_gathered` (the check, a thread per slot).
+  The candidates never leave the GPU; the per-gather counts and, per slot,
+  the sample index where it landed come back.
+
+**Exact.** The selection is integer arithmetic, and it is the CPU's:
+
+- `the_gpu_gathers_as_the_cpu_does`: 123 random gathers (cell lists of 1
+  to 1500 sample points, with and without neighbours, every kind of
+  index, caps from 1 to 16384, an empty list) -- 156,394 candidates, the
+  same on both sides, and the same 140,789 landing.
+- `dump_plans`: all 25 views plan bit for bit as the GPU planned with CPU
+  gathers; the CPU's plans are bit for bit as before the restructure.
+
+**Time.** Grand-julian at 1280x720, twelve cores and a GTX 1660 SUPER:
+
+| zoom | CPU plan | GPU plan, CPU gathers | GPU plan, GPU gathers |
+|---|---|---|---|
+| 1e3 | 435 ms | 162 ms | 91 ms |
+| 1e4 | 490 ms | 143 ms | 79 ms |
+| 1e6 | 449 ms | 226 ms | 130 ms |
+
+The gather's wall time fell from 49-69 ms to 5-6 ms (what is left is the
+nodes' cell lists, on the CPU). Beside the render
+(`a_plan_on_the_gpu_shares_it_with_the_render`):
+
+| frames | CPU plans | GPU plans | frames while planning, p95 (CPU / GPU) |
+|---|---|---|---|
+| as the app draws (128 workgroups) | 486-602 ms | 120-136 ms | 19.5 / 5.2 ms |
+| heavy (~12 ms each) | 507-580 ms | 370-389 ms | 26.9 / 13.1 ms |
+
+With every child replayed (§31) the CPU plans grew by a third; the GPU
+plans are now four times faster as the app draws, and faster under heavy
+frames too, where in phase 2 they only tied.
+
+**What is left in a GPU plan** is the GPU's own work (27-79 ms submit to
+mapped) and packing and reading (25-30 ms). Most of the GPU's work is
+the speculative checks: every child's candidates are checked in the
+replays' batch, and about nine in ten children are kept and never use
+theirs. Deciding keep-or-carry on the GPU, between the replay and the
+check in the same submission, and returning replay counts rather than a
+byte per point, is the next step if plans need to be faster.

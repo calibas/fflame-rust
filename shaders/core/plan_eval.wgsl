@@ -42,6 +42,10 @@ struct PlanView {
 @group(1) @binding(1) var<storage, read> plan_data: array<u32>;
 @group(1) @binding(2) var<storage, read_write> plan_out: array<u32>;
 @group(1) @binding(3) var<uniform> plan_view: PlanView;
+// The gathered candidates, as `plan_gather.wgsl` leaves them: per job
+// [count, step], then one slot per possible candidate (NONE past the
+// count). Bound for every batch; only `plan_eval_gathered` reads it.
+@group(1) @binding(4) var<storage, read> gcands: array<u32>;
 
 @compute @workgroup_size(64, 1, 1)
 fn plan_eval(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -87,4 +91,48 @@ fn plan_eval(@builtin(global_invocation_id) gid: vec3<u32>) {
     let d = p - plan_view.centre;
     let inside = dot(d, d) <= plan_view.radius * plan_view.radius;
     plan_out[e] = select(0u, 1u, inside && !bad);
+}
+
+// **The gathered candidates, checked.** One thread per gather slot, in
+// the same submission as the gather: the candidates never leave the GPU.
+// `plan_view.entries` is the slot count and `plan_view.jobs` the gather
+// jobs; job g at plan_data[4g .. 4g + 4] is [word offset (from
+// words_base), word length, first slot, 0]. Writes the candidate's
+// sample index where it lands in the disc, NONE otherwise.
+@compute @workgroup_size(64, 1, 1)
+fn plan_eval_gathered(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let s = gid.x + gid.y * plan_view.row;
+    if (s >= plan_view.entries) {
+        return;
+    }
+    let idx = gcands[2u * plan_view.jobs + s];
+    if (idx == 0xFFFFFFFFu) {
+        plan_out[s] = 0xFFFFFFFFu;
+        return;
+    }
+    var lo = 0u;
+    var hi = plan_view.jobs - 1u;
+    loop {
+        if (lo >= hi) {
+            break;
+        }
+        let mid = (lo + hi + 1u) / 2u;
+        if (plan_data[4u * mid + 2u] <= s) {
+            lo = mid;
+        } else {
+            hi = mid - 1u;
+        }
+    }
+    let word_offset = plan_view.words_base + plan_data[4u * lo];
+    let word_len = plan_data[4u * lo + 1u];
+    var p = plan_points[idx];
+    var rng = rng_init(s, 0x9E3779B9u);
+    for (var k = 0u; k < word_len; k = k + 1u) {
+        p = ct_apply_symbol(p, plan_data[word_offset + k], &rng, 0.0);
+    }
+    ct_forced_arm = -1;
+    let bad = !(abs(p.x) <= 1.0e30) || !(abs(p.y) <= 1.0e30);
+    let d = p - plan_view.centre;
+    let inside = dot(d, d) <= plan_view.radius * plan_view.radius;
+    plan_out[s] = select(0xFFFFFFFFu, idx, inside && !bad);
 }
