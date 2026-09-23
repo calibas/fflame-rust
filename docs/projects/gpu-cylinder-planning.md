@@ -580,15 +580,15 @@ Measured and not kept:
 
 ### 14.3 Found on the way (open)
 
-- **Views with no plan -- answered in part.** julian-disc from 1e3 and
-  random1 from 1e4 returned `ViewIsEmpty`, and their plans at shallower
-  views were badly incomplete (0.311 and 0.879). Both were the walk's
-  faults, fixed in `inversive-targeting.md` §31: children the sample
-  cannot see were dropped without a replay, and the cloud could not seed
-  where the dominant map is nearly neutral. A view holding at least one
-  sample point now plans completely (0.968-1.0). A view deeper than the
-  sample's resolution still needs the cloud, and for random1 the cloud
-  still cannot widen its region there -- open.
+- **Views with no plan -- answered.** julian-disc from 1e3 and random1
+  from 1e4 returned `ViewIsEmpty`, and their plans at shallower views
+  were badly incomplete (0.311 and 0.879). Both were the walk's faults,
+  fixed in `inversive-targeting.md` §31 (children the sample cannot see
+  were dropped unreplayed; the cloud could not seed where the dominant
+  map is nearly neutral) and §32 (the cloud followed one branch of an
+  inverse; unseen children were dropped on 100 points; a child with no
+  sample point was forced as it stood). They now plan at every view
+  measured, 0.974-0.998 covered.
 - **Coverage cannot be checked independently from 1e4.** The chaos game
   that measures it cannot reach a view that deep often enough. Plans
   there are complete by the walk's own point count (§27 of
@@ -614,14 +614,14 @@ files in `output/` (43 flames) and the 10 configs in `output/flame-zoom/`:
 
 | | deep-zooms | does not |
 |---|---|---|
-| **converts** | 6 | 4 |
+| **converts** | 7 | 3 |
 | **does not** | 2 | 43 |
 
 (The planar analysis alone, `analyse_2d`, gives the same table. First
-measured 5 / 5 / 2 / 43; `julian-disc` moved to the diagonal with the
-fixes of `inversive-targeting.md` §31.)
+measured 5 / 5 / 2 / 43; `julian-disc` moved to the diagonal with
+`inversive-targeting.md` §31, `random1` with §32.)
 
-**49 of 55 on the diagonal, and each of the six off it is a gap in one
+**50 of 55 on the diagonal, and each of the five off it is a gap in one
 tool, not a different kind of flame:**
 
 - **Converts, but the forward planner's word cap stops it** (3):
@@ -629,9 +629,6 @@ tool, not a different kind of flame:**
   `TooManyWords` (4404-6232 against 4096). They are analysable, so the
   inverse walk could plan them -- but `Cylinders::plan` sends only armed
   flames there.
-- **Converts, but the inverse walk returns an empty plan** (1):
-  `random1`, at views deeper than its sample resolves -- the cloud
-  phase's open problem (§14.3).
 - **Deep-zooms, but does not convert** (2): `schottky1`, `schottky2`.
   Four `mobius` transforms, targeted through forward ball bounds; the
   planar analysis does not read Möbius maps yet (`affine_role`'s note:
@@ -657,9 +654,9 @@ every map has something computable about it (an inverse, or a bound on
 where it sends a disc) -- and where that holds, both tools can in
 principle work. Every disagreement found is a gap to close, not a
 counterexample. Closing them is concrete: route analysable flames over
-the forward cap to the inverse walk, let the cloud phase seed where a
-neutral map will not widen a region, and teach the planar analysis
-Möbius maps.
+the forward cap to the inverse walk, and teach the planar analysis
+Möbius maps. (A third, the cloud phase that could not seed random1, is
+closed: `inversive-targeting.md` §32.)
 
 ---
 

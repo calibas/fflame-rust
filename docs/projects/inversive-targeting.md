@@ -1946,3 +1946,81 @@ landed nothing -- a true share up to a few percent reads zero. Giving
 those the full 400 points was measured and not kept: it helped julian-disc
 (0.992 -> 0.997) but turned random1 1e3 into a shallow plan with
 efficiency 0.013 for 0.974.
+
+---
+
+## 32. Every branch, a second look, and the replay's own points (2026-09-23)
+
+§31 left two things open: random1 planned nothing at views deeper than
+its sample resolves, and plans were still short at a few views. Views
+off the sample (`why_is_this_view_empty`, now with views moved off their
+sample point until they hold none) found a third: julian-disc at its 0.6
+position, 4 sample points in view, covered **0.840**. Three changes.
+
+**1. The cloud pulls back along every branch.** The analysis makes one
+map per branch of a transform's inverse -- a sum of a root and an affine
+(random1's `julian + linear`), `disc`, `bubble` -- and the walk kept the
+first map of each transform and pulled its cloud back along that alone.
+So random1's second arm never received a cloud point, and a view past
+the sample's resolution planned nothing. The cloud now follows every
+branch, confirming each preimage forward with its arm, and is kept to
+`CLOUD_CAP` (256) points. random1, which returned `ViewIsEmpty` at the
+corpus test's views, now deep-zooms there (`gpu-cylinder-planning.md`
+§15). Views centred on a sample point are unaffected: they seed at the
+root (§31).
+
+**2. An unseen child gets a second look before it is dropped.** The
+0.840 view lost its largest branch (`t1a3 t0^19`, 12.7% of the view)
+because the node above it held only the view's four points: the arm-3
+child was unseen, its 100-point replay landed nothing, and it was
+dropped. Its share of the attractor under that word is about 1.5%, which
+reads zero on 100 points a fifth of the time. An unseen child whose first
+pass lands nothing now runs all 400 verification points before it can be
+dropped -- zero then happens 0.25% of the time.
+
+**3. The replay's own points, where forcing would waste.** A child that
+lands but whose region yielded no sample point was forced as it stands.
+Forcing a shallow child with a sliver of the view is nearly all waste --
+with the second look finding more of them, random1 1e3 fell to an
+efficiency of 0.013. But such a child HAS sample points: the verification
+points its replay sent into the view are points of its region. Carried
+on from them everywhere, julian-disc's 51 arms multiplied into plans of
+200k words at efficiency 0.003. So a child is carried from its replay's
+points when forcing it would waste more than `FORCE_WASTE` (1%) of the
+mass already kept -- its probability times the share that misses -- and
+forced otherwise. Few shallow children with large probabilities are
+carried; thousands of tiny ones are forced.
+
+**Measured**, coverage on 1500-3000 samples of an independent chaos game
+(position in the sample; offset in view radii, moving the view off its
+sample point):
+
+    view (position, offset)          change 1 only   all three   efficiency
+    julian-disc 1e3 (0.6, 2)         0.840           0.978       0.23
+    julian-disc 1e2 (0.25)           0.992           0.997       0.02
+    julian-disc 1e3 (0.25)           0.998           0.998       0.06
+    julian-disc 1e3 (0.25, 2) *      0.995           0.997       0.46
+    random1 1e3 (0.25)               0.968           0.974       0.67
+    random1 1e4 (0.25)               0.990           0.992       0.72
+    random1 1e3 (0.25, 2)            0.991           0.992       0.60
+    random1 1e3 (0.6, 2)             0.998           0.998       0.72
+    grand-julian 1e3 (0.75, 2)       0.9993          0.9993      0.95
+    grand-julian 1e3 (0.3, 2)        1.0000          1.0000      0.94
+
+    * holds no sample point: planned from the cloud.
+
+Grand-julian's plans barely change; its efficiency at these views rose a
+little (0.92-0.94 to 0.94-0.95) because fewer shallow children are
+forced.
+
+**The cost** is the second look, on the CPU: most unseen children land
+nothing on their first pass, so most get the rest -- grand-julian's CPU
+plans went from 435-490 ms to 669-806 ms. On the GPU the rest of the
+points are asked anyway (speculation), and grand-julian plans take
+90-132 ms at 1e3-1e4. The CPU matters for the web, which plans inline;
+phase 3 of the GPU plan moves it to the GPU.
+
+**Still short.** random1 1e3 misses 2.6%, scattered one sample per
+history, and julian-disc's plans are large (14k-105k words) and at most
+views inefficient (0.02-0.46): its dominant map is nearly neutral, so its
+chains end at the depth cap. The julian-disc 0.6 view misses 2.2%.
