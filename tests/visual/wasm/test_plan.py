@@ -25,6 +25,10 @@ in docs/projects/gpu-cylinder-planning.md §17.
 The first case waits --settle seconds after the page loads, so the
 editor's boot is over before any plan starts.
 
+Then plans dropped mid-flight: one planner, restarted every few frames,
+then a plan run to the end. A plan dropped while its readback was out
+used to leave the staging buffer mapped, and the next plan panicked.
+
 Build first: build-wasm.bat (or ./build-wasm.sh), which writes ./pkg.
 Usage: python tests/visual/wasm/test_plan.py [--slice 6]
 """
@@ -142,6 +146,24 @@ def main():
                     f"blocking {e['blocking']:.1f} ms, render {e.get('render', 0):.1f} ms | scripts: {scripts or 'none'}"
                 )
             if r['words'] < 0 or over > 0:
+                failed = True
+        restart = ROOT / 'output' / 'grand-julian-missing-pieces.fflame'
+        if restart.exists():
+            r = driver.execute_async_script(
+                '''
+                const done = arguments[arguments.length - 1];
+                window.runRestarts(arguments[0], 1.0, arguments[1], [2, 3, 5, 8, 13, 21, 4, 9])
+                    .then(done)
+                    .catch(e => done({error: String(e), words: -1, dropped: 0}));
+                ''',
+                restart.read_text(),
+                args.slice,
+            )
+            print(
+                f"== restarts: {r['dropped']} of 8 plans dropped mid-flight, then {r['words']} words"
+                + (f" | error: {r['error']}" if r.get('error') else '')
+            )
+            if r['words'] <= 0 or r.get('error'):
                 failed = True
         for entry in driver.get_log('browser'):
             if entry['level'] in ('SEVERE',):

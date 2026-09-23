@@ -95,6 +95,22 @@ impl Grow {
         }
         self.buf.clone().expect("made")
     }
+
+    /// [`Self::get`], taken out: the caller has it alone until it gives it
+    /// back with [`Self::give_back`], and if it never does, the next use
+    /// makes a new one. The staging buffer is lent this way -- see
+    /// [`Readback`].
+    fn lend(&mut self, device: &wgpu::Device, words: usize) -> wgpu::Buffer {
+        let buf = self.get(device, words);
+        self.buf = None;
+        buf
+    }
+
+    fn give_back(&mut self, buf: wgpu::Buffer) {
+        if self.buf.is_none() && buf.size() >= (self.cap * 4) as u64 {
+            self.buf = Some(buf);
+        }
+    }
 }
 
 /// The walk's indexes on the GPU. See [`IndexTables`].
@@ -539,7 +555,7 @@ impl PlanGpu {
     /// with [`Self::wait`], the web's walk awaits it.
     fn submit(&mut self, mut enc: wgpu::CommandEncoder, copies: &[(&wgpu::Buffer, usize)], pack: f64) -> Readback {
         let total: usize = copies.iter().map(|c| c.1).sum();
-        let stage = self.stage.get(&self.device, total.max(1));
+        let stage = self.stage.lend(&self.device, total.max(1));
         let mut at = 0u64;
         for (buf, n) in copies {
             let bytes = (*n * 4) as u64;
@@ -555,7 +571,7 @@ impl PlanGpu {
         stage.slice(..(total.max(1) * 4) as u64).map_async(wgpu::MapMode::Read, move |r| {
             flag.store(if r.is_ok() { MAPPED } else { FAILED }, Ordering::Release);
         });
-        Readback { stage, total, state, index, pack, t_wait }
+        Readback { stage: Some(stage), total, state, index, pack, t_wait }
     }
 
     /// Block until `r` is in. The desktop's; the web awaits instead.
@@ -566,17 +582,20 @@ impl PlanGpu {
 
     /// Hand the words of an arrived readback to `read` while they are
     /// mapped -- `None` if the map failed -- and account the time.
-    fn take<T>(&mut self, r: Readback, read: impl FnOnce(Option<&[u32]>) -> T) -> T {
+    fn take<T>(&mut self, mut r: Readback, read: impl FnOnce(Option<&[u32]>) -> T) -> T {
         let wait = r.t_wait.elapsed().as_secs_f64() * 1e3;
         let t_read = web_time::Instant::now();
+        let stage = r.stage.take().expect("a readback is taken once");
         let out = if r.state.load(Ordering::Acquire) == MAPPED {
-            let slice = r.stage.slice(..(r.total.max(1) * 4) as u64);
+            let slice = stage.slice(..(r.total.max(1) * 4) as u64);
             let view = slice.get_mapped_range();
             let v = read(Some(&bytemuck::cast_slice::<u8, u32>(&view)[..r.total]));
             drop(view);
-            r.stage.unmap();
+            stage.unmap();
+            self.stage.give_back(stage);
             v
         } else {
+            // A failed map is not given back: see `Readback`.
             read(None)
         };
         self.last = RunTimes { pack: r.pack, wait, read: t_read.elapsed().as_secs_f64() * 1e3 };
@@ -757,8 +776,19 @@ impl PlanGpu {
 /// A submitted batch whose answer is coming: the staging buffer and how
 /// many words of it are the answer, whether its map has come back, and
 /// the times so far.
+///
+/// **The staging buffer is the readback's alone** ([`Grow::lend`]) until
+/// [`PlanGpu::take`] reads it and gives it back. A readback can be
+/// dropped instead: on the web a plan is a task, and a task dropped
+/// because the view moved on drops whatever readback it was waiting for.
+/// The buffer then goes with it, unmapped on the way -- which also aborts
+/// a map still pending -- and the next batch makes a new one. Shared,
+/// it was left mapped, and the next plan's first batch copied into a
+/// mapped buffer and panicked in `map_async`. A map that failed is never
+/// reused either: wgpu forgets a mapping only on `unmap`, and natively
+/// unmapping a buffer whose map failed is itself an error.
 struct Readback {
-    stage: wgpu::Buffer,
+    stage: Option<wgpu::Buffer>,
     total: usize,
     state: Arc<AtomicU8>,
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -770,6 +800,16 @@ struct Readback {
 const PENDING: u8 = 0;
 const MAPPED: u8 = 1;
 const FAILED: u8 = 2;
+
+impl Drop for Readback {
+    fn drop(&mut self) {
+        if let Some(stage) = self.stage.take() {
+            if self.state.load(Ordering::Acquire) != FAILED {
+                stage.unmap();
+            }
+        }
+    }
+}
 
 impl Readback {
     /// The map has come back, mapped or failed. The web's walk awaits
