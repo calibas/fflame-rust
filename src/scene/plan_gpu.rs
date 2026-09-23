@@ -12,15 +12,12 @@
 //! batch is a list of [`EvalJob`]s -- a word and the sample indices to
 //! apply it to -- and the answer is one byte per point, in job order.
 
+use crate::scene::backward::{Backward, Evaluate};
 use crate::scene::cylinder::View;
 use crate::scene::transforms::Flame;
 use wgpu::util::DeviceExt;
 
-/// One question: apply `word` to each of these sample points.
-pub struct EvalJob<'a> {
-    pub word: &'a [u32],
-    pub points: &'a [u32],
-}
+pub use crate::scene::backward::EvalJob;
 
 /// Mirrors `PlanView` in `plan_eval.wgsl`.
 #[repr(C)]
@@ -73,6 +70,13 @@ pub struct RunTimes {
 pub struct PlanGpu {
     /// Where the last batch spent its time.
     pub last: RunTimes,
+    /// Every batch's times added up, and how many batches, since the
+    /// caller last reset them.
+    pub totals: RunTimes,
+    pub batches: usize,
+    /// How many sample points were uploaded: the walk's indices must be
+    /// into the same sample.
+    points_len: usize,
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: wgpu::ComputePipeline,
@@ -235,6 +239,9 @@ impl PlanGpu {
             points,
             batch: None,
             last: RunTimes::default(),
+            totals: RunTimes::default(),
+            batches: 0,
+            points_len: sample.len(),
             _flame_buffers: vec![t_buf, v_buf, p_buf, a_buf, m_buf],
         }
     }
@@ -372,6 +379,64 @@ impl PlanGpu {
             b.stage.unmap();
         }
         self.last = RunTimes { pack, wait, read: t_read.elapsed().as_secs_f64() * 1e3 };
+        self.totals.pack += self.last.pack;
+        self.totals.wait += self.last.wait;
+        self.totals.read += self.last.read;
+        self.batches += 1;
         out
+    }
+}
+
+impl Evaluate for PlanGpu {
+    fn lands(&mut self, b: &Backward, view: View, jobs: &[EvalJob]) -> Vec<u8> {
+        assert_eq!(b.sample().len(), self.points_len, "a plan's GPU evaluator is for another sample");
+        self.evaluate(view, jobs)
+    }
+
+    fn speculative(&self) -> bool {
+        true
+    }
+}
+
+/// **The app's GPU planner**: a device, and the evaluator for the flame
+/// planned last -- the kernel is compiled per flame (~12 ms), so a flame
+/// panned and zoomed keeps its own.
+pub struct GpuPlanner {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    current: Option<(u64, PlanGpu)>,
+    /// A flame whose kernel failed to build plans on the CPU, and is not
+    /// retried until another flame has been planned.
+    failed: Option<u64>,
+}
+
+impl GpuPlanner {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+        Self { device: device.clone(), queue: queue.clone(), current: None, failed: None }
+    }
+
+    /// The evaluator for `flame`, whose walk is `b`: built on first use,
+    /// `None` if its kernel does not build here.
+    pub fn for_flame(&mut self, flame: &Flame, b: &Backward) -> Option<&mut PlanGpu> {
+        let key = Backward::flame_key(flame);
+        if self.failed == Some(key) {
+            return None;
+        }
+        if self.current.as_ref().is_some_and(|(k, g)| *k == key && g.points_len == b.sample().len()) {
+            return self.current.as_mut().map(|(_, g)| g);
+        }
+        self.current = None;
+        // A kernel that fails validation is a CPU plan, not a panic in
+        // the planner thread.
+        let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let gpu = PlanGpu::new(&self.device, &self.queue, flame, b.sample());
+        if let Some(err) = pollster::block_on(scope.pop()) {
+            log::warn!("the GPU planner's kernel did not build for this flame; planning on the CPU: {err}");
+            self.failed = Some(key);
+            return None;
+        }
+        self.failed = None;
+        self.current = Some((key, gpu));
+        self.current.as_mut().map(|(_, g)| g)
     }
 }

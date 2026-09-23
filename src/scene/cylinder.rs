@@ -791,7 +791,7 @@ impl Cylinders {
             // a flame the inverse walk refuses is refused, with its
             // reason, rather than handed to it.
             return match crate::scene::backward::Backward::cached(flame, registry) {
-                Ok(b) => b.plan_opts(view, opts),
+                Ok(b) => b.plan_for(flame, view, opts),
                 Err(why) => {
                     let index = flame
                         .transforms
@@ -3088,6 +3088,150 @@ mod gpu_tests {
             both as f64 / na.max(1) as f64, holes as f64 / na.max(1) as f64,
             sa / n.max(1.0), sb / n.max(1.0)
         );
+    }
+
+    /// **Phase 2's contention gate** (`gpu-cylinder-planning.md` §14): a
+    /// plan made while the render runs, with the CPU's answers and with
+    /// the GPU's. The GPU planner's batches share the render's queue, so
+    /// each waits behind whatever frame is running; this measures what
+    /// that does to a plan, and what a plan does to the frames.
+    ///
+    /// Two renders. **As the app draws**: 128 workgroups a frame (the
+    /// app's governor never dispatches more) paced to 60 Hz. **Heavy**:
+    /// frames of ~12 ms of GPU work back to back, the worst a busy queue
+    /// can do to a round trip. A plan is timed from the moment it starts
+    /// -- the settle delay before it is the view's, not the planner's.
+    #[test]
+    #[ignore = "needs a GPU; reads output/flame-zoom"]
+    fn a_plan_on_the_gpu_shares_it_with_the_render() {
+        use std::time::{Duration, Instant};
+        let Ok(text) = std::fs::read_to_string("output/flame-zoom/grand-julian.fflame") else {
+            println!("  no grand-julian.fflame");
+            return;
+        };
+        let (device, queue) = device();
+        let mut cfg: FractalConfig = serde_json::from_str(&text).expect("a config");
+        cfg.cylinder_targeting = true;
+        cfg.render_mode = crate::scene::transforms::RenderMode::TwoD;
+        let start = {
+            let guard = crate::variations::global_registry();
+            let b = crate::scene::backward::Backward::read(&cfg.flame, &guard).expect("armed");
+            b.sample_point(0.75)
+        };
+        let (w, h) = (1280u32, 720u32);
+        let mut r = crate::renderer::FlameRenderer::with_palette_size(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            w,
+            h,
+            &cfg.flame,
+            cfg.palette_size,
+        );
+        r.set_background_planning(true);
+        let load = |r: &mut crate::renderer::FlameRenderer, cfg: &FractalConfig| {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("contention load") });
+            r.load_config(&device, &mut enc, &queue, cfg, &cfg.palette, 1, 0);
+            queue.submit(Some(enc.finish()));
+        };
+        // One frame: a compute pass of `groups` workgroups, waited for,
+        // then held to `pace` if it came in under it (vsync).
+        let frame = |r: &mut crate::renderer::FlameRenderer, cfg: &FractalConfig, groups: u32, pace: Duration| -> Duration {
+            let t = Instant::now();
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("contention frame") });
+            if r.sync_cylinders(&device, &queue, cfg) {
+                r.load_config(&device, &mut enc, &queue, cfg, &cfg.palette, 1, 0);
+            }
+            r.compute_pass(
+                &mut enc, &queue, &device, groups, 256, 0, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, 0.0, 0.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, cfg.speed_factor, false, false,
+            );
+            queue.submit(Some(enc.finish()));
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            let spent = t.elapsed();
+            if spent < pace {
+                std::thread::sleep(pace - spent);
+            }
+            spent
+        };
+        let pct = |v: &mut Vec<Duration>, q: f64| -> f64 {
+            v.sort();
+            v.get(((v.len() as f64 - 1.0) * q).round() as usize).map_or(0.0, |d| d.as_secs_f64() * 1e3)
+        };
+
+        for heavy in [false, true] {
+            for gpu in [false, true] {
+                r.set_plan_on_gpu(gpu);
+                cfg.zoom = 1e3;
+                cfg.pan_x = start[0];
+                cfg.pan_y = start[1];
+                load(&mut r, &cfg);
+                // The first plan, and the shader it brings, out of the way.
+                let t0 = Instant::now();
+                loop {
+                    frame(&mut r, &cfg, 64, Duration::ZERO);
+                    if r.take_plan_arrived() {
+                        break;
+                    }
+                    assert!(t0.elapsed() < Duration::from_secs(90), "no first plan");
+                }
+                let (groups, pace) = if heavy {
+                    // Calibrated to ~12 ms of GPU work, back to back.
+                    let mut groups = 256u32;
+                    for _ in 0..6 {
+                        let mut v: Vec<Duration> = (0..5).map(|_| frame(&mut r, &cfg, groups, Duration::ZERO)).collect();
+                        let ms = pct(&mut v, 0.5);
+                        groups = ((groups as f64 * 12.0 / ms.max(0.1)) as u32).clamp(16, 65535);
+                    }
+                    (groups, Duration::ZERO)
+                } else {
+                    (128, Duration::from_micros(16_667))
+                };
+                let mut idle: Vec<Duration> = (0..30).map(|_| frame(&mut r, &cfg, groups, pace)).collect();
+                let idle_med = pct(&mut idle, 0.5);
+
+                // Five moves; each plan timed with the frames it overlapped.
+                let mut plans = Vec::new();
+                let mut during: Vec<Duration> = Vec::new();
+                for k in 0..5 {
+                    cfg.zoom *= if k % 2 == 0 { 3.0 } else { 0.5 };
+                    let t0 = Instant::now();
+                    let mut began: Option<Instant> = None;
+                    loop {
+                        let f = frame(&mut r, &cfg, groups, pace);
+                        if r.planning_elapsed().is_some() {
+                            began.get_or_insert_with(Instant::now);
+                            during.push(f);
+                        }
+                        if r.take_plan_arrived() {
+                            break;
+                        }
+                        assert!(t0.elapsed() < Duration::from_secs(90), "no plan after a move");
+                    }
+                    // A zoom out inside the standby needs no plan at all.
+                    if let Some(b) = began {
+                        plans.push(b.elapsed().as_secs_f64() * 1e3);
+                    }
+                    // Let the standby plan finish before the next move, so
+                    // each move times one plan.
+                    let t1 = Instant::now();
+                    while r.plans_running() && t1.elapsed() < Duration::from_secs(30) {
+                        frame(&mut r, &cfg, groups, pace);
+                    }
+                }
+                let n = during.len();
+                println!(
+                    "== {} frames ({groups} workgroups, {idle_med:.1} ms), planner on the {}: plans {} ms | \
+                     {n} frames during them: median {:.1} ms, p95 {:.1} ms, max {:.1} ms",
+                    if heavy { "heavy" } else { "app-like" },
+                    if gpu { "GPU" } else { "CPU" },
+                    plans.iter().map(|p| format!("{p:.0}")).collect::<Vec<_>>().join(", "),
+                    pct(&mut during, 0.5),
+                    pct(&mut during, 0.95),
+                    pct(&mut during, 1.0),
+                );
+            }
+        }
     }
 
     /// **Planning on a background thread, driven the way the app drives

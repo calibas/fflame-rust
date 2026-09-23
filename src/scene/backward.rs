@@ -213,8 +213,13 @@ pub struct PlanOptions<'a> {
     pub budget: std::time::Duration,
     /// Set by the caller when the view has moved on and this plan will
     /// never be used: the walk stops at its next check and the result
-    /// is meaningless. Checked once per node.
+    /// is meaningless. Checked between a level's batches.
     pub cancel: Option<&'a AtomicBool>,
+    /// Answer the walk's questions on the GPU when given, and when its
+    /// kernel builds for the flame; the CPU otherwise. Desktop only for
+    /// now -- the web is phase 3 of `gpu-cylinder-planning.md`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub gpu: Option<&'a Mutex<crate::scene::plan_gpu::GpuPlanner>>,
 }
 
 /// The budget where a plan must block: the web, which has no threads and
@@ -227,47 +232,110 @@ pub const INLINE_BUDGET: std::time::Duration = std::time::Duration::from_millis(
 impl Default for PlanOptions<'_> {
     fn default() -> Self {
         let budget = if cfg!(target_arch = "wasm32") { INLINE_BUDGET } else { TIME_BUDGET };
-        Self { budget, cancel: None }
-    }
-}
-
-/// The points a replay has run so far. See `Backward::replay_counted`.
-#[derive(Default)]
-struct ReplayAcc {
-    hit: usize,
-    total: usize,
-    sum: [f64; 2],
-    landed: Vec<[f64; 2]>,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Pass {
-    First,
-    Rest,
-}
-
-/// What a replay found: the share of the points that landed in the view,
-/// where they sit, and how many points it took to say so.
-struct Replay {
-    eff: f64,
-    centre: [f64; 2],
-    radius: f64,
-    used: usize,
-}
-
-impl ReplayAcc {
-    fn finish(self, view: View) -> Replay {
-        if self.hit == 0 {
-            return Replay { eff: 0.0, centre: view.centre, radius: view.radius, used: self.total };
+        Self {
+            budget,
+            cancel: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            gpu: None,
         }
-        let c = [self.sum[0] / self.hit as f64, self.sum[1] / self.hit as f64];
-        let r = self.landed.iter().map(|p| (p[0] - c[0]).hypot(p[1] - c[1])).fold(0.0, f64::max);
-        Replay { eff: self.hit as f64 / self.total.max(1) as f64, centre: c, radius: r, used: self.total }
     }
 }
 
-/// How many of the `VERIFY` points a replay runs first. See
-/// `Backward::replay_counted`.
+/// One question for the walk's evaluator: apply `word` to each of these
+/// sample points (indices into the sample).
+pub struct EvalJob<'a> {
+    pub word: &'a [u32],
+    pub points: &'a [u32],
+}
+
+/// **Answers the walk's one question, in batches**: apply each job's
+/// word to each of its sample points -- does the result land in the
+/// view? One byte per point, in job order, 1 where it lands.
+///
+/// A level asks everything it needs in five batches (seeds, replays,
+/// the replays' second pass, checks, top-ups), so the same walk runs on
+/// the CPU ([`CpuEval`]) or the GPU (`scene::plan_gpu::PlanGpu`), and
+/// every decision stays in the walk.
+pub trait Evaluate {
+    fn lands(&mut self, b: &Backward, view: View, jobs: &[EvalJob]) -> Vec<u8>;
+
+    /// Whether a batch's round trip costs more than extra answers do.
+    /// The walk then asks, with a level's replays, everything it MIGHT
+    /// ask next -- the replays' second pass and every child's checks --
+    /// and uses only the answers it would have asked for, so the plan is
+    /// the same either way. The GPU's batches queue behind the render's
+    /// frames, so a round trip there costs up to a frame; the CPU pays
+    /// for every answer and asks only what it needs.
+    fn speculative(&self) -> bool {
+        false
+    }
+}
+
+/// The CPU's answers: `Backward::lands`, in f64, over the jobs in
+/// parallel where there are threads.
+pub struct CpuEval;
+
+impl Evaluate for CpuEval {
+    fn lands(&mut self, b: &Backward, view: View, jobs: &[EvalJob]) -> Vec<u8> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use rayon::prelude::*;
+            jobs.par_iter()
+                .flat_map_iter(|j| {
+                    let (word, points) = (j.word, j.points);
+                    points.iter().map(move |&i| b.lands(word, b.sample[i as usize], view) as u8)
+                })
+                .collect()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            jobs.iter()
+                .flat_map(|j| {
+                    let (word, points) = (j.word, j.points);
+                    points.iter().map(move |&i| b.lands(word, b.sample[i as usize], view) as u8)
+                })
+                .collect()
+        }
+    }
+}
+
+/// `f` over every item, in parallel where there are threads; results in
+/// order.
+fn map_all<T: Sync, U: Send>(items: &[T], f: impl Fn(&T) -> U + Sync + Send) -> Vec<U> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        items.par_iter().map(f).collect()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        items.iter().map(f).collect()
+    }
+}
+
+/// `f` on every item, in parallel where there are threads.
+fn each_mut<T: Send>(items: &mut [T], f: impl Fn(&mut T) + Sync + Send) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        items.par_iter_mut().for_each(f);
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        items.iter_mut().for_each(f);
+    }
+}
+
+/// How many of the `VERIFY` points a replay runs first.
+///
+/// **A sequential replay.** The first `REPLAY_FIRST` of the `VERIFY`
+/// points -- spread evenly through them -- and the rest only when the
+/// share so far is close enough to `CUT_EFFICIENCY` that noise could flip
+/// the decision ([`REPLAY_EXTEND`]). The number a replay produces decides
+/// only whether a child is kept or carried, and ranks the beam; neither
+/// touches completeness, which is a count of points. A child landing 30%
+/// in frame is carried after a hundred points as surely as after four
+/// hundred, and replays were 64% of a plan's work.
 pub const REPLAY_FIRST: usize = 100;
 
 /// A first pass whose share falls strictly inside this band runs the
@@ -371,7 +439,65 @@ struct Node {
     eff: f64,
 }
 
-/// What expanding one node produced. See `Backward::expand`.
+/// A child being decided while its level's batches run. See
+/// `Backward::expand_level`.
+struct Child {
+    /// Its symbol, as an alphabet index.
+    ai: usize,
+    word: Vec<u32>,
+    prob: f64,
+    /// The walk stops here: kept if any of it lands.
+    last: bool,
+    /// Candidates from the index, or the pulled-back cloud.
+    pts: Pts,
+    /// The node's points this symbol produced: in the child's region by
+    /// construction, so never checked.
+    orbit_hits: Vec<u32>,
+    /// The replay: points landed of points tried.
+    hit: usize,
+    total: usize,
+    /// Candidates checked and found in the region.
+    hits: Vec<u32>,
+    /// Thin after its check, so searched again, wider.
+    topped: bool,
+    /// Its candidates' answers, asked ahead of need. See
+    /// `Evaluate::speculative`.
+    spec: Option<Vec<u32>>,
+    fate: Fate,
+}
+
+impl Child {
+    fn eff(&self) -> f64 {
+        self.hit as f64 / self.total.max(1) as f64
+    }
+
+    fn cands(&self) -> &[u32] {
+        match &self.pts {
+            Pts::Index(c) => c,
+            Pts::Cloud(_) => &[],
+        }
+    }
+}
+
+/// What the replays decided for a child, before its points are known.
+#[derive(Clone, Copy)]
+enum Fate {
+    /// Carried, with an index region still to be checked.
+    Undecided,
+    /// Kept, at this efficiency: it needs no points.
+    Kept(f64),
+    /// Carried with its cloud as it stands.
+    Carried,
+}
+
+/// A node of the level being expanded.
+struct Open {
+    node: Node,
+    children: Vec<Child>,
+    trace: Trace,
+}
+
+/// What expanding one node produced. See `Backward::expand_level`.
 #[derive(Default)]
 struct Expanded {
     kept: Vec<(Cylinder, f64)>,
@@ -461,6 +587,11 @@ pub struct Backward {
     /// in under that symbol's map. A child's candidates are the union
     /// of these over the parent's cells.
     landing: Vec<Index>,
+    /// The `VERIFY` verification points, split as a replay runs them:
+    /// every `VERIFY / REPLAY_FIRST`-th first, the others only when the
+    /// first pass is too close to the cut to trust.
+    verify_first: Vec<u32>,
+    verify_rest: Vec<u32>,
 }
 
 struct TransformInfo {
@@ -669,7 +800,34 @@ impl Backward {
             }
             landing.push(Index::build(entries));
         }
-        Ok(Self { ifs, transforms, alphabet, sample, made_by, centre, extent, cell, grid, landing })
+        let stride = (sample.len() / VERIFY).max(1);
+        let every = (VERIFY / REPLAY_FIRST).max(1);
+        let (mut verify_first, mut verify_rest) = (Vec::new(), Vec::new());
+        for k in 0..VERIFY {
+            if k * stride >= sample.len() {
+                break;
+            }
+            if k % every == 0 { &mut verify_first } else { &mut verify_rest }.push((k * stride) as u32);
+        }
+        Ok(Self {
+            ifs,
+            transforms,
+            alphabet,
+            sample,
+            made_by,
+            centre,
+            extent,
+            cell,
+            grid,
+            landing,
+            verify_first,
+            verify_rest,
+        })
+    }
+
+    /// The attractor sample the walk's questions index into.
+    pub fn sample(&self) -> &[[f64; 2]] {
+        &self.sample
     }
 
     /// How far the sample reaches from its centre.
@@ -772,6 +930,15 @@ impl Backward {
         Some(p)
     }
 
+    /// The share of all `VERIFY` points `word` sends into the view, for
+    /// measurements that want the full count.
+    #[cfg(test)]
+    fn replay_full(&self, word: &[u32], view: View) -> f64 {
+        let n = self.verify_first.len() + self.verify_rest.len();
+        let hit = self.verify_first.iter().chain(&self.verify_rest).filter(|&&i| self.lands(word, self.sample[i as usize], view)).count();
+        hit as f64 / n.max(1) as f64
+    }
+
     /// Whether `x`'s forward image along `word` lands in the view.
     fn lands(&self, word: &[u32], x: [f64; 2], view: View) -> bool {
         match self.forward_along(word, x) {
@@ -780,65 +947,6 @@ impl Backward {
         }
     }
 
-    /// Replay a word forward on the verification sample: the
-    /// fraction landing in the view, and where the landed points sit.
-    fn replay(&self, word: &[u32], view: View) -> (f64, [f64; 2], f64) {
-        let r = self.replay_counted(word, view);
-        (r.eff, r.centre, r.radius)
-    }
-
-    /// The replay on all `VERIFY` points, for measurements that want the
-    /// full count.
-    fn replay_full(&self, word: &[u32], view: View) -> (f64, [f64; 2], f64) {
-        let mut acc = ReplayAcc::default();
-        self.replay_pass(word, view, Pass::First, &mut acc);
-        self.replay_pass(word, view, Pass::Rest, &mut acc);
-        let r = acc.finish(view);
-        (r.eff, r.centre, r.radius)
-    }
-
-    /// **A sequential replay.** The first `REPLAY_FIRST` of the
-    /// `VERIFY` points -- spread evenly through them -- and the rest only
-    /// when the share so far is close enough to `CUT_EFFICIENCY` that
-    /// noise could flip the decision.
-    ///
-    /// The number a replay produces decides only whether a child is kept
-    /// or carried, and ranks the beam; neither touches completeness,
-    /// which is a count of points. A child landing 30% in frame is
-    /// carried after a hundred points as surely as after four hundred,
-    /// and replays were 64% of a plan's work.
-    fn replay_counted(&self, word: &[u32], view: View) -> Replay {
-        let mut acc = ReplayAcc::default();
-        self.replay_pass(word, view, Pass::First, &mut acc);
-        let e = acc.hit as f64 / acc.total.max(1) as f64;
-        if e > REPLAY_EXTEND.0 && e < REPLAY_EXTEND.1 {
-            self.replay_pass(word, view, Pass::Rest, &mut acc);
-        }
-        acc.finish(view)
-    }
-
-    /// Run one pass of a replay into `acc`: every `VERIFY / REPLAY_FIRST`-th
-    /// verification point for the first pass, the others for the rest.
-    fn replay_pass(&self, word: &[u32], view: View, pass: Pass, acc: &mut ReplayAcc) {
-        let stride = (self.sample.len() / VERIFY).max(1);
-        let every = (VERIFY / REPLAY_FIRST).max(1);
-        for k in 0..VERIFY {
-            let first = k % every == 0;
-            if first != (pass == Pass::First) {
-                continue;
-            }
-            let Some(p0) = self.sample.get(k * stride) else { break };
-            acc.total += 1;
-            if let Some(p) = self.forward_along(word, *p0) {
-                if (p[0] - view.centre[0]).hypot(p[1] - view.centre[1]) <= view.radius {
-                    acc.hit += 1;
-                    acc.sum[0] += p[0];
-                    acc.sum[1] += p[1];
-                    acc.landed.push(p);
-                }
-            }
-        }
-    }
 
     /// Up to `cap` sample indices filed under `cells` (and their
     /// neighbours, if asked) in `index`. The lists are disjoint across
@@ -886,53 +994,15 @@ impl Backward {
         out
     }
 
-    /// Expand one node: find its children, replay each, keep the ones
-    /// that fit the view, carry the rest -- or force the node itself when
-    /// its children do not account for it. Reads only `self`; everything
-    /// it decides is returned, so nodes can be expanded in parallel.
-    fn expand(&self, mut node: Node, depth: usize, view: View, floor_mass: f64, watch: Option<&[u32]>, record: bool) -> Expanded {
-        let mut out = Expanded::default();
-        let tr = &mut out.trace;
-        let watched = |tr: &mut Trace, word: &[u32], what: &str, detail: &dyn Fn() -> String| {
-            if let Some(line) = watch_line(watch, word, depth, what, detail) {
-                tr.watched.push(line);
-            }
-        };
+    /// A node's children: one per symbol its region's points came
+    /// through, each with its candidates. Reads only `self` and the node,
+    /// so the nodes of a level find theirs in parallel.
+    fn children_of(&self, o: &mut Open, depth: usize, floor_mass: f64) {
+        let tr = &mut o.trace;
+        let node = &o.node;
         let junk_r = JUNK_EXTENTS * self.extent;
         let is_junk = |q: [f64; 2]| (q[0] - self.centre[0]).hypot(q[1] - self.centre[1]) > junk_r;
-        let points_of = |pts: &Pts| -> Vec<[f64; 2]> {
-            match pts {
-                Pts::Cloud(c) => c.clone(),
-                Pts::Index(idx) => idx.iter().map(|&i| self.sample[i as usize]).collect(),
-            }
-        };
-
-        // **Seed a cloud region from the index** the moment sample
-        // points lie in it: the candidates are the sample points in the
-        // cells the cloud occupies, verified exactly.
-        let t_seed = std::time::Instant::now();
-        tr.nodes_expanded += 1;
-        if record {
-            tr.expanded.push(node.word.clone());
-        }
-        if let Pts::Cloud(cloud) = &node.pts {
-            let mut cells: Vec<Cell> = cloud.iter().map(|p| self.cell_of(*p)).collect();
-            cells.sort_unstable();
-            cells.dedup();
-            let cands = Self::gather(&self.grid, &cells, true, 16, SEED_CANDIDATES);
-            let hits: Vec<u32> = cands.into_iter().filter(|&i| self.lands(&node.word, self.sample[i as usize], view)).collect();
-            if hits.len() >= MIN_SEED {
-                let n = cloud.len();
-                watched(tr, &node.word, "SEEDED", &|| format!("{} sample points replace {n} cloud points", hits.len()));
-                node.pts = Pts::Index(hits);
-                tr.seeded += 1;
-            }
-        }
-        tr.t_seed += t_seed.elapsed();
-
-        // **Children**: one per symbol the region's points came through.
-        let t_gather = std::time::Instant::now();
-        let mut children: Vec<(usize, Pts)> = Vec::new(); // (alphabet index, candidates)
+        let mut found: Vec<(usize, Pts)> = Vec::new(); // (alphabet index, candidates)
         // Exact children from the orbit, by alphabet index.
         let mut from_orbit: Vec<Vec<u32>> = vec![Vec::new(); self.alphabet.len()];
         match &node.pts {
@@ -963,7 +1033,7 @@ impl Backward {
                         pts.push(q);
                     }
                     if !pts.is_empty() {
-                        children.push((ai, Pts::Cloud(pts)));
+                        found.push((ai, Pts::Cloud(pts)));
                     }
                 }
             }
@@ -990,107 +1060,395 @@ impl Backward {
                         tr.nocand += 1;
                         continue;
                     }
-                    children.push((ai, Pts::Index(cands)));
+                    found.push((ai, Pts::Index(cands)));
                 }
             }
         }
-        tr.t_gather += t_gather.elapsed();
+        let children = found
+            .into_iter()
+            .map(|(ai, pts)| {
+                let a = &self.alphabet[ai];
+                let prob = node.prob * a.prob;
+                let mut word = Vec::with_capacity(node.word.len() + 1);
+                word.push(a.sym);
+                word.extend_from_slice(&node.word);
+                Child {
+                    ai,
+                    word,
+                    prob,
+                    last: depth == MAX_DEPTH || prob < MEASURE_FLOOR * floor_mass,
+                    pts,
+                    orbit_hits: std::mem::take(&mut from_orbit[ai]),
+                    hit: 0,
+                    total: 0,
+                    hits: Vec::new(),
+                    topped: false,
+                    spec: None,
+                    fate: Fate::Undecided,
+                }
+            })
+            .collect();
+        o.children = children;
+    }
 
-        // Everything a node decides about its children is held here until
-        // the node has been checked for completeness.
+    /// **Expand a whole level, in batches.** Each node's children are
+    /// found, replayed, kept or carried, checked, and the node checked
+    /// for completeness -- the walk's rules, unchanged -- but the one
+    /// question underneath all of it, *does this word send this sample
+    /// point into the view*, is asked for every node of the level at
+    /// once, in five batches: seeds, replays, the replays' second pass,
+    /// checks, top-ups. `eval` answers them on the CPU or the GPU.
+    ///
+    /// `None` when cancelled between batches.
+    #[allow(clippy::too_many_arguments)]
+    fn expand_level(
+        &self,
+        frontier: Vec<Node>,
+        depth: usize,
+        view: View,
+        floor_mass: f64,
+        watch: Option<&[u32]>,
+        record: bool,
+        eval: &mut dyn Evaluate,
+        tr: &mut Trace,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Option<Vec<Expanded>> {
+        use std::time::Instant;
+        let watched = |t: &mut Trace, word: &[u32], what: &str, detail: &dyn Fn() -> String| {
+            if let Some(line) = watch_line(watch, word, depth, what, detail) {
+                t.watched.push(line);
+            }
+        };
+        let mut opens: Vec<Open> = frontier
+            .into_iter()
+            .map(|node| {
+                let mut trace = Trace::default();
+                trace.nodes_expanded += 1;
+                if record {
+                    trace.expanded.push(node.word.clone());
+                }
+                Open { node, children: Vec::new(), trace }
+            })
+            .collect();
+
+        // **1. Seeds.** A cloud region is seeded from the grid the moment
+        // sample points lie in it: the candidates are the sample points
+        // in the cells the cloud occupies, checked exactly.
+        let t = Instant::now();
+        let seeds: Vec<Vec<u32>> = map_all(&opens, |o| match &o.node.pts {
+            Pts::Cloud(cloud) => {
+                let mut cells: Vec<Cell> = cloud.iter().map(|p| self.cell_of(*p)).collect();
+                cells.sort_unstable();
+                cells.dedup();
+                Self::gather(&self.grid, &cells, true, 16, SEED_CANDIDATES)
+            }
+            Pts::Index(_) => Vec::new(),
+        });
+        let answers = {
+            let jobs: Vec<EvalJob> =
+                opens.iter().zip(&seeds).map(|(o, c)| EvalJob { word: &o.node.word, points: c }).collect();
+            eval.lands(self, view, &jobs)
+        };
+        let mut at = 0usize;
+        for (o, cands) in opens.iter_mut().zip(&seeds) {
+            let got = &answers[at..at + cands.len()];
+            at += cands.len();
+            let Pts::Cloud(cloud) = &o.node.pts else { continue };
+            let hits: Vec<u32> = cands.iter().zip(got).filter(|(_, g)| **g == 1).map(|(i, _)| *i).collect();
+            if hits.len() >= MIN_SEED {
+                let n = cloud.len();
+                watched(&mut o.trace, &o.node.word, "SEEDED", &|| format!("{} sample points replace {n} cloud points", hits.len()));
+                o.node.pts = Pts::Index(hits);
+                o.trace.seeded += 1;
+            }
+        }
+        drop(seeds);
+        tr.t_seed += t.elapsed();
+        if cancelled() {
+            return None;
+        }
+
+        // **2. Children.** The gathers are the cost; nodes in parallel.
+        let t = Instant::now();
+        each_mut(&mut opens, |o| self.children_of(o, depth, floor_mass));
+        tr.t_gather += t.elapsed();
+        if cancelled() {
+            return None;
+        }
+
+        // **3. Replays**: the first `REPLAY_FIRST` verification points
+        // for every child, then the rest for the children whose share is
+        // too close to the cut to trust. See `REPLAY_FIRST`.
+        let t = Instant::now();
+        let speculate = eval.speculative();
+        let in_band = |c: &Child| {
+            let e = c.hit as f64 / c.total.max(1) as f64;
+            e > REPLAY_EXTEND.0 && e < REPLAY_EXTEND.1
+        };
+        let landed = |g: &[u8]| g.iter().filter(|g| **g == 1).count();
+        let (n1, n2) = (self.verify_first.len(), self.verify_rest.len());
+        if speculate {
+            // One batch: both passes and the checks, for every child.
+            let answers = {
+                let mut jobs: Vec<EvalJob> = Vec::new();
+                for c in opens.iter().flat_map(|o| o.children.iter()) {
+                    jobs.push(EvalJob { word: &c.word, points: &self.verify_first });
+                    jobs.push(EvalJob { word: &c.word, points: &self.verify_rest });
+                    jobs.push(EvalJob { word: &c.word, points: c.cands() });
+                }
+                eval.lands(self, view, &jobs)
+            };
+            let mut at = 0usize;
+            for c in opens.iter_mut().flat_map(|o| o.children.iter_mut()) {
+                c.hit = landed(&answers[at..at + n1]);
+                c.total = n1;
+                at += n1;
+                let rest = landed(&answers[at..at + n2]);
+                at += n2;
+                if in_band(c) {
+                    c.hit += rest;
+                    c.total += n2;
+                }
+                let spec: Vec<u32> = {
+                    let cands = c.cands();
+                    let got = &answers[at..at + cands.len()];
+                    at += cands.len();
+                    cands.iter().zip(got).filter(|(_, g)| **g == 1).map(|(i, _)| *i).collect()
+                };
+                c.spec = Some(spec);
+            }
+        } else {
+            let answers = {
+                let jobs: Vec<EvalJob> = opens
+                    .iter()
+                    .flat_map(|o| o.children.iter().map(|c| EvalJob { word: &c.word, points: &self.verify_first }))
+                    .collect();
+                eval.lands(self, view, &jobs)
+            };
+            for (k, c) in opens.iter_mut().flat_map(|o| o.children.iter_mut()).enumerate() {
+                c.hit = landed(&answers[k * n1..(k + 1) * n1]);
+                c.total = n1;
+            }
+            let answers = {
+                let jobs: Vec<EvalJob> = opens
+                    .iter()
+                    .flat_map(|o| o.children.iter())
+                    .filter(|c| in_band(c))
+                    .map(|c| EvalJob { word: &c.word, points: &self.verify_rest })
+                    .collect();
+                eval.lands(self, view, &jobs)
+            };
+            let mut k = 0usize;
+            for c in opens.iter_mut().flat_map(|o| o.children.iter_mut()) {
+                if in_band(c) {
+                    c.hit += landed(&answers[k * n2..(k + 1) * n2]);
+                    c.total += n2;
+                    k += 1;
+                }
+            }
+        }
+        for o in &mut opens {
+            for c in &o.children {
+                o.trace.n_replay += c.total;
+            }
+        }
+        tr.t_replay += t.elapsed();
+        if cancelled() {
+            return None;
+        }
+
+        // **4. Kept or carried.** Below the floor, or at the depth cap,
+        // the walk stops -- and the word is FORCED if any of it lands,
+        // never dropped. See `MEASURE_FLOOR`.
+        for o in &mut opens {
+            for c in &mut o.children {
+                let eff = c.eff();
+                let prob = c.prob;
+                // A child the walk stops at is FORCED even when its
+                // replay landed nothing: zero hits in `VERIFY` samples
+                // means under one part in `VERIFY`, not none. Dropping
+                // those at the floor cost 1% of a view in scattered
+                // specks, while forcing them costs at most their
+                // probability each.
+                if !(eff > 0.0) && c.last {
+                    watched(&mut o.trace, &c.word, "ZERO", &|| format!("prob {prob:.2e}"));
+                    o.trace.floor += 1;
+                }
+                if eff >= CUT_EFFICIENCY || c.last {
+                    // **Kept: it needs no points.** Checking a kept
+                    // child's candidates exactly was 65% of a plan's
+                    // time, and ~90% of the children checked were kept.
+                    watched(&mut o.trace, &c.word, "CUT", &|| format!("eff {eff:.2} prob {prob:.2e}"));
+                    c.fate = Fate::Kept(eff);
+                } else if matches!(c.pts, Pts::Cloud(_)) {
+                    c.fate = Fate::Carried;
+                }
+            }
+        }
+
+        // **5. Checks.** A carried child now needs its region's points,
+        // checked exactly on a capped set of candidates.
+        let t = Instant::now();
+        let checking = |c: &Child| matches!(c.fate, Fate::Undecided);
+        if speculate {
+            // Answered with the replays; a kept child's answers go unused.
+            for o in &mut opens {
+                for c in &mut o.children {
+                    let spec = c.spec.take();
+                    if checking(c) {
+                        o.trace.n_verify += c.cands().len();
+                        c.hits = spec.unwrap_or_default();
+                    }
+                }
+            }
+        } else {
+            let answers = {
+                let jobs: Vec<EvalJob> = opens
+                    .iter()
+                    .flat_map(|o| o.children.iter())
+                    .filter(|c| checking(c))
+                    .map(|c| EvalJob { word: &c.word, points: c.cands() })
+                    .collect();
+                eval.lands(self, view, &jobs)
+            };
+            let mut at = 0usize;
+            for o in &mut opens {
+                for c in &mut o.children {
+                    if !checking(c) {
+                        continue;
+                    }
+                    let cands = c.cands();
+                    let got = &answers[at..at + cands.len()];
+                    at += cands.len();
+                    o.trace.n_verify += cands.len();
+                    let hits: Vec<u32> = cands.iter().zip(got).filter(|(_, g)| **g == 1).map(|(i, _)| *i).collect();
+                    c.hits = hits;
+                }
+            }
+        }
+
+        // **6. Top-ups.** A thin child is searched again, wider, over its
+        // parent's cells. See `TOPUP_BELOW`.
+        for o in &mut opens {
+            let parent_indexed = matches!(o.node.pts, Pts::Index(_));
+            for c in &mut o.children {
+                c.topped = checking(c) && parent_indexed && c.hits.len() + c.orbit_hits.len() < TOPUP_BELOW;
+                if c.topped {
+                    o.trace.topped_up += 1;
+                }
+            }
+        }
+        let wide: Vec<Vec<Vec<u32>>> = map_all(&opens, |o| {
+            let Pts::Index(parent) = &o.node.pts else { return Vec::new() };
+            if !o.children.iter().any(|c| c.topped) {
+                return Vec::new();
+            }
+            let mut cells: Vec<Cell> = parent.iter().map(|&i| self.cell_of(self.sample[i as usize])).collect();
+            cells.sort_unstable();
+            cells.dedup();
+            o.children
+                .iter()
+                .map(|c| if c.topped { Self::gather(&self.landing[c.ai], &cells, true, PER_CELL, TOPUP_CAP) } else { Vec::new() })
+                .collect()
+        });
+        let answers = {
+            let jobs: Vec<EvalJob> = opens
+                .iter()
+                .zip(&wide)
+                .flat_map(|(o, w)| o.children.iter().zip(w.iter()).map(|(c, pts)| EvalJob { word: &c.word, points: pts }))
+                .collect();
+            eval.lands(self, view, &jobs)
+        };
+        let mut at = 0usize;
+        for (o, w) in opens.iter_mut().zip(&wide) {
+            for (c, pts) in o.children.iter_mut().zip(w.iter()) {
+                let got = &answers[at..at + pts.len()];
+                at += pts.len();
+                o.trace.n_verify += pts.len();
+                c.hits.extend(pts.iter().zip(got).filter(|(_, g)| **g == 1).map(|(i, _)| *i));
+            }
+        }
+        drop(wide);
+        tr.t_verify += t.elapsed();
+        if cancelled() {
+            return None;
+        }
+
+        // **7. Each node decided**, its children in their order.
+        Some(opens.into_iter().map(|o| self.close(o, depth, view, watch)).collect())
+    }
+
+    /// Settle a node once its children's questions are answered: which
+    /// children are kept, which carried with what points -- and then
+    /// whether they account for the node, or the node is forced itself.
+    ///
+    /// A kept word's `centre` and `radius` are the view disc: what the
+    /// walk knows of where its landed points sit is that they are in the
+    /// view. Nothing downstream reads them for an inverse-walk plan (the
+    /// kernel's table holds the symbols, the probability and the colour
+    /// fold), and computing them needed positions an evaluator does not
+    /// return.
+    fn close(&self, o: Open, depth: usize, view: View, watch: Option<&[u32]>) -> Expanded {
+        let Open { node, children, mut trace } = o;
+        let watched = |t: &mut Trace, word: &[u32], what: &str, detail: &dyn Fn() -> String| {
+            if let Some(line) = watch_line(watch, word, depth, what, detail) {
+                t.watched.push(line);
+            }
+        };
+        let points_of = |pts: &Pts| -> Vec<[f64; 2]> {
+            match pts {
+                Pts::Cloud(c) => c.clone(),
+                Pts::Index(idx) => idx.iter().map(|&i| self.sample[i as usize]).collect(),
+            }
+        };
+        let disc = |word: Vec<u32>, prob: f64| Cylinder { word, prob, centre: view.centre, radius: view.radius };
+
         let mut node_kept: Vec<(Cylinder, f64)> = Vec::new();
         let mut node_next: Vec<Node> = Vec::new();
-        let mut node_lost = 0.0f64;
         // Which children survived -- carried or kept -- by alphabet
         // index, for the point count below.
         let mut survived = vec![false; self.alphabet.len()];
-        for (ai, pts) in children {
-            let orbit_hits = std::mem::take(&mut from_orbit[ai]);
-            let a = &self.alphabet[ai];
-            let prob = node.prob * a.prob;
-            let mut word = Vec::with_capacity(node.word.len() + 1);
-            word.push(a.sym);
-            word.extend_from_slice(&node.word);
-
-            // **Replay first.** Below the floor, or at the depth cap, the
-            // walk stops -- and the word is FORCED if any of it lands,
-            // never dropped. See `MEASURE_FLOOR`.
-            let last = depth == MAX_DEPTH || prob < MEASURE_FLOOR * floor_mass;
-            let t_replay = std::time::Instant::now();
-            let rp = self.replay_counted(&word, view);
-            tr.n_replay += rp.used;
-            let (eff, cc, r) = (rp.eff, rp.centre, rp.radius);
-            tr.t_replay += t_replay.elapsed();
-            // A child the walk stops at is FORCED even when its replay
-            // landed nothing: zero hits in `VERIFY` samples means under
-            // one part in `VERIFY`, not none. Dropping those at the floor
-            // cost 1% of a view in scattered specks, while forcing them
-            // costs at most their probability each -- below the floor by
-            // definition, about 1% of the draws for a thousand of them.
-            if !(eff > 0.0) && last {
-                watched(tr, &word, "ZERO", &|| format!("prob {prob:.2e}"));
-                tr.floor += 1;
-            }
-            let _ = &mut node_lost;
-            if eff >= CUT_EFFICIENCY || last {
-                // **Kept: it needs no points.** Checking a kept child's
-                // candidates exactly was 65% of a plan's time, and ~90%
-                // of the children checked were kept rather than carried.
-                watched(tr, &word, "CUT", &|| format!("eff {eff:.2} prob {prob:.2e}"));
-                survived[ai] = true;
-                node_kept.push((Cylinder { word, prob, centre: cc, radius: r }, eff));
-                continue;
-            }
-
-            // **Carried: now it needs its region's points**, checked
-            // exactly on a capped set of candidates.
-            let pts = match pts {
-                Pts::Index(cands) => {
-                    let n_cands = cands.len();
-                    let t_verify = std::time::Instant::now();
-                    tr.n_verify += cands.len();
-                    let mut hits: Vec<u32> =
-                        cands.into_iter().filter(|&i| self.lands(&word, self.sample[i as usize], view)).collect();
-                    // Thin: search again, wider. See `TOPUP_BELOW`.
-                    if hits.len() + orbit_hits.len() < TOPUP_BELOW {
-                        if let Pts::Index(parent) = &node.pts {
-                            let mut cells: Vec<Cell> = parent.iter().map(|&i| self.cell_of(self.sample[i as usize])).collect();
-                            cells.sort_unstable();
-                            cells.dedup();
-                            let wide = Self::gather(&self.landing[ai], &cells, true, PER_CELL, TOPUP_CAP);
-                            tr.n_verify += wide.len();
-                            tr.topped_up += 1;
-                            hits.extend(wide.into_iter().filter(|&i| self.lands(&word, self.sample[i as usize], view)));
-                        }
-                    }
-                    tr.t_verify += t_verify.elapsed();
+        for c in children {
+            let eff = c.eff();
+            let n_cands = c.cands().len();
+            let Child { ai, word, prob, pts, orbit_hits, mut hits, fate, .. } = c;
+            let pts = match fate {
+                Fate::Kept(eff) => {
+                    survived[ai] = true;
+                    node_kept.push((disc(word, prob), eff));
+                    continue;
+                }
+                Fate::Carried => pts,
+                Fate::Undecided => {
                     // The orbit's points need no check: they are in the
                     // child's region by construction.
                     hits.extend_from_slice(&orbit_hits);
                     hits.sort_unstable();
                     hits.dedup();
                     if hits.is_empty() {
-                        tr.empty += 1;
+                        trace.empty += 1;
                         if eff > 0.0 {
                             // It lands -- the replay says so -- but no
                             // point of its region was found to expand it
                             // from. Forced as it stands.
-                            watched(tr, &word, "FORCEDCH", &|| format!("{n_cands} candidates, none land; eff {eff:.2}"));
+                            watched(&mut trace, &word, "FORCEDCH", &|| format!("{n_cands} candidates, none land; eff {eff:.2}"));
                             survived[ai] = true;
-                            node_kept.push((Cylinder { word, prob, centre: cc, radius: r }, eff));
+                            node_kept.push((disc(word, prob), eff));
                         } else {
-                            watched(tr, &word, "EMPTY", &|| format!("{n_cands} candidates, none land"));
+                            watched(&mut trace, &word, "EMPTY", &|| format!("{n_cands} candidates, none land"));
                         }
                         continue;
                     }
                     Pts::Index(hits)
                 }
-                other => other,
             };
             survived[ai] = true;
-            let n = match &pts { Pts::Cloud(c) => c.len(), Pts::Index(i) => i.len() };
+            let n = match &pts {
+                Pts::Cloud(c) => c.len(),
+                Pts::Index(i) => i.len(),
+            };
             let indexed = matches!(pts, Pts::Index(_));
-            watched(tr, &word, "carried", &|| {
+            watched(&mut trace, &word, "carried", &|| {
                 format!("{n} pts spread {:.2e} eff {eff:.2} prob {prob:.2e} indexed {indexed}", spread_of(&points_of(&pts)))
             });
             node_next.push(Node { word, pts, prob, eff });
@@ -1116,18 +1474,19 @@ impl Backward {
             }
             Pts::Cloud(_) => None,
         };
+        let mut out = Expanded::default();
         if !node.word.is_empty() && node.eff > 0.0 && covered.is_some_and(|c| c < COMPLETE_ENOUGH) {
-            watched(tr, &node.word, "FORCED", &|| format!("children cover {:.3} of its points", covered.unwrap_or(0.0)));
-            let (_, cc, r) = self.replay(&node.word, view);
-            out.kept.push((Cylinder { word: node.word, prob: node.prob, centre: cc, radius: r }, node.eff));
-            out.trace.forced += 1;
+            watched(&mut trace, &node.word, "FORCED", &|| format!("children cover {:.3} of its points", covered.unwrap_or(0.0)));
+            out.kept.push((disc(node.word, node.prob), node.eff));
+            trace.forced += 1;
+            out.trace = trace;
             return out;
         }
-        out.trace.cut += node_kept.len();
-        out.trace.not_yet += node_next.len();
+        trace.cut += node_kept.len();
+        trace.not_yet += node_next.len();
         out.kept = node_kept;
         out.next = node_next;
-        out.lost = node_lost;
+        out.trace = trace;
         out
     }
 
@@ -1154,6 +1513,52 @@ impl Backward {
     }
 
     fn plan_with_opts(&self, view: View, tr: &mut Trace, opts: PlanOptions) -> Result<Cylinders, NoCylinders> {
+        self.plan_with_eval(view, tr, opts, &mut CpuEval)
+    }
+
+    /// Plan with the evaluator `opts` offers: the GPU when it is given
+    /// and its kernel builds for `flame`, the CPU otherwise. `flame` must
+    /// be the flame this walk was read from.
+    pub fn plan_for(&self, flame: &Flame, view: View, opts: PlanOptions) -> Result<Cylinders, NoCylinders> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(gpu) = opts.gpu {
+            // Held for the whole plan: one plan runs at a time, and a
+            // cancelled one stops at its next batch.
+            let mut g = gpu.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(eval) = g.for_flame(flame, self) {
+                let mut tr = Trace::default();
+                eval.totals = Default::default();
+                eval.batches = 0;
+                let t0 = std::time::Instant::now();
+                let r = self.plan_with_eval(view, &mut tr, opts, eval);
+                {
+                    log::debug!(
+                        "GPU plan {:.0} ms: {} batches, pack {:.0} wait {:.0} read {:.0} ms; walls seed {:.0} gather {:.0} replay {:.0} verify {:.0}",
+                        t0.elapsed().as_secs_f64() * 1e3,
+                        eval.batches,
+                        eval.totals.pack,
+                        eval.totals.wait,
+                        eval.totals.read,
+                        tr.t_seed.as_secs_f64() * 1e3,
+                        tr.t_gather.as_secs_f64() * 1e3,
+                        tr.t_replay.as_secs_f64() * 1e3,
+                        tr.t_verify.as_secs_f64() * 1e3,
+                    );
+                }
+                return r;
+            }
+        }
+        let _ = flame;
+        self.plan_opts(view, opts)
+    }
+
+    /// Plan with a given evaluator, for a caller holding one.
+    pub fn plan_eval(&self, view: View, opts: PlanOptions, eval: &mut dyn Evaluate) -> Result<Cylinders, NoCylinders> {
+        let mut tr = Trace::default();
+        self.plan_with_eval(view, &mut tr, opts, eval)
+    }
+
+    fn plan_with_eval(&self, view: View, tr: &mut Trace, opts: PlanOptions, eval: &mut dyn Evaluate) -> Result<Cylinders, NoCylinders> {
         let cancelled = || opts.cancel.is_some_and(|c| c.load(Ordering::Relaxed));
         let watch = tr.watch.clone();
         let record = tr.record_expanded;
@@ -1188,36 +1593,34 @@ impl Backward {
                     if n.word.is_empty() {
                         continue;
                     }
-                    let (_, cc, r) = self.replay(&n.word, view);
-                    kept.push((Cylinder { word: n.word, prob: n.prob, centre: cc, radius: r }, n.eff));
+                    kept.push((Cylinder { word: n.word, prob: n.prob, centre: view.centre, radius: view.radius }, n.eff));
                     tr.forced += 1;
                 }
                 break;
             }
 
-            // **Every node of a level is expanded in parallel.** Nodes are
-            // independent -- each reads the flame's analysis and writes
-            // only its own results -- and a plan was 97% node expansion
-            // on one core of twelve. The floor is read as it stood at the
-            // start of the level, and the results are merged in frontier
-            // order, so a plan is the same however the threads ran.
+            // **Every node of a level is expanded at once**, its questions
+            // asked in batches (`expand_level`). Nodes are independent --
+            // each reads the flame's analysis and writes only its own
+            // results -- so the CPU's work between batches runs in
+            // parallel. The floor is read as it stood at the start of the
+            // level, and the results are merged in frontier order, so a
+            // plan is the same however the threads ran and whichever
+            // evaluator answered.
             let floor_mass = kept_mass;
-            let expand = |node: Node| {
-                if cancelled() {
-                    return Expanded::default();
-                }
-                self.expand(node, depth, view, floor_mass, watch.as_deref(), record)
-            };
-            #[cfg(not(target_arch = "wasm32"))]
-            let results: Vec<Expanded> = {
-                use rayon::prelude::*;
-                std::mem::take(&mut frontier).into_par_iter().map(expand).collect()
-            };
-            #[cfg(target_arch = "wasm32")]
-            let results: Vec<Expanded> = std::mem::take(&mut frontier).into_iter().map(expand).collect();
-            if cancelled() {
+            let Some(results) = self.expand_level(
+                std::mem::take(&mut frontier),
+                depth,
+                view,
+                floor_mass,
+                watch.as_deref(),
+                record,
+                eval,
+                tr,
+                &cancelled,
+            ) else {
                 return Err(NoCylinders::ViewIsEmpty);
-            }
+            };
 
             let mut next: Vec<Node> = Vec::new();
             for e in results {
@@ -1273,9 +1676,8 @@ impl Backward {
                     if let Some(line) = watch_line(watch.as_deref(), &n.word, depth, "BEAM", || format!("prob {:.2e} eff {:.2}", n.prob, n.eff)) {
                         tr.watched.push(line);
                     }
-                    let (_, cc, r) = self.replay(&n.word, view);
                     kept_mass += n.prob;
-                    kept.push((Cylinder { word: n.word, prob: n.prob, centre: cc, radius: r }, n.eff));
+                    kept.push((Cylinder { word: n.word, prob: n.prob, centre: view.centre, radius: view.radius }, n.eff));
                     tr.beam += 1;
                 }
             }
@@ -1510,7 +1912,7 @@ mod tests {
         let mut cases: Vec<(String, crate::config::FractalConfig, f64)> = Vec::new();
         let text = std::fs::read_to_string("output/flame-zoom/grand-julian.fflame").expect("grand-julian");
         let gj: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
-        for z in [1e3f64, 1e6] {
+        for z in [1e3f64, 1e4, 1e6] {
             cases.push((format!("grand-julian x{z:.0e}"), gj.clone(), z));
         }
         if let Ok(path) = std::env::var("FFLAME") {
@@ -1520,6 +1922,31 @@ mod tests {
             cases.push((path, c, z));
         }
         println!("cores: {}", std::thread::available_parallelism().map_or(0, |n| n.get()));
+        let (device, queue) = test_device();
+        let mut planner = crate::scene::plan_gpu::GpuPlanner::new(&device, &queue);
+
+        /// An evaluator that times another: how much of a plan is the
+        /// answering, and how much the walk around it.
+        struct Timed<'e> {
+            inner: &'e mut dyn Evaluate,
+            spent: std::time::Duration,
+            batches: usize,
+            points: usize,
+        }
+        impl Evaluate for Timed<'_> {
+            fn lands(&mut self, b: &Backward, view: View, jobs: &[EvalJob]) -> Vec<u8> {
+                let t = std::time::Instant::now();
+                let r = self.inner.lands(b, view, jobs);
+                self.spent += t.elapsed();
+                self.batches += 1;
+                self.points += r.len();
+                r
+            }
+            fn speculative(&self) -> bool {
+                self.inner.speculative()
+            }
+        }
+
         for (name, cfg, zoom) in cases {
             let t0 = std::time::Instant::now();
             let b = Backward::read(&cfg.flame, reg).expect("armed");
@@ -1530,20 +1957,33 @@ mod tests {
                 [cfg.pan_x as f64, cfg.pan_y as f64]
             };
             let view = View::of(zoom, centre, 1280, 720);
-            let mut tr = Trace::default();
-            let t0 = std::time::Instant::now();
-            let plan = b.plan_with(view, &mut tr);
-            let total = t0.elapsed();
-            let words = plan.as_ref().map_or(0, |p| p.words.len());
-            let eff = plan.as_ref().map_or(0.0, |p| p.efficiency);
             let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
-            let other = total.saturating_sub(tr.t_seed + tr.t_gather + tr.t_verify + tr.t_replay);
-            println!(
-                "== {name}: read {:.0} ms; plan {:.0} ms, {} nodes expanded, {words} words, eff {eff:.2}\n   \
-                 seed {:.0} ms | gather {:.0} ms | verify {:.0} ms ({} candidate replays) | replay {:.0} ms ({} sample replays) | other {:.0} ms",
-                ms(read), ms(total), tr.nodes_expanded, ms(tr.t_seed), ms(tr.t_gather), ms(tr.t_verify), tr.n_verify,
-                ms(tr.t_replay), tr.n_replay, ms(other)
-            );
+            println!("== {name}: read {:.0} ms", ms(read));
+            let mut cpu = CpuEval;
+            let gpu = planner.for_flame(&cfg.flame, &b).expect("the kernel builds");
+            for (label, inner) in [("CPU", &mut cpu as &mut dyn Evaluate), ("GPU", gpu as &mut dyn Evaluate)] {
+                let mut timed = Timed { inner, spent: Default::default(), batches: 0, points: 0 };
+                let mut tr = Trace::default();
+                let t0 = std::time::Instant::now();
+                let plan = b.plan_with_eval(view, &mut tr, PlanOptions::default(), &mut timed);
+                let total = t0.elapsed();
+                let words = plan.as_ref().map_or(0, |p| p.words.len());
+                let other = total.saturating_sub(tr.t_seed + tr.t_gather + tr.t_verify + tr.t_replay);
+                println!(
+                    "   {label}: plan {:.0} ms, {} nodes, {words} words | answering {:.0} ms in {} batches, {} points | \
+                     walls: seed {:.0} gather {:.0} replay {:.0} verify {:.0} other {:.0} ms",
+                    ms(total),
+                    tr.nodes_expanded,
+                    ms(timed.spent),
+                    timed.batches,
+                    timed.points,
+                    ms(tr.t_seed),
+                    ms(tr.t_gather),
+                    ms(tr.t_replay),
+                    ms(tr.t_verify),
+                    ms(other)
+                );
+            }
         }
     }
 
@@ -1652,7 +2092,7 @@ mod tests {
                 // In-frame efficiency against the real view.
                 let (mut num, mut den) = (0.0f64, 0.0f64);
                 for w in &plan.words {
-                    let (eff, _, _) = b.replay_full(&w.word, view);
+                    let eff = b.replay_full(&w.word, view);
                     num += w.prob * eff;
                     den += w.prob;
                 }
@@ -1696,6 +2136,156 @@ mod tests {
         }
     }
 
+    /// A GPU for the tests that plan on one.
+    fn test_device() -> (wgpu::Device, wgpu::Queue) {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .expect("adapter");
+        println!("adapter: {:?}", adapter.get_info().name);
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor { label: Some("plan test"), ..Default::default() }))
+            .expect("device")
+    }
+
+    /// The share of an independent chaos game's in-view samples whose
+    /// recent past is one of the plan's words: what a targeted render
+    /// draws of what the untargeted one does. `None` where the game
+    /// cannot reach the view often enough to say -- deep enough, which is
+    /// why targeting exists (at 1e6, 400M iterations landed none).
+    fn coverage(b: &Backward, plan: &Cylinders, view: View, samples: usize) -> Option<f64> {
+        let total: f64 = b.transforms.iter().map(|t| t.weight).sum();
+        let mut st = 0xC0FFEE_u64;
+        let mut lcg = move || {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((st >> 33) as f64) / ((1u64 << 31) as f64)
+        };
+        let mut x = [0.31f64, 0.17];
+        let mut hist: Vec<u32> = Vec::new();
+        let longest = plan.words.iter().map(|w| w.word.len()).max().unwrap_or(1);
+        let (mut in_view, mut covered) = (0usize, 0usize);
+        for k in 0..400_000_000usize {
+            let mut u = lcg() * total;
+            let mut t = &b.transforms[b.transforms.len() - 1];
+            for c in &b.transforms {
+                if u < c.weight {
+                    t = c;
+                    break;
+                }
+                u -= c.weight;
+            }
+            let arm = ((lcg() * t.arms as f64) as u32).min(t.arms - 1);
+            let y = forward(&b.ifs.maps[t.map], x, arm);
+            if !finite(y) || y[0].abs() > 1e12 {
+                x = [0.31, 0.17];
+                hist.clear();
+                continue;
+            }
+            x = y;
+            hist.push(sym_of(t.index as u32, arm));
+            if hist.len() > longest + 4 {
+                hist.remove(0);
+            }
+            if k < 1000 || (x[0] - view.centre[0]).hypot(x[1] - view.centre[1]) > view.radius {
+                continue;
+            }
+            in_view += 1;
+            if plan.words.iter().any(|w| {
+                let k = w.word.len();
+                hist.len() >= k && hist[hist.len() - k..] == w.word[..]
+            }) {
+                covered += 1;
+            }
+            if in_view >= samples {
+                break;
+            }
+        }
+        (in_view >= samples / 10).then(|| covered as f64 / in_view as f64)
+    }
+
+    /// **Phase 2 of `gpu-cylinder-planning.md`: the GPU's plans.** The
+    /// same views planned with the CPU's answers and the GPU's: time,
+    /// size, efficiency, and completeness against an independent chaos
+    /// game. The gate is that the GPU's plan is as complete as the CPU's:
+    /// its answers differ at the rim by f32 rounding, and a plan is
+    /// allowed to differ with them, but not to lose what the CPU's finds.
+    /// Both are measured on the same chaos game, so equal plans cover
+    /// equally to the sample; 0.003 is two standard errors at 3000
+    /// samples near full coverage.
+    ///
+    /// The CPU's own coverage is reported, not gated here: at one view it
+    /// is 0.989 (`gpu-cylinder-planning.md` §14), which is the walk's to
+    /// answer for, not the evaluator's.
+    #[test]
+    #[ignore = "needs a GPU and reads output/flame-zoom"]
+    fn the_gpu_plans_as_completely_as_the_cpu() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let text = std::fs::read_to_string("output/flame-zoom/grand-julian.fflame").expect("grand-julian");
+        let gj: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
+        let b = Backward::read(&gj.flame, reg).expect("armed");
+        let (device, queue) = test_device();
+        let planner = std::sync::Mutex::new(crate::scene::plan_gpu::GpuPlanner::new(&device, &queue));
+        // Build the kernel outside the timings.
+        let t0 = std::time::Instant::now();
+        let _ = planner.lock().unwrap().for_flame(&gj.flame, &b).is_some();
+        println!("kernel for the flame: {:.0} ms", t0.elapsed().as_secs_f64() * 1e3);
+
+        let mut views: Vec<(String, View)> = Vec::new();
+        for z in [1e2f64, 1e3, 1e4, 1e6] {
+            for frac in [0.25f64, 0.75] {
+                views.push((format!("x{z:.0e} at {frac}"), View::of(z, b.sample_point(frac), 1280, 720)));
+            }
+        }
+        if let Ok(t) = std::fs::read_to_string("output/grand-julian-missing-pieces.fflame") {
+            let c: crate::config::FractalConfig = serde_json::from_str(&t).expect("config");
+            views.push(("missing-pieces".into(), View::of(c.zoom as f64, [c.pan_x as f64, c.pan_y as f64], 1280, 720)));
+        }
+        let (mut cpu_total, mut gpu_total) = (0.0f64, 0.0f64);
+        for (name, view) in views {
+            let t0 = std::time::Instant::now();
+            let cpu = b.plan(view).expect("a CPU plan");
+            let cpu_ms = t0.elapsed().as_secs_f64() * 1e3;
+            let t0 = std::time::Instant::now();
+            let gpu = b
+                .plan_for(&gj.flame, view, PlanOptions { gpu: Some(&planner), ..Default::default() })
+                .expect("a GPU plan");
+            let gpu_ms = t0.elapsed().as_secs_f64() * 1e3;
+            cpu_total += cpu_ms;
+            gpu_total += gpu_ms;
+            let same = {
+                let a: std::collections::HashSet<&Vec<u32>> = cpu.words.iter().map(|w| &w.word).collect();
+                gpu.words.iter().filter(|w| a.contains(&w.word)).count()
+            };
+            // 1e6 is past any independent chaos game: 400M iterations
+            // landed none there, and each try costs a minute.
+            let reachable = !name.starts_with("x1e6");
+            let measure = |p: &Cylinders| reachable.then(|| coverage(&b, p, view, 3000)).flatten();
+            let (cc, gc) = (measure(&cpu), measure(&gpu));
+            let shown = |c: Option<f64>| c.map_or("n/a (unreachable)".to_string(), |c| format!("{c:.4}"));
+            println!(
+                "== {name}: CPU {cpu_ms:>5.0} ms, {:>5} words, eff {:.3}, coverage {} | \
+                 GPU {gpu_ms:>5.0} ms, {:>5} words, eff {:.3}, coverage {} | {same} words in both | {:.1}x",
+                cpu.words.len(),
+                cpu.efficiency,
+                shown(cc),
+                gpu.words.len(),
+                gpu.efficiency,
+                shown(gc),
+                cpu_ms / gpu_ms
+            );
+            if let (Some(cc), Some(gc)) = (cc, gc) {
+                assert!(gc >= cc - 0.003, "{name}: the GPU's plan covers {gc:.4} where the CPU's covers {cc:.4}");
+            }
+        }
+        println!("total: CPU {cpu_total:.0} ms, GPU {gpu_total:.0} ms, {:.1}x", cpu_total / gpu_total);
+    }
+
     /// **Phase 0 and 1 of `gpu-cylinder-planning.md`: does the GPU give
     /// the CPU's answers, and how fast?**
     ///
@@ -1714,22 +2304,7 @@ mod tests {
         let gj: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
         let b = Backward::read(&gj.flame, reg).expect("armed");
 
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
-            ..wgpu::InstanceDescriptor::new_without_display_handle()
-        });
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            force_fallback_adapter: false,
-            compatible_surface: None,
-        }))
-        .expect("adapter");
-        println!("adapter: {:?}", adapter.get_info().name);
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("plan eval test"),
-            ..Default::default()
-        }))
-        .expect("device");
+        let (device, queue) = test_device();
         let t0 = std::time::Instant::now();
         let mut gpu = PlanGpu::new(&device, &queue, &gj.flame, &b.sample);
         println!("PlanGpu::new (shader + upload): {:.0} ms", t0.elapsed().as_secs_f64() * 1e3);
@@ -1938,7 +2513,7 @@ mod tests {
     /// of every view in a fixed set to `dir/<view>.txt` -- each word's
     /// symbols and the bits of its probability, then the plan's totals
     /// -- so two builds' plans can be diffed. A word's centre and radius
-    /// are left out.
+    /// are left out. `PLAN_GPU=1` plans through the GPU evaluator.
     #[test]
     #[ignore = "reads output/flame-zoom; writes $PLAN_DUMP"]
     fn dump_plans() {
@@ -1956,6 +2531,10 @@ mod tests {
         let saved = "output/grand-julian-missing-pieces.fflame";
         let saved_cfg: Option<crate::config::FractalConfig> =
             std::fs::read_to_string(saved).ok().map(|t| serde_json::from_str(&t).expect("a config"));
+        let gpu = std::env::var("PLAN_GPU").is_ok().then(|| {
+            let (device, queue) = test_device();
+            std::sync::Mutex::new(crate::scene::plan_gpu::GpuPlanner::new(&device, &queue))
+        });
         let t0 = std::time::Instant::now();
         for (name, cfg) in &flames {
             let Ok(b) = Backward::read(&cfg.flame, reg) else {
@@ -1977,7 +2556,7 @@ mod tests {
                 }
             }
             for (vname, view) in views {
-                let plan = b.plan(view);
+                let plan = b.plan_for(&cfg.flame, view, PlanOptions { gpu: gpu.as_ref(), ..Default::default() });
                 let mut out = String::new();
                 match plan {
                     Ok(p) => {

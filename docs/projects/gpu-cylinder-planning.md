@@ -1,8 +1,8 @@
 # Planning cylinders on the GPU (plan, 2026-09-22)
 
 Written as a plan before any code. The decisions (§11) were taken and
-are recorded in §12; phases 0 and 1 are built and measured in §13, and
-the rest of the document is the plan as it was written.
+are recorded in §12; phases 0 and 1 are built and measured in §13, phase
+2 in §14, and the rest of the document is the plan as it was written.
 
 Background: [inversive-targeting.md](inversive-targeting.md) §24–§30
 describe the planner this would accelerate -- the inverse walk over an
@@ -461,3 +461,131 @@ completeness gates the CPU's plans pass.
   records where the landed points sit (centre and radius). The
   `endpoints` mode returns them; phase 2 decides whether to reduce on
   the GPU or read positions back.
+
+---
+
+## 14. Phase 2, built and measured (2026-09-22)
+
+**Built.**
+
+- **`Evaluate`** (`backward.rs`): the walk's one question -- apply each
+  job's word to each of its sample points; does it land in the view? --
+  answered in batches. `CpuEval` answers with `Backward::lands` in f64 on
+  rayon; `PlanGpu` answers with the kernel.
+- **`Backward::expand_level`** replaces the per-node `expand`. The rules
+  are the same; a level's questions are asked for all of its nodes at
+  once, in five batches: seeds, replays (first pass), replays (second
+  pass), checks, top-ups. The CPU work between them -- children,
+  gathers, decisions -- runs over the nodes in parallel. `close` settles
+  each node in its children's order.
+- **Speculation.** An evaluator whose round trip costs more than extra
+  answers (`Evaluate::speculative`: the GPU) is asked, with a level's
+  replays, everything the walk might ask next -- the second pass and
+  every child's checks -- and the walk uses only the answers it would
+  have asked for. Plans are identical with and without it; batches per
+  plan fall from 80-100 to 48-60 at five times the points.
+- **`GpuPlanner`** (`plan_gpu.rs`): the device and the kernel for the
+  flame planned last (~10 ms to build per flame). A kernel that fails
+  validation makes that flame plan on the CPU instead of panicking the
+  planner thread. `Backward::plan_for` uses it when `PlanOptions::gpu` is
+  given.
+- **The app** plans on the GPU by default, both on the planner thread and
+  inline (export, the command line, tests). `FFLAME_PLAN_CPU=1` or
+  `FlameRenderer::set_plan_on_gpu(false)` plans on the CPU. Desktop only;
+  the web still plans inline on the CPU (phase 3).
+- **A kept word's centre and radius are now the view disc.** Nothing
+  downstream reads them for an inverse-walk plan -- the kernel's table
+  holds the symbols, the probability and the colour fold -- and
+  computing them needed positions an evaluator does not return.
+
+**The walk is unchanged.** `dump_plans` writes a plan exactly: every
+word's symbols and the bits of its probability, then the totals. Over 25
+views (grand-julian, julian-disc, random1 at 1e2-1e6, two positions each,
+and the saved missing-pieces view), the batched walk on the CPU
+reproduces the per-node walk's plans **bit for bit**, all 25.
+
+**The GPU's plans** differ where its answers do, at the rim:
+
+| view | CPU words | GPU words | in both |
+|---|---|---|---|
+| grand-julian 1e2 | 4055 / 2291 | 4059 / 2291 | 4044 / 2291 |
+| grand-julian 1e3 | 3422 / 4479 | 3424 / 4482 | 3420 / 4473 |
+| grand-julian 1e4 | 6883 / 3782 | 6944 / 3689 | 6746 / 3623 |
+| grand-julian 1e6 | 3175 / 2545 | 3408 / 3516 | 1794 / 1972 |
+| missing-pieces (546) | 8724 | 8724 | 8721 |
+| julian-disc 1e2 | 2631 / 8101 | 2631 / 8100 | 2629 / 8051 |
+| random1 1e2-1e4 | 1914 / 1471 / 963 / 1355 / 2365 | 1914 / 1471 / 962 / 1356 / 2371 | 1914 / 1471 / 962 / 1354 / 2337 |
+
+At 1e6 -- past the render's f32 ceiling for this view (§13.2) -- half
+the words differ, as the answers do. Completeness is the gate, measured
+against an independent chaos game on 3000 in-view samples
+(`the_gpu_plans_as_completely_as_the_cpu`): **the GPU's plan covers
+exactly what the CPU's does at every view measured** -- 0.9977, 0.9973,
+0.9980 and 0.9913 on both sides at 1e2-1e3, and 0.9913 at the saved
+view. From 1e4 the independent game cannot measure: 400M iterations land
+fewer than 300 samples in the view, and at 1e6 none -- which is why
+targeting exists. (A first run reported 1.0000 and 0.9888 at 1e4; those
+were fractions of about ninety samples, 0.9888 being one miss in 89, and
+the test now declines to report under 300.)
+
+### 14.1 Time, alone
+
+`where_a_plan_spends_its_time`, grand-julian at 1280x720, twelve cores:
+
+| zoom | CPU plan | GPU plan | GPU answering | CPU gathering |
+|---|---|---|---|---|
+| 1e3 | 297 ms | 94 ms (124 speculative) | 18 ms (34) | 54 ms |
+| 1e4 | 319 ms | 77 ms (101) | 13 ms (26) | 47 ms |
+| 1e6 | 329 ms | 89 ms (162) | 26 ms (60) | 57 ms |
+
+Alone, the GPU plans 3.5-4x faster, and the answering is no longer the
+cost: **gathering candidates on the CPU is now the largest part** of a
+GPU plan (phase 4's question). Speculation costs 30-70 ms alone -- five
+times the points -- and pays for itself only when round trips are
+expensive, which is the next table.
+
+### 14.2 Time, beside the render
+
+`a_plan_on_the_gpu_shares_it_with_the_render` draws grand-julian frames
+while the view moves, and times each plan from the moment it starts (the
+250 ms settle delay before it is the view's). The planner's batches
+share the render's queue, so each waits behind the frame running.
+
+| frames | planner | plans | frames while planning (median / p95) |
+|---|---|---|---|
+| as the app draws: 128 workgroups (~3 ms), 60 Hz | CPU | 337-416 ms | 4.6 / 18.2 ms |
+| | GPU | 137-189 ms | 2.9 / 8.2 ms |
+| heavy: ~12 ms back to back | CPU | 367-409 ms | 10.2 / 18.3 ms |
+| | GPU | 370-412 ms | 10.2 / 11.7 ms |
+
+**The GPU planner is never the worse choice.** Where the app draws as it
+does -- its governor never dispatches more than 128 workgroups, which for
+this flame is about 3 ms -- plans are 2.2-2.5x faster and the frames are
+smoother (the CPU planner's twelve threads crowd the app's own). Under
+the heaviest frames the plans tie and the frames are still smoother.
+
+Measured and not kept:
+
+- **Before speculation**, under heavy frames the GPU plans took 814-983
+  ms against the CPU's 616-699 (settle included): 80-100 batches, each a
+  frame's wait.
+- **A second device** on the same GPU, for a queue of its own: no change
+  (plans 778-960 ms). The GPU runs the render's frame first either way.
+- **Lighter frames while a plan runs** (an eighth of the dispatch; the
+  samples are a preview the plan's arrival resets): 446-496 ms under
+  heavy frames. Not needed where the app draws as it does, so not built;
+  a flame heavy enough to fill the frame at 128 workgroups is where it
+  would matter.
+
+### 14.3 Found on the way (open)
+
+- **Views with no plan.** julian-disc at every zoom from 1e3 (both
+  positions) and random1 at 1e4 (one position) and 1e6 (both): the walk
+  returns `ViewIsEmpty` for a view centred on a sample point of the
+  attractor, and targeting falls back to the untargeted render -- right,
+  and slow. The same before and after this phase; not investigated.
+- **Coverage cannot be checked independently from 1e4.** The chaos game
+  that measures it cannot reach a view that deep often enough. Plans
+  there are complete by the walk's own point count (§27 of
+  `inversive-targeting.md`) and by the pictures, not by this check.
+- **Gathering is the floor.** See §14.1.
