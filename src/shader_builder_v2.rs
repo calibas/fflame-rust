@@ -1948,6 +1948,15 @@ impl ShaderBuilder {
             shader.push('\n');
         }
 
+        // 11. The forced symbol of a cylinder replay -- one function the
+        //     render's replay arm and the planner's GPU kernel both call.
+        //     Only with the replay on, so every other shader is the text
+        //     it was.
+        if constants.cylinder_replay {
+            shader.push_str(&processor.process(include_str!("../shaders/core/replay.wgsl")));
+            shader.push('\n');
+        }
+
         Definitions { source: shader, processor, active, has_dc, has_rgb }
     }
 
@@ -1962,6 +1971,48 @@ impl ShaderBuilder {
     /// group 0 and the name `params`.
     pub fn build_layer_map(&self, flame: &crate::scene::transforms::Flame) -> String {
         self.build_layer_map_at(flame, 1)
+    }
+
+    /// The planner's GPU kernel for `flame` -- see
+    /// `docs/projects/gpu-cylinder-planning.md` and `scene::plan_gpu`.
+    ///
+    /// The flame's definitions, built with the replay flag on so the
+    /// armed variations' draws read a forced arm, followed by
+    /// `plan_eval.wgsl`: an entry point that applies a word to sample
+    /// points and tests the view. The maps are the render's own, which
+    /// is the point of doing this on the GPU at all.
+    ///
+    /// Group 0 is the flame's (transforms, params, variation params,
+    /// attachments, subflame metadata, as the simulation's layer map
+    /// binds them); group 1 is the planner's.
+    pub fn build_plan_eval(&self, flame: &crate::scene::transforms::Flame) -> String {
+        let constants = ShaderConstants {
+            num_transforms: flame.transforms.len().max(1) as u32,
+            color_mode: 0,
+            has_post_affine: flame.has_post_affine(),
+            has_attachments: flame.has_attachments(),
+            has_post_symmetry: false,
+            has_analytic_blur: false,
+            importance_sampling: false,
+            cylinder_targeting: false,
+            frame_coverage: false,
+            // Wraps the armed variations' draws to read the forced arm.
+            cylinder_replay: true,
+            cylinder_relative: false,
+            flatten_z_per_iter: false,
+            solid_enabled: false,
+            probe: false,
+            census: false,
+            attachment_cap: flame.attachment_cap() as u32,
+            inlined_transforms: None,
+            cumulative_weights: None,
+            variation_priorities: std::collections::BTreeMap::new(),
+        };
+        let defs = self.build_definitions(flame, false, false, false, true, &constants);
+        let mut src = defs.source;
+        src.push('\n');
+        src.push_str(include_str!("../shaders/core/plan_eval.wgsl"));
+        src
     }
 
     /// The same, at a chosen bind group.
@@ -3816,7 +3867,7 @@ mod tests {
             // emitted and the symbol walk must not be: the two read
             // incompatible buffer layouts, and emitting the wrong one
             // renders an empty frame.
-            for needle in ["ct_stride", "ct_sym", "ct_len"] {
+            for needle in ["ct_stride", "ct_apply_symbol", "ct_len"] {
                 assert!(
                     !with.contains(needle),
                     "3d={render_3d}: `{needle}` leaked into the composed arm"
@@ -3828,7 +3879,13 @@ mod tests {
             let walked =
                 builder.build_from_template(&flame, &active, render_3d, false, false, true, &replay);
             assert!(walked.contains("fn ct_stride"), "3d={render_3d}: no replay accessor");
-            assert!(walked.contains("ct_sym"), "3d={render_3d}: the replay does not read symbols");
+            // The symbol walk goes through the one function the
+            // planner's GPU kernel also calls (`replay.wgsl`).
+            assert!(walked.contains("fn ct_apply_symbol"), "3d={render_3d}: the shared replay is missing");
+            assert!(
+                walked.contains("current = ct_apply_symbol(current,"),
+                "3d={render_3d}: the replay does not walk symbols through the shared function"
+            );
             assert!(
                 !walked.contains("cylinders[ct_w + 4u]"),
                 "3d={render_3d}: the composed arm leaked into the replay"

@@ -1696,6 +1696,314 @@ mod tests {
         }
     }
 
+    /// **Phase 0 and 1 of `gpu-cylinder-planning.md`: does the GPU give
+    /// the CPU's answers, and how fast?**
+    ///
+    /// Real words from real plans (the kept words and every expanded
+    /// node's word), applied to the planner's own verification points
+    /// and to random sample points, on both sides. Agreement is counted
+    /// per point; time is compared at the batch sizes a plan's levels
+    /// actually have. `FFLAME=path` adds a saved view.
+    #[test]
+    #[ignore = "needs a GPU and reads output/flame-zoom"]
+    fn the_gpu_answers_as_the_cpu_does() {
+        use crate::scene::plan_gpu::{EvalJob, PlanGpu};
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let text = std::fs::read_to_string("output/flame-zoom/grand-julian.fflame").expect("grand-julian");
+        let gj: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
+        let b = Backward::read(&gj.flame, reg).expect("armed");
+
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .expect("adapter");
+        println!("adapter: {:?}", adapter.get_info().name);
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("plan eval test"),
+            ..Default::default()
+        }))
+        .expect("device");
+        let t0 = std::time::Instant::now();
+        let mut gpu = PlanGpu::new(&device, &queue, &gj.flame, &b.sample);
+        println!("PlanGpu::new (shader + upload): {:.0} ms", t0.elapsed().as_secs_f64() * 1e3);
+
+        let mut views: Vec<(String, View)> = Vec::new();
+        for z in [1e2f64, 1e3, 1e4, 1e6] {
+            views.push((format!("x{z:.0e}"), View::of(z, b.sample_point(0.75), 1280, 720)));
+        }
+        if let Ok(path) = std::env::var("FFLAME") {
+            let c: crate::config::FractalConfig =
+                serde_json::from_str(&std::fs::read_to_string(&path).expect("file")).expect("config");
+            views.push(("saved".into(), View::of(c.zoom as f64, [c.pan_x as f64, c.pan_y as f64], 1280, 720)));
+        }
+
+        let stride = (b.sample.len() / VERIFY).max(1);
+        let verify_pts: Vec<u32> = (0..VERIFY).map(|k| (k * stride) as u32).collect();
+        let mut st = 0x1234_5678u64;
+        let mut rnd = move || {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (st >> 33) as u32
+        };
+        for (name, view) in views {
+            let mut tr = Trace { record_expanded: true, ..Default::default() };
+            let plan = b.plan_with(view, &mut tr).expect("a plan");
+            let mut words: Vec<Vec<u32>> = plan.words.iter().map(|c| c.word.clone()).collect();
+            words.extend(tr.expanded.into_iter().filter(|w| !w.is_empty()));
+            // Checks go to random points; replays to the verification ones.
+            let check_pts: Vec<Vec<u32>> = words
+                .iter()
+                .map(|_| (0..256).map(|_| rnd() % b.sample.len() as u32).collect())
+                .collect();
+            let mut jobs: Vec<EvalJob> = Vec::new();
+            for (w, cp) in words.iter().zip(&check_pts) {
+                jobs.push(EvalJob { word: w, points: &verify_pts });
+                jobs.push(EvalJob { word: w, points: cp });
+            }
+            let entries: usize = jobs.iter().map(|j| j.points.len()).sum();
+            let symbols: usize = jobs.iter().map(|j| j.word.len() * j.points.len()).sum();
+
+            // Best of five: a short burst on an idle GPU runs at whatever
+            // clock it was idling at, and the first runs measure the ramp.
+            // Only the FIRST view's times are clean: after the CPU's runs
+            // below have held twelve cores for a second, the next view's
+            // GPU batches measured 2-3x slower in whichever order the
+            // views ran (packing, on the CPU, slowed as much). Run with one
+            // view (FFLAME and a reordered list) to time another zoom.
+            let mut got = Vec::new();
+            let mut gpu_ms = f64::INFINITY;
+            for _ in 0..5 {
+                let t0 = std::time::Instant::now();
+                let g = gpu.evaluate(view, &jobs);
+                gpu_ms = gpu_ms.min(t0.elapsed().as_secs_f64() * 1e3);
+                assert!(got.is_empty() || got == g, "the GPU is not deterministic");
+                got = g;
+            }
+            let mut want = Vec::new();
+            let mut cpu_ms = f64::INFINITY;
+            for _ in 0..3 {
+                let t0 = std::time::Instant::now();
+                want = {
+                    use rayon::prelude::*;
+                    let bb = &b;
+                    jobs.par_iter()
+                        .flat_map_iter(|j| j.points.iter().map(move |&i| bb.lands(j.word, bb.sample[i as usize], view) as u8))
+                        .collect::<Vec<u8>>()
+                };
+                cpu_ms = cpu_ms.min(t0.elapsed().as_secs_f64() * 1e3);
+            }
+
+            let agree = got.iter().zip(&want).filter(|(a, b)| a == b).count();
+            let (gpu_only, cpu_only) = got.iter().zip(&want).fold((0, 0), |(g, c), (a, b)| {
+                (g + (*a == 1 && *b == 0) as usize, c + (*a == 0 && *b == 1) as usize)
+            });
+            let hits = want.iter().filter(|x| **x == 1).count();
+            println!(
+                "== {name}: {} words, {entries} points, {:.1}M symbol applications, {hits} CPU hits
+                    per point: agreement {:.5} (GPU-only hits {gpu_only}, CPU-only hits {cpu_only})
+                    GPU {gpu_ms:.1} ms (last: pack {:.1}, wait {:.1}, read {:.1}) | CPU (12 threads) {cpu_ms:.1} ms | {:.1}x",
+                words.len(),
+                symbols as f64 / 1e6,
+                agree as f64 / entries as f64,
+                gpu.last.pack,
+                gpu.last.wait,
+                gpu.last.read,
+                cpu_ms / gpu_ms
+            );
+
+            // **Where the answers part.** The GPU's end points against the
+            // CPU's, in view radii. Rounding moves a point by a hair and
+            // disagrees only at the rim -- the f32 render puts that point
+            // on the GPU's side of it too. Anything moved further is a
+            // different point: a branch taken the other way.
+            let ends = gpu.endpoints(&jobs);
+            let cpu_ends: Vec<Option<[f64; 2]>> = jobs
+                .iter()
+                .flat_map(|j| j.points.iter().map(move |&i| (j.word, i)))
+                .map(|(w, i)| b.forward_along(w, b.sample[i as usize]))
+                .collect();
+            let moved = |k: usize| -> f64 {
+                match (ends[k], cpu_ends[k]) {
+                    (Some(g), Some(c)) => (g[0] as f64 - c[0]).hypot(g[1] as f64 - c[1]) / view.radius,
+                    (None, None) => 0.0,
+                    _ => f64::INFINITY,
+                }
+            };
+            let edges = [1e-4, 1e-3, 1e-2, 1e-1, 1.0, 10.0];
+            let mut all = [0usize; 8];
+            let mut dis = [0usize; 8];
+            let (mut structural, mut rim) = (0usize, 0usize);
+            for k in 0..entries {
+                let d = moved(k);
+                let bk = if d.is_infinite() { 7 } else { edges.iter().position(|e| d < *e).unwrap_or(6) };
+                all[bk] += 1;
+                structural += (d >= 0.1) as usize;
+                if got[k] != want[k] {
+                    dis[bk] += 1;
+                    if d < 0.1 {
+                        if let Some(c) = cpu_ends[k] {
+                            let from_rim = ((c[0] - view.centre[0]).hypot(c[1] - view.centre[1]) - view.radius).abs();
+                            rim += (from_rim <= 2.0 * d * view.radius + 1e-12) as usize;
+                        }
+                    }
+                }
+            }
+            let at = (view.centre[0].abs().max(view.centre[1].abs()) as f32).to_bits();
+            let ulp = (f32::from_bits(at + 1) - f32::from_bits(at)) as f64;
+            // The frame's pixel: `View::of` spans 4/zoom across the short side.
+            let pixel = view.radius / (1280f64.hypot(720.0) / 2.0);
+            println!("   f32 step at the centre: {:.2e} r = {:.2} px", ulp / view.radius, ulp / pixel);
+            println!("   |gpu - cpu| in radii:  <1e-4    <1e-3    <1e-2    <1e-1       <1      <10     >=10  one-bad");
+            println!("     every point   {}", all.iter().map(|n| format!("{n:>8}")).collect::<Vec<_>>().join(" "));
+            println!("     disagreeing   {}", dis.iter().map(|n| format!("{n:>8}")).collect::<Vec<_>>().join(" "));
+            let small = dis[..4].iter().sum::<usize>();
+            println!(
+                "   disagreements moved < 0.1 r: {small}, of which {rim} sit within twice their move of the rim;                  moved >= 0.1 r (a different point): {structural} = {:.1e} of all points",
+                structural as f64 / entries as f64
+            );
+
+            // **Replay shares**: each word's verification job, both sides.
+            let mut off = 0usize;
+            let mut worst = 0.0f64;
+            let mut within = 0usize;
+            let mut shown = 0usize;
+            // The decision a share makes: keep at `CUT_EFFICIENCY`, or carry.
+            let mut same_call = 0usize;
+            for (j, job) in jobs.iter().enumerate() {
+                let n = job.points.len();
+                if j % 2 == 0 {
+                    let g = got[off..off + n].iter().filter(|x| **x == 1).count() as f64 / n as f64;
+                    let c = want[off..off + n].iter().filter(|x| **x == 1).count() as f64 / n as f64;
+                    worst = worst.max((g - c).abs());
+                    within += ((g - c).abs() <= 0.01) as usize;
+                    same_call += ((g >= CUT_EFFICIENCY) == (c >= CUT_EFFICIENCY)) as usize;
+                    if (g - c).abs() > 0.01 && shown < 3 {
+                        shown += 1;
+                        // How big the word's image is, and how far each point moved.
+                        let pts: Vec<[f64; 2]> = cpu_ends[off..off + n].iter().flatten().copied().collect();
+                        let spread = spread_of(&pts) / view.radius;
+                        let mv = (off..off + n).map(&moved).filter(|d| d.is_finite()).fold(0.0, f64::max);
+                        println!(
+                            "     word len {:>2}: share cpu {c:.3} gpu {g:.3}; image spread {spread:.1e} r, largest move {mv:.1e} r",
+                            job.word.len()
+                        );
+                    }
+                }
+                off += n;
+            }
+            let share_ok = within as f64 / words.len() as f64;
+            let call_ok = same_call as f64 / words.len() as f64;
+            println!(
+                "   replay share within 1/100 of the CPU's: {share_ok:.4} of words (worst {worst:.4});                  the same keep-or-carry call: {call_ok:.4}"
+            );
+
+            // The gate, where the render can still resolve a pixel.
+            if ulp < pixel {
+                assert!(
+                    (structural as f64) < 1e-4 * entries as f64,
+                    "{name}: {structural} of {entries} points land somewhere else on the GPU"
+                );
+                assert_eq!(small, rim, "{name}: a disagreement that is not at the rim");
+                // Not the share itself: a word whose whole image is a speck
+                // on the rim, 1e-4 r across, shifts its share by the rim's
+                // rounding (measured: 0.02-0.05, one 0.235), and that only
+                // moves an efficiency estimate. The call the share makes is
+                // what changes a plan.
+                assert!(call_ok >= 0.99, "{name}: keep-or-carry differs for {:.3} of words", 1.0 - call_ok);
+            } else {
+                println!("   (past the render's f32 ceiling here: reported, not gated)");
+            }
+        }
+
+        // Latency: one small job, as the smallest round trip a level needs.
+        let w = vec![sym_of(0, 0)];
+        let pts: Vec<u32> = (0..100).collect();
+        let view = View::of(1e3, b.sample_point(0.75), 1280, 720);
+        let mut best = f64::INFINITY;
+        for _ in 0..20 {
+            let t0 = std::time::Instant::now();
+            let _ = gpu.evaluate(view, &[EvalJob { word: &w, points: &pts }]);
+            best = best.min(t0.elapsed().as_secs_f64() * 1e3);
+        }
+        println!("round trip, one job of 100 points: {best:.2} ms (best of 20)");
+    }
+
+    /// **Plans, written down exactly**: `PLAN_DUMP=dir` writes the plan
+    /// of every view in a fixed set to `dir/<view>.txt` -- each word's
+    /// symbols and the bits of its probability, then the plan's totals
+    /// -- so two builds' plans can be diffed. A word's centre and radius
+    /// are left out.
+    #[test]
+    #[ignore = "reads output/flame-zoom; writes $PLAN_DUMP"]
+    fn dump_plans() {
+        use std::fmt::Write as _;
+        let Ok(dir) = std::env::var("PLAN_DUMP") else { return };
+        std::fs::create_dir_all(&dir).expect("the dump directory");
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let mut flames: Vec<(String, crate::config::FractalConfig)> = Vec::new();
+        for name in ["grand-julian", "julian-disc", "random1"] {
+            if let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")) {
+                flames.push((name.to_string(), serde_json::from_str(&text).expect("a config")));
+            }
+        }
+        let saved = "output/grand-julian-missing-pieces.fflame";
+        let saved_cfg: Option<crate::config::FractalConfig> =
+            std::fs::read_to_string(saved).ok().map(|t| serde_json::from_str(&t).expect("a config"));
+        let t0 = std::time::Instant::now();
+        for (name, cfg) in &flames {
+            let Ok(b) = Backward::read(&cfg.flame, reg) else {
+                println!("{name}: refused");
+                continue;
+            };
+            let mut views: Vec<(String, View)> = Vec::new();
+            for z in [1e2f64, 1e3, 1e4, 1e6] {
+                for frac in [0.25f64, 0.75] {
+                    views.push((format!("{name}-x{z:.0e}-at{frac}"), View::of(z, b.sample_point(frac), 1280, 720)));
+                }
+            }
+            if name == "grand-julian" {
+                if let Some(c) = &saved_cfg {
+                    views.push((
+                        "grand-julian-missing-pieces".into(),
+                        View::of(c.zoom as f64, [c.pan_x as f64, c.pan_y as f64], 1280, 720),
+                    ));
+                }
+            }
+            for (vname, view) in views {
+                let plan = b.plan(view);
+                let mut out = String::new();
+                match plan {
+                    Ok(p) => {
+                        for w in &p.words {
+                            let _ = writeln!(out, "{:?} {:016x}", w.word, w.prob.to_bits());
+                        }
+                        let _ = writeln!(
+                            out,
+                            "words {} mass {:016x} lost {:016x} efficiency {:016x} depth {}",
+                            p.words.len(),
+                            p.mass.to_bits(),
+                            p.lost.to_bits(),
+                            p.efficiency.to_bits(),
+                            p.depth
+                        );
+                    }
+                    Err(e) => {
+                        let _ = writeln!(out, "no plan: {e:?}");
+                    }
+                }
+                std::fs::write(format!("{dir}/{vname}.txt"), out).expect("write");
+            }
+        }
+        println!("dumped in {:.1} s", t0.elapsed().as_secs_f64());
+    }
+
     /// **The completeness check at a saved view**: `FFLAME=path`.
     #[test]
     #[ignore = "reads $FFLAME"]
