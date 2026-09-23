@@ -3090,6 +3090,173 @@ mod gpu_tests {
         );
     }
 
+    /// Points on `flame`'s attractor, by the render's own maps: each of
+    /// 256 scattered seeds carried through its own random 48-symbol word
+    /// (transforms by weight, arms at random) on the planning kernel. Works
+    /// for any flame the kernel builds for, analysable or not -- which is
+    /// the point, since the question below is about the ones that are not.
+    ///
+    /// Before any final transform: the plan kernel applies normals only.
+    fn attractor_points(device: &wgpu::Device, queue: &wgpu::Queue, flame: &Flame, n: usize) -> Vec<[f64; 2]> {
+        use crate::scene::plan_gpu::{EvalJob, PlanGpu};
+        let mut st = 0x5EED_u64;
+        let mut rnd = move || {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((st >> 33) as f64) / ((1u64 << 31) as f64)
+        };
+        let seeds: Vec<[f64; 2]> = (0..256).map(|_| [rnd() * 2.0 - 1.0, rnd() * 2.0 - 1.0]).collect();
+        let live: Vec<(usize, f64)> =
+            flame.transforms.iter().enumerate().filter(|(_, t)| t.weight > 0.0).map(|(i, t)| (i, t.weight as f64)).collect();
+        if live.is_empty() {
+            return Vec::new();
+        }
+        let total: f64 = live.iter().map(|l| l.1).sum();
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let mut gpu = PlanGpu::new(device, queue, flame, &seeds);
+        if pollster::block_on(scope.pop()).is_some() {
+            return Vec::new();
+        }
+        let words: Vec<Vec<u32>> = (0..seeds.len())
+            .map(|_| {
+                (0..48)
+                    .map(|_| {
+                        let mut u = rnd() * total;
+                        let mut pick = live[live.len() - 1].0;
+                        for &(i, w) in &live {
+                            if u < w {
+                                pick = i;
+                                break;
+                            }
+                            u -= w;
+                        }
+                        // An arm for a many-valued variation; below 16, so
+                        // `2 pi k` stays exact in f32. Ignored by the rest.
+                        sym_of(pick as u32, (rnd() * 16.0) as u32)
+                    })
+                    .collect()
+            })
+            .collect();
+        let idx: Vec<[u32; 1]> = (0..seeds.len() as u32).map(|k| [k]).collect();
+        let jobs: Vec<EvalJob> = words.iter().zip(&idx).map(|(w, i)| EvalJob { word: w, points: i }).collect();
+        let pts: Vec<[f64; 2]> = gpu
+            .endpoints(&jobs)
+            .into_iter()
+            .flatten()
+            .map(|p| [p[0] as f64, p[1] as f64])
+            .filter(|p| p[0].abs() < 1e6 && p[1].abs() < 1e6)
+            .collect();
+        let step = (pts.len() / n.max(1)).max(1);
+        pts.into_iter().step_by(step).take(n).collect()
+    }
+
+    /// **Do the flames that convert to escape time deep-zoom, and only
+    /// they?** The theory in `gpu-cylinder-planning.md` §12, decision 4.
+    ///
+    /// For every flame in the corpus (`output/*.flame` and
+    /// `output/flame-zoom/*.fflame`): does it convert -- mode D's
+    /// `pack_flame`, planar or solid, and the planar `analyse_2d` alone --
+    /// and does targeting pay at depth -- a plan with a speedup above one
+    /// at 1e3 and 1e5 times the flame's own zoom, centred on three points
+    /// of its attractor. The table is the answer; the off-diagonal cells
+    /// are named with their reasons.
+    #[test]
+    #[ignore = "needs a GPU; reads output/*.flame and output/flame-zoom"]
+    fn do_escape_and_deep_zoom_go_together() {
+        use std::collections::BTreeMap;
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let (device, queue) = device();
+
+        let mut corpus: Vec<(String, FractalConfig)> = Vec::new();
+        let mut files: Vec<std::path::PathBuf> = std::fs::read_dir("output")
+            .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.extension().and_then(|x| x.to_str()) == Some("flame")).collect())
+            .unwrap_or_default();
+        files.sort();
+        for path in &files {
+            let Ok(text) = std::fs::read_to_string(path) else { continue };
+            let Ok(configs) = crate::flame_xml::parse_flame_xml(&text) else { continue };
+            let stem = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+            let many = configs.len() > 1;
+            for (k, cfg) in configs.into_iter().enumerate() {
+                corpus.push((if many { format!("{stem}#{k}") } else { stem.clone() }, cfg));
+            }
+        }
+        let mut zoomset: Vec<std::path::PathBuf> = std::fs::read_dir("output/flame-zoom")
+            .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.extension().and_then(|x| x.to_str()) == Some("fflame")).collect())
+            .unwrap_or_default();
+        zoomset.sort();
+        for path in &zoomset {
+            let Ok(text) = std::fs::read_to_string(path) else { continue };
+            let Ok(cfg) = serde_json::from_str::<FractalConfig>(&text) else { continue };
+            corpus.push((format!("zoom/{}", path.file_stem().unwrap_or_default().to_string_lossy()), cfg));
+        }
+        if corpus.is_empty() {
+            println!("  no corpus -- nothing to measure");
+            return;
+        }
+
+        // (escape, planar, deep) -> names, with the reason for the deep answer.
+        let mut cells: BTreeMap<(bool, bool), Vec<String>> = BTreeMap::new();
+        let mut planar_cells: BTreeMap<(bool, bool), usize> = BTreeMap::new();
+        for (name, cfg) in &corpus {
+            let flame = &cfg.flame;
+            let escape = crate::escape::ifs::pack_flame(flame, reg, None).is_ok();
+            let planar = crate::scene::ifs_analysis::analyse_2d(flame, reg);
+            let finals = flame.has_attachments();
+            let points = attractor_points(&device, &queue, flame, 3);
+            let mut best: Option<f64> = None;
+            let mut why = String::new();
+            for p in &points {
+                for mult in [1e3f64, 1e5] {
+                    let view = View::of(cfg.zoom.max(1e-6) as f64 * mult, *p, 512, 512);
+                    match Cylinders::plan(flame, reg, view) {
+                        Ok(c) => best = Some(best.unwrap_or(0.0).max(c.speedup())),
+                        Err(e) => {
+                            why = format!("{e:?}");
+                        }
+                    }
+                }
+            }
+            let deep = best.is_some_and(|s| s > 1.0);
+            let detail = match (best, points.is_empty()) {
+                (_, true) => "no attractor points (kernel did not build)".to_string(),
+                (Some(s), _) => format!("speedup {s:.2e}"),
+                (None, _) => {
+                    let w: String = why.chars().take(90).collect();
+                    format!("refused: {w}")
+                }
+            };
+            println!(
+                "  {name:<34} escape {:<5} planar {:<5} deep {:<5} {}{}",
+                escape,
+                planar.is_ok(),
+                deep,
+                detail,
+                if finals { "  [has finals: centres before them]" } else { "" }
+            );
+            cells.entry((escape, deep)).or_default().push(format!("{name} ({detail})"));
+            *planar_cells.entry((planar.is_ok(), deep)).or_default() += 1;
+        }
+
+        let n = |m: &BTreeMap<(bool, bool), Vec<String>>, k: (bool, bool)| m.get(&k).map_or(0, |v| v.len());
+        println!("\n  {} flames. Escape time (mode D) against deep zoom (targeting pays at depth):", corpus.len());
+        println!("                     deep     not deep");
+        println!("    converts       {:>6}    {:>6}", n(&cells, (true, true)), n(&cells, (true, false)));
+        println!("    does not       {:>6}    {:>6}", n(&cells, (false, true)), n(&cells, (false, false)));
+        let p = |k: (bool, bool)| planar_cells.get(&k).copied().unwrap_or(0);
+        println!("  The planar analysis alone (what the inverse walk starts from):");
+        println!("    analysable     {:>6}    {:>6}", p((true, true)), p((true, false)));
+        println!("    not            {:>6}    {:>6}", p((false, true)), p((false, false)));
+        for (k, label) in [((true, false), "converts but does not deep-zoom"), ((false, true), "deep-zooms but does not convert")] {
+            if let Some(v) = cells.get(&k) {
+                println!("\n  {label}:");
+                for w in v {
+                    println!("    {w}");
+                }
+            }
+        }
+    }
+
     /// **Phase 2's contention gate** (`gpu-cylinder-planning.md` §14): a
     /// plan made while the render runs, with the CPU's answers and with
     /// the GPU's. The GPU planner's batches share the render's queue, so
