@@ -2,7 +2,8 @@
 
 Written as a plan before any code. The decisions (§11) were taken and
 are recorded in §12; phases 0 and 1 are built and measured in §13, phase
-2 in §14, and the rest of the document is the plan as it was written.
+2 in §14, the escape-time theory is measured in §15, and the rest of the
+document is the plan as it was written.
 
 Background: [inversive-targeting.md](inversive-targeting.md) §24–§30
 describe the planner this would accelerate -- the inverse walk over an
@@ -589,3 +590,61 @@ Measured and not kept:
   there are complete by the walk's own point count (§27 of
   `inversive-targeting.md`) and by the pictures, not by this check.
 - **Gathering is the floor.** See §14.1.
+
+---
+
+## 15. Escape time and deep zoom: the theory, measured (2026-09-23)
+
+The theory (§12, decision 4): the flames that convert to escape time are
+the ones that can be deep-zoomed. `do_escape_and_deep_zoom_go_together`
+asks both questions of every flame in the corpus -- the 45 `.flame`
+files in `output/` (43 flames) and the 10 configs in `output/flame-zoom/`:
+
+- **Converts**: mode D's `pack_flame` accepts it, planar or solid.
+- **Deep-zooms**: `Cylinders::plan` returns a plan with a speedup above
+  one at 1e3 or 1e5 times the flame's own zoom, centred on one of three
+  points of its attractor. The points come from the planning kernel
+  itself: 256 scattered seeds, each carried through its own random
+  48-symbol word by the render's maps, which works for any flame the
+  kernel builds -- analysable or not.
+
+| | deep-zooms | does not |
+|---|---|---|
+| **converts** | 5 | 5 |
+| **does not** | 2 | 43 |
+
+(The planar analysis alone, `analyse_2d`, gives the same table.)
+
+**48 of 55 on the diagonal, and each of the seven off it is a gap in one
+tool, not a different kind of flame:**
+
+- **Converts, but the forward planner's word cap stops it** (3):
+  `cup_(3d)`, `cup_(3d)-nopreservez`, `linear3d-test`, all
+  `TooManyWords` (4404-6232 against 4096). They are analysable, so the
+  inverse walk could plan them -- but `Cylinders::plan` sends only armed
+  flames there.
+- **Converts, but the inverse walk returns an empty plan** (2):
+  `julian-disc`, `random1` -- `ViewIsEmpty` for views centred on points
+  of their own attractors. The open issue of §14.3; a planner fault.
+- **Deep-zooms, but does not convert** (2): `schottky1`, `schottky2`.
+  Four `mobius` transforms, targeted through forward ball bounds; the
+  planar analysis does not read Möbius maps yet (`affine_role`'s note:
+  conformal invertible maps are "the next candidates").
+
+The 43 that do neither are blocked, on the targeting side, by things
+both tools lack today rather than by geometry: a DC/RGB colour variation
+(`ColourNotAffine`, 20), xaos (8), a variation with no bound or inverse
+(`rays`, `cross`, `roundspher3D`, `julian` the analysis refuses: 10), the
+forward word cap (3), no invariant ball (1), a planner timeout
+(`spherical`, 1). So the
+diagonal is partly shared limits -- both tools need each map to be
+readable as a map -- and the corpus is small, and mostly flames made to
+test other features.
+
+**What it supports**: the property both tools rest on is the same --
+every map has something computable about it (an inverse, or a bound on
+where it sends a disc) -- and where that holds, both tools can in
+principle work. Every disagreement found is a gap to close, not a
+counterexample. Closing them is concrete: route analysable flames over
+the forward cap to the inverse walk, find why the inverse walk comes back
+empty for two family-J flames, and teach the planar analysis Möbius maps.
