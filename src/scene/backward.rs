@@ -73,6 +73,17 @@ pub const BEAM_LOSS: f64 = 1e-3;
 /// The hard cap on the frontier, for cost.
 pub const BEAM: usize = 2048;
 
+/// A child that lands but whose region yielded no sample point is forced
+/// as it stands only if that wastes at most this fraction of the mass
+/// already kept -- its probability times the share of it that misses the
+/// view. Above it, it is carried on from the points its replay landed.
+/// See `close`.
+pub const FORCE_WASTE: f64 = 0.01;
+
+/// The most points a pulled-back cloud keeps. The view's own cloud is 64;
+/// following every branch of an inverse can multiply it.
+pub const CLOUD_CAP: usize = 256;
+
 /// How many points of the attractor are sampled, once per flame. The
 /// walk's resolution is how many of them a region holds, so this is
 /// large; it is built once and cached.
@@ -503,6 +514,9 @@ impl Index {
 struct Sym {
     sym: u32,
     map: usize,
+    /// Every map the analysis made of this symbol's transform: one per
+    /// branch of its inverse. See `children_of`'s cloud.
+    branches: Vec<usize>,
     arm: u32,
     /// The probability the chaos game draws this transform AND this
     /// arm.
@@ -544,6 +558,9 @@ struct Child {
     /// The replay: points landed of points tried.
     hit: usize,
     total: usize,
+    /// The verification points its replay landed: sample points of its
+    /// region, found for free. See `close`.
+    replay_hits: Vec<u32>,
     /// Candidates checked and found in the region.
     hits: Vec<u32>,
     /// Thin after its check, so searched again, wider.
@@ -699,6 +716,8 @@ struct TransformInfo {
     weight: f64,
     arms: u32,
     map: usize,
+    /// All of the transform's maps, `map` first.
+    branches: Vec<usize>,
 }
 
 /// How many arms a map's FORWARD has -- a root's `|n|`; everything
@@ -798,14 +817,15 @@ impl Backward {
         }
         let mut transforms: Vec<TransformInfo> = Vec::new();
         for (mi, m) in ifs.maps.iter().enumerate() {
-            if transforms.iter().any(|t| t.index == m.transform_index) {
+            if let Some(t) = transforms.iter_mut().find(|t| t.index == m.transform_index) {
+                t.branches.push(mi);
                 continue;
             }
             let weight = flame
                 .transforms
                 .get(m.transform_index)
                 .map_or(0.0, |t| (t.weight as f64).max(0.0));
-            transforms.push(TransformInfo { index: m.transform_index, weight, arms: forward_arms(m), map: mi });
+            transforms.push(TransformInfo { index: m.transform_index, weight, arms: forward_arms(m), map: mi, branches: vec![mi] });
         }
         let total: f64 = transforms.iter().map(|t| t.weight).sum();
         if !(total > 0.0) {
@@ -823,6 +843,7 @@ impl Backward {
                 alphabet.push(Sym {
                     sym: sym_of(t.index as u32, arm),
                     map: t.map,
+                    branches: t.branches.clone(),
                     arm,
                     prob: t.weight / total / t.arms as f64,
                 });
@@ -1156,19 +1177,36 @@ impl Backward {
                             tr.pruned += 1;
                             continue;
                         }
-                        let q = map.inverse.apply(p);
-                        if !finite(q) || q[0].abs() > 1e12 || q[1].abs() > 1e12 {
-                            tr.no_preimage += 1;
-                            continue;
+                        // **Along every branch of the inverse.** A map
+                        // that is not one-to-one -- a sum of a root and an
+                        // affine, `disc`, `bubble` -- has several
+                        // preimages of a point, and the analysis makes one
+                        // map per branch. Pulled back along the first
+                        // alone, a sum's second arm never received a cloud
+                        // point, and random1's views past its sample's
+                        // resolution planned nothing. Each preimage is
+                        // confirmed forward, with its arm.
+                        for &mb in &a.branches {
+                            let q = self.ifs.maps[mb].inverse.apply(p);
+                            if !finite(q) || q[0].abs() > 1e12 || q[1].abs() > 1e12 {
+                                tr.no_preimage += 1;
+                                continue;
+                            }
+                            let Some(arm) = self.arm_of(map, q, p) else {
+                                tr.no_arm += 1;
+                                continue;
+                            };
+                            if arm != a.arm || is_junk(q) {
+                                continue;
+                            }
+                            pts.push(q);
                         }
-                        let Some(arm) = self.arm_of(map, q, p) else {
-                            tr.no_arm += 1;
-                            continue;
-                        };
-                        if arm != a.arm || is_junk(q) {
-                            continue;
-                        }
-                        pts.push(q);
+                    }
+                    // Branches can multiply a cloud level by level: kept
+                    // to `CLOUD_CAP`, evenly through it.
+                    if pts.len() > CLOUD_CAP {
+                        let n = pts.len();
+                        pts = (0..CLOUD_CAP).map(|k| pts[k * n / CLOUD_CAP]).collect();
                     }
                     if !pts.is_empty() {
                         found.push((ai, Pts::Cloud(pts)));
@@ -1230,6 +1268,7 @@ impl Backward {
                     orbit_hits: std::mem::take(&mut from_orbit[ai]),
                     hit: 0,
                     total: 0,
+                    replay_hits: Vec::new(),
                     hits: Vec::new(),
                     topped: false,
                     n_cands,
@@ -1338,11 +1377,22 @@ impl Backward {
         // for every child, then the rest for the children whose share is
         // too close to the cut to trust. See `REPLAY_FIRST`.
         let t = Instant::now();
+        // An UNSEEN child whose first pass landed nothing runs the rest
+        // too: it is about to be dropped, and a share of 1.5% reads zero
+        // on a hundred points a fifth of the time -- measured, a
+        // julian-disc branch holding 12.7% of its view was dropped so. On
+        // four hundred it reads zero 0.25% of the time. Only those: for
+        // every zero it cost a CPU plan 40%.
         let in_band = |c: &Child| {
             let e = c.hit as f64 / c.total.max(1) as f64;
-            e > REPLAY_EXTEND.0 && e < REPLAY_EXTEND.1
+            let unseen = matches!(c.pts, Pts::Index(_)) && c.n_cands == 0 && c.orbit_hits.is_empty();
+            (e > REPLAY_EXTEND.0 && e < REPLAY_EXTEND.1) || (c.hit == 0 && unseen)
         };
         let landed = |g: &[u8]| g.iter().filter(|g| **g == 1).count();
+        // The sample indices of the points that landed.
+        let which = |g: &[u8], pts: &[u32]| -> Vec<u32> {
+            g.iter().zip(pts).filter(|(a, _)| **a == 1).map(|(_, i)| *i).collect()
+        };
         let (n1, n2) = (self.verify_first.len(), self.verify_rest.len());
         if speculate {
             // One batch: both passes for every child, and every index
@@ -1369,19 +1419,22 @@ impl Backward {
             let mut gathered = gathered.into_iter();
             let mut at = 0usize;
             for c in opens.iter_mut().flat_map(|o| o.children.iter_mut()) {
-                c.hit = landed(&answers[at..at + n1]);
-                c.total = n1;
-                at += n1;
-                let rest = landed(&answers[at..at + n2]);
-                at += n2;
-                if in_band(c) {
-                    c.hit += rest;
-                    c.total += n2;
-                }
                 if matches!(c.pts, Pts::Index(_)) {
                     let g = gathered.next().expect("one answer per gather");
                     c.n_cands = g.cands;
                     c.spec = Some(g.hits);
+                }
+                let first = &answers[at..at + n1];
+                c.hit = landed(first);
+                c.total = n1;
+                c.replay_hits = which(first, &self.verify_first);
+                at += n1;
+                let rest = &answers[at..at + n2];
+                at += n2;
+                if in_band(c) {
+                    c.hit += landed(rest);
+                    c.total += n2;
+                    c.replay_hits.extend(which(rest, &self.verify_rest));
                 }
             }
         } else {
@@ -1393,8 +1446,10 @@ impl Backward {
                 eval.lands(self, view, &jobs)
             };
             for (k, c) in opens.iter_mut().flat_map(|o| o.children.iter_mut()).enumerate() {
-                c.hit = landed(&answers[k * n1..(k + 1) * n1]);
+                let first = &answers[k * n1..(k + 1) * n1];
+                c.hit = landed(first);
                 c.total = n1;
+                c.replay_hits = which(first, &self.verify_first);
             }
             let answers = {
                 let jobs: Vec<EvalJob> = opens
@@ -1408,8 +1463,10 @@ impl Backward {
             let mut k = 0usize;
             for c in opens.iter_mut().flat_map(|o| o.children.iter_mut()) {
                 if in_band(c) {
-                    c.hit += landed(&answers[k * n2..(k + 1) * n2]);
+                    let rest = &answers[k * n2..(k + 1) * n2];
+                    c.hit += landed(rest);
                     c.total += n2;
+                    c.replay_hits.extend(which(rest, &self.verify_rest));
                     k += 1;
                 }
             }
@@ -1553,7 +1610,7 @@ impl Backward {
         }
 
         // **7. Each node decided**, its children in their order.
-        Some(opens.into_iter().map(|o| self.close(o, depth, view, watch)).collect())
+        Some(opens.into_iter().map(|o| self.close(o, depth, view, watch, floor_mass)).collect())
     }
 
     /// Settle a node once its children's questions are answered: which
@@ -1566,7 +1623,7 @@ impl Backward {
     /// kernel's table holds the symbols, the probability and the colour
     /// fold), and computing them needed positions an evaluator does not
     /// return.
-    fn close(&self, o: Open, depth: usize, view: View, watch: Option<&[u32]>) -> Expanded {
+    fn close(&self, o: Open, depth: usize, view: View, watch: Option<&[u32]>, floor_mass: f64) -> Expanded {
         let Open { node, children, mut trace, .. } = o;
         let watched = |t: &mut Trace, word: &[u32], what: &str, detail: &dyn Fn() -> String| {
             if let Some(line) = watch_line(watch, word, depth, what, detail) {
@@ -1589,7 +1646,7 @@ impl Backward {
         for c in children {
             let eff = c.eff();
             let n_cands = c.n_cands;
-            let Child { ai, word, prob, pts, orbit_hits, mut hits, fate, .. } = c;
+            let Child { ai, word, prob, pts, orbit_hits, replay_hits, mut hits, fate, .. } = c;
             let pts = match fate {
                 Fate::Dropped => continue,
                 Fate::Kept(eff) => {
@@ -1604,12 +1661,34 @@ impl Backward {
                     hits.extend_from_slice(&orbit_hits);
                     hits.sort_unstable();
                     hits.dedup();
+                    // **Pointless, but it lands.** No point of its region
+                    // was found to expand it from -- except the
+                    // verification points its own replay sent into the
+                    // view, which ARE points of its region. Forced as it
+                    // stands, a shallow child with a sliver of the view is
+                    // nearly all waste: random1 1e3 fell to an efficiency
+                    // of 0.013 on a few of them. Carried on from those
+                    // points instead, julian-disc's 51 arms multiplied into
+                    // plans of 200k words. So it is carried when forcing
+                    // it would waste more than `FORCE_WASTE` of the mass
+                    // already kept, and forced otherwise.
+                    if hits.is_empty() && !replay_hits.is_empty() && prob * (1.0 - eff) > FORCE_WASTE * floor_mass {
+                        watched(&mut trace, &word, "REPLAYED", &|| format!("{} replay points; eff {eff:.2} prob {prob:.2e}", replay_hits.len()));
+                        hits = replay_hits;
+                        hits.sort_unstable();
+                        hits.dedup();
+                    }
                     if hits.is_empty() {
                         trace.empty += 1;
                         if eff > 0.0 {
                             // It lands -- the replay says so -- but no
                             // point of its region was found to expand it
                             // from. Forced as it stands.
+                            //
+                            // Carrying it on by replays alone instead was
+                            // measured and not kept: julian-disc's 51 arms
+                            // multiplied it into plans of 200k words at
+                            // efficiency 0.003.
                             watched(&mut trace, &word, "FORCEDCH", &|| format!("{n_cands} candidates, none land; eff {eff:.2}"));
                             survived[ai] = true;
                             node_kept.push((disc(word, prob), eff));
@@ -2872,11 +2951,33 @@ mod tests {
     fn why_is_this_view_empty() {
         let guard = crate::variations::global_registry();
         let reg = &*guard;
-        for (name, zoom, frac) in [("julian-disc", 1e3f64, 0.25f64), ("julian-disc", 1e2, 0.25), ("random1", 1e4, 0.25), ("random1", 1e3, 0.25)] {
+        // `off` moves the view off its sample point by that many radii, so
+        // it holds few or none of the sample and the cloud has to seed it.
+        for (name, zoom, frac, off) in [
+            ("julian-disc", 1e3f64, 0.25f64, 0.0f64),
+            ("julian-disc", 1e2, 0.25, 0.0),
+            ("random1", 1e4, 0.25, 0.0),
+            ("random1", 1e3, 0.25, 0.0),
+            ("julian-disc", 1e3, 0.25, 0.6),
+            ("random1", 1e3, 0.25, 0.6),
+            ("random1", 1e4, 0.25, 0.6),
+            ("grand-julian", 1e3, 0.75, 0.6),
+            ("julian-disc", 1e3, 0.25, 2.0),
+            ("random1", 1e3, 0.25, 2.0),
+            ("random1", 1e3, 0.6, 2.0),
+            ("julian-disc", 1e3, 0.6, 2.0),
+            ("grand-julian", 1e3, 0.75, 2.0),
+            ("grand-julian", 1e3, 0.3, 2.0),
+        ] {
+            if std::env::var("ONLY_OFF").is_ok() && off < 1.0 {
+                continue;
+            }
             let text = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")).expect("flame");
             let cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
             let b = Backward::read(&cfg.flame, reg).expect("armed");
-            let q = b.sample_point(frac);
+            let q0 = b.sample_point(frac);
+            let r0 = View::of(zoom, q0, 1280, 720).radius;
+            let q = [q0[0] + off * r0, q0[1] + 0.5 * off * r0];
             let view = View::of(zoom, q, 1280, 720);
             // How much of the sample is in the view at all, and through
             // which symbols it arrived.
@@ -2895,7 +2996,7 @@ mod tests {
             let mut tr = Trace::default();
             // Every word, watched -- or one lost branch, where set.
             tr.watch = Some(match std::env::var("WATCH") {
-                Ok(w) if name == "julian-disc" && zoom == 1e2 => w
+                Ok(w) if std::env::var("WATCH_AT").map_or(name == "julian-disc" && zoom == 1e2, |v| v == format!("{name}-{frac}-{off}")) => w
                     .split(',')
                     .map(|t| {
                         let (a, b) = t.split_once('.').unwrap();
@@ -2905,13 +3006,13 @@ mod tests {
                 _ => Vec::new(),
             });
             let plan = b.plan_with(view, &mut tr);
-            if plan.is_err() || std::env::var("WATCH").is_ok() && name == "julian-disc" && zoom == 1e2 {
-                for line in tr.watched.iter().take(80) {
+            if plan.is_err() || std::env::var("WATCH").is_ok() && !tr.watched.is_empty() && tr.watch.as_ref().is_some_and(|w| !w.is_empty()) {
+                for line in tr.watched.iter().take(120) {
                     println!("   watch: {line}");
                 }
             }
             println!(
-                "== {name} x{zoom:.0e} at {frac}: centre [{:.5}, {:.5}] r {:.2e}, extent {:.3}, {} alphabet, {} sample points in view by {:?}",
+                "== {name} x{zoom:.0e} at {frac} off {off}: centre [{:.5}, {:.5}] r {:.2e}, extent {:.3}, {} alphabet, {} sample points in view by {:?}",
                 q[0], q[1], view.radius, b.extent, b.alphabet.len(), inside.len(), by
             );
             if let Ok(p) = &plan {
