@@ -898,3 +898,34 @@ the browser was not measured here.) What would help, none of it done:
   busy stretch rather than the frame.
 - **Compiling the planner's kernels when the flame loads**, beside the
   render's, rather than on a frame of their own mid-plan.
+
+**Found in the app afterwards: a crash when a plan was dropped
+mid-flight.** On the web, a plan the view has moved on from is dropped
+when the next one starts, at whatever point it had reached -- usually
+waiting for a readback, since that is where it spends its frames. The
+readback's staging buffer belonged to the planner and outlived it,
+still mapped (or with its map pending), so the next plan's first batch
+copied into a mapped buffer and panicked in wgpu's `map_async`: "Buffer
+is already mapped". The desktop's threads never hit it: told to stop, a
+thread finishes its batch first. No test had cancelled a task mid-plan.
+
+- **The fix** (`plan_gpu.rs`): a readback has the staging buffer to
+  itself (`Grow::lend`) until `take` reads it and gives it back. Dropped
+  instead, it unmaps the buffer -- which also aborts a pending map -- and
+  the buffer goes with it; the next batch makes a new one. A map that
+  failed is not reused either: wgpu forgets a mapping only on `unmap`,
+  and natively, unmapping a buffer whose map failed is itself an error.
+- **The tests**: the standby flow, in both modes, now pans eight times
+  while plans are in flight, then moves to a view no standby covers and
+  requires a fresh plan. It reproduced the crash natively in task mode
+  before the fix ("Plan Eval Stage is still mapped"); after it, 8 of 8
+  pans landed mid-plan in task mode (7 of 8 with threads) and the fresh
+  plan came in 1.30 s (0.42 s). In the browser, `test_plan.py` restarts
+  one planner eight times mid-plan and then plans to the end: 8 of 8
+  dropped, then the full 10357 words.
+
+The native gate also failed once in a suite run, on a poll just past
+16 ms: the tail of one landing index and its radix sort, 8.3-9.4 ms in
+one piece. The sort now ticks between passes and the landing loop every
+4096 points; the longest poll over four runs fell from 14-16 ms to
+6.9-11.8 ms. Plans are bit for bit as before on both evaluators.

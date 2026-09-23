@@ -93,6 +93,28 @@
                 requestAnimationFrame(frame);
             });
         };
+
+        // A plan dropped mid-flight, again and again, on one planner: each
+        // start drops the last plan at whatever point it had reached -- a
+        // readback from the GPU included, which is what crashed the editor
+        // (the staging buffer was left mapped). Then one plan to the end.
+        window.runRestarts = async function (configJson, zoomMult, sliceMs, drops) {
+            const bench = await PlanBench.create(configJson);
+            const nextFrame = () => new Promise((r) => requestAnimationFrame(r));
+            let dropped = 0;
+            for (const n of drops) {
+                bench.start(zoomMult, sliceMs, false, false);
+                let done = false;
+                for (let i = 0; i < n && !done; i++) {
+                    await nextFrame();
+                    done = bench.step();
+                }
+                if (!done) dropped++;
+            }
+            bench.start(zoomMult, sliceMs, false, false);
+            while (!bench.step()) await nextFrame();
+            return { dropped, words: bench.words(), error: bench.error() };
+        };
     </script>
 </body>
 </html>

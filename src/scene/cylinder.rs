@@ -3715,6 +3715,38 @@ mod gpu_tests {
         assert!(!r.take_plan_arrived(), "a standby was swapped in for a view it does not cover");
         wait(&mut r, &cfg, "tight plan after a long pan", &|r| r.take_plan_arrived());
         assert!(matches!(r.targeting_state(), TS::Active { .. }), "{:?}", r.targeting_state());
+
+        // **Moving while a plan is made.** Each pan lands while the last
+        // one's plan is still in flight, and starting the next plan
+        // drops it -- at whatever point it had reached, a readback from
+        // the GPU included. The web crashed here: a task dropped while
+        // its readback was out left the planner's staging buffer mapped,
+        // and the next plan's first batch panicked in `map_async`
+        // ("Buffer is already mapped"). A thread, told to stop, finishes
+        // its batch first.
+        let mut in_flight = 0;
+        for k in 0..8u32 {
+            cfg.pan_x += if k % 2 == 0 { 5.0 } else { -5.0 } * radius;
+            cfg.pan_y += 0.1 * radius;
+            // The settle (250 ms), then a different way into the plan
+            // each time.
+            let t0 = Instant::now();
+            while t0.elapsed() < Duration::from_millis(260 + 40 * k as u64) {
+                frame(&mut r, &cfg);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            in_flight += r.plans_running() as u32;
+        }
+        println!("  {in_flight} of 8 pans landed with a plan in flight");
+        assert!(in_flight > 0, "no pan landed mid-plan: the drop was not tested");
+        // Then somewhere no standby covers -- over two radii from every
+        // view so far -- held still: after all those drops, the planner
+        // still makes a plan.
+        cfg.pan_y -= 3.0 * radius;
+        frame(&mut r, &cfg);
+        r.take_plan_arrived();
+        wait(&mut r, &cfg, "a fresh plan after the pans mid-plan", &|r| r.take_plan_arrived());
+        assert!(matches!(r.targeting_state(), TS::Active { .. }), "{:?}", r.targeting_state());
         longest.get()
     }
 

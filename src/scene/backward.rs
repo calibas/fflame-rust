@@ -583,7 +583,14 @@ impl Index {
     /// Comparison-sorting 100k tuples was the largest single piece of
     /// building the walk: 14-20 ms each, one per alphabet symbol, which a
     /// web frame cannot hold.
-    fn build(mut entries: Vec<(Cell, u32)>) -> Self {
+    #[cfg(test)]
+    fn build(entries: Vec<(Cell, u32)>) -> Self {
+        drive(Self::build_sliced(entries, &Slicer::never()))
+    }
+
+    /// [`Self::build`], ticking between passes: one index is 5-9 ms of
+    /// the analysis natively, too much of a web frame in one piece.
+    async fn build_sliced(mut entries: Vec<(Cell, u32)>, slicer: &Slicer) -> Self {
         if !entries.windows(2).all(|w| w[0].1 < w[1].1) {
             entries.sort_unstable();
             return Self { entries };
@@ -595,6 +602,7 @@ impl Index {
         let mut next: Vec<u32> = vec![0; n];
         let mut count = vec![0usize; 1 << 16];
         for pass in 0..4 {
+            slicer.tick().await;
             let shift = 16 * pass;
             let digit = |i: u32| ((keys[i as usize] >> shift) & 0xFFFF) as usize;
             let first = keys.first().map_or(0, |k| (k >> shift) & 0xFFFF);
@@ -618,6 +626,7 @@ impl Index {
             }
             std::mem::swap(&mut perm, &mut next);
         }
+        slicer.tick().await;
         let entries = perm.iter().map(|&i| entries[i as usize]).collect();
         Self { entries }
     }
@@ -1059,7 +1068,7 @@ impl Backward {
         let cell = 2.0 * extent / GRID_CELLS as f64;
         let key = |p: [f64; 2]| -> Cell { ((p[0] / cell).floor() as i32, (p[1] / cell).floor() as i32) };
         slicer.tick().await;
-        let grid = Index::build(sample.iter().enumerate().map(|(i, p)| (key(*p), i as u32)).collect());
+        let grid = Index::build_sliced(sample.iter().enumerate().map(|(i, p)| (key(*p), i as u32)).collect(), slicer).await;
         slicer.tick().await;
         // **The index.** Every sample point landed through every
         // symbol, filed by the cell it lands in.
@@ -1071,12 +1080,13 @@ impl Backward {
                 if finite(y) && y[0].abs() < 1e12 && y[1].abs() < 1e12 {
                     entries.push((key(y), i as u32));
                 }
-                if i % 8192 == 0 {
+                if i % 4096 == 0 {
                     slicer.tick().await;
                 }
             }
+            slicer.tick().await;
             // One index's sort: 100k entries, a few milliseconds.
-            landing.push(Index::build(entries));
+            landing.push(Index::build_sliced(entries, slicer).await);
             slicer.tick().await;
         }
         let stride = (sample.len() / VERIFY).max(1);
