@@ -150,7 +150,17 @@ pub const LAST_EFFICIENCY: f64 = 0.2;
 /// candidate, so this is the one place the cloud phase is expensive;
 /// it is also the one place being stingy costs the whole plan, since
 /// a region never seeded is walked by the cloud to the depth cap.
-pub const MIN_SEED: usize = 16;
+///
+/// **One.** A sample point is on the attractor exactly, and the
+/// indexed walk grows a thin region by its orbit split, its top-ups and
+/// its replays of unseen children. The cloud cannot always grow one: it
+/// needs the region to widen as it is pulled back, and where the
+/// dominant map is nearly neutral it does not. At 16, julian-disc from
+/// 1e3 (3 sample points in view) and random1 from 1e4 (1 point) walked
+/// the cloud ten levels at the same size until it drifted off the
+/// attractor, and planned nothing; at 1, they plan with coverage 0.998
+/// and 0.990. Grand-julian's plans were unchanged but for two deep views.
+pub const MIN_SEED: usize = 1;
 pub const SEED_CANDIDATES: usize = 4096;
 
 /// How many of a node's points contribute their cells to a child's
@@ -460,6 +470,11 @@ struct Child {
     hits: Vec<u32>,
     /// Thin after its check, so searched again, wider.
     topped: bool,
+    /// Neither the node's points nor the index put a single sample point
+    /// in this child's region. It is replayed like any other: a replay
+    /// that lands keeps or carries it, and only a replay that lands
+    /// nothing drops it. See `Backward::children_of`.
+    unseen: bool,
     /// Its candidates' answers, asked ahead of need. See
     /// `Evaluate::speculative`.
     spec: Option<Vec<u32>>,
@@ -488,6 +503,9 @@ enum Fate {
     Kept(f64),
     /// Carried with its cloud as it stands.
     Carried,
+    /// Unseen and its replay landed nothing: no evidence it holds any
+    /// of the view. See `Child::unseen`.
+    Dropped,
 }
 
 /// A node of the level being expanded.
@@ -1054,12 +1072,19 @@ impl Backward {
                 // few from each.
                 let looked = cells.len() * if neighbours { 9 } else { 1 };
                 let per_cell = PER_CELL.max(CAND_CAP.div_ceil(looked.max(1)));
+                // **A child the sample does not see is replayed, not
+                // dropped.** One whose region holds none of the node's
+                // points and none of the index's candidates can still hold
+                // real measure: its share of the node is below one part in
+                // the node's point count. Dropping those unreplayed lost
+                // julian-disc 69% of a 1e2 view -- its dominant map is
+                // nearly neutral there, so a branch is carried ~80 levels
+                // at efficiency ~0.3 and at each level 50 julian arms,
+                // 0.06% of the node apiece and mostly unseen, were
+                // dropped: up to 3% a level, compounding, and invisible
+                // to the completeness check, which counts points.
                 for (ai, _a) in self.alphabet.iter().enumerate() {
                     let cands = Self::gather(&self.landing[ai], &cells, neighbours, per_cell, CAND_CAP);
-                    if cands.is_empty() && from_orbit[ai].is_empty() {
-                        tr.nocand += 1;
-                        continue;
-                    }
                     found.push((ai, Pts::Index(cands)));
                 }
             }
@@ -1072,6 +1097,7 @@ impl Backward {
                 let mut word = Vec::with_capacity(node.word.len() + 1);
                 word.push(a.sym);
                 word.extend_from_slice(&node.word);
+                let unseen = matches!(&pts, Pts::Index(c) if c.is_empty()) && from_orbit[ai].is_empty();
                 Child {
                     ai,
                     word,
@@ -1083,6 +1109,7 @@ impl Backward {
                     total: 0,
                     hits: Vec::new(),
                     topped: false,
+                    unseen,
                     spec: None,
                     fate: Fate::Undecided,
                 }
@@ -1264,6 +1291,11 @@ impl Backward {
             for c in &mut o.children {
                 let eff = c.eff();
                 let prob = c.prob;
+                if c.unseen && !(eff > 0.0) {
+                    c.fate = Fate::Dropped;
+                    o.trace.nocand += 1;
+                    continue;
+                }
                 // A child the walk stops at is FORCED even when its
                 // replay landed nothing: zero hits in `VERIFY` samples
                 // means under one part in `VERIFY`, not none. Dropping
@@ -1413,6 +1445,7 @@ impl Backward {
             let n_cands = c.cands().len();
             let Child { ai, word, prob, pts, orbit_hits, mut hits, fate, .. } = c;
             let pts = match fate {
+                Fate::Dropped => continue,
                 Fate::Kept(eff) => {
                     survived[ai] = true;
                     node_kept.push((disc(word, prob), eff));
@@ -2581,6 +2614,175 @@ mod tests {
             }
         }
         println!("dumped in {:.1} s", t0.elapsed().as_secs_f64());
+    }
+
+    /// **Why does the walk come back empty -- or incomplete** -- for
+    /// julian-disc and random1? (`inversive-targeting.md` §31.) Per view:
+    /// the sample points in view and the symbols they came through, the
+    /// plan's coverage against an independent chaos game, and the recent
+    /// past of the samples it misses beside the sample's own. `WATCH=t.a,...`
+    /// follows a word suffix through julian-disc's 1e2 walk.
+    #[test]
+    #[ignore = "reads output/flame-zoom"]
+    fn why_is_this_view_empty() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        for (name, zoom, frac) in [("julian-disc", 1e3f64, 0.25f64), ("julian-disc", 1e2, 0.25), ("random1", 1e4, 0.25), ("random1", 1e3, 0.25)] {
+            let text = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")).expect("flame");
+            let cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
+            let b = Backward::read(&cfg.flame, reg).expect("armed");
+            let q = b.sample_point(frac);
+            let view = View::of(zoom, q, 1280, 720);
+            // How much of the sample is in the view at all, and through
+            // which symbols it arrived.
+            let inside: Vec<usize> = (0..b.sample.len())
+                .filter(|&i| (b.sample[i][0] - q[0]).hypot(b.sample[i][1] - q[1]) <= view.radius)
+                .collect();
+            let mut by: std::collections::BTreeMap<String, usize> = Default::default();
+            for &i in &inside {
+                let ai = b.made_by[i];
+                let k = if ai == u32::MAX { "reseed".to_string() } else {
+                    let a = &b.alphabet[ai as usize];
+                    format!("t{}a{}", sym_transform(a.sym), sym_arm(a.sym))
+                };
+                *by.entry(k).or_default() += 1;
+            }
+            let mut tr = Trace::default();
+            // Every word, watched -- or one lost branch, where set.
+            tr.watch = Some(match std::env::var("WATCH") {
+                Ok(w) if name == "julian-disc" && zoom == 1e2 => w
+                    .split(',')
+                    .map(|t| {
+                        let (a, b) = t.split_once('.').unwrap();
+                        sym_of(a.parse().unwrap(), b.parse().unwrap())
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            });
+            let plan = b.plan_with(view, &mut tr);
+            if plan.is_err() || std::env::var("WATCH").is_ok() && name == "julian-disc" && zoom == 1e2 {
+                for line in tr.watched.iter().take(80) {
+                    println!("   watch: {line}");
+                }
+            }
+            println!(
+                "== {name} x{zoom:.0e} at {frac}: centre [{:.5}, {:.5}] r {:.2e}, extent {:.3}, {} alphabet, {} sample points in view by {:?}",
+                q[0], q[1], view.radius, b.extent, b.alphabet.len(), inside.len(), by
+            );
+            if let Ok(p) = &plan {
+                println!("   coverage {:?}, efficiency {:.3}, depth {}", coverage(&b, p, view, 3000), p.efficiency, p.depth);
+                // What the plan misses: the in-view samples' recent past.
+                let total: f64 = b.transforms.iter().map(|t| t.weight).sum();
+                let mut st = 0xC0FFEE_u64;
+                let mut lcg = move || {
+                    st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    ((st >> 33) as f64) / ((1u64 << 31) as f64)
+                };
+                let mut x = [0.31f64, 0.17];
+                let mut hist: Vec<u32> = Vec::new();
+                let longest = p.words.iter().map(|w| w.word.len()).max().unwrap_or(1);
+                let mut missed: std::collections::HashMap<Vec<u32>, usize> = Default::default();
+                let mut lens: std::collections::BTreeMap<usize, usize> = Default::default();
+                for w in &p.words {
+                    *lens.entry(w.word.len()).or_default() += 1;
+                }
+                let show = |w: &[u32]| -> String {
+                    let mut out: Vec<String> = Vec::new();
+                    let mut run = 0usize;
+                    for s in w {
+                        if *s == sym_of(0, 0) {
+                            run += 1;
+                            continue;
+                        }
+                        if run > 0 {
+                            out.push(format!("t0^{run}"));
+                            run = 0;
+                        }
+                        out.push(format!("t{}a{}", sym_transform(*s), sym_arm(*s)));
+                    }
+                    if run > 0 {
+                        out.push(format!("t0^{run}"));
+                    }
+                    out.join(" ")
+                };
+                let (mut n_in, mut n_miss) = (0usize, 0usize);
+                for k in 0..200_000_000usize {
+                    let mut u = lcg() * total;
+                    let mut t = &b.transforms[b.transforms.len() - 1];
+                    for c in &b.transforms {
+                        if u < c.weight {
+                            t = c;
+                            break;
+                        }
+                        u -= c.weight;
+                    }
+                    let arm = ((lcg() * t.arms as f64) as u32).min(t.arms - 1);
+                    let y = forward(&b.ifs.maps[t.map], x, arm);
+                    if !finite(y) || y[0].abs() > 1e12 {
+                        x = [0.31, 0.17];
+                        hist.clear();
+                        continue;
+                    }
+                    x = y;
+                    hist.push(sym_of(t.index as u32, arm));
+                    if hist.len() > longest + 4 {
+                        hist.remove(0);
+                    }
+                    if k < 1000 || (x[0] - view.centre[0]).hypot(x[1] - view.centre[1]) > view.radius {
+                        continue;
+                    }
+                    n_in += 1;
+                    let hit = p.words.iter().any(|w| {
+                        let k = w.word.len();
+                        hist.len() >= k && hist[hist.len() - k..] == w.word[..]
+                    });
+                    if !hit {
+                        n_miss += 1;
+                        // The last few symbols, most recent last, with t0
+                        // runs collapsed so the branches show.
+                        let tail: Vec<u32> = hist[hist.len().saturating_sub(24)..].to_vec();
+                        *missed.entry(tail).or_default() += 1;
+                    }
+                    if n_in >= 1500 {
+                        break;
+                    }
+                }
+                println!("   word lengths in the plan: {lens:?}");
+                // The planner's own sample: the histories of its points in
+                // the view, back 30 steps, by the same collapsed notation.
+                let mut hist_s: std::collections::HashMap<String, usize> = Default::default();
+                let inside_s: Vec<usize> = (0..b.sample.len())
+                    .filter(|&i| (b.sample[i][0] - view.centre[0]).hypot(b.sample[i][1] - view.centre[1]) <= view.radius)
+                    .collect();
+                for &i in &inside_s {
+                    let mut syms: Vec<u32> = Vec::new();
+                    let mut j = i;
+                    while syms.len() < 24 && j > 0 && b.made_by[j] != u32::MAX {
+                        syms.push(b.alphabet[b.made_by[j] as usize].sym);
+                        j -= 1;
+                    }
+                    syms.reverse();
+                    *hist_s.entry(show(&syms)).or_default() += 1;
+                }
+                let mut hs: Vec<_> = hist_s.into_iter().collect();
+                hs.sort_by(|a, b| b.1.cmp(&a.1));
+                println!("   the planner's own {} in-view sample points, last 24 symbols:", inside_s.len());
+                for (w, n) in hs.iter().take(8) {
+                    println!("     {n:>4}: {w}");
+                }
+                println!("   {n_miss} of {n_in} in-view samples missed; their last 24 symbols (most recent last):");
+                let mut m: Vec<_> = missed.into_iter().collect();
+                m.sort_by(|a, b| b.1.cmp(&a.1));
+                for (w, n) in m.iter().take(10) {
+                    println!("     {n:>4}: {}", show(w));
+                }
+            }
+            println!(
+                "   plan: {} | nodes {} seeded {} pruned {} no_preimage {} no_arm {} floor {} cut {} carried {} empty {} nocand {} forced {}",
+                match &plan { Ok(p) => format!("{} words", p.words.len()), Err(e) => format!("{e:?}") },
+                tr.nodes_expanded, tr.seeded, tr.pruned, tr.no_preimage, tr.no_arm, tr.floor, tr.cut, tr.not_yet, tr.empty, tr.nocand, tr.forced
+            );
+        }
     }
 
     /// **The completeness check at a saved view**: `FFLAME=path`.
