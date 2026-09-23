@@ -1864,3 +1864,85 @@ to 0.981 coverage for 15% less time, at 256 to 0.962. It stays at 1024.
 What remains per plan (saved view): candidate checks 1.8 s, replays
 1.5 s, gather 1.0 s of CPU. The next step is the GPU:
 [gpu-cylinder-planning.md](gpu-cylinder-planning.md).
+
+---
+
+## 31. Unseen children are replayed, and one point seeds (2026-09-23)
+
+The GPU work ([gpu-cylinder-planning.md](gpu-cylinder-planning.md) §14-§15)
+turned up two family-J flames the walk served badly: `julian-disc` and
+`random1`. Measured against an independent chaos game
+(`why_is_this_view_empty`, the same test as `the_gpu_plans_as_completely_as_the_cpu`'s
+coverage), their plans at the depths the game can still reach were
+incomplete -- julian-disc 1e2 **0.311**, random1 1e3 **0.879** -- and
+deeper views planned nothing at all (`ViewIsEmpty`) and fell back to the
+untargeted render.
+
+**The hole: children dropped unreplayed.** A child whose region holds
+none of its node's points and none of the index's candidates was dropped
+before its replay ("nocand"), on the reasoning that the sample does not
+see it. But the sample fails to see anything whose share of the node is
+below one part in the node's point count -- and in julian-disc that is
+every julian arm. Its dominant map (`disc`, weight 15 of 15.5) is nearly
+neutral at the view, so a branch like `t0^k t1a28 t0^9` never shrinks
+enough to be cut: it is carried about 80 levels at efficiency ~0.3 to the
+depth cap. At each level its 50 julian arms hold 0.06% of it apiece, most
+of them unseen, and were dropped: up to 3% a level, compounding to 69% of
+the view. The completeness check (§27) could not see it, since it counts
+the node's points and the dropped arms held none.
+
+So an unseen child is now replayed like any other: a replay that lands
+keeps or carries it (carried with no points, it is forced as it stands,
+§27), and only one that lands nothing is dropped -- and not forced at the
+floor or the depth cap either, where forcing every silent arm would be
+pure waste. Forced, never dropped, now holds for the children the sample
+cannot see.
+
+**The empty plans: the cloud cannot always seed.** `MIN_SEED` was 16:
+the cloud phase (§25) walked view points back until a region held 16
+sample points. julian-disc at 1e3 holds 3 of the 100k in view, random1 at
+1e4 holds 1, and pulling back through a nearly neutral map does not widen
+the region: the cloud walked ten levels at the same size, drifted off the
+attractor, and planned nothing. A sample point is on the attractor
+exactly, and the indexed walk grows thin regions itself (orbit split,
+top-ups, and now unseen replays), so `MIN_SEED` is 1.
+
+**Measured** (coverage on 1500-3000 in-view samples of an independent
+chaos game; "n/a" where it cannot reach the view):
+
+    view                     before              now
+    julian-disc 1e2          0.311               0.992
+    julian-disc 1e3          no plan             0.998
+    random1 1e3              0.879               0.968
+    random1 1e4              no plan             0.990
+    grand-julian 1e2 (x2)    0.9977 / 0.9973     1.0000 / 1.0000
+    grand-julian 1e3 (x2)    0.9980 / 0.9913     1.0000 / 1.0000
+    saved view x546          0.9913              1.0000
+
+Grand-julian gained too: the residual 0.2-0.9% it missed was the same
+kind of drop. julian-disc and random1 now plan at every depth measured
+on views centred on a sample point, 1e2 through 1e6 -- such a view holds
+at least that point, so one-point seeding always applies. A view that
+holds none still needs the cloud, and there random1 still plans nothing
+(the corpus measure in `gpu-cylinder-planning.md` §15 centres its views
+independently of the sample, and finds it).
+
+**The cost** is replays: every child of every node is replayed now, where
+unseen ones were skipped. Grand-julian at 1280x720:
+
+    zoom   CPU plan          GPU plan
+    1e3    297 -> 426 ms     94 -> 162 ms
+    1e4    319 -> 463 ms     77 -> 143 ms
+    1e6    329 -> 430 ms     89 -> 226 ms
+
+and efficiency at one deep view fell from 0.955 to 0.855, the words
+forced as they stand being the least efficient. julian-disc's plans are
+large (12k-50k words) and inefficient (0.02-0.06) at the views measured:
+its neutral chains end at the depth cap. Complete first.
+
+**What is still short.** random1 1e3 misses 3.2%, scattered one sample
+per history. What remains dropped is children whose 100-point replay
+landed nothing -- a true share up to a few percent reads zero. Giving
+those the full 400 points was measured and not kept: it helped julian-disc
+(0.992 -> 0.997) but turned random1 1e3 into a shallow plan with
+efficiency 0.013 for 0.974.
