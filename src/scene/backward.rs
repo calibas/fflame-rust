@@ -257,6 +257,10 @@ pub struct PlanOptions<'a> {
     /// every piece holding one, rather than keeping it whole. The picture
     /// is the same; only how finely the plan divides it changes.
     pub refine: &'a [Vec<u32>],
+    /// Split every word shorter than this (PathMap's level, docs/projects/
+    /// word-editing.md §10): its colour reads that many maps of a path, and
+    /// zoomed out the plan's paths are one map long.
+    pub min_len: usize,
 }
 
 /// The budget where a plan must block: the web, which has no threads and
@@ -276,6 +280,7 @@ impl Default for PlanOptions<'_> {
             gpu: None,
             removals: &[],
             refine: &[],
+            min_len: 0,
         }
     }
 }
@@ -1476,6 +1481,29 @@ impl Backward {
     ///
     /// `None` for a word that needs no offsets (`m` is its length), and
     /// for one with no seed that lands -- both replay in absolute f32.
+    /// The attractor's centre and radius, from the analysis's sample: the
+    /// frame PathMap's Origin styles read a point in. Robust, not the
+    /// walk's `extent`: that is the farthest sample point, and julian's
+    /// and bubble's rare far points made it hundreds of times the body's
+    /// size, which read every point as at the centre -- one flat colour.
+    /// The median in each axis, and the distance nineteen points in
+    /// twenty lie within.
+    pub fn frame(&self) -> ([f64; 2], f64) {
+        if self.sample.is_empty() {
+            return (self.centre, self.extent);
+        }
+        let median = |axis: usize| {
+            let mut v: Vec<f64> = self.sample.iter().map(|p| p[axis]).collect();
+            let k = v.len() / 2;
+            *v.select_nth_unstable_by(k, f64::total_cmp).1
+        };
+        let c = [median(0), median(1)];
+        let mut d: Vec<f64> = self.sample.iter().map(|p| (p[0] - c[0]).hypot(p[1] - c[1])).collect();
+        let k = (d.len() * 95 / 100).min(d.len() - 1);
+        let r = *d.select_nth_unstable_by(k, f64::total_cmp).1;
+        (c, if r > 0.0 { r } else { self.extent })
+    }
+
     pub async fn reference_chains(&self, cyl: &Cylinders, view: View, slicer: &Slicer) -> Vec<Option<WordRefs>> {
         use crate::scene::forward_delta::map_forward_difference;
         let c = view.centre;
@@ -1808,7 +1836,8 @@ impl Backward {
     /// A node's children: one per symbol its region's points came
     /// through, each with its candidates. Reads only `self` and the node,
     /// so the nodes of a level find theirs in parallel.
-    fn children_of(&self, o: &mut Open, depth: usize, floor_mass: f64, gather_now: bool, removals: &[Vec<u32>], refine: &[Vec<u32>]) {
+    #[allow(clippy::too_many_arguments)]
+    fn children_of(&self, o: &mut Open, depth: usize, floor_mass: f64, gather_now: bool, removals: &[Vec<u32>], refine: &[Vec<u32>], min_len: usize) {
         let tr = &mut o.trace;
         let node = &o.node;
         let mut seen: Vec<Cell> = Vec::new();
@@ -1927,7 +1956,7 @@ impl Backward {
                     Pts::Index(c) => c.len(),
                     Pts::Cloud(_) => 0,
                 };
-                let refine = crate::scene::word_tree::must_split(removals, refine, &word);
+                let refine = crate::scene::word_tree::must_split(removals, refine, &word) || word.len() < min_len;
                 Some(Child {
                     ai,
                     word,
@@ -1976,6 +2005,7 @@ impl Backward {
         slicer: &Slicer,
         removals: &[Vec<u32>],
         refine: &[Vec<u32>],
+        min_len: usize,
     ) -> Option<Vec<Expanded>> {
         use web_time::Instant;
         let watched = |t: &mut Trace, word: &[u32], what: &str, detail: &dyn Fn() -> String| {
@@ -2047,7 +2077,7 @@ impl Backward {
 
         // **2. Children.** The gathers are the cost; nodes in parallel.
         let t = Instant::now();
-        each_sliced(&mut opens, |o| self.children_of(o, depth, floor_mass, !speculate, removals, refine), slicer).await;
+        each_sliced(&mut opens, |o| self.children_of(o, depth, floor_mass, !speculate, removals, refine, min_len), slicer).await;
         tr.t_gather += t.elapsed();
         if cancelled() {
             return None;
@@ -2425,7 +2455,11 @@ impl Backward {
                     // plans of 200k words. So it is carried when forcing
                     // it would waste more than `FORCE_WASTE` of the mass
                     // already kept, and forced otherwise.
-                    if hits.is_empty() && !replay_hits.is_empty() && prob * (1.0 - eff) > FORCE_WASTE * floor_mass {
+                    // A child that must be split is carried from them
+                    // too, whatever forcing it would waste: kept whole,
+                    // the split is undone (`PlanOptions::refine`,
+                    // `min_len`).
+                    if hits.is_empty() && !replay_hits.is_empty() && (refine || prob * (1.0 - eff) > FORCE_WASTE * floor_mass) {
                         watched(&mut trace, &word, "REPLAYED", &|| format!("{} replay points; eff {eff:.2} prob {prob:.2e}", replay_hits.len()));
                         hits = std::mem::take(&mut replay_hits);
                         hits.sort_unstable();
@@ -2659,6 +2693,7 @@ impl Backward {
                     slicer,
                     opts.removals,
                     opts.refine,
+                    opts.min_len,
                 )
                 .await
             else {
@@ -2713,7 +2748,7 @@ impl Backward {
                 // A node holding a removed piece is carried too: forced
                 // here, the piece would be back.
                 for n in next.drain(keep..) {
-                    if n.eff > 0.0 && !crate::scene::word_tree::must_split(opts.removals, opts.refine, &n.word) {
+                    if n.eff > 0.0 && !crate::scene::word_tree::must_split(opts.removals, opts.refine, &n.word) && n.word.len() >= opts.min_len {
                         rest.push(n)
                     } else {
                         unmeasured.push(n)
@@ -4134,7 +4169,7 @@ mod tests {
             let mut polls: Vec<f64> = Vec::new();
             let mut compiled = 0.0f64;
             let got = {
-                let fut = crate::scene::cylinder::Cylinders::plan_sliced(&gj.flame, reg, view, Some(&mut web_planner), &[], &[], &slicer);
+                let fut = crate::scene::cylinder::Cylinders::plan_sliced(&gj.flame, reg, view, Some(&mut web_planner), &[], &[], 0, &slicer);
                 let mut fut = std::pin::pin!(fut);
                 let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
                 loop {

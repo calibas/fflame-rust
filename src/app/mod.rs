@@ -3551,12 +3551,12 @@ impl App {
                     let pixel_x = click_x.min(width - 1);
                     let pixel_y = click_y.min(height - 1);
 
-                    // Read path entry for this specific pixel
-                    let path_entry = match pollster::block_on(renderer.read_path_buffer(&self.gpu.device, &self.gpu.queue)) {
-                        Ok(path_buffer) => path_buffer[pixel_y as usize][pixel_x as usize],
+                    // The path this pixel was last drawn through.
+                    let path = match pollster::block_on(renderer.read_path_at(&self.gpu.device, &self.gpu.queue, pixel_x, pixel_y)) {
+                        Ok(path) => path,
                         Err(e) => {
-                            log::error!("Failed to read path buffer: {}", e);
-                            crate::renderer::PathEntry::default()
+                            log::error!("Failed to read the path at a pixel: {e}");
+                            None
                         }
                     };
 
@@ -3576,16 +3576,11 @@ impl App {
                         found_pixel: (pixel_x, pixel_y),
                         fractal_coords,
                         search_distance: 0.0, // No search, exact pixel
-                        path_entry,
+                        path,
                         color_preview,
                         preview_size: (9, 9),
                     };
 
-                    if path_entry.iteration_count > 0 {
-                        log::info!("Path at ({}, {}): {:?}", pixel_x, pixel_y, path_entry.to_vec());
-                    } else {
-                        log::debug!("No path data at ({}, {})", pixel_x, pixel_y);
-                    }
                     self.egui_layer.set_path_click_info(Some(click_info));
                 }
             }

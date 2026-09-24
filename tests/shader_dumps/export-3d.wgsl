@@ -106,10 +106,13 @@ struct Params {
     dof_blur_strength: f32,  // Depth of field: blur amount (0.0 = disabled)
     fog_strength: f32,  // Depth fog: exponential fog density (0.0 = disabled)
     fog_start: f32,  // Depth fog: distance where fog begins
-    bits_per_transform: u32,  // Bits needed per transform index (1-5 based on num_transforms)
-    path_map_style: u32,  // 0=Prefix, 1=Suffix, 2=Prefix (Distinct), 3=Suffix (Distinct)
-    path_capture_mode: u32,  // 0=FirstHit, 1=FirstAfterBurnIn, 2=LastHit
-    path_tracking_mode: u32,  // 0=First (first 32 iterations), 1=Recent (rolling window of 32 most recent)
+    path_map_style: u32,  // PathMap: 0 Path, 1 Path (distinct), 2 Depth, 3-5 Origin radial / horizontal / vertical
+    // PathMap's Origin styles: the attractor's centre and radius, the
+    // frame a point's position is read in (`pathmap_origin`). Where the
+    // path history's capture and tracking modes, and its bit width, were.
+    path_origin_x: f32,
+    path_origin_y: f32,
+    path_origin_r: f32,
     // Where the path filters' count and minimum length were (the Path
     // Editor, replaced by word editing): padding, so `post_symmetry`
     // stays on its 16-byte boundary. Mirror in `src/gpu/buffers.rs`.
@@ -177,16 +180,6 @@ struct VariationParams {
 // Path storage for PathMap color mode
 // Stores up to 32 iterations losslessly (4 bits per transform, up to 16 transforms)
 // Also stores initial random X/Y coordinates for complete path reconstruction
-struct PathEntry {
-    path0: u32,  // Iterations 0-7 (4 bits each, LSB = iteration 0)
-    path1: u32,  // Iterations 8-15
-    path2: u32,  // Iterations 16-23
-    path3: u32,  // Iterations 24-31
-    iteration_count: u32,  // Actual iteration when pixel was hit (not capped at 32)
-    initial_x: f32,  // Initial random X coordinate [-1, 1]
-    initial_y: f32,  // Initial random Y coordinate [-1, 1]
-}
-
 // Per-normal-transform attachment list — entries hold global xform_ids
 // pointing into the concatenated transforms[] array. The main loop walks
 // these after the chaos game picks a normal transform: linkeds advance
@@ -243,7 +236,10 @@ struct SampleCounter {
 // Sample buffer write cursor.
 @group(0) @binding(6) var<storage, read_write> sample_counter: SampleCounter;
 
-@group(0) @binding(7) var<storage, read_write> path_buffer: array<PathEntry>;
+// PathMap: the path each pixel was last drawn through, 1-based into the
+// plan's words (0 = none), for the viewport's right-click.
+@group(0) @binding(7) var<storage, read_write> path_ids: array<u32>;
+
 // Binding 8 intentionally unused: the path filters, which word editing
 // replaced (docs/projects/word-editing.md).
 // Xaos (chaos) transition weights: xaos_weights[src * num_transforms + dst]
@@ -1198,13 +1194,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // Starting point (random in [-1, 1])
 
-
     var current = vec3<f32>(
         rng_nextf(&rng) * 2.0 - 1.0,
         rng_nextf(&rng) * 2.0 - 1.0,
         rng_nextf(&rng) * 2.0 - 1.0
     );
-
 
 
 
@@ -1371,7 +1365,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 
         // Original Step 1 (palette mode), or speed-based color (speed mode).
-        if (COLOR_MODE == 0u) {
+        // PathMap runs the palette's flow: its paths override it at the
+        // plot, and without a plan it is the palette.
+        if (COLOR_MODE == 0u || COLOR_MODE == 2u) {
             let symmetry = xform.color_speed;
             let colorC1 = (1.0 + symmetry) / 2.0;
             let colorC2 = xform.color * (1.0 - symmetry) / 2.0;
@@ -1380,12 +1376,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let speed_color = speed_to_color(speed);
             color = mix(color, speed_color, params.speed_factor);
         }
-
-
-        // Note: COLOR_MODE == 2 (PathMap) uses the full shader with path tracking
-
-
-
 
 
 
@@ -1424,16 +1414,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 
             // Pre-compute the iteration's base color OUTSIDE the
-            // symmetry loop. It depends only on color_index / color /
-            // (none for path-map) — none of which change between the
-            // K symmetric copies. Hoisting the palette texture sample
-            // alone gives a (K-1)/K speedup for palette mode at high
-            // Point-symmetry orders. Default of white covers the
-            // path-map COLOR_MODE branch (and any unhandled mode);
-            // fog inside the loop reads from this base into a local
-            // copy so its per-copy depth modulation doesn't bleed.
+            // symmetry loop. It depends only on color_index / color,
+            // neither of which changes between the K symmetric copies.
+            // Hoisting the palette texture sample alone gives a (K-1)/K
+            // speedup for palette mode at high Point-symmetry orders.
+            // PathMap reads the palette at its path's colour. Default
+            // of white covers any unhandled mode; fog inside the loop
+            // reads from this base into a local copy so its per-copy
+            // depth modulation doesn't bleed.
             var base_final_color: vec3<f32> = vec3<f32>(1.0, 1.0, 1.0);
-            if (COLOR_MODE == 0u) {
+            if (COLOR_MODE == 0u || COLOR_MODE == 2u) {
                 let palette_srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(color_index, 0.5), 0.0).rgb;
                 base_final_color = srgb_to_linear(palette_srgb);
             } else if (COLOR_MODE == 1u) {

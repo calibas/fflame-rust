@@ -25,20 +25,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var rng = rng_init(thread_id, params.seed);
 
     // Starting point (random in [-1, 1])
-{{#if PATH_TRACKING}}
-    // Store initial coordinates for path reconstruction
-    let initial_x = rng_nextf(&rng) * 2.0 - 1.0;
-    let initial_y = rng_nextf(&rng) * 2.0 - 1.0;
-{{#if RENDER_3D}}
-    var current = vec3<f32>(
-        initial_x,
-        initial_y,
-        rng_nextf(&rng) * 2.0 - 1.0
-    );
-{{else}}
-    var current = vec2<f32>(initial_x, initial_y);
-{{/if}}
-{{else}}
 {{#if RENDER_3D}}
     var current = vec3<f32>(
         rng_nextf(&rng) * 2.0 - 1.0,
@@ -50,7 +36,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         rng_nextf(&rng) * 2.0 - 1.0,
         rng_nextf(&rng) * 2.0 - 1.0
     );
-{{/if}}
 {{/if}}
 
 {{#if HAS_W}}
@@ -70,12 +55,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var fuse = params.burn_in;
 
 {{#if PATH_TRACKING}}
-    // Path tracking for PathMap mode
-    // Stores first 32 iterations losslessly (4 bits per transform, supports up to 16 transforms)
-    // path[0] = iterations 0-7, path[1] = 8-15, path[2] = 16-23, path[3] = 24-31
-    // Also stores initial_x, initial_y for complete path reconstruction
-    var path = array<u32, 4>(0u, 0u, 0u, 0u);
-    var path_iteration = 0u;  // Count of iterations stored in path
+    // PathMap: the path this thread's sample is drawn through, 1-based
+    // into the plan's words (0 = none), for `path_ids`.
+    var ct_word = 0u;
 {{/if}}
 
 {{#if XAOS_ENABLED}}
@@ -228,7 +210,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // (Final variations may also write *vc but it's discarded — Final
         //  is a plot-time filter, not part of dynamics.)
         var c_base: f32 = color_index;
-        if (COLOR_MODE == 0u) {
+        if (COLOR_MODE == 0u || COLOR_MODE == 2u) {
             let symmetry = xform.color_speed;
             c_base = color_index * (1.0 + symmetry) * 0.5 + xform.color * (1.0 - symmetry) * 0.5;
         }
@@ -403,7 +385,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 {{#if HAS_DC}}
         // Step 3 (palette mode), or speed-based color (speed mode).
-        if (COLOR_MODE == 0u) {
+        // PathMap runs the palette's flow: its paths override it at the
+        // plot, and without a plan it is the palette.
+        if (COLOR_MODE == 0u || COLOR_MODE == 2u) {
             color_index = c_base + xform.direct_color * (vc - c_base);
         } else if (COLOR_MODE == 1u) {
             let speed_color = speed_to_color(speed);
@@ -411,7 +395,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
 {{else}}
         // Original Step 1 (palette mode), or speed-based color (speed mode).
-        if (COLOR_MODE == 0u) {
+        // PathMap runs the palette's flow: its paths override it at the
+        // plot, and without a plan it is the palette.
+        if (COLOR_MODE == 0u || COLOR_MODE == 2u) {
             let symmetry = xform.color_speed;
             let colorC1 = (1.0 + symmetry) / 2.0;
             let colorC2 = xform.color * (1.0 - symmetry) / 2.0;
@@ -421,42 +407,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             color = mix(color, speed_color, params.speed_factor);
         }
 {{/if}}
-{{#if PATH_TRACKING}}
-        // Note: COLOR_MODE == 2 (PathMap) handled below with path buffer writes
-{{else}}
-        // Note: COLOR_MODE == 2 (PathMap) uses the full shader with path tracking
-{{/if}}
-
-{{#if PATH_TRACKING}}
-        // Path tracking: needed for path map mode
-        let needs_path_tracking = COLOR_MODE == 2u;
-        if (needs_path_tracking) {
-            // For FirstAfterBurnIn mode (1), only track path after burn-in
-            // (fuse == 0 — also re-armed by the bad-value respawn)
-            let should_track = (params.path_capture_mode != 1u) || (fuse == 0u);
-            if (should_track) {
-                if (params.path_tracking_mode == 0u) {
-                    // First mode: store first 32 iterations, then stop writing to path array
-                    if (path_iteration < 32u) {
-                        let slot = path_iteration / 8u;  // Which u32 (0-3)
-                        let pos = (path_iteration % 8u) * 4u;  // Bit position within u32 (0,4,8,12,16,20,24,28)
-                        path[slot] = path[slot] | ((xform_idx & 0xFu) << pos);
-                    }
-                } else {
-                    // Recent mode: rolling window of 32 most recent iterations
-                    // Shift all values left by 4 bits, insert new value at low end of path[0]
-                    // path[3] loses its highest 4 bits, gains from path[2]'s highest 4 bits, etc.
-                    path[3] = (path[3] << 4u) | (path[2] >> 28u);
-                    path[2] = (path[2] << 4u) | (path[1] >> 28u);
-                    path[1] = (path[1] << 4u) | (path[0] >> 28u);
-                    path[0] = (path[0] << 4u) | (xform_idx & 0xFu);
-                }
-                // Always increment - this is the actual iteration count (not capped at 32)
-                path_iteration = path_iteration + 1u;
-            }
-        }
-{{/if}}
-
 {{#if IMPORTANCE_SAMPLING}}
         // End of the epoch: start a fresh window. Resetting rather
         // than keeping a ring buffer is what bounds the variance by
@@ -557,6 +507,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 }
 {{/if}}
                 color_index = color_index * cylinders[ct_b + 1u] + cylinders[ct_b + 2u];
+{{#if PATH_TRACKING}}
+                // PathMap: the path's colour came with it (the CPU packs a
+                // path's colour as its fold, `H = 0`); Origin reads the
+                // point it started from.
+                ct_word = ct_i + 1u;
+                color_index = pathmap_origin(ct_saved.xy, color_index);
+{{/if}}
 {{else}}
                 // COMPOSED. Every map in the word is affine, so the
                 // CPU folded the whole prefix into one 2x2 and a
@@ -574,6 +531,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 current = vec2<f32>(ct_x, ct_y);
 {{/if}}
                 color_index = color_index * cylinders[ct_w + 6u] + cylinders[ct_w + 7u];
+{{#if PATH_TRACKING}}
+                ct_word = ct_w / 12u + 1u;
+                color_index = pathmap_origin(ct_saved.xy, color_index);
+{{/if}}
 {{/if}}
             }
 {{/if}}
@@ -667,16 +628,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 {{/if}}
 
             // Pre-compute the iteration's base color OUTSIDE the
-            // symmetry loop. It depends only on color_index / color /
-            // (none for path-map) — none of which change between the
-            // K symmetric copies. Hoisting the palette texture sample
-            // alone gives a (K-1)/K speedup for palette mode at high
-            // Point-symmetry orders. Default of white covers the
-            // path-map COLOR_MODE branch (and any unhandled mode);
-            // fog inside the loop reads from this base into a local
-            // copy so its per-copy depth modulation doesn't bleed.
+            // symmetry loop. It depends only on color_index / color,
+            // neither of which changes between the K symmetric copies.
+            // Hoisting the palette texture sample alone gives a (K-1)/K
+            // speedup for palette mode at high Point-symmetry orders.
+            // PathMap reads the palette at its path's colour. Default
+            // of white covers any unhandled mode; fog inside the loop
+            // reads from this base into a local copy so its per-copy
+            // depth modulation doesn't bleed.
             var base_final_color: vec3<f32> = vec3<f32>(1.0, 1.0, 1.0);
-            if (COLOR_MODE == 0u) {
+            if (COLOR_MODE == 0u || COLOR_MODE == 2u) {
                 let palette_srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(color_index, 0.5), 0.0).rgb;
                 base_final_color = srgb_to_linear(palette_srgb);
             } else if (COLOR_MODE == 1u) {
@@ -686,12 +647,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // Direct-RGB-writing variations override (or blend into) the
             // palette/speed-derived color. Same direct_color slider gates
             // it as the palette-index DC path: 0 keeps the existing color,
-            // 1 fully replaces with vrc, in-between mixes. Path-map mode
-            // (COLOR_MODE == 2) keeps the default white init regardless.
+            // 1 fully replaces with vrc, in-between mixes. PathMap
+            // (COLOR_MODE == 2) keeps its path's colour regardless.
             // Gate on the sentinel: only override when a WritesRgb variation
             // actually wrote a colour this iteration, so transforms with no
             // RGB variation keep their palette colour instead of going black.
-            if (vrc.x > -1.0e29) {
+            if (COLOR_MODE != 2u && vrc.x > -1.0e29) {
                 base_final_color = mix(base_final_color, vrc, xform.direct_color);
             }
 {{/if}}
@@ -1037,28 +998,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 var final_color: vec3<f32> = base_final_color;
 
 {{#if PATH_TRACKING}}
-                // Path-tracking write — depends on pixel_idx so it
-                // must stay inside the symmetry loop (each symmetric
-                // copy records the same path at its own pixel).
-                if (COLOR_MODE == 2u) {
-                    // Capture mode determines when to write:
-                    // 0 = FirstHit: only write if no path stored yet
-                    // 1 = FirstAfterBurnIn: same as FirstHit (we're already past burn-in here)
-                    // 2 = DeepestHit: overwrite only if new path has more iterations
-                    let existing_count = path_buffer[pixel_idx].iteration_count;
-                    let should_write = (params.path_capture_mode == 2u && path_iteration > existing_count) ||
-                                       (params.path_capture_mode != 2u && existing_count == 0u);
-
-                    if (should_write) {
-                        path_buffer[pixel_idx].path0 = path[0];
-                        path_buffer[pixel_idx].path1 = path[1];
-                        path_buffer[pixel_idx].path2 = path[2];
-                        path_buffer[pixel_idx].path3 = path[3];
-                        path_buffer[pixel_idx].iteration_count = path_iteration;
-                        path_buffer[pixel_idx].initial_x = initial_x;
-                        path_buffer[pixel_idx].initial_y = initial_y;
-                    }
-                }
+                // PathMap: the path this pixel was last drawn through, for
+                // the right-click. Inside the symmetry loop: each copy is
+                // drawn through the same path.
+                path_ids[pixel_idx] = ct_word;
 {{/if}}
 
 {{#if RENDER_3D}}

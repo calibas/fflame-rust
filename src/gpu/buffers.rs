@@ -789,36 +789,6 @@ impl GpuVariationParams {
     }
 }
 
-/// Calculate bits needed per (normal) transform index based on the
-/// normal-transform count. Used by the PathMap color mode's per-pixel
-/// path-hash packing (`xform_idx` is the NORMAL transform's index, not
-/// a global xform_id, since chaos-game selection is among normals only).
-///
-/// - 1-2 transforms: 1 bit
-/// - 3-4 transforms: 2 bits
-/// - 5-8 transforms: 3 bits
-/// - 9-16 transforms: 4 bits
-/// - 17-32 transforms: 5 bits
-/// - 33-64 transforms: 6 bits
-/// - 65-128 transforms: 7 bits
-pub fn bits_per_transform(num_transforms: u32) -> u32 {
-    if num_transforms <= 2 {
-        1
-    } else if num_transforms <= 4 {
-        2
-    } else if num_transforms <= 8 {
-        3
-    } else if num_transforms <= 16 {
-        4
-    } else if num_transforms <= 32 {
-        5
-    } else if num_transforms <= 64 {
-        6
-    } else {
-        7  // Up to 128 transforms
-    }
-}
-
 /// Dispatch parameters for compute shader
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -860,10 +830,12 @@ pub struct GpuParams {
     pub dof_blur_strength: f32, // Depth of field: blur amount (0.0 = disabled, default: 0.0)
     pub fog_strength: f32, // Depth fog: exponential fog density (0.0 = disabled)
     pub fog_start: f32, // Depth fog: distance where fog begins
-    pub bits_per_transform: u32, // Bits needed per transform index (1-4 based on num_transforms)
-    pub path_map_style: u32, // 0=Prefix, 1=Suffix, 2=PrefixDistinct, 3=SuffixDistinct
-    pub path_capture_mode: u32, // 0=FirstHit, 1=FirstAfterBurnIn, 2=DeepestHit
-    pub path_tracking_mode: u32, // 0=First (first 32 iterations), 1=Recent (rolling window of 32)
+    pub path_map_style: u32, // PathMap: 0 Path, 1 Path (distinct), 2 Depth, 3-5 Origin radial / horizontal / vertical
+    /// PathMap's Origin styles: the attractor's centre `[x, y]` and
+    /// radius, the frame a point's position is read in. Where the path
+    /// history's capture and tracking modes, and its bit width, were.
+    /// Mirror in header.wgsl.
+    pub path_origin: [f32; 3],
     /// Where the path filters' count and minimum length were: the Path
     /// Editor they served was replaced by word editing
     /// (docs/projects/word-editing.md). Kept as padding so `post_symmetry`
@@ -1488,10 +1460,8 @@ impl FlameBuffers {
             dof_blur_strength: crate::config::DEFAULT_DOF_BLUR_STRENGTH,
             fog_strength: crate::config::DEFAULT_FOG_STRENGTH,
             fog_start: crate::config::DEFAULT_FOG_START,
-            bits_per_transform: bits_per_transform(flame.transforms.len() as u32),
             path_map_style: 0,
-            path_capture_mode: 0, // FirstHit by default
-            path_tracking_mode: 0, // First (first 32 iterations) by default
+            path_origin: [0.0, 0.0, 1.0],
             _pad_path_filters: [0; 2],
             background_r: 0.0,
             background_g: 0.0,
@@ -1637,10 +1607,10 @@ impl FlameBuffers {
 
         // Create a minimal dummy buffer for binding when path features are disabled
         // WebGPU requires all declared bindings to be bound, even if unused
-        // Path buffer: 28 bytes minimum (PathEntry = 7 × u32)
+        // Path id buffer: 4 bytes minimum (one u32)
         let dummy_path_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Dummy Path Buffer"),
-            size: 28,  // PathEntry size: 7 × sizeof(u32) = 28 bytes
+            size: 4,  // One path id
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
@@ -2522,11 +2492,11 @@ impl FlameBuffers {
             "Creating path buffers: {}×{} ({:.1}MB)",
             self.width,
             self.height,
-            (self.width as f64 * self.height as f64 * 7.0 * 4.0) / (1024.0 * 1024.0)
+            (self.width as f64 * self.height as f64 * 4.0) / (1024.0 * 1024.0)
         );
 
-        // Create path buffer (7 × u32 per pixel for PathEntry struct)
-        let path_buffer_size = (self.width * self.height * 7 * std::mem::size_of::<u32>() as u32) as u64;
+        // Create the path id buffer (one u32 per pixel: the path it was last drawn through)
+        let path_buffer_size = (self.width * self.height * std::mem::size_of::<u32>() as u32) as u64;
         self.path_buffer = Some(device.create_buffer(&BufferDescriptor {
             label: Some("Path Buffer"),
             size: path_buffer_size,
@@ -2547,7 +2517,7 @@ impl FlameBuffers {
 
         log::info!(
             "Dropping path buffers: {:.1}MB freed",
-            (self.width as f64 * self.height as f64 * 7.0 * 4.0) / (1024.0 * 1024.0)
+            (self.width as f64 * self.height as f64 * 4.0) / (1024.0 * 1024.0)
         );
 
         self.path_buffer = None;

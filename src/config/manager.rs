@@ -1760,8 +1760,7 @@ impl ConfigManager {
             // Color
             ConfigPath::ColorMode => Ok(config.color_mode.into()),
             ConfigPath::PathMapStyle => Ok(config.path_map_style.into()),
-            ConfigPath::PathCaptureMode => Ok(config.path_capture_mode.into()),
-            ConfigPath::PathTrackingMode => Ok(config.path_tracking_mode.into()),
+            ConfigPath::PathMapLevel => Ok(config.path_map_level.into()),
             ConfigPath::PaletteIndex => {
                 // PaletteIndex is deprecated - return 0 for backward compatibility
                 Ok(0u32.into())
@@ -2762,11 +2761,8 @@ impl ConfigManager {
             ConfigPath::PathMapStyle => {
                 self.current.path_map_style = value.try_into()?;
             }
-            ConfigPath::PathCaptureMode => {
-                self.current.path_capture_mode = value.try_into()?;
-            }
-            ConfigPath::PathTrackingMode => {
-                self.current.path_tracking_mode = value.try_into()?;
+            ConfigPath::PathMapLevel => {
+                self.current.path_map_level = value.try_into()?;
             }
             ConfigPath::PaletteIndex => {
                 // PaletteIndex is deprecated - ignore updates
@@ -4591,7 +4587,7 @@ impl TryFrom<ConfigValue> for String {
 }
 
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
-use crate::scene::palette::{ColorMode, PathCaptureMode, PathMapStyle, PathTrackingMode};
+use crate::scene::palette::{ColorMode, PathMapStyle};
 use crate::scene::transforms::RenderMode;
 
 impl TryFrom<ConfigValue> for ToneMapMode {
@@ -4639,26 +4635,6 @@ impl TryFrom<ConfigValue> for PathMapStyle {
     fn try_from(v: ConfigValue) -> Result<Self, Self::Error> {
         match v {
             ConfigValue::PathMapStyle(m) => Ok(m),
-            _ => Err(ConfigError::TypeMismatch),
-        }
-    }
-}
-
-impl TryFrom<ConfigValue> for PathCaptureMode {
-    type Error = ConfigError;
-    fn try_from(v: ConfigValue) -> Result<Self, Self::Error> {
-        match v {
-            ConfigValue::PathCaptureMode(m) => Ok(m),
-            _ => Err(ConfigError::TypeMismatch),
-        }
-    }
-}
-
-impl TryFrom<ConfigValue> for PathTrackingMode {
-    type Error = ConfigError;
-    fn try_from(v: ConfigValue) -> Result<Self, Self::Error> {
-        match v {
-            ConfigValue::PathTrackingMode(m) => Ok(m),
             _ => Err(ConfigError::TypeMismatch),
         }
     }

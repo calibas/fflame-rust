@@ -188,16 +188,7 @@ pub fn render_paths_content(
                 }
             });
         if let Some(p) = remove {
-            // A removal the new one ends with is contained in it: the
-            // new one replaces it.
-            let mut list: Vec<String> = config
-                .word_removals
-                .iter()
-                .filter(|t| parse_pattern(t).is_none_or(|q| !q.ends_with(&p)))
-                .cloned()
-                .collect();
-            list.push(pattern_text(&p));
-            let _ = config_manager.update_param(ConfigPath::WordRemovals, list.into());
+            remove_path(config_manager, p);
         }
     }
     removed_list(ui, config_manager, &config.word_removals, &armed);
@@ -284,6 +275,27 @@ fn branch_row(
         });
 }
 
+/// Remove a path: add its pattern to `word_removals`, undoably. A
+/// removal the new one ends with is contained in it, and the new one
+/// replaces it. Shared with the viewport's PathMap right-click.
+pub(super) fn remove_path(config_manager: &mut ConfigManager, pattern: Vec<u32>) {
+    let mut list: Vec<String> = config_manager
+        .active_config()
+        .word_removals
+        .iter()
+        .filter(|t| parse_pattern(t).is_none_or(|q| !q.ends_with(&pattern)))
+        .cloned()
+        .collect();
+    list.push(pattern_text(&pattern));
+    let _ = config_manager.update_param(ConfigPath::WordRemovals, list.into());
+}
+
+/// A path as the panel names it, for `flame`: its transforms in the
+/// order they are applied.
+pub(super) fn label(pattern: &[u32], flame: &crate::scene::transforms::Flame) -> String {
+    path_label(pattern, &armed_transforms(flame))
+}
+
 /// The removed paths, each with a restore button.
 fn removed_list(ui: &mut egui::Ui, config_manager: &mut ConfigManager, removals: &[String], armed: &[bool]) {
     if removals.is_empty() {
@@ -331,9 +343,10 @@ fn map_label(sym: u32, armed: &[bool]) -> String {
 }
 
 /// A pattern's maps in the order they are applied, the map nearest the
-/// view last.
+/// view last. Joined with `>`: egui's default font has no `→`, which drew
+/// as an empty box.
 fn path_label(pattern: &[u32], armed: &[bool]) -> String {
-    pattern.iter().map(|&s| map_label(s, armed)).collect::<Vec<_>>().join(" → ")
+    pattern.iter().map(|&s| map_label(s, armed)).collect::<Vec<_>>().join(" > ")
 }
 
 #[cfg(test)]
@@ -345,6 +358,6 @@ mod tests {
         let armed = [false, true];
         assert_eq!(map_label(0, &armed), "T1");
         assert_eq!(map_label(1 | 2 << 8, &armed), "T2·3");
-        assert_eq!(path_label(&[1 | 1 << 8, 0], &armed), "T2·2 → T1");
+        assert_eq!(path_label(&[1 | 1 << 8, 0], &armed), "T2·2 > T1");
     }
 }

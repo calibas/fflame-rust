@@ -7,7 +7,7 @@
 /// - ConfigChange: Batch of deltas (single undo point)
 /// - UpdateType: What kind of update is needed for a change
 
-use crate::scene::palette::{Palette, ColorMode, PathCaptureMode, PathMapStyle, PathTrackingMode};
+use crate::scene::palette::{Palette, ColorMode, PathMapStyle};
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
 use crate::scene::transforms::RenderMode;
 use std::fmt::{self, Display, Formatter};
@@ -81,9 +81,8 @@ pub enum ConfigPath {
 
     // ===== Color (no iteration reset, just color buffer update) =====
     ColorMode,
-    PathMapStyle,  // Prefix or Suffix coloring for PathMap mode
-    PathCaptureMode,  // FirstHit, FirstAfterBurnIn, or LastHit
-    PathTrackingMode,  // First (first 32 iterations) or Recent (rolling window of 32 most recent)
+    PathMapStyle,  // How a path becomes a PathMap colour
+    PathMapLevel,  // How many transforms of a path decide its PathMap colour
     PaletteIndex,
     Palette, // Embedded palette data (custom palettes)
     PaletteRotation,
@@ -762,8 +761,7 @@ impl Display for ConfigPath {
             // Color
             ConfigPath::ColorMode => write!(f, "Color Mode"),
             ConfigPath::PathMapStyle => write!(f, "PathMap Style"),
-            ConfigPath::PathCaptureMode => write!(f, "PathMap Capture Mode"),
-            ConfigPath::PathTrackingMode => write!(f, "PathMap Tracking Mode"),
+            ConfigPath::PathMapLevel => write!(f, "PathMap Level"),
             ConfigPath::PaletteIndex => write!(f, "Palette"),
             ConfigPath::Palette => write!(f, "Palette Data"),
             ConfigPath::PaletteRotation => write!(f, "Palette Rotation"),
@@ -1266,8 +1264,7 @@ impl ConfigPath {
             // Color
             ConfigPath::ColorMode => I18nKey::simple("history.param.color_mode"),
             ConfigPath::PathMapStyle => I18nKey::simple("history.param.pathmap_style"),
-            ConfigPath::PathCaptureMode => I18nKey::simple("history.param.pathmap_capture_mode"),
-            ConfigPath::PathTrackingMode => I18nKey::simple("history.param.pathmap_tracking_mode"),
+            ConfigPath::PathMapLevel => I18nKey::simple("history.param.pathmap_level"),
             ConfigPath::PaletteIndex => I18nKey::simple("history.param.palette"),
             ConfigPath::Palette => I18nKey::simple("history.param.palette_data"),
             ConfigPath::PaletteRotation => I18nKey::simple("history.param.palette_rotation"),
@@ -1802,8 +1799,6 @@ pub enum ConfigValue {
     HighlightMode(crate::scene::tonemap::HighlightMode),
     ColorMode(ColorMode),
     PathMapStyle(PathMapStyle),
-    PathCaptureMode(PathCaptureMode),
-    PathTrackingMode(PathTrackingMode),
     RenderMode(RenderMode),
     ToneCurve(ToneCurve),
     Palette(Palette),
@@ -1871,8 +1866,6 @@ impl Display for ConfigValue {
             ConfigValue::ColorMode(m) => write!(f, "{:?}", m),
             ConfigValue::SqueezeMode(m) => write!(f, "{:?}", m),
             ConfigValue::PathMapStyle(m) => write!(f, "{:?}", m),
-            ConfigValue::PathCaptureMode(m) => write!(f, "{:?}", m),
-            ConfigValue::PathTrackingMode(m) => write!(f, "{:?}", m),
             ConfigValue::RenderMode(m) => write!(f, "{:?}", m),
             ConfigValue::ToneCurve(curve) => {
                 write!(f, "[Tone Curve: {} pts: {:?}]",
@@ -1989,17 +1982,6 @@ impl From<PathMapStyle> for ConfigValue {
     }
 }
 
-impl From<PathCaptureMode> for ConfigValue {
-    fn from(v: PathCaptureMode) -> Self {
-        ConfigValue::PathCaptureMode(v)
-    }
-}
-
-impl From<PathTrackingMode> for ConfigValue {
-    fn from(v: PathTrackingMode) -> Self {
-        ConfigValue::PathTrackingMode(v)
-    }
-}
 
 impl From<RenderMode> for ConfigValue {
     fn from(v: RenderMode) -> Self {
@@ -2642,15 +2624,11 @@ impl ConfigPath {
             | ConfigPath::PaletteSqueezeFalloff
             | ConfigPath::PaletteLogStrength
             | ConfigPath::PaletteReverse
-            | ConfigPath::SpeedFactor
-            // PathMapStyle affects color computation in compute shader, needs accumulation reset
-            | ConfigPath::PathMapStyle => UpdateType::ColorOnly,
+            | ConfigPath::SpeedFactor => UpdateType::ColorOnly,
 
-            // PathCaptureMode affects path buffer capture logic in compute shader
-            ConfigPath::PathCaptureMode => UpdateType::IterationReset,
-
-            // PathTrackingMode affects path tracking logic in compute shader
-            ConfigPath::PathTrackingMode => UpdateType::IterationReset,
+            // A path's PathMap colour is packed with the plan, and the
+            // level divides the plan: both redraw from scratch.
+            ConfigPath::PathMapStyle | ConfigPath::PathMapLevel => UpdateType::IterationReset,
 
             // Rendering settings - affect iteration behavior
             ConfigPath::BlendFactor
@@ -2937,8 +2915,7 @@ impl ConfigPath {
             // Color
             ConfigPath::ColorMode => "ColorMode".to_string(),
             ConfigPath::PathMapStyle => "PathMapStyle".to_string(),
-            ConfigPath::PathCaptureMode => "PathCaptureMode".to_string(),
-            ConfigPath::PathTrackingMode => "PathTrackingMode".to_string(),
+            ConfigPath::PathMapLevel => "PathMapLevel".to_string(),
             ConfigPath::PaletteIndex => "PaletteIndex".to_string(),
             ConfigPath::Palette => "Palette".to_string(),
             ConfigPath::PaletteRotation => "PaletteRotation".to_string(),
@@ -3307,8 +3284,7 @@ impl ConfigPath {
             // Color
             "ColorMode" => return Some(ConfigPath::ColorMode),
             "PathMapStyle" => return Some(ConfigPath::PathMapStyle),
-            "PathCaptureMode" => return Some(ConfigPath::PathCaptureMode),
-            "PathTrackingMode" => return Some(ConfigPath::PathTrackingMode),
+            "PathMapLevel" => return Some(ConfigPath::PathMapLevel),
             "PaletteIndex" => return Some(ConfigPath::PaletteIndex),
             "Palette" => return Some(ConfigPath::Palette),
             "PaletteRotation" => return Some(ConfigPath::PaletteRotation),
@@ -4024,7 +4000,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SystemExportWidth
         | ConfigPath::SystemExportHeight
         | ConfigPath::SystemPngStripMetadata
-        | ConfigPath::CylinderTrimLevels => {
+        | ConfigPath::CylinderTrimLevels
+        | ConfigPath::PathMapLevel => {
             json_as_round_u64(json).map(|u| ConfigValue::UInt(u as u32))
         }
 
@@ -4076,26 +4053,14 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
                 .or_else(|| {
                     // Pre-serde legacy style names from very old config files.
                     json.as_str().and_then(|s| match s {
-                        "Similar" => Some(PathMapStyle::Prefix),
-                        "Distinct" | "ScrambledPrefix" => Some(PathMapStyle::PrefixDistinct),
-                        "ScrambledSuffix" => Some(PathMapStyle::SuffixDistinct),
+                        "Similar" => Some(PathMapStyle::Path),
+                        "Distinct" | "ScrambledPrefix" | "ScrambledSuffix" => Some(PathMapStyle::PathDistinct),
                         _ => None,
                     })
                 })
                 .map(ConfigValue::PathMapStyle)
         }
 
-        ConfigPath::PathCaptureMode => {
-            serde_json::from_value::<PathCaptureMode>(json.clone())
-                .ok()
-                .map(ConfigValue::PathCaptureMode)
-        }
-
-        ConfigPath::PathTrackingMode => {
-            serde_json::from_value::<PathTrackingMode>(json.clone())
-                .ok()
-                .map(ConfigValue::PathTrackingMode)
-        }
 
         ConfigPath::RenderMode => {
             serde_json::from_value::<RenderMode>(json.clone())
@@ -4649,8 +4614,7 @@ mod tests {
             // Color
             ConfigPath::ColorMode,
             ConfigPath::PathMapStyle,
-            ConfigPath::PathCaptureMode,
-            ConfigPath::PathTrackingMode,
+            ConfigPath::PathMapLevel,
             ConfigPath::PaletteIndex,
             ConfigPath::Palette,
             ConfigPath::PaletteRotation,

@@ -1,114 +1,9 @@
 use egui_wgpu::wgpu::*;
 use crate::gpu::{buffers::*, pipelines::FlamePipelines};
 use crate::scene::transforms::Flame;
-use crate::scene::palette::{Palette, ColorMode, PathMapStyle, PathCaptureMode, PathTrackingMode};
+use crate::scene::palette::{Palette, ColorMode, PathMapStyle};
 use crate::config::FractalConfig;
 use crate::shader_builder_v2::ShaderConstants;
-
-/// Path entry storing first 32 iterations of transform sequence
-/// Also stores initial random X/Y coordinates for complete path reconstruction
-/// Matches GPU PathEntry struct layout (7 × u32 = 5 u32 + 2 f32)
-#[derive(Debug, Clone, Copy, Default)]
-#[repr(C)]
-pub struct PathEntry {
-    /// Iterations 0-7 (4 bits each, LSB = iteration 0)
-    pub path0: u32,
-    /// Iterations 8-15
-    pub path1: u32,
-    /// Iterations 16-23
-    pub path2: u32,
-    /// Iterations 24-31
-    pub path3: u32,
-    /// Number of valid iterations stored (0-32)
-    pub iteration_count: u32,
-    /// Initial random X coordinate [-1, 1]
-    pub initial_x: f32,
-    /// Initial random Y coordinate [-1, 1]
-    pub initial_y: f32,
-}
-
-impl PathEntry {
-    /// Extract transform index at given iteration (0-31)
-    /// Returns None if iteration >= iteration_count
-    pub fn get_transform(&self, iteration: u32) -> Option<u32> {
-        if iteration >= self.iteration_count {
-            return None;
-        }
-        let slot = iteration / 8;
-        let pos = (iteration % 8) * 4;
-        let path = match slot {
-            0 => self.path0,
-            1 => self.path1,
-            2 => self.path2,
-            3 => self.path3,
-            _ => return None,
-        };
-        Some((path >> pos) & 0xF)
-    }
-
-    /// Get full path as Vec of transform indices
-    pub fn to_vec(&self) -> Vec<u32> {
-        (0..self.iteration_count)
-            .filter_map(|i| self.get_transform(i))
-            .collect()
-    }
-
-    /// Get prefix data: first 8 iterations (path0 only)
-    /// Matches GPU get_prefix() function
-    pub fn get_prefix(&self) -> u32 {
-        self.path0
-    }
-
-    /// Get suffix data: last 8 valid iterations based on iteration_count
-    /// Matches GPU get_suffix() function
-    pub fn get_suffix(&self) -> u32 {
-        let count = self.iteration_count;
-        if count <= 8 {
-            self.path0
-        } else if count <= 16 {
-            self.path1
-        } else if count <= 24 {
-            self.path2
-        } else {
-            self.path3
-        }
-    }
-
-    /// Scramble hash for maximum color separation
-    /// Matches GPU scramble_hash() function (MurmurHash3 finalizer)
-    pub fn scramble_hash(x: u32) -> u32 {
-        let mut h = x;
-        h ^= h >> 16;
-        h = h.wrapping_mul(0x85ebca6b);
-        h ^= h >> 13;
-        h = h.wrapping_mul(0xc2b2ae35);
-        h ^= h >> 16;
-        h
-    }
-
-    /// Compute hue value for Prefix Distinct coloring mode (style 2)
-    /// Matches GPU path_to_color_prefix_distinct() function
-    /// Incorporates iteration_count to distinguish paths of different lengths
-    pub fn compute_prefix_distinct_hue(&self) -> f32 {
-        let value = self.get_prefix();
-        // Mix iteration_count into the value before hashing (same as GPU)
-        let mixed = value ^ (self.iteration_count.wrapping_mul(0x9E3779B9));
-        let scrambled = Self::scramble_hash(mixed);
-        let golden_ratio: f64 = 0.618033988749895;
-        let hue = (scrambled as f64 * golden_ratio / u32::MAX as f64).fract();
-        hue as f32
-    }
-
-    /// Compute hue value for Suffix Distinct coloring mode (style 3)
-    /// Matches GPU path_to_color_distinct() function
-    pub fn compute_suffix_distinct_hue(&self) -> f32 {
-        let value = self.get_suffix();
-        let scrambled = Self::scramble_hash(value);
-        let golden_ratio: f64 = 0.618033988749895;
-        let hue = (scrambled as f64 * golden_ratio / u32::MAX as f64).fract();
-        hue as f32
-    }
-}
 
 use crate::variations::analytic_blur::BlurSlotInfo;
 
@@ -413,8 +308,6 @@ pub struct FlameRenderer {
     shade_settle: u32,
     color_mode: ColorMode,
     path_map_style: PathMapStyle,
-    path_capture_mode: PathCaptureMode,
-    path_tracking_mode: PathTrackingMode,
     density_scale: f32,
     white_level: f32,
     highlight_mode: u32,
@@ -495,6 +388,16 @@ pub struct FlameRenderer {
     word_solo: Option<Vec<u32>>,
     /// The solo `cylinders` was cut with.
     applied_solo: Option<Vec<u32>>,
+    /// PathMap (docs/projects/word-editing.md §10): the colouring the
+    /// packed table was coloured with -- style and level, `None` when
+    /// PathMap is off -- and each drawn word's colour, kept so a resize
+    /// can pack the table again.
+    applied_path_colouring: Option<(PathMapStyle, u32)>,
+    path_colours: Option<Vec<f32>>,
+    /// PathMap's Origin frame: the attractor's centre and radius, and the
+    /// flame it was measured for.
+    path_origin: [f32; 3],
+    path_origin_key: u64,
     /// Pieces opened in the Pieces panel to see inside, which the plan
     /// splits (`PlanOptions::refine`), with the flame they were opened
     /// on. Transient and only ever grown -- a closed piece stays split,
@@ -664,8 +567,6 @@ impl FlameRenderer {
             shade_settle: 0,
             color_mode: ColorMode::Palette,
             path_map_style: PathMapStyle::default(),
-            path_capture_mode: PathCaptureMode::default(),
-            path_tracking_mode: PathTrackingMode::default(),
             density_scale: 1.0,
             white_level: crate::config::defaults::DEFAULT_WHITE_LEVEL,
             highlight_mode: 0,  // Clip — Apophysis-compatible default
@@ -708,6 +609,10 @@ impl FlameRenderer {
             applied_removals: Vec::new(),
             word_solo: None,
             applied_solo: None,
+            applied_path_colouring: None,
+            path_colours: None,
+            path_origin: [0.0, 0.0, 1.0],
+            path_origin_key: 0,
             word_split: (0, Vec::new()),
             word_tree: std::sync::OnceLock::new(),
             cylinder_key: None,
@@ -763,11 +668,14 @@ impl FlameRenderer {
         // world coordinates -- so it is packed again, before the bind
         // groups below are made against the buffer.
         if let Some(c) = &self.cylinders {
-            let packed = if c.composable {
+            let mut packed = if c.composable {
                 crate::scene::cylinder::pack(c, flame, &crate::variations::global_registry())
             } else {
                 crate::scene::cylinder::pack_words(c, flame)
             };
+            if let Some(colours) = &self.path_colours {
+                crate::scene::word_tree::recolour(&mut packed, c.composable, colours);
+            }
             self.buffers.update_cylinders(device, queue, Some(&packed));
         }
 
@@ -1028,10 +936,8 @@ impl FlameRenderer {
             dof_blur_strength: self.dof_blur_strength,
             fog_strength: self.atsplat_fog_strength(),
             fog_start: self.fog_start,
-            bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
-            path_capture_mode: self.path_capture_mode as u32,
-            path_tracking_mode: self.path_tracking_mode as u32,
+            path_origin: self.path_origin,
             _pad_path_filters: [0; 2],
             background_r: self.background_r,
             background_g: self.background_g,
@@ -2319,11 +2225,17 @@ impl FlameRenderer {
             self.cylinder_offsets,
             self.leak_probe[2] > 0.0,
         );
-        if shaders_changed {
+        // PathMap's per-pixel path ids (the right-click): a loaded
+        // PathMap config needs them as surely as a switch to PathMap.
+        let path_buffers_changed = path_features_enabled
+            && !self.current_render_mode.is_non_flame()
+            && self.buffers.create_path_buffers(device);
+        if shaders_changed || path_buffers_changed {
             log::info!("Shaders recompiled during preset load - recreating bind group");
             // Recreate compute bind group with new pipeline
             self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
             self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
+            self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
         }
 
         // 1. Update transforms and variation parameters in GPU buffer
@@ -2371,11 +2283,9 @@ impl FlameRenderer {
             self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
         }
 
-        // 2. Update color mode, path map style, and capture mode
+        // 2. Update color mode and path map style
         self.color_mode = config.color_mode;
         self.path_map_style = config.path_map_style;
-        self.path_capture_mode = config.path_capture_mode;
-        self.path_tracking_mode = config.path_tracking_mode;
 
         // 3. Update density and background
         self.density_scale = config.density_scale;
@@ -2510,10 +2420,8 @@ impl FlameRenderer {
                 config.fog_strength
             },
             fog_start: config.fog_start,
-            bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
-            path_capture_mode: self.path_capture_mode as u32,
-            path_tracking_mode: self.path_tracking_mode as u32,
+            path_origin: self.path_origin,
             _pad_path_filters: [0; 2],
             background_r: config.background_color[0],
             background_g: config.background_color[1],
@@ -2719,10 +2627,8 @@ impl FlameRenderer {
             dof_blur_strength: self.dof_blur_strength,
             fog_strength: self.atsplat_fog_strength(),
             fog_start: self.fog_start,
-            bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
-            path_capture_mode: self.path_capture_mode as u32,
-            path_tracking_mode: self.path_tracking_mode as u32,
+            path_origin: self.path_origin,
             _pad_path_filters: [0; 2],
             background_r: self.background_r,
             background_g: self.background_g,
@@ -3030,10 +2936,8 @@ impl FlameRenderer {
             dof_blur_strength: self.dof_blur_strength,
             fog_strength: self.atsplat_fog_strength(),
             fog_start: self.fog_start,
-            bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
-            path_capture_mode: self.path_capture_mode as u32,
-            path_tracking_mode: self.path_tracking_mode as u32,
+            path_origin: self.path_origin,
             _pad_path_filters: [0; 2],
             background_r: self.background_r,
             background_g: self.background_g,
@@ -3418,10 +3322,8 @@ impl FlameRenderer {
             dof_blur_strength: self.dof_blur_strength,
             fog_strength: self.atsplat_fog_strength(),
             fog_start: self.fog_start,
-            bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
-            path_capture_mode: self.path_capture_mode as u32,
-            path_tracking_mode: self.path_tracking_mode as u32,
+            path_origin: self.path_origin,
             _pad_path_filters: [0; 2],
             background_r: self.background_r,
             background_g: self.background_g,
@@ -3457,28 +3359,6 @@ impl FlameRenderer {
         self.path_map_style
     }
 
-    /// Set path capture mode (FirstHit, FirstAfterBurnIn, or LastHit)
-    pub fn set_path_capture_mode(&mut self, path_capture_mode: PathCaptureMode) {
-        self.path_capture_mode = path_capture_mode;
-        // Note: GPU params will be updated on next render
-    }
-
-    /// Get current path capture mode
-    pub fn path_capture_mode(&self) -> PathCaptureMode {
-        self.path_capture_mode
-    }
-
-    /// Set path tracking mode (First = first 32 iterations, Recent = rolling window of 32 most recent)
-    pub fn set_path_tracking_mode(&mut self, path_tracking_mode: PathTrackingMode) {
-        self.path_tracking_mode = path_tracking_mode;
-        // Note: GPU params will be updated on next render
-    }
-
-    /// Get current path tracking mode
-    pub fn path_tracking_mode(&self) -> PathTrackingMode {
-        self.path_tracking_mode
-    }
-
     /// Check if path features (the PathMap color mode) require buffers
     /// Returns true if path buffers should be enabled
     ///
@@ -3499,7 +3379,7 @@ impl FlameRenderer {
     /// Enable or disable path features based on current state
     /// Call this when color_mode changes
     /// Returns true if bind groups or shaders were rebuilt
-    pub fn update_path_features(&mut self, device: &Device, queue: &Queue, flame: &crate::scene::transforms::Flame) -> bool {
+    pub fn update_path_features(&mut self, device: &Device, _queue: &Queue, flame: &crate::scene::transforms::Flame) -> bool {
         // Sticky superset: this refresh may rebuild the shader, and it
         // must rebuild against the SAME map the buffers are packed with —
         // the last adopt's. `augmented` (not `adopt`) re-applies exactly
@@ -3665,6 +3545,7 @@ impl FlameRenderer {
         // before is made again when it is.
         Self::keeps_plan(config).hash(&mut h);
         self.split_for(config).hash(&mut h);
+        Self::path_min_len(config).hash(&mut h);
         h.finish()
     }
 
@@ -3771,8 +3652,12 @@ impl FlameRenderer {
         if solo_moved && self.cylinders_full.is_none() {
             self.applied_solo.clone_from(&self.word_solo);
         }
+        let colouring_moved = Self::path_colouring(config) != self.applied_path_colouring;
         if self.cylinders_full.is_some()
-            && ((config.cylinder_trim, config.cylinder_trim_levels) != self.applied_trim || removals_moved || solo_moved)
+            && ((config.cylinder_trim, config.cylinder_trim_levels) != self.applied_trim
+                || removals_moved
+                || solo_moved
+                || colouring_moved)
         {
             if solo_moved {
                 self.plan_arrived = true;
@@ -3909,6 +3794,7 @@ impl FlameRenderer {
         let gpu = if config.cylinder_targeting && two_d { self.gpu_planner(device, queue) } else { None };
         let removals = crate::scene::word_tree::parse_removals(&config.word_removals);
         let refine = self.split_for(config).to_vec();
+        let min_len = Self::path_min_len(config);
         let outcome = (config.cylinder_targeting && two_d).then(|| {
             let registry = crate::variations::global_registry();
             crate::scene::cylinder::Cylinders::plan_opts(
@@ -3920,6 +3806,7 @@ impl FlameRenderer {
                     gpu: gpu.as_deref(),
                     removals: &removals,
                     refine: &refine,
+                    min_len,
                     ..Default::default()
                 },
             )
@@ -3938,7 +3825,23 @@ impl FlameRenderer {
     /// Whether a plan is drawn even where it does not pay: Focused
     /// Rendering set to Always, or the picture edited by its words.
     fn keeps_plan(config: &FractalConfig) -> bool {
-        config.cylinder_always || Self::edits_words(config)
+        config.cylinder_always || Self::edits_words(config) || config.color_mode == ColorMode::PathMap
+    }
+
+    /// PathMap's colouring -- style and level -- or `None` when the
+    /// colour mode is not PathMap.
+    fn path_colouring(config: &FractalConfig) -> Option<(PathMapStyle, u32)> {
+        (config.color_mode == ColorMode::PathMap).then_some((config.path_map_style, config.path_map_level))
+    }
+
+    /// The shortest word the plan may keep: a path style reads
+    /// `path_map_level` maps of each path, and zoomed out the plan's
+    /// paths are one map long (`PlanOptions::min_len`).
+    fn path_min_len(config: &FractalConfig) -> usize {
+        match Self::path_colouring(config) {
+            Some((PathMapStyle::Path | PathMapStyle::PathDistinct, level)) => level.max(1) as usize,
+            _ => 0,
+        }
     }
 
     /// The pieces the plan splits for the Pieces panel, if they were
@@ -4030,23 +3933,48 @@ impl FlameRenderer {
         let trim = (config.cylinder_trim, config.cylinder_trim_levels);
         let removals = crate::scene::word_tree::parse_removals(&config.word_removals);
         let full = planned;
-        let planned = full.as_ref().map(|c| {
+        let trimmed = full.as_ref().map(|c| {
             let c = crate::scene::word_tree::remove(c, &removals);
-            let c = crate::scene::word_tree::trim_to(&c, trim.0 as f64, trim.1 as usize);
+            crate::scene::word_tree::trim_to(&c, trim.0 as f64, trim.1 as usize)
+        });
+        let planned = trimmed.as_ref().map(|c| {
             // **Solo** (§6): one branch alone, while its button is held
             // -- unless nothing drawn is in it.
             match &self.word_solo {
                 Some(p) => {
-                    let s = crate::scene::word_tree::solo(&c, p);
+                    let s = crate::scene::word_tree::solo(c, p);
                     if s.words.is_empty() {
-                        c
+                        c.clone()
                     } else {
                         s
                     }
                 }
-                None => c,
+                None => c.clone(),
             }
         });
+        // **PathMap** (§10): each drawn word's colour, measured in the
+        // trimmed plan so a solo keeps its colours; and, for the Origin
+        // styles, the attractor's frame, once per flame.
+        let colouring = Self::path_colouring(config);
+        let colours = match (colouring, &trimmed, &planned) {
+            (Some((style, level)), Some(t), Some(p)) => {
+                let alphabet = crate::scene::word_tree::alphabet(&config.flame, &registry);
+                Some(crate::scene::word_tree::path_colours(t, p, style, level, &alphabet))
+            }
+            _ => None,
+        };
+        if colouring.is_some() {
+            let key = Self::flame_key(config);
+            if self.path_origin_key != key {
+                self.path_origin_key = key;
+                self.path_origin = crate::scene::backward::Backward::cached(&config.flame, &registry)
+                    .map(|b| {
+                        let (c, r) = b.frame();
+                        [c[0] as f32, c[1] as f32, (r as f32).max(1e-12)]
+                    })
+                    .unwrap_or([0.0, 0.0, 1.0]);
+            }
+        }
         if let (TargetingState::Active { .. }, Some(c)) = (&self.targeting_state, &planned) {
             self.targeting_state = TargetingState::Active {
                 words: c.words.len(),
@@ -4065,12 +3993,18 @@ impl FlameRenderer {
         // whose maps are all affine folds each word into one matrix,
         // and anything else is handed the symbols to walk.
         let packed = planned.as_ref().map(|c| {
-            if c.composable {
+            let mut table = if c.composable {
                 crate::scene::cylinder::pack(c, &config.flame, &registry)
             } else {
                 crate::scene::cylinder::pack_words(c, &config.flame)
+            };
+            if let Some(colours) = &colours {
+                crate::scene::word_tree::recolour(&mut table, c.composable, colours);
             }
+            table
         });
+        self.applied_path_colouring = colouring;
+        self.path_colours = colours;
         let changed = self.buffers.update_cylinders(device, queue, packed.as_deref());
         let was = self.cylinder_arm();
         self.cylinders = planned;
@@ -4283,6 +4217,7 @@ impl FlameRenderer {
         let flame = config.flame.clone();
         let removals = crate::scene::word_tree::parse_removals(&config.word_removals);
         let refine = self.split_for(config).to_vec();
+        let min_len = Self::path_min_len(config);
         let slicer = std::rc::Rc::new(crate::scene::backward::Slicer::every(WEB_PLAN_SLICE));
         let s = slicer.clone();
         let task = Box::pin(async move {
@@ -4297,9 +4232,9 @@ impl FlameRenderer {
                     let mut g = g.borrow_mut();
                     #[cfg(not(target_arch = "wasm32"))]
                     let mut g = g.lock().unwrap_or_else(|e| e.into_inner());
-                    crate::scene::cylinder::Cylinders::plan_sliced(&flame, &registry, view, Some(&mut g), &removals, &refine, &s).await
+                    crate::scene::cylinder::Cylinders::plan_sliced(&flame, &registry, view, Some(&mut g), &removals, &refine, min_len, &s).await
                 }
-                None => crate::scene::cylinder::Cylinders::plan_sliced(&flame, &registry, view, None, &removals, &refine, &s).await,
+                None => crate::scene::cylinder::Cylinders::plan_sliced(&flame, &registry, view, None, &removals, &refine, min_len, &s).await,
             }
         });
         PlanJob {
@@ -4344,6 +4279,7 @@ impl FlameRenderer {
         let flame = config.flame.clone();
         let removals = crate::scene::word_tree::parse_removals(&config.word_removals);
         let refine = self.split_for(config).to_vec();
+        let min_len = Self::path_min_len(config);
         let cancel = Arc::new(AtomicBool::new(false));
         let flag = cancel.clone();
         let (tx, rx) = std::sync::mpsc::channel();
@@ -4359,6 +4295,7 @@ impl FlameRenderer {
                     gpu: gpu.as_deref(),
                     removals: &removals,
                     refine: &refine,
+                    min_len,
                 },
             );
             // A cancelled job's receiver is gone; nothing to tell.
@@ -4579,118 +4516,48 @@ impl FlameRenderer {
         Ok((self.width, self.height, rgba_data))
     }
 
-    /// Read path buffer from GPU for CPU-side path queries
-    /// Returns a 2D array of PathEntry indexed by [y][x]
-    /// Returns empty grid if path buffers are not enabled
-    pub async fn read_path_buffer(
-        &self,
-        device: &Device,
-        queue: &Queue,
-    ) -> Result<Vec<Vec<PathEntry>>, String> {
-        // Check if path buffer exists
-        let path_buffer = match &self.buffers.path_buffer {
-            Some(buf) => buf,
-            None => {
-                // Return empty PathEntry grid if path features are disabled
-                return Ok(vec![vec![PathEntry::default(); self.width as usize]; self.height as usize]);
-            }
-        };
-
-        // Wait for any pending rendering to complete
-        let sync_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("Pre-Read Path Sync"),
-        });
-        queue.submit(std::iter::once(sync_encoder.finish()));
-        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
-
-        // PathEntry is 7 × u32 = 28 bytes per pixel (5 u32 + 2 f32)
-        let bytes_per_entry = 7 * std::mem::size_of::<u32>() as u32;
-        let buffer_size = (self.width * self.height * bytes_per_entry) as u64;
-
-        // Create staging buffer for readback
-        let staging_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("Path Buffer Staging"),
-            size: buffer_size,
-            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-
-        // Copy path buffer to staging buffer
-        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("Path Buffer Read Encoder"),
-        });
-        encoder.copy_buffer_to_buffer(
-            path_buffer,
-            0,
-            &staging_buffer,
-            0,
-            buffer_size,
-        );
-        queue.submit(std::iter::once(encoder.finish()));
-
-        // Map and read
-        let buffer_slice = staging_buffer.slice(..);
-        let (tx, rx) = futures::channel::oneshot::channel();
-        buffer_slice.map_async(MapMode::Read, move |result| {
-            tx.send(result).unwrap();
-        });
-        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
-        rx.await
-            .map_err(|_| "Failed to map path buffer".to_string())?
-            .map_err(|e| format!("Path buffer map error: {:?}", e))?;
-
-        let data = buffer_slice.get_mapped_range();
-
-        // Convert raw bytes to PathEntry grid
-        let mut result = Vec::with_capacity(self.height as usize);
-        for y in 0..self.height {
-            let mut row = Vec::with_capacity(self.width as usize);
-            for x in 0..self.width {
-                let idx = ((y * self.width + x) * bytes_per_entry) as usize;
-                let path0 = u32::from_le_bytes([data[idx], data[idx + 1], data[idx + 2], data[idx + 3]]);
-                let path1 = u32::from_le_bytes([data[idx + 4], data[idx + 5], data[idx + 6], data[idx + 7]]);
-                let path2 = u32::from_le_bytes([data[idx + 8], data[idx + 9], data[idx + 10], data[idx + 11]]);
-                let path3 = u32::from_le_bytes([data[idx + 12], data[idx + 13], data[idx + 14], data[idx + 15]]);
-                let iteration_count = u32::from_le_bytes([data[idx + 16], data[idx + 17], data[idx + 18], data[idx + 19]]);
-                let initial_x = f32::from_le_bytes([data[idx + 20], data[idx + 21], data[idx + 22], data[idx + 23]]);
-                let initial_y = f32::from_le_bytes([data[idx + 24], data[idx + 25], data[idx + 26], data[idx + 27]]);
-
-                row.push(PathEntry {
-                    path0,
-                    path1,
-                    path2,
-                    path3,
-                    iteration_count,
-                    initial_x,
-                    initial_y,
-                });
-            }
-            result.push(row);
-        }
-
-        drop(data);
-        staging_buffer.unmap();
-        // Explicit, because dropping frees nothing on WebGPU.
-        staging_buffer.destroy();
-
-        Ok(result)
-    }
-
-    /// Get path at a specific pixel coordinate
-    /// This is a convenience method that reads the entire buffer
-    /// For frequent queries, cache the result of read_path_buffer()
-    pub async fn get_path_at(
-        &self,
-        device: &Device,
-        queue: &Queue,
-        x: u32,
-        y: u32,
-    ) -> Result<Option<PathEntry>, String> {
+    /// **The path a pixel was last drawn through** (PathMap's
+    /// right-click, docs/projects/word-editing.md §10): its word of the
+    /// plan on screen, and how many of its last maps every word on screen
+    /// shares; `None` where no path drew it or PathMap is off.
+    pub async fn read_path_at(&self, device: &Device, queue: &Queue, x: u32, y: u32) -> Result<Option<(Vec<u32>, usize)>, String> {
+        let Some(path_buffer) = &self.buffers.path_buffer else { return Ok(None) };
         if x >= self.width || y >= self.height {
             return Ok(None);
         }
-        let paths = self.read_path_buffer(device, queue).await?;
-        Ok(Some(paths[y as usize][x as usize]))
+        let staging = device.create_buffer(&BufferDescriptor {
+            label: Some("Path Id Staging"),
+            size: 4,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Path Id Read") });
+        encoder.copy_buffer_to_buffer(path_buffer, ((y * self.width + x) * 4) as u64, &staging, 0, 4);
+        queue.submit(std::iter::once(encoder.finish()));
+        let slice = staging.slice(..);
+        let (tx, rx) = futures::channel::oneshot::channel();
+        slice.map_async(MapMode::Read, move |result| {
+            let _ = tx.send(result);
+        });
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        rx.await
+            .map_err(|_| "Failed to map the path id".to_string())?
+            .map_err(|e| format!("Path id map error: {e:?}"))?;
+        let id = {
+            let data = slice.get_mapped_range();
+            u32::from_le_bytes([data[0], data[1], data[2], data[3]])
+        };
+        staging.unmap();
+        // Explicit, because dropping frees nothing on WebGPU.
+        staging.destroy();
+        // 1-based into the words drawn; the plan on screen is the one
+        // the ids were written against (a new plan restarts the picture,
+        // which clears them).
+        let Some(plan) = &self.cylinders else { return Ok(None) };
+        Ok(id
+            .checked_sub(1)
+            .and_then(|i| plan.words.get(i as usize))
+            .map(|c| (c.word.clone(), crate::scene::word_tree::common_suffix(plan))))
     }
 
     /// Read a region of pixels from the fractal texture centered at (center_x, center_y)

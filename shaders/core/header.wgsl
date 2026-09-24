@@ -99,10 +99,13 @@ struct Params {
     dof_blur_strength: f32,  // Depth of field: blur amount (0.0 = disabled)
     fog_strength: f32,  // Depth fog: exponential fog density (0.0 = disabled)
     fog_start: f32,  // Depth fog: distance where fog begins
-    bits_per_transform: u32,  // Bits needed per transform index (1-5 based on num_transforms)
-    path_map_style: u32,  // 0=Prefix, 1=Suffix, 2=Prefix (Distinct), 3=Suffix (Distinct)
-    path_capture_mode: u32,  // 0=FirstHit, 1=FirstAfterBurnIn, 2=LastHit
-    path_tracking_mode: u32,  // 0=First (first 32 iterations), 1=Recent (rolling window of 32 most recent)
+    path_map_style: u32,  // PathMap: 0 Path, 1 Path (distinct), 2 Depth, 3-5 Origin radial / horizontal / vertical
+    // PathMap's Origin styles: the attractor's centre and radius, the
+    // frame a point's position is read in (`pathmap_origin`). Where the
+    // path history's capture and tracking modes, and its bit width, were.
+    path_origin_x: f32,
+    path_origin_y: f32,
+    path_origin_r: f32,
     // Where the path filters' count and minimum length were (the Path
     // Editor, replaced by word editing): padding, so `post_symmetry`
     // stays on its 16-byte boundary. Mirror in `src/gpu/buffers.rs`.
@@ -170,16 +173,6 @@ struct VariationParams {
 // Path storage for PathMap color mode
 // Stores up to 32 iterations losslessly (4 bits per transform, up to 16 transforms)
 // Also stores initial random X/Y coordinates for complete path reconstruction
-struct PathEntry {
-    path0: u32,  // Iterations 0-7 (4 bits each, LSB = iteration 0)
-    path1: u32,  // Iterations 8-15
-    path2: u32,  // Iterations 16-23
-    path3: u32,  // Iterations 24-31
-    iteration_count: u32,  // Actual iteration when pixel was hit (not capped at 32)
-    initial_x: f32,  // Initial random X coordinate [-1, 1]
-    initial_y: f32,  // Initial random Y coordinate [-1, 1]
-}
-
 // Per-normal-transform attachment list — entries hold global xform_ids
 // pointing into the concatenated transforms[] array. The main loop walks
 // these after the chaos game picks a normal transform: linkeds advance
@@ -297,7 +290,30 @@ fn shadow_map_splat(p: vec3<f32>) {
 // Sample buffer write cursor.
 @group(0) @binding(6) var<storage, read_write> sample_counter: SampleCounter;
 {{/if}}
-@group(0) @binding(7) var<storage, read_write> path_buffer: array<PathEntry>;
+// PathMap: the path each pixel was last drawn through, 1-based into the
+// plan's words (0 = none), for the viewport's right-click.
+@group(0) @binding(7) var<storage, read_write> path_ids: array<u32>;
+{{#if PATH_TRACKING}}
+
+// **PathMap's Origin styles** (docs/projects/word-editing.md §10): where
+// the point was before its path carried it into the view -- a point of
+// the attractor -- read in the attractor's frame. Every other style keeps
+// `t`, the path's own colour, which the CPU packed with the path.
+fn pathmap_origin(p: vec2<f32>, t: f32) -> f32 {
+    let style = params.path_map_style;
+    if (style < 3u) {
+        return t;
+    }
+    let o = (p - vec2<f32>(params.path_origin_x, params.path_origin_y)) / max(params.path_origin_r, 1.0e-30);
+    if (style == 3u) {
+        return clamp(length(o), 0.0, 1.0);
+    }
+    if (style == 4u) {
+        return clamp(0.5 + 0.5 * o.x, 0.0, 1.0);
+    }
+    return clamp(0.5 + 0.5 * o.y, 0.0, 1.0);
+}
+{{/if}}
 // Binding 8 intentionally unused: the path filters, which word editing
 // replaced (docs/projects/word-editing.md).
 // Xaos (chaos) transition weights: xaos_weights[src * num_transforms + dst]

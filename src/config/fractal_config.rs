@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use crate::scene::transforms::{Flame, RenderMode};
-use crate::scene::palette::{ColorMode, Palette, PathCaptureMode, PathMapStyle, PathTrackingMode};
+use crate::scene::palette::{ColorMode, Palette, PathMapStyle};
 use crate::scene::tonemap::{HighlightMode, ToneMapMode, ToneCurve};
 use crate::effects::EffectInstance;
 
@@ -250,15 +250,16 @@ pub struct FractalConfig {
     /// Color settings
     #[serde(default)]
     pub color_mode: ColorMode,
-    /// PathMap coloring style (Prefix = color by path start, Suffix = color by path end)
+    /// PathMap colouring style (docs/projects/word-editing.md §10)
     #[serde(default, skip_serializing_if = "PathMapStyle::is_default")]
     pub path_map_style: PathMapStyle,
-    /// PathMap capture mode (FirstHit, FirstAfterBurnIn, LastHit)
-    #[serde(default, skip_serializing_if = "PathCaptureMode::is_default")]
-    pub path_capture_mode: PathCaptureMode,
-    /// PathMap tracking mode (First = first 32 iterations, Recent = rolling window of 32 most recent)
-    #[serde(default, skip_serializing_if = "PathTrackingMode::is_default")]
-    pub path_tracking_mode: PathTrackingMode,
+    /// How many transforms of each path decide its PathMap colour, for
+    /// the two path styles; Focused Rendering divides the picture at
+    /// least that finely so every part has them. The old history-based
+    /// PathMap's capture and tracking modes are gone with it: a file that
+    /// has them loads, and they are ignored.
+    #[serde(default = "default_path_map_level", skip_serializing_if = "is_default_path_map_level")]
+    pub path_map_level: u32,
     /// The palette data - always present (required)
     /// This is the single source of truth for the active palette
     #[serde(default = "default_palette", deserialize_with = "deserialize_palette")]
@@ -604,6 +605,14 @@ fn is_default_image_size(v: &(u32, u32)) -> bool {
 /// Skip-serialize helper — keeps fields free from existing flame
 /// JSON files unless the user actually changes them from zero.
 /// Shared by `camera_x` / `camera_y` and other zero-defaulted f32s.
+pub(crate) fn default_path_map_level() -> u32 {
+    2
+}
+
+fn is_default_path_map_level(v: &u32) -> bool {
+    *v == default_path_map_level()
+}
+
 fn default_trim_levels() -> u32 {
     2
 }
@@ -973,8 +982,7 @@ impl Default for FractalConfig {
             use_dynamic_blend: default_use_dynamic_blend(),
             color_mode: ColorMode::Palette,
             path_map_style: PathMapStyle::default(),
-            path_capture_mode: PathCaptureMode::default(),
-            path_tracking_mode: PathTrackingMode::default(),
+            path_map_level: default_path_map_level(),
             palette: default_palette(),
             palette_rotation: default_palette_rotation(),
             palette_size: default_palette_size(),

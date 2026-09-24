@@ -1,5 +1,5 @@
 use crate::scene::tonemap::{HighlightMode, ToneMapMode, ToneCurve};
-use crate::scene::palette::{ColorMode, PathMapStyle, PathCaptureMode, PathTrackingMode, PaletteLibrary};
+use crate::scene::palette::{ColorMode, PathMapStyle, PaletteLibrary};
 use crate::config::{ConfigManager, ConfigPath, LazyUndoUi, UpdateType};
 use crate::renderer::DensityHistogram;
 use super::histogram::{render_histogram_with_config, render_levels_controls_managed};
@@ -739,159 +739,63 @@ pub fn render_colors_content(
             }
 
             if matches!(current_color_mode, ColorMode::PathMap) {
-                let current_style = config_manager.active_config().path_map_style;
-                let style_text = match current_style {
-                    PathMapStyle::Prefix => t!("tonemap.path_prefix"),
-                    PathMapStyle::Suffix => t!("tonemap.path_suffix"),
-                    PathMapStyle::PrefixDistinct => t!("tonemap.path_prefix_distinct"),
-                    PathMapStyle::SuffixDistinct => t!("tonemap.path_suffix_distinct"),
-                    PathMapStyle::Depth => t!("tonemap.path_depth"),
-                    PathMapStyle::OriginRadial => t!("tonemap.path_origin_radial"),
-                    PathMapStyle::OriginHorizontal => t!("tonemap.path_origin_horizontal"),
-                    PathMapStyle::OriginVertical => t!("tonemap.path_origin_vertical"),
-                };
+                // PathMap colours by path, and only Focused Rendering
+                // draws through paths (docs/projects/word-editing.md §10):
+                // say so where it cannot, and offer to turn it on.
+                let cfg = config_manager.active_config();
+                if !matches!(cfg.render_mode, crate::scene::transforms::RenderMode::TwoD) {
+                    ui.label(egui::RichText::new(t!("tonemap.pathmap_needs_2d")).weak());
+                } else if !cfg.cylinder_targeting {
+                    ui.label(egui::RichText::new(t!("tonemap.pathmap_needs_focus")).weak());
+                    if ui.button(t!("tonemap.pathmap_turn_on_focus")).clicked() {
+                        if let Ok(update) = config_manager.update_param(ConfigPath::CylinderTargeting, true.into()) {
+                            max_update = max_update.max(update);
+                        }
+                    }
+                }
 
+                let current_style = config_manager.active_config().path_map_style;
+                let styles = [
+                    (PathMapStyle::Path, "tonemap.path_style_path", "tonemap.tooltip_path_style_path"),
+                    (PathMapStyle::PathDistinct, "tonemap.path_style_distinct", "tonemap.tooltip_path_style_distinct"),
+                    (PathMapStyle::Depth, "tonemap.path_depth", "tonemap.tooltip_path_depth"),
+                    (PathMapStyle::OriginRadial, "tonemap.path_origin_radial", "tonemap.tooltip_path_origin_radial"),
+                    (PathMapStyle::OriginHorizontal, "tonemap.path_origin_horizontal", "tonemap.tooltip_path_origin_horizontal"),
+                    (PathMapStyle::OriginVertical, "tonemap.path_origin_vertical", "tonemap.tooltip_path_origin_vertical"),
+                ];
+                let style_text = styles.iter().find(|(s, _, _)| *s == current_style).map_or_else(|| "?".into(), |(_, k, _)| t!(*k));
                 let mut temp_style = current_style;
                 egui::ComboBox::from_label(t!("tonemap.path_style"))
                     .selected_text(style_text)
                     .show_ui(ui, |ui| {
-                        // Hash-based styles
-                        ui.label(t!("tonemap.path_hash_based"));
-                        if ui.selectable_value(&mut temp_style, PathMapStyle::Prefix, t!("tonemap.path_prefix"))
-                            .on_hover_text(t!("tonemap.tooltip_path_prefix"))
-                            .changed()
-                        {
-                            if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {
-                                max_update = max_update.max(update);
+                        for (i, (style, label, tip)) in styles.iter().enumerate() {
+                            // Paths, then how deep, then where from.
+                            if i == 2 || i == 3 {
+                                ui.separator();
                             }
-                        }
-                        if ui.selectable_value(&mut temp_style, PathMapStyle::Suffix, t!("tonemap.path_suffix"))
-                            .on_hover_text(t!("tonemap.tooltip_path_suffix"))
-                            .changed()
-                        {
-                            if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {
-                                max_update = max_update.max(update);
-                            }
-                        }
-                        if ui.selectable_value(&mut temp_style, PathMapStyle::PrefixDistinct, t!("tonemap.path_prefix_distinct"))
-                            .on_hover_text(t!("tonemap.tooltip_path_prefix_distinct"))
-                            .changed()
-                        {
-                            if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {
-                                max_update = max_update.max(update);
-                            }
-                        }
-                        if ui.selectable_value(&mut temp_style, PathMapStyle::SuffixDistinct, t!("tonemap.path_suffix_distinct"))
-                            .on_hover_text(t!("tonemap.tooltip_path_suffix_distinct"))
-                            .changed()
-                        {
-                            if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {
-                                max_update = max_update.max(update);
-                            }
-                        }
-
-                        ui.separator();
-                        ui.label(t!("tonemap.path_palette_gradient"));
-                        if ui.selectable_value(&mut temp_style, PathMapStyle::Depth, t!("tonemap.path_depth"))
-                            .on_hover_text(t!("tonemap.tooltip_path_depth"))
-                            .changed()
-                        {
-                            if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {
-                                max_update = max_update.max(update);
-                            }
-                        }
-                        if ui.selectable_value(&mut temp_style, PathMapStyle::OriginRadial, t!("tonemap.path_origin_radial"))
-                            .on_hover_text(t!("tonemap.tooltip_path_origin_radial"))
-                            .changed()
-                        {
-                            if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {
-                                max_update = max_update.max(update);
-                            }
-                        }
-                        if ui.selectable_value(&mut temp_style, PathMapStyle::OriginHorizontal, t!("tonemap.path_origin_horizontal"))
-                            .on_hover_text(t!("tonemap.tooltip_path_origin_horizontal"))
-                            .changed()
-                        {
-                            if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {
-                                max_update = max_update.max(update);
-                            }
-                        }
-                        if ui.selectable_value(&mut temp_style, PathMapStyle::OriginVertical, t!("tonemap.path_origin_vertical"))
-                            .on_hover_text(t!("tonemap.tooltip_path_origin_vertical"))
-                            .changed()
-                        {
-                            if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {
-                                max_update = max_update.max(update);
+                            if ui.selectable_value(&mut temp_style, *style, t!(*label)).on_hover_text(t!(*tip)).changed() {
+                                if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {
+                                    max_update = max_update.max(update);
+                                }
                             }
                         }
                     });
 
-                // Path Capture Mode dropdown
-                let current_capture = config_manager.active_config().path_capture_mode;
-                let capture_text = match current_capture {
-                    PathCaptureMode::FirstHit => t!("tonemap.capture_first_hit"),
-                    PathCaptureMode::FirstAfterBurnIn => t!("tonemap.capture_first_after_burnin"),
-                    PathCaptureMode::LastHit => t!("tonemap.capture_deepest_hit"),
-                };
-
-                let mut temp_capture = current_capture;
-                egui::ComboBox::from_label(t!("tonemap.capture_mode"))
-                    .selected_text(capture_text)
-                    .show_ui(ui, |ui| {
-                        if ui.selectable_value(&mut temp_capture, PathCaptureMode::FirstHit, t!("tonemap.capture_first_hit"))
-                            .on_hover_text(t!("tonemap.tooltip_capture_first_hit"))
+                if matches!(current_style, PathMapStyle::Path | PathMapStyle::PathDistinct) {
+                    let mut level = config_manager.active_config().path_map_level;
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add(egui::DragValue::new(&mut level).range(1..=6))
+                            .on_hover_text(t!("tonemap.tooltip_path_level"))
                             .changed()
                         {
-                            if let Ok(update) = config_manager.update_param(ConfigPath::PathCaptureMode, temp_capture.into()) {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::PathMapLevel, level.into()) {
                                 max_update = max_update.max(update);
                             }
                         }
-                        if ui.selectable_value(&mut temp_capture, PathCaptureMode::FirstAfterBurnIn, t!("tonemap.capture_first_after_burnin"))
-                            .on_hover_text(t!("tonemap.tooltip_capture_first_after_burnin"))
-                            .changed()
-                        {
-                            if let Ok(update) = config_manager.update_param(ConfigPath::PathCaptureMode, temp_capture.into()) {
-                                max_update = max_update.max(update);
-                            }
-                        }
-                        if ui.selectable_value(&mut temp_capture, PathCaptureMode::LastHit, t!("tonemap.capture_deepest_hit"))
-                            .on_hover_text(t!("tonemap.tooltip_capture_deepest_hit"))
-                            .changed()
-                        {
-                            if let Ok(update) = config_manager.update_param(ConfigPath::PathCaptureMode, temp_capture.into()) {
-                                max_update = max_update.max(update);
-                            }
-                        }
+                        ui.label(t!("tonemap.path_level"));
                     });
-
-                // Path Tracking Mode dropdown
-                let current_tracking = config_manager.active_config().path_tracking_mode;
-                let tracking_text = match current_tracking {
-                    PathTrackingMode::First => t!("tonemap.tracking_first_32"),
-                    PathTrackingMode::Recent => t!("tonemap.tracking_recent_32"),
-                };
-
-                let mut temp_tracking = current_tracking;
-                egui::ComboBox::from_label(t!("tonemap.tracking_mode"))
-                    .selected_text(tracking_text)
-                    .show_ui(ui, |ui| {
-                        if ui.selectable_value(&mut temp_tracking, PathTrackingMode::First, t!("tonemap.tracking_first_32"))
-                            .on_hover_text(t!("tonemap.tooltip_tracking_first_32"))
-                            .changed()
-                        {
-                            if let Ok(update) = config_manager.update_param(ConfigPath::PathTrackingMode, temp_tracking.into()) {
-                                max_update = max_update.max(update);
-                            }
-                        }
-                        if ui.selectable_value(&mut temp_tracking, PathTrackingMode::Recent, t!("tonemap.tracking_recent_32"))
-                            .on_hover_text(t!("tonemap.tooltip_tracking_recent_32"))
-                            .changed()
-                        {
-                            if let Ok(update) = config_manager.update_param(ConfigPath::PathTrackingMode, temp_tracking.into()) {
-                                max_update = max_update.max(update);
-                            }
-                        }
-                    });
+                }
             }
 
             ui.separator();

@@ -139,7 +139,7 @@ pub struct HighResExporter {
     // declares `path_buffer` (binding 7) unconditionally, but the export
     // shader builds with PATH_TRACKING=false so the use-sites are
     // stripped. WebGPU still requires every declared binding to be
-    // bound; a minimum-size dummy (28 bytes for one PathEntry) satisfies
+    // bound; a minimum-size dummy (4 bytes for one path id) satisfies
     // the layout.
     dummy_path_buffer: Buffer,
     // Analytic-blur bindings (13/14) for the now-mode-independent routing.
@@ -575,7 +575,7 @@ impl HighResExporter {
         // unconditionally in header.wgsl; PATH_TRACKING=false in the
         // export build strips the use-sites but the binding still needs a
         // buffer. Its size matches the FlameRenderer dummy in
-        // gpu/buffers.rs: 28 bytes for one PathEntry.
+        // gpu/buffers.rs: 4 bytes for one path id.
         let dummy_path_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Export Dummy Path Buffer"),
             size: 28,
@@ -1822,10 +1822,8 @@ impl HighResExporter {
                     config.fog_strength
                 },
                 fog_start: config.fog_start,
-                bits_per_transform: crate::gpu::buffers::bits_per_transform(config.flame.transforms.len() as u32),
                 path_map_style: config.path_map_style as u32,
-                path_capture_mode: config.path_capture_mode as u32,
-                path_tracking_mode: config.path_tracking_mode as u32,
+                path_origin: [0.0, 0.0, 1.0],
                 _pad_path_filters: [0; 2],
                 background_r: config.background_color[0],
                 background_g: config.background_color[1],

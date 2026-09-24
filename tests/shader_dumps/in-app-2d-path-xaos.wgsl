@@ -106,10 +106,13 @@ struct Params {
     dof_blur_strength: f32,  // Depth of field: blur amount (0.0 = disabled)
     fog_strength: f32,  // Depth fog: exponential fog density (0.0 = disabled)
     fog_start: f32,  // Depth fog: distance where fog begins
-    bits_per_transform: u32,  // Bits needed per transform index (1-5 based on num_transforms)
-    path_map_style: u32,  // 0=Prefix, 1=Suffix, 2=Prefix (Distinct), 3=Suffix (Distinct)
-    path_capture_mode: u32,  // 0=FirstHit, 1=FirstAfterBurnIn, 2=LastHit
-    path_tracking_mode: u32,  // 0=First (first 32 iterations), 1=Recent (rolling window of 32 most recent)
+    path_map_style: u32,  // PathMap: 0 Path, 1 Path (distinct), 2 Depth, 3-5 Origin radial / horizontal / vertical
+    // PathMap's Origin styles: the attractor's centre and radius, the
+    // frame a point's position is read in (`pathmap_origin`). Where the
+    // path history's capture and tracking modes, and its bit width, were.
+    path_origin_x: f32,
+    path_origin_y: f32,
+    path_origin_r: f32,
     // Where the path filters' count and minimum length were (the Path
     // Editor, replaced by word editing): padding, so `post_symmetry`
     // stays on its 16-byte boundary. Mirror in `src/gpu/buffers.rs`.
@@ -177,16 +180,6 @@ struct VariationParams {
 // Path storage for PathMap color mode
 // Stores up to 32 iterations losslessly (4 bits per transform, up to 16 transforms)
 // Also stores initial random X/Y coordinates for complete path reconstruction
-struct PathEntry {
-    path0: u32,  // Iterations 0-7 (4 bits each, LSB = iteration 0)
-    path1: u32,  // Iterations 8-15
-    path2: u32,  // Iterations 16-23
-    path3: u32,  // Iterations 24-31
-    iteration_count: u32,  // Actual iteration when pixel was hit (not capped at 32)
-    initial_x: f32,  // Initial random X coordinate [-1, 1]
-    initial_y: f32,  // Initial random Y coordinate [-1, 1]
-}
-
 // Per-normal-transform attachment list — entries hold global xform_ids
 // pointing into the concatenated transforms[] array. The main loop walks
 // these after the chaos game picks a normal transform: linkeds advance
@@ -221,7 +214,30 @@ struct AttachmentList {
 // feature, removed because the feature was experimental and the
 // always-allocated buffer was just consuming GPU memory.
 
-@group(0) @binding(7) var<storage, read_write> path_buffer: array<PathEntry>;
+// PathMap: the path each pixel was last drawn through, 1-based into the
+// plan's words (0 = none), for the viewport's right-click.
+@group(0) @binding(7) var<storage, read_write> path_ids: array<u32>;
+
+
+// **PathMap's Origin styles** (docs/projects/word-editing.md §10): where
+// the point was before its path carried it into the view -- a point of
+// the attractor -- read in the attractor's frame. Every other style keeps
+// `t`, the path's own colour, which the CPU packed with the path.
+fn pathmap_origin(p: vec2<f32>, t: f32) -> f32 {
+    let style = params.path_map_style;
+    if (style < 3u) {
+        return t;
+    }
+    let o = (p - vec2<f32>(params.path_origin_x, params.path_origin_y)) / max(params.path_origin_r, 1.0e-30);
+    if (style == 3u) {
+        return clamp(length(o), 0.0, 1.0);
+    }
+    if (style == 4u) {
+        return clamp(0.5 + 0.5 * o.x, 0.0, 1.0);
+    }
+    return clamp(0.5 + 0.5 * o.y, 0.0, 1.0);
+}
+
 // Binding 8 intentionally unused: the path filters, which word editing
 // replaced (docs/projects/word-editing.md).
 // Xaos (chaos) transition weights: xaos_weights[src * num_transforms + dst]
@@ -1072,12 +1088,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // Starting point (random in [-1, 1])
 
-    // Store initial coordinates for path reconstruction
-    let initial_x = rng_nextf(&rng) * 2.0 - 1.0;
-    let initial_y = rng_nextf(&rng) * 2.0 - 1.0;
-
-    var current = vec2<f32>(initial_x, initial_y);
-
+    var current = vec2<f32>(
+        rng_nextf(&rng) * 2.0 - 1.0,
+        rng_nextf(&rng) * 2.0 - 1.0
+    );
 
 
 
@@ -1092,12 +1106,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var fuse = params.burn_in;
 
 
-    // Path tracking for PathMap mode
-    // Stores first 32 iterations losslessly (4 bits per transform, supports up to 16 transforms)
-    // path[0] = iterations 0-7, path[1] = 8-15, path[2] = 16-23, path[3] = 24-31
-    // Also stores initial_x, initial_y for complete path reconstruction
-    var path = array<u32, 4>(0u, 0u, 0u, 0u);
-    var path_iteration = 0u;  // Count of iterations stored in path
+    // PathMap: the path this thread's sample is drawn through, 1-based
+    // into the plan's words (0 = none), for `path_ids`.
+    var ct_word = 0u;
 
 
 
@@ -1231,7 +1242,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 
         // Original Step 1 (palette mode), or speed-based color (speed mode).
-        if (COLOR_MODE == 0u) {
+        // PathMap runs the palette's flow: its paths override it at the
+        // plot, and without a plan it is the palette.
+        if (COLOR_MODE == 0u || COLOR_MODE == 2u) {
             let symmetry = xform.color_speed;
             let colorC1 = (1.0 + symmetry) / 2.0;
             let colorC2 = xform.color * (1.0 - symmetry) / 2.0;
@@ -1240,40 +1253,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let speed_color = speed_to_color(speed);
             color = mix(color, speed_color, params.speed_factor);
         }
-
-
-        // Note: COLOR_MODE == 2 (PathMap) handled below with path buffer writes
-
-
-
-        // Path tracking: needed for path map mode
-        let needs_path_tracking = COLOR_MODE == 2u;
-        if (needs_path_tracking) {
-            // For FirstAfterBurnIn mode (1), only track path after burn-in
-            // (fuse == 0 — also re-armed by the bad-value respawn)
-            let should_track = (params.path_capture_mode != 1u) || (fuse == 0u);
-            if (should_track) {
-                if (params.path_tracking_mode == 0u) {
-                    // First mode: store first 32 iterations, then stop writing to path array
-                    if (path_iteration < 32u) {
-                        let slot = path_iteration / 8u;  // Which u32 (0-3)
-                        let pos = (path_iteration % 8u) * 4u;  // Bit position within u32 (0,4,8,12,16,20,24,28)
-                        path[slot] = path[slot] | ((xform_idx & 0xFu) << pos);
-                    }
-                } else {
-                    // Recent mode: rolling window of 32 most recent iterations
-                    // Shift all values left by 4 bits, insert new value at low end of path[0]
-                    // path[3] loses its highest 4 bits, gains from path[2]'s highest 4 bits, etc.
-                    path[3] = (path[3] << 4u) | (path[2] >> 28u);
-                    path[2] = (path[2] << 4u) | (path[1] >> 28u);
-                    path[1] = (path[1] << 4u) | (path[0] >> 28u);
-                    path[0] = (path[0] << 4u) | (xform_idx & 0xFu);
-                }
-                // Always increment - this is the actual iteration count (not capped at 32)
-                path_iteration = path_iteration + 1u;
-            }
-        }
-
 
 
 
@@ -1312,16 +1291,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 
             // Pre-compute the iteration's base color OUTSIDE the
-            // symmetry loop. It depends only on color_index / color /
-            // (none for path-map) — none of which change between the
-            // K symmetric copies. Hoisting the palette texture sample
-            // alone gives a (K-1)/K speedup for palette mode at high
-            // Point-symmetry orders. Default of white covers the
-            // path-map COLOR_MODE branch (and any unhandled mode);
-            // fog inside the loop reads from this base into a local
-            // copy so its per-copy depth modulation doesn't bleed.
+            // symmetry loop. It depends only on color_index / color,
+            // neither of which changes between the K symmetric copies.
+            // Hoisting the palette texture sample alone gives a (K-1)/K
+            // speedup for palette mode at high Point-symmetry orders.
+            // PathMap reads the palette at its path's colour. Default
+            // of white covers any unhandled mode; fog inside the loop
+            // reads from this base into a local copy so its per-copy
+            // depth modulation doesn't bleed.
             var base_final_color: vec3<f32> = vec3<f32>(1.0, 1.0, 1.0);
-            if (COLOR_MODE == 0u) {
+            if (COLOR_MODE == 0u || COLOR_MODE == 2u) {
                 let palette_srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(color_index, 0.5), 0.0).rgb;
                 base_final_color = srgb_to_linear(palette_srgb);
             } else if (COLOR_MODE == 1u) {
@@ -1367,28 +1346,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 var final_color: vec3<f32> = base_final_color;
 
 
-                // Path-tracking write — depends on pixel_idx so it
-                // must stay inside the symmetry loop (each symmetric
-                // copy records the same path at its own pixel).
-                if (COLOR_MODE == 2u) {
-                    // Capture mode determines when to write:
-                    // 0 = FirstHit: only write if no path stored yet
-                    // 1 = FirstAfterBurnIn: same as FirstHit (we're already past burn-in here)
-                    // 2 = DeepestHit: overwrite only if new path has more iterations
-                    let existing_count = path_buffer[pixel_idx].iteration_count;
-                    let should_write = (params.path_capture_mode == 2u && path_iteration > existing_count) ||
-                                       (params.path_capture_mode != 2u && existing_count == 0u);
-
-                    if (should_write) {
-                        path_buffer[pixel_idx].path0 = path[0];
-                        path_buffer[pixel_idx].path1 = path[1];
-                        path_buffer[pixel_idx].path2 = path[2];
-                        path_buffer[pixel_idx].path3 = path[3];
-                        path_buffer[pixel_idx].iteration_count = path_iteration;
-                        path_buffer[pixel_idx].initial_x = initial_x;
-                        path_buffer[pixel_idx].initial_y = initial_y;
-                    }
-                }
+                // PathMap: the path this pixel was last drawn through, for
+                // the right-click. Inside the symmetry loop: each copy is
+                // drawn through the same path.
+                path_ids[pixel_idx] = ct_word;
 
 
 
