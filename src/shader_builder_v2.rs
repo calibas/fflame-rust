@@ -320,6 +320,12 @@ pub struct ShaderConstants {
     /// exists. Only read when `cylinder_targeting` is on.
     pub cylinder_replay: bool,
 
+    /// Whether the replay's last steps run in OFFSETS from reference
+    /// orbits (`docs/projects/deep-zoom-precision.md`), which the plan
+    /// carries where the view is too deep for f32. Only with the replay,
+    /// in 2D, and with `cylinder_relative`, whose plot it feeds.
+    pub cylinder_offsets: bool,
+
     /// Whether the frame-coverage counters are compiled in (auto
     /// exposure — `docs/projects/flame-deep-zoom.md`). Drives
     /// `FRAME_COVERAGE`; when false the binding, the per-thread
@@ -443,6 +449,7 @@ impl Default for ShaderConstants {
             frame_coverage: false,
             cylinder_replay: false,
             cylinder_relative: false,
+            cylinder_offsets: false,
             flatten_z_per_iter: false,
             solid_enabled: false,
             probe: false,
@@ -676,6 +683,7 @@ impl ShaderConstants {
             frame_coverage: false,
             cylinder_replay: false,
             cylinder_relative: false,
+            cylinder_offsets: false,
             // Per-iteration Z flatten — only meaningful in 3D, and
             // only when preserve_z is false (JWF/Apo default).
             flatten_z_per_iter: matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD)
@@ -1709,6 +1717,9 @@ impl ShaderBuilder {
         // CYLINDER_RELATIVE moves the forced plot into view-relative
         // coordinates so a deep zoom is not quantised by f32.
         processor.set("CYLINDER_RELATIVE", constants.cylinder_relative);
+        // CYLINDER_OFFSETS carries the replay's deep steps as offsets from
+        // reference orbits (docs/projects/deep-zoom-precision.md).
+        processor.set("CYLINDER_OFFSETS", constants.cylinder_offsets && constants.cylinder_replay);
         // FLATTEN_Z_PER_ITER used to insert a blanket `current.z = 0.0;`
         // at the end of each iteration under preserve_z=false. That
         // destroyed the z compounding JWF gets through unconditional
@@ -1955,6 +1966,11 @@ impl ShaderBuilder {
         if constants.cylinder_replay {
             shader.push_str(&processor.process(include_str!("../shaders/core/replay.wgsl")));
             shader.push('\n');
+            // The forward difference forms the offset steps run.
+            if constants.cylinder_offsets {
+                shader.push_str(include_str!("../shaders/core/replay_delta.wgsl"));
+                shader.push('\n');
+            }
         }
 
         Definitions { source: shader, processor, active, has_dc, has_rgb }
@@ -1999,6 +2015,7 @@ impl ShaderBuilder {
             // Wraps the armed variations' draws to read the forced arm.
             cylinder_replay: true,
             cylinder_relative: false,
+            cylinder_offsets: false,
             flatten_z_per_iter: false,
             solid_enabled: false,
             probe: false,
@@ -2039,6 +2056,7 @@ impl ShaderBuilder {
             frame_coverage: false,
             cylinder_replay: false,
             cylinder_relative: false,
+            cylinder_offsets: false,
             flatten_z_per_iter: false,
             solid_enabled: false,
             probe: false,

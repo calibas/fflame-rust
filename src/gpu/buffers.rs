@@ -2846,6 +2846,14 @@ impl FlameBuffers {
         rebuilt
     }
 
+    /// Write the replay table's `shift` -- the plan's centre less the
+    /// view's -- into its header (`scene::cylinder::pack_words`).
+    pub fn write_cylinder_shift(&self, queue: &Queue, shift: [f32; 2]) {
+        if let Some(b) = &self.cylinder_buffer {
+            queue.write_buffer(b, 16, bytemuck::cast_slice(&shift));
+        }
+    }
+
     /// The bias table binding: the real buffer when the feature is
     /// on, the dummy otherwise.
     pub fn bias_binding(&self) -> &Buffer {

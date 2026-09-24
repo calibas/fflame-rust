@@ -176,6 +176,128 @@ pub struct PlanGpu {
 const MAX_GROUPS: u32 = 65535;
 
 impl PlanGpu {
+    /// **The render's replay, per sample, for a test**: the words of a
+    /// packed replay table (`scene::cylinder::pack_words`, with offsets),
+    /// each job `[word record, word block, start x, start y]`. Runs
+    /// `ct_apply_symbol` -- the render's own replay -- to the word's `m`,
+    /// then both the plain replay to its end and `ct_offsets`, the render's
+    /// offset steps. Back per job: the plain end point (absolute) and the
+    /// offset one (relative to the plan's centre).
+    #[cfg(test)]
+    pub fn offset_endpoints(&self, flame: &Flame, table: &[f32], jobs: &[[f32; 4]]) -> Vec<[f32; 4]> {
+        use wgpu::util::DeviceExt;
+        let device = &self.device;
+        let builder = crate::shader_builder_v2::ShaderBuilder::new(crate::variations::global_registry().clone());
+        let src = format!(
+            "{}\n{}\n{}",
+            builder.build_plan_eval(flame),
+            include_str!("../../shaders/core/replay_delta.wgsl"),
+            r#"
+@group(2) @binding(0) var<storage, read> cylinders: array<f32>;
+@group(2) @binding(1) var<storage, read> dz_jobs: array<vec4<f32>>;
+@group(2) @binding(2) var<storage, read_write> dz_out: array<vec4<f32>>;
+
+@compute @workgroup_size(64, 1, 1)
+fn dz_endpoints(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= arrayLength(&dz_out)) {
+        return;
+    }
+    let job = dz_jobs[i];
+    let b = u32(job.x);
+    let blk = u32(job.y);
+    let len = u32(cylinders[b + 3u]);
+    let m = select(len, u32(cylinders[blk]), blk != 0u);
+    var rng = rng_init(i, 0x9E3779B9u);
+    var p = job.zw;
+    for (var k = 0u; k < m; k = k + 1u) {
+        p = ct_apply_symbol(p, u32(cylinders[b + 4u + k]), &rng, 0.0);
+    }
+    var q = p;
+    for (var k = m; k < len; k = k + 1u) {
+        q = ct_apply_symbol(q, u32(cylinders[b + 4u + k]), &rng, 0.0);
+    }
+    ct_forced_arm = -1;
+    var rel = vec2<f32>(3.0e38, 3.0e38);
+    if (blk != 0u) {
+        rel = ct_offsets(p, b, blk, m, len);
+    }
+    dz_out[i] = vec4<f32>(q, rel);
+}
+"#
+        );
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("offset endpoints"),
+            source: wgpu::ShaderSource::Wgsl(src.into()),
+        });
+        let storage = |binding: u32, read_only: bool| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let layout0 = self.pipeline.get_bind_group_layout(0);
+        let empty = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[] });
+        let layout2 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[storage(0, true), storage(1, true), storage(2, false)],
+        });
+        let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[Some(&layout0), Some(&empty), Some(&layout2)],
+            immediate_size: 0,
+        });
+        let pipe = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("offset endpoints"),
+            layout: Some(&pl),
+            module: &module,
+            entry_point: Some("dz_endpoints"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let st = wgpu::BufferUsages::STORAGE;
+        let init = |bytes: &[u8]| device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: bytes, usage: st });
+        let table_buf = init(bytemuck::cast_slice(table));
+        let jobs_buf = init(bytemuck::cast_slice(jobs));
+        let bytes = (jobs.len() * 16) as u64;
+        let out = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: bytes, usage: st | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false });
+        let stage = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: bytes,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let g1 = device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &empty, entries: &[] });
+        let g2 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &layout2,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: table_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: jobs_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: out.as_entire_binding() },
+            ],
+        });
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+            pass.set_pipeline(&pipe);
+            pass.set_bind_group(0, &self.group0, &[]);
+            pass.set_bind_group(1, &g1, &[]);
+            pass.set_bind_group(2, &g2, &[]);
+            pass.dispatch_workgroups((jobs.len() as u32).div_ceil(64), 1, 1);
+        }
+        enc.copy_buffer_to_buffer(&out, 0, &stage, 0, bytes);
+        self.queue.submit(Some(enc.finish()));
+        stage.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        let got: Vec<[f32; 4]> = bytemuck::cast_slice::<u8, [f32; 4]>(&stage.slice(..).get_mapped_range()).to_vec();
+        got
+    }
+
     /// Build the kernel for `flame` and upload `sample` (in f32).
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, flame: &Flame, sample: &[[f64; 2]]) -> Self {
         use crate::gpu::buffers as gb;

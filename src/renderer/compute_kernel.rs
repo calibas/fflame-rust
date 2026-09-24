@@ -476,6 +476,10 @@ pub struct FlameRenderer {
     /// Decided with the enumeration, because it depends on both the
     /// flame and whether targeting is running at all.
     cylinder_relative: bool,
+    /// Whether the current shader runs the replay's deep steps in
+    /// offsets (`docs/projects/deep-zoom-precision.md`): the plan
+    /// carries references, and the plot is view-relative.
+    cylinder_offsets: bool,
     /// Fingerprint of everything the enumeration depends on, so the
     /// per-frame sync can skip the work when nothing moved.
     cylinder_key: Option<u64>,
@@ -677,6 +681,7 @@ impl FlameRenderer {
             targeting_state: TargetingState::default(),
             cylinder_key_pending: None,
             cylinder_relative: false,
+            cylinder_offsets: false,
             cylinder_key: None,
             background_planning: false,
             plan_job: None,
@@ -863,6 +868,7 @@ impl FlameRenderer {
             cylinder_targeting: self.cylinders.is_some(),
             cylinder_replay: self.cylinders.as_ref().is_some_and(|c| !c.composable),
             cylinder_relative: self.cylinder_relative,
+            cylinder_offsets: self.cylinder_offsets,
             frame_coverage: self.auto_exposure || self.leak_probe[2] > 0.0,
             flatten_z_per_iter: matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD)
                 && !preserve_z,
@@ -2012,10 +2018,31 @@ impl FlameRenderer {
     /// Composed arm only. The replay arm runs the transforms
     /// themselves, in world coordinates, so there is no single
     /// translation to shift.
+    /// Which kernel the plan on screen needs: composed or replayed, and
+    /// with offsets or without. A change of either is a new shader, so
+    /// every before-and-after of a plan compares this.
+    fn cylinder_arm(&self) -> Option<(bool, bool)> {
+        self.cylinders.as_ref().map(|c| (c.composable, !c.refs.is_empty()))
+    }
+
+    /// Write the replay table's shift for `config`'s view: the plan's
+    /// centre less the pan, formed in f64. A plan still drawing after a
+    /// pan then draws where it did (`scene::cylinder::pack_words`).
+    fn write_cylinder_shift(&self, queue: &Queue, config: &FractalConfig) {
+        if let Some(c) = self.cylinders.as_ref().filter(|c| !c.composable && !c.refs.is_empty()) {
+            let shift = [(c.view_centre[0] - config.pan_x) as f32, (c.view_centre[1] - config.pan_y) as f32];
+            self.buffers.write_cylinder_shift(queue, shift);
+        }
+    }
+
     fn relative_is_safe(&self, config: &FractalConfig) -> bool {
         let Some(cyl) = &self.cylinders else { return false };
         let registry = crate::variations::global_registry();
-        cyl.composable
+        // The composed arm subtracts the centre as it composes; a replay
+        // does so where its plan carries references, and subtracts the
+        // pan in f32 for every other word -- so it plots view-relative
+        // throughout (`ct_offsets`).
+        (cyl.composable || !cyl.refs.is_empty())
             && !config.flame.has_attachments()
             && config.flame.post_symmetry.ty
                 == crate::scene::transforms::PostSymmetryType::None
@@ -2219,6 +2246,7 @@ impl FlameRenderer {
             changed
         };
         self.cylinder_relative = self.relative_is_safe(config);
+        self.cylinder_offsets = self.cylinder_relative && self.cylinders.as_ref().is_some_and(|c| !c.composable && !c.refs.is_empty());
         let shaders_changed = self.pipelines.ensure_shaders_current_with_config(
             device,
             config,
@@ -2227,6 +2255,7 @@ impl FlameRenderer {
             self.cylinders.is_some(),
             self.cylinders.as_ref().is_some_and(|c| !c.composable),
             self.cylinder_relative,
+            self.cylinder_offsets,
             self.leak_probe[2] > 0.0,
         );
         if shaders_changed {
@@ -3697,6 +3726,7 @@ impl FlameRenderer {
         config: &FractalConfig,
     ) -> bool {
         let key = self.enumeration_key(config);
+        self.write_cylinder_shift(queue, config);
 
         // A plan from the background: applied if it is for this key,
         // waited for if it is still coming.
@@ -3762,10 +3792,10 @@ impl FlameRenderer {
         // `composable` and not just `is_some`: the two arms read
         // different buffer layouts, so crossing between them needs the
         // rebuild exactly as starting or stopping does.
-        let before = self.cylinders.as_ref().map(|c| c.composable);
+        let before = self.cylinder_arm();
         let buffers_changed = self.update_cylinders(device, queue, config);
         self.applied_flame_key = Some(Self::flame_key(config));
-        let after = self.cylinders.as_ref().map(|c| c.composable);
+        let after = self.cylinder_arm();
 
         // **The bind group must follow the buffer.** A pan that
         // changes how many words reach the view resizes the cylinder
@@ -3897,11 +3927,13 @@ impl FlameRenderer {
             }
         });
         let changed = self.buffers.update_cylinders(device, queue, packed.as_deref());
-        let was = self.cylinders.as_ref().map(|c| c.composable);
+        let was = self.cylinder_arm();
         self.cylinders = planned;
-        let now = self.cylinders.as_ref().map(|c| c.composable);
+        self.write_cylinder_shift(queue, config);
+        let now = self.cylinder_arm();
         // After the assignment: the predicate asks `self.cylinders`.
         self.cylinder_relative = self.relative_is_safe(config);
+        self.cylinder_offsets = self.cylinder_relative && self.cylinders.as_ref().is_some_and(|c| !c.composable && !c.refs.is_empty());
         // The SHADER changes when targeting starts or stops, so the
         // constants have to be seen to change even if the buffer did
         // not resize.
@@ -4015,9 +4047,9 @@ impl FlameRenderer {
             return None;
         }
         let sb = self.standby.take()?;
-        let before = self.cylinders.as_ref().map(|c| c.composable);
+        let before = self.cylinder_arm();
         let buffers_changed = self.apply_plan(device, queue, config, Some(Ok(sb.plan)));
-        let after = self.cylinders.as_ref().map(|c| c.composable);
+        let after = self.cylinder_arm();
         self.applied_view = Some(sb.view);
         self.applied_flame_key = Some(flame_key);
         // Samples drawn under the previous plan carry its weight.
@@ -4068,9 +4100,9 @@ impl FlameRenderer {
             // Made for a view the user has left.
             return None;
         }
-        let before = self.cylinders.as_ref().map(|c| c.composable);
+        let before = self.cylinder_arm();
         let buffers_changed = self.apply_plan(device, queue, config, Some(outcome));
-        let after = self.cylinders.as_ref().map(|c| c.composable);
+        let after = self.cylinder_arm();
         self.cylinder_key = Some(key);
         self.applied_flame_key = Some(job.flame_key);
         self.applied_view = self.cylinders.is_some().then_some(job.view);
@@ -4201,12 +4233,12 @@ impl FlameRenderer {
         }
         // Including a standby in flight: the view you stop on comes first.
         self.cancel_plan_job();
-        let before = self.cylinders.as_ref().map(|c| c.composable);
+        let before = self.cylinder_arm();
         if self.drop_stale_flame_plan(device, queue, config) {
             self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
             self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
         }
-        let reload = before != self.cylinders.as_ref().map(|c| c.composable);
+        let reload = before != self.cylinder_arm();
 
         let gpu = self.gpu_planner(device, queue);
         match self.spawn_plan(config, PlanKind::Tight, self.cylinder_view(config), key, gpu) {
@@ -4224,7 +4256,7 @@ impl FlameRenderer {
                     self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
                     self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
                 }
-                before != self.cylinders.as_ref().map(|c| c.composable)
+                before != self.cylinder_arm()
             }
         }
     }

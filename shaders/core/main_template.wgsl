@@ -517,13 +517,29 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let ct_i = ct_pick(rng_nextf(&ct_rng));
                 let ct_b = ct_base(ct_i);
                 let ct_len = u32(cylinders[ct_b + 3u]);
-                for (var ct_k = 0u; ct_k < ct_len; ct_k = ct_k + 1u) {
+{{#if CYLINDER_OFFSETS}}
+                // Absolute f32 only as far as it resolves the sample;
+                // the rest in offsets (`ct_offsets`).
+                let ct_blk = ct_block(ct_i);
+                let ct_m = select(ct_len, u32(cylinders[ct_blk]), ct_blk != 0u);
+{{else}}
+                let ct_m = ct_len;
+{{/if}}
+                for (var ct_k = 0u; ct_k < ct_m; ct_k = ct_k + 1u) {
                     // The transform in the low byte; the arm, if the
                     // transform's variation is many-valued, above it.
                     // `replay.wgsl`, shared with the planner's kernel.
                     current = ct_apply_symbol(current, u32(cylinders[ct_b + 4u + ct_k]), &ct_rng, color_index);
                 }
                 ct_forced_arm = -1;
+{{#if CYLINDER_OFFSETS}}
+                // Either way the plot is view-relative now.
+                if (ct_blk != 0u) {
+                    current = ct_offsets(current, ct_b, ct_blk, ct_m, ct_len);
+                } else {
+                    current = current - vec2<f32>(params.pan_x, params.pan_y);
+                }
+{{/if}}
                 color_index = color_index * cylinders[ct_b + 1u] + cylinders[ct_b + 2u];
 {{else}}
                 // COMPOSED. Every map in the word is affine, so the
