@@ -55,6 +55,9 @@ CASES = [
     # The flame whose analysis was the slowest (random1: 26 ms natively).
     ('random1, cold', ROOT / 'output' / 'flame-zoom' / 'random1.fflame', 1.0, True),
     ('random1 100x, warm', ROOT / 'output' / 'flame-zoom' / 'random1.fflame', 100.0, False),
+    # A renewal (tracker C2): transform 0's pre_blur, drawn in the web's
+    # replays and kept by geometry.
+    ('true grand julian 50x, cold', ROOT / 'output' / 'flame-zoom' / 'true-grand-julian.fflame', 50.0, True),
 ]
 
 

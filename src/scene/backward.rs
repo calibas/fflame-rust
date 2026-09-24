@@ -52,7 +52,7 @@
 //! sample point to a region that does.
 
 use super::cylinder::{sym_arm, sym_of, sym_transform, Cylinder, Cylinders, NoCylinders, View, MAX_DEPTH, MAX_WORDS};
-use super::ifs_analysis::{analyse_2d_maps_sliced, Ifs2, IfsMap, Kernel, Map2};
+use super::ifs_analysis::{analyse_2d_maps_blurred_sliced, Ifs2, IfsMap, Kernel, Map2, PreBlur};
 use super::transforms::Flame;
 use crate::variations::VariationRegistry;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -651,6 +651,8 @@ struct Sym {
     /// The probability the chaos game draws this transform AND this
     /// arm.
     prob: f64,
+    /// Set for a blurred transform: see [`Renewal`].
+    renewal: Option<Renewal>,
 }
 
 /// What a region is made of: view points pulled back (the descent from
@@ -846,6 +848,11 @@ struct TransformInfo {
     weight: f64,
     arms: u32,
     map: usize,
+    /// Its `pre_blur`, taken out of the maps by the analysis and drawn
+    /// here -- only ever on a [`Renewal`].
+    blur: Option<PreBlur>,
+    /// Set when it is blurred: see [`Renewal`].
+    renewal: Option<Renewal>,
     /// All of the transform's maps, `map` first.
     branches: Vec<usize>,
 }
@@ -949,6 +956,51 @@ pub struct RefChain {
     pub end: [f64; 2],
 }
 
+/// **A transform whose blur forgets its input** (tracker item C2): its
+/// `pre_blur` reaches across the attractor's whole image in the frame
+/// its kernel reads, and past the kernel's preimage of every point it
+/// can output. Every point of the attractor then has a positive chance
+/// of landing anywhere in its output, so the region of a word it starts
+/// is the whole attractor: its child is kept, never carried, and kept by
+/// whether the node's region can reach `out` at all -- not by replays,
+/// which at depth miss a smooth part that lands one time in ten million.
+///
+/// v1 knows one kernel, bubble, whose inner branch holds a preimage of
+/// every image point within radius 2, and whose image is the unit disc.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Renewal {
+    /// A disc holding everything the transform can output.
+    out_centre: [f64; 2],
+    out_radius: f64,
+}
+
+/// The inner preimage radius of bubble's image: `4v/(|v|²+4)` sends the
+/// disc of radius 2 onto the unit disc.
+const BUBBLE_PREIMAGE: f64 = 2.0;
+
+/// The blur's draw, as JWF's `pre_blur` makes it: `weight·(six uniforms
+/// − 3)` at a uniform angle.
+fn blur_draw(b: PreBlur, u: &mut impl FnMut() -> f64) -> [f64; 2] {
+    let g = b.weight * ((0..6).map(|_| u()).sum::<f64>() - 3.0);
+    let a = u() * std::f64::consts::TAU;
+    [g * a.cos(), g * a.sin()]
+}
+
+/// The forward map along arm `k`, with a blur drawn from `u` where the
+/// transform has one. See [`Renewal`].
+fn forward_blurred(map: &IfsMap<Map2>, x: [f64; 2], k: u32, blur: Option<PreBlur>, u: &mut impl FnMut() -> f64) -> [f64; 2] {
+    let Some(b) = blur else { return forward(map, x, k) };
+    let d = blur_draw(b, u);
+    match &map.forward {
+        Map2::Nonlinear(n) => {
+            let v = n.pre.apply(x);
+            let z = n.kernel.forward([v[0] + d[0], v[1] + d[1]], k);
+            n.post.apply([n.w * z[0], n.w * z[1]])
+        }
+        other => other.apply(x),
+    }
+}
+
 /// The last flame analysed, shared across threads: the app plans on a
 /// background thread, and a per-thread cache there would rebuild the
 /// index on every plan.
@@ -1033,7 +1085,8 @@ impl Backward {
     pub async fn read_sliced(flame: &Flame, registry: &VariationRegistry, slicer: &Slicer) -> Result<Self, String> {
         slicer.tick().await;
         // The maps alone: the escape engine's bounds are never read here.
-        let ifs = analyse_2d_maps_sliced(flame, registry, slicer).await.map_err(|errs| {
+        // A `pre_blur` comes back beside them (tracker item C2).
+        let (ifs, blurs) = analyse_2d_maps_blurred_sliced(flame, registry, slicer).await.map_err(|errs| {
             errs.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ")
         })?;
         slicer.tick().await;
@@ -1053,7 +1106,20 @@ impl Backward {
                 .transforms
                 .get(m.transform_index)
                 .map_or(0.0, |t| (t.weight as f64).max(0.0));
-            transforms.push(TransformInfo { index: m.transform_index, weight, arms: forward_arms(m), map: mi, branches: vec![mi] });
+            let blur = blurs.get(m.transform_index).copied().flatten();
+            let renewal = match blur {
+                Some(b) => Some(Self::renewal(&ifs, m, b).map_err(|why| format!("transform {}: {why}", m.transform_index))?),
+                None => None,
+            };
+            transforms.push(TransformInfo {
+                index: m.transform_index,
+                weight,
+                arms: forward_arms(m),
+                map: mi,
+                blur,
+                renewal,
+                branches: vec![mi],
+            });
         }
         let total: f64 = transforms.iter().map(|t| t.weight).sum();
         if !(total > 0.0) {
@@ -1074,6 +1140,7 @@ impl Backward {
                     branches: t.branches.clone(),
                     arm,
                     prob: t.weight / total / t.arms as f64,
+                    renewal: t.renewal,
                 });
             }
         }
@@ -1101,7 +1168,7 @@ impl Backward {
                 u -= c.weight;
             }
             let arm = ((lcg() * t.arms as f64) as u32).min(t.arms - 1);
-            let y = forward(&ifs.maps[t.map], x, arm);
+            let y = forward_blurred(&ifs.maps[t.map], x, arm, t.blur, &mut lcg);
             if finite(y) && y[0].abs() < 1e12 && y[1].abs() < 1e12 {
                 x = y;
             } else {
@@ -1210,6 +1277,33 @@ impl Backward {
         out
     }
 
+    /// Whether a blurred transform is a [`Renewal`], and its output disc;
+    /// or why it cannot be planned.
+    fn renewal(ifs: &Ifs2, m: &IfsMap<Map2>, b: PreBlur) -> Result<Renewal, String> {
+        let Map2::Nonlinear(n) = &m.forward else {
+            return Err("pre_blur is planned beside one kernel alone (not an affine, not a sum) so far".into());
+        };
+        if !matches!(n.kernel, Kernel::Bubble) {
+            return Err(format!("pre_blur is planned beside bubble so far, not {:?}", n.kernel));
+        }
+        // The attractor's image in the kernel's frame: the ball through
+        // `pre`, by its centre and largest stretch.
+        let c = n.pre.apply(ifs.ball.centre);
+        let (_, smax) = crate::scene::ifs_analysis::singular_values_of(n.pre.m);
+        let image = c[0].hypot(c[1]) + smax * ifs.ball.radius;
+        let need = image + BUBBLE_PREIMAGE;
+        if b.reach() < need {
+            return Err(format!(
+                "its pre_blur reaches {:.3}, short of the {:.3} it takes to forget its input; a partial blur is not planned yet",
+                b.reach(),
+                need
+            ));
+        }
+        // Bubble's image is the unit disc: w of it, through `post`.
+        let (_, pmax) = crate::scene::ifs_analysis::singular_values_of(n.post.m);
+        Ok(Renewal { out_centre: n.post.apply([0.0, 0.0]), out_radius: pmax * n.w.abs() })
+    }
+
     /// The flame's forward maps as the shader's rows, one per transform
     /// index up to the highest walked; an index the walk does not use
     /// (weight zero) is the identity, which no word names.
@@ -1274,6 +1368,52 @@ impl Backward {
         Some(level)
     }
 
+    /// Whether a child's candidates are gathered: an index child that is
+    /// not a renewal's. The gathers asked and the answers read back both
+    /// go by this, so they cannot disagree.
+    fn gathers(&self, c: &Child) -> bool {
+        matches!(c.pts, Pts::Index(_)) && self.alphabet[c.ai].renewal.is_none()
+    }
+
+    /// **Whether a renewal can land in `view` through `word`**: the view
+    /// pulled back through the word, last symbol first, along every
+    /// branch and arm, each piece's radius grown by the map's smallest
+    /// stretch there (twice, for the linearization), and any piece
+    /// reaching the renewal's output disc. Where the pull-back cannot be
+    /// followed -- no preimage on any branch, or too many pieces -- it
+    /// answers yes: a renewal kept in doubt costs efficiency, one
+    /// dropped in doubt is a hole.
+    fn reaches(&self, word: &[u32], view: View, ren: Renewal) -> bool {
+        use crate::scene::forward_delta::map_forward_difference;
+        const PIECES: usize = 64;
+        let mut level: Vec<([f64; 2], f64)> = vec![(view.centre, view.radius)];
+        for &sym in word.iter().rev() {
+            let Some(a) = self.alphabet.iter().find(|a| a.sym == sym) else { return true };
+            let map = &self.ifs.maps[a.map];
+            let mut next: Vec<([f64; 2], f64)> = Vec::new();
+            for &(q, r) in &level {
+                for &mb in &a.branches {
+                    let p = self.ifs.maps[mb].inverse.apply(q);
+                    if !finite(p) || self.arm_of(map, p, q) != Some(a.arm) {
+                        continue;
+                    }
+                    let h = 1e-6 * p[0].hypot(p[1]).max(1e-6);
+                    let col = |d: [f64; 2]| map_forward_difference(&map.forward, p, d, a.arm).map(|v| [v[0] / h, v[1] / h]);
+                    let smin = match (col([h, 0.0]), col([0.0, h])) {
+                        (Some(x), Some(y)) => crate::scene::ifs_analysis::singular_values_of([[x[0], y[0]], [x[1], y[1]]]).0,
+                        _ => 0.0,
+                    };
+                    next.push((p, if smin > 0.0 { 2.0 * r / smin } else { f64::INFINITY }));
+                }
+            }
+            if next.is_empty() || next.len() > PIECES {
+                return true;
+            }
+            level = next;
+        }
+        level.iter().any(|&(p, r)| (p[0] - ren.out_centre[0]).hypot(p[1] - ren.out_centre[1]) <= ren.out_radius + r)
+    }
+
     /// A symbol's forward map and arm.
     fn sym_map(&self, sym: u32) -> Option<(&IfsMap<Map2>, u32)> {
         let ti = crate::scene::cylinder::sym_transform(sym) as usize;
@@ -1318,11 +1458,17 @@ impl Backward {
         let one = |w: &Cylinder| -> Option<WordRefs> {
             let syms: Vec<(&IfsMap<Map2>, u32)> = w.word.iter().map(|&s| self.sym_map(s)).collect::<Option<_>>()?;
             let n = syms.len();
+            // A word a renewal starts is followed from AFTER it: its seeds
+            // are points of the rest's region (`close`), the blur is the
+            // shader's alone, and `m` is never before it.
+            let start = usize::from(self.alphabet.iter().any(|a| a.sym == w.word[0] && a.renewal.is_some()));
             // A seed's orbit through the word, if it lands in the view.
             let orbit = |x0: [f64; 2]| -> Option<Vec<[f64; 2]>> {
                 let mut z = Vec::with_capacity(n + 1);
-                z.push(x0);
-                for (m, arm) in &syms {
+                for _ in 0..=start {
+                    z.push(x0);
+                }
+                for (m, arm) in &syms[start..] {
                     let y = forward(m, *z.last().expect("seeded"), *arm);
                     if !finite(y) {
                         return None;
@@ -1347,7 +1493,7 @@ impl Backward {
             amp[n] = 1.0;
             size[n] = r;
             let mut prod = [[1.0f64, 0.0], [0.0, 1.0]];
-            for k in (0..n).rev() {
+            for k in (start..n).rev() {
                 let (map, arm) = syms[k];
                 let z = primary[k];
                 let h = 1e-6 * z[0].hypot(z[1]).max(1e-6);
@@ -1368,7 +1514,7 @@ impl Backward {
             let fits = |k: usize| GPU_STEP_ERROR * primary[k][0].hypot(primary[k][1]) * amp[k] <= PLOT_TOLERANCE * r;
             // Step 0 always fits: the free orbit's own error only picks a
             // slightly different point of the attractor.
-            let m = (1..=n).rev().find(|&k| fits(k)).unwrap_or(0);
+            let m = (start.max(1)..=n).rev().find(|&k| fits(k)).unwrap_or(start);
             if m == n {
                 return None;
             }
@@ -1503,12 +1649,22 @@ impl Backward {
     /// The forward image of `x` along `word`, or `None` where a map
     /// sends it to infinity.
     fn forward_along(&self, word: &[u32], x: [f64; 2]) -> Option<[f64; 2]> {
+        // A blurred transform draws its blur from a stream seeded by the
+        // word and the point: a replay is random, as the chaos game is,
+        // and the same every time, as a plan must be.
+        let mut st = word.iter().fold(x[0].to_bits() ^ x[1].to_bits().rotate_left(17), |h, &s| {
+            (h ^ s as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15).rotate_left(29)
+        });
+        let mut u = move || {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((st >> 33) as f64) / ((1u64 << 31) as f64)
+        };
         let mut p = x;
         for &sym in word {
             let t = sym_transform(sym) as usize;
             let arm = sym_arm(sym);
             let info = self.transforms.iter().find(|i| i.index == t)?;
-            p = forward(&self.ifs.maps[info.map], p, arm);
+            p = forward_blurred(&self.ifs.maps[info.map], p, arm, info.blur, &mut u);
             if !finite(p) {
                 return None;
             }
@@ -1639,6 +1795,12 @@ impl Backward {
         match &node.pts {
             Pts::Cloud(cloud) => {
                 for (ai, a) in self.alphabet.iter().enumerate() {
+                    // A renewal's region is the whole attractor: nothing
+                    // to pull back. Its child is decided by `reaches`.
+                    if a.renewal.is_some() {
+                        found.push((ai, Pts::Index(Vec::new())));
+                        continue;
+                    }
                     let map = &self.ifs.maps[a.map];
                     let mut pts = Vec::new();
                     for &p in cloud {
@@ -1712,9 +1874,12 @@ impl Backward {
                 //
                 // Gathered here on the CPU; an evaluator that gathers
                 // (`Evaluate::speculative`) does it with the replays.
-                for (ai, _a) in self.alphabet.iter().enumerate() {
-                    let cands =
-                        if gather_now { Self::gather_seen(&self.landing[ai], &seen, CAND_CAP) } else { Vec::new() };
+                for (ai, a) in self.alphabet.iter().enumerate() {
+                    let cands = if gather_now && a.renewal.is_none() {
+                        Self::gather_seen(&self.landing[ai], &seen, CAND_CAP)
+                    } else {
+                        Vec::new()
+                    };
                     found.push((ai, Pts::Index(cands)));
                 }
             }
@@ -1906,7 +2071,7 @@ impl Backward {
                         let c = &o.children[ci];
                         jobs.push(EvalJob { word: &c.word, points: &self.verify_first });
                         jobs.push(EvalJob { word: &c.word, points: &self.verify_rest });
-                        if matches!(c.pts, Pts::Index(_)) {
+                        if self.gathers(c) {
                             gathers.push(GatherJob { word: &c.word, index: IndexId::Landing(c.ai), seen: &o.seen, cap: CAND_CAP });
                         }
                     }
@@ -1915,8 +2080,9 @@ impl Backward {
                 let mut gathered = gathered.into_iter();
                 let mut at = 0usize;
                 for &(oi, ci) in &order[start..end] {
+                    let gathers_c = self.gathers(&opens[oi].children[ci]);
                     let c = &mut opens[oi].children[ci];
-                    if matches!(c.pts, Pts::Index(_)) {
+                    if gathers_c {
                         let g = gathered.next().expect("one answer per gather");
                         c.n_cands = g.cands;
                         c.spec = Some(g.hits);
@@ -1989,6 +2155,16 @@ impl Backward {
             for c in &mut o.children {
                 let eff = c.eff();
                 let prob = c.prob;
+                // **A renewal is kept, never carried, and kept by
+                // geometry** (`Renewal`): its region is the whole
+                // attractor, so carrying it cannot localize it, and at
+                // depth its replays can miss a smooth part that lands one
+                // time in ten million.
+                if let Some(ren) = self.alphabet[c.ai].renewal {
+                    c.fate = if self.reaches(&c.word[1..], view, ren) { Fate::Kept(eff) } else { Fate::Dropped };
+                    watched(&mut o.trace, &c.word, "RENEWAL", &|| format!("eff {eff:.2e} prob {prob:.2e} kept {}", matches!(c.fate, Fate::Kept(_))));
+                    continue;
+                }
                 let unseen = matches!(c.pts, Pts::Index(_)) && c.n_cands == 0 && c.orbit_hits.is_empty();
                 if unseen && !(eff > 0.0) {
                     c.fate = Fate::Dropped;
@@ -2163,7 +2339,13 @@ impl Backward {
                 Fate::Dropped => continue,
                 Fate::Kept(eff) => {
                     survived[ai] = true;
-                    let seeds = self.seeds_from(&[&orbit_hits, &hits, &replay_hits], Some(&pts));
+                    // A renewal's reference starts after it: at points of
+                    // the node's region (`reference_chains`).
+                    let seeds = if self.alphabet[ai].renewal.is_some() {
+                        self.seeds_from(&[], Some(&node.pts))
+                    } else {
+                        self.seeds_from(&[&orbit_hits, &hits, &replay_hits], Some(&pts))
+                    };
                     node_kept.push((disc(word, prob, seeds), eff));
                     continue;
                 }
@@ -3015,7 +3197,7 @@ mod tests {
                 u -= c.weight;
             }
             let arm = ((lcg() * t.arms as f64) as u32).min(t.arms - 1);
-            let y = forward(&b.ifs.maps[t.map], x, arm);
+            let y = forward_blurred(&b.ifs.maps[t.map], x, arm, t.blur, &mut lcg);
             if !finite(y) || y[0].abs() > 1e12 {
                 x = [0.31, 0.17];
                 hist.clear();
@@ -3501,7 +3683,7 @@ mod tests {
         let reg = &*guard;
         let (device, queue) = test_device();
         let mut worst_offsets = 0.0f64;
-        for name in ["grand-julian", "random1", "julian-disc"] {
+        for name in ["grand-julian", "random1", "julian-disc", "true-grand-julian"] {
             let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")) else { continue };
             let cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
             let Ok(b) = Backward::read(&cfg.flame, reg) else { continue };
@@ -3522,7 +3704,10 @@ mod tests {
                 let mut jobs: Vec<[f32; 4]> = Vec::new();
                 let mut which: Vec<(usize, usize)> = Vec::new();
                 for w in (0..plan.words.len()).step_by(step) {
-                    if plan.refs[w].is_none() {
+                    // A word a renewal starts draws its blur on its first
+                    // step, which f64 cannot follow; its offset steps are
+                    // the same machinery as every other word's.
+                    if plan.refs[w].is_none() || b.alphabet.iter().any(|a| a.sym == plan.words[w].word[0] && a.renewal.is_some()) {
                         continue;
                     }
                     let rec = (crate::scene::cylinder::HEADER_FLOATS + w * stride) as f32;
@@ -3594,6 +3779,83 @@ mod tests {
             }
         }
         println!("  worst 99th percentile anywhere: {worst_offsets:.4} px");
+    }
+
+    /// What the analysis and the walk say of the true Grand Julian
+    /// (`assets/presets.fflame`'s first flame, extracted to
+    /// `output/flame-zoom/true-grand-julian.fflame`): tracker item C2.
+    #[test]
+    #[ignore = "reads output/flame-zoom"]
+    fn what_the_true_grand_julian_is() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let Ok(text) = std::fs::read_to_string("output/flame-zoom/true-grand-julian.fflame") else { return };
+        let cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
+        for (i, t) in cfg.flame.transforms.iter().enumerate() {
+            println!("  transform {i}: weight {} vars {:?}", t.weight, t.variations);
+        }
+        match crate::scene::ifs_analysis::analyse_2d_maps(&cfg.flame, reg) {
+            Ok(ifs) => println!("  analysis: {} maps", ifs.maps.len()),
+            Err(errs) => {
+                for e in errs {
+                    println!("  analysis refuses: {e}");
+                }
+            }
+        }
+        match Backward::read(&cfg.flame, reg) {
+            Ok(b) => println!("  walk: read, extent {:.3}", b.extent),
+            Err(e) => println!("  walk refuses: {e}"),
+        }
+        let view = View::of(cfg.zoom as f64, [cfg.pan_x, cfg.pan_y], 1280, 720);
+        match crate::scene::cylinder::Cylinders::plan(&cfg.flame, reg, view) {
+            Ok(p) => println!("  plan: {} words", p.words.len()),
+            Err(e) => println!("  plan refuses: {e:?}"),
+        }
+        let Ok(b) = Backward::read(&cfg.flame, reg) else { return };
+        let renewals: Vec<u32> = b.alphabet.iter().filter(|a| a.renewal.is_some()).map(|a| a.sym).collect();
+        for (label, view) in [
+            ("the preset's view", View::of(cfg.zoom as f64, [cfg.pan_x, cfg.pan_y], 1280, 720)),
+            ("1e2 on the attractor", View::of(1e2, b.sample_point(0.75), 1280, 720)),
+            ("1e3 on the attractor", View::of(1e3, b.sample_point(0.75), 1280, 720)),
+            ("1e3 inside the blob", View::of(1e3, [0.0, 0.0], 1280, 720)),
+            ("1e5 on the attractor", View::of(1e5, b.sample_point(0.3), 1280, 720)),
+        ] {
+            let t0 = std::time::Instant::now();
+            match b.plan_eval(view, PlanOptions::default(), &mut CpuEval) {
+                Ok(p) => {
+                    let ms = t0.elapsed().as_secs_f64() * 1e3;
+                    let first = p.words.iter().filter(|w| renewals.contains(&w.word[0])).count();
+                    let cov = coverage(&b, &p, view, 20_000);
+                    // Mass and efficiency, renewal words against the rest.
+                    let (mut rm, mut rd, mut om, mut od) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+                    for w in &p.words {
+                        let e = b.replay_full(&w.word, view);
+                        if renewals.contains(&w.word[0]) {
+                            rm += w.prob;
+                            rd += w.prob * e;
+                        } else {
+                            om += w.prob;
+                            od += w.prob * e;
+                        }
+                    }
+                    println!(
+                        "      renewal words: {:.1}% of the mass at efficiency {:.4}; the rest: {:.1}% at {:.4}",
+                        100.0 * rm / (rm + om),
+                        rd / rm.max(1e-300),
+                        100.0 * om / (rm + om),
+                        od / om.max(1e-300)
+                    );
+                    println!(
+                        "  {label}: {} words ({first} start with the renewal), mass {:.2e}, efficiency {:.3}, {ms:.0} ms; coverage {}",
+                        p.words.len(),
+                        p.mass,
+                        p.efficiency,
+                        cov.map_or("n/a (unreachable)".to_string(), |c| format!("{c:.4}"))
+                    );
+                }
+                Err(e) => println!("  {label}: no plan: {e:?}"),
+            }
+        }
     }
 
     /// The radix-built index is in `(Cell, u32)`'s own order, exactly --
