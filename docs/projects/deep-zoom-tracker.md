@@ -214,6 +214,46 @@ Three corpus flames. They would need their own routing.
 
 ## Performance
 
+### P0. The targeted iteration rate at depth -- done (2026-09-24)
+
+Past zoom ~1e3 the offset replay roughly halved the targeted rate
+(`what_an_iteration_costs`, which now takes `ZOOMS` and `REPS` and
+reports medians). Measured, in order:
+
+- **Cheaper steps: no gain.** Forming the reference-only terms on the
+  CPU removed most of a step's transcendentals: the reference in the
+  kernel's frame, the root's K(v), both angles, and the cut test, which
+  was skipped when the offset cannot reach the cut. The rate did not
+  move, within noise. Dropping the unused kernel forms from the shader
+  did not move it either.
+- **The nearest-reference search: no gain** when pinned to one chain.
+- **Divergence was the cost.** A warp whose threads walk different words
+  runs the longest of each loop and every branch any of them takes. With
+  one word per 32 threads, the targeted rate on random1 doubled:
+
+  | zoom | per thread | one word per 32 threads |
+  |---|---|---|
+  | 3e3 | 331 | 644 |
+  | 1e4 | 245 | 536 |
+  | 1e5 | 215 | 419 |
+
+  (Miter/s, medians of five.) One word per 64 threads measured the same,
+  and one per 16 a little less. The true Grand Julian's 5-map words gain
+  1.0-1.3x.
+- **The draw.** Each sample still draws its word with the plan's
+  probability, independently of its own point, so the estimate is
+  unchanged; 32 samples share a draw. The draw is a hash of the group
+  and the iteration, so a thread that burns in after a respawn stays
+  with its group.
+- **Checks.** Every targeted-against-untargeted gate passes. The
+  stripes gate's noise floor did not move (two plain samplings: 7.98%
+  and 2.58%, against 7.76% and 2.37%).
+- **Why the precompute was not kept.** It tripled the per-step table.
+  On julian-disc at 1e6 (50,000 words, ~46 offset steps each) that put
+  the table past 2^24 floats, where its f32 block offsets stop being
+  exact. That limit is latent in the current layout too: ~10M floats
+  there. Worth a guard if plans grow.
+
 ### P1. Cache each word's landings across views -- measured, not worth building
 
 **Measured (2026-09-23, `what_could_a_cache_reuse`, the current walk):**

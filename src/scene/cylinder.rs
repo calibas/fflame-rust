@@ -2072,7 +2072,18 @@ pub fn pack_words(cyl: &Cylinders, flame: &Flame) -> Vec<f32> {
     if let Some(last) = cyl.words.len().checked_sub(1) {
         out[HEADER_FLOATS + last * stride] = 1.0;
     }
-    if cyl.refs.len() == cyl.words.len() && !cyl.offset_rows.is_empty() {
+    // The table's offsets are f32, exact below 2^24 floats (64 MB). A
+    // plan whose references would pass that -- none measured does; the
+    // widest, julian-disc at 1e6, is ~10M -- replays plainly rather than
+    // read its blocks at rounded offsets.
+    let offsets_len: usize = cyl.offset_rows.len()
+        + cyl.words.len()
+        + cyl.refs.iter().flatten().map(|r| 2 + r.chains.iter().map(|c| 2 * c.bases.len() + 2).sum::<usize>()).sum::<usize>();
+    let fits = out.len() + offsets_len < 1 << 24;
+    if !fits {
+        log::warn!("replay table of {} floats: past f32's exact offsets, so no replay in offsets", out.len() + offsets_len);
+    }
+    if fits && cyl.refs.len() == cyl.words.len() && !cyl.offset_rows.is_empty() {
         out[2] = out.len() as f32;
         out.extend_from_slice(&cyl.offset_rows);
         let offsets_at = out.len();
@@ -3432,8 +3443,21 @@ mod gpu_tests {
             let c = render_out(cfg, N, 80_000_000);
             (c.total_iterations - a.total_iterations) as f64 / ((c.render_time_ms - a.render_time_ms).max(1e-3) / 1e3) / 1e6
         };
+        // `ZOOMS` (comma-separated) and `REPS` narrow and repeat the
+        // measurement: the rates are wall-clock and vary run to run, so
+        // each is the median of `REPS` measurements.
+        let zooms: Vec<f64> = std::env::var("ZOOMS")
+            .ok()
+            .map(|z| z.split(',').filter_map(|v| v.trim().parse().ok()).collect())
+            .unwrap_or_else(|| vec![1e2, 1e3, 3e3, 5e3, 1e4, 1e5]);
+        let reps: usize = std::env::var("REPS").ok().and_then(|r| r.parse().ok()).unwrap_or(1).max(1);
+        let rate = |cfg: &FractalConfig| -> f64 {
+            let mut r: Vec<f64> = (0..reps).map(|_| rate(cfg)).collect();
+            r.sort_by(f64::total_cmp);
+            r[reps / 2]
+        };
         println!("  {name}: zoom   words  length  offset steps | Miter/s: offsets  plain  untargeted");
-        for zoom in [1e2f64, 1e3, 3e3, 5e3, 1e4, 1e5] {
+        for zoom in zooms {
             base.zoom = zoom as f32;
             let view = View::of(zoom, [base.pan_x, base.pan_y], N, N);
             let Ok(plan) = Cylinders::plan(&base.flame, reg, view) else {

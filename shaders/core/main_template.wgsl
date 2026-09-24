@@ -509,7 +509,24 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // must not disturb the free orbit's stream, or the
                 // walk this thread is carrying stops being the chaos
                 // game.
-                let ct_i = ct_pick(rng_nextf(&ct_rng));
+                // **One word per 32 threads** -- a warp on NVIDIA, a
+                // SIMD group on Apple, a wave on RDNA. A word's replay
+                // loops over its symbols and, past `m`, over its offset
+                // steps, so a warp whose threads walk different words
+                // runs the longest of each loop and every branch any of
+                // them takes. Measured on random1 (words of 14-26 maps),
+                // this doubled the targeted rate: 331 -> 644 Miter/s at
+                // zoom 3e3, 245 -> 536 at 1e4, 215 -> 419 at 1e5 (the true
+                // Grand Julian's 5-map words gain 1.0-1.3x). Cheaper steps
+                // did not move it; the divergence was the cost.
+                //
+                // Each sample still draws its word with the plan's
+                // probability, independently of its own point, so the
+                // estimate is the same; 32 samples share a draw. The draw
+                // is a hash of the group and the iteration rather than a
+                // stream, so a thread that skipped one -- burning in after
+                // a respawn -- stays with its group.
+                let ct_i = ct_pick(f32(pcg_hash(pcg_hash((thread_id / 32u) ^ params.seed ^ 0x27D4EB2Fu) + i)) / 4294967296.0);
                 let ct_b = ct_base(ct_i);
                 let ct_len = u32(cylinders[ct_b + 3u]);
 {{#if CYLINDER_OFFSETS}}
