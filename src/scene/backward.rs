@@ -878,6 +878,77 @@ fn finite(p: [f64; 2]) -> bool {
     p[0].is_finite() && p[1].is_finite()
 }
 
+/// **The replay in offsets** (`docs/projects/deep-zoom-precision.md` §2):
+/// a forced sample runs its word in absolute f32 up to step `m`, then as
+/// an offset from a reference orbit the CPU ran in f64.
+///
+/// **What one absolute step costs on a GPU**, as a share of the point's
+/// distance from the origin: not f32's rounding (6e-8) but the GPU's
+/// transcendental functions, which are accurate to an ABSOLUTE error
+/// near 1e-7 over a turn. Measured on the plain replay
+/// (`how_far_the_plain_replay_is_from_f64`, GTX 1660 SUPER): about 4e-7
+/// world units at every depth on grand-julian and julian-disc, a
+/// systematic displacement, not noise. Taken with margin.
+pub const GPU_STEP_ERROR: f64 = 4e-6;
+
+/// What the replay may be off by at the end, as a share of the view's
+/// radius: a twentieth of a pixel on a 4K frame (half-diagonal 2200 px).
+pub const PLOT_TOLERANCE: f64 = 0.05 / 2200.0;
+
+/// `m` is the last step at which an absolute step's error, carried
+/// through the rest of the word -- the largest singular value of the
+/// remaining steps' Jacobian, along the reference -- stays within
+/// [`PLOT_TOLERANCE`]. Taking the largest matters: disc stretches its
+/// radius and shrinks its angle by very different factors, and an
+/// error in the stretched direction is what reaches the picture.
+///
+/// A plan needs offsets at all once the plain replay's own last step
+/// misses the tolerance: under this share of the view centre's distance
+/// from the origin (or the attractor's scale).
+pub const SWITCH_SHARE: f64 = 0.2;
+
+/// A word's reference chains at most: one per separate cluster of its
+/// landed points at `m`. A word reached from several regions -- the
+/// walk merges the preimage branches of one symbol into one word --
+/// needs one in each, since an offset from the wrong one is as large as
+/// the distance between them, and f32 of that is nothing at depth.
+pub const MAX_CHAINS: usize = 4;
+
+/// Points of its region a kept word carries for its references.
+const REF_SEEDS: usize = 8;
+
+/// **Where the GPU planner stops** (`deep-zoom-precision.md` §8): its
+/// replays and landing checks are absolute, and as displaced as the plain
+/// replay -- about 4e-7 world units near unit scale. A view of radius
+/// under this (times the view centre's distance from the origin, where
+/// that is over one) is planned on the CPU, in f64. The GPU planner was
+/// measured complete at 1e6 on grand-julian (radius 4.1e-6, the error a
+/// tenth of it); here the error would be a fifth. Offsets for the planner
+/// are a later item.
+pub const GPU_PLAN_RADIUS: f64 = 2e-6;
+
+/// Tests only: plan without offsets, to measure what they are for.
+#[cfg(test)]
+pub static OFFSETS_OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// One word's references. See [`SWITCH_SHARE`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct WordRefs {
+    /// The first symbol replayed as an offset; those before run in
+    /// absolute f32, as a replay did before.
+    pub m: usize,
+    pub chains: Vec<RefChain>,
+}
+
+/// One reference orbit from step `m` on.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RefChain {
+    /// The reference before each step taken as an offset: `z_m ... z_{n-1}`.
+    pub bases: Vec<[f64; 2]>,
+    /// Where it ends, less the view centre, in f64: `z_n − c`.
+    pub end: [f64; 2],
+}
+
 /// The last flame analysed, shared across threads: the app plans on a
 /// background thread, and a per-thread cache there would rebuild the
 /// index on every plan.
@@ -1115,6 +1186,232 @@ impl Backward {
     }
 
     /// The attractor sample the walk's questions index into.
+    /// Up to `REF_SEEDS` points of a kept word's region, spread across
+    /// what the walk found -- the checked lists first, then its points
+    /// or candidates, which [`Self::reference_chains`] checks anyway.
+    fn seeds_from(&self, lists: &[&[u32]], pts: Option<&Pts>) -> Vec<[f64; 2]> {
+        let mut out: Vec<[f64; 2]> = Vec::new();
+        let spread = |n: usize, room: usize| n.div_ceil(room.max(1)).max(1);
+        for idx in lists {
+            let room = REF_SEEDS - out.len();
+            if room == 0 {
+                return out;
+            }
+            out.extend(idx.iter().step_by(spread(idx.len(), room)).take(room).map(|&i| self.sample[i as usize]));
+        }
+        let room = REF_SEEDS - out.len();
+        match pts {
+            Some(Pts::Index(idx)) if room > 0 => {
+                out.extend(idx.iter().step_by(spread(idx.len(), room)).take(room).map(|&i| self.sample[i as usize]));
+            }
+            Some(Pts::Cloud(c)) if room > 0 => out.extend(c.iter().step_by(spread(c.len(), room)).take(room).copied()),
+            _ => {}
+        }
+        out
+    }
+
+    /// The flame's forward maps as the shader's rows, one per transform
+    /// index up to the highest walked; an index the walk does not use
+    /// (weight zero) is the identity, which no word names.
+    pub fn forward_rows(&self) -> Vec<f32> {
+        use crate::scene::forward_delta::{forward_row, ROW_FLOATS};
+        let top = self.transforms.iter().map(|t| t.index).max().unwrap_or(0);
+        let mut rows = vec![0.0f32; (top + 1) * ROW_FLOATS];
+        for i in 0..=top {
+            rows[i * ROW_FLOATS + 16] = 1.0;
+            rows[i * ROW_FLOATS + 19] = 1.0;
+        }
+        for t in &self.transforms {
+            rows[t.index * ROW_FLOATS..(t.index + 1) * ROW_FLOATS].copy_from_slice(&forward_row(&self.ifs.maps[t.map].forward));
+        }
+        rows
+    }
+
+    /// **Every piece of a word's region at step `m`**: the preimages of
+    /// `end` (where the word's reference lands) back through the word's
+    /// symbols `m..n`, along EVERY branch of each inverse, confirmed
+    /// forward with the symbol's arm, and kept only where the symbol
+    /// before could have put a point (`near_landing`) -- a piece no path
+    /// reaches receives no sample.
+    ///
+    /// Bubble and disc are many-to-one going forward, so a word's region
+    /// can be several separate pieces, and the render's samples come from
+    /// all of them. A sample carried as an offset from another piece's
+    /// reference has an offset as large as the gap between them, and f32
+    /// of that is nothing at depth. `None` past `cap` pieces.
+    fn pieces(&self, word: &[u32], end: [f64; 2], m: usize, cap: usize) -> Option<Vec<[f64; 2]>> {
+        let ais: Vec<usize> = word.iter().map(|&s| self.alphabet.iter().position(|a| a.sym == s)).collect::<Option<_>>()?;
+        let junk_r = JUNK_EXTENTS * self.extent;
+        let mut level = vec![end];
+        for k in (m..word.len()).rev() {
+            let a = &self.alphabet[ais[k]];
+            let map = &self.ifs.maps[a.map];
+            let mut next: Vec<[f64; 2]> = Vec::new();
+            for &q in &level {
+                for &mb in &a.branches {
+                    let p = self.ifs.maps[mb].inverse.apply(q);
+                    if !finite(p) || (p[0] - self.centre[0]).hypot(p[1] - self.centre[1]) > junk_r {
+                        continue;
+                    }
+                    if self.arm_of(map, p, q) != Some(a.arm) {
+                        continue;
+                    }
+                    if k > 0 && !self.near_landing(ais[k - 1], p) {
+                        continue;
+                    }
+                    let scale = 1e-12 * (1.0 + p[0].abs().max(p[1].abs()));
+                    if next.iter().any(|r| (r[0] - p[0]).hypot(r[1] - p[1]) <= scale) {
+                        continue;
+                    }
+                    next.push(p);
+                }
+            }
+            if next.len() > cap {
+                return None;
+            }
+            level = next;
+        }
+        Some(level)
+    }
+
+    /// A symbol's forward map and arm.
+    fn sym_map(&self, sym: u32) -> Option<(&IfsMap<Map2>, u32)> {
+        let ti = crate::scene::cylinder::sym_transform(sym) as usize;
+        let t = self.transforms.iter().find(|t| t.index == ti)?;
+        Some((&self.ifs.maps[t.map], sym >> 8))
+    }
+
+    /// Whether any word of a plan for `view` could need offsets: the view
+    /// is under [`SWITCH_SHARE`] of the attractor's scale, or of its own
+    /// distance from the origin -- where the plain replay's last step
+    /// alone misses [`PLOT_TOLERANCE`].
+    pub fn needs_offsets(&self, view: View) -> bool {
+        #[cfg(test)]
+        if OFFSETS_OFF.load(std::sync::atomic::Ordering::Relaxed) {
+            return false;
+        }
+        view.radius < SWITCH_SHARE * self.extent.max(view.centre[0].hypot(view.centre[1]))
+    }
+
+    /// Whether the GPU planner resolves `view`. See [`GPU_PLAN_RADIUS`].
+    pub fn gpu_resolves(&self, view: View) -> bool {
+        view.radius >= GPU_PLAN_RADIUS * view.centre[0].hypot(view.centre[1]).max(1.0)
+    }
+
+    /// **Each kept word's reference orbits**, for the replay in offsets.
+    ///
+    /// Per word: its seeds run through it in f64, and those landing in
+    /// the view (within two radii of the centre) are its candidate
+    /// references. The first sets `m`: the view pulled back step by step
+    /// through the smallest singular value of each map at the reference
+    /// (from the exact forward forms, so without cancellation), and `m`
+    /// the last step still at [`SWITCH_SHARE`] of the reference's
+    /// distance from the origin. Then up to [`MAX_CHAINS`] references, one
+    /// per cluster of the candidates at `m` more than four regions apart.
+    ///
+    /// `None` for a word that needs no offsets (`m` is its length), and
+    /// for one with no seed that lands -- both replay in absolute f32.
+    pub async fn reference_chains(&self, cyl: &Cylinders, view: View, slicer: &Slicer) -> Vec<Option<WordRefs>> {
+        use crate::scene::forward_delta::map_forward_difference;
+        let c = view.centre;
+        let r = view.radius;
+        let one = |w: &Cylinder| -> Option<WordRefs> {
+            let syms: Vec<(&IfsMap<Map2>, u32)> = w.word.iter().map(|&s| self.sym_map(s)).collect::<Option<_>>()?;
+            let n = syms.len();
+            // A seed's orbit through the word, if it lands in the view.
+            let orbit = |x0: [f64; 2]| -> Option<Vec<[f64; 2]>> {
+                let mut z = Vec::with_capacity(n + 1);
+                z.push(x0);
+                for (m, arm) in &syms {
+                    let y = forward(m, *z.last().expect("seeded"), *arm);
+                    if !finite(y) {
+                        return None;
+                    }
+                    z.push(y);
+                }
+                let end = z[n];
+                ((end[0] - c[0]).hypot(end[1] - c[1]) <= 2.0 * r).then_some(z)
+            };
+            // The first seed that lands is the reference; the others are
+            // run only where they could find another piece (below).
+            let (first, primary_orbit) = w.seeds.iter().enumerate().find_map(|(i, &x0)| orbit(x0).map(|z| (i, z)))?;
+            let mut orbits = vec![primary_orbit];
+            let primary = &orbits[0];
+            // Back along the reference: the Jacobian of the steps from k
+            // to the end, `P_k = J_{n-1}···J_k`, from the exact forward
+            // forms (so without cancellation). Its largest singular value
+            // carries an error at k to the end; its smallest, the view
+            // back to k, which is how big the region is there.
+            let mut amp = vec![f64::INFINITY; n + 1];
+            let mut size = vec![f64::INFINITY; n + 1];
+            amp[n] = 1.0;
+            size[n] = r;
+            let mut prod = [[1.0f64, 0.0], [0.0, 1.0]];
+            for k in (0..n).rev() {
+                let (map, arm) = syms[k];
+                let z = primary[k];
+                let h = 1e-6 * z[0].hypot(z[1]).max(1e-6);
+                let col = |d: [f64; 2]| map_forward_difference(&map.forward, z, d, arm).map(|v| [v[0] / h, v[1] / h]);
+                let (Some(a), Some(b)) = (col([h, 0.0]), col([0.0, h])) else { break };
+                let j = [[a[0], b[0]], [a[1], b[1]]];
+                prod = [
+                    [prod[0][0] * j[0][0] + prod[0][1] * j[1][0], prod[0][0] * j[0][1] + prod[0][1] * j[1][1]],
+                    [prod[1][0] * j[0][0] + prod[1][1] * j[1][0], prod[1][0] * j[0][1] + prod[1][1] * j[1][1]],
+                ];
+                let (smin, smax) = crate::scene::ifs_analysis::singular_values_of(prod);
+                if !(smax.is_finite() && smin > 0.0) {
+                    break;
+                }
+                amp[k] = smax;
+                size[k] = r / smin;
+            }
+            let fits = |k: usize| GPU_STEP_ERROR * primary[k][0].hypot(primary[k][1]) * amp[k] <= PLOT_TOLERANCE * r;
+            // Step 0 always fits: the free orbit's own error only picks a
+            // slightly different point of the attractor.
+            let m = (1..=n).rev().find(|&k| fits(k)).unwrap_or(0);
+            if m == n {
+                return None;
+            }
+            // Another piece at `m` needs a map that is many-to-one going
+            // forward among the offset steps -- bubble or disc. Measured, no
+            // word of the corpus had one (`what_the_references_hold`), and
+            // running every seed through every word doubled a web plan; so
+            // the other seeds are run only where a piece could exist.
+            let merges = syms[m..].iter().any(|(map, _)| match &map.forward {
+                Map2::Nonlinear(k) => matches!(k.kernel, Kernel::Bubble | Kernel::Disc),
+                Map2::Sum(k) => matches!(k.kernel, Kernel::Bubble | Kernel::Disc),
+                _ => false,
+            });
+            if merges {
+                orbits.extend(w.seeds[first + 1..].iter().filter_map(|&x0| orbit(x0)));
+            }
+            // One reference per cluster at `m`, farthest first.
+            let apart = 4.0 * size[m];
+            let mut chosen = vec![0usize];
+            while chosen.len() < MAX_CHAINS {
+                let far = (0..orbits.len())
+                    .map(|j| {
+                        let d = chosen
+                            .iter()
+                            .map(|&i| (orbits[j][m][0] - orbits[i][m][0]).hypot(orbits[j][m][1] - orbits[i][m][1]))
+                            .fold(f64::INFINITY, f64::min);
+                        (j, d)
+                    })
+                    .max_by(|a, b| a.1.total_cmp(&b.1));
+                match far {
+                    Some((j, d)) if d > apart => chosen.push(j),
+                    _ => break,
+                }
+            }
+            let chains = chosen
+                .into_iter()
+                .map(|j| RefChain { bases: orbits[j][m..n].to_vec(), end: [orbits[j][n][0] - c[0], orbits[j][n][1] - c[1]] })
+                .collect();
+            Some(WordRefs { m, chains })
+        };
+        map_sliced(&cyl.words, one, slicer).await
+    }
+
     pub fn sample(&self) -> &[[f64; 2]] {
         &self.sample
     }
@@ -1851,7 +2148,7 @@ impl Backward {
                 Pts::Index(idx) => idx.iter().map(|&i| self.sample[i as usize]).collect(),
             }
         };
-        let disc = |word: Vec<u32>, prob: f64| Cylinder { word, prob, centre: view.centre, radius: view.radius };
+        let disc = |word: Vec<u32>, prob: f64, seeds: Vec<[f64; 2]>| Cylinder { word, prob, centre: view.centre, radius: view.radius, seeds };
 
         let mut node_kept: Vec<(Cylinder, f64)> = Vec::new();
         let mut node_next: Vec<Node> = Vec::new();
@@ -1861,12 +2158,13 @@ impl Backward {
         for c in children {
             let eff = c.eff();
             let n_cands = c.n_cands;
-            let Child { ai, word, prob, pts, orbit_hits, replay_hits, mut hits, fate, .. } = c;
+            let Child { ai, word, prob, pts, orbit_hits, mut replay_hits, mut hits, fate, .. } = c;
             let pts = match fate {
                 Fate::Dropped => continue,
                 Fate::Kept(eff) => {
                     survived[ai] = true;
-                    node_kept.push((disc(word, prob), eff));
+                    let seeds = self.seeds_from(&[&orbit_hits, &hits, &replay_hits], Some(&pts));
+                    node_kept.push((disc(word, prob, seeds), eff));
                     continue;
                 }
                 Fate::Carried => pts,
@@ -1889,7 +2187,7 @@ impl Backward {
                     // already kept, and forced otherwise.
                     if hits.is_empty() && !replay_hits.is_empty() && prob * (1.0 - eff) > FORCE_WASTE * floor_mass {
                         watched(&mut trace, &word, "REPLAYED", &|| format!("{} replay points; eff {eff:.2} prob {prob:.2e}", replay_hits.len()));
-                        hits = replay_hits;
+                        hits = std::mem::take(&mut replay_hits);
                         hits.sort_unstable();
                         hits.dedup();
                     }
@@ -1906,7 +2204,8 @@ impl Backward {
                             // efficiency 0.003.
                             watched(&mut trace, &word, "FORCEDCH", &|| format!("{n_cands} candidates, none land; eff {eff:.2}"));
                             survived[ai] = true;
-                            node_kept.push((disc(word, prob), eff));
+                            let seeds = self.seeds_from(&[&replay_hits], Some(&pts));
+                            node_kept.push((disc(word, prob, seeds), eff));
                         } else {
                             watched(&mut trace, &word, "EMPTY", &|| format!("{n_cands} candidates, none land"));
                         }
@@ -1950,7 +2249,8 @@ impl Backward {
         let mut out = Expanded::default();
         if !node.word.is_empty() && node.eff > 0.0 && covered.is_some_and(|c| c < COMPLETE_ENOUGH) {
             watched(&mut trace, &node.word, "FORCED", &|| format!("children cover {:.3} of its points", covered.unwrap_or(0.0)));
-            out.kept.push((disc(node.word, node.prob), node.eff));
+            let seeds = self.seeds_from(&[], Some(&node.pts));
+            out.kept.push((disc(node.word, node.prob, seeds), node.eff));
             trace.forced += 1;
             out.trace = trace;
             return out;
@@ -1994,7 +2294,7 @@ impl Backward {
     /// be the flame this walk was read from.
     pub fn plan_for(&self, flame: &Flame, view: View, opts: PlanOptions) -> Result<Cylinders, NoCylinders> {
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(gpu) = opts.gpu {
+        if let Some(gpu) = opts.gpu.filter(|_| self.gpu_resolves(view)) {
             // Held for the whole plan: one plan runs at a time, and a
             // cancelled one stops at its next batch.
             let mut g = gpu.lock().unwrap_or_else(|e| e.into_inner());
@@ -2080,7 +2380,8 @@ impl Backward {
                     if n.word.is_empty() {
                         continue;
                     }
-                    kept.push((Cylinder { word: n.word, prob: n.prob, centre: view.centre, radius: view.radius }, n.eff));
+                    let seeds = self.seeds_from(&[], Some(&n.pts));
+                    kept.push((Cylinder { word: n.word, prob: n.prob, centre: view.centre, radius: view.radius, seeds }, n.eff));
                     tr.forced += 1;
                 }
                 break;
@@ -2168,7 +2469,8 @@ impl Backward {
                         tr.watched.push(line);
                     }
                     kept_mass += n.prob;
-                    kept.push((Cylinder { word: n.word, prob: n.prob, centre: view.centre, radius: view.radius }, n.eff));
+                    let seeds = self.seeds_from(&[], Some(&n.pts));
+                    kept.push((Cylinder { word: n.word, prob: n.prob, centre: view.centre, radius: view.radius, seeds }, n.eff));
                     tr.beam += 1;
                 }
             }
@@ -2190,6 +2492,13 @@ impl Backward {
                 Some((m, me)) if m.word == c.word => {
                     *me = (*me + e).min(1.0);
                     m.radius = m.radius.max(c.radius);
+                    // Each branch's points: a merged word is reached
+                    // from separate regions, and each wants a reference.
+                    for q in c.seeds {
+                        if m.seeds.len() < 2 * REF_SEEDS {
+                            m.seeds.push(q);
+                        }
+                    }
                 }
                 _ => merged.push((c, e)),
             }
@@ -2200,7 +2509,7 @@ impl Backward {
         let mass: f64 = merged.iter().map(|(c, _)| c.prob).sum();
         let delivered: f64 = merged.iter().map(|(c, e)| c.prob * e).sum();
         let depth = merged.iter().map(|(c, _)| c.word.len()).max().unwrap_or(0);
-        Ok(Cylinders {
+        let mut plan = Cylinders {
             words: merged.into_iter().map(|(c, _)| c).collect(),
             mass,
             lost,
@@ -2209,7 +2518,20 @@ impl Backward {
             depth,
             composable: false,
             view_centre: view.centre,
-        })
+            refs: Vec::new(),
+            offset_rows: Vec::new(),
+        };
+        // The replay in offsets, where the view is deep enough for any
+        // word to need it (`deep-zoom-precision.md`).
+        if self.needs_offsets(view) {
+            plan.refs = self.reference_chains(&plan, view, slicer).await;
+            if plan.refs.iter().any(|r| r.is_some()) {
+                plan.offset_rows = self.forward_rows();
+            } else {
+                plan.refs.clear();
+            }
+        }
+        Ok(plan)
     }
 }
 
@@ -2875,6 +3197,403 @@ mod tests {
             a_f64.iter().filter(|x| **x == 1).count()
         );
         assert!(total > 10_000 && hits > 0 && hits < total, "the test gathered too little to mean anything");
+    }
+
+    /// **What the replay's references hold** (`deep-zoom-precision.md` §6
+    /// step 2), measured: per flame and zoom, how many words need offsets
+    /// and from which step, how many references they carry, how long the
+    /// references take -- and that the offset carry reproduces the
+    /// absolute replay. Every seed of every word is run both ways in f64:
+    /// absolute to the end, and absolute to `m` then as an offset from
+    /// its nearest reference through the forward forms. They must agree
+    /// to far under a pixel, and every seed must sit within its cluster
+    /// of a reference at `m` -- one that does not is a region the chains
+    /// missed.
+    #[test]
+    #[ignore = "reads output/flame-zoom"]
+    fn what_the_references_hold() {
+        use crate::scene::forward_delta::map_forward_difference;
+        use std::time::Instant;
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let mut worst_px = 0.0f64;
+        let mut stray = 0usize;
+        for name in ["grand-julian", "random1", "julian-disc"] {
+            let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")) else {
+                println!("  no {name}");
+                continue;
+            };
+            let cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
+            let Ok(b) = Backward::read(&cfg.flame, reg) else {
+                println!("  {name}: not walked");
+                continue;
+            };
+            for z in [1e4f64, 1e6, 1e8] {
+                let view = View::of(z, b.sample_point(0.75), 1280, 720);
+                let px = view.radius / (1280f64.hypot(720.0) / 2.0);
+                let t0 = Instant::now();
+                let Ok(plan) = b.plan_eval(view, PlanOptions::default(), &mut CpuEval) else {
+                    println!("  {name} {z:.0e}: no plan");
+                    continue;
+                };
+                let t_plan = t0.elapsed();
+                let t1 = Instant::now();
+                let refs = drive(b.reference_chains(&plan, view, &Slicer::never()));
+                let t_refs = t1.elapsed();
+                let with: Vec<(&Cylinder, &WordRefs)> =
+                    plan.words.iter().zip(&refs).filter_map(|(w, r)| r.as_ref().map(|r| (w, r))).collect();
+                let mut chains = [0usize; MAX_CHAINS + 1];
+                let mut steps: Vec<usize> = Vec::new();
+                let mut word_err = 0.0f64;
+                for (w, r) in &with {
+                    chains[r.chains.len()] += 1;
+                    steps.push(w.word.len() - r.m);
+                    let syms: Vec<(&IfsMap<Map2>, u32)> = w.word.iter().map(|&s| b.sym_map(s).expect("symbol")).collect();
+                    for &x0 in &w.seeds {
+                        // Absolute, f64, to the end.
+                        let mut x = x0;
+                        let mut xm = x0;
+                        for (k, (m, arm)) in syms.iter().enumerate() {
+                            if k == r.m {
+                                xm = x;
+                            }
+                            x = forward(m, x, *arm);
+                        }
+                        if (x[0] - view.centre[0]).hypot(x[1] - view.centre[1]) > 2.0 * view.radius {
+                            continue;
+                        }
+                        // To `m`, then an offset from the nearest reference.
+                        let (ci, _) = r
+                            .chains
+                            .iter()
+                            .enumerate()
+                            .map(|(i, ch)| (i, (xm[0] - ch.bases[0][0]).hypot(xm[1] - ch.bases[0][1])))
+                            .min_by(|a, b| a.1.total_cmp(&b.1))
+                            .expect("a chain");
+                        let ch = &r.chains[ci];
+                        let mut d = [xm[0] - ch.bases[0][0], xm[1] - ch.bases[0][1]];
+                        let d0 = d[0].hypot(d[1]);
+                        let mut ok = true;
+                        for (j, (m, arm)) in syms[r.m..].iter().enumerate() {
+                            match map_forward_difference(&m.forward, ch.bases[j], d, *arm) {
+                                Some(v) => d = v,
+                                None => {
+                                    ok = false;
+                                    break;
+                                }
+                            }
+                        }
+                        if !ok {
+                            stray += 1;
+                            continue;
+                        }
+                        let got = [ch.end[0] + d[0], ch.end[1] + d[1]];
+                        let want = [x[0] - view.centre[0], x[1] - view.centre[1]];
+                        let e = (got[0] - want[0]).hypot(got[1] - want[1]) / px;
+                        word_err = word_err.max(e);
+                        // A seed its reference is far from: the offset
+                        // is as large as the gap, and in f32 that is lost.
+                        if d0 > 1e-2 * ch.bases[0][0].hypot(ch.bases[0][1]).max(1e-9) {
+                            stray += 1;
+                        }
+                    }
+                }
+                steps.sort_unstable();
+                let q = |f: f64| steps.get(((steps.len() as f64 - 1.0) * f).round() as usize).copied().unwrap_or(0);
+                println!(
+                    "  {name} {z:.0e}: {} words, {} with offsets (steps min {} median {} max {}), chains {:?}, at the cap {} | plan {:.0} ms, refs {:.1} ms | offset vs absolute, worst {:.2e} px",
+                    plan.words.len(),
+                    with.len(),
+                    q(0.0),
+                    q(0.5),
+                    q(1.0),
+                    &chains[1..],
+                    chains[MAX_CHAINS],
+                    t_plan.as_secs_f64() * 1e3,
+                    t_refs.as_secs_f64() * 1e3,
+                    word_err
+                );
+                worst_px = worst_px.max(word_err);
+            }
+        }
+        println!("  seeds far from every reference, or off a form: {stray}");
+
+        // How many pieces a word's region has at `m`: what the chains must
+        // cover (`Backward::pieces`).
+        for name in ["grand-julian", "random1", "julian-disc"] {
+            let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")) else { continue };
+            let cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
+            let Ok(b) = Backward::read(&cfg.flame, reg) else { continue };
+            for z in [1e4f64, 1e6, 1e8] {
+                let view = View::of(z, b.sample_point(0.75), 1280, 720);
+                let Ok(plan) = b.plan_eval(view, PlanOptions::default(), &mut CpuEval) else { continue };
+                let mut hist = [0usize; 8];
+                let mut over = 0usize;
+                let t0 = Instant::now();
+                for (w, r) in plan.words.iter().zip(&plan.refs) {
+                    let Some(r) = r else { continue };
+                    let ch = &r.chains[0];
+                    let end = [ch.end[0] + view.centre[0], ch.end[1] + view.centre[1]];
+                    match b.pieces(&w.word, end, r.m, 256) {
+                        Some(p) => hist[(p.len().max(1) as f64).log2().ceil().min(7.0) as usize] += 1,
+                        None => over += 1,
+                    }
+                }
+                println!(
+                    "  {name} {z:.0e}: pieces per word, by power of two [1, 2, 3-4, 5-8, 9-16, 17-32, 33-64, 65+]: {hist:?}, over 256: {over} ({:.0} ms)",
+                    t0.elapsed().as_secs_f64() * 1e3
+                );
+            }
+        }
+        assert!(worst_px < 1e-3, "the offset carry and the absolute replay disagree by {worst_px:.2e} px");
+
+        // Not only seeds: a render sends EVERY attractor point through a
+        // word, most of them far from the reference. Random sample points
+        // through each word, absolute against offsets, in f64: where either
+        // lands within a few view radii, they must agree.
+        for name in ["grand-julian", "random1", "julian-disc"] {
+            let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")) else { continue };
+            let cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
+            let Ok(b) = Backward::read(&cfg.flame, reg) else { continue };
+            let view = View::of(1e4, b.sample_point(0.75), 1280, 720);
+            let px = view.radius / (1280f64.hypot(720.0) / 2.0);
+            let Ok(plan) = b.plan_eval(view, PlanOptions::default(), &mut CpuEval) else { continue };
+            let (mut tried, mut near, mut bad, mut worst) = (0usize, 0usize, 0usize, 0.0f64);
+            let mut worst_what = String::new();
+            for (wi, (w, r)) in plan.words.iter().zip(&plan.refs).enumerate().step_by(7) {
+                let Some(r) = r else { continue };
+                let syms: Vec<(&IfsMap<Map2>, u32)> = w.word.iter().map(|&s| b.sym_map(s).expect("symbol")).collect();
+                for si in (0..b.sample.len()).step_by(b.sample.len() / 300) {
+                    let x0 = b.sample[si];
+                    let mut x = x0;
+                    let mut xm = x0;
+                    for (k, (m, arm)) in syms.iter().enumerate() {
+                        if k == r.m {
+                            xm = x;
+                        }
+                        x = forward(m, x, *arm);
+                    }
+                    let ch = &r.chains[0];
+                    let mut d = [xm[0] - ch.bases[0][0], xm[1] - ch.bases[0][1]];
+                    let mut ok = true;
+                    for (j, (m, arm)) in syms[r.m..].iter().enumerate() {
+                        match map_forward_difference(&m.forward, ch.bases[j], d, *arm) {
+                            Some(v) => d = v,
+                            None => {
+                                ok = false;
+                                break;
+                            }
+                        }
+                    }
+                    tried += 1;
+                    let got = [ch.end[0] + d[0], ch.end[1] + d[1]];
+                    let want = [x[0] - view.centre[0], x[1] - view.centre[1]];
+                    let lands = |p: [f64; 2]| p[0].hypot(p[1]) < 4.0 * view.radius;
+                    if !(lands(got) || lands(want)) {
+                        continue;
+                    }
+                    near += 1;
+                    let e = if ok { (got[0] - want[0]).hypot(got[1] - want[1]) / px } else { f64::INFINITY };
+                    if e > 0.01 {
+                        bad += 1;
+                    }
+                    if !(e <= worst) {
+                        worst = e;
+                        worst_what = format!("word {wi} (len {}, m {}), |δ_m| {:.2e}", w.word.len(), r.m, (xm[0] - ch.bases[0][0]).hypot(xm[1] - ch.bases[0][1]));
+                    }
+                }
+            }
+            println!("  {name} 1e4, random points: {tried} tried, {near} near the view, {bad} off by more than 0.01 px; worst {worst:.2e} px at {worst_what}");
+        }
+
+        // The saved view, deeper: what the plan finds there.
+        if let Ok(t) = std::fs::read_to_string("output/grand-julian-missing-pieces.fflame") {
+            let c: crate::config::FractalConfig = serde_json::from_str(&t).expect("config");
+            let b = Backward::read(&c.flame, reg).expect("walked");
+            for z in [1e6f64, 1e8, 1e9] {
+                let view = View::of(z, [c.pan_x, c.pan_y], 1280, 720);
+                match b.plan_eval(view, PlanOptions::default(), &mut CpuEval) {
+                    Ok(p) => println!(
+                        "  saved view {z:.0e}: {} words, mass {:.2e}, {} with references",
+                        p.words.len(),
+                        p.mass,
+                        p.refs.iter().filter(|r| r.is_some()).count()
+                    ),
+                    Err(e) => println!("  saved view {z:.0e}: no plan: {e:?}"),
+                }
+            }
+        }
+    }
+
+    /// **How far the plain GPU replay is from f64**, per sample, in
+    /// pixels: the planner's kernel in endpoint mode runs `ct_apply_symbol`
+    /// -- the render's own replay -- from sample points, and the CPU runs
+    /// the same words from the same f32-rounded points in f64. The mean
+    /// error is a BIAS, which a sampling average cannot remove: it moves
+    /// the picture.
+    #[test]
+    #[ignore = "needs a GPU; reads output/flame-zoom"]
+    fn how_far_the_plain_replay_is_from_f64() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let Ok(text) = std::fs::read_to_string("output/flame-zoom/grand-julian.fflame") else { return };
+        let cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
+        let b = Backward::read(&cfg.flame, reg).expect("walked");
+        let (device, queue) = test_device();
+        let mut gpu = crate::scene::plan_gpu::PlanGpu::new(&device, &queue, &cfg.flame, b.sample());
+        for z in [1e4f64, 1e5] {
+            let view = View::of(z, b.sample_point(0.75), 1280, 720);
+            let px = view.radius / (1280f64.hypot(720.0) / 2.0);
+            let plan = b.plan_eval(view, PlanOptions::default(), &mut CpuEval).expect("a plan");
+            let pts: Vec<u32> = (0..b.sample.len() as u32).step_by(b.sample.len() / 64).collect();
+            let jobs: Vec<EvalJob> = plan.words.iter().step_by(5).map(|w| EvalJob { word: &w.word, points: &pts }).collect();
+            let got = gpu.endpoints(&jobs);
+            let (mut n, mut sum, mut mean) = (0usize, 0.0f64, [0.0f64; 2]);
+            let mut worst = 0.0f64;
+            let mut k = 0;
+            for j in &jobs {
+                let syms: Vec<(&IfsMap<Map2>, u32)> = j.word.iter().map(|&s| b.sym_map(s).expect("symbol")).collect();
+                for &i in j.points {
+                    let g = got[k];
+                    k += 1;
+                    let Some(g) = g else { continue };
+                    let p0 = b.sample[i as usize];
+                    let mut x = [p0[0] as f32 as f64, p0[1] as f32 as f64];
+                    for (m, arm) in &syms {
+                        x = forward(m, x, *arm);
+                    }
+                    // Only where it lands near the view: elsewhere the
+                    // error does not reach the picture.
+                    if (x[0] - view.centre[0]).hypot(x[1] - view.centre[1]) > 2.0 * view.radius {
+                        continue;
+                    }
+                    let e = [(g[0] as f64 - x[0]) / px, (g[1] as f64 - x[1]) / px];
+                    n += 1;
+                    sum += e[0].hypot(e[1]);
+                    mean[0] += e[0];
+                    mean[1] += e[1];
+                    worst = worst.max(e[0].hypot(e[1]));
+                }
+            }
+            let nn = n.max(1) as f64;
+            println!(
+                "  {z:.0e}: {n} samples in view; plain GPU replay against f64: mean |error| {:.3} px, worst {:.3} px, mean error (bias) ({:+.3}, {:+.3}) px",
+                sum / nn,
+                worst,
+                mean[0] / nn,
+                mean[1] / nn
+            );
+        }
+    }
+
+    /// **Gate 4, per sample: the render's replay against f64.** The
+    /// words of a packed replay table run on the GPU through the render's
+    /// own code (`PlanGpu::offset_endpoints`: `ct_apply_symbol` to `m`,
+    /// then either the plain replay or `ct_offsets`), from sample points,
+    /// and the CPU runs the same words from the same f32-rounded points in
+    /// f64. Error in pixels, for samples landing in the view: the mean
+    /// magnitude, the worst, and the mean VECTOR -- a bias, which moves
+    /// the picture and which no amount of sampling averages away.
+    #[test]
+    #[ignore = "needs a GPU; reads output/flame-zoom"]
+    fn the_offset_replay_holds_per_sample() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let (device, queue) = test_device();
+        let mut worst_offsets = 0.0f64;
+        for name in ["grand-julian", "random1", "julian-disc"] {
+            let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")) else { continue };
+            let cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
+            let Ok(b) = Backward::read(&cfg.flame, reg) else { continue };
+            let gpu = crate::scene::plan_gpu::PlanGpu::new(&device, &queue, &cfg.flame, b.sample());
+            for z in [1e4f64, 1e6, 1e8] {
+                let view = View::of(z, b.sample_point(0.75), 1280, 720);
+                let px = view.radius / (1280f64.hypot(720.0) / 2.0);
+                let Ok(plan) = b.plan_eval(view, PlanOptions::default(), &mut CpuEval) else { continue };
+                if plan.refs.is_empty() {
+                    println!("  {name} {z:.0e}: no offsets at this depth");
+                    continue;
+                }
+                let table = crate::scene::cylinder::pack_words(&plan, &cfg.flame);
+                let stride = table[0] as usize;
+                let blocks = table[3] as usize;
+                let step = (plan.words.len() / 400).max(1);
+                let pts: Vec<usize> = (0..b.sample.len()).step_by(b.sample.len() / 48).collect();
+                let mut jobs: Vec<[f32; 4]> = Vec::new();
+                let mut which: Vec<(usize, usize)> = Vec::new();
+                for w in (0..plan.words.len()).step_by(step) {
+                    if plan.refs[w].is_none() {
+                        continue;
+                    }
+                    let rec = (crate::scene::cylinder::HEADER_FLOATS + w * stride) as f32;
+                    let blk = table[blocks + w];
+                    for &i in &pts {
+                        let p = b.sample[i];
+                        jobs.push([rec, blk, p[0] as f32, p[1] as f32]);
+                        which.push((w, i));
+                    }
+                }
+                let got = gpu.offset_endpoints(&cfg.flame, &table, &jobs);
+                let (mut n, mut plain_sum, mut off_sum) = (0usize, 0.0f64, 0.0f64);
+                let (mut plain_bias, mut off_bias) = ([0.0f64; 2], [0.0f64; 2]);
+                let (mut plain_worst, mut off_worst) = (0.0f64, 0.0f64);
+                let mut off_errs: Vec<[f64; 2]> = Vec::new();
+                for ((w, i), g) in which.iter().zip(&got) {
+                    let syms: Vec<(&IfsMap<Map2>, u32)> = plan.words[*w].word.iter().map(|&s| b.sym_map(s).expect("symbol")).collect();
+                    let p0 = b.sample[*i];
+                    let mut x = [p0[0] as f32 as f64, p0[1] as f32 as f64];
+                    for (m, arm) in &syms {
+                        x = forward(m, x, *arm);
+                    }
+                    let want = [x[0] - view.centre[0], x[1] - view.centre[1]];
+                    if want[0].hypot(want[1]) > 2.0 * view.radius {
+                        continue;
+                    }
+                    n += 1;
+                    let ep = [(g[0] as f64 - view.centre[0] - want[0]) / px, (g[1] as f64 - view.centre[1] - want[1]) / px];
+                    let eo = [(g[2] as f64 - want[0]) / px, (g[3] as f64 - want[1]) / px];
+                    plain_sum += ep[0].hypot(ep[1]);
+                    off_sum += eo[0].hypot(eo[1]);
+                    plain_worst = plain_worst.max(ep[0].hypot(ep[1]));
+                    off_worst = off_worst.max(eo[0].hypot(eo[1]));
+                    off_errs.push(eo);
+                    for k in 0..2 {
+                        plain_bias[k] += ep[k];
+                        off_bias[k] += eo[k];
+                    }
+                }
+                let nn = n.max(1) as f64;
+                println!(
+                    "  {name} {z:.0e}: {n} in view | plain: mean {:.3} worst {:.3} bias ({:+.3}, {:+.3}) px | offsets: mean {:.4} worst {:.4} bias ({:+.4}, {:+.4}) px",
+                    plain_sum / nn,
+                    plain_worst,
+                    plain_bias[0] / nn,
+                    plain_bias[1] / nn,
+                    off_sum / nn,
+                    off_worst,
+                    off_bias[0] / nn,
+                    off_bias[1] / nn
+                );
+                // Robust to the odd sample within an ulp of a cut, which
+                // both replays send the other way round it (so does the
+                // free chaos game): the 99th percentile, the bias of the
+                // samples within it, and how many are off by a pixel.
+                off_errs.sort_by(|a, b| a[0].hypot(a[1]).total_cmp(&b[0].hypot(b[1])));
+                let keep = &off_errs[..(off_errs.len() * 99 / 100).max(1)];
+                let p99 = keep.last().map_or(0.0, |e| e[0].hypot(e[1]));
+                let tb = [
+                    keep.iter().map(|e| e[0]).sum::<f64>() / keep.len() as f64,
+                    keep.iter().map(|e| e[1]).sum::<f64>() / keep.len() as f64,
+                ];
+                let wild = off_errs.iter().filter(|e| e[0].hypot(e[1]) > 1.0).count();
+                println!("      offsets: 99th percentile {p99:.4} px, its bias ({:+.4}, {:+.4}) px, {wild} of {n} off by more than a pixel", tb[0], tb[1]);
+                assert!(p99 < 0.05, "{name} {z:.0e}: the offset replay's 99th percentile is {p99:.4} px");
+                assert!(tb[0].hypot(tb[1]) < 0.01, "{name} {z:.0e}: the offset replay is biased by ({:.4}, {:.4}) px", tb[0], tb[1]);
+                assert!(wild * 1000 <= n, "{name} {z:.0e}: {wild} of {n} samples off by more than a pixel");
+                worst_offsets = worst_offsets.max(p99);
+            }
+        }
+        println!("  worst 99th percentile anywhere: {worst_offsets:.4} px");
     }
 
     /// The radix-built index is in `(Cell, u32)`'s own order, exactly --

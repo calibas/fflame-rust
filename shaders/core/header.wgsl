@@ -396,8 +396,10 @@ fn bias_ratio(prev: u32, i: u32) -> f32 {
 {{#if CYLINDER_REPLAY}}
 // Replay layout. A word whose maps are not all affine cannot be
 // composed into one matrix on the CPU, so the kernel is handed the
-// SYMBOLS and walks them. Header `[stride, count, _, _]`, then one
-// word per stride: `[cdf, H, G, len, sym0, sym1, ...]`.
+// SYMBOLS and walks them. Header `[stride, count, rows, blocks, shift x,
+// shift y, _, _]`, then one word per stride: `[cdf, H, G, len, sym0,
+// sym1, ...]`. The rest of the header is the replay in offsets
+// (`scene::cylinder::pack_words`).
 //
 // Stride is uniform and set by the deepest word, which wastes a few
 // floats on the shallow ones and buys a multiply instead of an
@@ -412,8 +414,17 @@ fn ct_count() -> u32 {
 }
 
 fn ct_base(i: u32) -> u32 {
-    return 4u + i * ct_stride();
+    return 8u + i * ct_stride();
 }
+
+{{#if CYLINDER_OFFSETS}}
+// Where word `i`'s references start, or 0 for a word replayed in
+// absolute f32 to its end.
+fn ct_block(i: u32) -> u32 {
+    return u32(cylinders[u32(cylinders[3]) + i]);
+}
+
+{{/if}}
 {{else}}
 fn ct_count() -> u32 {
     return arrayLength(&cylinders) / 12u;

@@ -343,6 +343,12 @@ pub struct Cylinder {
     /// bound the enumeration stopped on.
     pub centre: [f64; 2],
     pub radius: f64,
+    /// A few points the inverse walk found landing in the view under
+    /// this word: where the replay's reference orbits start
+    /// (`docs/projects/deep-zoom-precision.md` §2). Empty from the
+    /// other enumerations, and where the walk kept a word on its
+    /// replay alone.
+    pub seeds: Vec<[f64; 2]>,
 }
 
 /// The enumerated antichain, restricted to the words that reach the
@@ -406,6 +412,15 @@ pub struct Cylinders {
     /// needs it: a word's translation is expressed RELATIVE to this
     /// point, which is what keeps a deep zoom out of f32's teeth.
     pub view_centre: [f64; 2],
+    /// Per word, its reference orbits for the replay in offsets, where
+    /// the view is deep enough to need them (`Backward::reference_chains`).
+    /// Empty when nothing was computed: every word then replays in
+    /// absolute f32, as before.
+    pub refs: Vec<Option<crate::scene::backward::WordRefs>>,
+    /// The flame's forward maps as the shader's rows
+    /// (`forward_delta::forward_row`), one per transform index, for the
+    /// offset steps. Empty with `refs`.
+    pub offset_rows: Vec<f32>,
 }
 
 impl Cylinders {
@@ -624,6 +639,7 @@ impl Cylinders {
                         prob: child_inc,
                         centre: enc.c,
                         radius: enc.r,
+                        seeds: Vec::new(),
                     });
                     Verdict::Emit(kept.len() - 1)
                 } else {
@@ -686,6 +702,8 @@ impl Cylinders {
             depth,
             composable: false,
             view_centre: view.centre,
+            refs: Vec::new(),
+            offset_rows: Vec::new(),
         })
     }
 
@@ -811,8 +829,9 @@ impl Cylinders {
         let mut tr = Trace::default();
         slicer.tick().await;
         let eval = match gpu {
-            Some(g) => g.for_flame_sliced(flame, &b, slicer).await,
-            None => None,
+            // Past its f32, the CPU plans (`Backward::gpu_resolves`).
+            Some(g) if b.gpu_resolves(view) => g.for_flame_sliced(flame, &b, slicer).await,
+            _ => None,
         };
         match eval {
             Some(eval) => b.walk(view, &mut tr, opts, eval, slicer).await,
@@ -1273,7 +1292,7 @@ impl Cylinders {
                     // and subdividing further would only lengthen the
                     // prefix. This is where the antichain is cut.
                     if radius <= view.radius {
-                        kept.push(Cylinder { word, prob, centre, radius });
+                        kept.push(Cylinder { word, prob, centre, radius, seeds: Vec::new() });
                         if kept.len() > MAX_WORDS {
                             return Err(NoCylinders::TooManyWords(kept.len()));
                         }
@@ -1358,6 +1377,7 @@ impl Cylinders {
                 prob: node.prob,
                 centre: node.centre,
                 radius: node.radius,
+                seeds: Vec::new(),
             });
         }
 
@@ -1375,6 +1395,8 @@ impl Cylinders {
             depth,
             composable,
             view_centre: view.centre,
+            refs: Vec::new(),
+            offset_rows: Vec::new(),
         })
     }
 }
@@ -1982,8 +2004,18 @@ pub fn pack(cyl: &Cylinders, flame: &Flame, registry: &crate::variations::Variat
 /// for the whole word and the kernel walks the symbols instead —
 /// running each transform exactly as the chaos game would.
 ///
-/// Layout: a four-float header `[stride, count, 0, 0]`, then one word
-/// per stride as `[cdf, H, G, len, sym0, sym1, …]`. The colour still
+/// Layout: an eight-float header `[stride, count, rows, blocks, shift x,
+/// shift y, 0, 0]`, then one word per stride as
+/// `[cdf, H, G, len, sym0, sym1, …]`.
+///
+/// **The replay in offsets** (`docs/projects/deep-zoom-precision.md`),
+/// when the plan carries references: `rows` is where the flame's forward
+/// maps start (`forward_delta::ROW_FLOATS` each, by transform index),
+/// and `blocks` where one offset per word starts, then the words' blocks
+/// -- `[m, chains, per chain: z_m … z_{n-1}, z_n − c]`, offset 0 for a
+/// word with none. `shift` is the plan's centre less the view's, in f64,
+/// which the renderer writes every frame so a plan still drawing after a
+/// pan stays where it belongs. Zero rows and blocks: no offsets. The colour still
 /// folds to the two coefficients `H` and `G`, because flam3's rule is
 /// affine in the colour coordinate whatever the POSITION map does —
 /// so the colour is exact here for the same reason it is in
@@ -1998,7 +2030,7 @@ pub fn pack_words(cyl: &Cylinders, flame: &Flame) -> Vec<f32> {
     // Round the stride to a vec4 multiple, as `pack` does, so a word
     // never straddles awkwardly.
     let stride = ((4 + longest) + 3) / 4 * 4;
-    let mut out = vec![0.0f32; 4 + cyl.words.len() * stride];
+    let mut out = vec![0.0f32; HEADER_FLOATS + cyl.words.len() * stride];
     out[0] = stride as f32;
     out[1] = cyl.words.len() as f32;
 
@@ -2015,7 +2047,7 @@ pub fn pack_words(cyl: &Cylinders, flame: &Flame) -> Vec<f32> {
             h_prod *= h;
         }
         acc += c.prob / cyl.mass.max(f64::MIN_POSITIVE);
-        let base = 4 + w * stride;
+        let base = HEADER_FLOATS + w * stride;
         out[base] = acc as f32;
         out[base + 1] = h_prod as f32;
         out[base + 2] = g_acc as f32;
@@ -2027,10 +2059,36 @@ pub fn pack_words(cyl: &Cylinders, flame: &Flame) -> Vec<f32> {
     // The last entry is exactly one, whatever the sum rounded to, so
     // a uniform draw always finds a word.
     if let Some(last) = cyl.words.len().checked_sub(1) {
-        out[4 + last * stride] = 1.0;
+        out[HEADER_FLOATS + last * stride] = 1.0;
+    }
+    if cyl.refs.len() == cyl.words.len() && !cyl.offset_rows.is_empty() {
+        out[2] = out.len() as f32;
+        out.extend_from_slice(&cyl.offset_rows);
+        let offsets_at = out.len();
+        out[3] = offsets_at as f32;
+        out.resize(offsets_at + cyl.words.len(), 0.0);
+        for (w, r) in cyl.refs.iter().enumerate() {
+            let Some(r) = r else { continue };
+            out[offsets_at + w] = out.len() as f32;
+            out.push(r.m as f32);
+            out.push(r.chains.len() as f32);
+            for ch in &r.chains {
+                for z in &ch.bases {
+                    out.push(z[0] as f32);
+                    out.push(z[1] as f32);
+                }
+                out.push(ch.end[0] as f32);
+                out.push(ch.end[1] as f32);
+            }
+        }
+        // f32 offsets are exact below 2^24 floats, 64 MB of table.
+        debug_assert!(out.len() < 1 << 24);
     }
     out
 }
+
+/// Floats before the first word of a replay table: see [`pack_words`].
+pub const HEADER_FLOATS: usize = 8;
 
 /// The gates that need a GPU: a targeted render is the untargeted
 /// render, and it gets there with far fewer wasted samples.
@@ -2566,6 +2624,168 @@ mod gpu_tests {
             deep += 1;
         }
         assert!(deep == 4, "the ladder did not run");
+    }
+
+    /// **Gate 4 of deep-zoom-precision.md: a replayed deep zoom holds.**
+    ///
+    /// Grand-julian, whose maps are roots and so is REPLAYED, down a
+    /// ladder from 64k -- where f32's spacing near the view is a third of
+    /// a pixel and the plain replay stripes -- to 1e10, each rung rendered
+    /// with the replay in offsets and without. Three numbers per render:
+    /// lit pixels; the share with a lit neighbour, which a quantisation
+    /// lattice fails; and STRIPES, the spread of each column's (and row's)
+    /// brightness about the mean of its six neighbours, which rises when
+    /// f32's grid gives neighbouring columns unequal shares of the points.
+    #[test]
+    #[ignore = "needs a GPU; reads output/flame-zoom"]
+    fn a_deep_replay_has_no_stripes_and_no_lattice() {
+        use std::sync::atomic::Ordering;
+        let Ok(text) = std::fs::read_to_string("output/flame-zoom/grand-julian.fflame") else {
+            println!("  no grand-julian.fflame");
+            return;
+        };
+        const N: u32 = 320;
+        let mut cfg: FractalConfig = serde_json::from_str(&text).expect("a config");
+        cfg.cylinder_targeting = true;
+        cfg.render_mode = crate::scene::transforms::RenderMode::TwoD;
+        cfg.deterministic_rng = true;
+        cfg.auto_exposure = true;
+        {
+            let guard = crate::variations::global_registry();
+            let b = crate::scene::backward::Backward::read(&cfg.flame, &guard).expect("armed");
+            let x = b.sample_point(0.75);
+            cfg.pan_x = x[0];
+            cfg.pan_y = x[1];
+        }
+        let measure = |rgba: &[u8]| -> (usize, f64, f64) {
+            let n = N as usize;
+            let lum: Vec<f64> = rgba.chunks(4).map(|p| p[0] as f64 + p[1] as f64 + p[2] as f64).collect();
+            let lit: Vec<bool> = lum.iter().map(|&l| l > 24.0).collect();
+            let (mut total, mut joined) = (0usize, 0usize);
+            for y in 0..n {
+                for x in 0..n {
+                    if !lit[y * n + x] {
+                        continue;
+                    }
+                    total += 1;
+                    if (x > 0 && lit[y * n + x - 1])
+                        || (x + 1 < n && lit[y * n + x + 1])
+                        || (y > 0 && lit[(y - 1) * n + x])
+                        || (y + 1 < n && lit[(y + 1) * n + x])
+                    {
+                        joined += 1;
+                    }
+                }
+            }
+            // Column and row sums, each against the mean of its six
+            // neighbours: the high-frequency part stripes live in.
+            let spread = |sums: &[f64]| -> f64 {
+                let mut r = Vec::new();
+                for i in 3..sums.len() - 3 {
+                    let around: f64 = (i - 3..=i + 3).filter(|&j| j != i).map(|j| sums[j]).sum::<f64>() / 6.0;
+                    if around > 0.0 {
+                        r.push(sums[i] / around);
+                    }
+                }
+                let m = r.iter().sum::<f64>() / r.len().max(1) as f64;
+                (r.iter().map(|v| (v - m) * (v - m)).sum::<f64>() / r.len().max(1) as f64).sqrt()
+            };
+            let cols: Vec<f64> = (0..n).map(|x| (0..n).map(|y| lum[y * n + x]).sum()).collect();
+            let rows: Vec<f64> = (0..n).map(|y| (0..n).map(|x| lum[y * n + x]).sum()).collect();
+            (total, joined as f64 / total.max(1) as f64, spread(&cols).max(spread(&rows)))
+        };
+        // Gate 3 first: at 1e3 the plain replay is still nearly right --
+        // its GPU transcendentals put it about 0.03 px off there, ten
+        // times that at 1e4 (`how_far_the_plain_replay_is_from_f64`) --
+        // and the plan already carries references, so the two must draw
+        // the same picture. Not
+        // the same SAMPLES: the offset steps skip the draws the absolute
+        // steps make, so later word picks differ, and the two renders are
+        // two samplings of one picture. So the bar is the noise between two
+        // samplings of the plain one -- deterministic against not --
+        // per pixel and over 4x4 blocks, where noise falls and a real
+        // difference would not.
+        {
+            cfg.zoom = 1.0e3;
+            let lum = |px: &[u8]| px[0] as f64 + px[1] as f64 + px[2] as f64;
+            let n = N as usize;
+            let blocks = |img: &[u8]| -> Vec<f64> {
+                let mut out = vec![0.0; (n / 4) * (n / 4)];
+                for y in 0..n {
+                    for x in 0..n {
+                        out[(y / 4) * (n / 4) + x / 4] += lum(&img[(y * n + x) * 4..(y * n + x) * 4 + 4]);
+                    }
+                }
+                out
+            };
+            let gap = |a: &[f64], b: &[f64]| a.iter().zip(b).map(|(x, y)| (x - y).abs()).sum::<f64>() / b.iter().sum::<f64>();
+            let pixels = |img: &[u8]| img.chunks(4).map(lum).collect::<Vec<f64>>();
+            let iters: u64 = std::env::var("GATE3_ITERS").ok().and_then(|v| v.parse().ok()).unwrap_or(48_000_000);
+            crate::scene::backward::OFFSETS_OFF.store(false, Ordering::Relaxed);
+            let on = render(&cfg, N, iters);
+            crate::scene::backward::OFFSETS_OFF.store(true, Ordering::Relaxed);
+            let off = render(&cfg, N, iters);
+            cfg.deterministic_rng = false;
+            let off2 = render(&cfg, N, iters);
+            cfg.deterministic_rng = true;
+            crate::scene::backward::OFFSETS_OFF.store(false, Ordering::Relaxed);
+            if std::env::var_os("GATE3_SAVE").is_some() {
+                let save = |name: &str, img: &[u8]| {
+                    let _ = image::save_buffer(format!("output/deep-offsets/{name}.png"), img, N, N, image::ColorType::Rgba8);
+                };
+                save("g3-on", &on);
+                save("g3-off", &off);
+                save("g3-off2", &off2);
+                let amp = |a: &[u8], b: &[u8]| -> Vec<u8> {
+                    a.chunks(4)
+                        .zip(b.chunks(4))
+                        .flat_map(|(x, y)| {
+                            let d = (lum(x) - lum(y)) * 2.0;
+                            [(d.max(0.0)).min(255.0) as u8, 0, ((-d).max(0.0)).min(255.0) as u8, 255]
+                        })
+                        .collect()
+                };
+                save("g3-diff-on-off", &amp(&on, &off));
+                save("g3-diff-off2-off", &amp(&off2, &off));
+            }
+            let (px_on, px_noise) = (gap(&pixels(&on), &pixels(&off)), gap(&pixels(&off2), &pixels(&off)));
+            let (bl_on, bl_noise) = (gap(&blocks(&on), &blocks(&off)), gap(&blocks(&off2), &blocks(&off)));
+            println!(
+                "  1e3: offsets against plain {:.2}% per pixel, {:.2}% per 4x4 block; two plain samplings {:.2}% and {:.2}%",
+                100.0 * px_on,
+                100.0 * bl_on,
+                100.0 * px_noise,
+                100.0 * bl_noise
+            );
+            assert!(
+                px_on < 1.2 * px_noise && bl_on < 1.2 * bl_noise,
+                "at 1e3 the offset replay is further from the plain one than sampling noise"
+            );
+        }
+        println!("  zoom       offsets:  lit  joined  stripes |  plain:  lit  joined  stripes");
+        for zoom in [65536.0f32, 1.0e6, 1.0e8, 1.0e10] {
+            cfg.zoom = zoom;
+            crate::scene::backward::OFFSETS_OFF.store(false, Ordering::Relaxed);
+            let on_rgba = render(&cfg, N, 48_000_000);
+            let _ = std::fs::create_dir_all("output/deep-offsets");
+            let _ = image::save_buffer(
+                format!("output/deep-offsets/ladder-{zoom:.0e}.png"),
+                &on_rgba,
+                N,
+                N,
+                image::ColorType::Rgba8,
+            );
+            let on = measure(&on_rgba);
+            crate::scene::backward::OFFSETS_OFF.store(true, Ordering::Relaxed);
+            let off = measure(&render(&cfg, N, 48_000_000));
+            crate::scene::backward::OFFSETS_OFF.store(false, Ordering::Relaxed);
+            println!(
+                "  {zoom:<10.0e}        {:>6}  {:>6.3}  {:>7.4} |       {:>6}  {:>6.3}  {:>7.4}",
+                on.0, on.1, on.2, off.0, off.1, off.2
+            );
+            assert!(on.0 > 500, "zoom {zoom:e}: only {} lit pixels with offsets", on.0);
+            assert!(on.1 > 0.85, "zoom {zoom:e}: a lattice with offsets ({:.3} joined)", on.1);
+        }
     }
 
     /// Panning and zooming with targeting on never submits a

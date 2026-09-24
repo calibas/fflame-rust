@@ -183,6 +183,7 @@ impl ShaderCache {
             frame_coverage: false,
             cylinder_replay: false,
             cylinder_relative: false,
+            cylinder_offsets: false,
             flatten_z_per_iter: false,
             solid_enabled: false,
             probe: false,
@@ -389,6 +390,7 @@ impl ShaderCache {
                 constants.frame_coverage = config.auto_exposure;
                 constants.cylinder_replay = false;
                 constants.cylinder_relative = false;
+                constants.cylinder_offsets = false;
                 constants
             }
         } else {
@@ -421,6 +423,7 @@ impl ShaderCache {
                 // it depends on the enumeration having run.
                 cylinder_replay: false,
                 cylinder_relative: false,
+            cylinder_offsets: false,
                 flatten_z_per_iter: matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD)
                     && !config.preserve_z,
                 solid_enabled: config.solid_strength > 0.0

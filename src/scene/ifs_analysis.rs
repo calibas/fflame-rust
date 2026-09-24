@@ -586,7 +586,7 @@ fn bubble_scale_gen<T: Real>(x: &T, branch: u32) -> T {
 }
 
 /// Blob's angular scale at `theta`, generically.
-fn blob_scale_gen<T: Transcendental>(high: f64, low: f64, waves: f64, theta: &T) -> T {
+pub(crate) fn blob_scale_gen<T: Transcendental>(high: f64, low: f64, waves: f64, theta: &T) -> T {
     let wave = theta.lit(waves).mul(theta).sin().add(&theta.one());
     theta.lit(low).add(&theta.lit((high - low) / 2.0).mul(&wave))
 }
