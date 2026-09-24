@@ -75,95 +75,9 @@ pub fn render_view_content(
 
                 ui.add_space(4.0);
 
-                let mut targeting = config.cylinder_targeting;
-                if ui
-                    .checkbox(&mut targeting, t!("view.cylinder_targeting").as_ref())
-                    .on_hover_text(t!("view.tooltip_cylinder_targeting"))
-                    .changed()
-                {
-                    let _ = config_manager
-                        .update_param(ConfigPath::CylinderTargeting, targeting.into());
-                }
-                if config.cylinder_targeting {
-                    use crate::renderer::TargetingState as TS;
-                    if let Some(secs) = deep_zoom.planning {
-                        ui.horizontal(|ui| {
-                            ui.add(egui::Spinner::new());
-                            ui.label(t!(
-                                "view.targeting_generating",
-                                secs = format!("{secs:.1}")
-                            ));
-                        });
-                        // The plan below is the one still drawing.
-                        if matches!(deep_zoom.targeting, TS::Active { .. }) {
-                            ui.label(t!("view.targeting_previous_plan"));
-                        }
-                    }
-                    let line = match &deep_zoom.targeting {
-                        TS::Off => t!("view.targeting_off").to_string(),
-                        TS::NotPlanar => t!("view.targeting_not_planar").to_string(),
-                        TS::NotWorthIt { speedup } => {
-                            t!("view.targeting_not_worth_it", speedup = format!("{speedup:.2}"))
-                                .to_string()
-                        }
-                        TS::Active { words, depth, speedup, lost, .. } => {
-                            let mut line = t!(
-                                "view.targeting_active",
-                                words = words.to_string(),
-                                depth = depth.to_string(),
-                                speedup = format!("{speedup:.0}")
-                            )
-                            .to_string();
-                            // Never folded into the sentence above: a
-                            // render that is missing part of its
-                            // attractor says so in its own clause, or
-                            // it does not really say it.
-                            if *lost > 0.0 {
-                                line.push(' ');
-                                line.push_str(
-                                    &t!(
-                                        "view.targeting_lost",
-                                        percent = format!("{:.3}", lost * 100.0)
-                                    )
-                                    .to_string(),
-                                );
-                            }
-                            line
-                        }
-                        TS::Declined(why) => {
-                            use crate::scene::cylinder::NoCylinders as NC;
-                            let reason = match why {
-                                NC::Unbounded { index, why } => t!(
-                                    "view.no_cyl_unbounded",
-                                    index = index.to_string(),
-                                    why = why.clone()
-                                )
-                                .to_string(),
-                                NC::NoInvariantBall => t!("view.no_cyl_no_ball").to_string(),
-                                NC::ColourNotAffine => t!("view.no_cyl_colour").to_string(),
-                                NC::Xaos => t!("view.no_cyl_xaos").to_string(),
-                                NC::NotContractive(i) => {
-                                    t!("view.no_cyl_expanding", index = i.to_string()).to_string()
-                                }
-                                NC::Empty => t!("view.no_cyl_empty").to_string(),
-                                NC::ViewIsEmpty => t!("view.no_cyl_off_attractor").to_string(),
-                                NC::TimedOut { nodes } => {
-                                    t!("view.no_cyl_timed_out", nodes = nodes.to_string())
-                                        .to_string()
-                                }
-                                NC::TooManyWords(n) => {
-                                    t!("view.no_cyl_too_many", count = n.to_string()).to_string()
-                                }
-                            };
-                            t!("view.targeting_declined", reason = reason).to_string()
-                        }
-                    };
-                    // "Not running" beside "Generating" says the same
-                    // thing twice, and less.
-                    if !(deep_zoom.planning.is_some() && matches!(deep_zoom.targeting, TS::Off)) {
-                        ui.label(line);
-                    }
-                }
+                // Focused Rendering (cylinder targeting): the switch and
+                // what it is doing, shared with the Paths panel.
+                super::paths_panel::focused_rendering(ui, config_manager, &config, deep_zoom);
             });
     }
 

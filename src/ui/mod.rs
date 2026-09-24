@@ -25,7 +25,7 @@ mod panel_viewer;
 /// panning internally). Re-exported for the keyboard handler.
 pub(crate) use panel_viewer::pan_fractal_view;
 pub(crate) use escape_panel::escape_zoom_by_factor;
-mod words_panel;
+mod paths_panel;
 mod performance;
 mod random_generator;
 mod scripts_panel;
@@ -1471,8 +1471,10 @@ impl EguiLayer {
         let mut variation_update_requested: Vec<String> = Vec::new();
         let mut script_cloud_request: Option<crate::app::script_cloud::ScriptCloudRequest> = None;
 
-        // The Words panel's solo button, held this frame
+        // The Paths panel's solo button, held this frame, and a path it
+        // opened that the plan has not split
         let mut word_solo: Option<Vec<u32>> = None;
+        let mut word_split: Option<Vec<u32>> = None;
 
         // Audio file loading
         let mut load_audio_file = false;
@@ -1788,8 +1790,9 @@ impl EguiLayer {
                         path_click_info: &self.path_click_info,
                         close_path_overlay: &mut self.close_path_overlay,
 
-                        // Words panel
+                        // Paths panel
                         word_solo: &mut word_solo,
+                        word_split: &mut word_split,
 
                         // Random generator panel state
                         random_generator_panel: &mut self.random_generator_panel,
@@ -2425,6 +2428,7 @@ impl EguiLayer {
             animation_seek_changed,
             animation_seek_drag_stopped,
             word_solo,
+            word_split,
             generated_flame,
             script_generated,
             script_animation,

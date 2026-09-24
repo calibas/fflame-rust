@@ -1354,11 +1354,15 @@ impl App {
         }
     }
 
-    /// The Words panel's solo button, held or not, every frame: the
-    /// renderer restarts the picture when it changes.
+    /// The Paths panel's solo button, held or not, every frame: the
+    /// renderer restarts the picture when it changes. And a path opened
+    /// to see inside: the plan splits it.
     fn handle_word_solo(&mut self, ui_response: &UiResponse) {
         if let Some(ref mut renderer) = self.flame_renderer {
             renderer.set_word_solo(ui_response.word_solo.clone());
+            if let Some(p) = &ui_response.word_split {
+                renderer.request_split(self.config_manager.active_config(), p.clone());
+            }
         }
     }
 

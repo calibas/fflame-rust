@@ -52,7 +52,7 @@
   - `src/export/` - High-resolution export (high_res.rs: tiled + CPU-histogram paths)
   - `src/shader_builder_v2.rs` - Per-flame WGSL assembly from templates + active variation defs
   - `src/gpu/` - Buffer types and std140/std430 layouts (buffers.rs)
-  - `src/ui/` - **Dockable panel UI** (egui_dock): 25+ panels — viewport, transforms, triangle editor, view, colors, palette editor/library, fractal browser, history, animation, effects, xaos editor, random generator, variations browser, subflames, words, signal, export, performance, …
+  - `src/ui/` - **Dockable panel UI** (egui_dock): 25+ panels — viewport, transforms, triangle editor, view, colors, palette editor/library, fractal browser, history, animation, effects, xaos editor, random generator, variations browser, subflames, paths, signal, export, performance, …
   - `src/animation/` - Track-based animation system + video export
   - `src/audio/` - Audio analysis for audio-reactive animation (cpal/symphonia/rustfft)
   - `src/signal/` - Signal/generator routing for animation inputs

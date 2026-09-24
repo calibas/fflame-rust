@@ -524,7 +524,7 @@ impl PlanBench {
         self.task = Some(Box::pin(async move {
             let registry = crate::variations::global_registry().clone();
             let mut g = gpu.borrow_mut();
-            crate::scene::cylinder::Cylinders::plan_sliced(&flame, &registry, view, Some(&mut g), &removals, &slicer).await
+            crate::scene::cylinder::Cylinders::plan_sliced(&flame, &registry, view, Some(&mut g), &removals, &[], &slicer).await
         }));
     }
 

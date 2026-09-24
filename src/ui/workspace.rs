@@ -41,9 +41,9 @@ pub enum PanelType {
     KeyboardShortcuts,
     /// Config import/export dialog
     ConfigDialog,
-    /// The plan's words as a tree: trim, remove, solo
-    /// (docs/projects/word-editing.md §6)
-    Words,
+    /// The plan's words as a tree -- "paths" in the UI: trim, remove,
+    /// solo (docs/projects/word-editing.md §6)
+    Paths,
     /// PNG Export panel
     Export,
     /// Random generator panel (generate random flames with settings)
@@ -90,7 +90,7 @@ impl std::fmt::Display for PanelType {
             PanelType::Help => t!("panels.help"),
             PanelType::KeyboardShortcuts => t!("panels.keyboard_shortcuts"),
             PanelType::ConfigDialog => t!("panels.config_dialog"),
-            PanelType::Words => t!("panels.words"),
+            PanelType::Paths => t!("panels.paths"),
             PanelType::Export => t!("panels.export"),
             PanelType::RandomGenerator => t!("panels.random_generator"),
             PanelType::Effects => t!("panels.effects"),
@@ -234,7 +234,7 @@ impl Workspace {
             PanelType::Help => egui::vec2(400.0, 350.0),
             PanelType::KeyboardShortcuts => egui::vec2(400.0, 500.0),
             PanelType::ConfigDialog => egui::vec2(350.0, 300.0),
-            PanelType::Words => egui::vec2(380.0, 420.0),
+            PanelType::Paths => egui::vec2(380.0, 420.0),
             PanelType::Export => egui::vec2(350.0, 400.0),
             PanelType::RandomGenerator => egui::vec2(400.0, 450.0),
             PanelType::Effects => egui::vec2(350.0, 400.0),

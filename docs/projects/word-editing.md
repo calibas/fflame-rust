@@ -213,7 +213,53 @@ count as efficiency 1.
 
 - Hysteresis for trim across animation frames (the "lowest common
   denominator"): a branch kept in the previous frame keeps a lower bar.
+  Tested on an animation (2026-09-24): not needed.
 - Hover highlight of a branch in the viewport.
+
+## 9. Names, Always, and opening a path (2026-09-24)
+
+- **Names in the UI.** Most users will not know the mathematical
+  terms, and "word" also means words. The code and these docs keep the
+  math names; only the UI changes:
+
+  | Code and docs | UI |
+  |---|---|
+  | cylinder targeting | **Focused Rendering** |
+  | a word | a **path**: the transforms that lead into a part of the picture |
+  | the Words panel | the **Paths** panel (`paths_panel.rs`, `PanelType::Paths`) |
+
+  The PathMap colour mode keeps its name; it colours by the history
+  a sample happened to take.
+- **Off / Auto / Always.** A switch replaces the targeting checkbox, in
+  the View panel and at the top of the Paths panel, with one status line
+  shared by both (`paths_panel::focused_rendering`). Auto is the old
+  behaviour: the renderer declines a plan where it does not pay.
+  - Always (`FractalConfig::cylinder_always`, skipped when false) keeps
+    the plan at every zoom, so the Paths panel works without zooming in
+    first. Zoomed out it renders about half as fast as the ordinary way,
+    and the status line says so.
+  - A trim or removals keep the plan too (`keeps_plan`), as before.
+  - The plan key includes `keeps_plan`, so switching to Always replans
+    a view Auto had declined.
+- **Opening a path splits it.** Zoomed out, every path is whole (the
+  view holds all of each: 26 top-level paths on the Grand Julian), so
+  the panel could only offer whole transforms.
+  - Opening a path that is one word of the plan asks the renderer to
+    split it (`FlameRenderer::request_split`, a per-frame `UiResponse`
+    field). The walk splits each such word, and every word holding one
+    (`PlanOptions::refine`, the same mechanism a removal uses), rather
+    than keeping it whole.
+  - The set is transient and only grows, so closing a path does not
+    replan. It is forgotten when the flame changes, and capped at 256.
+  - A path that cannot be split, such as a blur's (its region is the
+    whole fractal), shows "No smaller paths here".
+  - Gate (`always_keeps_a_plan_zoomed_out_and_opens_a_path`, GPU): at
+    zoom 1, Auto declines the plan and Always keeps it, as 26 whole
+    paths. Opening one splits it into 26 beneath it, and the rest stay
+    whole.
+  - The view's share is 0.9824 whole and 0.9817 split, so it is the
+    same picture, divided. The split's probability is 0.5% lower,
+    because it drops sub-paths that lie wholly off screen.
 
 ## 8. Order
 

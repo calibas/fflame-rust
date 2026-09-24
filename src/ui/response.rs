@@ -125,9 +125,12 @@ pub struct UiResponse {
     // Animation scrubber drag stopped or discrete seek action (frame step) - reset accumulation
     pub animation_seek_drag_stopped: bool,
 
-    /// The Words panel's solo button is held on this branch this frame
+    /// The Paths panel's solo button is held on this path this frame
     /// (applies to the renderer, not the config). `None` releases it.
     pub word_solo: Option<Vec<u32>>,
+    /// A path opened in the Paths panel to see inside, which the plan
+    /// has not split yet (applies to the renderer, not the config).
+    pub word_split: Option<Vec<u32>>,
 
     // Generated flame from random generator panel (single). Carries the
     // scene render settings (render_mode/perspective) alongside the flame
@@ -263,6 +266,7 @@ impl Default for UiResponse {
             animation_seek_changed: false,
             animation_seek_drag_stopped: false,
             word_solo: None,
+            word_split: None,
             generated_flame: None,
             generated_batch: None,
             script_generated: None,
