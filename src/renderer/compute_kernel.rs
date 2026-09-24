@@ -748,6 +748,23 @@ impl FlameRenderer {
         let palette_size = self.buffers.palette_size();
         self.buffers = FlameBuffers::with_palette_size(device, queue, width, height, flame, palette_size);
 
+        // **The plan on screen goes with them.** The fresh buffers hold
+        // the placeholder cylinder table, and the shader -- still compiled
+        // for targeting -- read its word count as zero. `ct_pick`'s search
+        // over zero words never ended: every resize of a targeted view
+        // hung the GPU, and with it the whole system, until the driver
+        // reset and the app died. The plan is still good -- it plots in
+        // world coordinates -- so it is packed again, before the bind
+        // groups below are made against the buffer.
+        if let Some(c) = &self.cylinders {
+            let packed = if c.composable {
+                crate::scene::cylinder::pack(c, flame, &crate::variations::global_registry())
+            } else {
+                crate::scene::cylinder::pack_words(c, flame)
+            };
+            self.buffers.update_cylinders(device, queue, Some(&packed));
+        }
+
         // Re-apply the solid depth region — fresh buffers default to none.
         // Bind groups referencing the histogram are recreated just below.
         let solid_enabled = (self.solid_strength > 0.0 || self.solid_shading.active())

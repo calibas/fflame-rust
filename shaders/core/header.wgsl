@@ -430,10 +430,17 @@ fn ct_count() -> u32 {
 // `pi(a) = p_a / P(A_V)` the estimator wants.
 fn ct_pick(u: f32) -> u32 {
     let n = ct_count();
+    // An empty table -- the placeholder, bound while no plan is -- has
+    // no word to search for. `n - 1` wrapped, the midpoint wrapped with
+    // it, and the search never ended: a GPU hang that took the whole
+    // system down. Word 0 of the placeholder is a word of no symbols.
+    if (n == 0u) {
+        return 0u;
+    }
     var lo = 0u;
     var hi = n - 1u;
     while (lo < hi) {
-        let mid = (lo + hi) / 2u;
+        let mid = lo + (hi - lo) / 2u;
 {{#if CYLINDER_REPLAY}}
         if (u <= cylinders[ct_base(mid)]) {
 {{else}}

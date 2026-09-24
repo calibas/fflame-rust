@@ -212,7 +212,9 @@ fn ct_fwd_diff(o: u32, z: vec2<f32>, d: vec2<f32>, arm: u32) -> vec2<f32> {
 // one on the GPU.
 fn ct_offsets(p: vec2<f32>, b: u32, blk: u32, m: u32, len: u32) -> vec2<f32> {
     let per = 2u * (len - m) + 2u;
-    let chains = u32(cylinders[blk + 1u]);
+    // `backward::MAX_CHAINS` is 4; bounded, like the word's length, so a
+    // mismatched table cannot loop the GPU for long.
+    let chains = min(u32(cylinders[blk + 1u]), 16u);
     var best = blk + 2u;
     var near = 3.0e38;
     for (var j = 0u; j < chains; j = j + 1u) {
