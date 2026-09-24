@@ -519,11 +519,12 @@ impl PlanBench {
         });
         self.slicer = slicer.clone();
         let flame = self.config.flame.clone();
+        let removals = crate::scene::word_tree::parse_removals(&self.config.word_removals);
         let gpu = self.gpu.clone();
         self.task = Some(Box::pin(async move {
             let registry = crate::variations::global_registry().clone();
             let mut g = gpu.borrow_mut();
-            crate::scene::cylinder::Cylinders::plan_sliced(&flame, &registry, view, Some(&mut g), &slicer).await
+            crate::scene::cylinder::Cylinders::plan_sliced(&flame, &registry, view, Some(&mut g), &removals, &slicer).await
         }));
     }
 

@@ -98,25 +98,62 @@ count as efficiency 1.
   - **Frame comparison:** `what_changes_between_frames` prints the
     levels-by-trim table and what trim removes.
 
-## 5. Removals (phase 2)
+## 5. Removals (phase 2, done)
 
-- **Config.** `FractalConfig::word_removals`: a list of patterns, each a
-  run of symbols (transform and arm) matched against a word's
-  last-applied maps. Undoable.
-- **In the walk,** so a removal holds at every zoom:
-  - a child whose word ends with a removed pattern is dropped;
-  - a child whose word is a proper suffix of a removed pattern (its piece
-    contains the removed one) is not kept as it stands but carried
-    deeper, until its words either match or diverge.
-  - A child that must be refined but has no points to carry is kept
-    whole: the removed piece then stays in that sliver, and this is
-    counted in the trace.
+- **Config.** `FractalConfig::word_removals`: a list of patterns, each
+  written as text such as `"t1a1 t1a0"`. Each map is a transform and an
+  arm, listed in the order the chaos game applies them, so the map
+  nearest the view is last (`word_tree::parse_pattern`). A pattern
+  matches a word that ends with it. It is a `ConfigPath` (a `StringList`),
+  so removals are undoable.
+- **In the walk** (`PlanOptions::removals`), so a removal holds at every
+  zoom:
+  - A child whose word ends with a removed pattern is never made, so it
+    is never replayed either. Its points count as accounted for, so the
+    node is not forced whole for want of it.
+  - A child whose word is a proper suffix of a removed pattern (its piece
+    contains the removed one) is never cut. It is carried deeper until
+    its words either match or diverge. The beam carries such nodes
+    rather than forcing them.
+  - Such a word kept whole anyway (at the depth cap, a renewal, no points
+    to refine it from, or out of time) keeps the removed piece. This is
+    counted as `Trace::unrefined`. None were in the gate.
 - **The other planners** (affine, Möbius) get the same filter after the
-  plan, dropping the matching words; one too short to split stays.
-- **Gate.** A removed branch is gone at the view it was removed at and
-  at deeper and shallower ones, with the rest of the picture unchanged
-  (targeted renders against targeted renders, removed pixels against
-  kept).
+  plan (`word_tree::remove`, in `Cylinders::plan_opts` and
+  `plan_sliced`). A word too short to split stays.
+- **In the renderer.** The plan on screen is filtered at once when the
+  removals change, and a replan (the removals are in the plan key)
+  brings the walk's refinement. A standby made with other removals is
+  dropped. While the picture is edited by its words (trim or removals),
+  a plan is drawn even where it would not pay (`speedup <= 1`), because
+  nothing else can draw the edit.
+- **Gate** (`a_removal_holds_at_every_zoom`, CPU, the first animation
+  frame). It removes `t1a0` (the flicker) plus a pattern one map longer
+  than the cut word holding the most of the view (7%), which the walk
+  must refine to take out. At zooms from 5.5 to 1408:
+
+  | zoom | words (plain) | view kept | plain words missing / new |
+  |---|---|---|---|
+  | 5.5 | 1,635 (2,883) | 92.8% | 5 / 148 |
+  | 22 | 5,526 (3,600) | 99.4% | 163 / 2,247 |
+  | 88 | 5,060 (5,319) | 97.0% | 12 / 27 |
+  | 352 | 5,077 (5,077) | 100% | 0 / 0 |
+  | 1408 | 94 (94) | 100% | 0 / 0 |
+
+  - No word ends with a removed pattern at any zoom, and nothing was
+    kept whole.
+  - At 88, the cut word is refined into 27 children, and the removed one
+    is never made.
+  - At 22 the plain plan cuts shallower, so the walk refines through
+    more levels to reach the piece, and the plan grows. This is the cost
+    of removing a deep piece at a shallow view.
+- **Against trim** (`the_zoom_examples_side_by_side`, GPU). `t1a0` alone
+  gives 5,042 words at zoom 88, against trim 0.05's 5,045. The floor and
+  the beam move slightly when a branch is never made.
+  - Rendered, the removal and the trim differ only by noise (8x8
+    block-averaged luminance: mean 0.9, max 5.2). Both take the same 36
+    blocks out of the untrimmed picture.
+  - Zoom2, which has no `t1a0`, is bit-identical with the removal.
 
 ## 6. The Words panel (phase 3)
 

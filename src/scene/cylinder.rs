@@ -744,7 +744,10 @@ impl Cylinders {
         view: View,
         opts: crate::scene::backward::PlanOptions,
     ) -> Result<Self, NoCylinders> {
-        Self::plan_inner(flame, registry, view, ARMS_ENABLED, opts)
+        // The planners other than the inverse walk know nothing of
+        // removals, so their words are filtered here.
+        let removals = opts.removals;
+        Self::plan_inner(flame, registry, view, ARMS_ENABLED, opts).map(|p| crate::scene::word_tree::remove(&p, removals))
     }
 
     /// What refuses any plan before a planner is chosen: no transforms,
@@ -817,12 +820,13 @@ impl Cylinders {
         registry: &crate::variations::VariationRegistry,
         view: View,
         gpu: Option<&mut crate::scene::plan_gpu::GpuPlanner>,
+        removals: &[Vec<u32>],
         slicer: &crate::scene::backward::Slicer,
     ) -> Result<Self, NoCylinders> {
         use crate::scene::backward::{Backward, Blocking, CpuEval, PlanOptions, Trace, TIME_BUDGET};
         slicer.tick().await;
         if !(ARMS_ENABLED && Self::armed(flame)) {
-            return Self::plan(flame, registry, view);
+            return Self::plan(flame, registry, view).map(|p| crate::scene::word_tree::remove(&p, removals));
         }
         Self::plannable(flame, registry)?;
         let b = match Backward::cached_sliced(flame, registry, slicer).await {
@@ -831,7 +835,7 @@ impl Cylinders {
         };
         // Nothing blocks, so the web's plan needs no inline budget; the
         // desktop's safety net applies.
-        let opts = PlanOptions { budget: TIME_BUDGET, ..Default::default() };
+        let opts = PlanOptions { budget: TIME_BUDGET, removals, ..Default::default() };
         let mut tr = Trace::default();
         slicer.tick().await;
         let eval = match gpu {
@@ -3251,6 +3255,21 @@ mod gpu_tests {
                 N * N,
                 100.0 * diff / total.max(1.0)
             );
+            // The flicker removed by its pattern (§5), through the whole
+            // renderer: against the untrimmed picture, and the trimmed.
+            cfg.word_removals = vec!["t1a0".into()];
+            let removed = render(&cfg, N, 200_000_000);
+            cfg.word_removals.clear();
+            let _ = image::save_buffer(format!("output/deep-offsets/{name}-removed.png"), &removed, N, N, image::ColorType::Rgba8);
+            for (what, other) in [("untrimmed", &tgt), ("trimmed", &trimmed)] {
+                let changed = other.chunks(4).zip(removed.chunks(4)).filter(|(a, b)| a != b).count();
+                let diff: f64 = other.chunks(4).zip(removed.chunks(4)).map(|(a, b)| (lum(a) - lum(b)).abs()).sum();
+                println!(
+                    "  {name}: removing t1a0 changes {changed} of {} pixels of the {what} picture, {:.2}% of the brightness",
+                    N * N,
+                    100.0 * diff / total.max(1.0)
+                );
+            }
         }
     }
 

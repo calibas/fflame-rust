@@ -813,6 +813,7 @@ history:
     use_tone_curve: "Use Tone Curve"
     cylinder_trim: "Trim"
     cylinder_trim_levels: "Trim Depth"
+    word_removals: "Removed Words"
 
     # Levels (density-to-opacity mapping)
     levels_low: "Levels Low"

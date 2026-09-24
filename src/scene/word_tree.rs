@@ -103,6 +103,64 @@ fn descend(plan: &Cylinders, idx: &mut [usize], depth: usize, trim: f64, levels:
     }
 }
 
+/// **Removals** (§5): pieces of the picture a user took out, each a
+/// pattern of maps matched against a word's last-applied maps. Written
+/// in a config as text -- `"t1a1 t1a0"`, transform and arm, in the order
+/// the chaos game applies them, so the map nearest the view is last --
+/// and parsed here into the walk's symbols (`transform | arm << 8`).
+pub fn parse_pattern(text: &str) -> Option<Vec<u32>> {
+    let pattern: Option<Vec<u32>> = text
+        .split_whitespace()
+        .map(|m| {
+            let m = m.strip_prefix('t')?;
+            let (t, arm) = match m.split_once('a') {
+                Some((t, a)) => (t.parse::<u32>().ok()?, a.parse::<u32>().ok()?),
+                None => (m.parse::<u32>().ok()?, 0),
+            };
+            (t < 256 && arm < (1 << 24)).then_some(t | arm << 8)
+        })
+        .collect();
+    pattern.filter(|p| !p.is_empty())
+}
+
+/// A pattern's text, as [`parse_pattern`] reads it.
+pub fn pattern_text(pattern: &[u32]) -> String {
+    pattern.iter().map(|&s| format!("t{}a{}", s & 0xff, s >> 8)).collect::<Vec<_>>().join(" ")
+}
+
+/// A config's removals, parsed; a pattern that does not parse is left
+/// out.
+pub fn parse_removals(list: &[String]) -> Vec<Vec<u32>> {
+    list.iter().filter_map(|t| parse_pattern(t)).collect()
+}
+
+/// Whether `word`'s piece was removed: it ends with a removed pattern.
+pub fn removed(removals: &[Vec<u32>], word: &[u32]) -> bool {
+    removals.iter().any(|p| word.ends_with(p))
+}
+
+/// Whether `word`'s piece HOLDS a removed one: it is a proper suffix of
+/// a removed pattern, so some of the words it would be refined into are
+/// removed and some not. The inverse walk refines such a word rather
+/// than keeping it whole.
+pub fn holds_removed(removals: &[Vec<u32>], word: &[u32]) -> bool {
+    removals.iter().any(|p| p.len() > word.len() && p.ends_with(word))
+}
+
+/// The plan without the words whose piece was removed. The inverse walk
+/// never makes them; this is for the planners that do not know about
+/// removals, and for a plan made before a removal, until its replan.
+pub fn remove(plan: &Cylinders, removals: &[Vec<u32>]) -> Cylinders {
+    if removals.is_empty() {
+        return plan.clone();
+    }
+    let keep: Vec<usize> = (0..plan.words.len()).filter(|&i| !removed(removals, &plan.words[i].word)).collect();
+    if keep.len() == plan.words.len() {
+        return plan.clone();
+    }
+    subset(plan, &keep)
+}
+
 /// The plan with only the words at `keep` (plan order), its mass,
 /// efficiency and depth recomputed and its references kept beside them.
 pub fn subset(plan: &Cylinders, keep: &[usize]) -> Cylinders {
@@ -151,6 +209,38 @@ mod tests {
             refs: Vec::new(),
             offset_rows: Vec::new(),
         }
+    }
+
+    /// A pattern reads back as it was written, arm 0 may be left out,
+    /// and anything else is refused.
+    #[test]
+    fn patterns_round_trip() {
+        let p = parse_pattern("t1a1 t1a0").expect("parses");
+        assert_eq!(p, vec![1 | 1 << 8, 1]);
+        assert_eq!(pattern_text(&p), "t1a1 t1a0");
+        assert_eq!(parse_pattern("t3"), Some(vec![3]));
+        for bad in ["", "  ", "x1", "t", "t1a", "ta0", "t300", "t1 q2"] {
+            assert_eq!(parse_pattern(bad), None, "{bad:?}");
+        }
+    }
+
+    /// A removal takes the words ending with it; a shorter word it ends
+    /// with holds it, and is not taken.
+    #[test]
+    fn removals_take_words_ending_with_them() {
+        let r = vec![vec![5, 1]];
+        assert!(removed(&r, &[5, 1]));
+        assert!(removed(&r, &[9, 5, 1]));
+        assert!(!removed(&r, &[1]));
+        assert!(!removed(&r, &[6, 1]));
+        assert!(holds_removed(&r, &[1]));
+        assert!(holds_removed(&r, &[]));
+        assert!(!holds_removed(&r, &[5, 1]));
+        assert!(!holds_removed(&r, &[2]));
+        let p = plan(vec![word(&[5, 1], 0.1, 1.0), word(&[9, 5, 1], 0.1, 1.0), word(&[6, 1], 0.2, 1.0), word(&[1], 0.3, 1.0)]);
+        let q = remove(&p, &r);
+        assert_eq!(q.words.len(), 2);
+        assert!((q.mass - 0.5).abs() < 1e-12);
     }
 
     /// Unmeasured words (efficiency 0) go with their branch; a branch of
