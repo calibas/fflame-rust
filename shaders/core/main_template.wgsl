@@ -528,12 +528,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // a respawn -- stays with its group.
                 let ct_i = ct_pick(f32(pcg_hash(pcg_hash((thread_id / 32u) ^ params.seed ^ 0x27D4EB2Fu) + i)) / 4294967296.0);
                 let ct_b = ct_base(ct_i);
-                let ct_len = u32(cylinders[ct_b + 3u]);
+                // Bounded by the table's own stride, so a table that is
+                // not what the shader was built for loops a word's length
+                // at most -- a loop that ran on a garbage count hangs the
+                // GPU, and the system with it.
+                let ct_len = min(u32(cylinders[ct_b + 3u]), max(ct_stride(), 4u) - 4u);
 {{#if CYLINDER_OFFSETS}}
                 // Absolute f32 only as far as it resolves the sample;
                 // the rest in offsets (`ct_offsets`).
                 let ct_blk = ct_block(ct_i);
-                let ct_m = select(ct_len, u32(cylinders[ct_blk]), ct_blk != 0u);
+                let ct_m = min(select(ct_len, u32(cylinders[ct_blk]), ct_blk != 0u), ct_len);
 {{else}}
                 let ct_m = ct_len;
 {{/if}}

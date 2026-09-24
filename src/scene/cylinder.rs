@@ -2918,6 +2918,63 @@ mod gpu_tests {
         );
     }
 
+    /// **A resize keeps the plan drawing.** `resize` rebuilds every
+    /// buffer, and the cylinder table came back as the placeholder while
+    /// the shader stayed compiled for targeting: its word count read
+    /// zero, `ct_pick` searched forever, and a resize of a targeted view
+    /// hung the GPU -- the whole system -- until the driver reset. The
+    /// frames between the resize and the next plan draw with the plan
+    /// on screen, so they must still land where it sends them: frame
+    /// coverage after the resize, with no replan, as before it.
+    #[test]
+    #[ignore = "needs a GPU; reads output/flame-zoom"]
+    fn a_resize_keeps_the_plan_drawing() {
+        use crate::renderer::TargetingState as TS;
+        let Ok(text) = std::fs::read_to_string("output/flame-zoom/grand-julian-zoom1.fflame") else { return };
+        let (device, queue) = device();
+        let mut cfg: FractalConfig = serde_json::from_str(&text).expect("a config");
+        cfg.cylinder_targeting = true;
+        cfg.auto_exposure = true;
+        let mut r = crate::renderer::FlameRenderer::with_palette_size(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            180,
+            180,
+            &cfg.flame,
+            cfg.palette_size,
+        );
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("resize") });
+        r.load_config(&device, &mut enc, &queue, &cfg, &cfg.palette, 1, 0);
+        queue.submit(Some(enc.finish()));
+        let _ = r.sync_cylinders(&device, &queue, &cfg);
+        assert!(matches!(r.targeting_state(), TS::Active { .. }), "no plan: {:?}", r.targeting_state());
+        let run = |r: &mut crate::renderer::FlameRenderer| -> f32 {
+            for _ in 0..8 {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
+                r.compute_pass(
+                    &mut enc, &queue, &device, 64, 64, 0, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, 0.0, 0.0, 0.0, 0.0,
+                    0.0, 0.0, 0.0, cfg.speed_factor, false, false,
+                );
+                queue.submit(Some(enc.finish()));
+                let _ = device.poll(wgpu::PollType::wait_indefinitely());
+            }
+            r.apply_exact_density_fraction(&device, &queue);
+            r.frame_coverage_fraction()
+        };
+        let before = run(&mut r);
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("resize") });
+        r.resize(
+            &device, &mut enc, &queue, 200, 150, &cfg.flame, 64, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, cfg.speed_factor,
+        );
+        queue.submit(Some(enc.finish()));
+        let after = run(&mut r);
+        println!("  frame coverage: {before:.3} before the resize, {after:.3} after");
+        assert!(before > 0.3, "the plan did not draw before the resize: coverage {before:.3}");
+        assert!(after > 0.5 * before, "after a resize the plan no longer draws: coverage {after:.3} against {before:.3}");
+    }
+
     /// **The Words panel sees what is drawn** (docs/projects/word-editing.md
     /// §6), through the renderer the app holds: the tree of the plan on
     /// screen, a solo that draws one branch and restarts the picture as it
