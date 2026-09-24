@@ -308,8 +308,11 @@ Words panel removes branches by hand, replacing the Path Editor.
   and the other frame's render is bit-identical. Unmeasured words
   (efficiency 0, such as the renewal glow) go with their branch and are
   never ranked as slivers.
-- Phase 2 (removals in the walk) and phase 3 (the Words panel, the Path
-  Editor removed): next.
+- **Phase 2, removals: done.** `FractalConfig::word_removals`. The walk
+  never makes a word ending with a removed pattern, and refines a word
+  that holds one. A removal holds from zoom 5.5 to 1408 on the Grand
+  Julian frame, with nothing kept whole.
+- Phase 3 (the Words panel, the Path Editor removed): next.
 
 ## Other
 

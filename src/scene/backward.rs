@@ -246,6 +246,12 @@ pub struct PlanOptions<'a> {
     /// now -- the web is phase 3 of `gpu-cylinder-planning.md`.
     #[cfg(not(target_arch = "wasm32"))]
     pub gpu: Option<&'a Mutex<crate::scene::plan_gpu::GpuPlanner>>,
+    /// Pieces of the picture removed (`docs/projects/word-editing.md`
+    /// §5): patterns of symbols matched against a word's last-applied
+    /// maps (`scene::word_tree::removed`). The walk makes no word ending
+    /// with one, and refines a word that holds one rather than keeping it
+    /// whole.
+    pub removals: &'a [Vec<u32>],
 }
 
 /// The budget where a plan must block: the web, which has no threads and
@@ -263,6 +269,7 @@ impl Default for PlanOptions<'_> {
             cancel: None,
             #[cfg(not(target_arch = "wasm32"))]
             gpu: None,
+            removals: &[],
         }
     }
 }
@@ -539,6 +546,12 @@ pub struct Trace {
     /// Nodes forced as they stood: incomplete children, off the
     /// beam, or out of time.
     pub forced: usize,
+    /// Words kept whole although they hold a removed piece (see
+    /// `PlanOptions::removals`): at the depth cap, a renewal, or with no
+    /// points to refine them from. The removed piece stays in these.
+    pub unrefined: usize,
+    /// Children never made because their piece was removed.
+    pub removed: usize,
     /// Where the time went, for profiling: seeding a cloud region from
     /// the grid, gathering candidates, checking them exactly, and
     /// replaying words for their efficiency. Plus how many word
@@ -682,6 +695,9 @@ struct Child {
     prob: f64,
     /// The walk stops here: kept if any of it lands.
     last: bool,
+    /// Its piece holds a removed one (`PlanOptions::removals`): carried
+    /// on, never cut, so the walk can separate the two.
+    refine: bool,
     /// Candidates from the index, or the pulled-back cloud.
     pts: Pts,
     /// The node's points this symbol produced: in the child's region by
@@ -794,6 +810,8 @@ impl Trace {
         self.empty += o.empty;
         self.nocand += o.nocand;
         self.forced += o.forced;
+        self.unrefined += o.unrefined;
+        self.removed += o.removed;
         self.t_seed += o.t_seed;
         self.t_gather += o.t_gather;
         self.t_verify += o.t_verify;
@@ -1783,7 +1801,7 @@ impl Backward {
     /// A node's children: one per symbol its region's points came
     /// through, each with its candidates. Reads only `self` and the node,
     /// so the nodes of a level find theirs in parallel.
-    fn children_of(&self, o: &mut Open, depth: usize, floor_mass: f64, gather_now: bool) {
+    fn children_of(&self, o: &mut Open, depth: usize, floor_mass: f64, gather_now: bool, removals: &[Vec<u32>]) {
         let tr = &mut o.trace;
         let node = &o.node;
         let mut seen: Vec<Cell> = Vec::new();
@@ -1884,23 +1902,31 @@ impl Backward {
                 }
             }
         }
+        let mut removed = 0usize;
         let children = found
             .into_iter()
-            .map(|(ai, pts)| {
+            .filter_map(|(ai, pts)| {
                 let a = &self.alphabet[ai];
                 let prob = node.prob * a.prob;
                 let mut word = Vec::with_capacity(node.word.len() + 1);
                 word.push(a.sym);
                 word.extend_from_slice(&node.word);
+                // A removed piece is never made (`PlanOptions::removals`).
+                if crate::scene::word_tree::removed(removals, &word) {
+                    removed += 1;
+                    return None;
+                }
                 let n_cands = match &pts {
                     Pts::Index(c) => c.len(),
                     Pts::Cloud(_) => 0,
                 };
-                Child {
+                let refine = crate::scene::word_tree::holds_removed(removals, &word);
+                Some(Child {
                     ai,
                     word,
                     prob,
                     last: depth == MAX_DEPTH || prob < MEASURE_FLOOR * floor_mass,
+                    refine,
                     pts,
                     orbit_hits: std::mem::take(&mut from_orbit[ai]),
                     hit: 0,
@@ -1911,9 +1937,10 @@ impl Backward {
                     n_cands,
                     spec: None,
                     fate: Fate::Undecided,
-                }
+                })
             })
             .collect();
+        o.trace.removed += removed;
         o.children = children;
         o.seen = seen;
     }
@@ -1940,6 +1967,7 @@ impl Backward {
         tr: &mut Trace,
         cancelled: &dyn Fn() -> bool,
         slicer: &Slicer,
+        removals: &[Vec<u32>],
     ) -> Option<Vec<Expanded>> {
         use web_time::Instant;
         let watched = |t: &mut Trace, word: &[u32], what: &str, detail: &dyn Fn() -> String| {
@@ -2011,7 +2039,7 @@ impl Backward {
 
         // **2. Children.** The gathers are the cost; nodes in parallel.
         let t = Instant::now();
-        each_sliced(&mut opens, |o| self.children_of(o, depth, floor_mass, !speculate), slicer).await;
+        each_sliced(&mut opens, |o| self.children_of(o, depth, floor_mass, !speculate, removals), slicer).await;
         tr.t_gather += t.elapsed();
         if cancelled() {
             return None;
@@ -2162,6 +2190,9 @@ impl Backward {
                 // time in ten million.
                 if let Some(ren) = self.alphabet[c.ai].renewal {
                     c.fate = if self.reaches(&c.word[1..], view, ren) { Fate::Kept(eff) } else { Fate::Dropped };
+                    if c.refine && matches!(c.fate, Fate::Kept(_)) {
+                        o.trace.unrefined += 1;
+                    }
                     watched(&mut o.trace, &c.word, "RENEWAL", &|| format!("eff {eff:.2e} prob {prob:.2e} kept {}", matches!(c.fate, Fate::Kept(_))));
                     continue;
                 }
@@ -2181,11 +2212,17 @@ impl Backward {
                     watched(&mut o.trace, &c.word, "ZERO", &|| format!("prob {prob:.2e}"));
                     o.trace.floor += 1;
                 }
-                if eff >= CUT_EFFICIENCY || c.last {
+                // One that holds a removed piece is never cut: it is
+                // refined, down to words that either are the piece or
+                // are not.
+                if (eff >= CUT_EFFICIENCY && !c.refine) || c.last {
                     // **Kept: it needs no points.** Checking a kept
                     // child's candidates exactly was 65% of a plan's
                     // time, and ~90% of the children checked were kept.
                     watched(&mut o.trace, &c.word, "CUT", &|| format!("eff {eff:.2} prob {prob:.2e}"));
+                    if c.refine {
+                        o.trace.unrefined += 1;
+                    }
                     c.fate = Fate::Kept(eff);
                 } else if matches!(c.pts, Pts::Cloud(_)) {
                     c.fate = Fate::Carried;
@@ -2295,7 +2332,7 @@ impl Backward {
         // **7. Each node decided**, its children in their order.
         let mut out = Vec::with_capacity(opens.len());
         for o in opens {
-            out.push(self.close(o, depth, view, watch, floor_mass));
+            out.push(self.close(o, depth, view, watch, floor_mass, removals));
             slicer.tick().await;
         }
         Some(out)
@@ -2311,7 +2348,7 @@ impl Backward {
     /// kernel's table holds the symbols, the probability and the colour
     /// fold), and computing them needed positions an evaluator does not
     /// return.
-    fn close(&self, o: Open, depth: usize, view: View, watch: Option<&[u32]>, floor_mass: f64) -> Expanded {
+    fn close(&self, o: Open, depth: usize, view: View, watch: Option<&[u32]>, floor_mass: f64, removals: &[Vec<u32>]) -> Expanded {
         let Open { node, children, mut trace, .. } = o;
         let watched = |t: &mut Trace, word: &[u32], what: &str, detail: &dyn Fn() -> String| {
             if let Some(line) = watch_line(watch, word, depth, what, detail) {
@@ -2331,10 +2368,23 @@ impl Backward {
         // Which children survived -- carried or kept -- by alphabet
         // index, for the point count below.
         let mut survived = vec![false; self.alphabet.len()];
+        // A removed child's points are accounted for: the piece is gone
+        // on purpose, and the node is not forced whole for want of it.
+        if !removals.is_empty() {
+            let mut word = Vec::with_capacity(node.word.len() + 1);
+            for (ai, a) in self.alphabet.iter().enumerate() {
+                word.clear();
+                word.push(a.sym);
+                word.extend_from_slice(&node.word);
+                if crate::scene::word_tree::removed(removals, &word) {
+                    survived[ai] = true;
+                }
+            }
+        }
         for c in children {
             let eff = c.eff();
             let n_cands = c.n_cands;
-            let Child { ai, word, prob, pts, orbit_hits, mut replay_hits, mut hits, fate, .. } = c;
+            let Child { ai, word, prob, pts, orbit_hits, mut replay_hits, mut hits, fate, refine, .. } = c;
             let pts = match fate {
                 Fate::Dropped => continue,
                 Fate::Kept(eff) => {
@@ -2385,6 +2435,9 @@ impl Backward {
                             // multiplied it into plans of 200k words at
                             // efficiency 0.003.
                             watched(&mut trace, &word, "FORCEDCH", &|| format!("{n_cands} candidates, none land; eff {eff:.2}"));
+                            if refine {
+                                trace.unrefined += 1;
+                            }
                             survived[ai] = true;
                             let seeds = self.seeds_from(&[&replay_hits], Some(&pts));
                             node_kept.push((disc(word, prob, seeds), eff));
@@ -2431,6 +2484,9 @@ impl Backward {
         let mut out = Expanded::default();
         if !node.word.is_empty() && node.eff > 0.0 && covered.is_some_and(|c| c < COMPLETE_ENOUGH) {
             watched(&mut trace, &node.word, "FORCED", &|| format!("children cover {:.3} of its points", covered.unwrap_or(0.0)));
+            if crate::scene::word_tree::holds_removed(removals, &node.word) {
+                trace.unrefined += 1;
+            }
             let seeds = self.seeds_from(&[], Some(&node.pts));
             out.kept.push((disc(node.word, node.prob, seeds), node.eff));
             trace.forced += 1;
@@ -2562,6 +2618,9 @@ impl Backward {
                     if n.word.is_empty() {
                         continue;
                     }
+                    if crate::scene::word_tree::holds_removed(opts.removals, &n.word) {
+                        tr.unrefined += 1;
+                    }
                     let seeds = self.seeds_from(&[], Some(&n.pts));
                     kept.push((Cylinder { word: n.word, prob: n.prob, centre: view.centre, radius: view.radius, seeds, eff: 0.0 }, n.eff));
                     tr.forced += 1;
@@ -2590,6 +2649,7 @@ impl Backward {
                     tr,
                     &cancelled,
                     slicer,
+                    opts.removals,
                 )
                 .await
             else {
@@ -2641,8 +2701,14 @@ impl Backward {
                 // depth-1 words holding a third of the attractor.
                 let mut unmeasured: Vec<Node> = Vec::new();
                 let mut rest: Vec<Node> = Vec::new();
+                // A node holding a removed piece is carried too: forced
+                // here, the piece would be back.
                 for n in next.drain(keep..) {
-                    if n.eff > 0.0 { rest.push(n) } else { unmeasured.push(n) }
+                    if n.eff > 0.0 && !crate::scene::word_tree::holds_removed(opts.removals, &n.word) {
+                        rest.push(n)
+                    } else {
+                        unmeasured.push(n)
+                    }
                 }
                 next.extend(unmeasured);
                 for n in rest {
@@ -4059,7 +4125,7 @@ mod tests {
             let mut polls: Vec<f64> = Vec::new();
             let mut compiled = 0.0f64;
             let got = {
-                let fut = crate::scene::cylinder::Cylinders::plan_sliced(&gj.flame, reg, view, Some(&mut web_planner), &slicer);
+                let fut = crate::scene::cylinder::Cylinders::plan_sliced(&gj.flame, reg, view, Some(&mut web_planner), &[], &slicer);
                 let mut fut = std::pin::pin!(fut);
                 let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
                 loop {
@@ -4695,5 +4761,94 @@ mod tests {
             }
         }
     }
-}
 
+    /// **A removal holds at every zoom** (`docs/projects/word-editing.md`
+    /// §5's gate), on the first animation frame. Two removals: the
+    /// flicker's (`t1a0`), and one a map longer than a word the plain plan
+    /// cuts whole, which the walk must refine to take out. At the frame's
+    /// view and at shallower and deeper ones: no word ends with a removed
+    /// pattern; and, against the plan without removals, how much went,
+    /// which of its other words are missing, which are new, and how many
+    /// pieces were kept whole holding a removed one.
+    #[test]
+    #[ignore = "reads output/flame-zoom"]
+    fn a_removal_holds_at_every_zoom() {
+        use crate::scene::word_tree::{parse_pattern, pattern_text, removed};
+        use std::collections::HashSet;
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let Ok(text) = std::fs::read_to_string("output/flame-zoom/grand-julian-zoom1.fflame") else { return };
+        let cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
+        let b = Backward::read(&cfg.flame, reg).expect("walked");
+        let base = View::of(cfg.zoom as f64, [cfg.pan_x, cfg.pan_y], 360, 360);
+        let plain = b.plan_eval(base, PlanOptions::default(), &mut CpuEval).expect("a plan");
+        // The cut word holding the most of the view, and the symbol most
+        // likely to be applied before it.
+        let cut = plain
+            .words
+            .iter()
+            .filter(|w| w.eff >= CUT_EFFICIENCY && !b.alphabet.iter().any(|a| a.sym == w.word[0] && a.renewal.is_some()))
+            .max_by(|x, y| (x.prob * x.eff).total_cmp(&(y.prob * y.eff)))
+            .expect("a cut word");
+        let before = b.alphabet.iter().filter(|a| a.renewal.is_none()).max_by(|x, y| x.prob.total_cmp(&y.prob)).expect("a symbol").sym;
+        let mut longer = vec![before];
+        longer.extend_from_slice(&cut.word);
+        let removals = vec![parse_pattern("t1a0").expect("parses"), longer.clone()];
+        println!(
+            "  removing t1a0, and {} (the cut word {} at {:.3}% of the view, one map longer)",
+            pattern_text(&longer),
+            pattern_text(&cut.word),
+            100.0 * cut.prob * cut.eff / plain.words.iter().map(|w| w.prob * w.eff).sum::<f64>()
+        );
+        // The flicker alone, at the frame's view: what trim 0.05 takes
+        // there, so the two should agree.
+        let flicker = vec![parse_pattern("t1a0").expect("parses")];
+        let alone = b.plan_eval(base, PlanOptions { removals: &flicker, ..Default::default() }, &mut CpuEval).expect("a plan");
+        let trimmed = crate::scene::word_tree::trim_to(&plain, 0.05, 2);
+        let same = alone.words.len() == trimmed.words.len() && alone.words.iter().zip(&trimmed.words).all(|(x, y)| x.word == y.word && x.prob == y.prob);
+        println!(
+            "  t1a0 alone at zoom {}: {} words, mass {:.6e}; trim 0.05/2: {} words, mass {:.6e}; the same words: {same}",
+            cfg.zoom,
+            alone.words.len(),
+            alone.mass,
+            trimmed.words.len(),
+            trimmed.mass
+        );
+        println!("     zoom   words  plain words  view removed  view kept  plain words missing / new  unrefined  children not made");
+        for f in [1.0 / 16.0, 0.25, 1.0, 4.0, 16.0] {
+            let view = View::of(cfg.zoom as f64 * f, [cfg.pan_x, cfg.pan_y], 360, 360);
+            let plain = b.plan_eval(view, PlanOptions::default(), &mut CpuEval).expect("a plan");
+            let mut tr = Trace::default();
+            let cut_off = b
+                .plan_with_eval(view, &mut tr, PlanOptions { removals: &removals, ..Default::default() }, &mut CpuEval)
+                .expect("a plan");
+            for w in &cut_off.words {
+                assert!(!removed(&removals, &w.word), "{} survived at zoom {}", pattern_text(&w.word), cfg.zoom as f64 * f);
+            }
+            let share = |p: &Cylinders| p.words.iter().map(|w| w.prob * w.eff).sum::<f64>();
+            let went: f64 = plain.words.iter().filter(|w| removed(&removals, &w.word)).map(|w| w.prob * w.eff).sum();
+            let have: HashSet<&Vec<u32>> = cut_off.words.iter().map(|w| &w.word).collect();
+            let had: HashSet<&Vec<u32>> = plain.words.iter().map(|w| &w.word).collect();
+            let missing = plain.words.iter().filter(|w| !removed(&removals, &w.word) && !have.contains(&w.word)).count();
+            let new = cut_off.words.iter().filter(|w| !had.contains(&w.word)).count();
+            println!(
+                "  {:>7.1}  {:>6}  {:>11}  {:>11.3}%  {:>8.3}%  {:>12} / {:<10}  {:>9}  {:>6}",
+                cfg.zoom as f64 * f,
+                cut_off.words.len(),
+                plain.words.len(),
+                100.0 * went / share(&plain).max(1e-300),
+                100.0 * share(&cut_off) / share(&plain).max(1e-300),
+                missing,
+                new,
+                tr.unrefined,
+                tr.removed
+            );
+            if f == 1.0 {
+                assert!(
+                    !have.contains(&cut.word) || tr.unrefined > 0,
+                    "the cut word holding a removed piece was kept whole and not counted"
+                );
+            }
+        }
+    }
+}

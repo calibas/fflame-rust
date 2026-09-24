@@ -423,6 +423,15 @@ pub struct FractalConfig {
     #[serde(default = "default_trim_levels", skip_serializing_if = "is_default_trim_levels")]
     pub cylinder_trim_levels: u32,
 
+    /// **Removals** (docs/projects/word-editing.md §5): pieces of the
+    /// picture taken out by their words, each a pattern of maps matched
+    /// against a word's last-applied maps -- `"t1a1 t1a0"`, transform and
+    /// arm in the order the chaos game applies them, the map nearest the
+    /// view last (`scene::word_tree::parse_pattern`). Drawn only where a
+    /// plan is: with cylinder targeting on, in 2D.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub word_removals: Vec<String>,
+
     /// Auto exposure: normalise the tone map by the density of the
     /// pixels actually IN FRAME rather than by total iterations
     /// (`docs/projects/flame-deep-zoom.md`).
@@ -991,6 +1000,7 @@ impl Default for FractalConfig {
             cylinder_targeting: false,
             cylinder_trim: 0.0,
             cylinder_trim_levels: default_trim_levels(),
+            word_removals: Vec::new(),
             auto_exposure: false,
         }
     }

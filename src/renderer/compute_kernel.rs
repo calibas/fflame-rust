@@ -486,6 +486,9 @@ pub struct FlameRenderer {
     cylinders_full: Option<crate::scene::cylinder::Cylinders>,
     /// The trim and its depth `cylinders` was cut with.
     applied_trim: (f32, u32),
+    /// The removals `cylinders` was filtered with
+    /// (`FractalConfig::word_removals`).
+    applied_removals: Vec<String>,
     /// Fingerprint of everything the enumeration depends on, so the
     /// per-frame sync can skip the work when nothing moved.
     cylinder_key: Option<u64>,
@@ -690,6 +693,7 @@ impl FlameRenderer {
             cylinder_offsets: false,
             cylinders_full: None,
             applied_trim: (0.0, 0),
+            applied_removals: Vec::new(),
             cylinder_key: None,
             background_planning: false,
             plan_job: None,
@@ -3651,6 +3655,7 @@ impl FlameRenderer {
         self.width.hash(&mut h);
         self.height.hash(&mut h);
         Self::flame_key(config).hash(&mut h);
+        config.word_removals.hash(&mut h);
         h.finish()
     }
 
@@ -3736,8 +3741,24 @@ impl FlameRenderer {
         let key = self.enumeration_key(config);
         self.write_cylinder_shift(queue, config);
 
-        // The trim moved: cut the plan on screen again, no replanning.
-        if self.cylinders_full.is_some() && (config.cylinder_trim, config.cylinder_trim_levels) != self.applied_trim {
+        // The removals changed: a standby made with the old ones is no
+        // use, and one being made is stopped. The replan the key asks
+        // for below refines what the filter here cannot.
+        let removals_moved = config.word_removals != self.applied_removals;
+        if removals_moved {
+            self.standby = None;
+            if self.plan_job.as_ref().is_some_and(|j| j.kind == PlanKind::Standby) {
+                self.cancel_plan_job();
+            }
+            if self.cylinders_full.is_none() {
+                self.applied_removals.clone_from(&config.word_removals);
+            }
+        }
+        // The trim moved, or the removals: cut the plan on screen again
+        // at once, without waiting on a plan.
+        if self.cylinders_full.is_some()
+            && ((config.cylinder_trim, config.cylinder_trim_levels) != self.applied_trim || removals_moved)
+        {
             let before = self.cylinder_arm();
             let full = self.cylinders_full.take();
             let buffers_changed = self.apply_plan(device, queue, config, full.map(Ok));
@@ -3868,6 +3889,7 @@ impl FlameRenderer {
         // Inline plans (export, the command line, tests) ask the GPU too.
         #[cfg(not(target_arch = "wasm32"))]
         let gpu = if config.cylinder_targeting && two_d { self.gpu_planner(device, queue) } else { None };
+        let removals = crate::scene::word_tree::parse_removals(&config.word_removals);
         let outcome = (config.cylinder_targeting && two_d).then(|| {
             let registry = crate::variations::global_registry();
             crate::scene::cylinder::Cylinders::plan_opts(
@@ -3877,6 +3899,7 @@ impl FlameRenderer {
                 crate::scene::backward::PlanOptions {
                     #[cfg(not(target_arch = "wasm32"))]
                     gpu: gpu.as_deref(),
+                    removals: &removals,
                     ..Default::default()
                 },
             )
@@ -3884,6 +3907,12 @@ impl FlameRenderer {
         let changed = self.apply_plan(device, queue, config, outcome);
         self.applied_view = self.cylinders.is_some().then(|| self.cylinder_view(config));
         changed
+    }
+
+    /// Whether the picture is being edited by its words -- trimmed or
+    /// with pieces removed -- which only a plan can draw.
+    fn edits_words(config: &FractalConfig) -> bool {
+        config.cylinder_trim > 0.0 || !config.word_removals.is_empty()
     }
 
     /// The view a plan is made for.
@@ -3913,7 +3942,9 @@ impl FlameRenderer {
                     self.targeting_state = TargetingState::Declined(why);
                     None
                 }
-                Ok(c) if c.speedup() <= 1.0 => {
+                // Unless the picture is being edited by its words, which
+                // needs the plan to draw at all.
+                Ok(c) if c.speedup() <= 1.0 && !Self::edits_words(config) => {
                     self.targeting_state = TargetingState::NotWorthIt { speedup: c.speedup() };
                     None
                 }
@@ -3941,10 +3972,17 @@ impl FlameRenderer {
         // **Trim** (docs/projects/word-editing.md §4): the plan as made
         // is kept, and what is drawn is cut from it -- so the slider
         // retrims without replanning. The panel reports what is drawn.
+        //
+        // **Removals** (§5) first, so trim judges what is left: the
+        // inverse walk has made none of them if the plan was made with
+        // these removals, and for a plan made before a removal this
+        // takes the piece out until the replan lands.
         let trim = (config.cylinder_trim, config.cylinder_trim_levels);
+        let removals = crate::scene::word_tree::parse_removals(&config.word_removals);
         let full = planned;
         let planned = full.as_ref().map(|c| {
-            crate::scene::word_tree::trim_to(c, trim.0 as f64, trim.1 as usize)
+            let c = crate::scene::word_tree::remove(c, &removals);
+            crate::scene::word_tree::trim_to(&c, trim.0 as f64, trim.1 as usize)
         });
         if let (TargetingState::Active { .. }, Some(c)) = (&self.targeting_state, &planned) {
             self.targeting_state = TargetingState::Active {
@@ -3957,6 +3995,7 @@ impl FlameRenderer {
         }
         self.cylinders_full = full;
         self.applied_trim = trim;
+        self.applied_removals.clone_from(&config.word_removals);
         // Two packings, because there are two kernels: a flame
         // whose maps are all affine folds each word into one matrix,
         // and anything else is handed the symbols to walk.
@@ -4177,6 +4216,7 @@ impl FlameRenderer {
         gpu: Option<SharedPlanner>,
     ) -> PlanJob {
         let flame = config.flame.clone();
+        let removals = crate::scene::word_tree::parse_removals(&config.word_removals);
         let slicer = std::rc::Rc::new(crate::scene::backward::Slicer::every(WEB_PLAN_SLICE));
         let s = slicer.clone();
         let task = Box::pin(async move {
@@ -4191,9 +4231,9 @@ impl FlameRenderer {
                     let mut g = g.borrow_mut();
                     #[cfg(not(target_arch = "wasm32"))]
                     let mut g = g.lock().unwrap_or_else(|e| e.into_inner());
-                    crate::scene::cylinder::Cylinders::plan_sliced(&flame, &registry, view, Some(&mut g), &s).await
+                    crate::scene::cylinder::Cylinders::plan_sliced(&flame, &registry, view, Some(&mut g), &removals, &s).await
                 }
-                None => crate::scene::cylinder::Cylinders::plan_sliced(&flame, &registry, view, None, &s).await,
+                None => crate::scene::cylinder::Cylinders::plan_sliced(&flame, &registry, view, None, &removals, &s).await,
             }
         });
         PlanJob {
@@ -4236,6 +4276,7 @@ impl FlameRenderer {
         use std::sync::atomic::AtomicBool;
         use std::sync::Arc;
         let flame = config.flame.clone();
+        let removals = crate::scene::word_tree::parse_removals(&config.word_removals);
         let cancel = Arc::new(AtomicBool::new(false));
         let flag = cancel.clone();
         let (tx, rx) = std::sync::mpsc::channel();
@@ -4249,6 +4290,7 @@ impl FlameRenderer {
                     budget: crate::scene::backward::TIME_BUDGET,
                     cancel: Some(&flag),
                     gpu: gpu.as_deref(),
+                    removals: &removals,
                 },
             );
             // A cancelled job's receiver is gone; nothing to tell.

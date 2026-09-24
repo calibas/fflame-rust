@@ -69,6 +69,9 @@ pub enum ConfigPath {
     CylinderTrim,
     /// How many levels of the word tree, from the view, trim reaches.
     CylinderTrimLevels,
+    /// The pieces of the picture removed by their words
+    /// (docs/projects/word-editing.md §5): a list of patterns.
+    WordRemovals,
     LevelsLow,
     LevelsHigh,
     LevelsGamma,
@@ -747,6 +750,7 @@ impl Display for ConfigPath {
             ConfigPath::CylinderTargeting => write!(f, "Cylinder Targeting"),
             ConfigPath::CylinderTrim => write!(f, "Cylinder Trim"),
             ConfigPath::CylinderTrimLevels => write!(f, "Cylinder Trim Levels"),
+            ConfigPath::WordRemovals => write!(f, "Word Removals"),
             ConfigPath::LevelsLow => write!(f, "Levels Low"),
             ConfigPath::LevelsHigh => write!(f, "Levels High"),
             ConfigPath::LevelsGamma => write!(f, "Levels Midtones"),
@@ -1249,6 +1253,7 @@ impl ConfigPath {
             ConfigPath::CylinderTargeting => I18nKey::simple("history.param.cylinder_targeting"),
             ConfigPath::CylinderTrim => I18nKey::simple("history.param.cylinder_trim"),
             ConfigPath::CylinderTrimLevels => I18nKey::simple("history.param.cylinder_trim_levels"),
+            ConfigPath::WordRemovals => I18nKey::simple("history.param.word_removals"),
             ConfigPath::LevelsLow => I18nKey::simple("history.param.levels_low"),
             ConfigPath::LevelsHigh => I18nKey::simple("history.param.levels_high"),
             ConfigPath::LevelsGamma => I18nKey::simple("history.param.levels_midtones"),
@@ -2730,7 +2735,8 @@ impl ConfigPath {
             | ConfigPath::AutoExposure
             | ConfigPath::CylinderTargeting
             | ConfigPath::CylinderTrim
-            | ConfigPath::CylinderTrimLevels => UpdateType::IterationReset,
+            | ConfigPath::CylinderTrimLevels
+            | ConfigPath::WordRemovals => UpdateType::IterationReset,
 
             // Escape-time: the fragment renderer re-renders the frame;
             // no flame-style reset/accumulate distinction exists there.
@@ -2916,6 +2922,7 @@ impl ConfigPath {
             ConfigPath::CylinderTargeting => "CylinderTargeting".to_string(),
             ConfigPath::CylinderTrim => "CylinderTrim".to_string(),
             ConfigPath::CylinderTrimLevels => "CylinderTrimLevels".to_string(),
+            ConfigPath::WordRemovals => "WordRemovals".to_string(),
             ConfigPath::LevelsLow => "LevelsLow".to_string(),
             ConfigPath::LevelsHigh => "LevelsHigh".to_string(),
             ConfigPath::LevelsGamma => "LevelsGamma".to_string(),
@@ -3284,6 +3291,7 @@ impl ConfigPath {
             "CylinderTargeting" => return Some(ConfigPath::CylinderTargeting),
             "CylinderTrim" => return Some(ConfigPath::CylinderTrim),
             "CylinderTrimLevels" => return Some(ConfigPath::CylinderTrimLevels),
+            "WordRemovals" => return Some(ConfigPath::WordRemovals),
             "LevelsLow" => return Some(ConfigPath::LevelsLow),
             "LevelsHigh" => return Some(ConfigPath::LevelsHigh),
             "LevelsGamma" => return Some(ConfigPath::LevelsGamma),
@@ -4243,7 +4251,9 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         // Variation order is a structural reorder, not a continuous param.
         | ConfigPath::TransformVariationOrder { .. }
         | ConfigPath::LinkedTransformVariationOrder { .. }
-        | ConfigPath::FinalTransformVariationOrder { .. } => None,
+        | ConfigPath::FinalTransformVariationOrder { .. }
+        // A list of removed pieces is an edit, not a continuous param.
+        | ConfigPath::WordRemovals => None,
     }
 }
 
@@ -4621,6 +4631,7 @@ mod tests {
             ConfigPath::CylinderTargeting,
             ConfigPath::CylinderTrim,
             ConfigPath::CylinderTrimLevels,
+            ConfigPath::WordRemovals,
             ConfigPath::LevelsLow,
             ConfigPath::LevelsHigh,
             ConfigPath::LevelsGamma,
