@@ -27,7 +27,7 @@ The rest group by what they edit:
 
 | Group | Panels |
 |---|---|
-| The flame | Transforms, Triangle Editor, Variations, Xaos Editor, Subflames, Words, View, Solid & Lighting |
+| The flame | Transforms, Triangle Editor, Variations, Xaos Editor, Subflames, Paths, View, Solid & Lighting |
 | The other engines | Escape Fractal, Simulation |
 | Appearance, shared by every engine | Colors, Palette Editor, Palette Library, Effects |
 | Workflow, mode-independent | Fractal Browser, History, Animation, Signals, Scripts, Random Generator, Export, Config Import/Export, Rendering, Performance, Help, Keyboard Shortcuts, Account, Save Online |
@@ -153,7 +153,7 @@ sections inside a panel.
 The rule of thumb the tables encode:
 
 - **Flame-only** (greyed in both non-flame modes): View, Xaos Editor,
-  Subflames, Words, and Random Generator, whose output would
+  Subflames, Paths, and Random Generator, whose output would
   leave the mode.
 - **Transform editors** (Transforms, Triangle Editor, Variations):
   available in Simulation too, because the flame's transforms are the
@@ -254,7 +254,7 @@ contract.
 | Variations | [variations.rs](../../src/ui/variations.rs) |
 | Xaos Editor | [xaos_editor.rs](../../src/ui/xaos_editor.rs) |
 | Subflames | [subflames.rs](../../src/ui/subflames.rs) |
-| Words | [words_panel.rs](../../src/ui/words_panel.rs) |
+| Paths | [paths_panel.rs](../../src/ui/paths_panel.rs) |
 | View | [view.rs](../../src/ui/view.rs) |
 | Solid & Lighting | [solid_panel.rs](../../src/ui/solid_panel.rs) |
 | Escape Fractal | [escape_panel.rs](../../src/ui/escape_panel.rs) |

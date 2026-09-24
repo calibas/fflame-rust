@@ -324,8 +324,10 @@ pub struct PanelContext<'a> {
     pub path_click_info: &'a Option<super::PathClickInfo>,
     pub close_path_overlay: &'a mut bool,
 
-    // Words panel: the branch whose solo button is held this frame
+    // Paths panel: the path whose solo button is held this frame, and a
+    // path opened to see inside that the plan has not split
     pub word_solo: &'a mut Option<Vec<u32>>,
+    pub word_split: &'a mut Option<Vec<u32>>,
 
     // Random generator panel state
     pub random_generator_panel: &'a mut Option<super::random_generator::RandomGeneratorPanel>,
@@ -986,8 +988,8 @@ impl<'a> PanelViewer<'a> {
             PanelType::FractalBrowser => {
                 self.render_fractal_browser_panel(ui);
             }
-            PanelType::Words => {
-                self.render_words_panel(ui);
+            PanelType::Paths => {
+                self.render_paths_panel(ui);
             }
             PanelType::Export => {
                 self.render_export_panel(ui);
@@ -2043,14 +2045,15 @@ impl<'a> PanelViewer<'a> {
             });
     }
 
-    /// Render the Words panel (docs/projects/word-editing.md §6)
-    fn render_words_panel(&mut self, ui: &mut egui::Ui) {
-        super::words_panel::render_words_content(
+    /// Render the Paths panel (docs/projects/word-editing.md §6)
+    fn render_paths_panel(&mut self, ui: &mut egui::Ui) {
+        super::paths_panel::render_paths_content(
             ui,
             self.context.config_manager,
             self.context.flame_renderer,
             self.context.deep_zoom,
             self.context.word_solo,
+            self.context.word_split,
         );
     }
 

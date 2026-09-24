@@ -147,6 +147,13 @@ pub fn holds_removed(removals: &[Vec<u32>], word: &[u32]) -> bool {
     removals.iter().any(|p| p.len() > word.len() && p.ends_with(word))
 }
 
+/// Whether the walk must split `word` rather than keep it whole: it
+/// holds a removed piece ([`holds_removed`]), or it is, or holds, a piece
+/// the user opened in the Pieces panel to see inside (`refine`).
+pub fn must_split(removals: &[Vec<u32>], refine: &[Vec<u32>], word: &[u32]) -> bool {
+    holds_removed(removals, word) || refine.iter().any(|p| p.len() >= word.len() && p.ends_with(word))
+}
+
 /// The plan without the words whose piece was removed. The inverse walk
 /// never makes them; this is for the planners that do not know about
 /// removals, and for a plan made before a removal, until its replan.
@@ -183,6 +190,9 @@ pub struct Branch {
     pub words: usize,
     /// None of its words is drawn: trim took them all.
     pub trimmed: bool,
+    /// It is one word of the plan, whole: the plan has not split it, and
+    /// asking it to (`PlanOptions::refine`) may show what is inside.
+    pub leaf: bool,
     /// One level further from the view, the largest share first. A word
     /// that ends at this branch counts in it but is no child.
     pub children: Vec<Branch>,
@@ -273,6 +283,7 @@ fn grow(plan: &Cylinders, drawn: &[bool], idx: &mut [usize], suffix: &[u32], lev
                 prob: group.iter().map(|&i| plan.words[i].prob).sum(),
                 words: group.len(),
                 trimmed: group.iter().all(|&i| !drawn.get(i).copied().unwrap_or(true)),
+                leaf: group.len() == 1 && plan.words[group[0]].word.len() == d + 1,
                 pattern,
                 children,
             });
@@ -344,6 +355,19 @@ mod tests {
         for bad in ["", "  ", "x1", "t", "t1a", "ta0", "t300", "t1 q2"] {
             assert_eq!(parse_pattern(bad), None, "{bad:?}");
         }
+    }
+
+    /// A piece opened to look inside is split, as is every piece holding
+    /// it; a removed piece is split only where it holds one.
+    #[test]
+    fn opened_pieces_are_split() {
+        let open = vec![vec![5, 1]];
+        assert!(must_split(&[], &open, &[5, 1]), "the opened piece itself");
+        assert!(must_split(&[], &open, &[1]), "a piece holding it");
+        assert!(!must_split(&[], &open, &[6, 1]));
+        assert!(!must_split(&[], &open, &[9, 5, 1]), "already inside it");
+        assert!(!must_split(&[vec![5, 1]], &[], &[5, 1]), "a removed piece is dropped, not split");
+        assert!(must_split(&[vec![5, 1]], &[], &[1]));
     }
 
     /// A removal takes the words ending with it; a shorter word it ends

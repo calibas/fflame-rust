@@ -252,6 +252,11 @@ pub struct PlanOptions<'a> {
     /// with one, and refines a word that holds one rather than keeping it
     /// whole.
     pub removals: &'a [Vec<u32>],
+    /// Pieces opened in the Pieces panel to see inside
+    /// (`docs/projects/word-editing.md` §6): the walk splits each, and
+    /// every piece holding one, rather than keeping it whole. The picture
+    /// is the same; only how finely the plan divides it changes.
+    pub refine: &'a [Vec<u32>],
 }
 
 /// The budget where a plan must block: the web, which has no threads and
@@ -270,6 +275,7 @@ impl Default for PlanOptions<'_> {
             #[cfg(not(target_arch = "wasm32"))]
             gpu: None,
             removals: &[],
+            refine: &[],
         }
     }
 }
@@ -695,8 +701,9 @@ struct Child {
     prob: f64,
     /// The walk stops here: kept if any of it lands.
     last: bool,
-    /// Its piece holds a removed one (`PlanOptions::removals`): carried
-    /// on, never cut, so the walk can separate the two.
+    /// Its piece holds a removed one, or was opened to see inside
+    /// (`PlanOptions::removals`, `refine`): carried on, never cut, so the
+    /// walk splits it.
     refine: bool,
     /// Candidates from the index, or the pulled-back cloud.
     pts: Pts,
@@ -1801,7 +1808,7 @@ impl Backward {
     /// A node's children: one per symbol its region's points came
     /// through, each with its candidates. Reads only `self` and the node,
     /// so the nodes of a level find theirs in parallel.
-    fn children_of(&self, o: &mut Open, depth: usize, floor_mass: f64, gather_now: bool, removals: &[Vec<u32>]) {
+    fn children_of(&self, o: &mut Open, depth: usize, floor_mass: f64, gather_now: bool, removals: &[Vec<u32>], refine: &[Vec<u32>]) {
         let tr = &mut o.trace;
         let node = &o.node;
         let mut seen: Vec<Cell> = Vec::new();
@@ -1920,7 +1927,7 @@ impl Backward {
                     Pts::Index(c) => c.len(),
                     Pts::Cloud(_) => 0,
                 };
-                let refine = crate::scene::word_tree::holds_removed(removals, &word);
+                let refine = crate::scene::word_tree::must_split(removals, refine, &word);
                 Some(Child {
                     ai,
                     word,
@@ -1968,6 +1975,7 @@ impl Backward {
         cancelled: &dyn Fn() -> bool,
         slicer: &Slicer,
         removals: &[Vec<u32>],
+        refine: &[Vec<u32>],
     ) -> Option<Vec<Expanded>> {
         use web_time::Instant;
         let watched = |t: &mut Trace, word: &[u32], what: &str, detail: &dyn Fn() -> String| {
@@ -2039,7 +2047,7 @@ impl Backward {
 
         // **2. Children.** The gathers are the cost; nodes in parallel.
         let t = Instant::now();
-        each_sliced(&mut opens, |o| self.children_of(o, depth, floor_mass, !speculate, removals), slicer).await;
+        each_sliced(&mut opens, |o| self.children_of(o, depth, floor_mass, !speculate, removals, refine), slicer).await;
         tr.t_gather += t.elapsed();
         if cancelled() {
             return None;
@@ -2650,6 +2658,7 @@ impl Backward {
                     &cancelled,
                     slicer,
                     opts.removals,
+                    opts.refine,
                 )
                 .await
             else {
@@ -2704,7 +2713,7 @@ impl Backward {
                 // A node holding a removed piece is carried too: forced
                 // here, the piece would be back.
                 for n in next.drain(keep..) {
-                    if n.eff > 0.0 && !crate::scene::word_tree::holds_removed(opts.removals, &n.word) {
+                    if n.eff > 0.0 && !crate::scene::word_tree::must_split(opts.removals, opts.refine, &n.word) {
                         rest.push(n)
                     } else {
                         unmeasured.push(n)
@@ -4125,7 +4134,7 @@ mod tests {
             let mut polls: Vec<f64> = Vec::new();
             let mut compiled = 0.0f64;
             let got = {
-                let fut = crate::scene::cylinder::Cylinders::plan_sliced(&gj.flame, reg, view, Some(&mut web_planner), &[], &slicer);
+                let fut = crate::scene::cylinder::Cylinders::plan_sliced(&gj.flame, reg, view, Some(&mut web_planner), &[], &[], &slicer);
                 let mut fut = std::pin::pin!(fut);
                 let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
                 loop {

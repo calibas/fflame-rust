@@ -821,6 +821,7 @@ impl Cylinders {
         view: View,
         gpu: Option<&mut crate::scene::plan_gpu::GpuPlanner>,
         removals: &[Vec<u32>],
+        refine: &[Vec<u32>],
         slicer: &crate::scene::backward::Slicer,
     ) -> Result<Self, NoCylinders> {
         use crate::scene::backward::{Backward, Blocking, CpuEval, PlanOptions, Trace, TIME_BUDGET};
@@ -835,7 +836,7 @@ impl Cylinders {
         };
         // Nothing blocks, so the web's plan needs no inline budget; the
         // desktop's safety net applies.
-        let opts = PlanOptions { budget: TIME_BUDGET, removals, ..Default::default() };
+        let opts = PlanOptions { budget: TIME_BUDGET, removals, refine, ..Default::default() };
         let mut tr = Trace::default();
         slicer.tick().await;
         let eval = match gpu {
@@ -2975,13 +2976,85 @@ mod gpu_tests {
         assert!(after > 0.5 * before, "after a resize the plan no longer draws: coverage {after:.3} against {before:.3}");
     }
 
-    /// **The Words panel sees what is drawn** (docs/projects/word-editing.md
+    /// **Always keeps a plan zoomed out, and an opened path is split.**
+    /// Zoomed out, a plan is slower than the ordinary chaos game, so Auto
+    /// declines it -- and the Paths panel had nothing to show until you
+    /// zoomed in. Always keeps it. There every path is whole (the view
+    /// holds all of each), so the panel could offer only the transforms;
+    /// opening one asks the plan to split it (`request_split`), and its
+    /// paths appear beneath it -- the picture the same, only divided.
+    #[test]
+    #[ignore = "needs a GPU; reads output/flame-zoom"]
+    fn always_keeps_a_plan_zoomed_out_and_opens_a_path() {
+        use crate::renderer::TargetingState as TS;
+        let Ok(text) = std::fs::read_to_string("output/flame-zoom/grand-julian-zoom1.fflame") else { return };
+        let (device, queue) = device();
+        let mut cfg: FractalConfig = serde_json::from_str(&text).expect("a config");
+        cfg.cylinder_targeting = true;
+        cfg.zoom = 1.0;
+        let mut r = crate::renderer::FlameRenderer::with_palette_size(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            180,
+            180,
+            &cfg.flame,
+            cfg.palette_size,
+        );
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("always") });
+        r.load_config(&device, &mut enc, &queue, &cfg, &cfg.palette, 1, 0);
+        queue.submit(Some(enc.finish()));
+        // Planning waits for the view to settle: sync until it has.
+        let settle = |r: &mut crate::renderer::FlameRenderer, cfg: &FractalConfig, done: &dyn Fn(&crate::renderer::FlameRenderer) -> bool| {
+            for _ in 0..40 {
+                let _ = r.sync_cylinders(&device, &queue, cfg);
+                if done(r) {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            panic!("never settled: {:?}", r.targeting_state());
+        };
+        settle(&mut r, &cfg, &|r| !matches!(r.targeting_state(), TS::Off));
+        assert!(matches!(r.targeting_state(), TS::NotWorthIt { .. }), "Auto keeps a plan zoomed out: {:?}", r.targeting_state());
+        assert!(r.word_tree().is_none(), "no plan, no tree");
+
+        cfg.cylinder_always = true;
+        settle(&mut r, &cfg, &|r| matches!(r.targeting_state(), TS::Active { .. }));
+        let tree = r.word_tree().expect("a tree");
+        assert!(tree.branches.iter().all(|b| b.leaf && b.children.is_empty()), "zoomed out every path is whole");
+        let open = tree.branches.iter().find(|b| b.share > 0.0).expect("a measured path").clone();
+
+        r.request_split(&cfg, open.pattern.clone());
+        settle(&mut r, &cfg, &|r| {
+            r.word_tree().is_some_and(|t| t.branches.iter().any(|b| b.pattern == open.pattern && !b.children.is_empty()))
+        });
+        let after = r.word_tree().expect("a tree");
+        let opened = after.branches.iter().find(|b| b.pattern == open.pattern).expect("still there");
+        println!(
+            "  zoom 1, Always: {} paths; {} opened: {} paths, {} of them one level beneath it",
+            tree.words,
+            crate::scene::word_tree::pattern_text(&open.pattern),
+            after.words,
+            opened.children.len()
+        );
+        assert!(after.branches.iter().filter(|b| b.pattern != open.pattern).all(|b| b.leaf), "only the opened path is split");
+        // What lands in the view, not the probability: splitting drops
+        // the opened path's parts that lie wholly off screen, which the
+        // whole path carried (it was kept because most of it lands).
+        // Shares are measured by replays, so a few percent is sampling.
+        let rel = (after.share - tree.share).abs() / tree.share.max(1e-300);
+        println!("  share of the view {:.4} whole, {:.4} split ({:.2}% apart); probability {:.4} and {:.4}", tree.share, after.share, 100.0 * rel, tree.prob, after.prob);
+        assert!(rel < 0.03, "the same picture, divided: the view's share moved {:.2}%", 100.0 * rel);
+    }
+
+    /// **The Paths panel sees what is drawn** (docs/projects/word-editing.md
     /// §6), through the renderer the app holds: the tree of the plan on
     /// screen, a solo that draws one branch and restarts the picture as it
     /// is pressed and released, and a removal that takes a branch out.
     #[test]
     #[ignore = "needs a GPU; reads output/flame-zoom"]
-    fn the_words_panel_sees_what_is_drawn() {
+    fn the_paths_panel_sees_what_is_drawn() {
         use crate::renderer::TargetingState as TS;
         let Ok(text) = std::fs::read_to_string("output/flame-zoom/grand-julian-zoom1.fflame") else { return };
         let (device, queue) = device();

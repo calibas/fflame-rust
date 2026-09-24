@@ -408,6 +408,15 @@ pub struct FractalConfig {
     #[serde(default, skip_serializing_if = "is_false")]
     pub cylinder_targeting: bool,
 
+    /// Keep the plan at every zoom -- "Always" in the UI's Focused
+    /// Rendering switch, where `cylinder_targeting` alone is "Auto".
+    /// Zoomed out, a plan renders more slowly than the ordinary chaos
+    /// game, and Auto declines it there; Always keeps it, so the Pieces
+    /// panel has a plan to show and edit at any zoom. Read only with
+    /// `cylinder_targeting`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub cylinder_always: bool,
+
     /// **Trim** (docs/projects/word-editing.md §4): drop the branches of
     /// the plan's word tree, within `cylinder_trim_levels` levels of the
     /// view, whose share of the view is under this times their largest
@@ -998,6 +1007,7 @@ impl Default for FractalConfig {
             deterministic_rng: false,
             importance: ImportanceSettings::default(),
             cylinder_targeting: false,
+            cylinder_always: false,
             cylinder_trim: 0.0,
             cylinder_trim_levels: default_trim_levels(),
             word_removals: Vec::new(),

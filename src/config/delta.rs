@@ -64,6 +64,9 @@ pub enum ConfigPath {
     /// lands in the viewport (docs/projects/flame-deep-zoom.md stage
     /// 2). A REQUEST -- the renderer still declines per view.
     CylinderTargeting,
+    /// Keep the plan at every zoom, even where it renders more slowly
+    /// ("Always" in the UI's Focused Rendering switch).
+    CylinderAlways,
     /// Trim: drop the plan's minor branches near the view
     /// (docs/projects/word-editing.md §4). 0 = off.
     CylinderTrim,
@@ -748,6 +751,7 @@ impl Display for ConfigPath {
             ConfigPath::LevelsEnabled => write!(f, "Levels Enabled"),
             ConfigPath::AutoExposure => write!(f, "Auto Exposure"),
             ConfigPath::CylinderTargeting => write!(f, "Cylinder Targeting"),
+            ConfigPath::CylinderAlways => write!(f, "Cylinder Always"),
             ConfigPath::CylinderTrim => write!(f, "Cylinder Trim"),
             ConfigPath::CylinderTrimLevels => write!(f, "Cylinder Trim Levels"),
             ConfigPath::WordRemovals => write!(f, "Word Removals"),
@@ -1251,6 +1255,7 @@ impl ConfigPath {
             ConfigPath::LevelsEnabled => I18nKey::simple("history.param.levels_enabled"),
             ConfigPath::AutoExposure => I18nKey::simple("history.param.auto_exposure"),
             ConfigPath::CylinderTargeting => I18nKey::simple("history.param.cylinder_targeting"),
+            ConfigPath::CylinderAlways => I18nKey::simple("history.param.cylinder_always"),
             ConfigPath::CylinderTrim => I18nKey::simple("history.param.cylinder_trim"),
             ConfigPath::CylinderTrimLevels => I18nKey::simple("history.param.cylinder_trim_levels"),
             ConfigPath::WordRemovals => I18nKey::simple("history.param.word_removals"),
@@ -2734,6 +2739,7 @@ impl ConfigPath {
             // so neither is a tone-map-only refresh.
             | ConfigPath::AutoExposure
             | ConfigPath::CylinderTargeting
+            | ConfigPath::CylinderAlways
             | ConfigPath::CylinderTrim
             | ConfigPath::CylinderTrimLevels
             | ConfigPath::WordRemovals => UpdateType::IterationReset,
@@ -2920,6 +2926,7 @@ impl ConfigPath {
             ConfigPath::LevelsEnabled => "LevelsEnabled".to_string(),
             ConfigPath::AutoExposure => "AutoExposure".to_string(),
             ConfigPath::CylinderTargeting => "CylinderTargeting".to_string(),
+            ConfigPath::CylinderAlways => "CylinderAlways".to_string(),
             ConfigPath::CylinderTrim => "CylinderTrim".to_string(),
             ConfigPath::CylinderTrimLevels => "CylinderTrimLevels".to_string(),
             ConfigPath::WordRemovals => "WordRemovals".to_string(),
@@ -3289,6 +3296,7 @@ impl ConfigPath {
             "LevelsEnabled" => return Some(ConfigPath::LevelsEnabled),
             "AutoExposure" => return Some(ConfigPath::AutoExposure),
             "CylinderTargeting" => return Some(ConfigPath::CylinderTargeting),
+            "CylinderAlways" => return Some(ConfigPath::CylinderAlways),
             "CylinderTrim" => return Some(ConfigPath::CylinderTrim),
             "CylinderTrimLevels" => return Some(ConfigPath::CylinderTrimLevels),
             "WordRemovals" => return Some(ConfigPath::WordRemovals),
@@ -3993,6 +4001,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::LevelsEnabled
         | ConfigPath::AutoExposure
         | ConfigPath::CylinderTargeting
+        | ConfigPath::CylinderAlways
         | ConfigPath::UseDynamicBlend
         | ConfigPath::DeterministicRng
         | ConfigPath::PaletteReverse
@@ -4629,6 +4638,7 @@ mod tests {
             ConfigPath::LevelsEnabled,
             ConfigPath::AutoExposure,
             ConfigPath::CylinderTargeting,
+            ConfigPath::CylinderAlways,
             ConfigPath::CylinderTrim,
             ConfigPath::CylinderTrimLevels,
             ConfigPath::WordRemovals,

@@ -137,7 +137,7 @@ pub fn panel(p: PanelType, m: RenderMode, solid: Solid) -> Vis {
         | P::Variations => Vis::Show,
 
         // Flame-only editing surfaces.
-        P::View | P::XaosEditor | P::Subflames | P::Words => match m {
+        P::View | P::XaosEditor | P::Subflames | P::Paths => match m {
             M::TwoD | M::ThreeD => Vis::Show,
             M::Escape | M::Simulation => Vis::Grey(FLAME_ONLY),
         },
@@ -387,7 +387,7 @@ pub static WINDOW_MENU: &[WindowMenuRow] = &[
     row(PanelType::FractalBrowser, "menu.window_fractal_browser"),
     row(PanelType::History, "menu.window_history"),
     row(PanelType::Animation, "menu.window_animation"),
-    row(PanelType::Words, "menu.window_words"),
+    row(PanelType::Paths, "menu.window_paths"),
     row(PanelType::RandomGenerator, "menu.window_random_generator"),
     row(PanelType::Effects, "menu.window_effects"),
     row(PanelType::Variations, "menu.window_variations"),
@@ -406,7 +406,7 @@ pub static WINDOW_MENU: &[WindowMenuRow] = &[
 /// transforms first -- but not its own labels. Palette Editor and
 /// Palette Library are deliberately absent: both are reachable from
 /// the Colors panel, and on a phone this menu was scrolling off the
-/// bottom. Words, Random Generator and Account are absent too.
+/// bottom. Paths, Random Generator and Account are absent too.
 pub static COMPACT_WINDOW_MENU: &[PanelType] = &[
     PanelType::Transforms,
     PanelType::TriangleEditor,
@@ -460,7 +460,7 @@ mod tests {
         PanelType::Help,
         PanelType::KeyboardShortcuts,
         PanelType::ConfigDialog,
-        PanelType::Words,
+        PanelType::Paths,
         PanelType::Export,
         PanelType::RandomGenerator,
         PanelType::Scripts,
@@ -706,13 +706,13 @@ mod tests {
         // transform edits the picture.
         let mut want_escape = vec![
             "View", "XaosEditor",
-            "Subflames", "Words", "SolidLighting", "RandomGenerator", "Simulation",
+            "Subflames", "Paths", "SolidLighting", "RandomGenerator", "Simulation",
         ];
         want_escape.sort();
         assert_eq!(greyed(RenderMode::Escape), want_escape, "Escape");
 
         let mut want_sim = vec![
-            "View", "XaosEditor", "Subflames", "Words", "SolidLighting",
+            "View", "XaosEditor", "Subflames", "Paths", "SolidLighting",
             "RandomGenerator", "Escape",
         ];
         want_sim.sort();

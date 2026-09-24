@@ -1749,6 +1749,7 @@ impl ConfigManager {
             ConfigPath::LevelsEnabled => Ok(config.levels_enabled.into()),
             ConfigPath::AutoExposure => Ok(config.auto_exposure.into()),
             ConfigPath::CylinderTargeting => Ok(config.cylinder_targeting.into()),
+            ConfigPath::CylinderAlways => Ok(config.cylinder_always.into()),
             ConfigPath::CylinderTrim => Ok(config.cylinder_trim.into()),
             ConfigPath::CylinderTrimLevels => Ok(config.cylinder_trim_levels.into()),
             ConfigPath::WordRemovals => Ok(ConfigValue::StringList(config.word_removals.clone())),
@@ -2731,6 +2732,9 @@ impl ConfigManager {
             }
             ConfigPath::CylinderTargeting => {
                 self.current.cylinder_targeting = value.try_into()?;
+            }
+            ConfigPath::CylinderAlways => {
+                self.current.cylinder_always = value.try_into()?;
             }
             ConfigPath::CylinderTrim => {
                 self.current.cylinder_trim = value.try_into()?;

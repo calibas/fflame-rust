@@ -495,6 +495,11 @@ pub struct FlameRenderer {
     word_solo: Option<Vec<u32>>,
     /// The solo `cylinders` was cut with.
     applied_solo: Option<Vec<u32>>,
+    /// Pieces opened in the Pieces panel to see inside, which the plan
+    /// splits (`PlanOptions::refine`), with the flame they were opened
+    /// on. Transient and only ever grown -- a closed piece stays split,
+    /// so closing it does not replan -- until the flame changes.
+    word_split: (u64, Vec<Vec<u32>>),
     /// The Words panel's tree of the plan on screen, built when first
     /// asked for after each plan is applied.
     word_tree: std::sync::OnceLock<std::sync::Arc<crate::scene::word_tree::Tree>>,
@@ -703,6 +708,7 @@ impl FlameRenderer {
             applied_removals: Vec::new(),
             word_solo: None,
             applied_solo: None,
+            word_split: (0, Vec::new()),
             word_tree: std::sync::OnceLock::new(),
             cylinder_key: None,
             background_planning: false,
@@ -3655,6 +3661,10 @@ impl FlameRenderer {
         self.height.hash(&mut h);
         Self::flame_key(config).hash(&mut h);
         config.word_removals.hash(&mut h);
+        // Whether a plan is kept where it does not pay: a plan declined
+        // before is made again when it is.
+        Self::keeps_plan(config).hash(&mut h);
+        self.split_for(config).hash(&mut h);
         h.finish()
     }
 
@@ -3898,6 +3908,7 @@ impl FlameRenderer {
         #[cfg(not(target_arch = "wasm32"))]
         let gpu = if config.cylinder_targeting && two_d { self.gpu_planner(device, queue) } else { None };
         let removals = crate::scene::word_tree::parse_removals(&config.word_removals);
+        let refine = self.split_for(config).to_vec();
         let outcome = (config.cylinder_targeting && two_d).then(|| {
             let registry = crate::variations::global_registry();
             crate::scene::cylinder::Cylinders::plan_opts(
@@ -3908,6 +3919,7 @@ impl FlameRenderer {
                     #[cfg(not(target_arch = "wasm32"))]
                     gpu: gpu.as_deref(),
                     removals: &removals,
+                    refine: &refine,
                     ..Default::default()
                 },
             )
@@ -3921,6 +3933,36 @@ impl FlameRenderer {
     /// with pieces removed -- which only a plan can draw.
     fn edits_words(config: &FractalConfig) -> bool {
         config.cylinder_trim > 0.0 || !config.word_removals.is_empty()
+    }
+
+    /// Whether a plan is drawn even where it does not pay: Focused
+    /// Rendering set to Always, or the picture edited by its words.
+    fn keeps_plan(config: &FractalConfig) -> bool {
+        config.cylinder_always || Self::edits_words(config)
+    }
+
+    /// The pieces the plan splits for the Pieces panel, if they were
+    /// opened on this flame.
+    fn split_for(&self, config: &FractalConfig) -> &[Vec<u32>] {
+        if self.word_split.0 == Self::flame_key(config) {
+            &self.word_split.1
+        } else {
+            &[]
+        }
+    }
+
+    /// Split `pattern`'s piece in the plan, so the Pieces panel can show
+    /// what is inside it: replans when it is new. Pieces opened on
+    /// another flame are forgotten.
+    pub fn request_split(&mut self, config: &FractalConfig, pattern: Vec<u32>) {
+        let key = Self::flame_key(config);
+        if self.word_split.0 != key {
+            self.word_split = (key, Vec::new());
+        }
+        // Bounded: each opened piece deepens the plan a little.
+        if !self.word_split.1.contains(&pattern) && self.word_split.1.len() < 256 {
+            self.word_split.1.push(pattern);
+        }
     }
 
     /// The view a plan is made for.
@@ -3952,7 +3994,7 @@ impl FlameRenderer {
                 }
                 // Unless the picture is being edited by its words, which
                 // needs the plan to draw at all.
-                Ok(c) if c.speedup() <= 1.0 && !Self::edits_words(config) => {
+                Ok(c) if c.speedup() <= 1.0 && !Self::keeps_plan(config) => {
                     self.targeting_state = TargetingState::NotWorthIt { speedup: c.speedup() };
                     None
                 }
@@ -4191,7 +4233,7 @@ impl FlameRenderer {
             // worth using at all.
             if job.flame_key == Self::flame_key(config) {
                 if let Ok(plan) = outcome {
-                    if plan.speedup() > 1.0 {
+                    if plan.speedup() > 1.0 || Self::keeps_plan(config) {
                         log::info!("standby plan ready after {:.2} s", job.started.elapsed().as_secs_f64());
                         self.standby = Some(Standby { view: job.view, flame_key: job.flame_key, plan });
                     }
@@ -4240,6 +4282,7 @@ impl FlameRenderer {
     ) -> PlanJob {
         let flame = config.flame.clone();
         let removals = crate::scene::word_tree::parse_removals(&config.word_removals);
+        let refine = self.split_for(config).to_vec();
         let slicer = std::rc::Rc::new(crate::scene::backward::Slicer::every(WEB_PLAN_SLICE));
         let s = slicer.clone();
         let task = Box::pin(async move {
@@ -4254,9 +4297,9 @@ impl FlameRenderer {
                     let mut g = g.borrow_mut();
                     #[cfg(not(target_arch = "wasm32"))]
                     let mut g = g.lock().unwrap_or_else(|e| e.into_inner());
-                    crate::scene::cylinder::Cylinders::plan_sliced(&flame, &registry, view, Some(&mut g), &removals, &s).await
+                    crate::scene::cylinder::Cylinders::plan_sliced(&flame, &registry, view, Some(&mut g), &removals, &refine, &s).await
                 }
-                None => crate::scene::cylinder::Cylinders::plan_sliced(&flame, &registry, view, None, &removals, &s).await,
+                None => crate::scene::cylinder::Cylinders::plan_sliced(&flame, &registry, view, None, &removals, &refine, &s).await,
             }
         });
         PlanJob {
@@ -4300,6 +4343,7 @@ impl FlameRenderer {
         use std::sync::Arc;
         let flame = config.flame.clone();
         let removals = crate::scene::word_tree::parse_removals(&config.word_removals);
+        let refine = self.split_for(config).to_vec();
         let cancel = Arc::new(AtomicBool::new(false));
         let flag = cancel.clone();
         let (tx, rx) = std::sync::mpsc::channel();
@@ -4314,6 +4358,7 @@ impl FlameRenderer {
                     cancel: Some(&flag),
                     gpu: gpu.as_deref(),
                     removals: &removals,
+                    refine: &refine,
                 },
             );
             // A cancelled job's receiver is gone; nothing to tell.
