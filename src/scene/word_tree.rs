@@ -161,6 +161,128 @@ pub fn remove(plan: &Cylinders, removals: &[Vec<u32>]) -> Cylinders {
     subset(plan, &keep)
 }
 
+/// **Solo** (§6): only the words whose piece is `pattern`'s -- what a
+/// branch is, drawn alone.
+pub fn solo(plan: &Cylinders, pattern: &[u32]) -> Cylinders {
+    let keep: Vec<usize> = (0..plan.words.len()).filter(|&i| plan.words[i].word.ends_with(pattern)).collect();
+    subset(plan, &keep)
+}
+
+/// A branch of a plan's word tree, for the Words panel (§6): the words
+/// that share `pattern` as their last-applied maps.
+#[derive(Clone, Debug)]
+pub struct Branch {
+    /// Its maps, in application order: the last is nearest the view.
+    /// Removing the branch removes this pattern.
+    pub pattern: Vec<u32>,
+    /// Its share of the view: the sum of its words' probability times
+    /// efficiency. Zero where nothing in it was measured.
+    pub share: f64,
+    /// The sum of its words' probability.
+    pub prob: f64,
+    pub words: usize,
+    /// None of its words is drawn: trim took them all.
+    pub trimmed: bool,
+    /// One level further from the view, the largest share first. A word
+    /// that ends at this branch counts in it but is no child.
+    pub children: Vec<Branch>,
+}
+
+/// What the Words panel shows of the plan on screen (§6).
+#[derive(Clone, Debug)]
+pub struct Tree {
+    /// The branches, from the view inward, the largest first.
+    pub branches: Vec<Branch>,
+    /// The whole tree's share of the view and probability: what a
+    /// branch's are a fraction of.
+    pub share: f64,
+    pub prob: f64,
+    pub words: usize,
+    /// The words drawn after trim.
+    pub drawn: usize,
+}
+
+impl Tree {
+    /// How many levels the tree is built to. A plan of a few thousand
+    /// words builds eight in a millisecond or two; the widest plans
+    /// (hundreds of thousands) get fewer, since it is rebuilt with every
+    /// move of the trim slider.
+    fn levels_for(words: usize) -> usize {
+        if words > 50_000 {
+            4
+        } else {
+            8
+        }
+    }
+
+    /// The tree of `full` -- a plan as made -- with `removals` taken out
+    /// and marked by what `trim` at `trim_levels` keeps: exactly what
+    /// the renderer draws from it.
+    pub fn of(full: &Cylinders, removals: &[Vec<u32>], trim: f64, trim_levels: usize) -> Tree {
+        let plan = remove(full, removals);
+        let mut drawn = vec![false; plan.words.len()];
+        let kept = if trim > 0.0 && trim_levels > 0 { kept_to(&plan, trim.min(1.0), trim_levels) } else { (0..plan.words.len()).collect() };
+        for &i in &kept {
+            drawn[i] = true;
+        }
+        Tree {
+            branches: tree(&plan, &drawn, Self::levels_for(plan.words.len())),
+            share: plan.words.iter().map(|w| w.prob * w.eff).sum(),
+            prob: plan.mass,
+            words: plan.words.len(),
+            drawn: kept.len(),
+        }
+    }
+}
+
+/// The tree of `plan`'s words to `levels` levels from the view, each
+/// level's branches the largest share first (then the most probable,
+/// for branches nothing in which was measured). `drawn[i]` says whether
+/// word `i` is drawn after trim.
+pub fn tree(plan: &Cylinders, drawn: &[bool], levels: usize) -> Vec<Branch> {
+    let mut idx: Vec<usize> = (0..plan.words.len()).collect();
+    grow(plan, drawn, &mut idx, &[], levels)
+}
+
+fn grow(plan: &Cylinders, drawn: &[bool], idx: &mut [usize], suffix: &[u32], levels: usize) -> Vec<Branch> {
+    if levels == 0 {
+        return Vec::new();
+    }
+    let d = suffix.len();
+    let key = |i: usize| -> Option<u32> {
+        let w = &plan.words[i].word;
+        (w.len() > d).then(|| w[w.len() - 1 - d])
+    };
+    idx.sort_by_key(|&i| key(i));
+    let mut out = Vec::new();
+    let mut start = 0;
+    while start < idx.len() {
+        let k = key(idx[start]);
+        let mut end = start;
+        while end < idx.len() && key(idx[end]) == k {
+            end += 1;
+        }
+        if let Some(sym) = k {
+            let group = &mut idx[start..end];
+            let mut pattern = Vec::with_capacity(d + 1);
+            pattern.push(sym);
+            pattern.extend_from_slice(suffix);
+            let children = grow(plan, drawn, group, &pattern, levels - 1);
+            out.push(Branch {
+                share: group.iter().map(|&i| share(plan, i)).sum(),
+                prob: group.iter().map(|&i| plan.words[i].prob).sum(),
+                words: group.len(),
+                trimmed: group.iter().all(|&i| !drawn.get(i).copied().unwrap_or(true)),
+                pattern,
+                children,
+            });
+        }
+        start = end;
+    }
+    out.sort_by(|a, b| b.share.total_cmp(&a.share).then(b.prob.total_cmp(&a.prob)));
+    out
+}
+
 /// The plan with only the words at `keep` (plan order), its mass,
 /// efficiency and depth recomputed and its references kept beside them.
 pub fn subset(plan: &Cylinders, keep: &[usize]) -> Cylinders {
@@ -241,6 +363,30 @@ mod tests {
         let q = remove(&p, &r);
         assert_eq!(q.words.len(), 2);
         assert!((q.mass - 0.5).abs() < 1e-12);
+    }
+
+    /// The tree groups by last maps, largest share first, marks what trim
+    /// took, and solo keeps one branch.
+    #[test]
+    fn the_tree_groups_by_last_maps() {
+        let p = plan(vec![
+            word(&[7, 3], 0.40, 1.0),
+            word(&[8, 3], 0.30, 1.0),
+            word(&[3], 0.02, 0.5),
+            word(&[5, 1], 0.03, 1.0),
+            word(&[6, 1], 0.01, 1.0),
+        ]);
+        let drawn = [true, true, true, false, false];
+        let t = tree(&p, &drawn, 2);
+        assert_eq!(t.iter().map(|b| b.pattern.clone()).collect::<Vec<_>>(), vec![vec![3], vec![1]]);
+        assert_eq!(t[0].words, 3);
+        assert!((t[0].share - 0.71).abs() < 1e-12);
+        assert!(!t[0].trimmed && t[1].trimmed);
+        assert_eq!(t[0].children.iter().map(|b| b.pattern.clone()).collect::<Vec<_>>(), vec![vec![7, 3], vec![8, 3]]);
+        assert!(t[0].children[0].children.is_empty(), "two levels only");
+        let s = solo(&p, &[3]);
+        assert_eq!(s.words.len(), 3);
+        assert!((s.mass - 0.72).abs() < 1e-12);
     }
 
     /// Unmeasured words (efficiency 0) go with their branch; a branch of

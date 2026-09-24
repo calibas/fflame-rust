@@ -110,8 +110,11 @@ struct Params {
     path_map_style: u32,  // 0=Prefix, 1=Suffix, 2=Prefix (Distinct), 3=Suffix (Distinct)
     path_capture_mode: u32,  // 0=FirstHit, 1=FirstAfterBurnIn, 2=LastHit
     path_tracking_mode: u32,  // 0=First (first 32 iterations), 1=Recent (rolling window of 32 most recent)
-    num_path_filters: u32,  // Number of active path filters (0 = disabled)
-    min_suffix_filter_length: u32,  // Minimum length among depth=0 filters (for optimization)
+    // Where the path filters' count and minimum length were (the Path
+    // Editor, replaced by word editing): padding, so `post_symmetry`
+    // stays on its 16-byte boundary. Mirror in `src/gpu/buffers.rs`.
+    _pad_path_filters_0: u32,
+    _pad_path_filters_1: u32,
     background_r: f32,  // Background color R (for depth fog)
     background_g: f32,  // Background color G (for depth fog)
     background_b: f32,  // Background color B (for depth fog)
@@ -184,16 +187,6 @@ struct PathEntry {
     initial_y: f32,  // Initial random Y coordinate [-1, 1]
 }
 
-// Path filter for blocking specific transform sequences
-// depth=0: suffix match (block paths ending with pattern at any depth)
-// depth>0: exact depth match (block paths matching pattern at specific iteration)
-struct PathFilter {
-    pattern: u32,  // Packed pattern (up to 8 iterations at 4 bits each, LSB = first)
-    length: u32,   // Number of iterations in pattern (1-8)
-    depth: u32,    // 0 = suffix match, >0 = match at this exact depth
-    _padding: u32, // Padding for 16-byte alignment
-}
-
 // Per-normal-transform attachment list — entries hold global xform_ids
 // pointing into the concatenated transforms[] array. The main loop walks
 // these after the chaos game picks a normal transform: linkeds advance
@@ -229,7 +222,8 @@ struct AttachmentList {
 // always-allocated buffer was just consuming GPU memory.
 
 @group(0) @binding(7) var<storage, read_write> path_buffer: array<PathEntry>;
-@group(0) @binding(8) var<storage, read> path_filters: array<PathFilter>;
+// Binding 8 intentionally unused: the path filters, which word editing
+// replaced (docs/projects/word-editing.md).
 // Xaos (chaos) transition weights: xaos_weights[src * num_transforms + dst]
 // Modifies probability of selecting dst transform when coming from src
 @group(0) @binding(9) var<storage, read> xaos_weights: array<f32>;

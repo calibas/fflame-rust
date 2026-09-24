@@ -34,7 +34,7 @@ impl App {
         // NOTE: Export requests handled in mod.rs due to complexity
         self.handle_animation_requests(ui_response);
         self.handle_animation_seek(ui_response);
-        self.handle_path_filters(ui_response);
+        self.handle_word_solo(ui_response);
         self.handle_save_online(ui_response);
         self.handle_save_animation_online(ui_response);
         self.handle_load_api_animation(ui_response);
@@ -1354,15 +1354,11 @@ impl App {
         }
     }
 
-    /// Handle path filter changes from Path Editor panel
-    fn handle_path_filters(&mut self, ui_response: &UiResponse) {
-        if let Some(ref filters) = ui_response.path_filters_changed {
-            if let Some(ref mut renderer) = self.flame_renderer {
-                log::info!("Path filters updated: {} filters", filters.len());
-                renderer.set_path_filters(filters.clone());
-                renderer.update_path_features(&self.gpu.device, &self.gpu.queue, &self.config_manager.active_config().flame);
-                self.config_manager.request_reset();
-            }
+    /// The Words panel's solo button, held or not, every frame: the
+    /// renderer restarts the picture when it changes.
+    fn handle_word_solo(&mut self, ui_response: &UiResponse) {
+        if let Some(ref mut renderer) = self.flame_renderer {
+            renderer.set_word_solo(ui_response.word_solo.clone());
         }
     }
 

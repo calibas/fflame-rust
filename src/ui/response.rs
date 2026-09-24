@@ -125,8 +125,9 @@ pub struct UiResponse {
     // Animation scrubber drag stopped or discrete seek action (frame step) - reset accumulation
     pub animation_seek_drag_stopped: bool,
 
-    // Path filters changed (applies to renderer, not config)
-    pub path_filters_changed: Option<Vec<crate::gpu::buffers::GpuPathFilter>>,
+    /// The Words panel's solo button is held on this branch this frame
+    /// (applies to the renderer, not the config). `None` releases it.
+    pub word_solo: Option<Vec<u32>>,
 
     // Generated flame from random generator panel (single). Carries the
     // scene render settings (render_mode/perspective) alongside the flame
@@ -261,7 +262,7 @@ impl Default for UiResponse {
             load_subflame_into: None,
             animation_seek_changed: false,
             animation_seek_drag_stopped: false,
-            path_filters_changed: None,
+            word_solo: None,
             generated_flame: None,
             generated_batch: None,
             script_generated: None,

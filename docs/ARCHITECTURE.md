@@ -342,8 +342,7 @@ fractal_flame_wgpu/
     │   ├── main_2d_export.wgsl     2D export entry point
     │   ├── main_3d_export.wgsl     3D export entry point
     │   ├── main_2d_tiled.wgsl      2D high-res tiled entry point
-    │   ├── main_3d_tiled.wgsl      3D high-res tiled entry point
-    │   └── path_filter.wgsl        Path filtering for density estimation
+    │   └── main_3d_tiled.wgsl      3D high-res tiled entry point
     │   (Note: Variation functions generated dynamically, not stored as files)
     │
     ├── ShaderBuilder               Dynamic compilation (only active variations)

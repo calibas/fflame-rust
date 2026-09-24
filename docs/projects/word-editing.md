@@ -155,19 +155,59 @@ count as efficiency 1.
     blocks out of the untrimmed picture.
   - Zoom2, which has no `t1a0`, is bit-identical with the removal.
 
-## 6. The Words panel (phase 3)
+## 6. The Words panel (phase 3, done)
 
-- **The tree of the current plan:** each branch labelled by its maps
-  (e.g. `T1·a0` for transform 1's first arm), with its share of the view
-  and its word count. Expandable, the largest first.
-- **Per branch:** remove (adds the branch's pattern) and solo (draw only
-  this branch while the button is held, to see what it is).
-- **Beside it:** the removed patterns with restore buttons, and the trim
-  slider.
-- **The old Path Editor goes:** the panel, `GpuPathFilter`,
-  `path_filter.wgsl`, `check_path_filters`, `set_path_filters`, and the
-  filter buffer. The PathMap colour mode stays. Canonical shader dumps
-  that held the filter code are regenerated deliberately.
+- **The tree of the plan on screen** (`word_tree::Tree`, built lazily
+  by `FlameRenderer::word_tree` once per applied plan). Each branch is
+  labelled by the map it adds, numbered as the Transforms panel numbers
+  them: `T2·1` is transform 2's first arm, and the arm is shown only for
+  a transform that has arms. The tooltip gives the whole path in the
+  order the maps are applied (`T2·1 → T4`).
+  - **What a row shows:** the branch's share of the view and its word
+    count. A branch where nothing was measured shows its share of the
+    samples instead. Trimmed branches are struck through.
+  - **Expanding:** a branch opens to the next map inward. The tree is
+    built eight levels deep (four above 50,000 words, since it is rebuilt
+    with every move of the trim slider). At most 40 children are listed,
+    and the rest are summed on one line.
+- **Per branch:**
+  - **Remove** adds the branch's pattern to `word_removals`. A removal
+    the new one ends with is contained in it and is replaced.
+  - **Solo** draws only this branch while the button is held
+    (`FlameRenderer::set_word_solo`, a per-frame `UiResponse` field). It
+    is transient: not in the config, not in the plan key. Pressing and
+    releasing it restarts the picture.
+- **Beside it:**
+  - the removed patterns, each with a restore button;
+  - the trim slider and its depth, moved here from the View panel;
+  - the targeting checkbox, since the panel needs a plan.
+- **The Path Editor is gone.** The Words panel took its `PanelType` slot
+  (flame-only, in the Window menu). Removed with it:
+  - `path_editor.rs`, `GpuPathFilter`, `path_filter.wgsl` and
+    `check_path_filters`;
+  - the filter buffer and binding 8, left as a gap in both the app's and
+    the export's layouts;
+  - `set_path_filters` and the `UiResponse` field that fed it.
+
+  The two `Params` fields the filters used are padding now, so
+  `post_symmetry` keeps its 16-byte boundary. The PathMap colour mode
+  stays, and `PATH_TRACKING` now means exactly the PathMap colour mode.
+  All eight canonical shader dumps were regenerated. The diff is the
+  padding, the dropped struct and binding, and, in the PathMap dump,
+  the filter module and its call.
+- **Gate.**
+  - `the_words_panel_sees_what_is_drawn` (GPU) runs through the
+    renderer the app holds:
+    - the tree covers every drawn word;
+    - solo draws the flicker's 274 words alone, and restarts the picture
+      when pressed and released, while the tree stays the plan's;
+    - a removal takes the branch out of the tree and the picture at once
+      (5,319 → 5,045 words), before the replan.
+  - The app, driven into the first animation frame, showed the tree
+    (`T4·1` 99.45%, the flicker `T2·1` 0.55%, the glow `T3·2` not
+    measured). With `t1a0` removed, the picture looks like the second
+    frame, and the Removed list shows `T2·1`.
+  - The visual suite passes, 330 of 330.
 
 ## 7. Later (phase 4, only if needed)
 

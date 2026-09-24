@@ -324,9 +324,8 @@ pub struct PanelContext<'a> {
     pub path_click_info: &'a Option<super::PathClickInfo>,
     pub close_path_overlay: &'a mut bool,
 
-    // Path editor state
-    pub path_editor_state: &'a mut super::path_editor::PathEditorState,
-    pub path_filters_changed: &'a mut Option<Vec<crate::gpu::buffers::GpuPathFilter>>,
+    // Words panel: the branch whose solo button is held this frame
+    pub word_solo: &'a mut Option<Vec<u32>>,
 
     // Random generator panel state
     pub random_generator_panel: &'a mut Option<super::random_generator::RandomGeneratorPanel>,
@@ -987,8 +986,8 @@ impl<'a> PanelViewer<'a> {
             PanelType::FractalBrowser => {
                 self.render_fractal_browser_panel(ui);
             }
-            PanelType::PathEditor => {
-                self.render_path_editor_panel(ui);
+            PanelType::Words => {
+                self.render_words_panel(ui);
             }
             PanelType::Export => {
                 self.render_export_panel(ui);
@@ -2044,19 +2043,15 @@ impl<'a> PanelViewer<'a> {
             });
     }
 
-    /// Render Path Editor panel (manage path filters)
-    fn render_path_editor_panel(&mut self, ui: &mut egui::Ui) {
-        let num_transforms = self.context.flame.transforms.len();
-        let response = super::path_editor::render_path_editor_content(
+    /// Render the Words panel (docs/projects/word-editing.md §6)
+    fn render_words_panel(&mut self, ui: &mut egui::Ui) {
+        super::words_panel::render_words_content(
             ui,
-            self.context.path_editor_state,
-            num_transforms,
+            self.context.config_manager,
+            self.context.flame_renderer,
+            self.context.deep_zoom,
+            self.context.word_solo,
         );
-
-        // Handle filter changes
-        if let Some(filters) = response.filters_changed {
-            *self.context.path_filters_changed = Some(filters);
-        }
     }
 
     /// Render Export panel (PNG export options)

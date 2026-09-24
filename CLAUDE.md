@@ -37,7 +37,6 @@
     - `rng.wgsl` - Random number generation (PCG)
     - `affine.wgsl` / `affine_3d.wgsl` - Affine transform application
     - `accumulate_samples.wgsl` - Sample-emit scatter pass (tiled high-res path)
-    - `path_filter.wgsl` - Path filtering for the path-map color mode
     - `noise.wgsl`, `voronoi.wgsl`, `complex.wgsl`, `fractwf.wgsl`, `subflame.wgsl` - Helper libraries pulled in by variations that need them
   - `shaders/accumulate.wgsl` (+ `accumulate_tiled.wgsl`) - Histogram → accumulator fold (see Render Pipeline below)
   - `shaders/tonemap.wgsl` - Display tone mapping pass
@@ -53,7 +52,7 @@
   - `src/export/` - High-resolution export (high_res.rs: tiled + CPU-histogram paths)
   - `src/shader_builder_v2.rs` - Per-flame WGSL assembly from templates + active variation defs
   - `src/gpu/` - Buffer types and std140/std430 layouts (buffers.rs)
-  - `src/ui/` - **Dockable panel UI** (egui_dock): 25+ panels — viewport, transforms, triangle editor, view, colors, palette editor/library, fractal browser, history, animation, effects, xaos editor, random generator, variations browser, subflames, signal, export, performance, …
+  - `src/ui/` - **Dockable panel UI** (egui_dock): 25+ panels — viewport, transforms, triangle editor, view, colors, palette editor/library, fractal browser, history, animation, effects, xaos editor, random generator, variations browser, subflames, words, signal, export, performance, …
   - `src/animation/` - Track-based animation system + video export
   - `src/audio/` - Audio analysis for audio-reactive animation (cpal/symphonia/rustfft)
   - `src/signal/` - Signal/generator routing for animation inputs
@@ -88,7 +87,7 @@
   1. **Compute Pass** - chaos-game iteration; each plotted sample atomically adds into a per-pixel u32 histogram (R, G, B, density × `color_scale = 100`). Dispatch size = workgroups × 64 threads × `iterations_per_thread` (default 256). flam3/JWF-style bad-value recovery: X/Y divergence respawns + re-fuses the point; Z saturates at ±1e32 with an amortized respawn (see `docs/projects/preserve-z-semantics.md`). High-res exports above the 128 MB storage-binding limit switch to a sample-emit + tiled scatter path (`accumulate_samples.wgsl`) or CPU histogram (`export/high_res.rs`).
   2. **Accumulate Pass** (`accumulate.wgsl`) - folds the frame histogram into an `Rgba32Float` accumulator: rgb = density-weighted running-mean color, a = raw cumulative hit count. Adaptive blend: `effective_blend = max(new_density/total_density, blend_factor)`; `blend_factor = 0` is the reference density-weighted mean, higher values keep late batches contributing (`use_dynamic_blend` toggles the adaptive mode).
   3. **Tonemap Pass** (`tonemap.wgsl`) - flam3-style log mapping with `k1`/`k2` normalized by `sample_density = total_iters / pixel_count` (brightness is iteration-count invariant), plus exposure/gamma/brightness/vibrancy, scale-invariant Levels, optional tone curve, background blend.
-- **Color Modes**: Palette (Apophysis color-coordinate evolution), Speed (distance per iteration), PathMap (transform-path history visualization with path filters)
+- **Color Modes**: Palette (Apophysis color-coordinate evolution), Speed (distance per iteration), PathMap (transform-path history visualization)
 - **Projection**: `perspective_strength: f32` (0 = orthographic; Apophysis `zr = 1 − persp·z` formula with behind-camera clipping)
 - **Camera**: full 4-angle Apophysis/JWildfire camera (pitch, yaw, bank, roll/rotation — effective chain `Rz(rotation)·Rx(pitch)·Ry(bank)·Rz(−yaw)`) plus world-space position (`camera_x/y/z`, JWF `cam_pos_*` round-trip)
   - **Fly mode** (F2 / 🚀): WASD/QE movement + mouse-look; two modes in SystemSettings — FreeLook (screen-relative, gimbal-free) and FPS (world-up anchored)

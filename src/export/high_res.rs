@@ -135,15 +135,13 @@ pub struct HighResExporter {
     coverage_buffer: Buffer,
     attachments_buffer: Buffer,  // Per-normal Linked + Final attachment lists
     subflame_metadata_buffer: Buffer,  // binding 12: per-subflame metadata
-    // Dummy path-tracking buffers — the unified shader's `header.wgsl`
-    // declares `path_buffer` (binding 7) and `path_filters` (binding 8)
-    // unconditionally, but the export shader builds with
-    // PATH_TRACKING=false so the use-sites are stripped. WebGPU still
-    // requires every declared binding to be bound; minimum-size dummies
-    // (28 bytes for one PathEntry, 16 for one GpuPathFilter) satisfy
-    // the layout. Pruning these bindings is a Phase 2d-or-later cleanup.
+    // Dummy path-tracking buffer — the unified shader's `header.wgsl`
+    // declares `path_buffer` (binding 7) unconditionally, but the export
+    // shader builds with PATH_TRACKING=false so the use-sites are
+    // stripped. WebGPU still requires every declared binding to be
+    // bound; a minimum-size dummy (28 bytes for one PathEntry) satisfies
+    // the layout.
     dummy_path_buffer: Buffer,
-    dummy_path_filter_buffer: Buffer,
     // Analytic-blur bindings (13/14) for the now-mode-independent routing.
     // In Phase 2 step 2a these are a dummy splat buffer + a params buffer with
     // count=0, so the routing falls back to stochastic; step 2b makes them a
@@ -573,21 +571,14 @@ impl HighResExporter {
         }
         queue.write_buffer(&attachments_buffer, 0, &buf);
 
-        // Dummy path_buffer (binding 7) and path_filters (binding 8). The
-        // unified shader declares these unconditionally in header.wgsl;
-        // PATH_TRACKING=false in the export build strips the use-sites
-        // but the bindings still need a buffer. Sizes match the FlameRenderer
-        // dummies in gpu/buffers.rs: 28 bytes for one PathEntry,
-        // 16 bytes for one GpuPathFilter.
+        // Dummy path_buffer (binding 7). The unified shader declares it
+        // unconditionally in header.wgsl; PATH_TRACKING=false in the
+        // export build strips the use-sites but the binding still needs a
+        // buffer. Its size matches the FlameRenderer dummy in
+        // gpu/buffers.rs: 28 bytes for one PathEntry.
         let dummy_path_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Export Dummy Path Buffer"),
             size: 28,
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let dummy_path_filter_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("Export Dummy Path Filter Buffer"),
-            size: 16,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -815,10 +806,10 @@ impl HighResExporter {
         // Create bind group layout matching the unified template's 11-slot
         // scheme — same as the interactive renderer's layout but with
         // sample-emit replacements at slots 2 (samples) and 6 (counter).
-        // Slots 7 and 8 (path_buffer, path_filters) are dummy bindings:
-        // the export shader builds with PATH_TRACKING=false so the
-        // use-sites are stripped, but WebGPU still requires every
-        // declared binding to be bound.
+        // Slot 7 (path_buffer) is a dummy binding: the export shader
+        // builds with PATH_TRACKING=false so the use-sites are stripped,
+        // but WebGPU still requires every declared binding to be bound.
+        // Slot 8 is a gap (the path filters, which word editing replaced).
         let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Export Bind Group Layout"),
             entries: &[
@@ -901,17 +892,6 @@ impl HighResExporter {
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::Buffer {
                         ty: BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // binding 8: path_filters (dummy — PATH_TRACKING=false in export)
-                BindGroupLayoutEntry {
-                    binding: 8,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -1469,7 +1449,6 @@ impl HighResExporter {
             attachments_buffer,
             subflame_metadata_buffer,
             dummy_path_buffer,
-            dummy_path_filter_buffer,
             blur_splat_buffer,
             blur_convolve_params_buffer,
             blur_setup,
@@ -1608,10 +1587,6 @@ impl HighResExporter {
                 BindGroupEntry {
                     binding: 7,
                     resource: self.dummy_path_buffer.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 8,
-                    resource: self.dummy_path_filter_buffer.as_entire_binding(),
                 },
                 BindGroupEntry {
                     binding: 9,
@@ -1851,8 +1826,7 @@ impl HighResExporter {
                 path_map_style: config.path_map_style as u32,
                 path_capture_mode: config.path_capture_mode as u32,
                 path_tracking_mode: config.path_tracking_mode as u32,
-                num_path_filters: 0, // Path filters not supported in export mode
-                min_suffix_filter_length: 0,
+                _pad_path_filters: [0; 2],
                 background_r: config.background_color[0],
                 background_g: config.background_color[1],
                 background_b: config.background_color[2],

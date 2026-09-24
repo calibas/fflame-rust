@@ -101,8 +101,9 @@ plots* -- which the CPU planner does not (see §7).
 `PATH_TRACKING` records, per sample, the first 32 transform indices of
 the chaos game's own random history (4 bits each, so at most 16
 transforms, and no arms), and writes it to a per-pixel buffer for the
-PathMap colouring; path filters drop samples whose recent history
-matches a suffix of up to 8 symbols. So it **observes** the addresses
+PathMap colouring; the path filters (since replaced by word editing,
+`word-editing.md`) dropped samples whose recent history matched a
+suffix of up to 8 symbols. So it **observes** the addresses
 the chaos game happens to take, where planning must **choose** a word
 and apply it to chosen points.
 

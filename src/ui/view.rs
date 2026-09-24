@@ -85,37 +85,6 @@ pub fn render_view_content(
                         .update_param(ConfigPath::CylinderTargeting, targeting.into());
                 }
                 if config.cylinder_targeting {
-                    // Trim (docs/projects/word-editing.md §4): logarithmic,
-                    // because the settings that matter are small -- 0.01
-                    // already drops a sliver at 0.5% of the view.
-                    let mut trim = config.cylinder_trim;
-                    if ui
-                        .add(
-                            egui::Slider::new(&mut trim, 0.0..=1.0)
-                                .logarithmic(true)
-                                .smallest_positive(1e-4)
-                                .text(t!("view.cylinder_trim").as_ref()),
-                        )
-                        .on_hover_text(t!("view.tooltip_cylinder_trim"))
-                        .changed()
-                    {
-                        let _ = config_manager.update_param(ConfigPath::CylinderTrim, trim.into());
-                    }
-                    if config.cylinder_trim > 0.0 {
-                        let mut levels = config.cylinder_trim_levels;
-                        ui.horizontal(|ui| {
-                            if ui
-                                .add(egui::DragValue::new(&mut levels).range(1..=8))
-                                .on_hover_text(t!("view.tooltip_cylinder_trim_levels"))
-                                .changed()
-                            {
-                                let _ = config_manager.update_param(ConfigPath::CylinderTrimLevels, levels.into());
-                            }
-                            ui.label(t!("view.cylinder_trim_levels"));
-                        });
-                    }
-                }
-                if config.cylinder_targeting {
                     use crate::renderer::TargetingState as TS;
                     if let Some(secs) = deep_zoom.planning {
                         ui.horizontal(|ui| {

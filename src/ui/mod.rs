@@ -25,7 +25,7 @@ mod panel_viewer;
 /// panning internally). Re-exported for the keyboard handler.
 pub(crate) use panel_viewer::pan_fractal_view;
 pub(crate) use escape_panel::escape_zoom_by_factor;
-mod path_editor;
+mod words_panel;
 mod performance;
 mod random_generator;
 mod scripts_panel;
@@ -831,9 +831,6 @@ pub struct EguiLayer {
     path_click_info: Option<PathClickInfo>,
     close_path_overlay: bool,
 
-    // Path editor state
-    path_editor_state: path_editor::PathEditorState,
-
     // Random generator panel state
     random_generator_panel: Option<random_generator::RandomGeneratorPanel>,
     scripts_panel: Option<scripts_panel::ScriptsPanel>,
@@ -1007,7 +1004,6 @@ impl EguiLayer {
             clicked_pixel: None,
             path_click_info: None,
             close_path_overlay: false,
-            path_editor_state: path_editor::PathEditorState::new(),
             random_generator_panel: None,
             allocated_textures: std::collections::HashSet::new(),
             scripts_panel: None,
@@ -1475,8 +1471,8 @@ impl EguiLayer {
         let mut variation_update_requested: Vec<String> = Vec::new();
         let mut script_cloud_request: Option<crate::app::script_cloud::ScriptCloudRequest> = None;
 
-        // Path filters
-        let mut path_filters_changed: Option<Vec<crate::gpu::buffers::GpuPathFilter>> = None;
+        // The Words panel's solo button, held this frame
+        let mut word_solo: Option<Vec<u32>> = None;
 
         // Audio file loading
         let mut load_audio_file = false;
@@ -1792,9 +1788,8 @@ impl EguiLayer {
                         path_click_info: &self.path_click_info,
                         close_path_overlay: &mut self.close_path_overlay,
 
-                        // Path editor state
-                        path_editor_state: &mut self.path_editor_state,
-                        path_filters_changed: &mut path_filters_changed,
+                        // Words panel
+                        word_solo: &mut word_solo,
 
                         // Random generator panel state
                         random_generator_panel: &mut self.random_generator_panel,
@@ -2429,7 +2424,7 @@ impl EguiLayer {
             load_subflame_into,
             animation_seek_changed,
             animation_seek_drag_stopped,
-            path_filters_changed,
+            word_solo,
             generated_flame,
             script_generated,
             script_animation,

@@ -110,8 +110,11 @@ struct Params {
     path_map_style: u32,  // 0=Prefix, 1=Suffix, 2=Prefix (Distinct), 3=Suffix (Distinct)
     path_capture_mode: u32,  // 0=FirstHit, 1=FirstAfterBurnIn, 2=LastHit
     path_tracking_mode: u32,  // 0=First (first 32 iterations), 1=Recent (rolling window of 32 most recent)
-    num_path_filters: u32,  // Number of active path filters (0 = disabled)
-    min_suffix_filter_length: u32,  // Minimum length among depth=0 filters (for optimization)
+    // Where the path filters' count and minimum length were (the Path
+    // Editor, replaced by word editing): padding, so `post_symmetry`
+    // stays on its 16-byte boundary. Mirror in `src/gpu/buffers.rs`.
+    _pad_path_filters_0: u32,
+    _pad_path_filters_1: u32,
     background_r: f32,  // Background color R (for depth fog)
     background_g: f32,  // Background color G (for depth fog)
     background_b: f32,  // Background color B (for depth fog)
@@ -184,16 +187,6 @@ struct PathEntry {
     initial_y: f32,  // Initial random Y coordinate [-1, 1]
 }
 
-// Path filter for blocking specific transform sequences
-// depth=0: suffix match (block paths ending with pattern at any depth)
-// depth>0: exact depth match (block paths matching pattern at specific iteration)
-struct PathFilter {
-    pattern: u32,  // Packed pattern (up to 8 iterations at 4 bits each, LSB = first)
-    length: u32,   // Number of iterations in pattern (1-8)
-    depth: u32,    // 0 = suffix match, >0 = match at this exact depth
-    _padding: u32, // Padding for 16-byte alignment
-}
-
 // Per-normal-transform attachment list — entries hold global xform_ids
 // pointing into the concatenated transforms[] array. The main loop walks
 // these after the chaos game picks a normal transform: linkeds advance
@@ -229,7 +222,8 @@ struct AttachmentList {
 // always-allocated buffer was just consuming GPU memory.
 
 @group(0) @binding(7) var<storage, read_write> path_buffer: array<PathEntry>;
-@group(0) @binding(8) var<storage, read> path_filters: array<PathFilter>;
+// Binding 8 intentionally unused: the path filters, which word editing
+// replaced (docs/projects/word-editing.md).
 // Xaos (chaos) transition weights: xaos_weights[src * num_transforms + dst]
 // Modifies probability of selecting dst transform when coming from src
 @group(0) @binding(9) var<storage, read> xaos_weights: array<f32>;
@@ -1054,105 +1048,6 @@ fn ff_atan2(y: f32, x: f32) -> f32 {
     return atan2(y, x);
 }
 
-// Path filter checking utilities
-
-// Extract the last N iterations from the current path as a packed u32
-// For suffix matching - gets the most recent iterations
-fn get_suffix_pattern(path: array<u32, 4>, path_iteration: u32, length: u32) -> u32 {
-    // The path is stored with LSB = earliest iteration
-    // For suffix, we want the last 'length' iterations
-    // These are at positions (path_iteration - length) to (path_iteration - 1)
-
-    var result = 0u;
-    let start_iter = path_iteration - length;
-
-    for (var j = 0u; j < length; j++) {
-        let iter_idx = start_iter + j;
-        let slot = iter_idx / 8u;
-        let pos = (iter_idx % 8u) * 4u;
-
-        var word: u32;
-        if (slot == 0u) {
-            word = path[0];
-        } else if (slot == 1u) {
-            word = path[1];
-        } else if (slot == 2u) {
-            word = path[2];
-        } else {
-            word = path[3];
-        }
-
-        let xform = (word >> pos) & 0xFu;
-        result = result | (xform << (j * 4u));
-    }
-
-    return result;
-}
-
-// Extract iterations [start, start+length) from the path as a packed u32
-// For exact depth matching
-fn get_path_pattern(path: array<u32, 4>, start: u32, length: u32) -> u32 {
-    var result = 0u;
-
-    for (var j = 0u; j < length; j++) {
-        let iter_idx = start + j;
-        let slot = iter_idx / 8u;
-        let pos = (iter_idx % 8u) * 4u;
-
-        var word: u32;
-        if (slot == 0u) {
-            word = path[0];
-        } else if (slot == 1u) {
-            word = path[1];
-        } else if (slot == 2u) {
-            word = path[2];
-        } else {
-            word = path[3];
-        }
-
-        let xform = (word >> pos) & 0xFu;
-        result = result | (xform << (j * 4u));
-    }
-
-    return result;
-}
-
-// Check if current path matches any filter and should be blocked
-// Returns true if the thread should be terminated
-fn check_path_filters(path: array<u32, 4>, path_iteration: u32) -> bool {
-    // Early exit if no filters
-    if (params.num_path_filters == 0u) {
-        return false;
-    }
-
-    // Check each filter
-    for (var f = 0u; f < params.num_path_filters; f++) {
-        let pf = path_filters[f];
-
-        if (pf.depth == 0u) {
-            // Suffix mode: check if we have enough iterations and suffix matches
-            if (path_iteration >= pf.length && path_iteration >= params.min_suffix_filter_length) {
-                let suffix = get_suffix_pattern(path, path_iteration, pf.length);
-                if (suffix == pf.pattern) {
-                    return true;  // Block this path
-                }
-            }
-        } else {
-            // Exact depth mode: only check at the specific depth
-            if (path_iteration == pf.depth) {
-                // Pattern starts at iteration (depth - length)
-                let start = pf.depth - pf.length;
-                let current_pattern = get_path_pattern(path, start, pf.length);
-                if (current_pattern == pf.pattern) {
-                    return true;  // Block this path
-                }
-            }
-        }
-    }
-
-    return false;
-}
-
 // Main compute shader template
 // This template generates variants via conditional compilation:
 //   - 2D mode (vec2 points) vs 3D mode (vec3 points)
@@ -1351,8 +1246,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 
 
-        // Path tracking: needed for path map mode OR when filters are active
-        let needs_path_tracking = (COLOR_MODE == 2u) || (params.num_path_filters > 0u);
+        // Path tracking: needed for path map mode
+        let needs_path_tracking = COLOR_MODE == 2u;
         if (needs_path_tracking) {
             // For FirstAfterBurnIn mode (1), only track path after burn-in
             // (fuse == 0 — also re-armed by the bad-value respawn)
@@ -1376,11 +1271,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 }
                 // Always increment - this is the actual iteration count (not capped at 32)
                 path_iteration = path_iteration + 1u;
-
-                // Check path filters - terminate thread if path matches blocklist
-                if (check_path_filters(path, path_iteration)) {
-                    break;
-                }
             }
         }
 
