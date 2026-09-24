@@ -358,6 +358,17 @@ Words panel removes branches by hand, replacing the Path Editor.
 - Phase 4 (trim hysteresis across frames, hover highlight): only if
   needed.
 
+### E2. 3D Focused Rendering -- idea (2026-09-24)
+
+Focused Rendering, and with it the Paths panel and PathMap, is 2D only:
+the plan asks whether a word's image meets a disc in the xy plane. The
+user's thought: 3D could flatten into 2D screen space, planning in
+projected coordinates. Open questions include:
+
+- A projected map is not an IFS in the plane, since what a point
+  projects to depends on its z.
+- The camera moves.
+
 ## Other
 
 - **O1. Other platforms -- later.** The planner's kernel has never run on

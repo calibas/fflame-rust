@@ -294,6 +294,157 @@ fn grow(plan: &Cylinders, drawn: &[bool], idx: &mut [usize], suffix: &[u32], lev
     out
 }
 
+/// **PathMap's digits** (§10): the flame's symbols, transform by
+/// transform and arm by arm -- the order a path's address is read in --
+/// each with the chance the chaos game draws it (its transform's share
+/// of the weight, over its arms).
+pub fn alphabet(flame: &crate::scene::transforms::Flame, registry: &crate::variations::VariationRegistry) -> Vec<(u32, f64)> {
+    let total: f64 = flame.transforms.iter().filter(|t| t.weight > 0.0).map(|t| t.weight as f64).sum();
+    let mut out = Vec::new();
+    for (t, xf) in flame.transforms.iter().enumerate() {
+        if !(xf.weight > 0.0) {
+            continue;
+        }
+        let arms = xf
+            .variations
+            .iter()
+            .filter(|(_, w)| **w != 0.0)
+            .filter_map(|(n, _)| {
+                let def = crate::variations::bound::arms_for(n)?;
+                let pf = |q: &str| xf.get_variation_param_or_default(n, q, registry) as f64;
+                Some((def.arms)(&pf))
+            })
+            .max()
+            .unwrap_or(1)
+            .clamp(1, 255);
+        for a in 0..arms {
+            out.push((t as u32 | a << 8, xf.weight as f64 / total.max(f64::MIN_POSITIVE) / arms as f64));
+        }
+    }
+    out
+}
+
+/// How many last-applied maps every word of `plan` shares: the address
+/// of the smallest piece holding the whole view.
+pub fn common_suffix(plan: &Cylinders) -> usize {
+    let Some(first) = plan.words.first() else { return 0 };
+    let mut n = first.word.len();
+    for w in &plan.words[1..] {
+        let shared = first.word.iter().rev().zip(w.word.iter().rev()).take(n).take_while(|(a, b)| a == b).count();
+        n = n.min(shared);
+        if n == 0 {
+            break;
+        }
+    }
+    n
+}
+
+/// **Each word's PathMap colour**, a palette position in [0, 1), for the
+/// styles the CPU colours; the Origin styles get zero, which the shader
+/// replaces with each sample's own. `stats` is the plan colours are
+/// measured in -- the address past the maps every word shares, the
+/// shortest and longest word -- and `drawn` the words coloured, so a solo
+/// keeps its colours.
+///
+/// - **Path**: the address, `level` maps of it past the shared ones, as
+///   digits of the flame's alphabet: the last map picks a range of the
+///   palette, the next one in a range within it. Each range is as wide
+///   as its symbol's chance, so the palette spreads over the picture as
+///   the fractal's own measure does -- and depends on the flame alone,
+///   so colours hold still across zooms and animation frames. (Equal
+///   ranges were tried first: the Grand Julian's dominant parts fell in
+///   a few adjacent ones, most of the picture one colour.)
+/// - **PathDistinct**: the same maps, hashed, so neighbours differ.
+/// - **Depth**: the word's length, shortest to longest.
+pub fn path_colours(
+    stats: &Cylinders,
+    drawn: &Cylinders,
+    style: crate::scene::palette::PathMapStyle,
+    level: u32,
+    alphabet: &[(u32, f64)],
+) -> Vec<f32> {
+    use crate::scene::palette::PathMapStyle as S;
+    let common = common_suffix(stats);
+    let level = level.max(1) as usize;
+    // Each symbol's range of [0, 1): where it starts and how wide.
+    let total: f64 = alphabet.iter().map(|a| a.1).sum::<f64>().max(f64::MIN_POSITIVE);
+    let mut ranges: Vec<(u32, f64, f64)> = Vec::with_capacity(alphabet.len());
+    let mut at = 0.0;
+    for &(sym, p) in alphabet {
+        ranges.push((sym, at / total, p / total));
+        at += p;
+    }
+    let range = |s: u32| ranges.iter().find(|r| r.0 == s).map_or((0.0, 1.0), |r| (r.1, r.2));
+    let (lo, hi) = stats
+        .words
+        .iter()
+        .map(|w| w.word.len())
+        .fold((usize::MAX, 0usize), |(lo, hi), l| (lo.min(l), hi.max(l)));
+    drawn
+        .words
+        .iter()
+        .map(|w| {
+            // The maps past the shared ones, nearest the view first.
+            let own = w.word.iter().rev().skip(common).take(level);
+            match style {
+                S::Path => {
+                    let (mut t, mut width) = (0.0f64, 1.0f64);
+                    for &s in own {
+                        let (start, w) = range(s);
+                        t += start * width;
+                        width *= w;
+                    }
+                    (t + 0.5 * width) as f32
+                }
+                S::PathDistinct => {
+                    // FNV-1a over the maps, then a finaliser, so paths
+                    // that differ in one map land far apart.
+                    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+                    for &s in own {
+                        h = (h ^ s as u64).wrapping_mul(0x100_0000_01b3);
+                    }
+                    h ^= h >> 33;
+                    h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
+                    h ^= h >> 33;
+                    ((h >> 40) as f64 / (1u64 << 24) as f64) as f32
+                }
+                S::Depth => {
+                    if hi > lo {
+                        ((w.word.len().saturating_sub(lo)) as f64 / (hi - lo) as f64) as f32
+                    } else {
+                        0.5
+                    }
+                }
+                S::OriginRadial | S::OriginHorizontal | S::OriginVertical => 0.0,
+            }
+        })
+        .collect()
+}
+
+/// Write PathMap colours into a packed table (`cylinder::pack` or
+/// `pack_words`): each word's colour fold becomes `H = 0, G = t`, so the
+/// kernel's `color_index * H + G` is the path's colour.
+pub fn recolour(table: &mut [f32], composable: bool, colours: &[f32]) {
+    if composable {
+        for (w, &t) in colours.iter().enumerate() {
+            let base = w * crate::scene::cylinder::WORD_FLOATS;
+            if base + 7 < table.len() {
+                table[base + 6] = 0.0;
+                table[base + 7] = t;
+            }
+        }
+    } else {
+        let stride = table.first().copied().unwrap_or(0.0) as usize;
+        for (w, &t) in colours.iter().enumerate() {
+            let base = crate::scene::cylinder::HEADER_FLOATS + w * stride;
+            if base + 2 < table.len() {
+                table[base + 1] = 0.0;
+                table[base + 2] = t;
+            }
+        }
+    }
+}
+
 /// The plan with only the words at `keep` (plan order), its mass,
 /// efficiency and depth recomputed and its references kept beside them.
 pub fn subset(plan: &Cylinders, keep: &[usize]) -> Cylinders {
@@ -355,6 +506,30 @@ mod tests {
         for bad in ["", "  ", "x1", "t", "t1a", "ta0", "t300", "t1 q2"] {
             assert_eq!(parse_pattern(bad), None, "{bad:?}");
         }
+    }
+
+    /// PathMap: the address past the shared maps, level by level; distinct
+    /// scatters; depth spans shortest to longest.
+    #[test]
+    fn path_colours_read_the_address_past_the_shared_maps() {
+        use crate::scene::palette::PathMapStyle as S;
+        // Every word ends with 9 (shared); past it, 1 or 2.
+        let p = plan(vec![word(&[1, 9], 0.2, 1.0), word(&[2, 9], 0.2, 1.0), word(&[1, 1, 9], 0.2, 1.0)]);
+        assert_eq!(common_suffix(&p), 1);
+        // Symbol 1 twice as likely as 2 or 9: ranges [0, 1/2), [1/2, 3/4),
+        // [3/4, 1).
+        let alphabet = [(1, 0.5), (2, 0.25), (9, 0.25)];
+        let path = path_colours(&p, &p, S::Path, 1, &alphabet);
+        assert!((path[0] - 0.25).abs() < 1e-6 && (path[1] - 0.625).abs() < 1e-6, "{path:?}");
+        assert_eq!(path[0], path[2], "level 1 reads one map past the shared ones");
+        let deeper = path_colours(&p, &p, S::Path, 2, &alphabet);
+        assert!(deeper[2] < deeper[0] && deeper[0] < 0.5, "level 2 subdivides within the range: {deeper:?}");
+        let distinct = path_colours(&p, &p, S::PathDistinct, 1, &alphabet);
+        assert_ne!(distinct[0], distinct[1]);
+        assert_eq!(distinct[0], distinct[2]);
+        let depth = path_colours(&p, &p, S::Depth, 1, &alphabet);
+        assert_eq!(depth, vec![0.0, 0.0, 1.0]);
+        assert_eq!(path_colours(&p, &p, S::OriginRadial, 1, &alphabet), vec![0.0; 3]);
     }
 
     /// A piece opened to look inside is split, as is every piece holding

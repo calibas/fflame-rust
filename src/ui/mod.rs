@@ -703,8 +703,10 @@ pub struct PathClickInfo {
     pub fractal_coords: (f64, f64),
     /// Distance from click to found pixel (0 if exact match)
     pub search_distance: f32,
-    /// Path data at the found pixel
-    pub path_entry: crate::renderer::PathEntry,
+    /// The path the pixel was last drawn through, and how many of its
+    /// last transforms every path on screen shares (docs/projects/
+    /// word-editing.md §10); `None` where no path drew it.
+    pub path: Option<(Vec<u32>, usize)>,
     /// 5x5 color preview centered on found pixel (RGBA, row-major)
     /// May be smaller if near edges
     pub color_preview: Vec<[u8; 4]>,

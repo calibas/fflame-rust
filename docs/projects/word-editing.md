@@ -162,7 +162,7 @@ count as efficiency 1.
   labelled by the map it adds, numbered as the Transforms panel numbers
   them: `T2·1` is transform 2's first arm, and the arm is shown only for
   a transform that has arms. The tooltip gives the whole path in the
-  order the maps are applied (`T2·1 → T4`).
+  order the maps are applied (`T2·1 > T4`; egui's font has no `→`).
   - **What a row shows:** the branch's share of the view and its word
     count. A branch where nothing was measured shows its share of the
     samples instead. Trimmed branches are struck through.
@@ -264,3 +264,91 @@ count as efficiency 1.
 ## 8. Order
 
 Phase 1, measured on the two frames, then 2, then 3.
+
+## 10. PathMap colours by path (2026-09-24)
+
+- **What was wrong.** PathMap coloured each pixel from the history of
+  the first thread to reach it. That history was the thread's first 32
+  transform choices, or a rolling last 32, stored 4 bits each, so it
+  handled at most 16 transforms and no arms.
+  - Prefix coloured by the start of the orbit, which the chaos game has
+    long forgotten, so it was noise.
+  - Suffix read the wrong 8 steps once a thread was past 32 iterations.
+  - Depth was the iteration count at that first hit.
+  - Origin was the thread's random starting point, forgotten after
+    burn-in.
+  - One sample coloured a whole pixel.
+- **Now.** Every sample Focused Rendering draws goes through a path of
+  the plan, and a part of the picture is its path. So a path's colour is
+  exact, and colours accumulate per sample like the palette's.
+  - The Path, Path (distinct) and Depth styles colour each path on the
+    CPU (`word_tree::path_colours`). The colour is packed as the path's
+    colour fold with `H = 0`, so the kernel's `color_index * H + G` is
+    the colour, with no shader change (`word_tree::recolour`).
+  - Origin reads the point each sample started from, in the shader
+    (`pathmap_origin`).
+  - No per-pixel history remains. The buffer went from 28 bytes a pixel
+    to 4, and the tone map's PathMap branch is gone. PathMap runs the
+    palette's colour flow, so with Focused Rendering off or in 3D it is
+    the palette, bit for bit.
+- **Styles** (`PathMapStyle`; the old names load as the new):
+  - **Path**: a gradient by address. It reads `path_map_level`
+    transforms of the path, counted from where the paths on screen
+    first differ (`word_tree::common_suffix`), so it keeps working at
+    depth.
+    - The last transform picks a range of the palette, and the one
+      before it a range within that. Each range is as wide as its
+      transform's (and arm's) chance, so the palette spreads over the
+      picture as the fractal's measure does. It depends only on the
+      flame, so colours hold still across zooms and frames.
+    - Equal ranges were tried first. On the Grand Julian the dominant
+      parts fell in a few adjacent ranges, and most of the picture came
+      out one colour.
+  - **Path (distinct)**: the same transforms, hashed, so neighbouring
+    parts differ.
+  - **Depth**: the path's length, from the shortest on screen to the
+    longest. It shows where Focused Rendering had to divide finely.
+  - **Origin (radial / horizontal / vertical)**: where the point was
+    before its path carried it on screen, which is a point of the
+    fractal. It is read in the fractal's frame (`Backward::frame`): the
+    median in each axis, and the radius nineteen points in twenty lie
+    within.
+    - The walk's own `extent` was the farthest point, hundreds of times
+      the body's size for julian and bubble. It made every point read as
+      central, so the whole picture came out one colour.
+    - Each part of the picture shows its own copy of the fractal's
+      gradient: a self-similar colouring.
+- **Level.** A path style reads `level` transforms of each path, and
+  zoomed out the plan's paths are one transform long. So the planner
+  splits every word shorter than the level (`PlanOptions::min_len`), and
+  PathMap keeps the plan at any zoom (`keeps_plan`).
+  - A word that must be split but has no indexed points is carried from
+    its replay's landed points, whatever forcing it would waste.
+    Previously it was kept whole (`FORCEDCH`), which undid the split for
+    11 of the Grand Julian's 26 top-level paths.
+  - Only a blur's path stays whole, because its region is the whole
+    fractal.
+- **Right-click.** The shader records, per pixel, the path it was last
+  drawn through (`path_ids`: 1-based into the drawn words).
+  - The overlay shows that path and offers to remove the part it names
+    at several sizes: from one transform past the ones every path on
+    screen shares (fewer would remove the whole view) up to the whole
+    path.
+  - `load_config` now allocates the id buffer for a loaded PathMap
+    config; before, only a switch to PathMap did.
+- **Removed.** The capture and tracking modes, `PathEntry`,
+  `path_filter`-era helpers, and the tone map's path buffer read. Files
+  that have the capture and tracking modes load, and they are ignored.
+- **Gate** (`pathmap_colours_by_path`, GPU, the Grand Julian at zoom 1).
+  - Seven style/level renders to `output/pathmap/`, each lit and each
+    unlike the others, plus copies with a full-hue palette.
+  - With Focused Rendering off, PathMap equals the palette bit for bit.
+  - Level 2 splits every path but the blur's (1,256 paths).
+  - The right-click reads a two-transform path at a lit pixel.
+  - In the app, the Colors panel's new controls and the overlay were
+    checked on screen.
+  - The visual suite passes, 330 of 330.
+- **Palette choice.** Every style reads the palette. Where the flame's
+  palette has a dark stretch (the Grand Julian's fades to black), the
+  parts that map there are dark. A full-hue palette shows every part.
+

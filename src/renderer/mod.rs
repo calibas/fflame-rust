@@ -8,7 +8,7 @@ pub mod dof_pass;
 pub mod density_stats;
 pub mod thumbnail;
 
-pub use compute_kernel::{FlameRenderer, PathEntry, TargetingState};
+pub use compute_kernel::{FlameRenderer, TargetingState};
 pub use histogram::{compute_histogram_async, DensityHistogram, HISTOGRAM_BINS};
 pub use render::{render, render_with, NoProgress, RenderEngines, RenderError, RenderJob, RenderOutput, RenderProgress};
 pub use thumbnail::{render_thumbnail_async, THUMBNAIL_ITERATIONS, THUMBNAIL_ITERATIONS_PER_THREAD, THUMBNAIL_SIZE};

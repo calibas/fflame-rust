@@ -822,6 +822,7 @@ impl Cylinders {
         gpu: Option<&mut crate::scene::plan_gpu::GpuPlanner>,
         removals: &[Vec<u32>],
         refine: &[Vec<u32>],
+        min_len: usize,
         slicer: &crate::scene::backward::Slicer,
     ) -> Result<Self, NoCylinders> {
         use crate::scene::backward::{Backward, Blocking, CpuEval, PlanOptions, Trace, TIME_BUDGET};
@@ -836,7 +837,7 @@ impl Cylinders {
         };
         // Nothing blocks, so the web's plan needs no inline budget; the
         // desktop's safety net applies.
-        let opts = PlanOptions { budget: TIME_BUDGET, removals, refine, ..Default::default() };
+        let opts = PlanOptions { budget: TIME_BUDGET, removals, refine, min_len, ..Default::default() };
         let mut tr = Trace::default();
         slicer.tick().await;
         let eval = match gpu {
@@ -2974,6 +2975,112 @@ mod gpu_tests {
         println!("  frame coverage: {before:.3} before the resize, {after:.3} after");
         assert!(before > 0.3, "the plan did not draw before the resize: coverage {before:.3}");
         assert!(after > 0.5 * before, "after a resize the plan no longer draws: coverage {after:.3} against {before:.3}");
+    }
+
+    /// **PathMap colours by path** (docs/projects/word-editing.md §10), on
+    /// the Grand Julian at zoom 1, where the plan is kept for it. Each
+    /// style renders to `output/pathmap/`; they differ from one another.
+    /// Level 2 splits every path to two maps. The right-click reads a
+    /// path of the plan at a lit pixel. And with Focused Rendering off,
+    /// PathMap is the palette, bit for bit.
+    #[test]
+    #[ignore = "needs a GPU; reads output/flame-zoom"]
+    fn pathmap_colours_by_path() {
+        use crate::renderer::TargetingState as TS;
+        use crate::scene::palette::{ColorMode, PathMapStyle as S};
+        const N: u32 = 256;
+        let Ok(text) = std::fs::read_to_string("output/flame-zoom/grand-julian-zoom1.fflame") else { return };
+        let mut cfg: FractalConfig = serde_json::from_str(&text).expect("a config");
+        cfg.deterministic_rng = true;
+        cfg.zoom = 1.0;
+        cfg.cylinder_targeting = true;
+        cfg.color_mode = ColorMode::PathMap;
+        let _ = std::fs::create_dir_all("output/pathmap");
+        let mut images = Vec::new();
+        for (style, level, name) in [
+            (S::Path, 1, "path-1"),
+            (S::Path, 2, "path-2"),
+            (S::PathDistinct, 1, "distinct-1"),
+            (S::PathDistinct, 2, "distinct-2"),
+            (S::Depth, 2, "depth"),
+            (S::OriginRadial, 2, "origin-radial"),
+            (S::OriginHorizontal, 2, "origin-horizontal"),
+        ] {
+            cfg.path_map_style = style;
+            cfg.path_map_level = level;
+            let img = render(&cfg, N, 40_000_000);
+            let _ = image::save_buffer(format!("output/pathmap/{name}.png"), &img, N, N, image::ColorType::Rgba8);
+            // And with a palette of every hue, where no part is lost to a
+            // dark stretch of the flame's own.
+            let mut rainbow = cfg.clone();
+            rainbow.palette = crate::scene::palette::Palette::rainbow();
+            let _ = image::save_buffer(format!("output/pathmap/{name}-rainbow.png"), &render(&rainbow, N, 40_000_000), N, N, image::ColorType::Rgba8);
+            images.push((name, img));
+        }
+        let lit = |img: &[u8]| img.chunks(4).filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24).count();
+        for (name, img) in &images {
+            assert!(lit(img) > (N * N / 10) as usize, "{name}: nearly empty ({} lit)", lit(img));
+        }
+        for i in 0..images.len() {
+            for j in i + 1..images.len() {
+                let differ = images[i].1.chunks(4).zip(images[j].1.chunks(4)).filter(|(a, b)| a != b).count();
+                assert!(differ > (N * N / 20) as usize, "{} and {} are nearly the same picture", images[i].0, images[j].0);
+            }
+        }
+
+        // Off: the palette, exactly.
+        cfg.cylinder_targeting = false;
+        let off = render(&cfg, N, 40_000_000);
+        cfg.color_mode = ColorMode::Palette;
+        let palette = render(&cfg, N, 40_000_000);
+        assert!(off == palette, "PathMap without Focused Rendering is not the palette");
+
+        // Level 2 splits the plan, and the right-click finds its paths.
+        let (device, queue) = device();
+        cfg.cylinder_targeting = true;
+        cfg.color_mode = ColorMode::PathMap;
+        cfg.path_map_style = S::PathDistinct;
+        cfg.path_map_level = 2;
+        let mut r = crate::renderer::FlameRenderer::with_palette_size(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, 128, 128, &cfg.flame, cfg.palette_size);
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pathmap") });
+        r.load_config(&device, &mut enc, &queue, &cfg, &cfg.palette, 1, 0);
+        queue.submit(Some(enc.finish()));
+        r.update_path_features(&device, &queue, &cfg.flame);
+        for _ in 0..40 {
+            if r.sync_cylinders(&device, &queue, &cfg) {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pathmap reload") });
+                r.load_config(&device, &mut enc, &queue, &cfg, &cfg.palette, 1, 0);
+                queue.submit(Some(enc.finish()));
+            }
+            if matches!(r.targeting_state(), TS::Active { .. }) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let tree = r.word_tree().expect("PathMap keeps a plan at zoom 1");
+        // A blur's path cannot be split (its region is the whole
+        // fractal): the Grand Julian's is transform 1's, `t0a0`.
+        let whole: Vec<String> = tree.branches.iter().filter(|b| b.leaf).map(|b| crate::scene::word_tree::pattern_text(&b.pattern)).collect();
+        println!("  paths still one map long at level 2: {whole:?}");
+        assert!(whole.iter().all(|w| w == "t0a0"), "level 2: a path other than the blur's is one map long: {whole:?}");
+        for _ in 0..6 {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pathmap frame") });
+            r.compute_pass(&mut enc, &queue, &device, 64, 64, 0, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, cfg.speed_factor, false, false);
+            queue.submit(Some(enc.finish()));
+            let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        }
+        let mut found = None;
+        'scan: for y in (8..120).step_by(8) {
+            for x in (8..120).step_by(8) {
+                if let Some(p) = pollster::block_on(r.read_path_at(&device, &queue, x, y)).expect("read") {
+                    found = Some(p);
+                    break 'scan;
+                }
+            }
+        }
+        let (word, shared) = found.expect("some pixel was drawn through a path");
+        println!("  {} paths at zoom 1, level 2; a pixel's path: {} ({} shared)", tree.words, crate::scene::word_tree::pattern_text(&word), shared);
+        assert!(word.len() >= 2, "a path of a level-2 plan has two maps");
     }
 
     /// **Always keeps a plan zoomed out, and an opened path is split.**

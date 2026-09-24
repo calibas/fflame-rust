@@ -1800,23 +1800,6 @@ impl<'a> PanelViewer<'a> {
         _image_response: &egui::Response,
         click_info: &super::PathClickInfo,
     ) {
-        // Get transform names for display
-        let flame = &self.context.config_manager.active_config().flame;
-        let transform_count = flame.transforms.len();
-
-        // Build path string
-        let path_vec = click_info.path_entry.to_vec();
-
-        // Format path: show transform indices and names
-        let path_str: Vec<String> = path_vec.iter().map(|&idx| {
-            let idx = idx as usize;
-            if idx < transform_count {
-                format!("T{}", idx)
-            } else {
-                format!("?{}", idx)
-            }
-        }).collect();
-
         // Create overlay window anchored to top-left of viewport
         egui::Area::new(egui::Id::new("path_overlay"))
             .fixed_pos(ui.min_rect().min + egui::vec2(10.0, 10.0))
@@ -1847,6 +1830,7 @@ impl<'a> PanelViewer<'a> {
                             // Left column: coordinates and path info
                             ui.vertical(|ui| {
                                 ui.set_min_width(280.0);
+                                ui.set_max_width(280.0);
 
                                 // Pixel coordinates section
                                 ui.label(egui::RichText::new(t!("path_overlay.coordinates")).strong().color(egui::Color32::LIGHT_GRAY));
@@ -1873,74 +1857,45 @@ impl<'a> PanelViewer<'a> {
                                         .color(egui::Color32::LIGHT_GREEN));
                                 });
 
-                                // IFS starting point
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(t!("path_overlay.ifs_start")).color(egui::Color32::GRAY));
-                                    ui.label(egui::RichText::new(format!("({:.4}, {:.4})",
-                                        click_info.path_entry.initial_x, click_info.path_entry.initial_y))
-                                        .color(egui::Color32::LIGHT_BLUE));
-                                });
-
                                 ui.add_space(6.0);
-
-                                // Path section
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(t!("path_overlay.path_label")).strong().color(egui::Color32::LIGHT_GRAY));
-                                    ui.label(egui::RichText::new(t!("path_overlay.path_iterations", count = click_info.path_entry.iteration_count))
-                                        .small()
-                                        .color(egui::Color32::GRAY));
-                                });
-                                ui.add_space(2.0);
-
-                                // Wrap path in a scrollable area if it's long
-                                if !path_str.is_empty() {
-                                    egui::ScrollArea::horizontal().max_width(260.0).show(ui, |ui| {
-                                        ui.horizontal_wrapped(|ui| {
-                                            for (i, name) in path_str.iter().enumerate() {
-                                                if i > 0 {
-                                                    ui.label(egui::RichText::new(">").color(egui::Color32::DARK_GRAY));
+                                // The path, and the parts of the picture it
+                                // could remove: the last few transforms,
+                                // from where the paths on screen first
+                                // differ (fewer would remove the whole
+                                // view), up to the whole path.
+                                ui.label(egui::RichText::new(t!("path_overlay.path_label")).strong().color(egui::Color32::LIGHT_GRAY));
+                                match &click_info.path {
+                                    Some((word, shared)) => {
+                                        let flame = &self.context.config_manager.active_config().flame;
+                                        ui.label(
+                                            egui::RichText::new(super::paths_panel::label(word, flame))
+                                                .color(egui::Color32::from_rgb(100, 180, 255)),
+                                        );
+                                        ui.add_space(4.0);
+                                        let first = (*shared + 1).min(word.len());
+                                        let mut levels: Vec<usize> = (first..=word.len()).take(4).collect();
+                                        if levels.last() != Some(&word.len()) {
+                                            levels.push(word.len());
+                                        }
+                                        let mut remove: Option<Vec<u32>> = None;
+                                        for n in levels {
+                                            let part = word[word.len() - n..].to_vec();
+                                            ui.horizontal(|ui| {
+                                                if ui.small_button("🗑").on_hover_text(t!("path_overlay.tooltip_remove")).clicked() {
+                                                    remove = Some(part.clone());
                                                 }
-                                                ui.label(egui::RichText::new(name).color(egui::Color32::from_rgb(100, 180, 255)));
-                                            }
-                                        });
-                                    });
-                                } else {
-                                    ui.label(egui::RichText::new(t!("path_overlay.path_empty")).color(egui::Color32::GRAY));
+                                                ui.label(egui::RichText::new(super::paths_panel::label(&part, flame)).color(egui::Color32::WHITE));
+                                            });
+                                        }
+                                        if let Some(p) = remove {
+                                            super::paths_panel::remove_path(self.context.config_manager, p);
+                                            *self.context.close_path_overlay = true;
+                                        }
+                                    }
+                                    None => {
+                                        ui.label(egui::RichText::new(t!("path_overlay.path_none")).color(egui::Color32::GRAY));
+                                    }
                                 }
-
-                                ui.add_space(6.0);
-
-                                // Hash debug info (shows Prefix Distinct calculation)
-                                use crate::renderer::PathEntry;
-                                let prefix = click_info.path_entry.get_prefix();
-                                let iter_count = click_info.path_entry.iteration_count;
-                                // Mix iteration_count into value before hashing (matches GPU)
-                                let mixed = prefix ^ (iter_count.wrapping_mul(0x9E3779B9));
-                                let hash = PathEntry::scramble_hash(mixed);
-                                let hue = click_info.path_entry.compute_prefix_distinct_hue();
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(t!("path_overlay.debug_prefix_distinct")).strong().color(egui::Color32::LIGHT_GRAY));
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(t!("path_overlay.debug_path0", value = format!("{:08X}", prefix)))
-                                        .small()
-                                        .color(egui::Color32::YELLOW));
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(t!("path_overlay.debug_mixed", value = format!("{:08X}", mixed)))
-                                        .small()
-                                        .color(egui::Color32::YELLOW));
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(t!("path_overlay.debug_hash", value = format!("{:08X}", hash)))
-                                        .small()
-                                        .color(egui::Color32::YELLOW));
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(t!("path_overlay.debug_hue", value = format!("{:.6}", hue)))
-                                        .small()
-                                        .color(egui::Color32::YELLOW));
-                                });
                             });
 
                             ui.add_space(12.0);
