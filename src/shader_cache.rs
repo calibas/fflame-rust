@@ -15,7 +15,7 @@ pub struct ShaderCache {
     /// Currently active variation names and weights
     active_variations: HashMap<String, f32>,
 
-    /// Whether path features (PathMap mode or path filters) are enabled
+    /// Whether path features (the PathMap mode) are enabled
     /// When false, uses simplified shaders without path tracking code
     path_features_enabled: bool,
 

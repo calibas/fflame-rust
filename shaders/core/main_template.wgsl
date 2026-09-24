@@ -428,8 +428,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 {{/if}}
 
 {{#if PATH_TRACKING}}
-        // Path tracking: needed for path map mode OR when filters are active
-        let needs_path_tracking = (COLOR_MODE == 2u) || (params.num_path_filters > 0u);
+        // Path tracking: needed for path map mode
+        let needs_path_tracking = COLOR_MODE == 2u;
         if (needs_path_tracking) {
             // For FirstAfterBurnIn mode (1), only track path after burn-in
             // (fuse == 0 — also re-armed by the bad-value respawn)
@@ -453,11 +453,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 }
                 // Always increment - this is the actual iteration count (not capped at 32)
                 path_iteration = path_iteration + 1u;
-
-                // Check path filters - terminate thread if path matches blocklist
-                if (check_path_filters(path, path_iteration)) {
-                    break;
-                }
             }
         }
 {{/if}}

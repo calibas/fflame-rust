@@ -92,7 +92,7 @@ menu:
   window_config_dialog: "📄 Config Import/Export"
   window_history: "⮪ Undo/Redo History"
   window_animation: "🎬 Animation"
-  window_path_editor: "🧪 Path Editor (Experimental)"
+  window_words: "🌳 Words"
   window_random_generator: "🎲 Random Generator"
   window_effects: "✨ Effects"
   window_variations: "🌀 Variations"
@@ -187,7 +187,7 @@ panels:
   help: "Help"
   keyboard_shortcuts: "Keyboard Shortcuts"
   config_dialog: "Config Import/Export"
-  path_editor: "Path Editor"
+  words: "Words"
   export: "Export"
   random_generator: "Random Generator"
   effects: "Effects"
@@ -1554,43 +1554,22 @@ track_editor:
   close: "Close"
   warning_replace: "⚠ A track with this target already exists and will be replaced"
 
-# Path Editor Panel
-path_editor:
-  title: "Path Editor"
-
-  # Experimental warning
-  experimental: "Experimental Feature"
-  experimental_hint: "This feature is under development and may change or be removed."
-
-  # Header
-  heading: "Path Filters"
-  description: "Block paths matching specific transform sequences."
-  suffix_hint: "Suffix: matches at any iteration depth"
-  at_depth_hint: "At Depth: matches only at specific iteration count"
-
-  # Filter list
-  active_filters: "Active Filters"
-  no_filters: "No filters defined"
-  suffix: "Suffix"
-  at_depth: "At Depth"
-
-  # Add new filter
-  add_new_filter: "Add New Filter"
-  type: "Type:"
-  pattern: "Pattern:"
-  pattern_hint: "e.g., 0,1 or 0,0,1"
-  depth: "Depth:"
-  transform_indices_hint: "Transform indices: 0-%{max} (comma-separated, max 8)"
-  invalid_pattern: "⚠ Invalid pattern"
-  add_filter: "➕ Add Filter"
-
-  # Actions
-  apply_filters: "✓ Apply Filters"
-  clear_all: "Clear All"
-
-  # Status
-  status: "%{count} active filter(s)"
-  status_unsaved: "%{count} active filter(s) (unsaved)"
+# Words Panel (docs/projects/word-editing.md §6)
+words:
+  tooltip_targeting: "Words are the plan's: cylinder targeting makes one for the view, and removing a branch removes its piece of the picture from it. 2D only."
+  needs_targeting: "Turn on cylinder targeting to edit the picture by its words."
+  no_plan: "No plan is drawn for this view: targeting declined it, or it is 3D."
+  summary: "%{words} words, %{drawn} drawn. Each branch is a piece of the picture: its maps, the last applied at the top."
+  tooltip_branch: "%{path}\nThe maps are in the order they are applied; the last lands in the view."
+  unmeasured: "not measured (%{percent}% of samples)"
+  word_count: "%{count} words"
+  trimmed: "trimmed"
+  solo: "Solo"
+  tooltip_solo: "Hold to draw only this branch."
+  tooltip_remove: "Remove this branch: its piece of the picture is gone at every zoom. Undoable."
+  more: "... %{count} more (%{percent}% of the view)"
+  removed: "Removed"
+  tooltip_restore: "Restore this branch."
 
 # Settings Panel
 settings:

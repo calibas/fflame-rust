@@ -864,8 +864,11 @@ pub struct GpuParams {
     pub path_map_style: u32, // 0=Prefix, 1=Suffix, 2=PrefixDistinct, 3=SuffixDistinct
     pub path_capture_mode: u32, // 0=FirstHit, 1=FirstAfterBurnIn, 2=DeepestHit
     pub path_tracking_mode: u32, // 0=First (first 32 iterations), 1=Recent (rolling window of 32)
-    pub num_path_filters: u32, // Number of active path filters (0 = disabled)
-    pub min_suffix_filter_length: u32, // Minimum length among depth=0 filters (for optimization)
+    /// Where the path filters' count and minimum length were: the Path
+    /// Editor they served was replaced by word editing
+    /// (docs/projects/word-editing.md). Kept as padding so `post_symmetry`
+    /// stays on its 16-byte boundary. Mirror in header.wgsl.
+    pub _pad_path_filters: [u32; 2],
     pub background_r: f32, // Background color R (for depth fog)
     pub background_g: f32, // Background color G (for depth fog)
     pub background_b: f32, // Background color B (for depth fog)
@@ -975,70 +978,6 @@ impl GpuPostSymmetry {
             rotation: 0.0,
             _pad_a: 0.0,
             _pad_b: 0.0,
-        }
-    }
-}
-
-/// Maximum number of path filters supported
-pub const MAX_PATH_FILTERS: usize = 64;
-
-/// GPU representation of a path filter (must match WGSL PathFilter struct)
-/// Used to block specific transform sequences during iteration
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct GpuPathFilter {
-    /// Packed pattern (up to 8 iterations at 4 bits each, LSB = first)
-    pub pattern: u32,
-    /// Number of iterations in pattern (1-8)
-    pub length: u32,
-    /// 0 = suffix match (any depth), >0 = match at this exact depth
-    pub depth: u32,
-    /// Padding for 16-byte alignment
-    pub _padding: u32,
-}
-
-impl GpuPathFilter {
-    /// Create an empty (unused) filter
-    pub fn empty() -> Self {
-        Self {
-            pattern: 0,
-            length: 0,
-            depth: 0,
-            _padding: 0,
-        }
-    }
-
-    /// Create a suffix filter (matches at any depth)
-    /// pattern: array of transform indices (0-15), up to 8 elements
-    pub fn suffix(pattern: &[u32]) -> Self {
-        assert!(pattern.len() <= 8, "Pattern can have at most 8 elements");
-        let mut packed = 0u32;
-        for (i, &idx) in pattern.iter().enumerate() {
-            packed |= (idx & 0xF) << (i * 4);
-        }
-        Self {
-            pattern: packed,
-            length: pattern.len() as u32,
-            depth: 0, // 0 = suffix match
-            _padding: 0,
-        }
-    }
-
-    /// Create an exact depth filter (only matches at specific iteration depth)
-    /// pattern: array of transform indices (0-15), up to 8 elements
-    /// depth: the iteration count at which this pattern should match
-    pub fn at_depth(pattern: &[u32], depth: u32) -> Self {
-        assert!(pattern.len() <= 8, "Pattern can have at most 8 elements");
-        assert!(depth >= pattern.len() as u32, "Depth must be >= pattern length");
-        let mut packed = 0u32;
-        for (i, &idx) in pattern.iter().enumerate() {
-            packed |= (idx & 0xF) << (i * 4);
-        }
-        Self {
-            pattern: packed,
-            length: pattern.len() as u32,
-            depth, // >0 = exact depth match
-            _padding: 0,
         }
     }
 }
@@ -1294,15 +1233,9 @@ pub struct FlameBuffers {
     // None when path features are disabled to save ~58MB at 1920×1080
     pub path_buffer: Option<Buffer>,
 
-    // Path filter buffer for blocking specific transform sequences (OPTIONAL)
-    // Layout: MAX_PATH_FILTERS × GpuPathFilter (16 bytes each)
-    // None when path features are disabled
-    pub path_filter_buffer: Option<Buffer>,
-
-    // Dummy buffers for binding when path features are disabled
-    // WebGPU requires all bindings to be present, so we bind minimal buffers when disabled
+    // Dummy buffer for binding when path features are disabled
+    // WebGPU requires all bindings to be present, so we bind a minimal buffer when disabled
     pub dummy_path_buffer: Buffer,
-    pub dummy_filter_buffer: Buffer,
 
     // Xaos (chaos) transition weights buffer (OPTIONAL)
     // Layout: N × N matrix where N = num_transforms
@@ -1425,7 +1358,6 @@ impl FlameBuffers {
         self.histogram_buffer_scratch.destroy();
         // Optional / feature buffers.
         if let Some(b) = &self.path_buffer { b.destroy(); }
-        if let Some(b) = &self.path_filter_buffer { b.destroy(); }
         if let Some(b) = &self.xaos_buffer { b.destroy(); }
         if let Some(b) = &self.bias_buffer { b.destroy(); }
         if let Some(b) = &self.cylinder_buffer { b.destroy(); }
@@ -1445,7 +1377,6 @@ impl FlameBuffers {
         self.histogram_blur_params_buffer_h.destroy();
         self.histogram_blur_params_buffer_v.destroy();
         self.dummy_path_buffer.destroy();
-        self.dummy_filter_buffer.destroy();
         self.dummy_xaos_buffer.destroy();
         self.dummy_bias_buffer.destroy();
         self.dummy_cylinder_buffer.destroy();
@@ -1561,8 +1492,7 @@ impl FlameBuffers {
             path_map_style: 0,
             path_capture_mode: 0, // FirstHit by default
             path_tracking_mode: 0, // First (first 32 iterations) by default
-            num_path_filters: 0, // No filters by default
-            min_suffix_filter_length: 0, // No filters by default
+            _pad_path_filters: [0; 2],
             background_r: 0.0,
             background_g: 0.0,
             background_b: 0.0,
@@ -1704,22 +1634,14 @@ impl FlameBuffers {
         // See create_path_buffers() and drop_path_buffers() methods
         // Initially None to save memory (~58MB at 1920×1080)
         let path_buffer: Option<Buffer> = None;
-        let path_filter_buffer: Option<Buffer> = None;
 
-        // Create minimal dummy buffers for binding when path features are disabled
+        // Create a minimal dummy buffer for binding when path features are disabled
         // WebGPU requires all declared bindings to be bound, even if unused
         // Path buffer: 28 bytes minimum (PathEntry = 7 × u32)
-        // Filter buffer: 16 bytes minimum (GpuPathFilter = 4 × u32)
         let dummy_path_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Dummy Path Buffer"),
             size: 28,  // PathEntry size: 7 × sizeof(u32) = 28 bytes
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let dummy_filter_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("Dummy Filter Buffer"),
-            size: 16,  // GpuPathFilter size: 4 × sizeof(u32) = 16 bytes
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
@@ -1938,9 +1860,7 @@ impl FlameBuffers {
             census_region: false,
             accum_depth_buffer: None,
             path_buffer,
-            path_filter_buffer,
             dummy_path_buffer,
-            dummy_filter_buffer,
             xaos_buffer: None,  // Created on demand when xaos is used
             bias_buffer: None,  // Created on demand when the bias is enabled
             dummy_bias_buffer,
@@ -2591,9 +2511,9 @@ impl FlameBuffers {
     }
 
     /// Create path buffers if not already created
-    /// Call when PathMap color mode is enabled or path filters are added
+    /// Call when PathMap color mode is enabled
     /// Returns true if buffers were created (bind groups need rebuilding)
-    pub fn create_path_buffers(&mut self, device: &Device, queue: &Queue) -> bool {
+    pub fn create_path_buffers(&mut self, device: &Device) -> bool {
         if self.path_buffer.is_some() {
             return false;  // Already created
         }
@@ -2614,28 +2534,11 @@ impl FlameBuffers {
             mapped_at_creation: false,
         }));
 
-        // Create path filter buffer (MAX_PATH_FILTERS × 16 bytes each)
-        let path_filter_buffer_size = (MAX_PATH_FILTERS * std::mem::size_of::<GpuPathFilter>()) as u64;
-        self.path_filter_buffer = Some(device.create_buffer(&BufferDescriptor {
-            label: Some("Path Filter Buffer"),
-            size: path_filter_buffer_size,
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        }));
-
-        // Initialize filter buffer with empty filters
-        let empty_filters = vec![GpuPathFilter::empty(); MAX_PATH_FILTERS];
-        queue.write_buffer(
-            self.path_filter_buffer.as_ref().unwrap(),
-            0,
-            bytemuck::cast_slice(&empty_filters),
-        );
-
         true  // Bind groups need rebuilding
     }
 
     /// Drop path buffers to free memory
-    /// Call when PathMap color mode is disabled AND no path filters are active
+    /// Call when PathMap color mode is disabled
     /// Returns true if buffers were dropped (bind groups need rebuilding)
     pub fn drop_path_buffers(&mut self) -> bool {
         if self.path_buffer.is_none() {
@@ -2648,7 +2551,6 @@ impl FlameBuffers {
         );
 
         self.path_buffer = None;
-        self.path_filter_buffer = None;
 
         true  // Bind groups need rebuilding
     }
@@ -2657,23 +2559,6 @@ impl FlameBuffers {
     /// Use this when creating bind groups
     pub fn get_path_buffer_for_binding(&self) -> &Buffer {
         self.path_buffer.as_ref().unwrap_or(&self.dummy_path_buffer)
-    }
-
-    /// Get the path filter buffer for binding (real or dummy)
-    /// Use this when creating bind groups
-    pub fn get_filter_buffer_for_binding(&self) -> &Buffer {
-        self.path_filter_buffer.as_ref().unwrap_or(&self.dummy_filter_buffer)
-    }
-
-    /// Write path filters to the GPU buffer
-    /// Only writes if path buffers are enabled
-    pub fn write_path_filters(&self, queue: &Queue, filters: &[GpuPathFilter]) {
-        if let Some(ref filter_buffer) = self.path_filter_buffer {
-            // Pad with empty filters if needed
-            let mut padded_filters = filters.to_vec();
-            padded_filters.resize(MAX_PATH_FILTERS, GpuPathFilter::empty());
-            queue.write_buffer(filter_buffer, 0, bytemuck::cast_slice(&padded_filters));
-        }
     }
 
     // ============================================================

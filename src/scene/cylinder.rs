@@ -2907,6 +2907,60 @@ mod gpu_tests {
         );
     }
 
+    /// **The Words panel sees what is drawn** (docs/projects/word-editing.md
+    /// §6), through the renderer the app holds: the tree of the plan on
+    /// screen, a solo that draws one branch and restarts the picture as it
+    /// is pressed and released, and a removal that takes a branch out.
+    #[test]
+    #[ignore = "needs a GPU; reads output/flame-zoom"]
+    fn the_words_panel_sees_what_is_drawn() {
+        use crate::renderer::TargetingState as TS;
+        let Ok(text) = std::fs::read_to_string("output/flame-zoom/grand-julian-zoom1.fflame") else { return };
+        let (device, queue) = device();
+        let mut cfg: FractalConfig = serde_json::from_str(&text).expect("a config");
+        cfg.cylinder_targeting = true;
+        let mut r = crate::renderer::FlameRenderer::with_palette_size(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            180,
+            180,
+            &cfg.flame,
+            cfg.palette_size,
+        );
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("words panel") });
+        r.load_config(&device, &mut enc, &queue, &cfg, &cfg.palette, 1, 0);
+        queue.submit(Some(enc.finish()));
+        let _ = r.sync_cylinders(&device, &queue, &cfg);
+        let drawn = |r: &crate::renderer::FlameRenderer| match r.targeting_state() {
+            TS::Active { words, .. } => *words,
+            other => panic!("no plan drawn: {other:?}"),
+        };
+        let all = drawn(&r);
+        let tree = r.word_tree().expect("a tree");
+        assert_eq!(tree.words, all);
+        assert_eq!(tree.branches.iter().map(|b| b.words).sum::<usize>(), all, "every word is under a branch");
+        let flicker = tree.branches.iter().find(|b| b.pattern == [1]).expect("the flicker's branch").words;
+        let _ = r.take_plan_arrived();
+
+        r.set_word_solo(Some(vec![1]));
+        let _ = r.sync_cylinders(&device, &queue, &cfg);
+        assert_eq!(drawn(&r), flicker, "solo draws the branch alone");
+        assert!(r.take_plan_arrived(), "a solo restarts the picture");
+        assert_eq!(r.word_tree().expect("a tree").words, all, "the tree is the plan's, not the solo's");
+
+        r.set_word_solo(None);
+        let _ = r.sync_cylinders(&device, &queue, &cfg);
+        assert_eq!(drawn(&r), all, "released, everything is drawn");
+        assert!(r.take_plan_arrived(), "and the picture restarts again");
+
+        cfg.word_removals = vec!["t1a0".into()];
+        let _ = r.sync_cylinders(&device, &queue, &cfg);
+        let tree = r.word_tree().expect("a tree");
+        assert!(tree.branches.iter().all(|b| b.pattern != [1]), "the removed branch is gone from the tree");
+        println!("  {all} words; the flicker {flicker}; with it removed, {} drawn", drawn(&r));
+    }
+
     /// **A ticked box never reports "Not running."**
     ///
     /// The panel draws its status line only when cylinder targeting

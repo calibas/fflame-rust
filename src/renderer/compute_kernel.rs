@@ -489,6 +489,15 @@ pub struct FlameRenderer {
     /// The removals `cylinders` was filtered with
     /// (`FractalConfig::word_removals`).
     applied_removals: Vec<String>,
+    /// A branch drawn alone while the Words panel's solo button is held
+    /// (docs/projects/word-editing.md §6): its pattern. Transient -- not
+    /// in the config, not undoable, not in the plan key.
+    word_solo: Option<Vec<u32>>,
+    /// The solo `cylinders` was cut with.
+    applied_solo: Option<Vec<u32>>,
+    /// The Words panel's tree of the plan on screen, built when first
+    /// asked for after each plan is applied.
+    word_tree: std::sync::OnceLock<std::sync::Arc<crate::scene::word_tree::Tree>>,
     /// Fingerprint of everything the enumeration depends on, so the
     /// per-frame sync can skip the work when nothing moved.
     cylinder_key: Option<u64>,
@@ -542,8 +551,6 @@ pub struct FlameRenderer {
     use_dynamic_blend: bool, // true = exponential convergence (old), false = fixed blend rate (new)
     overwrite_mode: bool, // When true, replace accumulation buffer instead of blending (for live preview)
     num_transforms: u32, // Number of normal transforms
-    path_filters: Vec<crate::gpu::buffers::GpuPathFilter>, // Active path filters
-    min_suffix_filter_length: u32, // Minimum length among depth=0 filters (optimization)
 }
 
 impl FlameRenderer {
@@ -694,6 +701,9 @@ impl FlameRenderer {
             cylinders_full: None,
             applied_trim: (0.0, 0),
             applied_removals: Vec::new(),
+            word_solo: None,
+            applied_solo: None,
+            word_tree: std::sync::OnceLock::new(),
             cylinder_key: None,
             background_planning: false,
             plan_job: None,
@@ -716,8 +726,6 @@ impl FlameRenderer {
             use_dynamic_blend: true, // Default to clamped exponential (0.8 → 0.01)
             overwrite_mode: false, // Default to normal blending (progressive refinement)
             num_transforms: flame.transforms.len() as u32,
-            path_filters: Vec::new(), // No filters by default
-            min_suffix_filter_length: 0,
             census: false,
         }
     }
@@ -1001,8 +1009,7 @@ impl FlameRenderer {
             path_map_style: self.path_map_style as u32,
             path_capture_mode: self.path_capture_mode as u32,
             path_tracking_mode: self.path_tracking_mode as u32,
-            num_path_filters: self.path_filters.len() as u32,
-            min_suffix_filter_length: self.min_suffix_filter_length,
+            _pad_path_filters: [0; 2],
             background_r: self.background_r,
             background_g: self.background_g,
             background_b: self.background_b,
@@ -1019,11 +1026,6 @@ impl FlameRenderer {
             leak_probe: self.leak_probe,
         };
         self.buffers.update_params(queue, &params);
-
-        // Update path filter buffer if filters are active and buffers exist
-        if !self.path_filters.is_empty() {
-            self.buffers.write_path_filters(queue, &self.path_filters);
-        }
 
         // Track total iterations as the count of iterations that
         // actually contribute to the histogram — i.e. dispatched iters
@@ -2093,6 +2095,31 @@ impl FlameRenderer {
     }
 
     /// What cylinder targeting is doing for the current view.
+    /// The Words panel's tree of the plan on screen (docs/projects/
+    /// word-editing.md §6), or `None` when no plan is drawn. Built on the
+    /// first call after a plan is applied, then shared.
+    pub fn word_tree(&self) -> Option<std::sync::Arc<crate::scene::word_tree::Tree>> {
+        let full = self.cylinders_full.as_ref()?;
+        let tree = self.word_tree.get_or_init(|| {
+            let removals = crate::scene::word_tree::parse_removals(&self.applied_removals);
+            std::sync::Arc::new(crate::scene::word_tree::Tree::of(
+                full,
+                &removals,
+                self.applied_trim.0 as f64,
+                self.applied_trim.1 as usize,
+            ))
+        });
+        Some(tree.clone())
+    }
+
+    /// Draw only the branch `pattern` names -- or everything, for `None`
+    /// -- from the next `sync_cylinders` on, restarting the picture
+    /// when it changes. For the Words panel's solo button, pressed and
+    /// released; not part of the config.
+    pub fn set_word_solo(&mut self, pattern: Option<Vec<u32>>) {
+        self.word_solo = pattern;
+    }
+
     pub fn targeting_state(&self) -> &TargetingState {
         &self.targeting_state
     }
@@ -2230,9 +2257,8 @@ impl FlameRenderer {
             config
         };
         // 0. Check if shaders need to be recompiled (variations or constants changed)
-        // Determine if path features are needed (PathMap mode or path filters active)
-        let path_features_enabled = config.color_mode == ColorMode::PathMap
-            || !self.path_filters.is_empty();
+        // Determine if path features are needed (PathMap mode)
+        let path_features_enabled = config.color_mode == ColorMode::PathMap;
         // The enumeration decides whether the shader is built with
         // the forced prefix in it, so it has to run FIRST. It was
         // below this for one commit and the render came out as the
@@ -2465,8 +2491,7 @@ impl FlameRenderer {
             path_map_style: self.path_map_style as u32,
             path_capture_mode: self.path_capture_mode as u32,
             path_tracking_mode: self.path_tracking_mode as u32,
-            num_path_filters: self.path_filters.len() as u32,
-            min_suffix_filter_length: self.min_suffix_filter_length,
+            _pad_path_filters: [0; 2],
             background_r: config.background_color[0],
             background_g: config.background_color[1],
             background_b: config.background_color[2],
@@ -2557,8 +2582,7 @@ impl FlameRenderer {
 
         // Check if shaders need to be recompiled (variations or constants changed)
         let constants = self.build_shader_constants(flame, render_mode, preserve_z);
-        let path_features_enabled = self.color_mode == ColorMode::PathMap
-            || !self.path_filters.is_empty();
+        let path_features_enabled = self.color_mode == ColorMode::PathMap;
         let shaders_changed = self.pipelines.ensure_shaders_current_with_constants(
             device,
             flame,
@@ -2676,8 +2700,7 @@ impl FlameRenderer {
             path_map_style: self.path_map_style as u32,
             path_capture_mode: self.path_capture_mode as u32,
             path_tracking_mode: self.path_tracking_mode as u32,
-            num_path_filters: self.path_filters.len() as u32,
-            min_suffix_filter_length: self.min_suffix_filter_length,
+            _pad_path_filters: [0; 2],
             background_r: self.background_r,
             background_g: self.background_g,
             background_b: self.background_b,
@@ -2988,8 +3011,7 @@ impl FlameRenderer {
             path_map_style: self.path_map_style as u32,
             path_capture_mode: self.path_capture_mode as u32,
             path_tracking_mode: self.path_tracking_mode as u32,
-            num_path_filters: self.path_filters.len() as u32,
-            min_suffix_filter_length: self.min_suffix_filter_length,
+            _pad_path_filters: [0; 2],
             background_r: self.background_r,
             background_g: self.background_g,
             background_b: self.background_b,
@@ -3377,8 +3399,7 @@ impl FlameRenderer {
             path_map_style: self.path_map_style as u32,
             path_capture_mode: self.path_capture_mode as u32,
             path_tracking_mode: self.path_tracking_mode as u32,
-            num_path_filters: self.path_filters.len() as u32,
-            min_suffix_filter_length: self.min_suffix_filter_length,
+            _pad_path_filters: [0; 2],
             background_r: self.background_r,
             background_g: self.background_g,
             background_b: self.background_b,
@@ -3435,44 +3456,7 @@ impl FlameRenderer {
         self.path_tracking_mode
     }
 
-    /// Set path filters for blocking specific transform sequences
-    ///
-    /// # Arguments
-    /// * `filters` - Vector of GpuPathFilter structs defining patterns to block
-    ///
-    /// # Example
-    /// ```ignore
-    /// // Block all paths ending with transform [0,0,0,0,1] (suffix filter)
-    /// renderer.set_path_filters(vec![GpuPathFilter::suffix(&[0, 0, 0, 0, 1])]);
-    ///
-    /// // Block paths matching [0,1] at iteration depth 2 (exact depth filter)
-    /// renderer.set_path_filters(vec![GpuPathFilter::at_depth(&[0, 1], 2)]);
-    /// ```
-    pub fn set_path_filters(&mut self, filters: Vec<crate::gpu::buffers::GpuPathFilter>) {
-        // Calculate min_suffix_filter_length for optimization
-        self.min_suffix_filter_length = filters
-            .iter()
-            .filter(|f| f.depth == 0) // Only suffix filters
-            .map(|f| f.length)
-            .min()
-            .unwrap_or(0);
-
-        self.path_filters = filters;
-        // Note: GPU buffer will be updated on next compute pass
-    }
-
-    /// Clear all path filters
-    pub fn clear_path_filters(&mut self) {
-        self.path_filters.clear();
-        self.min_suffix_filter_length = 0;
-    }
-
-    /// Get current path filters
-    pub fn path_filters(&self) -> &[crate::gpu::buffers::GpuPathFilter] {
-        &self.path_filters
-    }
-
-    /// Check if path features (PathMap color mode or path filters) require buffers
+    /// Check if path features (the PathMap color mode) require buffers
     /// Returns true if path buffers should be enabled
     ///
     /// Never in a non-flame mode. Nothing writes the path buffer there
@@ -3481,9 +3465,7 @@ impl FlameRenderer {
     /// while the buffer costs 58 MB at 1080p and the shader is
     /// recompiled with path features for nothing.
     pub fn needs_path_features(&self) -> bool {
-        !self.current_render_mode.is_non_flame()
-            && (self.color_mode == crate::scene::palette::ColorMode::PathMap
-                || !self.path_filters.is_empty())
+        !self.current_render_mode.is_non_flame() && self.color_mode == crate::scene::palette::ColorMode::PathMap
     }
 
     /// Check if path buffers are currently allocated
@@ -3492,7 +3474,7 @@ impl FlameRenderer {
     }
 
     /// Enable or disable path features based on current state
-    /// Call this when color_mode or path_filters change
+    /// Call this when color_mode changes
     /// Returns true if bind groups or shaders were rebuilt
     pub fn update_path_features(&mut self, device: &Device, queue: &Queue, flame: &crate::scene::transforms::Flame) -> bool {
         // Sticky superset: this refresh may rebuild the shader, and it
@@ -3509,7 +3491,7 @@ impl FlameRenderer {
         // Update buffers if needed
         if needs_path && !has_path {
             // Need to create path buffers
-            if self.buffers.create_path_buffers(device, queue) {
+            if self.buffers.create_path_buffers(device) {
                 // Rebuild bind groups with new buffers
                 self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
                 self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
@@ -3756,9 +3738,18 @@ impl FlameRenderer {
         }
         // The trim moved, or the removals: cut the plan on screen again
         // at once, without waiting on a plan.
+        // A solo pressed or released restarts the picture: it draws
+        // something else.
+        let solo_moved = self.word_solo != self.applied_solo;
+        if solo_moved && self.cylinders_full.is_none() {
+            self.applied_solo.clone_from(&self.word_solo);
+        }
         if self.cylinders_full.is_some()
-            && ((config.cylinder_trim, config.cylinder_trim_levels) != self.applied_trim || removals_moved)
+            && ((config.cylinder_trim, config.cylinder_trim_levels) != self.applied_trim || removals_moved || solo_moved)
         {
+            if solo_moved {
+                self.plan_arrived = true;
+            }
             let before = self.cylinder_arm();
             let full = self.cylinders_full.take();
             let buffers_changed = self.apply_plan(device, queue, config, full.map(Ok));
@@ -3982,7 +3973,20 @@ impl FlameRenderer {
         let full = planned;
         let planned = full.as_ref().map(|c| {
             let c = crate::scene::word_tree::remove(c, &removals);
-            crate::scene::word_tree::trim_to(&c, trim.0 as f64, trim.1 as usize)
+            let c = crate::scene::word_tree::trim_to(&c, trim.0 as f64, trim.1 as usize);
+            // **Solo** (§6): one branch alone, while its button is held
+            // -- unless nothing drawn is in it.
+            match &self.word_solo {
+                Some(p) => {
+                    let s = crate::scene::word_tree::solo(&c, p);
+                    if s.words.is_empty() {
+                        c
+                    } else {
+                        s
+                    }
+                }
+                None => c,
+            }
         });
         if let (TargetingState::Active { .. }, Some(c)) = (&self.targeting_state, &planned) {
             self.targeting_state = TargetingState::Active {
@@ -3996,6 +4000,8 @@ impl FlameRenderer {
         self.cylinders_full = full;
         self.applied_trim = trim;
         self.applied_removals.clone_from(&config.word_removals);
+        self.applied_solo.clone_from(&self.word_solo);
+        self.word_tree = std::sync::OnceLock::new();
         // Two packings, because there are two kernels: a flame
         // whose maps are all affine folds each word into one matrix,
         // and anything else is handed the symbols to walk.

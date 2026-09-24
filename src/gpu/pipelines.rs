@@ -124,17 +124,8 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
-                // Path filter buffer (storage, read-only for blocking transform sequences)
-                BindGroupLayoutEntry {
-                    binding: 8,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
+                // Binding 8 is a historical gap: the path filters, which
+                // word editing replaced (docs/projects/word-editing.md).
                 // Xaos weights buffer (storage, read-only for chaos-weighted transform selection)
                 BindGroupLayoutEntry {
                     binding: 9,
@@ -820,10 +811,6 @@ impl FlamePipelines {
                 BindGroupEntry {
                     binding: 7,
                     resource: buffers.get_path_buffer_for_binding().as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 8,
-                    resource: buffers.get_filter_buffer_for_binding().as_entire_binding(),
                 },
                 // Xaos weights for chaos-weighted transform selection
                 BindGroupEntry {

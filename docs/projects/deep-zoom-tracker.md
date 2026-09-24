@@ -312,7 +312,11 @@ Words panel removes branches by hand, replacing the Path Editor.
   never makes a word ending with a removed pattern, and refines a word
   that holds one. A removal holds from zoom 5.5 to 1408 on the Grand
   Julian frame, with nothing kept whole.
-- Phase 3 (the Words panel, the Path Editor removed): next.
+- **Phase 3, the Words panel: done.** The plan's tree with each
+  branch's share of the view, plus remove, solo and restore, and the
+  trim slider. The Path Editor and its GPU path filters are removed.
+- Phase 4 (trim hysteresis across frames, hover highlight): only if
+  needed.
 
 ## Other
 

@@ -1953,12 +1953,6 @@ impl ShaderBuilder {
         shader.push_str(&processor.process(include_str!("../shaders/core/utilities.wgsl")));
         shader.push('\n');
 
-        // 10. Path filter utilities (only needed when path features enabled)
-        if path_features_enabled {
-            shader.push_str(include_str!("../shaders/core/path_filter.wgsl"));
-            shader.push('\n');
-        }
-
         // 11. The forced symbol of a cylinder replay -- one function the
         //     render's replay arm and the planner's GPU kernel both call.
         //     Only with the replay on, so every other shader is the text
