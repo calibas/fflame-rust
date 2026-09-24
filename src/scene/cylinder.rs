@@ -349,6 +349,11 @@ pub struct Cylinder {
     /// other enumerations, and where the walk kept a word on its
     /// replay alone.
     pub seeds: Vec<[f64; 2]>,
+    /// The share of its forced samples that land in the view, from the
+    /// inverse walk's replays; 1 where the planner does not measure it.
+    /// With `prob`, how much of the picture the word is
+    /// (`scene::word_tree`).
+    pub eff: f64,
 }
 
 /// The enumerated antichain, restricted to the words that reach the
@@ -640,6 +645,7 @@ impl Cylinders {
                         centre: enc.c,
                         radius: enc.r,
                         seeds: Vec::new(),
+                        eff: 1.0,
                     });
                     Verdict::Emit(kept.len() - 1)
                 } else {
@@ -1292,7 +1298,7 @@ impl Cylinders {
                     // and subdividing further would only lengthen the
                     // prefix. This is where the antichain is cut.
                     if radius <= view.radius {
-                        kept.push(Cylinder { word, prob, centre, radius, seeds: Vec::new() });
+                        kept.push(Cylinder { word, prob, centre, radius, seeds: Vec::new(), eff: 1.0 });
                         if kept.len() > MAX_WORDS {
                             return Err(NoCylinders::TooManyWords(kept.len()));
                         }
@@ -1378,6 +1384,7 @@ impl Cylinders {
                 centre: node.centre,
                 radius: node.radius,
                 seeds: Vec::new(),
+                eff: 1.0,
             });
         }
 
@@ -3193,6 +3200,196 @@ mod gpu_tests {
     #[ignore = "needs a GPU; reads output/flame-zoom"]
     fn a_targeted_true_grand_julian_render_is_the_untargeted_render() {
         targeted_against_untargeted("true-grand-julian", &[1e1, 1e2, 1e3, 1e5, 1e7]);
+    }
+
+    /// **The two animation frames** the user compared
+    /// (`output/flame-zoom/grand-julian-zoom{1,2}.fflame`): the true Grand
+    /// Julian with transform 1 rotated a little. Each rendered targeted and
+    /// untargeted at its saved view, to `output/deep-offsets/`, with its
+    /// plan's size -- to see whether the section that flickers in is in
+    /// the picture itself or only in the targeted one.
+    #[test]
+    #[ignore = "needs a GPU; reads output/flame-zoom"]
+    fn the_zoom_examples_side_by_side() {
+        const N: u32 = 360;
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        for name in ["grand-julian-zoom1", "grand-julian-zoom2"] {
+            let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")) else { continue };
+            let mut cfg: FractalConfig = serde_json::from_str(&text).expect("a config");
+            cfg.deterministic_rng = true;
+            let view = View::of(cfg.zoom as f64, [cfg.pan_x, cfg.pan_y], N, N);
+            match Cylinders::plan(&cfg.flame, reg, view) {
+                Ok(p) => println!("  {name}: {} words, mass {:.3e}, efficiency {:.3}, depth {}", p.words.len(), p.mass, p.efficiency, p.depth),
+                Err(e) => println!("  {name}: no plan {e:?}"),
+            }
+            let _ = std::fs::create_dir_all("output/deep-offsets");
+            let mut tgt = Vec::new();
+            for targeted in [true, false] {
+                cfg.cylinder_targeting = targeted;
+                let img = render(&cfg, N, 200_000_000);
+                let tag = if targeted { "tgt" } else { "ref" };
+                let _ = image::save_buffer(format!("output/deep-offsets/{name}-{tag}.png"), &img, N, N, image::ColorType::Rgba8);
+                if targeted {
+                    tgt = img;
+                }
+            }
+            // Trim (word-editing.md §4) at 0.05, two levels: what it takes
+            // out of the targeted picture.
+            cfg.cylinder_targeting = true;
+            cfg.cylinder_trim = 0.05;
+            cfg.cylinder_trim_levels = 2;
+            let trimmed = render(&cfg, N, 200_000_000);
+            cfg.cylinder_trim = 0.0;
+            let _ = image::save_buffer(format!("output/deep-offsets/{name}-trim.png"), &trimmed, N, N, image::ColorType::Rgba8);
+            let lum = |p: &[u8]| p[0] as f64 + p[1] as f64 + p[2] as f64;
+            let changed = tgt.chunks(4).zip(trimmed.chunks(4)).filter(|(a, b)| a != b).count();
+            let diff: f64 = tgt.chunks(4).zip(trimmed.chunks(4)).map(|(a, b)| (lum(a) - lum(b)).abs()).sum();
+            let total: f64 = tgt.chunks(4).map(lum).sum();
+            println!(
+                "  {name}: trim 0.05 at two levels changes {changed} of {} pixels, {:.2}% of the brightness",
+                N * N,
+                100.0 * diff / total.max(1.0)
+            );
+        }
+    }
+
+    /// **What the app does at depth**: the app's frame loop -- sync, a
+    /// compute pass of 128 workgroups at 256 iterations a thread, a wait --
+    /// with background planning, held at each zoom for six seconds. How
+    /// many plans land (a view held still should need one tight plan and
+    /// one standby), how many frames a plan was running in, and the
+    /// iteration rate over the last three seconds.
+    #[test]
+    #[ignore = "needs a GPU; reads output/flame-zoom"]
+    fn what_the_app_does_at_depth() {
+        use std::time::{Duration, Instant};
+        let name = std::env::var("FLAME").unwrap_or_else(|_| "random1".into());
+        let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")) else { return };
+        let (device, queue) = device();
+        let mut cfg: FractalConfig = serde_json::from_str(&text).expect("a config");
+        cfg.cylinder_targeting = true;
+        cfg.render_mode = crate::scene::transforms::RenderMode::TwoD;
+        let start = {
+            let guard = crate::variations::global_registry();
+            let b = crate::scene::backward::Backward::read(&cfg.flame, &guard).expect("walked");
+            b.sample_point(0.75)
+        };
+        cfg.pan_x = start[0];
+        cfg.pan_y = start[1];
+        let mut r = crate::renderer::FlameRenderer::with_palette_size(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            1280,
+            720,
+            &cfg.flame,
+            cfg.palette_size,
+        );
+        r.set_background_planning(true);
+        let load = |r: &mut crate::renderer::FlameRenderer, cfg: &FractalConfig| {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("app load") });
+            r.load_config(&device, &mut enc, &queue, cfg, &cfg.palette, 1, 0);
+            queue.submit(Some(enc.finish()));
+        };
+        const GROUPS: u32 = 128;
+        const IPT: u32 = 256;
+        load(&mut r, &cfg);
+        println!("  {name}: zoom   plans landed  frames planning  frames   Miter/s (last 3 s)  state");
+        for zoom in [1e3f32, 5e3, 1e4] {
+            cfg.zoom = zoom;
+            let t0 = Instant::now();
+            let (mut landed, mut planning, mut frames) = (0usize, 0usize, 0usize);
+            let (mut late_iters, mut late_time) = (0u64, Duration::ZERO);
+            while t0.elapsed() < Duration::from_secs(6) {
+                let t = Instant::now();
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("app frame") });
+                if r.sync_cylinders(&device, &queue, &cfg) {
+                    r.load_config(&device, &mut enc, &queue, &cfg, &cfg.palette, 1, 0);
+                }
+                r.compute_pass(
+                    &mut enc, &queue, &device, GROUPS, IPT, 0, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, 0.0, 0.0,
+                    0.0, 0.0, 0.0, 0.0, 0.0, cfg.speed_factor, false, false,
+                );
+                queue.submit(Some(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                frames += 1;
+                if r.take_plan_arrived() {
+                    landed += 1;
+                }
+                if r.plans_running() {
+                    planning += 1;
+                }
+                if t0.elapsed() > Duration::from_secs(3) {
+                    late_iters += GROUPS as u64 * 64 * IPT as u64;
+                    late_time += t.elapsed();
+                }
+            }
+            println!(
+                "  {zoom:>9.0e}  {landed:>12}  {planning:>15}  {frames:>6}   {:>10.1}          {:?}",
+                late_iters as f64 / late_time.as_secs_f64().max(1e-9) / 1e6,
+                r.targeting_state()
+            );
+        }
+    }
+
+    /// **What an iteration costs, targeted**: the render's iteration rate
+    /// at each zoom, targeted with the replay in offsets, targeted without
+    /// them, and untargeted. Rates are from two renders' difference (20M
+    /// and 80M iterations), so planning and compiling cancel. With the
+    /// plans' word length and offset steps, weighted as the render draws
+    /// words.
+    #[test]
+    #[ignore = "needs a GPU; reads output/flame-zoom"]
+    fn what_an_iteration_costs() {
+        use std::sync::atomic::Ordering;
+        const N: u32 = 256;
+        let name = std::env::var("FLAME").unwrap_or_else(|_| "random1".into());
+        let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")) else { return };
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let mut base: FractalConfig = serde_json::from_str(&text).expect("a config");
+        base.deterministic_rng = true;
+        let b = crate::scene::backward::Backward::read(&base.flame, reg).expect("walked");
+        let x = b.sample_point(0.75);
+        base.pan_x = x[0];
+        base.pan_y = x[1];
+        let rate = |cfg: &FractalConfig| -> f64 {
+            let a = render_out(cfg, N, 20_000_000);
+            let c = render_out(cfg, N, 80_000_000);
+            (c.total_iterations - a.total_iterations) as f64 / ((c.render_time_ms - a.render_time_ms).max(1e-3) / 1e3) / 1e6
+        };
+        println!("  {name}: zoom   words  length  offset steps | Miter/s: offsets  plain  untargeted");
+        for zoom in [1e2f64, 1e3, 3e3, 5e3, 1e4, 1e5] {
+            base.zoom = zoom as f32;
+            let view = View::of(zoom, [base.pan_x, base.pan_y], N, N);
+            let Ok(plan) = Cylinders::plan(&base.flame, reg, view) else {
+                println!("  {zoom:>9.0e}  no plan");
+                continue;
+            };
+            let total: f64 = plan.words.iter().map(|w| w.prob).sum();
+            let len: f64 = plan.words.iter().map(|w| w.prob * w.word.len() as f64).sum::<f64>() / total;
+            let steps: f64 = plan
+                .words
+                .iter()
+                .zip(plan.refs.iter().map(Some).chain(std::iter::repeat(None)))
+                .map(|(w, r)| w.prob * r.and_then(|r| r.as_ref()).map_or(0.0, |r| (w.word.len() - r.m) as f64))
+                .sum::<f64>()
+                / total;
+            let mut tgt = base.clone();
+            tgt.cylinder_targeting = true;
+            let on = rate(&tgt);
+            crate::scene::backward::OFFSETS_OFF.store(true, Ordering::Relaxed);
+            let off = rate(&tgt);
+            crate::scene::backward::OFFSETS_OFF.store(false, Ordering::Relaxed);
+            let mut plain = base.clone();
+            plain.cylinder_targeting = false;
+            let un = rate(&plain);
+            println!(
+                "  {zoom:>9.0e}  {:>5}  {len:>6.1}  {steps:>6.1}       | {on:>8.1}  {off:>6.1}  {un:>8.1}",
+                plan.words.len()
+            );
+        }
     }
 
     /// A flame of `output/flame-zoom`, at a point of its attractor, drawn

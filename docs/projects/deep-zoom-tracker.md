@@ -295,6 +295,22 @@ the planner's six kernels synchronously
 
 ---
 
+## Editing by words
+
+### E1. Trim, removals and the Words panel -- in progress (2026-09-24)
+
+Plan: [word-editing.md](word-editing.md). A trim slider drops the minor
+branches of a plan's word tree that flicker in during an animation; a
+Words panel removes branches by hand, replacing the Path Editor.
+
+- **Phase 1, trim: done.** At trim 0.05, two levels from the view, the
+  flicker in the Grand Julian animation frames goes (all 274 of its words)
+  and the other frame's render is bit-identical. Unmeasured words
+  (efficiency 0, such as the renewal glow) go with their branch and are
+  never ranked as slivers.
+- Phase 2 (removals in the walk) and phase 3 (the Words panel, the Path
+  Editor removed): next.
+
 ## Other
 
 - **O1. Other platforms -- later.** The planner's kernel has never run on

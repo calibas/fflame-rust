@@ -552,6 +552,8 @@ fn parse_flame_element(
         deterministic_rng: false,
         importance: crate::config::fractal_config::ImportanceSettings::default(),
         cylinder_targeting: false,
+        cylinder_trim: 0.0,
+        cylinder_trim_levels: 2,
         auto_exposure: false,
         blend_factor: 0.1,
         use_dynamic_blend: true,

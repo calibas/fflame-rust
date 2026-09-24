@@ -2324,7 +2324,7 @@ impl Backward {
                 Pts::Index(idx) => idx.iter().map(|&i| self.sample[i as usize]).collect(),
             }
         };
-        let disc = |word: Vec<u32>, prob: f64, seeds: Vec<[f64; 2]>| Cylinder { word, prob, centre: view.centre, radius: view.radius, seeds };
+        let disc = |word: Vec<u32>, prob: f64, seeds: Vec<[f64; 2]>| Cylinder { word, prob, centre: view.centre, radius: view.radius, seeds, eff: 0.0 };
 
         let mut node_kept: Vec<(Cylinder, f64)> = Vec::new();
         let mut node_next: Vec<Node> = Vec::new();
@@ -2563,7 +2563,7 @@ impl Backward {
                         continue;
                     }
                     let seeds = self.seeds_from(&[], Some(&n.pts));
-                    kept.push((Cylinder { word: n.word, prob: n.prob, centre: view.centre, radius: view.radius, seeds }, n.eff));
+                    kept.push((Cylinder { word: n.word, prob: n.prob, centre: view.centre, radius: view.radius, seeds, eff: 0.0 }, n.eff));
                     tr.forced += 1;
                 }
                 break;
@@ -2652,7 +2652,7 @@ impl Backward {
                     }
                     kept_mass += n.prob;
                     let seeds = self.seeds_from(&[], Some(&n.pts));
-                    kept.push((Cylinder { word: n.word, prob: n.prob, centre: view.centre, radius: view.radius, seeds }, n.eff));
+                    kept.push((Cylinder { word: n.word, prob: n.prob, centre: view.centre, radius: view.radius, seeds, eff: 0.0 }, n.eff));
                     tr.beam += 1;
                 }
             }
@@ -2692,7 +2692,14 @@ impl Backward {
         let delivered: f64 = merged.iter().map(|(c, e)| c.prob * e).sum();
         let depth = merged.iter().map(|(c, _)| c.word.len()).max().unwrap_or(0);
         let mut plan = Cylinders {
-            words: merged.into_iter().map(|(c, _)| c).collect(),
+            // Each word keeps the efficiency its replays measured.
+            words: merged
+                .into_iter()
+                .map(|(mut c, e)| {
+                    c.eff = e;
+                    c
+                })
+                .collect(),
             mass,
             lost,
             sampling_leak: 0.0,
@@ -3854,6 +3861,135 @@ mod tests {
                     );
                 }
                 Err(e) => println!("  {label}: no plan: {e:?}"),
+            }
+        }
+    }
+
+    /// **What changes between two animation frames' plans**
+    /// (`output/flame-zoom/grand-julian-zoom{1,2}.fflame`: transform 1
+    /// rotated 1.8 degrees). The words both plans hold, and the ones only
+    /// one does; for those, how far from the view they branch off the
+    /// shared words (the longest suffix -- last-applied symbols -- they
+    /// share with any shared word); and each group drawn on the CPU, its
+    /// words' samples binned where they land, to
+    /// `output/deep-offsets/frames-*.png`.
+    #[test]
+    #[ignore = "reads output/flame-zoom"]
+    fn what_changes_between_frames() {
+        use std::collections::HashSet;
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let mut plans = Vec::new();
+        for name in ["grand-julian-zoom1", "grand-julian-zoom2"] {
+            let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")) else { return };
+            let cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
+            let b = Backward::read(&cfg.flame, reg).expect("walked");
+            let view = View::of(cfg.zoom as f64, [cfg.pan_x, cfg.pan_y], 360, 360);
+            let plan = b.plan_eval(view, PlanOptions::default(), &mut CpuEval).expect("a plan");
+            plans.push((name, b, view, plan));
+        }
+        let sets: Vec<HashSet<Vec<u32>>> = plans.iter().map(|p| p.3.words.iter().map(|w| w.word.clone()).collect()).collect();
+        let shared: HashSet<&Vec<u32>> = sets[0].intersection(&sets[1]).collect();
+        // The longest suffix a word shares with any shared word.
+        let suffixes: HashSet<Vec<u32>> =
+            shared.iter().flat_map(|w| (0..=w.len()).map(move |k| w[w.len() - k..].to_vec())).collect();
+        for (i, (name, b, view, plan)) in plans.iter().enumerate() {
+            let total: f64 = plan.words.iter().map(|w| w.prob).sum();
+            let mut depth_hist = [0usize; 12];
+            let (mut own_mass, mut own) = (0.0f64, 0usize);
+            for w in &plan.words {
+                if shared.contains(&w.word) {
+                    continue;
+                }
+                own += 1;
+                own_mass += w.prob;
+                let k = (0..=w.word.len()).rev().find(|&k| suffixes.contains(&w.word[w.word.len() - k..])).unwrap_or(0);
+                depth_hist[k.min(11)] += 1;
+            }
+            // The last symbols (transform, arm) of the words that branch off
+            // at depth 0, against the shared words'.
+            let last = |w: &[u32]| format!("t{}a{}", w[w.len() - 1] & 255, w[w.len() - 1] >> 8);
+            let mut fam: std::collections::BTreeMap<String, (usize, f64, usize)> = Default::default();
+            for w in &plan.words {
+                let e = fam.entry(last(&w.word)).or_default();
+                if shared.contains(&w.word) {
+                    e.2 += 1;
+                } else if !suffixes.contains(&w.word[w.word.len() - 1..]) {
+                    e.0 += 1;
+                    e.1 += w.prob;
+                }
+            }
+            for (k, (n0, m0, ns)) in &fam {
+                println!("      last symbol {k}: {ns} shared words, {n0} depth-0 own words ({:.2}% of the mass)", 100.0 * m0 / total);
+            }
+            // Trim (word-editing.md §4): what each setting removes.
+            let total_share: f64 = plan.words.iter().map(|w| w.prob * w.eff).sum();
+            for levels in [1usize, 2, 3, usize::MAX] {
+                let mut row = format!("      levels {:>3}:", if levels == usize::MAX { "all".to_string() } else { levels.to_string() });
+                for t in [0.001f64, 0.003, 0.01, 0.03, 0.1, 0.3] {
+                    let keep = crate::scene::word_tree::kept_to(plan, t, levels);
+                    let share: f64 = keep.iter().map(|&i| plan.words[i].prob * plan.words[i].eff).sum();
+                    let t1a0 = keep.iter().filter(|&&i| last(&plan.words[i].word) == "t1a0").count();
+                    row.push_str(&format!(" | {t}: -{:.2}% t1a0 {t1a0}", 100.0 * (1.0 - share / total_share)));
+                }
+                println!("{row}");
+            }
+            // What trim 0.05 at two levels removes, word by word.
+            let keep: std::collections::HashSet<usize> = crate::scene::word_tree::kept_to(plan, 0.05, 2).into_iter().collect();
+            let mut gone: std::collections::BTreeMap<String, (usize, f64, f64)> = Default::default();
+            for (i, w) in plan.words.iter().enumerate() {
+                if keep.contains(&i) {
+                    continue;
+                }
+                let tail = w.word.iter().rev().take(2).map(|&s| format!("t{}a{}", s & 255, s >> 8)).collect::<Vec<_>>().join("<");
+                let e = gone.entry(tail).or_default();
+                e.0 += 1;
+                e.1 += w.prob;
+                e.2 += w.prob * w.eff;
+            }
+            for (k, (n, pm, sh)) in &gone {
+                println!("      trim 0.05/2 removes {n} words ending {k}: {:.2}% of the probability, {:.4}% of the view", 100.0 * pm / total, 100.0 * sh / total_share);
+            }
+            // The t1a0 family's share of the view, against t3a0's.
+            let fam_share = |k: &str| plan.words.iter().filter(|w| last(&w.word) == k).map(|w| w.prob * w.eff).sum::<f64>();
+            println!("      share of the view: t1a0 {:.4}%, t3a0 {:.2}%", 100.0 * fam_share("t1a0") / total_share, 100.0 * fam_share("t3a0") / total_share);
+            println!(
+                "  {name}: {} words, {} shared ({:.1}% of its mass), {own} its own ({:.1}%); its own branch off the shared at depth [0..11]: {depth_hist:?}",
+                plan.words.len(),
+                plan.words.len() - own,
+                100.0 * (total - own_mass) / total,
+                100.0 * own_mass / total
+            );
+            // Draw: all its words, and its own alone.
+            for (tag, pick) in [("all", 0u8), ("own", 1u8)] {
+                const N: usize = 360;
+                let mut img = vec![0.0f64; N * N];
+                let px = 2.0 * view.radius / (N as f64 * std::f64::consts::SQRT_2);
+                for w in &plan.words {
+                    if pick == 1 && shared.contains(&w.word) {
+                        continue;
+                    }
+                    let k = 24usize;
+                    for j in 0..k {
+                        let x0 = b.sample[(j * 4099 + w.word.len() * 131) % b.sample.len()];
+                        let Some(p) = b.forward_along(&w.word, x0) else { continue };
+                        let (u, v) = ((p[0] - view.centre[0]) / px + N as f64 / 2.0, (p[1] - view.centre[1]) / px + N as f64 / 2.0);
+                        if u >= 0.0 && v >= 0.0 && (u as usize) < N && (v as usize) < N {
+                            img[(N - 1 - v as usize) * N + u as usize] += w.prob / k as f64;
+                        }
+                    }
+                }
+                let top = img.iter().cloned().fold(0.0f64, f64::max).max(1e-300);
+                let rgba: Vec<u8> = img
+                    .iter()
+                    .flat_map(|&d| {
+                        let l = if d > 0.0 { ((d / top).ln() / 12.0 + 1.0).clamp(0.0, 1.0) } else { 0.0 };
+                        let g = (l * 255.0) as u8;
+                        [g, g, g, 255]
+                    })
+                    .collect();
+                let _ = std::fs::create_dir_all("output/deep-offsets");
+                let _ = image::save_buffer(format!("output/deep-offsets/frames-{i}-{tag}.png"), &rgba, N as u32, N as u32, image::ColorType::Rgba8);
             }
         }
     }
