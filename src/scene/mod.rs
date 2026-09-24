@@ -10,6 +10,7 @@ pub mod cylinder;
 pub mod backward;
 pub mod plan_gpu;
 pub mod slice;
+pub mod word_tree;
 pub mod xaos;
 pub mod presets;
 pub mod palette;

@@ -64,6 +64,11 @@ pub enum ConfigPath {
     /// lands in the viewport (docs/projects/flame-deep-zoom.md stage
     /// 2). A REQUEST -- the renderer still declines per view.
     CylinderTargeting,
+    /// Trim: drop the plan's minor branches near the view
+    /// (docs/projects/word-editing.md §4). 0 = off.
+    CylinderTrim,
+    /// How many levels of the word tree, from the view, trim reaches.
+    CylinderTrimLevels,
     LevelsLow,
     LevelsHigh,
     LevelsGamma,
@@ -740,6 +745,8 @@ impl Display for ConfigPath {
             ConfigPath::LevelsEnabled => write!(f, "Levels Enabled"),
             ConfigPath::AutoExposure => write!(f, "Auto Exposure"),
             ConfigPath::CylinderTargeting => write!(f, "Cylinder Targeting"),
+            ConfigPath::CylinderTrim => write!(f, "Cylinder Trim"),
+            ConfigPath::CylinderTrimLevels => write!(f, "Cylinder Trim Levels"),
             ConfigPath::LevelsLow => write!(f, "Levels Low"),
             ConfigPath::LevelsHigh => write!(f, "Levels High"),
             ConfigPath::LevelsGamma => write!(f, "Levels Midtones"),
@@ -1240,6 +1247,8 @@ impl ConfigPath {
             ConfigPath::LevelsEnabled => I18nKey::simple("history.param.levels_enabled"),
             ConfigPath::AutoExposure => I18nKey::simple("history.param.auto_exposure"),
             ConfigPath::CylinderTargeting => I18nKey::simple("history.param.cylinder_targeting"),
+            ConfigPath::CylinderTrim => I18nKey::simple("history.param.cylinder_trim"),
+            ConfigPath::CylinderTrimLevels => I18nKey::simple("history.param.cylinder_trim_levels"),
             ConfigPath::LevelsLow => I18nKey::simple("history.param.levels_low"),
             ConfigPath::LevelsHigh => I18nKey::simple("history.param.levels_high"),
             ConfigPath::LevelsGamma => I18nKey::simple("history.param.levels_midtones"),
@@ -2719,7 +2728,9 @@ impl ConfigPath {
             // CYLINDER_TARGETING) and what the accumulator holds,
             // so neither is a tone-map-only refresh.
             | ConfigPath::AutoExposure
-            | ConfigPath::CylinderTargeting => UpdateType::IterationReset,
+            | ConfigPath::CylinderTargeting
+            | ConfigPath::CylinderTrim
+            | ConfigPath::CylinderTrimLevels => UpdateType::IterationReset,
 
             // Escape-time: the fragment renderer re-renders the frame;
             // no flame-style reset/accumulate distinction exists there.
@@ -2903,6 +2914,8 @@ impl ConfigPath {
             ConfigPath::LevelsEnabled => "LevelsEnabled".to_string(),
             ConfigPath::AutoExposure => "AutoExposure".to_string(),
             ConfigPath::CylinderTargeting => "CylinderTargeting".to_string(),
+            ConfigPath::CylinderTrim => "CylinderTrim".to_string(),
+            ConfigPath::CylinderTrimLevels => "CylinderTrimLevels".to_string(),
             ConfigPath::LevelsLow => "LevelsLow".to_string(),
             ConfigPath::LevelsHigh => "LevelsHigh".to_string(),
             ConfigPath::LevelsGamma => "LevelsGamma".to_string(),
@@ -3269,6 +3282,8 @@ impl ConfigPath {
             "LevelsEnabled" => return Some(ConfigPath::LevelsEnabled),
             "AutoExposure" => return Some(ConfigPath::AutoExposure),
             "CylinderTargeting" => return Some(ConfigPath::CylinderTargeting),
+            "CylinderTrim" => return Some(ConfigPath::CylinderTrim),
+            "CylinderTrimLevels" => return Some(ConfigPath::CylinderTrimLevels),
             "LevelsLow" => return Some(ConfigPath::LevelsLow),
             "LevelsHigh" => return Some(ConfigPath::LevelsHigh),
             "LevelsGamma" => return Some(ConfigPath::LevelsGamma),
@@ -3903,6 +3918,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::LevelsLow
         | ConfigPath::LevelsHigh
         | ConfigPath::LevelsGamma
+        | ConfigPath::CylinderTrim
         | ConfigPath::PostSymmetryCenterX
         | ConfigPath::PostSymmetryCenterY
         | ConfigPath::PostSymmetryDistance
@@ -3990,7 +4006,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SystemOrbitCacheMb
         | ConfigPath::SystemExportWidth
         | ConfigPath::SystemExportHeight
-        | ConfigPath::SystemPngStripMetadata => {
+        | ConfigPath::SystemPngStripMetadata
+        | ConfigPath::CylinderTrimLevels => {
             json_as_round_u64(json).map(|u| ConfigValue::UInt(u as u32))
         }
 
@@ -4602,6 +4619,8 @@ mod tests {
             ConfigPath::LevelsEnabled,
             ConfigPath::AutoExposure,
             ConfigPath::CylinderTargeting,
+            ConfigPath::CylinderTrim,
+            ConfigPath::CylinderTrimLevels,
             ConfigPath::LevelsLow,
             ConfigPath::LevelsHigh,
             ConfigPath::LevelsGamma,

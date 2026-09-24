@@ -480,6 +480,12 @@ pub struct FlameRenderer {
     /// offsets (`docs/projects/deep-zoom-precision.md`): the plan
     /// carries references, and the plot is view-relative.
     cylinder_offsets: bool,
+    /// The plan as made, before trim (`docs/projects/word-editing.md`);
+    /// `cylinders` is what is drawn. Kept so moving the trim slider
+    /// retrims without replanning.
+    cylinders_full: Option<crate::scene::cylinder::Cylinders>,
+    /// The trim and its depth `cylinders` was cut with.
+    applied_trim: (f32, u32),
     /// Fingerprint of everything the enumeration depends on, so the
     /// per-frame sync can skip the work when nothing moved.
     cylinder_key: Option<u64>,
@@ -682,6 +688,8 @@ impl FlameRenderer {
             cylinder_key_pending: None,
             cylinder_relative: false,
             cylinder_offsets: false,
+            cylinders_full: None,
+            applied_trim: (0.0, 0),
             cylinder_key: None,
             background_planning: false,
             plan_job: None,
@@ -3728,6 +3736,20 @@ impl FlameRenderer {
         let key = self.enumeration_key(config);
         self.write_cylinder_shift(queue, config);
 
+        // The trim moved: cut the plan on screen again, no replanning.
+        if self.cylinders_full.is_some() && (config.cylinder_trim, config.cylinder_trim_levels) != self.applied_trim {
+            let before = self.cylinder_arm();
+            let full = self.cylinders_full.take();
+            let buffers_changed = self.apply_plan(device, queue, config, full.map(Ok));
+            if buffers_changed {
+                self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+                self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
+            }
+            if before != self.cylinder_arm() {
+                return true;
+            }
+        }
+
         // A plan from the background: applied if it is for this key,
         // waited for if it is still coming.
         if let Some(reload) = self.poll_plan_job(device, queue, config, key) {
@@ -3916,6 +3938,25 @@ impl FlameRenderer {
             };
             None
         };
+        // **Trim** (docs/projects/word-editing.md §4): the plan as made
+        // is kept, and what is drawn is cut from it -- so the slider
+        // retrims without replanning. The panel reports what is drawn.
+        let trim = (config.cylinder_trim, config.cylinder_trim_levels);
+        let full = planned;
+        let planned = full.as_ref().map(|c| {
+            crate::scene::word_tree::trim_to(c, trim.0 as f64, trim.1 as usize)
+        });
+        if let (TargetingState::Active { .. }, Some(c)) = (&self.targeting_state, &planned) {
+            self.targeting_state = TargetingState::Active {
+                words: c.words.len(),
+                depth: c.depth,
+                speedup: c.speedup(),
+                mass: c.mass,
+                lost: c.lost,
+            };
+        }
+        self.cylinders_full = full;
+        self.applied_trim = trim;
         // Two packings, because there are two kernels: a flame
         // whose maps are all affine folds each word into one matrix,
         // and anything else is handed the symbols to walk.

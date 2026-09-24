@@ -499,6 +499,10 @@ view:
   coverage_reading: "Measured coverage: %{percent}% of plotted samples land in frame"
   cylinder_targeting: "Cylinder targeting"
   tooltip_cylinder_targeting: "Force a prefix of transforms chosen so every sample lands in the viewport, and correct the weight exactly. The picture is unchanged; it arrives far sooner. Affine flames only for now, and the renderer declines whenever it would cost more than it saves."
+  cylinder_trim: "Trim"
+  tooltip_cylinder_trim: "Drop the plan's minor branches near the view: a branch whose share of the view is less than this fraction of its largest sibling's. It removes real parts of the picture, on purpose -- for the slivers that flicker in and out during an animation. 0 is off."
+  cylinder_trim_levels: "Trim depth"
+  tooltip_cylinder_trim_levels: "How many levels of the word tree, counted from the view, trim reaches. 2 catches branches that split off near the view; more begins to cut real structure."
   targeting_off: "Not running."
   targeting_generating: "Generating a plan for this view... %{secs} s"
   targeting_previous_plan: "Still drawing with the previous plan; the picture restarts when the new one is ready."
@@ -807,6 +811,8 @@ history:
     highlight_mode: "Highlight Mode"
     tone_curve: "Tone Curve"
     use_tone_curve: "Use Tone Curve"
+    cylinder_trim: "Trim"
+    cylinder_trim_levels: "Trim Depth"
 
     # Levels (density-to-opacity mapping)
     levels_low: "Levels Low"

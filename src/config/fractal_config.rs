@@ -408,6 +408,21 @@ pub struct FractalConfig {
     #[serde(default, skip_serializing_if = "is_false")]
     pub cylinder_targeting: bool,
 
+    /// **Trim** (docs/projects/word-editing.md §4): drop the branches of
+    /// the plan's word tree, within `cylinder_trim_levels` levels of the
+    /// view, whose share of the view is under this times their largest
+    /// sibling's. An artistic choice -- it removes real parts of the
+    /// picture -- for the slivers that flicker in during an animation.
+    /// 0 is off.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub cylinder_trim: f32,
+
+    /// How many levels of the word tree, from the view, trim reaches.
+    /// Measured on the true Grand Julian's flicker: two remove it and
+    /// nothing else at any trim; three begin to cut real structure.
+    #[serde(default = "default_trim_levels", skip_serializing_if = "is_default_trim_levels")]
+    pub cylinder_trim_levels: u32,
+
     /// Auto exposure: normalise the tone map by the density of the
     /// pixels actually IN FRAME rather than by total iterations
     /// (`docs/projects/flame-deep-zoom.md`).
@@ -571,6 +586,14 @@ fn is_default_image_size(v: &(u32, u32)) -> bool {
 /// Skip-serialize helper — keeps fields free from existing flame
 /// JSON files unless the user actually changes them from zero.
 /// Shared by `camera_x` / `camera_y` and other zero-defaulted f32s.
+fn default_trim_levels() -> u32 {
+    2
+}
+
+fn is_default_trim_levels(v: &u32) -> bool {
+    *v == default_trim_levels()
+}
+
 fn is_zero_f32(v: &f32) -> bool {
     *v == 0.0
 }
@@ -966,6 +989,8 @@ impl Default for FractalConfig {
             deterministic_rng: false,
             importance: ImportanceSettings::default(),
             cylinder_targeting: false,
+            cylinder_trim: 0.0,
+            cylinder_trim_levels: default_trim_levels(),
             auto_exposure: false,
         }
     }
