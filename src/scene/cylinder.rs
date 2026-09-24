@@ -3182,6 +3182,23 @@ mod gpu_tests {
     #[test]
     #[ignore = "needs a GPU and reads output/flame-zoom"]
     fn a_targeted_grand_julian_render_is_the_untargeted_render() {
+        targeted_against_untargeted("grand-julian", &[1e2, 1e4, 1e6]);
+    }
+
+    /// **The true Grand Julian** (tracker item C2): the same comparison
+    /// on the flame whose transform 0 is `pre_blur` 10 and `bubble` 0.2 --
+    /// a renewal, planned by keeping its words by geometry. At zooms the
+    /// untargeted render can still reach.
+    #[test]
+    #[ignore = "needs a GPU; reads output/flame-zoom"]
+    fn a_targeted_true_grand_julian_render_is_the_untargeted_render() {
+        targeted_against_untargeted("true-grand-julian", &[1e1, 1e2, 1e3, 1e5, 1e7]);
+    }
+
+    /// A flame of `output/flame-zoom`, at a point of its attractor, drawn
+    /// with targeting and without at each of `zooms`: the targeted render
+    /// must light what the untargeted one does, as brightly.
+    fn targeted_against_untargeted(name: &str, zooms: &[f64]) {
         const N: u32 = 96;
         let stats = |rgba: &[u8]| -> (Vec<bool>, f64) {
             let lit: Vec<bool> = rgba
@@ -3201,8 +3218,8 @@ mod gpu_tests {
 
         let guard = crate::variations::global_registry();
         let reg = &*guard;
-        let Ok(text) = std::fs::read_to_string("output/flame-zoom/grand-julian.fflame") else {
-            println!("  no grand-julian.fflame");
+        let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")) else {
+            println!("  no {name}.fflame");
             return;
         };
         let mut base: crate::config::FractalConfig =
@@ -3219,7 +3236,7 @@ mod gpu_tests {
         println!("  zoom     words  depth   mass      eff   speedup    lit ref/tgt   overlap  bright");
         let mut checked = 0usize;
         let mut failures: Vec<String> = Vec::new();
-        for zoom in [1e2f64, 1e4, 1e6] {
+        for &zoom in zooms {
             base.zoom = zoom as f32;
             let plan = match Cylinders::plan(
                 &base.flame,
@@ -3251,6 +3268,10 @@ mod gpu_tests {
             let ra = render_out(&refc, N, iters_ref);
             let rb = render_out(&tgt, N, iters_tgt);
             let (a, b) = (ra.rgba_data, rb.rgba_data);
+            let _ = std::fs::create_dir_all("output/deep-offsets");
+            for (tag, img) in [("ref", &a), ("tgt", &b)] {
+                let _ = image::save_buffer(format!("output/deep-offsets/{name}-{zoom:.0e}-{tag}.png"), img, N, N, image::ColorType::Rgba8);
+            }
             let (la, ba) = stats(&a);
             let (lb, bb) = stats(&b);
             let lit_a = la.iter().filter(|v| **v).count();

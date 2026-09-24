@@ -66,9 +66,11 @@ transcendental functions, not f32's rounding.
 - The kernels to port are only those the analysis accepts (affine,
   roots, disc, bubble), because only those flames are targeted.
 
-### C2. `pre_blur` -- open
+### C2. `pre_blur` -- done, v1 (2026-09-23)
 
-**Today:** rejected by the analysis as not affine.
+**Before:** rejected by the analysis as not affine. **Now:** a blur that
+forgets its input (a renewal, v1 below) is planned. A smaller blur is
+refused with its numbers (C2c).
 
 **The idea:** keep blur out of the plan and let the forced replay apply
 it. That is **biased**:
@@ -103,6 +105,96 @@ variation. So the walk can treat it as a bounded dilation:
   a transform with slack.
 - Every place the walk maps a disc backward must add the slack.
 
+**The canonical case** is the true Grand Julian (the first flame of
+`assets/presets.fflame`, extracted to
+`output/flame-zoom/true-grand-julian.fflame`). Transform 0, drawn about
+6% of the time, is `pre_blur` 10 and `bubble` 0.2 on an identity affine.
+A blur reaching 30 swamps its input, so it emits a smooth blob on the
+disc of radius 0.2 whatever comes in: a **renewal**. Transforms 1-3 are
+julian roots.
+
+**Design, v1 (2026-09-23): renewal symbols.**
+
+- **Analysis.** The planner's analysis strips `pre_blur` from a copy of
+  the transform and records its reach, 3x the weight, in the frame the
+  kernel sees. That is allowed when it is the transform's only
+  pre-phase variation. The escape engine's analysis still refuses it.
+- **Renewal, or refused.** A blurred transform is a renewal when its
+  reach covers the attractor's image in its frame plus the kernel's
+  preimage radius: every point then has a positive chance of landing
+  anywhere in the transform's output. Bubble's inner branch holds a
+  preimage of every image point within radius 2. Anything else is
+  refused with its numbers ("a partial blur is not planned yet"), not
+  planned with holes.
+- **Sample and replays with the blur.** The walk's attractor sample and
+  its CPU replays draw the blur, as JWF does. Replays are seeded by word
+  and point, so a plan is still the same however it runs. The GPU
+  planner and the render run the variation's own code, blur included.
+- **A renewal child is kept, never carried**, since its region is the
+  whole attractor. It is kept or dropped by geometry, not by replays: at
+  depth, a smooth part can land 1e-7 of the time, and 400 replays would
+  drop it and leave the view black. So the view is pulled back through
+  the node's word, along every branch and with a radius bound. The child
+  is kept when that region can reach the renewal's output disc. Replays
+  only measure its efficiency.
+- **References.** A word that starts with a renewal starts its
+  reference after it, at points of the rest's region (its node's own),
+  with `m >= 1`, so the blurred step always runs as the shader's own
+  absolute code.
+- **Gates.** Coverage against an untargeted chaos game with the blur, at
+  views it can reach. The targeted picture against the untargeted one.
+  A view inside the blob (the smooth part) must not come out black. The
+  per-sample gate on its words.
+
+**Built and measured.** `Backward::renewal`, `Backward::reaches`,
+`forward_blurred`, `analyse_2d_maps_blurred_sliced`. On the true Grand
+Julian (`what_the_true_grand_julian_is`):
+
+| view | words (renewal-first) | coverage | renewal words: mass, efficiency | the rest: mass, efficiency |
+|---|---|---|---|---|
+| the preset's (1.8) | 26 (1) | 1.0000 | 6%, 1.00 | 94%, 0.96 |
+| 1e2 on the attractor | 4,035 (354) | 0.9999 | 54%, 0.15 | 46%, 0.90 |
+| 1e3 on the attractor | 1,065 (109) | 0.9997 | 89%, 0.04 | 12%, 0.93 |
+| 1e3 inside the blob | 1 (1) | unreachable | 100%, ~0 | none |
+
+- Coverage is against an independent chaos game with the blur, at views
+  it reaches.
+- Targeted against untargeted
+  (`a_targeted_true_grand_julian_render_is_the_untargeted_render`): the
+  targeted render lights 0.984, 0.994 and 0.999 of what the reference
+  lights at 10, 1e2 and 1e3, with brightness 0.334/0.329 at 10.
+- Its julian words hold per sample at 1e4-1e8: 99th percentile under
+  0.003 px.
+- Inside the blob the single word kept is the renewal itself, by
+  geometry. Its replays hit zero times, and the replay rule would have
+  dropped it.
+- Plans of flames without a blur are unchanged, bit for bit.
+
+**What v1 does not do: the blob is sampled at its own rate.** A
+renewal word forces a whole blob through the rest of its word, and only
+the part that reaches the view lands. At depth those words carry most of
+the plan's probability (89% at 1e3) and land 4% of the time, so the
+targeted render's efficiency falls toward zero there (it is correct, and
+the picture's soft glow is about a quarter of the view at 1e3). See C2b.
+
+### C2b. The blob's efficiency at depth -- open
+
+To land a renewal word's samples, the blob would have to be drawn
+already inside its word's region, with the word's probability scaled by
+the chance of that. The chance is a smooth integral over the blur and
+the attractor; the draw inside the region needs a per-sample weight,
+which the renderer's unit deposits do not carry. Needs either weighted
+deposits (the histogram carries `color_scale` = 100 per unit today) or
+an exact conditional draw of the blur. Research, not a transcription.
+
+### C2c. A blur too small to be a renewal -- open
+
+A `pre_blur` whose reach does not cover the attractor's image in its
+kernel's frame, or one beside anything but bubble, is refused with its
+numbers. Planning it needs the walk's regions dilated by the reach at
+each blurred step (the original C2 sketch above), so the blurred
+transform's children can be carried.
+
 ### C3. random1 at 1e3 misses 2.6% -- open
 
 Every other view measured covers 97% or more; grand-julian covers 100%.
@@ -122,25 +214,30 @@ Three corpus flames. They would need their own routing.
 
 ## Performance
 
-### P1. Cache each word's landings across views -- open
+### P1. Cache each word's landings across views -- measured, not worth building
 
-**The biggest expected win for panning and zooming in the app.** Much of
-a plan's cost is working out where the sample points go under each word
-(replays), and which of them land near each node (gathers). Where a word
-sends the sample does not depend on the view. Today every pan or zoom
-replans from the root and recomputes all of it.
+**Measured (2026-09-23, `what_could_a_cache_reuse`, the current walk):**
+the share of a plan's expanded nodes that the previous plan had already
+expanded.
 
-- **Cache, per flame:** each replayed word's landings (the sample points
-  it sends where, or the compact form the walk reads), bounded in memory
-  and evicted least-recently-used.
-- **Reuse:** a moved view walks again, but asks the evaluator only for
-  words it has not seen. Keep, carry and drop decisions stay per view,
-  since they depend on the view; only the view-free answers are reused.
-- **Measure first:** how many words nearby views share (small pans, 2x
-  zooms), which bounds the win. Then plan time per pan, before and after,
-  in the app.
-- **Fits the standby:** the standby plans a disc twice the view's radius,
-  and a cache warmed by it makes the next tight plan cheap.
+| move | at 1e3 | at 1e6 |
+|---|---|---|
+| pan 1/4 view | 28% | 31% |
+| pan 1 view | 10% | 17% |
+| zoom in 1.5x | 20% | 11% |
+| zoom in 4x | 2.6% | 2.0% |
+| zoom out 2x | 25% | 11% |
+
+A plan's work sits at the depth where words fit the view, and those words
+move with the view. So a cache keyed by word saves 1.0-1.45x on typical
+moves, the same answer an earlier session recorded
+([inversive-targeting.md](inversive-targeting.md) §28). The expectation
+that it would be the biggest win was wrong.
+
+What already covers moves: the standby plan (twice the view's radius) is
+swapped in on the frame a pan or zoom-in lands inside it. What would
+make plans faster at depth: the GPU planner in offsets (C1's leftover),
+which the CPU now stands in for past ~2e6 at 3-5x the time.
 
 ### P2. Patterns instead of paths -- investigate
 

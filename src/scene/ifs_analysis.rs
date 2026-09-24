@@ -3436,6 +3436,58 @@ pub async fn analyse_2d_maps_sliced(
     analyse_2d_with_sliced(flame, registry, false, slicer).await
 }
 
+/// A transform's `pre_blur`, taken out for the planner: see
+/// [`analyse_2d_maps_blurred_sliced`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PreBlur {
+    /// The variation's weight. JWF's draw is `weight·(six uniforms − 3)`
+    /// at a uniform angle, so it moves the point at most `3·|weight|`.
+    pub weight: f64,
+}
+
+impl PreBlur {
+    /// The furthest the blur moves a point, in the frame the kernel sees.
+    pub fn reach(&self) -> f64 {
+        3.0 * self.weight.abs()
+    }
+}
+
+/// [`analyse_2d_maps_sliced`], with each transform's `pre_blur` taken
+/// out and handed back beside the maps, by transform index (tracker item
+/// C2, `docs/projects/deep-zoom-tracker.md`). The maps are the flame's
+/// with the blur removed; the walk adds it back where it draws the
+/// sample and replays, and decides whether it can plan it at all.
+///
+/// Only a `pre_blur` that is its transform's one pre-phase variation is
+/// taken out: `pre` then is the transform's affine, and the blur lands
+/// exactly where the kernel reads. Beside another, it stays in and is
+/// refused as before. The escape engine's analysis never sees this: a
+/// random map has no escape time.
+pub async fn analyse_2d_maps_blurred_sliced(
+    flame: &Flame,
+    registry: &VariationRegistry,
+    slicer: &super::slice::Slicer,
+) -> Result<(Ifs2, Vec<Option<PreBlur>>), Vec<Disqualification>> {
+    let mut stripped = flame.clone();
+    let mut blurs = vec![None; flame.transforms.len()];
+    for (i, t) in stripped.transforms.iter_mut().enumerate() {
+        let w = t.variations.get("pre_blur").copied().unwrap_or(0.0);
+        if w == 0.0 {
+            continue;
+        }
+        let other_pre = t.variations.iter().any(|(n, &vw)| {
+            vw != 0.0 && n != "pre_blur" && registry.get(n).is_some_and(|d| d.phase == VariationPhase::Pre)
+        });
+        if other_pre {
+            continue;
+        }
+        t.variations.remove("pre_blur");
+        t.variation_order.retain(|n| n != "pre_blur");
+        blurs[i] = Some(PreBlur { weight: w as f64 });
+    }
+    analyse_2d_with_sliced(&stripped, registry, false, slicer).await.map(|ifs| (ifs, blurs))
+}
+
 fn analyse_2d_with(flame: &Flame, registry: &VariationRegistry, holes: bool) -> Result<Ifs2, Vec<Disqualification>> {
     super::slice::drive(analyse_2d_with_sliced(flame, registry, holes, &super::slice::Slicer::never()))
 }
