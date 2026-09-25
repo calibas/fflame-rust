@@ -264,11 +264,50 @@ numbers. Planning it needs the walk's regions dilated by the reach at
 each blurred step (the original C2 sketch above), so the blurred
 transform's children can be carried.
 
-### C3. random1 at 1e3 misses 2.6% -- open
+### C3. random1 at 1e3 misses 2.6% -- in progress (2026-09-24)
 
 Every other view measured covers 97% or more; grand-julian covers 100%.
 The measurements are in [inversive-targeting.md](inversive-targeting.md)
 §31-§32.
+
+**Found.** The missed samples all arrive last through `t1a1`; every
+sample point the planner has in the view arrived through `t0a0`. At
+depth 1 the `t1a1` child had 5 candidates, none landing, and 400
+replays reading zero, so it was dropped as EMPTY. It holds about 3% of
+the view. The sample, 10 points in view, is too sparse to resolve it.
+
+- A 10x sample (1M) takes this view to 0.9997, but only moves the hole
+  deeper: random1 at 1e4 fell to 0.957. A fixed sample always runs thin
+  at some depth, so the fix has to be local.
+
+**Built (first step): the rescue** (`Backward::rescue`).
+
+- An EMPTY child whose probability is over `FORCE_WASTE` of the kept
+  mass is looked for near its candidates, nearest first.
+- The nearby points come from the sample's own history
+  (`near_points`): a sample point's last k maps applied to other sample
+  points lie in its depth-k cylinder.
+- What lands is carried as a cloud.
+- The depth that lands varies by candidate (measured: 8-12 for random1;
+  k <= 6 spreads past the view, k >= 16 gathers round the miss), so
+  every depth from 4 to 16 is tried.
+
+| view | before | now |
+|---|---|---|
+| random1 1e3 (0.25) | 0.974 | 0.995 |
+| random1 1e4 (0.25) | 0.992 | 0.996 |
+| random1 1e3 (0.25, off 0.6) | 0.980 | 0.985 |
+| random1 1e4 (0.25, off 0.6) | 0.976 | 0.978 |
+| julian-disc 1e3 (0.6, off 2) | 0.978 | 0.978 |
+
+**Next:**
+
+- Trace the off-sample views' misses (`WATCH=1.1
+  WATCH_AT=random1-0.25-0.6` on `why_is_this_view_empty`) to see whether
+  the rescue finds too little there, or whether the loss is elsewhere,
+  such as unseen children with no candidates to look near.
+- The same for julian-disc 0.6.
+- Measure the rescue's planning cost, and run the targeting gates.
 
 ### C4. Schottky flames: a Möbius analysis -- open
 
