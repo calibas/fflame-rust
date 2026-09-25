@@ -174,8 +174,12 @@ Julian (`what_the_true_grand_julian_is`):
 renewal word forces a whole blob through the rest of its word, and only
 the part that reaches the view lands. At depth those words carry most of
 the plan's probability (89% at 1e3) and land 4% of the time, so the
-targeted render's efficiency falls toward zero there (it is correct, and
-the picture's soft glow is about a quarter of the view at 1e3). See C2b.
+targeted render's efficiency falls toward zero there. It is correct, and
+the picture's soft glow is about a quarter of the view at 1e3.
+
+Since C2b the blur words stay out of the walk's floor and are drawn at
+their square-root rate. At 1e3 they hold 59% of the mass at 0.23, and
+the plan's efficiency is 0.54, up from 0.15. See C2b.
 
 ### C2b. The blob's efficiency at depth -- partly done (2026-09-24)
 
@@ -235,18 +239,22 @@ and a sparse picture reads darker in the log tone map.
   1e3 (was 0.983 / 0.992 / 0.999).
 - Flames without a blur are untouched: no word is a blur word.
 
-**Still open:** the blob sampled at its own rate. A view inside the blob,
-where it is the whole picture, still wastes what does not land. The
-real fix is the exact conditional draw below.
+**Still open: the conditional draw.** A blur word's samples are still
+blobs drawn whole, and only the part that reaches the view lands. A view
+inside the blob, where the glow is the whole picture, wastes what lands
+elsewhere, and the draw rate cannot help there: every word is a blur
+word.
 
+To land every sample, draw the blur already inside the word's region:
+- Pick a point in the region the rest of the word pulls the view back
+  to.
+- Solve for the blur that reaches it, through bubble's two-branch
+  inverse.
+- Weight the sample by the blur's density there over the draw's.
 
-To land a renewal word's samples, the blob would have to be drawn
-already inside its word's region, with the word's probability scaled by
-the chance of that. The chance is a smooth integral over the blur and
-the attractor; the draw inside the region needs a per-sample weight,
-which the renderer's unit deposits do not carry. Needs either weighted
-deposits (the histogram carries `color_scale` = 100 per unit today) or
-an exact conditional draw of the blur. Research, not a transcription.
+The weight is no longer an obstacle: the deposit carries one (above).
+What remains is the region, the inverse, and the density. That is
+research, not a transcription.
 
 ### C2c. A blur too small to be a renewal -- open
 
@@ -365,11 +373,11 @@ root again.
   levels off, an automaton planner is feasible. If it keeps growing, it
   is not.
 - **Cheaper, and sure to help:** P1, the per-word cache.
-- **From the render itself:** the compute shader already knows each
-  deposited sample's recent symbols (the `PATH_TRACKING` machinery; under
-  targeting, the forced word plus the free symbols). A census of those
-  addresses per region of the view says which longer words land in a
-  zoomed-in sub-view, and how often. It is statistical, so on its own
+- **From the render itself:** under targeting, the compute shader knows
+  each deposited sample's word, and PathMap already records it per pixel
+  (`path_ids`). The old 4-bit history of the free orbit is gone. A census
+  of those words per region of the view says which longer words land in
+  a zoomed-in sub-view, and how often. It is statistical, so on its own
   it cannot rule out holes; it can seed the walk, or order it.
 
 ### P3. julian-disc plans are large and inefficient -- open
@@ -398,7 +406,7 @@ the planner's six kernels synchronously
 
 ## Editing by words
 
-### E1. Trim, removals and the Words panel -- in progress (2026-09-24)
+### E1. Trim, removals and the Paths panel -- done (2026-09-24)
 
 Plan: [word-editing.md](word-editing.md). A trim slider drops the minor
 branches of a plan's word tree that flicker in during an animation; a
@@ -416,8 +424,16 @@ Words panel removes branches by hand, replacing the Path Editor.
 - **Phase 3, the Words panel: done.** The plan's tree with each
   branch's share of the view, plus remove, solo and restore, and the
   trim slider. The Path Editor and its GPU path filters are removed.
-- Phase 4 (trim hysteresis across frames, hover highlight): only if
-  needed.
+- **Named for users** ([word-editing.md](word-editing.md) §9): the UI
+  says Focused Rendering, paths and the Paths panel. The code and docs
+  keep the math names.
+  - An Off / Auto / Always switch lets the Paths panel work at any zoom.
+  - Opening a path splits it in the plan (`PlanOptions::refine`).
+- **PathMap colours by path** (§10): exact per sample. Path, Path
+  (distinct), Depth and Origin; a right-click shows a pixel's path, with
+  Remove.
+- Phase 4 (trim hysteresis across frames, hover highlight): parked. An
+  animation tested on 2026-09-24 behaved as it should without it.
 
 ### E2. 3D Focused Rendering -- idea (2026-09-24)
 
@@ -437,6 +453,14 @@ projected coordinates. Open questions include:
   Firefox has not been run.
 - **O2. Merge `ifs-distance` into `main`** -- when you decide.
 - **O3. A CLAUDE.md entry** pointing here and to the design docs.
+- **O4. Small fixes.**
+  - The new UI strings (Paths, Focused Rendering, PathMap) are English
+    only.
+  - The Simulation panel's step readout uses `→`, which egui's font
+    cannot draw (an empty box).
+  - `a_standby_plan_covers_a_move` asserts a 100 ms swap, which fails
+    when many GPU tests share the GPU.
+  - `Backward::pieces` is unused.
 
 ## Done
 
