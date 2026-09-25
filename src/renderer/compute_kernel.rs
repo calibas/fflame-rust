@@ -4362,9 +4362,13 @@ impl FlameRenderer {
     /// That is the same statement: the forced render is doing the
     /// work of that many unbiased iterations, and saying so is what
     /// makes its brightness match theirs.
+    ///
+    /// A plan that draws some words off their probability
+    /// (`Cylinder::draw`) deposits `1 / S` per draw on average, which is
+    /// `N / (P(A_V) · S)` iterations' worth.
     pub fn cylinder_iteration_scale(&self) -> f64 {
         match &self.cylinders {
-            Some(c) if c.mass > 0.0 => 1.0 / c.mass,
+            Some(c) if c.mass > 0.0 => 1.0 / (c.mass * c.draw_scale()),
             _ => 1.0,
         }
     }

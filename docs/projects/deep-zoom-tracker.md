@@ -177,7 +177,68 @@ the plan's probability (89% at 1e3) and land 4% of the time, so the
 targeted render's efficiency falls toward zero there (it is correct, and
 the picture's soft glow is about a quarter of the view at 1e3). See C2b.
 
-### C2b. The blob's efficiency at depth -- open
+### C2b. The blob's efficiency at depth -- partly done (2026-09-24)
+
+**What was found.** The user saw a quality cliff on the true Grand
+Julian between zoom 1559 and 1560: 72 paths and heavy noise on one side,
+1,151 and clean on the other. Brightness also flickered in animation,
+and a sparse picture reads darker in the log tone map.
+
+- The cause was the blob word `[t0a0]`, kept by geometry. At 1080x1055
+  the view's disc grazes the blob's by 2e-6. That overlap is outside the
+  frame: none of 4M blob points landed in it.
+  - It held 99.9% of the plan and took 97% of the draws.
+  - Its probability, counted into the walk's measure floor, raised the
+    floor a hundredfold, so the rest of the plan stopped at 72 words
+    (efficiency 0.001).
+- A view 1% smaller (256x256) missed the blob and planned 1,116 words at
+  0.24.
+
+**Done.**
+
+- **Blur words stay out of the floor.** A blob is not the view's
+  measure. The fix went well beyond the cliff: the true Grand Julian's
+  deep plans had all been cut short by their blur words.
+
+  | | before | after |
+  |---|---|---|
+  | 1e3: words | 1,065 | 5,023 |
+  | 1e3: efficiency | 0.147 | 0.544 |
+  | 1e3: speedup | 432 | 1,426 |
+  | 1e5: words | 14 | 4,793 |
+  | 1e5: pixels lit at equal iterations | 1,131 | 9,027 |
+  | 1e7: pixels lit at equal iterations | 3,394 | 9,038 |
+
+  CPU plans take longer: 210 -> 760 ms at 1e3, and 16 -> 660 ms at 1e5,
+  where the old plan was unusable.
+- **Blur words are drawn at `prob · sqrt(eff)`** (`Cylinder::draw`), the
+  variance-optimal rate, with deposits of `1 / draw`. The deposit
+  already carries a weight (`density_weight`, as importance sampling
+  uses), so this is not the obstacle C2b named. The tone map is told
+  `N / (mass · S)` iterations (`Cylinders::draw_scale`), and the weights
+  go in a table section at `header[6]`.
+- **A costly blur word that read zero is replayed until it tells**
+  (`landings`, up to 2^20 draws, within a `RENEWAL_REPLAYS` budget),
+  costliest first, with the shares taken again after each.
+  - If nothing lands and the bound `prob · 3/k` is under 1% of the rest
+    of the view, it is dropped as negligible (`Trace::renewal_dropped`).
+  - Otherwise what landed sets its draw rate.
+
+**Result.**
+
+- Either side of the graze, at either size, the plans agree: mass
+  1.85e-4 within 0.2%, efficiency 0.46, 0.89 of draws landing
+  (`a_grazing_blob_does_not_take_the_draws`).
+- Rendered at 540x527, mean brightness went from 0.036 to 0.212 at 20M
+  iterations, and pixel noise at 200M fell from 0.106 to 0.010.
+- Targeted against untargeted: 0.984 / 0.997 / 1.000 lit at 10, 1e2 and
+  1e3 (was 0.983 / 0.992 / 0.999).
+- Flames without a blur are untouched: no word is a blur word.
+
+**Still open:** the blob sampled at its own rate. A view inside the blob,
+where it is the whole picture, still wastes what does not land. The
+real fix is the exact conditional draw below.
+
 
 To land a renewal word's samples, the blob would have to be drawn
 already inside its word's region, with the word's probability scaled by
