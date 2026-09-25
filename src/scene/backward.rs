@@ -156,6 +156,13 @@ pub const JUNK_EXTENTS: f64 = 2.0;
 /// `BEAM × MAX_DEPTH × MEASURE_FLOOR` of the kept mass.
 pub const MEASURE_FLOOR: f64 = 1e-4;
 
+/// A rescue (`Backward::rescue`) looks near this many of a child's
+/// candidates, nearest first, at each of these cylinder depths, with
+/// `RESCUE_POINTS` points at each.
+pub const RESCUE_CANDIDATES: usize = 8;
+pub const RESCUE_DEPTHS: std::ops::RangeInclusive<usize> = 4..=16;
+pub const RESCUE_POINTS: usize = 128;
+
 /// Map applications a plan may spend replaying its costliest blur words
 /// (see the walk's end): about a quarter of a second on one core.
 pub const RENEWAL_REPLAYS: usize = 4 << 20;
@@ -570,6 +577,8 @@ pub struct Trace {
     /// Blur words dropped as negligible: no landing in a long replay,
     /// and a bound under 1% of the rest of the view.
     pub renewal_dropped: usize,
+    /// Children with near misses found by looking closer (`rescue`).
+    pub rescued: usize,
     /// Where the time went, for profiling: seeding a cloud region from
     /// the grid, gathering candidates, checking them exactly, and
     /// replaying words for their efficiency. Plus how many word
@@ -832,6 +841,7 @@ impl Trace {
         self.unrefined += o.unrefined;
         self.removed += o.removed;
         self.renewal_dropped += o.renewal_dropped;
+        self.rescued += o.rescued;
         self.t_seed += o.t_seed;
         self.t_gather += o.t_gather;
         self.t_verify += o.t_verify;
@@ -2409,6 +2419,72 @@ impl Backward {
         Some(out)
     }
 
+    /// **Points of the attractor near sample point `i`**: its last `k`
+    /// maps -- the chaos game's own, which made it -- applied to other
+    /// sample points. They lie in `i`'s depth-`k` cylinder, so they are as
+    /// near it as `k` says, and as many as asked for. `None` where the
+    /// sample was reseeded within `k` steps of `i`.
+    fn near_points(&self, i: usize, k: usize, m: usize) -> Option<Vec<[f64; 2]>> {
+        if i < k || k == 0 {
+            return None;
+        }
+        let mut history: Vec<u32> = Vec::with_capacity(k);
+        for j in (i + 1 - k..=i).rev() {
+            let ai = *self.made_by.get(j)?;
+            if ai == u32::MAX {
+                return None;
+            }
+            history.push(self.alphabet[ai as usize].sym);
+        }
+        // Oldest first, as a word is applied.
+        history.reverse();
+        let n = self.sample.len();
+        Some((0..m).filter_map(|j| self.forward_along_salted(&history, self.sample[(i.wrapping_mul(2654435761) + j * 7919) % n], j as u64 + 1)).collect())
+    }
+
+    /// **A child with near misses, looked at closer** (tracker C3). Its
+    /// region's candidates came near the view and none landed, and its
+    /// replays read zero: at a view the sample holds ten points of, a
+    /// branch holding 3% of it (random1 at 1e3, `t1a1`) looked exactly
+    /// like that, and was dropped -- 2.6% of the view missing. So a child
+    /// whose probability is worth it (over `FORCE_WASTE` of the mass kept)
+    /// is looked for among points of the attractor near its candidates
+    /// (`near_points`), from coarse to fine. What lands is its region's,
+    /// on the attractor, and the walk carries it from there as a cloud.
+    fn rescue(&self, word: &[u32], pts: &Pts, view: View, prob: f64, floor_mass: f64) -> Option<Vec<[f64; 2]>> {
+        let Pts::Index(cands) = pts else { return None };
+        if cands.is_empty() || !(prob > FORCE_WASTE * floor_mass) {
+            return None;
+        }
+        // Nearest miss first. Every depth: too shallow and the points
+        // spread past the view, too deep and they gather round a point
+        // that misses; measured on random1, the depth that lands runs
+        // from 8 to 12 by candidate.
+        let mut near: Vec<(u32, f64)> = cands
+            .iter()
+            .filter_map(|&c| {
+                let y = self.forward_along(word, self.sample[c as usize])?;
+                Some((c, (y[0] - view.centre[0]).hypot(y[1] - view.centre[1])))
+            })
+            .collect();
+        near.sort_by(|a, b| a.1.total_cmp(&b.1));
+        let mut found: Vec<[f64; 2]> = Vec::new();
+        for &(c, _) in near.iter().take(RESCUE_CANDIDATES) {
+            for k in RESCUE_DEPTHS {
+                for z in self.near_points(c as usize, k, RESCUE_POINTS).unwrap_or_default() {
+                    if self.lands(word, z, view) {
+                        found.push(z);
+                    }
+                }
+                if found.len() >= CLOUD_CAP {
+                    found.truncate(CLOUD_CAP);
+                    return Some(found);
+                }
+            }
+        }
+        (!found.is_empty()).then_some(found)
+    }
+
     /// Settle a node once its children's questions are answered: which
     /// children are kept, which carried with what points -- and then
     /// whether they account for the node, or the node is forced itself.
@@ -2516,6 +2592,14 @@ impl Backward {
                             survived[ai] = true;
                             let seeds = self.seeds_from(&[&replay_hits], Some(&pts));
                             node_kept.push((disc(word, prob, seeds), eff));
+                        } else if let Some(cloud) = self.rescue(&word, &pts, view, prob, floor_mass) {
+                            // Near misses, and a large share: looked for
+                            // closer (`rescue`), found, and carried from
+                            // what was found.
+                            watched(&mut trace, &word, "RESCUED", &|| format!("{n_cands} candidates, none land; {} points near them do", cloud.len()));
+                            trace.rescued += 1;
+                            survived[ai] = true;
+                            node_next.push(Node { word, pts: Pts::Cloud(cloud), prob, eff: 0.0 });
                         } else {
                             watched(&mut trace, &word, "EMPTY", &|| format!("{n_cands} candidates, none land"));
                         }
