@@ -75,6 +75,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // does not shift the chaos game's own sequence -- the free orbit
     // has to be the same orbit it would have been.
     var ct_rng = rng_init(thread_id, params.seed ^ 0x85EBCA6Bu);
+    // The drawn word's deposit (`ct_word_weight`), for the plot: a word
+    // drawn off its probability deposits the difference, every other
+    // forced sample one. Folded into `density_weight` inline, so an
+    // untargeted shader is byte-identical.
+    var ct_weight = 1.0;
 {{/if}}
 {{#if IMPORTANCE_SAMPLING}}
     // The window's likelihood ratio and how many choices it covers
@@ -478,6 +483,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // a respawn -- stays with its group.
                 let ct_i = ct_pick(f32(pcg_hash(pcg_hash((thread_id / 32u) ^ params.seed ^ 0x27D4EB2Fu) + i)) / 4294967296.0);
                 let ct_b = ct_base(ct_i);
+                ct_weight = ct_word_weight(ct_i);
                 // Bounded by the table's own stride, so a table that is
                 // not what the shader was built for loops a word's length
                 // at most -- a loop that ran on a garbage count hangs the
@@ -746,9 +752,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // seeds it with the emission's weight; 3D depth-density
             // compensation below multiplies on top.
 {{#if HAS_PLOT_EMIT}}
-            var density_weight = src_weight;
+            var density_weight = src_weight{{#if CYLINDER_TARGETING}} * ct_weight{{/if}};
 {{else}}
-            var density_weight = 1.0;
+            var density_weight = 1.0{{#if CYLINDER_TARGETING}} * ct_weight{{/if}};
 {{/if}}
 {{#if IMPORTANCE_SAMPLING}}
             // The window's likelihood ratio, which is what makes the

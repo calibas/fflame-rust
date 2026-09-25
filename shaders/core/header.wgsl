@@ -427,6 +427,14 @@ fn ct_base(i: u32) -> u32 {
     return 8u + i * ct_stride();
 }
 
+// Word `i`'s deposit (`Cylinder::draw`): 1 but for a word drawn off its
+// probability -- a blur's -- whose samples weigh `1 / draw`. The table's
+// header says where the weights are, or 0 when every deposit is one.
+fn ct_word_weight(i: u32) -> f32 {
+    let at = u32(cylinders[6]);
+    return select(1.0, cylinders[at + i], at != 0u);
+}
+
 {{#if CYLINDER_OFFSETS}}
 // Where word `i`'s references start, or 0 for a word replayed in
 // absolute f32 to its end.

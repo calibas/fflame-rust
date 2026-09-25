@@ -354,6 +354,13 @@ pub struct Cylinder {
     /// With `prob`, how much of the picture the word is
     /// (`scene::word_tree`).
     pub eff: f64,
+    /// **How often the render draws it, relative to its probability**
+    /// (tracker item C2b): 1 but for a word a blur starts, whose samples
+    /// mostly land off the view. Such a word is drawn at `prob · draw`
+    /// and each of its samples deposits `1 / draw`, so the picture is the
+    /// same and fewer samples are spent where few land
+    /// (`Cylinders::draw_scale`).
+    pub draw: f64,
 }
 
 /// The enumerated antichain, restricted to the words that reach the
@@ -429,6 +436,21 @@ pub struct Cylinders {
 }
 
 impl Cylinders {
+    /// **The mean draw rate** (`Cylinder::draw`), probability-weighted:
+    /// the render draws word `w` with chance `prob_w · draw_w / (mass ·
+    /// S)` and deposits `1 / draw_w`, so each draw deposits `1 / S` of
+    /// what an unweighted draw would, on average, and the tone map is
+    /// told the render did `N / (mass · S)` iterations. 1 when every word
+    /// is drawn at its probability.
+    pub fn draw_scale(&self) -> f64 {
+        let s: f64 = self.words.iter().map(|w| w.prob * w.draw).sum();
+        if self.mass > 0.0 && s > 0.0 {
+            s / self.mass
+        } else {
+            1.0
+        }
+    }
+
     /// How much work one plotted sample costs against the unbiased
     /// game's, as a ratio of useful samples per map application.
     ///
@@ -646,6 +668,7 @@ impl Cylinders {
                         radius: enc.r,
                         seeds: Vec::new(),
                         eff: 1.0,
+                        draw: 1.0,
                     });
                     Verdict::Emit(kept.len() - 1)
                 } else {
@@ -1304,7 +1327,7 @@ impl Cylinders {
                     // and subdividing further would only lengthen the
                     // prefix. This is where the antichain is cut.
                     if radius <= view.radius {
-                        kept.push(Cylinder { word, prob, centre, radius, seeds: Vec::new(), eff: 1.0 });
+                        kept.push(Cylinder { word, prob, centre, radius, seeds: Vec::new(), eff: 1.0, draw: 1.0 });
                         if kept.len() > MAX_WORDS {
                             return Err(NoCylinders::TooManyWords(kept.len()));
                         }
@@ -1391,6 +1414,7 @@ impl Cylinders {
                 radius: node.radius,
                 seeds: Vec::new(),
                 eff: 1.0,
+                draw: 1.0,
             });
         }
 
@@ -2048,6 +2072,8 @@ pub fn pack_words(cyl: &Cylinders, flame: &Flame) -> Vec<f32> {
     out[1] = cyl.words.len() as f32;
 
     let mut acc = 0.0f64;
+    // Drawn at `prob · draw`, not `prob` (`Cylinder::draw`).
+    let drawn: f64 = cyl.words.iter().map(|c| c.prob * c.draw).sum();
     for (w, c) in cyl.words.iter().enumerate() {
         let mut h_prod = 1.0f64;
         let mut g_acc = 0.0f64;
@@ -2059,7 +2085,7 @@ pub fn pack_words(cyl: &Cylinders, flame: &Flame) -> Vec<f32> {
             g_acc = g_acc * h + g;
             h_prod *= h;
         }
-        acc += c.prob / cyl.mass.max(f64::MIN_POSITIVE);
+        acc += c.prob * c.draw / drawn.max(f64::MIN_POSITIVE);
         let base = HEADER_FLOATS + w * stride;
         out[base] = acc as f32;
         out[base + 1] = h_prod as f32;
@@ -2107,6 +2133,12 @@ pub fn pack_words(cyl: &Cylinders, flame: &Flame) -> Vec<f32> {
         }
         // f32 offsets are exact below 2^24 floats, 64 MB of table.
         debug_assert!(out.len() < 1 << 24);
+    }
+    // Each word's deposit, `1 / draw`, where any word is drawn off its
+    // probability; `out[6]` says where (0: every deposit is one).
+    if cyl.words.iter().any(|c| c.draw != 1.0) && out.len() + cyl.words.len() < 1 << 24 {
+        out[6] = out.len() as f32;
+        out.extend(cyl.words.iter().map(|c| (1.0 / c.draw.max(f64::MIN_POSITIVE)) as f32));
     }
     out
 }

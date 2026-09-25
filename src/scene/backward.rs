@@ -156,6 +156,10 @@ pub const JUNK_EXTENTS: f64 = 2.0;
 /// `BEAM × MAX_DEPTH × MEASURE_FLOOR` of the kept mass.
 pub const MEASURE_FLOOR: f64 = 1e-4;
 
+/// Map applications a plan may spend replaying its costliest blur words
+/// (see the walk's end): about a quarter of a second on one core.
+pub const RENEWAL_REPLAYS: usize = 4 << 20;
+
 /// A word that reached the depth cap without fitting is kept only if
 /// this fraction of its replayed samples land in the frame.
 pub const LAST_EFFICIENCY: f64 = 0.2;
@@ -563,6 +567,9 @@ pub struct Trace {
     pub unrefined: usize,
     /// Children never made because their piece was removed.
     pub removed: usize,
+    /// Blur words dropped as negligible: no landing in a long replay,
+    /// and a bound under 1% of the rest of the view.
+    pub renewal_dropped: usize,
     /// Where the time went, for profiling: seeding a cloud region from
     /// the grid, gathering candidates, checking them exactly, and
     /// replaying words for their efficiency. Plus how many word
@@ -824,6 +831,7 @@ impl Trace {
         self.forced += o.forced;
         self.unrefined += o.unrefined;
         self.removed += o.removed;
+        self.renewal_dropped += o.renewal_dropped;
         self.t_seed += o.t_seed;
         self.t_gather += o.t_gather;
         self.t_verify += o.t_verify;
@@ -1405,6 +1413,11 @@ impl Backward {
         matches!(c.pts, Pts::Index(_)) && self.alphabet[c.ai].renewal.is_none()
     }
 
+    /// Whether a blur starts `word`: the renewal is its first map.
+    fn renewal_first(&self, word: &[u32]) -> bool {
+        word.first().is_some_and(|s| self.alphabet.iter().any(|a| a.sym == *s && a.renewal.is_some()))
+    }
+
     /// **Whether a renewal can land in `view` through `word`**: the view
     /// pulled back through the word, last symbol first, along every
     /// branch and arm, each piece's radius grown by the map's smallest
@@ -1702,10 +1715,17 @@ impl Backward {
     /// The forward image of `x` along `word`, or `None` where a map
     /// sends it to infinity.
     fn forward_along(&self, word: &[u32], x: [f64; 2]) -> Option<[f64; 2]> {
+        self.forward_along_salted(word, x, 0)
+    }
+
+    /// [`Self::forward_along`], its blur drawn from a stream also seeded
+    /// by `salt`: independent draws from one point. Salt 0 is
+    /// `forward_along` exactly.
+    fn forward_along_salted(&self, word: &[u32], x: [f64; 2], salt: u64) -> Option<[f64; 2]> {
         // A blurred transform draws its blur from a stream seeded by the
         // word and the point: a replay is random, as the chaos game is,
         // and the same every time, as a plan must be.
-        let mut st = word.iter().fold(x[0].to_bits() ^ x[1].to_bits().rotate_left(17), |h, &s| {
+        let mut st = word.iter().fold(x[0].to_bits() ^ x[1].to_bits().rotate_left(17) ^ salt, |h, &s| {
             (h ^ s as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15).rotate_left(29)
         });
         let mut u = move || {
@@ -1732,6 +1752,19 @@ impl Backward {
         let n = self.verify_first.len() + self.verify_rest.len();
         let hit = self.verify_first.iter().chain(&self.verify_rest).filter(|&&i| self.lands(word, self.sample[i as usize], view)).count();
         hit as f64 / n.max(1) as f64
+    }
+
+    /// How many of `k` independent replays of `word` land in the view:
+    /// sample points in turn, each with its own blur draw. For a blur's
+    /// word, whose landings the walk's few hundred replays cannot resolve.
+    fn landings(&self, word: &[u32], view: View, k: usize) -> usize {
+        let n = self.sample.len().max(1);
+        (0..k)
+            .filter(|&i| {
+                self.forward_along_salted(word, self.sample[(i * 7919) % n], i as u64 + 1)
+                    .is_some_and(|y| (y[0] - view.centre[0]).hypot(y[1] - view.centre[1]) <= view.radius)
+            })
+            .count()
     }
 
     /// Whether `x`'s forward image along `word` lands in the view.
@@ -2399,7 +2432,7 @@ impl Backward {
                 Pts::Index(idx) => idx.iter().map(|&i| self.sample[i as usize]).collect(),
             }
         };
-        let disc = |word: Vec<u32>, prob: f64, seeds: Vec<[f64; 2]>| Cylinder { word, prob, centre: view.centre, radius: view.radius, seeds, eff: 0.0 };
+        let disc = |word: Vec<u32>, prob: f64, seeds: Vec<[f64; 2]>| Cylinder { word, prob, centre: view.centre, radius: view.radius, seeds, eff: 0.0, draw: 1.0 };
 
         let mut node_kept: Vec<(Cylinder, f64)> = Vec::new();
         let mut node_next: Vec<Node> = Vec::new();
@@ -2664,7 +2697,7 @@ impl Backward {
                         tr.unrefined += 1;
                     }
                     let seeds = self.seeds_from(&[], Some(&n.pts));
-                    kept.push((Cylinder { word: n.word, prob: n.prob, centre: view.centre, radius: view.radius, seeds, eff: 0.0 }, n.eff));
+                    kept.push((Cylinder { word: n.word, prob: n.prob, centre: view.centre, radius: view.radius, seeds, eff: 0.0, draw: 1.0 }, n.eff));
                     tr.forced += 1;
                 }
                 break;
@@ -2703,7 +2736,15 @@ impl Backward {
             let mut next: Vec<Node> = Vec::new();
             for e in results {
                 for (c, eff) in e.kept {
-                    kept_mass += c.prob;
+                    // A blur's word is not the view's measure: its blob
+                    // lands mostly elsewhere. Counted in the floor, one
+                    // kept at depth 1 because the view grazes the blob
+                    // raised the floor a hundredfold, and the rest of the
+                    // plan was cut short -- 72 words at efficiency 0.001
+                    // where a view 1% smaller planned 1,100 at 0.24.
+                    if !self.renewal_first(&c.word) {
+                        kept_mass += c.prob;
+                    }
                     kept.push((c, eff));
                 }
                 next.extend(e.next);
@@ -2760,9 +2801,11 @@ impl Backward {
                     if let Some(line) = watch_line(watch.as_deref(), &n.word, depth, "BEAM", || format!("prob {:.2e} eff {:.2}", n.prob, n.eff)) {
                         tr.watched.push(line);
                     }
-                    kept_mass += n.prob;
+                    if !self.renewal_first(&n.word) {
+                        kept_mass += n.prob;
+                    }
                     let seeds = self.seeds_from(&[], Some(&n.pts));
-                    kept.push((Cylinder { word: n.word, prob: n.prob, centre: view.centre, radius: view.radius, seeds, eff: 0.0 }, n.eff));
+                    kept.push((Cylinder { word: n.word, prob: n.prob, centre: view.centre, radius: view.radius, seeds, eff: 0.0, draw: 1.0 }, n.eff));
                     tr.beam += 1;
                 }
             }
@@ -2795,18 +2838,91 @@ impl Backward {
                 _ => merged.push((c, e)),
             }
         }
+        // **A blur's word that would take the draws for nothing** (C2b).
+        // Kept by geometry, a blur's word can carry most of the plan's
+        // probability while landing almost never: the true Grand Julian
+        // at zoom 1559 keeps its blob because the view's DISC grazes the
+        // blob's by 2e-6 -- outside the frame, which no blob point of
+        // four million reached -- and that word was 99.9% of the plan.
+        // Its few hundred replays read zero, which floors its draw rate
+        // at 1/20 and still hands it 97% of the draws.
+        //
+        // So such a word -- zero landings, a large share of the draws --
+        // is replayed as often as it takes to tell. None landing in `k`
+        // bounds its share of the view below `prob · 3/k`; under 1% of
+        // what the rest of the plan puts there, it is dropped as
+        // negligible. Otherwise what landed sets its draw rate.
+        //
+        // The costliest first, and the shares taken again after each:
+        // a word that looked cheap beside a grazing blob is costly once
+        // the blob is gone, and taken in one pass the plans either side
+        // of the graze kept different words.
+        {
+            let draw_floor = 1.0 / (self.verify_first.len() + self.verify_rest.len()).max(1) as f64;
+            let rest: f64 = merged.iter().map(|(c, e)| c.prob * e).sum();
+            // How often a word is drawn, relative to its probability: its
+            // measured rate once it has one.
+            let rate = |c: &Cylinder, e: f64| -> f64 {
+                if c.draw != 1.0 {
+                    c.draw
+                } else if self.renewal_first(&c.word) {
+                    e.max(draw_floor).sqrt()
+                } else {
+                    1.0
+                }
+            };
+            let unmeasured = |c: &Cylinder, e: f64| self.renewal_first(&c.word) && !(e > 0.0) && c.draw == 1.0;
+            let mut budget = RENEWAL_REPLAYS;
+            loop {
+                let drawn: f64 = merged.iter().map(|(c, e)| c.prob * rate(c, *e)).sum();
+                let Some(i) = merged
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (c, e))| unmeasured(c, *e) && c.prob * draw_floor.sqrt() > 0.05 * drawn)
+                    // The replays that could prove it negligible, if none
+                    // land -- within what is left of the budget.
+                    .filter(|(_, (c, _))| {
+                        let k = ((3.0 * c.prob / (0.01 * rest.max(f64::MIN_POSITIVE))).ceil() as usize).clamp(1 << 14, 1 << 20);
+                        k * c.word.len() <= budget
+                    })
+                    .max_by(|x, y| x.1 .0.prob.total_cmp(&y.1 .0.prob))
+                    .map(|(i, _)| i)
+                else {
+                    break;
+                };
+                let c = &merged[i].0;
+                let k = ((3.0 * c.prob / (0.01 * rest.max(f64::MIN_POSITIVE))).ceil() as usize).clamp(1 << 14, 1 << 20);
+                budget -= k * c.word.len();
+                let hits = self.landings(&c.word, view, k);
+                slicer.tick().await;
+                if hits == 0 && c.prob * 3.0 / (k as f64) < 0.01 * rest {
+                    tr.renewal_dropped += 1;
+                    merged.remove(i);
+                    continue;
+                }
+                merged[i].0.draw = (hits as f64 / k as f64).max(0.5 / k as f64).sqrt();
+            }
+        }
         if merged.is_empty() {
             return Err(NoCylinders::ViewIsEmpty);
         }
         let mass: f64 = merged.iter().map(|(c, _)| c.prob).sum();
         let delivered: f64 = merged.iter().map(|(c, e)| c.prob * e).sum();
+        // The least efficiency a replay can tell from none.
+        let draw_floor = 1.0 / (self.verify_first.len() + self.verify_rest.len()).max(1) as f64;
         let depth = merged.iter().map(|(c, _)| c.word.len()).max().unwrap_or(0);
         let mut plan = Cylinders {
-            // Each word keeps the efficiency its replays measured.
+            // Each word keeps the efficiency its replays measured. A
+            // blur's word is drawn at the square root of it
+            // (`Cylinder::draw`), floored at the replays' resolution.
             words: merged
                 .into_iter()
                 .map(|(mut c, e)| {
                     c.eff = e;
+                    // Unless a longer replay set it (above).
+                    if self.renewal_first(&c.word) && c.draw == 1.0 {
+                        c.draw = e.max(draw_floor).min(1.0).sqrt();
+                    }
                     c
                 })
                 .collect(),
@@ -4894,5 +5010,47 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// **A grazing blob does not take the draws** (the quality cliff at
+    /// zoom 1559/1560 on the true Grand Julian, tracker C2b). The view's
+    /// disc at 1080x1055 grazes the blob's by 2e-6, outside the frame, and
+    /// its blur word was kept by geometry: 99.9% of the plan, landing
+    /// never, and raising the floor so the rest stopped at 72 words --
+    /// efficiency 0.001, where 256x256 (1% smaller) planned 1,116 at 0.24.
+    /// Now either side of the graze, at either size, the plans agree: the
+    /// blob is measured and dropped as negligible, blur words no longer
+    /// raise the floor, and most draws land.
+    #[test]
+    #[ignore = "reads output/flame-zoom"]
+    fn a_grazing_blob_does_not_take_the_draws() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let mut plans = Vec::new();
+        for f in [1, 2] {
+            let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/grand-julian-zoom-quality{f}.fflame")) else { return };
+            let cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
+            let b = Backward::read(&cfg.flame, reg).expect("walked");
+            for (w, h) in [(1080u32, 1055u32), (256, 256)] {
+                let view = View::of(cfg.zoom as f64, [cfg.pan_x, cfg.pan_y], w, h);
+                let mut tr = Trace::default();
+                let p = b.plan_with_eval(view, &mut tr, PlanOptions::default(), &mut CpuEval).expect("a plan");
+                let drawn: f64 = p.words.iter().map(|w| w.prob * w.draw).sum();
+                let landed = p.words.iter().map(|w| w.prob * w.draw * w.eff).sum::<f64>() / drawn;
+                println!(
+                    "  zoom {} at {w}x{h}: {} words, mass {:.3e}, efficiency {:.3}, draws landing {:.3}, blur words dropped {}",
+                    cfg.zoom,
+                    p.words.len(),
+                    p.mass,
+                    p.efficiency,
+                    landed,
+                    tr.renewal_dropped
+                );
+                assert!(landed > 0.5, "zoom {} at {w}x{h}: only {landed:.3} of draws land", cfg.zoom);
+                plans.push(p.mass);
+            }
+        }
+        let (lo, hi) = plans.iter().fold((f64::INFINITY, 0.0f64), |(lo, hi), &m| (lo.min(m), hi.max(m)));
+        assert!(hi / lo < 1.05, "the plans either side of the graze disagree: mass {lo:.3e} to {hi:.3e}");
     }
 }

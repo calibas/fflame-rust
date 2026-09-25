@@ -476,7 +476,7 @@ mod tests {
     use crate::scene::cylinder::Cylinder;
 
     fn word(w: &[u32], prob: f64, eff: f64) -> Cylinder {
-        Cylinder { word: w.to_vec(), prob, centre: [0.0; 2], radius: 1.0, seeds: Vec::new(), eff }
+        Cylinder { word: w.to_vec(), prob, centre: [0.0; 2], radius: 1.0, seeds: Vec::new(), eff, draw: 1.0 }
     }
 
     fn plan(words: Vec<Cylinder>) -> Cylinders {
