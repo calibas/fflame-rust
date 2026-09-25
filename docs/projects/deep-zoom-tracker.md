@@ -264,11 +264,11 @@ numbers. Planning it needs the walk's regions dilated by the reach at
 each blurred step (the original C2 sketch above), so the blurred
 transform's children can be carried.
 
-### C3. random1 at 1e3 misses 2.6% -- in progress (2026-09-24)
+### C3. random1 at 1e3 misses 2.6% -- done; unseen branches open (2026-09-25)
 
-Every other view measured covers 97% or more; grand-julian covers 100%.
 The measurements are in [inversive-targeting.md](inversive-targeting.md)
-§31-§32.
+§31-§32 and `why_is_this_view_empty`, which now prints each plan's CPU
+time.
 
 **Found.** The missed samples all arrive last through `t1a1`; every
 sample point the planner has in the view arrived through `t0a0`. At
@@ -280,34 +280,54 @@ the view. The sample, 10 points in view, is too sparse to resolve it.
   deeper: random1 at 1e4 fell to 0.957. A fixed sample always runs thin
   at some depth, so the fix has to be local.
 
-**Built (first step): the rescue** (`Backward::rescue`).
+**Built.**
 
-- An EMPTY child whose probability is over `FORCE_WASTE` of the kept
-  mass is looked for near its candidates, nearest first.
-- The nearby points come from the sample's own history
-  (`near_points`): a sample point's last k maps applied to other sample
-  points lie in its depth-k cylinder.
-- What lands is carried as a cloud.
-- The depth that lands varies by candidate (measured: 8-12 for random1;
-  k <= 6 spreads past the view, k >= 16 gathers round the miss), so
-  every depth from 4 to 16 is tried.
+1. **The rescue** (`Backward::rescue`).
+   - An EMPTY child whose probability is over `FORCE_WASTE` of the kept
+     mass is looked for near its candidates, nearest first.
+   - The nearby points come from the sample's own history
+     (`near_points`): a sample point's last k maps applied to other
+     sample points lie in its depth-k cylinder.
+   - Every depth from 4 to 16 is tried, since the depth that lands
+     varies by candidate. Measured on random1, it is 8-12; k <= 6 spreads
+     past the view, and k >= 16 gathers round the miss.
+   - What lands is carried as a cloud.
+2. **The rescued cloud is exempt from the grid's test for
+   `RESCUE_LEVELS` (6) levels** (`Node::rescued`).
+   - Its points are on the attractor, but where the sample is too sparse
+     for `near_landing` to vouch for them. With the test, every preimage
+     was pruned and the rescued branch died one level later.
+   - Each level widens the region until the sample seeds it.
+   - A preimage that is not a real path costs only a replay, since its
+     word is measured all the same.
 
-| view | before | now |
-|---|---|---|
-| random1 1e3 (0.25) | 0.974 | 0.995 |
-| random1 1e4 (0.25) | 0.992 | 0.996 |
-| random1 1e3 (0.25, off 0.6) | 0.980 | 0.985 |
-| random1 1e4 (0.25, off 0.6) | 0.976 | 0.978 |
-| julian-disc 1e3 (0.6, off 2) | 0.978 | 0.978 |
+| view | before | rescue | + exemption |
+|---|---|---|---|
+| random1 1e3 (0.25) | 0.974 | 0.995 | 0.995 |
+| random1 1e4 (0.25) | 0.992 | 0.996 | 0.996 |
+| random1 1e3 (0.25, off 0.6) | 0.980 | 0.985 | **0.996** |
+| random1 1e3 (0.25, off 2) | 0.992 | 0.992 | **0.996** |
+| random1 1e4 (0.25, off 0.6) | 0.976 | 0.978 | 0.980 (241 samples: +/-1%) |
+| julian-disc 1e3 (0.6, off 2) | 0.978 | 0.978 | 0.978 |
 
-**Next:**
+Grand-julian: 0.999-1.000 as before. CPU plan times are unchanged
+within noise: random1 230-440 ms, grand-julian 1.1-1.3 s, julian-disc
+12-21 s (P3).
 
-- Trace the off-sample views' misses (`WATCH=1.1
-  WATCH_AT=random1-0.25-0.6` on `why_is_this_view_empty`) to see whether
-  the rescue finds too little there, or whether the loss is elsewhere,
-  such as unseen children with no candidates to look near.
-- The same for julian-disc 0.6.
-- Measure the rescue's planning cost, and run the targeting gates.
+**Still open: unseen branches.** julian-disc's misses are deep:
+`t1a3 t0^15` at depth 16, prob 3.95e-4. It was UNSEEN (no candidates at
+all, so there is nothing to rescue near) and its 400 replays read zero,
+though its landing rate looks to be about 1.6e-3.
+
+- A 4096-point third look would find it. Applied to every UNSEEN child
+  over `FORCE_WASTE` of the kept mass, it costs 7-20M map evaluations on
+  random1 and grand-julian, but 200M-1B on julian-disc, whose 51 arms
+  make thousands of such children.
+- It needs a cheap prefilter first: a wider gather, so that only
+  children with a sample point landing within a few cells get the look,
+  or a geometric reach test.
+
+`UNSEEN` now shows in `WATCH` traces.
 
 ### C4. Schottky flames: a Möbius analysis -- open
 

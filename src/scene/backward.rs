@@ -162,6 +162,10 @@ pub const MEASURE_FLOOR: f64 = 1e-4;
 pub const RESCUE_CANDIDATES: usize = 8;
 pub const RESCUE_DEPTHS: std::ops::RangeInclusive<usize> = 4..=16;
 pub const RESCUE_POINTS: usize = 128;
+/// How many levels a rescued cloud's descendants are pulled back without
+/// the grid's test: each level widens the region by the maps' expansion,
+/// until the sample holds points of it and seeds it.
+pub const RESCUE_LEVELS: u8 = 6;
 
 /// Map applications a plan may spend replaying its costliest blur words
 /// (see the walk's end): about a quarter of a second on one core.
@@ -711,6 +715,10 @@ struct Node {
     /// from its replay: `prob × eff` is what it holds of the view's
     /// measure, and that is what the beam ranks.
     eff: f64,
+    /// Levels left in which this cloud's points are pulled back without
+    /// `near_landing`'s test (`Backward::rescue`): they are points of the
+    /// attractor in a part too sparse for the sample's grid to vouch for.
+    rescued: u8,
 }
 
 /// A child being decided while its level's batches run. See
@@ -726,6 +734,8 @@ struct Child {
     /// (`PlanOptions::removals`, `refine`): carried on, never cut, so the
     /// walk splits it.
     refine: bool,
+    /// Inherited from a rescued cloud (`Node::rescued`), one level less.
+    rescued: u8,
     /// Candidates from the index, or the pulled-back cloud.
     pts: Pts,
     /// The node's points this symbol produced: in the child's region by
@@ -1904,7 +1914,12 @@ impl Backward {
                         // The point has to lie where this symbol's map
                         // sends the attractor, or no real path came
                         // through it.
-                        if !self.near_landing(ai, p) {
+                        // Not for a rescued cloud's points: they are on the
+                        // attractor, where the sample is too sparse to say
+                        // so (`Backward::rescue`). A preimage that is not a
+                        // path's costs a replay; its word is measured all
+                        // the same.
+                        if node.rescued == 0 && !self.near_landing(ai, p) {
                             tr.pruned += 1;
                             continue;
                         }
@@ -2000,12 +2015,14 @@ impl Backward {
                     Pts::Cloud(_) => 0,
                 };
                 let refine = crate::scene::word_tree::must_split(removals, refine, &word) || word.len() < min_len;
+                let rescued = node.rescued.saturating_sub(1);
                 Some(Child {
                     ai,
                     word,
                     prob,
                     last: depth == MAX_DEPTH || prob < MEASURE_FLOOR * floor_mass,
                     refine,
+                    rescued,
                     pts,
                     orbit_hits: std::mem::take(&mut from_orbit[ai]),
                     hit: 0,
@@ -2279,6 +2296,7 @@ impl Backward {
                 }
                 let unseen = matches!(c.pts, Pts::Index(_)) && c.n_cands == 0 && c.orbit_hits.is_empty();
                 if unseen && !(eff > 0.0) {
+                    watched(&mut o.trace, &c.word, "UNSEEN", &|| format!("no candidates, {} replays land nothing; prob {prob:.2e}", c.total));
                     c.fate = Fate::Dropped;
                     o.trace.nocand += 1;
                     continue;
@@ -2531,7 +2549,7 @@ impl Backward {
         for c in children {
             let eff = c.eff();
             let n_cands = c.n_cands;
-            let Child { ai, word, prob, pts, orbit_hits, mut replay_hits, mut hits, fate, refine, .. } = c;
+            let Child { ai, word, prob, pts, orbit_hits, mut replay_hits, mut hits, fate, refine, rescued, .. } = c;
             let pts = match fate {
                 Fate::Dropped => continue,
                 Fate::Kept(eff) => {
@@ -2599,7 +2617,7 @@ impl Backward {
                             watched(&mut trace, &word, "RESCUED", &|| format!("{n_cands} candidates, none land; {} points near them do", cloud.len()));
                             trace.rescued += 1;
                             survived[ai] = true;
-                            node_next.push(Node { word, pts: Pts::Cloud(cloud), prob, eff: 0.0 });
+                            node_next.push(Node { word, pts: Pts::Cloud(cloud), prob, eff: 0.0, rescued: RESCUE_LEVELS });
                         } else {
                             watched(&mut trace, &word, "EMPTY", &|| format!("{n_cands} candidates, none land"));
                         }
@@ -2617,7 +2635,10 @@ impl Backward {
             watched(&mut trace, &word, "carried", &|| {
                 format!("{n} pts spread {:.2e} eff {eff:.2} prob {prob:.2e} indexed {indexed}", spread_of(&points_of(&pts)))
             });
-            node_next.push(Node { word, pts, prob, eff });
+            // A rescued cloud's children keep its exemption, one level
+            // less, while they are clouds; seeded, they are ordinary.
+            let rescued = if matches!(pts, Pts::Cloud(_)) { rescued } else { 0 };
+            node_next.push(Node { word, pts, prob, eff, rescued });
         }
 
         // **Complete, or forced.** See `COMPLETE_ENOUGH`. The share of
@@ -2755,7 +2776,7 @@ impl Backward {
                 root_pts.push([view.centre[0] + r * angle.cos(), view.centre[1] + r * angle.sin()]);
             }
         }
-        let mut frontier = vec![Node { word: Vec::new(), pts: Pts::Cloud(root_pts), prob: 1.0, eff: 0.0 }];
+        let mut frontier = vec![Node { word: Vec::new(), pts: Pts::Cloud(root_pts), prob: 1.0, eff: 0.0, rescued: 0 }];
         let mut kept: Vec<(Cylinder, f64)> = Vec::new();
         let mut kept_mass = 0.0f64;
         let mut lost = 0.0f64;
@@ -4779,7 +4800,9 @@ mod tests {
                     .collect(),
                 _ => Vec::new(),
             });
+            let t_plan = web_time::Instant::now();
             let plan = b.plan_with(view, &mut tr);
+            println!("   planned in {:.0} ms (CPU)", t_plan.elapsed().as_secs_f64() * 1e3);
             if plan.is_err() || std::env::var("WATCH").is_ok() && !tr.watched.is_empty() && tr.watch.as_ref().is_some_and(|w| !w.is_empty()) {
                 for line in tr.watched.iter().take(120) {
                     println!("   watch: {line}");
