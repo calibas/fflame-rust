@@ -264,7 +264,7 @@ numbers. Planning it needs the walk's regions dilated by the reach at
 each blurred step (the original C2 sketch above), so the blurred
 transform's children can be carried.
 
-### C3. random1 at 1e3 misses 2.6% -- done; unseen branches open (2026-09-25)
+### C3. random1 at 1e3 misses 2.6% -- done (2026-09-25)
 
 The measurements are in [inversive-targeting.md](inversive-targeting.md)
 §31-§32 and `why_is_this_view_empty`, which now prints each plan's CPU
@@ -314,20 +314,74 @@ Grand-julian: 0.999-1.000 as before. CPU plan times are unchanged
 within noise: random1 230-440 ms, grand-julian 1.1-1.3 s, julian-disc
 12-21 s (P3).
 
-**Still open: unseen branches.** julian-disc's misses are deep:
-`t1a3 t0^15` at depth 16, prob 3.95e-4. It was UNSEEN (no candidates at
-all, so there is nothing to rescue near) and its 400 replays read zero,
-though its landing rate looks to be about 1.6e-3.
+**Unseen branches -- done (2026-09-25).** julian-disc's misses were
+deep: `t1a3 t0^15` at depth 16, prob 3.95e-4. It was UNSEEN (no
+candidates at all, so nothing to rescue near) and its 400 replays read
+zero.
 
-- A 4096-point third look would find it. Applied to every UNSEEN child
-  over `FORCE_WASTE` of the kept mass, it costs 7-20M map evaluations on
-  random1 and grand-julian, but 200M-1B on julian-disc, whose 51 arms
-  make thousands of such children.
-- It needs a cheap prefilter first: a wider gather, so that only
-  children with a sample point landing within a few cells get the look,
-  or a geometric reach test.
+3. **The unseen rescue.** An UNSEEN child is rescued like an EMPTY one,
+   from candidates gathered over the node's cells widened by
+   `UNSEEN_REACH` (4) cells, made once per node from `WIDEN_FROM` (64)
+   of them.
+   - It found random1's unseen branches (0.995 to 0.999 at 1e3) but not
+     julian-disc's: no sample point lands within 4 cells of it.
+   - Its cost was grand-julian's plan doubling (1.2 s to 2.7-3.2 s) for
+     nothing: ~300 failed rescues at ~5 ms. The kept mass is 0 until the
+     first word is kept, so `FORCE_WASTE` of it passes every child. Cut
+     back by stopping a candidate's depths once its images no longer
+     reach from the miss to the view (a deeper cylinder's are smaller):
+     1.4-1.9 s of rescues became 0.11 s, with the same successes.
+4. **Hidden pieces** (`Node::alt`). `MISS_WORD` showed why julian-disc's
+   branch had no candidates. `t0` is `disc`, which folds radius past 1
+   onto radius r-1 with the angle mirrored. The missed samples reach
+   `t0^15`'s region on that second sheet, near (1.03, 0.38), a unit
+   away from the 4 sample points the walk had of it. The sample holds
+   none there.
+   - A cloud is pulled back along every branch of an inverse, but an
+     indexed node's children come from its sample points, so a piece of
+     its region the sample never visited is lost for good.
+   - So an indexed node keeps a small cloud of its region's points
+     away from its sample points (`ALT_CAP` 32): its points pulled back
+     along every branch of a map with several (from `ALT_FROM` 16 of
+     them), its own hidden points pulled back along every map, and a
+     seeded cloud's points more than a cell from the seeds.
+   - An unseen or empty child with hidden points is carried as a cloud,
+     exempt from the grid's test like a rescued one.
+   - **The rescue goes first, and the hidden points join what it
+     finds.** Carried alone, a few hidden points took the place of a
+     256-point rescue and covered random1's `t1a0 t0^2 t1a0 t0^3 t1a1`
+     worse: 73 misses in 17,876 against 38.
+5. **Slices.** A rescue yields at every depth, and step 4 after every
+   rescue and every node. The web gate had frames of 40-85 ms: a node
+   with dozens of unseen children, each gathering over thousands of
+   widened cells.
 
-`UNSEEN` now shows in `WATCH` traces.
+| view | before | now | now, 20,000 samples |
+|---|---|---|---|
+| random1 1e3 (0.25) | 0.995 | 0.9993 | 0.9991 |
+| random1 1e4 (0.25) | 0.996 | 1.0 | |
+| random1 1e3 (0.25, off 0.6) | 0.996 | 0.9997 | 0.9990 |
+| random1 1e3 (0.25, off 2) | 0.996 | 0.9973 | 0.9980 |
+| random1 1e4 (0.25, off 0.6) | 0.980 | 0.998 (241 samples) | |
+| julian-disc 1e2 (0.25) | 0.9967 | 0.9987 | |
+| julian-disc 1e3 (0.25) | 0.9976 | 0.9976 | |
+| julian-disc 1e3 (0.25, off 0.6) | 0.9958 | 0.9989 | |
+| julian-disc 1e3 (0.25, off 2) | 0.9973 | 1.0 | |
+| julian-disc 1e3 (0.6, off 2) | 0.978 | **1.0** | |
+
+"Before" is the rescue and exemption above. Grand-julian is 0.999-1.000
+as before. At 20,000 samples random1 misses 14-36 in each of its 1e3
+views, where the unseen rescue alone missed 15-38, and hidden pieces
+carried before the rescue missed up to 73.
+
+CPU plan times: random1 350-690 ms (from 230-440), grand-julian
+1.1-1.3 s (unchanged), julian-disc 16-21 s (unchanged, P3). The cost
+is in julian-disc's plans: the 0.6 off 2 view plans 80k words at
+efficiency 0.14, where it planned at 0.19 with 2.2% missing.
+
+`UNSEEN`, `RESCUED` and `HIDDEN` show in `WATCH` traces;
+`why_is_this_view_empty` takes `ONLY`, `COVER_N`, `MISS_DUMP` and
+`MISS_WORD` (see its doc).
 
 ### C4. Schottky flames: a Möbius analysis -- open
 
@@ -441,7 +495,11 @@ root again.
 
 ### P3. julian-disc plans are large and inefficient -- open
 
-Complete, but they force many more words than the view needs.
+Complete, but they force many more words than the view needs. C3's
+hidden pieces made them less efficient: 80k words at efficiency 0.14
+for the 0.6 off 2 view, where it was 0.19 (2026-09-25). The pieces
+are carried as clouds with nothing landing yet, down to the floor, and
+forced there.
 
 ### P4. Keep-or-carry on the GPU -- open (optional)
 
@@ -519,6 +577,11 @@ projected coordinates. Open questions include:
     cannot draw (an empty box).
   - `a_standby_plan_covers_a_move` asserts a 100 ms swap, which fails
     when many GPU tests share the GPU.
+  - `the_web_plan_job_plans_a_slice_a_frame` asserts no `sync_cylinders`
+    past 16 ms, which times the whole call and not only the plan's
+    slice: 13.7-20.2 ms over three runs of the same build (2026-09-25),
+    so it fails about one run in three. `a_web_plan_takes_a_slice_a_frame`
+    times the slices alone and is steady.
   - `Backward::pieces` is unused.
 
 ## Done
