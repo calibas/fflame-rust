@@ -119,6 +119,10 @@ pub static INVERSES: &[&InverseDef] = &[
     &super::defs::INVERSE_JULIA3D,
     &super::defs::INVERSE_JULIA3DZ,
     &super::defs::INVERSE_QUATERNION_JULIA,
+    // The inverse walk's alone (`Kernel::walk_only`): the escape
+    // engine refuses them.
+    &super::defs::INVERSE_ELLIPTIC,
+    &super::defs::INVERSE_SPLITS,
 ];
 
 /// The inverse registered for `name`, without going through a
@@ -155,8 +159,8 @@ mod tests {
         }
         assert_eq!(
             seen.len(),
-            22,
-            "twenty-two inverses: twelve affine roles, seven planar kernels, three solid"
+            24,
+            "twenty-four inverses: twelve affine roles, nine planar kernels, three solid"
         );
     }
 }

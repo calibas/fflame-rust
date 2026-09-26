@@ -611,6 +611,67 @@ Refused (`why_a_saved_flame_is_not_targeted`).
   than bubble whose output is unbounded, so not a renewal (the dilated
   regions of C2's sketch); and a grid that survives a power-law tail,
   whose farthest sample point sets the grid's cell today.
+- **In stages.** (1) `elliptic` and `splits` as walk kernels; (2)
+  `cylinder`, and a `pre_blur` beside it; (3) the grid. Only all three
+  together plan these two flames; stage 1 alone plans no flame of the
+  corpus (the census: nothing else there uses either).
+
+**Stage 1, the plan (2026-09-26).**
+- `Kernel::Elliptic`: forward the flame's body, written without its
+  cancellations (below); inverse closed-form on the strip `|v.x| < 1`
+  (`s = 2E/(sqrt(1 + 4E) + 1)` with `E = e^L - 1`, `L = (pi/2)|v.y|`,
+  `xmax = 1 + s^2`, `x = xmax sin(pi v.x/2)`, `y = sign(v.y) s sqrt(2 +
+  s^2) cos(pi v.x/2)`), one branch, none past the strip. Its forward is
+  continuous in `x` everywhere and jumps in `y` across the rays `|x| >
+  1, y = 0`; it is C1 and not C2 across the segment between the foci
+  (JWF's `sqrt(xmax - 1)` where acosh has `sqrt(xmax^2 - 1)`).
+- **Its cancellations.** `xmax - 1`, `xmax - |x|` are differences of
+  O(1) numbers exactly where the picture needs them small (near the
+  segment, near the rays). Each is a sum of `h(d, k) = d - k` terms,
+  `d = sqrt(k^2 + y^2)`, taken as `y^2/(d + k)` for `k >= 0` and `d -
+  k` otherwise: nothing cancels. The forward difference differences each
+  `h` by the same rule chosen at the reference, so every term is O(e).
+- `Kernel::Splits { base, x, y }`: `K(v) = v + base + [v.x >= 0] x +
+  [v.y >= 0] y`, piecewise a translation; four inverse branches, one per
+  quadrant, each valid where its preimage lands in its quadrant. A
+  summed affine (`linear + splits`, as splits2 has) is folded in --
+  `L v + c + w K(v) = M(v + M^-1(c + w base) + ...)` with `M = L + wI`
+  -- so it is never a Newton sum, whose solve does not respect the
+  branch.
+- Both are the walk's alone: `analyse_2d` (the escape engine's) still
+  refuses them, as its shader has no row for either.
+- The offset replay's row grows from 20 floats to 24: splits' two steps
+  there. Forward difference forms on the CPU and in the shader, gated as
+  every kernel's are (exact against 512-bit, shader against CPU).
+- The gate for the walk: a code-built bounded flame with each, targeted
+  against untargeted at depth.
+
+**Stage 1, done (2026-09-26).** As planned, with one addition: splits
+counts as many-to-one going forward in `reference_chains`' `merges`
+(overlapping steps put two pieces of a view among the offset steps, each
+wanting its own reference).
+- The forms: exact against 512-bit on 71,190 differences, 468 across a
+  seam, worst 3.7e-14 (`the_forward_forms_are_exact`); the shader's
+  against the CPU's, elliptic 8.9e-7, splits 9.6e-8, `linear + splits`
+  9.8e-8 (`the_shader_forward_forms_are_the_cpu_ones`). The first try
+  took `ln(1 + G)` where the two sides of the segment meet, which kept
+  only 4.5e-8 of the digits; `ln1p` there.
+- The kernels: round trip, domains and Jacobians
+  (`every_registered_inverse_is_reachable_and_inverts`,
+  `the_kernels_jacobians_are_the_derivative`, the fixtures of both).
+- The walk (`elliptic_and_splits_are_walked`, two flames written to
+  `output/flame-zoom/elliptic-splits-{julian,final}.fflame`): a
+  julian's arms beside an elliptic and a `linear + splits` whose steps
+  overlap, and the elliptic and splits alone under an affine final.
+  Targeted against untargeted at 1e1-1e3, two points each: overlap
+  1.000 everywhere, brightness equal where the reference is sampled.
+- At depth (`the_offset_replay_holds_per_sample`, both flames added):
+  the offset replay's 99th percentile 0.0009-0.019 px at 1e4, 1e6 and
+  1e8, no bias, where the plain replay is off by 440-4700 px at 1e8. Two
+  of 5,473 julian samples at 1e6 are off by more than a pixel (3.7 px
+  worst), inside the gate's one in a thousand.
+- bipolar-elliptic-splits1 and 2 now stop at `cylinder` alone: "transform
+  2 uses `cylinder`, which is not affine" -- stage 2.
 
 **Found on the way, fixed: a final on a flame without arms.** The
 forward planner never looked at final transforms: it planned the view
