@@ -223,6 +223,14 @@ pub enum Kernel {
     /// steps are in the frame the folded map leaves. **The walk's alone**
     /// (`walk_only`).
     Splits { base: [f64; 2], x: [f64; 2], y: [f64; 2] },
+    /// `cylinder`: `(sin x, y)`, onto the strip `|v.x| ≤ 1` and periodic
+    /// in `x`, so every point of the strip has two preimages a turn,
+    /// `asin(v.x) + 2πk` (even branches) and `π − asin(v.x) + 2πk` (odd),
+    /// with `k = k0 + branch/2`. `k0` is the lowest turn the invariant
+    /// ball reaches in the pre-frame, set once the ball is known
+    /// (`cylinder_turns`), as disc's rings are counted (tracker C6).
+    /// **The walk's alone** (`walk_only`).
+    Cylinder { k0: i32 },
 }
 
 impl Kernel {
@@ -270,7 +278,7 @@ impl Kernel {
     /// the escape engine's shader has no row for it, so `analyse_2d`
     /// refuses it as it did before the walk had it.
     pub fn walk_only(&self) -> bool {
-        matches!(self, Kernel::Elliptic | Kernel::Splits { .. })
+        matches!(self, Kernel::Elliptic | Kernel::Splits { .. } | Kernel::Cylinder { .. })
     }
 
     /// Splits' step for quadrant `q` (bit 0 `x ≥ 0`, bit 1 `y ≥ 0`).
@@ -354,6 +362,11 @@ impl Kernel {
             Kernel::Spherical => r2,
             // A translation.
             Kernel::Splits { .. } => 1.0,
+            // diag(cos x, 1) at the preimage, and |cos x| = √(1 − v.x²).
+            Kernel::Cylinder { .. } => {
+                let c = (1.0 - v[0] * v[0]).max(0.0).sqrt();
+                c.min(1.0)
+            }
             // The inverse's derivative is the dual numbers' own, so the
             // forward's σ_min is its largest singular value reciprocated
             // -- exact by construction, and zero where it has none.
@@ -475,6 +488,8 @@ impl Kernel {
             }
             // It jumps across both axes.
             Kernel::Splits { .. } => z[0].abs().min(z[1].abs()),
+            // `sin` is smooth everywhere; its folds are the INVERSE's edge.
+            Kernel::Cylinder { .. } => f64::INFINITY,
             _ => rho,
         }
     }
@@ -552,6 +567,8 @@ impl Kernel {
                 }
                 u[0].abs().min(u[1].abs())
             }
+            // The strip's edge, the image of the folds.
+            Kernel::Cylinder { .. } => (1.0 - v[0].abs()).max(0.0),
         }
     }
 
@@ -580,7 +597,7 @@ impl Kernel {
             Kernel::Spherical => true,
             Kernel::Root { d, .. } => d < 0.0,
             Kernel::Bubble | Kernel::Hemisphere | Kernel::Disc | Kernel::Blob { .. } => false,
-            Kernel::Elliptic | Kernel::Splits { .. } => false,
+            Kernel::Elliptic | Kernel::Splits { .. } | Kernel::Cylinder { .. } => false,
         }
     }
 
@@ -627,6 +644,7 @@ impl Kernel {
             Kernel::Blob { .. } => "blob",
             Kernel::Elliptic => "elliptic",
             Kernel::Splits { .. } => "splits",
+            Kernel::Cylinder { .. } => "cylinder",
         }
     }
 }
@@ -784,6 +802,7 @@ pub fn kernel_forward_gen<T: Transcendental>(k: &Kernel, z: &[T; 2], branch: u32
             let s = Kernel::splits_shift(base, x, y, Kernel::splits_quadrant([z[0].to_f64(), z[1].to_f64()]));
             [z[0].add(&z[0].lit(s[0])), z[1].add(&z[1].lit(s[1]))]
         }
+        Kernel::Cylinder { .. } => [z[0].sin(), z[1].clone()],
     }
 }
 
@@ -885,6 +904,18 @@ pub fn kernel_inverse_gen<T: Transcendental>(k: &Kernel, v: &[T; 2], branch: u32
             }
             u
         }
+        // `asin(u) = atan2(u, √((1 − u)(1 + u)))`, the root without its
+        // cancellation at the strip's edge.
+        Kernel::Cylinder { k0 } => {
+            if !(v[0].to_f64().abs() <= 1.0) || !v[1].to_f64().is_finite() {
+                return [v[0].lit(1e30), v[1].lit(1e30)];
+            }
+            let one = v[0].one();
+            let a = T::atan2(&v[0], &one.sub(&v[0]).mul(&one.add(&v[0])).sqrt());
+            let turn = v[0].lit(2.0 * PI * (k0 as f64 + (branch / 2) as f64));
+            let x = if branch % 2 == 0 { a.add(&turn) } else { v[0].lit(PI).sub(&a).add(&turn) };
+            [x, v[1].clone()]
+        }
     }
 }
 
@@ -971,7 +1002,7 @@ pub fn kernel_inverse_real<T: Real>(k: &Kernel, v: &[T; 2], branch: u32) -> Opti
             let u = [v[0].sub(&v[0].lit(s[0])), v[1].sub(&v[1].lit(s[1]))];
             (branch <= 3 && Kernel::splits_quadrant([u[0].to_f64(), u[1].to_f64()]) == branch).then_some(u)
         }
-        Kernel::Disc | Kernel::Blob { .. } | Kernel::Elliptic => None,
+        Kernel::Disc | Kernel::Blob { .. } | Kernel::Elliptic | Kernel::Cylinder { .. } => None,
     }
 }
 
@@ -995,7 +1026,7 @@ pub fn kernel_has_difference(k: &Kernel) -> bool {
     match *k {
         Kernel::Spherical | Kernel::Bubble | Kernel::Hemisphere | Kernel::Splits { .. } => true,
         Kernel::Root { n, d } => root_powers(n, d).is_some(),
-        Kernel::Disc | Kernel::Blob { .. } | Kernel::Elliptic => false,
+        Kernel::Disc | Kernel::Blob { .. } | Kernel::Elliptic | Kernel::Cylinder { .. } => false,
     }
 }
 
@@ -1106,7 +1137,7 @@ pub fn kernel_difference_gen<T: Real>(
         }
         // A translation on the branch's quadrant, which both ends are in.
         Kernel::Splits { .. } => Some(d.clone()),
-        Kernel::Disc | Kernel::Blob { .. } | Kernel::Elliptic => None,
+        Kernel::Disc | Kernel::Blob { .. } | Kernel::Elliptic | Kernel::Cylinder { .. } => None,
     }
 }
 
@@ -1149,6 +1180,8 @@ pub fn kernel_inverse_domain(k: &Kernel, v: [f64; 2], branch: u32) -> bool {
             let s = Kernel::splits_shift(base, x, y, branch);
             branch <= 3 && Kernel::splits_quadrant([v[0] - s[0], v[1] - s[1]]) == branch
         }
+        // Inside the strip: on its edge the preimage is on a fold.
+        Kernel::Cylinder { .. } => v[0].abs() < 1.0 && v[1].is_finite(),
     }
 }
 
@@ -1478,8 +1511,33 @@ impl NonlinearMap2 {
             // One per quadrant; one whose preimages miss its quadrant has
             // none, and the walk finds that point by point.
             Kernel::Splits { .. } => 4,
+            // Two a turn, over the turns the ball reaches.
+            Kernel::Cylinder { .. } => {
+                let (lo, hi) = self.cylinder_turns(ball);
+                2 * (hi - lo + 1) as u32
+            }
             _ => 1,
         }
+    }
+
+    /// The turns `[lo, hi]` of `cylinder`'s preimages the ball reaches:
+    /// turn `k` holds `[2πk − π/2, 2πk + 3π/2)` of the pre-frame's `x`, and
+    /// the ball's `x` there is `pre(centre).x ± |pre's first row|·radius`.
+    /// At most [`CYLINDER_TURNS`] of them, centred on the ball's.
+    pub fn cylinder_turns(&self, ball: &Ball<[f64; 2]>) -> (i32, i32) {
+        use std::f64::consts::PI;
+        let c = self.pre.apply(ball.centre)[0];
+        let reach = self.pre.m[0][0].hypot(self.pre.m[0][1]) * ball.radius;
+        let turn = |x: f64| ((x + PI / 2.0) / (2.0 * PI)).floor();
+        let (lo, hi) = (turn(c - reach), turn(c + reach));
+        let mid = turn(c);
+        let half = (CYLINDER_TURNS / 2) as f64;
+        let lo = lo.max(mid - half);
+        let hi = hi.min(lo + CYLINDER_TURNS as f64 - 1.0);
+        if !(lo.is_finite() && hi.is_finite()) {
+            return (0, 0);
+        }
+        (lo as i32, hi.max(lo) as i32)
     }
 
     /// The constant parts of the forward map's singular values:
@@ -2803,6 +2861,11 @@ pub struct SumMap2 {
 /// preimage and saying so is better than returning it.
 pub const NEWTON_TOL: f64 = 1e-12;
 
+/// The most turns of `cylinder`'s preimages a map carries as branches (two
+/// a turn): a pre-frame reaching two hundred units across. Past it the
+/// turns nearest the ball's centre are kept.
+pub const CYLINDER_TURNS: i32 = 32;
+
 /// How many steps it may take.
 ///
 /// The plan expects three to six, and away from a fold that is what
@@ -3146,6 +3209,11 @@ pub fn transform_map_2d_ordered(
             w: 1.0,
         }));
     }
+    // A cylinder summed with an affine has no branch rule: Newton's seeds
+    // would not respect the turn.
+    if stage.any && matches!(kernel, Kernel::Cylinder { .. }) {
+        return Err(NotAffine::MixedSum(kind.to_string()));
+    }
     if stage.any {
         // A kernel SUMMED with an affine (D3). The affine part is
         // `stage.sum`'s xy block, already weighted, applied to the
@@ -3356,7 +3424,7 @@ pub enum Disqualification {
     /// analysis does not model.
     MultipleFinals { count: usize },
     /// No ball every map sends into itself was found (plan §8.8 J5):
-    /// the root maps do not keep the set bounded.
+    /// the nonlinear maps do not keep the set bounded.
     NoBall,
 }
 
@@ -3385,7 +3453,7 @@ impl std::fmt::Display for Disqualification {
             Self::FinalNotAffine { why: Some(w) } => write!(f, "the final transform is not affine ({w:?})"),
             Self::FinalNotAffine { why: None } => write!(f, "the final transform is singular"),
             Self::MultipleFinals { count } => write!(f, "{count} final transforms; at most one is supported"),
-            Self::NoBall => write!(f, "no bounding ball: the root maps do not keep the set bounded"),
+            Self::NoBall => write!(f, "no bounding ball: the nonlinear maps do not keep the set bounded"),
         }
     }
 }
@@ -3979,6 +4047,15 @@ async fn analyse_2d_with_sliced(
             // is the dominant term's, and each of its branches seeds
             // one Newton solve"), so the two cases read the same
             // count from the same kernel.
+            // Cylinder's turns start where the ball does.
+            let mut m = m;
+            if let (Map2::Nonlinear(f), Map2::NonlinearInverse(i)) = (&mut m.forward, &mut m.inverse) {
+                if let Kernel::Cylinder { .. } = f.kernel {
+                    let (lo, _) = f.cylinder_turns(&ball);
+                    f.kernel = Kernel::Cylinder { k0: lo };
+                    i.kernel = f.kernel;
+                }
+            }
             let branches = match (m.forward.nonlinear(), m.forward.sum()) {
                 (Some(n), _) => n.branch_count(&ball),
                 (_, Some(r)) => r.branches(),
@@ -4697,6 +4774,10 @@ pub(crate) fn kernel_fixtures() -> Vec<(Kernel, u32)> {
     // two others, so every branch has points with and without a preimage.
     for q in 0..4 {
         out.push((Kernel::Splits { base: [-0.4, 0.1], x: [0.8, 0.3], y: [-0.2, -0.9] }, q));
+    }
+    // Both families of two turns.
+    for b in 0..4 {
+        out.push((Kernel::Cylinder { k0: -1 }, b));
     }
     for n in [-3i32, -2, 2, 3, 5] {
         for d in [1.0f64, 2.0, 0.5] {
@@ -6378,6 +6459,8 @@ mod tests {
             ("elliptic", Kernel::Elliptic, 0),
             ("splits q0", Kernel::Splits { base: [-0.4, 0.1], x: [0.8, 0.3], y: [-0.2, -0.9] }, 0),
             ("splits q3", Kernel::Splits { base: [-0.4, 0.1], x: [0.8, 0.3], y: [-0.2, -0.9] }, 3),
+            ("cylinder even", Kernel::Cylinder { k0: -1 }, 0),
+            ("cylinder odd", Kernel::Cylinder { k0: -1 }, 3),
         ];
         // The largest singular value, stably: the larger eigenvalue of
         // `MᵀM` is `(p + r)/2 + sqrt(((p − r)/2)² + q²)`, where the
@@ -6749,8 +6832,8 @@ mod tests {
         }
         assert_eq!(
             (affine, planar, solid),
-            (12, 9, 3),
-            "twelve affine roles, nine planar kernels and three solid"
+            (12, 10, 3),
+            "twelve affine roles, ten planar kernels and three solid"
         );
     }
 

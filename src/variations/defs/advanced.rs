@@ -2298,6 +2298,15 @@ pub static INVERSE_BLOB: InverseDef = InverseDef {
     }),
 };
 
+/// `cylinder`: `(sin x, y)`, two preimages a turn on the strip `|v.x| <
+/// 1`; the analysis counts the turns from the invariant ball (tracker
+/// C6). Until it does, turns −1 and 0: four branches round the origin,
+/// `x` from −5π/2 to 3π/2. The inverse walk's alone.
+pub static INVERSE_CYLINDER: InverseDef = InverseDef {
+    name: "cylinder",
+    kernel: InverseKernel::Planar(|_| Ok(Kernel::Cylinder { k0: -1 })),
+};
+
 /// `elliptic`: one-to-one onto the strip `|v.x| ≤ 1`, with a closed
 /// inverse there (tracker C6). The inverse walk's alone.
 pub static INVERSE_ELLIPTIC: InverseDef = InverseDef {

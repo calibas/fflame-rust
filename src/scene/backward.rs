@@ -1019,6 +1019,12 @@ pub const SWITCH_SHARE: f64 = 0.2;
 /// the distance between them, and f32 of that is nothing at depth.
 pub const MAX_CHAINS: usize = 4;
 
+/// A word's reference chains at most past a map many-to-one going forward,
+/// where its seeds are clustered by the precision an offset keeps rather
+/// than by the reference's region (tracker C6): the shader's own bound on
+/// a block's chains (`ct_offsets`).
+pub const MAX_PIECE_CHAINS: usize = 16;
+
 /// Points of its region a kept word carries for its references.
 const REF_SEEDS: usize = 8;
 
@@ -1180,6 +1186,21 @@ struct Renewal {
     /// A disc holding everything the transform can output.
     out_centre: [f64; 2],
     out_radius: f64,
+}
+
+/// The least and greatest of `sin` over `[a, b]`: its ends, and ±1
+/// wherever a crest or trough lies between them.
+fn sin_range(a: f64, b: f64) -> (f64, f64) {
+    use std::f64::consts::{FRAC_PI_2, TAU};
+    if !(b - a < TAU) || !a.is_finite() {
+        return (-1.0, 1.0);
+    }
+    // Whether `a <= t + 2πn <= b` for some whole `n`.
+    let meets = |t: f64| ((a - t) / TAU).ceil() * TAU + t <= b;
+    let (sa, sb) = (a.sin(), b.sin());
+    let hi = if meets(FRAC_PI_2) { 1.0 } else { sa.max(sb) };
+    let lo = if meets(-FRAC_PI_2) { -1.0 } else { sa.min(sb) };
+    (lo, hi)
 }
 
 /// Where bubble's radial profile `4r/(r²+4)` reaches the unit circle:
@@ -1518,7 +1539,9 @@ impl Backward {
             return Err("pre_blur is planned beside one kernel alone (not an affine, not a sum) so far".into());
         };
         match b {
-            Blur::Pre(_) if !matches!(n.kernel, Kernel::Bubble) => Err(format!("pre_blur is planned beside bubble so far, not {:?}", n.kernel)),
+            Blur::Pre(_) if !matches!(n.kernel, Kernel::Bubble | Kernel::Cylinder { .. }) => {
+                Err(format!("pre_blur is planned beside bubble and cylinder so far, not {}", n.kernel.variation()))
+            }
             _ => Ok(()),
         }
     }
@@ -1538,6 +1561,17 @@ impl Backward {
             // it. The input reaches the attractor's image in the kernel's
             // frame, and the blur's reach past that -- the image from
             // the sample, with a margin for the points it did not draw.
+            Blur::Pre(b) if matches!(n.kernel, Kernel::Cylinder { .. }) => {
+                // Cylinder's `(sin x, y)` of the same dilated image: `sin`
+                // over its `x` range, its `y` range as it is, boxed.
+                let c = n.pre.apply(centre);
+                let (_, smax) = crate::scene::ifs_analysis::singular_values_of(n.pre.m);
+                let r = 1.02 * smax * extent + b.reach();
+                let (lo, hi) = sin_range(c[0] - r, c[0] + r);
+                let k = [0.5 * (lo + hi), c[1]];
+                let half = (0.5 * (hi - lo)).hypot(r);
+                Renewal { out_centre: n.post.apply([n.w * k[0], n.w * k[1]]), out_radius: pmax * n.w.abs() * half }
+            }
             Blur::Pre(b) => {
                 let c = n.pre.apply(centre);
                 let (_, smax) = crate::scene::ifs_analysis::singular_values_of(n.pre.m);
@@ -1901,59 +1935,95 @@ impl Backward {
             // run only where they could find another piece (below).
             let (first, primary_orbit) = w.seeds.iter().enumerate().find_map(|(i, &x0)| orbit(x0).map(|z| (i, z)))?;
             let mut orbits = vec![primary_orbit];
+            // A map many-to-one going forward -- bubble, disc, cylinder, or
+            // splits where its steps overlap -- puts a word's region in
+            // several pieces, and makes its samples' paths differ from the
+            // reference's: through another turn of a cylinder, or away from
+            // the fold the reference runs by. Measured, no word of the
+            // corpus had one among its offset steps
+            // (`what_the_references_hold`), and running every seed through
+            // every word doubled a web plan; so the other seeds are run only
+            // where such a map is.
+            let many = |from: usize| {
+                syms[from..].iter().any(|(map, _)| match &map.forward {
+                    Map2::Nonlinear(k) => matches!(k.kernel, Kernel::Bubble | Kernel::Disc | Kernel::Splits { .. } | Kernel::Cylinder { .. }),
+                    Map2::Sum(k) => matches!(k.kernel, Kernel::Bubble | Kernel::Disc),
+                    _ => false,
+                })
+            };
+            if many(start) {
+                orbits.extend(w.seeds[first + 1..].iter().filter_map(|&x0| orbit(x0)));
+            }
+            // Back along an orbit: the Jacobian of the steps from k to the
+            // end, `P_k = J_{n-1}···J_k`, from the exact forward forms (so
+            // without cancellation). Its largest singular value carries an
+            // error at k to the end; its smallest, the view back to k, which
+            // is how big the region is there.
+            let along = |z: &[[f64; 2]]| -> Option<(Vec<f64>, Vec<f64>)> {
+                let mut amp = vec![f64::INFINITY; n + 1];
+                let mut size = vec![f64::INFINITY; n + 1];
+                amp[n] = 1.0;
+                size[n] = r;
+                let mut prod = [[1.0f64, 0.0], [0.0, 1.0]];
+                // Past the word, the finals: an error at its end reaches the
+                // plot through their Jacobian.
+                if let Some(f) = &self.finals {
+                    prod = f.jacobian(z[n])?;
+                    let (smin, smax) = crate::scene::ifs_analysis::singular_values_of(prod);
+                    if !(smax.is_finite() && smin > 0.0) {
+                        return None;
+                    }
+                    amp[n] = smax;
+                    size[n] = r / smin;
+                }
+                for k in (start..n).rev() {
+                    let (map, arm) = syms[k];
+                    let zk = z[k];
+                    let h = 1e-6 * zk[0].hypot(zk[1]).max(1e-6);
+                    let col = |d: [f64; 2]| map_forward_difference(&map.forward, zk, d, arm).map(|v| [v[0] / h, v[1] / h]);
+                    let (Some(a), Some(b)) = (col([h, 0.0]), col([0.0, h])) else { break };
+                    let j = [[a[0], b[0]], [a[1], b[1]]];
+                    prod = [
+                        [prod[0][0] * j[0][0] + prod[0][1] * j[1][0], prod[0][0] * j[0][1] + prod[0][1] * j[1][1]],
+                        [prod[1][0] * j[0][0] + prod[1][1] * j[1][0], prod[1][0] * j[0][1] + prod[1][1] * j[1][1]],
+                    ];
+                    let (smin, smax) = crate::scene::ifs_analysis::singular_values_of(prod);
+                    if !(smax.is_finite() && smin > 0.0) {
+                        break;
+                    }
+                    amp[k] = smax;
+                    size[k] = r / smin;
+                }
+                Some((amp, size))
+            };
+            let (amp, size) = along(&orbits[0])?;
+            let others: Vec<(&[[f64; 2]], Vec<f64>)> =
+                orbits[1..].iter().filter_map(|z| along(z).map(|(a, _)| (z.as_slice(), a))).collect();
+            let amp_most = |k: usize| others.iter().map(|(_, a)| a[k]).fold(amp[k], f64::max);
             let primary = &orbits[0];
-            // Back along the reference: the Jacobian of the steps from k
-            // to the end, `P_k = J_{n-1}···J_k`, from the exact forward
-            // forms (so without cancellation). Its largest singular value
-            // carries an error at k to the end; its smallest, the view
-            // back to k, which is how big the region is there.
-            let mut amp = vec![f64::INFINITY; n + 1];
-            let mut size = vec![f64::INFINITY; n + 1];
-            amp[n] = 1.0;
-            size[n] = r;
-            let mut prod = [[1.0f64, 0.0], [0.0, 1.0]];
-            // Past the word, the finals: an error at its end reaches the
-            // plot through their Jacobian.
-            if let Some(f) = &self.finals {
-                prod = f.jacobian(primary[n])?;
-                let (smin, smax) = crate::scene::ifs_analysis::singular_values_of(prod);
-                if !(smax.is_finite() && smin > 0.0) {
-                    return None;
-                }
-                amp[n] = smax;
-                size[n] = r / smin;
-            }
-            for k in (start..n).rev() {
-                let (map, arm) = syms[k];
-                let z = primary[k];
-                let h = 1e-6 * z[0].hypot(z[1]).max(1e-6);
-                let col = |d: [f64; 2]| map_forward_difference(&map.forward, z, d, arm).map(|v| [v[0] / h, v[1] / h]);
-                let (Some(a), Some(b)) = (col([h, 0.0]), col([0.0, h])) else { break };
-                let j = [[a[0], b[0]], [a[1], b[1]]];
-                prod = [
-                    [prod[0][0] * j[0][0] + prod[0][1] * j[1][0], prod[0][0] * j[0][1] + prod[0][1] * j[1][1]],
-                    [prod[1][0] * j[0][0] + prod[1][1] * j[1][0], prod[1][0] * j[0][1] + prod[1][1] * j[1][1]],
-                ];
-                let (smin, smax) = crate::scene::ifs_analysis::singular_values_of(prod);
-                if !(smax.is_finite() && smin > 0.0) {
-                    break;
-                }
-                amp[k] = smax;
-                size[k] = r / smin;
-            }
-            let fits = |k: usize| GPU_STEP_ERROR * primary[k][0].hypot(primary[k][1]) * amp[k] <= PLOT_TOLERANCE * r;
-            // Step 0 always fits: the free orbit's own error only picks a
-            // slightly different point of the attractor.
+            // **Every absolute step must fit, along every path, not the
+            // last alone.** The replay runs the word absolutely to `m`, so
+            // each point before it carries its step's error to the end
+            // through `amp`. Where the maps contract, an earlier step's error
+            // shrinks on the way and the last one is the whole test -- but
+            // `julian` with a negative distance expands near its centre, and
+            // there an earlier error grows: the Grand JuliaN generator's
+            // flames were off by a pixel or two at 1e6 with `m` taken as the
+            // last step that fits. So `m` is where the first step fails to.
             //
-            // **Every absolute step must fit, not the last alone.** The
-            // replay runs the word absolutely to `m`, so each point before
-            // it carries its step's error to the end through `amp`. Where
-            // the maps contract, an earlier step's error shrinks on the way
-            // and the last one is the whole test -- but `julian` with a
-            // negative distance expands near its centre, and there an
-            // earlier error grows: the Grand JuliaN generator's flames were
-            // off by a pixel or two at 1e6 with `m` taken as the last step
-            // that fits. So `m` is where the first step fails to.
+            // And along every landed seed where the paths can differ (C6): a
+            // reference that runs by a cylinder's fold amplifies nothing,
+            // while a sample one turn away amplifies its first step's error
+            // by 0.26 -- measured, 0.15 px at 1e4 with `m` read off the
+            // reference alone.
+            let fits = |k: usize| {
+                let ok = |z: &[[f64; 2]], a: &[f64]| GPU_STEP_ERROR * z[k][0].hypot(z[k][1]) * a[k] <= PLOT_TOLERANCE * r;
+                ok(primary, &amp) && others.iter().all(|(z, a)| ok(z, a))
+            };
+            // Step 0 always fits: the free orbit's own error only picks a
+            // slightly different point of the attractor. (Carrying the
+            // whole word from its first point instead was measured worse:
+            // the region there is in more pieces still, farther apart.)
             let lo = start.max(1);
             let m = match (lo..=n).find(|&k| !fits(k)) {
                 Some(first) => first.saturating_sub(1).max(lo),
@@ -1968,24 +2038,26 @@ impl Backward {
             if m == n && finals_fit {
                 return None;
             }
-            // Another piece at `m` needs a map that is many-to-one going
-            // forward among the offset steps -- bubble, disc, or splits
-            // where its steps overlap. Measured, no word of the corpus had
-            // one (`what_the_references_hold`), and running every seed
-            // through every word doubled a web plan; so the other seeds are
-            // run only where a piece could exist.
-            let merges = syms[m..].iter().any(|(map, _)| match &map.forward {
-                Map2::Nonlinear(k) => matches!(k.kernel, Kernel::Bubble | Kernel::Disc | Kernel::Splits { .. }),
-                Map2::Sum(k) => matches!(k.kernel, Kernel::Bubble | Kernel::Disc),
-                _ => false,
-            });
-            if merges {
-                orbits.extend(w.seeds[first + 1..].iter().filter_map(|&x0| orbit(x0)));
+            // Another piece at `m` only past a many-to-one map there.
+            let merges = many(m);
+            let worst_m = amp_most(m);
+            // Two references are one cluster within four region sizes -- and,
+            // past a many-to-one map, within the distance an offset keeps
+            // the plot's tolerance along the worst path: near a fold the
+            // reference's region reads as huge while a seed one turn away
+            // is a different piece (C6).
+            let apart = if merges {
+                (4.0 * size[m]).min(PLOT_TOLERANCE * r / (GPU_STEP_ERROR * worst_m))
+            } else {
+                4.0 * size[m]
+            };
+            let cap = if merges { MAX_PIECE_CHAINS } else { MAX_CHAINS };
+            if !merges {
+                orbits.truncate(1);
             }
             // One reference per cluster at `m`, farthest first.
-            let apart = 4.0 * size[m];
             let mut chosen = vec![0usize];
-            while chosen.len() < MAX_CHAINS {
+            while chosen.len() < cap {
                 let far = (0..orbits.len())
                     .map(|j| {
                         let d = chosen
@@ -2000,7 +2072,7 @@ impl Backward {
                     _ => break,
                 }
             }
-            let chains = chosen
+            let chains: Vec<RefChain> = chosen
                 .into_iter()
                 .map(|j| {
                     let e = self.plotted(orbits[j][n]);
@@ -2018,6 +2090,12 @@ impl Backward {
 
     pub fn sample(&self) -> &[[f64; 2]] {
         &self.sample
+    }
+
+    /// How many maps the analysis made of transform `index`: its
+    /// inverse's branches, 0 for one the walk does not take.
+    pub fn branches_of(&self, index: usize) -> usize {
+        self.transforms.iter().find(|t| t.index == index).map_or(0, |t| t.branches.len())
     }
 
     /// How far the sample reaches from its centre.
@@ -4328,7 +4406,7 @@ mod tests {
                 let mut steps: Vec<usize> = Vec::new();
                 let mut word_err = 0.0f64;
                 for (w, r) in &with {
-                    chains[r.chains.len()] += 1;
+                    chains[r.chains.len().min(MAX_CHAINS)] += 1;
                     steps.push(w.word.len() - r.m);
                     let syms: Vec<(&IfsMap<Map2>, u32)> = w.word.iter().map(|&s| b.sym_map(s).expect("symbol")).collect();
                     for &x0 in &w.seeds {
@@ -4587,7 +4665,11 @@ mod tests {
         // `a_targeted_final_render_is_the_untargeted_render`: their offset
         // steps run through it, and f64 plots through it too.
         // `elliptic-splits-*` (C6, stage 1) by `elliptic_and_splits_are_walked`.
-        for name in ["grand-julian", "random1", "julian-disc", "true-grand-julian", "final-14", "final-7", "final-1", "elliptic-splits-julian", "elliptic-splits-final"] {
+        // `cylinder-*` (stage 2) by `cylinder_is_walked`.
+        for name in [
+            "grand-julian", "random1", "julian-disc", "true-grand-julian", "final-14", "final-7", "final-1",
+            "elliptic-splits-julian", "elliptic-splits-final", "cylinder-blur-bipolar", "cylinder-turns-julian",
+        ] {
             let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")) else { continue };
             let cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
             let Ok(b) = Backward::read(&cfg.flame, reg) else { continue };
@@ -4675,6 +4757,13 @@ mod tests {
                     off_bias[0] / nn,
                     off_bias[1] / nn
                 );
+                // A percentile of a handful is its largest: a view where
+                // the sampled words land fewer than this is reported, not
+                // judged.
+                if n < 100 {
+                    println!("      too few in view to judge");
+                    continue;
+                }
                 // Robust to the odd sample within an ulp of a cut, which
                 // both replays send the other way round it (so does the
                 // free chaos game): the 99th percentile, the bias of the
@@ -6233,3 +6322,4 @@ mod tests {
         assert!(hi / lo < 1.05, "the plans either side of the graze disagree: mass {lo:.3e} to {hi:.3e}");
     }
 }
+

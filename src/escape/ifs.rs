@@ -5213,7 +5213,7 @@ pub fn pack_maps(
                         Kernel::Hemisphere => (4.0, [0.0, 0.0, gap, 0.0]),
                         Kernel::Disc => (5.0, [0.0, 0.0, gap, 0.0]),
                         Kernel::Blob { high, low, waves } => (6.0, [high as f32, low as f32, waves as f32, 0.0]),
-                        Kernel::Elliptic | Kernel::Splits { .. } => {
+                        Kernel::Elliptic | Kernel::Splits { .. } | Kernel::Cylinder { .. } => {
                             unreachable!("analyse_2d refuses the walk's own kernels (Kernel::walk_only)")
                         }
                     };
@@ -5255,7 +5255,7 @@ pub fn pack_maps(
                         Kernel::Blob { high, low, waves } => {
                             (6.0, [high as f32, low as f32, waves as f32, 0.0])
                         }
-                        Kernel::Elliptic | Kernel::Splits { .. } => {
+                        Kernel::Elliptic | Kernel::Splits { .. } | Kernel::Cylinder { .. } => {
                             unreachable!("analyse_2d refuses the walk's own kernels (Kernel::walk_only)")
                         }
                     };

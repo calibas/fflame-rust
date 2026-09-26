@@ -673,6 +673,74 @@ wanting its own reference).
 - bipolar-elliptic-splits1 and 2 now stop at `cylinder` alone: "transform
   2 uses `cylinder`, which is not affine" -- stage 2.
 
+**Stage 2, the plan (2026-09-26).**
+- `Kernel::Cylinder { k0 }`: forward `(sin x, y)`; inverse two branches a
+  turn, `asin(u) + 2 pi k` and `pi - asin(u) + 2 pi k`, one-to-one on the
+  strip `|u.x| < 1`. The turns are counted from the invariant ball as
+  disc's rings are (`k0` the lowest the ball's reach in the pre-frame's
+  `x` meets, set once the ball is known), capped. Many-to-one going
+  forward, so it counts in `merges`. Forward difference `(2 cos(x +
+  e.x/2) sin(e.x/2), e.y)`. The walk's alone, like elliptic and splits.
+  Summed with an affine it is refused: Newton's seeds would not respect
+  the turn.
+- **A `pre_blur` beside it is a renewal**, as beside bubble: its output
+  disc from the attractor's image in the kernel's frame dilated by the
+  blur's reach -- `sin` of that `x` range (all of `[-1, 1]` past a turn)
+  by the `y` range, boxed, into the post-affine. Complete whatever the
+  blur's reach (C2's argument); what a partial blur costs is draw rate,
+  measured as bubble's is.
+- The gate: a code-built bounded flame shaped like C6's -- elliptic, a
+  contracting splits, `cylinder + pre_blur` under a bipolar final -- and
+  one with a plain cylinder whose pre-frame spans several turns, targeted
+  against untargeted and per sample at depth.
+
+**Stage 2, done (2026-09-26).** As planned, and the offset replay's
+references changed for every word with a map many-to-one going forward
+(bubble, disc, cylinder, splits).
+- The forms: cylinder's exact against 512-bit (with the others, worst
+  3.7e-14), the shader's against the CPU's 4.9e-7.
+- The walk (`cylinder_is_walked`, `output/flame-zoom/cylinder-{blur-
+  bipolar,turns-julian}.fflame`): bipolar-elliptic-splits1 with its
+  splits contracting (0.6 where it has 1.5), its `cylinder 0.099 +
+  pre_blur 0.5` a renewal, overlap 0.994-0.997 at 1e2-1e3, the targeted
+  render the reference's structure with its sampling gaps filled; a
+  julian beside a cylinder of two turns (four branches), overlap 1.000.
+  Per sample at depth, 99th percentiles 0.0004-0.0009 px (1e4-1e8) and
+  0.0045-0.011 px (1e4-1e6); at 1e8 none of the second's sampled words
+  land, and the gate now says so rather than judging a handful.
+- **The references past a many-to-one map, found on the way.** A julian
+  beside a cylinder of pre-scale 6 (stretching `x` by up to 3) was 0.15
+  px off at 1e4: its words' regions are in many small pieces, one per
+  turn, and `m` was read off the first reference's path alone -- which
+  ran by a fold, where the Jacobian is nearly zero -- while a sample one
+  turn away amplified its first absolute step by 0.26. And the seeds
+  were clustered `4 size[m]` apart, which by that fold read as one
+  cluster. Now, where the word has such a map, every landed seed's path
+  must fit (`m` is where the first step fails along any), and seeds are
+  one cluster only within the distance an offset keeps the plot's
+  tolerance along the worst path, up to 16 references
+  (`MAX_PIECE_CHAINS`, the shader's bound). The 99th percentile there
+  went from 0.16 to 0.029 px; every other flame of the gate is unchanged.
+  Its cost (`what_the_references_hold`): julian-disc's references from
+  ~400 ms to 1.2-1.6 s, against plans of 17-21 s (+5-7%), for no change
+  in its precision; grand-julian's 5 to 12 ms.
+  Two things tried and dropped, measured: carrying the whole word from
+  its first point (`m = 0`), worse -- the region there is in more pieces,
+  farther apart (one sample 3.9 px off); and a reference per piece from
+  `pieces()`, no difference -- it misses real pieces (the landing index
+  drops the reference's own path where its sample is sparse, and a point's
+  preimages miss a piece whose image stops at a fold short of it).
+- **Open: more pieces than seeds.** The pre-scale 6 flame still has a
+  sample 0.54 px off at 1e4: its piece holds none of the word's 8 seeds
+  (`REF_SEEDS`). Where a word's region is in more pieces than that, a
+  sample in a piece without a reference is only as good as absolute f32
+  at its first step. Its efficiency is 0.02 there, and at 1e6 none of the
+  gate's sampled words land. Efficiency is P3's (julian-disc's many-to-one
+  words are inefficient for the same reason); the pieces are this item's.
+- bipolar-elliptic-splits1 and 2 now stop at stage 3: "no bounding ball:
+  the nonlinear maps do not keep the set bounded" (the message said "root
+  maps", from before the walk had other kernels).
+
 **Found on the way, fixed: a final on a flame without arms.** The
 forward planner never looked at final transforms: it planned the view
 in the orbit's own space, and its composed arm plots view-relative. A
@@ -793,6 +861,18 @@ hidden pieces made them less efficient: 80k words at efficiency 0.14
 for the 0.6 off 2 view, where it was 0.19 (2026-09-25). The pieces
 are carried as clouds with nothing landing yet, down to the floor, and
 forced there.
+
+`cylinder` (C6, stage 2) is the same case, more so: a julian beside a
+cylinder of two turns plans at efficiency 0.09-0.43 at 1e2-1e3, and one
+of pre-scale 6 (stretching `x` by 3) at 0.02-0.07, with 40-70k words at
+1e3 and 430k at 1e6 -- correct (overlap 1.000), and forced mostly for
+nothing.
+
+**Not reproducible (found 2026-09-26).** The same build plans
+julian-disc's 1e8 view (`what_the_references_hold`) at 41,485 words one
+run and 43,649 the next; the 1e4 and 1e6 views agree. Something in the
+walk depends on the process -- iteration order, most likely a hashed
+container's. A plan should be a function of the flame and the view.
 
 ### P4. Keep-or-carry on the GPU -- open (optional)
 
