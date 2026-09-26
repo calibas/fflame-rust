@@ -3563,7 +3563,13 @@ impl FlameRenderer {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         config.flame.has_xaos().hash(&mut h);
-        for t in &config.flame.transforms {
+        // The finals and linked transforms too: the walk pulls the view
+        // back through the finals, and refuses a linked transform.
+        let pools = [&config.flame.transforms, &config.flame.final_transforms, &config.flame.linked_transforms];
+        for (pool, t) in pools.iter().enumerate().flat_map(|(k, ts)| ts.iter().map(move |t| (k, t))) {
+            pool.hash(&mut h);
+            t.final_attachments.hash(&mut h);
+            t.linked_attachments.hash(&mut h);
             for v in [
                 t.a, t.b, t.c, t.d, t.e, t.f, t.weight, t.color, t.color_speed, t.post_a,
                 t.post_b, t.post_c, t.post_d, t.post_e, t.post_f,

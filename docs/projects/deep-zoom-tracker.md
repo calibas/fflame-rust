@@ -256,7 +256,7 @@ The weight is no longer an obstacle: the deposit carries one (above).
 What remains is the region, the inverse, and the density. That is
 research, not a transcription.
 
-### C2c. Blurs the walk refuses -- in progress (2026-09-25)
+### C2c. Blurs and finals the walk refused -- done (2026-09-25)
 
 **Where they are.** Not in the saved corpus: of its 81 flames
 (`what_the_walk_refuses_across_the_corpus`), every one with a small
@@ -316,8 +316,49 @@ pulled back from the view can reach the transform's output disc.
   `bipolar` finals. Coverage 0.998-1.0 at `pre_blur` 0.50-1.24; GPU
   overlap 0.999-1.000.
 
-**3. A nonlinear final transform -- open.** The analysis wants the
-final affine, and the walk refuses a final at all.
+**3. Final transforms -- done, v1.** A final reshapes what is plotted
+and feeds nothing forward: the orbit's points plotted in a view are
+those in its pull-back through the final. The walk plans that, a disc
+in the orbit's own space (`FinalMap::pull_back`), and the render
+applies the final after the forced word as after every free step. The
+analysis sees the flame without its finals.
+- Followed: affine finals, and `bipolar` between its affine and
+  post-affine, in a chain with at most one `bipolar`. `bipolar` is
+  one-to-one: its output is bipolar coordinates, the angle halved,
+  shifted and wrapped, and the wrap only turns the angle round the
+  circle, so each output has one preimage, `(1+q)/(1−q)`. It is
+  conformal, so a small view pulls back to nearly a disc.
+- The pulled-back disc bounds the view's rim and interior pulled back,
+  from the preimage of its centre, with a 2% margin. **Except where the
+  view holds the plotted image of the plane's far points**:
+  `bipolar` sends every point far from its poles towards `(0, −shift)`,
+  wrapped, and a view holding that pulls back to the outside of a
+  circle, which no disc round its rim holds. It pulls back to the whole
+  attractor instead.
+- Every drawn normal transform must carry the same finals; a linked
+  transform is refused (the walk had ignored linked transforms, which
+  feed the orbit).
+- **No offsets through a final.** The render applies the final to the
+  absolute point, and the offset replay leaves it view-relative, so a
+  plan with finals replays in absolute f32, as the untargeted render
+  plots, and where f32 runs out both show it. Measured on `final-14`
+  (`a_final_at_depth`): clean at 1e4, heavy stripes at 1e5, a dot
+  lattice at 1e6. Carrying
+  the offsets through `bipolar` needs its difference form -- a
+  `log1p` of the step over `z ± 1` -- and the final applied in the
+  offset replay. Open.
+- The walk's cache key and the renderer's replan key now include the
+  finals and linked transforms: editing a final used to keep the old
+  plan and the old analysis.
+- The generator's flames the walk reads: 299 to 400 of 400. Coverage
+  1.0 at views from the preset's to 1e4 (`finals_plan_completely`,
+  `a_plan_through_a_final_covers_what_it_plots`); targeted against
+  untargeted on the GPU, overlap 1.000 and brightness within 2%
+  (`a_targeted_final_render_is_the_untargeted_render`).
+- Where the view holds many far points' image, the pull-back is large
+  and the plan's efficiency low (0.00-0.03 at some 1e2-1e3 views): a
+  large share of the attractor is plotted there, so the untargeted
+  render is dense there too.
 
 ### C3. random1 at 1e3 misses 2.6% -- done (2026-09-25)
 
