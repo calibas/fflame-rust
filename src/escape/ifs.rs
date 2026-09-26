@@ -5213,6 +5213,9 @@ pub fn pack_maps(
                         Kernel::Hemisphere => (4.0, [0.0, 0.0, gap, 0.0]),
                         Kernel::Disc => (5.0, [0.0, 0.0, gap, 0.0]),
                         Kernel::Blob { high, low, waves } => (6.0, [high as f32, low as f32, waves as f32, 0.0]),
+                        Kernel::Elliptic | Kernel::Splits { .. } => {
+                            unreachable!("analyse_2d refuses the walk's own kernels (Kernel::walk_only)")
+                        }
                     };
                     IfsMapGpu {
                         inv_m: m4(&post),
@@ -5251,6 +5254,9 @@ pub fn pack_maps(
                         Kernel::Disc => (5.0, [0.0; 4]),
                         Kernel::Blob { high, low, waves } => {
                             (6.0, [high as f32, low as f32, waves as f32, 0.0])
+                        }
+                        Kernel::Elliptic | Kernel::Splits { .. } => {
+                            unreachable!("analyse_2d refuses the walk's own kernels (Kernel::walk_only)")
                         }
                     };
                     IfsMapGpu {

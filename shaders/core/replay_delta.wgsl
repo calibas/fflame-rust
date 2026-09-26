@@ -10,16 +10,18 @@
 // `cylinders`:
 //
 //   0 kind (0 affine, 1 kernel, 2 kernel summed with an affine)
-//   1 kernel (0 root, 1 spherical, 2 bubble, 3 hemisphere, 4 disc, 5 blob)
+//   1 kernel (0 root, 1 spherical, 2 bubble, 3 hemisphere, 4 disc, 5 blob,
+//     6 elliptic, 7 splits)
 //   2..5 its parameters (root: n, d; blob: high, low, waves)
 //   5 the kernel's weight
 //   6..10 pre linear part, row-major     10..12 pre translation
 //   12..16 the sum's linear part          16..20 post linear part
+//   20..24 splits' steps: what crossing x = 0, then y = 0, adds
 //
 // Translations cancel in a difference, so only the pre's matters: it
 // places the reference in the kernel's frame.
 
-const CT_ROW: u32 = 20u;
+const CT_ROW: u32 = 24u;
 
 // Below 0.1 `ln(1 + a)` and `exp(a) − 1` take their series, above it
 // the plain functions: the `(1 + a) − 1` correction is exactly what
@@ -91,8 +93,110 @@ fn fd_cmul(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
 // dropped at the plot.
 const FD_POLE: vec2<f32> = vec2<f32>(1.0e30, 1.0e30);
 
-// K(v + e) − K(v), the kernel's forward difference along `arm`.
-fn fd_kernel(k: u32, p: vec3<f32>, v: vec2<f32>, e: vec2<f32>, arm: u32) -> vec2<f32> {
+// `h(d, k) = d - k` for `d = sqrt(k^2 + y^2)`, without cancelling: see
+// `ifs_analysis::elliptic_h`.
+fn fd_eh(d: f32, k: f32, y2: f32) -> f32 {
+    if (k >= 0.0) {
+        let den = d + k;
+        if (!(den > 0.0)) {
+            return 0.0;
+        }
+        return y2 / den;
+    }
+    return d - k;
+}
+
+// Its difference by the rule chosen at `(d, k)`: see
+// `forward_delta::elliptic_h_delta`. Past 1e30 at a focus, where the
+// map is singular.
+fn fd_eh_delta(d: f32, k: f32, y2: f32, dd: f32, dk: f32, dy2: f32, dw: f32, kw: f32) -> f32 {
+    if (k >= 0.0) {
+        let den = d + k;
+        let den_w = dw + kw;
+        if (!(den > 0.0) || !(den_w > 0.0)) {
+            return 3.0e38;
+        }
+        return (dy2 * den - y2 * (dd + dk)) / (den_w * den);
+    }
+    return dd - dk;
+}
+
+// elliptic(v + e) - elliptic(v), every term O(e): see
+// `forward_delta::elliptic_difference`. The output is (2/pi)(theta, sG):
+// theta = atan2(x, C) with C^2 = (xmax - x)(xmax + x), G = ln(1 + m +
+// sqrt(m)) with m = xmax - 1, s the sign of y -- each of m, xmax - x and
+// xmax + x half a sum of two `fd_eh` terms, differenced by `fd_eh_delta`.
+fn fd_elliptic(v: vec2<f32>, e: vec2<f32>) -> vec2<f32> {
+    let w = v + e;
+    let y2 = v.y * v.y;
+    let dy2 = e.y * (v.y + v.y + e.y);
+    let kp = v.x + 1.0;
+    let km = 1.0 - v.x;
+    let d1 = sqrt(kp * kp + y2);
+    let d2 = sqrt(km * km + y2);
+    let kpw = w.x + 1.0;
+    let kmw = 1.0 - w.x;
+    let y2w = w.y * w.y;
+    let d1w = sqrt(kpw * kpw + y2w);
+    let d2w = sqrt(kmw * kmw + y2w);
+    let s1 = d1 + d1w;
+    let s2 = d2 + d2w;
+    if (!(s1 > 0.0) || !(s2 > 0.0)) {
+        return FD_POLE;
+    }
+    let dd1 = (e.x * (kp + kp + e.x) + dy2) / s1;
+    let dd2 = (-e.x * (km + km - e.x) + dy2) / s2;
+    let a = fd_eh(d1, kp, y2);
+    let b = fd_eh(d2, km, y2);
+    let a_s = fd_eh(d1, -kp, y2);
+    let b_s = fd_eh(d2, -km, y2);
+    let da = fd_eh_delta(d1, kp, y2, dd1, e.x, dy2, d1w, kpw);
+    let db = fd_eh_delta(d2, km, y2, dd2, -e.x, dy2, d2w, kmw);
+    let da_s = fd_eh_delta(d1, -kp, y2, dd1, -e.x, dy2, d1w, -kpw);
+    let db_s = fd_eh_delta(d2, -km, y2, dd2, e.x, dy2, d2w, -kmw);
+    if (!(abs(da) <= 1e30) || !(abs(db) <= 1e30) || !(abs(da_s) <= 1e30) || !(abs(db_s) <= 1e30)) {
+        return FD_POLE;
+    }
+    // x: theta = atan2(x, C), C = sqrt(P Q).
+    let pp = 0.5 * (a + b_s);
+    let qq = 0.5 * (a_s + b);
+    let dp = 0.5 * (da + db_s);
+    let dq = 0.5 * (da_s + db);
+    let c = sqrt(pp * qq);
+    let cw = sqrt(max(pp + dp, 0.0) * max(qq + dq, 0.0));
+    var dc = 0.0;
+    if (c + cw > 0.0) {
+        dc = (dp * qq + pp * dq + dp * dq) / (c + cw);
+    }
+    let dtheta = ff_atan2(e.x * c - v.x * dc, v.x * w.x + c * cw);
+    // y: s ln(1 + m + sqrt(m)). Across y = 0 the two sides' terms have
+    // one sign: small across the segment between the foci, the jump
+    // across the rays beyond them.
+    let m = 0.5 * (a + b);
+    let dm = 0.5 * (da + db);
+    let mw = max(m + dm, 0.0);
+    let s = sqrt(m);
+    let sw = sqrt(mw);
+    let neg_v = v.y < 0.0;
+    let neg_w = w.y < 0.0;
+    var dg: f32;
+    if (neg_v == neg_w) {
+        var ds = 0.0;
+        if (s + sw > 0.0) {
+            ds = dm / (s + sw);
+        }
+        let g = fd_ln1p((dm + ds) / (1.0 + m + s));
+        dg = select(g, -g, neg_v);
+    } else {
+        let sum = fd_ln1p(m + s) + fd_ln1p(mw + sw);
+        dg = select(-sum, sum, neg_v);
+    }
+    return 0.63661977236758 * vec2<f32>(dtheta, dg);
+}
+
+// K(v + e) − K(v), the kernel's forward difference along `arm`. `q` is
+// the row's 20..24, splits' steps.
+fn fd_kernel(k: u32, p: vec3<f32>, q: vec4<f32>, v: vec2<f32>, e: vec2<f32>, arm: u32) -> vec2<f32> {
     let w = v + e;
     let x = dot(v, v);
     let vd = dot(v, e);
@@ -140,6 +244,17 @@ fn fd_kernel(k: u32, p: vec3<f32>, v: vec2<f32>, e: vec2<f32>, arm: u32) -> vec2
         let s = sqrt(x + 1.0);
         let s1 = sqrt(x + t + 1.0);
         return e / s1 - v * (t / (s * s1 * (s + s1)));
+    }
+    if (k == 6u) {
+        return fd_elliptic(v, e);
+    }
+    if (k == 7u) {
+        // Splits: e, plus the step between the quadrants of v and v + e
+        // -- zero within one, the row's numbers across.
+        let bv = vec2<f32>(select(0.0, 1.0, v.x >= 0.0), select(0.0, 1.0, v.y >= 0.0));
+        let bw = vec2<f32>(select(0.0, 1.0, w.x >= 0.0), select(0.0, 1.0, w.y >= 0.0));
+        let db = bw - bv;
+        return e + db.x * q.xy + db.y * q.zw;
     }
     // Disc and blob measure θ from +y: the change in θ is minus the
     // angle from v to v + ε.
@@ -193,7 +308,8 @@ fn ct_fwd_diff(o: u32, z: vec2<f32>, d: vec2<f32>, arm: u32) -> vec2<f32> {
     let v = fd_lin(o + 6u, z) + vec2<f32>(cylinders[o + 10u], cylinders[o + 11u]);
     let e = fd_lin(o + 6u, d);
     let kp = vec3<f32>(cylinders[o + 2u], cylinders[o + 3u], cylinders[o + 4u]);
-    let kd = fd_kernel(u32(cylinders[o + 1u]), kp, v, e, arm);
+    let kq = vec4<f32>(cylinders[o + 20u], cylinders[o + 21u], cylinders[o + 22u], cylinders[o + 23u]);
+    let kd = fd_kernel(u32(cylinders[o + 1u]), kp, kq, v, e, arm);
     var mid = cylinders[o + 5u] * kd;
     if (kind == 2u) {
         mid = fd_lin(o + 12u, e) + mid;

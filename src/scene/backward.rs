@@ -1969,12 +1969,13 @@ impl Backward {
                 return None;
             }
             // Another piece at `m` needs a map that is many-to-one going
-            // forward among the offset steps -- bubble or disc. Measured, no
-            // word of the corpus had one (`what_the_references_hold`), and
-            // running every seed through every word doubled a web plan; so
-            // the other seeds are run only where a piece could exist.
+            // forward among the offset steps -- bubble, disc, or splits
+            // where its steps overlap. Measured, no word of the corpus had
+            // one (`what_the_references_hold`), and running every seed
+            // through every word doubled a web plan; so the other seeds are
+            // run only where a piece could exist.
             let merges = syms[m..].iter().any(|(map, _)| match &map.forward {
-                Map2::Nonlinear(k) => matches!(k.kernel, Kernel::Bubble | Kernel::Disc),
+                Map2::Nonlinear(k) => matches!(k.kernel, Kernel::Bubble | Kernel::Disc | Kernel::Splits { .. }),
                 Map2::Sum(k) => matches!(k.kernel, Kernel::Bubble | Kernel::Disc),
                 _ => false,
             });
@@ -4585,7 +4586,8 @@ mod tests {
         // The `final-*` flames carry a `bipolar` final (C2c), written by
         // `a_targeted_final_render_is_the_untargeted_render`: their offset
         // steps run through it, and f64 plots through it too.
-        for name in ["grand-julian", "random1", "julian-disc", "true-grand-julian", "final-14", "final-7", "final-1"] {
+        // `elliptic-splits-*` (C6, stage 1) by `elliptic_and_splits_are_walked`.
+        for name in ["grand-julian", "random1", "julian-disc", "true-grand-julian", "final-14", "final-7", "final-1", "elliptic-splits-julian", "elliptic-splits-final"] {
             let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")) else { continue };
             let cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
             let Ok(b) = Backward::read(&cfg.flame, reg) else { continue };

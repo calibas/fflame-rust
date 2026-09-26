@@ -204,7 +204,126 @@ pub fn kernel_forward_difference_gen<T: Transcendental>(k: &Kernel, v: &[T; 2], 
                 _ => unreachable!(),
             }
         }
+        Kernel::Elliptic => elliptic_difference(v, e, &w),
+        // A translation on each quadrant: ε, plus the step between the
+        // quadrants of `v` and `v + ε` -- exactly zero within one, and a
+        // difference of the table's own numbers across.
+        Kernel::Splits { x: sx, y: sy, .. } => {
+            let qv = Kernel::splits_quadrant([v[0].to_f64(), v[1].to_f64()]);
+            let qw = Kernel::splits_quadrant([w[0].to_f64(), w[1].to_f64()]);
+            let bx = (qw & 1) as f64 - (qv & 1) as f64;
+            let by = ((qw >> 1) & 1) as f64 - ((qv >> 1) & 1) as f64;
+            Some([
+                e[0].add(&e[0].lit(bx * sx[0] + by * sy[0])),
+                e[1].add(&e[1].lit(bx * sx[1] + by * sy[1])),
+            ])
+        }
     }
+}
+
+/// `h(d', k') − h(d, k)` for [`elliptic_h`], by the rule it chose at
+/// `(d, k)`, so nothing cancels: `y²/(d + k)` differences as
+/// `(Δy²·(d + k) − y²·(Δd + Δk)) / ((d' + k')(d + k))`, and `d − k` as
+/// `Δd − Δk`. `None` where the first's denominator vanishes at either
+/// end: a focus, where the map is singular.
+#[allow(clippy::too_many_arguments)]
+fn elliptic_h_delta<T: Real>(d: &T, k: &T, y2: &T, dd: &T, dk: &T, dy2: &T, dw: &T, kw: &T) -> Option<T> {
+    if k.to_f64() >= 0.0 {
+        let den = d.add(k);
+        let den_w = dw.add(kw);
+        if !(den.to_f64() > 0.0) || !(den_w.to_f64() > 0.0) {
+            return None;
+        }
+        Some(dy2.mul(&den).sub(&y2.mul(&dd.add(dk))).div(&den_w.mul(&den)))
+    } else {
+        Some(dd.sub(dk))
+    }
+}
+
+/// **Elliptic's forward difference** (tracker C6), every term O(ε).
+///
+/// Its output is `(2/π)(θ, σG)`: `θ = atan2(x, C)` with `C² = (xmax −
+/// x)(xmax + x)`, and `G = ln(1 + m + √m)` with `m = xmax − 1`, `σ` the
+/// sign of `y`. Every one of `m`, `xmax − x`, `xmax + x` is half a sum of
+/// two [`elliptic_h`] terms, and each of those is differenced by
+/// [`elliptic_h_delta`]. Then `Δθ = atan2(ε.x·C − x·ΔC, x·x' + C·C')`
+/// with `ΔC = (ΔP·Q + P·ΔQ + ΔP·ΔQ)/(C + C')`, and on one side of `y = 0`
+/// `ΔG = ln(1 + (Δm + Δ√m)/(1 + m + √m))`, `Δ√m = Δm/(√m + √m')`. Across
+/// it `σ'G' − σG` is a sum of two same-signed terms: small across the
+/// segment between the foci, where the map is continuous, and the jump
+/// across the rays beyond them.
+fn elliptic_difference<T: Transcendental>(v: &[T; 2], e: &[T; 2], w: &[T; 2]) -> Option<[T; 2]> {
+    let one = v[0].one();
+    let half = v[0].lit(0.5);
+    let y2 = v[1].mul(&v[1]);
+    // y'² − y² and the distances' differences, as the norms' own.
+    let dy2 = e[1].mul(&v[1].add(&v[1]).add(&e[1]));
+    let kp = v[0].add(&one);
+    let km = one.sub(&v[0]);
+    let d1 = kp.mul(&kp).add(&y2).sqrt();
+    let d2 = km.mul(&km).add(&y2).sqrt();
+    let kpw = w[0].add(&one);
+    let kmw = one.sub(&w[0]);
+    let y2w = w[1].mul(&w[1]);
+    let d1w = kpw.mul(&kpw).add(&y2w).sqrt();
+    let d2w = kmw.mul(&kmw).add(&y2w).sqrt();
+    let s1 = d1.add(&d1w);
+    let s2 = d2.add(&d2w);
+    if !(s1.to_f64() > 0.0) || !(s2.to_f64() > 0.0) {
+        return None;
+    }
+    let ex = e[0].clone();
+    let dd1 = ex.mul(&kp.add(&kp).add(&ex)).add(&dy2).div(&s1);
+    let dd2 = ex.neg().mul(&km.add(&km).sub(&ex)).add(&dy2).div(&s2);
+    let p = super::ifs_analysis::elliptic_parts(v);
+    let da = elliptic_h_delta(&d1, &kp, &y2, &dd1, &ex, &dy2, &d1w, &kpw)?;
+    let db = elliptic_h_delta(&d2, &km, &y2, &dd2, &ex.neg(), &dy2, &d2w, &kmw)?;
+    let da_s = elliptic_h_delta(&d1, &kp.neg(), &y2, &dd1, &ex.neg(), &dy2, &d1w, &kpw.neg())?;
+    let db_s = elliptic_h_delta(&d2, &km.neg(), &y2, &dd2, &ex, &dy2, &d2w, &kmw.neg())?;
+    let clamp = |t: T| if t.to_f64() < 0.0 { t.zero() } else { t };
+    // The x output: θ = atan2(x, C), C = √(P·Q).
+    let pp = p.a.add(&p.b_s).mul(&half);
+    let qq = p.a_s.add(&p.b).mul(&half);
+    let dp = da.add(&db_s).mul(&half);
+    let dq = da_s.add(&db).mul(&half);
+    let c = pp.mul(&qq).sqrt();
+    let cw = clamp(pp.add(&dp)).mul(&clamp(qq.add(&dq))).sqrt();
+    let csum = c.add(&cw);
+    let dc = if csum.to_f64() > 0.0 {
+        dp.mul(&qq).add(&pp.mul(&dq)).add(&dp.mul(&dq)).div(&csum)
+    } else {
+        c.zero()
+    };
+    let dtheta = T::atan2(&ex.mul(&c).sub(&v[0].mul(&dc)), &v[0].mul(&w[0]).add(&c.mul(&cw)));
+    // The y output: σ·ln(1 + m + √m).
+    let m = p.a.add(&p.b).mul(&half);
+    let dm = da.add(&db).mul(&half);
+    let mw = clamp(m.add(&dm));
+    let (s, sw) = (m.sqrt(), mw.sqrt());
+    let neg_v = v[1].to_f64() < 0.0;
+    let neg_w = w[1].to_f64() < 0.0;
+    let dg = if neg_v == neg_w {
+        let ssum = s.add(&sw);
+        let ds = if ssum.to_f64() > 0.0 { dm.div(&ssum) } else { dm.zero() };
+        let g = ln1p(&dm.add(&ds).div(&one.add(&m).add(&s)));
+        if neg_v {
+            g.neg()
+        } else {
+            g
+        }
+    } else {
+        let g = ln1p(&m.add(&s));
+        let gw = ln1p(&mw.add(&sw));
+        // σ'G' − σG with σ' = −σ: −σ(G + G').
+        let sum = g.add(&gw);
+        if neg_v {
+            sum
+        } else {
+            sum.neg()
+        }
+    };
+    let k = v[0].lit(2.0 / std::f64::consts::PI);
+    Some([dtheta.mul(&k), dg.mul(&k)])
 }
 
 fn lin(m: &[[f64; 2]; 2], d: [f64; 2]) -> [f64; 2] {
@@ -235,7 +354,7 @@ pub fn map_forward_difference(m: &Map2, z: [f64; 2], d: [f64; 2], arm: u32) -> O
 }
 
 /// Floats per map row in the shader's table (`replay_delta.wgsl`).
-pub const ROW_FLOATS: usize = 20;
+pub const ROW_FLOATS: usize = 24;
 
 /// A forward map as the shader's row: see `replay_delta.wgsl` for the
 /// layout. An inverse variant, which the replay never runs, is written
@@ -256,6 +375,16 @@ pub fn forward_row(m: &Map2) -> [f32; ROW_FLOATS] {
             Kernel::Hemisphere => (3.0, [0.0; 3]),
             Kernel::Disc => (4.0, [0.0; 3]),
             Kernel::Blob { high, low, waves } => (5.0, [high, low, waves]),
+            Kernel::Elliptic => (6.0, [0.0; 3]),
+            // Its steps, past the three slots: a difference needs only
+            // what crossing each axis adds.
+            Kernel::Splits { x, y, .. } => {
+                row[20] = x[0] as f32;
+                row[21] = x[1] as f32;
+                row[22] = y[0] as f32;
+                row[23] = y[1] as f32;
+                (7.0, [0.0; 3])
+            }
         };
         row[1] = id;
         row[2] = p[0] as f32;
@@ -318,6 +447,10 @@ mod tests {
             (Kernel::Disc, vec![0]),
             (Kernel::Blob { high: 1.2, low: 0.4, waves: 3.0 }, vec![0]),
             (Kernel::Blob { high: 0.9, low: 0.1, waves: 2.5 }, vec![0]),
+            // The rings pass the segment between the foci (−0.3, −0.9 on
+            // the x axis) and the ray beyond them (−1.7).
+            (Kernel::Elliptic, vec![0]),
+            (Kernel::Splits { base: [-0.4, 0.1], x: [0.8, 0.3], y: [-0.2, 0.9] }, vec![0]),
         ]
     }
 
@@ -568,6 +701,23 @@ mod tests {
             ("hemisphere", kern("hemisphere", &[]), vec![0]),
             ("disc", kern("disc", &[]), vec![0]),
             ("blob", kern("blob", &[("high", 1.2), ("low", 0.4), ("waves", 3.0)]), vec![0]),
+            ("elliptic", kern("elliptic", &[]), vec![0]),
+            (
+                "splits",
+                kern("splits", &[("x", 0.4), ("y", -0.3), ("lshear", 0.1), ("rshear", -0.2), ("ushear", 0.15), ("dshear", 0.05)]),
+                vec![0],
+            ),
+            // Summed with an affine, as bipolar-elliptic-splits2 has it:
+            // folded into the post-affine (`transform_map_2d_ordered`).
+            (
+                "linear + splits",
+                {
+                    let mut t = kern("splits", &[("x", 1.0), ("y", 0.099)]);
+                    t.set_variation("linear", 0.2);
+                    t
+                },
+                vec![0],
+            ),
         ];
         let mut worst_all = 0.0f64;
         for (name, t, arms) in cases {

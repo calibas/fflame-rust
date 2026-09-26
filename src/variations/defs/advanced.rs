@@ -2297,3 +2297,28 @@ pub static INVERSE_BLOB: InverseDef = InverseDef {
         Ok(Kernel::Blob { high, low, waves })
     }),
 };
+
+/// `elliptic`: one-to-one onto the strip `|v.x| ≤ 1`, with a closed
+/// inverse there (tracker C6). The inverse walk's alone.
+pub static INVERSE_ELLIPTIC: InverseDef = InverseDef {
+    name: "elliptic",
+    kernel: InverseKernel::Planar(|_| Ok(Kernel::Elliptic)),
+};
+
+/// `splits`: a translation on each quadrant, `v + t_q`, its steps read
+/// off the body above -- `t.x = ±x + (y ≥ 0 ? ushear : −dshear)`, `t.y =
+/// ±y + (x ≥ 0 ? rshear : −lshear)` -- as the lower-left quadrant's step
+/// and what crossing each axis adds (tracker C6). The inverse walk's
+/// alone.
+pub static INVERSE_SPLITS: InverseDef = InverseDef {
+    name: "splits",
+    kernel: InverseKernel::Planar(|p| {
+        let (sx, sy) = (p("x"), p("y"));
+        let (l, r, u, d) = (p("lshear"), p("rshear"), p("ushear"), p("dshear"));
+        let all = [sx, sy, l, r, u, d];
+        if !all.iter().all(|v| v.is_finite()) {
+            return Err(Refusal::Degenerate);
+        }
+        Ok(Kernel::Splits { base: [-sx - d, -sy - l], x: [2.0 * sx, r + l], y: [u + d, 2.0 * sy] })
+    }),
+};

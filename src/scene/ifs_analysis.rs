@@ -206,6 +206,23 @@ pub enum Kernel {
     /// times an angular radial scale `s(θ) = low + (high − low)/2 ·
     /// (sin(waves·θ) + 1)`; onto the plane while `s > 0` (D3).
     Blob { high: f64, low: f64, waves: f64 },
+    /// `elliptic`: elliptic coordinates, `(2/π)·(asin(x/xmax),
+    /// ±ln(xmax + √(xmax − 1)))` with `xmax` half the sum of the
+    /// distances to the foci `(±1, 0)` and the sign `y`'s. One-to-one
+    /// onto the strip `|v.x| ≤ 1`, so one branch and none past the strip
+    /// (tracker C6). JWF's `√(xmax − 1)` where acosh would have
+    /// `√(xmax² − 1)` makes it C¹ and not C² across the segment between
+    /// the foci; `y` jumps across the rays `|x| > 1` beyond them.
+    /// **The walk's alone** (`walk_only`).
+    Elliptic,
+    /// `splits`: piecewise a translation, `v + base + [v.x ≥ 0]·x +
+    /// [v.y ≥ 0]·y`. Four branches, one per quadrant of the preimage,
+    /// each valid where its preimage lands in its quadrant: where the
+    /// steps overlap the quadrants' images a point has two (tracker C6).
+    /// A summed affine is folded in (`transform_map_2d_ordered`), so the
+    /// steps are in the frame the folded map leaves. **The walk's alone**
+    /// (`walk_only`).
+    Splits { base: [f64; 2], x: [f64; 2], y: [f64; 2] },
 }
 
 impl Kernel {
@@ -247,6 +264,25 @@ impl Kernel {
             return v[0].hypot(v[1]);
         }
         (v[0] - along * d[0]).hypot(v[1] - along * d[1])
+    }
+
+    /// Whether only the inverse walk (`backward.rs`) takes this kernel:
+    /// the escape engine's shader has no row for it, so `analyse_2d`
+    /// refuses it as it did before the walk had it.
+    pub fn walk_only(&self) -> bool {
+        matches!(self, Kernel::Elliptic | Kernel::Splits { .. })
+    }
+
+    /// Splits' step for quadrant `q` (bit 0 `x ≥ 0`, bit 1 `y ≥ 0`).
+    pub(crate) fn splits_shift(base: [f64; 2], x: [f64; 2], y: [f64; 2], q: u32) -> [f64; 2] {
+        let (bx, by) = ((q & 1) as f64, ((q >> 1) & 1) as f64);
+        [base[0] + bx * x[0] + by * y[0], base[1] + bx * x[1] + by * y[1]]
+    }
+
+    /// The quadrant splits reads `v` in, as its shader does: `x ≥ 0` is
+    /// bit 0 and `y ≥ 0` bit 1, so a signed zero is on the `≥ 0` side.
+    pub(crate) fn splits_quadrant(v: [f64; 2]) -> u32 {
+        (v[0] >= 0.0) as u32 | (((v[1] >= 0.0) as u32) << 1)
     }
 
     /// Blob's angular scale at `theta`.
@@ -316,6 +352,22 @@ impl Kernel {
             }
             Kernel::Root { n, d } => r2.sqrt().powf(1.0 - (n as f64).abs() / d),
             Kernel::Spherical => r2,
+            // A translation.
+            Kernel::Splits { .. } => 1.0,
+            // The inverse's derivative is the dual numbers' own, so the
+            // forward's σ_min is its largest singular value reciprocated
+            // -- exact by construction, and zero where it has none.
+            Kernel::Elliptic => match self.inverse_jacobian(v, branch) {
+                Some(j) => {
+                    let (_, hi) = singular_values_of(j);
+                    if hi > 0.0 {
+                        1.0 / hi
+                    } else {
+                        0.0
+                    }
+                }
+                None => 0.0,
+            },
             Kernel::Bubble => {
                 // The smaller of the tangential derivative `|v|/|p|`
                 // and the RADIAL one, which the tangential alone is
@@ -411,6 +463,18 @@ impl Kernel {
             Kernel::Root { n, .. } if n.unsigned_abs() > 1 => {
                 rho.min(Kernel::ray_distance(z, NEG_X))
             }
+            // Its `y` jumps across the rays beyond the foci. (Across the
+            // segment between them it is C¹, which is all Newton asks.)
+            Kernel::Elliptic => {
+                let ax = z[0].abs();
+                if ax >= 1.0 {
+                    z[1].abs()
+                } else {
+                    (1.0 - ax).hypot(z[1])
+                }
+            }
+            // It jumps across both axes.
+            Kernel::Splits { .. } => z[0].abs().min(z[1].abs()),
             _ => rho,
         }
     }
@@ -475,6 +539,19 @@ impl Kernel {
                 }
                 rho.min(rho * (sc / ds).abs())
             }
+            // The strip's edge, where the preimage reaches the rays, and
+            // the line `v.y = 0`, the segment's image, across which the
+            // inverse is C¹ and not C².
+            Kernel::Elliptic => (1.0 - v[0].abs()).max(0.0).min(v[1].abs()),
+            // The preimage's distance to its quadrant's edges.
+            Kernel::Splits { base, x, y } => {
+                let s = Kernel::splits_shift(base, x, y, branch);
+                let u = [v[0] - s[0], v[1] - s[1]];
+                if Kernel::splits_quadrant(u) != branch {
+                    return 0.0;
+                }
+                u[0].abs().min(u[1].abs())
+            }
         }
     }
 
@@ -503,6 +580,7 @@ impl Kernel {
             Kernel::Spherical => true,
             Kernel::Root { d, .. } => d < 0.0,
             Kernel::Bubble | Kernel::Hemisphere | Kernel::Disc | Kernel::Blob { .. } => false,
+            Kernel::Elliptic | Kernel::Splits { .. } => false,
         }
     }
 
@@ -547,6 +625,8 @@ impl Kernel {
             Kernel::Hemisphere => "hemisphere",
             Kernel::Disc => "disc",
             Kernel::Blob { .. } => "blob",
+            Kernel::Elliptic => "elliptic",
+            Kernel::Splits { .. } => "splits",
         }
     }
 }
@@ -589,6 +669,55 @@ fn bubble_scale_gen<T: Real>(x: &T, branch: u32) -> T {
 pub(crate) fn blob_scale_gen<T: Transcendental>(high: f64, low: f64, waves: f64, theta: &T) -> T {
     let wave = theta.lit(waves).mul(theta).sin().add(&theta.one());
     theta.lit(low).add(&theta.lit((high - low) / 2.0).mul(&wave))
+}
+
+/// `d − k` for `d = √(k² + y²)`, without cancelling: `y²/(d + k)` where
+/// `k ≥ 0`, which is where `d − k` would subtract two numbers that meet.
+/// Zero at `d = k = 0` (a focus of `elliptic`).
+///
+/// Elliptic's `xmax − 1`, `xmax − x` and `xmax + x` are each half a sum
+/// of two of these (`elliptic_parts`): the plain body forms `xmax` and
+/// subtracts, and loses every digit of `xmax − 1` near the segment
+/// between the foci -- where its square root is the whole of the
+/// output's `y` -- and of `xmax − |x|` near the rays beyond them.
+pub(crate) fn elliptic_h<T: Real>(d: &T, k: &T, y2: &T) -> T {
+    if k.to_f64() >= 0.0 {
+        let den = d.add(k);
+        if den.to_f64() == 0.0 {
+            return d.zero();
+        }
+        y2.div(&den)
+    } else {
+        d.sub(k)
+    }
+}
+
+/// Elliptic's parts at `z`, none of them a cancellation: the distances
+/// to the foci `(d1, d2)`, and `A = d1 − (x+1)`, `B = d2 − (1−x)`,
+/// `As = d1 + (x+1)`, `Bs = d2 + (1−x)` by [`elliptic_h`]. Then
+/// `xmax − 1 = (A + B)/2`, `xmax − x = (A + Bs)/2`, `xmax + x = (As +
+/// B)/2`.
+pub(crate) struct EllipticParts<T> {
+    pub d1: T,
+    pub d2: T,
+    pub a: T,
+    pub b: T,
+    pub a_s: T,
+    pub b_s: T,
+}
+
+pub(crate) fn elliptic_parts<T: Real>(z: &[T; 2]) -> EllipticParts<T> {
+    let one = z[0].one();
+    let y2 = z[1].mul(&z[1]);
+    let kp = z[0].add(&one);
+    let km = one.sub(&z[0]);
+    let d1 = kp.mul(&kp).add(&y2).sqrt();
+    let d2 = km.mul(&km).add(&y2).sqrt();
+    let a = elliptic_h(&d1, &kp, &y2);
+    let b = elliptic_h(&d2, &km, &y2);
+    let a_s = elliptic_h(&d1, &kp.neg(), &y2);
+    let b_s = elliptic_h(&d2, &km.neg(), &y2);
+    EllipticParts { d1, d2, a, b, a_s, b_s }
 }
 
 /// The forward kernel, over any [`Transcendental`].
@@ -636,6 +765,24 @@ pub fn kernel_forward_gen<T: Transcendental>(k: &Kernel, z: &[T; 2], branch: u32
         Kernel::Bubble => {
             let s = r2.lit(4.0).div(&r2.add(&r2.lit(4.0)));
             [z[0].mul(&s), z[1].mul(&s)]
+        }
+        // The flame's `(2/π)(atan2(x/xmax, √(1 − (x/xmax)²)), ±ln(xmax +
+        // √(xmax − 1)))`, as `atan2(x, C)` with `C = xmax·√(1 − a²) =
+        // √((xmax − x)(xmax + x))`, from the parts that do not cancel.
+        Kernel::Elliptic => {
+            let p = elliptic_parts(z);
+            let half = z[0].lit(0.5);
+            let m = p.a.add(&p.b).mul(&half);
+            let c = p.a.add(&p.b_s).mul(&p.a_s.add(&p.b)).sqrt().mul(&half);
+            let theta = T::atan2(&z[0], &c);
+            let g = m.one().add(&m).add(&m.sqrt()).ln();
+            let g = if z[1].to_f64() < 0.0 { g.neg() } else { g };
+            let k = z[0].lit(2.0 / PI);
+            [theta.mul(&k), g.mul(&k)]
+        }
+        Kernel::Splits { base, x, y } => {
+            let s = Kernel::splits_shift(base, x, y, Kernel::splits_quadrant([z[0].to_f64(), z[1].to_f64()]));
+            [z[0].add(&z[0].lit(s[0])), z[1].add(&z[1].lit(s[1]))]
         }
     }
 }
@@ -710,6 +857,33 @@ pub fn kernel_inverse_gen<T: Transcendental>(k: &Kernel, v: &[T; 2], branch: u32
             }
             let s = bubble_scale_gen(&r2, branch);
             [v[0].mul(&s), v[1].mul(&s)]
+        }
+        // `ln(1 + s² + s) = L` for `s = √(xmax − 1)`, `L = (π/2)|v.y|`:
+        // `s = 2E/(√(1 + 4E) + 1)` with `E = e^L − 1`, the root of the
+        // quadratic taken without its cancellation. Then `x = xmax·sin θ`
+        // and `|y| = √(xmax² − 1)·cos θ = s·√(2 + s²)·cos θ` on the
+        // ellipse `xmax`, `θ = (π/2)v.x`; `y` takes `v.y`'s sign as the
+        // forward gave it.
+        Kernel::Elliptic => {
+            if !(v[0].to_f64().abs() <= 1.0) || !v[1].to_f64().is_finite() {
+                return [v[0].lit(1e30), v[1].lit(1e30)];
+            }
+            let one = v[0].one();
+            let half_pi = v[0].lit(PI / 2.0);
+            let e = v[1].abs().mul(&half_pi).exp().sub(&one);
+            let s = e.add(&e).div(&one.add(&e.mul(&e.lit(4.0))).sqrt().add(&one));
+            let m = s.mul(&s);
+            let (st, ct) = v[0].mul(&half_pi).sin_cos();
+            let y = s.mul(&m.add(&m.lit(2.0)).sqrt()).mul(&ct);
+            [st.mul(&one.add(&m)), if v[1].to_f64() < 0.0 { y.neg() } else { y }]
+        }
+        Kernel::Splits { base, x, y } => {
+            let s = Kernel::splits_shift(base, x, y, branch);
+            let u = [v[0].sub(&v[0].lit(s[0])), v[1].sub(&v[1].lit(s[1]))];
+            if branch > 3 || Kernel::splits_quadrant([u[0].to_f64(), u[1].to_f64()]) != branch {
+                return [v[0].lit(1e30), v[1].lit(1e30)];
+            }
+            u
         }
     }
 }
@@ -792,7 +966,12 @@ pub fn kernel_inverse_real<T: Real>(k: &Kernel, v: &[T; 2], branch: u32) -> Opti
             let (a, b) = root_powers(n, d)?;
             Some(cmul(&cpow(v, a), &cpow(&cconj(v), b)))
         }
-        Kernel::Disc | Kernel::Blob { .. } => None,
+        Kernel::Splits { base, x, y } => {
+            let s = Kernel::splits_shift(base, x, y, branch);
+            let u = [v[0].sub(&v[0].lit(s[0])), v[1].sub(&v[1].lit(s[1]))];
+            (branch <= 3 && Kernel::splits_quadrant([u[0].to_f64(), u[1].to_f64()]) == branch).then_some(u)
+        }
+        Kernel::Disc | Kernel::Blob { .. } | Kernel::Elliptic => None,
     }
 }
 
@@ -814,9 +993,9 @@ pub fn root_powers_of(k: &Kernel) -> Option<(u32, u32)> {
 /// instead.
 pub fn kernel_has_difference(k: &Kernel) -> bool {
     match *k {
-        Kernel::Spherical | Kernel::Bubble | Kernel::Hemisphere => true,
+        Kernel::Spherical | Kernel::Bubble | Kernel::Hemisphere | Kernel::Splits { .. } => true,
         Kernel::Root { n, d } => root_powers(n, d).is_some(),
-        Kernel::Disc | Kernel::Blob { .. } => false,
+        Kernel::Disc | Kernel::Blob { .. } | Kernel::Elliptic => false,
     }
 }
 
@@ -925,7 +1104,9 @@ pub fn kernel_difference_gen<T: Real>(
                 Some(cdiv_real(&cscale(&num, &one.lit(2.0)), &x.mul(&xw)))
             }
         }
-        Kernel::Disc | Kernel::Blob { .. } => None,
+        // A translation on the branch's quadrant, which both ends are in.
+        Kernel::Splits { .. } => Some(d.clone()),
+        Kernel::Disc | Kernel::Blob { .. } | Kernel::Elliptic => None,
     }
 }
 
@@ -961,6 +1142,12 @@ pub fn kernel_inverse_domain(k: &Kernel, v: [f64; 2], branch: u32) -> bool {
         }
         Kernel::Blob { high, low, waves } => {
             r2 > 0.0 && Kernel::blob_scale(high, low, waves, v[1].atan2(v[0])).0 != 0.0
+        }
+        // Inside the strip: on its edge the preimage is on a ray.
+        Kernel::Elliptic => v[0].abs() < 1.0 && v[1].is_finite(),
+        Kernel::Splits { base, x, y } => {
+            let s = Kernel::splits_shift(base, x, y, branch);
+            branch <= 3 && Kernel::splits_quadrant([v[0] - s[0], v[1] - s[1]]) == branch
         }
     }
 }
@@ -1288,6 +1475,9 @@ impl NonlinearMap2 {
                 let r_max = c[0].hypot(c[1]) + pre_hi * ball.radius;
                 (r_max.floor() as u32 + 2).min(12)
             }
+            // One per quadrant; one whose preimages miss its quadrant has
+            // none, and the walk finds that point by point.
+            Kernel::Splits { .. } => 4,
             _ => 1,
         }
     }
@@ -2924,6 +3114,38 @@ pub fn transform_map_2d_ordered(
     let (Some(pre_inv), Some(post_inv)) = (pre.inverse(), post.inverse()) else {
         return Ok(Map2::Affine(Affine2 { m: [[0.0; 2]; 2], t: [0.0; 2] }));
     };
+    // **Splits is folded, never summed** (tracker C6). With the sum's
+    // affine part `L v + c`, the normal phase `L v + c + w·K(v)` is still
+    // a translation on each quadrant of `v`: `M·(v + M⁻¹(c + w·base) +
+    // [x ≥ 0]·w·M⁻¹X + [y ≥ 0]·w·M⁻¹Y)` with `M = L + wI`. So `M` joins
+    // the post-affine, the weight becomes one, and the kernel keeps its
+    // quadrants -- where a Newton sum would find SOME preimage from each
+    // seed rather than its branch's.
+    if let Kernel::Splits { base, x, y } = kernel {
+        let lin = xy(&stage.sum);
+        let m = Affine2 { m: [[lin.m[0][0] + w, lin.m[0][1]], [lin.m[1][0], lin.m[1][1] + w]], t: [0.0, 0.0] };
+        let Some(m_inv) = m.inverse() else {
+            return Err(NotAffine::Degenerate(kind.to_string()));
+        };
+        let base = m_inv.apply([lin.t[0] + w * base[0], lin.t[1] + w * base[1]]);
+        let x = m_inv.apply([w * x[0], w * x[1]]);
+        let y = m_inv.apply([w * y[0], w * y[1]]);
+        let post = post.then_after(&m);
+        let Some(post_inv) = post.inverse() else {
+            return Err(NotAffine::Degenerate(kind.to_string()));
+        };
+        return Ok(Map2::Nonlinear(NonlinearMap2 {
+            kernel: Kernel::Splits { base, x, y },
+            branch: 0,
+            pre,
+            post,
+            pre_inv,
+            post_inv,
+            hole: 0.0,
+            third: 0.0,
+            w: 1.0,
+        }));
+    }
     if stage.any {
         // A kernel SUMMED with an affine (D3). The affine part is
         // `stage.sum`'s xy block, already weighted, applied to the
@@ -3718,6 +3940,23 @@ async fn analyse_2d_with_sliced(
             .map(|a| (Map2::Affine(a), a.inverse().map(Map2::Affine), a.singular_values()))
     });
     let (maps, final_map, mut errs) = merge(maps, final_map, flame);
+    // The escape engine's (`holes`): a kernel its shader has no row for
+    // is refused as it was before the walk took it.
+    if holes {
+        for m in &maps {
+            let k = match &m.forward {
+                Map2::Nonlinear(n) => Some(n.kernel),
+                Map2::Sum(s) => Some(s.kernel),
+                _ => None,
+            };
+            if let Some(k) = k.filter(Kernel::walk_only) {
+                errs.push(Disqualification::NotAffine {
+                    index: m.transform_index,
+                    why: NotAffine::Variation(k.variation().to_string()),
+                });
+            }
+        }
+    }
     if !errs.is_empty() {
         return Err(errs);
     }
@@ -4452,7 +4691,13 @@ pub(crate) fn kernel_fixtures() -> Vec<(Kernel, u32)> {
         (Kernel::Disc, 2),
         (Kernel::Blob { high: 1.3, low: 0.4, waves: 3.0 }, 0),
         (Kernel::Blob { high: 1.0, low: 1.0, waves: 0.0 }, 0),
+        (Kernel::Elliptic, 0),
     ];
+    // Steps that overlap two quadrants' images and leave a gap between
+    // two others, so every branch has points with and without a preimage.
+    for q in 0..4 {
+        out.push((Kernel::Splits { base: [-0.4, 0.1], x: [0.8, 0.3], y: [-0.2, -0.9] }, q));
+    }
     for n in [-3i32, -2, 2, 3, 5] {
         for d in [1.0f64, 2.0, 0.5] {
             for k in 0..(n.unsigned_abs().max(1)) {
@@ -6130,6 +6375,9 @@ mod tests {
             ("disc m2", Kernel::Disc, 2),
             ("blob", Kernel::Blob { high: 1.4, low: 0.3, waves: 3.0 }, 0),
             ("blob neg low", Kernel::Blob { high: 1.2, low: -0.4, waves: 2.0 }, 0),
+            ("elliptic", Kernel::Elliptic, 0),
+            ("splits q0", Kernel::Splits { base: [-0.4, 0.1], x: [0.8, 0.3], y: [-0.2, -0.9] }, 0),
+            ("splits q3", Kernel::Splits { base: [-0.4, 0.1], x: [0.8, 0.3], y: [-0.2, -0.9] }, 3),
         ];
         // The largest singular value, stably: the larger eigenvalue of
         // `MᵀM` is `(p + r)/2 + sqrt(((p − r)/2)² + q²)`, where the
@@ -6501,8 +6749,8 @@ mod tests {
         }
         assert_eq!(
             (affine, planar, solid),
-            (12, 7, 3),
-            "twelve affine roles, seven planar kernels and three solid"
+            (12, 9, 3),
+            "twelve affine roles, nine planar kernels and three solid"
         );
     }
 

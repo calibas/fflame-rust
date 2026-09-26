@@ -3737,6 +3737,64 @@ mod gpu_tests {
         }
     }
 
+    /// **`elliptic` and `splits` in the walk** (tracker C6, stage 1): two
+    /// code-built bounded flames, targeted against untargeted. One has a
+    /// `julian`'s arms beside an `elliptic` and a `linear + splits` whose
+    /// steps overlap in `y` (two preimages there); the other has no arms
+    /// and reaches the walk through an affine final. Both are written to
+    /// `output/flame-zoom/`, where the per-sample offset gate
+    /// (`the_offset_replay_holds_per_sample`) reads them.
+    #[test]
+    #[ignore = "needs a GPU; writes output/flame-zoom"]
+    fn elliptic_and_splits_are_walked() {
+        let xf = |vars: &[(&str, f32)], params: &[(&str, &str, f32)], aff: [f32; 6], color: f32| {
+            let mut t = Transform::default();
+            t.variations.clear();
+            t.variation_order.clear();
+            for (v, w) in vars {
+                t.set_variation(v, *w);
+            }
+            for (v, p, x) in params {
+                t.set_variation_param(v, p, *x);
+            }
+            (t.a, t.b, t.c, t.d, t.e, t.f) = (aff[0], aff[1], aff[2], aff[3], aff[4], aff[5]);
+            t.weight = 1.0;
+            t.color = color;
+            t
+        };
+        let julian = xf(&[("julian", 1.0)], &[("julian", "power", 3.0)], [0.7, -0.3, 0.3, 0.7, 0.2, 0.1], 0.0);
+        let elliptic = xf(&[("elliptic", 0.9)], &[], [0.6, -0.5, 0.5, 0.6, 0.1, -0.2], 0.5);
+        let splits = xf(
+            &[("linear", 0.2), ("splits", 0.4)],
+            &[("splits", "x", 0.3), ("splits", "y", -0.25), ("splits", "lshear", 0.05)],
+            [0.55, 0.1, -0.1, 0.55, -0.1, 0.05],
+            1.0,
+        );
+        let affine = xf(&[("linear", 1.0)], &[], [0.45, 0.2, -0.2, 0.45, -0.3, 0.3], 0.75);
+        let _ = std::fs::create_dir_all("output/flame-zoom");
+        let mut armed = FractalConfig::default();
+        armed.flame.transforms = vec![julian, elliptic.clone(), splits.clone()];
+        let mut fin = FractalConfig::default();
+        let mut body = vec![elliptic, splits, affine];
+        for t in &mut body {
+            t.final_attachments = vec![0];
+        }
+        fin.flame.transforms = body;
+        let mut last = Transform::default();
+        last.variations.clear();
+        last.variation_order.clear();
+        last.set_variation("linear", 1.0);
+        (last.a, last.b, last.c, last.d, last.e, last.f) = (0.6, 0.2, -0.2, 0.6, 0.3, 0.1);
+        fin.flame.final_transforms = vec![last];
+        for (name, cfg) in [("elliptic-splits-julian", &armed), ("elliptic-splits-final", &fin)] {
+            std::fs::write(format!("output/flame-zoom/{name}.fflame"), serde_json::to_string_pretty(cfg).expect("json")).expect("written");
+            for frac in [0.3, 0.7] {
+                println!("== {name}, the plotted point at {frac}");
+                targeted_against_untargeted_at(name, &[1e1, 1e2, 1e3], |b| b.plotted(b.sample_point(frac)));
+            }
+        }
+    }
+
     /// **A final at depth** (tracker C2c): `final-14`, whose plans carry
     /// its `bipolar` final into their offsets, rendered targeted at 1e4,
     /// 1e5 and 1e6 to `output/deep-offsets/` -- where a replay in absolute
