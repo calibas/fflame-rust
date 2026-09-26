@@ -3452,6 +3452,112 @@ impl PreBlur {
     }
 }
 
+/// **A variation that ignores its input** (tracker C2c): its output is a
+/// random point drawn the same way wherever the point came from. A
+/// transform made of one alone forgets its input entirely, as a blur
+/// that reaches across the attractor does -- a renewal by construction.
+/// The Grand JuliaN generator's blob is one of these half the time.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FreeKind {
+    /// `blur`: a uniform angle, and a radius uniform in [0, 1).
+    Disc,
+    /// `gaussian_blur`: a uniform angle, and a radius the sum of four
+    /// uniforms less 2.
+    Gaussian,
+    /// `pie`, and `pie3D` in the plane: a radius uniform in [0, 1) in one
+    /// of `slices` wedges. `rotation` is in radians, as the shader and
+    /// JWF read it.
+    Pie { slices: f64, rotation: f64, thickness: f64 },
+    /// `starblur`: a point in a star of `power` points at radius 1,
+    /// whose inner vertices sit at `range`. `alpha` and `length` are its
+    /// init-derived slots.
+    Star { power: f64, alpha: f64, length: f64 },
+}
+
+/// A transform whose one variation ignores its input: see [`FreeKind`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FreeBlur {
+    pub kind: FreeKind,
+    /// The variation's weight: it scales the draw.
+    pub weight: f64,
+}
+
+impl FreeBlur {
+    /// The variation `name` on `t`, if it is one that ignores its input.
+    pub fn of(name: &str, t: &Transform, registry: &VariationRegistry) -> Option<Self> {
+        let p = |param: &str| t.get_variation_param_or_default(name, param, registry) as f64;
+        let kind = match name {
+            "blur" => FreeKind::Disc,
+            "gaussian_blur" => FreeKind::Gaussian,
+            "pie" | "pie3D" => FreeKind::Pie { slices: p("slices").max(1.0), rotation: p("rotation"), thickness: p("thickness") },
+            "starblur" => {
+                // `init_starblur`.
+                let power = p("power").max(1.0);
+                let range = p("range");
+                let alpha0 = std::f64::consts::PI / power;
+                let length = (1.0 + range * range - 2.0 * range * alpha0.cos()).max(1e-30).sqrt();
+                FreeKind::Star { power, alpha: (alpha0.sin() * range / length).asin(), length }
+            }
+            _ => return None,
+        };
+        let weight = t.variations.get(name).copied().unwrap_or(0.0) as f64;
+        (weight != 0.0 && weight.is_finite()).then_some(Self { kind, weight })
+    }
+
+    /// A radius every draw lies within, at weight 1.
+    pub fn radius(&self) -> f64 {
+        match self.kind {
+            FreeKind::Disc | FreeKind::Pie { .. } => 1.0,
+            FreeKind::Gaussian => 2.0,
+            // The star's edge is furthest from the centre at an end of
+            // its `x`: 1 at a point, or the far end of an edge.
+            FreeKind::Star { alpha, length, .. } => (1.0 + length * length - 2.0 * length * alpha.cos()).max(1.0).sqrt(),
+        }
+    }
+
+    /// One draw, weighted, as the variation's WGSL makes it.
+    pub fn draw(&self, u: &mut impl FnMut() -> f64) -> [f64; 2] {
+        use std::f64::consts::{FRAC_PI_2, TAU};
+        let (r, a) = match self.kind {
+            FreeKind::Disc => {
+                let a = u() * TAU;
+                (u(), a)
+            }
+            FreeKind::Gaussian => {
+                let a = u() * TAU;
+                (u() + u() + u() + u() - 2.0, a)
+            }
+            FreeKind::Pie { slices, rotation, thickness } => {
+                let sl = (u() * slices + 0.5).floor();
+                let a = rotation + TAU * (sl + u() * thickness) / slices;
+                (u(), a)
+            }
+            FreeKind::Star { power, alpha, length } => {
+                let mut f = u() * power * 2.0;
+                let arm = f.trunc();
+                f -= arm;
+                let x = f * length;
+                let z0 = (1.0 + x * x - 2.0 * x * alpha.cos()).max(1e-30).sqrt();
+                let arm_i = arm as i64;
+                let turn = TAU / power * (arm_i / 2) as f64;
+                let off = (alpha.sin() * x / z0).asin();
+                let ang = if arm_i % 2 == 0 { turn + off } else { turn - off };
+                (z0 * u().sqrt(), ang - FRAC_PI_2)
+            }
+        };
+        [self.weight * r * a.cos(), self.weight * r * a.sin()]
+    }
+}
+
+/// What the planner takes out of a transform to draw itself: a
+/// `pre_blur`, or a variation that ignores its input. See
+/// [`analyse_2d_maps_blurred_sliced`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Blur {
+    Pre(PreBlur),
+    Free(FreeBlur),
+}
+
 /// [`analyse_2d_maps_sliced`], with each transform's `pre_blur` taken
 /// out and handed back beside the maps, by transform index (tracker item
 /// C2, `docs/projects/deep-zoom-tracker.md`). The maps are the flame's
@@ -3463,14 +3569,37 @@ impl PreBlur {
 /// exactly where the kernel reads. Beside another, it stays in and is
 /// refused as before. The escape engine's analysis never sees this: a
 /// random map has no escape time.
+///
+/// **A transform whose one variation ignores its input** ([`FreeBlur`])
+/// is taken out whole. The analysis is handed a stand-in with the same
+/// reach: `bubble` scaled to the draw's radius, on an identity affine,
+/// whose image is the disc every draw lies in. The walk never evaluates
+/// it where the draw matters -- its sample and replays draw the real
+/// variation, and the GPU runs the flame's own code -- so what the
+/// stand-in carries is the output's extent: the invariant ball, and the
+/// renewal's output disc.
 pub async fn analyse_2d_maps_blurred_sliced(
     flame: &Flame,
     registry: &VariationRegistry,
     slicer: &super::slice::Slicer,
-) -> Result<(Ifs2, Vec<Option<PreBlur>>), Vec<Disqualification>> {
+) -> Result<(Ifs2, Vec<Option<Blur>>), Vec<Disqualification>> {
     let mut stripped = flame.clone();
     let mut blurs = vec![None; flame.transforms.len()];
     for (i, t) in stripped.transforms.iter_mut().enumerate() {
+        let live: Vec<&String> = t.variations.iter().filter(|(_, w)| **w != 0.0).map(|(n, _)| n).collect();
+        if let [name] = live.as_slice() {
+            if let Some(free) = FreeBlur::of(name, t, registry) {
+                let stand_in = (free.weight * free.radius()) as f32;
+                t.variations.clear();
+                t.variation_order.clear();
+                t.variation_params.clear();
+                t.variation_priorities.clear();
+                t.set_variation("bubble", stand_in);
+                (t.a, t.b, t.c, t.d, t.e, t.f) = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+                blurs[i] = Some(Blur::Free(free));
+                continue;
+            }
+        }
         let w = t.variations.get("pre_blur").copied().unwrap_or(0.0);
         if w == 0.0 {
             continue;
@@ -3483,7 +3612,7 @@ pub async fn analyse_2d_maps_blurred_sliced(
         }
         t.variations.remove("pre_blur");
         t.variation_order.retain(|n| n != "pre_blur");
-        blurs[i] = Some(PreBlur { weight: w as f64 });
+        blurs[i] = Some(Blur::Pre(PreBlur { weight: w as f64 }));
     }
     analyse_2d_with_sliced(&stripped, registry, false, slicer).await.map(|ifs| (ifs, blurs))
 }
@@ -5020,6 +5149,77 @@ mod tests {
         t.variations.insert(name.to_string(), w);
         t.variation_order.push(name.to_string());
         t
+    }
+
+    /// A transform of `name` at `w` alone.
+    fn only(name: &str, w: f32) -> Transform {
+        let mut t = Transform::default();
+        t.variations.clear();
+        t.variation_order.clear();
+        with(t, name, w)
+    }
+
+    /// **A variation that ignores its input draws inside its radius**
+    /// (tracker C2c): the radius is what the renewal's output disc and
+    /// the analysis's stand-in are made of, so a draw outside it is a
+    /// point the plan says cannot be there. And the radius is tight.
+    #[test]
+    fn a_free_blur_draws_within_its_radius() {
+        let guard = global_registry();
+        let r = &*guard;
+        let mut st = 7u64;
+        let mut u = move || {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((st >> 11) as f64) / ((1u64 << 53) as f64)
+        };
+        let cases: [(&str, &[(&str, f32)]); 6] = [
+            ("blur", &[]),
+            ("gaussian_blur", &[]),
+            ("pie", &[("slices", 5.0), ("thickness", 0.3)]),
+            ("pie3D", &[]),
+            ("starblur", &[("power", 6.0), ("range", 0.4)]),
+            ("starblur", &[("range", 1.7)]),
+        ];
+        for (name, params) in cases {
+            let mut t = only(name, -0.5);
+            for (k, v) in params {
+                t.set_variation_param(name, k, *v);
+            }
+            let f = FreeBlur::of(name, &t, r).expect("a free blur");
+            let reach = 0.5 * f.radius();
+            let far = (0..200_000).map(|_| f.draw(&mut u)).map(|p| p[0].hypot(p[1])).fold(0.0f64, f64::max);
+            assert!(far <= reach * (1.0 + 1e-12), "{name} {params:?}: a draw at {far}, past its radius {reach}");
+            assert!(far > 0.8 * reach, "{name} {params:?}: the radius {reach} is loose; the furthest draw was {far}");
+        }
+        assert!(FreeBlur::of("julian", &only("julian", 1.0), r).is_none());
+        assert!(FreeBlur::of("blur", &only("blur", 0.0), r).is_none(), "a zero weight is no variation");
+    }
+
+    /// **The analysis takes a lone free blur out, and nothing else**: a
+    /// transform whose one variation is `blur` is handed back as a
+    /// [`Blur::Free`] beside a stand-in map; `blur` beside another
+    /// variation is refused as before.
+    #[test]
+    fn the_analysis_takes_out_a_lone_free_blur() {
+        let guard = global_registry();
+        let r = &*guard;
+        let julian = || {
+            let mut t = only("julian", 1.0);
+            t.set_variation_param("julian", "power", 3.0);
+            (t.a, t.d) = (0.6, 0.6);
+            t
+        };
+        let fl = flame_of(vec![only("blur", 0.3), julian(), julian()]);
+        let slicer = crate::scene::slice::Slicer::never();
+        let (ifs, blurs) = crate::scene::slice::drive(analyse_2d_maps_blurred_sliced(&fl, r, &slicer)).expect("analysed");
+        assert!(matches!(blurs[0], Some(Blur::Free(FreeBlur { kind: FreeKind::Disc, weight })) if close(weight, 0.3)), "{blurs:?}");
+        assert!(blurs[1].is_none() && blurs[2].is_none());
+        assert!(ifs.maps.iter().any(|m| m.transform_index == 0));
+
+        let mut mixed = fl.clone();
+        mixed.transforms[0] = with(only("blur", 0.3), "linear", 0.5);
+        let refused = crate::scene::slice::drive(analyse_2d_maps_blurred_sliced(&mixed, r, &slicer));
+        assert!(refused.is_err(), "blur beside linear depends on its input and is not taken out");
     }
 
     /// In the plane the chaos game has no z, and a variation that

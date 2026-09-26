@@ -256,13 +256,52 @@ The weight is no longer an obstacle: the deposit carries one (above).
 What remains is the region, the inverse, and the density. That is
 research, not a transcription.
 
-### C2c. A blur too small to be a renewal -- open
+### C2c. Blurs the walk refuses -- in progress (2026-09-25)
 
-A `pre_blur` whose reach does not cover the attractor's image in its
-kernel's frame, or one beside anything but bubble, is refused with its
-numbers. Planning it needs the walk's regions dilated by the reach at
-each blurred step (the original C2 sketch above), so the blurred
-transform's children can be carried.
+**Where they are.** Not in the saved corpus: of its 81 flames
+(`what_the_walk_refuses_across_the_corpus`), every one with a small
+`pre_blur` is refused first for other variations (`curl`, `juliascope`,
+`julia3Dz`, ...). They are in the app's own **Grand JuliaN generator**,
+whose first transform is a blob. Over 400 seeds
+(`what_the_walk_refuses_of_generated_grand_julians`), before C2c:
+
+| the walk | flames | why |
+|---|---|---|
+| read | 41 | |
+| refused | 175 | `blur` (half the generator's blobs) |
+| refused | 92 | `bubble` with a `pre_blur` too small to be a renewal |
+| refused | 41 | `pie3D`, `starblur` |
+| refused | 101 | a `bipolar` final transform (with any blob) |
+
+**1. Variations that ignore their input -- done.** `blur`,
+`gaussian_blur`, `pie`, `pie3D` and `starblur` draw a random point
+whatever comes in, so a transform made of one alone is a renewal by
+construction (`FreeBlur`).
+- The analysis takes it out whole and is handed a stand-in, `bubble`
+  scaled to the draw's radius on an identity affine. The stand-in
+  carries the output's extent, for the invariant ball and the renewal's
+  output disc; the walk's sample and replays draw the real variation,
+  and the GPU runs the flame's own code.
+- The generator's flames the walk reads: 41 to 207 of 400. The rest
+  are the partial `pre_blur`s (2) and the `bipolar` finals (3).
+- Coverage against a chaos game 0.997-1.0 at every view tried
+  (`free_blurs_plan_completely`). Targeted against untargeted on the
+  GPU, overlap 1.000 at 1e1-1e3 for each kind
+  (`a_targeted_free_blur_render_is_the_untargeted_render`), which is
+  also the check that the CPU draws as the shaders do.
+- Inside a blob, a view is the blob's smooth glow and its efficiency is
+  near 0 (C2b's conditional draw). The GPU gate compares outside the
+  blob: at 1e1 inside `gaussian_blur`'s, the gate's sample budget
+  assumes an efficiency of 0.05 and the targeted render got a fifth of
+  the reference's in-frame samples.
+
+**2. A `pre_blur` too small to be a renewal -- open.** Planning it
+needs the walk's regions dilated by the reach at each blurred step (the
+original C2 sketch above), so the blurred transform's children can be
+carried.
+
+**3. A nonlinear final transform -- open.** The analysis wants the
+final affine, and the walk refuses a final at all.
 
 ### C3. random1 at 1e3 misses 2.6% -- done (2026-09-25)
 
@@ -583,6 +622,10 @@ projected coordinates. Open questions include:
     so it fails about one run in three. `a_web_plan_takes_a_slice_a_frame`
     times the slices alone and is steady.
   - `Backward::pieces` is unused.
+  - `pie` and `pie3D`'s rotation is an Angle parameter, shown in degrees
+    with a 0-360 slider, but the shader adds it in radians, as JWF does
+    (`pie_rotation` is radians in a `.flame`). The label is wrong, not
+    the render.
 
 ## Done
 
