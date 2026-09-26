@@ -282,8 +282,7 @@ construction (`FreeBlur`).
   carries the output's extent, for the invariant ball and the renewal's
   output disc; the walk's sample and replays draw the real variation,
   and the GPU runs the flame's own code.
-- The generator's flames the walk reads: 41 to 207 of 400. The rest
-  are the partial `pre_blur`s (2) and the `bipolar` finals (3).
+- The generator's flames the walk reads: 41 to 207 of 400.
 - Coverage against a chaos game 0.997-1.0 at every view tried
   (`free_blurs_plan_completely`). Targeted against untargeted on the
   GPU, overlap 1.000 at 1e1-1e3 for each kind
@@ -295,10 +294,27 @@ construction (`FreeBlur`).
   assumes an efficiency of 0.05 and the targeted render got a fifth of
   the reference's in-frame samples.
 
-**2. A `pre_blur` too small to be a renewal -- open.** Planning it
-needs the walk's regions dilated by the reach at each blurred step (the
-original C2 sketch above), so the blurred transform's children can be
-carried.
+**2. A `pre_blur` too small to be a renewal -- done.** It is planned
+as a renewal: its child kept, never carried, when the rest of its word
+pulled back from the view can reach the transform's output disc.
+- The refusal guarded efficiency, not completeness. The output disc
+  holds everything the transform can output, so a word dropped for
+  missing it cannot land. The blurred symbol is only ever a word's
+  first, and every word after it is unblurred and walked as any other.
+- What a partial blur's word loses by not being carried is a
+  refinement. At a view smaller than its smear there is nothing to
+  localize; above it, the replays measure what the word lands. The
+  dilated-region sketch above would carry such words, for efficiency at
+  shallow zooms. Not built: no view measured needs it.
+- The output disc is tighter for a small blur: bubble's radial profile
+  `4r/(r² + 4)` rises to 1 at r = 2, so an input that reaches no
+  further than `r` comes out within it. The input's reach is taken from
+  the walk's sample, drawn with the blur, with a 2% margin; the stripped
+  maps' invariant ball need not hold the blurred attractor, and a disc
+  drawn too small would drop words that land.
+- The generator's flames the walk reads: 207 to 299 of 400, all but the
+  `bipolar` finals. Coverage 0.998-1.0 at `pre_blur` 0.50-1.24; GPU
+  overlap 0.999-1.000.
 
 **3. A nonlinear final transform -- open.** The analysis wants the
 final affine, and the walk refuses a final at all.
