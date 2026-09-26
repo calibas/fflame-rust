@@ -205,6 +205,11 @@ pub fn kernel_forward_difference_gen<T: Transcendental>(k: &Kernel, v: &[T; 2], 
             }
         }
         Kernel::Elliptic => elliptic_difference(v, e, &w),
+        // `sin(x + ε) − sin x = 2 cos(x + ε/2) sin(ε/2)`.
+        Kernel::Cylinder { .. } => {
+            let h = e[0].mul(&e[0].lit(0.5));
+            Some([v[0].add(&h).cos().mul(&h.sin()).mul(&h.lit(2.0)), e[1].clone()])
+        }
         // A translation on each quadrant: ε, plus the step between the
         // quadrants of `v` and `v + ε` -- exactly zero within one, and a
         // difference of the table's own numbers across.
@@ -376,6 +381,8 @@ pub fn forward_row(m: &Map2) -> [f32; ROW_FLOATS] {
             Kernel::Disc => (4.0, [0.0; 3]),
             Kernel::Blob { high, low, waves } => (5.0, [high, low, waves]),
             Kernel::Elliptic => (6.0, [0.0; 3]),
+            // Its turns are the inverse's; going forward it has none.
+            Kernel::Cylinder { .. } => (8.0, [0.0; 3]),
             // Its steps, past the three slots: a difference needs only
             // what crossing each axis adds.
             Kernel::Splits { x, y, .. } => {
@@ -451,6 +458,7 @@ mod tests {
             // the x axis) and the ray beyond them (−1.7).
             (Kernel::Elliptic, vec![0]),
             (Kernel::Splits { base: [-0.4, 0.1], x: [0.8, 0.3], y: [-0.2, 0.9] }, vec![0]),
+            (Kernel::Cylinder { k0: 0 }, vec![0]),
         ]
     }
 
@@ -707,6 +715,7 @@ mod tests {
                 kern("splits", &[("x", 0.4), ("y", -0.3), ("lshear", 0.1), ("rshear", -0.2), ("ushear", 0.15), ("dshear", 0.05)]),
                 vec![0],
             ),
+            ("cylinder", kern("cylinder", &[]), vec![0]),
             // Summed with an affine, as bipolar-elliptic-splits2 has it:
             // folded into the post-affine (`transform_map_2d_ordered`).
             (

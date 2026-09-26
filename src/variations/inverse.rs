@@ -123,6 +123,7 @@ pub static INVERSES: &[&InverseDef] = &[
     // engine refuses them.
     &super::defs::INVERSE_ELLIPTIC,
     &super::defs::INVERSE_SPLITS,
+    &super::defs::INVERSE_CYLINDER,
 ];
 
 /// The inverse registered for `name`, without going through a
@@ -159,8 +160,8 @@ mod tests {
         }
         assert_eq!(
             seen.len(),
-            24,
-            "twenty-four inverses: twelve affine roles, nine planar kernels, three solid"
+            25,
+            "twenty-five inverses: twelve affine roles, ten planar kernels, three solid"
         );
     }
 }

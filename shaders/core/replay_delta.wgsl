@@ -11,7 +11,7 @@
 //
 //   0 kind (0 affine, 1 kernel, 2 kernel summed with an affine)
 //   1 kernel (0 root, 1 spherical, 2 bubble, 3 hemisphere, 4 disc, 5 blob,
-//     6 elliptic, 7 splits)
+//     6 elliptic, 7 splits, 8 cylinder)
 //   2..5 its parameters (root: n, d; blob: high, low, waves)
 //   5 the kernel's weight
 //   6..10 pre linear part, row-major     10..12 pre translation
@@ -255,6 +255,11 @@ fn fd_kernel(k: u32, p: vec3<f32>, q: vec4<f32>, v: vec2<f32>, e: vec2<f32>, arm
         let bw = vec2<f32>(select(0.0, 1.0, w.x >= 0.0), select(0.0, 1.0, w.y >= 0.0));
         let db = bw - bv;
         return e + db.x * q.xy + db.y * q.zw;
+    }
+    if (k == 8u) {
+        // Cylinder, (sin x, y): sin(x + e) - sin x = 2 cos(x + e/2) sin(e/2).
+        let h = 0.5 * e.x;
+        return vec2<f32>(2.0 * cos(v.x + h) * fd_sin(h), e.y);
     }
     // Disc and blob measure θ from +y: the change in θ is minus the
     // angle from v to v + ε.

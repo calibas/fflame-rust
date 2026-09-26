@@ -3795,6 +3795,75 @@ mod gpu_tests {
         }
     }
 
+    /// **`cylinder` in the walk, and a `pre_blur` beside it** (tracker C6,
+    /// stage 2). Two code-built bounded flames, targeted against
+    /// untargeted: bipolar-elliptic-splits1 with its `splits` contracting
+    /// (0.6 where it has 1.5) -- so its attractor is bounded -- and its
+    /// `cylinder 0.099 + pre_blur 0.5` a renewal; and a `julian` beside a
+    /// plain `cylinder` whose pre-frame reaches two turns (four branches).
+    /// Written to `output/flame-zoom/` for the per-sample offset gate.
+    ///
+    /// The second's cylinder stretches `x` by 1.5 at most. At a stretch of
+    /// 3 (a pre-scale of 6) a word's region is in more pieces than its
+    /// seeds reach, and a sample in one without a reference lands 0.5 px
+    /// off at 1e4 -- recorded in the tracker's C6, not gated.
+    #[test]
+    #[ignore = "needs a GPU; writes output/flame-zoom"]
+    fn cylinder_is_walked() {
+        let xf = |vars: &[(&str, f32)], params: &[(&str, &str, f32)], aff: [f32; 6], post: Option<[f32; 4]>, weight: f32, color: f32| {
+            let mut t = Transform::default();
+            t.variations.clear();
+            t.variation_order.clear();
+            for (v, w) in vars {
+                t.set_variation(v, *w);
+            }
+            for (v, p, x) in params {
+                t.set_variation_param(v, p, *x);
+            }
+            (t.a, t.b, t.c, t.d, t.e, t.f) = (aff[0], aff[1], aff[2], aff[3], aff[4], aff[5]);
+            if let Some(p) = post {
+                t.post_affine_enabled = true;
+                (t.post_a, t.post_b, t.post_c, t.post_d) = (p[0], p[1], p[2], p[3]);
+            }
+            t.weight = weight;
+            t.color = color;
+            t
+        };
+        let _ = std::fs::create_dir_all("output/flame-zoom");
+        // bipolar-elliptic-splits1, its splits contracting.
+        let mut c6 = FractalConfig::default();
+        let mut body = vec![
+            xf(&[("elliptic", 2.2)], &[], [0.308, -0.951, 0.951, 0.308, 0.0, 0.0], Some([0.0, -0.919, 0.919, 0.0]), 5.0, 0.92),
+            xf(&[("splits", 0.6)], &[("splits", "x", 2.0), ("splits", "y", -2.0)], [0.9, 0.0, 0.0, 0.9, 0.0, 0.0], Some([0.0, 1.0, -1.0, 0.0]), 15.0, 0.25),
+            xf(&[("cylinder", 0.099), ("pre_blur", 0.5)], &[], [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], None, 1.0, 0.0),
+        ];
+        for t in &mut body {
+            t.final_attachments = vec![0];
+        }
+        c6.flame.transforms = body;
+        c6.flame.final_transforms = vec![xf(&[("bipolar", 3.7)], &[], [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], None, 1.0, 0.5)];
+        // A julian beside a cylinder reaching four turns.
+        let mut turns = FractalConfig::default();
+        turns.flame.transforms = vec![
+            xf(&[("julian", 1.0)], &[("julian", "power", 2.0)], [0.7, -0.3, 0.3, 0.7, 0.2, 0.1], None, 1.0, 0.0),
+            xf(&[("cylinder", 0.5)], &[], [3.0, 0.0, 0.0, 0.8, 0.3, 0.0], None, 1.0, 0.5),
+            xf(&[("linear", 1.0)], &[], [0.45, 0.2, -0.2, 0.45, -0.3, 0.3], None, 1.0, 1.0),
+        ];
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let b = crate::scene::backward::Backward::read(&turns.flame, reg).expect("reads");
+        let branches = b.branches_of(1);
+        println!("  the cylinder's branches: {branches}");
+        assert!(branches >= 4, "a cylinder reaching two turns has {branches} branches");
+        for (name, cfg) in [("cylinder-blur-bipolar", &c6), ("cylinder-turns-julian", &turns)] {
+            std::fs::write(format!("output/flame-zoom/{name}.fflame"), serde_json::to_string_pretty(cfg).expect("json")).expect("written");
+            for frac in [0.3, 0.7] {
+                println!("== {name}, the plotted point at {frac}");
+                targeted_against_untargeted_at(name, &[1e1, 1e2, 1e3], |b| b.plotted(b.sample_point(frac)));
+            }
+        }
+    }
+
     /// **A final at depth** (tracker C2c): `final-14`, whose plans carry
     /// its `bipolar` final into their offsets, rendered targeted at 1e4,
     /// 1e5 and 1e6 to `output/deep-offsets/` -- where a replay in absolute
