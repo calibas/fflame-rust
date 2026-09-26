@@ -435,6 +435,114 @@ fn ct_word_weight(i: u32) -> f32 {
     return select(1.0, cylinders[at + i], at != 0u);
 }
 
+{{#if RENDER_3D}}
+{{else}}
+// **The conditional draw** (tracker C2b, `backward::Conditional`): a word
+// whose weight is negative draws its blur's point from boxes of the
+// blur's polar frame, not from the whole blob. Its block, at minus the
+// weight (`scene::cylinder::pack_words`): `[pieces, kind, slices,
+// rotation, thickness, post linear (4), w]`, then CT_PIECE floats a piece,
+// `[cdf, centre (2), rho_c, phi_c, rho_lo - rho_c, rho span, phi_lo -
+// phi_c, phi span, density, full, _]`. Kinds: 0 `blur`, 1
+// `gaussian_blur`, 2 `pie`.
+const CT_PIECE: u32 = 12u;
+
+// sin(x) to the precision of x: see `fd_sin` in replay_delta.wgsl.
+fn ct_sin(x: f32) -> f32 {
+    if (abs(x) < 0.25) {
+        let x2 = x * x;
+        return x * (1.0 - x2 / 6.0 * (1.0 - x2 / 20.0 * (1.0 - x2 / 42.0 * (1.0 - x2 / 72.0))));
+    }
+    return sin(x);
+}
+
+// The blur's density per radius and angle, times 2pi
+// (`FreeBlur::polar_density`).
+fn ct_blur_density(cb: u32, rho: f32, phi: f32) -> f32 {
+    let kind = u32(cylinders[cb + 1u]);
+    if (kind == 1u) {
+        // Four uniforms less 2, folded: twice Irwin-Hall's at 2 + rho.
+        if (!(rho < 2.0)) {
+            return 0.0;
+        }
+        let x = 2.0 + rho;
+        var pdf = 0.0;
+        var c = array<f32, 4>(1.0, -4.0, 6.0, -4.0);
+        for (var k = 0u; k < 4u; k = k + 1u) {
+            let d = x - f32(k);
+            if (d > 0.0) {
+                pdf = pdf + c[k] * d * d * d;
+            }
+        }
+        return pdf / 3.0;
+    }
+    if (!(rho < 1.0)) {
+        return 0.0;
+    }
+    if (kind == 2u) {
+        let thickness = cylinders[cb + 4u];
+        let t = (phi - cylinders[cb + 3u]) / 6.28318530717959 * cylinders[cb + 2u];
+        return select(0.0, 1.0 / thickness, t - floor(t) < thickness);
+    }
+    return 1.0;
+}
+
+// Whether piece `o` holds `(rho, phi)`, the angle round the turn.
+fn ct_piece_holds(o: u32, rho: f32, phi: f32) -> bool {
+    let lo = cylinders[o + 3u] + cylinders[o + 5u];
+    let a0 = cylinders[o + 4u] + cylinders[o + 7u];
+    let t = phi - a0 - 6.28318530717959 * floor((phi - a0) / 6.28318530717959);
+    return rho >= lo && rho <= lo + cylinders[o + 6u] && (cylinders[o + 10u] > 0.5 || t <= cylinders[o + 8u]);
+}
+
+// One conditional draw from the block at `cb`: the point as an offset
+// from its piece's centre, formed without absolute coordinates; the
+// sample's deposit, the blur's density over the pieces' mixture there;
+// and the piece.
+fn ct_conditional(cb: u32, rng: ptr<function, RngState>) -> vec4<f32> {
+    let np = max(min(u32(cylinders[cb]), 16u), 1u);
+    let u0 = rng_nextf(rng);
+    var j = np - 1u;
+    for (var k = 0u; k < np; k = k + 1u) {
+        if (u0 <= cylinders[cb + 10u + k * CT_PIECE]) {
+            j = k;
+            break;
+        }
+    }
+    let o = cb + 10u + j * CT_PIECE;
+    let rho_c = cylinders[o + 3u];
+    let phi_c = cylinders[o + 4u];
+    let drho = cylinders[o + 5u] + rng_nextf(rng) * cylinders[o + 6u];
+    let dphi = cylinders[o + 7u] + rng_nextf(rng) * cylinders[o + 8u];
+    let rho = rho_c + drho;
+    let phi = phi_c + dphi;
+    var dv: vec2<f32>;
+    if (cylinders[o + 10u] > 0.5) {
+        // Round the frame's centre: the point itself, small.
+        dv = rho * vec2<f32>(cos(phi), sin(phi)) - rho_c * vec2<f32>(cos(phi_c), sin(phi_c));
+    } else {
+        // (rho_c + drho) e^{i(phi_c + dphi)} - rho_c e^{i phi_c}, every
+        // part the size of the offsets.
+        let mid = phi_c + 0.5 * dphi;
+        let h = 2.0 * ct_sin(0.5 * dphi);
+        dv = drho * vec2<f32>(cos(phi), sin(phi)) + rho_c * h * vec2<f32>(-sin(mid), cos(mid));
+    }
+    let w = cylinders[cb + 9u];
+    let dy = w * vec2<f32>(cylinders[cb + 5u] * dv.x + cylinders[cb + 6u] * dv.y, cylinders[cb + 7u] * dv.x + cylinders[cb + 8u] * dv.y);
+    // The mixture's density there: this piece's, and any other's that
+    // holds the point.
+    var mix = cylinders[o + 9u];
+    for (var k = 0u; k < np; k = k + 1u) {
+        let q = cb + 10u + k * CT_PIECE;
+        if (k != j && ct_piece_holds(q, rho, phi)) {
+            mix = mix + cylinders[q + 9u];
+        }
+    }
+    let deposit = ct_blur_density(cb, rho, phi) / (6.28318530717959 * mix);
+    return vec4<f32>(dy, deposit, f32(j));
+}
+{{/if}}
+
 {{#if CYLINDER_OFFSETS}}
 // Where word `i`'s references start, or 0 for a word replayed in
 // absolute f32 to its end.
