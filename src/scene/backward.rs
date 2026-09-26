@@ -166,6 +166,14 @@ pub const RESCUE_POINTS: usize = 128;
 /// the grid's test: each level widens the region by the maps' expansion,
 /// until the sample holds points of it and seeds it.
 pub const RESCUE_LEVELS: u8 = 6;
+/// How far past the node's own cells an unseen child's near misses are
+/// gathered, in cells, and from how many of them.
+pub const UNSEEN_REACH: i32 = 4;
+pub const WIDEN_FROM: usize = 64;
+/// An indexed node's points pulled back for the pieces its sample does
+/// not show (`Node::alt`): this many of them, and this many kept.
+pub const ALT_FROM: usize = 16;
+pub const ALT_CAP: usize = 32;
 
 /// Map applications a plan may spend replaying its costliest blur words
 /// (see the walk's end): about a quarter of a second on one core.
@@ -583,6 +591,9 @@ pub struct Trace {
     pub renewal_dropped: usize,
     /// Children with near misses found by looking closer (`rescue`).
     pub rescued: usize,
+    /// Children carried from points of a piece the sample does not show
+    /// (`Node::alt`).
+    pub hidden: usize,
     /// Where the time went, for profiling: seeding a cloud region from
     /// the grid, gathering candidates, checking them exactly, and
     /// replaying words for their efficiency. Plus how many word
@@ -719,6 +730,16 @@ struct Node {
     /// `near_landing`'s test (`Backward::rescue`): they are points of the
     /// attractor in a part too sparse for the sample's grid to vouch for.
     rescued: u8,
+    /// **Points of its region the sample does not show** (tracker C3). An
+    /// indexed node's points are the sample's, and a piece of its region
+    /// the sample never visited has none: another branch of a map's
+    /// inverse -- `disc` past radius one -- can hold a share of the view
+    /// at a measure no sample point reaches. The node's points pulled
+    /// back along every branch, and a seeded cloud's points away from the
+    /// sample's, are kept here, so the walk still finds the children
+    /// through that piece. Empty for a cloud, which is pulled back along
+    /// every branch itself.
+    alt: Vec<[f64; 2]>,
 }
 
 /// A child being decided while its level's batches run. See
@@ -736,6 +757,9 @@ struct Child {
     refine: bool,
     /// Inherited from a rescued cloud (`Node::rescued`), one level less.
     rescued: u8,
+    /// Its region's points in pieces the sample does not show
+    /// (`Node::alt`): an indexed node's pulled back through this symbol.
+    alt: Vec<[f64; 2]>,
     /// Candidates from the index, or the pulled-back cloud.
     pts: Pts,
     /// The node's points this symbol produced: in the child's region by
@@ -825,6 +849,15 @@ fn watch_line(
     Some(format!("depth {depth:>2} {what:<8} [{}] {}", syms.join(" "), detail()))
 }
 
+/// At most `cap` of `pts`, evenly through them.
+fn thin(pts: Vec<[f64; 2]>, cap: usize) -> Vec<[f64; 2]> {
+    if pts.len() <= cap {
+        return pts;
+    }
+    let n = pts.len();
+    (0..cap).map(|k| pts[k * n / cap]).collect()
+}
+
 fn spread_of(pts: &[[f64; 2]]) -> f64 {
     let n = pts.len() as f64;
     if n == 0.0 {
@@ -852,6 +885,7 @@ impl Trace {
         self.removed += o.removed;
         self.renewal_dropped += o.renewal_dropped;
         self.rescued += o.rescued;
+        self.hidden += o.hidden;
         self.t_seed += o.t_seed;
         self.t_gather += o.t_gather;
         self.t_verify += o.t_verify;
@@ -1796,6 +1830,77 @@ impl Backward {
     }
 
 
+    /// `pts` pulled back through symbol `ai`: **along every branch of
+    /// the inverse.** A map that is not one-to-one -- a sum of a root and
+    /// an affine, `disc`, `bubble` -- has several preimages of a point,
+    /// and the analysis makes one map per branch. Pulled back along the
+    /// first alone, a sum's second arm never received a cloud point, and
+    /// random1's views past its sample's resolution planned nothing. Each
+    /// preimage is confirmed forward, with its arm.
+    ///
+    /// A point has to lie where the symbol's map sends the attractor
+    /// (`near_landing`), or no real path came through it -- unless
+    /// `exempt`.
+    fn pull_back(&self, ai: usize, pts: &[[f64; 2]], exempt: bool, tr: &mut Trace) -> Vec<[f64; 2]> {
+        let a = &self.alphabet[ai];
+        let map = &self.ifs.maps[a.map];
+        let junk_r = JUNK_EXTENTS * self.extent;
+        let mut out = Vec::new();
+        for &p in pts {
+            if !exempt && !self.near_landing(ai, p) {
+                tr.pruned += 1;
+                continue;
+            }
+            for &mb in &a.branches {
+                let q = self.ifs.maps[mb].inverse.apply(p);
+                if !finite(q) || q[0].abs() > 1e12 || q[1].abs() > 1e12 {
+                    tr.no_preimage += 1;
+                    continue;
+                }
+                let Some(arm) = self.arm_of(map, q, p) else {
+                    tr.no_arm += 1;
+                    continue;
+                };
+                if arm != a.arm || (q[0] - self.centre[0]).hypot(q[1] - self.centre[1]) > junk_r {
+                    continue;
+                }
+                out.push(q);
+            }
+        }
+        out
+    }
+
+    /// The points of `pts` more than a cell from every sample point in
+    /// `idx`, at most `ALT_CAP` of them: the pieces of a region its
+    /// sample points do not stand for (`Node::alt`).
+    fn away_from(&self, idx: &[u32], pts: Vec<[f64; 2]>) -> Vec<[f64; 2]> {
+        if pts.is_empty() {
+            return pts;
+        }
+        let mut cells: Vec<Cell> = idx.iter().map(|&i| self.cell_of(self.sample[i as usize])).collect();
+        cells.sort_unstable();
+        cells.dedup();
+        let near = Self::expand_cells(&cells, true);
+        let away: Vec<[f64; 2]> = pts.into_iter().filter(|p| near.binary_search(&self.cell_of(*p)).is_err()).collect();
+        thin(away, ALT_CAP)
+    }
+
+    /// `cells` and every cell within `reach` of one, sorted and
+    /// deduplicated: a wider gather for an unseen child's near misses.
+    fn widen_cells(cells: &[Cell], reach: i32) -> Vec<Cell> {
+        let mut out: Vec<Cell> = Vec::with_capacity(cells.len() * ((2 * reach + 1) * (2 * reach + 1)) as usize);
+        for &(cx, cy) in cells {
+            for dx in -reach..=reach {
+                for dy in -reach..=reach {
+                    out.push((cx + dx, cy + dy));
+                }
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
     /// The cells a gather reads: `cells` and, if asked, their eight
     /// neighbours, sorted and deduplicated.
     fn expand_cells(cells: &[Cell], neighbours: bool) -> Vec<Cell> {
@@ -1894,11 +1999,11 @@ impl Backward {
         let tr = &mut o.trace;
         let node = &o.node;
         let mut seen: Vec<Cell> = Vec::new();
-        let junk_r = JUNK_EXTENTS * self.extent;
-        let is_junk = |q: [f64; 2]| (q[0] - self.centre[0]).hypot(q[1] - self.centre[1]) > junk_r;
         let mut found: Vec<(usize, Pts)> = Vec::new(); // (alphabet index, candidates)
         // Exact children from the orbit, by alphabet index.
         let mut from_orbit: Vec<Vec<u32>> = vec![Vec::new(); self.alphabet.len()];
+        // Their hidden pieces (`Node::alt`), by alphabet index.
+        let mut alt_of: Vec<Vec<[f64; 2]>> = vec![Vec::new(); self.alphabet.len()];
         match &node.pts {
             Pts::Cloud(cloud) => {
                 for (ai, a) in self.alphabet.iter().enumerate() {
@@ -1908,52 +2013,14 @@ impl Backward {
                         found.push((ai, Pts::Index(Vec::new())));
                         continue;
                     }
-                    let map = &self.ifs.maps[a.map];
-                    let mut pts = Vec::new();
-                    for &p in cloud {
-                        // The point has to lie where this symbol's map
-                        // sends the attractor, or no real path came
-                        // through it.
-                        // Not for a rescued cloud's points: they are on the
-                        // attractor, where the sample is too sparse to say
-                        // so (`Backward::rescue`). A preimage that is not a
-                        // path's costs a replay; its word is measured all
-                        // the same.
-                        if node.rescued == 0 && !self.near_landing(ai, p) {
-                            tr.pruned += 1;
-                            continue;
-                        }
-                        // **Along every branch of the inverse.** A map
-                        // that is not one-to-one -- a sum of a root and an
-                        // affine, `disc`, `bubble` -- has several
-                        // preimages of a point, and the analysis makes one
-                        // map per branch. Pulled back along the first
-                        // alone, a sum's second arm never received a cloud
-                        // point, and random1's views past its sample's
-                        // resolution planned nothing. Each preimage is
-                        // confirmed forward, with its arm.
-                        for &mb in &a.branches {
-                            let q = self.ifs.maps[mb].inverse.apply(p);
-                            if !finite(q) || q[0].abs() > 1e12 || q[1].abs() > 1e12 {
-                                tr.no_preimage += 1;
-                                continue;
-                            }
-                            let Some(arm) = self.arm_of(map, q, p) else {
-                                tr.no_arm += 1;
-                                continue;
-                            };
-                            if arm != a.arm || is_junk(q) {
-                                continue;
-                            }
-                            pts.push(q);
-                        }
-                    }
+                    // Not tested against the landings for a rescued
+                    // cloud's points: they are on the attractor, where the
+                    // sample is too sparse to say so (`Backward::rescue`).
+                    // A preimage that is not a path's costs a replay; its
+                    // word is measured all the same.
                     // Branches can multiply a cloud level by level: kept
                     // to `CLOUD_CAP`, evenly through it.
-                    if pts.len() > CLOUD_CAP {
-                        let n = pts.len();
-                        pts = (0..CLOUD_CAP).map(|k| pts[k * n / CLOUD_CAP]).collect();
-                    }
+                    let pts = thin(self.pull_back(ai, cloud, node.rescued > 0, tr), CLOUD_CAP);
                     if !pts.is_empty() {
                         found.push((ai, Pts::Cloud(pts)));
                     }
@@ -1994,6 +2061,22 @@ impl Backward {
                     };
                     found.push((ai, Pts::Index(cands)));
                 }
+                // **The pieces the sample does not show** (`Node::alt`).
+                // The node's points through every branch of a map with
+                // several -- one branch's preimages are the candidates'
+                // piece, the others' may be pieces no sample point is in
+                // -- and its own hidden points through every map. Those
+                // beside the sample's are dropped in `close`.
+                let from: Vec<[f64; 2]> = idx.iter().step_by(idx.len().div_ceil(ALT_FROM).max(1)).map(|&i| self.sample[i as usize]).collect();
+                let mut scratch = Trace::default();
+                for (ai, a) in self.alphabet.iter().enumerate() {
+                    if a.renewal.is_some() {
+                        continue;
+                    }
+                    let mut alt = if a.branches.len() > 1 { self.pull_back(ai, &from, false, &mut scratch) } else { Vec::new() };
+                    alt.extend(self.pull_back(ai, &node.alt, false, &mut scratch));
+                    alt_of[ai] = thin(alt, ALT_CAP);
+                }
             }
         }
         let mut removed = 0usize;
@@ -2023,6 +2106,7 @@ impl Backward {
                     last: depth == MAX_DEPTH || prob < MEASURE_FLOOR * floor_mass,
                     refine,
                     rescued,
+                    alt: std::mem::take(&mut alt_of[ai]),
                     pts,
                     orbit_hits: std::mem::take(&mut from_orbit[ai]),
                     hit: 0,
@@ -2124,6 +2208,9 @@ impl Backward {
             if hits.len() >= MIN_SEED {
                 let n = cloud.len();
                 watched(&mut o.trace, &o.node.word, "SEEDED", &|| format!("{} sample points replace {n} cloud points", hits.len()));
+                // What the sample's points do not stand for is kept:
+                // the cloud's points away from them (`Node::alt`).
+                o.node.alt = self.away_from(&hits, cloud.clone());
                 o.node.pts = Pts::Index(hits);
                 o.trace.seeded += 1;
             }
@@ -2278,6 +2365,11 @@ impl Backward {
         // the walk stops -- and the word is FORCED if any of it lands,
         // never dropped. See `MEASURE_FLOOR`.
         for o in &mut opens {
+            // The node's cells widened for an unseen child's near misses,
+            // made once, when first wanted: from at most `WIDEN_FROM` of
+            // them, since a node with a large region widened whole was
+            // tens of milliseconds a child.
+            let mut wide: Option<Vec<Cell>> = None;
             for c in &mut o.children {
                 let eff = c.eff();
                 let prob = c.prob;
@@ -2295,8 +2387,56 @@ impl Backward {
                     continue;
                 }
                 let unseen = matches!(c.pts, Pts::Index(_)) && c.n_cands == 0 && c.orbit_hits.is_empty();
+                // **Unseen, but perhaps only just** (tracker C3): no
+                // candidate in the node's cells, but a child worth its
+                // probability may have them a few cells out -- near
+                // misses, to look closer around (`rescue`) -- or points
+                // in a piece of its region the sample does not show at
+                // all (`Node::alt`): julian-disc's `t1a3 t0^15` held 1.3%
+                // of its view on the second sheet of `disc`, a unit away
+                // from every sample point the walk had. Carried, as a
+                // cloud, from what either finds. The rescue's points are
+                // the attractor's, many and spread; the hidden ones are
+                // exact but few, and carried alone they covered a branch
+                // worse than a rescue does.
                 if unseen && !(eff > 0.0) {
-                    watched(&mut o.trace, &c.word, "UNSEEN", &|| format!("no candidates, {} replays land nothing; prob {prob:.2e}", c.total));
+                    let rescued = if prob > FORCE_WASTE * floor_mass {
+                        let cells = wide.get_or_insert_with(|| {
+                            let every = o.seen.len().div_ceil(WIDEN_FROM).max(1);
+                            let from: Vec<Cell> = o.seen.iter().step_by(every).copied().collect();
+                            Self::widen_cells(&from, UNSEEN_REACH)
+                        });
+                        let near = Self::gather_seen(&self.landing[c.ai], cells, 8 * RESCUE_CANDIDATES);
+                        let found = self.rescue(&c.word, &Pts::Index(near), view, prob, floor_mass, slicer).await;
+                        // A gather over the widened cells is a thousand
+                        // binary searches, and a node can have dozens of
+                        // unseen children.
+                        slicer.tick().await;
+                        found
+                    } else {
+                        None
+                    };
+                    let hidden = c.alt.len();
+                    if rescued.is_some() || hidden > 0 {
+                        let found = rescued.as_ref().map_or(0, |r| r.len());
+                        watched(&mut o.trace, &c.word, if found > 0 { "RESCUED" } else { "HIDDEN" }, &|| {
+                            format!("unseen; {found} points near a wider gather land, {hidden} of a piece the sample does not show")
+                        });
+                        if found > 0 {
+                            o.trace.rescued += 1;
+                        } else {
+                            o.trace.hidden += 1;
+                        }
+                        let mut cloud = rescued.unwrap_or_default();
+                        cloud.append(&mut c.alt);
+                        c.pts = Pts::Cloud(thin(cloud, CLOUD_CAP));
+                        c.rescued = RESCUE_LEVELS;
+                        c.fate = Fate::Carried;
+                        continue;
+                    }
+                }
+                if unseen && !(eff > 0.0) {
+                    watched(&mut o.trace, &c.word, "UNSEEN", &|| format!("no candidates, {} replays land nothing; prob {prob:.2e} floor {floor_mass:.2e}", c.total));
                     c.fate = Fate::Dropped;
                     o.trace.nocand += 1;
                     continue;
@@ -2327,6 +2467,7 @@ impl Backward {
                     c.fate = Fate::Carried;
                 }
             }
+            slicer.tick().await;
         }
 
         // **5. Checks.** A carried child now needs its region's points,
@@ -2431,7 +2572,7 @@ impl Backward {
         // **7. Each node decided**, its children in their order.
         let mut out = Vec::with_capacity(opens.len());
         for o in opens {
-            out.push(self.close(o, depth, view, watch, floor_mass, removals));
+            out.push(self.close(o, depth, view, watch, floor_mass, removals, slicer).await);
             slicer.tick().await;
         }
         Some(out)
@@ -2469,7 +2610,10 @@ impl Backward {
     /// is looked for among points of the attractor near its candidates
     /// (`near_points`), from coarse to fine. What lands is its region's,
     /// on the attractor, and the walk carries it from there as a cloud.
-    fn rescue(&self, word: &[u32], pts: &Pts, view: View, prob: f64, floor_mass: f64) -> Option<Vec<[f64; 2]>> {
+    ///
+    /// An UNSEEN child, with no candidates at all, is given some from the
+    /// node's cells widened by `UNSEEN_REACH` (`expand_level`, step 4).
+    async fn rescue(&self, word: &[u32], pts: &Pts, view: View, prob: f64, floor_mass: f64, slicer: &Slicer) -> Option<Vec<[f64; 2]>> {
         let Pts::Index(cands) = pts else { return None };
         if cands.is_empty() || !(prob > FORCE_WASTE * floor_mass) {
             return None;
@@ -2478,25 +2622,37 @@ impl Backward {
         // spread past the view, too deep and they gather round a point
         // that misses; measured on random1, the depth that lands runs
         // from 8 to 12 by candidate.
-        let mut near: Vec<(u32, f64)> = cands
+        let mut near: Vec<(u32, f64, [f64; 2])> = cands
             .iter()
             .filter_map(|&c| {
                 let y = self.forward_along(word, self.sample[c as usize])?;
-                Some((c, (y[0] - view.centre[0]).hypot(y[1] - view.centre[1])))
+                Some((c, (y[0] - view.centre[0]).hypot(y[1] - view.centre[1]), y))
             })
             .collect();
         near.sort_by(|a, b| a.1.total_cmp(&b.1));
         let mut found: Vec<[f64; 2]> = Vec::new();
-        for &(c, _) in near.iter().take(RESCUE_CANDIDATES) {
+        for &(c, dist, yc) in near.iter().take(RESCUE_CANDIDATES) {
             for k in RESCUE_DEPTHS {
+                // A depth is up to a millisecond.
+                slicer.tick().await;
+                let before = found.len();
+                let mut spread = 0.0f64;
                 for z in self.near_points(c as usize, k, RESCUE_POINTS).unwrap_or_default() {
-                    if self.lands(word, z, view) {
+                    let Some(y) = self.forward_along(word, z) else { continue };
+                    if (y[0] - view.centre[0]).hypot(y[1] - view.centre[1]) <= view.radius {
                         found.push(z);
                     }
+                    spread = spread.max((y[0] - yc[0]).hypot(y[1] - yc[1]));
                 }
                 if found.len() >= CLOUD_CAP {
                     found.truncate(CLOUD_CAP);
                     return Some(found);
+                }
+                // Deeper cylinders are smaller, and so are their images:
+                // once this one's no longer reaches from the miss to the
+                // view, no deeper one will.
+                if found.len() == before && spread < dist - view.radius {
+                    break;
                 }
             }
         }
@@ -2513,7 +2669,8 @@ impl Backward {
     /// kernel's table holds the symbols, the probability and the colour
     /// fold), and computing them needed positions an evaluator does not
     /// return.
-    fn close(&self, o: Open, depth: usize, view: View, watch: Option<&[u32]>, floor_mass: f64, removals: &[Vec<u32>]) -> Expanded {
+    #[allow(clippy::too_many_arguments)]
+    async fn close(&self, o: Open, depth: usize, view: View, watch: Option<&[u32]>, floor_mass: f64, removals: &[Vec<u32>], slicer: &Slicer) -> Expanded {
         let Open { node, children, mut trace, .. } = o;
         let watched = |t: &mut Trace, word: &[u32], what: &str, detail: &dyn Fn() -> String| {
             if let Some(line) = watch_line(watch, word, depth, what, detail) {
@@ -2549,7 +2706,7 @@ impl Backward {
         for c in children {
             let eff = c.eff();
             let n_cands = c.n_cands;
-            let Child { ai, word, prob, pts, orbit_hits, mut replay_hits, mut hits, fate, refine, rescued, .. } = c;
+            let Child { ai, word, prob, pts, orbit_hits, mut replay_hits, mut hits, fate, refine, rescued, alt, .. } = c;
             let pts = match fate {
                 Fate::Dropped => continue,
                 Fate::Kept(eff) => {
@@ -2610,14 +2767,28 @@ impl Backward {
                             survived[ai] = true;
                             let seeds = self.seeds_from(&[&replay_hits], Some(&pts));
                             node_kept.push((disc(word, prob, seeds), eff));
-                        } else if let Some(cloud) = self.rescue(&word, &pts, view, prob, floor_mass) {
+                        } else if let Some(cloud) = match self.rescue(&word, &pts, view, prob, floor_mass, slicer).await {
+                            Some(found) => Some(found),
+                            None => (!alt.is_empty()).then(Vec::new),
+                        } {
                             // Near misses, and a large share: looked for
-                            // closer (`rescue`), found, and carried from
-                            // what was found.
-                            watched(&mut trace, &word, "RESCUED", &|| format!("{n_cands} candidates, none land; {} points near them do", cloud.len()));
-                            trace.rescued += 1;
+                            // closer (`rescue`), and carried from what was
+                            // found -- with its points in pieces the sample
+                            // does not show (`Node::alt`), or from those
+                            // alone.
+                            let (found, hidden) = (cloud.len(), alt.len());
+                            watched(&mut trace, &word, if found > 0 { "RESCUED" } else { "HIDDEN" }, &|| {
+                                format!("{n_cands} candidates, none land; {found} points near them do, {hidden} of a piece the sample does not show")
+                            });
+                            if found > 0 {
+                                trace.rescued += 1;
+                            } else {
+                                trace.hidden += 1;
+                            }
                             survived[ai] = true;
-                            node_next.push(Node { word, pts: Pts::Cloud(cloud), prob, eff: 0.0, rescued: RESCUE_LEVELS });
+                            let mut cloud = cloud;
+                            cloud.extend(alt);
+                            node_next.push(Node { word, pts: Pts::Cloud(thin(cloud, CLOUD_CAP)), prob, eff: 0.0, rescued: RESCUE_LEVELS, alt: Vec::new() });
                         } else {
                             watched(&mut trace, &word, "EMPTY", &|| format!("{n_cands} candidates, none land"));
                         }
@@ -2638,7 +2809,13 @@ impl Backward {
             // A rescued cloud's children keep its exemption, one level
             // less, while they are clouds; seeded, they are ordinary.
             let rescued = if matches!(pts, Pts::Cloud(_)) { rescued } else { 0 };
-            node_next.push(Node { word, pts, prob, eff, rescued });
+            // Its hidden points, but those beside the sample's: those are
+            // the piece its points already are.
+            let alt = match &pts {
+                Pts::Index(idx) => self.away_from(idx, alt),
+                Pts::Cloud(_) => Vec::new(),
+            };
+            node_next.push(Node { word, pts, prob, eff, rescued, alt });
         }
 
         // **Complete, or forced.** See `COMPLETE_ENOUGH`. The share of
@@ -2776,7 +2953,7 @@ impl Backward {
                 root_pts.push([view.centre[0] + r * angle.cos(), view.centre[1] + r * angle.sin()]);
             }
         }
-        let mut frontier = vec![Node { word: Vec::new(), pts: Pts::Cloud(root_pts), prob: 1.0, eff: 0.0, rescued: 0 }];
+        let mut frontier = vec![Node { word: Vec::new(), pts: Pts::Cloud(root_pts), prob: 1.0, eff: 0.0, rescued: 0, alt: Vec::new() }];
         let mut kept: Vec<(Cylinder, f64)> = Vec::new();
         let mut kept_mass = 0.0f64;
         let mut lost = 0.0f64;
@@ -4740,7 +4917,14 @@ mod tests {
     /// the sample points in view and the symbols they came through, the
     /// plan's coverage against an independent chaos game, and the recent
     /// past of the samples it misses beside the sample's own. `WATCH=t.a,...`
-    /// follows a word suffix through julian-disc's 1e2 walk.
+    /// follows a word suffix through julian-disc's 1e2 walk, or through
+    /// the view `WATCH_AT=name-frac-off` names.
+    ///
+    /// `ONLY=name` runs one flame's views; `COVER_N` counts that many
+    /// in-view samples (1500), for a difference of a few misses to mean
+    /// something; `MISS_DUMP=prefix` writes every missed history to a file
+    /// per view; `MISS_WORD=t.a,...` says where the misses through that
+    /// word were before it, against the sample and the landing index.
     #[test]
     #[ignore = "reads output/flame-zoom"]
     fn why_is_this_view_empty() {
@@ -4764,7 +4948,7 @@ mod tests {
             ("grand-julian", 1e3, 0.75, 2.0),
             ("grand-julian", 1e3, 0.3, 2.0),
         ] {
-            if std::env::var("ONLY_OFF").is_ok() && off < 1.0 {
+            if std::env::var("ONLY_OFF").is_ok() && off < 1.0 || std::env::var("ONLY").is_ok_and(|n| n != name) {
                 continue;
             }
             let text = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")).expect("flame");
@@ -4849,6 +5033,20 @@ mod tests {
                     out.join(" ")
                 };
                 let (mut n_in, mut n_miss) = (0usize, 0usize);
+                // `MISS_WORD=t.a,...` (application order): where the missed
+                // samples arriving through that word were, before it.
+                let miss_word: Vec<u32> = std::env::var("MISS_WORD")
+                    .map(|w| {
+                        w.split(',')
+                            .map(|t| {
+                                let (a, b) = t.split_once('.').unwrap();
+                                sym_of(a.parse().unwrap(), b.parse().unwrap())
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let mut xs: Vec<[f64; 2]> = Vec::new();
+                let mut befores: Vec<([f64; 2], [f64; 2])> = Vec::new();
                 for k in 0..200_000_000usize {
                     let mut u = lcg() * total;
                     let mut t = &b.transforms[b.transforms.len() - 1];
@@ -4866,10 +5064,12 @@ mod tests {
                         hist.clear();
                         continue;
                     }
+                    xs.push(x);
                     x = y;
                     hist.push(sym_of(t.index as u32, arm));
                     if hist.len() > longest + 4 {
                         hist.remove(0);
+                        xs.remove(0);
                     }
                     if k < 1000 || (x[0] - view.centre[0]).hypot(x[1] - view.centre[1]) > view.radius {
                         continue;
@@ -4885,12 +5085,46 @@ mod tests {
                         // runs collapsed so the branches show.
                         let tail: Vec<u32> = hist[hist.len().saturating_sub(24)..].to_vec();
                         *missed.entry(tail).or_default() += 1;
+                        let m = miss_word.len();
+                        if m > 0 && hist.len() >= m && hist[hist.len() - m..] == miss_word[..] {
+                            // xs[j] is the point hist[j] was applied to.
+                            let j = hist.len() - m;
+                            let after_first = if m >= 2 { xs[j + 1] } else { x };
+                            befores.push((xs[j], after_first));
+                        }
                     }
-                    if n_in >= 1500 {
+                    if n_in >= std::env::var("COVER_N").ok().and_then(|v| v.parse().ok()).unwrap_or(1500) {
                         break;
                     }
                 }
                 println!("   word lengths in the plan: {lens:?}");
+                if !befores.is_empty() {
+                    let ai = b.alphabet.iter().position(|a| a.sym == miss_word[0]).expect("symbol");
+                    let rest = &miss_word[1..];
+                    // Sample points in the region of the word's rest: the
+                    // points its first symbol has to land near.
+                    let region: Vec<usize> = (0..b.sample.len())
+                        .filter(|&i| b.forward_along(rest, b.sample[i]).is_some_and(|z| (z[0] - view.centre[0]).hypot(z[1] - view.centre[1]) <= view.radius))
+                        .collect();
+                    let ring = |idx: &Index, p: [f64; 2]| -> Option<i32> {
+                        let (cx, cy) = b.cell_of(p);
+                        (0..=256i32).find(|&r| {
+                            (-r..=r).any(|dx| (-r..=r).any(|dy| {
+                                dx.abs().max(dy.abs()) == r && {
+                                    let (lo, hi) = idx.bounds((cx + dx, cy + dy));
+                                    hi > lo
+                                }
+                            }))
+                        })
+                    };
+                    println!("   MISS_WORD: {} missed samples through it; cell {:.2e}; {} sample points in its rest's region, cells {:?}",
+                        befores.len(), b.cell, region.len(),
+                        region.iter().take(8).map(|&i| b.cell_of(b.sample[i])).collect::<Vec<_>>());
+                    for (x0, y0) in befores.iter().take(10) {
+                        println!("     before {:?} cell {:?} (sample ring {:?}); after the first symbol {:?} cell {:?} (landing ring {:?})",
+                            x0, b.cell_of(*x0), ring(&b.grid, *x0), y0, b.cell_of(*y0), ring(&b.landing[ai], *y0));
+                    }
+                }
                 // The planner's own sample: the histories of its points in
                 // the view, back 30 steps, by the same collapsed notation.
                 let mut hist_s: std::collections::HashMap<String, usize> = Default::default();
@@ -4916,14 +5150,19 @@ mod tests {
                 println!("   {n_miss} of {n_in} in-view samples missed; their last 24 symbols (most recent last):");
                 let mut m: Vec<_> = missed.into_iter().collect();
                 m.sort_by(|a, b| b.1.cmp(&a.1));
+                if let Ok(path) = std::env::var("MISS_DUMP") {
+                    let text: String = m.iter().map(|(w, n)| format!("{n} {}
+", w.iter().map(|s| format!("{}.{}", sym_transform(*s), sym_arm(*s))).collect::<Vec<_>>().join(","))).collect();
+                    std::fs::write(format!("{path}-{name}-{zoom:.0e}-{frac}-{off}.txt"), text).ok();
+                }
                 for (w, n) in m.iter().take(10) {
                     println!("     {n:>4}: {}", show(w));
                 }
             }
             println!(
-                "   plan: {} | nodes {} seeded {} pruned {} no_preimage {} no_arm {} floor {} cut {} carried {} empty {} nocand {} forced {}",
+                "   plan: {} | nodes {} seeded {} pruned {} no_preimage {} no_arm {} floor {} cut {} carried {} empty {} nocand {} forced {} rescued {} hidden {} beam {}",
                 match &plan { Ok(p) => format!("{} words", p.words.len()), Err(e) => format!("{e:?}") },
-                tr.nodes_expanded, tr.seeded, tr.pruned, tr.no_preimage, tr.no_arm, tr.floor, tr.cut, tr.not_yet, tr.empty, tr.nocand, tr.forced
+                tr.nodes_expanded, tr.seeded, tr.pruned, tr.no_preimage, tr.no_arm, tr.floor, tr.cut, tr.not_yet, tr.empty, tr.nocand, tr.forced, tr.rescued, tr.hidden, tr.beam
             );
         }
     }
