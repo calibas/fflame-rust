@@ -3583,6 +3583,57 @@ mod gpu_tests {
         }
     }
 
+    /// **A final transform** (tracker C2c): Grand JuliaN generator flames
+    /// with a `bipolar` final, planned through the view pulled back
+    /// through it. The render plots every sample through the final, free
+    /// or forced, so the pictures must agree. Views at points of the
+    /// plotted picture. Written to `output/flame-zoom/final-*.fflame`.
+    #[test]
+    #[ignore = "needs a GPU; writes output/flame-zoom"]
+    fn a_targeted_final_render_is_the_untargeted_render() {
+        let host = crate::script::ScriptHost::new();
+        let text = include_str!("../../assets/scripts/generators/grand_julian.rhai");
+        let _ = std::fs::create_dir_all("output/flame-zoom");
+        for seed in [1u64, 7, 14] {
+            let cfg = host.run(text, &FractalConfig::default(), seed, Default::default()).expect("the script runs").config;
+            assert!(!cfg.flame.final_transforms.is_empty(), "seed {seed} has no final");
+            let name = format!("final-{seed}");
+            std::fs::write(format!("output/flame-zoom/{name}.fflame"), serde_json::to_string_pretty(&cfg).expect("json")).expect("written");
+            for frac in [0.75, 0.3] {
+                println!("== {name}, the plotted point at {frac}");
+                targeted_against_untargeted_at(&name, &[1e1, 1e2, 1e3], |b| b.plotted(b.sample_point(frac)));
+            }
+        }
+    }
+
+    /// **A final at depth**: a plan through a final carries no offsets
+    /// (tracker C2c), so it replays in absolute f32. `final-14` rendered
+    /// targeted at 1e4, 1e5 and 1e6, to `output/deep-offsets/`, to see
+    /// where f32 runs out.
+    #[test]
+    #[ignore = "needs a GPU; reads output/flame-zoom (written by a_targeted_final_render_is_the_untargeted_render)"]
+    fn a_final_at_depth() {
+        const N: u32 = 256;
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let Ok(text) = std::fs::read_to_string("output/flame-zoom/final-14.fflame") else { return };
+        let mut cfg: FractalConfig = serde_json::from_str(&text).expect("a config");
+        cfg.deterministic_rng = true;
+        let b = crate::scene::backward::Backward::read(&cfg.flame, reg).expect("reads");
+        let x = b.plotted(b.sample_point(0.3));
+        cfg.pan_x = x[0];
+        cfg.pan_y = x[1];
+        cfg.cylinder_targeting = true;
+        let _ = std::fs::create_dir_all("output/deep-offsets");
+        for zoom in [1e4f64, 1e5, 1e6] {
+            cfg.zoom = zoom as f32;
+            let img = render(&cfg, N, 100_000_000);
+            let lit = img.chunks(4).filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24).count();
+            println!("  {zoom:.0e}: {lit} of {} pixels lit", N * N);
+            let _ = image::save_buffer(format!("output/deep-offsets/final-14-{zoom:.0e}.png"), &img, N, N, image::ColorType::Rgba8);
+        }
+    }
+
     /// **The two animation frames** the user compared
     /// (`output/flame-zoom/grand-julian-zoom{1,2}.fflame`): the true Grand
     /// Julian with transform 1 rotated a little. Each rendered targeted and

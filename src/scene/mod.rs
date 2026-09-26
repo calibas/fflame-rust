@@ -8,6 +8,7 @@ pub mod ifs_real;
 pub mod importance;
 pub mod cylinder;
 pub mod backward;
+pub mod final_map;
 pub mod plan_gpu;
 pub mod slice;
 pub mod word_tree;

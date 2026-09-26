@@ -52,6 +52,7 @@
 //! sample point to a region that does.
 
 use super::cylinder::{sym_arm, sym_of, sym_transform, Cylinder, Cylinders, NoCylinders, View, MAX_DEPTH, MAX_WORDS};
+use super::final_map::FinalMap;
 use super::ifs_analysis::{analyse_2d_maps_blurred_sliced, Blur, Ifs2, IfsMap, Kernel, Map2, PreBlur};
 use super::transforms::Flame;
 use crate::variations::VariationRegistry;
@@ -902,6 +903,10 @@ impl Trace {
 /// The attractor, sampled and indexed, with the maps to walk it.
 pub struct Backward {
     ifs: Ifs2,
+    /// The final transforms every point is plotted through, if any: the
+    /// walk plans for the view pulled back through them
+    /// (`FinalMap::pull_back`).
+    finals: Option<FinalMap>,
     /// One entry per distinct transform.
     transforms: Vec<TransformInfo>,
     alphabet: Vec<Sym>,
@@ -1177,7 +1182,9 @@ impl Backward {
                 t
             })
             .collect();
-        let json = serde_json::to_string(&live).unwrap_or_default();
+        // The finals pull the view back, and a linked transform refuses
+        // the flame: both are part of what the walk read.
+        let json = serde_json::to_string(&(&live, &flame.final_transforms, &flame.linked_transforms)).unwrap_or_default();
         let mut h = std::collections::hash_map::DefaultHasher::new();
         json.hash(&mut h);
         h.finish()
@@ -1192,15 +1199,21 @@ impl Backward {
     /// [`Self::read`], yielding at `slicer`'s ticks.
     pub async fn read_sliced(flame: &Flame, registry: &VariationRegistry, slicer: &Slicer) -> Result<Self, String> {
         slicer.tick().await;
+        // **The finals are the plot's, not the orbit's** (C2c): the walk
+        // follows them to pull the view back, and analyses the orbit's
+        // maps without them.
+        let finals = FinalMap::of(flame, registry)?;
+        let mut body = flame.clone();
+        body.final_transforms.clear();
+        for t in &mut body.transforms {
+            t.final_attachments.clear();
+        }
         // The maps alone: the escape engine's bounds are never read here.
         // A `pre_blur` comes back beside them (tracker item C2).
-        let (ifs, blurs) = analyse_2d_maps_blurred_sliced(flame, registry, slicer).await.map_err(|errs| {
+        let (ifs, blurs) = analyse_2d_maps_blurred_sliced(&body, registry, slicer).await.map_err(|errs| {
             errs.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ")
         })?;
         slicer.tick().await;
-        if ifs.final_map.is_some() {
-            return Err("a final transform is not pulled back yet".into());
-        }
         if ifs.maps.is_empty() {
             return Err("no maps".into());
         }
@@ -1357,6 +1370,7 @@ impl Backward {
         }
         Ok(Self {
             ifs,
+            finals,
             transforms,
             alphabet,
             sample,
@@ -1565,8 +1579,22 @@ impl Backward {
         view.radius < SWITCH_SHARE * self.extent.max(view.centre[0].hypot(view.centre[1]))
     }
 
+    /// A disc holding the attractor: its sample's farthest point, with a
+    /// margin for those it did not draw.
+    fn whole(&self) -> View {
+        View { centre: self.centre, radius: 1.1 * self.extent }
+    }
+
+    /// Where the orbit's point `x` is plotted: through the finals, if the
+    /// flame has any.
+    pub fn plotted(&self, x: [f64; 2]) -> [f64; 2] {
+        self.finals.as_ref().map_or(x, |f| f.forward(x))
+    }
+
     /// Whether the GPU planner resolves `view`. See [`GPU_PLAN_RADIUS`].
+    /// Judged where the walk plans it: through the finals, if any.
     pub fn gpu_resolves(&self, view: View) -> bool {
+        let view = self.finals.as_ref().and_then(|f| f.pull_back(view, self.whole())).unwrap_or(view);
         view.radius >= GPU_PLAN_RADIUS * view.centre[0].hypot(view.centre[1]).max(1.0)
     }
 
@@ -2976,6 +3004,26 @@ impl Backward {
         eval: &mut dyn AskEval,
         slicer: &Slicer,
     ) -> Result<Cylinders, NoCylinders> {
+        // **Through the finals** (C2c): the orbit's points plotted in the
+        // view are those in its pull-back, a disc in the orbit's space,
+        // and that is what is planned. The plan keeps the view's own
+        // centre, which is what the renderer compares a pan against.
+        let Some(finals) = &self.finals else { return self.walk_disc(view, tr, opts, eval, slicer).await };
+        let disc = finals.pull_back(view, self.whole()).ok_or(NoCylinders::ViewIsEmpty)?;
+        let mut plan = self.walk_disc(disc, tr, opts, eval, slicer).await?;
+        plan.view_centre = view.centre;
+        Ok(plan)
+    }
+
+    /// [`Self::walk`], for a disc of the orbit's own space.
+    async fn walk_disc(
+        &self,
+        view: View,
+        tr: &mut Trace,
+        opts: PlanOptions<'_>,
+        eval: &mut dyn AskEval,
+        slicer: &Slicer,
+    ) -> Result<Cylinders, NoCylinders> {
         let cancelled = || opts.cancel.is_some_and(|c| c.load(Ordering::Relaxed));
         let watch = tr.watch.clone();
         let record = tr.record_expanded;
@@ -3254,8 +3302,11 @@ impl Backward {
             offset_rows: Vec::new(),
         };
         // The replay in offsets, where the view is deep enough for any
-        // word to need it (`deep-zoom-precision.md`).
-        if self.needs_offsets(view) {
+        // word to need it (`deep-zoom-precision.md`). Not through finals:
+        // the render applies them to the absolute point, which offsets
+        // leave view-relative -- so a plan with finals replays in
+        // absolute f32, as the untargeted render plots.
+        if self.finals.is_none() && self.needs_offsets(view) {
             plan.refs = self.reference_chains(&plan, view, slicer).await;
             if plan.refs.iter().any(|r| r.is_some()) {
                 plan.offset_rows = self.forward_rows();
@@ -3758,7 +3809,9 @@ mod tests {
             if hist.len() > longest + 4 {
                 hist.remove(0);
             }
-            if k < 1000 || (x[0] - view.centre[0]).hypot(x[1] - view.centre[1]) > view.radius {
+            // Plotted through the finals, as the render plots.
+            let y = b.plotted(x);
+            if k < 1000 || (y[0] - view.centre[0]).hypot(y[1] - view.centre[1]) > view.radius {
                 continue;
             }
             in_view += 1;
@@ -5490,6 +5543,76 @@ mod tests {
                 }
             }
             if done.len() == 6 && done.values().all(|n| *n >= 2) {
+                break;
+            }
+        }
+    }
+
+    /// **A plan through a final covers what it plots** (tracker C2c): a
+    /// Grand JuliaN generator flame with a `bipolar` final, planned at
+    /// its own view, at a deep one, and at one holding where the plane's
+    /// far points are plotted -- whose pull-back is everything -- against
+    /// a chaos game plotted through the final.
+    #[test]
+    fn a_plan_through_a_final_covers_what_it_plots() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let text = include_str!("../../assets/scripts/generators/grand_julian.rhai");
+        let cfg = crate::script::ScriptHost::new().run(text, &crate::config::FractalConfig::default(), 7, Default::default()).expect("the script runs").config;
+        assert!(!cfg.flame.final_transforms.is_empty(), "seed 7 has a final");
+        let b = Backward::read(&cfg.flame, reg).expect("reads");
+        let inf = b.finals.as_ref().and_then(|f| f.infinity()).expect("bipolar plots far points at a point");
+        for (label, view) in [
+            ("its own view", View::of(cfg.zoom as f64, [cfg.pan_x, cfg.pan_y], 320, 180)),
+            ("1e3", View::of(1e3, b.plotted(b.sample_point(0.3)), 320, 180)),
+            ("at infinity's image", View::of(40.0, inf, 320, 180)),
+        ] {
+            let p = b.plan_eval(view, PlanOptions::default(), &mut CpuEval).expect("a plan");
+            let c = coverage(&b, &p, view, 1500);
+            assert!(c.is_some_and(|c| c >= 0.99), "{label}: coverage {c:?} with {} words", p.words.len());
+        }
+    }
+
+    /// **A final transform is planned through its pull-back** (tracker
+    /// C2c): Grand JuliaN generator flames with a `bipolar` final, planned
+    /// at views of the plotted picture, against an independent chaos game
+    /// plotted through the same final.
+    #[test]
+    #[ignore = "a measurement"]
+    fn finals_plan_completely() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let host = crate::script::ScriptHost::new();
+        let text = include_str!("../../assets/scripts/generators/grand_julian.rhai");
+        let mut done = 0;
+        for seed in 1..400u64 {
+            let cfg = host.run(text, &crate::config::FractalConfig::default(), seed, Default::default()).expect("the script runs").config;
+            if cfg.flame.final_transforms.is_empty() {
+                continue;
+            }
+            let b = Backward::read(&cfg.flame, reg).expect("reads");
+            let shift = cfg.flame.final_transforms[0].get_variation_param_or_default("bipolar", "shift", reg);
+            println!("== seed {seed}: bipolar final, shift {shift:.2}, extent {:.2}", b.extent);
+            for (label, view) in [
+                ("its own view", View::of(cfg.zoom as f64, [cfg.pan_x, cfg.pan_y], 1280, 720)),
+                ("1e2 at 0.75", View::of(1e2, b.plotted(b.sample_point(0.75)), 1280, 720)),
+                ("1e3 at 0.3", View::of(1e3, b.plotted(b.sample_point(0.3)), 1280, 720)),
+                ("1e4 at 0.55", View::of(1e4, b.plotted(b.sample_point(0.55)), 1280, 720)),
+            ] {
+                let t = std::time::Instant::now();
+                match b.plan_eval(view, PlanOptions::default(), &mut CpuEval) {
+                    Ok(p) => println!(
+                        "   {label:<14} {:>6} words, efficiency {:.3}, {:.0} ms; coverage {:?}",
+                        p.words.len(),
+                        p.efficiency,
+                        t.elapsed().as_secs_f64() * 1e3,
+                        coverage(&b, &p, view, 3000)
+                    ),
+                    Err(e) => println!("   {label:<14} {e:?}"),
+                }
+            }
+            done += 1;
+            if done == 4 {
                 break;
             }
         }
