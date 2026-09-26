@@ -52,7 +52,7 @@
 //! sample point to a region that does.
 
 use super::cylinder::{sym_arm, sym_of, sym_transform, Cylinder, Cylinders, NoCylinders, View, MAX_DEPTH, MAX_WORDS};
-use super::ifs_analysis::{analyse_2d_maps_blurred_sliced, Ifs2, IfsMap, Kernel, Map2, PreBlur};
+use super::ifs_analysis::{analyse_2d_maps_blurred_sliced, Blur, Ifs2, IfsMap, Kernel, Map2, PreBlur};
 use super::transforms::Flame;
 use crate::variations::VariationRegistry;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -940,9 +940,10 @@ struct TransformInfo {
     weight: f64,
     arms: u32,
     map: usize,
-    /// Its `pre_blur`, taken out of the maps by the analysis and drawn
-    /// here -- only ever on a [`Renewal`].
-    blur: Option<PreBlur>,
+    /// Its `pre_blur`, or its one variation that ignores its input,
+    /// taken out of the maps by the analysis and drawn here -- only ever
+    /// on a [`Renewal`].
+    blur: Option<Blur>,
     /// Set when it is blurred: see [`Renewal`].
     renewal: Option<Renewal>,
     /// All of the transform's maps, `map` first.
@@ -1059,6 +1060,9 @@ pub struct RefChain {
 ///
 /// v1 knows one kernel, bubble, whose inner branch holds a preimage of
 /// every image point within radius 2, and whose image is the unit disc.
+/// A transform whose one variation ignores its input -- `blur`,
+/// `gaussian_blur`, `pie`, `pie3D`, `starblur` (`FreeBlur`) -- is a
+/// renewal by construction, its output the disc its draw lies in (C2c).
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Renewal {
     /// A disc holding everything the transform can output.
@@ -1080,16 +1084,19 @@ fn blur_draw(b: PreBlur, u: &mut impl FnMut() -> f64) -> [f64; 2] {
 
 /// The forward map along arm `k`, with a blur drawn from `u` where the
 /// transform has one. See [`Renewal`].
-fn forward_blurred(map: &IfsMap<Map2>, x: [f64; 2], k: u32, blur: Option<PreBlur>, u: &mut impl FnMut() -> f64) -> [f64; 2] {
+fn forward_blurred(map: &IfsMap<Map2>, x: [f64; 2], k: u32, blur: Option<Blur>, u: &mut impl FnMut() -> f64) -> [f64; 2] {
     let Some(b) = blur else { return forward(map, x, k) };
-    let d = blur_draw(b, u);
-    match &map.forward {
-        Map2::Nonlinear(n) => {
+    match (b, &map.forward) {
+        (Blur::Pre(b), Map2::Nonlinear(n)) => {
+            let d = blur_draw(b, u);
             let v = n.pre.apply(x);
             let z = n.kernel.forward([v[0] + d[0], v[1] + d[1]], k);
             n.post.apply([n.w * z[0], n.w * z[1]])
         }
-        other => other.apply(x),
+        // The analysis's stand-in holds the transform's post; the draw
+        // is the variation's own.
+        (Blur::Free(f), Map2::Nonlinear(n)) => n.post.apply(f.draw(u)),
+        (_, other) => other.apply(x),
     }
 }
 
@@ -1371,9 +1378,19 @@ impl Backward {
 
     /// Whether a blurred transform is a [`Renewal`], and its output disc;
     /// or why it cannot be planned.
-    fn renewal(ifs: &Ifs2, m: &IfsMap<Map2>, b: PreBlur) -> Result<Renewal, String> {
+    fn renewal(ifs: &Ifs2, m: &IfsMap<Map2>, b: Blur) -> Result<Renewal, String> {
         let Map2::Nonlinear(n) = &m.forward else {
             return Err("pre_blur is planned beside one kernel alone (not an affine, not a sum) so far".into());
+        };
+        let b = match b {
+            // A variation that ignores its input forgets it whatever
+            // came in: a renewal, whose output is its draw's disc (the
+            // analysis's stand-in is `bubble` scaled to it).
+            Blur::Free(f) => {
+                let (_, pmax) = crate::scene::ifs_analysis::singular_values_of(n.post.m);
+                return Ok(Renewal { out_centre: n.post.apply([0.0, 0.0]), out_radius: pmax * f.weight.abs() * f.radius() });
+            }
+            Blur::Pre(b) => b,
         };
         if !matches!(n.kernel, Kernel::Bubble) {
             return Err(format!("pre_blur is planned beside bubble so far, not {:?}", n.kernel));
@@ -5355,6 +5372,211 @@ mod tests {
                     "the cut word holding a removed piece was kept whole and not counted"
                 );
             }
+        }
+    }
+
+    /// **What the walk refuses of the Grand JuliaN generator's flames**
+    /// (tracker C2c): the app's own generator puts a blob on its first
+    /// transform -- `blur`, `bubble` with a `pre_blur`, `pie3D` or
+    /// `starblur` -- and the corpus holds none of the kinds the walk
+    /// refuses. `SEEDS` flames (400), refusals tallied by blob.
+    #[test]
+    #[ignore = "a measurement"]
+    fn what_the_walk_refuses_of_generated_grand_julians() {
+        use std::collections::BTreeMap;
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let host = crate::script::ScriptHost::new();
+        let text = include_str!("../../assets/scripts/generators/grand_julian.rhai");
+        let n: u64 = std::env::var("SEEDS").ok().and_then(|v| v.parse().ok()).unwrap_or(400);
+        let mut tally: BTreeMap<(String, String), usize> = BTreeMap::new();
+        for seed in 1..=n {
+            let out = host.run(text, &crate::config::FractalConfig::default(), seed, Default::default()).expect("the script runs");
+            let t = &out.config.flame.transforms[0];
+            let blob = ["blur", "bubble", "pie3D", "starblur"].iter().find(|v| t.variations.get(**v).is_some_and(|w| *w != 0.0)).copied().unwrap_or("?");
+            let blob = match (blob, t.variations.get("pre_blur")) {
+                ("bubble", Some(w)) => format!("bubble + pre_blur {:.1}", (w * 2.0).round() / 2.0),
+                (b, _) => b.to_string(),
+            };
+            let why = match Backward::read(&out.config.flame, reg) {
+                Ok(_) => "read".to_string(),
+                Err(e) => e.chars().map(|c| if c.is_ascii_digit() { '#' } else { c }).collect::<String>().split(" short of").next().unwrap_or("").to_string(),
+            };
+            *tally.entry((blob, why)).or_default() += 1;
+        }
+        for ((blob, why), k) in &tally {
+            println!("  {k:>4}  {blob:<24} {why}");
+        }
+    }
+
+    /// **A variation that ignores its input is planned as a renewal**
+    /// (tracker C2c): Grand JuliaN generator flames with each blob kind,
+    /// planned at a few views, against an independent chaos game.
+    #[test]
+    #[ignore = "a measurement"]
+    fn free_blurs_plan_completely() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let host = crate::script::ScriptHost::new();
+        let text = include_str!("../../assets/scripts/generators/grand_julian.rhai");
+        let mut done: std::collections::BTreeMap<&str, usize> = Default::default();
+        for seed in 1..400u64 {
+            let mut cfg = host.run(text, &crate::config::FractalConfig::default(), seed, Default::default()).expect("the script runs").config;
+            if !cfg.flame.final_transforms.is_empty() {
+                continue;
+            }
+            let t0 = &cfg.flame.transforms[0];
+            let Some(kind) = ["blur", "pie3D", "starblur"].into_iter().find(|v| t0.variations.get(*v).is_some_and(|w| *w != 0.0)) else { continue };
+            // A gaussian_blur, from a blur flame.
+            let kind = if kind == "blur" && done.get("blur").copied().unwrap_or(0) >= 2 {
+                let w = cfg.flame.transforms[0].variations["blur"];
+                cfg.flame.transforms[0].remove_variation("blur");
+                cfg.flame.transforms[0].set_variation("gaussian_blur", w);
+                "gaussian_blur"
+            } else {
+                kind
+            };
+            if done.get(kind).copied().unwrap_or(0) >= 2 {
+                continue;
+            }
+            *done.entry(kind).or_default() += 1;
+            let b = Backward::read(&cfg.flame, reg).expect("reads");
+            println!("== seed {seed}: {kind} {}, extent {:.2}", cfg.flame.transforms[0].variations[kind], b.extent);
+            for (label, view) in [
+                ("its own view", View::of(cfg.zoom as f64, [cfg.pan_x, cfg.pan_y], 1280, 720)),
+                ("1e2 at 0.75", View::of(1e2, b.sample_point(0.75), 1280, 720)),
+                ("1e3 at 0.3", View::of(1e3, b.sample_point(0.3), 1280, 720)),
+                ("1e3 in the blob", View::of(1e3, b.ifs.maps[b.transforms[0].map].forward.apply([0.0, 0.0]), 1280, 720)),
+            ] {
+                let t = std::time::Instant::now();
+                match b.plan_eval(view, PlanOptions::default(), &mut CpuEval) {
+                    Ok(p) => println!(
+                        "   {label:<16} {:>6} words, efficiency {:.3}, {:.0} ms; coverage {:?}",
+                        p.words.len(),
+                        p.efficiency,
+                        t.elapsed().as_secs_f64() * 1e3,
+                        coverage(&b, &p, view, 3000)
+                    ),
+                    Err(e) => println!("   {label:<16} {e:?}"),
+                }
+            }
+            if done.len() == 4 && done.values().all(|n| *n >= 2) {
+                break;
+            }
+        }
+    }
+
+    /// **What the inverse walk refuses across the corpus, and why**
+    /// (tracker C2c). Every flame in `output/*.flame`, `output/flame-zoom`
+    /// and `assets/presets.fflame` is read by `Backward::read`, and the
+    /// refusals are tallied by reason, with the blurs each flame carries.
+    #[test]
+    #[ignore = "reads output/*.flame"]
+    fn what_the_walk_refuses_across_the_corpus() {
+        use std::collections::BTreeMap;
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let mut flames: Vec<(String, crate::scene::transforms::Flame)> = Vec::new();
+        // `output/*.fflame` are escape and simulation configs, whose flame
+        // is the default one: only the XML flames there.
+        let mut paths: Vec<std::path::PathBuf> = std::fs::read_dir("output")
+            .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.extension().and_then(|x| x.to_str()) == Some("flame")).collect())
+            .unwrap_or_default();
+        paths.extend(std::fs::read_dir("output/flame-zoom").map(|rd| rd.flatten().map(|e| e.path()).collect::<Vec<_>>()).unwrap_or_default());
+        paths.push("assets/presets.fflame".into());
+        paths.sort();
+        for p in &paths {
+            let stem = p.file_stem().unwrap_or_default().to_string_lossy().to_string();
+            let Ok(text) = std::fs::read_to_string(p) else { continue };
+            match p.extension().and_then(|x| x.to_str()) {
+                Some("flame") => {
+                    if let Ok(cfgs) = crate::flame_xml::parse_flame_xml(&text) {
+                        for (k, c) in cfgs.into_iter().enumerate() {
+                            flames.push((format!("{stem}#{k}"), c.flame));
+                        }
+                    }
+                }
+                Some("fflame") => {
+                    if let Ok(c) = serde_json::from_str::<crate::config::FractalConfig>(&text) {
+                        flames.push((stem, c.flame));
+                    } else if let Ok(cs) = serde_json::from_str::<Vec<crate::config::FractalConfig>>(&text) {
+                        for (k, c) in cs.into_iter().enumerate() {
+                            flames.push((format!("{stem}#{k}"), c.flame));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let blurs = ["pre_blur", "blur", "gaussian_blur", "radial_blur", "pre_gaussian_blur", "post_blur"];
+        let mut why: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut ok = 0usize;
+        for (name, flame) in &flames {
+            let carried: Vec<String> = flame
+                .transforms
+                .iter()
+                .enumerate()
+                .flat_map(|(i, t)| {
+                    blurs.iter().filter_map(move |b| t.variations.get(*b).filter(|w| **w != 0.0).map(|w| format!("t{i} {b} {w}")))
+                })
+                .collect();
+            let t0 = std::time::Instant::now();
+            let r = Backward::read(flame, reg);
+            let ms = t0.elapsed().as_secs_f64() * 1e3;
+            match r {
+                Ok(b) => {
+                    ok += 1;
+                    println!("  OK      {name:<40} {} symbols, {ms:.0} ms {}", b.alphabet.len(), carried.join("; "));
+                }
+                Err(e) => {
+                    println!("  REFUSED {name:<40} {e} | {}", carried.join("; "));
+                    // The reason without its numbers, to tally.
+                    let key: String = e.chars().map(|c| if c.is_ascii_digit() { '#' } else { c }).collect();
+                    why.entry(key).or_default().push(name.clone());
+                }
+            }
+        }
+        println!("
+  {} flames, {ok} read", flames.len());
+        let mut v: Vec<_> = why.into_iter().collect();
+        v.sort_by_key(|(_, n)| std::cmp::Reverse(n.len()));
+        for (k, n) in &v {
+            println!("  {:>3}  {k}", n.len());
+        }
+        // **What would free the most**, greedily: each refused flame's
+        // blockers -- the variations it names, and each other reason --
+        // and the fewest fixes that clear the most flames.
+        let blockers_of = |e: &str| -> std::collections::BTreeSet<String> {
+            e.split("; ")
+                .map(|part| match (part.find("uses `"), part.find("` has")) {
+                    (Some(i), _) => part[i + 6..].split('`').next().unwrap_or("").to_string(),
+                    (_, Some(_)) => part.split('`').nth(1).map_or(part.to_string(), |n| format!("{n} (a parameter)")),
+                    _ => part.split(" (").next().unwrap_or(part).replace(|c: char| c.is_ascii_digit(), "#"),
+                })
+                .collect()
+        };
+        let mut need: Vec<std::collections::BTreeSet<String>> = Vec::new();
+        for (_, flame) in &flames {
+            if let Err(e) = Backward::read(flame, reg) {
+                if !e.contains("forward planner is exact") && !e.contains("no transforms") {
+                    need.push(blockers_of(&e));
+                }
+            }
+        }
+        println!("
+  greedy cover of {} refused flames:", need.len());
+        let mut have: std::collections::BTreeSet<String> = Default::default();
+        for step in 1..=12 {
+            let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+            for m in need.iter().filter(|m| !m.is_subset(&have)) {
+                for x in m.difference(&have) {
+                    *counts.entry(x.clone()).or_default() += 1;
+                }
+            }
+            let Some((x, c)) = counts.into_iter().max_by_key(|(_, c)| *c) else { break };
+            have.insert(x.clone());
+            let freed = need.iter().filter(|m| m.is_subset(&have)).count();
+            println!("    +{step:<2} {x:<40} (in {c:>2}) -> {freed:>2} clear");
         }
     }
 
