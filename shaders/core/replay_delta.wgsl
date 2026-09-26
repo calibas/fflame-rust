@@ -201,6 +201,60 @@ fn ct_fwd_diff(o: u32, z: vec2<f32>, d: vec2<f32>, arm: u32) -> vec2<f32> {
     return fd_lin(o + 16u, mid);
 }
 
+// **The final transforms, in offsets** (`scene::final_map`): a section
+// of the table at `cylinders[7]` -- their count, then CT_FINAL_ROW floats
+// a step, `[kind, pre linear (4), pre translation (2), w, shift, post
+// linear (4)]`, kind 0 an affine (its linear part in the pre's place),
+// 1 `bipolar`. `cylinders[7]` is 0 for a flame without.
+const CT_FINAL_ROW: u32 = 13u;
+
+// bipolar(v + e) - bipolar(v), without forming the difference: see
+// `final_map::bipolar_diff`. With a = e/(v +- 1), the log term changes by
+// (ln|1 + a+| - ln|1 + a-|)/pi and the angle term by
+// (arg(1 + a-) - arg(1 + a+))/pi. Across the angle's wrap the point lands
+// the whole strip away, far off a view deep enough for offsets: FD_POLE.
+fn fd_bipolar(v: vec2<f32>, e: vec2<f32>, shift: f32) -> vec2<f32> {
+    let pi = 3.14159265358979;
+    let half_pi = 1.5707963267948966;
+    let bp = vec2<f32>(v.x + 1.0, v.y);
+    let bm = vec2<f32>(v.x - 1.0, v.y);
+    let np = dot(bp, bp);
+    let nm = dot(bm, bm);
+    if (!(np > 0.0) || !(nm > 0.0)) {
+        return FD_POLE;
+    }
+    let ap = vec2<f32>(dot(e, bp), e.y * bp.x - e.x * bp.y) / np;
+    let am = vec2<f32>(dot(e, bm), e.y * bm.x - e.x * bm.y) / nm;
+    let dx = 0.5 * (fd_ln1p(2.0 * ap.x + dot(ap, ap)) - fd_ln1p(2.0 * am.x + dot(am, am))) / pi;
+    let dy = (ff_atan2(am.y, 1.0 + am.x) - ff_atan2(ap.y, 1.0 + ap.x)) / pi;
+    // The reference's own output angle, as `bipolar` wraps it: where the
+    // seam is.
+    var y = 0.5 * ff_atan2(2.0 * v.y, dot(v, v) - 1.0) - half_pi * shift;
+    if (y > half_pi) {
+        y = -half_pi + (y + half_pi) % pi;
+    } else if (y < -half_pi) {
+        y = half_pi - (half_pi - y) % pi;
+    }
+    if (!(abs(2.0 / pi * y + dy) <= 1.0)) {
+        return FD_POLE;
+    }
+    return vec2<f32>(dx, dy);
+}
+
+// F(z + d) - F(z) for the final step whose row is at `o`.
+fn ct_final_diff(o: u32, z: vec2<f32>, d: vec2<f32>) -> vec2<f32> {
+    let e = fd_lin(o + 1u, d);
+    if (u32(cylinders[o]) == 0u) {
+        return e;
+    }
+    let v = fd_lin(o + 1u, z) + vec2<f32>(cylinders[o + 5u], cylinders[o + 6u]);
+    let k = fd_bipolar(v, e, cylinders[o + 8u]);
+    if (k.x == FD_POLE.x) {
+        return FD_POLE;
+    }
+    return fd_lin(o + 9u, cylinders[o + 7u] * k);
+}
+
 // **The replay's last steps, in offsets.** `p` is the sample after the
 // first `m` symbols of the word whose record is at `b`, in absolute f32,
 // where f32 still resolves it; `blk` is the word's block of references
@@ -209,9 +263,12 @@ fn ct_fwd_diff(o: u32, z: vec2<f32>, d: vec2<f32>, arm: u32) -> vec2<f32> {
 // forms, and comes out RELATIVE to the view centre: the reference's end,
 // less the plan's centre, was formed in f64, and the table's `shift`
 // moves the plan's centre to the view's. No big number meets a small
-// one on the GPU.
+// one on the GPU. A flame's final transforms are its last offset
+// steps, each chain holding the reference before each (`scene::final_map`).
 fn ct_offsets(p: vec2<f32>, b: u32, blk: u32, m: u32, len: u32) -> vec2<f32> {
-    let per = 2u * (len - m) + 2u;
+    let fin = u32(cylinders[7]);
+    let finals = select(0u, min(u32(cylinders[fin]), 4u), fin != 0u);
+    let per = 2u * (len - m) + 2u * finals + 2u;
     // `backward::MAX_CHAINS` is 4; bounded, like the word's length, so a
     // mismatched table cannot loop the GPU for long.
     let chains = min(u32(cylinders[blk + 1u]), 16u);
@@ -233,6 +290,10 @@ fn ct_offsets(p: vec2<f32>, b: u32, blk: u32, m: u32, len: u32) -> vec2<f32> {
         let sym = u32(cylinders[b + 4u + k]);
         d = ct_fwd_diff(rows + (sym & 255u) * CT_ROW, vec2<f32>(cylinders[at], cylinders[at + 1u]), d, sym >> 8u);
     }
-    let end = best + 2u * (len - m);
+    for (var j = 0u; j < finals; j = j + 1u) {
+        let at = best + 2u * (len - m) + 2u * j;
+        d = ct_final_diff(fin + 1u + j * CT_FINAL_ROW, vec2<f32>(cylinders[at], cylinders[at + 1u]), d);
+    }
+    let end = best + 2u * (len - m) + 2u * finals;
     return vec2<f32>(cylinders[end], cylinders[end + 1u]) + d + vec2<f32>(cylinders[4], cylinders[5]);
 }

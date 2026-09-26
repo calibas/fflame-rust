@@ -1050,6 +1050,9 @@ pub struct WordRefs {
 pub struct RefChain {
     /// The reference before each step taken as an offset: `z_m ... z_{n-1}`.
     pub bases: Vec<[f64; 2]>,
+    /// And before each final transform, `z_n` first (`FinalMap::positions`):
+    /// the finals are offset steps too. Empty for a flame without.
+    pub finals: Vec<[f64; 2]>,
     /// Where it ends, less the view centre, in f64: `z_n − c`.
     pub end: [f64; 2],
 }
@@ -1585,6 +1588,16 @@ impl Backward {
         View { centre: self.centre, radius: 1.1 * self.extent }
     }
 
+    /// The disc `view` pulls back to through the finals, and where the
+    /// plane's far points are plotted: for measurements.
+    #[cfg(test)]
+    pub fn pulled_back(&self, view: View) -> (Option<View>, Option<[f64; 2]>) {
+        match &self.finals {
+            Some(f) => (f.pull_back(view, self.whole()), f.infinity()),
+            None => (Some(view), None),
+        }
+    }
+
     /// Where the orbit's point `x` is plotted: through the finals, if the
     /// flame has any.
     pub fn plotted(&self, x: [f64; 2]) -> [f64; 2] {
@@ -1634,8 +1647,15 @@ impl Backward {
         (c, if r > 0.0 { r } else { self.extent })
     }
 
-    pub async fn reference_chains(&self, cyl: &Cylinders, view: View, slicer: &Slicer) -> Vec<Option<WordRefs>> {
+    ///
+    /// **Through the finals** (C2c), `view` is the plot's and `disc` the
+    /// orbit's: a reference lands where it is plotted, its errors are
+    /// carried through the finals' Jacobian too, and the finals are its
+    /// last offset steps -- a word may need offsets for them alone, where
+    /// the absolute plot would round.
+    pub async fn reference_chains(&self, cyl: &Cylinders, view: View, disc: View, slicer: &Slicer) -> Vec<Option<WordRefs>> {
         use crate::scene::forward_delta::map_forward_difference;
+        let _ = disc;
         let c = view.centre;
         let r = view.radius;
         let one = |w: &Cylinder| -> Option<WordRefs> {
@@ -1658,7 +1678,7 @@ impl Backward {
                     }
                     z.push(y);
                 }
-                let end = z[n];
+                let end = self.plotted(z[n]);
                 ((end[0] - c[0]).hypot(end[1] - c[1]) <= 2.0 * r).then_some(z)
             };
             // The first seed that lands is the reference; the others are
@@ -1676,6 +1696,17 @@ impl Backward {
             amp[n] = 1.0;
             size[n] = r;
             let mut prod = [[1.0f64, 0.0], [0.0, 1.0]];
+            // Past the word, the finals: an error at its end reaches the
+            // plot through their Jacobian.
+            if let Some(f) = &self.finals {
+                prod = f.jacobian(primary[n])?;
+                let (smin, smax) = crate::scene::ifs_analysis::singular_values_of(prod);
+                if !(smax.is_finite() && smin > 0.0) {
+                    return None;
+                }
+                amp[n] = smax;
+                size[n] = r / smin;
+            }
             for k in (start..n).rev() {
                 let (map, arm) = syms[k];
                 let z = primary[k];
@@ -1697,8 +1728,28 @@ impl Backward {
             let fits = |k: usize| GPU_STEP_ERROR * primary[k][0].hypot(primary[k][1]) * amp[k] <= PLOT_TOLERANCE * r;
             // Step 0 always fits: the free orbit's own error only picks a
             // slightly different point of the attractor.
-            let m = (start.max(1)..=n).rev().find(|&k| fits(k)).unwrap_or(start);
-            if m == n {
+            //
+            // **Every absolute step must fit, not the last alone.** The
+            // replay runs the word absolutely to `m`, so each point before
+            // it carries its step's error to the end through `amp`. Where
+            // the maps contract, an earlier step's error shrinks on the way
+            // and the last one is the whole test -- but `julian` with a
+            // negative distance expands near its centre, and there an
+            // earlier error grows: the Grand JuliaN generator's flames were
+            // off by a pixel or two at 1e6 with `m` taken as the last step
+            // that fits. So `m` is where the first step fails to.
+            let lo = start.max(1);
+            let m = match (lo..=n).find(|&k| !fits(k)) {
+                Some(first) => first.saturating_sub(1).max(lo),
+                None => n,
+            };
+            // The finals applied to the absolute end, and the pan taken
+            // off their output, round at the size of that output.
+            let finals_fit = self.finals.is_none() || {
+                let e = self.plotted(primary[n]);
+                GPU_STEP_ERROR * e[0].hypot(e[1]) <= PLOT_TOLERANCE * r
+            };
+            if m == n && finals_fit {
                 return None;
             }
             // Another piece at `m` needs a map that is many-to-one going
@@ -1734,7 +1785,14 @@ impl Backward {
             }
             let chains = chosen
                 .into_iter()
-                .map(|j| RefChain { bases: orbits[j][m..n].to_vec(), end: [orbits[j][n][0] - c[0], orbits[j][n][1] - c[1]] })
+                .map(|j| {
+                    let e = self.plotted(orbits[j][n]);
+                    RefChain {
+                        bases: orbits[j][m..n].to_vec(),
+                        finals: self.finals.as_ref().map_or_else(Vec::new, |f| f.positions(orbits[j][n])),
+                        end: [e[0] - c[0], e[1] - c[1]],
+                    }
+                })
                 .collect();
             Some(WordRefs { m, chains })
         };
@@ -3008,10 +3066,24 @@ impl Backward {
         // view are those in its pull-back, a disc in the orbit's space,
         // and that is what is planned. The plan keeps the view's own
         // centre, which is what the renderer compares a pan against.
-        let Some(finals) = &self.finals else { return self.walk_disc(view, tr, opts, eval, slicer).await };
-        let disc = finals.pull_back(view, self.whole()).ok_or(NoCylinders::ViewIsEmpty)?;
+        let disc = match &self.finals {
+            Some(f) => f.pull_back(view, self.whole()).ok_or(NoCylinders::ViewIsEmpty)?,
+            None => view,
+        };
         let mut plan = self.walk_disc(disc, tr, opts, eval, slicer).await?;
         plan.view_centre = view.centre;
+        // The replay in offsets, where the view is deep enough for any
+        // word to need it (`deep-zoom-precision.md`) -- in the orbit's
+        // space, or through the finals in the plot's.
+        if self.needs_offsets(disc) || (self.finals.is_some() && self.needs_offsets(view)) {
+            plan.refs = self.reference_chains(&plan, view, disc, slicer).await;
+            if plan.refs.iter().any(|r| r.is_some()) {
+                plan.offset_rows = self.forward_rows();
+                plan.final_rows = self.finals.as_ref().map_or_else(Vec::new, |f| f.rows());
+            } else {
+                plan.refs.clear();
+            }
+        }
         Ok(plan)
     }
 
@@ -3300,20 +3372,8 @@ impl Backward {
             view_centre: view.centre,
             refs: Vec::new(),
             offset_rows: Vec::new(),
+            final_rows: Vec::new(),
         };
-        // The replay in offsets, where the view is deep enough for any
-        // word to need it (`deep-zoom-precision.md`). Not through finals:
-        // the render applies them to the absolute point, which offsets
-        // leave view-relative -- so a plan with finals replays in
-        // absolute f32, as the untargeted render plots.
-        if self.finals.is_none() && self.needs_offsets(view) {
-            plan.refs = self.reference_chains(&plan, view, slicer).await;
-            if plan.refs.iter().any(|r| r.is_some()) {
-                plan.offset_rows = self.forward_rows();
-            } else {
-                plan.refs.clear();
-            }
-        }
         Ok(plan)
     }
 }
@@ -4023,7 +4083,7 @@ mod tests {
                 };
                 let t_plan = t0.elapsed();
                 let t1 = Instant::now();
-                let refs = drive(b.reference_chains(&plan, view, &Slicer::never()));
+                let refs = drive(b.reference_chains(&plan, view, view, &Slicer::never()));
                 let t_refs = t1.elapsed();
                 let with: Vec<(&Cylinder, &WordRefs)> =
                     plan.words.iter().zip(&refs).filter_map(|(w, r)| r.as_ref().map(|r| (w, r))).collect();
@@ -4286,13 +4346,19 @@ mod tests {
         let reg = &*guard;
         let (device, queue) = test_device();
         let mut worst_offsets = 0.0f64;
-        for name in ["grand-julian", "random1", "julian-disc", "true-grand-julian"] {
+        // The `final-*` flames carry a `bipolar` final (C2c), written by
+        // `a_targeted_final_render_is_the_untargeted_render`: their offset
+        // steps run through it, and f64 plots through it too.
+        for name in ["grand-julian", "random1", "julian-disc", "true-grand-julian", "final-14", "final-7", "final-1"] {
             let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")) else { continue };
             let cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
             let Ok(b) = Backward::read(&cfg.flame, reg) else { continue };
             let gpu = crate::scene::plan_gpu::PlanGpu::new(&device, &queue, &cfg.flame, b.sample());
-            for z in [1e4f64, 1e6, 1e8] {
-                let view = View::of(z, b.sample_point(0.75), 1280, 720);
+            // The finals' flames at points off their blob: at 0.75 each
+            // view is its glow, planned as one blur's word.
+            let fracs: &[f64] = if name.starts_with("final") { &[0.3, 0.55] } else { &[0.75] };
+            for (z, frac) in [1e4f64, 1e6, 1e8].into_iter().flat_map(|z| fracs.iter().map(move |f| (z, *f))) {
+                let view = View::of(z, b.plotted(b.sample_point(frac)), 1280, 720);
                 let px = view.radius / (1280f64.hypot(720.0) / 2.0);
                 let Ok(plan) = b.plan_eval(view, PlanOptions::default(), &mut CpuEval) else { continue };
                 if plan.refs.is_empty() {
@@ -4321,6 +4387,11 @@ mod tests {
                         which.push((w, i));
                     }
                 }
+                if jobs.is_empty() {
+                    let with = plan.refs.iter().filter(|r| r.is_some()).count();
+                    println!("  {name} {z:.0e} at {frac}: no word to check ({with} of {} carry references, every one a blur's)", plan.words.len());
+                    continue;
+                }
                 let got = gpu.offset_endpoints(&cfg.flame, &table, &jobs);
                 let (mut n, mut plain_sum, mut off_sum) = (0usize, 0.0f64, 0.0f64);
                 let (mut plain_bias, mut off_bias) = ([0.0f64; 2], [0.0f64; 2]);
@@ -4333,12 +4404,16 @@ mod tests {
                     for (m, arm) in &syms {
                         x = forward(m, x, *arm);
                     }
+                    let x = b.plotted(x);
                     let want = [x[0] - view.centre[0], x[1] - view.centre[1]];
                     if want[0].hypot(want[1]) > 2.0 * view.radius {
                         continue;
                     }
                     n += 1;
-                    let ep = [(g[0] as f64 - view.centre[0] - want[0]) / px, (g[1] as f64 - view.centre[1] - want[1]) / px];
+                    // The plain replay ends before the finals: plotted
+                    // through them here, in f64.
+                    let gp = b.plotted([g[0] as f64, g[1] as f64]);
+                    let ep = [(gp[0] - view.centre[0] - want[0]) / px, (gp[1] - view.centre[1] - want[1]) / px];
                     let eo = [(g[2] as f64 - want[0]) / px, (g[3] as f64 - want[1]) / px];
                     plain_sum += ep[0].hypot(ep[1]);
                     off_sum += eo[0].hypot(eo[1]);
@@ -4352,7 +4427,7 @@ mod tests {
                 }
                 let nn = n.max(1) as f64;
                 println!(
-                    "  {name} {z:.0e}: {n} in view | plain: mean {:.3} worst {:.3} bias ({:+.3}, {:+.3}) px | offsets: mean {:.4} worst {:.4} bias ({:+.4}, {:+.4}) px",
+                    "  {name} {z:.0e} at {frac}: {n} in view | plain: mean {:.3} worst {:.3} bias ({:+.3}, {:+.3}) px | offsets: mean {:.4} worst {:.4} bias ({:+.4}, {:+.4}) px",
                     plain_sum / nn,
                     plain_worst,
                     plain_bias[0] / nn,

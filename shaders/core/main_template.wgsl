@@ -80,6 +80,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // forced sample one. Folded into `density_weight` inline, so an
     // untargeted shader is byte-identical.
     var ct_weight = 1.0;
+{{#if CYLINDER_OFFSETS}}
+{{#if HAS_ATTACHMENTS}}
+    // Where a plan carries the final transforms into its offsets
+    // (`scene::final_map`): a sample `ct_offsets` took through them skips
+    // the final chain, and one replayed in absolute f32 takes the pan off
+    // after it. Set on every forced sample.
+    var ct_final_done = false;
+    var ct_pan_late = false;
+{{/if}}
+{{/if}}
 {{/if}}
 {{#if IMPORTANCE_SAMPLING}}
     // The window's likelihood ratio and how many choices it covers
@@ -505,11 +515,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 }
                 ct_forced_arm = -1;
 {{#if CYLINDER_OFFSETS}}
-                // Either way the plot is view-relative now.
+                // Either way the plot is view-relative now -- past the
+                // final transforms, where the flame has any.
+{{#if HAS_ATTACHMENTS}}
+                ct_final_done = ct_blk != 0u;
+                ct_pan_late = ct_blk == 0u;
+{{/if}}
                 if (ct_blk != 0u) {
                     current = ct_offsets(current, ct_b, ct_blk, ct_m, ct_len);
                 } else {
+{{#if HAS_ATTACHMENTS}}
+{{else}}
                     current = current - vec2<f32>(params.pan_x, params.pan_y);
+{{/if}}
                 }
 {{/if}}
                 color_index = color_index * cylinders[ct_b + 1u] + cylinders[ct_b + 2u];
@@ -557,7 +575,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // like its xyz and color, shapes only the plot, not the walk.
             let point_w_before_final = point_w;
 {{/if}}
-            for (var fi = 0u; fi < attach.final_count; fi = fi + 1u) {
+            for (var fi = 0u; fi < {{#if CYLINDER_OFFSETS}}select(attach.final_count, 0u, ct_final_done){{else}}attach.final_count{{/if}}; fi = fi + 1u) {
                 let fid = attach.final_[fi];
                 let fxform = transforms[fid];
                 let faff = apply_affine(fxform, final_pos);
@@ -588,6 +606,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             }
 {{#if HAS_W}}
             point_w = point_w_before_final;
+{{/if}}
+{{#if CYLINDER_OFFSETS}}
+            if (ct_pan_late) {
+                final_pos = final_pos - vec2<f32>(params.pan_x, params.pan_y);
+            }
 {{/if}}
 {{else}}
             // No attachments: skip the chain — plot the post-Linked

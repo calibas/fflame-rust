@@ -239,7 +239,10 @@ and a sparse picture reads darker in the log tone map.
   1e3 (was 0.983 / 0.992 / 0.999).
 - Flames without a blur are untouched: no word is a blur word.
 
-**Still open: the conditional draw.** A blur word's samples are still
+**Still open: the conditional draw.** (More pressing since C2c: the
+Grand JuliaN generator's flames all have a blob, and at depth their
+plans are nearly all blur words -- `final-14` at 1e6, 100%.) A blur
+word's samples are still
 blobs drawn whole, and only the part that reaches the view lands. A view
 inside the blob, where the glow is the whole picture, wastes what lands
 elsewhere, and the draw rate cannot help there: every word is a blur
@@ -338,15 +341,53 @@ analysis sees the flame without its finals.
 - Every drawn normal transform must carry the same finals; a linked
   transform is refused (the walk had ignored linked transforms, which
   feed the orbit).
-- **No offsets through a final.** The render applies the final to the
-  absolute point, and the offset replay leaves it view-relative, so a
-  plan with finals replays in absolute f32, as the untargeted render
-  plots, and where f32 runs out both show it. Measured on `final-14`
-  (`a_final_at_depth`): clean at 1e4, heavy stripes at 1e5, a dot
-  lattice at 1e6. Carrying
-  the offsets through `bipolar` needs its difference form -- a
-  `log1p` of the step over `z ± 1` -- and the final applied in the
-  offset replay. Open.
+- **Offsets through the final.** Without them a plan with finals
+  replayed in absolute f32: on `final-14` (`a_final_at_depth`) clean
+  at 1e4, heavy stripes at 1e5, a dot lattice at 1e6. Now the finals
+  are the replay's last offset steps.
+  - `bipolar`'s difference form (`final_map::bipolar_diff`, and its
+    twin `ct_final_diff` in `replay_delta.wgsl`): with `a± = δ/(v ± 1)`
+    the log term changes by `(ln|1+a₊| − ln|1+a₋|)/π` and the angle
+    term by `(arg(1+a₋) − arg(1+a₊))/π`. A step across the wrap's seam
+    lands the strip away, far off any view deep enough for offsets, and
+    is dropped. The shader's form is the CPU's to a relative 1e-6 at
+    offsets from 1e-1 to 1e-12 (`the_shader_final_forms_are_the_cpu_ones`).
+  - The finals' rows go in the table (`header[7]`, 0 without), and each
+    reference chain holds the point before each final between its bases
+    and its end, which is the plotted point less the view's centre.
+  - References are chosen in the plot: an error reaches it through the
+    finals' Jacobian, and a word may need offsets for the finals alone.
+  - The render skips the final chain for a sample `ct_offsets` took
+    through them, and one replayed in absolute f32 has the pan taken
+    off after it. Relative plotting is allowed for a flame whose finals
+    the plan carries.
+  - Per sample against f64 (`the_offset_replay_holds_per_sample`, now
+    with three final flames): 99th percentile 0.0009-0.041 px from 1e4
+    to 1e8.
+  - `final-14` at depth (`a_final_at_depth`): clean at 1e4 and 1e5. At
+    1e6 it is sparse (5,335 of 65,536 pixels lit at 1e8 iterations), and
+    not for the finals: the plan is 100% the blur's words (98% at 1e4,
+    99.9% at 1e5), its mass flat at 1.1e-4 from 1e5 on and its
+    efficiency 0.000. The view is lit by the blob's images, smooth below
+    their smear, and each blur word lands a sliver of its draws -- C2b's
+    conditional draw. Every Grand JuliaN flame has a blob, so for them
+    that is the efficiency item at depth.
+- **How `m` is chosen: every absolute step must fit** (a C1 fix found
+  here). The replay runs a word absolutely to `m`, and each point before
+  it carries its step's error to the end. `m` was the last step whose
+  error fits, which is enough where the maps contract. `julian` with a
+  negative distance expands near its centre, and there an earlier
+  step's error grows: `final-1` at 1e6 had a 20-map word off by 1-2 px
+  in the orbit's own space, 99th percentile 0.92 px. `m` is now where
+  the first step fails to fit. That flame's 99th percentile went to
+  0.041 px; the existing flames' went down too (julian-disc at 1e8
+  0.044 to 0.0076 px, true-grand-julian at 1e4 0.027 to 0.0025 px).
+  Cost (`what_an_iteration_costs`, offset steps per sample weighted as
+  drawn): julian-disc at 1e4 33 to 52 steps, its offset rate 162 to 122
+  Miter/s; at 1e6 and 1e8, and on grand-julian and random1, a step or
+  two or none, and rates within the measurement's noise (the plain
+  rates, which the change does not touch, moved by up to 15% between
+  runs).
 - The walk's cache key and the renderer's replan key now include the
   finals and linked transforms: editing a final used to keep the old
   plan and the old analysis.
