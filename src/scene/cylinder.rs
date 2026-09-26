@@ -4086,6 +4086,40 @@ mod gpu_tests {
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
+    /// **Why a saved flame is not targeted**: `FFLAME=path` -- the
+    /// planner's answer at its view, the inverse walk's, the analysis's,
+    /// and each transform's forward bound.
+    #[test]
+    #[ignore = "reads $FFLAME"]
+    fn why_a_saved_flame_is_not_targeted() {
+        let Ok(path) = std::env::var("FFLAME") else { return };
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let cfg: FractalConfig = serde_json::from_str(&std::fs::read_to_string(&path).expect("file")).expect("config");
+        let view = View::of(cfg.zoom as f64, [cfg.pan_x, cfg.pan_y], 1280, 720);
+        println!("  armed: {}", Cylinders::armed(&cfg.flame));
+        match Cylinders::plan(&cfg.flame, reg, view) {
+            Ok(p) => println!("  plan: {} words", p.words.len()),
+            Err(e) => println!("  plan refuses: {e:?}"),
+        }
+        match crate::scene::backward::Backward::read(&cfg.flame, reg) {
+            Ok(_) => println!("  walk: reads"),
+            Err(e) => println!("  walk refuses: {e}"),
+        }
+        match crate::scene::ifs_analysis::analyse_2d(&cfg.flame, reg) {
+            Ok(ifs) => println!("  analysis: ball {:?} r {}", ifs.ball.centre, ifs.ball.radius),
+            Err(errs) => {
+                for e in errs {
+                    println!("  analysis refuses: {e}");
+                }
+            }
+        }
+        for (i, t) in cfg.flame.transforms.iter().enumerate() {
+            let b = crate::scene::ifs_ball::transform_ball_2d(t, reg, Ball::new([0.0, 0.0], 1.0));
+            println!("  t{i} {:?}: unit disc goes to {:?}", t.variations, b.map(|b| (b.c, b.r)));
+        }
+    }
+
     /// **A saved view, targeted against untargeted**: `FFLAME=path`.
     /// Writes both renders next to the file as `<name>-ref.png` and
     /// `<name>-tgt.png`, and prints how they agree.
