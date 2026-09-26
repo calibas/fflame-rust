@@ -1985,8 +1985,11 @@ impl FlameRenderer {
         // does so where its plan carries references, and subtracts the
         // pan in f32 for every other word -- so it plots view-relative
         // throughout (`ct_offsets`).
+        // Final transforms are safe where the plan carries them into its
+        // offsets (`Cylinders::final_rows`): the replay applies them there,
+        // and to the absolute point before taking the pan off elsewhere.
         (cyl.composable || !cyl.refs.is_empty())
-            && !config.flame.has_attachments()
+            && (!config.flame.has_attachments() || (!cyl.composable && !cyl.final_rows.is_empty()))
             && config.flame.post_symmetry.ty
                 == crate::scene::transforms::PostSymmetryType::None
             && !config.flame.analytic_blur_active(&registry, config.render_mode)

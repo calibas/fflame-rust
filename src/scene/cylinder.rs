@@ -433,6 +433,10 @@ pub struct Cylinders {
     /// (`forward_delta::forward_row`), one per transform index, for the
     /// offset steps. Empty with `refs`.
     pub offset_rows: Vec<f32>,
+    /// The flame's final transforms as the shader's rows
+    /// (`FinalMap::rows`), for the offset steps past the word. Empty with
+    /// `refs`, or for a flame without finals.
+    pub final_rows: Vec<f32>,
 }
 
 impl Cylinders {
@@ -733,6 +737,7 @@ impl Cylinders {
             view_centre: view.centre,
             refs: Vec::new(),
             offset_rows: Vec::new(),
+            final_rows: Vec::new(),
         })
     }
 
@@ -1434,6 +1439,7 @@ impl Cylinders {
             view_centre: view.centre,
             refs: Vec::new(),
             offset_rows: Vec::new(),
+            final_rows: Vec::new(),
         })
     }
 }
@@ -2042,7 +2048,7 @@ pub fn pack(cyl: &Cylinders, flame: &Flame, registry: &crate::variations::Variat
 /// running each transform exactly as the chaos game would.
 ///
 /// Layout: an eight-float header `[stride, count, rows, blocks, shift x,
-/// shift y, 0, 0]`, then one word per stride as
+/// shift y, weights, finals]`, then one word per stride as
 /// `[cdf, H, G, len, sym0, sym1, …]`.
 ///
 /// **The replay in offsets** (`docs/projects/deep-zoom-precision.md`),
@@ -2050,7 +2056,10 @@ pub fn pack(cyl: &Cylinders, flame: &Flame, registry: &crate::variations::Variat
 /// maps start (`forward_delta::ROW_FLOATS` each, by transform index),
 /// and `blocks` where one offset per word starts, then the words' blocks
 /// -- `[m, chains, per chain: z_m … z_{n-1}, z_n − c]`, offset 0 for a
-/// word with none. `shift` is the plan's centre less the view's, in f64,
+/// word with none. A flame with final transforms has their rows where
+/// `finals` says (`FinalMap::rows`), and each chain the reference before
+/// each final between its bases and its end, which is then the plotted
+/// point less the centre. `shift` is the plan's centre less the view's, in f64,
 /// which the renderer writes every frame so a plan still drawing after a
 /// pan stays where it belongs. Zero rows and blocks: no offsets. The colour still
 /// folds to the two coefficients `H` and `G`, because flam3's rule is
@@ -2105,8 +2114,9 @@ pub fn pack_words(cyl: &Cylinders, flame: &Flame) -> Vec<f32> {
     // widest, julian-disc at 1e6, is ~10M -- replays plainly rather than
     // read its blocks at rounded offsets.
     let offsets_len: usize = cyl.offset_rows.len()
+        + cyl.final_rows.len()
         + cyl.words.len()
-        + cyl.refs.iter().flatten().map(|r| 2 + r.chains.iter().map(|c| 2 * c.bases.len() + 2).sum::<usize>()).sum::<usize>();
+        + cyl.refs.iter().flatten().map(|r| 2 + r.chains.iter().map(|c| 2 * (c.bases.len() + c.finals.len()) + 2).sum::<usize>()).sum::<usize>();
     let fits = out.len() + offsets_len < 1 << 24;
     if !fits {
         log::warn!("replay table of {} floats: past f32's exact offsets, so no replay in offsets", out.len() + offsets_len);
@@ -2114,6 +2124,11 @@ pub fn pack_words(cyl: &Cylinders, flame: &Flame) -> Vec<f32> {
     if fits && cyl.refs.len() == cyl.words.len() && !cyl.offset_rows.is_empty() {
         out[2] = out.len() as f32;
         out.extend_from_slice(&cyl.offset_rows);
+        // The finals' rows, where the flame has any: `out[7]` says where.
+        if !cyl.final_rows.is_empty() {
+            out[7] = out.len() as f32;
+            out.extend_from_slice(&cyl.final_rows);
+        }
         let offsets_at = out.len();
         out[3] = offsets_at as f32;
         out.resize(offsets_at + cyl.words.len(), 0.0);
@@ -2123,7 +2138,7 @@ pub fn pack_words(cyl: &Cylinders, flame: &Flame) -> Vec<f32> {
             out.push(r.m as f32);
             out.push(r.chains.len() as f32);
             for ch in &r.chains {
-                for z in &ch.bases {
+                for z in ch.bases.iter().chain(&ch.finals) {
                     out.push(z[0] as f32);
                     out.push(z[1] as f32);
                 }
@@ -3606,10 +3621,11 @@ mod gpu_tests {
         }
     }
 
-    /// **A final at depth**: a plan through a final carries no offsets
-    /// (tracker C2c), so it replays in absolute f32. `final-14` rendered
-    /// targeted at 1e4, 1e5 and 1e6, to `output/deep-offsets/`, to see
-    /// where f32 runs out.
+    /// **A final at depth** (tracker C2c): `final-14`, whose plans carry
+    /// its `bipolar` final into their offsets, rendered targeted at 1e4,
+    /// 1e5 and 1e6 to `output/deep-offsets/` -- where a replay in absolute
+    /// f32 was striped at 1e5 and a dot lattice at 1e6. `REF` renders the
+    /// untargeted picture beside each, at 2e9 iterations.
     #[test]
     #[ignore = "needs a GPU; reads output/flame-zoom (written by a_targeted_final_render_is_the_untargeted_render)"]
     fn a_final_at_depth() {
@@ -3627,9 +3643,39 @@ mod gpu_tests {
         let _ = std::fs::create_dir_all("output/deep-offsets");
         for zoom in [1e4f64, 1e5, 1e6] {
             cfg.zoom = zoom as f32;
+            if std::env::var("REF").is_ok() {
+                cfg.cylinder_targeting = false;
+                let img = render(&cfg, N, 2_000_000_000);
+                let _ = image::save_buffer(format!("output/deep-offsets/final-14-{zoom:.0e}-ref.png"), &img, N, N, image::ColorType::Rgba8);
+                cfg.cylinder_targeting = true;
+            }
             let img = render(&cfg, N, 100_000_000);
             let lit = img.chunks(4).filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24).count();
-            println!("  {zoom:.0e}: {lit} of {} pixels lit", N * N);
+            let plan = Cylinders::plan(&cfg.flame, reg, View::of(zoom, [cfg.pan_x, cfg.pan_y], N, N));
+            let about = match &plan {
+                Ok(p) => {
+                    // The blob, transform 0, starts the blur's words.
+                    let blur: f64 = p.words.iter().filter(|w| sym_transform(w.word[0]) == 0).map(|w| w.prob).sum();
+                    format!(
+                        "{} words, mass {:.2e} ({:.1}% the blur's), efficiency {:.3}, {} with references",
+                        p.words.len(),
+                        p.mass,
+                        100.0 * blur / p.mass,
+                        p.efficiency,
+                        p.refs.iter().flatten().count()
+                    )
+                }
+                Err(e) => format!("{e:?}"),
+            };
+            println!("  {zoom:.0e}: {lit} of {} pixels lit; {about}", N * N);
+            let view = View::of(zoom, [cfg.pan_x, cfg.pan_y], N, N);
+            let (disc, inf) = b.pulled_back(view);
+            let (res, tr) = b.plan_traced(view);
+            println!(
+                "      plot radius {:.2e}; pulled back to radius {:.2e} at {:?}; infinity plotted at {:?}; depth {:?}, forced {}, floor {}, beam {}",
+                view.radius, disc.map_or(f64::NAN, |d| d.radius), disc.map(|d| d.centre), inf,
+                res.as_ref().map(|p| p.depth).ok(), tr.forced, tr.floor, tr.beam
+            );
             let _ = image::save_buffer(format!("output/deep-offsets/final-14-{zoom:.0e}.png"), &img, N, N, image::ColorType::Rgba8);
         }
     }

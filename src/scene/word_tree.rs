@@ -467,6 +467,7 @@ pub fn subset(plan: &Cylinders, keep: &[usize]) -> Cylinders {
         composable: plan.composable,
         view_centre: plan.view_centre,
         offset_rows: plan.offset_rows.clone(),
+        final_rows: plan.final_rows.clone(),
     }
 }
 
@@ -492,6 +493,7 @@ mod tests {
             view_centre: [0.0; 2],
             refs: Vec::new(),
             offset_rows: Vec::new(),
+            final_rows: Vec::new(),
         }
     }
 
