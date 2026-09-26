@@ -586,25 +586,43 @@ because the inverse walk's analysis does not model Möbius maps.
 
 Three corpus flames. They would need their own routing.
 
-### C6. An unbounded attractor a bounded map holds -- open (2026-09-26)
+### C6. An unbounded attractor -- open (2026-09-26)
 
 `output/flame-zoom/bipolar-elliptic-splits{1,2}.fflame`: `elliptic`,
 `splits`, and `cylinder` with a `pre_blur`, under a `bipolar` final.
-Refused with `NoInvariantBall` (`why_a_saved_flame_is_not_targeted`).
-- No arm, so the forward planner has them, and it needs a disc every
-  transform maps into itself. There is none: `splits` 1.5 on a 0.9
-  affine scales by about 1.35 and adds a fixed offset, so the attractor
-  is unbounded.
-- The orbit stays finite anyway: `elliptic`, drawn 5 times in 21, sends
-  any point into a bounded strip, whatever came in. So every point is
-  a bounded map's output carried through a run of the others, and the
-  `bipolar` final folds the unbounded plane into a bounded picture.
-- So the plan is renewal's again, without a blur: a transform whose
-  output is bounded for every input starts every word, from its output
-  disc; the rest of the word is bounded forward from there, however it
-  expands; and a run long enough to leave the view has a measure that
-  falls geometrically. The inverse walk would need `elliptic`,
-  `splits` and `cylinder` as well, which the analysis has none of.
+Refused (`why_a_saved_flame_is_not_targeted`).
+- No transform draws among several images, so they went to the forward
+  planner, which refused them with `NoInvariantBall`: `splits` 1.5 on a
+  0.9 affine scales by about 1.35 and adds a fixed offset, so no disc
+  maps into itself. The attractor is unbounded: a run of `k` of them
+  reaches about 1.35^k, with probability about (15/21)^k, a power-law
+  tail. What brings the orbit back is `elliptic`, whose `y` is
+  `(2/pi) acosh(|p|-ish)`: it compresses far points logarithmically and
+  bounds none -- no transform here has a bounded output, so there is no
+  renewal to start words from.
+- With their `bipolar` final they are the inverse walk's now (below),
+  which refuses them: its analysis has none of `elliptic`, `splits` or
+  `cylinder`.
+- **What they need of the walk:** `elliptic` (one-to-one, an elliptic
+  coordinate map with a closed inverse) and `splits` (a translation by
+  quadrant, with a gap) as kernels -- forward, inverse, difference
+  forms, their shader rows; `cylinder` too, whose inverse has a branch
+  every `2pi` across the attractor; a `pre_blur` beside a kernel other
+  than bubble whose output is unbounded, so not a renewal (the dilated
+  regions of C2's sketch); and a grid that survives a power-law tail,
+  whose farthest sample point sets the grid's cell today.
+
+**Found on the way, fixed: a final on a flame without arms.** The
+forward planner never looked at final transforms: it planned the view
+in the orbit's own space, and its composed arm plots view-relative. A
+filled carpet under an affine final rendered targeted came out black,
+nothing lit where the untargeted render lit every pixel. A flame with
+final or linked transforms is now the walk's (`Cylinders::walked`),
+which pulls the view back through a final and refuses a linked
+transform with its reason: the carpet under an affine and under a
+`bipolar` final, targeted against untargeted, overlap 1.000 and
+brightness equal to three digits at 1e2 and 1e3
+(`a_final_on_an_affine_flame_is_planned`).
 
 ---
 

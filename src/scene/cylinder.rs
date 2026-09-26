@@ -822,6 +822,19 @@ impl Cylinders {
         Ok(())
     }
 
+    /// **Whether the inverse walk plans `flame`**: some transform draws
+    /// among several images, or it has final or linked transforms. The
+    /// forward planner below knows neither: it plans the view in the
+    /// orbit's own space and its composed arm plots view-relative, so a
+    /// final made the targeted render black (measured: the filled carpet
+    /// with an affine final, nothing lit where the untargeted render lit
+    /// every pixel). The walk pulls the view back through a final
+    /// (`scene::final_map`) and refuses a linked transform, with its
+    /// reason.
+    fn walked(flame: &Flame) -> bool {
+        Self::armed(flame) || flame.has_attachments()
+    }
+
     /// Whether some transform draws among several images -- a flame the
     /// inverse walk plans.
     fn armed(flame: &Flame) -> bool {
@@ -862,7 +875,7 @@ impl Cylinders {
     ) -> Result<Self, NoCylinders> {
         use crate::scene::backward::{Backward, Blocking, CpuEval, PlanOptions, Trace, TIME_BUDGET};
         slicer.tick().await;
-        if !(ARMS_ENABLED && Self::armed(flame)) {
+        if !(ARMS_ENABLED && Self::walked(flame)) {
             return Self::plan(flame, registry, view).map(|p| crate::scene::word_tree::remove(&p, removals));
         }
         Self::plannable(flame, registry)?;
@@ -901,7 +914,7 @@ impl Cylinders {
         // word has to say which. Everything below that is specific to
         // arms is keyed on this and not on `family_j`, so a flame
         // without arms takes exactly the path it always took.
-        let armed = family_j && Self::armed(flame);
+        let armed = family_j && Self::walked(flame);
 
         // **The inverse walk first, for an armed flame.** A flame the
         // inverse-walk analysis accepts is planned by pulling the view
@@ -3679,6 +3692,47 @@ mod gpu_tests {
             for frac in [0.75, 0.3] {
                 println!("== {name}, the plotted point at {frac}");
                 targeted_against_untargeted_at(&name, &[1e1, 1e2, 1e3], |b| b.plotted(b.sample_point(frac)));
+            }
+        }
+    }
+
+    /// **A flame without arms, with a final** (the forward planner's
+    /// blind spot): a filled carpet -- nine maps of a third, the centre
+    /// kept -- under an affine final, and under a `bipolar` one. The
+    /// forward planner planned the view in the orbit's own space and its
+    /// composed arm plots view-relative, so the targeted render was black;
+    /// such a flame is the walk's now (`Cylinders::walked`), and must be
+    /// the untargeted picture. Written to `output/flame-zoom/` first.
+    #[test]
+    #[ignore = "needs a GPU; writes output/flame-zoom"]
+    fn a_final_on_an_affine_flame_is_planned() {
+        let mut cfg = FractalConfig::default();
+        let mut maps = Vec::new();
+        for (i, (x, y)) in [(0, 0), (1, 0), (2, 0), (0, 1), (2, 1), (0, 2), (1, 2), (2, 2), (1, 1)].into_iter().enumerate() {
+            let mut t = Transform::default();
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("linear", 1.0);
+            (t.a, t.b, t.c, t.d) = (1.0 / 3.0, 0.0, 0.0, 1.0 / 3.0);
+            (t.e, t.f) = (x as f32 / 3.0, -(y as f32) / 3.0);
+            t.weight = if i == 8 { 0.15 } else { 0.125 };
+            t.color = i as f32 / 8.0;
+            t.final_attachments = vec![0];
+            maps.push(t);
+        }
+        cfg.flame.transforms = maps;
+        let _ = std::fs::create_dir_all("output/flame-zoom");
+        for (name, variation, weight) in [("carpet-affine-final", "linear", 1.0f32), ("carpet-bipolar-final", "bipolar", 1.0)] {
+            let mut fin = Transform::default();
+            fin.variations.clear();
+            fin.variation_order.clear();
+            fin.set_variation(variation, weight);
+            (fin.a, fin.b, fin.c, fin.d, fin.e, fin.f) = (0.6, 0.2, -0.2, 0.6, 0.3, 0.1);
+            cfg.flame.final_transforms = vec![fin];
+            std::fs::write(format!("output/flame-zoom/{name}.fflame"), serde_json::to_string_pretty(&cfg).expect("json")).expect("written");
+            for frac in [0.3, 0.7] {
+                println!("== {name}, the plotted point at {frac}");
+                targeted_against_untargeted_at(name, &[1e1, 1e2, 1e3], |b| b.plotted(b.sample_point(frac)));
             }
         }
     }

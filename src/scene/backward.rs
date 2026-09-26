@@ -1345,7 +1345,11 @@ impl Backward {
             return Err("no weight".into());
         }
         if transforms.iter().all(|t| t.arms == 1) {
-            return Err("no many-valued variation; the forward planner is exact here".into());
+            // Unless it has finals, which the forward planner cannot
+            // follow (`Cylinders::walked`).
+            if finals.is_none() {
+                return Err("no many-valued variation; the forward planner is exact here".into());
+            }
         }
         let mut alphabet: Vec<Sym> = Vec::new();
         for t in &transforms {
