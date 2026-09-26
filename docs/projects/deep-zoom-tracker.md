@@ -586,6 +586,26 @@ because the inverse walk's analysis does not model Möbius maps.
 
 Three corpus flames. They would need their own routing.
 
+### C6. An unbounded attractor a bounded map holds -- open (2026-09-26)
+
+`output/flame-zoom/bipolar-elliptic-splits{1,2}.fflame`: `elliptic`,
+`splits`, and `cylinder` with a `pre_blur`, under a `bipolar` final.
+Refused with `NoInvariantBall` (`why_a_saved_flame_is_not_targeted`).
+- No arm, so the forward planner has them, and it needs a disc every
+  transform maps into itself. There is none: `splits` 1.5 on a 0.9
+  affine scales by about 1.35 and adds a fixed offset, so the attractor
+  is unbounded.
+- The orbit stays finite anyway: `elliptic`, drawn 5 times in 21, sends
+  any point into a bounded strip, whatever came in. So every point is
+  a bounded map's output carried through a run of the others, and the
+  `bipolar` final folds the unbounded plane into a bounded picture.
+- So the plan is renewal's again, without a blur: a transform whose
+  output is bounded for every input starts every word, from its output
+  disc; the rest of the word is bounded forward from there, however it
+  expands; and a run long enough to leave the view has a measure that
+  falls geometrically. The inverse walk would need `elliptic`,
+  `splits` and `cylinder` as well, which the analysis has none of.
+
 ---
 
 ## Performance
