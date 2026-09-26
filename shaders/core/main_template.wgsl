@@ -507,7 +507,27 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 {{else}}
                 let ct_m = ct_len;
 {{/if}}
-                for (var ct_k = 0u; ct_k < ct_m; ct_k = ct_k + 1u) {
+                var ct_k0 = 0u;
+{{#if RENDER_3D}}
+{{else}}
+                // **A blur drawn where it lands** (C2b): a negative weight
+                // names the word's conditional draw (`ct_conditional`),
+                // which stands for its first symbol, the blur, and says
+                // what the sample deposits.
+                var ct_piece = -1;
+                var ct_d = vec2<f32>(0.0, 0.0);
+                if (ct_weight < 0.0) {
+                    let cb = u32(-ct_weight);
+                    let s = ct_conditional(cb, &ct_rng);
+                    ct_weight = s.z;
+                    ct_piece = i32(s.w);
+                    ct_d = s.xy;
+                    let o = cb + 10u + u32(ct_piece) * CT_PIECE;
+                    current = vec2<f32>(cylinders[o + 1u], cylinders[o + 2u]) + ct_d;
+                    ct_k0 = 1u;
+                }
+{{/if}}
+                for (var ct_k = ct_k0; ct_k < ct_m; ct_k = ct_k + 1u) {
                     // The transform in the low byte; the arm, if the
                     // transform's variation is many-valued, above it.
                     // `replay.wgsl`, shared with the planner's kernel.
@@ -522,7 +542,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 ct_pan_late = ct_blk == 0u;
 {{/if}}
                 if (ct_blk != 0u) {
-                    current = ct_offsets(current, ct_b, ct_blk, ct_m, ct_len);
+                    if (ct_piece >= 0) {
+                        // From its piece's chain, the sample never absolute.
+                        current = ct_offsets_chain(ct_b, ct_blk, u32(ct_piece), ct_d, 1u, ct_len);
+                    } else {
+                        current = ct_offsets(current, ct_b, ct_blk, ct_m, ct_len);
+                    }
                 } else {
 {{#if HAS_ATTACHMENTS}}
 {{else}}

@@ -3515,6 +3515,58 @@ impl FreeBlur {
         }
     }
 
+    /// **Whether its draw restricts to a polar box** (the conditional
+    /// draw, tracker C2b): a radius and an angle drawn independently, with
+    /// a density in closed form. `starblur`'s is not; `pie`'s is for a
+    /// whole number of slices of some thickness.
+    pub fn boxable(&self) -> bool {
+        match self.kind {
+            FreeKind::Disc | FreeKind::Gaussian => true,
+            FreeKind::Pie { slices, thickness, .. } => slices.fract() == 0.0 && thickness > 0.0,
+            FreeKind::Star { .. } => false,
+        }
+    }
+
+    /// The draw's density per unit radius and angle at `(rho, phi)` of its
+    /// unweighted output, times 2pi: 1 for `blur` inside its disc.
+    pub fn polar_density(&self, rho: f64, phi: f64) -> f64 {
+        match self.kind {
+            FreeKind::Disc => f64::from(rho < 1.0),
+            FreeKind::Gaussian => gaussian_radial(rho),
+            FreeKind::Pie { slices, rotation, thickness } => {
+                let t = (phi - rotation) / std::f64::consts::TAU * slices;
+                if rho < 1.0 && t - t.floor() < thickness {
+                    1.0 / thickness
+                } else {
+                    0.0
+                }
+            }
+            FreeKind::Star { .. } => 0.0,
+        }
+    }
+
+    /// **The draw's probability of a polar box** `[rho_lo, rho_hi] x
+    /// [phi_lo, phi_hi]` of its unweighted output. See [`Self::boxable`].
+    pub fn box_mass(&self, rho_lo: f64, rho_hi: f64, phi_lo: f64, phi_hi: f64) -> f64 {
+        let radial = match self.kind {
+            FreeKind::Gaussian => gaussian_radial_cdf(rho_hi) - gaussian_radial_cdf(rho_lo),
+            _ => (rho_hi.min(1.0) - rho_lo.min(1.0)).max(0.0),
+        };
+        let angular = match self.kind {
+            FreeKind::Pie { slices, rotation, thickness } => {
+                // The share of an angle interval inside the wedges: per
+                // slice `t`, a wedge is `frac(t) < thickness`.
+                let g = |phi: f64| {
+                    let t = (phi - rotation) / std::f64::consts::TAU * slices;
+                    t.floor() * thickness + (t - t.floor()).min(thickness)
+                };
+                std::f64::consts::TAU / slices * (g(phi_hi) - g(phi_lo)) / thickness
+            }
+            _ => phi_hi - phi_lo,
+        };
+        radial * angular / std::f64::consts::TAU
+    }
+
     /// One draw, weighted, as the variation's WGSL makes it.
     pub fn draw(&self, u: &mut impl FnMut() -> f64) -> [f64; 2] {
         use std::f64::consts::{FRAC_PI_2, TAU};
@@ -3547,6 +3599,37 @@ impl FreeBlur {
         };
         [self.weight * r * a.cos(), self.weight * r * a.sin()]
     }
+}
+
+/// The Irwin-Hall distribution of four uniforms: its density and its
+/// distribution function on `[0, 4]`.
+fn irwin_hall_4(x: f64) -> (f64, f64) {
+    let x = x.clamp(0.0, 4.0);
+    let c = [1.0, -4.0, 6.0, -4.0, 1.0];
+    let (mut pdf, mut cdf) = (0.0, 0.0);
+    for (k, ck) in c.iter().enumerate() {
+        let d = x - k as f64;
+        if d > 0.0 {
+            pdf += ck * d * d * d;
+            cdf += ck * d * d * d * d;
+        }
+    }
+    (pdf / 6.0, (cdf / 24.0).clamp(0.0, 1.0))
+}
+
+/// `gaussian_blur`'s radius: `|r|` for `r` four uniforms less 2, which is
+/// symmetric, so its density is twice `r`'s at `2 + rho`.
+fn gaussian_radial(rho: f64) -> f64 {
+    if (0.0..2.0).contains(&rho) {
+        2.0 * irwin_hall_4(2.0 + rho).0
+    } else {
+        0.0
+    }
+}
+
+/// Its distribution function.
+fn gaussian_radial_cdf(rho: f64) -> f64 {
+    2.0 * irwin_hall_4(2.0 + rho.clamp(0.0, 2.0)).1 - 1.0
 }
 
 /// What the planner takes out of a transform to draw itself: a
@@ -5193,6 +5276,66 @@ mod tests {
         }
         assert!(FreeBlur::of("julian", &only("julian", 1.0), r).is_none());
         assert!(FreeBlur::of("blur", &only("blur", 0.0), r).is_none(), "a zero weight is no variation");
+    }
+
+    /// **A polar box's mass is the draw's** (the conditional draw, C2b):
+    /// against how often the variation's own draws fall in it, for boxes
+    /// inside the support, across its edge, round the centre and across
+    /// `pie`'s wedges; and the density integrates to the mass.
+    #[test]
+    fn a_polar_box_holds_what_the_draw_puts_in_it() {
+        let guard = global_registry();
+        let r = &*guard;
+        let mut st = 17u64;
+        let mut u = move || {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((st >> 11) as f64) / ((1u64 << 53) as f64)
+        };
+        let mut pie = only("pie", 1.0);
+        pie.set_variation_param("pie", "slices", 5.0);
+        pie.set_variation_param("pie", "thickness", 0.3);
+        pie.set_variation_param("pie", "rotation", 0.4);
+        let blurs = [("blur", only("blur", 1.0)), ("gaussian_blur", only("gaussian_blur", 1.0)), ("pie", pie)];
+        let boxes = [(0.2, 0.5, 0.3, 1.1), (0.8, 1.3, -2.0, -1.0), (0.0, 0.4, -3.0, 3.2), (1.2, 1.9, 0.5, 2.5), (0.1, 0.9, 5.0, 7.5)];
+        const N: usize = 400_000;
+        for (name, t) in &blurs {
+            let f = FreeBlur::of(name, t, r).expect("free");
+            assert!(f.boxable(), "{name}");
+            let draws: Vec<(f64, f64)> = (0..N)
+                .map(|_| {
+                    let p = f.draw(&mut u);
+                    (p[0].hypot(p[1]), p[1].atan2(p[0]))
+                })
+                .collect();
+            for &(r0, r1, a0, a1) in &boxes {
+                let tau = std::f64::consts::TAU;
+                let inside = draws
+                    .iter()
+                    .filter(|(rho, phi)| {
+                        // Any turn of the angle the box spans.
+                        let k = ((a0 - phi) / tau).ceil();
+                        *rho >= r0 && *rho < r1 && phi + k * tau <= a1
+                    })
+                    .count() as f64
+                    / N as f64;
+                let mass = f.box_mass(r0, r1, a0, a1);
+                let sd = (mass * (1.0 - mass) / N as f64).sqrt();
+                assert!((inside - mass).abs() <= 5.0 * sd + 1e-4, "{name} box {:?}: draws {inside:.5}, mass {mass:.5}", (r0, r1, a0, a1));
+                // The density integrates to the mass: fine in the angle,
+                // where `pie`'s wedges have edges.
+                let (nr, na) = (400, 4000);
+                let mut integral = 0.0;
+                for i in 0..nr {
+                    for j in 0..na {
+                        let rho = r0 + (i as f64 + 0.5) / nr as f64 * (r1 - r0);
+                        let phi = a0 + (j as f64 + 0.5) / na as f64 * (a1 - a0);
+                        integral += f.polar_density(rho, phi);
+                    }
+                }
+                integral *= (r1 - r0) * (a1 - a0) / (nr * na) as f64 / tau;
+                assert!((integral - mass).abs() < 2e-3, "{name} box {:?}: density integrates to {integral:.5}, mass {mass:.5}", (r0, r1, a0, a1));
+            }
+        }
     }
 
     /// **The analysis takes a lone free blur out, and nothing else**: a

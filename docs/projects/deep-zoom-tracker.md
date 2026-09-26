@@ -181,7 +181,7 @@ Since C2b the blur words stay out of the walk's floor and are drawn at
 their square-root rate. At 1e3 they hold 59% of the mass at 0.23, and
 the plan's efficiency is 0.54, up from 0.15. See C2b.
 
-### C2b. The blob's efficiency at depth -- partly done (2026-09-24)
+### C2b. The blob's efficiency at depth -- done for the input-free blurs (2026-09-26)
 
 **What was found.** The user saw a quality cliff on the true Grand
 Julian between zoom 1559 and 1560: 72 paths and heavy noise on one side,
@@ -239,25 +239,82 @@ and a sparse picture reads darker in the log tone map.
   1e3 (was 0.983 / 0.992 / 0.999).
 - Flames without a blur are untouched: no word is a blur word.
 
-**Still open: the conditional draw.** (More pressing since C2c: the
-Grand JuliaN generator's flames all have a blob, and at depth their
-plans are nearly all blur words -- `final-14` at 1e6, 100%.) A blur
-word's samples are still
-blobs drawn whole, and only the part that reaches the view lands. A view
-inside the blob, where the glow is the whole picture, wastes what lands
-elsewhere, and the draw rate cannot help there: every word is a blur
-word.
+**The conditional draw.** (Pressing since C2c: the Grand JuliaN
+generator's flames all have a blob, and at depth their plans are nearly
+all blur words -- `final-14` at 1e6, 100%.) A blur word's samples were
+blobs drawn whole, and only the part that reaches the view lands. To
+land every sample, draw the blur already inside the word's region, and
+weight the sample by the blur's density there over the draw's. The
+weight is no obstacle: the deposit carries one (above). What it takes is
+the region and the density. Built for the blurs that ignore their input
+(below); **still open for `starblur`, and `bubble` with a `pre_blur`**,
+whose densities are not closed forms -- bubble's is the attractor
+blurred and pushed through its two-branch inverse, an average over the
+sample at each point asked.
 
-To land every sample, draw the blur already inside the word's region:
-- Pick a point in the region the rest of the word pulls the view back
-  to.
-- Solve for the blur that reaches it, through bubble's two-branch
-  inverse.
-- Weight the sample by the blur's density there over the draw's.
+**Built (2026-09-26): the conditional draw, v1 for the input-free
+blurs** -- the plan below, with what building it found.
 
-The weight is no longer an obstacle: the deposit carries one (above).
-What remains is the region, the inverse, and the density. That is
-research, not a transcription.
+- **The pull-back is of the whole view.** Pulled back through a word's
+  own arms, the view's centre left the arm's sector for nine blur words
+  in ten: a 22-arm julian contracts about 22x a step, so three steps
+  back the view's pull-back is as wide as a sector, and the word's
+  points are the part inside. The pull-back of the whole view holds
+  them, which is all the draw needs; nor is a point asked whether the
+  symbol before lands near it, since after the blur the points are the
+  blob's images. A long word's pull-back then covers most of the blob,
+  and a word whose boxes hold `CONDITIONAL_BELOW` (a quarter) or more
+  of the blob keeps the ordinary draw.
+- **Unbiased.** Each conditional word's share of the view, from its
+  boxes' mass and its samples' deposits, against long replays of the
+  whole word: within sampling error at every view measured
+  (`the_conditional_draw_lands_what_the_whole_draw_does`). Targeted
+  against untargeted on the GPU, overlap 1.000 and brightness as before
+  for every blob kind and the final flames.
+- **What it does to the render** (`where_a_blur_flames_draws_go`, the
+  share of draws that land):
+
+  | flame | 1e3 | 1e4 | 1e5 | 1e6 |
+  |---|---|---|---|---|
+  | seed 3, before | 0.081 | 0.033 | 0.013 | 0.000 |
+  | seed 3, conditional | 0.79 | 0.58 | 0.72 | 0.002 |
+  | seed 14, before | 0.71 | 0.41 | 0.14 | 0.000 |
+  | seed 14, conditional | 0.71 | 0.84 | 0.82 | 0.84 |
+
+  `final-14` at 1e6 (`a_final_at_depth`), at 1e8 iterations: 5,335 of
+  65,536 pixels lit to all of them, and the glow at 1e4 and 1e5
+  smoother.
+- **Not helped: a view in the glow itself** (seed 3 at 1e6: 14 words,
+  0.002). Its heaviest-drawn words' pull-backs are not finite -- `julian`
+  with a negative distance sends points near its centre to infinity --
+  so they keep the ordinary draw, at the floor of `sqrt(1/400)`: they
+  are never replayed at length, since `2^20` replays of an 8-map word
+  are past `RENEWAL_REPLAYS`. The untargeted picture there is nearly
+  empty too.
+
+**The plan it was built to (2026-09-26).**
+- *The region.* For a blur word `[B, u]`, the view's centre and a rim
+  of points pulled back through `u` exactly, along every branch, as a
+  final's pull-back is (`FinalMap::pull_back`): a disc per piece in
+  B's output, the farthest rim point with a margin.
+- *The density, exactly.* `blur`, `gaussian_blur` and `pie` draw a
+  radius and an angle independently, so in B's frame a disc lies in a
+  polar box, and the draw restricted to the box is the blur's own draw
+  on a smaller range: the radius and angle uniform over it, and the
+  deposit the blur's density there over the box's (1 for `blur`;
+  `gaussian_blur`'s radial density; `pie`'s wedges). The box's mass is
+  analytic.
+- *The draw.* The word is drawn at the boxes' mass (`Cylinder::draw`),
+  a box chosen by its mass, and each sample deposits the blur's density
+  over the box's uniform one, over the box's mass. Unbiased as long as
+  the discs hold the region; nearly every sample lands.
+- *At depth.* Each piece's centre is its reference orbit's start
+  (`m = 1`), and the sample is an offset from it, formed from the box
+  offsets in the blur's polar frame without absolute coordinates.
+- *In the table.* A conditional word's entry in the weights section
+  (`header[6]`) is minus its block's offset, so no other table changes.
+- *Not yet:* `starblur`, and `bubble` with a `pre_blur`, whose
+  densities are not closed forms: their words keep the draw above.
 
 ### C2c. Blurs and finals the walk refused -- done (2026-09-25)
 
@@ -717,8 +774,11 @@ projected coordinates. Open questions include:
   - `the_web_plan_job_plans_a_slice_a_frame` asserts no `sync_cylinders`
     past 16 ms, which times the whole call and not only the plan's
     slice: 13.7-20.2 ms over three runs of the same build (2026-09-25),
-    so it fails about one run in three. `a_web_plan_takes_a_slice_a_frame`
-    times the slices alone and is steady.
+    so it fails about one run in three -- and on 2026-09-26 it failed
+    three runs in three on the committed build (16.6-17.7 ms) and on the
+    conditional draw's (18.0-18.4 ms), whose flame has no blur word.
+    `a_web_plan_takes_a_slice_a_frame` times the slices alone and is
+    steady.
   - `Backward::pieces` is unused.
   - `pie` and `pie3D`'s rotation is an Angle parameter, shown in degrees
     with a 0-360 slider, but the shader adds it in radians, as JWF does

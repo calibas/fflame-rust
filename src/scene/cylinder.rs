@@ -361,6 +361,12 @@ pub struct Cylinder {
     /// same and fewer samples are spent where few land
     /// (`Cylinders::draw_scale`).
     pub draw: f64,
+    /// **Its blur drawn where it lands** (tracker C2b,
+    /// `backward::Conditional`): for a word a blur that ignores its input
+    /// starts, the blur's draw restricted to where the rest of the word
+    /// sends the view. `draw` is then the restriction's mass, and each
+    /// sample deposits the blur's density over the restriction's.
+    pub cond: Option<Box<crate::scene::backward::Conditional>>,
 }
 
 /// The enumerated antichain, restricted to the words that reach the
@@ -673,6 +679,7 @@ impl Cylinders {
                         seeds: Vec::new(),
                         eff: 1.0,
                         draw: 1.0,
+                        cond: None,
                     });
                     Verdict::Emit(kept.len() - 1)
                 } else {
@@ -1332,7 +1339,7 @@ impl Cylinders {
                     // and subdividing further would only lengthen the
                     // prefix. This is where the antichain is cut.
                     if radius <= view.radius {
-                        kept.push(Cylinder { word, prob, centre, radius, seeds: Vec::new(), eff: 1.0, draw: 1.0 });
+                        kept.push(Cylinder { word, prob, centre, radius, seeds: Vec::new(), eff: 1.0, draw: 1.0, cond: None });
                         if kept.len() > MAX_WORDS {
                             return Err(NoCylinders::TooManyWords(kept.len()));
                         }
@@ -1420,6 +1427,7 @@ impl Cylinders {
                 seeds: Vec::new(),
                 eff: 1.0,
                 draw: 1.0,
+                cond: None,
             });
         }
 
@@ -2150,13 +2158,67 @@ pub fn pack_words(cyl: &Cylinders, flame: &Flame) -> Vec<f32> {
         debug_assert!(out.len() < 1 << 24);
     }
     // Each word's deposit, `1 / draw`, where any word is drawn off its
-    // probability; `out[6]` says where (0: every deposit is one).
-    if cyl.words.iter().any(|c| c.draw != 1.0) && out.len() + cyl.words.len() < 1 << 24 {
-        out[6] = out.len() as f32;
+    // probability; `out[6]` says where (0: every deposit is one). A word
+    // drawn conditionally (`Cylinder::cond`) has minus its block's offset
+    // there instead, and its block after: `[pieces, kind, slices,
+    // rotation, thickness, post linear (4), w]`, then per piece `[cdf,
+    // centre (2), rho_c, phi_c, rho_lo - rho_c, rho span, phi_lo - phi_c,
+    // phi span, density, full, 0]` (`header.wgsl`'s `ct_conditional`).
+    let cond_len: usize = cyl.words.iter().filter_map(|c| c.cond.as_ref()).map(|k| COND_HEAD + COND_PIECE * k.pieces.len()).sum();
+    if cyl.words.iter().any(|c| c.draw != 1.0 || c.cond.is_some()) && out.len() + cyl.words.len() + cond_len < 1 << 24 {
+        let at = out.len();
+        out[6] = at as f32;
         out.extend(cyl.words.iter().map(|c| (1.0 / c.draw.max(f64::MIN_POSITIVE)) as f32));
+        for (w, c) in cyl.words.iter().enumerate() {
+            let Some(k) = &c.cond else { continue };
+            out[at + w] = -(out.len() as f32);
+            let (kind, slices, rotation, thickness) = match k.blur.kind {
+                crate::scene::ifs_analysis::FreeKind::Disc => (0.0, 0.0, 0.0, 0.0),
+                crate::scene::ifs_analysis::FreeKind::Gaussian => (1.0, 0.0, 0.0, 0.0),
+                crate::scene::ifs_analysis::FreeKind::Pie { slices, rotation, thickness } => (2.0, slices, rotation, thickness),
+                crate::scene::ifs_analysis::FreeKind::Star { .. } => unreachable!("not boxable"),
+            };
+            let m = k.post.m;
+            out.extend_from_slice(&[
+                k.pieces.len() as f32,
+                kind,
+                slices as f32,
+                rotation as f32,
+                thickness as f32,
+                m[0][0] as f32,
+                m[0][1] as f32,
+                m[1][0] as f32,
+                m[1][1] as f32,
+                k.blur.weight as f32,
+            ]);
+            let total = k.mass();
+            let mut acc = 0.0f64;
+            for (i, p) in k.pieces.iter().enumerate() {
+                acc += p.mass / total;
+                out.extend_from_slice(&[
+                    if i + 1 == k.pieces.len() { 1.0 } else { acc as f32 },
+                    p.centre[0] as f32,
+                    p.centre[1] as f32,
+                    p.rho_c as f32,
+                    p.phi_c as f32,
+                    (p.rho[0] - p.rho_c) as f32,
+                    (p.rho[1] - p.rho[0]) as f32,
+                    (p.phi[0] - p.phi_c) as f32,
+                    (p.phi[1] - p.phi[0]) as f32,
+                    p.density() as f32,
+                    f32::from(u8::from(p.full)),
+                    0.0,
+                ]);
+            }
+        }
     }
     out
 }
+
+/// A conditional draw's block in a replay table (`pack_words`): its head,
+/// and each piece.
+pub const COND_HEAD: usize = 10;
+pub const COND_PIECE: usize = 12;
 
 /// Floats before the first word of a replay table: see [`pack_words`].
 pub const HEADER_FLOATS: usize = 8;

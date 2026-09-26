@@ -283,7 +283,25 @@ fn ct_offsets(p: vec2<f32>, b: u32, blk: u32, m: u32, len: u32) -> vec2<f32> {
             best = o;
         }
     }
-    var d = p - vec2<f32>(cylinders[best], cylinders[best + 1u]);
+    return ct_offsets_from(b, best, p - vec2<f32>(cylinders[best], cylinders[best + 1u]), m, len);
+}
+
+// The same from chain `j` of the word's block, with the offset `d` from
+// its base: a conditional draw's sample, formed from its piece's centre
+// (`ct_conditional`), whose chain is its piece's.
+fn ct_offsets_chain(b: u32, blk: u32, j: u32, d: vec2<f32>, m: u32, len: u32) -> vec2<f32> {
+    let fin = u32(cylinders[7]);
+    let finals = select(0u, min(u32(cylinders[fin]), 4u), fin != 0u);
+    let per = 2u * (len - m) + 2u * finals + 2u;
+    let chains = min(u32(cylinders[blk + 1u]), 16u);
+    return ct_offsets_from(b, blk + 2u + min(j, chains - 1u) * per, d, m, len);
+}
+
+// Chain `best`'s offset steps from `d0`: the word's, then the finals'.
+fn ct_offsets_from(b: u32, best: u32, d0: vec2<f32>, m: u32, len: u32) -> vec2<f32> {
+    let fin = u32(cylinders[7]);
+    let finals = select(0u, min(u32(cylinders[fin]), 4u), fin != 0u);
+    var d = d0;
     let rows = u32(cylinders[2]);
     for (var k = m; k < len; k = k + 1u) {
         let at = best + 2u * (k - m);

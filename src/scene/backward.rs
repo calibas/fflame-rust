@@ -53,7 +53,7 @@
 
 use super::cylinder::{sym_arm, sym_of, sym_transform, Cylinder, Cylinders, NoCylinders, View, MAX_DEPTH, MAX_WORDS};
 use super::final_map::FinalMap;
-use super::ifs_analysis::{analyse_2d_maps_blurred_sliced, Blur, Ifs2, IfsMap, Kernel, Map2, PreBlur};
+use super::ifs_analysis::{analyse_2d_maps_blurred_sliced, Affine2, Blur, FreeBlur, Ifs2, IfsMap, Kernel, Map2, PreBlur};
 use super::transforms::Flame;
 use crate::variations::VariationRegistry;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1057,6 +1057,101 @@ pub struct RefChain {
     pub end: [f64; 2],
 }
 
+/// **The conditional draw** (tracker C2b): a blur word's first point
+/// drawn already where the rest of the word sends it into the view.
+///
+/// A word `[B, u]` whose blur `B` ignores its input lands a sample when
+/// `B`'s draw falls in `u`'s pull-back of the view -- at depth a sliver of
+/// the blob, so drawn from the whole blob almost none land. The pull-back
+/// is found exactly (`Backward::conditional`) as discs in `B`'s output,
+/// one per piece; each disc lies in a box of `B`'s own polar frame, where
+/// the blur draws its radius and angle independently; and the blur's draw
+/// restricted to a box is the blur's own draw on smaller ranges. So a
+/// sample is drawn uniformly in radius and angle over a box chosen by its
+/// mass, and deposits the blur's density there over the boxes' (1 for
+/// `blur`, whose density per radius and angle is flat): unbiased while the
+/// discs hold the pull-back, and nearly every sample lands.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Conditional {
+    /// The blur, and its output's frame: `y = post(w * v)` for its
+    /// unweighted draw `v`.
+    pub blur: FreeBlur,
+    pub post: Affine2,
+    pub pieces: Vec<Piece>,
+}
+
+/// One piece of a [`Conditional`]: a disc of the blur's output, and the
+/// polar box of the blur's frame that holds it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Piece {
+    /// Where the view's centre pulls back to: the disc's centre, and the
+    /// reference orbit's start for a replay in offsets.
+    pub centre: [f64; 2],
+    /// The centre's radius and angle in the blur's frame.
+    pub rho_c: f64,
+    pub phi_c: f64,
+    /// The box, as ranges of radius and angle.
+    pub rho: [f64; 2],
+    pub phi: [f64; 2],
+    /// The box goes round the frame's centre: every angle, from radius 0.
+    pub full: bool,
+    /// The blur's probability of the box.
+    pub mass: f64,
+}
+
+impl Piece {
+    /// The box's own density per radius and angle, `mass / area`: what a
+    /// sample in it divides the blur's by.
+    pub fn density(&self) -> f64 {
+        self.mass / ((self.rho[1] - self.rho[0]) * (self.phi[1] - self.phi[0]))
+    }
+
+    /// Whether `(rho, phi)` is in the box, the angle taken round the turn.
+    pub fn holds(&self, rho: f64, phi: f64) -> bool {
+        let tau = std::f64::consts::TAU;
+        let t = (phi - self.phi[0]).rem_euclid(tau);
+        rho >= self.rho[0] && rho <= self.rho[1] && (self.full || t <= self.phi[1] - self.phi[0])
+    }
+}
+
+impl Conditional {
+    /// The blur's probability of the boxes: the word's draw rate.
+    pub fn mass(&self) -> f64 {
+        self.pieces.iter().map(|p| p.mass).sum()
+    }
+
+    /// **One conditional draw**, as the shader makes it: the piece, the
+    /// point in the blur's output, and its deposit -- the blur's density
+    /// over the boxes' mixture there, which a sample of an overlapped box
+    /// divides among them.
+    pub fn sample(&self, u: &mut impl FnMut() -> f64) -> (usize, [f64; 2], f64) {
+        let mut t = u() * self.mass();
+        let mut j = self.pieces.len() - 1;
+        for (i, p) in self.pieces.iter().enumerate() {
+            if t < p.mass {
+                j = i;
+                break;
+            }
+            t -= p.mass;
+        }
+        let p = &self.pieces[j];
+        let rho = p.rho[0] + u() * (p.rho[1] - p.rho[0]);
+        let phi = p.phi[0] + u() * (p.phi[1] - p.phi[0]);
+        let w = self.blur.weight;
+        let y = self.post.apply([w * rho * phi.cos(), w * rho * phi.sin()]);
+        let mix: f64 = p.density() + self.pieces.iter().enumerate().filter(|(i, q)| *i != j && q.holds(rho, phi)).map(|(_, q)| q.density()).sum::<f64>();
+        (j, y, self.blur.polar_density(rho, phi) / (std::f64::consts::TAU * mix))
+    }
+}
+
+/// A conditional draw's pieces at most: past it, the word keeps the
+/// blob's whole draw.
+pub const CONDITIONAL_PIECES: usize = 16;
+/// A word is drawn conditionally where the boxes hold under this share of
+/// its blob: above it the whole draw lands well enough, and the discs are
+/// large enough for the pull-back's rim to bound them loosely.
+pub const CONDITIONAL_BELOW: f64 = 0.25;
+
 /// **A blurred transform, planned as a renewal** (tracker items C2,
 /// C2c). A `pre_blur` that reaches across the attractor's whole image in
 /// the frame its kernel reads, and past the kernel's preimage of every
@@ -1519,6 +1614,96 @@ impl Backward {
         matches!(c.pts, Pts::Index(_)) && self.alphabet[c.ai].renewal.is_none()
     }
 
+    /// **The conditional draw for a blur word** (tracker C2b): see
+    /// [`Conditional`]. `None` where the word's blur is not one that
+    /// ignores its input with a closed-form density, where the pull-back
+    /// cannot be followed, or where it holds nothing of the blob.
+    ///
+    /// The view's centre and rim are pulled back through the rest of the
+    /// word, along every branch; each piece's disc is its centre and
+    /// farthest rim point, with a margin. The inverse of a symbol is
+    /// continuous and one-to-one on its branch, so a piece is the region
+    /// its rim bounds, and its farthest point from an inside one is on the
+    /// rim.
+    ///
+    /// **The whole view, not the word's share of it.** The word's image
+    /// can cover part of the view -- a root's arm holds a sector -- and the
+    /// view's centre then is not the word's point: confirmed with its arm,
+    /// it was dropped, and nine blur words in ten with it. The pull-back of
+    /// the whole view holds what the word sends into it, which is all the
+    /// draw needs: a larger box costs samples that miss, not a bias. Nor
+    /// is a point asked whether the symbol before lands near it: after the
+    /// blur the points are the blob's images, whatever the attractor's.
+    pub fn conditional(&self, word: &[u32], view: View) -> Option<Conditional> {
+        const RIM: usize = 32;
+        let first = *word.first()?;
+        let t = self.transforms.iter().find(|t| t.index == crate::scene::cylinder::sym_transform(first) as usize)?;
+        let Some(Blur::Free(blur)) = t.blur else { return None };
+        if !blur.boxable() {
+            return None;
+        }
+        let Map2::Nonlinear(n) = &self.ifs.maps[t.map].forward else { return None };
+        let post = n.post;
+        let post_inv = post.inverse()?;
+        let ais: Vec<usize> = word.iter().map(|&s| self.alphabet.iter().position(|a| a.sym == s)).collect::<Option<_>>()?;
+        let rim: Vec<[f64; 2]> = (0..RIM)
+            .map(|k| {
+                let a = std::f64::consts::TAU * k as f64 / RIM as f64;
+                [view.centre[0] + view.radius * a.cos(), view.centre[1] + view.radius * a.sin()]
+            })
+            .collect();
+        let mut level: Vec<([f64; 2], Vec<[f64; 2]>)> = vec![(view.centre, rim)];
+        for k in (1..word.len()).rev() {
+            let a = &self.alphabet[ais[k]];
+            let mut next = Vec::new();
+            for (q, rim) in &level {
+                for &mb in &a.branches {
+                    let inv = &self.ifs.maps[mb].inverse;
+                    let p = inv.apply(*q);
+                    if !finite(p) {
+                        continue;
+                    }
+                    let back: Vec<[f64; 2]> = rim.iter().map(|&r| inv.apply(r)).collect();
+                    if !back.iter().all(|x| finite(*x)) {
+                        return None;
+                    }
+                    next.push((p, back));
+                }
+            }
+            if next.is_empty() || next.len() > CONDITIONAL_PIECES {
+                return None;
+            }
+            level = next;
+        }
+        let (_, spread) = crate::scene::ifs_analysis::singular_values_of(post_inv.m);
+        let w = blur.weight;
+        let reach = blur.radius();
+        let pieces: Vec<Piece> = level
+            .into_iter()
+            .filter_map(|(c, rim)| {
+                let r = 1.05 * rim.iter().map(|x| (x[0] - c[0]).hypot(x[1] - c[1])).fold(0.0f64, f64::max);
+                // Into the blur's frame: `v = post^-1(y) / w`.
+                let u = post_inv.apply(c);
+                let (cv, rv) = ([u[0] / w, u[1] / w], r * spread / w.abs());
+                let rho_c = cv[0].hypot(cv[1]);
+                let phi_c = cv[1].atan2(cv[0]);
+                let full = rho_c <= rv;
+                let (rho, phi) = if full {
+                    ([0.0, (rho_c + rv).min(reach)], [phi_c - std::f64::consts::PI, phi_c + std::f64::consts::PI])
+                } else {
+                    let a = (rv / rho_c).asin();
+                    ([rho_c - rv, (rho_c + rv).min(reach)], [phi_c - a, phi_c + a])
+                };
+                if !(rho[1] > rho[0]) {
+                    return None;
+                }
+                let mass = blur.box_mass(rho[0], rho[1], phi[0], phi[1]);
+                (mass > 0.0).then_some(Piece { centre: c, rho_c, phi_c, rho, phi, full, mass })
+            })
+            .collect();
+        (!pieces.is_empty()).then(|| Conditional { blur, post, pieces })
+    }
+
     /// Whether a blur starts `word`: the renewal is its first map.
     fn renewal_first(&self, word: &[u32]) -> bool {
         word.first().is_some_and(|s| self.alphabet.iter().any(|a| a.sym == *s && a.renewal.is_some()))
@@ -1661,6 +1846,33 @@ impl Backward {
         let one = |w: &Cylinder| -> Option<WordRefs> {
             let syms: Vec<(&IfsMap<Map2>, u32)> = w.word.iter().map(|&s| self.sym_map(s)).collect::<Option<_>>()?;
             let n = syms.len();
+            // **A word drawn conditionally** (`Conditional`) samples as
+            // an offset from a piece's centre: one reference per piece,
+            // from it, in the pieces' order, and every step past the blur
+            // in offsets.
+            if let Some(cond) = &w.cond {
+                let chains = cond
+                    .pieces
+                    .iter()
+                    .map(|p| {
+                        let mut z = vec![p.centre, p.centre];
+                        for (m, arm) in &syms[1..] {
+                            let y = forward(m, *z.last().expect("seeded"), *arm);
+                            if !finite(y) {
+                                return None;
+                            }
+                            z.push(y);
+                        }
+                        let e = self.plotted(z[n]);
+                        Some(RefChain {
+                            bases: z[1..n].to_vec(),
+                            finals: self.finals.as_ref().map_or_else(Vec::new, |f| f.positions(z[n])),
+                            end: [e[0] - c[0], e[1] - c[1]],
+                        })
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                return Some(WordRefs { m: 1, chains });
+            }
             // A word a renewal starts is followed from AFTER it: its seeds
             // are points of the rest's region (`close`), the blur is the
             // shader's alone, and `m` is never before it.
@@ -2804,7 +3016,7 @@ impl Backward {
                 Pts::Index(idx) => idx.iter().map(|&i| self.sample[i as usize]).collect(),
             }
         };
-        let disc = |word: Vec<u32>, prob: f64, seeds: Vec<[f64; 2]>| Cylinder { word, prob, centre: view.centre, radius: view.radius, seeds, eff: 0.0, draw: 1.0 };
+        let disc = |word: Vec<u32>, prob: f64, seeds: Vec<[f64; 2]>| Cylinder { word, prob, centre: view.centre, radius: view.radius, seeds, eff: 0.0, draw: 1.0, cond: None };
 
         let mut node_kept: Vec<(Cylinder, f64)> = Vec::new();
         let mut node_next: Vec<Node> = Vec::new();
@@ -3134,7 +3346,7 @@ impl Backward {
                         tr.unrefined += 1;
                     }
                     let seeds = self.seeds_from(&[], Some(&n.pts));
-                    kept.push((Cylinder { word: n.word, prob: n.prob, centre: view.centre, radius: view.radius, seeds, eff: 0.0, draw: 1.0 }, n.eff));
+                    kept.push((Cylinder { word: n.word, prob: n.prob, centre: view.centre, radius: view.radius, seeds, eff: 0.0, draw: 1.0, cond: None }, n.eff));
                     tr.forced += 1;
                 }
                 break;
@@ -3242,7 +3454,7 @@ impl Backward {
                         kept_mass += n.prob;
                     }
                     let seeds = self.seeds_from(&[], Some(&n.pts));
-                    kept.push((Cylinder { word: n.word, prob: n.prob, centre: view.centre, radius: view.radius, seeds, eff: 0.0, draw: 1.0 }, n.eff));
+                    kept.push((Cylinder { word: n.word, prob: n.prob, centre: view.centre, radius: view.radius, seeds, eff: 0.0, draw: 1.0, cond: None }, n.eff));
                     tr.beam += 1;
                 }
             }
@@ -3275,6 +3487,26 @@ impl Backward {
                 _ => merged.push((c, e)),
             }
         }
+        // **A blur's word drawn where it lands** (C2b, `Conditional`):
+        // where its blur ignores its input and the boxes hold under
+        // `CONDITIONAL_BELOW` of the blob, the word is drawn at their
+        // mass and never replayed at length below.
+        {
+            let conds = map_sliced(
+                &merged,
+                |(c, _)| if self.renewal_first(&c.word) { self.conditional(&c.word, view) } else { None },
+                slicer,
+            )
+            .await;
+            for ((c, _), cond) in merged.iter_mut().zip(conds) {
+                if let Some(cond) = cond.filter(|k| k.mass() < CONDITIONAL_BELOW) {
+                    c.draw = cond.mass();
+                    c.cond = Some(Box::new(cond));
+                }
+            }
+            slicer.tick().await;
+        }
+
         // **A blur's word that would take the draws for nothing** (C2b).
         // Kept by geometry, a blur's word can carry most of the plan's
         // probability while landing almost never: the true Grand Julian
@@ -3308,7 +3540,7 @@ impl Backward {
                     1.0
                 }
             };
-            let unmeasured = |c: &Cylinder, e: f64| self.renewal_first(&c.word) && !(e > 0.0) && c.draw == 1.0;
+            let unmeasured = |c: &Cylinder, e: f64| self.renewal_first(&c.word) && !(e > 0.0) && c.draw == 1.0 && c.cond.is_none();
             let mut budget = RENEWAL_REPLAYS;
             loop {
                 let drawn: f64 = merged.iter().map(|(c, e)| c.prob * rate(c, *e)).sum();
@@ -3357,7 +3589,7 @@ impl Backward {
                 .map(|(mut c, e)| {
                     c.eff = e;
                     // Unless a longer replay set it (above).
-                    if self.renewal_first(&c.word) && c.draw == 1.0 {
+                    if self.renewal_first(&c.word) && c.draw == 1.0 && c.cond.is_none() {
                         c.draw = e.max(draw_floor).min(1.0).sqrt();
                     }
                     c
@@ -5692,6 +5924,152 @@ mod tests {
             }
         }
     }
+
+    /// **The conditional draw lands what the whole draw does** (C2b): for
+    /// the Grand JuliaN generator's `blur`, `gaussian_blur` and `pie3D`
+    /// blobs, each conditionally drawn word's share of the view two ways
+    /// -- its boxes' mass times the mean deposit of the conditional samples
+    /// that land, and long replays of the whole word, blur drawn -- summed
+    /// over the heaviest words. And how many conditional samples land.
+    #[test]
+    #[ignore = "a measurement"]
+    fn the_conditional_draw_lands_what_the_whole_draw_does() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let host = crate::script::ScriptHost::new();
+        let text = include_str!("../../assets/scripts/generators/grand_julian.rhai");
+        let mut u = {
+            let mut st = 0x1234_5678u64;
+            move || {
+                st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                ((st >> 11) as f64) / ((1u64 << 53) as f64)
+            }
+        };
+        let mut worst = 0.0f64;
+        for (kind, seed) in [("blur", 3u64), ("gaussian_blur", 9), ("pie3D", 12)] {
+            let mut cfg = host.run(text, &crate::config::FractalConfig::default(), seed, Default::default()).expect("runs").config;
+            if kind == "gaussian_blur" {
+                let w = cfg.flame.transforms[0].variations["blur"];
+                cfg.flame.transforms[0].remove_variation("blur");
+                cfg.flame.transforms[0].set_variation("gaussian_blur", w);
+            }
+            let b = Backward::read(&cfg.flame, reg).expect("reads");
+            for (zoom, frac) in [(1e2f64, 0.75f64), (1e3, 0.3), (1e3, 0.55)] {
+                let view = View::of(zoom, b.plotted(b.sample_point(frac)), 1280, 720);
+                let Ok(plan) = b.plan_eval(view, PlanOptions::default(), &mut CpuEval) else { continue };
+                let mut conds: Vec<&Cylinder> = plan.words.iter().filter(|w| w.cond.is_some()).collect();
+                if conds.is_empty() {
+                    println!("  {kind} {zoom:.0e} at {frac}: no word drawn conditionally ({} words)", plan.words.len());
+                    continue;
+                }
+                conds.sort_by(|a, b| (b.prob * b.draw).total_cmp(&(a.prob * a.draw)));
+                let (mut cond_sum, mut cond_var, mut long_sum, mut landed, mut drawn) = (0.0f64, 0.0f64, 0.0f64, 0usize, 0usize);
+                const M: usize = 4000;
+                const K: usize = 1 << 17;
+                for w in conds.iter().take(200) {
+                    let c = w.cond.as_ref().expect("conditional");
+                    let (mut s1, mut s2) = (0.0f64, 0.0f64);
+                    for _ in 0..M {
+                        let (_, y, dep) = c.sample(&mut u);
+                        let lands = b.forward_along(&w.word[1..], y).is_some_and(|z| (z[0] - view.centre[0]).hypot(z[1] - view.centre[1]) <= view.radius);
+                        let x = if lands { dep } else { 0.0 };
+                        landed += usize::from(lands);
+                        drawn += 1;
+                        s1 += x;
+                        s2 += x * x;
+                    }
+                    let mean = s1 / M as f64;
+                    let var = (s2 / M as f64 - mean * mean).max(0.0) / M as f64;
+                    cond_sum += w.prob * c.mass() * mean;
+                    cond_var += (w.prob * c.mass()).powi(2) * var;
+                    long_sum += w.prob * b.landings(&w.word, view, K) as f64 / K as f64;
+                }
+                let long_sd = (long_sum * plan.words.iter().map(|w| w.prob).fold(0.0, f64::max) / K as f64).sqrt();
+                let sd = (cond_var.sqrt()).hypot(long_sd);
+                let rel = (cond_sum - long_sum).abs() / long_sum.max(f64::MIN_POSITIVE);
+                println!(
+                    "  {kind} {zoom:.0e} at {frac}: {} of {} words conditional; share conditional {cond_sum:.3e}, whole {long_sum:.3e} ({:.1} sd, {:.1}%); {:.2} of conditional samples land",
+                    conds.len(),
+                    plan.words.len(),
+                    (cond_sum - long_sum).abs() / sd.max(f64::MIN_POSITIVE),
+                    100.0 * rel,
+                    landed as f64 / drawn as f64
+                );
+                assert!((cond_sum - long_sum).abs() <= 4.0 * sd + 0.02 * long_sum, "{kind} {zoom:.0e}: the conditional draw's share {cond_sum:.3e} is not the whole draw's {long_sum:.3e}");
+                worst = worst.max(rel);
+            }
+        }
+        println!("  worst relative difference {:.1}%", 100.0 * worst);
+    }
+
+
+    /// **Where a blur flame's draws go at depth** (C2b): per plan, the
+    /// share of the draws the blur's words take, the share of the landings
+    /// they give, and the render's landing rate -- each word's efficiency
+    /// from long replays -- by how efficient the words are.
+    #[test]
+    #[ignore = "a measurement"]
+    fn where_a_blur_flames_draws_go() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let host = crate::script::ScriptHost::new();
+        let text = include_str!("../../assets/scripts/generators/grand_julian.rhai");
+        for seed in [3u64, 14] {
+            let cfg = host.run(text, &crate::config::FractalConfig::default(), seed, Default::default()).expect("runs").config;
+            let b = Backward::read(&cfg.flame, reg).expect("reads");
+            for zoom in [1e3f64, 1e4, 1e5, 1e6] {
+                let view = View::of(zoom, b.plotted(b.sample_point(0.3)), 1280, 720);
+                let disc = b.pulled_back(view).0.unwrap_or(view);
+                let Ok(plan) = b.plan_eval(view, PlanOptions::default(), &mut CpuEval) else { continue };
+                let drawn: f64 = plan.words.iter().map(|w| w.prob * w.draw).sum();
+                // eff from long replays, for the blur words; the plan's for the rest.
+                let mut rows: Vec<(bool, f64, f64)> = Vec::new(); // (blur, draw share, eff)
+                let mut u = { let mut st = 7u64; move || { st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407); ((st >> 11) as f64) / ((1u64 << 53) as f64) } };
+                let mut conditional = 0.0f64;
+                for w in &plan.words {
+                    let blur = b.renewal_first(&w.word);
+                    // A conditional word lands as its samples do.
+                    let e = match &w.cond {
+                        Some(c) => {
+                            conditional += w.prob * w.draw / drawn;
+                            let n = 4000;
+                            (0..n).filter(|_| {
+                                let (_, y, _) = c.sample(&mut u);
+                                b.forward_along(&w.word[1..], y).is_some_and(|z| (z[0] - disc.centre[0]).hypot(z[1] - disc.centre[1]) <= disc.radius)
+                            }).count() as f64 / n as f64
+                        }
+                        None if blur => b.landings(&w.word, disc, 1 << 15) as f64 / (1 << 15) as f64,
+                        None => w.eff,
+                    };
+                    rows.push((blur, w.prob * w.draw / drawn, e));
+                }
+                let land: f64 = rows.iter().map(|(_, d, e)| d * e).sum();
+                let blur_draw: f64 = rows.iter().filter(|r| r.0).map(|r| r.1).sum();
+                let blur_land: f64 = rows.iter().filter(|r| r.0).map(|(_, d, e)| d * e).sum();
+                let mut by: std::collections::BTreeMap<i32, (f64, f64)> = Default::default();
+                for (blur, d, e) in &rows {
+                    if *blur {
+                        let k = if *e > 0.0 { e.log10().floor() as i32 } else { -99 };
+                        let slot = by.entry(k).or_default();
+                        slot.0 += d;
+                        slot.1 += d * e;
+                    }
+                }
+                println!(
+                    "  seed {seed} {zoom:.0e}: {} words ({:.1}% of draws conditional); blur words take {:.1}% of draws, give {:.1}% of landings; render lands {:.3} of draws",
+                    plan.words.len(),
+                    100.0 * conditional,
+                    100.0 * blur_draw,
+                    100.0 * blur_land / land.max(f64::MIN_POSITIVE),
+                    land
+                );
+                println!("      blur draws by efficiency decade (draw share, landing share): {:?}",
+                    by.iter().map(|(k, (d, l))| format!("1e{k}: {:.3} {:.3}", d, l / land.max(f64::MIN_POSITIVE))).collect::<Vec<_>>());
+            }
+        }
+    }
+
+
 
     /// **What the inverse walk refuses across the corpus, and why**
     /// (tracker C2c). Every flame in `output/*.flame`, `output/flame-zoom`
