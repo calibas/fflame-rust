@@ -3540,19 +3540,20 @@ mod gpu_tests {
         targeted_against_untargeted("true-grand-julian", &[1e1, 1e2, 1e3, 1e5, 1e7]);
     }
 
-    /// **Blobs that ignore their input** (tracker C2c): Grand JuliaN
-    /// generator flames whose transform 0 is `blur`, `starblur`, `pie3D`
-    /// or `gaussian_blur`, planned as renewals. The walk's samples of
-    /// them are drawn on the CPU and the render's on the GPU, so this is
-    /// also the check that the two draw alike. Written to
-    /// `output/flame-zoom/free-*.fflame` first.
+    /// **Blobs that ignore their input, and partial blurs** (tracker
+    /// C2c): Grand JuliaN generator flames whose transform 0 is `blur`,
+    /// `starblur`, `pie3D` or `gaussian_blur`, or `bubble` with a
+    /// `pre_blur` too small to forget its input, planned as renewals. The
+    /// walk's samples of them are drawn on the CPU and the render's on
+    /// the GPU, so this is also the check that the two draw alike.
+    /// Written to `output/flame-zoom/free-*.fflame` first.
     #[test]
     #[ignore = "needs a GPU; writes output/flame-zoom"]
     fn a_targeted_free_blur_render_is_the_untargeted_render() {
         let host = crate::script::ScriptHost::new();
         let text = include_str!("../../assets/scripts/generators/grand_julian.rhai");
         let _ = std::fs::create_dir_all("output/flame-zoom");
-        for (kind, seed) in [("blur", 3u64), ("starblur", 4), ("pie3D", 12), ("gaussian_blur", 9)] {
+        for (kind, seed) in [("blur", 3u64), ("starblur", 4), ("pie3D", 12), ("gaussian_blur", 9), ("pre_blur", 2), ("pre_blur", 25)] {
             let mut cfg = host.run(text, &FractalConfig::default(), seed, Default::default()).expect("the script runs").config;
             if kind == "gaussian_blur" {
                 let w = cfg.flame.transforms[0].variations["blur"];
@@ -3560,15 +3561,19 @@ mod gpu_tests {
                 cfg.flame.transforms[0].set_variation("gaussian_blur", w);
             }
             assert!(cfg.flame.transforms[0].variations.get(kind).is_some_and(|w| *w != 0.0), "seed {seed} is not a {kind} flame");
-            let name = format!("free-{kind}");
+            let name = format!("free-{kind}-{seed}");
             std::fs::write(format!("output/flame-zoom/{name}.fflame"), serde_json::to_string_pretty(&cfg).expect("json")).expect("written");
             println!("== {name} (seed {seed}), a sample point outside the blob");
             // The blob's disc, on the generator's identity post: a
             // view inside it is the blob's smooth glow, where a renewal
             // word lands a sliver of its draws (C2b) and a fair
             // comparison takes more samples than this gate spends.
-            let w = cfg.flame.transforms[0].variations[kind].abs() as f64;
-            let reach = if kind == "gaussian_blur" { 2.0 } else { 1.0 } * w;
+            let t0 = &cfg.flame.transforms[0];
+            let reach = match kind {
+                "gaussian_blur" => 2.0 * t0.variations[kind].abs() as f64,
+                "pre_blur" => t0.variations["bubble"].abs() as f64,
+                _ => t0.variations[kind].abs() as f64,
+            };
             targeted_against_untargeted_at(&name, &[1e1, 1e2, 1e3], |b| {
                 (1..40)
                     .map(|k| b.sample_point(k as f64 / 40.0))

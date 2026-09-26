@@ -1049,20 +1049,29 @@ pub struct RefChain {
     pub end: [f64; 2],
 }
 
-/// **A transform whose blur forgets its input** (tracker item C2): its
-/// `pre_blur` reaches across the attractor's whole image in the frame
-/// its kernel reads, and past the kernel's preimage of every point it
-/// can output. Every point of the attractor then has a positive chance
-/// of landing anywhere in its output, so the region of a word it starts
-/// is the whole attractor: its child is kept, never carried, and kept by
-/// whether the node's region can reach `out` at all -- not by replays,
-/// which at depth miss a smooth part that lands one time in ten million.
+/// **A blurred transform, planned as a renewal** (tracker items C2,
+/// C2c). A `pre_blur` that reaches across the attractor's whole image in
+/// the frame its kernel reads, and past the kernel's preimage of every
+/// point it can output, forgets its input: every point of the attractor
+/// has a positive chance of landing anywhere in its output, and the
+/// region of a word it starts is the whole attractor. Its child is kept,
+/// never carried, and kept by whether the node's region can reach `out`
+/// at all -- not by replays, which at depth miss a smooth part that lands
+/// one time in ten million.
 ///
-/// v1 knows one kernel, bubble, whose inner branch holds a preimage of
-/// every image point within radius 2, and whose image is the unit disc.
-/// A transform whose one variation ignores its input -- `blur`,
+/// **A smaller blur is planned the same way.** Keeping by geometry is
+/// complete whatever the blur's reach: `out` holds everything the
+/// transform can output, so a word dropped because the view's pull-back
+/// misses it cannot land. The blurred symbol is only ever a word's first,
+/// and every word after it is unblurred and walked as any other. What a
+/// partial blur's word loses by not being carried is a refinement: at a
+/// view smaller than its smear there is nothing to localize, and above it
+/// the replays measure what it lands.
+///
+/// v1 knows one kernel, bubble, whose image is the unit disc. A
+/// transform whose one variation ignores its input -- `blur`,
 /// `gaussian_blur`, `pie`, `pie3D`, `starblur` (`FreeBlur`) -- is a
-/// renewal by construction, its output the disc its draw lies in (C2c).
+/// renewal by construction, its output the disc its draw lies in.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Renewal {
     /// A disc holding everything the transform can output.
@@ -1070,8 +1079,8 @@ struct Renewal {
     out_radius: f64,
 }
 
-/// The inner preimage radius of bubble's image: `4v/(|v|²+4)` sends the
-/// disc of radius 2 onto the unit disc.
+/// Where bubble's radial profile `4r/(r²+4)` reaches the unit circle:
+/// it sends the disc of radius 2 onto the unit disc.
 const BUBBLE_PREIMAGE: f64 = 2.0;
 
 /// The blur's draw, as JWF's `pre_blur` makes it: `weight·(six uniforms
@@ -1206,17 +1215,17 @@ impl Backward {
                 .get(m.transform_index)
                 .map_or(0.0, |t| (t.weight as f64).max(0.0));
             let blur = blurs.get(m.transform_index).copied().flatten();
-            let renewal = match blur {
-                Some(b) => Some(Self::renewal(&ifs, m, b).map_err(|why| format!("transform {}: {why}", m.transform_index))?),
-                None => None,
-            };
+            if let Some(b) = blur {
+                Self::blur_planned(m, b).map_err(|why| format!("transform {}: {why}", m.transform_index))?;
+            }
             transforms.push(TransformInfo {
                 index: m.transform_index,
                 weight,
                 arms: forward_arms(m),
                 map: mi,
                 blur,
-                renewal,
+                // Its output disc wants the attractor: set below.
+                renewal: None,
                 branches: vec![mi],
             });
         }
@@ -1302,6 +1311,17 @@ impl Backward {
         if !(extent > 0.0) || !extent.is_finite() {
             return Err("the attractor has no extent".into());
         }
+        // **The blurred transforms' output discs**, from the attractor
+        // the blur itself draws: the stripped maps' ball need not hold
+        // it, and an output disc drawn too small drops words that land.
+        for t in &mut transforms {
+            if let Some(b) = t.blur {
+                t.renewal = Some(Self::renewal(&ifs.maps[t.map], b, centre, extent));
+            }
+        }
+        for a in &mut alphabet {
+            a.renewal = transforms.iter().find(|t| t.map == a.map).and_then(|t| t.renewal);
+        }
         let cell = 2.0 * extent / GRID_CELLS as f64;
         let key = |p: [f64; 2]| -> Cell { ((p[0] / cell).floor() as i32, (p[1] / cell).floor() as i32) };
         slicer.tick().await;
@@ -1376,41 +1396,39 @@ impl Backward {
         out
     }
 
-    /// Whether a blurred transform is a [`Renewal`], and its output disc;
-    /// or why it cannot be planned.
-    fn renewal(ifs: &Ifs2, m: &IfsMap<Map2>, b: Blur) -> Result<Renewal, String> {
+    /// Whether a blurred transform can be planned, or why not.
+    fn blur_planned(m: &IfsMap<Map2>, b: Blur) -> Result<(), String> {
         let Map2::Nonlinear(n) = &m.forward else {
             return Err("pre_blur is planned beside one kernel alone (not an affine, not a sum) so far".into());
         };
-        let b = match b {
-            // A variation that ignores its input forgets it whatever
-            // came in: a renewal, whose output is its draw's disc (the
-            // analysis's stand-in is `bubble` scaled to it).
-            Blur::Free(f) => {
-                let (_, pmax) = crate::scene::ifs_analysis::singular_values_of(n.post.m);
-                return Ok(Renewal { out_centre: n.post.apply([0.0, 0.0]), out_radius: pmax * f.weight.abs() * f.radius() });
-            }
-            Blur::Pre(b) => b,
-        };
-        if !matches!(n.kernel, Kernel::Bubble) {
-            return Err(format!("pre_blur is planned beside bubble so far, not {:?}", n.kernel));
+        match b {
+            Blur::Pre(_) if !matches!(n.kernel, Kernel::Bubble) => Err(format!("pre_blur is planned beside bubble so far, not {:?}", n.kernel)),
+            _ => Ok(()),
         }
-        // The attractor's image in the kernel's frame: the ball through
-        // `pre`, by its centre and largest stretch.
-        let c = n.pre.apply(ifs.ball.centre);
-        let (_, smax) = crate::scene::ifs_analysis::singular_values_of(n.pre.m);
-        let image = c[0].hypot(c[1]) + smax * ifs.ball.radius;
-        let need = image + BUBBLE_PREIMAGE;
-        if b.reach() < need {
-            return Err(format!(
-                "its pre_blur reaches {:.3}, short of the {:.3} it takes to forget its input; a partial blur is not planned yet",
-                b.reach(),
-                need
-            ));
-        }
-        // Bubble's image is the unit disc: w of it, through `post`.
+    }
+
+    /// A blurred transform's [`Renewal`]: the disc holding everything it
+    /// can output, given an attractor within `extent` of `centre`.
+    fn renewal(m: &IfsMap<Map2>, b: Blur, centre: [f64; 2], extent: f64) -> Renewal {
+        let Map2::Nonlinear(n) = &m.forward else { unreachable!("checked by blur_planned") };
         let (_, pmax) = crate::scene::ifs_analysis::singular_values_of(n.post.m);
-        Ok(Renewal { out_centre: n.post.apply([0.0, 0.0]), out_radius: pmax * n.w.abs() })
+        let out_centre = n.post.apply([0.0, 0.0]);
+        match b {
+            // A variation that ignores its input: its draw's disc (the
+            // analysis's stand-in is `bubble` scaled to it).
+            Blur::Free(f) => Renewal { out_centre, out_radius: pmax * f.weight.abs() * f.radius() },
+            // Bubble's radial profile `4r/(r² + 4)` rises to 1 at r = 2:
+            // an input that reaches no further than `r` comes out within
+            // it. The input reaches the attractor's image in the kernel's
+            // frame, and the blur's reach past that -- the image from
+            // the sample, with a margin for the points it did not draw.
+            Blur::Pre(b) => {
+                let c = n.pre.apply(centre);
+                let (_, smax) = crate::scene::ifs_analysis::singular_values_of(n.pre.m);
+                let r = (c[0].hypot(c[1]) + 1.02 * smax * extent + b.reach()).min(BUBBLE_PREIMAGE);
+                Renewal { out_centre, out_radius: pmax * n.w.abs() * 4.0 * r / (r * r + 4.0) }
+            }
+        }
     }
 
     /// The flame's forward maps as the shader's rows, one per transform
@@ -5426,7 +5444,17 @@ mod tests {
                 continue;
             }
             let t0 = &cfg.flame.transforms[0];
-            let Some(kind) = ["blur", "pie3D", "starblur"].into_iter().find(|v| t0.variations.get(*v).is_some_and(|w| *w != 0.0)) else { continue };
+            let pre = t0.variations.get("pre_blur").copied().unwrap_or(0.0);
+            let kind = if t0.variations.contains_key("bubble") {
+                // A partial blur: too small to forget its input.
+                if pre < 0.6 { Some("pre_blur<0.6") } else if pre < 1.6 { Some("pre_blur<1.6") } else { None }
+            } else {
+                ["blur", "pie3D", "starblur"].into_iter().find(|v| t0.variations.get(*v).is_some_and(|w| *w != 0.0))
+            };
+            if std::env::var("KINDS").is_ok_and(|k| !kind.is_some_and(|kind| k.split(',').any(|x| x == kind))) {
+                continue;
+            }
+            let Some(kind) = kind else { continue };
             // A gaussian_blur, from a blur flame.
             let kind = if kind == "blur" && done.get("blur").copied().unwrap_or(0) >= 2 {
                 let w = cfg.flame.transforms[0].variations["blur"];
@@ -5441,7 +5469,8 @@ mod tests {
             }
             *done.entry(kind).or_default() += 1;
             let b = Backward::read(&cfg.flame, reg).expect("reads");
-            println!("== seed {seed}: {kind} {}, extent {:.2}", cfg.flame.transforms[0].variations[kind], b.extent);
+            let w = cfg.flame.transforms[0].variations.get(kind).or(cfg.flame.transforms[0].variations.get("pre_blur")).copied().unwrap_or(0.0);
+            println!("== seed {seed}: {kind} {w}, extent {:.2}", b.extent);
             for (label, view) in [
                 ("its own view", View::of(cfg.zoom as f64, [cfg.pan_x, cfg.pan_y], 1280, 720)),
                 ("1e2 at 0.75", View::of(1e2, b.sample_point(0.75), 1280, 720)),
@@ -5460,7 +5489,7 @@ mod tests {
                     Err(e) => println!("   {label:<16} {e:?}"),
                 }
             }
-            if done.len() == 4 && done.values().all(|n| *n >= 2) {
+            if done.len() == 6 && done.values().all(|n| *n >= 2) {
                 break;
             }
         }
