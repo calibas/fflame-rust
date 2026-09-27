@@ -1380,6 +1380,19 @@ pieces outnumber their seeds, is the same problem), or the checks stay on
 the CPU and only the replays -- 84% of the time -- move to the GPU in
 offsets. The second is the smaller, safer step.
 
+**Done meanwhile: the references, 2.4x faster.** On the GPU planner half
+of a julian-disc plan was its references, run after the walk and
+outside every timed step: 2.6 s of 5.0 at 1e6. Its words' disc makes
+every word run every landed seed's orbit and, along each, the Jacobian
+of the steps to the end (`along`), which took each step's matrix from
+two exact difference forms. `map_forward_jacobian` takes it in one pass
+of dual numbers, as exact (no step, nothing cancelling; it agrees with the
+difference forms to their own step's error, 1e-4, on every kernel and
+arm). References 864 -> 360 ms at 1e2, 1,256 -> 536 at 1e4, 2,634 ->
+1,097 at 1e6; whole GPU plans 2.2 -> 1.8 s, 2.7 -> 1.9 s, 5.0 -> 3.4 s.
+The offsets replay as before (per-sample gate, worst 99th percentile
+0.027 px).
+
 ---
 
 ## Editing by words
