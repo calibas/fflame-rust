@@ -5207,13 +5207,13 @@ pub fn pack_maps(
                     let (kind, params) = match r.kernel {
                         // z: the gap scale; w: the hole radius, 0 for
                         // none (a root with a positive distance).
-                        Kernel::Root { n, d } => (1.0, [n as f32, d as f32, gap, r.hole as f32]),
+                        Kernel::Root { n, d, mirror: false } => (1.0, [n as f32, d as f32, gap, r.hole as f32]),
                         Kernel::Spherical => (2.0, [0.0, 0.0, gap, r.hole as f32]),
                         Kernel::Bubble => (3.0, [0.0, 0.0, gap, 0.0]),
                         Kernel::Hemisphere => (4.0, [0.0, 0.0, gap, 0.0]),
                         Kernel::Disc => (5.0, [0.0, 0.0, gap, 0.0]),
                         Kernel::Blob { high, low, waves } => (6.0, [high as f32, low as f32, waves as f32, 0.0]),
-                        Kernel::Elliptic | Kernel::Splits { .. } | Kernel::Cylinder { .. } => {
+                        Kernel::Elliptic | Kernel::Splits { .. } | Kernel::Cylinder { .. } | Kernel::Root { mirror: true, .. } => {
                             unreachable!("analyse_2d refuses the walk's own kernels (Kernel::walk_only)")
                         }
                     };
@@ -5247,7 +5247,7 @@ pub fn pack_maps(
                 Map2::Sum(r) | Map2::SumInverse(r) => {
                     use crate::scene::ifs_analysis::Kernel;
                     let (kk, params) = match r.kernel {
-                        Kernel::Root { n, d } => (1.0, [n as f32, d as f32, 0.0, 0.0]),
+                        Kernel::Root { n, d, mirror: false } => (1.0, [n as f32, d as f32, 0.0, 0.0]),
                         Kernel::Spherical => (2.0, [0.0; 4]),
                         Kernel::Bubble => (3.0, [0.0; 4]),
                         Kernel::Hemisphere => (4.0, [0.0; 4]),
@@ -5255,7 +5255,7 @@ pub fn pack_maps(
                         Kernel::Blob { high, low, waves } => {
                             (6.0, [high as f32, low as f32, waves as f32, 0.0])
                         }
-                        Kernel::Elliptic | Kernel::Splits { .. } | Kernel::Cylinder { .. } => {
+                        Kernel::Elliptic | Kernel::Splits { .. } | Kernel::Cylinder { .. } | Kernel::Root { mirror: true, .. } => {
                             unreachable!("analyse_2d refuses the walk's own kernels (Kernel::walk_only)")
                         }
                     };
@@ -12481,16 +12481,16 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // Every kernel, with the branch counts the walk gives them.
         let kernels: Vec<(Kernel, u32)> = vec![
             (Kernel::Spherical, 1),
-            (Kernel::Root { n: 2, d: 1.0 }, 2),
-            (Kernel::Root { n: 3, d: 1.0 }, 3),
-            (Kernel::Root { n: -3, d: 1.0 }, 3),
-            (Kernel::Root { n: 1, d: -1.0 }, 1),
-            (Kernel::Root { n: 5, d: -1.0 }, 5),
-            (Kernel::Root { n: -5, d: -1.0 }, 5),
-            (Kernel::Root { n: 15, d: -1.0 }, 15),
+            (Kernel::Root { n: 2, d: 1.0, mirror: false }, 2),
+            (Kernel::Root { n: 3, d: 1.0, mirror: false }, 3),
+            (Kernel::Root { n: -3, d: 1.0, mirror: false }, 3),
+            (Kernel::Root { n: 1, d: -1.0, mirror: false }, 1),
+            (Kernel::Root { n: 5, d: -1.0, mirror: false }, 5),
+            (Kernel::Root { n: -5, d: -1.0, mirror: false }, 5),
+            (Kernel::Root { n: 15, d: -1.0, mirror: false }, 15),
             // The ones that used to decline.
-            (Kernel::Root { n: 2, d: 3.0 }, 2),
-            (Kernel::Root { n: -3, d: 1.5 }, 3),
+            (Kernel::Root { n: 2, d: 3.0, mirror: false }, 2),
+            (Kernel::Root { n: -3, d: 1.5, mirror: false }, 3),
             (Kernel::Bubble, 2),
             (Kernel::Hemisphere, 1),
             (Kernel::Disc, 4),
@@ -12552,7 +12552,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // test off the big step and asserting parity instead.
         for (a, b) in [
             (Kernel::Spherical, [0.0f64, 0.0]),
-            (Kernel::Root { n: 2, d: 1.0 }, [0.0, 0.0]),
+            (Kernel::Root { n: 2, d: 1.0, mirror: false }, [0.0, 0.0]),
         ] {
             let got = super::big_kernel_inverse(a, 0, &[big(b[0]), big(b[1])]);
             let want = a.inverse(b, 0);

@@ -5228,12 +5228,19 @@ mod tests {
         // `a_targeted_final_render_is_the_untargeted_render`: their offset
         // steps run through it, and f64 plots through it too.
         // `elliptic-splits-*` (C6, stage 1) by `elliptic_and_splits_are_walked`.
-        // `cylinder-*` (stage 2) by `cylinder_is_walked`.
+        // `cylinder-*` (stage 2) by `cylinder_is_walked`; `juliascope-*` by
+        // `juliascope_is_walked`.
         for name in [
             "grand-julian", "random1", "julian-disc", "true-grand-julian", "final-14", "final-7", "final-1",
             "elliptic-splits-julian", "elliptic-splits-final", "cylinder-blur-bipolar", "cylinder-turns-julian",
-            "bipolar-elliptic-splits1", "bipolar-elliptic-splits2",
+            "bipolar-elliptic-splits1", "bipolar-elliptic-splits2", "juliascope-arms", "juliascope-rays",
         ] {
+            // `OFFSET_FLAMES=a,b` checks only those.
+            if let Ok(only) = std::env::var("OFFSET_FLAMES") {
+                if !only.split(',').any(|n| n.trim() == name) {
+                    continue;
+                }
+            }
             let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")) else { continue };
             let cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
             let Ok(b) = Backward::read(&cfg.flame, reg) else { continue };

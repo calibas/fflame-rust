@@ -2248,7 +2248,7 @@ fn variation_cpow(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<funct
 /// `julian` is the same kernel with them.
 pub static INVERSE_JULIA: InverseDef = InverseDef {
     name: "julia",
-    kernel: InverseKernel::Planar(|_| Ok(Kernel::Root { n: 2, d: 1.0 })),
+    kernel: InverseKernel::Planar(|_| Ok(Kernel::Root { n: 2, d: 1.0, mirror: false })),
 };
 
 /// `julian`: the `n`th root raised to `d`, every branch.
@@ -2263,7 +2263,7 @@ pub static INVERSE_JULIAN: InverseDef = InverseDef {
         if n == 0 || !(d != 0.0) || !d.is_finite() {
             return Err(Refusal::Degenerate);
         }
-        Ok(Kernel::Root { n, d })
+        Ok(Kernel::Root { n, d, mirror: false })
     }),
 };
 
@@ -2329,5 +2329,25 @@ pub static INVERSE_SPLITS: InverseDef = InverseDef {
             return Err(Refusal::Degenerate);
         }
         Ok(Kernel::Splits { base: [-sx - d, -sy - l], x: [2.0 * sx, r + l], y: [u + d, 2.0 * sy] })
+    }),
+};
+
+/// `juliascope`: `julian` with its odd arms mirrored -- the root of
+/// `conj(z)` there -- so the inverse is the root's, conjugated in an odd
+/// arm's sector. The power is truncated to a whole number as the body's
+/// `i32(...)` does; a fractional one is refused, since the arm table
+/// (`bound::JULIASCOPE_ARMS`) counts its ceiling and the body its floor.
+/// The radius is `|z|^{dist/power}`, the power's sign kept, where the
+/// root's is over `|n|`: so `d = dist·sgn(power)`. The inverse walk's
+/// alone.
+pub static INVERSE_JULIASCOPE: InverseDef = InverseDef {
+    name: "juliascope",
+    kernel: InverseKernel::Planar(|p| {
+        let (power, dist) = (p("power"), p("dist"));
+        if !power.is_finite() || power.fract() != 0.0 || power == 0.0 || !(dist != 0.0) || !dist.is_finite() {
+            return Err(Refusal::Degenerate);
+        }
+        let n = power as i32;
+        Ok(Kernel::Root { n, d: dist * power.signum(), mirror: true })
     }),
 };
