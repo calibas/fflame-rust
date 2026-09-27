@@ -998,39 +998,68 @@ the odd ones, and `Kernel::Root` carries it as `mirror: true`:
   - juliascope-arms, a code-built flame with a power 5 beside a power −4
     summed with a `linear`: overlap 0.976-1.000, speedup to 1,138×.
   - juliascope-rays, JWF-rando32-simplified4 (a power-7 juliascope
-    alone): overlap 0.975-1.000.
+    alone), set to 2D: overlap 1.000. Without its filter the lit counts
+    are equal too (80/80, 141/142 at 1e3); with it, see C9.
+  - **A `.flame` imports in 3D** (`flame_xml`: JWF and Apophysis flames
+    are all treated as 3D), and Focused Rendering is 2D only, so the
+    renderer does not target one. The first run of this gate compared
+    the untargeted render with itself at fewer samples: its 0.975-1.000
+    (commit b3201ca2's message) measured nothing. Every other flame the
+    gates read is 2D. In the app, a corpus flame is not targeted until
+    switched to 2D.
 - The per-sample offset gate (`OFFSET_FLAMES` picks flames): mean offset
   error 0.0002-0.0006 px at 1e4-1e8 on both, worst 0.22 px (arms, 1e8).
 - The census: JWF-rando32-simplified4 reads (7 symbols, 120 ms), 39 of 105
   flames with the two code-built ones. JWF-rando32-simplified stops at its
   `julian + juliascope` sum and a `spirograph3D`; JWF-rando7 at `curl` and
   `boarders`.
-- **The per-sample gate fails on cylinder-turns-julian at 1e6**, before
-  C8 and without it: at HEAD 7767717f all 850 samples in view are off by
-  ~1e46 px, the plain replay by 4e7 px. At stage 2 it held. Open, with a
-  bisect under way.
 
-**Found on the way: the spatial filter differs under targeting.**
-JWF-rando32-simplified4 carries JWF's `filter` 0.75, which imports as
-`filter_radius`. With it the targeted render lit 0.69 and 0.76 of the
-reference's pixels at 1e3: the same blobs, thinner. The filter is
-bilateral, and its edge-preserving `σ_d` is the batch's samples over the
-frame's pixels (`compute_kernel.rs`). An untargeted render at depth
-lands mass·samples in view, so its `σ_d` is 1/mass too wide for the
-view's densities and the blur is uniform. A targeted render lands nearly
-all of them, and keeps edges. The gate drops the filter (0.975 and 1.000
-without it). See C9.
+### C9. A spatial filter under targeting -- done (2026-09-27), a residual
 
-### C9. A spatial filter at depth -- open
+Found by C8. With JWF's `filter` 0.75 (`filter_radius`), juliascope-rays
+targeted lit 0.52 and 0.51 of the reference's pixels at 1e3: exactly the
+pixels an unfiltered render lights (80 and 142), so the filter did
+nothing. The filter is bilateral, run on each batch's histogram, and its
+edge-preserving `σ_d` was the batch's samples over the frame's pixels
+(`compute_kernel.rs`). An untargeted batch at depth lands `mass` of its
+samples in the view and a targeted one nearly all, so the targeted `σ_d`
+was `mass` times too small for the view's densities, and every
+neighbour read as an edge.
 
-Found by C8. Any flame with a spatial filter (`filter_radius`, which
-every JWF flame with `filter` imports) renders differently targeted: the
-bilateral filter's `σ_d` comes from the batch's samples, and a targeted
-batch's samples are all in the view where an untargeted one's are a
-`mass` of them. The tonemap already scales a targeted render's density by
-`cylinder_iteration_scale()` to the untargeted one's. Scaling `σ_d`'s
-sample count the same way would make the two agree without touching an
-untargeted render.
+Now a targeted batch is counted as the untargeted batch it stands for,
+by `cylinder_iteration_scale()`, as the tonemap's `sample_density`
+already counts it: the density-to-`σ_d` ratio is the untargeted
+render's in expectation, and nothing changes untargeted. Overlap 1.000
+at every zoom.
+
+**The residual**: the targeted render now lights more of the fringe --
+275 and 460 pixels where the reference lights 153 and 279 at 1e3, mean
+brightness of lit pixels 0.49 and 0.51 against 0.56 and 0.58. An
+untargeted batch at depth has a handful of samples in the view, whose
+noise the bilateral weight reads as edges, so it blurs less than its
+expectation; a targeted batch is dense. A reference ten times longer
+barely moves (159 and 312): the noise is a batch's, not the render's.
+A filter that depends on how many samples a batch holds is the filter's
+design, not targeting's -- untargeted, it also moves with the batch size.
+No visual test targets a filtered flame.
+
+### C10. The per-sample gate at cylinder-turns-julian 1e6 -- open
+
+`the_offset_replay_holds_per_sample` fails there at 7767717f and after:
+all 850 samples in view are off by ~1e46 px, the bias equal in x and y,
+and the plain replay by 4e7 px. It passes at 60a320fd, 030482e6 and
+1b231220, with 76, 24 and 76 samples in view.
+
+7767717f changed no answer: the rescues it runs up front return what
+`close` would have found, one for one (compared). The difference is
+time. The old code plans 87,990 words to depth 19, the new one 210,867
+to depth 21 (mass 7.3e-8), and making the new one do more work alone --
+each rescue computed twice -- brings back the old plan. The one decision
+in the walk that reads the clock is `TIME_BUDGET` (20 s), which forces
+the frontier where it stands. So the failure is in words the budget had
+cut off. Why their offsets fail is not yet known: an equal bias in x and
+y looks like a sentinel propagating (the difference forms' `FD_POLE`),
+which would put a reference on a pole.
 
 ---
 

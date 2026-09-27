@@ -1178,9 +1178,16 @@ impl FlameRenderer {
             //                                          extreme outliers
             //                                          preserved, close
             //                                          to uniform blur)
+            //
+            // A targeted batch is counted as the untargeted batch it stands
+            // for, as the tonemap's `sample_density` counts it: its samples
+            // land in the view, an untargeted one's `mass` of them, so a
+            // count of its own would tighten σ_d by 1/mass and keep edges
+            // the reference blurs (tracker C9). 1 untargeted.
             const HISTOGRAM_COLOR_SCALE: f32 = 100.0;
             let pixel_count = (self.width as f32) * (self.height as f32);
-            let mean_density_scaled = (samples_this_frame as f32 / pixel_count) * HISTOGRAM_COLOR_SCALE;
+            let standing_for = samples_this_frame as f64 * self.cylinder_iteration_scale();
+            let mean_density_scaled = (standing_for as f32 / pixel_count) * HISTOGRAM_COLOR_SCALE;
             let density_sigma = mean_density_scaled * 100.0_f32.powf(2.0 * self.filter_blur_edges - 1.0);
             self.buffers.update_histogram_blur_params(queue, self.width, self.height, self.filter_radius, density_sigma);
 
