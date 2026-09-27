@@ -898,7 +898,19 @@ the attractor.
 - **Plan time.** splits1 at (0, 0): 1.8 s at 1e3, 3.9 s at 1e4, 8.9 s at
   1e5, 19 s at 1e6 (splits2 1-3 s); the tail sample's points make large
   regions. Measured on the CPU only: a plotted view is not the GPU
-  planner's.
+  planner's. By step (`what_a_plan_of_the_image_of_infinity_costs`), 8.7
+  of the 18.6 s at 1e6 was deciding kept or carried, and of that nearly
+  all was preparing rescues one after another -- 103,703 over three
+  views, whose widened cells and gathers took 12.2 s and whose replays
+  0.34 s: in the far tail nearly every node has unseen children (an
+  `elliptic` preimage of a far region is farther out than any point).
+  They run on every thread now, widening, gather and replays, with the
+  same answers: 2.6 s at 1e4, 5.5 s at 1e5, 10.9 s at 1e6, and random1 1e8
+  7.5 to 7.3 s, grand-julian 1e8 1.6 to 1.5 s, plans identical word for
+  word. What is left at 1e6 is the replays (4.6 s, 40M) and the checks
+  (3.1 s, 26M), already parallel: a replay of a 60-symbol word from an
+  orbit point that cannot reach the far tail runs to its end to find
+  so.
 - **The per-sample gate cannot check a word through a blur** (the GPU
   draws its own): at (0, 0) most words carrying references are such.
   Their offsets start after the blur by construction; the renders above
