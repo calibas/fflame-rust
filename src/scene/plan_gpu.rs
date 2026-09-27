@@ -42,7 +42,9 @@ struct GpuPlanView {
     words_base: u32,
     idx_base: u32,
     mode: u32,
-    _pad: [u32; 3],
+    /// 1 for a view of the plot, behind the finals (`View::plotted`).
+    plotted: u32,
+    _pad: [u32; 2],
 }
 
 /// What a batch writes per entry. Mirrors `PlanView::mode`.
@@ -351,7 +353,10 @@ fn dz_endpoints(@builtin(global_invocation_id) gid: vec3<u32>) {
             cache: None,
         });
 
-        let n = flame.transforms.len().max(1);
+        // Every parent transform -- normals, then linked, then finals, as
+        // the render lays them out -- so a plotted view's test can apply
+        // the finals (`ct_apply_finals`, tracker C7).
+        let n = (flame.transforms.len() + flame.linked_transforms.len() + flame.final_transforms.len()).max(1);
         let transforms = gb::pack_gpu_transforms(flame, crate::scene::transforms::RenderMode::TwoD);
         let vparams = gb::pack_gpu_variation_params(flame);
         let init = |label: &str, bytes: &[u8], usage: wgpu::BufferUsages| {
@@ -365,8 +370,19 @@ fn dz_endpoints(@builtin(global_invocation_id) gid: vec3<u32>) {
             bytemuck::bytes_of(&<gb::GpuParams as bytemuck::Zeroable>::zeroed()),
             wgpu::BufferUsages::UNIFORM,
         );
-        let attachments = vec![<gb::GpuAttachmentList as bytemuck::Zeroable>::zeroed(); gb::MAX_TRANSFORMS];
-        let a_buf = init("Plan Eval Attachments", bytemuck::cast_slice(&attachments), st);
+        // The attachment lists, packed as the render packs them, at the cap
+        // the kernel was built with (`Flame::attachment_cap`).
+        let attachments = {
+            let cap = flame.attachment_cap();
+            let stride = gb::attachment_stride_bytes(cap);
+            let (l, f) = (flame.linked_transforms.len(), flame.final_transforms.len());
+            let mut buf = vec![0u8; gb::MAX_TRANSFORMS * stride];
+            for (i, t) in flame.transforms.iter().enumerate().take(gb::MAX_TRANSFORMS) {
+                gb::pack_attachment_entry(&mut buf[i * stride..(i + 1) * stride], t, cap, flame.transforms.len(), l, flame.transforms.len() + l, f);
+            }
+            buf
+        };
+        let a_buf = init("Plan Eval Attachments", &attachments, st);
         let metas = gb::build_subflame_metas(&[]).unwrap_or_else(|_| {
             [<gb::SubflameMeta as bytemuck::Zeroable>::zeroed(); gb::MAX_SUBFLAMES]
         });
@@ -650,7 +666,8 @@ fn dz_endpoints(@builtin(global_invocation_id) gid: vec3<u32>) {
             words_base,
             idx_base,
             mode: mode as u32,
-            _pad: [0; 3],
+            plotted: view.plotted as u32,
+            _pad: [0; 2],
         };
         let data_buf = self.data.get(&self.device, data.len());
         let out_buf = self.out.get(&self.device, per * entries);
@@ -810,7 +827,8 @@ fn dz_endpoints(@builtin(global_invocation_id) gid: vec3<u32>) {
             words_base: e_words_base,
             idx_base: 0,
             mode: 0,
-            _pad: [0; 3],
+            plotted: view.plotted as u32,
+            _pad: [0; 2],
         };
         let gdata = self.gdata.get(&self.device, table.len());
         let gpairs = self.gpairs.get(&self.device, 3 * pairs.max(1));
@@ -850,7 +868,8 @@ fn dz_endpoints(@builtin(global_invocation_id) gid: vec3<u32>) {
                 words_base,
                 idx_base,
                 mode: Mode::Disc as u32,
-                _pad: [0; 3],
+                plotted: view.plotted as u32,
+                _pad: [0; 2],
             };
             let data_buf = self.data.get(&self.device, data.len());
             let out_buf = self.out.get(&self.device, entries);

@@ -74,3 +74,53 @@ fn ct_apply_symbol(p: vec2<f32>, w: u32, rng: ptr<function, RngState>, colour: f
     }
     return q;
 }
+
+{{#if RENDER_3D}}
+{{else}}
+// **The finals attached to symbol `w`'s transform**, applied to `p` as the
+// render plots a point (`main_template.wgsl`): for the planner's view of
+// the plot (`PlanView::plotted`, tracker C7). Their colour and hide flag
+// are discarded, and the point they make feeds nothing forward.
+fn ct_apply_finals(p: vec2<f32>, w: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+{{#if HAS_ATTACHMENTS}}
+    let attach = attachments[w & 255u];
+    var q = p;
+    for (var fi = 0u; fi < attach.final_count; fi = fi + 1u) {
+        let fid = attach.final_[fi];
+        let fxform = transforms[fid];
+        let faff = apply_affine(fxform, q);
+        var hide = false;
+{{#if HAS_ANALYTIC_BLUR}}
+        var blur = vec2<f32>(0.0, 0.0);
+{{/if}}
+{{#if HAS_DC}}
+        var vc: f32 = 0.0;
+{{/if}}
+{{#if HAS_RGB}}
+        var vrc: vec3<f32> = vec3<f32>(-1.0e30);
+{{/if}}
+{{#if HAS_DC}}
+{{#if HAS_RGB}}
+        q = apply_variations(fxform, fid, faff, rng, &vc, &vrc, &hide{{#if HAS_ANALYTIC_BLUR}}, &blur{{/if}});
+{{else}}
+        q = apply_variations(fxform, fid, faff, rng, &vc, &hide{{#if HAS_ANALYTIC_BLUR}}, &blur{{/if}});
+{{/if}}
+{{else}}
+{{#if HAS_RGB}}
+        q = apply_variations(fxform, fid, faff, rng, &vrc, &hide{{#if HAS_ANALYTIC_BLUR}}, &blur{{/if}});
+{{else}}
+        q = apply_variations(fxform, fid, faff, rng, &hide{{#if HAS_ANALYTIC_BLUR}}, &blur{{/if}});
+{{/if}}
+{{/if}}
+        if (HAS_POST_AFFINE) {
+            if (fxform.post_enabled > 0.5) {
+                q = apply_post_affine(fxform, q);
+            }
+        }
+    }
+    return q;
+{{else}}
+    return p;
+{{/if}}
+}
+{{/if}}
