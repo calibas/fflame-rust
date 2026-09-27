@@ -565,7 +565,7 @@ fn dz_endpoints(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// it. In f32, as the render has it.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn endpoints(&mut self, jobs: &[EvalJob]) -> Vec<Option<[f32; 2]>> {
-        let view = View { centre: [0.0, 0.0], radius: 0.0 };
+        let view = View { centre: [0.0, 0.0], radius: 0.0, plotted: false };
         self.run(view, jobs, Mode::Endpoint, |w| {
             w.chunks_exact(2)
                 .map(|c| {

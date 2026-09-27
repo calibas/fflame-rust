@@ -4203,8 +4203,8 @@ impl FlameRenderer {
         // The tight plan is up: now the standby around it, in reserve.
         if self.cylinders.is_some() {
             let wide = crate::scene::cylinder::View {
-                centre: job.view.centre,
                 radius: job.view.radius * STANDBY_MARGIN,
+                ..job.view
             };
             let gpu = self.gpu_planner(device, queue);
             self.plan_job = self.spawn_plan(config, PlanKind::Standby, wide, 0, gpu).ok();

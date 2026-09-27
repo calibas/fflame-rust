@@ -800,6 +800,9 @@ struct Child {
     /// `Evaluate::speculative`.
     spec: Option<Vec<u32>>,
     fate: Fate,
+    /// Kept by geometry as a renewal (`Renewal`), or `None`: not a
+    /// blurred transform's child, or one carried (`Backward::renewal_here`).
+    renewal: Option<Renewal>,
 }
 
 impl Child {
@@ -938,6 +941,14 @@ pub struct Backward {
     /// the landing index by cell found them only when the cells were
     /// right.
     made_by: Vec<u32>,
+    /// How many of `sample` are the orbit's own, in proportion to the
+    /// attractor's measure. Past them, a flame whose final plots infinity
+    /// and whose tail thins as a power law has points of the tail sampled
+    /// by splitting (C7, `tail_sample`): on the attractor, with their pasts
+    /// recorded, but not in proportion -- so they stand for regions (the
+    /// index, the landings, the orbit's children) and never for measure
+    /// (the verify replays, the draw rates, the frame).
+    natural: usize,
     centre: [f64; 2],
     extent: f64,
     cell: f64,
@@ -1263,6 +1274,121 @@ fn forward_blurred(map: &IfsMap<Map2>, x: [f64; 2], k: u32, blur: Option<Blur>, 
     }
 }
 
+/// Levels of the tail sample: radii doubling from the grid's span to
+/// this, past which the chaos game's own bound (1e12) is near.
+const TAIL_REACH: f64 = 1e11;
+/// Chains cloned where one first crosses a level, at most this many a
+/// level, each continued this many steps at most.
+const TAIL_CLONES: usize = 4;
+const TAIL_PER_LEVEL: usize = 384;
+const TAIL_STEPS: usize = 160;
+/// Points of the tail sample at most.
+const TAIL_POINTS: usize = 120_000;
+
+/// **The tail of an attractor, sampled by splitting** (tracker C7).
+///
+/// A tail thinning as a power law is reached a handful of times by the
+/// orbit's 100k points past a few hundred bulk radii, and a view holding a
+/// final's image of infinity is exactly that tail. So chains of the chaos
+/// game start from the orbit's points past `span` of the bulk's centre,
+/// and a chain crossing up into a level of radius -- the levels doubling
+/// from `span` -- is cloned (`TAIL_CLONES`, at most `TAIL_PER_LEVEL` a
+/// level): multilevel splitting,
+/// the rare-event method, which keeps a population at every level. Each
+/// chain runs its own draws until it falls well back into the bulk (a
+/// sixteenth of `span`), leaves the chaos game's bound, or `TAIL_STEPS`. Every point is on the attractor
+/// and its predecessor is the point before it (a chain's first point is
+/// marked as having none), so the walk's orbit children are exact for it;
+/// the points are not in proportion to the measure, which the walk never
+/// reads from them (`Backward::natural`).
+#[allow(clippy::too_many_arguments)]
+async fn tail_sample(
+    ifs: &Ifs2,
+    transforms: &[TransformInfo],
+    alphabet: &[Sym],
+    total: f64,
+    sample: &[[f64; 2]],
+    centre: [f64; 2],
+    span: f64,
+    slicer: &Slicer,
+) -> (Vec<[f64; 2]>, Vec<u32>) {
+    let dist = |p: [f64; 2]| (p[0] - centre[0]).hypot(p[1] - centre[1]);
+    let level_of = |r: f64| if r > span { (r / span).log2().floor() as i32 } else { -1 };
+    let top = level_of(TAIL_REACH);
+    // (start, level crossed, stream seed)
+    let mut queue: std::collections::VecDeque<([f64; 2], i32, u64)> = sample
+        .iter()
+        .filter(|p| dist(**p) > span)
+        .enumerate()
+        .map(|(i, &p)| (p, level_of(dist(p)), 0xA5A5_5A5A_1234_5678 ^ (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)))
+        .collect();
+    let mut spawned = vec![0usize; (top.max(0) + 2) as usize];
+    let (mut pts, mut by) = (Vec::new(), Vec::new());
+    let mut chains = 0usize;
+    while let Some((x0, mut level, seed)) = queue.pop_front() {
+        if pts.len() >= TAIL_POINTS {
+            break;
+        }
+        let mut st = seed;
+        let mut u = move || {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((st >> 33) as f64) / ((1u64 << 31) as f64)
+        };
+        pts.push(x0);
+        by.push(u32::MAX);
+        let mut x = x0;
+        for step in 0..TAIL_STEPS {
+            let mut w = u() * total;
+            let mut t = &transforms[transforms.len() - 1];
+            for c in transforms {
+                if w < c.weight {
+                    t = c;
+                    break;
+                }
+                w -= c.weight;
+            }
+            let arm = ((u() * t.arms as f64) as u32).min(t.arms - 1);
+            let y = forward_blurred(&ifs.maps[t.map], x, arm, t.blur, &mut u);
+            if !finite(y) || y[0].abs() > 1e12 || y[1].abs() > 1e12 {
+                break;
+            }
+            let ai = alphabet.iter().position(|a| a.sym == sym_of(t.index as u32, arm)).map_or(u32::MAX, |i| i as u32);
+            pts.push(y);
+            by.push(ai);
+            x = y;
+            let r = dist(y);
+            // Well inside, not merely inside: a `pre_blur + cylinder` brings
+            // a far point ten times closer, and what `splits` does next,
+            // taking it back out, is the path a view of the tail sees
+            // (measured: bipolar-elliptic-splits1 missed 2% of a 1e5 view
+            // with chains stopped at the span).
+            if r < span / 16.0 {
+                break;
+            }
+            // Every upward crossing, not the chain's first alone: a point
+            // a `cylinder` brought ten times closer climbs back through
+            // levels it crossed before, and that climb is the path.
+            let l = level_of(r).min(top);
+            let rose = l > level;
+            level = l;
+            if rose {
+                let at = level.max(0) as usize;
+                for c in 1..TAIL_CLONES {
+                    if spawned[at] < TAIL_PER_LEVEL {
+                        spawned[at] += 1;
+                        queue.push_back((y, level, seed.rotate_left(13) ^ ((step as u64) << 32) ^ c as u64));
+                    }
+                }
+            }
+        }
+        chains += 1;
+        if chains % 64 == 0 {
+            slicer.tick().await;
+        }
+    }
+    (pts, by)
+}
+
 /// The last flame analysed, shared across threads: the app plans on a
 /// background thread, and a per-thread cache there would rebuild the
 /// index on every plan.
@@ -1504,6 +1630,24 @@ impl Backward {
         };
         let span = if bulk > 0.0 { extent.min(GRID_TAIL_SPAN * bulk) } else { extent };
         let cell = 2.0 * span / GRID_CELLS as f64;
+        // **The tail, sampled by splitting** (C7), where a final plots
+        // infinity and the grid spans the bulk rather than the farthest
+        // point: a view holding infinity's image is the far tail, which the
+        // orbit's 100k points reach a handful of times.
+        let natural = sample.len();
+        if span < extent && finals.as_ref().is_some_and(|f| f.infinity().is_some()) {
+            let bulk_centre = {
+                let median = |axis: usize| {
+                    let mut v: Vec<f64> = sample.iter().map(|p| p[axis]).collect();
+                    let k = v.len() / 2;
+                    *v.select_nth_unstable_by(k, f64::total_cmp).1
+                };
+                [median(0), median(1)]
+            };
+            let (pts, by) = tail_sample(&ifs, &transforms, &alphabet, total, &sample, bulk_centre, span, slicer).await;
+            sample.extend(pts);
+            made_by.extend(by);
+        }
         let key = |p: [f64; 2]| -> Cell { ((p[0] / cell).floor() as i32, (p[1] / cell).floor() as i32) };
         slicer.tick().await;
         let grid = Index::build_sliced(sample.iter().enumerate().map(|(i, p)| (key(*p), i as u32)).collect(), slicer).await;
@@ -1527,11 +1671,11 @@ impl Backward {
             landing.push(Index::build_sliced(entries, slicer).await);
             slicer.tick().await;
         }
-        let stride = (sample.len() / VERIFY).max(1);
+        let stride = (natural / VERIFY).max(1);
         let every = (VERIFY / REPLAY_FIRST).max(1);
         let (mut verify_first, mut verify_rest) = (Vec::new(), Vec::new());
         for k in 0..VERIFY {
-            if k * stride >= sample.len() {
+            if k * stride >= natural {
                 break;
             }
             if k % every == 0 { &mut verify_first } else { &mut verify_rest }.push((k * stride) as u32);
@@ -1543,6 +1687,7 @@ impl Backward {
             alphabet,
             sample,
             made_by,
+            natural,
             centre,
             extent,
             cell,
@@ -1697,7 +1842,7 @@ impl Backward {
     /// not a renewal's. The gathers asked and the answers read back both
     /// go by this, so they cannot disagree.
     fn gathers(&self, c: &Child) -> bool {
-        matches!(c.pts, Pts::Index(_)) && self.alphabet[c.ai].renewal.is_none()
+        matches!(c.pts, Pts::Index(_)) && c.renewal.is_none()
     }
 
     /// **The conditional draw for a blur word** (tracker C2b): see
@@ -1722,6 +1867,9 @@ impl Backward {
     /// blur the points are the blob's images, whatever the attractor's.
     pub fn conditional(&self, word: &[u32], view: View) -> Option<Conditional> {
         const RIM: usize = 32;
+        if view.plotted {
+            return None;
+        }
         let first = *word.first()?;
         let t = self.transforms.iter().find(|t| t.index == crate::scene::cylinder::sym_transform(first) as usize)?;
         let Some(Blur::Free(blur)) = t.blur else { return None };
@@ -1790,6 +1938,27 @@ impl Backward {
         (!pieces.is_empty()).then(|| Conditional { blur, post, pieces })
     }
 
+    /// A symbol's `pre_blur`, where it has one beside its kernel.
+    fn partial_blur(&self, ai: usize) -> Option<PreBlur> {
+        let t = crate::scene::cylinder::sym_transform(self.alphabet[ai].sym) as usize;
+        match self.transforms.iter().find(|x| x.index == t)?.blur {
+            Some(Blur::Pre(b)) => Some(b),
+            _ => None,
+        }
+    }
+
+    /// **A blurred symbol's child: a renewal, kept by geometry, or carried**
+    /// (tracker C7). A blur that ignores its input is a renewal wherever it
+    /// is; a partial one (`pre_blur` beside a kernel) is carried in a
+    /// plotted view, as the kernel's pull-back grown by the blur's reach
+    /// (`pull_back`): there the region is the far tail, which the blur
+    /// smears by nothing, and kept at the top of every word it forced mass
+    /// that reaches the tail once in thousands.
+    fn renewal_here(&self, ai: usize, carry_blurs: bool) -> Option<Renewal> {
+        let r = self.alphabet[ai].renewal?;
+        (!(carry_blurs && self.partial_blur(ai).is_some())).then_some(r)
+    }
+
     /// Whether a blur starts `word`: the renewal is its first map.
     fn renewal_first(&self, word: &[u32]) -> bool {
         word.first().is_some_and(|s| self.alphabet.iter().any(|a| a.sym == *s && a.renewal.is_some()))
@@ -1805,6 +1974,10 @@ impl Backward {
     /// dropped in doubt is a hole.
     fn reaches(&self, word: &[u32], view: View, ren: Renewal) -> bool {
         use crate::scene::forward_delta::map_forward_difference;
+        // A plotted view is no disc to pull back: kept in doubt (C7).
+        if view.plotted {
+            return true;
+        }
         const PIECES: usize = 64;
         let mut level: Vec<([f64; 2], f64)> = vec![(view.centre, view.radius)];
         for &sym in word.iter().rev() {
@@ -1856,7 +2029,7 @@ impl Backward {
     /// A disc holding the attractor: its sample's farthest point, with a
     /// margin for those it did not draw.
     fn whole(&self) -> View {
-        View { centre: self.centre, radius: 1.1 * self.extent }
+        View { centre: self.centre, radius: 1.1 * self.extent, plotted: false }
     }
 
     /// The disc `view` pulls back to through the finals, and where the
@@ -1875,9 +2048,48 @@ impl Backward {
         self.finals.as_ref().map_or(x, |f| f.forward(x))
     }
 
+    /// Where the finals plot infinity, if they do.
+    pub fn plotted_infinity(&self) -> Option<[f64; 2]> {
+        self.finals.as_ref().and_then(|f| f.infinity())
+    }
+
+    /// Whether `view`, of the plot, holds the finals' image of infinity
+    /// and is planned through them (`View::plotted`, C7): where the tail
+    /// was sampled (`tail_sample`), which is what stands for the far
+    /// region. Elsewhere its pull-back stays the whole attractor. Measured
+    /// on a Grand JuliaN generator flame whose far points come from a
+    /// negative-distance root, not a tail the grid caps: planned through
+    /// the final from the orbit's handful of far points, a view holding
+    /// 0.05% of it came to 188k words drawing 98.3% of it, and a deeper one
+    /// was refused as empty.
+    pub fn holds_infinity(&self, view: View) -> bool {
+        let tailed = self.natural < self.sample.len();
+        tailed
+            && self
+                .plotted_infinity()
+                .is_some_and(|p| (p[0] - view.centre[0]).hypot(p[1] - view.centre[1]) <= 1.02 * view.radius)
+    }
+
+    /// How far `y` lands from `view`'s centre: through the finals for a
+    /// plotted view (`View::plotted`).
+    fn view_distance(&self, view: View, y: [f64; 2]) -> f64 {
+        let q = if view.plotted { self.plotted(y) } else { y };
+        (q[0] - view.centre[0]).hypot(q[1] - view.centre[1])
+    }
+
+    /// Whether `y` lands in `view`.
+    fn in_view(&self, view: View, y: [f64; 2]) -> bool {
+        self.view_distance(view, y) <= view.radius
+    }
+
     /// Whether the GPU planner resolves `view`. See [`GPU_PLAN_RADIUS`].
     /// Judged where the walk plans it: through the finals, if any.
     pub fn gpu_resolves(&self, view: View) -> bool {
+        // A plotted view's landings go through the finals, which the GPU
+        // planner does not apply (C7).
+        if self.holds_infinity(view) {
+            return false;
+        }
         let view = self.finals.as_ref().and_then(|f| f.pull_back(view, self.whole())).unwrap_or(view);
         view.radius >= GPU_PLAN_RADIUS * view.centre[0].hypot(view.centre[1]).max(1.0)
     }
@@ -1906,13 +2118,14 @@ impl Backward {
         if self.sample.is_empty() {
             return (self.centre, self.extent);
         }
+        let own = &self.sample[..self.natural];
         let median = |axis: usize| {
-            let mut v: Vec<f64> = self.sample.iter().map(|p| p[axis]).collect();
+            let mut v: Vec<f64> = own.iter().map(|p| p[axis]).collect();
             let k = v.len() / 2;
             *v.select_nth_unstable_by(k, f64::total_cmp).1
         };
         let c = [median(0), median(1)];
-        let mut d: Vec<f64> = self.sample.iter().map(|p| (p[0] - c[0]).hypot(p[1] - c[1])).collect();
+        let mut d: Vec<f64> = own.iter().map(|p| (p[0] - c[0]).hypot(p[1] - c[1])).collect();
         let k = (d.len() * 95 / 100).min(d.len() - 1);
         let r = *d.select_nth_unstable_by(k, f64::total_cmp).1;
         (c, if r > 0.0 { r } else { self.extent })
@@ -1926,7 +2139,6 @@ impl Backward {
     /// the absolute plot would round.
     pub async fn reference_chains(&self, cyl: &Cylinders, view: View, disc: View, slicer: &Slicer) -> Vec<Option<WordRefs>> {
         use crate::scene::forward_delta::map_forward_difference;
-        let _ = disc;
         let c = view.centre;
         let r = view.radius;
         let one = |w: &Cylinder| -> Option<WordRefs> {
@@ -1962,9 +2174,21 @@ impl Backward {
             // A word a renewal starts is followed from AFTER it: its seeds
             // are points of the rest's region (`close`), the blur is the
             // shader's alone, and `m` is never before it.
-            let start = usize::from(self.alphabet.iter().any(|a| a.sym == w.word[0] && a.renewal.is_some()));
+            // **An offset cannot cross a blur**: the sample draws its own, and
+            // the reference another. So `m` is never before the last blurred
+            // symbol's successor. A word carried through a blur (C7) has its
+            // seeds at its start, and they are taken past the blur by a draw
+            // of it; a renewal's word, kept by geometry, has them after its
+            // blur already (`close`).
+            let blurred = |s: u32| self.alphabet.iter().any(|a| a.sym == s && a.renewal.is_some());
+            let start = w.word.iter().rposition(|&s| blurred(s)).map_or(0, |j| j + 1);
+            let seeded_at = match self.alphabet.iter().position(|a| a.sym == w.word[0]) {
+                Some(ai) if self.renewal_here(ai, disc.plotted).is_some() => 1,
+                _ => 0,
+            };
             // A seed's orbit through the word, if it lands in the view.
             let orbit = |x0: [f64; 2]| -> Option<Vec<[f64; 2]>> {
+                let x0 = if start > seeded_at { self.forward_along(&w.word[seeded_at..start], x0)? } else { x0 };
                 let mut z = Vec::with_capacity(n + 1);
                 for _ in 0..=start {
                     z.push(x0);
@@ -2155,7 +2379,7 @@ impl Backward {
     /// the orbit -- somewhere a view can be centred that is on the
     /// set.
     pub fn sample_point(&self, frac: f64) -> [f64; 2] {
-        let i = ((self.sample.len() as f64 * frac.clamp(0.0, 1.0)) as usize).min(self.sample.len() - 1);
+        let i = ((self.natural as f64 * frac.clamp(0.0, 1.0)) as usize).min(self.natural - 1);
         self.sample[i]
     }
 
@@ -2276,11 +2500,11 @@ impl Backward {
     /// sample points in turn, each with its own blur draw. For a blur's
     /// word, whose landings the walk's few hundred replays cannot resolve.
     fn landings(&self, word: &[u32], view: View, k: usize) -> usize {
-        let n = self.sample.len().max(1);
+        let n = self.natural.max(1);
         (0..k)
             .filter(|&i| {
                 self.forward_along_salted(word, self.sample[(i * 7919) % n], i as u64 + 1)
-                    .is_some_and(|y| (y[0] - view.centre[0]).hypot(y[1] - view.centre[1]) <= view.radius)
+                    .is_some_and(|y| self.in_view(view, y))
             })
             .count()
     }
@@ -2288,7 +2512,7 @@ impl Backward {
     /// Whether `x`'s forward image along `word` lands in the view.
     fn lands(&self, word: &[u32], x: [f64; 2], view: View) -> bool {
         match self.forward_along(word, x) {
-            Some(y) => (y[0] - view.centre[0]).hypot(y[1] - view.centre[1]) <= view.radius,
+            Some(y) => self.in_view(view, y),
             None => false,
         }
     }
@@ -2309,6 +2533,11 @@ impl Backward {
         let a = &self.alphabet[ai];
         let map = &self.ifs.maps[a.map];
         let junk_r = JUNK_EXTENTS * self.extent;
+        // A partial blur's input is anywhere within its reach of the
+        // kernel's preimage, in the frame the kernel reads (C2's dilated
+        // regions): a ring at the reach about each, where it is carried
+        // (`renewal_here`).
+        let blur = self.partial_blur(ai);
         let mut out = Vec::new();
         for &p in pts {
             if !exempt && !self.near_landing(ai, p) {
@@ -2329,6 +2558,14 @@ impl Backward {
                     continue;
                 }
                 out.push(q);
+                if let (Some(b), Map2::NonlinearInverse(n)) = (blur, &self.ifs.maps[mb].inverse) {
+                    let u = n.pre.apply(q);
+                    let rho = b.reach();
+                    for k in 0..6 {
+                        let t = std::f64::consts::TAU * k as f64 / 6.0;
+                        out.push(n.pre_inv.apply([u[0] + rho * t.cos(), u[1] + rho * t.sin()]));
+                    }
+                }
             }
         }
         out
@@ -2478,7 +2715,8 @@ impl Backward {
     /// through, each with its candidates. Reads only `self` and the node,
     /// so the nodes of a level find theirs in parallel.
     #[allow(clippy::too_many_arguments)]
-    fn children_of(&self, o: &mut Open, depth: usize, floor_mass: f64, gather_now: bool, removals: &[Vec<u32>], refine: &[Vec<u32>], min_len: usize) {
+    #[allow(clippy::too_many_arguments)]
+    fn children_of(&self, o: &mut Open, depth: usize, floor_mass: f64, gather_now: bool, removals: &[Vec<u32>], refine: &[Vec<u32>], min_len: usize, carry_blurs: bool) {
         let tr = &mut o.trace;
         let node = &o.node;
         let mut seen: Vec<Cell> = Vec::new();
@@ -2489,10 +2727,10 @@ impl Backward {
         let mut alt_of: Vec<Vec<[f64; 2]>> = vec![Vec::new(); self.alphabet.len()];
         match &node.pts {
             Pts::Cloud(cloud) => {
-                for (ai, a) in self.alphabet.iter().enumerate() {
+                for (ai, _) in self.alphabet.iter().enumerate() {
                     // A renewal's region is the whole attractor: nothing
                     // to pull back. Its child is decided by `reaches`.
-                    if a.renewal.is_some() {
+                    if self.renewal_here(ai, carry_blurs).is_some() {
                         found.push((ai, Pts::Index(Vec::new())));
                         continue;
                     }
@@ -2537,7 +2775,7 @@ impl Backward {
                 // Gathered here on the CPU; an evaluator that gathers
                 // (`Evaluate::speculative`) does it with the replays.
                 for (ai, a) in self.alphabet.iter().enumerate() {
-                    let cands = if gather_now && a.renewal.is_none() {
+                    let cands = if gather_now && self.renewal_here(ai, carry_blurs).is_none() {
                         Self::gather_seen(&self.landing[ai], &seen, CAND_CAP)
                     } else {
                         Vec::new()
@@ -2553,7 +2791,7 @@ impl Backward {
                 let from: Vec<[f64; 2]> = idx.iter().step_by(idx.len().div_ceil(ALT_FROM).max(1)).map(|&i| self.sample[i as usize]).collect();
                 let mut scratch = Trace::default();
                 for (ai, a) in self.alphabet.iter().enumerate() {
-                    if a.renewal.is_some() {
+                    if self.renewal_here(ai, carry_blurs).is_some() {
                         continue;
                     }
                     let mut alt = if a.branches.len() > 1 { self.pull_back(ai, &from, false, &mut scratch) } else { Vec::new() };
@@ -2600,6 +2838,7 @@ impl Backward {
                     n_cands,
                     spec: None,
                     fate: Fate::Undecided,
+                    renewal: self.renewal_here(ai, carry_blurs),
                 })
             })
             .collect();
@@ -2707,7 +2946,9 @@ impl Backward {
 
         // **2. Children.** The gathers are the cost; nodes in parallel.
         let t = Instant::now();
-        each_sliced(&mut opens, |o| self.children_of(o, depth, floor_mass, !speculate, removals, refine, min_len), slicer).await;
+        // A plotted view carries a partial blur (`renewal_here`).
+        let carry_blurs = view.plotted;
+        each_sliced(&mut opens, |o| self.children_of(o, depth, floor_mass, !speculate, removals, refine, min_len, carry_blurs), slicer).await;
         tr.t_gather += t.elapsed();
         if cancelled() {
             return None;
@@ -2861,7 +3102,7 @@ impl Backward {
                 // attractor, so carrying it cannot localize it, and at
                 // depth its replays can miss a smooth part that lands one
                 // time in ten million.
-                if let Some(ren) = self.alphabet[c.ai].renewal {
+                if let Some(ren) = c.renewal {
                     c.fate = if self.reaches(&c.word[1..], view, ren) { Fate::Kept(eff) } else { Fate::Dropped };
                     if c.refine && matches!(c.fate, Fate::Kept(_)) {
                         o.trace.unrefined += 1;
@@ -3109,7 +3350,7 @@ impl Backward {
             .iter()
             .filter_map(|&c| {
                 let y = self.forward_along(word, self.sample[c as usize])?;
-                Some((c, (y[0] - view.centre[0]).hypot(y[1] - view.centre[1]), y))
+                Some((c, self.view_distance(view, y), y))
             })
             .collect();
         near.sort_by(|a, b| a.1.total_cmp(&b.1));
@@ -3122,10 +3363,13 @@ impl Backward {
                 let mut spread = 0.0f64;
                 for z in self.near_points(c as usize, k, RESCUE_POINTS).unwrap_or_default() {
                     let Some(y) = self.forward_along(word, z) else { continue };
-                    if (y[0] - view.centre[0]).hypot(y[1] - view.centre[1]) <= view.radius {
+                    if self.in_view(view, y) {
                         found.push(z);
                     }
-                    spread = spread.max((y[0] - yc[0]).hypot(y[1] - yc[1]));
+                    // Measured where the view is, through the finals for a
+                    // plotted one.
+                    let (p, pc) = if view.plotted { (self.plotted(y), self.plotted(yc)) } else { (y, yc) };
+                    spread = spread.max((p[0] - pc[0]).hypot(p[1] - pc[1]));
                 }
                 if found.len() >= CLOUD_CAP {
                     found.truncate(CLOUD_CAP);
@@ -3189,14 +3433,14 @@ impl Backward {
         for c in children {
             let eff = c.eff();
             let n_cands = c.n_cands;
-            let Child { ai, word, prob, pts, orbit_hits, mut replay_hits, mut hits, fate, refine, rescued, alt, .. } = c;
+            let Child { ai, word, prob, pts, orbit_hits, mut replay_hits, mut hits, fate, refine, rescued, alt, renewal, .. } = c;
             let pts = match fate {
                 Fate::Dropped => continue,
                 Fate::Kept(eff) => {
                     survived[ai] = true;
                     // A renewal's reference starts after it: at points of
                     // the node's region (`reference_chains`).
-                    let seeds = if self.alphabet[ai].renewal.is_some() {
+                    let seeds = if renewal.is_some() {
                         self.seeds_from(&[], Some(&node.pts))
                     } else {
                         self.seeds_from(&[&orbit_hits, &hits, &replay_hits], Some(&pts))
@@ -3429,7 +3673,13 @@ impl Backward {
         // view are those in its pull-back, a disc in the orbit's space,
         // and that is what is planned. The plan keeps the view's own
         // centre, which is what the renderer compares a pan against.
+        //
+        // **A view holding the image of infinity** (C7) has no disc for a
+        // pull-back -- it is everything outside a large circle -- and the
+        // whole attractor in its place planned nothing. It is planned as
+        // the plot's own disc, every landing tested through the finals.
         let disc = match &self.finals {
+            Some(_) if self.holds_infinity(view) => View { plotted: true, ..view },
             Some(f) => f.pull_back(view, self.whole()).ok_or(NoCylinders::ViewIsEmpty)?,
             None => view,
         };
@@ -3480,7 +3730,24 @@ impl Backward {
         // renewal alone: 162 of 9030 pixels. Past twice the grid's span
         // the region is its sample points, exactly.
         let span = self.cell * GRID_CELLS as f64 / 2.0;
-        let root = if view.radius > 2.0 * span {
+        let mut root_alt: Vec<[f64; 2]> = Vec::new();
+        let root = if view.plotted {
+            // **A plotted view's region** (C7): the sample points plotted
+            // into it, exactly, and the view's rings pulled back through
+            // the finals for the pieces the sample does not show -- the
+            // centre, infinity's image, has no preimage.
+            let pulled: Vec<[f64; 2]> = match &self.finals {
+                Some(f) => root_pts.iter().filter_map(|&q| f.inverse(q)).filter(|p| finite(*p)).collect(),
+                None => Vec::new(),
+            };
+            let inside: Vec<u32> = (0..self.sample.len() as u32).filter(|&i| self.in_view(view, self.sample[i as usize])).collect();
+            if inside.is_empty() {
+                Pts::Cloud(pulled)
+            } else {
+                root_alt = self.away_from(&inside, pulled);
+                Pts::Index(inside)
+            }
+        } else if view.radius > 2.0 * span {
             let inside: Vec<u32> = (0..self.sample.len() as u32)
                 .filter(|&i| {
                     let p = self.sample[i as usize];
@@ -3495,7 +3762,7 @@ impl Backward {
         } else {
             Pts::Cloud(root_pts)
         };
-        let mut frontier = vec![Node { word: Vec::new(), pts: root, prob: 1.0, eff: 0.0, rescued: 0, alt: Vec::new() }];
+        let mut frontier = vec![Node { word: Vec::new(), pts: root, prob: 1.0, eff: 0.0, rescued: 0, alt: root_alt }];
         let mut kept: Vec<(Cylinder, f64)> = Vec::new();
         let mut kept_mass = 0.0f64;
         let mut lost = 0.0f64;
@@ -4125,11 +4392,11 @@ mod tests {
             println!("== zoom {zoom:.0e}: base plan {w0} words, {} nodes expanded, {ms0:.0} ms", e0.len());
             let r = base.radius;
             for (label, v) in [
-                ("pan 1/4 view", View { centre: [q[0] + 0.25 * r, q[1]], radius: r }),
-                ("pan 1 view", View { centre: [q[0] + 1.0 * r, q[1]], radius: r }),
-                ("zoom in 1.5x", View { centre: q, radius: r / 1.5 }),
-                ("zoom in 4x", View { centre: q, radius: r / 4.0 }),
-                ("zoom out 2x", View { centre: q, radius: r * 2.0 }),
+                ("pan 1/4 view", View { centre: [q[0] + 0.25 * r, q[1]], radius: r, plotted: false }),
+                ("pan 1 view", View { centre: [q[0] + 1.0 * r, q[1]], radius: r, plotted: false }),
+                ("zoom in 1.5x", View { centre: q, radius: r / 1.5, plotted: false }),
+                ("zoom in 4x", View { centre: q, radius: r / 4.0, plotted: false }),
+                ("zoom out 2x", View { centre: q, radius: r * 2.0, plotted: false }),
             ] {
                 let (e1, w1, ms1) = run(v);
                 let shared = e1.intersection(&e0).count();
@@ -4167,7 +4434,7 @@ mod tests {
         for (name, view) in views {
             println!("== {name}");
             for m in [1.0f64, 1.25, 1.5, 2.0, 2.25, 3.0] {
-                let planned = View { centre: view.centre, radius: view.radius * m };
+                let planned = View { centre: view.centre, radius: view.radius * m, plotted: false };
                 let t0 = std::time::Instant::now();
                 let Ok(plan) = b.plan(planned) else {
                     println!("   margin {m:.2}: no plan");
@@ -4298,7 +4565,9 @@ mod tests {
     /// **An unbounded attractor plans completely** (tracker C6, stage 3):
     /// the bipolar-elliptic-splits flames, a tail thinning as a power law,
     /// at two points from 1e3 to 1e5, against an independent chaos game
-    /// through the finals -- where it lands enough samples to judge.
+    /// through the finals -- where it lands enough samples to judge. And at
+    /// the image of infinity (C7), their saved views' centre, from the
+    /// saved zoom to 1e6: the far tail, planned through the finals.
     #[test]
     #[ignore = "reads output/flame-zoom; minutes of chaos game"]
     fn the_tailed_flames_plan_completely() {
@@ -4309,9 +4578,16 @@ mod tests {
             let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")) else { continue };
             let cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
             let b = Backward::read(&cfg.flame, reg).expect("reads");
-            for frac in [0.3, 0.7] {
-                for zoom in [1e3f64, 1e4, 1e5] {
-                    let view = View::of(zoom, b.plotted(b.sample_point(frac)), 96, 96);
+            let inf = b.finals.as_ref().and_then(|f| f.infinity()).expect("a final's infinity");
+            let views: Vec<(String, f64, [f64; 2])> = [0.3, 0.7]
+                .into_iter()
+                .flat_map(|frac| [1e3f64, 1e4, 1e5].into_iter().map(move |z| (format!("{frac}"), z, frac)))
+                .map(|(l, z, frac)| (l, z, b.plotted(b.sample_point(frac))))
+                .chain([cfg.zoom as f64, 1e3, 1e4, 1e5, 1e6].into_iter().map(|z| ("infinity".to_string(), z, inf)))
+                .collect();
+            for (frac, zoom, at) in views {
+                {
+                    let view = View::of(zoom, at, 1280, 720);
                     let p = b.plan(view).expect("plans");
                     let cov = coverage(&b, &p, view, 2000);
                     println!(
@@ -4439,7 +4715,7 @@ mod tests {
         let centre = b.sample_point(0.3);
         let mut d: Vec<f64> = b.sample.iter().map(|p| (p[0] - centre[0]).hypot(p[1] - centre[1])).collect();
         d.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let view = View { centre, radius: d[d.len() / 2] };
+        let view = View { centre, radius: d[d.len() / 2], plotted: false };
         let mut seen_lists: Vec<Vec<Cell>> = Vec::new();
         for k in 0..40 {
             let start = rnd(b.sample.len() - 2000);
@@ -4805,8 +5081,13 @@ mod tests {
             // The finals' flames at points off their blob: at 0.75 each
             // view is its glow, planned as one blur's word.
             let fracs: &[f64] = if name.starts_with("final") { &[0.3, 0.55] } else { &[0.75] };
-            for (z, frac) in [1e4f64, 1e6, 1e8].into_iter().flat_map(|z| fracs.iter().map(move |f| (z, *f))) {
-                let view = View::of(z, b.plotted(b.sample_point(frac)), 1280, 720);
+            // And, where a final plots infinity from a tail, views of it
+            // (C7): `frac` below 0 stands for infinity's image.
+            let tailed = name.starts_with("bipolar-elliptic-splits");
+            let fracs: Vec<f64> = fracs.iter().copied().chain(tailed.then_some(-1.0)).collect();
+            for (z, frac) in [1e4f64, 1e6, 1e8].into_iter().flat_map(|z| fracs.clone().into_iter().map(move |f| (z, f))) {
+                let at = if frac < 0.0 { b.finals.as_ref().and_then(|f| f.infinity()).expect("a final's infinity") } else { b.plotted(b.sample_point(frac)) };
+                let view = View::of(z, at, 1280, 720);
                 let px = view.radius / (1280f64.hypot(720.0) / 2.0);
                 let Ok(plan) = b.plan_eval(view, PlanOptions::default(), &mut CpuEval) else { continue };
                 if plan.refs.is_empty() {
@@ -4824,7 +5105,7 @@ mod tests {
                     // A word a renewal starts draws its blur on its first
                     // step, which f64 cannot follow; its offset steps are
                     // the same machinery as every other word's.
-                    if plan.refs[w].is_none() || b.alphabet.iter().any(|a| a.sym == plan.words[w].word[0] && a.renewal.is_some()) {
+                    if plan.refs[w].is_none() || plan.words[w].word.iter().any(|&s| b.alphabet.iter().any(|a| a.sym == s && a.renewal.is_some())) {
                         continue;
                     }
                     let rec = (crate::scene::cylinder::HEADER_FLOATS + w * stride) as f32;
