@@ -1080,20 +1080,65 @@ none of 850 off by a pixel.
 The gate now fails where a plan's references do not fit, unless the walk
 ran out of time (`Cylinders::timed_out`), which it reports: C11.
 
-### C11. cylinder-turns-julian at 1e8: the walk runs out of time -- open
+### C11. cylinder-turns-julian at 1e8: the walk runs out of time -- done (2026-09-27); two accuracy tails open
 
-At 1e8 (at the gate's point, 0.75) the walk runs 25 s and forces its whole
-depth-23 frontier: 265,106 words, 264,679 of them unmeasured, overall
-efficiency reading 0.000. Their references would take 52M floats, past
-any table, so the render replays the plan plainly -- which at 1e8 the
-gate measures at 1,000-4,700 px off on the other flames. Before C10 the gate saw no sample of it in view.
+At 1e8 (at the gate's point, 0.75) the walk ran 25 s and forced its whole
+depth-23 frontier: 265,106 words, 264,679 of them unmeasured, whose
+references would take 52M floats, past any table (C10), so the render
+replayed the plan plainly.
 
-The walk's cost here is the question, not the table's: a view the
-walk cannot settle in 20 s makes a plan no table holds. The julian's two
-arms and the cylinder's four branches (two turns) make every node wide (as
-julian-disc's 51 arms do, P3). Open: where the time goes, and whether a
-forced frontier should be forced shallower -- fewer, larger words -- when
-it would not fit.
+**Why the frontier grows.** The beam ranks the nodes a replay has
+measured and carries every node none could, and at 1e8 that is nearly
+all of them: a depth-20 word's image is far larger than the view, and its
+replays' handful of points never land. The flame's pieces overlap (the
+julian's two arms, the cylinder's four branches), so each level makes
+1.6 nodes of each, while their mass falls by 2.5: 1, 2, 7, 17 … 66,264
+at depth 20, 265,087 at 23. Reaching words the view's size would take
+some 13 levels more, ~450 times the words: enumeration does not get
+there. A plan forced shallower is still worth drawing: complete, and at
+an efficiency around the view's measure over the frontier's (~5e-4),
+far above the untargeted render's share of the view.
+
+**Forced before it outgrows the table** (`FRONTIER_FLOATS`). Before each
+level the walk projects the frontier it would make, at the last level's
+growth, and forces the one it has if that projection's words would take
+over half the replay table with their references (`word_floats`, at
+`MAX_CHAINS`; half for the words past a many-to-one map, which may
+carry more). 1e8: 4.4 s, 66,264 words at depth 20 (13.2M-float table).
+1e6: 11.2 s, 87,990 words at depth 19, where it took 23 s and 210,867.
+Neither runs out of time now.
+
+**Accuracy at depth: two tails, open.** The gate's 48 points a word land
+1 at 1e8, since a forced word lands at ~5e-4. Searching the sample for up
+to 8 landing points from each of 2,000 words finds what it does not:
+
+- 1e8, 103 points from 32 words: median 0.018 px, 99th percentile 2.5,
+  worst 10, 4 over a pixel. Every bad one has `m` = 1 with its nearest
+  reference as close as 1e-8: the error is the first step's, run
+  absolutely in f32, not the offset's. The `m` rule cannot help, since
+  it never goes below 1 ("step 0 always fits").
+- 1e6, 3,815 points from 699 words: median 0.0066 px, 99th percentile
+  1.08, worst 13.6, 44 over a pixel -- where the gate's 353 read 0.010.
+  These points are in a piece of their word's region no reference
+  reaches (0.2-2.5 from the nearest, words with 1-8 seeds), so the
+  offset is as large as a point and rounds like one: the limit C6
+  recorded at 1e4 for a steeper cylinder. A reference is built only from
+  a seed whose orbit lands within 2r, and a forced word's seeds rarely do.
+
+**Tried and reverted: offsets from the first point.** Where step 1 does
+not fit, `m` = 0, with every reference starting at an f32 point so the
+shader's first base is exact. At cylinder-turns-julian 1e8 that took
+the worst to 0.063 px (none over 0.1), and at 1e6 to 21 over a pixel.
+But bipolar-elliptic-splits2's views of infinity's image broke: 67 of
+147 samples at `FD_POLE`, where step 1 "fails" only because the tail's
+points are far, the old `m` = 1 was exact (0.0006 px), and a difference
+form at a far point, across a large offset, has no answer (which one --
+the elliptic's or the bipolar final's -- was not traced).
+Also requiring step 0 to fit gave `m` = 0 to no word at
+cylinder-turns-julian and still broke splits2. What would separate them
+is not yet known. What would reach the pieces is seeds found in them: a
+search for landing points per forced word, as `rescue` does per child --
+what the 3,815 points above cost to find.
 
 ---
 
