@@ -366,6 +366,41 @@ pub fn map_forward_difference(m: &Map2, z: [f64; 2], d: [f64; 2], arm: u32) -> O
     }
 }
 
+/// **The forward map's Jacobian at `z`, along `arm`**, by dual numbers:
+/// exact, with no step size and nothing cancelling, in one pass of the
+/// kernel -- where two of [`map_forward_difference`], one a column, cost
+/// twice as many and were most of a plan's references (tracker P6). `None`
+/// where the kernel's derivative is not finite.
+pub fn map_forward_jacobian(m: &Map2, z: [f64; 2], arm: u32) -> Option<[[f64; 2]; 2]> {
+    use super::ifs_analysis::kernel_forward_gen;
+    use super::ifs_real::jacobian2;
+    let mul = |a: &[[f64; 2]; 2], b: &[[f64; 2]; 2]| {
+        [
+            [a[0][0] * b[0][0] + a[0][1] * b[1][0], a[0][0] * b[0][1] + a[0][1] * b[1][1]],
+            [a[1][0] * b[0][0] + a[1][1] * b[1][0], a[1][0] * b[0][1] + a[1][1] * b[1][1]],
+        ]
+    };
+    let out = match m {
+        Map2::Affine(a) => a.m,
+        Map2::Nonlinear(n) => {
+            let j = jacobian2(n.pre.apply(z), |v| kernel_forward_gen(&n.kernel, &v, arm))?;
+            let wj = [[n.w * j[0][0], n.w * j[0][1]], [n.w * j[1][0], n.w * j[1][1]]];
+            mul(&n.post.m, &mul(&wj, &n.pre.m))
+        }
+        Map2::Sum(s) => {
+            let j = jacobian2(s.pre.apply(z), |v| kernel_forward_gen(&s.kernel, &v, arm))?;
+            let l = &s.lin.m;
+            let phase = [
+                [l[0][0] + s.kw * j[0][0], l[0][1] + s.kw * j[0][1]],
+                [l[1][0] + s.kw * j[1][0], l[1][1] + s.kw * j[1][1]],
+            ];
+            mul(&s.post.m, &mul(&phase, &s.pre.m))
+        }
+        Map2::NonlinearInverse(_) | Map2::SumInverse(_) => return None,
+    };
+    out.iter().flatten().all(|v| v.is_finite()).then_some(out)
+}
+
 /// Floats per map row in the shader's table (`replay_delta.wgsl`).
 pub const ROW_FLOATS: usize = 24;
 
@@ -444,6 +479,84 @@ mod tests {
 
     fn big2(v: [f64; 2]) -> [BigFloat; 2] {
         [BigFloat::from_f64(v[0], LIMBS), BigFloat::from_f64(v[1], LIMBS)]
+    }
+
+    /// **The dual Jacobian is the difference forms' derivative**: for every
+    /// kernel the analysis builds, alone and summed with an affine, on
+    /// every arm tested, at points on rings about the pre-frame origin --
+    /// against the columns `map_forward_difference` gives for a step small
+    /// enough that its own error is under the bar.
+    #[test]
+    fn the_forward_jacobian_is_the_difference_forms_derivative() {
+        use crate::scene::ifs_analysis::analyse_2d_maps;
+        use crate::scene::transforms::{Flame, Transform};
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let kern = |vars: &[(&str, f32)], params: &[(&str, &str, f32)]| {
+            let mut t = Transform::default();
+            (t.a, t.b, t.c, t.d, t.e, t.f) = (0.9, 0.3, -0.3, 0.9, 0.15, -0.2);
+            t.variations.clear();
+            t.variation_order.clear();
+            for (v, w) in vars {
+                t.set_variation(v, *w);
+            }
+            for (v, p, x) in params {
+                t.set_variation_param(v, p, *x);
+            }
+            t
+        };
+        let mut affine = Transform::default();
+        (affine.a, affine.d, affine.e) = (0.5, 0.5, 0.3);
+        affine.variations.clear();
+        affine.variation_order.clear();
+        affine.set_variation("linear", 1.0);
+        let cases: Vec<(&str, Transform, Vec<u32>)> = vec![
+            ("julian 3", kern(&[("julian", 0.6)], &[("julian", "power", 3.0)]), vec![0, 1, 2]),
+            ("julian -2 dist -1", kern(&[("julian", 0.6)], &[("julian", "power", -2.0), ("julian", "dist", -1.0)]), vec![0, 1]),
+            ("juliascope 5", kern(&[("juliascope", 0.6)], &[("juliascope", "power", 5.0)]), vec![0, 1, 4]),
+            ("linear + julian", kern(&[("linear", 0.3), ("julian", 0.6)], &[("julian", "power", 2.0)]), vec![0, 1]),
+            ("spherical", kern(&[("spherical", 0.6)], &[]), vec![0]),
+            ("bubble", kern(&[("bubble", 0.6)], &[]), vec![0]),
+            ("hemisphere", kern(&[("hemisphere", 0.6)], &[]), vec![0]),
+            ("disc", kern(&[("disc", 0.6)], &[]), vec![0]),
+            ("blob", kern(&[("blob", 0.6)], &[("blob", "high", 1.2), ("blob", "low", 0.4), ("blob", "waves", 3.0)]), vec![0]),
+            ("elliptic", kern(&[("elliptic", 0.6)], &[]), vec![0]),
+            ("cylinder", kern(&[("cylinder", 0.6)], &[]), vec![0]),
+            ("linear + splits", kern(&[("linear", 0.2), ("splits", 0.6)], &[("splits", "x", 0.4), ("splits", "y", -0.3)]), vec![0]),
+        ];
+        let mut checked = 0usize;
+        for (name, t, arms) in cases {
+            let mut flame = Flame::default();
+            flame.transforms = vec![t, affine.clone()];
+            let ifs = analyse_2d_maps(&flame, reg).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            let map = &ifs.maps[0].forward;
+            for &arm in &arms {
+                for rad in [0.2f64, 0.55, 1.1, 2.3] {
+                    for i in 0..24 {
+                        let a = std::f64::consts::TAU * i as f64 / 24.0 + 0.05;
+                        let z = [rad * a.cos() - 0.1, rad * a.sin() + 0.07];
+                        let Some(j) = map_forward_jacobian(map, z, arm) else { continue };
+                        let h = 1e-7 * z[0].hypot(z[1]).max(1e-3);
+                        let col = |d: [f64; 2]| map_forward_difference(map, z, d, arm).map(|v| [v[0] / h, v[1] / h]);
+                        let (Some(c0), Some(c1)) = (col([h, 0.0]), col([0.0, h])) else { continue };
+                        let scale = j.iter().flatten().fold(0.0f64, |m, v| m.max(v.abs())).max(1e-12);
+                        let err = [(j[0][0] - c0[0]), (j[1][0] - c0[1]), (j[0][1] - c1[0]), (j[1][1] - c1[1])]
+                            .iter()
+                            .fold(0.0f64, |m, v| m.max(v.abs()))
+                            / scale;
+                        // Near a piecewise map's seam the difference crosses
+                        // it; the dual reads one side.
+                        if err > 1e-4 && name.contains("splits") {
+                            continue;
+                        }
+                        assert!(err < 1e-4, "{name} arm {arm} at {z:?}: dual {j:?}, difference [{c0:?}, {c1:?}], relative {err:.2e}");
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert!(checked > 1500, "only {checked} checked");
+        println!("  {checked} Jacobians agree");
     }
 
     /// Every forward kernel the analysis accepts, with the arms worth

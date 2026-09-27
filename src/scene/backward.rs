@@ -2183,7 +2183,7 @@ impl Backward {
     /// last offset steps -- a word may need offsets for them alone, where
     /// the absolute plot would round.
     pub async fn reference_chains(&self, cyl: &Cylinders, view: View, disc: View, slicer: &Slicer) -> Vec<Option<WordRefs>> {
-        use crate::scene::forward_delta::map_forward_difference;
+        use crate::scene::forward_delta::map_forward_jacobian;
         let c = view.centre;
         let r = view.radius;
         let one = |w: &Cylinder| -> Option<WordRefs> {
@@ -2295,11 +2295,7 @@ impl Backward {
                 }
                 for k in (start..n).rev() {
                     let (map, arm) = syms[k];
-                    let zk = z[k];
-                    let h = 1e-6 * zk[0].hypot(zk[1]).max(1e-6);
-                    let col = |d: [f64; 2]| map_forward_difference(&map.forward, zk, d, arm).map(|v| [v[0] / h, v[1] / h]);
-                    let (Some(a), Some(b)) = (col([h, 0.0]), col([0.0, h])) else { break };
-                    let j = [[a[0], b[0]], [a[1], b[1]]];
+                    let Some(j) = map_forward_jacobian(&map.forward, z[k], arm) else { break };
                     prod = [
                         [prod[0][0] * j[0][0] + prod[0][1] * j[1][0], prod[0][0] * j[0][1] + prod[0][1] * j[1][1]],
                         [prod[1][0] * j[0][0] + prod[1][1] * j[1][0], prod[1][0] * j[0][1] + prod[1][1] * j[1][1]],
