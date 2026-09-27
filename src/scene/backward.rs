@@ -617,6 +617,12 @@ pub struct Trace {
     pub t_gather: std::time::Duration,
     pub t_verify: std::time::Duration,
     pub t_replay: std::time::Duration,
+    /// Deciding kept or carried (step 4), the top-ups (6), settling each
+    /// node (7), and what the walk does after its levels.
+    pub t_fates: std::time::Duration,
+    pub t_topup: std::time::Duration,
+    pub t_close: std::time::Duration,
+    pub t_after: std::time::Duration,
     pub n_verify: usize,
     pub n_replay: usize,
     pub nodes_expanded: usize,
@@ -2774,7 +2780,7 @@ impl Backward {
                 //
                 // Gathered here on the CPU; an evaluator that gathers
                 // (`Evaluate::speculative`) does it with the replays.
-                for (ai, a) in self.alphabet.iter().enumerate() {
+                for ai in 0..self.alphabet.len() {
                     let cands = if gather_now && self.renewal_here(ai, carry_blurs).is_none() {
                         Self::gather_seen(&self.landing[ai], &seen, CAND_CAP)
                     } else {
@@ -3088,13 +3094,68 @@ impl Backward {
         // **4. Kept or carried.** Below the floor, or at the depth cap,
         // the walk stops -- and the word is FORCED if any of it lands,
         // never dropped. See `MEASURE_FLOOR`.
-        for o in &mut opens {
-            // The node's cells widened for an unseen child's near misses,
-            // made once, when first wanted: from at most `WIDEN_FROM` of
-            // them, since a node with a large region widened whole was
-            // tens of milliseconds a child.
-            let mut wide: Option<Vec<Cell>> = None;
-            for c in &mut o.children {
+        let t_fates = Instant::now();
+        // **The rescues first, all at once.** An unseen child worth its
+        // probability is looked for near its node's cells (`rescue`): the
+        // node's cells widened, a gather over them, then replays of its
+        // word. One after another they were most of a plan -- at
+        // bipolar-elliptic-splits1's views of the image of infinity (C7),
+        // whose far tail leaves nearly every node with unseen children
+        // (an `elliptic` preimage of a far region is farther out than any
+        // point), 103,703 of them over three views took 12.2 s to widen
+        // and gather and 0.34 s to replay. So the widening (per node), the
+        // gathers and the rescues run on every thread, and the loop below
+        // reads them back. On the web, one at a time: the rescue yields a
+        // slice per depth.
+        let needs_rescue = |c: &Child| {
+            let unseen = matches!(c.pts, Pts::Index(_)) && c.n_cands == 0 && c.orbit_hits.is_empty();
+            c.renewal.is_none() && unseen && !(c.eff() > 0.0) && c.prob > FORCE_WASTE * floor_mass
+        };
+        // The node's cells widened for an unseen child's near misses: from
+        // at most `WIDEN_FROM` of them, since a node with a large region
+        // widened whole was tens of milliseconds a child.
+        let wides: Vec<Option<Vec<Cell>>> = map_sliced(
+            &opens,
+            |o| {
+                o.children.iter().any(needs_rescue).then(|| {
+                    let every = o.seen.len().div_ceil(WIDEN_FROM).max(1);
+                    let from: Vec<Cell> = o.seen.iter().step_by(every).copied().collect();
+                    Self::widen_cells(&from, UNSEEN_REACH)
+                })
+            },
+            slicer,
+        )
+        .await;
+        let jobs: Vec<(usize, usize)> = opens
+            .iter()
+            .enumerate()
+            .flat_map(|(oi, o)| o.children.iter().enumerate().filter(|(_, c)| needs_rescue(c)).map(move |(ci, _)| (oi, ci)))
+            .collect();
+        let near_of = |oi: usize, ci: usize| {
+            let c = &opens[oi].children[ci];
+            Pts::Index(Self::gather_seen(&self.landing[c.ai], wides[oi].as_deref().unwrap_or(&[]), 8 * RESCUE_CANDIDATES))
+        };
+        let rescued_all: Vec<Option<Vec<[f64; 2]>>> = if slicer.slices() {
+            let mut out = Vec::with_capacity(jobs.len());
+            for &(oi, ci) in &jobs {
+                let (c, near) = (&opens[oi].children[ci], near_of(oi, ci));
+                out.push(self.rescue(&c.word, &near, view, c.prob, floor_mass, slicer).await);
+                // A gather over the widened cells is a thousand binary
+                // searches, and a node can have dozens of unseen children.
+                slicer.tick().await;
+            }
+            out
+        } else {
+            map_all(&jobs, |&(oi, ci)| {
+                let (c, near) = (&opens[oi].children[ci], near_of(oi, ci));
+                super::slice::drive(self.rescue(&c.word, &near, view, c.prob, floor_mass, &Slicer::never()))
+            })
+        };
+        drop(wides);
+        let mut rescued_by: std::collections::HashMap<(usize, usize), Option<Vec<[f64; 2]>>> =
+            jobs.into_iter().zip(rescued_all).collect();
+        for (oi, o) in opens.iter_mut().enumerate() {
+            for (ci, c) in o.children.iter_mut().enumerate() {
                 let eff = c.eff();
                 let prob = c.prob;
                 // **A renewal is kept, never carried, and kept by
@@ -3124,22 +3185,7 @@ impl Backward {
                 // exact but few, and carried alone they covered a branch
                 // worse than a rescue does.
                 if unseen && !(eff > 0.0) {
-                    let rescued = if prob > FORCE_WASTE * floor_mass {
-                        let cells = wide.get_or_insert_with(|| {
-                            let every = o.seen.len().div_ceil(WIDEN_FROM).max(1);
-                            let from: Vec<Cell> = o.seen.iter().step_by(every).copied().collect();
-                            Self::widen_cells(&from, UNSEEN_REACH)
-                        });
-                        let near = Self::gather_seen(&self.landing[c.ai], cells, 8 * RESCUE_CANDIDATES);
-                        let found = self.rescue(&c.word, &Pts::Index(near), view, prob, floor_mass, slicer).await;
-                        // A gather over the widened cells is a thousand
-                        // binary searches, and a node can have dozens of
-                        // unseen children.
-                        slicer.tick().await;
-                        found
-                    } else {
-                        None
-                    };
+                    let rescued = rescued_by.remove(&(oi, ci)).flatten();
                     let hidden = c.alt.len();
                     if rescued.is_some() || hidden > 0 {
                         let found = rescued.as_ref().map_or(0, |r| r.len());
@@ -3194,6 +3240,7 @@ impl Backward {
             slicer.tick().await;
         }
 
+        tr.t_fates += t_fates.elapsed();
         // **5. Checks.** A carried child now needs its region's points,
         // checked exactly on a capped set of candidates.
         let t = Instant::now();
@@ -3237,6 +3284,7 @@ impl Backward {
 
         // **6. Top-ups.** A thin child is searched again, wider, over its
         // parent's cells. See `TOPUP_BELOW`.
+        let t_topup = Instant::now();
         for o in &mut opens {
             let parent_indexed = matches!(o.node.pts, Pts::Index(_));
             for c in &mut o.children {
@@ -3293,12 +3341,15 @@ impl Backward {
         }
         slicer.tick().await;
 
+        tr.t_topup += t_topup.elapsed();
         // **7. Each node decided**, its children in their order.
+        let t_close = Instant::now();
         let mut out = Vec::with_capacity(opens.len());
         for o in opens {
             out.push(self.close(o, depth, view, watch, floor_mass, removals, slicer).await);
             slicer.tick().await;
         }
+        tr.t_close += t_close.elapsed();
         Some(out)
     }
 
@@ -3904,6 +3955,7 @@ impl Backward {
             slicer.tick().await;
         }
 
+        let t_after = web_time::Instant::now();
         // More words than the kernel's table holds: keep the ones
         // carrying the most measure and charge the rest.
         // No truncation: the kernel's word table is sized to fit and
@@ -4022,6 +4074,7 @@ impl Backward {
         // The least efficiency a replay can tell from none.
         let draw_floor = 1.0 / (self.verify_first.len() + self.verify_rest.len()).max(1) as f64;
         let depth = merged.iter().map(|(c, _)| c.word.len()).max().unwrap_or(0);
+        tr.t_after += t_after.elapsed();
         let mut plan = Cylinders {
             // Each word keeps the efficiency its replays measured. A
             // blur's word is drawn at the square root of it
@@ -6356,6 +6409,39 @@ mod tests {
             if done.len() == 6 && done.values().all(|n| *n >= 2) {
                 break;
             }
+        }
+    }
+
+    /// **What a plan of the image of infinity costs** (tracker C7), by
+    /// step: bipolar-elliptic-splits1 at (0, 0), from 1e4 to 1e6.
+    #[test]
+    #[ignore = "a measurement; reads output/flame-zoom"]
+    fn what_a_plan_of_the_image_of_infinity_costs() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let Ok(text) = std::fs::read_to_string("output/flame-zoom/bipolar-elliptic-splits1.fflame") else { return };
+        let cfg: crate::config::FractalConfig = serde_json::from_str(&text).unwrap();
+        let t0 = std::time::Instant::now();
+        let b = Backward::read(&cfg.flame, reg).unwrap();
+        println!("  read {:.0} ms (natural {}, tail {})", t0.elapsed().as_secs_f64() * 1e3, b.natural, b.sample.len() - b.natural);
+        for zoom in [1e4f64, 1e5, 1e6] {
+            let view = View::of(zoom, [cfg.pan_x, cfg.pan_y], 1280, 720);
+            let disc = View { plotted: true, ..view };
+            let mut tr = Trace::default();
+            let t = std::time::Instant::now();
+            let mut eval = CpuEval;
+            let plan = drive(b.walk_disc(disc, &mut tr, PlanOptions::default(), &mut Blocking(&mut eval), &Slicer::never())).unwrap();
+            let walk = t.elapsed().as_secs_f64() * 1e3;
+            let t = std::time::Instant::now();
+            let refs = drive(b.reference_chains(&plan, view, disc, &Slicer::never()));
+            let rt = t.elapsed().as_secs_f64() * 1e3;
+            let with = refs.iter().filter(|r| r.is_some()).count();
+            let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
+            println!(
+                "  {zoom:.0e}: {} words, depth {}; walk {walk:.0} ms (seed {:.0}, gather {:.0}, verify {:.0} n {}, replay {:.0} n {}, fates {:.0}, topup {:.0}, close {:.0}, after {:.0}), nodes {}; references {rt:.0} ms for {with}",
+                plan.words.len(), plan.depth, ms(tr.t_seed), ms(tr.t_gather), ms(tr.t_verify), tr.n_verify, ms(tr.t_replay), tr.n_replay,
+                ms(tr.t_fates), ms(tr.t_topup), ms(tr.t_close), ms(tr.t_after), tr.nodes_expanded
+            );
         }
     }
 
