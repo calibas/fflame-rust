@@ -911,6 +911,26 @@ the attractor.
   (3.1 s, 26M), already parallel: a replay of a 60-symbol word from an
   orbit point that cannot reach the far tail runs to its end to find
   so.
+- **The GPU planner plans a plotted view** (2026-09-26). Its kernels take
+  a word's end point through the finals the last symbol's transform has
+  before the test (`ct_apply_finals` in `replay.wgsl`, the render's own
+  loop; `PlanView::plotted`), with the finals and the attachment lists
+  uploaded as the render lays them out. It resolves such a view at any
+  depth: near infinity's image the final shrinks a far point's absolute
+  error with the point, so the plot's error is ~4e-7 of the plotted
+  distance from that image (`gpu_resolves`). As complete as the CPU's
+  (`the_gpu_plans_the_image_of_infinity`): coverage 1.000 at every zoom
+  on both flames, 0.997 at splits1's 1e6 as the CPU's.
+- **Settling a node, on every thread.** A node settles on its own
+  (`close`), so on the desktop all of a level's do at once; the rescues
+  it asks for are found before it, also at once. Plans identical word
+  for word (grand-julian, random1, the C7 views).
+- Together, splits1 at (0, 0): 2.6 s at 1e4 on either planner (1.9 s on
+  the GPU), 3.9 s at 1e5 on the GPU (4.7 on the CPU), 6.0 s at 1e6 on the
+  GPU (9.7 on the CPU) -- from 3.7, 8.3 and 17.7 s. random1 1e8 7.5 to 6.1
+  s. What is left at 1e6 on the GPU: its replays, 2.7 s over 327 batches
+  (2.0 s of it waiting on the GPU), the rescues' replays on the CPU, 1.3-2
+  s, and the rest under 0.4 s each.
 - **The per-sample gate cannot check a word through a blur** (the GPU
   draws its own): at (0, 0) most words carrying references are such.
   Their offsets start after the blur by construction; the renders above

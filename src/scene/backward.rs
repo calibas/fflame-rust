@@ -809,6 +809,9 @@ struct Child {
     /// Kept by geometry as a renewal (`Renewal`), or `None`: not a
     /// blurred transform's child, or one carried (`Backward::renewal_here`).
     renewal: Option<Renewal>,
+    /// Its rescue, where `close` would look for one, found before it on
+    /// every thread (`expand_level`, step 7); `None` where not asked.
+    rescue_found: Option<Option<Vec<[f64; 2]>>>,
 }
 
 impl Child {
@@ -2091,10 +2094,16 @@ impl Backward {
     /// Whether the GPU planner resolves `view`. See [`GPU_PLAN_RADIUS`].
     /// Judged where the walk plans it: through the finals, if any.
     pub fn gpu_resolves(&self, view: View) -> bool {
-        // A plotted view's landings go through the finals, which the GPU
-        // planner does not apply (C7).
+        // **A plotted view** (C7): the planner applies the finals too
+        // (`ct_apply_finals`). Near the image of infinity they shrink a far
+        // point's absolute error along with the point -- its error is ~4e-7
+        // of its distance, and the final maps both by about 1/|p| -- so the
+        // plot's is that share of the plotted distance from infinity's
+        // image: a view centred there resolves at any depth.
         if self.holds_infinity(view) {
-            return false;
+            let inf = self.plotted_infinity().expect("it holds it");
+            let reach = (view.centre[0] - inf[0]).hypot(view.centre[1] - inf[1]) + view.radius;
+            return view.radius >= GPU_PLAN_RADIUS * reach;
         }
         let view = self.finals.as_ref().and_then(|f| f.pull_back(view, self.whole())).unwrap_or(view);
         view.radius >= GPU_PLAN_RADIUS * view.centre[0].hypot(view.centre[1]).max(1.0)
@@ -2845,6 +2854,7 @@ impl Backward {
                     spec: None,
                     fate: Fate::Undecided,
                     renewal: self.renewal_here(ai, carry_blurs),
+                    rescue_found: None,
                 })
             })
             .collect();
@@ -3344,11 +3354,63 @@ impl Backward {
         tr.t_topup += t_topup.elapsed();
         // **7. Each node decided**, its children in their order.
         let t_close = Instant::now();
-        let mut out = Vec::with_capacity(opens.len());
-        for o in opens {
-            out.push(self.close(o, depth, view, watch, floor_mass, removals, slicer).await);
-            slicer.tick().await;
+        // The rescues `close` asks for, first and on every thread, as step
+        // 4's are: a child whose candidates and replays found nothing,
+        // looked for near its candidates (`rescue`). One node after another
+        // they were most of settling a node at bipolar-elliptic-splits1's
+        // views of the image of infinity (C7). The same children `close`
+        // would rescue, by the same test; the web keeps its slices.
+        if !slicer.slices() {
+            let asks = |c: &Child| {
+                matches!(c.fate, Fate::Undecided)
+                    && c.hits.is_empty()
+                    && c.orbit_hits.is_empty()
+                    && !(c.eff() > 0.0)
+                    && matches!(&c.pts, Pts::Index(v) if !v.is_empty())
+                    && c.prob > FORCE_WASTE * floor_mass
+            };
+            let jobs: Vec<(usize, usize)> = opens
+                .iter()
+                .enumerate()
+                .flat_map(|(oi, o)| o.children.iter().enumerate().filter(|(_, c)| asks(c)).map(move |(ci, _)| (oi, ci)))
+                .collect();
+            let found = {
+                let opens = &opens;
+                map_all(&jobs, |&(oi, ci)| {
+                    let c = &opens[oi].children[ci];
+                    super::slice::drive(self.rescue(&c.word, &c.pts, view, c.prob, floor_mass, &Slicer::never()))
+                })
+            };
+            for ((oi, ci), f) in jobs.into_iter().zip(found) {
+                opens[oi].children[ci].rescue_found = Some(f);
+            }
         }
+        // Each node settles on its own, so on the desktop they settle on
+        // every thread, in order; the web keeps one a slice.
+        #[cfg(not(target_arch = "wasm32"))]
+        let out: Vec<Expanded> = if slicer.slices() {
+            let mut out = Vec::with_capacity(opens.len());
+            for o in opens {
+                out.push(self.close(o, depth, view, watch, floor_mass, removals, slicer).await);
+                slicer.tick().await;
+            }
+            out
+        } else {
+            use rayon::prelude::*;
+            opens
+                .into_par_iter()
+                .map(|o| super::slice::drive(self.close(o, depth, view, watch, floor_mass, removals, &Slicer::never())))
+                .collect()
+        };
+        #[cfg(target_arch = "wasm32")]
+        let out: Vec<Expanded> = {
+            let mut out = Vec::with_capacity(opens.len());
+            for o in opens {
+                out.push(self.close(o, depth, view, watch, floor_mass, removals, slicer).await);
+                slicer.tick().await;
+            }
+            out
+        };
         tr.t_close += t_close.elapsed();
         Some(out)
     }
@@ -3484,7 +3546,7 @@ impl Backward {
         for c in children {
             let eff = c.eff();
             let n_cands = c.n_cands;
-            let Child { ai, word, prob, pts, orbit_hits, mut replay_hits, mut hits, fate, refine, rescued, alt, renewal, .. } = c;
+            let Child { ai, word, prob, pts, orbit_hits, mut replay_hits, mut hits, fate, refine, rescued, alt, renewal, rescue_found, .. } = c;
             let pts = match fate {
                 Fate::Dropped => continue,
                 Fate::Kept(eff) => {
@@ -3545,7 +3607,10 @@ impl Backward {
                             survived[ai] = true;
                             let seeds = self.seeds_from(&[&replay_hits], Some(&pts));
                             node_kept.push((disc(word, prob, seeds), eff));
-                        } else if let Some(cloud) = match self.rescue(&word, &pts, view, prob, floor_mass, slicer).await {
+                        } else if let Some(cloud) = match match rescue_found {
+                            Some(found) => found,
+                            None => self.rescue(&word, &pts, view, prob, floor_mass, slicer).await,
+                        } {
                             Some(found) => Some(found),
                             None => (!alt.is_empty()).then(Vec::new),
                         } {
@@ -3679,8 +3744,8 @@ impl Backward {
                 let t0 = web_time::Instant::now();
                 let r = self.plan_with_eval(view, &mut tr, opts, eval);
                 {
-                    log::debug!(
-                        "GPU plan {:.0} ms: {} batches, pack {:.0} wait {:.0} read {:.0} ms; walls seed {:.0} gather {:.0} replay {:.0} verify {:.0}",
+                    let line = format!(
+                        "GPU plan {:.0} ms: {} batches, pack {:.0} wait {:.0} read {:.0} ms; walls seed {:.0} gather {:.0} replay {:.0} verify {:.0} fates {:.0} topup {:.0} close {:.0}; nodes {}",
                         t0.elapsed().as_secs_f64() * 1e3,
                         eval.batches,
                         eval.totals.pack,
@@ -3690,7 +3755,12 @@ impl Backward {
                         tr.t_gather.as_secs_f64() * 1e3,
                         tr.t_replay.as_secs_f64() * 1e3,
                         tr.t_verify.as_secs_f64() * 1e3,
+                        tr.t_fates.as_secs_f64() * 1e3,
+                        tr.t_topup.as_secs_f64() * 1e3,
+                        tr.t_close.as_secs_f64() * 1e3,
+                        tr.nodes_expanded,
                     );
+                    log::debug!("{line}");
                 }
                 return r;
             }
@@ -4735,6 +4805,43 @@ mod tests {
             }
         }
         println!("total: CPU {cpu_total:.0} ms, GPU {gpu_total:.0} ms, {:.1}x", cpu_total / gpu_total);
+    }
+
+    /// **The GPU plans a view of the plot as completely as the CPU**
+    /// (tracker C7): bipolar-elliptic-splits1 and 2 at the image of
+    /// infinity, their saved views' centre, from the saved zoom to 1e6 --
+    /// the planner applying the finals before its test (`ct_apply_finals`).
+    #[test]
+    #[ignore = "needs a GPU and reads output/flame-zoom"]
+    fn the_gpu_plans_the_image_of_infinity() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let (device, queue) = test_device();
+        for name in ["bipolar-elliptic-splits1", "bipolar-elliptic-splits2"] {
+            let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")) else { continue };
+            let cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
+            let b = Backward::read(&cfg.flame, reg).expect("reads");
+            let planner = std::sync::Mutex::new(crate::scene::plan_gpu::GpuPlanner::new(&device, &queue));
+            let _ = planner.lock().unwrap().for_flame(&cfg.flame, &b).is_some();
+            for zoom in [cfg.zoom as f64, 1e3, 1e4, 1e5, 1e6] {
+                let view = View::of(zoom, [cfg.pan_x, cfg.pan_y], 1280, 720);
+                assert!(b.gpu_resolves(view), "{name} {zoom:.0e}: a view of infinity's image the GPU does not plan");
+                let t0 = std::time::Instant::now();
+                let cpu = b.plan(view).expect("a CPU plan");
+                let cpu_ms = t0.elapsed().as_secs_f64() * 1e3;
+                let t0 = std::time::Instant::now();
+                let gpu = b.plan_for(&cfg.flame, view, PlanOptions { gpu: Some(&planner), ..Default::default() }).expect("a GPU plan");
+                let gpu_ms = t0.elapsed().as_secs_f64() * 1e3;
+                let (cc, gc) = (coverage(&b, &cpu, view, 1000), coverage(&b, &gpu, view, 1000));
+                println!(
+                    "  {name} {zoom:>9.0}: CPU {cpu_ms:>6.0} ms, {:>5} words, eff {:.3}, coverage {cc:?} | GPU {gpu_ms:>6.0} ms, {:>5} words, eff {:.3}, coverage {gc:?} | {:.1}x",
+                    cpu.words.len(), cpu.efficiency, gpu.words.len(), gpu.efficiency, cpu_ms / gpu_ms
+                );
+                if let (Some(cc), Some(gc)) = (cc, gc) {
+                    assert!(gc >= cc - 0.005, "{name} {zoom:.0e}: the GPU's plan covers {gc:.4} where the CPU's covers {cc:.4}");
+                }
+            }
+        }
     }
 
     /// **Phase 4: the GPU gathers exactly what the CPU gathers.** Random
