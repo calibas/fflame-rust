@@ -586,7 +586,7 @@ because the inverse walk's analysis does not model Möbius maps.
 
 Three corpus flames. They would need their own routing.
 
-### C6. An unbounded attractor -- open (2026-09-26)
+### C6. An unbounded attractor -- done (2026-09-26); its blur's draw open
 
 `output/flame-zoom/bipolar-elliptic-splits{1,2}.fflame`: `elliptic`,
 `splits`, and `cylinder` with a `pre_blur`, under a `bipolar` final.
