@@ -1339,6 +1339,47 @@ the planner's six kernels synchronously
   a shorter frame.
 - Compile the planner's kernels when the flame loads.
 
+### P6. The GPU planner in offsets -- plan, for a decision (2026-09-27)
+
+C1's leftover, and the lever P3's measurements point to. Past
+`GPU_PLAN_RADIUS` the planner's absolute f32 is as displaced as the plain
+replay (~4e-7 units), so a view that deep is planned on the CPU. Measured
+on julian-disc at the gate's point (12 threads, GTX 1660 Super):
+
+| zoom | CPU | GPU planner | GPU resolves |
+|---|---|---|---|
+| 1e2 | 15.6 s | 2.2 s | yes |
+| 1e4 | 16.8 s | 2.6 s | yes |
+| 1e6 | 21.8 s, out of time | 4.7 s | yes |
+| 1e7 | 21.0 s, out of time | -- | no |
+| 1e8 | 21.8 s, out of time | -- | no |
+
+On the CPU, 84% is replays: 30-45M points a plan through words of 60-96
+symbols, ~67 ns a map step on twelve threads, bound by the kernels'
+transcendentals. Past the GPU's reach every julian-disc plan runs out of
+time, so it is also where P3's irreproducible plans and forced-frontier
+waste come from.
+
+**What it would take.** The planner answers one question in batches:
+does word `w` send sample point `x` into the view. In offsets, as the
+render's `ct_offsets` does: `w` runs absolutely to `m`, then carries its
+offset from a reference's bases, and the test is on the reference's end
+plus the offset. So each job needs a reference, computed on the CPU in
+f64 before the batch -- one orbit per child against a hundred GPU replays
+of it, ~1 s a plan on twelve threads -- and the batch carries the words'
+blocks as the replay table does.
+
+**The question to settle first.** A reference covers one piece of a
+word's region, and a replay's points come from the whole attractor. A
+point in a piece no reference reaches is tested as absolutely as today:
+wrong near the view's edge at that depth. For the replays that only
+moves an efficiency estimate. For the exact checks (a candidate's
+landing, which decides the region and so completeness) it is a hole. So
+either every piece gets a reference (C11's tail, where forced words'
+pieces outnumber their seeds, is the same problem), or the checks stay on
+the CPU and only the replays -- 84% of the time -- move to the GPU in
+offsets. The second is the smaller, safer step.
+
 ---
 
 ## Editing by words
