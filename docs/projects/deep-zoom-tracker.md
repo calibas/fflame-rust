@@ -1146,6 +1146,45 @@ is not yet known. What would reach the pieces is seeds found in them: a
 search for landing points per forced word, as `rescue` does per child --
 what the 3,815 points above cost to find.
 
+### C12. "Not contractive": translations -- investigated, not worth targeting (2026-09-27)
+
+The census's third blocker, in four flames. presets#3 ("Spherical3", also
+`output/spherical.flame`) and presets#4 ("Square Tile") are not blocked
+by an expanding map but by TRANSLATIONS: identity linear parts with an
+offset, σ_max exactly 1. (presets#7's σ = 2 is an expansion, not looked
+at.) Tried, measured, and reverted:
+
+- The walk's analysis (`!holes`) accepting an affine with σ_max ≤ 1: its
+  inverse keeps a region's size, and the walk needs no invariant ball
+  (C6). Both then read -- but as flames without arms, the forward
+  planner's.
+- `flatten` beside a blur: the free-blur test counts a transform's live
+  variations, and a `flatten` (nothing in the plane, `AffineRole::Nothing`)
+  made Square Tile's blur "not affine". Skipping plane-inert variations
+  there fixes it.
+- Routing a flame the forward planner fails on (no invariant ball, not
+  contractive, out of nodes, too many words) to the walk.
+
+What the walk then planned (a view at the preset's centre + (0.3, 0.2)):
+
+| flame | zoom | time | words | efficiency | speedup |
+|---|---|---|---|---|---|
+| Spherical3 | 1e1 | 1.0 s | 177 (forward planner) | 1.000 | 7.4 |
+| Spherical3 | 1e2 | 13.4 s | 560,065 | 0.003 | 0.06 |
+| Spherical3 | 1e3 | 22.0 s, out of time | 686,359 | 0.001 | 487 |
+| Square Tile | 1e1-1e3 | 0.8-4.6 s | 49-78k | 0.000-0.072 | 0.12-0.39 |
+
+Square Tile has no contracting map at all: four translations and a blur,
+so every word's image is a unit disc moved by its net translation, and
+no view deeper than the disc has structure to target -- declined at
+every zoom, correctly. Spherical3 is family M (similarities and an
+inversion, `inversive-targeting.md`), whose disc bounds never shrink
+through the inversion; the walk plans it only past its time budget,
+into a table no smaller. So routing them to the walk would cost 5-22 s
+of planning a view for plans the renderer declines or cannot hold. Not
+kept. If a flame with arms and a translation appears, the first two
+changes are what it needs.
+
 ---
 
 ## Performance
