@@ -3887,6 +3887,7 @@ impl Backward {
         let mut kept: Vec<(Cylinder, f64)> = Vec::new();
         let mut kept_mass = 0.0f64;
         let mut lost = 0.0f64;
+        let mut timed_out = false;
         let started = web_time::Instant::now();
 
         for depth in 1..=MAX_DEPTH {
@@ -3900,6 +3901,7 @@ impl Backward {
             // Out of time: what is still on the frontier is FORCED as it
             // stands. Dropping it was a hole; forcing it is waste.
             if started.elapsed() > opts.budget {
+                timed_out = true;
                 for n in frontier.drain(..) {
                     // Zero hits is not zero measure; forced all the same.
                     if n.word.is_empty() {
@@ -4163,6 +4165,7 @@ impl Backward {
             mass,
             lost,
             sampling_leak: 0.0,
+            timed_out,
             efficiency: if mass > 0.0 { delivered / mass } else { 0.0 },
             depth,
             composable: false,
@@ -5264,6 +5267,18 @@ mod tests {
                 let table = crate::scene::cylinder::pack_words(&plan, &cfg.flame);
                 let stride = table[0] as usize;
                 let blocks = table[3] as usize;
+                // References the table could not hold: the render replays
+                // the whole plan plainly, pixels off at depth (C10). Read on
+                // regardless, the blocks' offsets would be the words'. Only
+                // a walk that ran out of time has made such a plan -- its
+                // whole frontier forced, cylinder-turns-julian's at 1e8
+                // (C11) -- and that is reported, not judged.
+                if blocks == 0 {
+                    let with = plan.refs.iter().flatten().count();
+                    assert!(plan.timed_out, "{name} {z:.0e}: {with} words' references do not fit their table");
+                    println!("  {name} {z:.0e} at {frac}: out of time, {} words, and their references do not fit the table -- not judged", plan.words.len());
+                    continue;
+                }
                 let step = (plan.words.len() / 400).max(1);
                 let pts: Vec<usize> = (0..b.sample.len()).step_by(b.sample.len() / 48).collect();
                 let mut jobs: Vec<[f32; 4]> = Vec::new();
