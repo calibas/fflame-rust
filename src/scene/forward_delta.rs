@@ -93,13 +93,21 @@ fn sin_cos_shifted<T: Transcendental>(x: &T, q: f64) -> (T, T) {
 /// defined, or both at the origin.
 pub fn kernel_forward_difference_gen<T: Transcendental>(k: &Kernel, v: &[T; 2], e: &[T; 2], arm: u32) -> Option<[T; 2]> {
     use std::f64::consts::{PI, TAU};
+    // A mirrored root's odd arm is the root's of the conjugate, and the
+    // conjugate is linear: the root's difference at `conj(v)`, `conj(ε)`.
+    if let Kernel::Root { n, d, mirror: true } = *k {
+        if Kernel::mirrored_arm(n, arm) {
+            let root = Kernel::Root { n, d, mirror: false };
+            return kernel_forward_difference_gen(&root, &[v[0].clone(), v[1].neg()], &[e[0].clone(), e[1].neg()], arm);
+        }
+    }
     let w = [v[0].add(&e[0]), v[1].add(&e[1])];
     let x = cnorm2(v);
     // `|v + ε|² − |v|² = 2v·ε + |ε|²`, which cancels nothing.
     let dot = v[0].mul(&e[0]).add(&v[1].mul(&e[1]));
     let t = dot.add(&dot).add(&cnorm2(e));
     match *k {
-        Kernel::Root { n, d } => {
+        Kernel::Root { n, d, .. } => {
             let xv = x.to_f64();
             if !(xv > 0.0) || !(cnorm2(&w).to_f64() > 0.0) {
                 return None;
@@ -374,7 +382,9 @@ pub fn forward_row(m: &Map2) -> [f32; ROW_FLOATS] {
     };
     let kernel = |row: &mut [f32; ROW_FLOATS], k: &Kernel| {
         let (id, p) = match *k {
-            Kernel::Root { n, d } => (0.0, [n as f64, d, 0.0]),
+            // The third: 1 for a mirrored root, whose odd arms the shader
+            // takes at the conjugate.
+            Kernel::Root { n, d, mirror } => (0.0, [n as f64, d, if mirror { 1.0 } else { 0.0 }]),
             Kernel::Spherical => (1.0, [0.0; 3]),
             Kernel::Bubble => (2.0, [0.0; 3]),
             Kernel::Hemisphere => (3.0, [0.0; 3]),
@@ -441,13 +451,17 @@ mod tests {
     /// a negative power.
     fn kernels() -> Vec<(Kernel, Vec<u32>)> {
         vec![
-            (Kernel::Root { n: 2, d: 1.0 }, vec![0, 1]),
-            (Kernel::Root { n: 3, d: 1.0 }, vec![0, 2]),
-            (Kernel::Root { n: 2, d: -1.0 }, vec![0, 1]),
-            (Kernel::Root { n: 15, d: -1.0 }, vec![0, 7, 14]),
-            (Kernel::Root { n: 8, d: -1.0 }, vec![3]),
-            (Kernel::Root { n: -2, d: 1.0 }, vec![0, 1]),
-            (Kernel::Root { n: 5, d: 2.5 }, vec![4]),
+            (Kernel::Root { n: 2, d: 1.0, mirror: false }, vec![0, 1]),
+            (Kernel::Root { n: 3, d: 1.0, mirror: false }, vec![0, 2]),
+            (Kernel::Root { n: 2, d: -1.0, mirror: false }, vec![0, 1]),
+            (Kernel::Root { n: 15, d: -1.0, mirror: false }, vec![0, 7, 14]),
+            (Kernel::Root { n: 8, d: -1.0, mirror: false }, vec![3]),
+            (Kernel::Root { n: -2, d: 1.0, mirror: false }, vec![0, 1]),
+            (Kernel::Root { n: 5, d: 2.5, mirror: false }, vec![4]),
+            // juliascope: its odd arms the root's at the conjugates.
+            (Kernel::Root { n: 5, d: 1.0, mirror: true }, vec![0, 1, 4]),
+            (Kernel::Root { n: -4, d: -1.0, mirror: true }, vec![1, 2]),
+            (Kernel::Root { n: 3, d: 2.0, mirror: true }, vec![1]),
             (Kernel::Spherical, vec![0]),
             (Kernel::Bubble, vec![0]),
             (Kernel::Hemisphere, vec![0]),
@@ -543,7 +557,7 @@ mod tests {
     /// `v`, where the form still has them all.
     #[test]
     fn the_direct_forward_subtraction_loses_everything() {
-        let k = Kernel::Root { n: 2, d: -1.0 };
+        let k = Kernel::Root { n: 2, d: -1.0, mirror: false };
         let v = [0.268, -0.111];
         let e = [3e-18, -4e-18];
         let w = [v[0] + e[0], v[1] + e[1]];
@@ -716,6 +730,9 @@ mod tests {
                 vec![0],
             ),
             ("cylinder", kern("cylinder", &[]), vec![0]),
+            ("juliascope n=5 d=1", kern("juliascope", &[("power", 5.0), ("dist", 1.0)]), vec![0, 1, 4]),
+            ("juliascope n=-4 d=1", kern("juliascope", &[("power", -4.0), ("dist", 1.0)]), vec![1, 2]),
+            ("juliascope n=3 d=-1", kern("juliascope", &[("power", 3.0), ("dist", -1.0)]), vec![1]),
             // Summed with an affine, as bipolar-elliptic-splits2 has it:
             // folded into the post-affine (`transform_map_2d_ordered`).
             (

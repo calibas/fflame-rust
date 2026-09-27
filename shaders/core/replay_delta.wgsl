@@ -12,7 +12,7 @@
 //   0 kind (0 affine, 1 kernel, 2 kernel summed with an affine)
 //   1 kernel (0 root, 1 spherical, 2 bubble, 3 hemisphere, 4 disc, 5 blob,
 //     6 elliptic, 7 splits, 8 cylinder)
-//   2..5 its parameters (root: n, d; blob: high, low, waves)
+//   2..5 its parameters (root: n, d, 1 if mirrored -- juliascope; blob: high, low, waves)
 //   5 the kernel's weight
 //   6..10 pre linear part, row-major     10..12 pre translation
 //   12..16 the sum's linear part          16..20 post linear part
@@ -202,17 +202,23 @@ fn fd_kernel(k: u32, p: vec3<f32>, q: vec4<f32>, v: vec2<f32>, e: vec2<f32>, arm
     let vd = dot(v, e);
     let t = vd + vd + dot(e, e);
     if (k == 0u) {
-        // Root: K(v)·((1 + ε/v)^{(d/|n|, 1/n)} − 1).
-        if (!(x > 0.0) || !(dot(w, w) > 0.0)) {
+        // Root: K(v)·((1 + ε/v)^{(d/|n|, 1/n)} − 1). A mirrored root
+        // (juliascope, p.z = 1) is the root's at the conjugates on its
+        // odd arms; |v|² is the same either way.
+        let mir = select(1.0, -1.0, p.z > 0.5 && ((arm % max(u32(abs(p.x)), 1u)) & 1u) == 1u);
+        let vr = vec2<f32>(v.x, v.y * mir);
+        let er = vec2<f32>(e.x, e.y * mir);
+        let wr = vr + er;
+        if (!(x > 0.0) || !(dot(wr, wr) > 0.0)) {
             return FD_POLE;
         }
         let n = p.x;
         let d = p.y;
-        let u = vec2<f32>(dot(e, v), e.y * v.x - e.x * v.y) / x;
+        let u = vec2<f32>(dot(er, vr), er.y * vr.x - er.x * vr.y) / x;
         let lnmod = 0.5 * fd_ln1p(u.x + u.x + dot(u, u));
         let argu = ff_atan2(u.y, 1.0 + u.x);
-        let tv = ff_atan2(v.y, v.x);
-        let tw = ff_atan2(w.y, w.x);
+        let tv = ff_atan2(vr.y, vr.x);
+        let tw = ff_atan2(wr.y, wr.x);
         let q = fd_turns(tv, tw, argu) / n;
         let a = lnmod * (d / abs(n));
         let b = argu / n;

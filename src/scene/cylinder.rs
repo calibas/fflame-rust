@@ -3870,6 +3870,67 @@ mod gpu_tests {
         }
     }
 
+    /// **`juliascope` in the walk**: `julian` with its odd arms mirrored
+    /// (`Kernel::Root { mirror }`). A code-built flame -- an odd power,
+    /// where the last arm and the first are both even, beside a negative
+    /// even power summed with a `linear` -- and the corpus flame it
+    /// unblocks, JWF-rando32-simplified4 ("Rays"), a power-7 juliascope
+    /// alone. Targeted against untargeted, and written to
+    /// `output/flame-zoom/` for the per-sample offset gate. Measured:
+    /// overlap 0.976-1.000 at 1e1-1e3, speedup to 1,138x.
+    #[test]
+    #[ignore = "needs a GPU; writes output/flame-zoom"]
+    fn juliascope_is_walked() {
+        let xf = |vars: &[(&str, f32)], params: &[(&str, &str, f32)], aff: [f32; 6], color: f32| {
+            let mut t = Transform::default();
+            t.variations.clear();
+            t.variation_order.clear();
+            for (v, w) in vars {
+                t.set_variation(v, *w);
+            }
+            for (v, p, x) in params {
+                t.set_variation_param(v, p, *x);
+            }
+            (t.a, t.b, t.c, t.d, t.e, t.f) = (aff[0], aff[1], aff[2], aff[3], aff[4], aff[5]);
+            t.weight = 1.0;
+            t.color = color;
+            t
+        };
+        let _ = std::fs::create_dir_all("output/flame-zoom");
+        let mut arms = FractalConfig::default();
+        arms.flame.transforms = vec![
+            xf(&[("juliascope", 1.0)], &[("juliascope", "power", 5.0)], [0.7, -0.3, 0.3, 0.7, 0.2, 0.1], 0.0),
+            xf(
+                &[("linear", 0.3), ("juliascope", 0.6)],
+                &[("juliascope", "power", -4.0)],
+                [0.6, 0.2, -0.2, 0.6, -0.1, 0.2],
+                0.5,
+            ),
+            xf(&[("linear", 1.0)], &[], [0.45, 0.2, -0.2, 0.45, -0.3, 0.3], 1.0),
+        ];
+        std::fs::write("output/flame-zoom/juliascope-arms.fflame", serde_json::to_string_pretty(&arms).expect("json")).expect("written");
+        let mut names = vec!["juliascope-arms"];
+        // Its JWF `filter` (0.75) is dropped: the bilateral spatial filter
+        // takes its edge-preserving sigma from ALL of a batch's samples
+        // over the frame's pixels, so an untargeted render at depth, whose
+        // samples mostly land outside the view, blurs uniformly where a
+        // targeted one keeps edges -- the same words, fatter blobs. With it
+        // the overlap at 1e3 read 0.69 and 0.76; without it, 0.975 and
+        // 1.000. Tracker, C8's notes.
+        if let Ok(text) = std::fs::read_to_string("output/JWF-rando32-simplified4.flame") {
+            let mut cfg = crate::flame_xml::parse_flame_xml(&text).expect("parses").remove(0);
+            cfg.filter_radius = 0.0;
+            std::fs::write("output/flame-zoom/juliascope-rays.fflame", serde_json::to_string_pretty(&cfg).expect("json")).expect("written");
+            names.push("juliascope-rays");
+        }
+        for name in names {
+            for frac in [0.3, 0.7] {
+                println!("== {name}, the plotted point at {frac}");
+                targeted_against_untargeted_at(name, &[1e1, 1e2, 1e3], |b| b.plotted(b.sample_point(frac)));
+            }
+        }
+    }
+
     /// **An unbounded attractor** (tracker C6, stage 3): the
     /// bipolar-elliptic-splits flames, whose `splits` expands often enough
     /// that their tail thins as a power law, targeted against untargeted

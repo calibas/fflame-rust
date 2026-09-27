@@ -950,6 +950,88 @@ the attractor.
   full suite and passes alone in 0.8 s: a timing test the suite's load can
   push over.
 
+### C8. `juliascope` -- done (2026-09-27)
+
+The corpus census (2026-09-27) had juliascope in four refused flames. It
+is the cheapest of the census's blockers, not the biggest: alone it
+clears one of them. JWF-rando32-simplified sums a `julian` and a
+`juliascope` in one transform, which the analysis refuses as two kernels
+summed (`NotAffine::MixedSum`); JWF-rando7 and its re-export also carry
+`curl`, `boarders` and `combimirror`.
+
+**The kernel.** juliascope is julian with its odd arms mirrored: arm `k`
+takes `(2πk ± arg z)/n`, `+` on even arms and `−` on odd, one draw
+choosing both (JWF `JuliaScopeFunc`). An odd arm is the root of
+`conj(z)`, so each arm fills the same sector as the root's, reflected on
+the odd ones, and `Kernel::Root` carries it as `mirror: true`:
+
+- **Forward**: the root's at `conj(z)` on an odd arm (`Kernel::
+  mirrored_arm`, the arm counted mod `|n|`). `atan2(−y, x)` is
+  `−atan2(y, x)` bit for bit, the negative real axis included.
+- **Inverse**: still one branch, as the root's is: the arm is read off the
+  sector `v` is in (`Kernel::root_arm`), and an odd sector's preimage is
+  the root's conjugate. That is continuous, since a sector's edge is the
+  image of the negative real axis from either side, and creased along
+  the edges between arms of different parity. `singular_distance`
+  includes the nearest crease.
+- **Radius**: juliascope's is `|z|^{dist/power}`, the power's sign kept,
+  where julian's is over `|power|`. So `d = dist·sgn(power)`
+  (`INVERSE_JULIASCOPE`). A fractional power is refused: the body
+  truncates it, the arm table (`bound::JULIASCOPE_ARMS`) takes its
+  ceiling.
+- **Forward differences**: the root's at `conj(v)`, `conj(ε)` on an odd
+  arm, on the CPU and in `replay_delta.wgsl` (the row's third parameter
+  is 1 for a mirror). The inverse difference forms are the escape
+  engine's, so a mirror has none: it is the walk's alone (`walk_only`).
+  The GPU planner and the render replay its arms by the variation's own
+  body, which already reads the forced arm.
+
+**Results.**
+
+- Round trips, Jacobians against central differences across every sector
+  (the creases held off by `singular_distance`), and the registry gate
+  pass.
+- The forward forms are exact against 512-bit (worst 3.7e-14 over all
+  kernels). The shader's match the CPU's to 1.02e-6, as the root's do
+  (1.3e-6).
+- `juliascope_is_walked`, targeted against untargeted at 1e1-1e3:
+  - juliascope-arms, a code-built flame with a power 5 beside a power −4
+    summed with a `linear`: overlap 0.976-1.000, speedup to 1,138×.
+  - juliascope-rays, JWF-rando32-simplified4 (a power-7 juliascope
+    alone): overlap 0.975-1.000.
+- The per-sample offset gate (`OFFSET_FLAMES` picks flames): mean offset
+  error 0.0002-0.0006 px at 1e4-1e8 on both, worst 0.22 px (arms, 1e8).
+- The census: JWF-rando32-simplified4 reads (7 symbols, 120 ms), 39 of 105
+  flames with the two code-built ones. JWF-rando32-simplified stops at its
+  `julian + juliascope` sum and a `spirograph3D`; JWF-rando7 at `curl` and
+  `boarders`.
+- **The per-sample gate fails on cylinder-turns-julian at 1e6**, before
+  C8 and without it: at HEAD 7767717f all 850 samples in view are off by
+  ~1e46 px, the plain replay by 4e7 px. At stage 2 it held. Open, with a
+  bisect under way.
+
+**Found on the way: the spatial filter differs under targeting.**
+JWF-rando32-simplified4 carries JWF's `filter` 0.75, which imports as
+`filter_radius`. With it the targeted render lit 0.69 and 0.76 of the
+reference's pixels at 1e3: the same blobs, thinner. The filter is
+bilateral, and its edge-preserving `σ_d` is the batch's samples over the
+frame's pixels (`compute_kernel.rs`). An untargeted render at depth
+lands mass·samples in view, so its `σ_d` is 1/mass too wide for the
+view's densities and the blur is uniform. A targeted render lands nearly
+all of them, and keeps edges. The gate drops the filter (0.975 and 1.000
+without it). See C9.
+
+### C9. A spatial filter at depth -- open
+
+Found by C8. Any flame with a spatial filter (`filter_radius`, which
+every JWF flame with `filter` imports) renders differently targeted: the
+bilateral filter's `σ_d` comes from the batch's samples, and a targeted
+batch's samples are all in the view where an untargeted one's are a
+`mass` of them. The tonemap already scales a targeted render's density by
+`cylinder_iteration_scale()` to the untargeted one's. Scaling `σ_d`'s
+sample count the same way would make the two agree without touching an
+untargeted render.
+
 ---
 
 ## Performance

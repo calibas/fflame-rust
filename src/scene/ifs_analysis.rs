@@ -188,7 +188,18 @@ impl Affine2 {
 pub enum Kernel {
     /// `julia` / `julian`: forward `|z|^{d/|n|} · e^{i(arg z + 2πk)/n}`,
     /// every branch undone by `|v|^{|n|/d} · e^{i·n·arg v}` (J1).
-    Root { n: i32, d: f64 },
+    ///
+    /// `mirror`: `juliascope`, whose odd arms take `−arg z` -- the
+    /// root of `conj(z)` -- so each arm fills the same sector as the
+    /// root's, reflected on the odd ones. Its inverse is the root's,
+    /// conjugated where `v` is in an odd arm's sector: continuous, since
+    /// a sector's edge is the image of the negative real axis either
+    /// side, and creased along the edges between arms of different
+    /// parity. `d` is taken as `juliascope` has it over `|n|`: its
+    /// radius is `|z|^{dist/n}`, the power's sign included, so
+    /// `d = dist·sgn(n)` (`INVERSE_JULIASCOPE`). **The walk's alone**
+    /// (`walk_only`).
+    Root { n: i32, d: f64, mirror: bool },
     /// `spherical`: inversion in the circle, its own inverse (S2).
     Spherical,
     /// `bubble`: `4p/(|p|² + 4)`, onto the unit disc and 2-to-1; the
@@ -278,7 +289,22 @@ impl Kernel {
     /// the escape engine's shader has no row for it, so `analyse_2d`
     /// refuses it as it did before the walk had it.
     pub fn walk_only(&self) -> bool {
-        matches!(self, Kernel::Elliptic | Kernel::Splits { .. } | Kernel::Cylinder { .. })
+        matches!(self, Kernel::Elliptic | Kernel::Splits { .. } | Kernel::Cylinder { .. } | Kernel::Root { mirror: true, .. })
+    }
+
+    /// Whether a mirrored root with `n` takes arm `k` at the conjugate:
+    /// an odd arm, counted mod `|n|`.
+    pub(crate) fn mirrored_arm(n: i32, k: u32) -> bool {
+        (k % n.unsigned_abs().max(1)) % 2 == 1
+    }
+
+    /// The arm of a root with `n` whose sector holds `v`: the arm `k`
+    /// whose `(arg z + 2πk)/n` is `arg v` with `arg z` in `[−π, π]`. On
+    /// an edge between two arms either may come back, and both send the
+    /// negative real axis there.
+    pub(crate) fn root_arm(n: i32, v: [f64; 2]) -> u32 {
+        let nf = n as f64;
+        (nf * v[1].atan2(v[0]) / std::f64::consts::TAU).round().rem_euclid(nf.abs().max(1.0)) as u32
     }
 
     /// Splits' step for quadrant `q` (bit 0 `x ≥ 0`, bit 1 `y ≥ 0`).
@@ -358,7 +384,8 @@ impl Kernel {
                 let disc = (a * a - 4.0 * sc.powi(4)).max(0.0).sqrt();
                 ((a - disc) * 0.5).max(0.0).sqrt()
             }
-            Kernel::Root { n, d } => r2.sqrt().powf(1.0 - (n as f64).abs() / d),
+            // A mirror is an isometry, so a mirrored root's is the root's.
+            Kernel::Root { n, d, .. } => r2.sqrt().powf(1.0 - (n as f64).abs() / d),
             Kernel::Spherical => r2,
             // A translation.
             Kernel::Splits { .. } => 1.0,
@@ -510,6 +537,17 @@ impl Kernel {
             // smooth away from it, and `e^{i·n·arg v}` has no cut for
             // an integer `n` -- arg jumps by 2π and `n·2π` is a whole
             // turn.
+            //
+            // A mirrored root's is creased as well, along the edges of
+            // `v`'s sector: its inverse is the root's on one side and
+            // the conjugate on the other.
+            Kernel::Root { n, mirror: true, .. } if n.unsigned_abs() > 1 => {
+                use std::f64::consts::{FRAC_PI_2, PI, TAU};
+                let nf = n as f64;
+                let j = (nf * v[1].atan2(v[0]) / TAU).round();
+                let edge = |s: f64| Kernel::ray_distance(v, FRAC_PI_2 - (TAU * j + s * PI) / nf);
+                rho.min(edge(1.0)).min(edge(-1.0))
+            }
             Kernel::Root { .. } | Kernel::Spherical => rho,
             // The image's edge, where the square root branches.
             Kernel::Hemisphere => (1.0 - rho).max(0.0),
@@ -577,7 +615,7 @@ impl Kernel {
     /// one for the others.
     fn sigma_const(&self) -> (f64, f64) {
         match *self {
-            Kernel::Root { n, d } => {
+            Kernel::Root { n, d, .. } => {
                 // A negative distance is a root of the inverted
                 // radius; the derivative's magnitude is what a
                 // singular value is.
@@ -622,7 +660,7 @@ impl Kernel {
         }
         match *self {
             Kernel::Spherical => 1.0 / r_pre,
-            Kernel::Root { n, d } if d < 0.0 => r_pre.powf(d / (n as f64).abs()),
+            Kernel::Root { n, d, .. } if d < 0.0 => r_pre.powf(d / (n as f64).abs()),
             _ => 0.0,
         }
     }
@@ -635,7 +673,8 @@ impl Kernel {
 
     pub fn variation(&self) -> &'static str {
         match self {
-            Kernel::Root { n: 2, d } if *d == 1.0 => "julia",
+            Kernel::Root { mirror: true, .. } => "juliascope",
+            Kernel::Root { n: 2, d, .. } if *d == 1.0 => "julia",
             Kernel::Root { .. } => "julian",
             Kernel::Spherical => "spherical",
             Kernel::Bubble => "bubble",
@@ -767,10 +806,15 @@ pub fn kernel_forward_gen<T: Transcendental>(k: &Kernel, z: &[T; 2], branch: u32
             let (st, ct) = theta.sin_cos();
             [r.mul(&sc).mul(&ct), r.mul(&sc).mul(&st)]
         }
-        Kernel::Root { n, d } => {
+        Kernel::Root { n, d, mirror } => {
             let nf = n as f64;
             let rr = r2.sqrt().powf(&r2.lit(d / nf.abs()));
-            let a = T::atan2(&z[1], &z[0])
+            // A mirrored root's odd arm is the root's of `conj(z)`.
+            // `atan2(−y, x)` is `−atan2(y, x)` bit for bit, the negative
+            // real axis included, where both are ∓π. An arm past `|n|`
+            // is its remainder's, as the root's own angle has it.
+            let y = if mirror && Kernel::mirrored_arm(n, branch) { z[1].neg() } else { z[1].clone() };
+            let a = T::atan2(&y, &z[0])
                 .add(&z[0].lit(TAU * branch as f64))
                 .div(&z[0].lit(nf));
             let (sa, ca) = a.sin_cos();
@@ -849,11 +893,16 @@ pub fn kernel_inverse_gen<T: Transcendental>(k: &Kernel, v: &[T; 2], branch: u32
             let sc = blob_scale_gen(high, low, waves, &theta);
             [v[1].div(&sc), v[0].div(&sc)]
         }
-        Kernel::Root { n, d } => {
+        Kernel::Root { n, d, mirror } => {
             let nf = n as f64;
             let rr = r2.sqrt().powf(&r2.lit(nf.abs() / d));
             let a = v[0].lit(nf).mul(&T::atan2(&v[1], &v[0]));
             let (sa, ca) = a.sin_cos();
+            // The arm is `v`'s sector's, so the inverse has one branch;
+            // a mirrored root's odd sector has the conjugate preimage.
+            if mirror && Kernel::mirrored_arm(n, Kernel::root_arm(n, [v[0].to_f64(), v[1].to_f64()])) {
+                return [rr.mul(&ca), rr.mul(&sa).neg()];
+            }
             [rr.mul(&ca), rr.mul(&sa)]
         }
         Kernel::Spherical => {
@@ -993,7 +1042,9 @@ pub fn kernel_inverse_real<T: Real>(k: &Kernel, v: &[T; 2], branch: u32) -> Opti
             // uses, since `bubble_scale_gen` is already `Real`-only.
             Some(cscale(v, &bubble_scale_gen(&r2, branch)))
         }
-        Kernel::Root { n, d } => {
+        // A mirrored root is the walk's alone, which never asks.
+        Kernel::Root { mirror: true, .. } => None,
+        Kernel::Root { n, d, .. } => {
             let (a, b) = root_powers(n, d)?;
             Some(cmul(&cpow(v, a), &cpow(&cconj(v), b)))
         }
@@ -1011,7 +1062,7 @@ pub fn kernel_inverse_real<T: Real>(k: &Kernel, v: &[T; 2], branch: u32) -> Opti
 /// sides cannot disagree about a borderline `dist`.
 pub fn root_powers_of(k: &Kernel) -> Option<(u32, u32)> {
     match *k {
-        Kernel::Root { n, d } => root_powers(n, d),
+        Kernel::Root { n, d, mirror: false } => root_powers(n, d),
         _ => None,
     }
 }
@@ -1025,7 +1076,9 @@ pub fn root_powers_of(k: &Kernel) -> Option<(u32, u32)> {
 pub fn kernel_has_difference(k: &Kernel) -> bool {
     match *k {
         Kernel::Spherical | Kernel::Bubble | Kernel::Hemisphere | Kernel::Splits { .. } => true,
-        Kernel::Root { n, d } => root_powers(n, d).is_some(),
+        // A mirrored root's is not needed: the difference forms are the
+        // escape engine's, and it is the walk's alone.
+        Kernel::Root { n, d, mirror } => !mirror && root_powers(n, d).is_some(),
         Kernel::Disc | Kernel::Blob { .. } | Kernel::Elliptic | Kernel::Cylinder { .. } => false,
     }
 }
@@ -1083,7 +1136,8 @@ pub fn kernel_difference_gen<T: Real>(
     let x = cnorm2(z);
 
     match *k {
-        Kernel::Root { n, d: dist } => {
+        Kernel::Root { mirror: true, .. } => None,
+        Kernel::Root { n, d: dist, .. } => {
             let (a, b) = root_powers(n, dist)?;
             // P = W^a − Z^a, Q = conj(W)^b − conj(Z)^b, and
             // (Z^a + P)(conj(Z)^b + Q) − Z^a·conj(Z)^b
@@ -4810,7 +4864,16 @@ pub(crate) fn kernel_fixtures() -> Vec<(Kernel, u32)> {
     for n in [-3i32, -2, 2, 3, 5] {
         for d in [1.0f64, 2.0, 0.5] {
             for k in 0..(n.unsigned_abs().max(1)) {
-                out.push((Kernel::Root { n, d }, k));
+                out.push((Kernel::Root { n, d, mirror: false }, k));
+            }
+        }
+    }
+    // juliascope: an odd count, where the last arm and the first are
+    // both even and meet without a crease, and an even one.
+    for n in [-4i32, 3, 5] {
+        for d in [1.0f64, -1.0, 2.0] {
+            for k in 0..n.unsigned_abs() {
+                out.push((Kernel::Root { n, d, mirror: true }, k));
             }
         }
     }
@@ -4872,11 +4935,11 @@ mod difference_tests {
             (Kernel::Hemisphere, 0, disc.clone()),
             (Kernel::Bubble, 0, disc.clone()),
             (Kernel::Bubble, 1, disc.clone()),
-            (Kernel::Root { n: 2, d: 1.0 }, 0, plane.clone()),
-            (Kernel::Root { n: 3, d: 1.0 }, 0, plane.clone()),
-            (Kernel::Root { n: -2, d: 1.0 }, 0, plane.clone()),
-            (Kernel::Root { n: 5, d: 1.0 }, 0, plane.clone()),
-            (Kernel::Root { n: 2, d: 0.5 }, 0, plane),
+            (Kernel::Root { n: 2, d: 1.0, mirror: false }, 0, plane.clone()),
+            (Kernel::Root { n: 3, d: 1.0, mirror: false }, 0, plane.clone()),
+            (Kernel::Root { n: -2, d: 1.0, mirror: false }, 0, plane.clone()),
+            (Kernel::Root { n: 5, d: 1.0, mirror: false }, 0, plane.clone()),
+            (Kernel::Root { n: 2, d: 0.5, mirror: false }, 0, plane),
         ]
     }
 
@@ -5007,7 +5070,7 @@ mod difference_tests {
     /// exact forms would be dead weight.
     #[test]
     fn the_direct_subtraction_fails_this_gate() {
-        let k = Kernel::Root { n: 2, d: 1.0 };
+        let k = Kernel::Root { n: 2, d: 1.0, mirror: false };
         let z = [0.31, -0.47];
         let mut rows: Vec<(i32, f64, f64)> = Vec::new();
         for e in [0i32, 4, 8, 12, 16, 20, 24] {
@@ -5859,7 +5922,7 @@ mod tests {
         let t = julia_xform([0.3, -0.4]);
         let m = transform_map_2d_ordered(&t, r, &t.ordered_variation_names(r)).expect("a root map");
         let Map2::Nonlinear(root) = m else { panic!("expected a root map, got {m:?}") };
-        assert_eq!((root.kernel, root.w), (Kernel::Root { n: 2, d: 1.0 }, 1.0));
+        assert_eq!((root.kernel, root.w), (Kernel::Root { n: 2, d: 1.0, mirror: false }, 1.0));
         // ±sqrt(p − c): both branches square back to p − c, and the
         // inverse returns p.
         let p = [0.7, 0.2];
@@ -5890,7 +5953,7 @@ mod tests {
         j.set_variation_param("julian", "dist", 1.5);
         let m = transform_map_2d_ordered(&j, r, &j.ordered_variation_names(r)).expect("a root map");
         let root = m.nonlinear().copied().expect("root");
-        assert_eq!(root.kernel, Kernel::Root { n: 3, d: 1.5 });
+        assert_eq!(root.kernel, Kernel::Root { n: 3, d: 1.5, mirror: false });
         assert!(close(root.w, 0.8));
         for k in 0..3 {
             let back = root.apply_inverse(root.apply_branch(p, k));
@@ -5915,7 +5978,7 @@ mod tests {
         let mixed = with(julia_xform([0.0, 0.0]), "linear", 0.5);
         let ifs = analyse_2d(&flame_of(vec![mixed]), r).expect("a sum is a map now");
         let sum = ifs.maps[0].forward.sum().copied().expect("a sum");
-        assert_eq!(sum.kernel, Kernel::Root { n: 2, d: 1.0 });
+        assert_eq!(sum.kernel, Kernel::Root { n: 2, d: 1.0, mirror: false });
         assert_eq!(sum.kind, "julia");
         assert!(close(sum.kw, 1.0) && close(sum.lin.m[0][0], 0.5));
         // A root's two preimages are the sum's two, and each is a
@@ -6471,10 +6534,10 @@ mod tests {
     #[test]
     fn the_kernels_jacobians_are_the_derivative() {
         let cases: Vec<(&str, Kernel, u32)> = vec![
-            ("root n2 d1", Kernel::Root { n: 2, d: 1.0 }, 0),
-            ("root n3 d-1", Kernel::Root { n: 3, d: -1.0 }, 0),
-            ("root n-5 d2", Kernel::Root { n: -5, d: 2.0 }, 0),
-            ("root n8 d-1", Kernel::Root { n: 8, d: -1.0 }, 0),
+            ("root n2 d1", Kernel::Root { n: 2, d: 1.0, mirror: false }, 0),
+            ("root n3 d-1", Kernel::Root { n: 3, d: -1.0, mirror: false }, 0),
+            ("root n-5 d2", Kernel::Root { n: -5, d: 2.0, mirror: false }, 0),
+            ("root n8 d-1", Kernel::Root { n: 8, d: -1.0, mirror: false }, 0),
             ("spherical", Kernel::Spherical, 0),
             ("bubble in", Kernel::Bubble, 0),
             ("bubble out", Kernel::Bubble, 1),
@@ -6489,6 +6552,12 @@ mod tests {
             ("splits q3", Kernel::Splits { base: [-0.4, 0.1], x: [0.8, 0.3], y: [-0.2, -0.9] }, 3),
             ("cylinder even", Kernel::Cylinder { k0: -1 }, 0),
             ("cylinder odd", Kernel::Cylinder { k0: -1 }, 3),
+            // juliascope, last so the others keep their samples. Every
+            // sector, so across the creases between arms of different
+            // parity, which the clearance must hold off.
+            ("scope n5 d1", Kernel::Root { n: 5, d: 1.0, mirror: true }, 0),
+            ("scope n-4 d-1", Kernel::Root { n: -4, d: -1.0, mirror: true }, 0),
+            ("scope n3 d2", Kernel::Root { n: 3, d: 2.0, mirror: true }, 0),
         ];
         // The largest singular value, stably: the larger eigenvalue of
         // `MᵀM` is `(p + r)/2 + sqrt(((p − r)/2)² + q²)`, where the
@@ -6860,8 +6929,8 @@ mod tests {
         }
         assert_eq!(
             (affine, planar, solid),
-            (12, 10, 3),
-            "twelve affine roles, ten planar kernels and three solid"
+            (12, 11, 3),
+            "twelve affine roles, eleven planar kernels and three solid"
         );
     }
 
@@ -6884,7 +6953,7 @@ mod tests {
         neg.set_variation_param("julian", "power", 3.0);
         neg.set_variation_param("julian", "dist", -1.0);
 
-        for (t, kernel) in [(&sph, Kernel::Spherical), (&bub, Kernel::Bubble), (&neg, Kernel::Root { n: 3, d: -1.0 })] {
+        for (t, kernel) in [(&sph, Kernel::Spherical), (&bub, Kernel::Bubble), (&neg, Kernel::Root { n: 3, d: -1.0, mirror: false })] {
             let m = transform_map_2d_ordered(t, r, &t.ordered_variation_names(r)).expect("a nonlinear map");
             let base = m.nonlinear().copied().expect("nonlinear");
             assert_eq!(base.kernel, kernel);
