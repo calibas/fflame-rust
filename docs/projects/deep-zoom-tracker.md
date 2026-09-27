@@ -813,6 +813,111 @@ transform with its reason: the carpet under an affine and under a
 brightness equal to three digits at 1e2 and 1e3
 (`a_final_on_an_affine_flame_is_planned`).
 
+### C7. A view holding a final's image of infinity -- open (2026-09-26)
+
+**Seen:** bipolar-elliptic-splits1 and 2 at their saved views, pan (0, 0),
+plan three depth-1 words holding the whole attractor at every zoom
+(speedup 0.5, never forced): Focused Rendering does nothing there.
+`bipolar` sends infinity to the origin, so the view is the far tail seen
+from every direction, and its pull-back is everything outside a large
+circle, which no disc stands for; `FinalMap::pull_back` answers the
+whole attractor. There is much to gain: the view holds 13.8% of splits1's
+plotted sample at its saved zoom, 0.45% at 1e3, 0.062% at 1e4, 0.002% at
+1e6 (splits2 12.8%, 5.9%, 1.7%, 0.16%).
+
+**The plan.**
+1. **The region, through the final.** A `View` may be the plot's
+   (`View::plotted`): a point lands where its plotted image is in the
+   disc. The walk plans such a view where it holds the image of infinity.
+   Its root is the sample points plotted into it, exactly, with the
+   view's rings pulled back through the final (`FinalMap::inverse`) as
+   its hidden points; every landing test (replays, gathers, the rescue)
+   goes through the final. The GPU planner is not asked (CPU only), a
+   renewal is kept in doubt, and no conditional draw is made, until each
+   is taught the region.
+2. **A partial blur, carried where it is small.** The only way out along
+   the tail is a run of `splits`; `pre_blur + cylinder` (a renewal) can
+   reach the tail only from ten times farther in `y`, rarely, so kept at
+   the top of every word it forces mass for nothing. Where the blur's
+   reach is small against the region, its child is carried as the
+   kernel's pull-back grown by the reach (C2's dilated regions) rather
+   than kept as a renewal.
+3. **Gates.** Coverage against the chaos game through the final at (0,
+   0) from the saved zoom to where it can still judge; targeted against
+   untargeted where the reference is dense; the per-sample offsets at
+   depth.
+
+**Built (2026-09-26), in the order the measurements asked for it.**
+- **The region alone** planned real words at (0, 0) -- 300 to 1,000,
+  depth 30-64 -- and changed nothing: words starting with the blurred
+  `cylinder`, kept in doubt, held 0.17 of the mass at every zoom (speedup
+  0.1).
+- **The partial blur carried** (`Backward::renewal_here`; the cloud's
+  pull-back through it gets a ring at the blur's reach about each
+  preimage): efficiency 0.5-0.87, splits1's speedup 4.8 at 1e3 to 7,170
+  at 1e6. But coverage fell with depth, 0.987 to 0.93 on splits1.
+- **The tail, sampled by splitting** (`tail_sample`). The misses were
+  one path, `[1, 2, 1^k]`: a far point the cylinder brings ten times
+  closer, then `k` splits back out. The walk's child through the blur
+  came back "no candidates, 400 replays land nothing": the orbit's 100k
+  points never go that far, nor do replays from them. So chains of the
+  chaos game start from the orbit's points past the grid's span and are
+  cloned each time they cross up into a level of radius (the levels
+  doubling to 1e11) -- multilevel splitting -- and run until they fall a
+  sixteenth of the span in. Two things measured wrong first: chains
+  stopped AT the span never took the path back out after the pull-in,
+  and cloning only a chain's first crossing of a level never cloned the
+  climb back (one such path in 12,798 points; 21 in the 50k now). The
+  points stand for regions -- the index, the landings, the orbit's
+  children -- and never for measure: the verify replays, the draw rates
+  and the frame read only the orbit's own (`Backward::natural`).
+- **References past the blur.** An offset cannot cross a blur, so `m` is
+  never before the last blurred symbol's successor, and a carried word's
+  seeds are taken past the blur by a draw of it.
+- **`bipolar`'s difference, far out** (`final_map::bipolar_diff`,
+  `fd_bipolar`). At (0, 0) the plain f32 replay is exact -- the final
+  shrinks the tail's absolute error to nothing -- and the offset replay was
+  36 px off: its two log terms' changes, each O(e/|v|), cancelled to their
+  O(e/|v|^2) difference. `bipolar` is the log of `(z+1)/(z-1)`, so the
+  change is `ln(1 + q)`, `q = -2e/((v+e-1)(v+1))`, every term O(e/|v|^2).
+  Exact to 6e-16 against 512-bit at |v| 1e2-1e10
+  (`bipolar_diff_is_exact_far_out`); the shader within 1.3e-6 there.
+
+**Results at (0, 0).** Coverage 1.000 on both flames from the saved zoom to
+1e5, 0.997 at 1e6 on splits1 (one miss in 368). Targeted against
+untargeted (`an_unbounded_attractor_is_planned`): overlap 0.992-1.000,
+brightness equal to two or three digits, efficiency 0.67-0.79; at 1e5
+the untargeted render is scattered dots and the targeted one the whole
+self-similar structure. Speedups (1280x720): splits1 4.5 at 1e3, 47 at
+1e4, 505 at 1e5, 4,800 at 1e6; splits2 1.3 at 1e4, 4 at 1e5, 13 at 1e6,
+near its ceiling -- its view holds 0.16% of its plot at 1e6. At the saved
+zooms (42, 235) forcing is still not worth it: the view holds 13-14% of
+the attractor.
+
+**Open.**
+- **Plan time.** splits1 at (0, 0): 1.8 s at 1e3, 3.9 s at 1e4, 8.9 s at
+  1e5, 19 s at 1e6 (splits2 1-3 s); the tail sample's points make large
+  regions. Measured on the CPU only: a plotted view is not the GPU
+  planner's.
+- **The per-sample gate cannot check a word through a blur** (the GPU
+  draws its own): at (0, 0) most words carrying references are such.
+  Their offsets start after the blur by construction; the renders above
+  are the check.
+- The partial blur is carried only in plotted views. Elsewhere it is
+  still a renewal, with C6's draw problem.
+- **Only a sampled tail is planned through the final**
+  (`Backward::holds_infinity`). A Grand JuliaN generator flame whose far
+  points come from a negative-distance root -- its grid not capped, so no
+  tail sample -- was planned at infinity's image from the orbit's handful
+  of far points: 188k words in 12 s drawing 98.3% at zoom 40 (the view
+  holding 0.05% of it), and refused as empty at 1e2. Such a view keeps
+  the whole attractor as its pull-back, as before. Sampling such a tail
+  too is open.
+- A frame-time budget test of the simulations
+  (`mccabe_meets_the_interactive_budget_at_1080p`) failed once under the
+  full suite and passes alone in 0.8 s: a timing test the suite's load can
+  push over.
+
 ---
 
 ## Performance

@@ -330,24 +330,26 @@ fn ct_fwd_diff(o: u32, z: vec2<f32>, d: vec2<f32>, arm: u32) -> vec2<f32> {
 const CT_FINAL_ROW: u32 = 13u;
 
 // bipolar(v + e) - bipolar(v), without forming the difference: see
-// `final_map::bipolar_diff`. With a = e/(v +- 1), the log term changes by
-// (ln|1 + a+| - ln|1 + a-|)/pi and the angle term by
-// (arg(1 + a-) - arg(1 + a+))/pi. Across the angle's wrap the point lands
-// the whole strip away, far off a view deep enough for offsets: FD_POLE.
+// `final_map::bipolar_diff`. With q = -2e/((v+e-1)(v+1)), the log term
+// changes by ln|1+q|/pi and the angle term by -arg(1+q)/pi, every term
+// O(e/|v|^2) at any distance. Across the angle's wrap the point lands the
+// whole strip away, far off a view deep enough for offsets: FD_POLE.
 fn fd_bipolar(v: vec2<f32>, e: vec2<f32>, shift: f32) -> vec2<f32> {
     let pi = 3.14159265358979;
     let half_pi = 1.5707963267948966;
-    let bp = vec2<f32>(v.x + 1.0, v.y);
-    let bm = vec2<f32>(v.x - 1.0, v.y);
-    let np = dot(bp, bp);
-    let nm = dot(bm, bm);
-    if (!(np > 0.0) || !(nm > 0.0)) {
+    // Two divisions rather than one by the product, which would square
+    // |v| and overflow f32 past 1e19.
+    let w1 = vec2<f32>(v.x + e.x - 1.0, v.y + e.y);
+    let w2 = vec2<f32>(v.x + 1.0, v.y);
+    let n1 = dot(w1, w1);
+    let n2 = dot(w2, w2);
+    if (!(n1 > 0.0) || !(n2 > 0.0)) {
         return FD_POLE;
     }
-    let ap = vec2<f32>(dot(e, bp), e.y * bp.x - e.x * bp.y) / np;
-    let am = vec2<f32>(dot(e, bm), e.y * bm.x - e.x * bm.y) / nm;
-    let dx = 0.5 * (fd_ln1p(2.0 * ap.x + dot(ap, ap)) - fd_ln1p(2.0 * am.x + dot(am, am))) / pi;
-    let dy = (ff_atan2(am.y, 1.0 + am.x) - ff_atan2(ap.y, 1.0 + ap.x)) / pi;
+    let a = vec2<f32>(dot(e, w1), e.y * w1.x - e.x * w1.y) / n1;
+    let q = -2.0 * vec2<f32>(dot(a, w2), a.y * w2.x - a.x * w2.y) / n2;
+    let dx = 0.5 * fd_ln1p(2.0 * q.x + dot(q, q)) / pi;
+    let dy = -ff_atan2(q.y, 1.0 + q.x) / pi;
     // The reference's own output angle, as `bipolar` wraps it: where the
     // seam is.
     var y = 0.5 * ff_atan2(2.0 * v.y, dot(v, v) - 1.0) - half_pi * shift;

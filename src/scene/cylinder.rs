@@ -317,6 +317,12 @@ pub struct View {
     pub centre: [f64; 2],
     /// Half the diagonal: the radius of a disc containing the frame.
     pub radius: f64,
+    /// **The plot's disc, behind the flame's final transforms** (tracker
+    /// C7): a point is in the view where its PLOTTED image is in the disc,
+    /// not the point itself. The walk plans such a view where it holds a
+    /// final's image of infinity, whose pull-back is everything outside a
+    /// large circle -- no disc of the orbit's space stands for it.
+    pub plotted: bool,
 }
 
 impl View {
@@ -325,7 +331,7 @@ impl View {
         let short = width.min(height).max(1) as f64;
         let hx = 2.0 / zoom * (width as f64 / short);
         let hy = 2.0 / zoom * (height as f64 / short);
-        Self { centre: pan, radius: (hx * hx + hy * hy).sqrt() }
+        Self { centre: pan, radius: (hx * hx + hy * hy).sqrt(), plotted: false }
     }
 }
 
@@ -3877,6 +3883,10 @@ mod gpu_tests {
                 println!("== {name}, the plotted point at {frac}");
                 targeted_against_untargeted_at(name, &[1e2, 1e3], |b| b.plotted(b.sample_point(frac)));
             }
+            // Their saved views' centre, the image of infinity (C7): the far
+            // tail, whose share of the plot falls to 6e-5 at 1e5.
+            println!("== {name}, the image of infinity");
+            targeted_against_untargeted_at(name, &[1e3, 1e4, 1e5], |b| b.plotted_infinity().expect("a final plotting infinity"));
         }
     }
 
@@ -8433,7 +8443,7 @@ mod tests {
             }
 
             // --- bound: words whose computed region meets the view
-            let view = View { centre: x, radius: view_r };
+            let view = View { centre: x, radius: view_r, plotted: false };
             println!(
                 "  view radius {view_r:.1e}: {hits} of {plotted} samples inside ({:.2e})",
                 hits as f64 / plotted.max(1) as f64

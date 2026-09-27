@@ -94,18 +94,29 @@ fn cdiv(a: [f64; 2], b: [f64; 2]) -> Option<[f64; 2]> {
 }
 
 /// **`bipolar(v + e) - bipolar(v)`, without forming the difference**.
-/// With `a+- = e/(v +- 1)`, `|v + e +- 1| = |v +- 1|*|1 + a+-|`, so the
-/// log term changes by `(ln|1 + a+| - ln|1 + a-|)/pi`, and the angle
-/// `arg((v-1)/(v+1))` by `arg(1 + a-) - arg(1 + a+)`, which halved and
-/// scaled is `/pi` of the output. The angle's wrap is a seam in the plot:
-/// a step across it lands the whole strip away, `None` -- far off any
-/// view deep enough to take offsets.
+/// `bipolar` is the log of `(z+1)/(z-1)` (its `x` the log's real part
+/// over `pi`, its angle `arg((z-1)/(z+1))`), so its change is `ln(1 + q)`
+/// for `q = -2e/((v+e-1)(v+1))`: the `x` term changes by `ln|1+q|/pi`,
+/// the angle by `-arg(1+q)`, which halved and scaled by `2/pi` is
+/// `-arg(1+q)/pi`. Every term is O(e/|v|^2), at any distance.
+///
+/// Written as the two log terms' changes apart, `ln|1+e/(v+1)| - ln|1+
+/// e/(v-1)|`, each O(e/|v|) cancels to that difference: in f32, past
+/// |v| ~ 1e5 nothing was left (tracker C7: a view holding the image of
+/// infinity plots the far tail, and its offsets were 36 px off where the
+/// plain replay was exact).
+///
+/// `None` where the reference and `v + e` are either side of the angle's
+/// wrap, which halves `arg` into `(-pi/2, pi/2]`: there the point lands the
+/// whole strip away (`bipolar`'s own seam), which a small offset never
+/// does unless the view straddles it.
 pub fn bipolar_diff(v: [f64; 2], e: [f64; 2], shift: f64) -> Option<[f64; 2]> {
-    let ap = cdiv(e, [v[0] + 1.0, v[1]])?;
-    let am = cdiv(e, [v[0] - 1.0, v[1]])?;
-    let dx = (ln_abs_1p(ap) - ln_abs_1p(am)) / PI;
-    let arg_1p = |a: [f64; 2]| a[1].atan2(1.0 + a[0]);
-    let dy = (arg_1p(am) - arg_1p(ap)) / PI;
+    // Two divisions rather than one by the product, which would square
+    // |v| and leave f32's range past 1e19.
+    let a = cdiv(e, [v[0] + e[0] - 1.0, v[1] + e[1]])?;
+    let q = cdiv([-2.0 * a[0], -2.0 * a[1]], [v[0] + 1.0, v[1]])?;
+    let dx = ln_abs_1p(q) / PI;
+    let dy = -q[1].atan2(1.0 + q[0]) / PI;
     let y = bipolar(v, shift)[1];
     (dx.is_finite() && (y + dy).abs() <= 1.0).then_some([dx, dy])
 }
@@ -340,7 +351,7 @@ impl FinalMap {
             (n > 0.0).then(|| [pts.iter().map(|p| p[0]).sum::<f64>() / n, pts.iter().map(|p| p[1]).sum::<f64>() / n])
         })?;
         let far = pts.iter().map(|p| (p[0] - centre[0]).hypot(p[1] - centre[1])).fold(0.0f64, f64::max);
-        (far > 0.0 && far.is_finite()).then(|| View { centre, radius: 1.02 * far })
+        (far > 0.0 && far.is_finite()).then(|| View { centre, radius: 1.02 * far, plotted: false })
     }
 }
 
@@ -413,6 +424,58 @@ mod tests {
         println!("  worst against the Jacobian at 1e-11: {worst:.1e}");
     }
 
+    /// **Far from its poles, the difference keeps its digits** (C7): at
+    /// |v| from 1e2 to 1e10, against `bipolar` of both ends in 512-bit
+    /// arithmetic. The form as the two log terms' changes apart cancelled
+    /// to nothing in f32 past |v| ~ 1e5.
+    #[test]
+    fn bipolar_diff_is_exact_far_out() {
+        use crate::escape::bigfloat::BigFloat;
+        use crate::scene::ifs_real::Real;
+        const L: usize = 8;
+        let big = |x: f64| BigFloat::from_f64(x, L);
+        let bdiff = |v: [f64; 2], e: [f64; 2]| -> [f64; 2] {
+            let (vb, eb) = ([big(v[0]), big(v[1])], [big(e[0]), big(e[1])]);
+            let w = [vb[0].add(&eb[0]), vb[1].add(&eb[1])];
+            // The differences taken at 512 bits, before rounding.
+            let one = big(1.0);
+            let two = big(2.0);
+            let parts = |p: &[BigFloat; 2]| {
+                let x2y2 = p[0].mul(&p[0]).add(&p[1].mul(&p[1]));
+                let t = x2y2.add(&one);
+                let ln = t.add(&two.mul(&p[0])).div(&t.sub(&two.mul(&p[0]))).ln();
+                let ang = BigFloat::atan2(&two.mul(&p[1]), &x2y2.sub(&one));
+                (ln, ang)
+            };
+            let (la, aa) = parts(&vb);
+            let (lb, ab) = parts(&w);
+            [lb.sub(&la).to_f64() / (2.0 * PI), ab.sub(&aa).to_f64() / (2.0 * PI)]
+        };
+        let mut u = lcg(17);
+        let mut worst = 0.0f64;
+        for k in 0..400 {
+            let r = 10f64.powf(2.0 + 8.0 * (k as f64 / 400.0));
+            let b = u() * std::f64::consts::TAU;
+            let v = [r * b.cos(), r * b.sin()];
+            for scale in [1e-2, 1e-6, 1e-10] {
+                let a = u() * std::f64::consts::TAU;
+                let e = [scale * r * a.cos(), scale * r * a.sin()];
+                let Some(got) = bipolar_diff(v, e, 0.0) else { continue };
+                // The angle halves and scales by 2/pi: arg's change over pi.
+                let want = bdiff(v, e);
+                let want = [want[0], 2.0 * want[1]];
+                let norm = want[0].hypot(want[1]);
+                if !(norm > 0.0) {
+                    continue;
+                }
+                let err = (got[0] - want[0]).hypot(got[1] - want[1]) / norm;
+                worst = worst.max(err);
+            }
+        }
+        println!("  far out, worst relative error {worst:.1e}");
+        assert!(worst < 1e-12, "worst relative error {worst:.1e}");
+    }
+
     /// **The shader's final forms are the CPU's**: `ct_final_diff` in
     /// `replay_delta.wgsl`, for a `bipolar` final with an affine either
     /// side, against [`FinalMap::diff`] in f64 on the SAME f32 inputs, at
@@ -451,6 +514,18 @@ mod tests {
             let z = [u() as f32 * 3.0 - 1.5, u() as f32 * 3.0 - 1.5];
             for p in 1..=12 {
                 let mag = 10f32.powi(-p) * z[0].hypot(z[1]).max(0.1);
+                let a = u() as f32 * std::f32::consts::TAU;
+                jobs.push([z[0], z[1], mag * a.cos(), mag * a.sin()]);
+            }
+        }
+        // And far out, where a view of the image of infinity plots the tail
+        // (C7): |z| from 1e2 to 1e10.
+        for k in 0..400 {
+            let r = 10f32.powf(2.0 + 8.0 * (k as f32 / 400.0));
+            let b = u() as f32 * std::f32::consts::TAU;
+            let z = [r * b.cos(), r * b.sin()];
+            for p in 1..=8 {
+                let mag = 10f32.powi(-p) * r;
                 let a = u() as f32 * std::f32::consts::TAU;
                 jobs.push([z[0], z[1], mag * a.cos(), mag * a.sin()]);
             }
@@ -538,10 +613,10 @@ mod tests {
             post_inv: Affine2::IDENTITY,
         };
         let f = FinalMap { steps: vec![step] };
-        let whole = View { centre: [0.0, 0.0], radius: 1e6 };
+        let whole = View { centre: [0.0, 0.0], radius: 1e6, plotted: false };
         let mut u = lcg(5);
         for (centre, radius) in [([0.3, 0.2], 0.05), ([1.9, -0.4], 1e-3), ([-0.2, 1.28], 0.03), ([0.0, 0.0], 0.8), ([-2.5, 0.9], 1e-5)] {
-            let view = View { centre, radius };
+            let view = View { centre, radius, plotted: false };
             let d = f.pull_back(view, whole).expect("the view holds plotted points");
             // Preimages of points in the view, found by sampling the
             // plane near the disc.
@@ -558,7 +633,7 @@ mod tests {
             }
             assert!(inside > 0, "view {centre:?}: nothing sampled near {d:?} lands in it");
         }
-        assert!(f.pull_back(View { centre: [0.0, 5.0], radius: 0.1 }, whole).is_none(), "a view past the range holds nothing");
+        assert!(f.pull_back(View { centre: [0.0, 5.0], radius: 0.1, plotted: false }, whole).is_none(), "a view past the range holds nothing");
     }
 
     /// **A view holding where far points are plotted pulls back to the
@@ -578,10 +653,10 @@ mod tests {
         let inf = f.infinity().expect("bipolar plots far points at a point");
         let far = f.forward([300.0, -200.0]);
         assert!((far[0] - inf[0]).hypot(far[1] - inf[1]) < 1e-2, "{far:?} is not near {inf:?}");
-        let whole = View { centre: [0.0, 0.0], radius: 500.0 };
-        let view = View { centre: [inf[0] + 0.01, inf[1]], radius: 0.05 };
+        let whole = View { centre: [0.0, 0.0], radius: 500.0, plotted: false };
+        let view = View { centre: [inf[0] + 0.01, inf[1]], radius: 0.05, plotted: false };
         assert_eq!(f.pull_back(view, whole), Some(whole));
-        let away = View { centre: [inf[0] + 0.5, inf[1]], radius: 0.05 };
+        let away = View { centre: [inf[0] + 0.5, inf[1]], radius: 0.05, plotted: false };
         assert!(f.pull_back(away, whole).is_some_and(|d| d.radius < 100.0), "a view away from it is bounded");
     }
 }
