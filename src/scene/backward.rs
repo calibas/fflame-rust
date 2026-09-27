@@ -74,6 +74,32 @@ pub const BEAM_LOSS: f64 = 1e-3;
 /// The hard cap on the frontier, for cost.
 pub const BEAM: usize = 2048;
 
+/// **The most of the replay table a forced frontier may take**: half of
+/// [`TABLE_FLOATS`](super::cylinder::TABLE_FLOATS).
+///
+/// The beam ranks nodes a replay has measured; a node no replay could
+/// measure is carried whole. On a flame whose pieces overlap heavily,
+/// at a depth where a word's image is far larger than the view, that is
+/// nearly every node, and the frontier grows by the overlap each level:
+/// cylinder-turns-julian's at 1e8 by 1.6 a level, to 265,087 nodes at
+/// depth 23 after 22 s, when the time budget forced it -- words whose
+/// references took 52M floats, past any table, so the render replayed
+/// them plainly (tracker C11). A forced frontier is complete however
+/// shallow, only less efficient; one no table holds is replayed wrong.
+/// So before a level, the walk projects the frontier it would make at the
+/// last level's growth, and forces the one it has if that projection's
+/// words would take more than this ([`word_floats`]). Half, for the words
+/// past a many-to-one map, which may carry `MAX_PIECE_CHAINS`.
+pub const FRONTIER_FLOATS: usize = super::cylinder::TABLE_FLOATS / 2;
+
+/// What a word of `len` symbols takes of a replay table with its
+/// references (`cylinder::pack_words`), at [`MAX_CHAINS`] chains: its
+/// record, its block's offset, and each chain's base before each step and
+/// its end.
+pub fn word_floats(len: usize) -> usize {
+    (4 + len) + 1 + 2 + MAX_CHAINS * (2 * len + 2)
+}
+
 /// A child that lands but whose region yielded no sample point is forced
 /// as it stands only if that wastes at most this fraction of the mass
 /// already kept -- its probability times the share of it that misses the
@@ -3889,6 +3915,8 @@ impl Backward {
         let mut lost = 0.0f64;
         let mut timed_out = false;
         let started = web_time::Instant::now();
+        // What a level made of the frontier it expanded, for `FRONTIER_FLOATS`.
+        let mut growth = 1.0f64;
 
         for depth in 1..=MAX_DEPTH {
             if frontier.is_empty() {
@@ -3898,10 +3926,14 @@ impl Backward {
             if cancelled() {
                 return Err(NoCylinders::ViewIsEmpty);
             }
-            // Out of time: what is still on the frontier is FORCED as it
-            // stands. Dropping it was a hole; forcing it is waste.
-            if started.elapsed() > opts.budget {
-                timed_out = true;
+            // Out of time, or about to carry more words than the replay
+            // table holds references for (`FRONTIER_FLOATS`): what is
+            // still on the frontier is FORCED as it stands. Dropping it
+            // was a hole; forcing it is waste.
+            let projected = kept.len() + (frontier.len() as f64 * growth).ceil() as usize;
+            let too_big = projected.saturating_mul(word_floats(depth)) > FRONTIER_FLOATS;
+            if started.elapsed() > opts.budget || too_big {
+                timed_out = !too_big;
                 for n in frontier.drain(..) {
                     // Zero hits is not zero measure; forced all the same.
                     if n.word.is_empty() {
@@ -3947,6 +3979,7 @@ impl Backward {
                 return Err(NoCylinders::ViewIsEmpty);
             };
 
+            let expanded = results.len();
             let mut next: Vec<Node> = Vec::new();
             for e in results {
                 for (c, eff) in e.kept {
@@ -4023,6 +4056,7 @@ impl Backward {
                     tr.beam += 1;
                 }
             }
+            growth = next.len() as f64 / expanded.max(1) as f64;
             frontier = next;
             slicer.tick().await;
         }
