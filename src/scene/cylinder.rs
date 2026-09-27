@@ -3910,16 +3910,15 @@ mod gpu_tests {
         ];
         std::fs::write("output/flame-zoom/juliascope-arms.fflame", serde_json::to_string_pretty(&arms).expect("json")).expect("written");
         let mut names = vec!["juliascope-arms"];
-        // Its JWF `filter` (0.75) is dropped: the bilateral spatial filter
-        // takes its edge-preserving sigma from ALL of a batch's samples
-        // over the frame's pixels, so an untargeted render at depth, whose
-        // samples mostly land outside the view, blurs uniformly where a
-        // targeted one keeps edges -- the same words, fatter blobs. With it
-        // the overlap at 1e3 read 0.69 and 0.76; without it, 0.975 and
-        // 1.000. Tracker, C8's notes.
+        // In 2D: a `.flame` imports in 3D (`flame_xml`), where the renderer
+        // does not target, and its "targeted" render was then the
+        // untargeted one with fewer samples. It keeps its JWF `filter`
+        // (0.75), which lit 0.52 of the reference at 1e3 until the
+        // filter counted a targeted batch as the untargeted one it stands
+        // for (tracker C9); without it, 1.000 with equal lit counts.
         if let Ok(text) = std::fs::read_to_string("output/JWF-rando32-simplified4.flame") {
             let mut cfg = crate::flame_xml::parse_flame_xml(&text).expect("parses").remove(0);
-            cfg.filter_radius = 0.0;
+            cfg.render_mode = crate::scene::transforms::RenderMode::TwoD;
             std::fs::write("output/flame-zoom/juliascope-rays.fflame", serde_json::to_string_pretty(&cfg).expect("json")).expect("written");
             names.push("juliascope-rays");
         }
