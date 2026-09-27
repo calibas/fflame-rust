@@ -582,9 +582,23 @@ efficiency 0.14, where it planned at 0.19 with 2.2% missing.
 Two corpus flames. They are off the escape-time / deep-zoom diagonal
 because the inverse walk's analysis does not model Möbius maps.
 
-### C5. Flames over the forward word cap -- open
+### C5. Flames over the forward word cap -- open, and 3D (2026-09-27)
 
-Three corpus flames. They would need their own routing.
+Three corpus flames: `cup_(3d)`, `cup_(3d)-nopreservez`, `linear3d-test`
+(`gpu-cylinder-planning.md`'s census, 4404-6232 words against 4096). They
+would need their own routing -- a forward failure sent to the walk, as
+C12 tried. But all three are `.flame` files, which import in 3D
+(`flame_xml`), where the renderer does not target: routing them helps
+only once someone switches them to 2D.
+
+**The census's other leftovers** (2026-09-27), looked at and not pursued:
+`subflame_wf` (rando13, rando34) is a renewal drawn from a nested chaos
+game, whose detail is inside a second attractor the walk cannot target
+into -- at depth its words land as the untargeted render does.
+presets#8's `julia3Dz` has no body in the plane (the 2D stub returns 0:
+the transform collapses every point), in a flame named for 3D.
+presets#2's `noise` beside a blur is a random rotation-and-scale of the
+input: nearly a renewal, one flame.
 
 ### C6. An unbounded attractor -- done (2026-09-26); its blur's draw open
 
