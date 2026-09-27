@@ -1104,9 +1104,15 @@ level the walk projects the frontier it would make, at the last level's
 growth, and forces the one it has if that projection's words would take
 over half the replay table with their references (`word_floats`, at
 `MAX_CHAINS`; half for the words past a many-to-one map, which may
-carry more). 1e8: 4.4 s, 66,264 words at depth 20 (13.2M-float table).
-1e6: 11.2 s, 87,990 words at depth 19, where it took 23 s and 210,867.
-Neither runs out of time now.
+carry more, and for the words kept). 1e8: 4.4 s, 66,264 words at depth
+20 (13.2M-float table). 1e6: 11.2 s, 87,990 words at depth 19, where it
+took 23 s and 210,867. Neither runs out of time now.
+
+The first version projected the kept words too, and julian-disc keeps
+~25k words 62-84 symbols long, so it forced every frontier at once: at
+1e6, 80 unmeasured words held 99.8% of the mass, efficiency 0.001 and
+speedup 3.3e5 against 0.156 and 7.6e7. Fixed the next commit: the
+frontier alone is projected, and julian-disc plans as before C11.
 
 **Accuracy at depth: two tails, open.** The gate's 48 points a word land
 1 at 1e8, since a forced word lands at ~5e-4. Searching the sample for up
@@ -1255,11 +1261,26 @@ of pre-scale 6 (stretching `x` by 3) at 0.02-0.07, with 40-70k words at
 1e3 and 430k at 1e6 -- correct (overlap 1.000), and forced mostly for
 nothing.
 
-**Not reproducible (found 2026-09-26).** The same build plans
-julian-disc's 1e8 view (`what_the_references_hold`) at 41,485 words one
-run and 43,649 the next; the 1e4 and 1e6 views agree. Something in the
-walk depends on the process -- iteration order, most likely a hashed
-container's. A plan should be a function of the flame and the view.
+**Not reproducible (found 2026-09-26) -- explained (2026-09-27).** The
+same build planned julian-disc's 1e8 view (`what_the_references_hold`)
+at 41,485 words one run and 43,649 the next. It is the time budget: the
+walk forces its frontier when 20 s have passed (`TIME_BUDGET`), at
+whatever level it is on, and julian-disc's 1e6 and 1e8 views take 21-22
+s (C10 found the same with cylinder-turns-julian). Two runs today gave
+the same plans, hashed, because the level boundaries fall well clear of
+the 20 s; under load or on a slower machine they would not. Plans that
+finish inside the budget are identical across processes (1e4: 17.3 s,
+the same hash twice). A plan that is a function of the flame and the
+view would need a budget of work rather than of time -- and one set
+below 20 s of this machine's work cuts plans earlier than now. Not
+decided.
+
+**Where the 1e6 plan's waste is** (2026-09-27): 114 words forced
+unmeasured when time ran out hold 58% of its mass (69 words, 67%, at
+1e8; 49 words, 6%, at 1e4, where the walk reaches the depth cap of 96).
+They land nothing measurable, and the plan's efficiency is 0.156 (0.034
+at 1e8) for it. A walk that got further in the same time would refine
+them.
 
 ### P4. Keep-or-carry on the GPU -- open (optional)
 

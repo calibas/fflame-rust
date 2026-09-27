@@ -89,7 +89,11 @@ pub const BEAM: usize = 2048;
 /// So before a level, the walk projects the frontier it would make at the
 /// last level's growth, and forces the one it has if that projection's
 /// words would take more than this ([`word_floats`]). Half, for the words
-/// past a many-to-one map, which may carry `MAX_PIECE_CHAINS`.
+/// past a many-to-one map, which may carry `MAX_PIECE_CHAINS`, and for the
+/// words already kept. The frontier alone: counting the kept words too,
+/// julian-disc -- 25k words kept, 62-84 symbols long -- forced a small
+/// frontier holding 99.8% of its 1e6 plan's mass, efficiency 0.001
+/// against 0.156.
 pub const FRONTIER_FLOATS: usize = super::cylinder::TABLE_FLOATS / 2;
 
 /// What a word of `len` symbols takes of a replay table with its
@@ -3930,7 +3934,7 @@ impl Backward {
             // table holds references for (`FRONTIER_FLOATS`): what is
             // still on the frontier is FORCED as it stands. Dropping it
             // was a hole; forcing it is waste.
-            let projected = kept.len() + (frontier.len() as f64 * growth).ceil() as usize;
+            let projected = (frontier.len() as f64 * growth).ceil() as usize;
             let too_big = projected.saturating_mul(word_floats(depth)) > FRONTIER_FLOATS;
             if started.elapsed() > opts.budget || too_big {
                 timed_out = !too_big;
