@@ -417,6 +417,10 @@ pub struct Cylinders {
     /// flame with a real invariant ball, which is every flame that
     /// targeted before family M existed.
     pub sampling_leak: f64,
+    /// Whether the inverse walk ran out of time (`backward::TIME_BUDGET`)
+    /// and forced its frontier as it stood: complete, but its words are
+    /// wherever the walk had reached, and there can be very many of them.
+    pub timed_out: bool,
     /// The fraction of forced samples that land in the frame, weighted
     /// by the words' probabilities. One everywhere except the inverse
     /// walk, which verifies each word by replaying it forward on a
@@ -744,6 +748,7 @@ impl Cylinders {
             mass,
             lost,
             sampling_leak,
+            timed_out: false,
             efficiency: 1.0,
             depth,
             composable: false,
@@ -1460,6 +1465,7 @@ impl Cylinders {
             mass,
             lost,
             sampling_leak,
+            timed_out: false,
             efficiency: 1.0,
             depth,
             composable,
@@ -2136,32 +2142,34 @@ pub fn pack_words(cyl: &Cylinders, flame: &Flame) -> Vec<f32> {
     if let Some(last) = cyl.words.len().checked_sub(1) {
         out[HEADER_FLOATS + last * stride] = 1.0;
     }
-    // The table's offsets are f32, exact below 2^24 floats (64 MB). A
-    // plan whose references would pass that -- none measured does; the
-    // widest, julian-disc at 1e6, is ~10M -- replays plainly rather than
-    // read its blocks at rounded offsets.
+    // The table's offsets are f32 (`TABLE_FLOATS`), every one even. A
+    // plan whose references would pass the table's size replays plainly
+    // rather than read its blocks at rounded offsets: at depth, where the
+    // plain replay is pixels off.
     let offsets_len: usize = cyl.offset_rows.len()
         + cyl.final_rows.len()
         + cyl.words.len()
         + cyl.refs.iter().flatten().map(|r| 2 + r.chains.iter().map(|c| 2 * (c.bases.len() + c.finals.len()) + 2).sum::<usize>()).sum::<usize>();
-    let fits = out.len() + offsets_len < 1 << 24;
+    // At most a float of padding a block, and one before each section.
+    let padding = cyl.refs.iter().flatten().count() + 3;
+    let fits = out.len() + offsets_len + padding < TABLE_FLOATS;
     if !fits {
-        log::warn!("replay table of {} floats: past f32's exact offsets, so no replay in offsets", out.len() + offsets_len);
+        log::warn!("replay table of {} floats: past its {TABLE_FLOATS}, so no replay in offsets", out.len() + offsets_len + padding);
     }
     if fits && cyl.refs.len() == cyl.words.len() && !cyl.offset_rows.is_empty() {
-        out[2] = out.len() as f32;
+        out[2] = at_even(&mut out);
         out.extend_from_slice(&cyl.offset_rows);
         // The finals' rows, where the flame has any: `out[7]` says where.
         if !cyl.final_rows.is_empty() {
-            out[7] = out.len() as f32;
+            out[7] = at_even(&mut out);
             out.extend_from_slice(&cyl.final_rows);
         }
-        let offsets_at = out.len();
+        let offsets_at = at_even(&mut out) as usize;
         out[3] = offsets_at as f32;
         out.resize(offsets_at + cyl.words.len(), 0.0);
         for (w, r) in cyl.refs.iter().enumerate() {
             let Some(r) = r else { continue };
-            out[offsets_at + w] = out.len() as f32;
+            out[offsets_at + w] = at_even(&mut out);
             out.push(r.m as f32);
             out.push(r.chains.len() as f32);
             for ch in &r.chains {
@@ -2173,8 +2181,7 @@ pub fn pack_words(cyl: &Cylinders, flame: &Flame) -> Vec<f32> {
                 out.push(ch.end[1] as f32);
             }
         }
-        // f32 offsets are exact below 2^24 floats, 64 MB of table.
-        debug_assert!(out.len() < 1 << 24);
+        debug_assert!(out.len() < TABLE_FLOATS);
     }
     // Each word's deposit, `1 / draw`, where any word is drawn off its
     // probability; `out[6]` says where (0: every deposit is one). A word
@@ -2184,13 +2191,14 @@ pub fn pack_words(cyl: &Cylinders, flame: &Flame) -> Vec<f32> {
     // centre (2), rho_c, phi_c, rho_lo - rho_c, rho span, phi_lo - phi_c,
     // phi span, density, full, 0]` (`header.wgsl`'s `ct_conditional`).
     let cond_len: usize = cyl.words.iter().filter_map(|c| c.cond.as_ref()).map(|k| COND_HEAD + COND_PIECE * k.pieces.len()).sum();
-    if cyl.words.iter().any(|c| c.draw != 1.0 || c.cond.is_some()) && out.len() + cyl.words.len() + cond_len < 1 << 24 {
-        let at = out.len();
+    let conds = cyl.words.iter().filter(|c| c.cond.is_some()).count();
+    if cyl.words.iter().any(|c| c.draw != 1.0 || c.cond.is_some()) && out.len() + cyl.words.len() + cond_len + conds + 1 < TABLE_FLOATS {
+        let at = at_even(&mut out) as usize;
         out[6] = at as f32;
         out.extend(cyl.words.iter().map(|c| (1.0 / c.draw.max(f64::MIN_POSITIVE)) as f32));
         for (w, c) in cyl.words.iter().enumerate() {
             let Some(k) = &c.cond else { continue };
-            out[at + w] = -(out.len() as f32);
+            out[at + w] = -at_even(&mut out);
             let (kind, slices, rotation, thickness) = match k.blur.kind {
                 crate::scene::ifs_analysis::FreeKind::Disc => (0.0, 0.0, 0.0, 0.0),
                 crate::scene::ifs_analysis::FreeKind::Gaussian => (1.0, 0.0, 0.0, 0.0),
@@ -2241,6 +2249,25 @@ pub const COND_PIECE: usize = 12;
 
 /// Floats before the first word of a replay table: see [`pack_words`].
 pub const HEADER_FLOATS: usize = 8;
+
+/// **The most floats a replay table holds** (`pack_words`): 2^25, 128 MiB
+/// -- WebGPU's and wgpu's default `max_storage_buffer_binding_size`, which
+/// the table's buffer is bound whole under. The table's offsets are f32,
+/// which holds every integer to 2^24 and every EVEN one to 2^25, so each
+/// is placed at an even float (`at_even`): exact to the end of the table.
+/// At 2^24 a plan's references were dropped whole, which
+/// cylinder-turns-julian's 1e6 plan passed (tracker C10).
+pub const TABLE_FLOATS: usize = 1 << 25;
+
+/// The table's length as a position, padded to an even one first so f32
+/// holds it exactly to [`TABLE_FLOATS`].
+fn at_even(out: &mut Vec<f32>) -> f32 {
+    if out.len() % 2 == 1 {
+        out.push(0.0);
+    }
+    debug_assert!(out.len() < TABLE_FLOATS);
+    out.len() as f32
+}
 
 /// The gates that need a GPU: a targeted render is the untargeted
 /// render, and it gets there with far fewer wasted samples.

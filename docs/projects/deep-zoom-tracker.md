@@ -1043,23 +1043,57 @@ A filter that depends on how many samples a batch holds is the filter's
 design, not targeting's -- untargeted, it also moves with the batch size.
 No visual test targets a filtered flame.
 
-### C10. The per-sample gate at cylinder-turns-julian 1e6 -- open
+### C10. The per-sample gate at cylinder-turns-julian 1e6 -- done (2026-09-27)
 
-`the_offset_replay_holds_per_sample` fails there at 7767717f and after:
-all 850 samples in view are off by ~1e46 px, the bias equal in x and y,
-and the plain replay by 4e7 px. It passes at 60a320fd, 030482e6 and
-1b231220, with 76, 24 and 76 samples in view.
+`the_offset_replay_holds_per_sample` failed there from 7767717f on: all
+850 samples in view off by ~1e46 px.
 
-7767717f changed no answer: the rescues it runs up front return what
-`close` would have found, one for one (compared). The difference is
-time. The old code plans 87,990 words to depth 19, the new one 210,867
-to depth 21 (mass 7.3e-8), and making the new one do more work alone --
-each rescue computed twice -- brings back the old plan. The one decision
-in the walk that reads the clock is `TIME_BUDGET` (20 s), which forces
-the frontier where it stands. So the failure is in words the budget had
-cut off. Why their offsets fail is not yet known: an equal bias in x and
-y looks like a sentinel propagating (the difference forms' `FD_POLE`),
-which would put a reference on a pole.
+**Why.** The replay table (`pack_words`) holds its positions as f32,
+exact to 2^24 floats, and a plan whose references would pass that had
+them dropped whole, with a warning: the render replays it plainly, pixels
+off at depth. The code said no measured plan came near (julian-disc at
+1e6, ~10M floats). This one does: 210,867 words, 206,576 with
+references -- 558,493 chains, 23.4M floats -- beside a 5.9M-float table.
+The gate did not notice. It read each word's block offset from the
+blocks array the table no longer had (the header's 0), which is word
+data, and the shader ran on it: exactly `(0, 0)` for every offset. On
+the CPU the same references replay to 1e-8 px.
+
+It appeared with 7767717f because that commit made the walk faster, not
+different: its up-front rescues match `close`'s one for one (compared).
+The walk ran out of time either way (`TIME_BUDGET`, 20 s; this plan takes
+23 s) and forced its frontier where it stood, and the faster walk stood
+deeper: depth 21, 190,734 of the words forced unmeasured, where the old
+one stopped at depth 19 with 87,990 words, whose references fit. Making
+the new walk do only more work (each rescue twice) brought back the old
+plan.
+
+**The fix.** f32 holds every even integer to 2^25, so every position the
+table stores -- its sections, each word's block, each conditional block
+-- is placed at an even float (`at_even`, at most a float of padding a
+block), and the table may hold `TABLE_FLOATS` = 2^25 floats: 128 MiB,
+WebGPU's and wgpu's default `max_storage_buffer_binding_size`, which it
+is bound whole under. No reader changes. This plan's table is 29.5M
+floats (118 MB) and replays at 1e6 to 0.014 px at the 99th percentile,
+none of 850 off by a pixel.
+
+The gate now fails where a plan's references do not fit, unless the walk
+ran out of time (`Cylinders::timed_out`), which it reports: C11.
+
+### C11. cylinder-turns-julian at 1e8: the walk runs out of time -- open
+
+At 1e8 (at the gate's point, 0.75) the walk runs 25 s and forces its whole
+depth-23 frontier: 265,106 words, 264,679 of them unmeasured, overall
+efficiency reading 0.000. Their references would take 52M floats, past
+any table, so the render replays the plan plainly -- which at 1e8 the
+gate measures at 1,000-4,700 px off on the other flames. Before C10 the gate saw no sample of it in view.
+
+The walk's cost here is the question, not the table's: a view the
+walk cannot settle in 20 s makes a plan no table holds. The julian's two
+arms and the cylinder's four branches (two turns) make every node wide (as
+julian-disc's 51 arms do, P3). Open: where the time goes, and whether a
+forced frontier should be forced shallower -- fewer, larger words -- when
+it would not fit.
 
 ---
 
