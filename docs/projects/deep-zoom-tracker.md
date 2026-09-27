@@ -741,6 +741,66 @@ references changed for every word with a map many-to-one going forward
   the nonlinear maps do not keep the set bounded" (the message said "root
   maps", from before the walk had other kernels).
 
+**Stage 3, done (2026-09-26): both flames plan, completely.** Measured
+first: splits1's farthest sample point is 10^4 times its 95% radius
+(about its median), splits2's 5*10^7; every other flame of
+`output/flame-zoom` is within 28.5 (free-pie3D; grand-julian 15-18). The
+mean is dragged by the tail too: splits2's 50%, 90% and 99% radii about
+it were one number. Five things, each found by the one before:
+- **The ball.** The walk's analysis takes the bulk's ball where none is
+  invariant, as the inversions do (S3): it counts branches by it and
+  bounds nothing. The escape engine still refuses.
+- **The grid** spans the farthest point or `GRID_TAIL_SPAN` (32) of the
+  95% radius about the median, whichever is less: no other flame's grid
+  moves, and the bulk is resolved as free-pie3D's is. Across the
+  farthest point, splits1's whole bulk was one cell of 1,200, and a 1e3
+  view drew 84% of what the untargeted render did.
+- **A view larger than the grid** is seeded with its sample points, not
+  a 64-point cloud: a finals flame's view holding the image of infinity
+  pulls back to the whole attractor, a disc 2e10 across about the
+  tail-dragged mean, whose cloud lay in empty space -- the walk planned
+  the renewal alone, 162 of 9,030 pixels.
+- **Cylinder's output is a strip.** A renewal carries one where its
+  kernel bounds a coordinate whatever the input (`Renewal::strip`):
+  `pre_blur + cylinder` outputs a line `2|w|` wide however far its `y`
+  goes. The disc about it, 6e4 across, met every node, and its words
+  held all of a 1e4 plan's mass at an efficiency of nothing: speedups
+  0.14-0.55, now 3-1250.
+- **Hidden pieces, by the region's size.** A hidden point was dropped as
+  "beside" the node's sample points when within a cell of them; with
+  splits1's cells 3.8 across, a second piece 4.4 from a node whose
+  points spread 9e-3 was dropped, and 3.5% of a 1e4 view with it. Beside
+  is now also within four of the points' spread. The other flames pay
+  for it at depth, measured twice each way on an awake machine (the runs
+  agree within 3%): grand-julian 1e6/1e8 1.24/1.39 to 1.42/1.59 s,
+  random1 3.05/7.6 to 3.46/9.0 s, julian-disc 1e6 17.5 to 21.6 s (its 1e4
+  and 1e8 unchanged). What they buy there: nothing measurable -- the 14
+  views of `why_is_this_view_empty` have the same coverage to every
+  printed digit, one julian-disc view's efficiency 0.028 to 0.323 and one
+  0.141 to 0.133. At 16 and 64 spreads the cost is the same as at four:
+  the pieces carried are far outside their node's region, real pieces a
+  cell had merged. Merging real pieces is how splits1 lost 3.5% of a
+  view, so the cost is kept.
+- Tried and dropped, measured to change nothing: discs past a map's
+  image counted as unreachable in `reaches`, and the part of a disc
+  across a seam pulled back from the image's edge.
+
+Results. Coverage by an independent chaos game through the final
+(`the_tailed_flames_plan_completely`): 1.000 at every view it can judge,
+1e3-1e5 on both flames at two points (at 1e5 splits2's views land too few
+of its samples to say). Targeted against untargeted
+(`an_unbounded_attractor_is_planned`): overlap 0.999-1.000 at 1e2-1e3.
+Per sample at depth (`the_offset_replay_holds_per_sample`, both added):
+99th percentiles 0.0006-0.0074 px at 1e4-1e8, where the plain replay is
+54-217 px off at 1e8.
+
+**Open: the renewal's draw.** Speedups are 2-20 at many views and
+efficiencies 0.000-0.08, because a shallow word through the `pre_blur +
+cylinder` (probability ~1e-3, 3.5% of one view) lands its blur in a
+target a few thousandths across once in thousands of draws. It is
+C2b's open item for a blur beside a kernel -- a draw conditioned on the
+target, per sample, since the blur's output depends on its input here.
+
 **Found on the way, fixed: a final on a flame without arms.** The
 forward planner never looked at final transforms: it planned the view
 in the orbit's own space, and its composed arm plots view-relative. A

@@ -108,6 +108,20 @@ pub const SAMPLE: usize = 100_000;
 /// pulled back to the origin is no longer within a cell of anything.
 pub const GRID_CELLS: usize = 1024;
 
+/// The grid spans the sample's farthest point, or this many of its 95%
+/// radius about its median, whichever is less (tracker C6).
+///
+/// **A power-law tail puts the farthest point anywhere.** Where `splits`
+/// expands by 1.35 with probability 0.71 a step, a run of `k` of them
+/// reaches `1.35^k` about `0.71^k` of the time: bipolar-elliptic-splits1's
+/// farthest of 100k points is 10^4 of its 95% radius out, splits2's
+/// 5·10^7, and a grid across that put the whole bulk in one cell, where
+/// "within a cell of a sample point" says nothing. Every other flame of
+/// `output/flame-zoom` is within 28.5 (free-pie3D; grand-julian 15-18),
+/// so at 32 none of their grids moves, and a tailed flame's bulk is
+/// resolved as finely as theirs is.
+pub const GRID_TAIL_SPAN: f64 = 32.0;
+
 /// How many sample points a cut is verified against.
 pub const VERIFY: usize = 400;
 
@@ -1186,6 +1200,22 @@ struct Renewal {
     /// A disc holding everything the transform can output.
     out_centre: [f64; 2],
     out_radius: f64,
+    /// And a strip, where the kernel bounds one coordinate whatever its
+    /// input: `|a·q + b| <= 1` for an output `q`, as `[a.x, a.y, b]`.
+    /// `cylinder`'s `x` is a sine (tracker C6): the output of a `pre_blur
+    /// + cylinder` is a line `2|w|` wide however far its `y` reaches, and
+    /// bipolar-elliptic-splits's tail made the disc about it 6e4 across,
+    /// so every node reached it and its words held all of a 1e4 plan's
+    /// mass, at an efficiency of nothing.
+    strip: Option<[f64; 3]>,
+}
+
+impl Renewal {
+    /// Whether the disc `(p, r)` can reach what the transform outputs.
+    fn meets(&self, p: [f64; 2], r: f64) -> bool {
+        let disc = (p[0] - self.out_centre[0]).hypot(p[1] - self.out_centre[1]) <= self.out_radius + r;
+        disc && self.strip.is_none_or(|[ax, ay, b]| (ax * p[0] + ay * p[1] + b).abs() <= 1.0 + r * ax.hypot(ay))
+    }
 }
 
 /// The least and greatest of `sin` over `[a, b]`: its ends, and ±1
@@ -1458,7 +1488,22 @@ impl Backward {
         for a in &mut alphabet {
             a.renewal = transforms.iter().find(|t| t.map == a.map).and_then(|t| t.renewal);
         }
-        let cell = 2.0 * extent / GRID_CELLS as f64;
+        // Across the bulk, not the tail (`GRID_TAIL_SPAN`): the 95% radius
+        // about the median, as `frame` has it, the mean being the tail's
+        // too.
+        let bulk = {
+            let median = |axis: usize| {
+                let mut v: Vec<f64> = sample.iter().map(|p| p[axis]).collect();
+                let k = v.len() / 2;
+                *v.select_nth_unstable_by(k, f64::total_cmp).1
+            };
+            let c = [median(0), median(1)];
+            let mut d: Vec<f64> = sample.iter().map(|p| (p[0] - c[0]).hypot(p[1] - c[1])).collect();
+            let k = (d.len() * 95 / 100).min(d.len() - 1);
+            *d.select_nth_unstable_by(k, f64::total_cmp).1
+        };
+        let span = if bulk > 0.0 { extent.min(GRID_TAIL_SPAN * bulk) } else { extent };
+        let cell = 2.0 * span / GRID_CELLS as f64;
         let key = |p: [f64; 2]| -> Cell { ((p[0] / cell).floor() as i32, (p[1] / cell).floor() as i32) };
         slicer.tick().await;
         let grid = Index::build_sliced(sample.iter().enumerate().map(|(i, p)| (key(*p), i as u32)).collect(), slicer).await;
@@ -1555,7 +1600,7 @@ impl Backward {
         match b {
             // A variation that ignores its input: its draw's disc (the
             // analysis's stand-in is `bubble` scaled to it).
-            Blur::Free(f) => Renewal { out_centre, out_radius: pmax * f.weight.abs() * f.radius() },
+            Blur::Free(f) => Renewal { out_centre, out_radius: pmax * f.weight.abs() * f.radius(), strip: None },
             // Bubble's radial profile `4r/(r² + 4)` rises to 1 at r = 2:
             // an input that reaches no further than `r` comes out within
             // it. The input reaches the attractor's image in the kernel's
@@ -1570,13 +1615,16 @@ impl Backward {
                 let (lo, hi) = sin_range(c[0] - r, c[0] + r);
                 let k = [0.5 * (lo + hi), c[1]];
                 let half = (0.5 * (hi - lo)).hypot(r);
-                Renewal { out_centre: n.post.apply([n.w * k[0], n.w * k[1]]), out_radius: pmax * n.w.abs() * half }
+                // The kernel frame's `x` of an output `q`: `post⁻¹(q).x / w`.
+                let iw = 1.0 / n.w;
+                let strip = Some([n.post_inv.m[0][0] * iw, n.post_inv.m[0][1] * iw, n.post_inv.t[0] * iw]);
+                Renewal { out_centre: n.post.apply([n.w * k[0], n.w * k[1]]), out_radius: pmax * n.w.abs() * half, strip }
             }
             Blur::Pre(b) => {
                 let c = n.pre.apply(centre);
                 let (_, smax) = crate::scene::ifs_analysis::singular_values_of(n.pre.m);
                 let r = (c[0].hypot(c[1]) + 1.02 * smax * extent + b.reach()).min(BUBBLE_PREIMAGE);
-                Renewal { out_centre, out_radius: pmax * n.w.abs() * 4.0 * r / (r * r + 4.0) }
+                Renewal { out_centre, out_radius: pmax * n.w.abs() * 4.0 * r / (r * r + 4.0), strip: None }
             }
         }
     }
@@ -1783,7 +1831,7 @@ impl Backward {
             }
             level = next;
         }
-        level.iter().any(|&(p, r)| (p[0] - ren.out_centre[0]).hypot(p[1] - ren.out_centre[1]) <= ren.out_radius + r)
+        level.iter().any(|&(p, r)| ren.meets(p, r))
     }
 
     /// A symbol's forward map and arm.
@@ -2286,9 +2334,18 @@ impl Backward {
         out
     }
 
-    /// The points of `pts` more than a cell from every sample point in
-    /// `idx`, at most `ALT_CAP` of them: the pieces of a region its
-    /// sample points do not stand for (`Node::alt`).
+    /// The points of `pts` away from every sample point in `idx`, at most
+    /// `ALT_CAP` of them: the pieces of a region its sample points do not
+    /// stand for (`Node::alt`). Away is more than a cell, or more than
+    /// four of the points' own spread -- the region's size, where the
+    /// cell is the grid's.
+    ///
+    /// **The cell alone was the grid's size, not the region's** (C6). A
+    /// node of bipolar-elliptic-splits1 whose five points spread 9e-3 had a
+    /// second piece 4.4 away, from `splits`' other branch; its cells were
+    /// 3.8 across, the piece read as beside them and was dropped, and 3.5%
+    /// of a 1e4 view with it. At depth every region is far smaller than a
+    /// cell.
     fn away_from(&self, idx: &[u32], pts: Vec<[f64; 2]>) -> Vec<[f64; 2]> {
         if pts.is_empty() {
             return pts;
@@ -2297,7 +2354,17 @@ impl Backward {
         cells.sort_unstable();
         cells.dedup();
         let near = Self::expand_cells(&cells, true);
-        let away: Vec<[f64; 2]> = pts.into_iter().filter(|p| near.binary_search(&self.cell_of(*p)).is_err()).collect();
+        let own: Vec<[f64; 2]> = idx.iter().step_by(idx.len().div_ceil(256).max(1)).map(|&i| self.sample[i as usize]).collect();
+        let reach = 4.0 * spread_of(&own);
+        let away: Vec<[f64; 2]> = pts
+            .into_iter()
+            .filter(|p| {
+                near.binary_search(&self.cell_of(*p)).is_err() || {
+                    let slack = reach + 1e-12 * (1.0 + p[0].abs().max(p[1].abs()));
+                    !own.iter().any(|q| (q[0] - p[0]).hypot(q[1] - p[1]) <= slack)
+                }
+            })
+            .collect();
         thin(away, ALT_CAP)
     }
 
@@ -3219,18 +3286,19 @@ impl Backward {
                 Pts::Index(i) => i.len(),
             };
             let indexed = matches!(pts, Pts::Index(_));
-            watched(&mut trace, &word, "carried", &|| {
-                format!("{n} pts spread {:.2e} eff {eff:.2} prob {prob:.2e} indexed {indexed}", spread_of(&points_of(&pts)))
-            });
             // A rescued cloud's children keep its exemption, one level
             // less, while they are clouds; seeded, they are ordinary.
             let rescued = if matches!(pts, Pts::Cloud(_)) { rescued } else { 0 };
             // Its hidden points, but those beside the sample's: those are
             // the piece its points already are.
+            let alt_in = alt.len();
             let alt = match &pts {
                 Pts::Index(idx) => self.away_from(idx, alt),
                 Pts::Cloud(_) => Vec::new(),
             };
+            watched(&mut trace, &word, "carried", &|| {
+                format!("{n} pts spread {:.2e} eff {eff:.2} prob {prob:.2e} indexed {indexed}; hidden {} of {alt_in} ({:?})", spread_of(&points_of(&pts)), alt.len(), alt.first())
+            });
             node_next.push(Node { word, pts, prob, eff, rescued, alt });
         }
 
@@ -3403,7 +3471,31 @@ impl Backward {
                 root_pts.push([view.centre[0] + r * angle.cos(), view.centre[1] + r * angle.sin()]);
             }
         }
-        let mut frontier = vec![Node { word: Vec::new(), pts: Pts::Cloud(root_pts), prob: 1.0, eff: 0.0, rescued: 0, alt: Vec::new() }];
+        // **A view larger than the grid** (C6): a finals flame's view holding
+        // the image of infinity pulls back to the whole attractor, and a
+        // tailed attractor's whole is a disc of its farthest point about
+        // its mean -- 2e10 across for bipolar-elliptic-splits2, whose bulk
+        // is 800. The cloud's 64 points lie in empty space there, the cells
+        // they seed from hold none of the bulk, and the walk planned the
+        // renewal alone: 162 of 9030 pixels. Past twice the grid's span
+        // the region is its sample points, exactly.
+        let span = self.cell * GRID_CELLS as f64 / 2.0;
+        let root = if view.radius > 2.0 * span {
+            let inside: Vec<u32> = (0..self.sample.len() as u32)
+                .filter(|&i| {
+                    let p = self.sample[i as usize];
+                    (p[0] - view.centre[0]).hypot(p[1] - view.centre[1]) <= view.radius
+                })
+                .collect();
+            if inside.is_empty() {
+                Pts::Cloud(root_pts)
+            } else {
+                Pts::Index(inside)
+            }
+        } else {
+            Pts::Cloud(root_pts)
+        };
+        let mut frontier = vec![Node { word: Vec::new(), pts: root, prob: 1.0, eff: 0.0, rescued: 0, alt: Vec::new() }];
         let mut kept: Vec<(Cylinder, f64)> = Vec::new();
         let mut kept_mass = 0.0f64;
         let mut lost = 0.0f64;
@@ -4203,6 +4295,41 @@ mod tests {
         (in_view >= samples / 10).then(|| covered as f64 / in_view as f64)
     }
 
+    /// **An unbounded attractor plans completely** (tracker C6, stage 3):
+    /// the bipolar-elliptic-splits flames, a tail thinning as a power law,
+    /// at two points from 1e3 to 1e5, against an independent chaos game
+    /// through the finals -- where it lands enough samples to judge.
+    #[test]
+    #[ignore = "reads output/flame-zoom; minutes of chaos game"]
+    fn the_tailed_flames_plan_completely() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let mut judged = 0usize;
+        for name in ["bipolar-elliptic-splits1", "bipolar-elliptic-splits2"] {
+            let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")) else { continue };
+            let cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
+            let b = Backward::read(&cfg.flame, reg).expect("reads");
+            for frac in [0.3, 0.7] {
+                for zoom in [1e3f64, 1e4, 1e5] {
+                    let view = View::of(zoom, b.plotted(b.sample_point(frac)), 96, 96);
+                    let p = b.plan(view).expect("plans");
+                    let cov = coverage(&b, &p, view, 2000);
+                    println!(
+                        "  {name} {frac} {zoom:.0e}: {} words, depth {}, efficiency {:.3}, speedup {:.1}; coverage {cov:?}",
+                        p.words.len(), p.depth, p.efficiency, p.speedup()
+                    );
+                    if let Some(c) = cov {
+                        judged += 1;
+                        assert!(c >= 0.99, "{name} {frac} {zoom:.0e}: the plan draws {c:.3} of what the chaos game lands");
+                    }
+                }
+            }
+        }
+        if judged > 0 {
+            assert!(judged >= 6, "only {judged} views could be judged");
+        }
+    }
+
     /// **Phase 2 of `gpu-cylinder-planning.md`: the GPU's plans.** The
     /// same views planned with the CPU's answers and the GPU's: time,
     /// size, efficiency, and completeness against an independent chaos
@@ -4669,6 +4796,7 @@ mod tests {
         for name in [
             "grand-julian", "random1", "julian-disc", "true-grand-julian", "final-14", "final-7", "final-1",
             "elliptic-splits-julian", "elliptic-splits-final", "cylinder-blur-bipolar", "cylinder-turns-julian",
+            "bipolar-elliptic-splits1", "bipolar-elliptic-splits2",
         ] {
             let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")) else { continue };
             let cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
@@ -6322,4 +6450,5 @@ mod tests {
         assert!(hi / lo < 1.05, "the plans either side of the graze disagree: mass {lo:.3e} to {hi:.3e}");
     }
 }
+
 
