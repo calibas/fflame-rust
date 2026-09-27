@@ -3864,6 +3864,22 @@ mod gpu_tests {
         }
     }
 
+    /// **An unbounded attractor** (tracker C6, stage 3): the
+    /// bipolar-elliptic-splits flames, whose `splits` expands often enough
+    /// that their tail thins as a power law, targeted against untargeted
+    /// where the reference is dense enough to judge (their depths are
+    /// `the_tailed_flames_plan_completely`'s, by the chaos game).
+    #[test]
+    #[ignore = "needs a GPU; reads output/flame-zoom"]
+    fn an_unbounded_attractor_is_planned() {
+        for name in ["bipolar-elliptic-splits1", "bipolar-elliptic-splits2"] {
+            for frac in [0.3, 0.7] {
+                println!("== {name}, the plotted point at {frac}");
+                targeted_against_untargeted_at(name, &[1e2, 1e3], |b| b.plotted(b.sample_point(frac)));
+            }
+        }
+    }
+
     /// **A final at depth** (tracker C2c): `final-14`, whose plans carry
     /// its `bipolar` final into their offsets, rendered targeted at 1e4,
     /// 1e5 and 1e6 to `output/deep-offsets/` -- where a replay in absolute
@@ -9297,3 +9313,4 @@ mod tests {
         assert_eq!(Cylinders::plan(&gasket(), &reg, far), Err(NoCylinders::ViewIsEmpty));
     }
 }
+

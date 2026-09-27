@@ -4031,7 +4031,9 @@ async fn analyse_2d_with_sliced(
     // The ball first, on the unexpanded maps -- a forward map does
     // not depend on the branch -- because a disc's branch count is
     // read off it (D2).
-    let Some(ball) = ball_2d(&maps, slicer).await else {
+    // The walk (`!holes`) takes a bulk where no ball is invariant: it
+    // counts branches by the ball and bounds nothing with it (C6).
+    let Some(ball) = ball_2d(&maps, !holes, slicer).await else {
         errs.push(Disqualification::NoBall);
         return Err(errs);
     };
@@ -4314,7 +4316,7 @@ const BALL_REFINEMENTS: usize = 64;
 /// the distance walk reads it as having escaped at level 0. Growing
 /// the ball is always safe (any radius above the bound still satisfies
 /// `S(B) subset B`) and costs 1e-9 of relative tightness.
-async fn ball_2d(maps: &[IfsMap<Map2>], slicer: &super::slice::Slicer) -> Option<Ball<[f64; 2]>> {
+async fn ball_2d(maps: &[IfsMap<Map2>], bulk: bool, slicer: &super::slice::Slicer) -> Option<Ball<[f64; 2]>> {
     if maps.iter().all(|m| m.forward.is_affine()) {
         let affine: Vec<IfsMap<Affine2>> = maps
             .iter()
@@ -4328,7 +4330,7 @@ async fn ball_2d(maps: &[IfsMap<Map2>], slicer: &super::slice::Slicer) -> Option
             .collect();
         return Some(ball_2d_affine(&affine));
     }
-    ball_2d_numeric(maps, slicer).await
+    ball_2d_numeric(maps, bulk, slicer).await
 }
 
 /// A ball every map sends into itself, found numerically (J5), for
@@ -4342,7 +4344,13 @@ async fn ball_2d(maps: &[IfsMap<Map2>], slicer: &super::slice::Slicer) -> Option
 /// margin of 5% then covers the sampling. A radius that has not
 /// settled in sixty rounds is no ball: the maps do not keep the set
 /// bounded.
-async fn ball_2d_numeric(maps: &[IfsMap<Map2>], slicer: &super::slice::Slicer) -> Option<Ball<[f64; 2]>> {
+///
+/// With `bulk`, a set no ball holds -- one whose maps expand often enough
+/// that its tail thins as a power law, as bipolar-elliptic-splits's
+/// `splits` does (tracker C6) -- has the bulk's ball instead, as the
+/// inversions do: for the walk, which counts branches by it and bounds
+/// nothing.
+async fn ball_2d_numeric(maps: &[IfsMap<Map2>], bulk: bool, slicer: &super::slice::Slicer) -> Option<Ball<[f64; 2]>> {
     // A fixed-seed LCG: the ball must be the same ball every time.
     let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
     let mut next = || {
@@ -4419,6 +4427,73 @@ async fn ball_2d_numeric(maps: &[IfsMap<Map2>], slicer: &super::slice::Slicer) -
     // over hundreds of them moves by a hair when one crosses a
     // branch cut.
     if maps.iter().any(|m| m.forward.nonlinear().is_some_and(|n| n.kernel.unbounded_at_origin())) {
+        return bulk_ball_2d(maps, slicer).await;
+    }
+    let mut radius = sample.iter().map(|&p| dist(p)).fold(0.0f64, f64::max).max(1e-9);
+
+    // Grow until the sampled disc maps into the disc: sixty rounds of
+    // the plain fixed-point iteration, which is what the julia and
+    // bubble balls were found by, then twenty more overshooting.
+    for round in 0..80 {
+        let mut reach = 0.0f64;
+        for ring in [1.0f64, 0.75, 0.5, 0.25] {
+            let count = if ring == 1.0 { 256 } else { 64 };
+            for j in 0..count {
+                let a = std::f64::consts::TAU * j as f64 / count as f64;
+                let q = [centre[0] + radius * ring * a.cos(), centre[1] + radius * ring * a.sin()];
+                for m in maps {
+                    let branches = match m.forward.nonlinear().map(|r| r.kernel) {
+                        Some(Kernel::Root { n, .. }) => n.unsigned_abs(),
+                        _ => 1,
+                    };
+                    for k in 0..branches {
+                        let img = match &m.forward {
+                            Map2::Nonlinear(r) => r.apply_branch(q, k),
+                            other => other.apply(q),
+                        };
+                        let d = dist(img);
+                        if !d.is_finite() {
+                            return if bulk { bulk_ball_2d(maps, slicer).await } else { None };
+                        }
+                        reach = reach.max(d);
+                    }
+                }
+            }
+        }
+        if reach <= radius {
+            return Some(Ball { centre, radius: radius * (1.0 + BALL_MARGIN) });
+        }
+        // The plain iteration `radius = reach` climbs toward its limit
+        // from below by a geometric step and can fail to satisfy
+        // `reach <= radius` exactly -- a blob IFS was still creeping
+        // at 0.51 after sixty rounds. Past sixty, five percent over
+        // the reach lands above the limit the moment the maps contract
+        // in the large. Not from the start, because the balls the
+        // shipped julia presets were framed on came from the plain
+        // iteration and an overshoot moves them.
+        radius = if round < 60 { reach } else { reach * 1.05 };
+        slicer.tick().await;
+    }
+    if bulk {
+        return bulk_ball_2d(maps, slicer).await;
+    }
+    None
+}
+
+/// The BULK of a set no ball is invariant for, with a margin: the mean of
+/// the top 5% of radii over many short chains, times 1.5 (S3). Not a
+/// proof; the sparse tail beyond it is outside.
+async fn bulk_ball_2d(maps: &[IfsMap<Map2>], slicer: &super::slice::Slicer) -> Option<Ball<[f64; 2]>> {
+    let branch = |m: &Map2, p: [f64; 2], u: f64| -> [f64; 2] {
+        match m {
+            Map2::Nonlinear(r) => match r.kernel {
+                Kernel::Root { n, .. } => r.apply_branch(p, (u * (n.unsigned_abs() as f64)).floor() as u32),
+                _ => r.apply_branch(p, 0),
+            },
+            other => other.apply(p),
+        }
+    };
+    {
         let mut pts: Vec<[f64; 2]> = Vec::with_capacity(4000 * 10);
         for chain in 0..4000u64 {
             let mut st: u64 = 0x9E37_79B9_7F4A_7C15 ^ chain.wrapping_mul(0xD1B5_4A32_D192_ED03);
@@ -4459,53 +4534,6 @@ async fn ball_2d_numeric(maps: &[IfsMap<Map2>], slicer: &super::slice::Slicer) -
         // pictures do not change coverage along with continuity.
         return Some(Ball { centre: c, radius: bulk.max(1e-9) * 1.5 });
     }
-
-    let mut radius = sample.iter().map(|&p| dist(p)).fold(0.0f64, f64::max).max(1e-9);
-
-    // Grow until the sampled disc maps into the disc: sixty rounds of
-    // the plain fixed-point iteration, which is what the julia and
-    // bubble balls were found by, then twenty more overshooting.
-    for round in 0..80 {
-        let mut reach = 0.0f64;
-        for ring in [1.0f64, 0.75, 0.5, 0.25] {
-            let count = if ring == 1.0 { 256 } else { 64 };
-            for j in 0..count {
-                let a = std::f64::consts::TAU * j as f64 / count as f64;
-                let q = [centre[0] + radius * ring * a.cos(), centre[1] + radius * ring * a.sin()];
-                for m in maps {
-                    let branches = match m.forward.nonlinear().map(|r| r.kernel) {
-                        Some(Kernel::Root { n, .. }) => n.unsigned_abs(),
-                        _ => 1,
-                    };
-                    for k in 0..branches {
-                        let img = match &m.forward {
-                            Map2::Nonlinear(r) => r.apply_branch(q, k),
-                            other => other.apply(q),
-                        };
-                        let d = dist(img);
-                        if !d.is_finite() {
-                            return None;
-                        }
-                        reach = reach.max(d);
-                    }
-                }
-            }
-        }
-        if reach <= radius {
-            return Some(Ball { centre, radius: radius * (1.0 + BALL_MARGIN) });
-        }
-        // The plain iteration `radius = reach` climbs toward its limit
-        // from below by a geometric step and can fail to satisfy
-        // `reach <= radius` exactly -- a blob IFS was still creeping
-        // at 0.51 after sixty rounds. Past sixty, five percent over
-        // the reach lands above the limit the moment the maps contract
-        // in the large. Not from the start, because the balls the
-        // shipped julia presets were framed on came from the plain
-        // iteration and an overshoot moves them.
-        radius = if round < 60 { reach } else { reach * 1.05 };
-        slicer.tick().await;
-    }
-    None
 }
 
 fn ball_2d_affine(maps: &[IfsMap<Affine2>]) -> Ball<[f64; 2]> {
