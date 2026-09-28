@@ -177,6 +177,31 @@ pub struct PlanGpu {
     offsets: Option<(wgpu::ComputePipeline, wgpu::BindGroupLayout, wgpu::BindGroup)>,
 }
 
+/// **The most candidate slots one fused batch asks for.** A level's seeds
+/// and top-ups are asked in one call, every gather at once, and a gather
+/// takes `CAND_CAP` slots: a level with ~65k of them asked for a 512 MB
+/// candidates buffer, past the device's 256 MB, and wgpu panicked (found
+/// carrying partial blurs at ordinary views, tracker C7). Past this many,
+/// the gathers are asked in several batches: 4M slots, 16 MB a buffer.
+const MAX_BATCH_SLOTS: usize = 1 << 22;
+
+/// `gathers` in runs of at most [`MAX_BATCH_SLOTS`] slots, one gather a run
+/// at least.
+fn gather_runs(gathers: &[GatherJob]) -> Vec<std::ops::Range<usize>> {
+    let mut runs = Vec::new();
+    let (mut start, mut slots) = (0usize, 0usize);
+    for (i, g) in gathers.iter().enumerate() {
+        if i > start && slots + g.cap > MAX_BATCH_SLOTS {
+            runs.push(start..i);
+            start = i;
+            slots = 0;
+        }
+        slots += g.cap;
+    }
+    runs.push(start..gathers.len());
+    runs
+}
+
 /// The most workgroups in one dispatch dimension, WebGPU's default.
 const MAX_GROUPS: u32 = 65535;
 
@@ -1170,7 +1195,12 @@ impl Evaluate for PlanGpu {
             return gather_on_cpu(self, b, view, jobs, gathers);
         }
         assert_eq!(b.sample().len(), self.points_len, "a plan's GPU evaluator is for another sample");
-        self.fused(view, jobs, gathers, b)
+        let runs = gather_runs(gathers);
+        let (answers, mut gathered) = self.fused(view, jobs, &gathers[runs[0].clone()], b);
+        for run in &runs[1..] {
+            gathered.extend(self.fused(view, &[], &gathers[run.clone()], b).1);
+        }
+        (answers, gathered)
     }
 }
 
@@ -1313,9 +1343,16 @@ impl crate::scene::backward::AskEval for PlanGpu {
                 return (a, Vec::new());
             }
             assert!(self.gathers_here(), "the web's GPU planner gathers on the GPU");
-            let (r, parse) = self.fused_submit(view, jobs, gathers, b);
+            let runs = gather_runs(gathers);
+            let (r, parse) = self.fused_submit(view, jobs, &gathers[runs[0].clone()], b);
             r.arrived(&self.device).await;
-            self.take(r, |w| parse.read(w))
+            let (answers, mut gathered) = self.take(r, |w| parse.read(w));
+            for run in &runs[1..] {
+                let (r, parse) = self.fused_submit(view, &[], &gathers[run.clone()], b);
+                r.arrived(&self.device).await;
+                gathered.extend(self.take(r, |w| parse.read(w)).1);
+            }
+            (answers, gathered)
         })
     }
 }
@@ -1412,5 +1449,40 @@ impl GpuPlanner {
             self.current = Some((key, gpu));
         }
         self.current.as_mut().map(|(_, g)| g)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene::backward::IndexId;
+
+    /// **A level's gathers are asked in runs that fit** (`gather_runs`):
+    /// every gather in exactly one run, in order, and no run past
+    /// `MAX_BATCH_SLOTS` unless one gather alone is.
+    #[test]
+    fn gathers_are_asked_in_runs_that_fit() {
+        let word = [1u32, 2, 3];
+        let make = |caps: &[usize]| -> Vec<GatherJob<'static>> {
+            caps.iter().map(|&cap| GatherJob { word: Box::leak(Box::new(word)), index: IndexId::Grid, seen: &[], cap }).collect()
+        };
+        for caps in [
+            vec![1024; 100_000],
+            vec![1024; 10],
+            vec![MAX_BATCH_SLOTS + 1, 5, MAX_BATCH_SLOTS, 1],
+            vec![3000; 5000],
+        ] {
+            let gathers = make(&caps);
+            let runs = gather_runs(&gathers);
+            let mut next = 0;
+            for r in &runs {
+                assert_eq!(r.start, next, "runs cover every gather in order");
+                assert!(!r.is_empty());
+                let slots: usize = caps[r.clone()].iter().sum();
+                assert!(slots <= MAX_BATCH_SLOTS || r.len() == 1, "a run of {} gathers asks {slots} slots", r.len());
+                next = r.end;
+            }
+            assert_eq!(next, caps.len());
+        }
     }
 }
