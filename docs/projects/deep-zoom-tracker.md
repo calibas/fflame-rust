@@ -2031,6 +2031,18 @@ projected coordinates. Open questions include:
 
 ## Done
 
+- 2026-09-28: **an affine flame's plan drew a previous plan's words.**
+  Reported as a section of a Heighway dragon at 5e12 black, or drawn
+  offset, until a slight pan; an export of the same view was right. The
+  table's buffer is reused while it is large enough, and the composed
+  kernel counted its words from the buffer's length, so after a plan of
+  40 words one of 32 was searched with the old plan's leftover eight:
+  its last two words, the view's bottom-right corner, were never drawn,
+  and 6% of the draws went to the old plan's words -- placed relative to
+  the old plan's centre, so offset after a pan. The composed table now
+  carries its word count (`COUNT_AT`), as the replayed one always did.
+  Gate: `a_smaller_plan_after_a_larger_one_draws_its_own_words` (3,568
+  pixels dark before the fix, none after).
 - 2026-09-23: phase 3 (plans on the web), phase 4 (gathers on the GPU),
   and the crash when a web plan was dropped mid-flight
   ([gpu-cylinder-planning.md](gpu-cylinder-planning.md) §16-§17).
