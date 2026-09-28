@@ -2020,7 +2020,8 @@ pub const WORD_FLOATS: usize = 12;
 /// 4..6   t0, t1                  its translation
 /// 6..8   H, G                    the colour fold
 /// 8      cdf                     cumulative p_a / mass, ascending
-/// 9..12  spare (stride)
+/// 9      the word count          word 0 only (`COUNT_AT`); spare elsewhere
+/// 10..12 spare (stride)
 /// ```
 ///
 /// The CDF is cumulative and its last entry is exactly 1, so the
@@ -2091,8 +2092,22 @@ pub fn pack(cyl: &Cylinders, flame: &Flame, registry: &crate::variations::Variat
     if let Some(last) = cyl.words.len().checked_sub(1) {
         out[last * WORD_FLOATS + 8] = 1.0;
     }
+    // **The table's own word count** (`ct_count`). The GPU buffer is
+    // reused while it is large enough, so past this table it holds the
+    // tail of a longer one drawn before, and a count read from its
+    // length searched those words too: the new plan's last words were
+    // never drawn -- the corner of a Heighway dragon at 5e12 left black
+    // after a zoom in from a plan of more words -- and the old plan's
+    // drawn in their place, where its own centre put them.
+    if !out.is_empty() {
+        out[COUNT_AT] = cyl.words.len() as f32;
+    }
     out
 }
+
+/// Where a composed table (`pack`) keeps its word count: word 0's
+/// first spare float. Exact in f32 to 2^24 words.
+pub const COUNT_AT: usize = 9;
 
 /// Pack the enumeration for a kernel that must REPLAY it.
 ///
@@ -3106,6 +3121,149 @@ mod gpu_tests {
         assert!(
             counts.len() > 1,
             "the sweep never changed the word count, so it never resized the buffer: {counts:?}"
+        );
+    }
+
+    /// **A smaller plan after a larger one draws its own words.** The
+    /// table's buffer is reused while it is large enough, and the
+    /// composed kernel counted its words from the buffer's length: after
+    /// a zoom in from a plan of 40 words to one of 32, it searched the old
+    /// plan's leftover eight too, the new plan's last two -- the view's
+    /// bottom-right corner -- were never drawn, and 6% of the draws went to
+    /// the old plan's words. Reported on a Heighway dragon at 5e12,
+    /// 958x873: that corner black in the app, drawn in an export.
+    ///
+    /// The app's sequence: one renderer draws the larger plan, then the
+    /// smaller one; a fresh renderer draws the smaller one alone. After
+    /// the larger plan, no more than noise of what the fresh render
+    /// lights may be dark, and no 16x16 block under 60% as bright.
+    /// Before the fix: 3,568 pixels and 20 blocks.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_smaller_plan_after_a_larger_one_draws_its_own_words() {
+        use crate::renderer::TargetingState as TS;
+        const W: u32 = 958;
+        const H: u32 = 873;
+        let dragon = |zoom: f32| -> FractalConfig {
+            let mut cfg = FractalConfig::default();
+            cfg.flame.transforms.clear();
+            for (m, colour, speed) in [
+                ([0.5f32, -0.5, 0.5, 0.5, 0.0, 0.0], 0.2f32, 0.7f32),
+                ([-0.5, -0.5, 0.5, -0.5, 1.0, 0.0], 0.8, 0.57),
+            ] {
+                let mut t = Transform::default();
+                (t.a, t.b, t.c, t.d, t.e, t.f) = (m[0], m[1], m[2], m[3], m[4], m[5]);
+                t.weight = 1.0;
+                t.color = colour;
+                t.color_speed = speed;
+                t.variations.clear();
+                t.variation_order.clear();
+                t.set_variation("linear", 1.0);
+                cfg.flame.transforms.push(t);
+            }
+            cfg.deterministic_rng = true;
+            cfg.levels_enabled = false;
+            cfg.cylinder_targeting = true;
+            cfg.cylinder_always = true;
+            cfg.zoom = zoom;
+            cfg.pan_x = 0.5;
+            cfg.pan_y = 0.25;
+            cfg
+        };
+        let (larger, smaller) = (dragon(3_276_796_600_000.0), dragon(4_915_195_000_000.0));
+        let (device, queue) = device();
+        let sync = |r: &mut crate::renderer::FlameRenderer, cfg: &FractalConfig| {
+            if r.sync_cylinders(&device, &queue, cfg) {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("reload") });
+                r.load_config(&device, &mut enc, &queue, cfg, &cfg.palette, 1, 0);
+                queue.submit(Some(enc.finish()));
+            }
+        };
+        let renderer = |cfg: &FractalConfig| {
+            let mut r = crate::renderer::FlameRenderer::with_palette_size(
+                &device,
+                &queue,
+                wgpu::TextureFormat::Rgba8Unorm,
+                W,
+                H,
+                &cfg.flame,
+                cfg.palette_size,
+            );
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("load") });
+            r.load_config(&device, &mut enc, &queue, cfg, &cfg.palette, 1, 0);
+            queue.submit(Some(enc.finish()));
+            sync(&mut r, cfg);
+            r
+        };
+        let draw = |r: &mut crate::renderer::FlameRenderer, cfg: &FractalConfig| -> Vec<u8> {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("reset") });
+            r.reset(&mut enc, &queue, 64, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, cfg.speed_factor);
+            queue.submit(Some(enc.finish()));
+            for _ in 0..40 {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
+                let n = r.compute_pass(
+                    &mut enc, &queue, &device, 256, 64, 0, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, 0.0, 0.0, 0.0, 0.0,
+                    0.0, 0.0, 0.0, cfg.speed_factor, true, false,
+                );
+                r.accumulate_pass(&mut enc, &queue, &device, n);
+                queue.submit(Some(enc.finish()));
+                let _ = device.poll(wgpu::PollType::wait_indefinitely());
+            }
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("tonemap") });
+            r.tonemap_pass(&queue, &mut enc);
+            queue.submit(Some(enc.finish()));
+            pollster::block_on(r.read_fractal_pixels(&device, &queue, false, [0.0, 0.0, 0.0])).expect("pixels").2
+        };
+        let words = |r: &crate::renderer::FlameRenderer| match r.targeting_state() {
+            TS::Active { words, .. } => *words,
+            s => panic!("no plan: {s:?}"),
+        };
+
+        let mut fresh = renderer(&smaller);
+        let want = draw(&mut fresh, &smaller);
+        let mut r = renderer(&larger);
+        let before = words(&r);
+        let _ = draw(&mut r, &larger);
+        sync(&mut r, &smaller);
+        let after = words(&r);
+        let got = draw(&mut r, &smaller);
+        assert!(before > after, "the first plan has {before} words, the second {after}: nothing was left over to find");
+
+        // Pixels dark after the larger plan that the fresh render lit, and
+        // 16x16 blocks it left at under 60% of the fresh render's mean
+        // brightness. Where the leftover words were drawn instead, a
+        // region is dark, speckled by whichever old words cross it.
+        let dark = |px: &[u8]| px[0].max(px[1]).max(px[2]) < 20;
+        let lum = |px: &[u8]| 0.299 * px[0] as f64 + 0.587 * px[1] as f64 + 0.114 * px[2] as f64;
+        let newly_dark = (0..(W * H) as usize).filter(|&i| dark(&got[4 * i..4 * i + 4]) && !dark(&want[4 * i..4 * i + 4])).count();
+        let (mut lit, mut dim) = (0usize, 0usize);
+        for by in 0..H / 16 {
+            for bx in 0..W / 16 {
+                let (mut lw, mut lg) = (0.0f64, 0.0f64);
+                for y in by * 16..by * 16 + 16 {
+                    for x in bx * 16..bx * 16 + 16 {
+                        let i = 4 * (y * W + x) as usize;
+                        lw += lum(&want[i..i + 4]);
+                        lg += lum(&got[i..i + 4]);
+                    }
+                }
+                if lw > 256.0 * 40.0 {
+                    lit += 1;
+                    if lg < 0.6 * lw {
+                        dim += 1;
+                    }
+                }
+            }
+        }
+        let _ = std::fs::create_dir_all("output/cylinder-gates");
+        let _ = image::save_buffer("output/cylinder-gates/smaller-after-larger.png", &got, W, H, image::ColorType::Rgba8);
+        println!(
+            "  {before} words, then {after}: {newly_dark} pixels dark that the fresh render lit, {dim} of its {lit} lit blocks under 60% as bright"
+        );
+        assert!(lit > 1000, "the fresh render lights only {lit} blocks: the gate judges nothing");
+        assert!(
+            newly_dark < 500 && dim == 0,
+            "after a larger plan, {newly_dark} pixels the fresh render lit are dark and {dim} blocks dimmed: its leftover words were searched"
         );
     }
 
@@ -5791,6 +5949,9 @@ mod tests {
             prev = v;
         }
         assert_eq!(prev, 1.0, "the CDF ends at {prev}, so a draw near one finds nothing");
+        // The table says how many words it holds, since the buffer
+        // it goes into can be longer (`COUNT_AT`).
+        assert_eq!(packed[COUNT_AT], cyl.words.len() as f32, "the table does not carry its word count");
         }
         // Six zooms, one to three words each, eight comparisons a word.
         assert!(checked >= 80, "only {checked} comparisons");

@@ -552,8 +552,14 @@ fn ct_block(i: u32) -> u32 {
 
 {{/if}}
 {{else}}
+// The table's own word count, in word 0's float 9 (`COUNT_AT` in
+// `scene::cylinder::pack`), not the buffer's length. The buffer is
+// reused while it is large enough, so past the table it holds the words
+// of a longer one drawn before; counted from the length, the search ran
+// into them, the new plan's last words were never drawn, and the old
+// plan's were drawn in their place. The length still bounds it.
 fn ct_count() -> u32 {
-    return arrayLength(&cylinders) / 12u;
+    return min(u32(cylinders[9]), arrayLength(&cylinders) / 12u);
 }
 {{/if}}
 
