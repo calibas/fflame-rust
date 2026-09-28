@@ -13,9 +13,11 @@ other platforms (macOS/Metal, Firefox) is planned for later.
 
 Status: **open**, **investigate** (measure before building), **done**.
 
-**Order of work (2026-09-28)**, from the review below, agreed: P3 step 1,
-P7, P8, P9, then C14, C13, C15. It replaces the 2026-09-23 priorities for
-these items; coverage-first decides what comes after them.
+**Order of work (2026-09-28)**, from the review below, agreed: P3 step 1
+(done 2026-09-28), P7, P8, P9, then C14, C13, C15. It replaces the
+2026-09-23 priorities for these items; coverage-first decides what comes
+after them. C16, a coverage gap P3's measurements found, is new and not
+yet placed in it.
 
 ---
 
@@ -74,7 +76,9 @@ redoes. Fusing a level into one submission (P4) might buy 1.5x. The big
 lever is the render's: at 1e7 julian-disc's plan has efficiency 0.014,
 98.6% of forced samples wasted, on words cut at the depth cap that hold
 95% of the draws and land nothing (P3). Fixing that is 10-70x at those
-depths.
+depths. (P3 step 1 measured less, 2026-09-28: 2.4-10x in the share of
+draws landing, 1.7-3.3x in the render's variance at 1e6-1e8. The cap's
+words do land, and that light is part of the picture; see P3.)
 
 **3. Cheating.** More exists than it looks: a 250 ms settle before
 planning, background planning while the old plan draws, a standby plan
@@ -300,7 +304,9 @@ and a sparse picture reads darker in the log tone map.
   go in a table section at `header[6]`.
 - **A costly blur word that read zero is replayed until it tells**
   (`landings`, up to 2^20 draws, within a `RENEWAL_REPLAYS` budget),
-  costliest first, with the shares taken again after each.
+  costliest first, with the shares taken again after each. (Widened in
+  P3 step 1, 2026-09-28, to every word kept with nothing landing, in
+  rounds, within `LONG_REPLAYS`; the counter is `Trace::negligible`.)
   - If nothing lands and the bound `prob · 3/k` is under 1% of the rest
     of the view, it is dropped as negligible (`Trace::renewal_dropped`).
   - Otherwise what landed sets its draw rate.
@@ -367,7 +373,8 @@ blurs** -- the plan below, with what building it found.
   so they keep the ordinary draw, at the floor of `sqrt(1/400)`: they
   are never replayed at length, since `2^20` replays of an 8-map word
   are past `RENEWAL_REPLAYS`. The untargeted picture there is nearly
-  empty too.
+  empty too. (P3 step 1 replays such words in rounds from 1,024, within
+  a larger budget; this view was not measured again.)
 
 **The plan it was built to (2026-09-26).**
 - *The region.* For a blur word `[B, u]`, the view's centre and a rim
@@ -1400,6 +1407,52 @@ factors come from the Jacobian (`jacobian2`, `hessian2` in
 (`the_generic_kernel_is_the_f64_kernel`, the registry gate) and the visual
 suite decide it. Do it when the next kernel is added, not before.
 
+### C16. Where the GPU planner is taken to resolve a view, it misjudges children -- open, measured (2026-09-28)
+
+Found measuring P3. `gpu_resolves` hands a view to the GPU planner's
+absolute f32 down to `GPU_PLAN_RADIUS` (2e-6), which 1280x720 at 1e6
+(radius 4.1e-6) clears. Its doc says the error there is a tenth of the
+radius, measured on grand-julian. The per-sample gate says the same f32,
+the render's plain replay, is off by a mean of 30 px at grand-julian 1e6,
+20 px at random1 and 70 px at julian-disc (worst 444 px, the view being
+1,468 px across).
+
+`where_the_gpu_planner_resolves_it_disagrees` runs the walk on the CPU's
+answers and puts every batch to the GPU planner too:
+
+| view | points that differ | over a pixel from the edge | jobs landing on the CPU, none on the GPU |
+|---|---|---|---|
+| julian-disc 1e5 at 0.75 | 0.12% | 19,021 | 55 of 101,237 |
+| julian-disc 1e6 at 0.75 | 1.2% | 189,915 | 701 of 87,955 |
+| julian-disc 1e6 at 0.25 | 0.37% | 197,587 | 1,046 of 278,765 |
+| grand-julian 1e6 at 0.75 | 3.7% | 136,376 | 310 of 17,267 |
+| random1 1e6 at 0.75 | 1.8% | 156,231 | 288 of 54,340 |
+
+A job that lands on the CPU and never on the GPU is a child the GPU
+walk measures as landing nothing, and drops where its region is unseen:
+a hole the chaos game cannot check at 1e6, where it lands no samples.
+Among them are words kept at the floor that the CPU lands 27-100 replays
+of 100 on, and the GPU none: julian-disc's `t1` arms in long runs of the
+near-neutral `t0`, 63-95 symbols, about 1e-7 of the mass each.
+
+[gpu-cylinder-planning.md](gpu-cylinder-planning.md) §14 recorded half
+of grand-julian's 1e6 words differing between the CPU's plan and the
+GPU's, and put it to the f32 ceiling. The gate there checks coverage
+only where the chaos game reaches, to 1e3.
+
+**Not yet measured:** whether the dropped children are visible -- a GPU
+plan's coverage against a CPU plan's at 1e5-1e6, sampling the CPU plan's
+words forward in f64.
+
+**The likely fix**, cheap: a lower bar for the offsets. The offset
+replays (P6) disagree with the CPU's on 11-26 points in 29-38M, over a
+pixel from the edge, at julian-disc 1e7-1e8. Setting `GPU_PLAN_RADIUS`
+near the zoom where the plain replay's mean error reaches a pixel (1e4
+at julian-disc: 0.7 px) sends 1e5-1e6 there. The offsets plan 1e7 in
+4.4 s, where the GPU planner plans 1e6 in 3.5 s. Gates: this test's
+counts near zero at 1e5-1e6; coverage against the CPU's plan; plan
+times.
+
 ---
 
 ## Performance
@@ -1501,7 +1554,7 @@ root again.
   a zoomed-in sub-view, and how often. It is statistical, so on its own
   it cannot rule out holes; it can seed the walk, or order it.
 
-### P3. julian-disc plans are large and inefficient -- open, planned (2026-09-27)
+### P3. julian-disc plans are large and inefficient -- step 1 done (2026-09-28); step 2 open
 
 Complete, but they force many more words than the view needs. C3's
 hidden pieces made them less efficient: 80k words at efficiency 0.14
@@ -1547,7 +1600,9 @@ offset replays past it).** julian-disc at the gate's point:
 | 1e7 | 4.2 s | 49,761 | 0.014 | 90 | 0.954 |
 | 1e8 | 5.1 s | 48,165 | 0.045 | 69 | 0.614 |
 
-Every unmeasured word is 96 symbols long: `MAX_DEPTH`. The walk reaches
+The unmeasured words holding that mass are 96 symbols long: `MAX_DEPTH`.
+(Corrected 2026-09-28, when this read "every unmeasured word": lighter
+ones are 33-95 symbols, forced at the floor.) The walk reaches
 the cap with nodes whose images are still far larger than the view --
 julian-disc's dominant map is nearly neutral there -- and keeps them
 whole (`last`), landing nothing measurable. At 1e7 they take 95% of the
@@ -1582,6 +1637,104 @@ alone, so the references were dropped at 1e6 (cap 160), 1e8, and 1e7
    table (records packed by length with an offset index, not one stride;
    the shaders read a word's record through it), and plan time kept
    inside the budget (8-25 s measured).
+
+**Step 1, built (2026-09-28).** C2b's rule, widened from a blur's word to
+every word the walk kept with nothing landing (the end of `walk_disc`):
+
+- **Replayed at length, in rounds, on the CPU in f64**: 1,024 replays
+  (`PROBE_FIRST`), then four times as many each round, while a word has
+  fewer than 8 landings (`PROBE_HITS`) and the words not yet told draw
+  over 1% of the plan's draws together (`PROBE_SHARE`), costliest first;
+  within 64M map applications (`LONG_REPLAYS`; 8M on the web, planning
+  on one thread). A word without a blur stops at the sample's 100k
+  points, since past it the replays repeat. The CPU, whatever the
+  evaluator, because of C16.
+- **Drawn at the square root of its landing rate** (`Cylinder::draw`), and
+  its efficiency the rate the long replays read.
+- **Dropped where none landed**, if those words' bounds, `prob · 3/k`,
+  fit together in 1% of the light the rest of the plan puts in the view.
+  While they do not, the largest bounds get more replays; with the budget
+  spent, the costliest drop first, each whose bound still fits. Taken the
+  least bound first, specks fill the room and a grazing blob, 97% of the
+  draws, stays.
+- `RENEWAL_REPLAYS` became `LONG_REPLAYS`, and `Trace::renewal_dropped`
+  became `Trace::negligible`, with `negligible_mass`, `probed` and
+  `probe_steps`.
+- **A draw rate is used only with its weight** (`Cylinders::weights_fit`).
+  The table packs each word's `1 / draw` only where it fits, and a plan
+  whose weights did not fit was still drawn at `prob · draw`: its rarely
+  drawn words as much too dim. Now such a plan is drawn at its
+  probabilities, and its tone map told so. Latent since C2b; reachable
+  near 330k words at the depth cap.
+
+**Results.** `what_the_draw_rates_buy`, julian-disc at the gate's point
+(0.75), 1280x720, on the app's path; before is `ede62d45`. Variance is
+the render's, summed over the view, per draw, over the light squared:
+`(Σ p·draw)(Σ p·e/draw) / (Σ p·e)²`, 1 where every draw lands.
+
+| zoom | draws landing | variance per draw | replayed at length | dropped (share of the mass) | plan time |
+|---|---|---|---|---|---|
+| 1e2 | 0.567 -> 0.598 | 1.76 -> 1.69 (1.05x) | 3 words, 0.3M map steps | none | 1.7 -> 1.7-1.9 s |
+| 1e4 | 0.473 -> 0.501 | 2.11 -> 2.00 (1.06x) | 1, 0.1M | 1 (5.5%) | 2.1 -> 2.1-2.2 s |
+| 1e6 | 0.188 -> 0.489 | 5.33 -> 2.11 (2.5x) | 6, 0.9M | 5 (52%) | 3.5 -> 3.3-3.5 s |
+| 1e7 | 0.016 -> 0.164 | 62.1 -> 18.8 (3.3x) | 18, 3.2M | 9 (0.6%) | 5.0 -> 4.4-4.6 s |
+| 1e8 | 0.046 -> 0.110 | 21.8 -> 13.1 (1.7x) | 4, 2.8M | none | 5.2 -> 5.6 s |
+
+The light each plan puts in the view agrees to 0.2% at every zoom.
+
+Less than the review's 10-70x, because the cap's words do land: one
+replay in a few hundred to a few thousand, or none. At 1e7 the one word
+holding 94% of the mass lands 31 of 16,384 replays, 13% of the light the
+rest of the plan delivers. Drawn at the square root of that rate it
+still takes a share of the draws, and each of its landings deposits
+heavily. The rest of the waste at 1e7-1e8 is in the words the walk
+measured, drawn at their probability.
+
+The blur flames change too, the rule being C2b's:
+
+| view | draws landing | variance per draw |
+|---|---|---|
+| true Grand Julian 1e3 | 0.805 -> 0.819 | 1.28 -> 1.25 |
+| true Grand Julian 1e5 | 0.001 -> 0.042 | 1,086 -> 24.8 (44x) |
+| true Grand Julian 1e7 | 0.0000 -> 0.0000 | 888,394 -> 21,714 (41x) |
+| free-pie3D 1e3 (6 conditional words, read loosely) | 0.753 -> 0.879 | 1.33 -> 1.14 |
+| bipolar-elliptic-splits1 1e4 at 0.7 | 0.233 -> 0.316 | 4.99 -> 3.69 |
+| grand-julian, random1 1e4 | unchanged | unchanged |
+
+In the targeted-against-untargeted gate the true Grand Julian now lights
+7,833 of 9,216 pixels at 1e5 (2,868 before) and 446 at 1e7 (29), at the
+gate's iterations. Its deep plans spend the whole budget (+0.5 s) and are
+still nearly all blob: at 1e7 the blob's words land about 3 samples in 10^8,
+past what replays can tell or bound. That is C2b's open item, the
+conditional draw for `bubble` with a `pre_blur`.
+
+**Measured, not built: every word at the square root of its rate.** For
+the words the walk measured too, from their 100-400 replays: 1.26x (1e2),
+1.38x (1e4), 1.25x (1e6), 1.33x (1e7) and 1.86x (1e8) more in the summed
+variance. Not built: the sum hides where the noise goes -- a low-rate
+word deposits heavily in the pixels it lights, and the log tone map shows
+the dim ones -- and a rate read from 100 replays is coarse, one landing
+being 1%. It needs a per-pixel noise gate first.
+
+**Gates (2026-09-28), all passing:**
+
+- New, `a_targeted_julian_disc_render_is_the_untargeted_render`: at 1e2
+  brightness 0.140 against 0.134, overlap 0.902 (0.905 before); 1e3-1e4
+  too sparse to compare.
+- `a_grazing_blob_does_not_take_the_draws`: draws landing 0.93 at all
+  four views (0.89-0.90 before). It now compares the light the plans put in
+  the view, not their mass: which of the blur words landing nothing get
+  replayed and dropped depends on the view (at 1080x1055 the blob's
+  replays come first), so the masses differ by those words, 7%, and the
+  light by under 1%.
+- Targeted against untargeted: grand-julian, the true Grand Julian, the
+  free blurs, the finals, the gasket. Completeness: tailed flames, the
+  image of infinity (CPU and GPU), free blurs, finals, the plotted final,
+  GPU against CPU on grand-julian (coverage 1.000). The offset replays
+  against the CPU's, and the per-sample gate. The conditional draw;
+  juliascope and elliptic-splits walked. `release.py check`, and the
+  scene module's 200 unit tests with `a_draw_rate_is_used_only_with_its_weight`
+  new.
 
 ### P4. Keep-or-carry on the GPU -- open (optional)
 

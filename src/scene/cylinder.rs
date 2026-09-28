@@ -461,14 +461,35 @@ impl Cylinders {
     /// S)` and deposits `1 / draw_w`, so each draw deposits `1 / S` of
     /// what an unweighted draw would, on average, and the tone map is
     /// told the render did `N / (mass · S)` iterations. 1 when every word
-    /// is drawn at its probability.
+    /// is drawn at its probability -- and where the replay table has no
+    /// room for the weights (`weights_fit`).
     pub fn draw_scale(&self) -> f64 {
+        if !self.weights_fit() {
+            return 1.0;
+        }
         let s: f64 = self.words.iter().map(|w| w.prob * w.draw).sum();
         if self.mass > 0.0 && s > 0.0 {
             s / self.mass
         } else {
             1.0
         }
+    }
+
+    /// **Whether the replay table holds the words' draw weights**
+    /// (`pack_words`): the `1 / draw` each sample deposits, and the
+    /// conditional draws' blocks. Where it would not, every word is drawn
+    /// at its probability, whole, and deposits 1 -- less efficient, the
+    /// same picture. Drawn at `prob · draw` without the weights, a word
+    /// drawn rarely would be as much too dim. Since tracker P3 any word
+    /// can be drawn so, not only a blur's.
+    pub fn weights_fit(&self) -> bool {
+        if !self.words.iter().any(|c| c.draw != 1.0 || c.cond.is_some()) {
+            return true;
+        }
+        let longest = self.words.iter().map(|c| c.word.len()).max().unwrap_or(0);
+        let cond_len: usize = self.words.iter().filter_map(|c| c.cond.as_ref()).map(|k| COND_HEAD + COND_PIECE * k.pieces.len()).sum();
+        let conds = self.words.iter().filter(|c| c.cond.is_some()).count();
+        weights_fit_for(self.words.len(), longest, cond_len, conds)
     }
 
     /// How much work one plotted sample costs against the unbiased
@@ -2114,8 +2135,11 @@ pub fn pack_words(cyl: &Cylinders, flame: &Flame) -> Vec<f32> {
     out[1] = cyl.words.len() as f32;
 
     let mut acc = 0.0f64;
-    // Drawn at `prob · draw`, not `prob` (`Cylinder::draw`).
-    let drawn: f64 = cyl.words.iter().map(|c| c.prob * c.draw).sum();
+    // Drawn at `prob · draw`, not `prob` (`Cylinder::draw`) -- where the
+    // weights that make up for it fit (`Cylinders::weights_fit`).
+    let weighted = cyl.weights_fit();
+    let draw = |c: &Cylinder| if weighted { c.draw } else { 1.0 };
+    let drawn: f64 = cyl.words.iter().map(|c| c.prob * draw(c)).sum();
     for (w, c) in cyl.words.iter().enumerate() {
         let mut h_prod = 1.0f64;
         let mut g_acc = 0.0f64;
@@ -2127,7 +2151,7 @@ pub fn pack_words(cyl: &Cylinders, flame: &Flame) -> Vec<f32> {
             g_acc = g_acc * h + g;
             h_prod *= h;
         }
-        acc += c.prob * c.draw / drawn.max(f64::MIN_POSITIVE);
+        acc += c.prob * draw(c) / drawn.max(f64::MIN_POSITIVE);
         let base = HEADER_FLOATS + w * stride;
         out[base] = acc as f32;
         out[base + 1] = h_prod as f32;
@@ -2192,7 +2216,8 @@ pub fn pack_words(cyl: &Cylinders, flame: &Flame) -> Vec<f32> {
     // phi span, density, full, 0]` (`header.wgsl`'s `ct_conditional`).
     let cond_len: usize = cyl.words.iter().filter_map(|c| c.cond.as_ref()).map(|k| COND_HEAD + COND_PIECE * k.pieces.len()).sum();
     let conds = cyl.words.iter().filter(|c| c.cond.is_some()).count();
-    if cyl.words.iter().any(|c| c.draw != 1.0 || c.cond.is_some()) && out.len() + cyl.words.len() + cond_len + conds + 1 < TABLE_FLOATS {
+    if weighted && cyl.words.iter().any(|c| c.draw != 1.0 || c.cond.is_some()) {
+        debug_assert!(out.len() + cyl.words.len() + cond_len + conds + 1 < TABLE_FLOATS);
         let at = at_even(&mut out) as usize;
         out[6] = at as f32;
         out.extend(cyl.words.iter().map(|c| (1.0 / c.draw.max(f64::MIN_POSITIVE)) as f32));
@@ -2249,6 +2274,15 @@ pub const COND_PIECE: usize = 12;
 
 /// Floats before the first word of a replay table: see [`pack_words`].
 pub const HEADER_FLOATS: usize = 8;
+
+/// [`Cylinders::weights_fit`] for a plan of `words` words, the longest
+/// `longest` symbols, with conditional blocks of `cond_len` floats in all,
+/// `conds` of them: the words' records, the weights (padded to an even
+/// start) and each block (padded likewise) under [`TABLE_FLOATS`].
+fn weights_fit_for(words: usize, longest: usize, cond_len: usize, conds: usize) -> bool {
+    let stride = ((4 + longest) + 3) / 4 * 4;
+    HEADER_FLOATS + words * stride + 1 + words + cond_len + conds + 1 < TABLE_FLOATS
+}
 
 /// **The most floats a replay table holds** (`pack_words`): 2^25, 128 MiB
 /// -- WebGPU's and wgpu's default `max_storage_buffer_binding_size`, which
@@ -3651,6 +3685,17 @@ mod gpu_tests {
     #[ignore = "needs a GPU and reads output/flame-zoom"]
     fn a_targeted_grand_julian_render_is_the_untargeted_render() {
         targeted_against_untargeted("grand-julian", &[1e2, 1e4, 1e6]);
+    }
+
+    /// **julian-disc, its words drawn by what lands** (tracker P3): a word
+    /// the walk kept with nothing landing is replayed at length and drawn
+    /// at the square root of its landing rate, each sample depositing the
+    /// inverse. The same picture, as bright, where the untargeted render
+    /// is dense enough to say.
+    #[test]
+    #[ignore = "needs a GPU and reads output/flame-zoom"]
+    fn a_targeted_julian_disc_render_is_the_untargeted_render() {
+        targeted_against_untargeted("julian-disc", &[1e2, 1e3, 1e4]);
     }
 
     /// **The true Grand Julian** (tracker item C2): the same comparison
@@ -5299,6 +5344,44 @@ mod tests {
         t.variation_order.clear();
         t.set_variation("linear", 1.0);
         t
+    }
+
+    /// **A word's draw rate is used only with its weight** (tracker P3,
+    /// `Cylinders::weights_fit`). A word drawn at `prob · draw` deposits
+    /// `1 / draw`; drawn so without the weight, it is as much too dim. At
+    /// the depth cap a word's record is 100 floats, so the weights stop
+    /// fitting near 330k words; a plan that large is drawn by probability
+    /// alone. A small one keeps its rates and its weights.
+    #[test]
+    fn a_draw_rate_is_used_only_with_its_weight() {
+        assert!(weights_fit_for(330_000, MAX_DEPTH, 0, 0));
+        assert!(!weights_fit_for(333_000, MAX_DEPTH, 0, 0));
+        let w = |sym: u32, draw: f64| Cylinder { word: vec![sym], prob: 0.5, centre: [0.0; 2], radius: 1.0, seeds: Vec::new(), eff: 1.0, draw, cond: None };
+        let plan = Cylinders {
+            words: vec![w(0, 1.0), w(1, 0.25)],
+            mass: 1.0,
+            lost: 0.0,
+            sampling_leak: 0.0,
+            timed_out: false,
+            efficiency: 1.0,
+            depth: 1,
+            composable: false,
+            view_centre: [0.0; 2],
+            refs: Vec::new(),
+            offset_rows: Vec::new(),
+            final_rows: Vec::new(),
+        };
+        assert!(plan.weights_fit());
+        assert!((plan.draw_scale() - 0.625).abs() < 1e-12);
+        let f = flame_of(vec![affine(0.5, 0.0, 0.0, 0.5, 0.0, 0.0, 1.0), affine(0.5, 0.0, 0.0, 0.5, 0.5, 0.0, 1.0)]);
+        let t = pack_words(&plan, &f);
+        let stride = t[0] as usize;
+        // Drawn one to a quarter: the first word's share of the draws is 0.8.
+        assert!((t[HEADER_FLOATS] - 0.8).abs() < 1e-6, "cdf {}", t[HEADER_FLOATS]);
+        assert!((t[HEADER_FLOATS + stride] - 1.0).abs() < 1e-6);
+        let at = t[6] as usize;
+        assert!(at > 0, "no weights");
+        assert_eq!((t[at], t[at + 1]), (1.0, 4.0));
     }
 
     fn flame_of(ts: Vec<Transform>) -> Flame {
