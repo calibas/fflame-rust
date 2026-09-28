@@ -360,6 +360,18 @@ pub struct EvalJob<'a> {
     pub points: &'a [u32],
 }
 
+/// **Step 3's replays, with their nodes' references** (tracker P6). A
+/// child's word is its symbol, then its node's word, so from its second
+/// step its orbit is its node's, and the node's references serve all its
+/// children: the child runs its symbol and the node's steps before `m`
+/// absolutely, then the node's chains in offsets. `nodes[i]` is node `i`'s
+/// word and references (`None`: none were made -- a shallow word, or no
+/// seed that lands), and `job_node[j]` the node job `j`'s word extends.
+pub struct ReplayRefs<'a> {
+    pub nodes: Vec<(&'a [u32], Option<WordRefs>)>,
+    pub job_node: Vec<usize>,
+}
+
 /// **Answers the walk's one question, in batches**: apply each job's
 /// word to each of its sample points -- does the result land in the
 /// view? One byte per point, in job order, 1 where it lands.
@@ -393,6 +405,19 @@ pub trait Evaluate {
     /// an evaluator that only answers `lands` plans exactly as before.
     fn gather_lands(&mut self, b: &Backward, view: View, jobs: &[EvalJob], gathers: &[GatherJob]) -> (Vec<u8>, Vec<Gathered>) {
         gather_on_cpu(self, b, view, jobs, gathers)
+    }
+
+    /// Whether [`Self::replays`] reads its jobs' references: the walk
+    /// makes them only then (tracker P6).
+    fn replay_refs(&self) -> bool {
+        false
+    }
+
+    /// Step 3's replays: `lands`, unless the evaluator replays in offsets
+    /// from `refs` (tracker P6).
+    fn replays(&mut self, b: &Backward, view: View, jobs: &[EvalJob], refs: &ReplayRefs) -> Vec<u8> {
+        let _ = refs;
+        self.lands(b, view, jobs)
     }
 }
 
@@ -506,6 +531,17 @@ pub trait AskEval {
         jobs: &'a [EvalJob<'a>],
         gathers: &'a [GatherJob<'a>],
     ) -> Ask<'a, (Vec<u8>, Vec<Gathered>)>;
+
+    /// See [`Evaluate::replay_refs`].
+    fn replay_refs(&self) -> bool {
+        false
+    }
+
+    /// See [`Evaluate::replays`].
+    fn replays<'a>(&'a mut self, b: &'a Backward, view: View, jobs: &'a [EvalJob<'a>], refs: &'a ReplayRefs<'a>) -> Ask<'a, Vec<u8>> {
+        let _ = refs;
+        self.lands(b, view, jobs)
+    }
 }
 
 /// A synchronous [`Evaluate`], answered at once.
@@ -529,6 +565,15 @@ impl AskEval for Blocking<'_> {
         gathers: &'a [GatherJob<'a>],
     ) -> Ask<'a, (Vec<u8>, Vec<Gathered>)> {
         let r = self.0.gather_lands(b, view, jobs, gathers);
+        Box::pin(std::future::ready(r))
+    }
+
+    fn replay_refs(&self) -> bool {
+        self.0.replay_refs()
+    }
+
+    fn replays<'a>(&'a mut self, b: &'a Backward, view: View, jobs: &'a [EvalJob<'a>], refs: &'a ReplayRefs<'a>) -> Ask<'a, Vec<u8>> {
+        let r = self.0.replays(b, view, jobs, refs);
         Box::pin(std::future::ready(r))
     }
 }
@@ -879,6 +924,19 @@ struct Open {
     /// The cells its children gather over: `expand_cells` of the node's
     /// own, once per node rather than once per child.
     seen: Vec<Cell>,
+}
+
+/// The references a level's replays read (`ReplayRefs`), for the children
+/// `pick` takes, in the order the jobs list them: none where the walk made
+/// none.
+fn replay_refs_of<'o>(opens: &'o [Open], node_refs: &[Option<WordRefs>], pick: &dyn Fn(&Child) -> bool) -> ReplayRefs<'o> {
+    if node_refs.is_empty() {
+        return ReplayRefs { nodes: Vec::new(), job_node: Vec::new() };
+    }
+    ReplayRefs {
+        nodes: opens.iter().zip(node_refs).map(|(o, r)| (o.node.word.as_slice(), r.clone())).collect(),
+        job_node: opens.iter().enumerate().flat_map(|(oi, o)| o.children.iter().filter(|c| pick(c)).map(move |_| oi)).collect(),
+    }
 }
 
 /// What expanding one node produced. See `Backward::expand_level`.
@@ -2183,222 +2241,241 @@ impl Backward {
     /// last offset steps -- a word may need offsets for them alone, where
     /// the absolute plot would round.
     pub async fn reference_chains(&self, cyl: &Cylinders, view: View, disc: View, slicer: &Slicer) -> Vec<Option<WordRefs>> {
+        let through = self.finals.is_some();
+        map_sliced(&cyl.words, |w: &Cylinder| self.word_refs(&w.word, w.cond.as_deref(), &w.seeds, view, disc, through), slicer).await
+    }
+
+    /// **One word's references** (`reference_chains`): the word run in f64
+    /// from its `seeds`, `m` chosen, and the chains clustered. Through the
+    /// finals where `through_finals` -- a plan's, whose end is the plotted
+    /// point -- or not: the walk's own replays, whose view is the disc the
+    /// finals pull the plot back to (P6).
+    pub(crate) fn word_refs(
+        &self,
+        word: &[u32],
+        cond: Option<&Conditional>,
+        seeds: &[[f64; 2]],
+        view: View,
+        disc: View,
+        through_finals: bool,
+    ) -> Option<WordRefs> {
         use crate::scene::forward_delta::map_forward_jacobian;
         let c = view.centre;
         let r = view.radius;
-        let one = |w: &Cylinder| -> Option<WordRefs> {
-            let syms: Vec<(&IfsMap<Map2>, u32)> = w.word.iter().map(|&s| self.sym_map(s)).collect::<Option<_>>()?;
-            let n = syms.len();
-            // **A word drawn conditionally** (`Conditional`) samples as
-            // an offset from a piece's centre: one reference per piece,
-            // from it, in the pieces' order, and every step past the blur
-            // in offsets.
-            if let Some(cond) = &w.cond {
-                let chains = cond
-                    .pieces
-                    .iter()
-                    .map(|p| {
-                        let mut z = vec![p.centre, p.centre];
-                        for (m, arm) in &syms[1..] {
-                            let y = forward(m, *z.last().expect("seeded"), *arm);
-                            if !finite(y) {
-                                return None;
-                            }
-                            z.push(y);
+        let finals = if through_finals { self.finals.as_ref() } else { None };
+        let plot = |z: [f64; 2]| if through_finals { self.plotted(z) } else { z };
+        {
+            let syms: Vec<(&IfsMap<Map2>, u32)> = word.iter().map(|&s| self.sym_map(s)).collect::<Option<_>>()?;
+        let n = syms.len();
+        // **A word drawn conditionally** (`Conditional`) samples as
+        // an offset from a piece's centre: one reference per piece,
+        // from it, in the pieces' order, and every step past the blur
+        // in offsets.
+        if let Some(cond) = cond {
+            let chains = cond
+                .pieces
+                .iter()
+                .map(|p| {
+                    let mut z = vec![p.centre, p.centre];
+                    for (m, arm) in &syms[1..] {
+                        let y = forward(m, *z.last().expect("seeded"), *arm);
+                        if !finite(y) {
+                            return None;
                         }
-                        let e = self.plotted(z[n]);
-                        Some(RefChain {
-                            bases: z[1..n].to_vec(),
-                            finals: self.finals.as_ref().map_or_else(Vec::new, |f| f.positions(z[n])),
-                            end: [e[0] - c[0], e[1] - c[1]],
-                        })
-                    })
-                    .collect::<Option<Vec<_>>>()?;
-                return Some(WordRefs { m: 1, chains });
-            }
-            // A word a renewal starts is followed from AFTER it: its seeds
-            // are points of the rest's region (`close`), the blur is the
-            // shader's alone, and `m` is never before it.
-            // **An offset cannot cross a blur**: the sample draws its own, and
-            // the reference another. So `m` is never before the last blurred
-            // symbol's successor. A word carried through a blur (C7) has its
-            // seeds at its start, and they are taken past the blur by a draw
-            // of it; a renewal's word, kept by geometry, has them after its
-            // blur already (`close`).
-            let blurred = |s: u32| self.alphabet.iter().any(|a| a.sym == s && a.renewal.is_some());
-            let start = w.word.iter().rposition(|&s| blurred(s)).map_or(0, |j| j + 1);
-            let seeded_at = match self.alphabet.iter().position(|a| a.sym == w.word[0]) {
-                Some(ai) if self.renewal_here(ai, disc.plotted).is_some() => 1,
-                _ => 0,
-            };
-            // A seed's orbit through the word, if it lands in the view.
-            let orbit = |x0: [f64; 2]| -> Option<Vec<[f64; 2]>> {
-                let x0 = if start > seeded_at { self.forward_along(&w.word[seeded_at..start], x0)? } else { x0 };
-                let mut z = Vec::with_capacity(n + 1);
-                for _ in 0..=start {
-                    z.push(x0);
-                }
-                for (m, arm) in &syms[start..] {
-                    let y = forward(m, *z.last().expect("seeded"), *arm);
-                    if !finite(y) {
-                        return None;
+                        z.push(y);
                     }
-                    z.push(y);
-                }
-                let end = self.plotted(z[n]);
-                ((end[0] - c[0]).hypot(end[1] - c[1]) <= 2.0 * r).then_some(z)
-            };
-            // The first seed that lands is the reference; the others are
-            // run only where they could find another piece (below).
-            let (first, primary_orbit) = w.seeds.iter().enumerate().find_map(|(i, &x0)| orbit(x0).map(|z| (i, z)))?;
-            let mut orbits = vec![primary_orbit];
-            // A map many-to-one going forward -- bubble, disc, cylinder, or
-            // splits where its steps overlap -- puts a word's region in
-            // several pieces, and makes its samples' paths differ from the
-            // reference's: through another turn of a cylinder, or away from
-            // the fold the reference runs by. Measured, no word of the
-            // corpus had one among its offset steps
-            // (`what_the_references_hold`), and running every seed through
-            // every word doubled a web plan; so the other seeds are run only
-            // where such a map is.
-            let many = |from: usize| {
-                syms[from..].iter().any(|(map, _)| match &map.forward {
-                    Map2::Nonlinear(k) => matches!(k.kernel, Kernel::Bubble | Kernel::Disc | Kernel::Splits { .. } | Kernel::Cylinder { .. }),
-                    Map2::Sum(k) => matches!(k.kernel, Kernel::Bubble | Kernel::Disc),
-                    _ => false,
-                })
-            };
-            if many(start) {
-                orbits.extend(w.seeds[first + 1..].iter().filter_map(|&x0| orbit(x0)));
-            }
-            // Back along an orbit: the Jacobian of the steps from k to the
-            // end, `P_k = J_{n-1}···J_k`, from the exact forward forms (so
-            // without cancellation). Its largest singular value carries an
-            // error at k to the end; its smallest, the view back to k, which
-            // is how big the region is there.
-            let along = |z: &[[f64; 2]]| -> Option<(Vec<f64>, Vec<f64>)> {
-                let mut amp = vec![f64::INFINITY; n + 1];
-                let mut size = vec![f64::INFINITY; n + 1];
-                amp[n] = 1.0;
-                size[n] = r;
-                let mut prod = [[1.0f64, 0.0], [0.0, 1.0]];
-                // Past the word, the finals: an error at its end reaches the
-                // plot through their Jacobian.
-                if let Some(f) = &self.finals {
-                    prod = f.jacobian(z[n])?;
-                    let (smin, smax) = crate::scene::ifs_analysis::singular_values_of(prod);
-                    if !(smax.is_finite() && smin > 0.0) {
-                        return None;
-                    }
-                    amp[n] = smax;
-                    size[n] = r / smin;
-                }
-                for k in (start..n).rev() {
-                    let (map, arm) = syms[k];
-                    let Some(j) = map_forward_jacobian(&map.forward, z[k], arm) else { break };
-                    prod = [
-                        [prod[0][0] * j[0][0] + prod[0][1] * j[1][0], prod[0][0] * j[0][1] + prod[0][1] * j[1][1]],
-                        [prod[1][0] * j[0][0] + prod[1][1] * j[1][0], prod[1][0] * j[0][1] + prod[1][1] * j[1][1]],
-                    ];
-                    let (smin, smax) = crate::scene::ifs_analysis::singular_values_of(prod);
-                    if !(smax.is_finite() && smin > 0.0) {
-                        break;
-                    }
-                    amp[k] = smax;
-                    size[k] = r / smin;
-                }
-                Some((amp, size))
-            };
-            let (amp, size) = along(&orbits[0])?;
-            let others: Vec<(&[[f64; 2]], Vec<f64>)> =
-                orbits[1..].iter().filter_map(|z| along(z).map(|(a, _)| (z.as_slice(), a))).collect();
-            let amp_most = |k: usize| others.iter().map(|(_, a)| a[k]).fold(amp[k], f64::max);
-            let primary = &orbits[0];
-            // **Every absolute step must fit, along every path, not the
-            // last alone.** The replay runs the word absolutely to `m`, so
-            // each point before it carries its step's error to the end
-            // through `amp`. Where the maps contract, an earlier step's error
-            // shrinks on the way and the last one is the whole test -- but
-            // `julian` with a negative distance expands near its centre, and
-            // there an earlier error grows: the Grand JuliaN generator's
-            // flames were off by a pixel or two at 1e6 with `m` taken as the
-            // last step that fits. So `m` is where the first step fails to.
-            //
-            // And along every landed seed where the paths can differ (C6): a
-            // reference that runs by a cylinder's fold amplifies nothing,
-            // while a sample one turn away amplifies its first step's error
-            // by 0.26 -- measured, 0.15 px at 1e4 with `m` read off the
-            // reference alone.
-            let fits = |k: usize| {
-                let ok = |z: &[[f64; 2]], a: &[f64]| GPU_STEP_ERROR * z[k][0].hypot(z[k][1]) * a[k] <= PLOT_TOLERANCE * r;
-                ok(primary, &amp) && others.iter().all(|(z, a)| ok(z, a))
-            };
-            // Step 0 always fits: the free orbit's own error only picks a
-            // slightly different point of the attractor. (Carrying the
-            // whole word from its first point instead was measured worse:
-            // the region there is in more pieces still, farther apart.)
-            let lo = start.max(1);
-            let m = match (lo..=n).find(|&k| !fits(k)) {
-                Some(first) => first.saturating_sub(1).max(lo),
-                None => n,
-            };
-            // The finals applied to the absolute end, and the pan taken
-            // off their output, round at the size of that output.
-            let finals_fit = self.finals.is_none() || {
-                let e = self.plotted(primary[n]);
-                GPU_STEP_ERROR * e[0].hypot(e[1]) <= PLOT_TOLERANCE * r
-            };
-            if m == n && finals_fit {
-                return None;
-            }
-            // Another piece at `m` only past a many-to-one map there.
-            let merges = many(m);
-            let worst_m = amp_most(m);
-            // Two references are one cluster within four region sizes -- and,
-            // past a many-to-one map, within the distance an offset keeps
-            // the plot's tolerance along the worst path: near a fold the
-            // reference's region reads as huge while a seed one turn away
-            // is a different piece (C6).
-            let apart = if merges {
-                (4.0 * size[m]).min(PLOT_TOLERANCE * r / (GPU_STEP_ERROR * worst_m))
-            } else {
-                4.0 * size[m]
-            };
-            let cap = if merges { MAX_PIECE_CHAINS } else { MAX_CHAINS };
-            if !merges {
-                orbits.truncate(1);
-            }
-            // One reference per cluster at `m`, farthest first.
-            let mut chosen = vec![0usize];
-            while chosen.len() < cap {
-                let far = (0..orbits.len())
-                    .map(|j| {
-                        let d = chosen
-                            .iter()
-                            .map(|&i| (orbits[j][m][0] - orbits[i][m][0]).hypot(orbits[j][m][1] - orbits[i][m][1]))
-                            .fold(f64::INFINITY, f64::min);
-                        (j, d)
-                    })
-                    .max_by(|a, b| a.1.total_cmp(&b.1));
-                match far {
-                    Some((j, d)) if d > apart => chosen.push(j),
-                    _ => break,
-                }
-            }
-            let chains: Vec<RefChain> = chosen
-                .into_iter()
-                .map(|j| {
-                    let e = self.plotted(orbits[j][n]);
-                    RefChain {
-                        bases: orbits[j][m..n].to_vec(),
-                        finals: self.finals.as_ref().map_or_else(Vec::new, |f| f.positions(orbits[j][n])),
+                    let e = plot(z[n]);
+                    Some(RefChain {
+                        bases: z[1..n].to_vec(),
+                        finals: finals.map_or_else(Vec::new, |f| f.positions(z[n])),
                         end: [e[0] - c[0], e[1] - c[1]],
-                    }
+                    })
                 })
-                .collect();
-            Some(WordRefs { m, chains })
+                .collect::<Option<Vec<_>>>()?;
+            return Some(WordRefs { m: 1, chains });
+        }
+        // A word a renewal starts is followed from AFTER it: its seeds
+        // are points of the rest's region (`close`), the blur is the
+        // shader's alone, and `m` is never before it.
+        // **An offset cannot cross a blur**: the sample draws its own, and
+        // the reference another. So `m` is never before the last blurred
+        // symbol's successor. A word carried through a blur (C7) has its
+        // seeds at its start, and they are taken past the blur by a draw
+        // of it; a renewal's word, kept by geometry, has them after its
+        // blur already (`close`).
+        let blurred = |s: u32| self.alphabet.iter().any(|a| a.sym == s && a.renewal.is_some());
+        let start = word.iter().rposition(|&s| blurred(s)).map_or(0, |j| j + 1);
+        let seeded_at = match self.alphabet.iter().position(|a| a.sym == word[0]) {
+            Some(ai) if self.renewal_here(ai, disc.plotted).is_some() => 1,
+            _ => 0,
         };
-        map_sliced(&cyl.words, one, slicer).await
+        // A seed's orbit through the word, if it lands in the view.
+        let orbit = |x0: [f64; 2]| -> Option<Vec<[f64; 2]>> {
+            let x0 = if start > seeded_at { self.forward_along(&word[seeded_at..start], x0)? } else { x0 };
+            let mut z = Vec::with_capacity(n + 1);
+            for _ in 0..=start {
+                z.push(x0);
+            }
+            for (m, arm) in &syms[start..] {
+                let y = forward(m, *z.last().expect("seeded"), *arm);
+                if !finite(y) {
+                    return None;
+                }
+                z.push(y);
+            }
+            let end = plot(z[n]);
+            ((end[0] - c[0]).hypot(end[1] - c[1]) <= 2.0 * r).then_some(z)
+        };
+        // The first seed that lands is the reference; the others are
+        // run only where they could find another piece (below).
+        let (first, primary_orbit) = seeds.iter().enumerate().find_map(|(i, &x0)| orbit(x0).map(|z| (i, z)))?;
+        let mut orbits = vec![primary_orbit];
+        // A map many-to-one going forward -- bubble, disc, cylinder, or
+        // splits where its steps overlap -- puts a word's region in
+        // several pieces, and makes its samples' paths differ from the
+        // reference's: through another turn of a cylinder, or away from
+        // the fold the reference runs by. Measured, no word of the
+        // corpus had one among its offset steps
+        // (`what_the_references_hold`), and running every seed through
+        // every word doubled a web plan; so the other seeds are run only
+        // where such a map is.
+        let many = |from: usize| {
+            syms[from..].iter().any(|(map, _)| match &map.forward {
+                Map2::Nonlinear(k) => matches!(k.kernel, Kernel::Bubble | Kernel::Disc | Kernel::Splits { .. } | Kernel::Cylinder { .. }),
+                Map2::Sum(k) => matches!(k.kernel, Kernel::Bubble | Kernel::Disc),
+                _ => false,
+            })
+        };
+        if many(start) {
+            orbits.extend(seeds[first + 1..].iter().filter_map(|&x0| orbit(x0)));
+        }
+        // Back along an orbit: the Jacobian of the steps from k to the
+        // end, `P_k = J_{n-1}···J_k`, from the exact forward forms (so
+        // without cancellation). Its largest singular value carries an
+        // error at k to the end; its smallest, the view back to k, which
+        // is how big the region is there.
+        let along = |z: &[[f64; 2]]| -> Option<(Vec<f64>, Vec<f64>)> {
+            let mut amp = vec![f64::INFINITY; n + 1];
+            let mut size = vec![f64::INFINITY; n + 1];
+            amp[n] = 1.0;
+            size[n] = r;
+            let mut prod = [[1.0f64, 0.0], [0.0, 1.0]];
+            // Past the word, the finals: an error at its end reaches the
+            // plot through their Jacobian.
+            if let Some(f) = finals {
+                prod = f.jacobian(z[n])?;
+                let (smin, smax) = crate::scene::ifs_analysis::singular_values_of(prod);
+                if !(smax.is_finite() && smin > 0.0) {
+                    return None;
+                }
+                amp[n] = smax;
+                size[n] = r / smin;
+            }
+            for k in (start..n).rev() {
+                let (map, arm) = syms[k];
+                let Some(j) = map_forward_jacobian(&map.forward, z[k], arm) else { break };
+                prod = [
+                    [prod[0][0] * j[0][0] + prod[0][1] * j[1][0], prod[0][0] * j[0][1] + prod[0][1] * j[1][1]],
+                    [prod[1][0] * j[0][0] + prod[1][1] * j[1][0], prod[1][0] * j[0][1] + prod[1][1] * j[1][1]],
+                ];
+                let (smin, smax) = crate::scene::ifs_analysis::singular_values_of(prod);
+                if !(smax.is_finite() && smin > 0.0) {
+                    break;
+                }
+                amp[k] = smax;
+                size[k] = r / smin;
+            }
+            Some((amp, size))
+        };
+        let (amp, size) = along(&orbits[0])?;
+        let others: Vec<(&[[f64; 2]], Vec<f64>)> =
+            orbits[1..].iter().filter_map(|z| along(z).map(|(a, _)| (z.as_slice(), a))).collect();
+        let amp_most = |k: usize| others.iter().map(|(_, a)| a[k]).fold(amp[k], f64::max);
+        let primary = &orbits[0];
+        // **Every absolute step must fit, along every path, not the
+        // last alone.** The replay runs the word absolutely to `m`, so
+        // each point before it carries its step's error to the end
+        // through `amp`. Where the maps contract, an earlier step's error
+        // shrinks on the way and the last one is the whole test -- but
+        // `julian` with a negative distance expands near its centre, and
+        // there an earlier error grows: the Grand JuliaN generator's
+        // flames were off by a pixel or two at 1e6 with `m` taken as the
+        // last step that fits. So `m` is where the first step fails to.
+        //
+        // And along every landed seed where the paths can differ (C6): a
+        // reference that runs by a cylinder's fold amplifies nothing,
+        // while a sample one turn away amplifies its first step's error
+        // by 0.26 -- measured, 0.15 px at 1e4 with `m` read off the
+        // reference alone.
+        let fits = |k: usize| {
+            let ok = |z: &[[f64; 2]], a: &[f64]| GPU_STEP_ERROR * z[k][0].hypot(z[k][1]) * a[k] <= PLOT_TOLERANCE * r;
+            ok(primary, &amp) && others.iter().all(|(z, a)| ok(z, a))
+        };
+        // Step 0 always fits: the free orbit's own error only picks a
+        // slightly different point of the attractor. (Carrying the
+        // whole word from its first point instead was measured worse:
+        // the region there is in more pieces still, farther apart.)
+        let lo = start.max(1);
+        let m = match (lo..=n).find(|&k| !fits(k)) {
+            Some(first) => first.saturating_sub(1).max(lo),
+            None => n,
+        };
+        // The finals applied to the absolute end, and the pan taken
+        // off their output, round at the size of that output.
+        let finals_fit = finals.is_none() || {
+            let e = plot(primary[n]);
+            GPU_STEP_ERROR * e[0].hypot(e[1]) <= PLOT_TOLERANCE * r
+        };
+        if m == n && finals_fit {
+            return None;
+        }
+        // Another piece at `m` only past a many-to-one map there.
+        let merges = many(m);
+        let worst_m = amp_most(m);
+        // Two references are one cluster within four region sizes -- and,
+        // past a many-to-one map, within the distance an offset keeps
+        // the plot's tolerance along the worst path: near a fold the
+        // reference's region reads as huge while a seed one turn away
+        // is a different piece (C6).
+        let apart = if merges {
+            (4.0 * size[m]).min(PLOT_TOLERANCE * r / (GPU_STEP_ERROR * worst_m))
+        } else {
+            4.0 * size[m]
+        };
+        let cap = if merges { MAX_PIECE_CHAINS } else { MAX_CHAINS };
+        if !merges {
+            orbits.truncate(1);
+        }
+        // One reference per cluster at `m`, farthest first.
+        let mut chosen = vec![0usize];
+        while chosen.len() < cap {
+            let far = (0..orbits.len())
+                .map(|j| {
+                    let d = chosen
+                        .iter()
+                        .map(|&i| (orbits[j][m][0] - orbits[i][m][0]).hypot(orbits[j][m][1] - orbits[i][m][1]))
+                        .fold(f64::INFINITY, f64::min);
+                    (j, d)
+                })
+                .max_by(|a, b| a.1.total_cmp(&b.1));
+            match far {
+                Some((j, d)) if d > apart => chosen.push(j),
+                _ => break,
+            }
+        }
+        let chains: Vec<RefChain> = chosen
+            .into_iter()
+            .map(|j| {
+                let e = plot(orbits[j][n]);
+                RefChain {
+                    bases: orbits[j][m..n].to_vec(),
+                    finals: finals.map_or_else(Vec::new, |f| f.positions(orbits[j][n])),
+                    end: [e[0] - c[0], e[1] - c[1]],
+                }
+            })
+            .collect();
+        Some(WordRefs { m, chains })
+        }
     }
 
     pub fn sample(&self) -> &[[f64; 2]] {
@@ -3083,12 +3160,32 @@ impl Backward {
                 slicer.tick().await;
             }
         } else {
+            // **In offsets, where the evaluator asks** (tracker P6): each
+            // node's references, from its region's points, in the walk's
+            // view -- the disc, so not through the finals.
+            let node_refs: Vec<Option<WordRefs>> = if eval.replay_refs() && !view.plotted {
+                map_sliced(
+                    &opens,
+                    |o| {
+                        if o.node.word.is_empty() {
+                            return None;
+                        }
+                        let seeds = self.seeds_from(&[], Some(&o.node.pts));
+                        self.word_refs(&o.node.word, None, &seeds, view, view, false)
+                    },
+                    slicer,
+                )
+                .await
+            } else {
+                Vec::new()
+            };
             let answers = {
                 let jobs: Vec<EvalJob> = opens
                     .iter()
                     .flat_map(|o| o.children.iter().map(|c| EvalJob { word: &c.word, points: &self.verify_first }))
                     .collect();
-                eval.lands(self, view, &jobs).await
+                let refs = replay_refs_of(&opens, &node_refs, &|_| true);
+                eval.replays(self, view, &jobs, &refs).await
             };
             for (k, c) in opens.iter_mut().flat_map(|o| o.children.iter_mut()).enumerate() {
                 let first = &answers[k * n1..(k + 1) * n1];
@@ -3103,7 +3200,8 @@ impl Backward {
                     .filter(|c| in_band(c))
                     .map(|c| EvalJob { word: &c.word, points: &self.verify_rest })
                     .collect();
-                eval.lands(self, view, &jobs).await
+                let refs = replay_refs_of(&opens, &node_refs, &|c| in_band(c));
+                eval.replays(self, view, &jobs, &refs).await
             };
             let mut k = 0usize;
             for c in opens.iter_mut().flat_map(|o| o.children.iter_mut()) {
@@ -3789,6 +3887,17 @@ impl Backward {
                     log::debug!("{line}");
                 }
                 return r;
+            }
+        }
+        // **Past the GPU's precision** (tracker P6): the checks on the CPU,
+        // the replays on the GPU in offsets.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(gpu) = opts.gpu.filter(|_| !self.gpu_resolves(view)) {
+            let mut g = gpu.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(pg) = g.for_flame(flame, self) {
+                let mut eval = crate::scene::plan_gpu::OffsetReplays { gpu: pg, flame, on_gpu: 0, on_cpu: 0 };
+                let mut tr = Trace::default();
+                return self.plan_with_eval(view, &mut tr, opts, &mut eval);
             }
         }
         let _ = flame;
@@ -5409,6 +5518,116 @@ mod tests {
             }
         }
         println!("  worst 99th percentile anywhere: {worst_offsets:.4} px");
+    }
+
+    /// **The replays in offsets are the CPU's** (tracker P6), past the
+    /// view radius the GPU planner's absolute f32 resolves. Part 1: the
+    /// walk runs on the CPU's answers, and every replay it asks is also run
+    /// on the GPU in offsets from its node's references; a point on which
+    /// they disagree must end within a pixel of the view's edge, in f64 --
+    /// where f32 rounding decides, not the arithmetic. Part 2: the view
+    /// planned with the offset replays against the CPU's plan: coverage,
+    /// words and time.
+    #[test]
+    #[ignore = "needs a GPU and reads output/flame-zoom"]
+    fn the_offset_replays_are_the_cpus() {
+        use crate::scene::plan_gpu::OffsetReplays;
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let (device, queue) = test_device();
+
+        struct Both<'g> {
+            off: OffsetReplays<'g>,
+            points: usize,
+            differ: usize,
+            wide: usize,
+            worst_px: f64,
+            px: f64,
+        }
+        impl Evaluate for Both<'_> {
+            fn lands(&mut self, b: &Backward, view: View, jobs: &[EvalJob]) -> Vec<u8> {
+                CpuEval.lands(b, view, jobs)
+            }
+            fn replay_refs(&self) -> bool {
+                true
+            }
+            fn replays(&mut self, b: &Backward, view: View, jobs: &[EvalJob], refs: &ReplayRefs) -> Vec<u8> {
+                let cpu = CpuEval.lands(b, view, jobs);
+                let gpu = self.off.replays(b, view, jobs, refs);
+                let mut at = 0usize;
+                for j in jobs {
+                    for &i in j.points {
+                        if cpu[at] != gpu[at] {
+                            self.differ += 1;
+                            // A blurred symbol draws its own on either side.
+                            let blurred = j.word.iter().any(|&s| b.alphabet.iter().any(|a| a.sym == s && a.renewal.is_some()));
+                            if !blurred {
+                                let edge = b.forward_along(j.word, b.sample[i as usize]).map_or(f64::INFINITY, |y| {
+                                    ((y[0] - view.centre[0]).hypot(y[1] - view.centre[1]) - view.radius).abs() / self.px
+                                });
+                                if edge > 1.0 {
+                                    self.wide += 1;
+                                    self.worst_px = self.worst_px.max(edge);
+                                }
+                            }
+                        }
+                        at += 1;
+                    }
+                }
+                self.points += at;
+                cpu
+            }
+        }
+
+        let cases: &[(&str, &[f64])] = &[
+            ("julian-disc", &[1e7, 1e8]),
+            ("random1", &[1e8]),
+            ("grand-julian", &[1e8]),
+            ("cylinder-turns-julian", &[1e6]),
+        ];
+        for &(name, zooms) in cases {
+            let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")) else { continue };
+            let cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
+            let b = Backward::read(&cfg.flame, reg).expect("reads");
+            let mut gpu = crate::scene::plan_gpu::PlanGpu::new(&device, &queue, &cfg.flame, b.sample());
+            gpu.attach(&b);
+            for &z in zooms {
+                let view = View::of(z, b.plotted(b.sample_point(0.75)), 1280, 720);
+                if b.gpu_resolves(view) {
+                    println!("  {name} {z:.0e}: the GPU resolves it; not this gate's");
+                    continue;
+                }
+                let px = view.radius / (1280f64.hypot(720.0) / 2.0);
+                let mut both = Both { off: OffsetReplays { gpu: &mut gpu, flame: &cfg.flame, on_gpu: 0, on_cpu: 0 }, points: 0, differ: 0, wide: 0, worst_px: 0.0, px };
+                let t0 = std::time::Instant::now();
+                let cpu_plan = b.plan_eval(view, PlanOptions::default(), &mut both).expect("a plan");
+                let both_ms = t0.elapsed().as_secs_f64() * 1e3;
+                println!(
+                    "  {name} {z:.0e}: {} replayed points ({} jobs on the GPU, {} on the CPU), {} differ, {} of them over a pixel from the edge (worst {:.1} px) [{both_ms:.0} ms]",
+                    both.points, both.off.on_gpu, both.off.on_cpu, both.differ, both.wide, both.worst_px
+                );
+                assert!(both.off.on_gpu > 0, "{name} {z:.0e}: no replay ran in offsets");
+                assert!(both.wide * 10_000 <= both.points, "{name} {z:.0e}: {} of {} replayed points disagree away from the edge", both.wide, both.points);
+
+                // Part 2: planned with the offset replays.
+                let t0 = std::time::Instant::now();
+                let cpu_again = b.plan_eval(view, PlanOptions::default(), &mut CpuEval).expect("a CPU plan");
+                let cpu_ms = t0.elapsed().as_secs_f64() * 1e3;
+                let mut off = OffsetReplays { gpu: &mut gpu, flame: &cfg.flame, on_gpu: 0, on_cpu: 0 };
+                let t0 = std::time::Instant::now();
+                let off_plan = b.plan_eval(view, PlanOptions::default(), &mut off).expect("an offset plan");
+                let off_ms = t0.elapsed().as_secs_f64() * 1e3;
+                let (cc, oc) = (coverage(&b, &cpu_again, view, 1000), coverage(&b, &off_plan, view, 1000));
+                println!(
+                    "      CPU {cpu_ms:>6.0} ms, {:>6} words, eff {:.3}, timed out {}, coverage {cc:?} | offsets {off_ms:>6.0} ms, {:>6} words, eff {:.3}, timed out {}, coverage {oc:?} | {:.1}x",
+                    cpu_again.words.len(), cpu_again.efficiency, cpu_again.timed_out, off_plan.words.len(), off_plan.efficiency, off_plan.timed_out, cpu_ms / off_ms
+                );
+                let _ = cpu_plan;
+                if let (Some(cc), Some(oc)) = (cc, oc) {
+                    assert!(oc >= cc - 0.005, "{name} {z:.0e}: the offset plan covers {oc:.4} where the CPU's covers {cc:.4}");
+                }
+            }
+        }
     }
 
     /// What the analysis and the walk say of the true Grand Julian

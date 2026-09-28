@@ -172,6 +172,9 @@ pub struct PlanGpu {
     eview: wgpu::Buffer,
     /// The flame's group-0 buffers, held so the bind group stays valid.
     _flame_buffers: Vec<wgpu::Buffer>,
+    /// `plan_offsets` (tracker P6), built the first time it is asked for:
+    /// its pipeline, its group-2 layout, and an empty group 1.
+    offsets: Option<(wgpu::ComputePipeline, wgpu::BindGroupLayout, wgpu::BindGroup)>,
 }
 
 /// The most workgroups in one dispatch dimension, WebGPU's default.
@@ -298,6 +301,125 @@ fn dz_endpoints(@builtin(global_invocation_id) gid: vec3<u32>) {
         let _ = device.poll(wgpu::PollType::wait_indefinitely());
         let got: Vec<[f32; 4]> = bytemuck::cast_slice::<u8, [f32; 4]>(&stage.slice(..).get_mapped_range()).to_vec();
         got
+    }
+
+    /// **Replays in offsets** (tracker P6): for each job `[record, block,
+    /// symbol, _]` of the replay `table` (`cylinder::pack_words`) and each
+    /// of `points` (sample indices), the job's first symbol and its node's
+    /// steps before `m` absolutely, then the node's chains by `ct_offsets`,
+    /// the render's own arithmetic -- and whether the end lands within
+    /// `radius` of the table's centre. One bit a point, `points.len()`
+    /// rounded up to 32 a job.
+    pub fn offset_replays(&mut self, flame: &Flame, table: &[f32], jobs: &[[u32; 4]], points: &[u32], radius: f32) -> Vec<u32> {
+        let words = points.len().div_ceil(32);
+        if jobs.is_empty() || points.is_empty() {
+            return vec![0; jobs.len() * words];
+        }
+        let t0 = web_time::Instant::now();
+        if self.offsets.is_none() {
+            self.offsets = Some(self.build_offsets(flame));
+        }
+        let (pipe, layout2, g1) = self.offsets.as_ref().expect("built");
+        let device = &self.device;
+        let st = wgpu::BufferUsages::STORAGE;
+        let init = |bytes: &[u8], usage| device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: bytes, usage });
+        let table_buf = init(bytemuck::cast_slice(table), st);
+        let mut data: Vec<u32> = points.to_vec();
+        data.extend(jobs.iter().flatten());
+        let data_buf = init(bytemuck::cast_slice(&data), st);
+        let total = jobs.len() * points.len();
+        let groups = total.div_ceil(64) as u32;
+        let x = groups.min(MAX_GROUPS);
+        let y = groups.div_ceil(x);
+        let row = x * 64;
+        let view: [u32; 4] = [radius.to_bits(), points.len() as u32, jobs.len() as u32, row];
+        let view_buf = init(bytemuck::cast_slice(&view), wgpu::BufferUsages::UNIFORM);
+        let bytes = (jobs.len() * words * 4) as u64;
+        let out = device.create_buffer(&wgpu::BufferDescriptor { label: Some("Plan Offsets Out"), size: bytes, usage: st | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false });
+        let stage = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Plan Offsets Stage"),
+            size: bytes,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let g2 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Plan Offsets"),
+            layout: layout2,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: table_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: data_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: self.points.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: out.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: view_buf.as_entire_binding() },
+            ],
+        });
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Plan Offsets") });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("Plan Offsets"), timestamp_writes: None });
+            pass.set_pipeline(pipe);
+            pass.set_bind_group(0, &self.group0, &[]);
+            pass.set_bind_group(1, g1, &[]);
+            pass.set_bind_group(2, &g2, &[]);
+            pass.dispatch_workgroups(x, y, 1);
+        }
+        enc.copy_buffer_to_buffer(&out, 0, &stage, 0, bytes);
+        let pack = t0.elapsed().as_secs_f64() * 1e3;
+        self.queue.submit(Some(enc.finish()));
+        stage.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        let wait = t0.elapsed().as_secs_f64() * 1e3 - pack;
+        let got: Vec<u32> = bytemuck::cast_slice::<u8, u32>(&stage.slice(..).get_mapped_range()).to_vec();
+        self.totals.pack += pack;
+        self.totals.wait += wait;
+        self.batches += 1;
+        got
+    }
+
+    /// `plan_offsets`' pipeline: the planner's shader, the offset replay's
+    /// forms (`replay_delta.wgsl`) and the kernel, in group 2.
+    fn build_offsets(&self, flame: &Flame) -> (wgpu::ComputePipeline, wgpu::BindGroupLayout, wgpu::BindGroup) {
+        let device = &self.device;
+        let builder = crate::shader_builder_v2::ShaderBuilder::new(crate::variations::global_registry().clone());
+        let src = format!(
+            "{}\n{}\n{}",
+            builder.build_plan_eval(flame),
+            include_str!("../../shaders/core/replay_delta.wgsl"),
+            include_str!("../../shaders/core/plan_offsets.wgsl"),
+        );
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("Plan Offsets"), source: wgpu::ShaderSource::Wgsl(src.into()) });
+        let storage = |binding: u32, read_only: bool| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only }, has_dynamic_offset: false, min_binding_size: None },
+            count: None,
+        };
+        let uniform = wgpu::BindGroupLayoutEntry {
+            binding: 4,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+            count: None,
+        };
+        let layout0 = self.pipeline.get_bind_group_layout(0);
+        let empty = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("Plan Offsets Empty"), entries: &[] });
+        let layout2 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Plan Offsets Batch"),
+            entries: &[storage(0, true), storage(1, true), storage(2, true), storage(3, false), uniform],
+        });
+        let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Plan Offsets"),
+            bind_group_layouts: &[Some(&layout0), Some(&empty), Some(&layout2)],
+            immediate_size: 0,
+        });
+        let pipe = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Plan Offsets"),
+            layout: Some(&pl),
+            module: &module,
+            entry_point: Some("plan_offsets"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let g1 = device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &empty, entries: &[] });
+        (pipe, layout2, g1)
     }
 
     /// Build the kernel for `flame` and upload `sample` (in f32).
@@ -525,6 +647,7 @@ fn dz_endpoints(@builtin(global_invocation_id) gid: vec3<u32>) {
             batches: 0,
             points_len: sample.len(),
             _flame_buffers: vec![t_buf, v_buf, p_buf, a_buf, m_buf],
+            offsets: None,
         }
     }
 
@@ -1048,6 +1171,101 @@ impl Evaluate for PlanGpu {
         }
         assert_eq!(b.sample().len(), self.points_len, "a plan's GPU evaluator is for another sample");
         self.fused(view, jobs, gathers, b)
+    }
+}
+
+/// **Past the GPU's precision, the replays in offsets** (tracker P6): the
+/// planner's evaluator where the GPU does not resolve the view. The
+/// checks and gathers are the CPU's, in f64, as they were; step 3's
+/// replays run on the GPU from their nodes' references (`ReplayRefs`), in
+/// the render's offset arithmetic, and on the CPU for a child whose node
+/// has none.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct OffsetReplays<'g> {
+    pub gpu: &'g mut PlanGpu,
+    pub flame: &'g Flame,
+    /// Replay jobs run on the GPU in offsets, and on the CPU for want of
+    /// references.
+    pub on_gpu: usize,
+    pub on_cpu: usize,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Evaluate for OffsetReplays<'_> {
+    fn lands(&mut self, b: &Backward, view: View, jobs: &[EvalJob]) -> Vec<u8> {
+        crate::scene::backward::CpuEval.lands(b, view, jobs)
+    }
+
+    fn replay_refs(&self) -> bool {
+        true
+    }
+
+    fn replays(&mut self, b: &Backward, view: View, jobs: &[EvalJob], refs: &crate::scene::backward::ReplayRefs) -> Vec<u8> {
+        use crate::scene::backward::CpuEval;
+        use crate::scene::cylinder::{pack_words, Cylinder, Cylinders, HEADER_FLOATS};
+        // Step 3 asks every child the same points; anything else, and a
+        // level without references, is the CPU's.
+        let Some(points) = jobs.first().map(|j| j.points) else { return Vec::new() };
+        if refs.job_node.len() != jobs.len() || jobs.iter().any(|j| !std::ptr::eq(j.points, points)) {
+            return CpuEval.lands(b, view, jobs);
+        }
+        assert_eq!(b.sample().len(), self.gpu.points_len, "a plan's GPU evaluator is for another sample");
+        // The nodes with references, as the replay table's words.
+        let mut slot = vec![usize::MAX; refs.nodes.len()];
+        let mut words = Vec::new();
+        let mut node_refs = Vec::new();
+        for (i, (word, r)) in refs.nodes.iter().enumerate() {
+            if let Some(r) = r {
+                slot[i] = words.len();
+                words.push(Cylinder { word: word.to_vec(), prob: 1.0, centre: view.centre, radius: view.radius, seeds: Vec::new(), eff: 1.0, draw: 1.0, cond: None });
+                node_refs.push(Some(r.clone()));
+            }
+        }
+        let depth = words.iter().map(|w| w.word.len()).max().unwrap_or(0);
+        let cyl = Cylinders {
+            words,
+            mass: 1.0,
+            lost: 0.0,
+            sampling_leak: 0.0,
+            timed_out: false,
+            efficiency: 1.0,
+            depth,
+            composable: false,
+            view_centre: view.centre,
+            refs: node_refs,
+            offset_rows: b.forward_rows(),
+            final_rows: Vec::new(),
+        };
+        let table = pack_words(&cyl, self.flame);
+        let (stride, blocks) = (table[0] as usize, table[3] as usize);
+        let on_gpu = |j: usize| blocks != 0 && slot[refs.job_node[j]] != usize::MAX;
+        let gpu_jobs: Vec<[u32; 4]> = (0..jobs.len())
+            .filter(|&j| on_gpu(j))
+            .map(|j| {
+                let k = slot[refs.job_node[j]];
+                [(HEADER_FLOATS + k * stride) as u32, table[blocks + k] as u32, jobs[j].word[0], 0]
+            })
+            .collect();
+        let bits = self.gpu.offset_replays(self.flame, &table, &gpu_jobs, points, view.radius as f32);
+        let cpu_jobs: Vec<EvalJob> = (0..jobs.len()).filter(|&j| !on_gpu(j)).map(|j| EvalJob { word: jobs[j].word, points }).collect();
+        self.on_gpu += gpu_jobs.len();
+        self.on_cpu += cpu_jobs.len();
+        let cpu = if cpu_jobs.is_empty() { Vec::new() } else { CpuEval.lands(b, view, &cpu_jobs) };
+        let per = points.len().div_ceil(32);
+        let n = points.len();
+        let (mut g, mut c) = (0usize, 0usize);
+        let mut out = Vec::with_capacity(jobs.len() * n);
+        for j in 0..jobs.len() {
+            if on_gpu(j) {
+                let w = &bits[g * per..(g + 1) * per];
+                out.extend((0..n).map(|k| ((w[k / 32] >> (k % 32)) & 1) as u8));
+                g += 1;
+            } else {
+                out.extend_from_slice(&cpu[c * n..(c + 1) * n]);
+                c += 1;
+            }
+        }
+        out
     }
 }
 
