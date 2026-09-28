@@ -1359,7 +1359,7 @@ root again.
   a zoomed-in sub-view, and how often. It is statistical, so on its own
   it cannot rule out holes; it can seed the walk, or order it.
 
-### P3. julian-disc plans are large and inefficient -- open
+### P3. julian-disc plans are large and inefficient -- open, planned (2026-09-27)
 
 Complete, but they force many more words than the view needs. C3's
 hidden pieces made them less efficient: 80k words at efficiency 0.14
@@ -1393,6 +1393,53 @@ unmeasured when time ran out hold 58% of its mass (69 words, 67%, at
 They land nothing measurable, and the plan's efficiency is 0.156 (0.034
 at 1e8) for it. A walk that got further in the same time would refine
 them.
+
+**Where the waste is now (2026-09-27, the app's path: the GPU planner,
+offset replays past it).** julian-disc at the gate's point:
+
+| zoom | time | words | efficiency | unmeasured words | their share of the mass |
+|---|---|---|---|---|---|
+| 1e2 | 1.7 s | 68,451 | 0.567 | 86 | 0.059 |
+| 1e4 | 1.7 s | 59,165 | 0.473 | 49 | 0.056 |
+| 1e6 | 3.1 s | 100,484 | 0.187 | 150 | 0.624 |
+| 1e7 | 4.2 s | 49,761 | 0.014 | 90 | 0.954 |
+| 1e8 | 5.1 s | 48,165 | 0.045 | 69 | 0.614 |
+
+Every unmeasured word is 96 symbols long: `MAX_DEPTH`. The walk reaches
+the cap with nodes whose images are still far larger than the view --
+julian-disc's dominant map is nearly neutral there -- and keeps them
+whole (`last`), landing nothing measurable. At 1e7 they take 95% of the
+draws. A deeper cap resolves them (`DBG_DEPTH` measured, reverted):
+
+| zoom | cap 96 | cap 160 | cap 256 |
+|---|---|---|---|
+| 1e6 | 0.187, 3.1 s | 0.498, 8.0 s, 254k words | 0.564, 8.4 s |
+| 1e7 | 0.014, 4.2 s | 0.100, 13.5 s | 0.376, 22 s, out of time |
+| 1e8 | 0.045, 5.1 s | 0.147, 25 s, out of time | the same |
+
+-- but the replay table breaks first: its records share one stride, the
+longest word's, and 254k records at 164 floats are past `TABLE_FLOATS`
+alone, so the references were dropped at 1e6 (cap 160), 1e8, and 1e7
+(cap 256): those plans would render wrong at depth.
+
+**The plan (2026-09-27), in order.**
+
+1. **The cap's words measured and drawn by what lands** -- C2b's rule for
+   an unmeasured blur word, which exists (`RENEWAL_REPLAYS`, after the
+   walk): a word the walk kept unmeasured at the cap, taking a large share
+   of the draws, is replayed as long as it takes to tell; drawn at the
+   square root of its landing rate (`Cylinder::draw`, each sample
+   depositing `1 / draw`, so the picture is the same), or dropped where
+   none landing bounds it under 1% of what the rest of the plan puts in
+   the view. No word longer, no table larger. Gates: efficiency and
+   speedup on julian-disc 1e4-1e8; targeted against untargeted where the
+   reference is dense (brightness equal: the draw rates are unbiased); the
+   per-sample gate; coverage where it can be judged.
+2. **Then, if the plan is still short, a deeper cap** where the walk
+   reaches 96 with unmeasured words -- which needs, first, a dense replay
+   table (records packed by length with an offset index, not one stride;
+   the shaders read a word's record through it), and plan time kept
+   inside the budget (8-25 s measured).
 
 ### P4. Keep-or-carry on the GPU -- open (optional)
 
