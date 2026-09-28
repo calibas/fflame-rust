@@ -220,9 +220,20 @@ pub const WIDEN_FROM: usize = 64;
 pub const ALT_FROM: usize = 16;
 pub const ALT_CAP: usize = 32;
 
-/// Map applications a plan may spend replaying its costliest blur words
-/// (see the walk's end): about a quarter of a second on one core.
-pub const RENEWAL_REPLAYS: usize = 4 << 20;
+/// **The long replays** (see the walk's end, tracker P3): a word kept
+/// with nothing landing is replayed in rounds -- `PROBE_FIRST` replays,
+/// then four times as many each round -- until `PROBE_HITS` of them land,
+/// the words still unmeasured draw under `PROBE_SHARE` of the plan's
+/// draws together, or `LONG_REPLAYS` map applications are spent: a third
+/// to half a second on twelve threads (the true Grand Julian's deep plans
+/// spend it all, +0.5 s). The web, planning on one thread, spends an
+/// eighth of that.
+pub const LONG_REPLAYS: usize = if cfg!(target_arch = "wasm32") { 8 << 20 } else { 64 << 20 };
+pub const PROBE_FIRST: usize = 1024;
+pub const PROBE_HITS: usize = 8;
+pub const PROBE_SHARE: f64 = 0.01;
+/// Replays per task, so the web ticks between them.
+pub const PROBE_SLICE: usize = 4096;
 
 /// A word that reached the depth cap without fitting is kept only if
 /// this fraction of its replayed samples land in the frame.
@@ -676,9 +687,15 @@ pub struct Trace {
     pub unrefined: usize,
     /// Children never made because their piece was removed.
     pub removed: usize,
-    /// Blur words dropped as negligible: no landing in a long replay,
-    /// and a bound under 1% of the rest of the view.
-    pub renewal_dropped: usize,
+    /// Words dropped as negligible: no landing in their long replays,
+    /// and bounds together under 1% of the rest of the view. And their
+    /// probability.
+    pub negligible: usize,
+    pub negligible_mass: f64,
+    /// Words kept with nothing landing, replayed at length, and the map
+    /// applications that took (see the walk's end).
+    pub probed: usize,
+    pub probe_steps: usize,
     /// Children with near misses found by looking closer (`rescue`).
     pub rescued: usize,
     /// Children carried from points of a piece the sample does not show
@@ -998,7 +1015,10 @@ impl Trace {
         self.forced += o.forced;
         self.unrefined += o.unrefined;
         self.removed += o.removed;
-        self.renewal_dropped += o.renewal_dropped;
+        self.negligible += o.negligible;
+        self.negligible_mass += o.negligible_mass;
+        self.probed += o.probed;
+        self.probe_steps += o.probe_steps;
         self.rescued += o.rescued;
         self.hidden += o.hidden;
         self.t_seed += o.t_seed;
@@ -2615,16 +2635,33 @@ impl Backward {
     }
 
     /// How many of `k` independent replays of `word` land in the view:
-    /// sample points in turn, each with its own blur draw. For a blur's
-    /// word, whose landings the walk's few hundred replays cannot resolve.
+    /// sample points in turn, each with its own blur draw. For a word
+    /// whose landings the walk's few hundred replays cannot resolve.
     fn landings(&self, word: &[u32], view: View, k: usize) -> usize {
-        let n = self.natural.max(1);
-        (0..k)
+        self.landings_in(word, view, 0..k)
+    }
+
+    /// [`Self::landings`] for replays `range` of the same sequence, so a
+    /// word's replays can be extended, or split between threads.
+    fn landings_in(&self, word: &[u32], view: View, range: std::ops::Range<usize>) -> usize {
+        let n = self.natural.max(1) as u64;
+        range
             .filter(|&i| {
-                self.forward_along_salted(word, self.sample[(i * 7919) % n], i as u64 + 1)
-                    .is_some_and(|y| self.in_view(view, y))
+                // In u64: 2^20 replays times the stride is past a 32-bit usize.
+                let at = (i as u64 * 7919 % n) as usize;
+                self.forward_along_salted(word, self.sample[at], i as u64 + 1).is_some_and(|y| self.in_view(view, y))
             })
             .count()
+    }
+
+    /// Whether a map of `word` draws a blur: its replays from one point
+    /// then differ, and more of them than the sample has points still
+    /// tell something.
+    fn blurred(&self, word: &[u32]) -> bool {
+        word.iter().any(|&s| {
+            let t = sym_transform(s) as usize;
+            self.transforms.iter().any(|x| x.index == t && x.blur.is_some())
+        })
     }
 
     /// Whether `x`'s forward image along `word` lands in the view.
@@ -4216,25 +4253,35 @@ impl Backward {
             slicer.tick().await;
         }
 
-        // **A blur's word that would take the draws for nothing** (C2b).
-        // Kept by geometry, a blur's word can carry most of the plan's
-        // probability while landing almost never: the true Grand Julian
-        // at zoom 1559 keeps its blob because the view's DISC grazes the
-        // blob's by 2e-6 -- outside the frame, which no blob point of
-        // four million reached -- and that word was 99.9% of the plan.
-        // Its few hundred replays read zero, which floors its draw rate
-        // at 1/20 and still hands it 97% of the draws.
+        // **A word kept with nothing landing, drawn by what does** (C2b,
+        // tracker P3). The walk keeps a word it stops at -- the depth cap,
+        // the floor, a blur's word kept by geometry -- even when none of
+        // its replays landed: none in a hundred is under one part in a
+        // hundred, not none. Drawn at its probability, such a word can
+        // take most of the draws and land almost never. julian-disc
+        // reaches the depth cap with words its nearly neutral map has not
+        // narrowed to the view: 62-95% of the plan at 1e6-1e8, landing
+        // one replay in a few hundred to a few thousand, or none. The
+        // true Grand Julian at zoom 1559
+        // keeps a blob whose disc grazes the view's by 2e-6, outside the
+        // frame: 99.9% of the plan, landing never.
         //
-        // So such a word -- zero landings, a large share of the draws --
-        // is replayed as often as it takes to tell. None landing in `k`
-        // bounds its share of the view below `prob · 3/k`; under 1% of
-        // what the rest of the plan puts there, it is dropped as
-        // negligible. Otherwise what landed sets its draw rate.
+        // So such a word is replayed at length, in rounds, the costliest
+        // first: a thousand replays, then four times as many each round,
+        // while it has not landed often enough to tell its rate
+        // (`PROBE_HITS`) and the words still unmeasured draw more than
+        // `PROBE_SHARE` of the plan's draws together. What landed sets its
+        // draw rate: the square root of its landing rate, as a blur's word
+        // is drawn (`Cylinder::draw`; each sample deposits `1 / draw`, so
+        // the picture is the same). None landing in `k` bounds a word's
+        // share of the view below `prob · 3/k`; words whose bounds come to
+        // under 1% of what the rest of the plan puts there, together, are
+        // dropped as negligible.
         //
-        // The costliest first, and the shares taken again after each:
-        // a word that looked cheap beside a grazing blob is costly once
-        // the blob is gone, and taken in one pass the plans either side
-        // of the graze kept different words.
+        // In f64 on the CPU, whatever the evaluator: at julian-disc's 1e6
+        // view, where the GPU planner's absolute f32 is taken to resolve
+        // the view, it lands none of 100 replays of words the CPU lands
+        // all 100 of (tracker C16).
         {
             let draw_floor = 1.0 / (self.verify_first.len() + self.verify_rest.len()).max(1) as f64;
             let rest: f64 = merged.iter().map(|(c, e)| c.prob * e).sum();
@@ -4249,37 +4296,141 @@ impl Backward {
                     1.0
                 }
             };
-            let unmeasured = |c: &Cylinder, e: f64| self.renewal_first(&c.word) && !(e > 0.0) && c.draw == 1.0 && c.cond.is_none();
-            let mut budget = RENEWAL_REPLAYS;
+            // Past the sample's size, a word without a blur replays the
+            // same points again.
+            let most = |c: &Cylinder| if self.blurred(&c.word) { 1 << 20 } else { self.natural.max(1) };
+            let rate_of = |hits: usize, k: usize| ((hits as f64).max(0.5) / k as f64).sqrt().min(1.0);
+            // (the word, its replays that landed, its replays)
+            let mut probes: Vec<(usize, usize, usize)> = merged
+                .iter()
+                .enumerate()
+                .filter(|(_, (c, e))| !(*e > 0.0) && c.draw == 1.0 && c.cond.is_none())
+                .map(|(i, _)| (i, 0, 0))
+                .collect();
+            let room = 0.01 * rest;
+            // A word none of whose replays landed, and the bound on its
+            // share of the view that gives.
+            let none = |p: &(usize, usize, usize)| p.1 == 0 && p.2 > 0;
+            let bound_at = |p: &(usize, usize, usize), k: usize| merged[p.0].0.prob * 3.0 / k.max(1) as f64;
+            let mut budget = LONG_REPLAYS;
             loop {
-                let drawn: f64 = merged.iter().map(|(c, e)| c.prob * rate(c, *e)).sum();
-                let Some(i) = merged
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, (c, e))| unmeasured(c, *e) && c.prob * draw_floor.sqrt() > 0.05 * drawn)
-                    // The replays that could prove it negligible, if none
-                    // land -- within what is left of the budget.
-                    .filter(|(_, (c, _))| {
-                        let k = ((3.0 * c.prob / (0.01 * rest.max(f64::MIN_POSITIVE))).ceil() as usize).clamp(1 << 14, 1 << 20);
-                        k * c.word.len() <= budget
-                    })
-                    .max_by(|x, y| x.1 .0.prob.total_cmp(&y.1 .0.prob))
-                    .map(|(i, _)| i)
-                else {
-                    break;
-                };
-                let c = &merged[i].0;
-                let k = ((3.0 * c.prob / (0.01 * rest.max(f64::MIN_POSITIVE))).ceil() as usize).clamp(1 << 14, 1 << 20);
-                budget -= k * c.word.len();
-                let hits = self.landings(&c.word, view, k);
-                slicer.tick().await;
-                if hits == 0 && c.prob * 3.0 / (k as f64) < 0.01 * rest {
-                    tr.renewal_dropped += 1;
-                    merged.remove(i);
-                    continue;
+                let mut rates: Vec<f64> = merged.iter().map(|(c, e)| rate(c, *e)).collect();
+                for &(i, hits, k) in &probes {
+                    if k > 0 {
+                        rates[i] = rate_of(hits, k);
+                    }
                 }
-                merged[i].0.draw = (hits as f64 / k as f64).max(0.5 / k as f64).sqrt();
+                let drawn: f64 = merged.iter().zip(&rates).map(|((c, _), r)| c.prob * r).sum();
+                let cost = |j: usize| merged[probes[j].0].0.prob * rates[probes[j].0];
+                // Their bounds fit the room together: they are all dropped.
+                let fits = probes.iter().filter(|p| none(p)).map(|p| bound_at(p, p.2)).sum::<f64>() <= room;
+                // This round's replays for a word: to four times as many.
+                let next = |j: usize| {
+                    let (i, _, k) = probes[j];
+                    let to = (4 * k).clamp(PROBE_FIRST, most(&merged[i].0));
+                    (to, (to - k) * merged[i].0.word.len().max(1))
+                };
+                let mut to_of: Vec<Option<usize>> = vec![None; probes.len()];
+                // **For the draws**: a word not yet told -- too few landed,
+                // more replays possible, not settled as negligible -- the
+                // costliest first, until those left draw under `PROBE_SHARE`
+                // of the plan's together.
+                let mut open: Vec<usize> = (0..probes.len())
+                    .filter(|&j| {
+                        let p = &probes[j];
+                        p.1 < PROBE_HITS && p.2 < most(&merged[p.0].0) && !(none(p) && fits)
+                    })
+                    .collect();
+                open.sort_by(|&x, &y| cost(y).total_cmp(&cost(x)).then(x.cmp(&y)));
+                let mut left: f64 = open.iter().map(|&j| cost(j)).sum();
+                for &j in &open {
+                    if left <= PROBE_SHARE * drawn {
+                        break;
+                    }
+                    let (to, steps) = next(j);
+                    if steps <= budget {
+                        budget -= steps;
+                        left -= cost(j);
+                        to_of[j] = Some(to);
+                    }
+                }
+                // **For the room**: while the bounds of the words none of
+                // whose replays landed do not fit it together, the largest
+                // first, as far as this round would bring them if none land
+                // -- so a word dropped where no blob grazes the view is
+                // dropped where one does too, rather than left without room.
+                if !fits {
+                    let mut total: f64 = (0..probes.len())
+                        .filter(|&j| none(&probes[j]))
+                        .map(|j| bound_at(&probes[j], to_of[j].unwrap_or(probes[j].2)))
+                        .sum();
+                    let mut by_bound: Vec<usize> = (0..probes.len())
+                        .filter(|&j| none(&probes[j]) && to_of[j].is_none() && probes[j].2 < most(&merged[probes[j].0].0))
+                        .collect();
+                    by_bound.sort_by(|&x, &y| bound_at(&probes[y], probes[y].2).total_cmp(&bound_at(&probes[x], probes[x].2)).then(x.cmp(&y)));
+                    for j in by_bound {
+                        if total <= room {
+                            break;
+                        }
+                        let (to, steps) = next(j);
+                        if steps <= budget {
+                            budget -= steps;
+                            total -= bound_at(&probes[j], probes[j].2) - bound_at(&probes[j], to);
+                            to_of[j] = Some(to);
+                        }
+                    }
+                }
+                let round: Vec<(usize, usize, usize)> = (0..probes.len()).filter_map(|j| to_of[j].map(|to| (j, probes[j].2, to))).collect();
+                if round.is_empty() {
+                    break;
+                }
+                tr.probe_steps += round.iter().map(|&(j, from, to)| (to - from) * merged[probes[j].0].0.word.len().max(1)).sum::<usize>();
+                let tasks: Vec<(usize, usize, usize)> = round
+                    .iter()
+                    .flat_map(|&(j, from, to)| (from..to).step_by(PROBE_SLICE).map(move |a| (j, a, (a + PROBE_SLICE).min(to))))
+                    .collect();
+                let landed = map_sliced(&tasks, |&(j, a, b)| self.landings_in(&merged[probes[j].0].0.word, view, a..b), slicer).await;
+                for (&(j, _, _), hits) in tasks.iter().zip(landed) {
+                    probes[j].1 += hits;
+                }
+                for &(j, _, to) in &round {
+                    probes[j].2 = to;
+                }
+                slicer.tick().await;
             }
+            // Dropped: the words none of whose replays landed, the costliest
+            // first, each whose bound still fits -- all of them where the
+            // rounds above made their bounds fit together. Taken the least
+            // bound first instead, specks fill the room and the true Grand
+            // Julian's grazing blob, 97% of the draws, is kept (measured).
+            let mut dropping: Vec<(f64, f64, usize)> = probes
+                .iter()
+                .filter(|p| none(p))
+                .map(|p| (merged[p.0].0.prob * rate_of(0, p.2), bound_at(p, p.2), p.0))
+                .collect();
+            dropping.sort_by(|x, y| y.0.total_cmp(&x.0).then(x.2.cmp(&y.2)));
+            let mut room = room;
+            let mut negligible = vec![false; merged.len()];
+            for (_, bound, i) in dropping {
+                if bound <= room {
+                    room -= bound;
+                    negligible[i] = true;
+                    tr.negligible += 1;
+                    tr.negligible_mass += merged[i].0.prob;
+                }
+            }
+            for &(i, hits, k) in &probes {
+                if k > 0 {
+                    tr.probed += 1;
+                    merged[i].0.draw = rate_of(hits, k);
+                    merged[i].1 = hits as f64 / k as f64;
+                }
+            }
+            let mut at = 0usize;
+            merged.retain(|_| {
+                at += 1;
+                !negligible[at - 1]
+            });
         }
         if merged.is_empty() {
             return Err(NoCylinders::ViewIsEmpty);
@@ -5627,6 +5778,175 @@ mod tests {
                     assert!(oc >= cc - 0.005, "{name} {z:.0e}: the offset plan covers {oc:.4} where the CPU's covers {cc:.4}");
                 }
             }
+        }
+    }
+
+    /// **What the draw rates buy** (tracker P3): views of flames whose
+    /// plans keep words with nothing landing -- julian-disc at the depth
+    /// cap, blur words kept by geometry -- planned on the app's path (the
+    /// GPU planner, offset replays past it), with the light each plan puts
+    /// in the view, the share of its draws that land, and the render's
+    /// variance per draw over the light squared, `(Σ p·draw)(Σ p·e/draw) /
+    /// (Σ p·e)²`: 1 for a plan whose every draw lands. A word the walk did
+    /// not measure is measured here, by `K` replays on the CPU. Printed to
+    /// compare revisions; `P3_CASES` picks views as `name:zoom:at,...`. A
+    /// conditional draw is counted at the rate the plan measured, not its
+    /// own, so a plan of many is read loosely.
+    #[test]
+    #[ignore = "needs a GPU and reads output/flame-zoom"]
+    fn what_the_draw_rates_buy() {
+        use rayon::prelude::*;
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let (device, queue) = test_device();
+        let mut planner = crate::scene::plan_gpu::GpuPlanner::new(&device, &queue);
+        const K: usize = 1 << 14;
+        let cases = std::env::var("P3_CASES").unwrap_or(
+            "julian-disc:1e2:0.75,julian-disc:1e4:0.75,julian-disc:1e6:0.75,julian-disc:1e7:0.75,julian-disc:1e8:0.75,\
+             true-grand-julian:1e3:0.75,true-grand-julian:1e5:0.75,true-grand-julian:1e7:0.75,\
+             free-blur:1e3:0.75,free-pie3D:1e3:0.75,free-gaussian_blur:1e3:0.75,free-pre_blur-2:1e3:0.75,final-14:1e4:0.3,\
+             bipolar-elliptic-splits1:1e3:0.3,bipolar-elliptic-splits1:1e4:0.7,bipolar-elliptic-splits2:1e3:0.3,bipolar-elliptic-splits2:1e4:0.7,\
+             grand-julian:1e4:0.75,random1:1e4:0.75".into());
+        for case in cases.split(',') {
+            let v: Vec<&str> = case.trim().split(':').collect();
+            let (name, z, frac): (&str, f64, f64) = (v[0], v[1].parse().unwrap(), v[2].parse().unwrap());
+            let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")) else {
+                println!("  {name}: missing");
+                continue;
+            };
+            let cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
+            let Ok(b) = Backward::read(&cfg.flame, reg) else {
+                println!("  {name}: not walked");
+                continue;
+            };
+            let view = View::of(z, b.plotted(b.sample_point(frac)), 1280, 720);
+            let mut tr = Trace::default();
+            let t0 = std::time::Instant::now();
+            let gpu = planner.for_flame(&cfg.flame, &b).expect("builds");
+            let (plan, how) = if b.gpu_resolves(view) {
+                (b.plan_with_eval(view, &mut tr, PlanOptions::default(), gpu), "GPU")
+            } else {
+                let mut eval = crate::scene::plan_gpu::OffsetReplays { gpu, flame: &cfg.flame, on_gpu: 0, on_cpu: 0 };
+                (b.plan_with_eval(view, &mut tr, PlanOptions::default(), &mut eval), "offsets")
+            };
+            let Ok(plan) = plan else {
+                println!("  {name} {z:.0e} at {frac}: no plan");
+                continue;
+            };
+            let secs = t0.elapsed().as_secs_f64();
+            // Each word's landing rate: the plan's where it measured one,
+            // else K long replays on the CPU.
+            let zero: Vec<usize> = (0..plan.words.len()).filter(|&i| !(plan.words[i].eff > 0.0)).collect();
+            let hits: Vec<usize> = zero.par_iter().map(|&i| b.landings(&plan.words[i].word, view, K)).collect();
+            let mut e: Vec<f64> = plan.words.iter().map(|w| w.eff.max(0.0)).collect();
+            for (&i, &h) in zero.iter().zip(&hits) {
+                e[i] = h as f64 / K as f64;
+            }
+            // A conditional draw lands at its own rate, not the word's: counted
+            // as the plan measured it (1 where it did not).
+            let drawn: f64 = plan.words.iter().map(|w| w.prob * w.draw).sum();
+            let light: f64 = plan.words.iter().zip(&e).map(|(w, e)| w.prob * e).sum();
+            let lands: f64 = plan.words.iter().zip(&e).map(|(w, e)| w.prob * w.draw * e).sum();
+            let second: f64 = plan.words.iter().zip(&e).map(|(w, e)| w.prob * e / w.draw.max(1e-300)).sum();
+            let conds = plan.words.iter().filter(|w| w.cond.is_some()).count();
+            println!(
+                "  {name} {z:.0e} at {frac} [{how}]: {secs:.1} s, {} words ({conds} conditional), mass {:.3e}, light {light:.3e}, draws landing {:.4}, variance per draw / light^2 {:.3}, timed out {}; replayed at length {} ({:.1}M steps), dropped {} ({:.3} of the mass)",
+                plan.words.len(), plan.mass, lands / drawn, drawn * second / (light * light).max(1e-300), plan.timed_out,
+                tr.probed, tr.probe_steps as f64 / 1e6, tr.negligible, tr.negligible_mass / (plan.mass + tr.negligible_mass)
+            );
+        }
+    }
+
+    /// **Where the GPU planner is taken to resolve a view, what its
+    /// answers get wrong** (tracker C16). The walk runs on the CPU's
+    /// answers, and every batch is also put to the GPU planner's absolute
+    /// f32 (`PlanGpu::lands`). Counted: points on which they disagree, those
+    /// over a pixel from the view's edge in f64 -- the arithmetic, not the
+    /// rounding at the edge -- and the jobs (a child's replays, checks, a
+    /// gather) that land on the CPU and not at all on the GPU: a child the
+    /// GPU walk would measure as landing nothing, and drop if its region
+    /// is unseen. `C16_CASES` picks views as `name:zoom:at,...`.
+    #[test]
+    #[ignore = "needs a GPU and reads output/flame-zoom"]
+    fn where_the_gpu_planner_resolves_it_disagrees() {
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let (device, queue) = test_device();
+        struct Both<'g> {
+            gpu: &'g mut crate::scene::plan_gpu::PlanGpu,
+            points: usize,
+            differ: usize,
+            wide: usize,
+            wide_cpu_only: usize,
+            jobs: usize,
+            jobs_lost: usize,
+            worst_px: f64,
+            px: f64,
+        }
+        impl Evaluate for Both<'_> {
+            fn lands(&mut self, b: &Backward, view: View, jobs: &[EvalJob]) -> Vec<u8> {
+                let cpu = CpuEval.lands(b, view, jobs);
+                let gpu = Evaluate::lands(&mut *self.gpu, b, view, jobs);
+                let mut at = 0usize;
+                for j in jobs {
+                    let blurred = b.blurred(j.word);
+                    let (mut c_hits, mut g_hits) = (0usize, 0usize);
+                    for &i in j.points {
+                        c_hits += cpu[at] as usize;
+                        g_hits += gpu[at] as usize;
+                        if cpu[at] != gpu[at] {
+                            self.differ += 1;
+                            if !blurred {
+                                let edge = b.forward_along(j.word, b.sample[i as usize]).map_or(f64::INFINITY, |y| {
+                                    (b.view_distance(view, y) - view.radius).abs() / self.px
+                                });
+                                if edge > 1.0 {
+                                    self.wide += 1;
+                                    if cpu[at] == 1 {
+                                        self.wide_cpu_only += 1;
+                                    }
+                                    self.worst_px = self.worst_px.max(edge);
+                                }
+                            }
+                        }
+                        at += 1;
+                    }
+                    self.jobs += 1;
+                    if c_hits > 0 && g_hits == 0 && !blurred {
+                        self.jobs_lost += 1;
+                    }
+                }
+                self.points += at;
+                cpu
+            }
+        }
+        let cases: Vec<(String, f64, f64)> = std::env::var("C16_CASES")
+            .unwrap_or("julian-disc:1e6:0.75,julian-disc:1e5:0.75,julian-disc:1e6:0.25,grand-julian:1e6:0.75,random1:1e6:0.75".into())
+            .split(',')
+            .map(|c| {
+                let v: Vec<&str> = c.split(':').collect();
+                (v[0].to_string(), v[1].parse().unwrap(), v[2].parse().unwrap())
+            })
+            .collect();
+        for (name, z, frac) in cases {
+            let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")) else { continue };
+            let cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
+            let b = Backward::read(&cfg.flame, reg).expect("reads");
+            let view = View::of(z, b.plotted(b.sample_point(frac)), 1280, 720);
+            if !b.gpu_resolves(view) {
+                println!("  {name} {z:.0e} at {frac}: not the GPU's");
+                continue;
+            }
+            let mut gpu = crate::scene::plan_gpu::PlanGpu::new(&device, &queue, &cfg.flame, b.sample());
+            gpu.attach(&b);
+            let px = view.radius / (1280f64.hypot(720.0) / 2.0);
+            let mut both = Both { gpu: &mut gpu, points: 0, differ: 0, wide: 0, wide_cpu_only: 0, jobs: 0, jobs_lost: 0, worst_px: 0.0, px };
+            let t0 = std::time::Instant::now();
+            let plan = b.plan_eval(view, PlanOptions::default(), &mut both).expect("a plan");
+            println!(
+                "  {name} {z:.0e} at {frac}: {} points, {} differ, {} over a pixel from the edge ({} landing on the CPU alone; worst {:.1} px); {} of {} jobs land on the CPU and none on the GPU; plan {} words, timed out {} [{:.1} s]",
+                both.points, both.differ, both.wide, both.wide_cpu_only, both.worst_px, both.jobs_lost, both.jobs, plan.words.len(), plan.timed_out, t0.elapsed().as_secs_f64()
+            );
         }
     }
 
@@ -7166,6 +7486,14 @@ mod tests {
     /// Now either side of the graze, at either size, the plans agree: the
     /// blob is measured and dropped as negligible, blur words no longer
     /// raise the floor, and most draws land.
+    ///
+    /// They agree on the light they put in the view (`mass · efficiency`,
+    /// the view's measure), not on their mass. Since P3 every word kept
+    /// with nothing landing is replayed at length and dropped where none
+    /// landing bounds it negligible, and which of the blur words that
+    /// land nothing are replayed depends on the view: at 1080x1055 the
+    /// blob's replays come first. The mass then differs by those words
+    /// (7%, measured), and the light by under 1%.
     #[test]
     #[ignore = "reads output/flame-zoom"]
     fn a_grazing_blob_does_not_take_the_draws() {
@@ -7183,20 +7511,20 @@ mod tests {
                 let drawn: f64 = p.words.iter().map(|w| w.prob * w.draw).sum();
                 let landed = p.words.iter().map(|w| w.prob * w.draw * w.eff).sum::<f64>() / drawn;
                 println!(
-                    "  zoom {} at {w}x{h}: {} words, mass {:.3e}, efficiency {:.3}, draws landing {:.3}, blur words dropped {}",
+                    "  zoom {} at {w}x{h}: {} words, mass {:.3e}, efficiency {:.3}, draws landing {:.3}, dropped as negligible {}",
                     cfg.zoom,
                     p.words.len(),
                     p.mass,
                     p.efficiency,
                     landed,
-                    tr.renewal_dropped
+                    tr.negligible
                 );
                 assert!(landed > 0.5, "zoom {} at {w}x{h}: only {landed:.3} of draws land", cfg.zoom);
-                plans.push(p.mass);
+                plans.push(p.mass * p.efficiency);
             }
         }
         let (lo, hi) = plans.iter().fold((f64::INFINITY, 0.0f64), |(lo, hi), &m| (lo.min(m), hi.max(m)));
-        assert!(hi / lo < 1.05, "the plans either side of the graze disagree: mass {lo:.3e} to {hi:.3e}");
+        assert!(hi / lo < 1.05, "the plans either side of the graze disagree: they put {lo:.3e} to {hi:.3e} in the view");
     }
 }
 
