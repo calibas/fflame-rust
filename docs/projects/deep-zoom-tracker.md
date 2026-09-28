@@ -827,7 +827,7 @@ transform with its reason: the carpet under an affine and under a
 brightness equal to three digits at 1e2 and 1e3
 (`a_final_on_an_affine_flame_is_planned`).
 
-### C7. A view holding a final's image of infinity -- open (2026-09-26)
+### C7. A view holding a final's image of infinity -- done (2026-09-26); two leftovers measured (2026-09-27)
 
 **Seen:** bipolar-elliptic-splits1 and 2 at their saved views, pan (0, 0),
 plan three depth-1 words holding the whole attractor at every zoom
@@ -963,6 +963,65 @@ the attractor.
   (`mccabe_meets_the_interactive_budget_at_1080p`) failed once under the
   full suite and passes alone in 0.8 s: a timing test the suite's load can
   push over.
+
+**The leftovers, measured (2026-09-27).** Plan time is done (the GPU
+planner plans a plotted view, and nodes settle in parallel). Two remain:
+
+- **A tail that comes from a pole, not an expansion: not pursued.** The
+  Grand JuliaN generator's seed 7 (`a_plan_through_a_final_covers_what_it_plots`)
+  throws its far points from a negative-distance root's pole in one step:
+  the natural sample's farthest point is 14 (99.9% within 5.7), never 32
+  bulk radii, so no tail is sampled and a view of infinity's image plans
+  the whole attractor (25 words, speedup 0.5, declined). Planned as a
+  plotted view regardless: 188k words, coverage 0.983 at zoom 40, and
+  empty from 1e2 -- no sample point lands there, and the view's rings
+  pulled back through the final are pruned as landing nowhere the sample
+  lands. Exempting them from that test planned 1e2 at coverage 0.795 and
+  1e3-1e4 at efficiency 0.000. The tail sampler splits a chain as it
+  climbs through radius levels, and a pole's jump crosses them all at once:
+  sampling such a tail means sampling ever closer to the pole, a deep plan
+  of its own at every level. One generated flame's glow point; left.
+- **The partial blur carried at ordinary views: the lever, and its
+  obstacle.** Carried everywhere (not only in plotted views),
+  bipolar-elliptic-splits1 and 2 on the GPU planner (1280x720, the gate's
+  points 0.3 and 0.7):
+
+  | view | now: speedup (eff) | carried: speedup (eff), time | coverage |
+  |---|---|---|---|
+  | splits1 0.3 1e4 | 23 (0.002) | 515 (0.057), 4.5 s | 0.997 |
+  | splits1 0.3 1e5 | 21 (0.000) | 16,464 (0.057), 4.7 s | -- |
+  | splits1 0.7 1e4 | 37 (0.049) | 263 (0.314), 2.4 s | 1.000 |
+  | splits1 0.7 1e5 | 347 (0.022) | 2,371 (0.117), 2.6 s | 0.998 |
+  | splits2 0.3 1e3 | 3 (0.000) | 25 (0.002), 10.9 s | **0.973** |
+  | splits2 0.7 1e4 | 166 (0.057) | 626 (0.184), 1.7 s | 1.000 |
+  | splits2 0.7 1e5 | 27 (0.000) | 3,054 (0.051), 2.3 s | 0.993 |
+
+  (On the CPU the same plans took 10-39 s and eight of twelve ran out of
+  time; now: 2-3 s on the GPU and 5-10 s on the CPU.) The holes are one
+  mechanism, traced (`watch`) at splits2 0.3 1e3, where 74 of 3,000
+  plotted points missed: the child `[t2a0 t2a0 t1a0 t0a0 t1a0]` came back
+  EMPTY, "1017 candidates, none land". A child of a node with sample
+  points takes candidates gathered where the UNBLURRED map sends points,
+  and checks each by a replay with one RANDOM blur draw; the question is
+  whether SOME draw lands it. Where the node's region is small against
+  the blur's reach (1.5 in the kernel's frame here), a random draw almost
+  never lands, and a region that is there reads empty. In the far tail
+  the regions are huge against the reach, which is why carrying held there.
+  Tried: the child's region as the node's points pulled back with the
+  blur's ring (as a cloud's are), not gathered -- worse, 455 of 3,000
+  missed: the rings lie off the attractor and the next level's landing
+  test prunes them.
+
+  **The plan, not built.** A carried blur child's candidates and check
+  made geometric. The node's points pulled back through the kernel (every
+  branch) give the kernel-frame points `v_j`; a sample point `x` is in the
+  child's region where `pre(x)` is within the reach of some `v_j` -- a
+  deterministic test, over sample points gathered from the grid cells
+  covering those discs, with no replay deciding membership (the replays
+  still measure its efficiency, by random draws, as the render lands
+  them). Gates: coverage 1.000 where the chaos game can judge, on both
+  flames at 0.3 and 0.7, 1e3-1e5; the plotted views unchanged (C7's
+  results); plan time on the GPU planner.
 
 ### C8. `juliascope` -- done (2026-09-27)
 
