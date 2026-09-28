@@ -1353,7 +1353,7 @@ the planner's six kernels synchronously
   a shorter frame.
 - Compile the planner's kernels when the flame loads.
 
-### P6. The GPU planner in offsets -- plan, for a decision (2026-09-27)
+### P6. The GPU planner in offsets -- stage 1, the replays, done (2026-09-27)
 
 C1's leftover, and the lever P3's measurements point to. Past
 `GPU_PLAN_RADIUS` the planner's absolute f32 is as displaced as the plain
@@ -1393,6 +1393,56 @@ either every piece gets a reference (C11's tail, where forced words'
 pieces outnumber their seeds, is the same problem), or the checks stay on
 the CPU and only the replays -- 84% of the time -- move to the GPU in
 offsets. The second is the smaller, safer step.
+
+**Stage 1, the replays (decided 2026-09-27).** Past `GPU_PLAN_RADIUS`
+the checks and gathers stay on the CPU, and only the replays go to the
+GPU, in offsets:
+
+1. **A replay is its own question.** `Evaluate` (and `AskEval`) gain
+   `replays(jobs, refs)`, which defaults to `lands`, and the walk asks
+   step 3's replays through it. The fused speculative path is the GPU
+   planner's own and is unchanged.
+2. **One reference set per node, shared by its children.** A child's
+   word is its symbol, then its node's word, so from its second step its
+   orbit is its node's. The node's references are made from the node's
+   region points by the rule a plan's are (`reference_chains`' per-word
+   body, taken out as a method), in the walk's own view -- the disc,
+   so without the finals -- and a child runs its first symbol, and the
+   node's steps before `m`, absolutely, then the node's chains in offsets.
+3. **The render's arithmetic.** The level's nodes and their references
+   are packed as the render's replay table (`pack_words`), and a new
+   planner kernel runs `ct_offsets` on it, testing the offset end against
+   the view. A child whose node has no references is replayed on the CPU.
+4. **Where.** A view the GPU does not resolve, on the desktop, when a GPU
+   planner exists (`plan_for`). The web keeps the CPU there for now.
+5. **Gates.** The offset replays against the CPU's f64 replays of the
+   same jobs, disagreeing only within the tolerance of the view's edge;
+   plans against the CPU's at deep views -- coverage and words -- on
+   julian-disc (1e7, 1e8), random1 and grand-julian (1e8) and
+   cylinder-turns-julian (1e6); and the time.
+
+**Stage 1, built.** As planned: `OffsetReplays` (`plan_gpu.rs`), the
+kernel `plan_offsets.wgsl`, `ReplayRefs` and `Backward::word_refs`, and
+`plan_for` sends a view the GPU does not resolve there when a planner
+exists. Measured (`the_offset_replays_are_the_cpus`), the walk on the
+CPU's answers with every replay also run in offsets:
+
+| view | replayed points | disagree | past a pixel of the edge | CPU plan | offset replays |
+|---|---|---|---|---|---|
+| julian-disc 1e7 | 39.4M | 51 | 12 (worst 641 px) | 20.7 s, out of time | 3.6 s, 5.7x |
+| julian-disc 1e8 | 26.1M | 42 | 22 (worst 68,519 px) | 20.9 s, out of time | 5.1 s, 4.1x |
+| random1 1e8 | 13.2M | 0 | 0 | 6.5 s | 3.9 s, 1.7x, the same plan |
+| grand-julian 1e8 | 3.7M | 13 | 7 (worst 753 px) | 1.4 s | 0.8 s, 1.7x, the same plan |
+
+Over 99.8% of replay jobs ran in offsets; the rest had nodes without
+references (the root's, and nodes no seed of which landed). At most one
+point in a million disagrees away from the view's edge -- a sample in a
+piece no reference of its node reaches, as in C11's tail -- which moves
+an efficiency estimate by that much. julian-disc's deep views no longer
+run out of time, so they are reproducible too (P3). Coverage cannot be
+sampled this deep; completeness is the checks', which are the CPU's in
+f64 as before. The per-sample gate is unchanged (0.027 px). The web
+keeps the CPU past the GPU's precision.
 
 **Done meanwhile: the references, 2.4x faster.** On the GPU planner half
 of a julian-disc plan was its references, run after the walk and
