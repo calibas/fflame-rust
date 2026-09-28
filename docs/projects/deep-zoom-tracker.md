@@ -13,6 +13,83 @@ other platforms (macOS/Metal, Firefox) is planned for later.
 
 Status: **open**, **investigate** (measure before building), **done**.
 
+**Order of work (2026-09-28)**, from the review below, agreed: P3 step 1,
+P7, P8, P9, then C14, C13, C15. It replaces the 2026-09-23 priorities for
+these items; coverage-first decides what comes after them.
+
+---
+
+## Review (2026-09-28): what the system is, and what to do next
+
+Asked: do we need to keep adding special cases and new regions, can the
+approach be generalised, can it be made much faster, and can it cheat --
+a lossy mode for speed and visual quality. Answered from the design docs,
+the code and this branch's measurements.
+
+**What it is.** One identity -- the invariant measure unrolled over an
+antichain of words (`cylinder.rs`) -- and one question: which words'
+images meet this view. Two planners answer it. The forward planner
+pushes a disc through a word's maps: cheap and exact enough for
+contracting maps, structurally useless for expanding ones
+([inversive-targeting.md](inversive-targeting.md) §24: 2-3x looser a
+step, compounding; a `julian` at `dist -1` never contracts at all). The
+inverse walk (`backward.rs`) pulls the view back through the inverses,
+guided by an indexed attractor sample. Escape-time conversion (mode D,
+`escape/ifs.rs`) shares the analysis (`analyse_2d`) and needs the same
+inverses per pixel on the GPU, which is why the census
+([gpu-cylinder-planning.md](gpu-cylinder-planning.md) §15) put 50 of 55
+flames on the diagonal: what converts is what deep-zooms, since both
+need every map readable as a map.
+
+**Where the special cases are**, counted:
+
+| layer | cases | where |
+|---|---|---|
+| per kernel (10 planar, 3 solid) | forward body, inverse body, exact-arithmetic inverse, domain, two singular distances, sigma factor, hole, image gap, branch count, CPU difference form, shader difference form, forward row, escape row, the escape shader's inverse (2D and 3D) | ~17 sites: 95 match arms in `ifs_analysis.rs`, 18 in `forward_delta.rs`, 14 in `escape/ifs.rs`, two `kind ==` chains in the mode-D WGSL |
+| per region kind | Cloud, Index, hidden pieces, rescued clouds, renewals, partial blurs, conditional draws, plotted views, the tail sample | `backward.rs` |
+| per final kind | affine, bipolar | `final_map.rs` |
+
+Every region kind was added because one flame failed.
+
+**1. Generalising.** The walk needs inverses for one thing: the descent
+from a view too small to hold sample points, on expanding maps. A
+forward-only substitute was looked for -- importance-sampling the chaos
+game toward the view, as `tail_sample` does for the far tail -- and
+does not work in general: a point's distance to the view is not
+monotone along its orbit, so splitting has nothing to steer by. The
+pull-back is what targets a view. So the per-kernel floor is an inverse
+body, a branch count and a domain, and everything else per kernel can go
+generic (P9, C13, C14, C15 below): offsets by Jacobian chains instead of
+per-kernel difference forms; every final tested through the render's own
+code, as C7's plotted views already do; one refinement mechanism where
+the sample is too sparse, with RNG-bearing maps indexed by several draws;
+and the kernels as registry entries carrying their inverse WGSL, spliced
+into mode D's shader instead of switched on `kind`.
+
+**2. Speed.** The plan side is near its floor: a GPU plan of julian-disc
+at 1e6 is 3.4 s -- replays 1.5 s (1.1 s waiting on 555 round trips),
+references 1.1 s -- and caching across views was measured at 1.1-1.5x
+(P1), because the cost is the last level's width, which every move
+redoes. Fusing a level into one submission (P4) might buy 1.5x. The big
+lever is the render's: at 1e7 julian-disc's plan has efficiency 0.014,
+98.6% of forced samples wasted, on words cut at the depth cap that hold
+95% of the draws and land nothing (P3). Fixing that is 10-70x at those
+depths.
+
+**3. Cheating.** More exists than it looks: a 250 ms settle before
+planning, background planning while the old plan draws, a standby plan
+at twice the view's radius swapped in on a pan (nothing is rechecked on a
+slight move), `trim` as a user-facing lossy knob, and a time budget that
+forces the frontier -- a plan cut short is complete, only less efficient
+(inversive-targeting §27 made holes into waste on purpose). "Ignore a branch that goes
+offscreen" is what the pull-back does; what costs is deciding a branch
+is offscreen, the replays of unseen children, half the GPU time.
+Skipping those is where a lossy mode would save, and C3 and
+inversive-targeting §31 measured what it loses -- 2.6% of a view, 3% a level: holes, not noise. Not
+planned as a default. What gives the feel without losing anything: no
+accumulation reset when a plan lands (P7), and an anytime planner that
+delivers a complete coarse plan in ~0.3 s and deepens it (P8).
+
 ---
 
 ## Coverage
@@ -1258,6 +1335,71 @@ of planning a view for plans the renderer declines or cannot hold. Not
 kept. If a flame with arms and a translation appears, the first two
 changes are what it needs.
 
+### C13. Every final through the render's own code -- open, planned (2026-09-28)
+
+`hypertile1` finals block 7 corpus files (~4 flames), `julia3D` and
+`julia3Dq` two more: `FinalMap::of` reads affine and `bipolar` finals
+only. C7's plotted views (`View::plotted`) already test landings THROUGH
+the finals, on the GPU by the render's own loop (`ct_apply_finals` in
+`replay.wgsl`) -- any final, by construction. What a generic final needs:
+
+1. **A CPU body for any final.** The walk plots on the CPU too
+   (`Backward::plotted`: landing tests, `view_distance`, rescue, the
+   references' ends). `variations/derive.rs` already interprets any
+   variation's WGSL body on the CPU over naga IR (the interval
+   evaluator of [forward-bounds.md](forward-bounds.md)); a plain-value
+   mode of it, with a forced arm, plots a point through any final.
+2. **Random arms tested as "some arm lands".** `hypertile1` picks one of
+   `p` tiles a draw, each a large move, so a one-draw test reads a
+   region as empty `1 - 1/p` of the time (C7's blur lesson). The CPU
+   enumerates the arms (`ARMED` gains `hypertile1`, whose draw is
+   `floor(rng·p)` as julian's is); the GPU planner's `plan_tested` runs
+   all `p` and takes any. `ct_apply_finals` draws its own arm at render
+   time, so a view that is one tile's image lands `1/p` of its samples:
+   efficiency, not correctness. Forcing the final's arm from the plan
+   (a trailing symbol the word carries) is the later step.
+3. **Offsets through a generic final**: P9's Jacobian at the reference's
+   end, in place of `FinalMap::rows`.
+
+Ranked after P9 and C14: every blocked file is a `.flame` import, which
+loads in 3D by decision (`flame_xml`), so none is targeted until switched
+to 2D by hand.
+
+### C14. RNG-bearing maps: one refinement mechanism -- open, planned (2026-09-28)
+
+Rescue, hidden pieces, the tail sample and C7's carried blur are all one
+problem: the sample does not show a region. Rescue's `near_points` (a
+local chaos game around a candidate) is the general tool. What C7's
+holes need (the plan recorded there, made general):
+
+1. **The landing index of a blurred symbol built with K draws a point**
+   (`Backward::read`, the `landing` loop, which today files each point
+   through the UNBLURRED map, `forward` not `forward_blurred`), K = 4-8,
+   so a child's candidates cover the blur's spread; and the candidate
+   check as "any of K draws lands". Only blurred symbols pay the K. This
+   covers any variation with a draw, not `pre_blur` beside a kernel
+   alone.
+2. **Then carry partial blurs at every view** (`carry_blurs = true` in
+   `expand_level`), which C7 measured at 5x-16,000x on the
+   bipolar-elliptic-splits flames on the GPU planner in 2-5 s, with holes
+   to 2.7% that (1) is for.
+3. Gates: coverage 1.000 where the chaos game can judge on splits1 and 2
+   at 0.3 and 0.7, 1e3-1e5 (C7's table); C7's plotted views unchanged;
+   `free_blurs_plan_completely`; plan time on the GPU planner.
+
+### C15. Kernels as registry entries -- open, planned (2026-09-28)
+
+`Kernel` is an enum matched in ~17 places (the review's count). Make it
+what `VariationDef` is: one file per kernel, an `InverseDef` carrying the
+inverse WGSL too, and mode D's assembler splicing the inverse bodies as
+the shader builder splices forward bodies, in place of the two `kind ==`
+chains in `escape/ifs.rs`. With P9 the per-kernel surface is the inverse
+body, the branch count and the domain; the singular distances and sigma
+factors come from the Jacobian (`jacobian2`, `hessian2` in
+`ifs_real.rs`). A refactor: the CPU gates
+(`the_generic_kernel_is_the_f64_kernel`, the registry gate) and the visual
+suite decide it. Do it when the next kernel is added, not before.
+
 ---
 
 ## Performance
@@ -1562,6 +1704,105 @@ arm). References 864 -> 360 ms at 1e2, 1,256 -> 536 at 1e4, 2,634 ->
 1,097 at 1e6; whole GPU plans 2.2 -> 1.8 s, 2.7 -> 1.9 s, 5.0 -> 3.4 s.
 The offsets replay as before (per-sample gate, worst 99th percentile
 0.027 px).
+
+### P7. No accumulation reset when a plan lands -- open, planned (2026-09-28)
+
+Every plan that lands restarts the picture (`plan_arrived`,
+`take_plan_arrived` in `compute_kernel.rs`, taken in `app/mod.rs`),
+because the tonemap's `sample_density` is `samples_in_buffer` times the
+CURRENT plan's `cylinder_iteration_scale()` (`refresh_sample_density`):
+samples under another plan carry another weight. So after a pan the
+standby draws for 1-5 s, then the tight plan lands and throws that away.
+
+Under a plan `b`, a batch of `n_b` samples puts `n_b·μ(P)/mass_b` in
+pixel `P` for every pixel its antichain covers; that is `N_b·μ(P)` with
+`N_b = n_b / (mass_b·S_b)` equivalent untargeted iterations. Summing raw
+counts over batches from different plans is unbiased wherever every
+plan covered the pixel, with `Σ N_b` as the denominator. So:
+
+1. `accumulate_pass` keeps a running `equiv_iters += samples_this_frame ·
+   cylinder_iteration_scale()`, and `refresh_sample_density` reads it
+   in place of `samples_in_buffer · scale` (the solid fraction and the
+   frame-coverage factor stay as they are; `levels_density` becomes
+   `samples_in_buffer / pixels`, which it was).
+2. `plan_arrived` is set only when the PICTURE changes -- a flame edit,
+   removals, solo, trim, a plan for another view -- not when a complete
+   plan for a disc containing the view replaces another (tight after
+   standby, a deeper plan after a coarse one, targeted after untargeted:
+   untargeted batches have scale 1 and cover everything). The view's own
+   move resets as it always has.
+3. Gate: a render that accumulates under the standby, swaps the tight
+   plan in without a reset and accumulates on, against the tight plan
+   alone and against untargeted: brightness equal to two digits, overlap
+   1.000; `a_standby_plan_covers_a_move` as before.
+
+### P8. An anytime planner -- open, planned (2026-09-28)
+
+A plan whose frontier is forced is complete, only less efficient (§27),
+and the walk is level-structured, so it can deliver: after the first
+~0.3 s a complete coarse plan, then a deeper one every time it has
+doubled its time, the last being the plan it makes today. With P7 each
+swap only brightens; the user sees a whole picture at once and watches it
+sharpen. Needs:
+
+1. `walk_disc`'s level loop (`backward.rs`) takes a delivery schedule in
+   `PlanOptions` and, at a level boundary past the next deadline, builds
+   a plan from the kept words plus the frontier forced as it stands
+   (`seeds_from` its points; the frontier itself is not consumed), with
+   its references (`reference_chains`; a coarse plan's are cheap), and
+   emits it; then continues. The final plan is bit for bit the plan made
+   without emission, so the existing gates hold.
+2. `PlanJob` (`compute_kernel.rs`) receives intermediate plans through
+   its channel and `poll_plan_job` applies each as it arrives, under P7's
+   rule (no reset). The web's job is the same future, polled per frame.
+3. The standby stays: a pan's first frames are its; the anytime tight
+   plan follows in ~0.3 s.
+4. Gates: `a_plan_is_made_in_the_background` extended -- the first plan
+   within 0.5 s, complete by the CPU coverage test (≥ 0.99 where it can
+   judge), efficiency rising with each delivery, the last plan equal to
+   the one-shot plan's words; and the picture after the last lands, with
+   no reset, against the untargeted reference.
+
+### P9. Offsets by Jacobian chains -- open, planned (2026-09-28)
+
+The first generalisation, and the one whose success removes the most
+code: `replay_delta.wgsl`'s per-kernel forward difference forms
+(`fd_*`, `ct_fwd_diff`, `ct_final_diff`), `forward_delta.rs`'s 18 CPU
+forms and `forward_row`, and `FinalMap::rows` and `bipolar_diff`.
+
+The CPU already takes each reference step's exact Jacobian by dual
+numbers (`map_forward_jacobian`, 2026-09-27). A chain uploads `J_k` per
+step (4 f32) in place of the base (2), plus the finals' Jacobian at the
+end, and the shader carries `d = J·d`: no kernel-specific WGSL, for any
+variation, finals included -- `ct_offsets` keeps only the nearest-chain
+pick (by the chain's first base) and the carry. The first-order
+remainder is `~size[m]²·K''·amp`, and the `m` rule already forces
+`size[m]` below `~6·r²/|z|`, so at every depth where offsets are needed
+it sits orders below `PLOT_TOLERANCE·r`; and a linear carry has none of
+the f32 cancellation C7 found in `bipolar`'s log terms. The remainder is
+also computed, per word, on the CPU (`hessian2`) and joins the `m` rule:
+`m` is where the first step fails to fit by either error.
+
+Two things to settle in the build:
+
+- **The table.** Four floats a step where there were two: julian-disc's
+  1e6 references, 23M floats today, become ~45M, past `TABLE_FLOATS`
+  (2^25, C10). Either the chains take a second buffer bound at the
+  device's own `max_storage_buffer_binding_size` on the desktop (the web
+  keeps 128 MiB and the plain replay past it), or the records and chains
+  share the 2^25 and C11's frontier cap counts the larger word.
+- **Seams.** A sample across an `atan2` cut or a `splits` axis from its
+  reference is carried wrongly by any Jacobian; the exact forms handled
+  turns. The chain clustering (`apart`, pieces) is what must keep such a
+  sample on its own reference; C11's tail is the same question.
+
+Gates: `the_offset_replay_holds_per_sample` on every flame, 1e4-1e8,
+99th percentile under 0.05 px as now (0.027); `what_the_references_hold`;
+`the_offset_replays_are_the_cpus` (P6); the targeted renders at depth
+(`a_targeted_final_render_is_the_untargeted_render`, final-14 to 1e6).
+If a kernel fails the gate on the linear carry, its exact form stays as
+that kernel's fallback and the failure is recorded here; the forms are
+removed only where the gate says they can be.
 
 ---
 
