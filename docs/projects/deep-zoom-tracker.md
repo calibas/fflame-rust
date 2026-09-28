@@ -1434,7 +1434,7 @@ CPU's answers with every replay also run in offsets:
 | random1 1e8 | 13.2M | 0 | 0 | 6.5 s | 3.9 s, 1.7x, the same plan |
 | grand-julian 1e8 | 3.7M | 13 | 7 (worst 753 px) | 1.4 s | 0.8 s, 1.7x, the same plan |
 
-Over 99.8% of replay jobs ran in offsets; the rest had nodes without
+At least 99.5% of replay jobs ran in offsets; the rest had nodes without
 references (the root's, and nodes no seed of which landed). At most one
 point in a million disagrees away from the view's edge -- a sample in a
 piece no reference of its node reaches, as in C11's tail -- which moves
