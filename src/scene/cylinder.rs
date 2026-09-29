@@ -5176,6 +5176,146 @@ mod gpu_tests {
         assert!(warm < std::time::Duration::from_millis(16), "a frame's planning took {warm:?}");
     }
 
+    /// **Does the render slow the planner?** (tracker P10) In the app the
+    /// planner submits to the render's own queue, so each of a plan's
+    /// round trips waits behind whatever dispatch is queued. This times
+    /// the same background plan while a 60 Hz frame loop renders at the
+    /// app's batch shapes -- none, the governor's floor, full width
+    /// shortened, and the full batch -- after a warm-up plan, so the
+    /// planner's kernel build is not in it. The render draws the previous
+    /// view's plan meanwhile, as the app does after a long pan.
+    #[test]
+    #[ignore = "measurement: needs a GPU; reads output/flame-zoom"]
+    fn dbg_plan_time_under_render_load() {
+        use std::time::{Duration, Instant};
+        const W: u32 = 1280;
+        const H: u32 = 720;
+        const FRAME: Duration = Duration::from_micros(16_667);
+        let floor = crate::app::Batch { max_workgroups: 128, iterations_per_thread: 256, burn_in: 20, shorten: true }
+            .shape(crate::app::Knee::Shedding { over: 0 }, crate::app::MIN_ITER_SCALE);
+        let loads: [(&str, Option<(u32, u32)>); 4] =
+            [("paused", None), ("floor", Some(floor)), ("128x64", Some((128, 64))), ("128x256", Some((128, 256)))];
+        let rounds: usize = std::env::var("ROUNDS").ok().and_then(|v| v.parse().ok()).unwrap_or(2);
+        let (device, queue) = device();
+        println!("  floor batch {floor:?}; {rounds} rounds, loads interleaved");
+        for (name, zoom) in [("julian-disc", 1e6f32), ("grand-julian", 1e4), ("random1", 1e4)] {
+            let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")) else {
+                println!("  no {name}.fflame");
+                continue;
+            };
+            let mut cfg: FractalConfig = serde_json::from_str(&text).expect("a config");
+            cfg.cylinder_targeting = true;
+            cfg.render_mode = crate::scene::transforms::RenderMode::TwoD;
+            cfg.zoom = zoom;
+            let (warm_at, target_at) = {
+                let guard = crate::variations::global_registry();
+                let b = crate::scene::backward::Backward::read(&cfg.flame, &guard).expect("armed");
+                (b.sample_point(0.3), b.sample_point(0.75))
+            };
+            println!("== {name} at {zoom:.0e}");
+            println!("  load       batch        plan s   frames  dispatch ms (median)  plan");
+            let mut by_load: Vec<Vec<f64>> = vec![Vec::new(); loads.len()];
+            for round in 0..rounds {
+                for (li, (label, batch)) in loads.iter().enumerate() {
+                    let mut r = crate::renderer::FlameRenderer::with_palette_size(
+                        &device,
+                        &queue,
+                        wgpu::TextureFormat::Rgba8Unorm,
+                        W,
+                        H,
+                        &cfg.flame,
+                        cfg.palette_size,
+                    );
+                    r.set_background_planning(true);
+                    let dispatch_ms: std::cell::RefCell<Vec<f64>> = Default::default();
+                    let frame = |r: &mut crate::renderer::FlameRenderer, cfg: &FractalConfig, render: bool| {
+                        let t = Instant::now();
+                        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("load frame") });
+                        if r.sync_cylinders(&device, &queue, cfg) {
+                            r.load_config(&device, &mut enc, &queue, cfg, &cfg.palette, 1, 0);
+                        }
+                        queue.submit(Some(enc.finish()));
+                        if let (true, Some((w, ipt))) = (render, batch) {
+                            let s = Instant::now();
+                            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("load dispatch") });
+                            r.compute_pass(
+                                &mut enc, &queue, &device, *w, *ipt, 20, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, 0.0,
+                                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, cfg.speed_factor, true, false,
+                            );
+                            let idx = queue.submit(Some(enc.finish()));
+                            let _ = device.poll(wgpu::PollType::Wait { submission_index: Some(idx), timeout: None });
+                            dispatch_ms.borrow_mut().push(s.elapsed().as_secs_f64() * 1e3);
+                        }
+                        if let Some(rest) = FRAME.checked_sub(t.elapsed()) {
+                            std::thread::sleep(rest);
+                        }
+                    };
+                    let wait = |what: &str, t0: Instant| assert!(t0.elapsed() < Duration::from_secs(120), "{name}: {what}: nothing in 120 s");
+
+                    // Warm-up: the first plan builds the planner's kernel.
+                    (cfg.pan_x, cfg.pan_y) = (warm_at[0], warm_at[1]);
+                    {
+                        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("load") });
+                        r.load_config(&device, &mut enc, &queue, &cfg, &cfg.palette, 1, 0);
+                        queue.submit(Some(enc.finish()));
+                    }
+                    let t0 = Instant::now();
+                    loop {
+                        frame(&mut r, &cfg, false);
+                        if r.take_plan_arrived() {
+                            break;
+                        }
+                        wait("warm-up plan", t0);
+                    }
+                    // And its standby, so no job is left running.
+                    let t0 = Instant::now();
+                    while !r.has_standby_plan() {
+                        frame(&mut r, &cfg, false);
+                        wait("warm-up standby", t0);
+                    }
+
+                    // The measured plan: from the job's start to its landing.
+                    (cfg.pan_x, cfg.pan_y) = (target_at[0], target_at[1]);
+                    dispatch_ms.borrow_mut().clear();
+                    let t0 = Instant::now();
+                    let mut started: Option<Instant> = None;
+                    let mut frames = 0usize;
+                    let took = loop {
+                        frame(&mut r, &cfg, true);
+                        if started.is_none() && r.plans_running() {
+                            started = Some(Instant::now());
+                        }
+                        if started.is_some() {
+                            frames += 1;
+                        }
+                        if r.take_plan_arrived() {
+                            break started.map_or(Duration::ZERO, |s| s.elapsed());
+                        }
+                        wait("measured plan", t0);
+                    };
+                    let mut dispatch_ms = dispatch_ms.take();
+                    dispatch_ms.sort_by(|a, b| a.total_cmp(b));
+                    let median = dispatch_ms.get(dispatch_ms.len() / 2).copied().unwrap_or(0.0);
+                    let state = match r.targeting_state() {
+                        crate::renderer::TargetingState::Active { words, depth, .. } => format!("{words} words, depth {depth}"),
+                        s => format!("{s:?}"),
+                    };
+                    let shape = batch.map_or("-".to_string(), |(w, i)| format!("{w}x{i}"));
+                    println!(
+                        "  {label:<9}  {shape:<10}  {:>7.2}  {frames:>6}  {median:>10.1}             {state}   (round {round})",
+                        took.as_secs_f64()
+                    );
+                    by_load[li].push(took.as_secs_f64());
+                }
+            }
+            let base = by_load[0].iter().sum::<f64>() / by_load[0].len().max(1) as f64;
+            for ((label, _), times) in loads.iter().zip(&by_load) {
+                let mean = times.iter().sum::<f64>() / times.len().max(1) as f64;
+                println!("  mean {label:<9} {mean:>6.2} s  ({:.2}x paused)", mean / base.max(1e-9));
+            }
+        }
+    }
+
     /// The standby flow, with plans on a worker thread or in a task.
     /// Returns the longest single `sync_cylinders` up to the first plan,
     /// and after it.
