@@ -1890,7 +1890,7 @@ And what it would keep is small: 1-5 s of standby is worth roughly
 plan resets, and accumulation starts under it at once. Replaced by
 measuring whether the render slows the planner (P10).
 
-### P8. An anytime planner -- open, planned (2026-09-28)
+### P8. An anytime planner -- step 1 done (2026-09-29); step 2 open
 
 A plan whose frontier is forced is complete, only less efficient (§27),
 and the walk is level-structured, so it can deliver: after the first
@@ -1918,6 +1918,45 @@ accumulated. Needs:
    judge), efficiency rising with each delivery, the last plan equal to
    the one-shot plan's words; and the picture after the last lands against
    the untargeted reference.
+
+**Step 1, done (2026-09-29).** `PlanOptions::deliver` and
+`deliver_after`: at the first level boundary past `deliver_after`, and
+past each doubling of the time since, `walk_disc` hands the callback a
+plan of what it has kept and its frontier forced as it stands, with its
+references (`Backward::finish`), and carries on. The walk's tail is
+`Backward::assemble`, shared: a plan on the way skips the conditional
+draws and P3's long replays, and draws EVERY word at the square root of
+the landing rate the walk's replays measured (floored at 1/`VERIFY`);
+each sample deposits the inverse, so the picture is the same. Drawn at
+their probabilities instead, the words with nothing landing took most of
+the draws: 5-20x lower landing shares.
+
+Measured (`dbg_plans_on_the_way`, GPU planner, 1280x720, first delivery
+at 50 ms): the final plan is the plain plan's, word for word, in all five
+cases, and the deliveries cost 1-3% of the plan's time in this run (14-16%
+on julian-disc in an earlier one, before the draw rates changed). What a
+plan on the way lands, as drawn, against the final plan:
+
+| flame, zoom | final plan | best plan on the way | landing share |
+|---|---|---|---|
+| julian-disc 1e8 | 4.75 s | at 2.43 s | 14.7% vs 11.0% |
+| random1 1e4 | 0.29 s | at 0.14 s | 65% vs 57% |
+| julian-disc 1e6 | 3.95 s | at 1.37 s | 0.84% vs 49% |
+| true Grand Julian 1e5 | 1.22 s | at 0.28 s | 0.056% vs 4.2% |
+| grand-julian 1e4 | 0.14 s | at 0.07 s | 89% vs 95% |
+
+Uneven, and for a reason: julian-disc's nearly neutral map narrows its
+words to the view only in the last levels (depth 70 to the cap at 96), so
+at 1e6 a plan on the way is complete but lands a hundredth of what the
+final one does -- sparse speckle until it lands. Where the frontier
+narrows early (julian-disc 1e8, random1), half the wait is saved.
+
+Step 2 still to decide: a plan on the way must not replace a better plan
+on screen. After a short pan the standby covers the view and is complete
+and deep; julian-disc 1e6's plans on the way would draw worse than it.
+Proposed: apply a plan on the way only while no plan on screen covers the
+view (a long pan, a first plan, a zoom past the standby), or to replace
+an earlier one.
 
 ### P9. Offsets by Jacobian chains -- open, planned (2026-09-28)
 

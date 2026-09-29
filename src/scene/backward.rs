@@ -340,6 +340,13 @@ pub struct PlanOptions<'a> {
     /// word-editing.md §10): its colour reads that many maps of a path, and
     /// zoomed out the plan's paths are one map long.
     pub min_len: usize,
+    /// **Plans on the way** (tracker P8): at the first level boundary past
+    /// `deliver_after`, and past each doubling of the time since, the walk
+    /// hands this a complete plan -- what it has kept, and its frontier
+    /// forced as it stands -- and carries on. What it returns is the plan
+    /// it makes without them.
+    pub deliver: Option<&'a dyn Fn(Cylinders)>,
+    pub deliver_after: std::time::Duration,
 }
 
 /// The budget where a plan must block: the web, which has no threads and
@@ -360,6 +367,8 @@ impl Default for PlanOptions<'_> {
             removals: &[],
             refine: &[],
             min_len: 0,
+            deliver: None,
+            deliver_after: std::time::Duration::ZERO,
         }
     }
 }
@@ -3976,13 +3985,19 @@ impl Backward {
             Some(f) => f.pull_back(view, self.whole()).ok_or(NoCylinders::ViewIsEmpty)?,
             None => view,
         };
-        let mut plan = self.walk_disc(disc, tr, opts, eval, slicer).await?;
+        let mut plan = self.walk_disc(disc, view, tr, opts, eval, slicer).await?;
+        self.finish(&mut plan, view, disc, slicer).await;
+        Ok(plan)
+    }
+
+    /// A plan of `disc` made for `view`: its centre, and the replay in
+    /// offsets where the view is deep enough for any word to need it
+    /// (`deep-zoom-precision.md`) -- in the orbit's space, or through the
+    /// finals in the plot's.
+    async fn finish(&self, plan: &mut Cylinders, view: View, disc: View, slicer: &Slicer) {
         plan.view_centre = view.centre;
-        // The replay in offsets, where the view is deep enough for any
-        // word to need it (`deep-zoom-precision.md`) -- in the orbit's
-        // space, or through the finals in the plot's.
         if self.needs_offsets(disc) || (self.finals.is_some() && self.needs_offsets(view)) {
-            plan.refs = self.reference_chains(&plan, view, disc, slicer).await;
+            plan.refs = self.reference_chains(plan, view, disc, slicer).await;
             if plan.refs.iter().any(|r| r.is_some()) {
                 plan.offset_rows = self.forward_rows();
                 plan.final_rows = self.finals.as_ref().map_or_else(Vec::new, |f| f.rows());
@@ -3990,13 +4005,13 @@ impl Backward {
                 plan.refs.clear();
             }
         }
-        Ok(plan)
     }
 
     /// [`Self::walk`], for a disc of the orbit's own space.
     async fn walk_disc(
         &self,
         view: View,
+        plot: View,
         tr: &mut Trace,
         opts: PlanOptions<'_>,
         eval: &mut dyn AskEval,
@@ -4063,6 +4078,8 @@ impl Backward {
         let started = web_time::Instant::now();
         // What a level made of the frontier it expanded, for `FRONTIER_FLOATS`.
         let mut growth = 1.0f64;
+        // When the next plan on the way is due (`PlanOptions::deliver`).
+        let mut due = opts.deliver_after;
 
         for depth in 1..=MAX_DEPTH {
             if frontier.is_empty() {
@@ -4093,6 +4110,26 @@ impl Backward {
                     tr.forced += 1;
                 }
                 break;
+            }
+
+            // **A plan on the way** (tracker P8): what is kept, and the
+            // frontier forced as it stands -- complete, less efficient --
+            // without the long replays that set the final plan's draw
+            // rates. The walk's own state is left as it was, so the plan it
+            // returns is the one it makes without these.
+            if let Some(deliver) = opts.deliver.filter(|_| depth > 1 && started.elapsed() >= due) {
+                let mut words = kept.clone();
+                for n in &frontier {
+                    let seeds = self.seeds_from(&[], Some(&n.pts));
+                    let c = Cylinder { word: n.word.clone(), prob: n.prob, centre: view.centre, radius: view.radius, seeds, eff: 0.0, draw: 1.0, cond: None };
+                    words.push((c, n.eff));
+                }
+                let mut scratch = Trace::default();
+                if let Ok(mut plan) = self.assemble(words, view, lost, false, &mut scratch, slicer, false).await {
+                    self.finish(&mut plan, plot, view, slicer).await;
+                    deliver(plan);
+                }
+                due = 2 * started.elapsed();
             }
 
             // **Every node of a level is expanded at once**, its questions
@@ -4206,7 +4243,26 @@ impl Backward {
             frontier = next;
             slicer.tick().await;
         }
+        self.assemble(kept, view, lost, timed_out, tr, slicer, true).await
+    }
 
+    /// **The walk's words, made a plan**: each word once, a blur's word
+    /// drawn where it lands, and -- `whole`, for the plan the walk
+    /// returns -- the words kept with nothing landing replayed at length
+    /// to set their draw rates (P3). Without `whole` those are drawn at
+    /// their probability, as they were before P3: the same picture, less
+    /// efficiently, and none of the long replays' time.
+    #[allow(clippy::too_many_arguments)]
+    async fn assemble(
+        &self,
+        mut kept: Vec<(Cylinder, f64)>,
+        view: View,
+        lost: f64,
+        timed_out: bool,
+        tr: &mut Trace,
+        slicer: &Slicer,
+        whole: bool,
+    ) -> Result<Cylinders, NoCylinders> {
         let t_after = web_time::Instant::now();
         // More words than the kernel's table holds: keep the ones
         // carrying the most measure and charge the rest.
@@ -4237,7 +4293,7 @@ impl Backward {
         // where its blur ignores its input and the boxes hold under
         // `CONDITIONAL_BELOW` of the blob, the word is drawn at their
         // mass and never replayed at length below.
-        {
+        if whole {
             let conds = map_sliced(
                 &merged,
                 |(c, _)| if self.renewal_first(&c.word) { self.conditional(&c.word, view) } else { None },
@@ -4282,7 +4338,7 @@ impl Backward {
         // view, where the GPU planner's absolute f32 is taken to resolve
         // the view, it lands none of 100 replays of words the CPU lands
         // all 100 of (tracker C16).
-        {
+        if whole {
             let draw_floor = 1.0 / (self.verify_first.len() + self.verify_rest.len()).max(1) as f64;
             let rest: f64 = merged.iter().map(|(c, e)| c.prob * e).sum();
             // How often a word is drawn, relative to its probability: its
@@ -4449,8 +4505,12 @@ impl Backward {
                 .into_iter()
                 .map(|(mut c, e)| {
                     c.eff = e;
-                    // Unless a longer replay set it (above).
-                    if self.renewal_first(&c.word) && c.draw == 1.0 && c.cond.is_none() {
+                    // Unless a longer replay set it (above). A plan on the
+                    // way draws every word so, by what the walk's replays
+                    // measured -- the long replays that would tell a word
+                    // with nothing landing are skipped, and drawn at its
+                    // probability such a word takes most of the draws.
+                    if (!whole || self.renewal_first(&c.word)) && c.draw == 1.0 && c.cond.is_none() {
                         c.draw = e.max(draw_floor).min(1.0).sqrt();
                     }
                     c
@@ -7132,7 +7192,7 @@ mod tests {
             let mut tr = Trace::default();
             let t = std::time::Instant::now();
             let mut eval = CpuEval;
-            let plan = drive(b.walk_disc(disc, &mut tr, PlanOptions::default(), &mut Blocking(&mut eval), &Slicer::never())).unwrap();
+            let plan = drive(b.walk_disc(disc, disc, &mut tr, PlanOptions::default(), &mut Blocking(&mut eval), &Slicer::never())).unwrap();
             let walk = t.elapsed().as_secs_f64() * 1e3;
             let t = std::time::Instant::now();
             let refs = drive(b.reference_chains(&plan, view, disc, &Slicer::never()));
