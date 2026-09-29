@@ -6281,7 +6281,7 @@ mod tests {
             let mut polls: Vec<f64> = Vec::new();
             let mut compiled = 0.0f64;
             let got = {
-                let fut = crate::scene::cylinder::Cylinders::plan_sliced(&gj.flame, reg, view, Some(&mut web_planner), &[], &[], 0, &slicer);
+                let fut = crate::scene::cylinder::Cylinders::plan_sliced(&gj.flame, reg, view, Some(&mut web_planner), &[], &[], 0, None, &slicer);
                 let mut fut = std::pin::pin!(fut);
                 let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
                 loop {

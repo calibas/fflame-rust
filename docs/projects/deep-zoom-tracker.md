@@ -1890,7 +1890,7 @@ And what it would keep is small: 1-5 s of standby is worth roughly
 plan resets, and accumulation starts under it at once. Replaced by
 measuring whether the render slows the planner (P10).
 
-### P8. An anytime planner -- step 1 done (2026-09-29); step 2 open
+### P8. An anytime planner -- done (2026-09-29)
 
 A plan whose frontier is forced is complete, only less efficient (§27),
 and the walk is level-structured, so it can deliver: after the first
@@ -1951,12 +1951,46 @@ at 1e6 a plan on the way is complete but lands a hundredth of what the
 final one does -- sparse speckle until it lands. Where the frontier
 narrows early (julian-disc 1e8, random1), half the wait is saved.
 
-Step 2 still to decide: a plan on the way must not replace a better plan
-on screen. After a short pan the standby covers the view and is complete
-and deep; julian-disc 1e6's plans on the way would draw worse than it.
-Proposed: apply a plan on the way only while no plan on screen covers the
-view (a long pan, a first plan, a zoom past the standby), or to replace
-an earlier one.
+**Step 2, done (2026-09-29).** A tight job hands its plans on the way to
+the renderer -- `Delivery::OnTheWay` over the thread's channel, a slot the
+web's task leaves them in -- from `PLAN_ON_THE_WAY` (250 ms) on. One is
+shown only where it cannot be worse than what is on screen: no plan there
+covers the view (a long pan, a first plan, a zoom past the standby), or
+the one there is an earlier plan on the way; and only if it would be
+drawn at all. Each resets the picture, as a landed plan does. A standby
+delivers none, and the standby still swaps in on a short pan's frame.
+P10's cap stays on while the job runs.
+
+Gates:
+- `plans_on_the_way_are_shown_until_the_plan_lands` (and `_in_a_task`,
+  the web's path): julian-disc at 1e8, 640x360. After a long pan, plans on
+  the way at 0.55, 0.80, 1.49 and 3.15 s, then the plan at 5.64 s, the
+  one-shot plan's words; after a short pan, the standby on the pan's frame
+  and nothing on the way before the plan.
+- `a_plan_on_the_way_draws_the_same_picture`: the earliest plan on the way
+  that can be matched in samples and the last, against the landed plan, BY
+  DENSITY in 16 replicates (below), at 1,024 iterations a thread: the whole
+  view within 0.5% on all four flames (grand-julian, random1, the true
+  Grand Julian, julian-disc at 1e3), the worst significantly different
+  dense block 2.2%.
+
+**Compare pictures by density, not by the tone map** (2026-09-29). The
+first version of that gate compared tone-mapped brightness and found
+julian-disc's early plans 8% bright and grand-julian's plans drawing a
+faint haze the untargeted chaos game did not. Both were the tone map: it
+lifts faint light and darkens sparse light, so of two renders with the
+same measure, the sparser reads darker -- and an untargeted reference at
+60 samples a pixel is sparse exactly where the haze is. By density
+(`FlameRenderer::read_density_blocking`: the accumulator's weighted count
+per equivalent iteration), in replicates so each 16x16 block has a
+standard error (`replicated_blocks`, `compare_blocks`), with the faint
+blocks pooled -- `dbg_faint_regions_against_untargeted`, grand-julian at
+1e3 against 1.3e11 untargeted iterations: the landed plan's whole view
+0.9956 of the untargeted, the dense tier (161 blocks) 0.9955, the middle
+(58) 1.006, the faint (37, the haze) 1.059 +- 0.022. The haze is the
+attractor's. The existing targeted-against-untargeted gates still compare
+tone-mapped pixels, and their brightness tolerance is 35%.
+
 
 ### P9. Offsets by Jacobian chains -- open, planned (2026-09-28)
 
@@ -2000,6 +2034,33 @@ that kernel's fallback and the failure is recorded here; the forms are
 removed only where the gate says they can be.
 
 ---
+
+### P11. Restarted orbits move light under a short dispatch -- open, measured (2026-09-29)
+
+Every dispatch restarts its orbits (the blue band's cause), and a forced
+sample is its word applied to the free orbit's point -- which, 20
+iterations past a restart, is not yet the attractor's measure on a slowly
+mixing flame. A deep word forgets its start; a short one carries the
+error into the view. Measured by density (`dbg_orbit_length_by_density`),
+julian-disc at 1e3, same total work, against 4,096 iterations a thread:
+
+| iterations a thread | landed plan: whole view | worst dense block | plan on the way, depth 13: whole | worst block |
+|---|---|---|---|---|
+| 64 | +0.05% | 18% | +2.6% | 34% |
+| 256 | 0.00% | 3.9% | +0.5% | 8.8% |
+| 1,024 | +0.05% | 0.8% | +0.08% | 2.0% |
+
+The measure is conserved to a fraction of a percent; where it lands is
+not. 64 is what the governor shortens a targeted dispatch to when it
+sheds (`Batch::shape`) and what P10 caps a planning frame at -- so the
+app's targeted picture can have blocks 18% off on this flame while it
+sheds, and a plan on the way shown during planning up to 34%. The app's
+default of 256 is 3.9%; an export's 1,024, 0.8%.
+
+The fix is persistent orbits (`persistent-orbits.md`), which the
+governor's shortening was always meant to wait for: an orbit that is not
+restarted is the attractor's measure at every dispatch, and a short
+dispatch then costs nothing. Until then: nothing changed.
 
 ### P10. The render slows the planner -- done (2026-09-29)
 
