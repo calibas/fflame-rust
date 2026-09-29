@@ -125,9 +125,8 @@ pub struct HighResExporter {
     // export must render what the app renders -- the same table,
     // from the same `build_table`.
     bias_buffer: Buffer,
-    // Enumerated cylinders. Always allocated so the layout is
-    // uniform; the tiled exporter renders many views and the
-    // enumeration is per view, so it does not target yet.
+    // Enumerated cylinders: the export view's plan, one for the whole
+    // image (`plan_view`), or a placeholder so the layout is uniform.
     cylinder_buffer: Buffer,
     // Frame-coverage counters. Allocated so the layout is uniform; the
     // tiled exporter renders many views and coverage is a property of
@@ -236,6 +235,15 @@ pub struct HighResExporter {
     shadow_view: (f32, f32, f32, f32, f32), // zoom, rotation, pan_x, pan_y, persp
     /// Accepted/dispatched fraction for solid brightness renormalization.
     solid_density_fraction: f32,
+    /// How many iterations of the unbiased chaos game one of this
+    /// export's stands for: `Cylinders::iteration_scale` where the view is
+    /// targeted, 1 where it is not. Scales the tone map's sample count.
+    cylinder_iteration_scale: f64,
+    /// What targeting is doing for the export's view, as the panel would
+    /// say it, and the shader's `[replay, relative, offsets]` where it
+    /// runs.
+    targeting_state: crate::renderer::TargetingState,
+    targeting_flags: Option<[bool; 3]>,
 }
 
 impl HighResExporter {
@@ -367,6 +375,17 @@ impl HighResExporter {
             "High-res export: {}x{}, {} workgroups, {} samples/dispatch (~{}MB buffer)",
             width, height, workgroups, samples_per_dispatch, buffer_size_mb
         );
+
+        // **Targeting** (docs/projects/flame-deep-zoom.md): ONE plan, for
+        // the whole export view. Every dispatch emits samples for the whole
+        // image and the tiles only scatter them, so there is one view to
+        // plan however the image is tiled. Planned here, before anything
+        // else is built, because the plan decides the shader.
+        let (targeting_state, targeting) =
+            crate::renderer::compute_kernel::plan_view(&device, &queue, config, width, height);
+        if config.cylinder_targeting {
+            log::info!("High-res export: targeting {:?}", targeting_state);
+        }
 
         // Create transform buffer with solo mode handling. The tiled export
         // path is sample-emit (OUTPUT_HISTOGRAM_DIRECT=false) and currently
@@ -539,12 +558,26 @@ impl HighResExporter {
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
-        let cylinder_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("Export Cylinder Buffer"),
-            size: 48,
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        // The plan's word table, or a placeholder of one empty word
+        // (`ct_pick`) where the view is not targeted -- the layout is the
+        // same either way.
+        let cylinder_buffer = match &targeting {
+            Some(plan) => {
+                let mut table = plan.table.clone();
+                table.resize(table.len().max(12), 0.0);
+                device.create_buffer_init(&util::BufferInitDescriptor {
+                    label: Some("Export Cylinder Buffer"),
+                    contents: bytemuck::cast_slice(&table),
+                    usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                })
+            }
+            None => device.create_buffer(&BufferDescriptor {
+                label: Some("Export Cylinder Buffer"),
+                size: 48,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+        };
 
         // Per-normal attachment lists (Linked + Final chains). The GPU
         // struct stride matches the per-flame `attachment_cap` — must
@@ -729,10 +762,19 @@ impl HighResExporter {
                 .get(name)
                 .is_some_and(|info| info.has_feature(crate::variations::definition::Feature::NeedsW))
         });
+        // A targeted view builds the 2D shader too: targeting is 2D only
+        // (`plan_view`), and its forced prefix is written for the 2D plot.
         let force_2d = analytic_active
+            || targeting.is_some()
             || (config.render_mode == crate::scene::transforms::RenderMode::TwoD && has_needs_w);
         let shader_builder = ShaderBuilder::new(global_registry().clone());
-        let constants = crate::shader_cache::ShaderCache::constants_from_config(config);
+        let mut constants = crate::shader_cache::ShaderCache::constants_from_config(config);
+        if let Some(plan) = &targeting {
+            constants.cylinder_targeting = true;
+            constants.cylinder_replay = plan.replay;
+            constants.cylinder_relative = plan.relative;
+            constants.cylinder_offsets = plan.offsets;
+        }
         let shader_source = shader_builder.build_from_template(
             &config.flame,
             &active_variations,
@@ -1493,8 +1535,18 @@ impl HighResExporter {
                 config.perspective_strength,
             ),
             solid_density_fraction: 1.0,
+            cylinder_iteration_scale: targeting.as_ref().map_or(1.0, |t| t.iteration_scale),
+            targeting_flags: targeting.as_ref().map(|t| [t.replay, t.relative, t.offsets]),
+            targeting_state,
             iterations_per_thread,
         })
+    }
+
+    /// What targeting is doing for the export's view
+    /// (`compute_kernel::plan_view`), and the shader's
+    /// `[replay, relative, offsets]` where it runs.
+    pub fn targeting(&self) -> (&crate::renderer::TargetingState, Option<[bool; 3]>) {
+        (&self.targeting_state, self.targeting_flags)
     }
 
     /// Export to RGBA pixel data
@@ -2634,7 +2686,11 @@ impl HighResExporter {
         let area = (self.width as f32 * self.height as f32) / (pixels_per_unit_zoomed * pixels_per_unit_zoomed);
 
         let total_pixels = (self.width as f32) * (self.height as f32);
+        // A targeted export is counted as the untargeted iterations it
+        // stands for, as `FlameRenderer::refresh_sample_density` counts a
+        // targeted frame -- the same expression, so the two agree.
         let sample_density = ((total_iterations as f32) * self.solid_density_fraction
+            * self.cylinder_iteration_scale as f32
             / total_pixels.max(1.0))
             .max(1e-6);
 
@@ -2683,12 +2739,10 @@ impl HighResExporter {
                 crate::scene::tonemap::HighlightMode::Filmic => 3,
             },
             levels_enabled: if config.levels_enabled { 1 } else { 0 },
-            // Equal to `sample_density` on every path that builds these
-            // directly: none of them targets, so there is no
-            // inflation to undo. The two differ only in the
-            // interactive/headless path that `refresh_sample_density`
-            // writes per frame.
-            levels_density: sample_density,
+            // Levels measures against the frame's REAL mean: this same
+            // number without the targeting inflation, undone as
+            // `refresh_sample_density` undoes it. Equal to it untargeted.
+            levels_density: (sample_density / self.cylinder_iteration_scale as f32).max(1e-6),
             _pad_levels: 0,
         }
     }
@@ -3260,7 +3314,11 @@ impl HighResExporter {
         // yields a scale-invariant `density × k2` so brightness doesn't
         // drift with sample count.
         let total_pixels = (self.width as f32) * (self.height as f32);
+        // A targeted export is counted as the untargeted iterations it
+        // stands for, as `FlameRenderer::refresh_sample_density` counts a
+        // targeted frame -- the same expression, so the two agree.
         let sample_density = ((total_iterations as f32) * self.solid_density_fraction
+            * self.cylinder_iteration_scale as f32
             / total_pixels.max(1.0))
             .max(1e-6);
 
@@ -3319,12 +3377,10 @@ impl HighResExporter {
             // the opaque export exactly. Respect the flame's setting in both
             // modes (matches FlameRenderer::set_transparent_mode after its fix).
             levels_enabled: if config.levels_enabled { 1 } else { 0 },
-            // Equal to `sample_density` on every path that builds these
-            // directly: none of them targets, so there is no
-            // inflation to undo. The two differ only in the
-            // interactive/headless path that `refresh_sample_density`
-            // writes per frame.
-            levels_density: sample_density,
+            // Levels measures against the frame's REAL mean: this same
+            // number without the targeting inflation, undone as
+            // `refresh_sample_density` undoes it. Equal to it untargeted.
+            levels_density: (sample_density / self.cylinder_iteration_scale as f32).max(1e-6),
             _pad_levels: 0,
         };
 
@@ -3628,5 +3684,192 @@ impl HighResExporter {
         readback_buffer.unmap();
 
         Ok(pixels)
+    }
+}
+
+#[cfg(test)]
+mod targeting_tests {
+    use super::*;
+    use crate::scene::transforms::Transform;
+
+    struct Quiet;
+    impl crate::export::ExportReporter for Quiet {
+        fn progress(&mut self, _fraction: f32, _detail: &str) {}
+    }
+
+    fn device() -> (Device, Queue) {
+        let instance = Instance::new(InstanceDescriptor {
+            backends: Backends::all(),
+            ..InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = pollster::block_on(instance.request_adapter(&RequestAdapterOptions {
+            power_preference: PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .expect("adapter");
+        let al = adapter.limits();
+        let mut limits = Limits::default();
+        limits.max_storage_buffers_per_shader_stage = al.max_storage_buffers_per_shader_stage;
+        limits.max_storage_buffer_binding_size = al.max_storage_buffer_binding_size;
+        limits.max_buffer_size = al.max_buffer_size;
+        pollster::block_on(adapter.request_device(&DeviceDescriptor {
+            label: Some("export targeting test"),
+            required_features: Features::CLEAR_TEXTURE,
+            required_limits: limits,
+            ..Default::default()
+        }))
+        .expect("device")
+    }
+
+    /// Which pixels anything landed on (the background is black), and
+    /// the mean brightness of each 16x16 block.
+    fn stats(rgba: &[u8], w: u32) -> (Vec<bool>, Vec<f64>) {
+        let lit: Vec<bool> = rgba.chunks(4).map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 0).collect();
+        let (bw, bh) = (w as usize / 16, rgba.len() / 4 / w as usize / 16);
+        let mut blocks = vec![0.0f64; bw * bh];
+        for (i, p) in rgba.chunks(4).enumerate() {
+            let (x, y) = (i % w as usize / 16, i / w as usize / 16);
+            if x < bw && y < bh {
+                blocks[y * bw + x] += (p[0] as f64 + p[1] as f64 + p[2] as f64) / 765.0 / 256.0;
+            }
+        }
+        (lit, blocks)
+    }
+
+    /// The Heighway dragon of `a_smaller_plan_after_a_larger_one_draws_its_own_words`:
+    /// two affine maps, so the composed arm.
+    fn dragon(zoom: f32) -> FractalConfig {
+        let mut cfg = FractalConfig::default();
+        cfg.flame.transforms.clear();
+        for (m, colour, speed) in [
+            ([0.5f32, -0.5, 0.5, 0.5, 0.0, 0.0], 0.2f32, 0.7f32),
+            ([-0.5, -0.5, 0.5, -0.5, 1.0, 0.0], 0.8, 0.57),
+        ] {
+            let mut t = Transform::default();
+            (t.a, t.b, t.c, t.d, t.e, t.f) = (m[0], m[1], m[2], m[3], m[4], m[5]);
+            t.weight = 1.0;
+            t.color = colour;
+            t.color_speed = speed;
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("linear", 1.0);
+            cfg.flame.transforms.push(t);
+        }
+        cfg.zoom = zoom;
+        cfg.pan_x = 0.5;
+        cfg.pan_y = 0.25;
+        cfg
+    }
+
+    /// **The tiled exporter targets as the renderer does.** It rendered
+    /// the plain chaos game whatever the config asked, so a deep view
+    /// exported through it -- every long render from the app, and every
+    /// image past one binding -- came out as the sparse pixels an
+    /// untargeted render leaves there. Now it plans the export's view once
+    /// and draws that plan for the whole image.
+    ///
+    /// Compared against `FlameRenderer` targeting the same view, at the
+    /// same size and iterations: the same pixels lit, as bright. The views:
+    /// the affine dragon deep (the composed arm); a Grand JuliaN generator
+    /// flame with a final (the replay); and, where they are on disk, the
+    /// saved julian-disc views (the replay in offsets).
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_targeted_export_is_the_targeted_render() {
+        const W: u32 = 320;
+        const H: u32 = 240;
+        const ITERS: u64 = 48_000_000;
+        let mut cases: Vec<(String, FractalConfig)> = vec![("dragon 1e9".into(), dragon(1e9))];
+        {
+            let host = crate::script::ScriptHost::new();
+            let text = include_str!("../../assets/scripts/generators/grand_julian.rhai");
+            let mut cfg = host.run(text, &FractalConfig::default(), 7, Default::default()).expect("the script runs").config;
+            let reg = global_registry();
+            let b = crate::scene::backward::Backward::read(&cfg.flame, &reg).expect("armed");
+            let x = b.plotted(b.sample_point(0.75));
+            (cfg.pan_x, cfg.pan_y, cfg.zoom) = (x[0], x[1], 1e3);
+            cases.push(("grand julian final-7 1e3".into(), cfg));
+        }
+        for (name, path, zoom) in [
+            ("targeted-1e9", "output/blue-band/targeted-1e9.fflame", None),
+            ("julian-disc 1e8", "output/flame-zoom/julian-disc.fflame", Some(1e8f32)),
+        ] {
+            let Ok(text) = std::fs::read_to_string(path) else {
+                println!("  no {path}");
+                continue;
+            };
+            let mut cfg: FractalConfig = serde_json::from_str(&text).expect("a config");
+            if let Some(z) = zoom {
+                let reg = global_registry();
+                let b = crate::scene::backward::Backward::read(&cfg.flame, &reg).expect("armed");
+                let x = b.sample_point(0.75);
+                (cfg.pan_x, cfg.pan_y, cfg.zoom) = (x[0], x[1], z);
+            }
+            cases.push((name.into(), cfg));
+        }
+
+        let (device, queue) = device();
+        let _ = std::fs::create_dir_all("output/export-targeting");
+        let mut failures = Vec::new();
+        println!("  case                        [replay, relative, offsets]   lit render/export  overlap r>e e>r   mean render/export");
+        for (name, mut cfg) in cases {
+            cfg.render_mode = RenderMode::TwoD;
+            cfg.deterministic_rng = true;
+            cfg.levels_enabled = false;
+            cfg.auto_exposure = false;
+            cfg.cylinder_targeting = true;
+            let job = crate::renderer::RenderJob::new(&cfg, W, H).with_iterations(ITERS);
+            let rendered = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data;
+            let mut exporter = pollster::block_on(HighResExporter::new(&cfg, W, H, Some(256))).expect("exporter");
+            let (state, flags) = exporter.targeting();
+            let (state, flags) = (format!("{state:?}"), flags);
+            let exported = pollster::block_on(exporter.export(&cfg, ITERS, false, false, &mut Quiet)).expect("export");
+            let tag = name.replace(' ', "-");
+            let _ = image::save_buffer(format!("output/export-targeting/{tag}-render.png"), &rendered, W, H, image::ColorType::Rgba8);
+            let _ = image::save_buffer(format!("output/export-targeting/{tag}-export.png"), &exported, W, H, image::ColorType::Rgba8);
+
+            let (lr, blocks_r) = stats(&rendered, W);
+            let (le, blocks_e) = stats(&exported, W);
+            let (nr, ne) = (lr.iter().filter(|v| **v).count(), le.iter().filter(|v| **v).count());
+            let both = lr.iter().zip(&le).filter(|(a, b)| **a && **b).count();
+            let (re, er) = (both as f64 / nr.max(1) as f64, both as f64 / ne.max(1) as f64);
+            let br = blocks_r.iter().sum::<f64>() / blocks_r.len() as f64;
+            let be = blocks_e.iter().sum::<f64>() / blocks_e.len() as f64;
+            // The worst block that is not black in both.
+            let worst = blocks_r
+                .iter()
+                .zip(&blocks_e)
+                .filter(|(a, b)| a.max(**b) > 0.02)
+                .map(|(a, b)| (a - b).abs() / a.max(*b))
+                .fold(0.0f64, f64::max);
+            println!(
+                "  {name:<27} {:<29} {nr:>6}/{ne:<6}       {re:.3} {er:.3}      {br:.4}/{be:.4}  worst block {worst:.3}",
+                format!("{flags:?}")
+            );
+            println!("      {state}");
+            if flags.is_none() {
+                failures.push(format!("{name}: the export did not target ({state})"));
+                continue;
+            }
+            if nr < 2000 {
+                failures.push(format!("{name}: the render lit only {nr} pixels -- not a view to compare on"));
+                continue;
+            }
+            if re < 0.9 || er < 0.9 {
+                failures.push(format!(
+                    "{name}: lit pixels disagree -- the export lights {re:.3} of the render's, the render {er:.3} of the export's"
+                ));
+            }
+            if (br - be).abs() > 0.05 * br.max(be) {
+                failures.push(format!("{name}: brightness disagrees -- render {br:.4}, export {be:.4}"));
+            }
+            if worst > 0.25 {
+                failures.push(format!("{name}: a block's brightness disagrees by {worst:.3}"));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 }

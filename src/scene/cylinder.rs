@@ -475,6 +475,18 @@ impl Cylinders {
         }
     }
 
+    /// **How many iterations of the unbiased chaos game one targeted
+    /// iteration stands for**: `1 / (mass · S)`, the factor the tone map's
+    /// sample count is scaled by (`FlameRenderer::cylinder_iteration_scale`
+    /// says why). 1 for a plan with no mass.
+    pub fn iteration_scale(&self) -> f64 {
+        if self.mass > 0.0 {
+            1.0 / (self.mass * self.draw_scale())
+        } else {
+            1.0
+        }
+    }
+
     /// **Whether the replay table holds the words' draw weights**
     /// (`pack_words`): the `1 / draw` each sample deposits, and the
     /// conditional draws' blocks. Where it would not, every word is drawn

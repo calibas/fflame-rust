@@ -43,6 +43,105 @@ pub enum TargetingState {
     Active { words: usize, depth: usize, speedup: f64, mass: f64, lost: f64 },
 }
 
+impl TargetingState {
+    /// The state of a plan being drawn.
+    fn active(c: &crate::scene::cylinder::Cylinders) -> Self {
+        Self::Active { words: c.words.len(), depth: c.depth, speedup: c.speedup(), mass: c.mass, lost: c.lost }
+    }
+}
+
+/// **A plan for a view that does not move, packed for the shader** --
+/// what a render that is not a `FlameRenderer` needs in order to target
+/// as one would: the tiled exporter, which renders the whole image from
+/// one stream of dispatches and so has one view to plan, however it is
+/// tiled.
+pub struct ViewPlan {
+    /// The word table, bound where the renderer binds its own.
+    pub table: Vec<f32>,
+    /// The shader's constants, as `FlameRenderer` sets them for the same
+    /// plan: `cylinder_replay`, `cylinder_relative`, `cylinder_offsets`.
+    pub replay: bool,
+    pub relative: bool,
+    pub offsets: bool,
+    /// The factor the tone map's iteration count is scaled by
+    /// (`Cylinders::iteration_scale`).
+    pub iteration_scale: f64,
+}
+
+/// **Plan `config`'s view at `width` by `height`, as the renderer
+/// would**, and pack it: `None` with the state that says why where the
+/// view is not targeted -- not asked for, not 2D, not enumerable, not
+/// worth it.
+///
+/// The same decisions as `FlameRenderer::update_cylinders` and
+/// `apply_plan`, made once: the removals the walk makes no words for,
+/// PathMap's shortest word, the plan dropped where it does not pay
+/// unless it is kept, then the removals and the trim applied to what is
+/// drawn. What the renderer adds for its panels -- the Pieces panel's
+/// splits, the Words panel's solo, PathMap's colours -- is not part of
+/// the config and has no place here.
+///
+/// Planned on the GPU given on the desktop, as the renderer's inline
+/// plans are; the CPU on the web.
+pub fn plan_view(
+    device: &Device,
+    queue: &Queue,
+    config: &FractalConfig,
+    width: u32,
+    height: u32,
+) -> (TargetingState, Option<ViewPlan>) {
+    let two_d = matches!(config.render_mode, crate::scene::transforms::RenderMode::TwoD);
+    if !config.cylinder_targeting {
+        return (TargetingState::Off, None);
+    }
+    if !two_d {
+        return (TargetingState::NotPlanar, None);
+    }
+    let registry = crate::variations::global_registry();
+    let view = crate::scene::cylinder::View::of(
+        config.zoom.max(1e-6) as f64,
+        [config.pan_x, config.pan_y],
+        width.max(1),
+        height.max(1),
+    );
+    #[cfg(not(target_arch = "wasm32"))]
+    let gpu = std::sync::Mutex::new(crate::scene::plan_gpu::GpuPlanner::new(device, queue));
+    #[cfg(target_arch = "wasm32")]
+    let _ = (device, queue);
+    let removals = crate::scene::word_tree::parse_removals(&config.word_removals);
+    let outcome = crate::scene::cylinder::Cylinders::plan_opts(
+        &config.flame,
+        &registry,
+        view,
+        crate::scene::backward::PlanOptions {
+            #[cfg(not(target_arch = "wasm32"))]
+            gpu: Some(&gpu),
+            removals: &removals,
+            min_len: FlameRenderer::path_min_len(config),
+            ..Default::default()
+        },
+    );
+    let (state, planned) = FlameRenderer::judge_plan(config, outcome);
+    let Some(full) = planned else { return (state, None) };
+    let drawn = crate::scene::word_tree::trim_to(
+        &crate::scene::word_tree::remove(&full, &removals),
+        config.cylinder_trim as f64,
+        config.cylinder_trim_levels as usize,
+    );
+    let relative = FlameRenderer::relative_is_safe_for(&drawn, config);
+    let plan = ViewPlan {
+        table: FlameRenderer::pack_plan(&drawn, config),
+        replay: !drawn.composable,
+        relative,
+        // The replay table's shift -- the plan's centre less the view's
+        // (`write_cylinder_shift`) -- is zero here, and the packing
+        // leaves it so: the plan is made for exactly this view.
+        offsets: relative && !drawn.composable && !drawn.refs.is_empty(),
+        iteration_scale: drawn.iteration_scale(),
+    };
+    (TargetingState::active(&drawn), Some(plan))
+}
+
 
 /// A cylinder plan being made in the background -- on a worker thread on
 /// the desktop, and on the web as a future polled a slice at a time each
@@ -1986,7 +2085,10 @@ impl FlameRenderer {
     }
 
     fn relative_is_safe(&self, config: &FractalConfig) -> bool {
-        let Some(cyl) = &self.cylinders else { return false };
+        self.cylinders.as_ref().is_some_and(|cyl| Self::relative_is_safe_for(cyl, config))
+    }
+
+    fn relative_is_safe_for(cyl: &crate::scene::cylinder::Cylinders, config: &FractalConfig) -> bool {
         let registry = crate::variations::global_registry();
         // The composed arm subtracts the centre as it composes; a replay
         // does so where its plan carries references, and subtracts the
@@ -3844,6 +3946,35 @@ impl FlameRenderer {
         config.cylinder_always || Self::edits_words(config) || config.color_mode == ColorMode::PathMap
     }
 
+    /// What the panel says of a plan, and the plan to draw if it is drawn:
+    /// none where the flame could not be enumerated, or where the plan
+    /// does not pay -- unless it is kept anyway (`keeps_plan`).
+    fn judge_plan(
+        config: &FractalConfig,
+        outcome: Result<crate::scene::cylinder::Cylinders, crate::scene::cylinder::NoCylinders>,
+    ) -> (TargetingState, Option<crate::scene::cylinder::Cylinders>) {
+        match outcome {
+            Err(why) => (TargetingState::Declined(why), None),
+            // Unless the picture is being edited by its words, which
+            // needs the plan to draw at all.
+            Ok(c) if c.speedup() <= 1.0 && !Self::keeps_plan(config) => {
+                (TargetingState::NotWorthIt { speedup: c.speedup() }, None)
+            }
+            Ok(c) => (TargetingState::active(&c), Some(c)),
+        }
+    }
+
+    /// The word table for the shader. Two packings, because there are two
+    /// kernels: a flame whose maps are all affine folds each word into one
+    /// matrix, and anything else is handed the symbols to walk.
+    fn pack_plan(c: &crate::scene::cylinder::Cylinders, config: &FractalConfig) -> Vec<f32> {
+        if c.composable {
+            crate::scene::cylinder::pack(c, &config.flame, &crate::variations::global_registry())
+        } else {
+            crate::scene::cylinder::pack_words(c, &config.flame)
+        }
+    }
+
     /// PathMap's colouring -- style and level -- or `None` when the
     /// colour mode is not PathMap.
     fn path_colouring(config: &FractalConfig) -> Option<(PathMapStyle, u32)> {
@@ -3906,28 +4037,9 @@ impl FlameRenderer {
         let registry = crate::variations::global_registry();
         let two_d = matches!(config.render_mode, crate::scene::transforms::RenderMode::TwoD);
         let planned = if let Some(outcome) = outcome {
-            match outcome {
-                Err(why) => {
-                    self.targeting_state = TargetingState::Declined(why);
-                    None
-                }
-                // Unless the picture is being edited by its words, which
-                // needs the plan to draw at all.
-                Ok(c) if c.speedup() <= 1.0 && !Self::keeps_plan(config) => {
-                    self.targeting_state = TargetingState::NotWorthIt { speedup: c.speedup() };
-                    None
-                }
-                Ok(c) => {
-                    self.targeting_state = TargetingState::Active {
-                        words: c.words.len(),
-                        depth: c.depth,
-                        speedup: c.speedup(),
-                        mass: c.mass,
-                        lost: c.lost,
-                    };
-                    Some(c)
-                }
-            }
+            let (state, planned) = Self::judge_plan(config, outcome);
+            self.targeting_state = state;
+            planned
         } else {
             self.targeting_state = if config.cylinder_targeting && !two_d {
                 TargetingState::NotPlanar
@@ -3992,28 +4104,15 @@ impl FlameRenderer {
             }
         }
         if let (TargetingState::Active { .. }, Some(c)) = (&self.targeting_state, &planned) {
-            self.targeting_state = TargetingState::Active {
-                words: c.words.len(),
-                depth: c.depth,
-                speedup: c.speedup(),
-                mass: c.mass,
-                lost: c.lost,
-            };
+            self.targeting_state = TargetingState::active(c);
         }
         self.cylinders_full = full;
         self.applied_trim = trim;
         self.applied_removals.clone_from(&config.word_removals);
         self.applied_solo.clone_from(&self.word_solo);
         self.word_tree = std::sync::OnceLock::new();
-        // Two packings, because there are two kernels: a flame
-        // whose maps are all affine folds each word into one matrix,
-        // and anything else is handed the symbols to walk.
         let packed = planned.as_ref().map(|c| {
-            let mut table = if c.composable {
-                crate::scene::cylinder::pack(c, &config.flame, &registry)
-            } else {
-                crate::scene::cylinder::pack_words(c, &config.flame)
-            };
+            let mut table = Self::pack_plan(c, config);
             if let Some(colours) = &colours {
                 crate::scene::word_tree::recolour(&mut table, c.composable, colours);
             }
@@ -4383,10 +4482,7 @@ impl FlameRenderer {
     /// (`Cylinder::draw`) deposits `1 / S` per draw on average, which is
     /// `N / (P(A_V) · S)` iterations' worth.
     pub fn cylinder_iteration_scale(&self) -> f64 {
-        match &self.cylinders {
-            Some(c) if c.mass > 0.0 => 1.0 / (c.mass * c.draw_scale()),
-            _ => 1.0,
-        }
+        self.cylinders.as_ref().map_or(1.0, |c| c.iteration_scale())
     }
 
     fn update_xaos_buffer(&mut self, device: &Device, queue: &Queue, flame: &crate::scene::transforms::Flame) -> bool {

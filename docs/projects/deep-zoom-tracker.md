@@ -2031,6 +2031,32 @@ projected coordinates. Open questions include:
 
 ## Done
 
+- 2026-09-28: **the tiled exporter targets.** Reported as an Export PNG
+  at 1920x1080 with 2x AA coming out as sparse pixels. The app sends a
+  long render (over 250M iterations) and any image past one binding to
+  `HighResExporter`, which rendered the plain chaos game whatever the
+  config asked: on `blue-band/targeted-1e9` it lit 8% of what the
+  targeted render does, and on the dragon at 1e9 nothing. It now plans
+  ONE view, the export's, before building its shader -- every dispatch
+  emits samples for the whole image and the tiles only scatter them, so
+  there is one view however it is tiled. `compute_kernel::plan_view`
+  makes the renderer's decisions once (removals, PathMap's shortest word,
+  not-worth-it unless kept, trim), shared with `apply_plan`; the exporter
+  binds the table, builds the 2D shader with the renderer's four flags,
+  and scales its tone map's count by `Cylinders::iteration_scale` (Levels
+  keeps the real mean, as `refresh_sample_density` does). Gate:
+  `a_targeted_export_is_the_targeted_render` -- the exporter against
+  `FlameRenderer` on the dragon (composed), a Grand JuliaN with a final
+  (replay) and the saved julian-disc views (replay in offsets): mean
+  brightness within 0.1%, lit pixels 93-100% shared; every view fails
+  with the exporter untargeted. At the reported size (3840x2160, 4e9
+  iterations) the two engines' PNGs agree to 0.03% in mean brightness
+  and 99% of lit pixels; the exporter took 75 s to the renderer's 48 s,
+  which is its sample-emit path, not the targeting. Not done: planning
+  runs inside `HighResExporter::new`, before `export` reports progress,
+  so the status line reads "Exporting PNG" until the plan is made; the
+  exporter draws no PathMap colours and does no auto exposure, as
+  before.
 - 2026-09-28: **an affine flame's plan drew a previous plan's words.**
   Reported as a section of a Heighway dragon at 5e12 black, or drawn
   offset, until a slight pan; an export of the same view was right. The
