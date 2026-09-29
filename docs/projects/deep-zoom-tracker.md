@@ -14,7 +14,8 @@ other platforms (macOS/Metal, Firefox) is planned for later.
 Status: **open**, **investigate** (measure before building), **done**.
 
 **Order of work (2026-09-28)**, from the review below, agreed: P3 step 1
-(done 2026-09-28), P7, P8, P9, then C14, C13, C15. It replaces the
+(done 2026-09-28), P7 (dropped 2026-09-29; P10, measured in its place),
+P8, P9, then C14, C13, C15. It replaces the
 2026-09-23 priorities for these items; coverage-first decides what comes
 after them. C16, a coverage gap P3's measurements found, is new and not
 yet placed in it.
@@ -90,9 +91,10 @@ offscreen" is what the pull-back does; what costs is deciding a branch
 is offscreen, the replays of unseen children, half the GPU time.
 Skipping those is where a lossy mode would save, and C3 and
 inversive-targeting §31 measured what it loses -- 2.6% of a view, 3% a level: holes, not noise. Not
-planned as a default. What gives the feel without losing anything: no
-accumulation reset when a plan lands (P7), and an anytime planner that
-delivers a complete coarse plan in ~0.3 s and deepens it (P8).
+planned as a default. What gives the feel without losing anything: an
+anytime planner that delivers a complete coarse plan in ~0.3 s and
+deepens it (P8). (Keeping the accumulation across a landed plan, P7,
+was dropped 2026-09-29.)
 
 ---
 
@@ -1858,45 +1860,46 @@ arm). References 864 -> 360 ms at 1e2, 1,256 -> 536 at 1e4, 2,634 ->
 The offsets replay as before (per-sample gate, worst 99th percentile
 0.027 px).
 
-### P7. No accumulation reset when a plan lands -- open, planned (2026-09-28)
+### P7. No accumulation reset when a plan lands -- dropped (2026-09-29)
 
-Every plan that lands restarts the picture (`plan_arrived`,
-`take_plan_arrived` in `compute_kernel.rs`, taken in `app/mod.rs`),
-because the tonemap's `sample_density` is `samples_in_buffer` times the
-CURRENT plan's `cylinder_iteration_scale()` (`refresh_sample_density`):
-samples under another plan carry another weight. So after a pan the
-standby draws for 1-5 s, then the tight plan lands and throws that away.
+The proposal: keep the samples drawn under the standby (or a coarser
+plan) when the tight plan lands, summing raw counts across plans with
+each batch counted as `n_b / (mass_b·S_b)` untargeted iterations. The
+density sum is sound in expectation; everything else the tone map reads
+is not:
 
-Under a plan `b`, a batch of `n_b` samples puts `n_b·μ(P)/mass_b` in
-pixel `P` for every pixel its antichain covers; that is `N_b·μ(P)` with
-`N_b = n_b / (mass_b·S_b)` equivalent untargeted iterations. Summing raw
-counts over batches from different plans is unbiased wherever every
-plan covered the pixel, with `Σ N_b` as the denominator. So:
+- **Levels** (on by default) measures against `samples / pixels`, which
+  stands for the frame's mean only while every batch lands a similar
+  share of its samples in the view. The standby's disc has twice the
+  radius: for an evenly spread attractor about a sixth of its samples
+  land in the view, against about two thirds of the tight plan's. Mixed,
+  the reference drifts with the ratio of batches, and the Levels
+  thresholds with it.
+- **Auto exposure** multiplies the whole count by the current coverage
+  (an EMA), so untargeted batches followed by targeted ones would be
+  scaled by the targeted coverage.
+- **A third count** to keep aligned with the accumulator through every
+  reset path -- the class of bug behind the overwrite-exit flash and the
+  stale `levels_density` (15 grey levels).
+- **Each plan's own small errors** (negligible words dropped within P3's
+  1% room, the f32 CDF, C16's misjudged children) would blend and drift
+  after a swap instead of belonging to one picture.
 
-1. `accumulate_pass` keeps a running `equiv_iters += samples_this_frame ·
-   cylinder_iteration_scale()`, and `refresh_sample_density` reads it
-   in place of `samples_in_buffer · scale` (the solid fraction and the
-   frame-coverage factor stay as they are; `levels_density` becomes
-   `samples_in_buffer / pixels`, which it was).
-2. `plan_arrived` is set only when the PICTURE changes -- a flame edit,
-   removals, solo, trim, a plan for another view -- not when a complete
-   plan for a disc containing the view replaces another (tight after
-   standby, a deeper plan after a coarse one, targeted after untargeted:
-   untargeted batches have scale 1 and cover everything). The view's own
-   move resets as it always has.
-3. Gate: a render that accumulates under the standby, swaps the tight
-   plan in without a reset and accumulates on, against the tight plan
-   alone and against untargeted: brightness equal to two digits, overlap
-   1.000; `a_standby_plan_covers_a_move` as before.
+And what it would keep is small: 1-5 s of standby is worth roughly
+0.25-1.25 s of the tight plan's samples in the view. Decided: a landed
+plan resets, and accumulation starts under it at once. Replaced by
+measuring whether the render slows the planner (P10).
 
 ### P8. An anytime planner -- open, planned (2026-09-28)
 
 A plan whose frontier is forced is complete, only less efficient (§27),
 and the walk is level-structured, so it can deliver: after the first
 ~0.3 s a complete coarse plan, then a deeper one every time it has
-doubled its time, the last being the plan it makes today. With P7 each
-swap only brightens; the user sees a whole picture at once and watches it
-sharpen. Needs:
+doubled its time, the last being the plan it makes today. The user sees
+a whole picture at once and watches it sharpen. Written with P7 in mind,
+so each swap kept the picture; P7 is dropped, so each delivery resets the
+accumulation as a landed plan does -- early, while little has been
+accumulated. Needs:
 
 1. `walk_disc`'s level loop (`backward.rs`) takes a delivery schedule in
    `PlanOptions` and, at a level boundary past the next deadline, builds
@@ -1906,15 +1909,15 @@ sharpen. Needs:
    emits it; then continues. The final plan is bit for bit the plan made
    without emission, so the existing gates hold.
 2. `PlanJob` (`compute_kernel.rs`) receives intermediate plans through
-   its channel and `poll_plan_job` applies each as it arrives, under P7's
-   rule (no reset). The web's job is the same future, polled per frame.
+   its channel and `poll_plan_job` applies each as it arrives, resetting
+   the accumulation. The web's job is the same future, polled per frame.
 3. The standby stays: a pan's first frames are its; the anytime tight
    plan follows in ~0.3 s.
 4. Gates: `a_plan_is_made_in_the_background` extended -- the first plan
    within 0.5 s, complete by the CPU coverage test (≥ 0.99 where it can
    judge), efficiency rising with each delivery, the last plan equal to
-   the one-shot plan's words; and the picture after the last lands, with
-   no reset, against the untargeted reference.
+   the one-shot plan's words; and the picture after the last lands against
+   the untargeted reference.
 
 ### P9. Offsets by Jacobian chains -- open, planned (2026-09-28)
 
@@ -1958,6 +1961,42 @@ that kernel's fallback and the failure is recorded here; the forms are
 removed only where the gate says they can be.
 
 ---
+
+### P10. The render slows the planner -- measured (2026-09-29)
+
+In the app the planner submits to the render's own queue, so each of a
+plan's round trips waits behind whatever dispatch is queued. Measured by
+`dbg_plan_time_under_render_load` (`cylinder.rs`): the same background
+plan, after a warm-up plan, while a 60 Hz frame loop renders at the app's
+batch shapes at 1280x720, the previous view's plan drawing, two rounds
+interleaved. Plan time from the job's start to its landing:
+
+| flame, zoom | plan | paused | floor 2x64 | 128x64 | 128x256 |
+|---|---|---|---|---|---|
+| julian-disc 1e6 | 100,479 words | 4.50 s | 3.98 s | 3.97 s | 8.19 s |
+| grand-julian 1e4 | 4,196 words | 0.17 s | 0.22 s | 0.15 s | 0.21 s |
+| random1 1e4 | 4,307 words | 0.35 s | 0.47 s | 0.44 s | 0.45 s |
+
+Median dispatch per frame on julian-disc: 2.6 ms at the floor, 3.0 ms at
+128x64, 13 ms at 128x256.
+
+- **A full batch nearly doubles a long plan** (1.82x): at 13 ms of a
+  16.7 ms frame, most round trips wait behind a dispatch.
+- **A light render costs it nothing** -- 12% faster than no render at all,
+  in both rounds. Why is not measured; a GPU that idles between round
+  trips clocking down is the likely guess.
+- **Short plans show no effect** above the noise: 9-30 frames each, and
+  the rounds differ by up to 30%.
+
+The app runs the full batch whenever frames fit the budget: `Batch::shape`
+at scale 1 is 128x256 with or without shortening, so a plan made after a
+pan is the 128x256 column, less whatever the governor sheds once the
+planner's work lengthens the frames. Not measured in the app itself.
+
+Suggested, not built: while a tight plan is made, cap the dispatch at the
+shortened full width (128 x the ipt floor) and hold the governor, so the
+frames the planner lengthens do not teach it to shed. Not a pause: the
+old plan or the standby keeps drawing, and pausing measured slower.
 
 ## Editing by words
 
