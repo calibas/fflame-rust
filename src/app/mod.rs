@@ -3181,7 +3181,13 @@ impl App {
                     self.governor_batch = Some(batch);
                     self.governor_knee = crate::app::Knee::Shedding { over: 0 };
                 }
-                if let Some(prev) = self.last_iter_frame {
+                // **A tight plan being made** (tracker P10): the dispatch is
+                // capped so the planner's round trips, queued behind it,
+                // wait for little, and the governor HOLDS -- the planner's
+                // GPU work lengthens these frames, and read as the render's
+                // cost it would shed a batch that fits.
+                let planning = renderer.planning_elapsed().is_some();
+                if let Some(prev) = self.last_iter_frame.filter(|_| !planning) {
                     // Re-ask the platform every so often rather than every
                     // frame: the answer only changes when the window moves to
                     // a different display, and `current_monitor` is a syscall.
@@ -3227,7 +3233,11 @@ impl App {
                 // remaining shed axis would be trajectory depth — which is
                 // exactly what the governor exists to protect. One
                 // workgroup still makes forward progress every frame.
-                let (effective_workgroups, effective_ipt) = batch.shape(self.governor_knee, self.iter_scale);
+                let (effective_workgroups, effective_ipt) = if planning {
+                    batch.while_planning(self.governor_knee, self.iter_scale)
+                } else {
+                    batch.shape(self.governor_knee, self.iter_scale)
+                };
 
                 self.frames_since_accumulation += 1;
 
@@ -3830,6 +3840,18 @@ impl Batch {
         (w, short)
     }
 
+    /// **The dispatch while a tight plan is made** (tracker P10): the
+    /// governor's shape, no longer than the shortened floor. The planner
+    /// submits to the render's queue, so each of its round trips waits
+    /// behind the dispatch queued ahead of it: a 100,479-word julian-disc
+    /// plan at 1e6 took 8.2 s behind 128x256 and 4.0 s behind 128x64 (4.5 s
+    /// with no render at all). Whatever is drawn meanwhile is thrown away
+    /// when the plan lands, so the length it gives up costs nothing kept.
+    pub fn while_planning(&self, knee: Knee, scale: f64) -> (u32, u32) {
+        let (w, ipt) = self.shape(knee, scale);
+        (w, ipt.min(self.ipt_floor()))
+    }
+
     /// The width of the floor's dispatch.
     fn floor_width(&self) -> u32 {
         self.shape(Knee::Shedding { over: 0 }, MIN_ITER_SCALE).0
@@ -3947,6 +3969,33 @@ mod governor_tests {
             (knee, scale) = governor_step(knee, scale, median, ratio, &batch);
         }
         out
+    }
+
+    /// **While a tight plan is made the dispatch is short** (tracker P10),
+    /// and never heavier than the governor's own shape.
+    #[test]
+    fn a_dispatch_while_planning_is_short() {
+        for shorten in [false, true] {
+            let batch = Batch { max_workgroups: 128, iterations_per_thread: 256, burn_in: 20, shorten };
+            let knees = [
+                Knee::Shedding { over: 0 },
+                Knee::Probing { width: 16, free: 1.0, frames: 0 },
+                Knee::Holding { width: 64, at: 1.0 },
+            ];
+            for knee in knees {
+                for scale in [1.0, 0.5, 0.1, MIN_ITER_SCALE] {
+                    let (w, ipt) = batch.shape(knee, scale);
+                    let (pw, pipt) = batch.while_planning(knee, scale);
+                    assert_eq!(pw, w, "{knee:?} at {scale}: the width changed");
+                    assert!(pipt <= 64 && pipt <= ipt, "{knee:?} at {scale}: {pipt} iterations a thread, against {ipt}");
+                }
+            }
+            // The full batch, as the app runs it on a light flame.
+            assert_eq!(batch.while_planning(Knee::Shedding { over: 0 }, 1.0), (128, 64));
+        }
+        // A setting shorter than the floor stays as it is.
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 32, burn_in: 20, shorten: true };
+        assert_eq!(batch.while_planning(Knee::Shedding { over: 0 }, 1.0).1, 32);
     }
 
     /// A GPU that runs every workgroup of the batch at once: the frame

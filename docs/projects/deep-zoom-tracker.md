@@ -14,7 +14,7 @@ other platforms (macOS/Metal, Firefox) is planned for later.
 Status: **open**, **investigate** (measure before building), **done**.
 
 **Order of work (2026-09-28)**, from the review below, agreed: P3 step 1
-(done 2026-09-28), P7 (dropped 2026-09-29; P10, measured in its place),
+(done 2026-09-28), P7 (dropped 2026-09-29; P10 done in its place),
 P8, P9, then C14, C13, C15. It replaces the
 2026-09-23 priorities for these items; coverage-first decides what comes
 after them. C16, a coverage gap P3's measurements found, is new and not
@@ -1962,7 +1962,7 @@ removed only where the gate says they can be.
 
 ---
 
-### P10. The render slows the planner -- measured (2026-09-29)
+### P10. The render slows the planner -- done (2026-09-29)
 
 In the app the planner submits to the render's own queue, so each of a
 plan's round trips waits behind whatever dispatch is queued. Measured by
@@ -1993,10 +1993,27 @@ at scale 1 is 128x256 with or without shortening, so a plan made after a
 pan is the 128x256 column, less whatever the governor sheds once the
 planner's work lengthens the frames. Not measured in the app itself.
 
-Suggested, not built: while a tight plan is made, cap the dispatch at the
-shortened full width (128 x the ipt floor) and hold the governor, so the
-frames the planner lengthens do not teach it to shed. Not a pause: the
-old plan or the standby keeps drawing, and pausing measured slower.
+**Built:** while a tight plan is made the dispatch is capped at the ipt
+floor, at the governor's width (`Batch::while_planning`), and the governor
+holds -- the planner's work lengthens those frames, and read as the
+render's cost it shed the batch to 0.02-0.27 of full. Not a pause: the old
+plan or the standby keeps drawing, and pausing measured slower. What is
+drawn meanwhile is thrown away when the plan lands, so the length given
+up costs nothing kept. Standby plans are not capped.
+
+**In the app** (a temporary hook, not committed: julian-disc at 1e6,
+eight long pans alternating between two views, the app's own "cylinder
+plan ready after" line; window as it opened):
+
+| | view A, 4 pans | view B, 4 pans | mean of 8 |
+|---|---|---|---|
+| before | 7.42, 6.59, 7.45, 7.49 s | 8.49, 8.63, 8.67, 8.70 s | 7.93 s |
+| capped | 5.57, 5.63, 5.78, 5.65 s | 5.84, 5.82, 5.79, 5.97 s | 5.76 s |
+
+1.38x faster, and steadier. The governor read 1.0 throughout the capped
+plans. The harness's paused time for view A at 1280x720 was 4.5 s; the
+app's window and its UI are the rest, not measured. Gate:
+`a_dispatch_while_planning_is_short` (the shape only).
 
 ## Editing by words
 
