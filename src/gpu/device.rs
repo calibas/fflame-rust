@@ -233,14 +233,12 @@ impl GpuContext {
         // the in-app export hits the same effective limits.
         limits.max_buffer_size = adapter_limits.max_buffer_size;
         limits.max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d;
-        // The compute bind group now holds 10 storage buffers
-        // (transforms, histogram, variation_params, iteration_counts,
-        // path_buffer, xaos_weights, attachments,
-        // subflame_transforms, subflame_metadata). The WebGPU spec
-        // floor of 8 forces a layout-creation failure; modern desktops
-        // report ≥10 (often 16 or 32). Mirror the adapter's actual
-        // limit, same pattern as the binding-size / buffer-size
-        // expansions above.
+        // A flame shader's layout holds only the storage buffers its WGSL
+        // uses (`gpu::pipelines::used_bindings`): 4 for a plain flame, 8
+        // with every optional one on -- within WebGPU's floor of 8. Ask
+        // for the adapter's own limit anyway, same pattern as the
+        // binding-size / buffer-size expansions above: the headroom
+        // costs nothing, and a browser reports as few as 10.
         limits.max_storage_buffers_per_shader_stage =
             adapter_limits.max_storage_buffers_per_shader_stage;
 

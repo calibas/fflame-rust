@@ -309,7 +309,7 @@ pub struct FlameRenderer {
     buffers: FlameBuffers,
     /// Bumped on every palette upload — see [`Self::palette_generation`].
     palette_generation: u64,
-    compute_bind_group: BindGroup,
+    compute_bind_group: crate::gpu::pipelines::ComputeBindGroup,
     accumulate_bind_group: BindGroup,
     histogram_blur_h_bind_group: BindGroup,
     histogram_blur_v_bind_group: BindGroup,
@@ -1149,6 +1149,13 @@ impl FlameRenderer {
             self.init_dirty = false;
         }
 
+        // **The bind group follows the shader's layout**, which holds only
+        // the bindings the shader uses (`gpu::pipelines::used_bindings`):
+        // a shader rebuilt with other bindings needs a new group, whichever
+        // of the paths that rebuild shaders did it.
+        if self.compute_bind_group.bindings != self.pipelines.compute_bindings() {
+            self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+        }
         let mut compute_pass = encoder.begin_compute_pass(&ComputePassDescriptor {
             label: Some("Flame Compute Pass"),
             timestamp_writes: None,
@@ -1158,7 +1165,7 @@ impl FlameRenderer {
         let pipeline = self.pipelines.get_trajectory_pipeline(self.current_render_mode);
 
         compute_pass.set_pipeline(pipeline);
-        compute_pass.set_bind_group(0, &self.compute_bind_group, &[]);
+        compute_pass.set_bind_group(0, &self.compute_bind_group.group, &[]);
         compute_pass.dispatch_workgroups(num_workgroups, 1, 1);
 
         drop(compute_pass);
@@ -5298,13 +5305,14 @@ impl FlameRenderer {
             source: wgpu::ShaderSource::Wgsl(source.into()),
         });
 
-        // Reuse the render path's bind group layout rather than an auto
+        // Every binding, in a layout of them all, rather than an auto
         // layout: the probe entry point touches only a few of the
         // bindings, and an auto layout would derive a *narrower* one
-        // that the existing bind group no longer satisfies.
+        // that a bind group of them all would not satisfy.
+        let (full_layout, bind_group) = self.pipelines.create_full_compute_bind_group(device, &self.buffers);
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("probe pipeline layout"),
-            bind_group_layouts: &[Some(&self.pipelines.compute_bind_group_layout)],
+            bind_group_layouts: &[Some(&full_layout)],
             immediate_size: 0,
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -5348,7 +5356,7 @@ impl FlameRenderer {
                 timestamp_writes: None,
             });
             pass.set_pipeline(&pipeline);
-            pass.set_bind_group(0, &self.compute_bind_group, &[]);
+            pass.set_bind_group(0, &bind_group, &[]);
             pass.dispatch_workgroups(threads.div_ceil(64), 1, 1);
         }
         encoder.copy_buffer_to_buffer(
