@@ -105,15 +105,30 @@ where `total_slots` is the shader builder's size of `thread_state`
 (`shader_builder_v2.rs`). They change only with the shader, and a shader
 change comes with a generation change.
 
-**Binding 8**, unused in both layouts. The storage-buffer count rises
-from 11 to 12 in `FlameRenderer`'s compute layout (`gpu/pipelines.rs`)
-and from 12 to 13 in the high-res exporter's (`export/high_res.rs`, which
-also binds `sample_counter` at 6). The device asks for the adapter's own
-limit (`gpu/device.rs`; its comment still counts 10). If a target adapter
-reports fewer (step 0 checks), the fallback keeps the count: the orbit
-buffer takes binding 16 and holds the frame-coverage counters at its head,
-as `array<atomic<u32>>`, orbit fields read and written through `bitcast`;
-the per-frame clear then covers only the counters.
+**Binding 8**, unused in both layouts. Since 2026-09-29 `FlameRenderer`'s
+compute layout holds only the bindings its shader's WGSL uses
+(`gpu::pipelines::used_bindings`; the layout of all of them held 11
+storage buffers and a laptop's Chrome allows 10, so no flame rendered
+there). So the orbit buffer is one more storage buffer only in a shader
+built with `PERSISTENT_ORBITS`, and it needs no gating of its own beyond
+its declaration's use: a plain flame's shader uses 4 storage buffers
+(transforms, histogram, variation params, xaos), one with every optional
+binding on -- PathMap's path ids, auto exposure's counters, the plan,
+importance sampling's table -- 8, so 5 and 9 with orbits. 9 is over
+WebGPU's minimum of 8 but within the 10 the laptop reports; step 0
+records what Chrome and Firefox report on the target machines, and
+`a_flame_renders_within_a_browsers_storage_limit` gains the orbit
+buffer. If an 8-limit device must run everything at once, the fallback
+still applies: the orbit buffer takes binding 16 and holds the
+frame-coverage counters at its head, as `array<atomic<u32>>`, orbit
+fields read and written through `bitcast`; the per-frame clear then
+covers only the counters.
+
+The high-res exporter (`export/high_res.rs`) still binds a fixed layout
+of 12 storage buffers (it also binds `sample_counter` at 6), 13 with the
+orbit buffer. It is the desktop's only -- the web never builds one -- and
+desktop adapters report far more; it can take the same per-shader layout
+when step 3 reaches it.
 
 The buffer survives a resize: orbits do not depend on the view. It is
 created zeroed, so every thread's `gen` is 0 until its first dispatch.

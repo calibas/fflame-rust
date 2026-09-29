@@ -2187,6 +2187,21 @@ projected coordinates. Open questions include:
 
 ## Done
 
+- 2026-09-29: **no flame rendered in a laptop's Chrome** ("The number of
+  storage buffers (11) in the Compute stage exceeds the maximum per-stage
+  limit (10)"). This branch took the compute layout from 9 storage buffers
+  to 11 (importance sampling's table, the plan, auto exposure's counters),
+  and a browser counts the layout's, used or not. Each flame shader's
+  layout now holds the bindings its WGSL uses
+  (`gpu::pipelines::used_bindings`, a scan of the generated source -- the
+  web build has no parser -- held to naga's answer on the desktop): 4
+  storage buffers for a plain flame, 8 with every optional one on, so
+  within WebGPU's minimum. The bind group follows the pipeline's layout
+  (`FlameRenderer::compute_pass` rebuilds it when the bindings change); the
+  numerical probe builds a layout of all of them when it runs. Gates:
+  `a_layout_holds_every_binding_its_shader_uses`,
+  `a_flame_renders_within_a_browsers_storage_limit` (8 and 10); the visual
+  suite 330/330; the variation probe, no differences.
 - 2026-09-28: **the tiled exporter targets.** Reported as an Export PNG
   at 1920x1080 with 2x AA coming out as sparse pixels. The app sends a
   long render (over 250M iterations) and any image past one binding to
