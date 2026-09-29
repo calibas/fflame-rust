@@ -508,6 +508,10 @@ pub struct App {
     /// The previous two frames' budget ratios, for the governor's
     /// median-of-3 outlier filter. Neutral (1.0) at rest.
     pub(super) governor_ratio_prev: [f64; 2],
+    /// Whether shedding width still helps (`Knee`), and the dispatch
+    /// geometry it was judged for: a change of geometry starts over.
+    pub(super) governor_knee: crate::app::Knee,
+    pub(super) governor_batch: Option<crate::app::Batch>,
     // Display refresh in millihertz, and a counter that re-queries it every
     // 120 iterating frames. Under vsync this — not `target_fps` — is the
     // governor's budget; see `frame_budget`.
@@ -841,6 +845,8 @@ impl App {
             iter_scale: 1.0,
             last_iter_frame: None,
             governor_ratio_prev: [1.0, 1.0],
+            governor_knee: crate::app::Knee::Shedding { over: 0 },
+            governor_batch: None,
             display_refresh_mhz: None,
             display_refresh_age: 0,
             accumulation_batch_size: 4, // EXPERIMENT: Test batching
@@ -3141,11 +3147,15 @@ impl App {
                 // it measures command ENCODING, not GPU execution — the
                 // frame delta is the only honest GPU-load signal here.)
                 //
-                // The governor scales WORKGROUPS, never iterations_per_
+                // The governor scales WORKGROUPS, not iterations_per_
                 // thread: trajectories do not persist across dispatches,
                 // so ipt IS the trajectory depth — a user-visible quality
                 // setting for long-memory fractals — while the workgroup
-                // count is pure throughput.
+                // count is pure throughput. Two exceptions (`Batch`,
+                // `Knee`): under targeting a sample's cost is its word's
+                // replay, so the dispatch is SHORTENED first, and where
+                // shedding width stops shortening the frame the width is
+                // grown back while that is free.
                 // Under vsync the compositor blocks until the next refresh, so
                 // this delta cannot go below the refresh interval however
                 // little work we submit — landing exactly ON the target is the
@@ -3158,6 +3168,19 @@ impl App {
                 // Windows with vsync off escaped it because Immediate lets the
                 // delta track real GPU time.
                 let now = web_time::Instant::now();
+                let batch = {
+                    let settings = self.config_manager.system_settings();
+                    crate::app::Batch {
+                        max_workgroups: NUM_WORKGROUPS,
+                        iterations_per_thread: settings.iterations_per_thread,
+                        burn_in: settings.burn_in,
+                        shorten: matches!(renderer.targeting_state(), crate::renderer::TargetingState::Active { .. }),
+                    }
+                };
+                if self.governor_batch != Some(batch) {
+                    self.governor_batch = Some(batch);
+                    self.governor_knee = crate::app::Knee::Shedding { over: 0 };
+                }
                 if let Some(prev) = self.last_iter_frame {
                     // Re-ask the platform every so often rather than every
                     // frame: the answer only changes when the window moves to
@@ -3192,8 +3215,10 @@ impl App {
                         a.max(b).min(a.min(b).max(c)) // median of {a, b, c}
                     };
                     self.governor_ratio_prev = [self.governor_ratio_prev[1], ratio];
-                    self.iter_scale =
-                        crate::app::adjust_iter_scale(self.iter_scale, median, ratio);
+                    let (knee, scale) =
+                        crate::app::governor_step(self.governor_knee, self.iter_scale, median, ratio, &batch);
+                    self.governor_knee = knee;
+                    self.iter_scale = scale;
                 }
                 self.last_iter_frame = Some(now);
                 // Floor of ONE workgroup: at extreme depth x emit x solid
@@ -3202,8 +3227,7 @@ impl App {
                 // remaining shed axis would be trajectory depth — which is
                 // exactly what the governor exists to protect. One
                 // workgroup still makes forward progress every frame.
-                let effective_workgroups =
-                    ((NUM_WORKGROUPS as f64 * self.iter_scale) as u32).max(1);
+                let (effective_workgroups, effective_ipt) = batch.shape(self.governor_knee, self.iter_scale);
 
                 self.frames_since_accumulation += 1;
 
@@ -3224,7 +3248,7 @@ impl App {
                 }
 
                 let samples_this_frame = renderer.compute_pass(&mut render_encoder, &self.gpu.queue, &self.gpu.device, effective_workgroups,
-                    self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in,
+                    effective_ipt, self.config_manager.system_settings().burn_in,
                     final_config.zoom, final_config.pan_x as f32, final_config.pan_y as f32, final_config.rotation,
                     final_config.camera_rotation_x, final_config.camera_rotation_y, final_config.camera_bank, final_config.camera_x, final_config.camera_y, final_config.camera_z, final_config.speed_factor, clear_histogram, clear_paths);
 
@@ -3256,6 +3280,7 @@ impl App {
                 // batch for no reason.
                 self.last_iter_frame = None;
                 self.governor_ratio_prev = [1.0, 1.0];
+                self.governor_knee = crate::app::Knee::Shedding { over: 0 };
             }
             
             let t_tonemap = Instant::now();
@@ -3735,12 +3760,295 @@ pub(crate) fn adjust_iter_scale(scale: f64, median_ratio: f64, raw_ratio: f64) -
     }
     // 1/256 lets the dispatch reach its 1-workgroup floor (128/256 -> 1
     // after the ceiling at the call site); the old 1/64 bottomed out at 2.
-    s.clamp(1.0 / 256.0, 1.0)
+    s.clamp(MIN_ITER_SCALE, 1.0)
+}
+
+/// The governor's smallest scale (`adjust_iter_scale`): its floor.
+pub(crate) const MIN_ITER_SCALE: f64 = 1.0 / 256.0;
+
+/// Frames over budget at the floor before the governor asks whether
+/// width was the constraint at all (`Knee`).
+const KNEE_AFTER: u32 = 8;
+/// Frames held at each probed width before its median is read: one of
+/// lag, since a frame's delta is read at the next frame's start, and
+/// three for the median.
+const KNEE_SETTLE: u32 = 4;
+/// A wider dispatch whose median frame costs at most this much more
+/// than the narrower one's costs nothing that matters: it is kept.
+const KNEE_FREE: f64 = 1.25;
+
+/// **The dispatch's geometry, and how the governor's scale maps onto
+/// it.** Normally the scale sheds WORKGROUPS and leaves
+/// `iterations_per_thread`, the trajectory depth, alone.
+///
+/// Under targeting (`shorten`) the dispatch is shortened first. A forced
+/// sample replays its word -- up to 96 maps at depth -- so one thread's
+/// iterations alone can outlast the frame: julian-disc at zoom 1,598 with
+/// 1,000 iterations per thread took about 58 ms at ANY width, and the
+/// governor, able only to shed width, went to one workgroup and stayed,
+/// at 1.1 million samples a second against the CLI's 76 million (the
+/// same view at full width and 256 per thread: 80-87 million, 45 fps).
+/// Shortening costs little there: the burn-in iterations skip the forced
+/// replay, and a forced sample's position comes from its word, not from
+/// how long the free orbit has run. Not for untargeted renders until
+/// orbits persist across dispatches (`docs/projects/persistent-orbits.md`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Batch {
+    pub max_workgroups: u32,
+    pub iterations_per_thread: u32,
+    pub burn_in: u32,
+    pub shorten: bool,
+}
+
+impl Batch {
+    /// The shortest dispatch a targeted batch is cut to: 64 iterations,
+    /// or three burn-ins, never more than the setting.
+    fn ipt_floor(&self) -> u32 {
+        self.iterations_per_thread.min((3 * self.burn_in).max(64)).max(1)
+    }
+
+    /// Workgroups and iterations per thread for this frame.
+    pub fn shape(&self, knee: Knee, scale: f64) -> (u32, u32) {
+        let ipt = self.iterations_per_thread.max(1);
+        let width = match knee {
+            Knee::Probing { width, .. } | Knee::Holding { width, .. } => Some(width.clamp(1, self.max_workgroups)),
+            Knee::Shedding { .. } => None,
+        };
+        if !self.shorten {
+            let w = width.unwrap_or(((self.max_workgroups as f64 * scale) as u32).max(1));
+            return (w, ipt);
+        }
+        let floor = self.ipt_floor();
+        if let Some(w) = width {
+            return (w, floor);
+        }
+        // The same work as the unshortened batch at this scale: full width
+        // while the dispatch can shorten, then narrower at its floor.
+        let short = ((ipt as f64 * scale).round() as u32).clamp(floor, ipt);
+        let work = scale * self.max_workgroups as f64 * ipt as f64;
+        let w = ((work / short as f64).round() as u32).clamp(1, self.max_workgroups);
+        (w, short)
+    }
+
+    /// The width of the floor's dispatch.
+    fn floor_width(&self) -> u32 {
+        self.shape(Knee::Shedding { over: 0 }, MIN_ITER_SCALE).0
+    }
+
+    /// The scale whose dispatch is `width` wide at the floor's length:
+    /// where shedding resumes when a hold ends.
+    fn scale_of(&self, width: u32) -> f64 {
+        let per = if self.shorten {
+            self.ipt_floor() as f64 / (self.max_workgroups as f64 * self.iterations_per_thread.max(1) as f64)
+        } else {
+            1.0 / self.max_workgroups as f64
+        };
+        (width as f64 * per).clamp(MIN_ITER_SCALE, 1.0)
+    }
+}
+
+/// **Whether shedding width still helps.** The governor assumed a
+/// frame's time grows with its width. On a GPU that runs every workgroup
+/// of the batch at once, it does not: the frame lasts as long as one
+/// thread's iterations, and shedding width throws throughput away
+/// without shortening the frame. So when the governor sits at its floor
+/// and frames are still over budget, it PROBES: it doubles the width
+/// while the frame costs at most `KNEE_FREE` times more, and holds the
+/// widest width that was free -- full width where the frame never grew.
+/// Gradually, not at once: where width does cost (heavy solid and emit
+/// stacks, the floor's reason), each step at most doubles the frame, and
+/// the first costly step ends the probe.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Knee {
+    /// Scaling by the budget (`adjust_iter_scale`); `over` counts frames
+    /// over budget at the floor.
+    Shedding { over: u32 },
+    /// Trying `width`; `free` is the median at the last width found free,
+    /// and `frames` how long `width` has been held.
+    Probing { width: u32, free: f64, frames: u32 },
+    /// Holding `width`, whose median was `at`.
+    Holding { width: u32, at: f64 },
+}
+
+/// One frame of the governor: the knee's state and the scale, from this
+/// frame's median and raw budget ratios.
+pub(crate) fn governor_step(knee: Knee, scale: f64, median: f64, raw: f64, batch: &Batch) -> (Knee, f64) {
+    match knee {
+        Knee::Shedding { over } => {
+            let s = adjust_iter_scale(scale, median, raw);
+            let floor_width = batch.floor_width();
+            if s <= MIN_ITER_SCALE && median > 1.3 && floor_width < batch.max_workgroups {
+                let over = over + 1;
+                if over >= KNEE_AFTER {
+                    let width = (floor_width * 2).min(batch.max_workgroups);
+                    return (Knee::Probing { width, free: median, frames: 0 }, s);
+                }
+                return (Knee::Shedding { over }, s);
+            }
+            (Knee::Shedding { over: 0 }, s)
+        }
+        Knee::Probing { width, free, frames } => {
+            // Under budget: the flame got lighter. Shed and grow from here.
+            if median < 1.05 {
+                return (Knee::Shedding { over: 0 }, batch.scale_of(width));
+            }
+            let narrower = (width / 2).max(batch.floor_width());
+            // One frame this far past the last free width: widening is not
+            // free, and waiting for the median would hold it.
+            if raw >= 4.0 * free {
+                return (Knee::Holding { width: narrower, at: free }, scale);
+            }
+            let frames = frames + 1;
+            if frames < KNEE_SETTLE {
+                return (Knee::Probing { width, free, frames }, scale);
+            }
+            if median <= free * KNEE_FREE {
+                if width >= batch.max_workgroups {
+                    return (Knee::Holding { width, at: median }, scale);
+                }
+                return (Knee::Probing { width: (width * 2).min(batch.max_workgroups), free: median, frames: 0 }, scale);
+            }
+            (Knee::Holding { width: narrower, at: free }, scale)
+        }
+        Knee::Holding { width, at } => {
+            if median < 1.05 {
+                // Under budget: the flame got lighter.
+                return (Knee::Shedding { over: 0 }, batch.scale_of(width));
+            }
+            if median > 2.0 * at {
+                // Heavier: back to the floor, and probe again from there.
+                return (Knee::Shedding { over: 0 }, MIN_ITER_SCALE);
+            }
+            (Knee::Holding { width, at }, scale)
+        }
+    }
 }
 
 #[cfg(test)]
 mod governor_tests {
-    use super::{adjust_iter_scale, frame_budget};
+    use super::{adjust_iter_scale, frame_budget, governor_step, Batch, Knee, MIN_ITER_SCALE};
+
+    /// The governor with the knee and the dispatch's shape, driven by a
+    /// model of what a dispatch costs: `frame(workgroups, ipt)` in
+    /// seconds, against a 60 Hz budget. Returns each frame's shape and
+    /// time.
+    fn drive(batch: Batch, frames: usize, frame: &dyn Fn(u32, u32) -> f64) -> Vec<(u32, u32, f64)> {
+        const BUDGET: f64 = 1.0 / 60.0;
+        let (mut scale, mut knee, mut prev) = (1.0f64, Knee::Shedding { over: 0 }, [1.0f64, 1.0]);
+        let mut out = Vec::new();
+        for _ in 0..frames {
+            let (w, ipt) = batch.shape(knee, scale);
+            let t = frame(w, ipt);
+            out.push((w, ipt, t));
+            let ratio = t / BUDGET;
+            let [a, b] = prev;
+            let median = a.max(b).min(a.min(b).max(ratio));
+            prev = [prev[1], ratio];
+            (knee, scale) = governor_step(knee, scale, median, ratio, &batch);
+        }
+        out
+    }
+
+    /// A GPU that runs every workgroup of the batch at once: the frame
+    /// lasts as long as one thread's iterations. 80 us an iteration is a
+    /// targeted sample's replay at depth: 1,000 iterations, 84 ms.
+    fn latency_bound(_w: u32, ipt: u32) -> f64 {
+        0.004 + ipt as f64 * 80e-6
+    }
+
+    /// **A targeted render shortens its dispatch and keeps its width**
+    /// (reported: julian-disc at zoom 1,598, 1,000 iterations per thread,
+    /// one workgroup at 17 fps, 1.1 million samples a second).
+    #[test]
+    fn a_targeted_render_shortens_its_dispatch_and_keeps_its_width() {
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20, shorten: true };
+        let run = drive(batch, 300, &latency_bound);
+        let (w, ipt, t) = *run.last().unwrap();
+        assert_eq!(w, 128, "the width was shed: {run:?}");
+        assert!(ipt >= 100 && t <= 1.3 / 60.0, "{ipt} iterations per thread, {:.1} ms a frame", t * 1e3);
+        // Plotted samples a second, against one workgroup at the full length.
+        let now = w as f64 * 64.0 * (ipt - 20) as f64 / t;
+        let before = 64.0 * 980.0 / latency_bound(1, 1000);
+        assert!(now > 50.0 * before, "{now:.3e} samples a second against {before:.3e}");
+    }
+
+    /// **Shedding that does not shorten the frame is undone.** Untargeted
+    /// and latency-bound: the dispatch keeps its length (the trajectory
+    /// depth), and the width goes back to full once the floor proves no
+    /// faster.
+    #[test]
+    fn shedding_that_does_not_help_is_undone() {
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20, shorten: false };
+        let run = drive(batch, 400, &latency_bound);
+        let (w, ipt, _) = *run.last().unwrap();
+        assert_eq!((w, ipt), (128, 1000), "the batch stayed shed: {:?}", &run[run.len() - 5..]);
+    }
+
+    /// **Where width costs, the floor holds.** Each workgroup 20 ms: the
+    /// heavy solid and emit stacks the one-workgroup floor exists for. The
+    /// probe tries two workgroups, finds them costly, and goes back --
+    /// never a frame much past twice the floor's.
+    #[test]
+    fn where_width_costs_the_floor_holds() {
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20, shorten: false };
+        let heavy = |w: u32, _ipt: u32| 0.004 + w as f64 * 0.020;
+        let run = drive(batch, 400, &heavy);
+        let settled = &run[100..];
+        assert!(settled.iter().all(|(w, _, _)| *w == 1), "left the floor: {:?}", &run[run.len() - 5..]);
+        let worst = run[50..].iter().map(|(_, _, t)| *t).fold(0.0, f64::max);
+        assert!(worst <= 2.0 * heavy(1, 1000) + 1e-9, "a probe frame took {:.0} ms", worst * 1e3);
+    }
+
+    /// **The knee is where widening starts to cost**: a GPU that runs 16
+    /// workgroups at once, then another wave.
+    #[test]
+    fn the_knee_is_where_widening_starts_to_cost() {
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20, shorten: false };
+        let waves = |w: u32, ipt: u32| 0.004 + ipt as f64 * 20e-6 * ((w + 15) / 16) as f64;
+        let run = drive(batch, 400, &waves);
+        assert_eq!(run.last().unwrap().0, 16, "{:?}", &run[run.len() - 5..]);
+    }
+
+    /// **A lighter flame leaves the hold**, and the batch grows back to
+    /// full.
+    #[test]
+    fn a_lighter_flame_leaves_the_hold() {
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20, shorten: false };
+        let (mut scale, mut knee, mut prev) = (1.0f64, Knee::Shedding { over: 0 }, [1.0f64, 1.0]);
+        let mut shapes = Vec::new();
+        for i in 0..600 {
+            let (w, ipt) = batch.shape(knee, scale);
+            let t = if i < 300 { latency_bound(w, ipt) } else { 0.004 + w as f64 * 20e-6 };
+            let ratio = t * 60.0;
+            let [a, b] = prev;
+            let median = a.max(b).min(a.min(b).max(ratio));
+            prev = [prev[1], ratio];
+            (knee, scale) = governor_step(knee, scale, median, ratio, &batch);
+            shapes.push((w, knee));
+        }
+        assert!(matches!(shapes[299].1, Knee::Holding { width: 128, .. }), "not holding before: {:?}", shapes[299]);
+        assert!(matches!(knee, Knee::Shedding { .. }) && (scale - 1.0).abs() < 1e-9, "{knee:?} at scale {scale}");
+    }
+
+    /// The floor's dispatch, and a hold's return to shedding, keep the
+    /// shape consistent: the floor is one workgroup untargeted, and under
+    /// targeting the shortest dispatch at whatever width does the floor's
+    /// work.
+    #[test]
+    fn the_floor_is_the_smallest_batch() {
+        let plain = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20, shorten: false };
+        assert_eq!(plain.shape(Knee::Shedding { over: 0 }, MIN_ITER_SCALE), (1, 1000));
+        assert_eq!(plain.shape(Knee::Shedding { over: 0 }, 1.0), (128, 1000));
+        let targeted = Batch { shorten: true, ..plain };
+        assert_eq!(targeted.shape(Knee::Shedding { over: 0 }, 1.0), (128, 1000));
+        assert_eq!(targeted.shape(Knee::Shedding { over: 0 }, 0.25), (128, 250));
+        let (w, ipt) = targeted.shape(Knee::Shedding { over: 0 }, MIN_ITER_SCALE);
+        assert_eq!(ipt, 64);
+        assert!(w >= 1 && w < 128, "{w}");
+        // A setting under the floor is left alone.
+        let short = Batch { iterations_per_thread: 32, ..targeted };
+        assert_eq!(short.shape(Knee::Shedding { over: 0 }, MIN_ITER_SCALE).1, 32);
+    }
 
     /// Drive the governor the way the app does: a rolling median-of-3
     /// window over the per-frame ratios.

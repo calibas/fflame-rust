@@ -230,6 +230,10 @@ at 128 workgroups. Without it, large exports would keep the band.
 - **Burn-in** (SystemSettings) now means iterations per restart, not per
   dispatch. Its tooltip and `docs/main/RENDERER.md` say so.
 - **Iterations per thread** no longer trades depth against breadth.
+- **The frame-time governor** (`app/mod.rs`: `Batch`, `Knee`) shortens
+  the dispatch before shedding workgroups, but only under targeting since
+  2026-09-28, because until orbits persist a shorter dispatch is a shorter
+  orbit. Once they persist, it shortens every dispatch (step 6).
 - **CLAUDE.md**'s render-pipeline paragraph is updated.
 - **The archived state doc**: its non-goal gets a note that the state now
   persists.
@@ -272,8 +276,20 @@ touches.
    (escape-time and simulation are unaffected) and the benchmark hashes.
    Review every image that moves past the tolerance, expecting noise except
    where a flame mixes slowly. Update the docs (§3.9).
-6. **Remove the flag**, or keep it as a setting if a flame is found that
+6. **The governor shortens every dispatch.** Since 2026-09-28 it cuts
+   iterations per thread before workgroups only while targeting is active
+   (`Batch::shorten`): julian-disc at zoom 1,598 with 1,000 per thread had
+   fallen to one workgroup and 1.1 million samples a second, and shortening
+   brought it to 79-87 million at full width. With persistent orbits a
+   shorter dispatch costs no orbit depth, so `shorten` becomes true for
+   every render. Gate: the independence gate with the governor shortening,
+   and the governor's tests (`governor_tests`) with `shorten` on for an
+   untargeted batch.
+7. **Remove the flag**, or keep it as a setting if a flame is found that
    renders worse. Decided then.
+8. **Governor controls in Rendering** (asked for, 2026-09-28; after the
+   rest): a toggle for the governor, and a manual workgroup count for when
+   it is off.
 
 ## 6. Gates
 
