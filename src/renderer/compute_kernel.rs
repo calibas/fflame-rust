@@ -166,7 +166,7 @@ enum Runner {
     /// A worker thread: the desktop's. `cancel` is set when the view moves
     /// on, and the planner stops at its next batch.
     #[cfg(not(target_arch = "wasm32"))]
-    Thread { cancel: std::sync::Arc<std::sync::atomic::AtomicBool>, rx: std::sync::mpsc::Receiver<PlanOutcome> },
+    Thread { cancel: std::sync::Arc<std::sync::atomic::AtomicBool>, rx: std::sync::mpsc::Receiver<Delivery> },
     /// The plan as a future, polled each frame for `slicer`'s budget or
     /// until it waits on the GPU: the web's, and the desktop's when
     /// [`FlameRenderer::set_plan_in_task`] asks, which is how the web's
@@ -174,10 +174,24 @@ enum Runner {
     Task {
         task: std::pin::Pin<Box<dyn std::future::Future<Output = PlanOutcome>>>,
         slicer: std::rc::Rc<crate::scene::backward::Slicer>,
+        /// The latest plan on the way, left here by the walk.
+        on_the_way: std::rc::Rc<std::cell::RefCell<Option<crate::scene::cylinder::Cylinders>>>,
     },
 }
 
 type PlanOutcome = Result<crate::scene::cylinder::Cylinders, crate::scene::cylinder::NoCylinders>;
+
+/// What a job hands back: a plan on the way (tracker P8), or its plan.
+enum Delivery {
+    OnTheWay(crate::scene::cylinder::Cylinders),
+    Done(PlanOutcome),
+}
+
+/// **When a tight plan first hands over a plan on the way** (tracker P8),
+/// and after that at each doubling of its time: complete plans of what the
+/// walk has so far, shown while no plan on screen covers the view. A
+/// standby delivers none.
+const PLAN_ON_THE_WAY: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// The GPU planner a job plans with: shared with the worker threads on the
 /// desktop, with the page's own tasks on the web.
@@ -191,29 +205,38 @@ type SharedPlanner = std::rc::Rc<std::cell::RefCell<crate::scene::plan_gpu::GpuP
 const WEB_PLAN_SLICE: std::time::Duration = std::time::Duration::from_millis(6);
 
 impl PlanJob {
-    /// The plan, once it is made; `None` while it is still coming.
-    fn try_take(&mut self) -> Option<PlanOutcome> {
+    /// The plan, once it is made, or the latest plan on the way; `None`
+    /// while nothing new has come.
+    fn try_take(&mut self) -> Option<Delivery> {
         match &mut self.runner {
             #[cfg(not(target_arch = "wasm32"))]
             Runner::Thread { rx, .. } => {
                 use std::sync::mpsc::TryRecvError;
-                match rx.try_recv() {
-                    Err(TryRecvError::Empty) => None,
-                    Ok(r) => Some(r),
-                    // The planner panicked. Said so, once, rather than
-                    // retried on every frame.
-                    Err(TryRecvError::Disconnected) => Some(Err(crate::scene::cylinder::NoCylinders::Unbounded {
-                        index: 0,
-                        why: "the planner failed on this view".to_string(),
-                    })),
+                // The latest of what has come: the plan itself outranks any
+                // plan on the way before it.
+                let mut latest = None;
+                loop {
+                    match rx.try_recv() {
+                        Ok(Delivery::Done(r)) => return Some(Delivery::Done(r)),
+                        Ok(d) => latest = Some(d),
+                        Err(TryRecvError::Empty) => return latest,
+                        // The planner panicked. Said so, once, rather than
+                        // retried on every frame.
+                        Err(TryRecvError::Disconnected) => {
+                            return Some(Delivery::Done(Err(crate::scene::cylinder::NoCylinders::Unbounded {
+                                index: 0,
+                                why: "the planner failed on this view".to_string(),
+                            })))
+                        }
+                    }
                 }
             }
-            Runner::Task { task, slicer } => {
+            Runner::Task { task, slicer, on_the_way } => {
                 slicer.begin();
                 let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
                 match task.as_mut().poll(&mut cx) {
-                    std::task::Poll::Ready(r) => Some(r),
-                    std::task::Poll::Pending => None,
+                    std::task::Poll::Ready(r) => Some(Delivery::Done(r)),
+                    std::task::Poll::Pending => on_the_way.borrow_mut().take().map(Delivery::OnTheWay),
                 }
             }
         }
@@ -518,6 +541,9 @@ pub struct FlameRenderer {
     /// samples drawn under the previous plan (or none), which carry a
     /// different weight, so the app resets on this.
     plan_arrived: bool,
+    /// The plan on screen is a plan on the way (tracker P8): a later one
+    /// may replace it, whatever it covers.
+    showing_on_the_way: bool,
     /// The flame half of the key the plan on screen was made for. A plan
     /// for another FLAME is dropped at once -- its words can name
     /// transforms that no longer exist -- where one for another VIEW is
@@ -718,6 +744,7 @@ impl FlameRenderer {
             background_planning: false,
             plan_job: None,
             plan_arrived: false,
+            showing_on_the_way: false,
             applied_flame_key: None,
             applied_view: None,
             standby: None,
@@ -4036,6 +4063,7 @@ impl FlameRenderer {
     ) -> bool {
         let registry = crate::variations::global_registry();
         let two_d = matches!(config.render_mode, crate::scene::transforms::RenderMode::TwoD);
+        self.showing_on_the_way = false;
         let planned = if let Some(outcome) = outcome {
             let (state, planned) = Self::judge_plan(config, outcome);
             self.targeting_state = state;
@@ -4227,10 +4255,7 @@ impl FlameRenderer {
         fn swap_in_standby(&mut self, device: &Device, queue: &Queue, config: &FractalConfig) -> Option<bool> {
         let view = self.cylinder_view(config);
         let flame_key = Self::flame_key(config);
-        let on_screen_covers = self.cylinders.is_some()
-            && self.applied_flame_key == Some(flame_key)
-            && self.applied_view.is_some_and(|v| disc_contains(v, view));
-        if on_screen_covers {
+        if self.on_screen_covers(config) {
             return None;
         }
         let covers = self
@@ -4255,6 +4280,83 @@ impl FlameRenderer {
         Some(before != after)
     }
 
+    /// **Draw `plan` from the next frame on**, as if it had just been made
+    /// for `config`'s view -- for gates that draw a plan they made
+    /// themselves. `true` when the shader must change: the caller follows
+    /// with `load_config`, which keeps this plan.
+    #[cfg(test)]
+    pub(crate) fn show_plan(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        config: &FractalConfig,
+        plan: crate::scene::cylinder::Cylinders,
+    ) -> bool {
+        let before = self.cylinder_arm();
+        let buffers_changed = self.apply_plan(device, queue, config, Some(Ok(plan)));
+        self.cylinder_key = Some(self.enumeration_key(config));
+        self.applied_flame_key = Some(Self::flame_key(config));
+        self.applied_view = self.cylinders.is_some().then(|| self.cylinder_view(config));
+        if buffers_changed {
+            self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+            self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
+        }
+        before != self.cylinder_arm()
+    }
+
+    /// **The accumulated density of each pixel, per iteration of the
+    /// unbiased chaos game it stands for**: the accumulator's weighted hit
+    /// count over `samples_in_buffer` times `cylinder_iteration_scale`. The
+    /// picture's measure, before any tone map, so a targeted render and an
+    /// untargeted one can be compared number for number. Row-major.
+    #[cfg(test)]
+    pub(crate) fn read_density_blocking(&self, device: &Device, queue: &Queue) -> Vec<f64> {
+        let row = self.width * 16;
+        let align = egui_wgpu::wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded = row.div_ceil(align) * align;
+        let buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Density Readback"),
+            size: (padded * self.height) as u64,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Density Readback") });
+        encoder.copy_texture_to_buffer(
+            TexelCopyTextureInfo {
+                texture: self.buffers.current_accumulation_texture(),
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded), rows_per_image: Some(self.height) },
+            },
+            Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 },
+        );
+        queue.submit(Some(encoder.finish()));
+        buffer.slice(..).map_async(MapMode::Read, |_| {});
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let data = buffer.slice(..).get_mapped_range();
+        let per = 1.0 / (self.samples_in_buffer.max(1) as f64 * self.cylinder_iteration_scale());
+        let mut out = Vec::with_capacity((self.width * self.height) as usize);
+        for y in 0..self.height {
+            let at = (y * padded) as usize;
+            for px in data[at..at + row as usize].chunks_exact(16) {
+                out.push(f32::from_le_bytes([px[12], px[13], px[14], px[15]]) as f64 * per);
+            }
+        }
+        out
+    }
+
+    /// Whether the plan on screen is this flame's and covers the view.
+    fn on_screen_covers(&self, config: &FractalConfig) -> bool {
+        let view = self.cylinder_view(config);
+        self.cylinders.is_some()
+            && self.applied_flame_key == Some(Self::flame_key(config))
+            && self.applied_view.is_some_and(|v| disc_contains(v, view))
+    }
+
     fn cancel_plan_job(&mut self) {
         // Dropping it stops it.
         self.plan_job = None;
@@ -4272,9 +4374,37 @@ impl FlameRenderer {
         key: u64,
     ) -> Option<bool> {
         let job = self.plan_job.as_mut()?;
-        let Some(outcome) = job.try_take() else {
-            // A standby never settles a frame: the view is already drawn.
-            return (job.kind == PlanKind::Tight && job.key == key).then_some(false);
+        let (kind, job_key, job_view, job_flame, started) = (job.kind, job.key, job.view, job.flame_key, job.started);
+        // A standby never settles a frame: the view is already drawn.
+        let for_this_view = kind == PlanKind::Tight && job_key == key;
+        let outcome = match job.try_take() {
+            None => return for_this_view.then_some(false),
+            Some(Delivery::OnTheWay(plan)) => {
+                // **A plan on the way** (tracker P8): shown only where it
+                // cannot be worse than what is on screen -- no plan there
+                // covers the view (a long pan, a first plan, a zoom past the
+                // standby), or it is an earlier plan on the way -- and only
+                // if it would be drawn at all.
+                let drawn = plan.speedup() > 1.0 || Self::keeps_plan(config);
+                if for_this_view && drawn && (self.showing_on_the_way || !self.on_screen_covers(config)) {
+                    let before = self.cylinder_arm();
+                    let words = plan.words.len();
+                    let buffers_changed = self.apply_plan(device, queue, config, Some(Ok(plan)));
+                    let after = self.cylinder_arm();
+                    self.showing_on_the_way = self.cylinders.is_some();
+                    self.applied_flame_key = Some(job_flame);
+                    self.applied_view = self.cylinders.is_some().then_some(job_view);
+                    self.plan_arrived = true;
+                    log::info!("plan on the way after {:.2} s: {words} words", started.elapsed().as_secs_f64());
+                    if buffers_changed {
+                        self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+                        self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
+                    }
+                    return Some(before != after);
+                }
+                return for_this_view.then_some(false);
+            }
+            Some(Delivery::Done(outcome)) => outcome,
         };
         let job = self.plan_job.take()?;
         if job.kind == PlanKind::Standby {
@@ -4335,10 +4465,15 @@ impl FlameRenderer {
         let min_len = Self::path_min_len(config);
         let slicer = std::rc::Rc::new(crate::scene::backward::Slicer::every(WEB_PLAN_SLICE));
         let s = slicer.clone();
+        let on_the_way: std::rc::Rc<std::cell::RefCell<Option<crate::scene::cylinder::Cylinders>>> = Default::default();
+        let slot = on_the_way.clone();
+        let tight = kind == PlanKind::Tight;
         let task = Box::pin(async move {
             // A copy, not the lock: the task lives across frames, and a
             // read guard held that long would stall any writer.
             let registry = crate::variations::global_registry().clone();
+            let leave = move |p: crate::scene::cylinder::Cylinders| *slot.borrow_mut() = Some(p);
+            let deliver = tight.then_some((&leave as &dyn Fn(crate::scene::cylinder::Cylinders), PLAN_ON_THE_WAY));
             match gpu {
                 Some(g) => {
                     // One job at a time, and a job is dropped before the
@@ -4347,9 +4482,9 @@ impl FlameRenderer {
                     let mut g = g.borrow_mut();
                     #[cfg(not(target_arch = "wasm32"))]
                     let mut g = g.lock().unwrap_or_else(|e| e.into_inner());
-                    crate::scene::cylinder::Cylinders::plan_sliced(&flame, &registry, view, Some(&mut g), &removals, &refine, min_len, &s).await
+                    crate::scene::cylinder::Cylinders::plan_sliced(&flame, &registry, view, Some(&mut g), &removals, &refine, min_len, deliver, &s).await
                 }
-                None => crate::scene::cylinder::Cylinders::plan_sliced(&flame, &registry, view, None, &removals, &refine, min_len, &s).await,
+                None => crate::scene::cylinder::Cylinders::plan_sliced(&flame, &registry, view, None, &removals, &refine, min_len, deliver, &s).await,
             }
         });
         PlanJob {
@@ -4358,7 +4493,7 @@ impl FlameRenderer {
             key,
             flame_key: Self::flame_key(config),
             started: web_time::Instant::now(),
-            runner: Runner::Task { task, slicer },
+            runner: Runner::Task { task, slicer, on_the_way },
         }
     }
 
@@ -4398,8 +4533,15 @@ impl FlameRenderer {
         let cancel = Arc::new(AtomicBool::new(false));
         let flag = cancel.clone();
         let (tx, rx) = std::sync::mpsc::channel();
+        let on_the_way = (kind == PlanKind::Tight).then(|| tx.clone());
         std::thread::Builder::new().name("cylinder-plan".into()).spawn(move || {
             let registry = crate::variations::global_registry();
+            // A cancelled job's receiver is gone; nothing to tell.
+            let send = |p: crate::scene::cylinder::Cylinders| {
+                if let Some(tx) = &on_the_way {
+                    let _ = tx.send(Delivery::OnTheWay(p));
+                }
+            };
             let result = crate::scene::cylinder::Cylinders::plan_opts(
                 &flame,
                 &registry,
@@ -4411,11 +4553,11 @@ impl FlameRenderer {
                     removals: &removals,
                     refine: &refine,
                     min_len,
-                    ..Default::default()
+                    deliver: on_the_way.is_some().then_some(&send as &dyn Fn(crate::scene::cylinder::Cylinders)),
+                    deliver_after: PLAN_ON_THE_WAY,
                 },
             );
-            // A cancelled job's receiver is gone; nothing to tell.
-            let _ = tx.send(result);
+            let _ = tx.send(Delivery::Done(result));
         })?;
         Ok(PlanJob {
             kind,

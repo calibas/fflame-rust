@@ -915,6 +915,7 @@ impl Cylinders {
         removals: &[Vec<u32>],
         refine: &[Vec<u32>],
         min_len: usize,
+        deliver: Option<(&dyn Fn(Self), std::time::Duration)>,
         slicer: &crate::scene::backward::Slicer,
     ) -> Result<Self, NoCylinders> {
         use crate::scene::backward::{Backward, Blocking, CpuEval, PlanOptions, Trace, TIME_BUDGET};
@@ -929,7 +930,15 @@ impl Cylinders {
         };
         // Nothing blocks, so the web's plan needs no inline budget; the
         // desktop's safety net applies.
-        let opts = PlanOptions { budget: TIME_BUDGET, removals, refine, min_len, ..Default::default() };
+        let opts = PlanOptions {
+            budget: TIME_BUDGET,
+            removals,
+            refine,
+            min_len,
+            deliver: deliver.map(|d| d.0),
+            deliver_after: deliver.map_or(std::time::Duration::ZERO, |d| d.1),
+            ..Default::default()
+        };
         let mut tr = Trace::default();
         slicer.tick().await;
         let eval = match gpu {
@@ -5174,6 +5183,501 @@ mod gpu_tests {
             warm.as_secs_f64() * 1e3
         );
         assert!(warm < std::time::Duration::from_millis(16), "a frame's planning took {warm:?}");
+    }
+
+    /// The share of a plan's forced samples landing in its view, as it
+    /// draws its words (`Cylinder::draw`, where the weights fit).
+    fn drawn_efficiency(p: &Cylinders) -> f64 {
+        let d = |c: &Cylinder| if p.weights_fit() { c.draw } else { 1.0 };
+        let w: f64 = p.words.iter().map(|c| c.prob * d(c)).sum();
+        let e: f64 = p.words.iter().map(|c| c.prob * d(c) * c.eff).sum();
+        e / w.max(f64::MIN_POSITIVE)
+    }
+
+    /// **Plans on the way** (tracker P8): after a long pan -- nothing on
+    /// screen covers the view -- the tight plan's job hands over complete
+    /// plans while it runs, each shown at once, then its own plan, the
+    /// one-shot plan; after a short pan the standby covers the view, and
+    /// no plan on the way replaces it.
+    #[test]
+    #[ignore = "needs a GPU; reads output/flame-zoom"]
+    fn plans_on_the_way_are_shown_until_the_plan_lands() {
+        on_the_way_flow(false, 1e8);
+    }
+
+    /// The same, with plans made as the web makes them: a task polled a
+    /// slice at a time each frame. At 1e6, where the GPU planner resolves
+    /// the view as it does on the web; at 1e8 the task plans on the CPU a
+    /// slice a frame and runs past the walk's budget.
+    #[test]
+    #[ignore = "needs a GPU; reads output/flame-zoom"]
+    fn plans_on_the_way_in_a_task() {
+        on_the_way_flow(true, 1e6);
+    }
+
+    fn on_the_way_flow(task: bool, zoom: f32) {
+        use crate::renderer::TargetingState as TS;
+        use std::time::{Duration, Instant};
+        let Ok(text) = std::fs::read_to_string("output/flame-zoom/julian-disc.fflame") else {
+            println!("  no julian-disc.fflame");
+            return;
+        };
+        const W: u32 = 640;
+        const H: u32 = 360;
+        let (device, queue) = device();
+        let mut cfg: FractalConfig = serde_json::from_str(&text).expect("a config");
+        cfg.cylinder_targeting = true;
+        cfg.render_mode = crate::scene::transforms::RenderMode::TwoD;
+        cfg.zoom = zoom;
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let b = crate::scene::backward::Backward::read(&cfg.flame, reg).expect("armed");
+        let (a_at, b_at) = (b.sample_point(0.3), b.sample_point(0.75));
+        let mut r = crate::renderer::FlameRenderer::with_palette_size(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, W, H, &cfg.flame, cfg.palette_size);
+        r.set_background_planning(true);
+        r.set_plan_in_task(task);
+        let load = |r: &mut crate::renderer::FlameRenderer, cfg: &FractalConfig| {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("on the way") });
+            r.load_config(&device, &mut enc, &queue, cfg, &cfg.palette, 1, 0);
+            queue.submit(Some(enc.finish()));
+        };
+        let words = |r: &crate::renderer::FlameRenderer| match r.targeting_state() {
+            TS::Active { words, .. } => *words,
+            _ => 0,
+        };
+        // Frames until the tight plan's job has started and ended: each
+        // plan that arrived, whether the job was still running, its words,
+        // the frame it arrived on.
+        let run = |r: &mut crate::renderer::FlameRenderer, cfg: &FractalConfig, what: &str| -> Vec<(f64, bool, usize, usize)> {
+            let t0 = Instant::now();
+            let mut arrivals = Vec::new();
+            let mut started = false;
+            for frame in 0.. {
+                if r.sync_cylinders(&device, &queue, cfg) {
+                    load(r, cfg);
+                }
+                let running = r.planning_elapsed().is_some();
+                started |= running;
+                if r.take_plan_arrived() {
+                    arrivals.push((t0.elapsed().as_secs_f64(), running, words(r), frame));
+                }
+                if started && !running {
+                    println!("  {what}: {:?}", arrivals.iter().map(|(t, on, w, _)| format!("{t:.2} s {} {w} words", if *on { "on the way" } else { "plan" })).collect::<Vec<_>>());
+                    return arrivals;
+                }
+                assert!(t0.elapsed() < Duration::from_secs(180), "{what}: no plan in 180 s");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            unreachable!()
+        };
+        // The standby around THIS view: held, and no job still making one.
+        // A standby for an earlier view is held until it is replaced.
+        let standby = |r: &mut crate::renderer::FlameRenderer, cfg: &FractalConfig| {
+            let t0 = Instant::now();
+            while !r.has_standby_plan() || r.plans_running() {
+                if r.sync_cylinders(&device, &queue, cfg) {
+                    load(r, cfg);
+                }
+                assert!(t0.elapsed() < Duration::from_secs(180), "no standby in 180 s");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+
+        (cfg.pan_x, cfg.pan_y) = (a_at[0], a_at[1]);
+        load(&mut r, &cfg);
+        let _ = run(&mut r, &cfg, "first plan");
+        standby(&mut r, &cfg);
+
+        // A long pan: nothing on screen covers the view.
+        (cfg.pan_x, cfg.pan_y) = (b_at[0], b_at[1]);
+        let long = run(&mut r, &cfg, "after a long pan");
+        let on_the_way: Vec<usize> = long.iter().filter(|a| a.1).map(|a| a.2).collect();
+        assert!(!on_the_way.is_empty(), "no plan on the way was shown: {long:?}");
+        assert!(on_the_way.iter().all(|&w| w > 0), "a plan on the way drew nothing: {long:?}");
+        let last = long.last().expect("the plan");
+        assert!(!last.1, "the last arrival was a plan on the way: {long:?}");
+        // The plan it lands is the one-shot plan, as the job's evaluator
+        // makes it: the GPU where it resolves the view; past that, a thread
+        // replays in offsets on it and a task on the CPU.
+        let view = View::of(cfg.zoom as f64, [cfg.pan_x, cfg.pan_y], W, H);
+        let planner = std::sync::Mutex::new(crate::scene::plan_gpu::GpuPlanner::new(&device, &queue));
+        let gpu = if task && !b.gpu_resolves(view) { None } else { Some(&planner) };
+        let one_shot = Cylinders::plan_opts(&cfg.flame, reg, view, crate::scene::backward::PlanOptions { gpu, ..Default::default() }).expect("a plan");
+        // A plan that ran past the walk's budget forced its frontier where
+        // the time ran out, which the one-shot plan need not have.
+        if last.0 < crate::scene::backward::TIME_BUDGET.as_secs_f64() {
+            assert_eq!(last.2, one_shot.words.len(), "the plan landed is not the one-shot plan");
+        } else {
+            println!("  past the budget: {} words against the one-shot {}", last.2, one_shot.words.len());
+        }
+        standby(&mut r, &cfg);
+
+        // A short pan: the standby covers it and is swapped in at once;
+        // nothing on the way replaces it.
+        let radius = view.radius;
+        cfg.pan_x += 0.5 * radius;
+        let short = run(&mut r, &cfg, "after a short pan");
+        assert!(short.first().is_some_and(|a| a.3 == 0 && !a.1), "the standby was not swapped in on the pan's frame: {short:?}");
+        assert!(short.iter().all(|a| !a.1), "a plan on the way replaced the standby: {short:?}");
+        assert_eq!(short.len(), 2, "expected the swap and the plan: {short:?}");
+    }
+
+    /// **A render's density, in replicates.** `reps` independent renders of
+    /// `cfg` (drawing `plan` if given, untargeted otherwise), each `frames`
+    /// dispatches of 256 x `ipt`, read as density per equivalent iteration
+    /// (`read_density_blocking`) and summed in 16x16 blocks. From the
+    /// replicates each block has a mean and a standard error, so two renders
+    /// can be compared where they are precise and not where they are noise.
+    /// Also the last replicate, tone-mapped, for looking at.
+    #[allow(clippy::too_many_arguments)]
+    fn replicated_blocks(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        cfg: &FractalConfig,
+        plan: Option<&Cylinders>,
+        n: u32,
+        ipt: u32,
+        frames: usize,
+        reps: usize,
+    ) -> (Vec<Vec<f64>>, Vec<u8>) {
+        let mut cfg = cfg.clone();
+        cfg.deterministic_rng = false;
+        cfg.cylinder_targeting = plan.is_some();
+        let mut r = crate::renderer::FlameRenderer::with_palette_size(device, queue, wgpu::TextureFormat::Rgba8Unorm, n, n, &cfg.flame, cfg.palette_size);
+        if let Some(p) = plan {
+            let _ = r.show_plan(device, queue, &cfg, p.clone());
+        }
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("load") });
+        r.load_config(device, &mut enc, queue, &cfg, &cfg.palette, 1, 0);
+        queue.submit(Some(enc.finish()));
+        let side = (n / 16) as usize;
+        let mut out = Vec::with_capacity(reps);
+        let mut last = Vec::new();
+        for rep in 0..reps {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("reset") });
+            r.reset(&mut enc, queue, ipt, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, cfg.speed_factor);
+            queue.submit(Some(enc.finish()));
+            for _ in 0..frames.max(1) {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
+                let k = r.compute_pass(
+                    &mut enc, queue, device, 256, ipt, 20, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, 0.0, 0.0, 0.0, 0.0, 0.0,
+                    0.0, 0.0, cfg.speed_factor, true, false,
+                );
+                r.accumulate_pass(&mut enc, queue, device, k);
+                queue.submit(Some(enc.finish()));
+                let _ = device.poll(wgpu::PollType::wait_indefinitely());
+            }
+            let d = r.read_density_blocking(device, queue);
+            let mut b = vec![0.0f64; side * side];
+            for (i, v) in d.iter().enumerate() {
+                let (x, y) = (i % n as usize / 16, i / n as usize / 16);
+                b[y * side + x] += v;
+            }
+            out.push(b);
+            if rep + 1 == reps {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("tonemap") });
+                r.tonemap_pass(queue, &mut enc);
+                queue.submit(Some(enc.finish()));
+                last = pollster::block_on(r.read_fractal_pixels(device, queue, false, [0.0, 0.0, 0.0])).expect("pixels").2;
+            }
+        }
+        (out, last)
+    }
+
+    /// Mean and standard error of the mean, over replicates.
+    fn mean_se(xs: &[f64]) -> (f64, f64) {
+        let k = xs.len() as f64;
+        let m = xs.iter().sum::<f64>() / k;
+        let var = xs.iter().map(|x| (x - m) * (x - m)).sum::<f64>() / (k - 1.0).max(1.0);
+        (m, (var / k).sqrt())
+    }
+
+    /// **Two renders' densities, compared where they are precise.** Blocks
+    /// in three tiers by `tiers_of`'s density against its mean block --
+    /// dense (at least a tenth of it), middle, faint (under a hundredth,
+    /// not empty) -- each tier pooled over its blocks replicate by
+    /// replicate; and every block's own difference in standard errors.
+    struct Compared {
+        /// (x mean, x se, y mean, y se, z) for the whole view and each tier.
+        pooled: Vec<(&'static str, usize, f64, f64, f64, f64, f64)>,
+        /// The largest block |z|, and how many blocks pass 5.
+        worst_z: f64,
+        over_5: usize,
+        judged: usize,
+        /// The largest relative difference of a block that differs by more
+        /// than 5 standard errors, in the dense tier and the middle one.
+        worst_dense: f64,
+        worst_middle: f64,
+    }
+
+    fn compare_blocks(x: &[Vec<f64>], y: &[Vec<f64>], tiers_of: &[Vec<f64>]) -> Compared {
+        let nb = x[0].len();
+        let per_block = |reps: &[Vec<f64>], b: usize| mean_se(&reps.iter().map(|r| r[b]).collect::<Vec<_>>());
+        let reference: Vec<f64> = (0..nb).map(|b| per_block(tiers_of, b).0).collect();
+        let mean_block = reference.iter().sum::<f64>() / nb as f64;
+        let tier = |b: usize| -> &'static str {
+            let v = reference[b];
+            if v >= 0.1 * mean_block {
+                "dense"
+            } else if v >= 0.01 * mean_block {
+                "middle"
+            } else if v > 0.0 {
+                "faint"
+            } else {
+                "empty"
+            }
+        };
+        let mut pooled = Vec::new();
+        for name in ["all", "dense", "middle", "faint", "empty"] {
+            let in_tier: Vec<usize> = (0..nb).filter(|&b| name == "all" || tier(b) == name).collect();
+            let sums = |reps: &[Vec<f64>]| mean_se(&reps.iter().map(|r| in_tier.iter().map(|&b| r[b]).sum::<f64>()).collect::<Vec<_>>());
+            let ((mx, sx), (my, sy)) = (sums(x), sums(y));
+            let se = (sx * sx + sy * sy).sqrt();
+            let z = if se > 0.0 { (mx - my) / se } else if mx == my { 0.0 } else { f64::INFINITY };
+            pooled.push((name, in_tier.len(), mx, sx, my, sy, z));
+        }
+        let (mut worst_z, mut over_5, mut judged) = (0.0f64, 0usize, 0usize);
+        let (mut worst_dense, mut worst_middle) = (0.0f64, 0.0f64);
+        for b in 0..nb {
+            let ((mx, sx), (my, sy)) = (per_block(x, b), per_block(y, b));
+            let se = (sx * sx + sy * sy).sqrt();
+            if se > 0.0 {
+                judged += 1;
+                let z = ((mx - my) / se).abs();
+                worst_z = worst_z.max(z);
+                over_5 += (z > 5.0) as usize;
+                if z > 5.0 {
+                    let rel = (mx - my).abs() / mx.max(my);
+                    match tier(b) {
+                        "dense" => worst_dense = worst_dense.max(rel),
+                        "middle" => worst_middle = worst_middle.max(rel),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        Compared { pooled, worst_z, over_5, judged, worst_dense, worst_middle }
+    }
+
+    fn print_compared(what: &str, c: &Compared) {
+        println!(
+            "  {what}: blocks judged {}, worst |z| {:.1}, over 5: {}; of those, the largest difference {:.3} dense, {:.3} middle",
+            c.judged, c.worst_z, c.over_5, c.worst_dense, c.worst_middle
+        );
+        for (name, n, mx, sx, my, sy, z) in &c.pooled {
+            if *n > 0 {
+                println!("    {name:<6} {n:>3} blocks: {mx:.4e} +- {sx:.1e}  against  {my:.4e} +- {sy:.1e}   ratio {:.4}  z {z:+.1}", mx / my.max(f64::MIN_POSITIVE));
+            }
+        }
+    }
+
+    /// **Is the faint light a plan draws really there?** The untargeted chaos
+    /// game, the landed plan and its first plan on the way, compared by
+    /// density in replicates (`compare_blocks`): the faint tier pooled over
+    /// its blocks is what a single block of a sparse reference cannot say.
+    /// `FLAME`, `ZOOM`, `REF_ITERS` (the untargeted's total, default 1.3e11).
+    #[test]
+    #[ignore = "debug: needs a GPU; reads output/flame-zoom"]
+    fn dbg_faint_regions_against_untargeted() {
+        use std::time::Duration;
+        const N: u32 = 256;
+        const REPS: usize = 8;
+        let (device, queue) = device();
+        let planner = std::sync::Mutex::new(crate::scene::plan_gpu::GpuPlanner::new(&device, &queue));
+        let name = std::env::var("FLAME").unwrap_or_else(|_| "grand-julian".into());
+        let zoom: f32 = std::env::var("ZOOM").ok().and_then(|v| v.parse().ok()).unwrap_or(1e3);
+        let ref_iters: f64 = std::env::var("REF_ITERS").ok().and_then(|v| v.parse().ok()).unwrap_or(1.3e11);
+        let text = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")).expect("the flame");
+        let mut cfg: FractalConfig = serde_json::from_str(&text).expect("a config");
+        cfg.render_mode = crate::scene::transforms::RenderMode::TwoD;
+        cfg.levels_enabled = false;
+        cfg.cylinder_always = true;
+        cfg.zoom = zoom;
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let at = crate::scene::backward::Backward::read(&cfg.flame, reg).expect("armed").sample_point(0.75);
+        (cfg.pan_x, cfg.pan_y) = (at[0], at[1]);
+        let got: std::cell::RefCell<Vec<Cylinders>> = Default::default();
+        let keep = |p: Cylinders| got.borrow_mut().push(p);
+        let plan = Cylinders::plan_opts(
+            &cfg.flame,
+            reg,
+            View::of(zoom as f64, at, N, N),
+            crate::scene::backward::PlanOptions { gpu: Some(&planner), deliver: Some(&keep), deliver_after: Duration::ZERO, ..Default::default() },
+        )
+        .expect("a plan");
+        let got = got.into_inner();
+        let e_plan = drawn_efficiency(&plan);
+        let per_frame = 256.0 * 64.0 * 1024.0;
+        let t0 = std::time::Instant::now();
+        let (untargeted, u_img) = replicated_blocks(&device, &queue, &cfg, None, N, 1024, (ref_iters / per_frame / REPS as f64).ceil() as usize, REPS);
+        println!("== {name} at {zoom:.0e}: untargeted {ref_iters:.1e} iterations in {REPS} replicates, {:.0} s", t0.elapsed().as_secs_f64());
+        let (landed, l_img) = replicated_blocks(&device, &queue, &cfg, Some(&plan), N, 1024, 12, REPS);
+        let _ = std::fs::create_dir_all("output/cylinder-gates");
+        let _ = image::save_buffer(format!("output/cylinder-gates/faint-{name}-untargeted.png"), &u_img, N, N, image::ColorType::Rgba8);
+        let _ = image::save_buffer(format!("output/cylinder-gates/faint-{name}-landed.png"), &l_img, N, N, image::ColorType::Rgba8);
+        print_compared(&format!("landed ({} words, depth {}) against untargeted, tiers by the landed", plan.words.len(), plan.depth), &compare_blocks(&landed, &untargeted, &landed));
+        if let Some(p) = got.iter().find(|p| drawn_efficiency(p) >= e_plan / 40.0) {
+            let frames = ((12.0 * e_plan / drawn_efficiency(p)).ceil() as usize).clamp(12, 480);
+            let (early, _) = replicated_blocks(&device, &queue, &cfg, Some(p), N, 1024, frames, REPS);
+            print_compared(&format!("on the way ({} words, depth {}) against untargeted", p.words.len(), p.depth), &compare_blocks(&early, &untargeted, &landed));
+            print_compared("on the way against landed", &compare_blocks(&early, &landed, &landed));
+        }
+    }
+
+    /// **Does a short orbit bias a targeted render?** Every dispatch
+    /// restarts its orbits, and the governor shortens a targeted dispatch
+    /// to 64 iterations a thread. The landed plan and the first plan on the
+    /// way, by density in replicates, at 64, 256 and 1,024 iterations a
+    /// thread against 4,096, at the same total work. `FLAME`, `ZOOM`.
+    #[test]
+    #[ignore = "debug: needs a GPU; reads output/flame-zoom"]
+    fn dbg_orbit_length_by_density() {
+        use std::time::Duration;
+        const N: u32 = 256;
+        const REPS: usize = 8;
+        let (device, queue) = device();
+        let planner = std::sync::Mutex::new(crate::scene::plan_gpu::GpuPlanner::new(&device, &queue));
+        let name = std::env::var("FLAME").unwrap_or_else(|_| "julian-disc".into());
+        let zoom: f32 = std::env::var("ZOOM").ok().and_then(|v| v.parse().ok()).unwrap_or(1e3);
+        let text = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")).expect("the flame");
+        let mut cfg: FractalConfig = serde_json::from_str(&text).expect("a config");
+        cfg.render_mode = crate::scene::transforms::RenderMode::TwoD;
+        cfg.levels_enabled = false;
+        cfg.cylinder_always = true;
+        cfg.zoom = zoom;
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let at = crate::scene::backward::Backward::read(&cfg.flame, reg).expect("armed").sample_point(0.75);
+        (cfg.pan_x, cfg.pan_y) = (at[0], at[1]);
+        let got: std::cell::RefCell<Vec<Cylinders>> = Default::default();
+        let keep = |p: Cylinders| got.borrow_mut().push(p);
+        let plan = Cylinders::plan_opts(
+            &cfg.flame,
+            reg,
+            View::of(zoom as f64, at, N, N),
+            crate::scene::backward::PlanOptions { gpu: Some(&planner), deliver: Some(&keep), deliver_after: Duration::ZERO, ..Default::default() },
+        )
+        .expect("a plan");
+        let got = got.into_inner();
+        let e_plan = drawn_efficiency(&plan);
+        let early = got.iter().find(|p| drawn_efficiency(p) >= e_plan / 40.0).cloned();
+        println!("== {name} at {zoom:.0e}");
+        for (what, p) in std::iter::once(("landed", &plan)).chain(early.as_ref().map(|p| ("on the way", p))) {
+            // 64 frames of 256 x 4096 in all, split as each length needs.
+            let work = |ipt: u32| ((64.0 * e_plan / drawn_efficiency(p)).ceil() as usize).clamp(64, 2560) * 4096 / ipt as usize / REPS;
+            let (long, _) = replicated_blocks(&device, &queue, &cfg, Some(p), N, 4096, work(4096), REPS);
+            for ipt in [64u32, 256, 1024] {
+                let (short, _) = replicated_blocks(&device, &queue, &cfg, Some(p), N, ipt, work(ipt), REPS);
+                print_compared(&format!("{what} ({} words, depth {}) at {ipt} a thread against 4096", p.words.len(), p.depth), &compare_blocks(&short, &long, &long));
+            }
+        }
+    }
+
+    /// **A plan on the way draws the same picture** (tracker P8): complete
+    /// -- the frontier forced as it stands -- and drawn by what landed,
+    /// each sample depositing the inverse of its word's rate. The earliest
+    /// plan the walk hands over that can be matched in samples, and the
+    /// last, against the plan it lands.
+    ///
+    /// **By density, in replicates** (`compare_blocks`), not by the tone
+    /// map: a tone map lifts faint light and darkens sparse light, so a
+    /// sparser render reads darker however right it is. Held to what
+    /// matters, not only to what is detectable -- at these sample counts a
+    /// 0.3% difference is dozens of standard errors: the whole view and the
+    /// dense tier within 1.5%, the middle tier 5%, the faint 15%, and no
+    /// dense block that differs significantly off by more than 10%.
+    ///
+    /// **Drawn with long orbits** (1,024 iterations a thread). Every
+    /// dispatch restarts its orbits, and a free orbit 20 iterations past a
+    /// restart is not yet the attractor's measure on a slowly mixing flame:
+    /// julian-disc at 1e3 drawn at 64 a thread is 4.4% brighter (tone
+    /// mapped) under its landed plan and 7.6% under a plan on the way of
+    /// depth 13, whose short words carry the orbit's error further into the
+    /// picture. That is the restarts' error, not the plans'; this compares
+    /// the plans.
+    #[test]
+    #[ignore = "needs a GPU; reads output/flame-zoom"]
+    fn a_plan_on_the_way_draws_the_same_picture() {
+        use std::time::Duration;
+        const N: u32 = 256;
+        const LONG: u32 = 1024;
+        const REPS: usize = 16;
+        const FRAMES: usize = 2;
+        let (device, queue) = device();
+        let planner = std::sync::Mutex::new(crate::scene::plan_gpu::GpuPlanner::new(&device, &queue));
+        let mut checked = 0usize;
+        let mut failures = Vec::new();
+        for (name, zoom) in [("grand-julian", 1e3f32), ("random1", 1e3), ("true-grand-julian", 1e3), ("julian-disc", 1e3)] {
+            let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")) else {
+                println!("  no {name}.fflame");
+                continue;
+            };
+            let mut cfg: FractalConfig = serde_json::from_str(&text).expect("a config");
+            cfg.cylinder_always = true;
+            cfg.render_mode = crate::scene::transforms::RenderMode::TwoD;
+            cfg.levels_enabled = false;
+            cfg.zoom = zoom;
+            let guard = crate::variations::global_registry();
+            let reg = &*guard;
+            let at = crate::scene::backward::Backward::read(&cfg.flame, reg).expect("armed").sample_point(0.75);
+            (cfg.pan_x, cfg.pan_y) = (at[0], at[1]);
+            let got: std::cell::RefCell<Vec<Cylinders>> = Default::default();
+            let keep = |p: Cylinders| got.borrow_mut().push(p);
+            let plan = Cylinders::plan_opts(
+                &cfg.flame,
+                reg,
+                View::of(zoom as f64, at, N, N),
+                crate::scene::backward::PlanOptions { gpu: Some(&planner), deliver: Some(&keep), deliver_after: Duration::ZERO, ..Default::default() },
+            )
+            .expect("a plan");
+            let got = got.into_inner();
+            if got.is_empty() {
+                println!("  {name} at {zoom:.0e}: no plan on the way");
+                continue;
+            }
+            let e_plan = drawn_efficiency(&plan);
+            let (landed, img) = replicated_blocks(&device, &queue, &cfg, Some(&plan), N, LONG, FRAMES, REPS);
+            let _ = std::fs::create_dir_all("output/cylinder-gates");
+            let _ = image::save_buffer(format!("output/cylinder-gates/on-the-way-{name}-plan.png"), &img, N, N, image::ColorType::Rgba8);
+            // The earliest plan on the way that can be matched in samples --
+            // the first is a depth-1 word whose image dwarfs the view -- and
+            // the last.
+            let mut pick: Vec<(&str, &Cylinders)> = Vec::new();
+            if let Some(i) = got.iter().position(|p| drawn_efficiency(p) >= e_plan / 40.0).filter(|&i| i + 1 < got.len()) {
+                pick.push(("first matched", &got[i]));
+            }
+            pick.push(("last", &got[got.len() - 1]));
+            for (tag, p) in pick {
+                let e = drawn_efficiency(p);
+                let frames = ((FRAMES as f64 * e_plan / e.max(1e-9)).ceil() as usize).clamp(FRAMES, 40 * FRAMES);
+                let (reps, img) = replicated_blocks(&device, &queue, &cfg, Some(p), N, LONG, frames, REPS);
+                let _ = image::save_buffer(format!("output/cylinder-gates/on-the-way-{name}-{tag}.png"), &img, N, N, image::ColorType::Rgba8);
+                let c = compare_blocks(&reps, &landed, &landed);
+                print_compared(
+                    &format!("{name} at {zoom:.0e}, {tag} of {}: {} words, depth {}, landing {e:.3} (plan {e_plan:.3}), {frames} frames", got.len(), p.words.len(), p.depth),
+                    &c,
+                );
+                for (tier, n, mx, _, my, _, z) in &c.pooled {
+                    let tol = match *tier {
+                        "all" | "dense" => 0.015,
+                        "middle" => 0.05,
+                        "faint" => 0.15,
+                        _ => continue,
+                    };
+                    let off = (mx / my.max(f64::MIN_POSITIVE) - 1.0).abs();
+                    if *n > 0 && z.abs() > 4.0 && off > tol {
+                        failures.push(format!("{name} {tag}: the {tier} tier is off by {off:.3} ({z:+.1} standard errors)"));
+                    }
+                }
+                if c.worst_dense > 0.10 {
+                    failures.push(format!("{name} {tag}: a dense block differs by {:.3}", c.worst_dense));
+                }
+                checked += 1;
+            }
+        }
+        assert!(checked > 0, "nothing compared");
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     /// **What the plans on the way are** (tracker P8): each plan the walk
