@@ -4411,6 +4411,7 @@ impl FlameRenderer {
                     removals: &removals,
                     refine: &refine,
                     min_len,
+                    ..Default::default()
                 },
             );
             // A cancelled job's receiver is gone; nothing to tell.

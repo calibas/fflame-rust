@@ -5176,6 +5176,82 @@ mod gpu_tests {
         assert!(warm < std::time::Duration::from_millis(16), "a frame's planning took {warm:?}");
     }
 
+    /// **What the plans on the way are** (tracker P8): each plan the walk
+    /// delivers while it runs -- when, how deep, how efficient -- against
+    /// the plan it returns, and that plan against the one made without
+    /// deliveries: the same words, and what the deliveries cost.
+    #[test]
+    #[ignore = "measurement: needs a GPU; reads output/flame-zoom"]
+    fn dbg_plans_on_the_way() {
+        use std::time::{Duration, Instant};
+        let (device, queue) = device();
+        let gpu = std::sync::Mutex::new(crate::scene::plan_gpu::GpuPlanner::new(&device, &queue));
+        let first: u64 = std::env::var("FIRST_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(50);
+        for (name, zoom) in [("julian-disc", 1e6f64), ("julian-disc", 1e8), ("grand-julian", 1e4), ("random1", 1e4), ("true-grand-julian", 1e5)] {
+            let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")) else {
+                println!("  no {name}.fflame");
+                continue;
+            };
+            let cfg: FractalConfig = serde_json::from_str(&text).expect("a config");
+            let guard = crate::variations::global_registry();
+            let reg = &*guard;
+            let b = crate::scene::backward::Backward::read(&cfg.flame, reg).expect("armed");
+            let view = View::of(zoom, b.sample_point(0.75), 1280, 720);
+            let opts = || crate::scene::backward::PlanOptions { gpu: Some(&gpu), ..Default::default() };
+            // The planner's kernel, built on a plan elsewhere.
+            let _ = Cylinders::plan_opts(&cfg.flame, reg, View::of(zoom, b.sample_point(0.3), 1280, 720), opts());
+            let t0 = Instant::now();
+            let plain = Cylinders::plan_opts(&cfg.flame, reg, view, opts());
+            let t_plain = t0.elapsed();
+            let got: std::cell::RefCell<Vec<(Duration, Cylinders)>> = Default::default();
+            let t1 = Instant::now();
+            let deliver = |p: Cylinders| got.borrow_mut().push((t1.elapsed(), p));
+            let fin = Cylinders::plan_opts(
+                &cfg.flame,
+                reg,
+                view,
+                crate::scene::backward::PlanOptions { deliver: Some(&deliver), deliver_after: Duration::from_millis(first), ..opts() },
+            );
+            let t_fin = t1.elapsed();
+            println!("== {name} at {zoom:.0e}: plain plan {:.2} s, with deliveries {:.2} s", t_plain.as_secs_f64(), t_fin.as_secs_f64());
+            println!("     at s   words  depth      mass   eff@prob  eff drawn  maps/draw  fit   refs");
+            // The share of forced samples landing, as the plan draws its
+            // words (`Cylinder::draw`, where the weights fit), and the maps
+            // a draw costs.
+            let drawn = |p: &Cylinders| -> (f64, f64) {
+                let d = |c: &Cylinder| if p.weights_fit() { c.draw } else { 1.0 };
+                let w: f64 = p.words.iter().map(|c| c.prob * d(c)).sum();
+                let e: f64 = p.words.iter().map(|c| c.prob * d(c) * c.eff).sum();
+                let m: f64 = p.words.iter().map(|c| c.prob * d(c) * (c.word.len() + 1) as f64).sum();
+                (e / w.max(f64::MIN_POSITIVE), m / w.max(f64::MIN_POSITIVE))
+            };
+            let row = |t: f64, p: &Cylinders, what: &str| {
+                let (e, m) = drawn(p);
+                println!(
+                    "  {t:>7.2}  {:>6}  {:>5}  {:.2e}  {:.2e}   {e:.2e}  {m:>9.1}  {:>4}  {:>5}  {what}",
+                    p.words.len(),
+                    p.depth,
+                    p.mass,
+                    p.efficiency,
+                    p.weights_fit(),
+                    p.refs.iter().filter(|r| r.is_some()).count()
+                );
+            };
+            for (t, p) in got.borrow().iter() {
+                row(t.as_secs_f64(), p, "on the way");
+            }
+            match (&plain, &fin) {
+                (Ok(a), Ok(f)) => {
+                    row(t_fin.as_secs_f64(), f, "final");
+                    let same = a.words.len() == f.words.len()
+                        && a.words.iter().zip(&f.words).all(|(x, y)| x.word == y.word && x.prob == y.prob && x.draw == y.draw);
+                    println!("  final plan the plain plan's: {same}");
+                }
+                (a, f) => println!("  plain {:?} / final {:?}", a.as_ref().err(), f.as_ref().err()),
+            }
+        }
+    }
+
     /// **Does the render slow the planner?** (tracker P10) In the app the
     /// planner submits to the render's own queue, so each of a plan's
     /// round trips waits behind whatever dispatch is queued. This times
