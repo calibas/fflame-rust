@@ -1457,6 +1457,24 @@ times.
 
 ---
 
+### C17. Opacity and Speed colour under targeting -- open, found (2026-09-29)
+
+Two things the chaos game decides from the transform it just applied are
+decided, for a forced sample, from the FREE orbit's transform instead of
+the word's last one:
+
+- **Opacity** (`main_template.wgsl`: `should_plot = rng < xform.opacity`).
+  A flame with a transform below full opacity draws the targeted picture
+  with the wrong transforms hidden. Nothing declines such a flame. Quick
+  fix: decline targeting, with its reason. Right fix: draw the plot
+  against the opacity of the word's last symbol's transform (the replay
+  has it; the composed record has room for it).
+- **Speed colour mode**: the sample wears the free orbit's step's speed,
+  which says nothing of the point it plots. Quick fix: decline in Speed
+  mode.
+
+Both found reviewing the branch for merge; not measured on a flame.
+
 ## Performance
 
 ### P0. The targeted iteration rate at depth -- done (2026-09-24)
@@ -2163,7 +2181,9 @@ projected coordinates. Open questions include:
   Metal, where fast-math has broken our shaders before (see CLAUDE.md).
   Firefox has not been run.
 - **O2. Merge `ifs-distance` into `main`** -- when you decide.
-- **O3. A CLAUDE.md entry** pointing here and to the design docs.
+- **O3. A CLAUDE.md entry** pointing here and to the design docs -- done
+  (2026-09-29): Key Concepts' Focused Rendering, and its open gaps under
+  Known Issues.
 - **O4. Small fixes.**
   - The new UI strings (Paths, Focused Rendering, PathMap) are English
     only.
