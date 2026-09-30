@@ -128,9 +128,8 @@ pub struct HighResExporter {
     // Enumerated cylinders: the export view's plan, one for the whole
     // image (`plan_view`), or a placeholder so the layout is uniform.
     cylinder_buffer: Buffer,
-    // Frame-coverage counters. Allocated so the layout is uniform; the
-    // tiled exporter renders many views and coverage is a property of
-    // one view, so it does not auto-expose yet.
+    // Frame-coverage counters: read and cleared with each dispatch's
+    // sample count when the config auto-exposes (`frame_coverage`).
     coverage_buffer: Buffer,
     attachments_buffer: Buffer,  // Per-normal Linked + Final attachment lists
     subflame_metadata_buffer: Buffer,  // binding 12: per-subflame metadata
@@ -244,6 +243,14 @@ pub struct HighResExporter {
     /// runs.
     targeting_state: crate::renderer::TargetingState,
     targeting_flags: Option<[bool; 3]>,
+    /// **Auto exposure**: the shader counts plot attempts and those
+    /// landing in the image (`FRAME_COVERAGE`), and the export's share of
+    /// them -- exact, over every dispatch -- scales the tone map's count
+    /// as the app's measured coverage does (`refresh_sample_density`).
+    /// Without it a deep, untargeted, auto-exposed view exported as near
+    /// black: the app shows it at 1/coverage the unscaled exposure.
+    frame_coverage: bool,
+    frame_coverage_fraction: f32,
 }
 
 impl HighResExporter {
@@ -1538,6 +1545,8 @@ impl HighResExporter {
             cylinder_iteration_scale: targeting.as_ref().map_or(1.0, |t| t.iteration_scale),
             targeting_flags: targeting.as_ref().map(|t| [t.replay, t.relative, t.offsets]),
             targeting_state,
+            frame_coverage: config.auto_exposure,
+            frame_coverage_fraction: 1.0,
             iterations_per_thread,
         })
     }
@@ -1783,7 +1792,9 @@ impl HighResExporter {
         // Create readback buffer for counter
         let counter_readback_buffer = self.device.create_buffer(&BufferDescriptor {
             label: Some("Counter Readback Buffer"),
-            size: 4,
+            // The sample count, then the frame-coverage counters' hits and
+            // attempts (`frame_coverage`).
+            size: 12,
             usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
@@ -1808,6 +1819,15 @@ impl HighResExporter {
             (total_iterations + iterations_per_dispatch - 1) / iterations_per_dispatch;
 
         let mut total_samples_accumulated = 0u64;
+        // Frame coverage over the whole export, in u64: a long export
+        // passes 2^32 attempts, so each dispatch's counters are read and
+        // cleared rather than left to accumulate on the GPU.
+        let (mut cov_hits, mut cov_attempts) = (0u64, 0u64);
+        if self.frame_coverage {
+            let mut e = self.device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Export Coverage Clear") });
+            e.clear_buffer(&self.coverage_buffer, 0, None);
+            self.queue.submit(std::iter::once(e.finish()));
+        }
 
         for dispatch in 0..num_dispatches {
             // Rendering is the bulk of the work; map it to 0..0.9 and reserve
@@ -1919,11 +1939,20 @@ impl HighResExporter {
                 0,
                 4,
             );
+            if self.frame_coverage {
+                encoder.copy_buffer_to_buffer(&self.coverage_buffer, 0, &counter_readback_buffer, 4, 8);
+                encoder.clear_buffer(&self.coverage_buffer, 0, None);
+            }
 
             self.queue.submit(std::iter::once(encoder.finish()));
 
-            // Read sample count
-            let sample_count = self.read_counter(&counter_readback_buffer).await?;
+            // Read sample count, and this dispatch's coverage
+            let words = self.read_counter(&counter_readback_buffer).await?;
+            let sample_count = words[0];
+            if self.frame_coverage {
+                cov_hits += words[1] as u64;
+                cov_attempts += words[2] as u64;
+            }
 
             if sample_count > 0 {
                 if !tile_accumulate_bind_groups.is_empty() {
@@ -2182,6 +2211,16 @@ impl HighResExporter {
         // sample_density formula (Phase 8a).
         let total_iters_dispatched = num_dispatches * iterations_per_dispatch;
 
+        // Auto exposure's share, exact over the export; as the app, it
+        // needs enough hits to mean anything (`coverage_from`).
+        self.frame_coverage_fraction = if self.frame_coverage && cov_attempts > 0 && cov_hits >= 32 {
+            let f = (cov_hits as f64 / cov_attempts as f64).clamp(1e-9, 1.0) as f32;
+            log::info!("High-res export: auto exposure, frame coverage {f:.3e} ({cov_hits} of {cov_attempts} plot attempts in frame)");
+            f
+        } else {
+            1.0
+        };
+
         // Solid brightness renormalization (exact): OCCLUSION-ONLY
         // survival fraction from the dedicated counters — never the
         // accumulated density, which folds artistic per-sample weights
@@ -2333,7 +2372,8 @@ impl HighResExporter {
     }
 
     /// Read sample counter from GPU
-    async fn read_counter(&self, buffer: &Buffer) -> Result<u32, String> {
+    /// The words of a small readback buffer: the sample count first.
+    async fn read_counter(&self, buffer: &Buffer) -> Result<Vec<u32>, String> {
         let buffer_slice = buffer.slice(..);
         let (tx, rx) = futures::channel::oneshot::channel();
         buffer_slice.map_async(MapMode::Read, move |result| {
@@ -2348,11 +2388,11 @@ impl HighResExporter {
             .map_err(|e| format!("Failed to map counter buffer: {:?}", e))?;
 
         let data = buffer_slice.get_mapped_range();
-        let count = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+        let words: Vec<u32> = data.chunks_exact(4).map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]])).collect();
         drop(data);
         buffer.unmap();
 
-        Ok(count)
+        Ok(words)
     }
 
     /// Read samples from GPU buffer
@@ -2690,6 +2730,7 @@ impl HighResExporter {
         // stands for, as `FlameRenderer::refresh_sample_density` counts a
         // targeted frame -- the same expression, so the two agree.
         let sample_density = ((total_iterations as f32) * self.solid_density_fraction
+            * self.frame_coverage_fraction
             * self.cylinder_iteration_scale as f32
             / total_pixels.max(1.0))
             .max(1e-6);
@@ -3318,6 +3359,7 @@ impl HighResExporter {
         // stands for, as `FlameRenderer::refresh_sample_density` counts a
         // targeted frame -- the same expression, so the two agree.
         let sample_density = ((total_iterations as f32) * self.solid_density_fraction
+            * self.frame_coverage_fraction
             * self.cylinder_iteration_scale as f32
             / total_pixels.max(1.0))
             .max(1e-6);
@@ -3760,6 +3802,43 @@ mod targeting_tests {
         cfg.pan_x = 0.5;
         cfg.pan_y = 0.25;
         cfg
+    }
+
+    /// **An auto-exposed export is exposed as the render is.** The tiled
+    /// exporter built the counting shader and never read the counts, so an
+    /// untargeted, auto-exposed view -- auto exposure's reason to exist --
+    /// exported at the unscaled exposure while the app showed it scaled;
+    /// and an export from the app at the default billion iterations takes
+    /// this path. Now it counts over every dispatch and scales as the
+    /// renderer does. On this dragon, at a coverage of 0.4%, the unscaled
+    /// export was 2.3% darker in mean -- the log map compresses a 230x
+    /// scale on a nearly saturated picture; a sparser view moves more --
+    /// and now matches `FlameRenderer` to 0.02% at the same size and
+    /// iterations.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn an_auto_exposed_export_is_exposed_as_the_render_is() {
+        const W: u32 = 320;
+        const H: u32 = 240;
+        const ITERS: u64 = 200_000_000;
+        let mut cfg = dragon(1e2);
+        cfg.levels_enabled = false;
+        cfg.auto_exposure = true;
+        let (device, queue) = device();
+        let mean = |rgba: &[u8]| rgba.chunks(4).map(|p| (p[0] as f64 + p[1] as f64 + p[2] as f64) / 765.0).sum::<f64>() / (W * H) as f64;
+        let job = crate::renderer::RenderJob::new(&cfg, W, H).with_iterations(ITERS);
+        let rendered = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+            .expect("render")
+            .rgba_data;
+        let mut exporter = pollster::block_on(HighResExporter::new(&cfg, W, H, Some(256))).expect("exporter");
+        let exported = pollster::block_on(exporter.export(&cfg, ITERS, false, false, &mut Quiet)).expect("export");
+        let (r, e) = (mean(&rendered), mean(&exported));
+        println!("  auto-exposed dragon at 1e2, untargeted: render {r:.4}, export {e:.4}, coverage {:.3e}", exporter.frame_coverage_fraction);
+        let _ = std::fs::create_dir_all("output/export-targeting");
+        let _ = image::save_buffer("output/export-targeting/auto-exposed-render.png", &rendered, W, H, image::ColorType::Rgba8);
+        let _ = image::save_buffer("output/export-targeting/auto-exposed-export.png", &exported, W, H, image::ColorType::Rgba8);
+        assert!((r - e).abs() < 0.01 * r.max(e), "the export's mean brightness {e:.4} is not the render's {r:.4}");
+        assert!(exporter.frame_coverage_fraction < 0.5, "the view is not deep enough to test auto exposure: coverage {}", exporter.frame_coverage_fraction);
     }
 
     /// **The tiled exporter targets as the renderer does.** It rendered

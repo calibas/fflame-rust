@@ -2207,6 +2207,29 @@ projected coordinates. Open questions include:
 
 ## Done
 
+- 2026-09-29: **the pre-merge review's fixes** (a review of the whole
+  branch against main):
+  - importance sampling's epoch reset ran before the 2m-th iteration's
+    deposit, which carried a weight of one: the total right, the light
+    misplaced -- 63% in the worst dense block at a window of 8, 48% at
+    16. Now reset before the next choice: 0.7%, none significant.
+    Gate: `the_importance_correction_puts_the_light_where_it_belongs`,
+    by density (the tone-mapped gate could not see it).
+  - post-symmetry is declined (`NoCylinders::PostSymmetry`): an affine
+    flame was packed relative to the view and plotted with the pan taken
+    off twice, and its copies leave the planned view anyway.
+  - flames with final or linked transforms plan in the background after
+    the settle delay: they take the inverse walk, and planned inline
+    each frame of a pan.
+  - the tiled exporter auto-exposes: it reads and clears the coverage
+    counters with each dispatch's sample count, summed in u64. Gate:
+    `an_auto_exposed_export_is_exposed_as_the_render_is` (2.3% darker
+    unscaled on a saturated dragon; now 0.02%).
+  - PathMap's path ids are cleared when a plan lands; every palette
+    upload bumps the escape band key's `palette_generation`; the Colors
+    panel asks `visibility` (`Control::FocusedRendering`) whether PathMap
+    can draw; `sync_cylinders` returns at once with targeting off and
+    nothing held.
 - 2026-09-29: **no flame rendered in a laptop's Chrome** ("The number of
   storage buffers (11) in the Compute stage exceeds the maximum per-stage
   limit (10)"). This branch took the compute layout from 9 storage buffers

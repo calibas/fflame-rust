@@ -14,6 +14,7 @@ visibility:
   log_only: "Only the logarithmic tone mapping reads this. The active mode writes a unit-range image and renders through the linear mapping."
   linear_only: "Linear is the only mapping that behaves here: the other two divide by a sample density that only the chaos game produces."
   alpha_blend_inert: "Blends between two alpha curves that are identical under the linear mapping, so it has no effect in this mode."
+  two_d_only: "2D flame mode only: Focused Rendering plans the view in the plane, and a 3D flame's samples depend on the camera and their depth."
 
 # The four render modes, named once. Used by the mode picker and by
 # anything that has to say which engine is running.
@@ -523,6 +524,7 @@ view:
   no_cyl_no_ball: "no disc around the origin contains the attractor -- the flame's pieces do not close, or it sits too far from the origin for the search to reach"
   no_cyl_colour: "a variation writes colour directly, so a forced prefix would plot the right point in the wrong colour"
   no_cyl_xaos: "the flame uses xaos, so the first symbol's probability depends on the previous transform"
+  no_cyl_post_symmetry: "the flame has post-symmetry, whose copies of each point land outside the view the plan was made for"
   no_cyl_expanding: "transform %{index} expands rather than contracts, so a path's image never shrinks"
   no_cyl_empty: "the flame has no transforms with weight"
   no_cyl_off_attractor: "the view is off the attractor entirely -- there is nothing here to target"
