@@ -743,7 +743,13 @@ pub fn render_colors_content(
                 // draws through paths (docs/projects/word-editing.md §10):
                 // say so where it cannot, and offer to turn it on.
                 let cfg = config_manager.active_config();
-                if !matches!(cfg.render_mode, crate::scene::transforms::RenderMode::TwoD) {
+                let planar = crate::ui::visibility::control(
+                    crate::ui::visibility::Control::FocusedRendering,
+                    cfg.render_mode,
+                    cfg.tonemap_mode,
+                )
+                .is_show();
+                if !planar {
                     ui.label(egui::RichText::new(t!("tonemap.pathmap_needs_2d")).weak());
                 } else if !cfg.cylinder_targeting {
                     ui.label(egui::RichText::new(t!("tonemap.pathmap_needs_focus")).weak());

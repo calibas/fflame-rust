@@ -164,6 +164,22 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 {{/if}}
 {{/if}}
 {{#if IMPORTANCE_SAMPLING}}
+        // End of the epoch: start a fresh window. Resetting rather
+        // than keeping a ring buffer is what bounds the variance by
+        // construction -- the product over an orbit's whole history
+        // has variance that grows without bound, and is unnecessary
+        // because older choices only select position WITHIN a
+        // sub-pixel.
+        //
+        // HERE, before the next choice, and not after the colour update
+        // where it was: the 2m-th choice deposits too (the gate below
+        // passes `m` through `2m`, which is the `m + 1` the deposit's
+        // rate factor counts), and a reset before that deposit gave it
+        // a weight of one instead of the window's product.
+        if (is_window >= 2u * params.importance_window) {
+            is_weight = 1.0;
+            is_window = 0u;
+        }
         is_weight = is_weight * bias_ratio(is_prev_row, xform_idx);
         is_window = is_window + 1u;
 {{/if}}
@@ -420,18 +436,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         } else if (COLOR_MODE == 1u) {
             let speed_color = speed_to_color(speed);
             color = mix(color, speed_color, params.speed_factor);
-        }
-{{/if}}
-{{#if IMPORTANCE_SAMPLING}}
-        // End of the epoch: start a fresh window. Resetting rather
-        // than keeping a ring buffer is what bounds the variance by
-        // construction -- the product over an orbit's whole history
-        // has variance that grows without bound, and is unnecessary
-        // because older choices only select position WITHIN a
-        // sub-pixel.
-        if (is_window >= 2u * params.importance_window) {
-            is_weight = 1.0;
-            is_window = 0u;
         }
 {{/if}}
 

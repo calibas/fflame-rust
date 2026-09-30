@@ -1378,7 +1378,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
 
 
-
         // Skip burn-in / re-fuse iterations (the respawn above resets
         // the countdown so recovering points don't plot mid-flight)
         if (fuse > 0u) {

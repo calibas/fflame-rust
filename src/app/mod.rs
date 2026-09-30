@@ -3054,6 +3054,10 @@ impl App {
                     );
                     self.frames_since_accumulation = 0;
                     self.rendering_complete = false;
+                    // PathMap's per-pixel path ids are 1-based into the
+                    // plan's words: under another plan they name other
+                    // words, so they go with the picture.
+                    self.clear_paths_next_frame = true;
                 }
                 // Keep frames coming while a plan is being made, so it
                 // is picked up the moment it lands -- and, on the web,

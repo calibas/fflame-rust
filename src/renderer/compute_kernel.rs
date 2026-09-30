@@ -2159,7 +2159,12 @@ impl FlameRenderer {
                     *w != 0.0 && crate::variations::bound::arms_for(n).is_some()
                 })
         });
-        if armed || crate::scene::mobius::MobiusFlame::is_family_m(&config.flame, &reg) {
+        // A flame with final or linked transforms is planned by the same
+        // walk (`Cylinders::walked`), affine or not.
+        if armed
+            || config.flame.has_attachments()
+            || crate::scene::mobius::MobiusFlame::is_family_m(&config.flame, &reg)
+        {
             std::time::Duration::from_millis(250)
         } else {
             // The affine and bounded paths cost well under a
@@ -2503,6 +2508,9 @@ impl FlameRenderer {
             config.palette_log_strength,
             config.palette_reverse,
         );
+        // Every write of the texture is a new palette to the escape
+        // renderer's band key, this one included.
+        self.palette_generation = self.palette_generation.wrapping_add(1);
 
         // Note: scale_buffer removed - scale is now in params.histogram_color_scale
 
@@ -3409,6 +3417,8 @@ impl FlameRenderer {
         // Only the compute bind group references the palette texture view
         self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
         self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
+        // A new texture: a new palette to the escape renderer's band key.
+        self.palette_generation = self.palette_generation.wrapping_add(1);
 
         true
     }
@@ -3780,6 +3790,17 @@ impl FlameRenderer {
         queue: &Queue,
         config: &FractalConfig,
     ) -> bool {
+        // Targeting off, and nothing of it held: nothing to sync. Every
+        // flame reaches here every frame, and the key below hashes the
+        // whole flame.
+        if !config.cylinder_targeting && self.cylinders.is_none() && self.plan_job.is_none() && self.standby.is_none() {
+            // ...but the panel says it is off, whatever it said before
+            // (a 3D flame's "2D only"), and the next sync with it on plans
+            // afresh rather than finding its old key unchanged.
+            self.targeting_state = TargetingState::Off;
+            self.cylinder_key = None;
+            return false;
+        }
         let key = self.enumeration_key(config);
         self.write_cylinder_shift(queue, config);
 

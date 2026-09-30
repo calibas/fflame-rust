@@ -112,6 +112,7 @@ pub(super) fn focused_rendering(
                 NC::ViewIsEmpty => t!("view.no_cyl_off_attractor").to_string(),
                 NC::TimedOut { nodes } => t!("view.no_cyl_timed_out", nodes = nodes.to_string()).to_string(),
                 NC::TooManyWords(n) => t!("view.no_cyl_too_many", count = n.to_string()).to_string(),
+                NC::PostSymmetry => t!("view.no_cyl_post_symmetry").to_string(),
             };
             t!("view.targeting_declined", reason = reason).to_string()
         }

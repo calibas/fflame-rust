@@ -56,6 +56,8 @@ const LOG_ONLY: &str = "visibility.log_only";
 const LINEAR_ONLY: &str = "visibility.linear_only";
 /// Mixes between two values that are equal here.
 const ALPHA_BLEND_INERT: &str = "visibility.alpha_blend_inert";
+/// Focused Rendering plans in the plane.
+const TWO_D_ONLY: &str = "visibility.two_d_only";
 
 /// Whether the loaded config renders a SOLID SURFACE.
 ///
@@ -267,6 +269,10 @@ pub enum Control {
     /// shader recompile, and hides the palette controls both modes
     /// genuinely use.
     ColorMode,
+    /// Focused Rendering itself, and PathMap, which draws through it:
+    /// its planners enumerate discs in the PLANE, so a 3D flame gets
+    /// neither (the renderer reports `TargetingState::NotPlanar`).
+    FocusedRendering,
 }
 
 /// Is this control meaningful in this mode?
@@ -291,6 +297,11 @@ pub fn control(c: Control, m: RenderMode, tone: ToneMapMode) -> Vis {
                 Vis::Hide
             }
         }
+        C::FocusedRendering => match m {
+            RenderMode::TwoD => Vis::Show,
+            RenderMode::ThreeD => Vis::Grey(TWO_D_ONLY),
+            RenderMode::Escape | RenderMode::Simulation => Vis::Hide,
+        },
         C::ViewNavigation => {
             if matches!(m, RenderMode::Simulation) {
                 Vis::Hide
@@ -537,6 +548,7 @@ mod tests {
         Control::DeepZoom,
         Control::ColorMode,
         Control::ViewNavigation,
+        Control::FocusedRendering,
     ];
 
     /// Every reason a panel or control is greyed names a string that
@@ -581,12 +593,13 @@ mod tests {
 
     /// Every control is available in both flame modes under the
     /// logarithmic mapping, except the orbit cache, which is escape's
-    /// alone and does nothing in a flame.
+    /// alone and does nothing in a flame, and Focused Rendering in 3D,
+    /// whose planners work in the plane.
     #[test]
     fn the_flame_modes_offer_every_control_but_the_orbit_cache() {
         for m in [RenderMode::TwoD, RenderMode::ThreeD] {
             for c in ALL_CONTROLS {
-                let want = *c != Control::OrbitCache;
+                let want = *c != Control::OrbitCache && !(*c == Control::FocusedRendering && m == RenderMode::ThreeD);
                 assert_eq!(
                     control(*c, m, ToneMapMode::Logarithmic).is_show(),
                     want,
@@ -652,6 +665,7 @@ mod tests {
             assert!(hidden(Control::DensityLevels), "{m:?} levels");
             assert!(hidden(Control::DeepZoom), "{m:?} deep zoom");
             assert!(hidden(Control::ColorMode), "{m:?} colour mode");
+            assert!(hidden(Control::FocusedRendering), "{m:?} focused rendering");
             if m == RenderMode::Simulation {
                 assert!(hidden(Control::ViewNavigation), "sim viewport navigation");
             } else {

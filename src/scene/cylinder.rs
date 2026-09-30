@@ -303,6 +303,11 @@ pub enum NoCylinders {
     /// The enumeration hit [`MAX_WORDS`] — the viewport straddles too
     /// many pieces for targeting to be worth it.
     TooManyWords(usize),
+    /// The flame has post-symmetry. Its copies of a forced sample are
+    /// rotated or mirrored about the origin, out of the view the plan
+    /// was made for, and the copies of words the plan left out -- those
+    /// landing elsewhere -- would have landed in it.
+    PostSymmetry,
 }
 
 /// The viewport, in world coordinates.
@@ -837,6 +842,9 @@ impl Cylinders {
         }
         if flame.has_xaos() {
             return Err(NoCylinders::Xaos);
+        }
+        if flame.post_symmetry.ty != crate::scene::transforms::PostSymmetryType::None {
+            return Err(NoCylinders::PostSymmetry);
         }
 
         // Colour must stay an affine function of the running colour
@@ -5469,6 +5477,60 @@ mod gpu_tests {
                 println!("    {name:<6} {n:>3} blocks: {mx:.4e} +- {sx:.1e}  against  {my:.4e} +- {sy:.1e}   ratio {:.4}  z {z:+.1}", mx / my.max(f64::MIN_POSITIVE));
             }
         }
+    }
+
+    /// **Importance sampling's correction puts the light where it
+    /// belongs.** The gasket with its first transform drawn 4x as often,
+    /// corrected through the window, against importance sampling off, by
+    /// density in replicates (`compare_blocks`) -- the tone-mapped gate
+    /// (`the_correction_renders_the_true_measure`) could not see this.
+    ///
+    /// The epoch reset used to run before the 2m-th iteration's deposit,
+    /// which then carried a weight of one instead of the window's
+    /// product: the total was right and where it landed was not -- the
+    /// worst dense block 63% off at a window of 8, 48% at 16, every
+    /// block significantly. Now 0.7% and none. A window of 4 is still
+    /// 15% off: too short to fix a point's position, which is the
+    /// window's own trade (`what_a_bias_costs_the_window`), not this.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_importance_correction_puts_the_light_where_it_belongs() {
+        const N: u32 = 128;
+        const REPS: usize = 8;
+        let (device, queue) = device();
+        let mut cfg = FractalConfig::default();
+        cfg.flame.transforms.clear();
+        for (i, (e, f)) in [(0.0f32, 0.0f32), (0.5, 0.0), (0.25, 0.5)].into_iter().enumerate() {
+            let mut t = Transform::default();
+            (t.a, t.b, t.c, t.d, t.e, t.f) = (0.5, 0.0, 0.0, 0.5, e, f);
+            t.weight = 1.0;
+            t.color = i as f32 / 2.0;
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("linear", 1.0);
+            cfg.flame.transforms.push(t);
+        }
+        cfg.zoom = 1.6;
+        (cfg.pan_x, cfg.pan_y) = (-0.25, -0.25);
+        cfg.levels_enabled = false;
+        let (truth, _) = replicated_blocks(&device, &queue, &cfg, None, N, 1024, 4, REPS);
+        let mut failures = Vec::new();
+        for window in [8u32, 16] {
+            let mut biased = cfg.clone();
+            biased.importance = crate::config::fractal_config::ImportanceSettings { enabled: true, bias: vec![4.0, 1.0, 1.0], window };
+            let (reps, _) = replicated_blocks(&device, &queue, &biased, None, N, 1024, 4, REPS);
+            let c = compare_blocks(&reps, &truth, &truth);
+            print_compared(&format!("4x bias, window {window}, against importance off"), &c);
+            if c.worst_dense > 0.05 {
+                failures.push(format!("window {window}: a dense block is {:.3} off", c.worst_dense));
+            }
+            let (_, _, mx, _, my, _, z) = c.pooled[0];
+            if z.abs() > 4.0 && (mx / my - 1.0).abs() > 0.02 {
+                failures.push(format!("window {window}: the whole view is {:.4} of the truth ({z:+.1} standard errors)", mx / my));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("
+"));
     }
 
     /// **Is the faint light a plan draws really there?** The untargeted chaos
@@ -10369,6 +10431,15 @@ mod tests {
             vec![1.0, 1.0, 1.0],
         ]);
         assert_eq!(Cylinders::plan(&x, &reg, view), Err(NoCylinders::Xaos));
+
+        // Post-symmetry: its copies of a forced sample leave the view the
+        // plan was made for. Before this refusal an affine flame was
+        // planned, packed relative to the view, and plotted with the pan
+        // taken off a second time (tracker, 2026-09-29).
+        let mut sym = gasket();
+        sym.post_symmetry.ty = crate::scene::transforms::PostSymmetryType::Point;
+        sym.post_symmetry.order = 3;
+        assert_eq!(Cylinders::plan(&sym, &reg, view), Err(NoCylinders::PostSymmetry));
 
         // Expanding: a word's image does not shrink, so there is no
         // stopping rule.
