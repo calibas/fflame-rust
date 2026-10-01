@@ -122,6 +122,64 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // with no custom-init variations.
 //__STATE_INIT_BLOCK__
 
+{{#if PERSISTENT_ORBITS}}
+    // **Resume the orbit this thread left** (docs/projects/
+    // persistent-orbits.md): everything above is how a thread STARTS, and
+    // a thread whose stored generation is this one's picks up where its
+    // last dispatch stopped instead -- the point, the colour, the burn-in
+    // left, and every register the chaos game carries. The random streams
+    // stay seeded per dispatch, from `params.seed`.
+    let orbit_at = thread_id * ORBIT_WORDS;
+    // Refresh (persistent-orbits.md §3.7): where the xaos walk itself
+    // decides which of several closed groups an orbit ends in, a share of
+    // the threads starts again each dispatch to redraw it.
+    let orbit_refreshed = params.orbit_refresh_period != 0u &&
+        ((thread_id + params.seed) % params.orbit_refresh_period) == 0u;
+    if (orbits[orbit_at + 8u] == params.orbit_generation && !orbit_refreshed) {
+{{#if RENDER_3D}}
+        current = vec3<f32>(bitcast<f32>(orbits[orbit_at]), bitcast<f32>(orbits[orbit_at + 1u]), bitcast<f32>(orbits[orbit_at + 2u]));
+{{else}}
+        current = vec2<f32>(bitcast<f32>(orbits[orbit_at]), bitcast<f32>(orbits[orbit_at + 1u]));
+{{/if}}
+{{#if HAS_W}}
+        point_w = bitcast<f32>(orbits[orbit_at + 3u]);
+{{/if}}
+        color = vec3<f32>(bitcast<f32>(orbits[orbit_at + 4u]), bitcast<f32>(orbits[orbit_at + 5u]), bitcast<f32>(orbits[orbit_at + 6u]));
+        color_index = bitcast<f32>(orbits[orbit_at + 7u]);
+        fuse = orbits[orbit_at + 9u];
+{{#if XAOS_ENABLED}}
+        prev_xform_idx = orbits[orbit_at + 10u];
+{{/if}}
+{{#if IMPORTANCE_SAMPLING}}
+        is_window = orbits[orbit_at + 11u];
+        is_weight = bitcast<f32>(orbits[orbit_at + 12u]);
+{{/if}}
+{{#if HAS_ANALYTIC_BLUR}}
+        ab_residual_remaining = orbits[orbit_at + 13u];
+        ab_residual_slot = bitcast<i32>(orbits[orbit_at + 14u]);
+{{/if}}
+{{#if HAS_THREAD_STATE}}
+        for (var s = 0u; s < ORBIT_SLOTS; s++) {
+            thread_state[s] = bitcast<f32>(orbits[orbit_at + 16u + s]);
+        }
+{{/if}}
+{{#if XAOS_ENABLED}}
+    } else {
+        // A thread starting: its first pick STRATIFIED over the threads
+        // that start with it (persistent-orbits.md §3.7). Where xaos splits
+        // the transforms into closed groups, the first pick decides which
+        // group an orbit stays in for its life, so independent picks would
+        // leave a group holding 1% of the weight with 82 +- 9 of 8,192
+        // orbits -- an 11% error in its light no later dispatch averages
+        // out. A Kronecker sequence in the thread index (2^32 / golden
+        // ratio, offset by the seed) gives every range of threads, and
+        // every refresh's set, its share to within a thread or two.
+        let orbit_u = thread_id * 2654435769u + params.seed;
+        prev_xform_idx = select_transform_const(f32(orbit_u >> 8u) / 16777216.0);
+{{/if}}
+    }
+{{/if}}
+
 {{#if FRAME_COVERAGE}}
     // Frame-coverage tallies for this thread (see header.wgsl binding
     // 16). Registers, flushed once after the loop.
@@ -1305,6 +1363,39 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         current.z = 0.0;
 {{/if}}
     }
+{{#if PERSISTENT_ORBITS}}
+    // ...and leave it for the next dispatch, in this generation.
+    orbits[orbit_at] = bitcast<u32>(current.x);
+    orbits[orbit_at + 1u] = bitcast<u32>(current.y);
+{{#if RENDER_3D}}
+    orbits[orbit_at + 2u] = bitcast<u32>(current.z);
+{{/if}}
+{{#if HAS_W}}
+    orbits[orbit_at + 3u] = bitcast<u32>(point_w);
+{{/if}}
+    orbits[orbit_at + 4u] = bitcast<u32>(color.x);
+    orbits[orbit_at + 5u] = bitcast<u32>(color.y);
+    orbits[orbit_at + 6u] = bitcast<u32>(color.z);
+    orbits[orbit_at + 7u] = bitcast<u32>(color_index);
+    orbits[orbit_at + 8u] = params.orbit_generation;
+    orbits[orbit_at + 9u] = fuse;
+{{#if XAOS_ENABLED}}
+    orbits[orbit_at + 10u] = prev_xform_idx;
+{{/if}}
+{{#if IMPORTANCE_SAMPLING}}
+    orbits[orbit_at + 11u] = is_window;
+    orbits[orbit_at + 12u] = bitcast<u32>(is_weight);
+{{/if}}
+{{#if HAS_ANALYTIC_BLUR}}
+    orbits[orbit_at + 13u] = ab_residual_remaining;
+    orbits[orbit_at + 14u] = bitcast<u32>(ab_residual_slot);
+{{/if}}
+{{#if HAS_THREAD_STATE}}
+    for (var s = 0u; s < ORBIT_SLOTS; s++) {
+        orbits[orbit_at + 16u + s] = bitcast<u32>(thread_state[s]);
+    }
+{{/if}}
+{{/if}}
 {{#if FRAME_COVERAGE}}
     // One pair of atomics per thread rather than per iteration: the
     // contention is negligible and the count is exact.

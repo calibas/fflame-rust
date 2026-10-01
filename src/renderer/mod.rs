@@ -7,6 +7,10 @@ pub mod sticky;
 pub mod dof_pass;
 pub mod density_stats;
 pub mod thumbnail;
+#[cfg(test)]
+pub(crate) mod density_gates;
+#[cfg(test)]
+mod orbit_gates;
 
 pub use compute_kernel::{FlameRenderer, TargetingState};
 pub use histogram::{compute_histogram_async, DensityHistogram, HISTOGRAM_BINS};
