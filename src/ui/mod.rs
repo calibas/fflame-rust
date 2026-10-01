@@ -1504,6 +1504,8 @@ impl EguiLayer {
             can_undo,
             can_redo,
             is_paused: *paused,
+            frame_governor: config_manager.system_settings().frame_governor,
+            manual_workgroups: config_manager.system_settings().manual_workgroups,
             render_mode: config_manager.config().render_mode,
             tonemap_mode: config_manager.config().tonemap_mode,
             solid: crate::ui::visibility::Solid::of(config_manager.config()),
@@ -2359,6 +2361,14 @@ impl EguiLayer {
             );
         }
 
+        if let Some(on) = menu_actions.rendering.set_frame_governor {
+            let _ = config_manager.update_system_setting(crate::config::ConfigPath::SystemFrameGovernor, on.into());
+        }
+
+        if let Some(w) = menu_actions.rendering.set_manual_workgroups {
+            let _ = config_manager.update_system_setting(crate::config::ConfigPath::SystemManualWorkgroups, w.into());
+        }
+
         if menu_actions.rendering.reset_to_defaults {
             reset_rendering_to_defaults(config_manager);
             *paused = false; // Resume rendering after reset
@@ -2598,6 +2608,8 @@ fn reset_rendering_to_defaults(config_manager: &mut crate::config::ConfigManager
         ConfigPath::SystemBurnIn,
         20u32.into() // Default burn-in
     );
+    let _ = config_manager.update_system_setting(ConfigPath::SystemFrameGovernor, true.into());
+    let _ = config_manager.update_system_setting(ConfigPath::SystemManualWorkgroups, 128u32.into());
     let _ = config_manager.update_system_setting(
         ConfigPath::SystemVsyncEnabled,
         true.into()

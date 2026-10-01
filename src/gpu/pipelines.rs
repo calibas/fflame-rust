@@ -507,6 +507,7 @@ impl FlamePipelines {
         cylinder_relative: bool,
         cylinder_offsets: bool,
         leak_probe: bool,
+        persistent_orbits: bool,
     ) -> bool {
         // Census is renderer state, not config state — a .fflame cannot
         // ask to be instrumented. Threaded from FlameRenderer::census.
@@ -533,6 +534,9 @@ impl FlamePipelines {
         // carry the region, and the shader simply has no counters to
         // add to -- which reads as "no leak" rather than as an error.
         constants.frame_coverage = constants.frame_coverage || leak_probe;
+        // Renderer state too, until it is on for every render
+        // (docs/projects/persistent-orbits.md step 5).
+        constants.persistent_orbits = persistent_orbits;
         self.shader_cache.ensure_current_full(
             device,
             &config.flame,
@@ -619,6 +623,12 @@ impl FlamePipelines {
     /// The bindings the current flame shader uses.
     pub fn compute_bindings(&self) -> &[u32] {
         &self.shader_cache.compute_bindings
+    }
+
+    /// The u32 words each thread's orbit takes in the current flame
+    /// shader (`ORBIT_WORDS`), or 0 when its orbits do not persist.
+    pub fn orbit_words(&self) -> u32 {
+        self.shader_cache.orbit_words
     }
 
     /// Create the init compute pass bind group.
@@ -882,8 +892,19 @@ fn compute_layout_entries() -> Vec<BindGroupLayoutEntry> {
                 },
                 count: None,
             },
-            // Binding 8 is a historical gap: the path filters, which
-            // word editing replaced (docs/projects/word-editing.md).
+            // Each thread's orbit, kept between dispatches
+            // (PERSISTENT_ORBITS; docs/projects/persistent-orbits.md).
+            // Binding 8 was the path filters, which word editing replaced.
+            BindGroupLayoutEntry {
+                binding: 8,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
             // Xaos weights buffer (storage, read-only for chaos-weighted transform selection)
             BindGroupLayoutEntry {
                 binding: 9,
@@ -1031,6 +1052,11 @@ fn compute_entries(buffers: &super::buffers::FlameBuffers) -> Vec<BindGroupEntry
                 binding: 7,
                 resource: buffers.get_path_buffer_for_binding().as_entire_binding(),
             },
+            // Each thread's orbit (real or dummy).
+            BindGroupEntry {
+                binding: 8,
+                resource: buffers.orbit_binding().as_entire_binding(),
+            },
             // Xaos weights for chaos-weighted transform selection
             BindGroupEntry {
                 binding: 9,
@@ -1177,7 +1203,7 @@ mod layout_tests {
         let builder = crate::shader_builder_v2::ShaderBuilder::new(crate::variations::global_registry().clone());
         let active = cfg.flame.extract_active_variations();
         type Tweak = fn(&mut crate::shader_builder_v2::ShaderConstants);
-        let tweaks: [(&str, Tweak, bool); 7] = [
+        let tweaks: [(&str, Tweak, bool); 9] = [
             ("plain", |_| {}, false),
             ("auto exposure", |c| c.frame_coverage = true, false),
             ("importance", |c| c.importance_sampling = true, false),
@@ -1200,6 +1226,16 @@ mod layout_tests {
                 c.cylinder_relative = true;
                 c.cylinder_offsets = true;
             }, true),
+            ("persistent orbits", |c| c.persistent_orbits = true, false),
+            ("all of them, persistent", |c| {
+                c.frame_coverage = true;
+                c.importance_sampling = true;
+                c.cylinder_targeting = true;
+                c.cylinder_replay = true;
+                c.cylinder_relative = true;
+                c.cylinder_offsets = true;
+                c.persistent_orbits = true;
+            }, true),
         ];
         for (name, tweak, path) in tweaks {
             let mut constants = crate::shader_cache::ShaderCache::constants_from_config(&cfg);
@@ -1207,6 +1243,18 @@ mod layout_tests {
             let src = builder.build_from_template(&cfg.flame, &active, false, path, false, true, &constants);
             out.push((format!("built: {name}"), src));
         }
+        // A stateful variation's slots ride in the orbit too.
+        let mut stateful = cfg.clone();
+        let mut t = crate::scene::transforms::Transform::default();
+        t.weight = 1.0;
+        t.set_variation("cubic_julia", 0.5);
+        stateful.flame.transforms = vec![t];
+        let active = stateful.flame.extract_active_variations();
+        let mut constants = crate::shader_cache::ShaderCache::constants_from_config(&stateful);
+        constants.persistent_orbits = true;
+        let src = builder.build_from_template(&stateful.flame, &active, false, false, false, true, &constants);
+        assert!(src.contains("const ORBIT_SLOTS: u32 = 1u;"), "cubic_julia's slot is not in the orbit");
+        out.push(("built: persistent, a stateful variation".to_string(), src));
         out
     }
 
@@ -1286,13 +1334,14 @@ mod layout_tests {
             (cfg.pan_x, cfg.pan_y) = (0.5, 0.25);
             cfg
         };
-        // A plain flame, at WebGPU's minimum.
+        // A plain flame, at WebGPU's minimum: 5 with its orbits.
         let (device, queue) = limited_device(8);
         let n = lit(&render(&device, &queue, &dragon()));
         println!("  plain flame, 8 storage buffers: {n} pixels lit");
         assert!(n > 100, "the plain flame drew {n} pixels");
 
-        // Everything that adds a binding, at the laptop's ten.
+        // Everything that adds a binding, at the laptop's ten: 8 and the
+        // orbits make 9.
         let (device, queue) = limited_device(10);
         let mut cfg = dragon();
         cfg.zoom = 1e4;

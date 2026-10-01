@@ -70,7 +70,7 @@ or an `Option`, and `src/ui/mod.rs` acts on it after the frame is drawn.
 | Edit | Undo, Redo (Preferences is a disabled stub) |
 | View | Reset View, Zoom In / Out |
 | **Mode** | The four render modes as radio rows, built from `RenderMode::ALL` |
-| Rendering | Pause, Reset Accumulation, Iterations per Thread, Reset to Defaults. **Hidden entirely outside the flame modes** — every item configures the chaos game |
+| Rendering | Pause, Reset Accumulation, Iterations per Thread, Frame-Time Governor (on/off) and the Workgroups a frame dispatches while it is off, Reset to Defaults. **Hidden entirely outside the flame modes** — every item configures the chaos game |
 | Window | Reset Workspace, Mobile View, the panel rows, Workspace Layout presets |
 | Help | Help panel, Keyboard Shortcuts, Report a Bug, About |
 

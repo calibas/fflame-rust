@@ -49,6 +49,9 @@ pub struct ShaderCache {
     /// asks nothing of the device for them.
     pub compute_layout: BindGroupLayout,
     pub compute_bindings: Vec<u32>,
+    /// The u32 words a thread's orbit takes (`16 + ORBIT_SLOTS`), or 0
+    /// when the shader's orbits do not persist (`orbit_words_of`).
+    pub orbit_words: u32,
 
     /// Init compute pipeline for variations with `wgsl_init`. `None` when no
     /// active variation in the current flame has init. Rebuilt alongside the
@@ -134,6 +137,7 @@ struct CachedPipelines {
     /// The layout the pipeline was made with, and its bindings.
     layout: BindGroupLayout,
     bindings: Vec<u32>,
+    orbit_words: u32,
     init_source: Option<String>,
     init_pipeline: Option<ComputePipeline>,
     init_pair_count: u32,
@@ -190,6 +194,10 @@ impl ShaderCache {
             has_analytic_blur: flame.analytic_blur_active(&crate::variations::global_registry(), RenderMode::TwoD),
             importance_sampling: false,
             cylinder_targeting: false,
+            // The renderer's default (only `FlameRenderer::new` makes a
+            // cache), so its first config load is an early-out, not a
+            // rebuild.
+            persistent_orbits: true,
             frame_coverage: false,
             cylinder_replay: false,
             cylinder_relative: false,
@@ -258,12 +266,14 @@ impl ShaderCache {
 
         // Seed the pipeline LRU with the initial build, so returning to
         // the startup flame after visiting others is a hit like any other.
+        let orbit_words = Self::orbit_words_of(&shader_source_2d, &compute_bindings);
         let lru = vec![CachedPipelines {
             key: Self::cache_key(&shader_source_2d, init_shader_source.as_deref()),
             source: shader_source_2d.clone(),
             pipeline: compute_pipeline_2d.clone(),
             layout: compute_layout.clone(),
             bindings: compute_bindings.clone(),
+            orbit_words,
             init_source: init_shader_source.clone(),
             init_pipeline: init_pipeline.clone(),
             init_pair_count,
@@ -284,6 +294,7 @@ impl ShaderCache {
             shader_source_3d,
             compute_pipeline_2d,
             compute_pipeline_3d,
+            orbit_words,
             compute_layout,
             compute_bindings,
             init_pipeline,
@@ -428,6 +439,7 @@ impl ShaderCache {
                 has_analytic_blur: config.flame.analytic_blur_active(&registry, config.render_mode),
                 importance_sampling: config.importance.enabled,
                 cylinder_targeting: false,
+                persistent_orbits: false,
                 // Auto exposure is a config choice, so unlike
                 // targeting it can be read straight off the config
                 // here -- it needs no knowledge of the view.
@@ -622,6 +634,7 @@ impl ShaderCache {
             self.compute_pipeline_3d = entry.pipeline.clone();
             self.compute_layout = entry.layout.clone();
             self.compute_bindings = entry.bindings.clone();
+            self.orbit_words = entry.orbit_words;
             self.init_shader_source = entry.init_source.clone();
             self.init_pipeline = entry.init_pipeline.clone();
             self.init_pair_count = entry.init_pair_count;
@@ -653,6 +666,8 @@ impl ShaderCache {
             self.compute_pipeline_3d = pipeline.clone();
             self.compute_layout = layout.clone();
             self.compute_bindings = bindings.clone();
+            let orbit_words = Self::orbit_words_of(&source, &bindings);
+            self.orbit_words = orbit_words;
             self.init_shader_source = init_source.clone();
             self.init_pipeline = init_pipeline.clone();
             self.init_pair_count = init_pair_count;
@@ -663,6 +678,7 @@ impl ShaderCache {
                     key,
                     source,
                     pipeline,
+                    orbit_words,
                     layout,
                     bindings,
                     init_source,
@@ -765,6 +781,26 @@ impl ShaderCache {
     #[cfg(target_arch = "wasm32")]
     fn validate_wgsl(_source: &str, _label: &str) -> Result<(), String> {
         Ok(())
+    }
+
+    /// The words of a thread's orbit before its variation slots
+    /// (`header.wgsl`: `ORBIT_WORDS = 16u + ORBIT_SLOTS`).
+    pub(crate) const ORBIT_FIXED_WORDS: u32 = 16;
+
+    /// **The u32 words a thread's orbit takes in `source`**: `16 +
+    /// ORBIT_SLOTS`, read from the constant the builder emits, or 0 when
+    /// the shader does not use the orbit buffer (binding 8).
+    pub(crate) fn orbit_words_of(source: &str, bindings: &[u32]) -> u32 {
+        if !bindings.contains(&8) {
+            return 0;
+        }
+        let slots = source
+            .split("const ORBIT_SLOTS: u32 = ")
+            .nth(1)
+            .and_then(|r| r.split('u').next())
+            .and_then(|n| n.trim().parse::<u32>().ok())
+            .expect("a shader using the orbit buffer declares ORBIT_SLOTS");
+        Self::ORBIT_FIXED_WORDS + slots
     }
 
     /// Create a compute pipeline from shader source, in the layout of the

@@ -519,6 +519,8 @@ pub struct SystemSettings {
     pub vsync_enabled: bool,              // VSync toggle (default: true)
     pub target_fps: f32,                  // FPS when VSync off (default: 60.0)
     pub iterations_per_thread: u32,       // GPU tuning (default: 256)
+    pub frame_governor: bool,             // size each frame's dispatch to the budget (default: true)
+    pub manual_workgroups: u32,           // workgroups a frame dispatches with the governor off (default: 128)
 
     // UI/UX
     pub language: String,                 // ISO 639-1 code (default: "en")

@@ -62,6 +62,11 @@ pub struct RenderJob<'a> {
     /// `RenderEngines`). `None` -- the default, and what every still
     /// path passes -- means a fresh engine for this render.
     pub engines: Option<&'a mut RenderEngines>,
+
+    /// Restart every orbit every dispatch, as before orbits persisted
+    /// (`docs/projects/persistent-orbits.md`): a gate's baseline.
+    #[cfg(test)]
+    pub(crate) restarted_orbits: bool,
 }
 
 impl<'a> RenderJob<'a> {
@@ -77,6 +82,8 @@ impl<'a> RenderJob<'a> {
             transparent: false,
             premultiplied: false,
             engines: None,
+            #[cfg(test)]
+            restarted_orbits: false,
         }
     }
 
@@ -107,6 +114,14 @@ impl<'a> RenderJob<'a> {
     /// Use premultiplied alpha (vs straight-alpha reconstruction) for transparent export
     pub fn with_premultiplied(mut self, premultiplied: bool) -> Self {
         self.premultiplied = premultiplied;
+        self
+    }
+
+    /// Keep each thread's orbit between dispatches, or restart them every
+    /// dispatch as a gate's baseline.
+    #[cfg(test)]
+    pub(crate) fn with_persistent_orbits(mut self, on: bool) -> Self {
+        self.restarted_orbits = !on;
         self
     }
 
@@ -368,6 +383,8 @@ pub async fn render_with(
         job.config.flame.transforms.len()
     );
 
+    #[cfg(test)]
+    renderer.set_persistent_orbits(!job.restarted_orbits);
     renderer.load_config(
         device,
         &mut encoder,
@@ -424,6 +441,10 @@ pub async fn render_with(
     // Render loop
     let mut total_rendered = 0u64;
     let mut batch_frame_count = 0u32;
+    // The samples the batch plotted, which the tone map normalises by:
+    // what the renderer says plotted, as the app counts -- a thread's
+    // burn-in is paid once, not every dispatch.
+    let mut batch_samples = 0u64;
 
     while total_rendered < target {
         // Check for cancellation
@@ -438,7 +459,7 @@ pub async fn render_with(
         let clear_histogram = batch_frame_count == 0;
         let clear_paths = total_rendered == 0 && clear_histogram;
 
-        renderer.compute_pass(
+        let plotted = renderer.compute_pass(
             &mut encoder,
             queue,
             device,
@@ -463,13 +484,14 @@ pub async fn render_with(
         let samples_this_frame =
             NUM_WORKGROUPS as u64 * THREADS_PER_WORKGROUP * job.iterations_per_thread as u64;
         total_rendered += samples_this_frame;
+        batch_samples += plotted;
         batch_frame_count += 1;
 
         // Accumulate when batch is complete
         if batch_frame_count >= BATCH_SIZE {
-            let total_samples_in_batch = samples_this_frame * BATCH_SIZE as u64;
-            renderer.accumulate_pass(&mut encoder, queue, device, total_samples_in_batch);
+            renderer.accumulate_pass(&mut encoder, queue, device, batch_samples);
             batch_frame_count = 0;
+            batch_samples = 0;
         }
 
         queue.submit(std::iter::once(encoder.finish()));
@@ -484,8 +506,7 @@ pub async fn render_with(
                 let mut final_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
                     label: Some("Final Batch Accumulation"),
                 });
-                let total_samples_in_batch = samples_this_frame * batch_frame_count as u64;
-                renderer.accumulate_pass(&mut final_encoder, queue, device, total_samples_in_batch);
+                renderer.accumulate_pass(&mut final_encoder, queue, device, batch_samples);
                 queue.submit(std::iter::once(final_encoder.finish()));
             }
             break;

@@ -879,7 +879,16 @@ pub struct GpuParams {
     ///
     /// Read only under the IMPORTANCE_SAMPLING builder flag.
     pub importance_window: u32,
-    pub _pad_shadow: [u32; 2],
+    /// The orbit generation (`PERSISTENT_ORBITS`,
+    /// docs/projects/persistent-orbits.md): a thread whose stored orbit
+    /// carries it resumes. Carved from the second shadow pad, like
+    /// `importance_window` from the first, so no offset moves.
+    pub orbit_generation: u32,
+    /// **Refresh** (`PERSISTENT_ORBITS`; persistent-orbits.md §3.7): a
+    /// dispatch restarts the threads with `(thread_id + seed) % period ==
+    /// 0`, so a flame whose xaos chain has several closed groups redraws
+    /// which group its orbits are in. 0 is off. Carved from the same pad.
+    pub orbit_refresh_period: u32,
     // xyz = world-space direction TO each light, w unused.
     pub shadow_dirs: [[f32; 4]; 4],
     /// **The leak probe: `[cx, cy, r, unused]`, off when `r <= 0`.**
@@ -1232,6 +1241,11 @@ pub struct FlameBuffers {
     // for depth and a shallow view has nothing to target.
     pub cylinder_buffer: Option<Buffer>,
     pub dummy_cylinder_buffer: Buffer,
+    /// Each thread's orbit, kept between dispatches (binding 8,
+    /// `PERSISTENT_ORBITS`; docs/projects/persistent-orbits.md). Made when
+    /// a shader first asks for it, grown when a dispatch needs more.
+    pub orbit_buffer: Option<Buffer>,
+    pub dummy_orbit_buffer: Buffer,
 
     // Frame-coverage counters for auto exposure: two u32s, [0] plot
     // attempts that landed in frame and [1] plot attempts. Always
@@ -1476,7 +1490,8 @@ impl FlameBuffers {
             shadow_radius: 1.0,
             shadow_count: 0,
             importance_window: 0,
-            _pad_shadow: [0; 2],
+            orbit_generation: 0,
+            orbit_refresh_period: 0,
             shadow_dirs: [[0.0; 4]; 4],
             leak_probe: [0.0; 4],
         };
@@ -1623,6 +1638,12 @@ impl FlameBuffers {
             label: Some("Frame Coverage Counters"),
             size: 32,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let dummy_orbit_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Dummy Orbit Buffer"),
+            size: 64,
+            usage: BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
         let dummy_cylinder_buffer = device.create_buffer(&BufferDescriptor {
@@ -1836,6 +1857,8 @@ impl FlameBuffers {
             dummy_bias_buffer,
             cylinder_buffer: None,  // Created on demand when a view is targeted
             dummy_cylinder_buffer,
+            orbit_buffer: None,
+            dummy_orbit_buffer,
             coverage_buffer,
             dummy_xaos_buffer,
             blur_splat_buffer: None,  // Created on demand when analytic blur is active
@@ -2660,6 +2683,31 @@ impl FlameBuffers {
 
     /// Update xaos weights from flame
     /// Only writes if xaos buffer is enabled
+    /// The orbit buffer's binding: the real buffer once a shader has asked
+    /// for one, the dummy before.
+    pub fn orbit_binding(&self) -> &Buffer {
+        self.orbit_buffer.as_ref().unwrap_or(&self.dummy_orbit_buffer)
+    }
+
+    /// Make the orbit buffer hold at least `bytes`, created zeroed -- every
+    /// thread's generation 0, which no dispatch carries. Returns true when
+    /// it was (re)made: its orbits are gone, and the bind group must follow.
+    pub fn ensure_orbit_capacity(&mut self, device: &Device, bytes: u64) -> bool {
+        if self.orbit_buffer.as_ref().is_some_and(|b| b.size() >= bytes) {
+            return false;
+        }
+        if let Some(b) = self.orbit_buffer.take() {
+            b.destroy();
+        }
+        self.orbit_buffer = Some(device.create_buffer(&BufferDescriptor {
+            label: Some("Orbit Buffer"),
+            size: bytes.max(64),
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
+        true
+    }
+
     /// The cylinder table binding: the real buffer when a view is
     /// targeted, the dummy otherwise.
     pub fn cylinder_binding(&self) -> &Buffer {

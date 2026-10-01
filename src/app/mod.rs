@@ -519,6 +519,11 @@ pub struct App {
     pub(super) display_refresh_age: u32,
     pub(super) accumulation_batch_size: u32,  // Process every N frames (1 = normal, 4 = batched)
     pub(super) frames_since_accumulation: u32,
+    // The samples the batch's frames plotted so far, each frame's as
+    // `compute_pass` counted it: frames differ (the first after a restart
+    // pays the burn-in, the governor changes the width), so a batch is
+    // their sum, not its last frame times its length.
+    pub(super) samples_in_batch: u64,
     // Overwrite mode timing (100ms window after parameter changes)
     // Note: This is intentionally separate from RenderModeFSM. The FSM manages high-level
     // state transitions (Normal/Animating/Overwrite), while this simple timer handles the
@@ -851,6 +856,7 @@ impl App {
             display_refresh_age: 0,
             accumulation_batch_size: 4, // EXPERIMENT: Test batching
             frames_since_accumulation: 0,
+            samples_in_batch: 0,
             use_overwrite_next_frame: false,
             last_param_change_time: None,
             rendering_complete: false,
@@ -2186,6 +2192,7 @@ impl App {
                     const BATCH_SIZE: u32 = 4;
 
                     let mut batch_frame_count = 0;
+                    let mut batch_samples = 0u64;
 
                     let is_escape_export = export_config.render_mode
                         == crate::scene::transforms::RenderMode::Escape;
@@ -2207,7 +2214,7 @@ impl App {
                         // Clear paths only on very first batch of the entire export
                         let clear_paths = total_rendered == 0 && clear_histogram;
 
-                        temp_renderer.compute_pass(
+                        let plotted = temp_renderer.compute_pass(
                             &mut encoder,
                             &self.gpu.queue,
                             &self.gpu.device,
@@ -2234,12 +2241,15 @@ impl App {
 
                         let samples_this_frame = NUM_WORKGROUPS as u64 * THREADS_PER_WORKGROUP * iterations_per_thread as u64;
                         total_rendered += samples_this_frame;
+                        // What plotted, as `render.rs` counts: the tone
+                        // map normalises by it.
+                        batch_samples += plotted;
                         batch_frame_count += 1;
 
                         if batch_frame_count >= BATCH_SIZE {
-                            let total_samples_in_batch = samples_this_frame * BATCH_SIZE as u64;
-                            temp_renderer.accumulate_pass(&mut encoder, &self.gpu.queue, &self.gpu.device, total_samples_in_batch);
+                            temp_renderer.accumulate_pass(&mut encoder, &self.gpu.queue, &self.gpu.device, batch_samples);
                             batch_frame_count = 0;
+                            batch_samples = 0;
                         }
 
                         self.gpu.queue.submit(std::iter::once(encoder.finish()));
@@ -2249,8 +2259,7 @@ impl App {
                                 let mut final_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                                     label: Some("WASM Export Final Accumulation"),
                                 });
-                                let total_samples_in_batch = samples_this_frame * batch_frame_count as u64;
-                                temp_renderer.accumulate_pass(&mut final_encoder, &self.gpu.queue, &self.gpu.device, total_samples_in_batch);
+                                temp_renderer.accumulate_pass(&mut final_encoder, &self.gpu.queue, &self.gpu.device, batch_samples);
                                 self.gpu.queue.submit(std::iter::once(final_encoder.finish()));
                             }
                             break;
@@ -3151,15 +3160,13 @@ impl App {
                 // it measures command ENCODING, not GPU execution — the
                 // frame delta is the only honest GPU-load signal here.)
                 //
-                // The governor scales WORKGROUPS, not iterations_per_
-                // thread: trajectories do not persist across dispatches,
-                // so ipt IS the trajectory depth — a user-visible quality
-                // setting for long-memory fractals — while the workgroup
-                // count is pure throughput. Two exceptions (`Batch`,
-                // `Knee`): under targeting a sample's cost is its word's
-                // replay, so the dispatch is SHORTENED first, and where
-                // shedding width stops shortening the frame the width is
-                // grown back while that is free.
+                // The governor SHORTENS the dispatch first, then sheds
+                // workgroups (`Batch`): orbits persist across dispatches
+                // (docs/projects/persistent-orbits.md), so a shorter
+                // dispatch costs no trajectory depth, and a full-width one
+                // keeps the GPU occupied. Where shedding width stops
+                // shortening the frame, the width is grown back while that
+                // is free (`Knee`).
                 // Under vsync the compositor blocks until the next refresh, so
                 // this delta cannot go below the refresh interval however
                 // little work we submit — landing exactly ON the target is the
@@ -3178,7 +3185,6 @@ impl App {
                         max_workgroups: NUM_WORKGROUPS,
                         iterations_per_thread: settings.iterations_per_thread,
                         burn_in: settings.burn_in,
-                        shorten: matches!(renderer.targeting_state(), crate::renderer::TargetingState::Active { .. }),
                     }
                 };
                 if self.governor_batch != Some(batch) {
@@ -3191,7 +3197,14 @@ impl App {
                 // GPU work lengthens these frames, and read as the render's
                 // cost it would shed a batch that fits.
                 let planning = renderer.planning_elapsed().is_some();
-                if let Some(prev) = self.last_iter_frame.filter(|_| !planning) {
+                // The governor can be switched off (Rendering menu): every
+                // frame then dispatches the chosen workgroups, and the
+                // governor neither measures nor adapts.
+                let (governed, manual_workgroups) = {
+                    let settings = self.config_manager.system_settings();
+                    (settings.frame_governor, settings.manual_workgroups)
+                };
+                if let Some(prev) = self.last_iter_frame.filter(|_| !planning && governed) {
                     // Re-ask the platform every so often rather than every
                     // frame: the answer only changes when the window moves to
                     // a different display, and `current_monitor` is a syscall.
@@ -3237,7 +3250,9 @@ impl App {
                 // remaining shed axis would be trajectory depth — which is
                 // exactly what the governor exists to protect. One
                 // workgroup still makes forward progress every frame.
-                let (effective_workgroups, effective_ipt) = if planning {
+                let (effective_workgroups, effective_ipt) = if !governed {
+                    batch.fixed(manual_workgroups, planning)
+                } else if planning {
                     batch.while_planning(self.governor_knee, self.iter_scale)
                 } else {
                     batch.shape(self.governor_knee, self.iter_scale)
@@ -3267,16 +3282,17 @@ impl App {
                     final_config.camera_rotation_x, final_config.camera_rotation_y, final_config.camera_bank, final_config.camera_x, final_config.camera_y, final_config.camera_z, final_config.speed_factor, clear_histogram, clear_paths);
 
                 self.metrics.record_compute_time(t_compute.elapsed().as_secs_f64() * 1000.0);
+                // The histogram holds every frame of the batch: count them
+                // all, frame by frame.
+                if clear_histogram {
+                    self.samples_in_batch = 0;
+                }
+                self.samples_in_batch += samples_this_frame;
 
                 let t_accumulate = Instant::now();
                 // 2. Accumulate samples - but only every N frames if batching enabled
                 if should_accumulate {
-                    // samples_this_frame is only THIS frame's samples, but histogram contains
-                    // accumulated samples from all frames in the batch
-                    // Pass total samples for proper blend_factor calculation
-                    let total_samples_in_batch = samples_this_frame * batch_size as u64;
-
-                    renderer.accumulate_pass(&mut render_encoder, &self.gpu.queue, &self.gpu.device, total_samples_in_batch);
+                    renderer.accumulate_pass(&mut render_encoder, &self.gpu.queue, &self.gpu.device, self.samples_in_batch);
 
                     self.frames_since_accumulation = 0;
                     self.metrics.record_accumulate_time(t_accumulate.elapsed().as_secs_f64() * 1000.0);
@@ -3763,7 +3779,9 @@ pub(crate) fn frame_budget(vsync: bool, target_fps: f32, refresh_mhz: Option<u32
 /// hitches big enough to trip the catastrophic clause were already
 /// dropped frames; a one-off grain correction alongside is acceptable,
 /// and it caps the slow-recovery tail the old playback-only rule had.
-pub(crate) fn adjust_iter_scale(scale: f64, median_ratio: f64, raw_ratio: f64) -> f64 {
+///
+/// `floor` is the smallest scale: the batch's (`Batch::min_scale`).
+pub(crate) fn adjust_iter_scale(scale: f64, median_ratio: f64, raw_ratio: f64, floor: f64) -> f64 {
     let mut s = scale;
     if raw_ratio >= 4.0 {
         s /= raw_ratio.min(4.0);
@@ -3772,13 +3790,8 @@ pub(crate) fn adjust_iter_scale(scale: f64, median_ratio: f64, raw_ratio: f64) -
     } else if median_ratio < 1.05 {
         s *= 1.15;
     }
-    // 1/256 lets the dispatch reach its 1-workgroup floor (128/256 -> 1
-    // after the ceiling at the call site); the old 1/64 bottomed out at 2.
-    s.clamp(MIN_ITER_SCALE, 1.0)
+    s.clamp(floor, 1.0)
 }
-
-/// The governor's smallest scale (`adjust_iter_scale`): its floor.
-pub(crate) const MIN_ITER_SCALE: f64 = 1.0 / 256.0;
 
 /// Frames over budget at the floor before the governor asks whether
 /// width was the constraint at all (`Knee`).
@@ -3792,31 +3805,40 @@ const KNEE_SETTLE: u32 = 4;
 const KNEE_FREE: f64 = 1.25;
 
 /// **The dispatch's geometry, and how the governor's scale maps onto
-/// it.** Normally the scale sheds WORKGROUPS and leaves
-/// `iterations_per_thread`, the trajectory depth, alone.
+/// it.** The scale SHORTENS the dispatch first, down to `ipt_floor`, and
+/// only then sheds workgroups.
 ///
-/// Under targeting (`shorten`) the dispatch is shortened first. A forced
-/// sample replays its word -- up to 96 maps at depth -- so one thread's
-/// iterations alone can outlast the frame: julian-disc at zoom 1,598 with
-/// 1,000 iterations per thread took about 58 ms at ANY width, and the
-/// governor, able only to shed width, went to one workgroup and stayed,
-/// at 1.1 million samples a second against the CLI's 76 million (the
-/// same view at full width and 256 per thread: 80-87 million, 45 fps).
-/// Shortening costs little there: the burn-in iterations skip the forced
-/// replay, and a forced sample's position comes from its word, not from
-/// how long the free orbit has run. Not for untargeted renders until
-/// orbits persist across dispatches (`docs/projects/persistent-orbits.md`).
+/// Orbits persist across dispatches (`docs/projects/persistent-orbits.md`),
+/// so `iterations_per_thread` only slices the work: a shorter dispatch
+/// costs no trajectory depth, and full width keeps the GPU occupied. And
+/// one thread's iterations alone can outlast the frame -- a targeted
+/// sample replays its word, up to 96 maps at depth: julian-disc at zoom
+/// 1,598 with 1,000 iterations per thread took about 58 ms at ANY width,
+/// and a governor able only to shed width went to one workgroup and
+/// stayed, at 1.1 million samples a second against the CLI's 76 million
+/// (the same view at full width and 256 per thread: 80-87 million, 45
+/// fps). Until orbits persisted it shortened only under targeting, where
+/// a forced sample's position comes from its word, not from how long the
+/// free orbit has run.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Batch {
     pub max_workgroups: u32,
     pub iterations_per_thread: u32,
     pub burn_in: u32,
-    pub shorten: bool,
 }
 
 impl Batch {
-    /// The shortest dispatch a targeted batch is cut to: 64 iterations,
-    /// or three burn-ins, never more than the setting.
+    /// **The governor's smallest scale**: one workgroup at the shortest
+    /// dispatch, the batch the heaviest flames (deep emit and solid
+    /// stacks, a workgroup tens of milliseconds) need. A fixed share of
+    /// the full batch is not enough once the dispatch shortens first:
+    /// 1/256 of 128 workgroups of 1,000 is 8 workgroups of 64.
+    pub fn min_scale(&self) -> f64 {
+        self.ipt_floor() as f64 / (self.max_workgroups.max(1) as f64 * self.iterations_per_thread.max(1) as f64)
+    }
+
+    /// The shortest dispatch a batch is cut to: 64 iterations, or three
+    /// burn-ins, never more than the setting.
     fn ipt_floor(&self) -> u32 {
         self.iterations_per_thread.min((3 * self.burn_in).max(64)).max(1)
     }
@@ -3828,16 +3850,12 @@ impl Batch {
             Knee::Probing { width, .. } | Knee::Holding { width, .. } => Some(width.clamp(1, self.max_workgroups)),
             Knee::Shedding { .. } => None,
         };
-        if !self.shorten {
-            let w = width.unwrap_or(((self.max_workgroups as f64 * scale) as u32).max(1));
-            return (w, ipt);
-        }
         let floor = self.ipt_floor();
         if let Some(w) = width {
             return (w, floor);
         }
-        // The same work as the unshortened batch at this scale: full width
-        // while the dispatch can shorten, then narrower at its floor.
+        // The work of the full batch at this scale: full width while the
+        // dispatch can shorten, then narrower at its floor.
         let short = ((ipt as f64 * scale).round() as u32).clamp(floor, ipt);
         let work = scale * self.max_workgroups as f64 * ipt as f64;
         let w = ((work / short as f64).round() as u32).clamp(1, self.max_workgroups);
@@ -3856,20 +3874,25 @@ impl Batch {
         (w, ipt.min(self.ipt_floor()))
     }
 
+    /// **The dispatch with the governor off**: `workgroups` of the full
+    /// length, every frame. While a tight plan is made it is still capped
+    /// to the shortest dispatch -- that cap is the planner's, not the
+    /// governor's (tracker P10: the plan's round trips queue behind it).
+    pub fn fixed(&self, workgroups: u32, planning: bool) -> (u32, u32) {
+        let ipt = self.iterations_per_thread.max(1);
+        (workgroups.max(1), if planning { ipt.min(self.ipt_floor()) } else { ipt })
+    }
+
     /// The width of the floor's dispatch.
     fn floor_width(&self) -> u32 {
-        self.shape(Knee::Shedding { over: 0 }, MIN_ITER_SCALE).0
+        self.shape(Knee::Shedding { over: 0 }, self.min_scale()).0
     }
 
     /// The scale whose dispatch is `width` wide at the floor's length:
     /// where shedding resumes when a hold ends.
     fn scale_of(&self, width: u32) -> f64 {
-        let per = if self.shorten {
-            self.ipt_floor() as f64 / (self.max_workgroups as f64 * self.iterations_per_thread.max(1) as f64)
-        } else {
-            1.0 / self.max_workgroups as f64
-        };
-        (width as f64 * per).clamp(MIN_ITER_SCALE, 1.0)
+        let per = self.ipt_floor() as f64 / (self.max_workgroups as f64 * self.iterations_per_thread.max(1) as f64);
+        (width as f64 * per).clamp(self.min_scale(), 1.0)
     }
 }
 
@@ -3901,9 +3924,9 @@ pub(crate) enum Knee {
 pub(crate) fn governor_step(knee: Knee, scale: f64, median: f64, raw: f64, batch: &Batch) -> (Knee, f64) {
     match knee {
         Knee::Shedding { over } => {
-            let s = adjust_iter_scale(scale, median, raw);
+            let s = adjust_iter_scale(scale, median, raw, batch.min_scale());
             let floor_width = batch.floor_width();
-            if s <= MIN_ITER_SCALE && median > 1.3 && floor_width < batch.max_workgroups {
+            if s <= batch.min_scale() && median > 1.3 && floor_width < batch.max_workgroups {
                 let over = over + 1;
                 if over >= KNEE_AFTER {
                     let width = (floor_width * 2).min(batch.max_workgroups);
@@ -3943,7 +3966,7 @@ pub(crate) fn governor_step(knee: Knee, scale: f64, median: f64, raw: f64, batch
             }
             if median > 2.0 * at {
                 // Heavier: back to the floor, and probe again from there.
-                return (Knee::Shedding { over: 0 }, MIN_ITER_SCALE);
+                return (Knee::Shedding { over: 0 }, batch.min_scale());
             }
             (Knee::Holding { width, at }, scale)
         }
@@ -3952,7 +3975,10 @@ pub(crate) fn governor_step(knee: Knee, scale: f64, median: f64, raw: f64, batch
 
 #[cfg(test)]
 mod governor_tests {
-    use super::{adjust_iter_scale, frame_budget, governor_step, Batch, Knee, MIN_ITER_SCALE};
+    use super::{adjust_iter_scale, frame_budget, governor_step, Batch, Knee};
+
+    /// The slew tests' floor: the scale alone, without a batch.
+    const MIN_ITER_SCALE: f64 = 1.0 / 256.0;
 
     /// The governor with the knee and the dispatch's shape, driven by a
     /// model of what a dispatch costs: `frame(workgroups, ipt)` in
@@ -3979,26 +4005,24 @@ mod governor_tests {
     /// and never heavier than the governor's own shape.
     #[test]
     fn a_dispatch_while_planning_is_short() {
-        for shorten in [false, true] {
-            let batch = Batch { max_workgroups: 128, iterations_per_thread: 256, burn_in: 20, shorten };
-            let knees = [
-                Knee::Shedding { over: 0 },
-                Knee::Probing { width: 16, free: 1.0, frames: 0 },
-                Knee::Holding { width: 64, at: 1.0 },
-            ];
-            for knee in knees {
-                for scale in [1.0, 0.5, 0.1, MIN_ITER_SCALE] {
-                    let (w, ipt) = batch.shape(knee, scale);
-                    let (pw, pipt) = batch.while_planning(knee, scale);
-                    assert_eq!(pw, w, "{knee:?} at {scale}: the width changed");
-                    assert!(pipt <= 64 && pipt <= ipt, "{knee:?} at {scale}: {pipt} iterations a thread, against {ipt}");
-                }
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 256, burn_in: 20 };
+        let knees = [
+            Knee::Shedding { over: 0 },
+            Knee::Probing { width: 16, free: 1.0, frames: 0 },
+            Knee::Holding { width: 64, at: 1.0 },
+        ];
+        for knee in knees {
+            for scale in [1.0, 0.5, 0.1, batch.min_scale()] {
+                let (w, ipt) = batch.shape(knee, scale);
+                let (pw, pipt) = batch.while_planning(knee, scale);
+                assert_eq!(pw, w, "{knee:?} at {scale}: the width changed");
+                assert!(pipt <= 64 && pipt <= ipt, "{knee:?} at {scale}: {pipt} iterations a thread, against {ipt}");
             }
-            // The full batch, as the app runs it on a light flame.
-            assert_eq!(batch.while_planning(Knee::Shedding { over: 0 }, 1.0), (128, 64));
         }
+        // The full batch, as the app runs it on a light flame.
+        assert_eq!(batch.while_planning(Knee::Shedding { over: 0 }, 1.0), (128, 64));
         // A setting shorter than the floor stays as it is.
-        let batch = Batch { max_workgroups: 128, iterations_per_thread: 32, burn_in: 20, shorten: true };
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 32, burn_in: 20 };
         assert_eq!(batch.while_planning(Knee::Shedding { over: 0 }, 1.0).1, 32);
     }
 
@@ -4009,12 +4033,13 @@ mod governor_tests {
         0.004 + ipt as f64 * 80e-6
     }
 
-    /// **A targeted render shortens its dispatch and keeps its width**
-    /// (reported: julian-disc at zoom 1,598, 1,000 iterations per thread,
-    /// one workgroup at 17 fps, 1.1 million samples a second).
+    /// **A render shortens its dispatch and keeps its width** (reported,
+    /// targeted: julian-disc at zoom 1,598, 1,000 iterations per thread,
+    /// one workgroup at 17 fps, 1.1 million samples a second). Every
+    /// render, since orbits persist.
     #[test]
-    fn a_targeted_render_shortens_its_dispatch_and_keeps_its_width() {
-        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20, shorten: true };
+    fn a_render_shortens_its_dispatch_and_keeps_its_width() {
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20 };
         let run = drive(batch, 300, &latency_bound);
         let (w, ipt, t) = *run.last().unwrap();
         assert_eq!(w, 128, "the width was shed: {run:?}");
@@ -4025,16 +4050,22 @@ mod governor_tests {
         assert!(now > 50.0 * before, "{now:.3e} samples a second against {before:.3e}");
     }
 
-    /// **Shedding that does not shorten the frame is undone.** Untargeted
-    /// and latency-bound: the dispatch keeps its length (the trajectory
-    /// depth), and the width goes back to full once the floor proves no
-    /// faster.
+    /// A latency-bound frame too long even at the floor's length: 400 us an
+    /// iteration, 30 ms at 64 iterations a thread, at any width.
+    fn too_slow(_w: u32, ipt: u32) -> f64 {
+        0.004 + ipt as f64 * 400e-6
+    }
+
+    /// **Shedding that does not shorten the frame is undone.** Latency-
+    /// bound past the shortest dispatch: shortening goes to its floor,
+    /// shedding width then buys nothing, and the width goes back to full
+    /// once the floor proves no faster.
     #[test]
     fn shedding_that_does_not_help_is_undone() {
-        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20, shorten: false };
-        let run = drive(batch, 400, &latency_bound);
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20 };
+        let run = drive(batch, 400, &too_slow);
         let (w, ipt, _) = *run.last().unwrap();
-        assert_eq!((w, ipt), (128, 1000), "the batch stayed shed: {:?}", &run[run.len() - 5..]);
+        assert_eq!((w, ipt), (128, 64), "the batch stayed shed: {:?}", &run[run.len() - 5..]);
     }
 
     /// **Where width costs, the floor holds.** Each workgroup 20 ms: the
@@ -4043,7 +4074,7 @@ mod governor_tests {
     /// never a frame much past twice the floor's.
     #[test]
     fn where_width_costs_the_floor_holds() {
-        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20, shorten: false };
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20 };
         let heavy = |w: u32, _ipt: u32| 0.004 + w as f64 * 0.020;
         let run = drive(batch, 400, &heavy);
         let settled = &run[100..];
@@ -4053,11 +4084,12 @@ mod governor_tests {
     }
 
     /// **The knee is where widening starts to cost**: a GPU that runs 16
-    /// workgroups at once, then another wave.
+    /// workgroups at once, then another wave, each wave over budget even at
+    /// the floor's length.
     #[test]
     fn the_knee_is_where_widening_starts_to_cost() {
-        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20, shorten: false };
-        let waves = |w: u32, ipt: u32| 0.004 + ipt as f64 * 20e-6 * ((w + 15) / 16) as f64;
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20 };
+        let waves = |w: u32, ipt: u32| 0.004 + ipt as f64 * 400e-6 * ((w + 15) / 16) as f64;
         let run = drive(batch, 400, &waves);
         assert_eq!(run.last().unwrap().0, 16, "{:?}", &run[run.len() - 5..]);
     }
@@ -4066,12 +4098,12 @@ mod governor_tests {
     /// full.
     #[test]
     fn a_lighter_flame_leaves_the_hold() {
-        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20, shorten: false };
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20 };
         let (mut scale, mut knee, mut prev) = (1.0f64, Knee::Shedding { over: 0 }, [1.0f64, 1.0]);
         let mut shapes = Vec::new();
         for i in 0..600 {
             let (w, ipt) = batch.shape(knee, scale);
-            let t = if i < 300 { latency_bound(w, ipt) } else { 0.004 + w as f64 * 20e-6 };
+            let t = if i < 300 { too_slow(w, ipt) } else { 0.004 + w as f64 * 20e-6 };
             let ratio = t * 60.0;
             let [a, b] = prev;
             let median = a.max(b).min(a.min(b).max(ratio));
@@ -4083,24 +4115,29 @@ mod governor_tests {
         assert!(matches!(knee, Knee::Shedding { .. }) && (scale - 1.0).abs() < 1e-9, "{knee:?} at scale {scale}");
     }
 
+    /// **With the governor off** every frame is the chosen workgroups at
+    /// the full length -- but for the planner's cap while a plan is made.
+    #[test]
+    fn with_the_governor_off_the_dispatch_is_fixed() {
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20 };
+        assert_eq!(batch.fixed(512, false), (512, 1000));
+        assert_eq!(batch.fixed(512, true), (512, 64));
+        assert_eq!(batch.fixed(0, false), (1, 1000));
+    }
+
     /// The floor's dispatch, and a hold's return to shedding, keep the
-    /// shape consistent: the floor is one workgroup untargeted, and under
-    /// targeting the shortest dispatch at whatever width does the floor's
-    /// work.
+    /// shape consistent: the full batch shortens first, and the floor is
+    /// one workgroup of the shortest dispatch.
     #[test]
     fn the_floor_is_the_smallest_batch() {
-        let plain = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20, shorten: false };
-        assert_eq!(plain.shape(Knee::Shedding { over: 0 }, MIN_ITER_SCALE), (1, 1000));
-        assert_eq!(plain.shape(Knee::Shedding { over: 0 }, 1.0), (128, 1000));
-        let targeted = Batch { shorten: true, ..plain };
-        assert_eq!(targeted.shape(Knee::Shedding { over: 0 }, 1.0), (128, 1000));
-        assert_eq!(targeted.shape(Knee::Shedding { over: 0 }, 0.25), (128, 250));
-        let (w, ipt) = targeted.shape(Knee::Shedding { over: 0 }, MIN_ITER_SCALE);
-        assert_eq!(ipt, 64);
-        assert!(w >= 1 && w < 128, "{w}");
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20 };
+        assert_eq!(batch.shape(Knee::Shedding { over: 0 }, 1.0), (128, 1000));
+        assert_eq!(batch.shape(Knee::Shedding { over: 0 }, 0.25), (128, 250));
+        assert_eq!(batch.shape(Knee::Shedding { over: 0 }, batch.min_scale()), (1, 64));
+        assert_eq!(batch.scale_of(1), batch.min_scale());
         // A setting under the floor is left alone.
-        let short = Batch { iterations_per_thread: 32, ..targeted };
-        assert_eq!(short.shape(Knee::Shedding { over: 0 }, MIN_ITER_SCALE).1, 32);
+        let short = Batch { iterations_per_thread: 32, ..batch };
+        assert_eq!(short.shape(Knee::Shedding { over: 0 }, short.min_scale()), (1, 32));
     }
 
     /// Drive the governor the way the app does: a rolling median-of-3
@@ -4117,7 +4154,7 @@ mod governor_tests {
             let [a, b] = self.prev;
             let median = a.max(b).min(a.min(b).max(ratio));
             self.prev = [self.prev[1], ratio];
-            self.scale = adjust_iter_scale(self.scale, median, ratio);
+            self.scale = adjust_iter_scale(self.scale, median, ratio, MIN_ITER_SCALE);
             self.scale
         }
     }
