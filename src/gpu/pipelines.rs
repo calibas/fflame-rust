@@ -1334,13 +1334,14 @@ mod layout_tests {
             (cfg.pan_x, cfg.pan_y) = (0.5, 0.25);
             cfg
         };
-        // A plain flame, at WebGPU's minimum.
+        // A plain flame, at WebGPU's minimum: 5 with its orbits.
         let (device, queue) = limited_device(8);
         let n = lit(&render(&device, &queue, &dragon()));
         println!("  plain flame, 8 storage buffers: {n} pixels lit");
         assert!(n > 100, "the plain flame drew {n} pixels");
 
-        // Everything that adds a binding, at the laptop's ten.
+        // Everything that adds a binding, at the laptop's ten: 8 and the
+        // orbits make 9.
         let (device, queue) = limited_device(10);
         let mut cfg = dragon();
         cfg.zoom = 1e4;

@@ -330,13 +330,12 @@ impl HighResExporter {
         height: u32,
         iterations_per_thread: Option<u32>,
     ) -> Result<Self, String> {
-        Self::new_with_orbits(config, width, height, iterations_per_thread, false).await
+        Self::new_with_orbits(config, width, height, iterations_per_thread, true).await
     }
 
     /// `new`, with each thread's orbit kept between the export's dispatches
-    /// (`docs/projects/persistent-orbits.md`) or restarted every dispatch.
-    /// `new` restarts them until that plan's step 5 makes persistence every
-    /// render's.
+    /// (`docs/projects/persistent-orbits.md`), as `new` does, or restarted
+    /// every dispatch, as a gate's baseline does.
     pub async fn new_with_orbits(
         config: &FractalConfig,
         width: u32,
@@ -2315,9 +2314,10 @@ impl HighResExporter {
         // Tonemap histogram to RGBA using GPU. The actual iteration
         // count is the loop's ceiling-rounded `num_dispatches × per-dispatch`,
         // not the user-passed target — feed that to the scale-invariant
-        // sample_density formula (Phase 8a). Restarted orbits count every
-        // iteration, burn-in included, as `render.rs` does; persistent ones
-        // what plotted, as `render.rs` then does too.
+        // sample_density formula (Phase 8a). Persistent orbits count what
+        // plotted, as `render.rs` and the app do; restarted ones (a gate's
+        // baseline) every iteration, burn-in included, as this path did
+        // before orbits persisted.
         let total_iters_dispatched = if self.orbit_words > 0 { plotted } else { num_dispatches * iterations_per_dispatch };
 
         // Auto exposure's share, exact over the export; as the app, it

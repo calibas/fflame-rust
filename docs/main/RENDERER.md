@@ -153,6 +153,31 @@ pub fn compute_pass(&mut self, encoder: &mut CommandEncoder) {
 2M iterations/frame × 60 FPS = 120M iterations/second
 ```
 
+### Persistent orbits
+
+Each thread's orbit outlives its dispatch
+([persistent-orbits.md](../projects/persistent-orbits.md)). The orbit
+buffer (binding 8, `PERSISTENT_ORBITS`) holds, for every thread, its
+point, colour, burn-in left, xaos previous transform, importance window,
+analytic-blur residual and variation registers; a dispatch resumes them
+and stores them back. The random streams are still seeded per dispatch.
+
+- **What restarts them**: a new generation, `params.orbit_generation`,
+  bumped when the orbit key changes -- a hash of the whole flame, the
+  render mode, `preserve_z`, the colour mode and the speed factor. A pan,
+  zoom, palette or tone-map change keeps them.
+- **Burn-in** is paid once per restart, not once per dispatch, so
+  iterations per thread only slices the work: the picture does not depend
+  on it, and a short dispatch costs no orbit depth.
+- **The count**: `compute_pass` returns the samples that plotted,
+  modelled exactly on the CPU (`OrbitFuses`, one burn-in counter a
+  thread). Anything that accumulates must pass that count on, not
+  `threads × iterations`.
+- **Closed xaos groups**: a starting thread's first transform is a
+  stratified pick, so each isolated group gets its share of the orbits;
+  where the xaos walk itself decides the group, a quarter of the threads
+  restart each dispatch (refresh, `orbit_refresh_period`).
+
 ### Output
 
 **Histogram buffer updated:**
@@ -437,7 +462,8 @@ let result = render(&device, &queue, job, &mut NoProgress).await?;
 **RenderJob builder methods:**
 - `with_iterations(target)` - Override max_iterations from config
 - `with_iterations_per_thread(n)` - GPU iterations per dispatch
-- `with_burn_in(n)` - Skip first N iterations (default: 20)
+- `with_burn_in(n)` - Iterations an orbit runs before it plots, when it starts (default: 20); orbits persist, so this is paid once per render, not per dispatch
+- `with_persistent_orbits(bool)` - On by default; off only where a gate measures what restarted orbits did
 - `with_transparent(bool)` - Transparent or opaque PNG
 
 **RenderProgress trait:**

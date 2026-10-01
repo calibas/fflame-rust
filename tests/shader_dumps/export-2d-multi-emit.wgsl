@@ -258,6 +258,22 @@ struct SampleCounter {
 
 
 
+// **Each thread's orbit, kept between dispatches**
+// (docs/projects/persistent-orbits.md). `ORBIT_WORDS` u32 a thread:
+//
+//   0..4   x, y, z, point_w        4..8   speed rgb, color_index
+//   8      generation              9      burn-in left
+//   10     xaos previous transform 11, 12 importance window, weight
+//   13, 14 analytic-blur residual  15     -
+//   16..   the stateful variations' slots (ORBIT_SLOTS)
+//
+// Floats are stored through `bitcast`. A thread whose generation word is
+// not `params.orbit_generation` starts afresh; the buffer is created
+// zeroed and generations start at 1.
+@group(0) @binding(8) var<storage, read_write> orbits: array<u32>;
+const ORBIT_WORDS: u32 = 16u + ORBIT_SLOTS;
+
+
 
 
 // Per-subflame metadata: where each subflame's normals + finals live
@@ -458,6 +474,7 @@ fn get_param(xform_id: u32, variation_id: u32, param_slot: u32) -> f32 {
     return variation_params[xform_id].params[offset + param_slot];
 }
 
+const ORBIT_SLOTS: u32 = 0u;
 
 // Multi-emit collector (Feature::PlotEmits): up to 16 extra
              // plot points per iteration, reset by the main loop. See
@@ -1210,6 +1227,33 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 
 
+    // **Resume the orbit this thread left** (docs/projects/
+    // persistent-orbits.md): everything above is how a thread STARTS, and
+    // a thread whose stored generation is this one's picks up where its
+    // last dispatch stopped instead -- the point, the colour, the burn-in
+    // left, and every register the chaos game carries. The random streams
+    // stay seeded per dispatch, from `params.seed`.
+    let orbit_at = thread_id * ORBIT_WORDS;
+    // Refresh (persistent-orbits.md §3.7): where the xaos walk itself
+    // decides which of several closed groups an orbit ends in, a share of
+    // the threads starts again each dispatch to redraw it.
+    let orbit_refreshed = params.orbit_refresh_period != 0u &&
+        ((thread_id + params.seed) % params.orbit_refresh_period) == 0u;
+    if (orbits[orbit_at + 8u] == params.orbit_generation && !orbit_refreshed) {
+
+        current = vec2<f32>(bitcast<f32>(orbits[orbit_at]), bitcast<f32>(orbits[orbit_at + 1u]));
+
+
+        color = vec3<f32>(bitcast<f32>(orbits[orbit_at + 4u]), bitcast<f32>(orbits[orbit_at + 5u]), bitcast<f32>(orbits[orbit_at + 6u]));
+        color_index = bitcast<f32>(orbits[orbit_at + 7u]);
+        fuse = orbits[orbit_at + 9u];
+
+
+
+
+
+    }
+
 
 
 
@@ -1498,6 +1542,22 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 
     }
+
+    // ...and leave it for the next dispatch, in this generation.
+    orbits[orbit_at] = bitcast<u32>(current.x);
+    orbits[orbit_at + 1u] = bitcast<u32>(current.y);
+
+
+    orbits[orbit_at + 4u] = bitcast<u32>(color.x);
+    orbits[orbit_at + 5u] = bitcast<u32>(color.y);
+    orbits[orbit_at + 6u] = bitcast<u32>(color.z);
+    orbits[orbit_at + 7u] = bitcast<u32>(color_index);
+    orbits[orbit_at + 8u] = params.orbit_generation;
+    orbits[orbit_at + 9u] = fuse;
+
+
+
+
 
 
 }

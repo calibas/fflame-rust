@@ -64,8 +64,8 @@ pub struct RenderJob<'a> {
     pub engines: Option<&'a mut RenderEngines>,
 
     /// Keep each thread's orbit between dispatches
-    /// (`docs/projects/persistent-orbits.md`). Off until that plan's
-    /// step 5 makes it every render's.
+    /// (`docs/projects/persistent-orbits.md`). On; off only where a gate
+    /// measures what restarted orbits did.
     pub persistent_orbits: bool,
 }
 
@@ -82,7 +82,7 @@ impl<'a> RenderJob<'a> {
             transparent: false,
             premultiplied: false,
             engines: None,
-            persistent_orbits: false,
+            persistent_orbits: true,
         }
     }
 
@@ -437,12 +437,11 @@ pub async fn render_with(
     // Render loop
     let mut total_rendered = 0u64;
     let mut batch_frame_count = 0u32;
-    // The samples the batch plotted, which the tone map normalises by.
-    // Restarted orbits count every iteration, burn-in included, as this
-    // path always has (the app counts what plotted: the visual suite's
-    // baselines carry the difference until persistent orbits are every
-    // render's). Persistent orbits count what the renderer says plotted:
-    // a thread's burn-in is paid once, not every dispatch.
+    // The samples the batch plotted, which the tone map normalises by:
+    // what the renderer says plotted, as the app counts -- a thread's
+    // burn-in is paid once, not every dispatch. Restarted orbits (a gate's
+    // baseline) count every iteration, burn-in included, as this path did
+    // before orbits persisted.
     let mut batch_samples = 0u64;
 
     while total_rendered < target {

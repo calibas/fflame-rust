@@ -555,8 +555,9 @@ pub struct FlameRenderer {
     cylinder_offsets: bool,
     /// **Persistent orbits** (`docs/projects/persistent-orbits.md`): each
     /// thread's orbit is kept between dispatches, so a dispatch resumes it
-    /// and only a change to the dynamics restarts it. Renderer state until
-    /// it is on for every render; takes effect at the next shader build.
+    /// and only a change to the dynamics restarts it. On; off only where a
+    /// gate measures what restarted orbits did. Takes effect at the next
+    /// shader build.
     persistent_orbits: bool,
     /// The generation a dispatch's orbits belong to (`params.
     /// orbit_generation`): bumped when `orbit_key` changes. Never 0, which
@@ -810,7 +811,7 @@ impl FlameRenderer {
             cylinder_key_pending: None,
             cylinder_relative: false,
             cylinder_offsets: false,
-            persistent_orbits: false,
+            persistent_orbits: true,
             orbit_generation: 1,
             orbit_key: None,
             flame_hash: 0,
