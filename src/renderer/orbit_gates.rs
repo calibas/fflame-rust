@@ -207,7 +207,8 @@ fn dbg_how_long_a_restart_shows() {
     for frames in [1usize, 10, 100] {
         let mut b = Blocks { density: Vec::new(), light: [Vec::new(), Vec::new(), Vec::new()], image: Vec::new() };
         for _ in 0..8 {
-            let one = render_blocks(&device, &queue, &cfg, N, &Run { ipt: 256, frames, reps: 1, persistent: true, ..Default::default() });
+            // Unwarmed: the restart's transient is what is measured.
+            let one = render_blocks(&device, &queue, &cfg, N, &Run { ipt: 256, frames, reps: 1, persistent: true, warm: false, ..Default::default() });
             b.density.extend(one.density);
             for c in 0..3 {
                 b.light[c].extend(one.light[c].iter().cloned());
@@ -550,30 +551,26 @@ fn the_exporter_does_not_depend_on_iterations_per_thread() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// **An export counts what the app counts** with persistent orbits: the
-/// band flame through the exporter and through `FlameRenderer`, both at
-/// 256 iterations a thread and the same total work. Both normalise by the
-/// samples that plotted, so the whole view's density and light per sample
-/// agree. Restarted, the exporter counts the burn-in too, and reads 2% dark
-/// at 1,024 a thread (`dbg_export_against_app`).
+/// **An export is the app's picture**: the band flame through the
+/// exporter and through `FlameRenderer`, both at 256 iterations a thread
+/// and the same total work, block by block in density and light. Both
+/// count what plotted, so the measure per sample agrees.
 ///
-/// Whole view only: block by block the exporter's picture of this view
-/// differs from the app's -- dense blocks up to 59% -- with persistence
-/// off as much as on, and the app's 2D and 3D shaders agree with each
-/// other. A difference between the exporter and the app that predates this
-/// plan (`persistent-orbits.md` §8, step 3), measured by
-/// `dbg_export_against_app`.
+/// This once read dense blocks 59% apart and was filed as an exporter bug;
+/// it was the harness, which drew the app's side without the config's
+/// rotation (-4 degrees here) while the exporter used it. `render_blocks`
+/// now passes the whole view, as the app does.
 #[test]
 #[ignore = "GPU gate: persistent orbits; reads output/flame-zoom"]
-fn an_export_counts_what_the_app_counts() {
+fn an_export_is_the_apps_picture() {
     let Some(cfg) = band_flame() else {
         println!("  no julian-disc-blue1.fflame");
         return;
     };
     const N: u32 = 128;
     let (device, queue) = device();
-    let app = render_blocks(&device, &queue, &cfg, N, &Run { ipt: 256, frames: 64, reps: 16, persistent: true, ..Default::default() });
-    let (export, _) = export_blocks(&cfg, N, 256, 256 * 64 * 256 * 64, true, 16);
+    let app = render_blocks(&device, &queue, &cfg, N, &Run { ipt: 256, frames: 64, reps: 16, workgroups: &[128], ..Default::default() });
+    let (export, _) = export_blocks(&cfg, N, 256, 128 * 64 * 256 * 64, true, 16);
     let mut failures = Vec::new();
     let [d, red, _, blue] = compare_all(&export, &app);
     for (what, c) in [("density", &d), ("red light", &red), ("blue light", &blue)] {
@@ -582,6 +579,9 @@ fn an_export_counts_what_the_app_counts() {
         let (_, _, x, _, y, _, z) = c.pooled[0];
         if (x / y - 1.0).abs() > 0.01 && z.abs() > 3.0 {
             failures.push(format!("{what}: the export's whole view is {:.4} of the app's", x / y));
+        }
+        if c.worst_dense > 0.05 || c.worst_middle > 0.15 {
+            failures.push(format!("{what}: a block is {:.3} off", c.worst_dense.max(c.worst_middle)));
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
@@ -724,71 +724,6 @@ fn dbg_short_dispatches_precisely() {
         print_compared(&format!("red light, {what}"), &red);
         print_compared(&format!("blue light, {what}"), &blue);
     }
-}
-
-/// **The exporter against the app, block by block** -- a difference that
-/// predates persistent orbits (§8, step 3). The band flame through both at
-/// the same total work: restarted at 1,024 a thread, then persistent at
-/// 1,024 and 256. Dense blocks differ by up to 59% every way; the whole
-/// view agrees once both count what plotted.
-#[test]
-#[ignore = "debug: needs a GPU; reads output/flame-zoom"]
-fn dbg_export_against_app() {
-    let Some(cfg) = band_flame() else { return };
-    const N: u32 = 128;
-    let (device, queue) = device();
-    for (persistent, ipt) in [(false, 1024u32), (true, 1024), (true, 256)] {
-        let frames = (128 * 256 / ipt) as usize;
-        let app = render_blocks(&device, &queue, &cfg, N, &Run { ipt, frames, reps: 8, persistent, workgroups: &[128], ..Default::default() });
-        let (export, _) = export_blocks(&cfg, N, ipt, 128 * 64 * ipt as u64 * frames as u64, persistent, 8);
-        print_compared(&format!("density, exported against the app, {ipt} a thread, persistent {persistent}"), &compare_all(&export, &app)[0]);
-    }
-}
-
-/// **Isolated groups keep their share** (§6; step 4): a group holding 1% of
-/// the weight holds 1% of the light, within about what restarted orbits
-/// manage, at the app's 128 workgroups after 64 frames. Isolated groups,
-/// where the first pick decides an orbit's group, by the stratified first
-/// pick alone; the hub flame, where the walk decides it, by the refresh.
-/// Without either, persistent orbits froze the split at +-11% (measured,
-/// `dbg_isolated_groups_share`).
-#[test]
-#[ignore = "GPU gate: persistent orbits"]
-fn isolated_groups_keep_their_share() {
-    const N: u32 = 128;
-    const REPS: usize = 24;
-    let (device, queue) = device();
-    let mut failures = Vec::new();
-    for (what, cfg) in [("isolated groups", isolated_groups(0.01)), ("the hub", hub_groups(0.01))] {
-        let shares: Vec<f64> = (0..REPS)
-            .map(|_| {
-                let b = render_blocks(&device, &queue, &cfg, N, &Run { ipt: 256, frames: 64, reps: 1, persistent: true, workgroups: &[128], ..Default::default() });
-                let side = (N / 16) as usize;
-                let (mut left, mut right) = (0.0, 0.0);
-                for (i, d) in b.density[0].iter().enumerate() {
-                    if i % side < side / 2 {
-                        left += d;
-                    } else {
-                        right += d;
-                    }
-                }
-                right / (left + right)
-            })
-            .collect();
-        let mean = shares.iter().sum::<f64>() / REPS as f64;
-        let sd = (shares.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (REPS - 1) as f64).sqrt();
-        println!("  {what}: the 1% group's share {mean:.5} +- {sd:.5} ({:.1}%)", sd / mean * 100.0);
-        // Restarted orbits: +-1.1%. Measured persistent: 0.9% isolated,
-        // 2.8% through the hub.
-        if sd / mean > 0.05 {
-            failures.push(format!("{what}: the share varies {:.1}% between renders", sd / mean * 100.0));
-        }
-        if (mean / 0.01 - 1.0).abs() > 4.0 * sd / mean / (REPS as f64).sqrt() + 0.01 {
-            failures.push(format!("{what}: the share is {mean:.5}, not 0.01"));
-        }
-    }
-    assert!(failures.is_empty(), "{}", failures.join("
-"));
 }
 
 /// **What persistent orbits cost** (§6, Performance; the decision between

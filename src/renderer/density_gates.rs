@@ -142,11 +142,22 @@ pub(crate) struct Run<'a> {
     /// A refresh period in place of the one the flame needs
     /// (persistent-orbits.md §3.7); none keeps the flame's.
     pub refresh: Option<u32>,
+    /// Warm each replicate's fresh orbits before accumulating: dispatches
+    /// that plot nothing kept until every thread has run `WARM_UP`
+    /// iterations. A replicate starts its orbits afresh, and with few
+    /// frames the restart's transient would be a share of it that depends
+    /// on the frame count -- half of two frames, an eightieth of eighty --
+    /// so two renders of different lengths would differ by it. Off only
+    /// where the transient is what is measured.
+    pub warm: bool,
 }
+
+/// Iterations each thread runs before a warmed replicate accumulates.
+pub(crate) const WARM_UP: u32 = 4096;
 
 impl Default for Run<'_> {
     fn default() -> Self {
-        Self { plan: None, ipt: 1024, frames: 4, reps: 8, persistent: true, workgroups: &[], lengths: &[], refresh: None }
+        Self { plan: None, ipt: 1024, frames: 4, reps: 8, persistent: true, workgroups: &[], lengths: &[], refresh: None, warm: true }
     }
 }
 
@@ -183,15 +194,37 @@ pub(crate) fn render_blocks(device: &wgpu::Device, queue: &wgpu::Queue, cfg: &Fr
         // understate the noise.
         r.restart_orbits();
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("reset") });
-        r.reset(&mut enc, queue, run.ipt, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, cfg.speed_factor);
+        r.reset(
+            &mut enc, queue, run.ipt, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, cfg.rotation, cfg.camera_rotation_x, cfg.camera_rotation_y,
+            cfg.camera_bank, cfg.camera_x, cfg.camera_y, cfg.camera_z, cfg.speed_factor,
+        );
         queue.submit(Some(enc.finish()));
+        // Warm-up: dispatched, never accumulated -- the first counted
+        // frame clears the histogram they filled. Restarted orbits start
+        // afresh every dispatch whatever is done here.
+        if run.warm && run.persistent {
+            let groups = run.workgroups.first().copied().unwrap_or(256);
+            for _ in 0..WARM_UP.div_ceil(run.ipt.max(1)) {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("warm-up") });
+                r.compute_pass(
+                    &mut enc, queue, device, groups, run.ipt, 20, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, cfg.rotation,
+                    cfg.camera_rotation_x, cfg.camera_rotation_y, cfg.camera_bank, cfg.camera_x, cfg.camera_y, cfg.camera_z,
+                    cfg.speed_factor, true, false,
+                );
+                queue.submit(Some(enc.finish()));
+            }
+        }
         for f in 0..run.frames.max(1) {
             let groups = if run.workgroups.is_empty() { 256 } else { run.workgroups[f % run.workgroups.len()] };
             let ipt = if run.lengths.is_empty() { run.ipt } else { run.lengths[f % run.lengths.len()] };
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
+            // The config's whole view, as the app passes it: a gate that
+            // dropped the rotation compared an unrotated render against a
+            // rotated export and read the difference as the exporter's.
             let k = r.compute_pass(
-                &mut enc, queue, device, groups, ipt, 20, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, 0.0, 0.0, 0.0, 0.0, 0.0,
-                0.0, 0.0, cfg.speed_factor, true, false,
+                &mut enc, queue, device, groups, ipt, 20, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, cfg.rotation,
+                cfg.camera_rotation_x, cfg.camera_rotation_y, cfg.camera_bank, cfg.camera_x, cfg.camera_y, cfg.camera_z,
+                cfg.speed_factor, true, false,
             );
             r.accumulate_pass(&mut enc, queue, device, k);
             queue.submit(Some(enc.finish()));
