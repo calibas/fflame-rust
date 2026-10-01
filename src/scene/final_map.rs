@@ -492,10 +492,13 @@ mod tests {
             steps: vec![Step::Bipolar { pre, pre_inv: pre.inverse().unwrap(), w: 1.3, shift: 0.7, post, post_inv: post.inverse().unwrap() }],
         };
         let rows = f.rows();
-        let util = std::fs::read_to_string("shaders/core/utilities.wgsl").expect("utilities.wgsl");
+        // LF, whatever the checkout: on a `core.autocrlf` one the files are
+        // CRLF, and the search for the function's closing `\n}\n` never
+        // matched.
+        let util = std::fs::read_to_string("shaders/core/utilities.wgsl").expect("utilities.wgsl").replace("\r\n", "\n");
         let a = util.find("fn ff_atan2(").expect("ff_atan2");
         let end = a + util[a..].find("\n}\n").expect("its end") + 3;
-        let delta = std::fs::read_to_string("shaders/core/replay_delta.wgsl").expect("replay_delta.wgsl");
+        let delta = std::fs::read_to_string("shaders/core/replay_delta.wgsl").expect("replay_delta.wgsl").replace("\r\n", "\n");
         let src = format!(
             "@group(0) @binding(0) var<storage, read> cylinders: array<f32>;\n\
              @group(0) @binding(1) var<storage, read> jobs: array<vec4<f32>>;\n\

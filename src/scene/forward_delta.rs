@@ -694,10 +694,13 @@ mod tests {
     /// `utilities.wgsl` has it, `replay_delta.wgsl`, and one job per
     /// thread -- `(z, δ)` then `(arm, row offset)`.
     fn harness() -> String {
-        let util = std::fs::read_to_string("shaders/core/utilities.wgsl").expect("utilities.wgsl");
+        // LF, whatever the checkout: on a `core.autocrlf` one the files are
+        // CRLF, and the search for the function's closing `\n}\n` never
+        // matched.
+        let util = std::fs::read_to_string("shaders/core/utilities.wgsl").expect("utilities.wgsl").replace("\r\n", "\n");
         let a = util.find("fn ff_atan2(").expect("ff_atan2");
         let end = a + util[a..].find("\n}\n").expect("its end") + 3;
-        let delta = std::fs::read_to_string("shaders/core/replay_delta.wgsl").expect("replay_delta.wgsl");
+        let delta = std::fs::read_to_string("shaders/core/replay_delta.wgsl").expect("replay_delta.wgsl").replace("\r\n", "\n");
         let head = "@group(0) @binding(0) var<storage, read> cylinders: array<f32>;\n\
                     @group(0) @binding(1) var<storage, read> jobs: array<vec4<f32>>;\n\
                     @group(0) @binding(2) var<storage, read_write> out: array<vec2<f32>>;\n";
