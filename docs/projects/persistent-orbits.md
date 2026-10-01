@@ -1,6 +1,10 @@
 # Persistent orbits: keeping each thread's chaos-game orbit between dispatches
 
-Status: **planned** (2026-09-28). Not started.
+Status: **in progress** (2026-10-01), branch `persistent-orbits`. Steps
+0-4 done, behind `PERSISTENT_ORBITS` (off by default): the shader persists
+every piece of state (§3.4), so step 2 was its gates; the high-res
+exporter persists too; flames with several closed xaos groups keep each
+group's share (§3.7, as built). Results in §8.
 
 Every compute dispatch today restarts every thread's orbit from scratch.
 Where a flame takes longer than the burn-in to forget that start, the
@@ -83,7 +87,18 @@ exporter at most 128.
 
 ### 3.1 The state buffer
 
-One entry per thread, for the largest dispatch (8,192 threads):
+*As built:* each thread owns `ORBIT_WORDS = 16 + ORBIT_SLOTS` consecutive
+`u32`s, the slots following its own 16 words rather than a separate
+array, and every field is stored as bits (`bitcast`): words 0-3 the point
+and `point_w`, 4-7 the speed colour and `color_index`, 8 the generation, 9
+the fuse, 10 the xaos previous transform, 11-12 the importance window and
+weight, 13-14 the analytic-blur residual, 15 padding, then the variation
+slots. `ORBIT_SLOTS` is the shader builder's size of `thread_state`, a
+constant in the WGSL that `shader_cache` reads back, so the renderer
+knows the stride without asking the builder again. The buffer is made at
+the first dispatch, with room for the app's widest (128 workgroups), and
+grown when a dispatch is wider; growing drops the orbits and restarts
+them. The sketch it was built from:
 
 ```wgsl
 struct Orbit {
@@ -105,7 +120,9 @@ where `total_slots` is the shader builder's size of `thread_state`
 (`shader_builder_v2.rs`). They change only with the shader, and a shader
 change comes with a generation change.
 
-**Binding 8**, unused in both layouts. Since 2026-09-29 `FlameRenderer`'s
+**Binding 8**, unused in both layouts. *Measured* (the layout tests in
+`gpu/pipelines.rs`): a plain flame's shader with orbits binds 5 storage
+buffers, one with every optional binding on, 9. Since 2026-09-29 `FlameRenderer`'s
 compute layout holds only the bindings its shader's WGSL uses
 (`gpu::pipelines::used_bindings`; the layout of all of them held 11
 storage buffers and a laptop's Chrome allows 10, so no flame rendered
@@ -124,11 +141,10 @@ frame-coverage counters at its head, as `array<atomic<u32>>`, orbit
 fields read and written through `bitcast`; the per-frame clear then
 covers only the counters.
 
-The high-res exporter (`export/high_res.rs`) still binds a fixed layout
-of 12 storage buffers (it also binds `sample_counter` at 6), 13 with the
-orbit buffer. It is the desktop's only -- the web never builds one -- and
-desktop adapters report far more; it can take the same per-shader layout
-when step 3 reaches it.
+The high-res exporter (`export/high_res.rs`) bound a fixed layout of 12
+storage buffers (it also binds `sample_counter` at 6), 13 with the orbit
+buffer. *Step 3 gave it the per-shader layout:* the band flame's export
+shader binds 5, and 6 with orbits.
 
 The buffer survives a resize: orbits do not depend on the view. It is
 created zeroed, so every thread's `gen` is 0 until its first dispatch.
@@ -191,6 +207,13 @@ previous one's first samples, in the new view. They are valid chaos-game
 samples, so the picture is right. Step 1 decides whether to keep the
 counter running across resets that keep the generation.
 
+*Decided (step 1): the counter still resets.* A deterministic render
+already replots exactly the same samples after every reset -- same seeds,
+same random starts -- and that is what makes it deterministic; a persisted
+orbit converging onto the previous trajectory is the same thing, less
+exactly. A render from scratch, which is what the CLI and the visual suite
+make, starts a new generation at counter 0 and reproduces bit for bit.
+
 ### 3.5 Counting plotted samples
 
 Brightness is normalised by `total_iterations`, counted in `compute_pass`
@@ -234,6 +257,22 @@ averages out (and fewer threads when the governor sheds load).
 plan removes, so P, and whether refresh is always on or only for flames
 with xaos, are decided by measurement (step 4).
 
+*As built (step 4).* Two cases, told apart on the CPU from the xaos chain
+(`Flame::xaos_closed_classes`, `xaos_walk_splits_orbits`):
+
+- **The first pick decides the group** -- isolated groups, the common
+  case. A thread starting draws its first transform from a Kronecker
+  sequence in its index (`thread_id · 2^32/φ + seed`) instead of
+  independently, so every range of threads starting together holds each
+  group's share to within a thread or two. No restart, no cost.
+- **The walk decides it** -- a transform an orbit can start at leads
+  into two or more closed groups. Refresh, with P = 4 and the restarted
+  threads chosen by `(thread_id + seed) % P == 0`, so the CPU's count
+  (`OrbitFuses`, now one burn-in counter a thread) knows which.
+
+Every other flame -- no xaos, or one closed group -- needs neither: every
+orbit ends in the same group.
+
 ### 3.8 The high-res exporter
 
 Its own layout, dispatch loop and sample count (`export/high_res.rs`). The
@@ -262,6 +301,11 @@ at 128 workgroups. Without it, large exports would keep the band.
    1, 10 and 100 app frames. If the first frames are visibly wrong, give
    the first dispatch after a generation change a longer burn-in, at the
    cost of a frame with nothing plotted after each edit.
+   *Measured (step 1, `dbg_how_long_a_restart_shows`):* the band flame
+   from a fresh start at 256 a thread has 11 blocks of blue light off by
+   more than 5 standard errors after 1 frame (it is a restarted frame),
+   1 after 10, none after 100: a sixth of a second at 60 frames a second.
+   No longer first burn-in.
 3. **The refresh period, and when it applies** (§3.7).
 4. **The binding** (§3.1).
 
@@ -291,6 +335,21 @@ touches.
    (escape-time and simulation are unaffected) and the benchmark hashes.
    Review every image that moves past the tolerance, expecting noise except
    where a flame mixes slowly. Update the docs (§3.9).
+   *Found in steps 2-3, to do here:* every place that counts samples must
+   count what `compute_pass` says plotted.
+   - `render.rs` and the exporter count every iteration dispatched, burn-in
+     included, and the live app counts what plotted, so today a CLI render
+     normalises by 256/236 more samples than the app shows at the same
+     settings. With persistence both count what plotted (behind
+     `RenderJob::with_persistent_orbits` and
+     `HighResExporter::new_with_orbits` until this step), and the
+     difference goes.
+   - The app's WASM export loop (`app/mod.rs`, the `temp_renderer`) counts
+     as `render.rs` does.
+   - The live loop multiplies the last frame's count by the batch size.
+     That is wrong as soon as frames in a batch differ -- the first after a
+     restart pays the burn-in, the governor changes the width -- so it
+     sums each frame's count instead.
 6. **The governor shortens every dispatch.** Since 2026-09-28 it cuts
    iterations per thread before workgroups only while targeting is active
    (`Batch::shorten`): julian-disc at zoom 1,598 with 1,000 per thread had
@@ -331,7 +390,9 @@ touches.
   release check, and the full GPU sweep at the end, in the background.
 - **Performance**: plotted samples per second up about 8.5% at 256 per
   thread (all 256 plotted instead of 236) and 2% at 1,024; dispatch time
-  unchanged within noise.
+  unchanged within noise. *Measured (§8): the dispatch costs 1-5% more at
+  256 and 1,024 a thread, up to 10% at 64, and plotted samples a second
+  rise everywhere -- 4-6% at 256, 32-40% at 64.*
 
 ## 7. Costs and risks
 
@@ -345,3 +406,164 @@ touches.
 - **One more storage binding**, or a merged buffer (§3.1).
 - **Two kernels to keep in step**: the renderer's and the high-res
   exporter's.
+
+## 8. Results
+
+Measured on the desktop (GTX 1660 SUPER, Vulkan), 2026-10-01. The gates
+are in `src/renderer/orbit_gates.rs` and compare by density and by each
+colour channel's light, block by block over replicates
+(`src/renderer/density_gates.rs`), never through the tone map.
+
+### Step 0: before (persistence off)
+
+- **The picture depends on iterations per thread.** The band flame at
+  128x128, 8 replicates, equal total work, 64 and 256 a thread against
+  1,024: 25 blocks differ by more than 5 standard errors, the worst by 79%
+  in density; the blue light is gone at 64 a thread and 20% short at 256.
+- **Against long orbits** (16,384 a thread, restarted): 256 a thread has
+  19 blocks off, up to 62%, and 75% of the blue light.
+- **Visual suite**: 238/238 on Windows at the merge of #120.
+- **Storage buffers**: the browsers' limits are still to be recorded on
+  the target machines (the laptop's Chrome reports 10).
+
+### Step 1: the core (persistence on)
+
+| gate | result |
+|---|---|
+| the picture does not depend on iterations per thread | 64 and 256 against 1,024: no block outside noise; density and light ratios 0.9995-1.0042 |
+| the band is gone | against the long orbits, 256 a thread: no block off, density 1.0010, red 1.0008, blue 1.0131; 64 a thread: one block, 4.1% |
+| a varying dispatch keeps its brightness | the gasket at 64 a thread over 256, 16, 128, 64, 256 and 8 workgroups against 256 each time: ratio 1.0000, z -0.5 |
+| the count is the GPU's | the cohorts' count equals the shader's own tally of plot attempts exactly, over 16 dispatches of varying width and length, burn-in spanning dispatches, and an edit |
+| an edit restarts the orbits and a pan does not | a pan and a zoom keep the generation and pay no burn-in; an edit starts a new one and pays it once |
+
+**Performance** (`dbg_what_persistent_orbits_cost`): the app's frame, 128
+workgroups, compute and accumulate, persistence off then on, alternated
+over three rounds.
+
+| flame | per thread | dispatch, ms | plotted samples/s, millions |
+|---|---|---|---|
+| gasket | 64 | 0.369 → 0.399 (+8.0%) | 977 → 1,315 (+34.6%) |
+| | 256 | 0.774 → 0.801 (+3.4%) | 2,497 → 2,619 (+4.9%) |
+| | 1,024 | 2.401 → 2.401 (0.0%) | 3,425 → 3,494 (+2.0%) |
+| julian-disc (the band) | 64 | 0.321 → 0.333 (+3.9%) | 1,124 → 1,574 (+40.0%) |
+| | 256 | 0.550 → 0.568 (+3.3%) | 3,518 → 3,693 (+5.0%) |
+| | 1,024 | 1.473 → 1.500 (+1.9%) | 5,586 → 5,593 (+0.1%) |
+| random1 | 64 | 0.328 → 0.343 (+4.7%) | 1,099 → 1,527 (+38.9%) |
+| | 256 | 0.576 → 0.596 (+3.5%) | 3,358 → 3,520 (+4.8%) |
+| | 1,024 | 1.586 → 1.613 (+1.6%) | 5,184 → 5,203 (+0.4%) |
+| bubble-3d | 64 | 0.352 → 0.370 (+5.1%) | 1,023 → 1,416 (+38.4%) |
+| | 256 | 0.651 → 0.668 (+2.7%) | 2,972 → 3,138 (+5.6%) |
+| | 1,024 | 1.855 → 1.892 (+2.0%) | 4,435 → 4,433 (0.0%) |
+| gasket + cubic_julia (stateful) | 64 | 0.425 → 0.469 (+10.4%) | 848 → 1,117 (+31.7%) |
+| | 256 | 1.005 → 1.050 (+4.4%) | 1,923 → 1,997 (+3.9%) |
+| | 1,024 | 3.335 → 3.377 (+1.3%) | 2,466 → 2,484 (+0.7%) |
+
+A dispatch costs a near-constant 0.01-0.04 ms more -- the load before the
+first iteration and the store after the last -- so its share falls as the
+dispatch lengthens. What a render converges by is plotted samples a
+second, and that rises at every setting: the burn-in that every dispatch
+paid is paid once. By the rule set for this plan (always on if the cost is
+under 10%), persistence is always on; step 7 removes the flag unless a
+flame is found that renders worse.
+
+### Step 2: the rest of the state
+
+The shader already persisted it in step 1; these are its gates.
+
+| gate | result |
+|---|---|
+| stateful registers (`a_stateful_register_does_not_depend_on_iterations_per_thread`): `cubic_julia` Branch Blend at a colour speed of 0.02, 64 and 256 a thread against 1,024 | restarted: red light 32% and 82% of 1,024's, green 2% and 64%, every judged block off by thousands of standard errors; persistent: every ratio 1.0000-1.0003, no block off |
+| importance sampling's bit-identity at `q = p` (`a_neutral_bias_renders_what_the_feature_off_renders`, now run both ways) | 0 of 65,536 bytes differ, restarted and persistent |
+
+Density is the same either way on the Branch Blend flame: the register
+colours the set, it does not move it. Restarted at 1,024 a thread is not
+the truth either -- its red light is 5% under persistent's.
+
+`RenderJob::with_persistent_orbits` turns persistence on for the headless
+renderer, so the importance gate can run through it.
+
+### Step 3: the high-res exporter
+
+`HighResExporter::new_with_orbits` builds the exporter's shader with
+`PERSISTENT_ORBITS`, binds an orbit buffer for its 128 workgroups, one
+generation for its life, and counts what plotted (`OrbitCohorts`), as the
+renderer does; `new` keeps restarted orbits until step 5. Its layout and
+bind group now hold only the bindings its shader uses.
+
+| gate | result |
+|---|---|
+| the exporter does not depend on iterations per thread (16 replicates) | restarted: 64 a thread has no blue light and 72% of the density (it counts the burn-in), 256 has 15 blocks off up to 34%; persistent: 64 and 256 against 1,024, no block past 2.7 standard errors |
+| an export counts what the app counts | the whole view's density 1.002-1.003 of the app's, red 1.002-1.003, blue 1.01-1.02; restarted at 1,024 a thread the export reads 0.981 (the burn-in it counts) |
+| storage buffers | the band flame's export shader: 5, 6 with orbits (13 before) |
+
+**Tracker P11 is closed by persistence.** Targeted julian-disc at 1e3,
+`dbg_orbit_length_by_density`, against 4,096 a thread restarted:
+
+| iterations a thread | landed plan: worst dense block, restarted | persistent | plan on the way: restarted | persistent |
+|---|---|---|---|---|
+| 64 | 18% (234 blocks past 5 standard errors) | none past 5 | 18% (252) | 0.7% (13) |
+| 256 | 4.1% (106) | none | 4.0% (198) | 0.3% (1) |
+| 1,024 | 0.8% (7) | none | 0.8% (26) | 0.4% (2) |
+
+The residue on the way is the reference's own: it restarts every 4,096
+iterations.
+
+**Found on the way, not this plan's, not fixed:**
+
+- **An export's picture of a deep view is not the app's.** The band
+  flame (julian-disc at zoom 1,598) through the exporter and through
+  `FlameRenderer` agrees on the whole view once both count what plotted,
+  but block by block dense blocks differ by up to 59% -- with persistence
+  off as much as on. The app's 2D and 3D shaders agree with each other, so
+  it is not the exporter's use of the 3D shader. The light's centroid sits
+  0.6 px right and 0.3 px down in the export, and the row profiles are not
+  a plain shift. `dbg_export_against_app` measures it.
+- **`rng_nextf` returns exactly 1.0** one draw in 2^25: `f32(u32)` rounds
+  the top 128 values up to 2^32. So `rng_nextf() < opacity` drops a plot
+  at opacity 1 (the count gate tolerates exactly this), and any
+  `u32(rng_nextf() * n)` can produce `n`. A fix (`f32(x >> 8u) /
+  16777216.0`) changes every render's bits, so it waits for a decision.
+- **The exporter's GPU histogram is u32, scaled by 100**: a pixel holding
+  more than 43 million samples wraps. Seen only at 34 billion samples on
+  a 128x128 gasket.
+
+**The gates' statistics.** With persistence, replicates rendered by one
+renderer continued each other's orbits, so their spread understated the
+noise; `render_blocks` now restarts the orbits each replicate. Colour
+light is tiered by its own reference (a block dense in density can hold
+almost no blue). At 8 replicates, 5 standard errors is crossed by chance
+about once a run; the gates use 16. The band gate holds blocks to 10%, and
+blue to the whole view only: its reference restarts every 16,384
+iterations, and the light a restart makes -- the blue -- shows in single
+blocks of it, up to 6% in density and 48% in blue, where persistent orbits
+at 64 and at 256 a thread agree with each other to 4 standard errors
+(`dbg_short_dispatches_precisely`).
+
+### Step 4: closed xaos groups
+
+`dbg_isolated_groups_share`: the right group's share of the density over
+24 fresh renders of 256 a thread, for a group holding 1% of the weight.
+
+| flame, arm | 128 workgroups, 64 frames | 16 workgroups, 64 frames | 128, 256 frames | 16, 256 frames |
+|---|---|---|---|---|
+| isolated, restarted | +-1.1% | +-4.1% | +-0.6% | +-2.1% |
+| isolated, persistent, independent first picks | +-9.9% | +-31.8% | | |
+| isolated, persistent, stratified first pick | +-0.9% | +-5.5% | +-0.9% | +-6.0% |
+| hub, restarted | +-1.1% | +-4.0% | +-0.6% | +-2.1% |
+| hub, persistent, no refresh | +-10.8% | +-26.9% | +-13.8% | +-38.5% |
+| hub, persistent, refresh every 4 | +-2.8% | +-9.0% | +-1.7% | +-4.8% |
+| hub, persistent, refresh every 16 | +-7.0% | +-22.5% | +-4.6% | +-11.5% |
+
+Every mean is the weight share, 0.0094-0.0111. The stratified pick's
+spread at 16 workgroups does not shrink with frames: 1,024 threads hold
+10 or 11 of a 1% group, a floor of +-5% for as long as the governor runs
+that narrow; the threads above keep their orbits, and the full 8,192
+holds the share to +-1%. Refresh every 4 costs `20 / (4 · 256)`, 2% of
+the iterations, on the flames that need it, and brings back a quarter of
+a restarted render's transient on them.
+
+| gate | result |
+|---|---|
+| isolated groups keep their share | isolated +-1.1%, hub +-3.8% (bar 5%), means within noise of 1% |
+| the count is the GPU's, now through a refresh (the hub) | exact but for the opacity draw, 24 dispatches |
+| closed groups on the CPU (`closed_class_tests`) | no xaos, isolated, bridged, a one-way split, an unreachable group |

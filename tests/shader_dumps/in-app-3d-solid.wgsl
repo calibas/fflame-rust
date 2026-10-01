@@ -142,8 +142,13 @@ struct Params {
     // first shadow pad so no offset moves. Mirror in
     // src/gpu/buffers.rs. Read only under IMPORTANCE_SAMPLING.
     importance_window: u32,
-    _pad_shadow1: u32,
-    _pad_shadow2: u32,
+    // The orbit generation (PERSISTENT_ORBITS): a thread whose stored
+    // orbit carries it resumes; any other starts afresh. Carved from the
+    // second shadow pad. Mirror in src/gpu/buffers.rs.
+    orbit_generation: u32,
+    // Refresh: a dispatch restarts the threads with
+    // `(thread_id + seed) % orbit_refresh_period == 0`; 0 is off.
+    orbit_refresh_period: u32,
     shadow_dirs: array<vec4<f32>, 4>,
     // [cx, cy, r, unused]; off when r <= 0. See GpuParams::leak_probe.
     leak_probe: vec4<f32>,
@@ -277,6 +282,7 @@ fn shadow_map_splat(p: vec3<f32>) {
 // Per-normal-transform attachment lists. Indexed by the normal's
 // xform_id (0..num_transforms). See AttachmentList struct above.
 @group(0) @binding(10) var<storage, read> attachments: array<AttachmentList>;
+
 
 
 
@@ -1258,6 +1264,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 
 
+
+
     // Iterate
     for (var i = 0u; i < params.iterations_per_thread; i++) {
         // Save old position for speed calculation
@@ -1690,5 +1698,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 
     }
+
 
 }

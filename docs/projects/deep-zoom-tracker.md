@@ -2053,7 +2053,7 @@ removed only where the gate says they can be.
 
 ---
 
-### P11. Restarted orbits move light under a short dispatch -- open, measured (2026-09-29)
+### P11. Restarted orbits move light under a short dispatch -- fixed by persistent orbits (2026-10-01, branch `persistent-orbits`)
 
 Every dispatch restarts its orbits (the blue band's cause), and a forced
 sample is its word applied to the free orbit's point -- which, 20
@@ -2078,7 +2078,14 @@ default of 256 is 3.9%; an export's 1,024, 0.8%.
 The fix is persistent orbits (`persistent-orbits.md`), which the
 governor's shortening was always meant to wait for: an orbit that is not
 restarted is the attractor's measure at every dispatch, and a short
-dispatch then costs nothing. Until then: nothing changed.
+dispatch then costs nothing.
+
+**Measured with persistent orbits** (2026-10-01, the same test, which now
+renders both): at 64 a thread the landed plan has no block past 5
+standard errors (restarted: 234, the worst 18%), and the plan on the way
+13, the worst 0.7% (restarted: 252, 18%). The residue is the reference's:
+it restarts every 4,096 iterations. Table in `persistent-orbits.md` §8,
+step 3. It ships on by default with that plan's step 5.
 
 ### P10. The render slows the planner -- done (2026-09-29)
 

@@ -135,8 +135,13 @@ struct Params {
     // first shadow pad so no offset moves. Mirror in
     // src/gpu/buffers.rs. Read only under IMPORTANCE_SAMPLING.
     importance_window: u32,
-    _pad_shadow1: u32,
-    _pad_shadow2: u32,
+    // The orbit generation (PERSISTENT_ORBITS): a thread whose stored
+    // orbit carries it resumes; any other starts afresh. Carved from the
+    // second shadow pad. Mirror in src/gpu/buffers.rs.
+    orbit_generation: u32,
+    // Refresh: a dispatch restarts the threads with
+    // `(thread_id + seed) % orbit_refresh_period == 0`; 0 is off.
+    orbit_refresh_period: u32,
     shadow_dirs: array<vec4<f32>, 4>,
     // [cx, cy, r, unused]; off when r <= 0. See GpuParams::leak_probe.
     leak_probe: vec4<f32>,
@@ -389,6 +394,23 @@ fn bias_ratio(prev: u32, i: u32) -> f32 {
 @group(0) @binding(16) var<storage, read_write> coverage: array<atomic<u32>>;
 {{/if}}
 
+{{#if PERSISTENT_ORBITS}}
+// **Each thread's orbit, kept between dispatches**
+// (docs/projects/persistent-orbits.md). `ORBIT_WORDS` u32 a thread:
+//
+//   0..4   x, y, z, point_w        4..8   speed rgb, color_index
+//   8      generation              9      burn-in left
+//   10     xaos previous transform 11, 12 importance window, weight
+//   13, 14 analytic-blur residual  15     -
+//   16..   the stateful variations' slots (ORBIT_SLOTS)
+//
+// Floats are stored through `bitcast`. A thread whose generation word is
+// not `params.orbit_generation` starts afresh; the buffer is created
+// zeroed and generations start at 1.
+@group(0) @binding(8) var<storage, read_write> orbits: array<u32>;
+const ORBIT_WORDS: u32 = 16u + ORBIT_SLOTS;
+
+{{/if}}
 {{#if CYLINDER_TARGETING}}
 // The enumerated cylinders -- stage 2 of
 // docs/projects/flame-deep-zoom.md. Twelve floats a word, packed by
