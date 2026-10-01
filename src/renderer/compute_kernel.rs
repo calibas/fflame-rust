@@ -555,9 +555,9 @@ pub struct FlameRenderer {
     cylinder_offsets: bool,
     /// **Persistent orbits** (`docs/projects/persistent-orbits.md`): each
     /// thread's orbit is kept between dispatches, so a dispatch resumes it
-    /// and only a change to the dynamics restarts it. On; off only where a
-    /// gate measures what restarted orbits did. Takes effect at the next
-    /// shader build.
+    /// and only a change to the dynamics restarts it. Always on; a gate
+    /// turns it off (`set_persistent_orbits`) to measure what restarted
+    /// orbits did. Takes effect at the next shader build.
     persistent_orbits: bool,
     /// The generation a dispatch's orbits belong to (`params.
     /// orbit_generation`): bumped when `orbit_key` changes. Never 0, which
@@ -4784,32 +4784,18 @@ impl FlameRenderer {
         }
     }
 
-    /// The factor the tone map's iteration count is inflated by.
-    ///
-    /// A forced sample carries weight `P(A_V)`, and depositing that
-    /// directly would be hopeless: at a zoom of 2^20 it is 2.6e-9, so
-    /// the u32 histogram would round every deposit to zero but for a
-    /// one-in-a-hundred-million tail -- handing the whole advantage
-    /// back to quantisation. So the deposit carries ONE, at full
-    /// resolution, and the tone map is told the render did
-    /// `N / P(A_V)` iterations instead of `N`.
-    ///
-    /// That is the same statement: the forced render is doing the
-    /// work of that many unbiased iterations, and saying so is what
-    /// makes its brightness match theirs.
-    ///
-    /// A plan that draws some words off their probability
-    /// (`Cylinder::draw`) deposits `1 / S` per draw on average, which is
-    /// `N / (P(A_V) · S)` iterations' worth.
-    /// Keep each thread's orbit between dispatches
-    /// (`docs/projects/persistent-orbits.md`), from the next shader build
-    /// on -- the next `load_config`.
-    pub fn set_persistent_orbits(&mut self, on: bool) {
+    /// Restart every thread's orbit at every dispatch, as before orbits
+    /// persisted (`docs/projects/persistent-orbits.md`), from the next
+    /// shader build on -- the next `load_config`. The gates' baseline only:
+    /// every renderer keeps its orbits.
+    #[cfg(test)]
+    pub(crate) fn set_persistent_orbits(&mut self, on: bool) {
         self.persistent_orbits = on;
     }
 
     /// The generation the orbits belong to. For the gates.
-    pub fn orbit_generation(&self) -> u32 {
+    #[cfg(test)]
+    pub(crate) fn orbit_generation(&self) -> u32 {
         self.orbit_generation
     }
 
@@ -4844,6 +4830,23 @@ impl FlameRenderer {
         h.finish()
     }
 
+    /// The factor the tone map's iteration count is inflated by.
+    ///
+    /// A forced sample carries weight `P(A_V)`, and depositing that
+    /// directly would be hopeless: at a zoom of 2^20 it is 2.6e-9, so
+    /// the u32 histogram would round every deposit to zero but for a
+    /// one-in-a-hundred-million tail -- handing the whole advantage
+    /// back to quantisation. So the deposit carries ONE, at full
+    /// resolution, and the tone map is told the render did
+    /// `N / P(A_V)` iterations instead of `N`.
+    ///
+    /// That is the same statement: the forced render is doing the
+    /// work of that many unbiased iterations, and saying so is what
+    /// makes its brightness match theirs.
+    ///
+    /// A plan that draws some words off their probability
+    /// (`Cylinder::draw`) deposits `1 / S` per draw on average, which is
+    /// `N / (P(A_V) · S)` iterations' worth.
     pub fn cylinder_iteration_scale(&self) -> f64 {
         self.cylinders.as_ref().map_or(1.0, |c| c.iteration_scale())
     }

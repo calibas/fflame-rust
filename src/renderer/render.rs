@@ -63,10 +63,10 @@ pub struct RenderJob<'a> {
     /// path passes -- means a fresh engine for this render.
     pub engines: Option<&'a mut RenderEngines>,
 
-    /// Keep each thread's orbit between dispatches
-    /// (`docs/projects/persistent-orbits.md`). On; off only where a gate
-    /// measures what restarted orbits did.
-    pub persistent_orbits: bool,
+    /// Restart every orbit every dispatch, as before orbits persisted
+    /// (`docs/projects/persistent-orbits.md`): a gate's baseline.
+    #[cfg(test)]
+    pub(crate) restarted_orbits: bool,
 }
 
 impl<'a> RenderJob<'a> {
@@ -82,7 +82,8 @@ impl<'a> RenderJob<'a> {
             transparent: false,
             premultiplied: false,
             engines: None,
-            persistent_orbits: true,
+            #[cfg(test)]
+            restarted_orbits: false,
         }
     }
 
@@ -116,9 +117,11 @@ impl<'a> RenderJob<'a> {
         self
     }
 
-    /// Keep each thread's orbit between dispatches.
-    pub fn with_persistent_orbits(mut self, on: bool) -> Self {
-        self.persistent_orbits = on;
+    /// Keep each thread's orbit between dispatches, or restart them every
+    /// dispatch as a gate's baseline.
+    #[cfg(test)]
+    pub(crate) fn with_persistent_orbits(mut self, on: bool) -> Self {
+        self.restarted_orbits = !on;
         self
     }
 
@@ -380,7 +383,8 @@ pub async fn render_with(
         job.config.flame.transforms.len()
     );
 
-    renderer.set_persistent_orbits(job.persistent_orbits);
+    #[cfg(test)]
+    renderer.set_persistent_orbits(!job.restarted_orbits);
     renderer.load_config(
         device,
         &mut encoder,
@@ -439,9 +443,7 @@ pub async fn render_with(
     let mut batch_frame_count = 0u32;
     // The samples the batch plotted, which the tone map normalises by:
     // what the renderer says plotted, as the app counts -- a thread's
-    // burn-in is paid once, not every dispatch. Restarted orbits (a gate's
-    // baseline) count every iteration, burn-in included, as this path did
-    // before orbits persisted.
+    // burn-in is paid once, not every dispatch.
     let mut batch_samples = 0u64;
 
     while total_rendered < target {
@@ -482,7 +484,7 @@ pub async fn render_with(
         let samples_this_frame =
             NUM_WORKGROUPS as u64 * THREADS_PER_WORKGROUP * job.iterations_per_thread as u64;
         total_rendered += samples_this_frame;
-        batch_samples += if job.persistent_orbits { plotted } else { samples_this_frame };
+        batch_samples += plotted;
         batch_frame_count += 1;
 
         // Accumulate when batch is complete
