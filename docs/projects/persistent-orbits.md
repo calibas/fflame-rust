@@ -506,7 +506,7 @@ bind group now hold only the bindings its shader uses.
 | gate | result |
 |---|---|
 | the exporter does not depend on iterations per thread (16 replicates) | restarted: 64 a thread has no blue light and 72% of the density (it counts the burn-in), 256 has 15 blocks off up to 34%; persistent: 64 and 256 against 1,024, no block past 2.7 standard errors |
-| an export counts what the app counts | the whole view's density 1.002-1.003 of the app's, red 1.002-1.003, blue 1.01-1.02; restarted at 1,024 a thread the export reads 0.981 (the burn-in it counts) |
+| an export is the app's picture (first run as "counts what the app counts", whole view only -- see the retraction below) | the whole view's density 1.002-1.003 of the app's, red 1.002-1.003, blue 1.01-1.02; restarted at 1,024 a thread the export reads 0.981 (the burn-in it counts); block by block once the harness passed the rotation |
 | storage buffers | the band flame's export shader: 5, 6 with orbits (13 before) |
 
 **Tracker P11 is closed by persistence.** Targeted julian-disc at 1e3,
@@ -523,14 +523,18 @@ iterations.
 
 **Found on the way, not this plan's, not fixed:**
 
-- **An export's picture of a deep view is not the app's.** The band
-  flame (julian-disc at zoom 1,598) through the exporter and through
-  `FlameRenderer` agrees on the whole view once both count what plotted,
-  but block by block dense blocks differ by up to 59% -- with persistence
-  off as much as on. The app's 2D and 3D shaders agree with each other, so
-  it is not the exporter's use of the 3D shader. The light's centroid sits
-  0.6 px right and 0.3 px down in the export, and the row profiles are not
-  a plain shift. `dbg_export_against_app` measures it.
+- ~~**An export's picture of a deep view is not the app's.**~~
+  *Retracted (2026-10-01): a harness error, not the exporter.*
+  `render_blocks` drew the app's side with rotation 0 and no camera,
+  while the exporter used the config's: the band flame is rotated by -4
+  degrees, and a rotated picture against an unrotated one is dense blocks
+  59% apart with the whole view equal. With the view passed whole, the
+  export is the app's picture block by block (`an_export_is_the_apps_picture`:
+  no block past 3 standard errors, whole view 1.0007). The same fix gives
+  each replicate's fresh orbits a warm-up (`Run::warm`, 4,096 iterations
+  a thread unaccumulated): with two frames a replicate, the restart's
+  transient was half of one render and an eightieth of the other it was
+  compared with.
 - **`rng_nextf` returns exactly 1.0** one draw in 2^25: `f32(u32)` rounds
   the top 128 values up to 2^32. So `rng_nextf() < opacity` drops a plot
   at opacity 1 (the count gate tolerates exactly this), and any
