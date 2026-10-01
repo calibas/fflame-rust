@@ -783,6 +783,10 @@ impl ShaderCache {
         Ok(())
     }
 
+    /// The words of a thread's orbit before its variation slots
+    /// (`header.wgsl`: `ORBIT_WORDS = 16u + ORBIT_SLOTS`).
+    pub(crate) const ORBIT_FIXED_WORDS: u32 = 16;
+
     /// **The u32 words a thread's orbit takes in `source`**: `16 +
     /// ORBIT_SLOTS`, read from the constant the builder emits, or 0 when
     /// the shader does not use the orbit buffer (binding 8).
@@ -796,7 +800,7 @@ impl ShaderCache {
             .and_then(|r| r.split('u').next())
             .and_then(|n| n.trim().parse::<u32>().ok())
             .expect("a shader using the orbit buffer declares ORBIT_SLOTS");
-        16 + slots
+        Self::ORBIT_FIXED_WORDS + slots
     }
 
     /// Create a compute pipeline from shader source, in the layout of the

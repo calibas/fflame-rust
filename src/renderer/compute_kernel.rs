@@ -567,6 +567,10 @@ pub struct FlameRenderer {
     /// everything else that changes the dynamics or the state an orbit
     /// carries (`compute_pass`).
     orbit_key: Option<u64>,
+    /// The accumulation has started again since the last dispatch
+    /// (`reset_iteration_counter`): a flame carrying variation state
+    /// restarts its orbits there (`compute_pass`).
+    accumulation_restarted: bool,
     /// A hash of the whole flame, taken where flame edits land
     /// (`load_config`, `update_flame`) -- the whole of it, because a field
     /// left out would leave orbits on an old attractor, and a restart too
@@ -814,6 +818,7 @@ impl FlameRenderer {
             persistent_orbits: true,
             orbit_generation: 1,
             orbit_key: None,
+            accumulation_restarted: false,
             flame_hash: 0,
             orbit_fuses: OrbitFuses::default(),
             orbit_refresh_period: 0,
@@ -953,6 +958,7 @@ impl FlameRenderer {
     /// Reset iteration counters without clearing accumulation buffer
     /// Used when transitioning from overwrite mode to normal accumulation
     pub fn reset_iteration_counter(&mut self) {
+        self.accumulation_restarted = true;
         self.samples_accumulated = 0;
         self.total_iterations = 0;
         self.effective_iterations = 0; // Reset for new accumulation phase
@@ -977,6 +983,7 @@ impl FlameRenderer {
     /// zeros samples_in_buffer) because that path also clears the
     /// accumulator immediately afterward — both go to zero together.
     pub fn reset_iteration_counter_keep_buffer(&mut self) {
+        self.accumulation_restarted = true;
         self.samples_accumulated = 0;
         self.total_iterations = 0;
         self.effective_iterations = 0;
@@ -1102,6 +1109,18 @@ impl FlameRenderer {
         // attractor does not depend on where it is looked at from.
         let orbit_words = self.pipelines.orbit_words();
         let threads = num_workgroups.saturating_mul(64);
+        // ...except where the flame carries VARIATION STATE. A state can be
+        // a clock rather than a register that settles -- `curliecue2`'s
+        // walker ignores its input and walks on from wherever it was, so
+        // its picture is the walk since its state started, and a pan would
+        // show the next stretch of it. JWildfire initialises a variation's
+        // state for every render, and any view change is a new render; so
+        // here every restart of the accumulation (a pan, a reset, each
+        // overwrite-mode frame) restarts these flames' orbits.
+        if orbit_words > crate::shader_cache::ShaderCache::ORBIT_FIXED_WORDS && (self.accumulation_restarted || self.overwrite_mode) {
+            self.orbit_key = None;
+        }
+        self.accumulation_restarted = false;
         if orbit_words > 0 {
             // Room for the app's widest dispatch (128 workgroups) from the
             // start, so the governor widening again never drops the orbits;

@@ -170,6 +170,20 @@ subflames, so it is not enough.)
 Not: the view (zoom, pan, rotation, camera), palette, tone mapping,
 effects, plans.
 
+*Amended after step 8 (reported in the app):* except on a flame that
+carries variation state (`ORBIT_SLOTS > 0`). There every restart of the
+accumulation -- a pan, a reset, each overwrite-mode frame -- restarts the
+orbits too. A variation's state can be a clock rather than a register
+that settles: `curliecue2` ignores its input and walks on from its state,
+so its picture is the walk since the state started, and kept through a
+pan it showed the walk's next stretch instead of a fresh one. JWildfire
+initialises a variation's state for every render, and any view change is
+a new render. The cost is a burn-in, and a register's settling, per pan,
+on those flames only. Gate: `a_pan_restarts_variation_state` -- panned
+from A to B, `curliecue2` is exactly a fresh render at B (without the
+restart, every lit pixel was off); overwrite frames restart it every
+frame.
+
 Computed where flame edits land: `FlameRenderer::update_flame` and
 `load_config`. A slider drag on the flame changes it every frame and
 restarts every frame, as today.
