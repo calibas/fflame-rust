@@ -1,10 +1,8 @@
 # Persistent orbits: keeping each thread's chaos-game orbit between dispatches
 
 Status: **in progress** (2026-10-01), branch `persistent-orbits`. Steps
-0-4 done, behind `PERSISTENT_ORBITS` (off by default): the shader persists
-every piece of state (§3.4), so step 2 was its gates; the high-res
-exporter persists too; flames with several closed xaos groups keep each
-group's share (§3.7, as built). Results in §8.
+0-6 done: on by default in every renderer since step 5, and the governor
+shortens every dispatch since step 6. Results in §8.
 
 Every compute dispatch today restarts every thread's orbit from scratch.
 Where a flame takes longer than the burn-in to forget that start, the
@@ -567,3 +565,45 @@ a restarted render's transient on them.
 | isolated groups keep their share | isolated +-1.1%, hub +-3.8% (bar 5%), means within noise of 1% |
 | the count is the GPU's, now through a refresh (the hub) | exact but for the opacity draw, 24 dispatches |
 | closed groups on the CPU (`closed_class_tests`) | no xaos, isolated, bridged, a one-way split, an unreachable group |
+
+### Step 5: on by default
+
+`FlameRenderer`, `RenderJob` and `HighResExporter::new` keep their
+orbits; restarted orbits remain as the gates' baseline only. Every place
+that counts samples counts what `compute_pass` says plotted: `render.rs`,
+the exporter, the app's WASM export loop, and the live loop, which now
+sums a batch's frames. The shader cache's start-up shader is built with
+orbits, so the first config load is not a rebuild.
+
+**The visual suite**: 324 of 330 images within tolerance (they change by
+noise: every sample's path differs). The 6 past it, each reviewed against
+its baseline:
+
+| image | change | why |
+|---|---|---|
+| `2d-simple-linear` | a filled square becomes 8,192 dots | its one transform (`a = d = 0.5`, `linear` 2) is the identity: no attractor. Restarted orbits drew their random start square; persistent ones keep their fixed points |
+| `variations-curliecue2-smoke` | a small pentagon becomes rays across the frame | `curliecue2` walks 0.001 a step from per-thread state: reset each dispatch, it never got past 256 steps; kept, it walks the whole render, as JWildfire's per-thread state does |
+| `variations-hypertile-poincare` | the disc's interior glow dims, the light on the boundary circle | restarted orbits started inside the disc and plotted on their way out |
+| `2d-plastic-sierpinski` | colour and brightness move in the streams | an identity-affine transform: slow mixing |
+| `3d-cpow3_wf-smoke`, `variations-watchlist-misc-smoke` | mean difference 3.0 and 2.07 against a limit of 2.0 | noise on sparse flames |
+
+Baselines updated. Storage buffers, with orbits on by default: a plain
+flame at WebGPU's minimum of 8 binds 5; everything at the laptop's 10
+binds 9 (`a_flame_renders_within_a_browsers_storage_limit`).
+
+### Step 6: the governor shortens every dispatch
+
+`Batch::shorten` is gone: every render's dispatch shortens first, to 64
+iterations a thread, then sheds width. The floor had to move with it --
+the governor's smallest scale was a fixed 1/256 of the full batch, which
+once the dispatch shortens first is 8 workgroups of 64 at 1,000 a thread
+(the governor test for heavy flames, a workgroup 20 ms, caught it at 164
+ms a frame); it is now one workgroup of the shortest dispatch
+(`Batch::min_scale`). The knee tests now use frames over budget even at
+the shortest dispatch, the case the knee is for once shortening comes
+first.
+
+| gate | result |
+|---|---|
+| `governor_tests` (14), every batch shortening | pass; the floor is one workgroup of 64 |
+| a varying dispatch keeps its brightness: widths 256, 16, 128, 64, 256, 8 and lengths 64, 256, 1,000, 64, 20, 512 against 256 x 64 | whole view 1.0000, no block off |

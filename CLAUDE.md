@@ -333,7 +333,7 @@ Structural actions (transform add/delete, config import/export, preset loading) 
 
 ### Performance
 - Target 60+ FPS at 1080p; progressive refinement adds samples every frame
-- Dispatch = workgroups × 64 threads × `iterations_per_thread` (SystemSettings, default 256). In the app a frame-time governor sizes it: it sheds workgroups, and under targeting shortens the dispatch first (`app/mod.rs`: `Batch`, `Knee`; see `docs/projects/persistent-orbits.md` step 6). While a tight plan is made it caps the dispatch short and holds, since the planner shares the render's GPU queue (`Batch::while_planning`, tracker P10)
+- Dispatch = workgroups × 64 threads × `iterations_per_thread` (SystemSettings, default 256). In the app a frame-time governor sizes it: it shortens the dispatch first (down to 64 iterations a thread -- orbits persist, so that costs no trajectory depth), then sheds workgroups, to a floor of one workgroup of the shortest dispatch (`app/mod.rs`: `Batch`, `Batch::min_scale`, `Knee`). While a tight plan is made it caps the dispatch short and holds, since the planner shares the render's GPU queue (`Batch::while_planning`, tracker P10)
 - Track total iterations for quality measurement; histogram density is iteration-count-normalized in the tonemap, so brightness is stable as accumulation runs
 
 ## Common Tasks

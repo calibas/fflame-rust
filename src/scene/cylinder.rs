@@ -5438,11 +5438,13 @@ mod gpu_tests {
         }
     }
 
-    /// **Does a short orbit bias a targeted render?** Every dispatch
-    /// restarts its orbits, and the governor shortens a targeted dispatch
-    /// to 64 iterations a thread. The landed plan and the first plan on the
-    /// way, by density in replicates, at 64, 256 and 1,024 iterations a
-    /// thread against 4,096, at the same total work. `FLAME`, `ZOOM`.
+    /// **Does a short orbit bias a targeted render?** The governor shortens
+    /// a dispatch to 64 iterations a thread. With restarted orbits that
+    /// moved light (tracker P11); persistent orbits do not restart. The
+    /// landed plan and the first plan on the way, by density in
+    /// replicates, at 64, 256 and 1,024 iterations a thread, restarted and
+    /// persistent, against 4,096 restarted, at the same total work.
+    /// `FLAME`, `ZOOM`.
     #[test]
     #[ignore = "debug: needs a GPU; reads output/flame-zoom"]
     fn dbg_orbit_length_by_density() {
@@ -5688,8 +5690,8 @@ mod gpu_tests {
         const W: u32 = 1280;
         const H: u32 = 720;
         const FRAME: Duration = Duration::from_micros(16_667);
-        let floor = crate::app::Batch { max_workgroups: 128, iterations_per_thread: 256, burn_in: 20, shorten: true }
-            .shape(crate::app::Knee::Shedding { over: 0 }, crate::app::MIN_ITER_SCALE);
+        let batch = crate::app::Batch { max_workgroups: 128, iterations_per_thread: 256, burn_in: 20 };
+        let floor = batch.shape(crate::app::Knee::Shedding { over: 0 }, batch.min_scale());
         let loads: [(&str, Option<(u32, u32)>); 4] =
             [("paused", None), ("floor", Some(floor)), ("128x64", Some((128, 64))), ("128x256", Some((128, 256)))];
         let rounds: usize = std::env::var("ROUNDS").ok().and_then(|v| v.parse().ok()).unwrap_or(2);
