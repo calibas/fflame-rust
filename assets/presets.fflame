@@ -1051,5 +1051,1905 @@
     "version": 1,
     "vibrancy": 1.0,
     "zoom": 1.4204298257827759
+  },
+  {
+    "escape": {
+      "bailout": 4.0,
+      "center_im": "0.3333333333333333",
+      "center_re": "0.5",
+      "coloring": "ifs_address",
+      "formula": "ifs_flame",
+      "max_iter": 256,
+      "zoom_log2": 1.321928093444667
+    },
+    "flame": {
+      "name": "Sierpinski Gasket",
+      "transforms": [
+        {
+          "a": 0.5,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.1,
+          "color_speed": 0.0,
+          "d": 0.5,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 0.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 0.5,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.5,
+          "color_speed": 0.0,
+          "d": 0.5,
+          "direct_color": 1.0,
+          "e": 0.5,
+          "f": 0.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 0.5,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.9,
+          "color_speed": 0.0,
+          "d": 0.5,
+          "direct_color": 1.0,
+          "e": 0.25,
+          "f": 0.5,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        }
+      ]
+    },
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "tonemap_mode": "linear",
+    "version": 3
+  },
+  {
+    "escape": {
+      "bailout": 4.0,
+      "center_im": "0.5000000223517421",
+      "center_re": "0.5000000223517421",
+      "coloring": "ifs_level",
+      "formula": "ifs_flame",
+      "max_iter": 256,
+      "zoom_log2": 1.2369655282300176
+    },
+    "flame": {
+      "name": "Sierpinski Carpet",
+      "transforms": [
+        {
+          "a": 0.33333334,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.0,
+          "color_speed": 0.0,
+          "d": 0.33333334,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 0.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 0.33333334,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.125,
+          "color_speed": 0.0,
+          "d": 0.33333334,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 0.33333334,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 0.33333334,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.25,
+          "color_speed": 0.0,
+          "d": 0.33333334,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 0.6666667,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 0.33333334,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.375,
+          "color_speed": 0.0,
+          "d": 0.33333334,
+          "direct_color": 1.0,
+          "e": 0.33333334,
+          "f": 0.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 0.33333334,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.5,
+          "color_speed": 0.0,
+          "d": 0.33333334,
+          "direct_color": 1.0,
+          "e": 0.33333334,
+          "f": 0.6666667,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 0.33333334,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.625,
+          "color_speed": 0.0,
+          "d": 0.33333334,
+          "direct_color": 1.0,
+          "e": 0.6666667,
+          "f": 0.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 0.33333334,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.75,
+          "color_speed": 0.0,
+          "d": 0.33333334,
+          "direct_color": 1.0,
+          "e": 0.6666667,
+          "f": 0.33333334,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 0.33333334,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.875,
+          "color_speed": 0.0,
+          "d": 0.33333334,
+          "direct_color": 1.0,
+          "e": 0.6666667,
+          "f": 0.6666667,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        }
+      ]
+    },
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "tonemap_mode": "linear",
+    "version": 3
+  },
+  {
+    "escape": {
+      "bailout": 4.0,
+      "center_im": "0.19999999999999998",
+      "center_re": "0.39999999999999997",
+      "coloring": "ifs_distance",
+      "formula": "ifs_flame",
+      "formula_params": {
+        "beam": 8.0
+      },
+      "max_iter": 256,
+      "zoom_log2": 0.6263763368089926
+    },
+    "flame": {
+      "name": "Heighway Dragon",
+      "transforms": [
+        {
+          "a": 0.5,
+          "b": -0.5,
+          "c": 0.5,
+          "color": 0.2,
+          "color_speed": 0.0,
+          "d": 0.5,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 0.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        },
+        {
+          "a": -0.5,
+          "b": -0.5,
+          "c": 0.5,
+          "color": 0.8,
+          "color_speed": 0.0,
+          "d": -0.5,
+          "direct_color": 1.0,
+          "e": 1.0,
+          "f": 0.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        }
+      ]
+    },
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "tonemap_mode": "linear",
+    "version": 3
+  },
+  {
+    "escape": {
+      "bailout": 4.0,
+      "center_im": "0.06185895766012041",
+      "center_re": "0.5000000151672536",
+      "coloring": "ifs_address",
+      "formula": "ifs_flame",
+      "formula_params": {
+        "beam": 8.0
+      },
+      "max_iter": 256,
+      "zoom_log2": 1.7260081204836983
+    },
+    "flame": {
+      "name": "Koch Curve",
+      "transforms": [
+        {
+          "a": 0.33333334,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.05,
+          "color_speed": 0.0,
+          "d": 0.33333334,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 0.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 0.16666667,
+          "b": -0.28867513,
+          "c": 0.28867513,
+          "color": 0.35,
+          "color_speed": 0.0,
+          "d": 0.16666667,
+          "direct_color": 1.0,
+          "e": 0.33333334,
+          "f": 0.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 0.16666667,
+          "b": 0.28867513,
+          "c": -0.28867513,
+          "color": 0.65,
+          "color_speed": 0.0,
+          "d": 0.16666667,
+          "direct_color": 1.0,
+          "e": 0.5,
+          "f": 0.28867513,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 0.33333334,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.95,
+          "color_speed": 0.0,
+          "d": 0.33333334,
+          "direct_color": 1.0,
+          "e": 0.6666667,
+          "f": 0.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        }
+      ]
+    },
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "tonemap_mode": "linear",
+    "version": 3
+  },
+  {
+    "escape": {
+      "bailout": 4.0,
+      "cam_pitch": 0.25,
+      "cam_yaw": 2.6,
+      "center_im": "0",
+      "center_re": "-0.5",
+      "coloring": "ifs_address",
+      "coloring_params": {
+        "reach": 0.0
+      },
+      "formula": "ifs_flame_3d",
+      "max_iter": 256
+    },
+    "flame": {
+      "name": "Sierpinski Tetrahedron",
+      "transforms": [
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.08,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 0.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear3D"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear3D": 0.5
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.36,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 1.0,
+          "f": 1.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear3D"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear3D": 0.5
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.64,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 1.0,
+          "f": 0.0,
+          "g": 1.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear3D"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear3D": 0.5
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.92,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 1.0,
+          "g": 1.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear3D"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear3D": 0.5
+          },
+          "weight": 1.0
+        }
+      ]
+    },
+    "gamma": 2.2,
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "solid_shading": {
+      "ambient": 0.2,
+      "diffuse": 0.95,
+      "gap_fill": 0,
+      "lights": [
+        {
+          "azimuth": 35.0,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 35.0,
+          "enabled": true,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": -95.0,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 10.0,
+          "enabled": true,
+          "intensity": 0.35
+        },
+        {
+          "azimuth": 35.0,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 40.0,
+          "enabled": false,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": 35.0,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 40.0,
+          "enabled": false,
+          "intensity": 1.0
+        }
+      ],
+      "normal_smoothing": 1,
+      "shading_strength": 1.0,
+      "shadow_strength": 0.0,
+      "shininess": 32.0,
+      "specular": 0.0,
+      "ssao_radius": 0.15,
+      "ssao_strength": 1.0
+    },
+    "tonemap_mode": "linear",
+    "version": 3
+  },
+  {
+    "escape": {
+      "bailout": 4.0,
+      "cam_yaw": 0.9,
+      "center_im": "0",
+      "center_re": "-0.5",
+      "coloring": "ifs_address",
+      "coloring_params": {
+        "reach": 0.0
+      },
+      "formula": "ifs_flame_3d",
+      "max_iter": 256
+    },
+    "flame": {
+      "name": "Menger Sponge",
+      "transforms": [
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.0,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 0.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear3D"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear3D": 0.33333334
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.05,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 0.0,
+          "g": 1.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear3D"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear3D": 0.33333334
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.1,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 0.0,
+          "g": 2.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear3D"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear3D": 0.33333334
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.15,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 1.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear3D"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear3D": 0.33333334
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.2,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 1.0,
+          "g": 2.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear3D"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear3D": 0.33333334
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.25,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 2.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear3D"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear3D": 0.33333334
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.3,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 2.0,
+          "g": 1.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear3D"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear3D": 0.33333334
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.35,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 2.0,
+          "g": 2.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear3D"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear3D": 0.33333334
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.4,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 1.0,
+          "f": 0.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear3D"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear3D": 0.33333334
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.45,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 1.0,
+          "f": 0.0,
+          "g": 2.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear3D"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear3D": 0.33333334
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.5,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 1.0,
+          "f": 2.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear3D"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear3D": 0.33333334
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.55,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 1.0,
+          "f": 2.0,
+          "g": 2.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear3D"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear3D": 0.33333334
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.6,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 2.0,
+          "f": 0.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear3D"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear3D": 0.33333334
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.65,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 2.0,
+          "f": 0.0,
+          "g": 1.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear3D"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear3D": 0.33333334
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.7,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 2.0,
+          "f": 0.0,
+          "g": 2.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear3D"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear3D": 0.33333334
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.75,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 2.0,
+          "f": 1.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear3D"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear3D": 0.33333334
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.8,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 2.0,
+          "f": 1.0,
+          "g": 2.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear3D"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear3D": 0.33333334
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.85,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 2.0,
+          "f": 2.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear3D"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear3D": 0.33333334
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.9,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 2.0,
+          "f": 2.0,
+          "g": 1.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear3D"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear3D": 0.33333334
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.95,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 2.0,
+          "f": 2.0,
+          "g": 2.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear3D"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear3D": 0.33333334
+          },
+          "weight": 1.0
+        }
+      ]
+    },
+    "gamma": 2.2,
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "solid_shading": {
+      "ambient": 0.2,
+      "diffuse": 0.95,
+      "gap_fill": 0,
+      "lights": [
+        {
+          "azimuth": 35.0,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 35.0,
+          "enabled": true,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": -95.0,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 10.0,
+          "enabled": true,
+          "intensity": 0.35
+        },
+        {
+          "azimuth": 35.0,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 40.0,
+          "enabled": false,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": 35.0,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 40.0,
+          "enabled": false,
+          "intensity": 1.0
+        }
+      ],
+      "normal_smoothing": 1,
+      "shading_strength": 1.0,
+      "shadow_strength": 0.0,
+      "shininess": 32.0,
+      "specular": 0.0,
+      "ssao_radius": 0.15,
+      "ssao_strength": 1.0
+    },
+    "tonemap_mode": "linear",
+    "version": 3
+  },
+  {
+    "escape": {
+      "bailout": 4.0,
+      "center_im": "-0.007065506963206407",
+      "center_re": "0.031929445761839655",
+      "coloring": "ifs_level",
+      "formula": "ifs_flame",
+      "max_iter": 256,
+      "zoom_log2": 0.102213983953004
+    },
+    "flame": {
+      "name": "Douady Rabbit",
+      "transforms": [
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.5,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 0.123,
+          "f": -0.745,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "julia"
+          ],
+          "variation_params": {},
+          "variations": {
+            "julia": 1.0
+          },
+          "weight": 1.0
+        }
+      ]
+    },
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "tonemap_mode": "linear",
+    "version": 3
+  },
+  {
+    "escape": {
+      "bailout": 4.0,
+      "center_im": "0.002000280974576803",
+      "center_re": "0.019778474402273028",
+      "coloring": "ifs_distance",
+      "formula": "ifs_flame",
+      "max_iter": 256,
+      "zoom_log2": 0.38172232409522944
+    },
+    "flame": {
+      "name": "Julia Dendrite",
+      "transforms": [
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.5,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": -0.36,
+          "f": -0.1,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "julia"
+          ],
+          "variation_params": {},
+          "variations": {
+            "julia": 1.0
+          },
+          "weight": 1.0
+        }
+      ]
+    },
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "tonemap_mode": "linear",
+    "version": 3
+  },
+  {
+    "escape": {
+      "bailout": 4.0,
+      "center_im": "-0.0004921343834416683",
+      "center_re": "0.028764033263990258",
+      "coloring": "ifs_address",
+      "formula": "ifs_flame",
+      "max_iter": 256,
+      "zoom_log2": 0.434244626696665
+    },
+    "flame": {
+      "name": "Cubic Pair",
+      "transforms": [
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.2,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": -0.4,
+          "f": -0.3,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "julian"
+          ],
+          "variation_params": {
+            "julian.dist": 1.0,
+            "julian.power": 3.0
+          },
+          "variations": {
+            "julian": 1.0
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.8,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 0.5,
+          "f": -0.2,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "julian"
+          ],
+          "variation_params": {
+            "julian.dist": 1.0,
+            "julian.power": 3.0
+          },
+          "variations": {
+            "julian": 1.0
+          },
+          "weight": 1.0
+        }
+      ]
+    },
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "tonemap_mode": "linear",
+    "version": 3
+  },
+  {
+    "escape": {
+      "bailout": 4.0,
+      "center_im": "0.20164597996115077",
+      "center_re": "0.1357018949998583",
+      "coloring": "ifs_distance",
+      "coloring_params": {
+        "bands": 12.0,
+        "interior": 0.0
+      },
+      "formula": "ifs_flame",
+      "formula_params": {
+        "levels": 48.0
+      },
+      "max_iter": 256,
+      "zoom_log2": -0.4631669079825511
+    },
+    "flame": {
+      "name": "Blob Flower",
+      "transforms": [
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.3,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 0.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "blob"
+          ],
+          "variation_params": {
+            "blob.high": 1.2,
+            "blob.low": 0.5,
+            "blob.waves": 5.0
+          },
+          "variations": {
+            "blob": 0.8
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 0.6,
+          "b": 0.3,
+          "c": -0.3,
+          "color": 0.6,
+          "color_speed": 0.0,
+          "d": 0.6,
+          "direct_color": 1.0,
+          "e": 0.5,
+          "f": 0.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 0.5,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.9,
+          "color_speed": 0.0,
+          "d": 0.5,
+          "direct_color": 1.0,
+          "e": -0.4,
+          "f": 0.3,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        }
+      ]
+    },
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "tonemap_mode": "linear",
+    "version": 3
+  },
+  {
+    "escape": {
+      "bailout": 4.0,
+      "cam_yaw": 0.9,
+      "center_im": "0",
+      "center_re": "-0.5",
+      "coloring": "ifs_level",
+      "formula": "quaternion_julia_solid",
+      "formula_params": {
+        "cw": 0.0,
+        "cx": -1.0,
+        "cy": 0.2,
+        "cz": 0.0,
+        "slice_axis": 3.0
+      },
+      "max_iter": 256,
+      "zoom_log2": 0.7
+    },
+    "flame": {
+      "name": "Quaternion Julia",
+      "transforms": []
+    },
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "tonemap_mode": "linear",
+    "version": 3
   }
 ]

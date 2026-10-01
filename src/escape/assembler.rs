@@ -19,6 +19,7 @@
 //! `srgb_to_linear` convention the flame plot uses.
 
 use super::fields::{FieldColoringDef, FieldDef};
+use super::ifs::{IfsColoringDef, IfsDef};
 use super::{ColoringDef, ColoringFeature, FormulaDef, FormulaFeature};
 
 /// Number of vec4 slots for each param block in the uniform — 16 float
@@ -226,6 +227,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         / vec2<f32>(f32(params.width), f32(params.height));
     var d = (uv - vec2<f32>(0.5, 0.5)) * params.span;
     d.y = -d.y;
+    //__LENS_APPLY__
     let rot = params.rot_cs;
     let pixel = params.center + vec2<f32>(
         d.x * rot.x - d.y * rot.y,
@@ -372,7 +374,8 @@ struct EscapeParams {
     tile_y0: u32,
     damping: vec2<f32>,
     shade_flags: u32,
-    _pad_shade0: u32,
+    // Mode D's interaction stride (1 or 2); the other engines read 1.
+    stride: u32,
     _pad_shade1: u32,
     _pad_shade2: u32,
     fparams: array<vec4<f32>, 4>,
@@ -619,6 +622,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         - 0.5 * vec2<f32>(f32(params.width), f32(params.height));
     var dpx = centered;
     dpx.y = -dpx.y;
+    //__LENS_APPLY_PX__
     let rot = params.rot_cs;
     let d0 = vec2<f32>(
         dpx.x * rot.x - dpx.y * rot.y,
@@ -863,7 +867,8 @@ struct EscapeParams {
     tile_y0: u32,
     damping: vec2<f32>,
     shade_flags: u32,
-    _pad_shade0: u32,
+    // Mode D's interaction stride (1 or 2); the other engines read 1.
+    stride: u32,
     _pad_shade1: u32,
     _pad_shade2: u32,
     fparams: array<vec4<f32>, 4>,
@@ -1538,6 +1543,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         - 0.5 * vec2<f32>(f32(params.width), f32(params.height));
     var dpx = centered;
     dpx.y = -dpx.y;
+    //__LENS_APPLY_PX__
     let rot = params.rot_cs;
     let d0px = vec2<f32>(
         dpx.x * rot.x - dpx.y * rot.y,
@@ -3876,6 +3882,20 @@ fn delta_step_ducks_fe(variant: u32) -> String {
 /// orbit value every iteration for the rebase test, which is exactly
 /// the summary the colorings consume. `floatexp` picks the deep rung.
 pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbTier) -> String {
+    assemble_perturbed_with_lens(coloring, floatexp, tier, None)
+}
+
+/// The same, with a camera lens.
+///
+/// The perturbed path matters more than the direct one here: it is
+/// what renders past zoom ~14, so a lens wired only into the direct
+/// template would work until the user zoomed and then silently stop.
+pub fn assemble_perturbed_with_lens(
+    coloring: &ColoringDef,
+    floatexp: bool,
+    tier: PerturbTier,
+    lens: Option<&str>,
+) -> String {
     let needs_accum = coloring.has_feature(ColoringFeature::NeedsOrbitAccum);
     let colors_interior = coloring.has_feature(ColoringFeature::ColorsInterior);
     let bounded = coloring.has_feature(ColoringFeature::Bounded);
@@ -3889,8 +3909,10 @@ pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbT
     };
 
     let mut out = Vec::new();
+    lens_prelude(&mut out, lens);
     for line in template.lines() {
         match line.trim() {
+            "//__LENS_APPLY_PX__" => lens_apply_pixels(&mut out, lens),
             "//__DELTA_STEP__" => out.push(match tier {
                 PerturbTier::Power(p) => delta_step_scaled(p.clamp(2, 12)),
                 PerturbTier::Ship(v) => delta_step_ship(v.min(5)),
@@ -4052,7 +4074,8 @@ struct EscapeParams {
     tile_y0: u32,
     damping: vec2<f32>,
     shade_flags: u32,
-    _pad_shade0: u32,
+    // Mode D's interaction stride (1 or 2); the other engines read 1.
+    stride: u32,
     _pad_shade1: u32,
     _pad_shade2: u32,
     fparams: array<vec4<f32>, 4>,
@@ -4211,7 +4234,8 @@ struct EscapeParams {
     tile_y0: u32,
     damping: vec2<f32>,
     shade_flags: u32,
-    _pad_shade0: u32,
+    // Mode D's interaction stride (1 or 2); the other engines read 1.
+    stride: u32,
     _pad_shade1: u32,
     _pad_shade2: u32,
     fparams: array<vec4<f32>, 4>,
@@ -4310,6 +4334,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         / vec2<f32>(f32(params.width), f32(params.height));
     var d = (uv - vec2<f32>(0.5, 0.5)) * params.span;
     d.y = -d.y;
+    //__LENS_APPLY__
     let rot = params.rot_cs;
     let pixel = params.center + vec2<f32>(
         d.x * rot.x - d.y * rot.y,
@@ -4341,13 +4366,1808 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 "#;
 
+pub(crate) const IFS_TEMPLATE: &str = r#"
+// Distance-field compute pass (mode D, ifs-distance-rendering.md
+// phase 1): no iteration of the pixel and no series - each pixel walks
+// the INVERSE maps of an affine IFS until it leaves a bounding ball,
+// and what the walk yields is the distance to the attractor plus three
+// more quantities that cost nothing extra. The same uniform block as
+// the escape and field templates keeps the renderer's params packing
+// shared; `max_iter` is unused here (the walk's depth is a def param).
+
+struct EscapeParams {
+    center: vec2<f32>,
+    julia_c: vec2<f32>,
+    span: vec2<f32>,
+    rot_cs: vec2<f32>,
+    width: u32,
+    height: u32,
+    max_iter: u32,
+    flags: u32,
+    bailout: f32,
+    tile_y0: u32,
+    damping: vec2<f32>,
+    shade_flags: u32,
+    // Mode D's interaction stride (1 or 2); the other engines read 1.
+    stride: u32,
+    _pad_shade1: u32,
+    _pad_shade2: u32,
+    fparams: array<vec4<f32>, 4>,
+    cparams: array<vec4<f32>, 4>,
+    // Mode D keeps the whole-IFS constants here: see
+    // `escape::ifs::pack_globals` for the layout.
+    fdata: array<vec4<f32>, 64>,
+}
+
+@group(0) @binding(0) var<uniform> params: EscapeParams;
+@group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(2) var palette_texture: texture_2d<f32>;
+@group(0) @binding(3) var palette_sampler: sampler;
+@group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
+
+// One map of the IFS, as `escape::ifs::IfsMapGpu` packs it. Group 1 so
+// mode D is the only pipeline whose layout mentions it and no existing
+// shader's bindings move (D5). Eighty bytes: the second half is a
+// nonlinear map's pre-inverse, its kind and branch, then a vec4 of
+// kernel parameters; `kind == 0` marks an affine row (plan 8.8 J7,
+// 8.9 S1).
+struct IfsMapGpu {
+    inv_m: vec4<f32>,
+    inv_t: vec2<f32>,
+    sigma_min: f32,
+    color: f32,
+    pre_m: vec4<f32>,
+    pre_t: vec2<f32>,
+    kind: f32,
+    branch: f32,
+    params: vec4<f32>,
+    // What the MEASURE walk needs and nothing else reads:
+    // (a, b, has_form, spare): the delta walk's own row. A root's
+    // inverse is `v^a conj(v)^b` when the exponents are whole, and
+    // `has_form` is 1 where the kernel has an exact difference at
+    // all. Computed on the CPU so the two sides cannot disagree
+    // about a borderline exponent.
+    delta: vec4<f32>,
+    // (probability, colour speed, spare, spare). A whole vec4 because
+    // std430 rounds the struct's stride to its largest member's
+    // alignment -- at 88 bytes this would stride 96 here and 88 in
+    // Rust, and every row after the first would be misread.
+    measure: vec4<f32>,
+    // A SUM row's affine term (`ifs-general.md` D3): the 2x2, then
+    // (t.x, t.y, kw, kernel_kind). Zero on every other row. A sum's
+    // other three affines are `inv_*` (its post-inverse, UNSCALED --
+    // a sum's weight multiplies only the kernel term) and `pre_*`;
+    // this is the fourth and had nowhere else to go.
+    lin_m: vec4<f32>,
+    lin_t: vec4<f32>,
+}
+
+@group(1) @binding(0) var<storage, read> ifs_maps: array<IfsMapGpu>;
+
+// The transition graph, when the flame has xaos (`ifs-general.md`
+// D4). Element 0 is the map count, and zero there means no xaos at
+// all -- the ordinary case, where every map may follow every map.
+// After it, `n*n` step probabilities in `[child * n + last]` order.
+//
+// One array for both questions the walk asks: a transition is
+// ADMISSIBLE exactly when its step probability is positive, so the
+// distance walk reads the sign and the measure walk reads the value.
+// Bound at a dummy element when there is no graph, like the coarse
+// pass beside it.
+@group(1) @binding(4) var<storage, read> ifs_xaos: array<f32>;
+
+const IFS_NO_LAST: u32 = 0xffffffffu;
+
+fn ifs_xaos_n() -> u32 {
+    if (arrayLength(&ifs_xaos) < 2u) {
+        return 0u;
+    }
+    return u32(max(ifs_xaos[0], 0.0));
+}
+
+// The factor an address's probability gains when `child` is appended
+// to a path whose last map is `last`. `IFS_NO_LAST` is the first
+// level, where the factor is the chain's stationary probability --
+// stored in the diagonal-free header row that follows the count.
+fn ifs_xaos_step(child: u32, last: u32) -> f32 {
+    let n = ifs_xaos_n();
+    if (n == 0u || child >= n) {
+        return -1.0;
+    }
+    if (last == IFS_NO_LAST) {
+        // The stationary row, packed after the n*n matrix.
+        return ifs_xaos[1u + n * n + child];
+    }
+    if (last >= n) {
+        return -1.0;
+    }
+    return ifs_xaos[1u + child * n + last];
+}
+
+// Whether `child` may be applied immediately BEFORE `last` in the
+// chaos game's own order -- which is what appending it to an address
+// means, since the forward chain runs an address backwards.
+fn ifs_admits(child: u32, last: u32) -> bool {
+    let s = ifs_xaos_step(child, last);
+    return s < 0.0 || s > 0.0;
+}
+
+// One pixel's walk, cached so a colouring change need not re-walk it.
+//
+// Thirty-two bytes, the same stride as mode A's `IterResult`, so both
+// share the one records buffer and the one binding. Everything a
+// mode-D colouring can read is here: the four quantities of the plan's
+// 2.3 plus the escape flag and depth.
+struct IfsRecord {
+    distance: f32,
+    level: f32,
+    address: f32,
+    color: f32,
+    point: vec2<f32>,
+    // Bit 0: the walk left the ball. Bit 1: a SOLID render found no
+    // surface at this pixel.
+    escaped: u32,
+    // What the walk's own shading multiplied the colour by -- one for
+    // a plane, the lit factor for a solid.
+    //
+    // This word held `depth`, which was stored and never read: no
+    // colouring takes it, and the recolor pass only copied it back.
+    // A solid's LIGHTING, on the other hand, cannot be recomputed
+    // without the walk -- the normal is central differences of the
+    // distance function -- so a cached recolour came back flat until
+    // it was kept here.
+    shade: f32,
+}
+
+// The recolor cache. Written when params.flags bit 3 is set; bound to
+// a 32-byte dummy and left alone otherwise, exactly as mode A does.
+@group(0) @binding(5) var<storage, read_write> results: array<IfsRecord>;
+
+fn fparam(i: u32) -> f32 {
+    return params.fparams[i / 4u][i % 4u];
+}
+
+fn cparam(i: u32) -> f32 {
+    return params.cparams[i / 4u][i % 4u];
+}
+
+fn fdata4(i: u32) -> vec4<f32> {
+    return params.fdata[i];
+}
+
+// The whole-IFS constants.
+fn ifs_centre() -> vec2<f32> {
+    return params.fdata[0].xy;
+}
+
+fn ifs_radius() -> f32 {
+    return params.fdata[0].z;
+}
+
+fn ifs_count() -> u32 {
+    return u32(max(params.fdata[0].w, 0.0));
+}
+
+// The final transform's inverse: 2x2 in one vec4, then
+// (t.x, t.y, sigma_min, has_final).
+fn ifs_final_m() -> vec4<f32> {
+    return params.fdata[1];
+}
+
+fn ifs_final() -> vec4<f32> {
+    return params.fdata[2];
+}
+
+fn ifs_mean_sigma() -> f32 {
+    return params.fdata[1].x;
+}
+
+// The ball centre's scalar coordinate (plan 8.11 step 3), and the
+// slice the march's samples start at.
+fn ifs_ball_w() -> f32 {
+    return params.fdata[1].z;
+}
+
+fn ifs_slice_w() -> f32 {
+    return fparam(6u);
+}
+
+// Whether any map is nonlinear, which switches the walk's precision
+// early exit off (an affine argument; see pack_globals3).
+fn ifs_has_nonlinear() -> bool {
+    return params.fdata[1].w > 0.5;
+}
+
+// The beam's ranking key: sigma-weighted position when the CPU that
+// seeds this walk chose it, which it does when every map is an
+// inversion. See `ifs_estimate::RankKey::Auto` for the measurement.
+fn ifs_weighted_key() -> bool {
+    return params.fdata[3].w > 0.5;
+}
+
+// The beam's handover state, packed by `escape::ifs::pack_seeds`.
+fn ifs_handover_level() -> u32 {
+    return u32(max(params.fdata[1].y, 0.0));
+}
+
+fn ifs_seed_count() -> u32 {
+    return u32(max(params.fdata[1].z, 0.0));
+}
+
+fn ifs_addr_scale() -> f32 {
+    return params.fdata[1].w;
+}
+
+// The smallest bound among pieces the PREFIX could not enter, in the
+// same per-pixel units the seeds' bounds are in; 0 means "none", since
+// a carried gap is never negative. fdata[2] is the planar layout's one
+// free vec4 -- `pack_globals` zeroes it and nothing else reads it (the
+// solid's layout puts its camera there, and uses a different packer
+// and a different walk).
+fn ifs_seed_dead_min() -> f32 {
+    let v = params.fdata[2].x;
+    return select(1e30, v, v > 0.0);
+}
+
+// Word `w` of seed `j`. SIX words each, from index 4 -- the stride
+// must match `escape::ifs::SEED_VEC4S`, and it grew from four when the
+// delta gained its quadratic part. A stale stride here reads seed 1
+// onward out of the middle of seed 0's words, which is invisible on a
+// one-seed walk and cost a Sierpinski 11% of its view.
+fn ifs_seed(j: u32, w: u32) -> vec4<f32> {
+    return params.fdata[4u + 6u * j + w];
+}
+
+
+// IEEE-exact atan2 at the four signed-zero pairs. The expanded point
+// can land exactly on the ball centre, so the angle trap reaches (0,0)
+// -- where Metal's fast-math atan2 returns pi/4 for same-sign zeros
+// and NaN for mixed. Transcribed from shaders/core/utilities.wgsl and
+// kept identical by `the_atan2_guard_is_identical_to_the_flame_one`.
+fn ff_atan2(y: f32, x: f32) -> f32 {
+    if (y == 0.0 && x == 0.0) {
+        let pi = 3.14159265358979;
+        let mag = select(0.0, pi, (bitcast<u32>(x) & 0x80000000u) != 0u);
+        return select(mag, -mag, (bitcast<u32>(y) & 0x80000000u) != 0u);
+    }
+    return atan2(y, x);
+}
+
+// What one evaluation yields: the four quantities of the plan's 2.3.
+struct IfsResult {
+    // Lower bound on the distance to the attractor. Zero means the
+    // walk never pushed the point out of the ball, i.e. it is on the
+    // set as far as this depth can tell.
+    distance: f32,
+    // Inverse-orbit depth at escape, with a continuous residual.
+    // Rises toward the set.
+    level: f32,
+    // The branch history as a base-N fraction in [0, 1).
+    address: f32,
+    // The coarsest branch's transform colour.
+    color: f32,
+    // The point after the last inversion, in the expanded frame.
+    point: vec2<f32>,
+    escaped: u32,
+    depth: u32,
+}
+
+// The widest beam a mode-D walk may follow. The candidate arrays are
+// function-scope registers, so this is a register-pressure ceiling
+// rather than a limit anything wants to raise casually.
+const IFS_MAX_BEAM: u32 = 8u;
+
+// Palette position + luminance, the field templates' convention.
+struct IfsShade {
+    t: f32,
+    lum: f32,
+}
+
+// Fade by distance from the set, in pixels. The address and the trap
+// are defined for every point the walk touches, but they describe the
+// SET; lighting the whole plane by them shows the exterior's branch
+// partition instead, which is a different (and much flatter) picture.
+fn ifs_halo(res: IfsResult, reach: f32) -> f32 {
+    if (!(reach > 0.0)) {
+        return 1.0;
+    }
+    return exp(-res.distance / reach);
+}
+
+//__IFS__
+
+//__IFS_COLORING__
+
+@compute @workgroup_size(8, 8, 1)
+fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    // The interaction stride: at 2, this thread owns a 2x2 block and
+    // walks its top-left pixel once. The band starts on a block
+    // boundary, so the block never straddles two bands.
+    let stride = max(params.stride, 1u);
+    let px = gid.x * stride;
+    let py = gid.y * stride + params.tile_y0;
+    if (px >= params.width || py >= params.height) {
+        return;
+    }
+
+    // The pixel's NORMALISED offset, spanning [-1/2, 1/2]. Not a
+    // position: at a deep zoom there is no position an f32 could hold,
+    // and the walk starts from the beam state the CPU handed over
+    // instead. `rot_cs` and `span` are folded into the seeds' basis.
+    // `var` rather than `let`: a camera lens rewrites this offset in
+    // place, and WGSL has no shadowing in the same scope. Identical
+    // without one.
+    var uv = (vec2<f32>(f32(px), f32(py)) + vec2<f32>(0.5, 0.5))
+        / vec2<f32>(f32(params.width), f32(params.height))
+        - vec2<f32>(0.5, 0.5);
+
+    //__LENS_APPLY_UV__
+    let res = ifs_evaluate(uv);
+
+    // Cache the walk before colouring it. A band cannot be
+    // re-coloured after the fact without this -- the walk that
+    // produced it is gone -- which is what made a palette edit cost a
+    // full re-render. One record per BLOCK; the recolor pass reads
+    // block-aligned.
+    if ((params.flags & 8u) != 0u) {
+        let idx = py * params.width + px;
+        results[idx].distance = res.distance;
+        results[idx].level = res.level;
+        results[idx].address = res.address;
+        results[idx].color = res.color;
+        results[idx].point = res.point;
+        results[idx].escaped = res.escaped;
+        results[idx].shade = 1.0;
+    }
+
+    let shade = ifs_color(res);
+    let t = fract(shade.t);
+    let height = select(shade.t, t, params.shade_flags == 1u);
+    let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
+    let rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2)) * clamp(shade.lum, 0.0, 4.0);
+
+    // The whole block, from the one walk.
+    for (var dy = 0u; dy < stride; dy = dy + 1u) {
+        for (var dx = 0u; dx < stride; dx = dx + 1u) {
+            let x = px + dx;
+            let y = py + dy;
+            if (x < params.width && y < params.height) {
+                textureStore(out_tex, vec2<i32>(i32(x), i32(y)), vec4<f32>(rgb, 1.0));
+                textureStore(height_tex, vec2<i32>(i32(x), i32(y)), vec4<f32>(height, 0.0, 0.0, 0.0));
+            }
+        }
+    }
+}
+"#;
+
+/// The lighting rig and the geometry packing, spliced into both the walk
+/// template and the relight template at `//__IFS_RIG__` so the two cannot
+/// drift. That they are one text is the basis of the cache being exact.
+const IFS_RIG: &str = r#"
+// The lighting rig, as ONE function spliced into both the walk and the
+// relight pass at `//__IFS_RIG__` -- so the two cannot drift, which is
+// the whole basis of the cache being exact. Blinn-Phong over the
+// Solid Rendering panel's lights, the vocabulary the splat pipeline
+// shades in: occlusion on the AMBIENT term, the traced shadow on the
+// DIRECT one, which is the way round the two names already say.
+//
+// `ao` is the raw occlusion and `sun` the four raw shadow terms; the
+// panel's strengths are applied HERE, not where they were measured, so
+// a strength change is a relight and not a walk.
+fn ifs_rig(albedo: vec3<f32>, n: vec3<f32>, ao_raw: f32, sun: vec4<f32>, dir: vec3<f32>, t: f32) -> vec3<f32> {
+    let ao = mix(1.0, ao_raw, clamp(ifs_occlusion_strength(), 0.0, 1.0));
+    let shadow_amount = clamp(ifs_shadow_strength(), 0.0, 1.0);
+    let v = -dir;
+    var lit_rgb = albedo * (ifs_ambient() * ao);
+    let lights = ifs_light_count();
+    for (var li = 0u; li < lights; li = li + 1u) {
+        let ld = ifs_light_dir(li);
+        let ndotl = max(dot(n, ld), 0.0);
+        if (ndotl <= 0.0) {
+            continue;
+        }
+        let lcol = ifs_light_color(li) * ifs_light_power(li);
+        let s = mix(1.0, sun[li], shadow_amount);
+        lit_rgb = lit_rgb + albedo * lcol * (ifs_diffuse() * ndotl * ao * s);
+        if (ifs_specular() > 0.0) {
+            let hh = normalize(ld + v);
+            let spec = pow(max(dot(n, hh), 0.0), max(ifs_shininess(), 1.0));
+            lit_rgb = lit_rgb + lcol * (ifs_specular() * spec * s);
+        }
+    }
+    var rgb = mix(albedo, lit_rgb, clamp(ifs_shading_strength(), 0.0, 1.0));
+    // Depth fog AFTER lighting, so distant lit surfaces fade toward
+    // the background like atmosphere rather than being lit on top of
+    // it -- the ordering the shade pass settled on.
+    if (ifs_fog_strength() > 0.0) {
+        let depth = t * dot(dir, ifs_forward());
+        let f = 1.0 - exp(-ifs_fog_strength() * max(depth - ifs_fog_start(), 0.0));
+        rgb = mix(rgb, ifs_fog_color(), f);
+    }
+    return rgb;
+}
+
+// The geometry record: what a walk found at a pixel that a relight
+// needs and a colouring change does not touch. Sixteen bytes, packed,
+// because at 1080p this sits beside a 32-byte record per pixel and
+// four unpacked floats for the normal alone would double it:
+//   0. normal.xy as two f16
+//   1. normal.z and the raw occlusion as two f16
+//   2. the four raw per-light shadow terms as unorm8
+//   3. the hit depth along the ray, f32 -- and ZERO means no surface,
+//      which is what a cleared buffer says and why the relight can
+//      run over rows a banded walk has not reached yet
+fn ifs_pack_geom(n: vec3<f32>, ao: f32, sun: vec4<f32>, t: f32) -> vec4<u32> {
+    return vec4<u32>(
+        pack2x16float(n.xy),
+        pack2x16float(vec2<f32>(n.z, ao)),
+        pack4x8unorm(clamp(sun, vec4<f32>(0.0), vec4<f32>(1.0))),
+        bitcast<u32>(t),
+    );
+}
+
+// A pixel's ray, from its coordinates and the camera: the one thing
+// both the walk and the relight derive rather than store.
+fn ifs_ray(px: u32, py: u32) -> vec3<f32> {
+    // `var` rather than `let`: a camera lens rewrites this offset in
+    // place, and WGSL has no shadowing in the same scope. Identical
+    // without one.
+    var uv = (vec2<f32>(f32(px), f32(py)) + vec2<f32>(0.5, 0.5))
+        / vec2<f32>(f32(params.width), f32(params.height))
+        - vec2<f32>(0.5, 0.5);
+    let aspect = f32(params.width) / f32(max(params.height, 1u));
+    //__LENS_APPLY_RAY__
+    let tan_half = tan(ifs_fov() * 0.5);
+    return normalize(
+        ifs_forward() + ifs_right() * (uv.x * aspect * 2.0 * tan_half)
+            - ifs_up() * (uv.y * 2.0 * tan_half)
+    );
+}
+"#;
+
+const IFS_RECOLOR_TEMPLATE: &str = r#"
+// Mode-D recolor pass: a colouring and a palette, over cached walk
+// records. See assemble_ifs_recolor.
+//
+// Mode D's walk is by far the most expensive thing the escape engine
+// does, and none of it depends on the colouring or the palette. This
+// is what makes a palette rotation one cheap dispatch instead of a
+// full re-walk -- and, because the walk is banded across frames, what
+// stops a palette edit part-way through a pass from striping the
+// picture.
+
+struct EscapeParams {
+    center: vec2<f32>,
+    julia_c: vec2<f32>,
+    span: vec2<f32>,
+    rot_cs: vec2<f32>,
+    width: u32,
+    height: u32,
+    max_iter: u32,
+    flags: u32,
+    bailout: f32,
+    tile_y0: u32,
+    damping: vec2<f32>,
+    shade_flags: u32,
+    // Mode D's interaction stride (1 or 2); the other engines read 1.
+    stride: u32,
+    _pad_shade1: u32,
+    _pad_shade2: u32,
+    fparams: array<vec4<f32>, 4>,
+    cparams: array<vec4<f32>, 4>,
+    fdata: array<vec4<f32>, 64>,
+}
+
+struct IfsRecord {
+    distance: f32,
+    level: f32,
+    address: f32,
+    color: f32,
+    point: vec2<f32>,
+    // Bit 0: the walk left the ball. Bit 1: a SOLID render found no
+    // surface at this pixel.
+    escaped: u32,
+    // What the walk's own shading multiplied the colour by -- one for
+    // a plane, the lit factor for a solid.
+    //
+    // This word held `depth`, which was stored and never read: no
+    // colouring takes it, and the recolor pass only copied it back.
+    // A solid's LIGHTING, on the other hand, cannot be recomputed
+    // without the walk -- the normal is central differences of the
+    // distance function -- so a cached recolour came back flat until
+    // it was kept here.
+    shade: f32,
+}
+
+@group(0) @binding(0) var<uniform> params: EscapeParams;
+@group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(2) var palette_texture: texture_2d<f32>;
+@group(0) @binding(3) var palette_sampler: sampler;
+@group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
+@group(0) @binding(5) var<storage, read> results: array<IfsRecord>;
+
+// Bound because the layout is shared with mode A's recolor pass. Mode
+// C does not apply the contrast fit: its walk pass does not either,
+// and the two have to agree or the cache would not reproduce the
+// picture it replaces.
+struct ContrastParams {
+    plane: vec3<f32>,
+    lo: f32,
+    hi: f32,
+    strength: f32,
+    turns: f32,
+    enabled: u32,
+}
+@group(0) @binding(6) var<uniform> contrast: ContrastParams;
+
+fn cparam(i: u32) -> f32 {
+    return params.cparams[i / 4u][i % 4u];
+}
+
+fn fparam(i: u32) -> f32 {
+    return params.fparams[i / 4u][i % 4u];
+}
+
+// The whole-IFS constants, from the same `fdata` block the walk reads.
+// The trap colouring measures against the ball's centre, so this has
+// to be here too.
+fn ifs_centre() -> vec2<f32> {
+    return params.fdata[0].xy;
+}
+
+fn ifs_radius() -> f32 {
+    return params.fdata[0].z;
+}
+
+fn ifs_count() -> u32 {
+    return u32(max(params.fdata[0].w, 0.0));
+}
+
+fn ff_atan2(y: f32, x: f32) -> f32 {
+    if (y == 0.0 && x == 0.0) {
+        let pi = 3.14159265358979;
+        let mag = select(0.0, pi, (bitcast<u32>(x) & 0x80000000u) != 0u);
+        return select(mag, -mag, (bitcast<u32>(y) & 0x80000000u) != 0u);
+    }
+    return atan2(y, x);
+}
+
+struct IfsResult {
+    distance: f32,
+    level: f32,
+    address: f32,
+    color: f32,
+    point: vec2<f32>,
+    escaped: u32,
+    depth: u32,
+}
+
+struct IfsShade {
+    t: f32,
+    lum: f32,
+}
+
+fn ifs_halo(res: IfsResult, reach: f32) -> f32 {
+    if (!(reach > 0.0)) {
+        return 1.0;
+    }
+    return exp(-res.distance / reach);
+}
+
+//__IFS_COLORING__
+
+@compute @workgroup_size(8, 8, 1)
+fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= params.width || gid.y >= params.height) {
+        return;
+    }
+    // Block-aligned: a preview walk wrote one record per 2x2 block.
+    let stride = max(params.stride, 1u);
+    let sx = (gid.x / stride) * stride;
+    let sy = (gid.y / stride) * stride;
+    let r = results[sy * params.width + sx];
+    var res: IfsResult;
+    res.distance = r.distance;
+    res.level = r.level;
+    res.address = r.address;
+    res.color = r.color;
+    res.point = r.point;
+    res.escaped = r.escaped & 1u;
+    res.depth = 0u;
+
+    // Bit 1 of `escaped` is a SOLID render's "no surface here". Left
+    // absent rather than painted, so the tonemap's background blend
+    // fills it -- the same convention the walk pass uses, and what
+    // keeps a transparent export transparent.
+    if ((r.escaped & 2u) != 0u) {
+        textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(0.0, 0.0, 0.0, 0.0));
+        textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(0.0));
+        return;
+    }
+
+    let shade = ifs_color(res);
+    let t = fract(shade.t);
+    let height = select(shade.t, t, params.shade_flags == 1u);
+    let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
+    let rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2))
+        * clamp(shade.lum, 0.0, 4.0)
+        * r.shade;
+
+    textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, 1.0));
+    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, 0.0, 0.0, 0.0));
+}"#;
+
+const IFS_RELIGHT_TEMPLATE: &str = r#"
+// Mode-D relight pass (solid): a colouring, a palette and the lighting
+// rig, over the walk's records and its geometry cache.
+//
+// The walk does not shade. It records the four colouring quantities in
+// one buffer and what it found at the surface -- normal, occlusion,
+// per-light shadow, depth -- in another, and this pass owns the
+// picture. It runs over the WHOLE frame after every band of a walk and
+// again on any change that is not a geometry input, and it is cheap
+// because it contains no walk: a few hundred arithmetic operations a
+// pixel against the hundred distance evaluations a march costs.
+//
+// That division is what makes a Solid Rendering panel edit a relight
+// instead of a re-walk, what makes the recolour cache exact for a
+// coloured light or a specular where a single scalar could not be, and
+// what stops a light edit part-way through a banded pass from striping
+// the frame: every band relights everything walked so far, with the
+// lighting of NOW.
+
+struct EscapeParams {
+    center: vec2<f32>,
+    julia_c: vec2<f32>,
+    span: vec2<f32>,
+    rot_cs: vec2<f32>,
+    width: u32,
+    height: u32,
+    max_iter: u32,
+    flags: u32,
+    bailout: f32,
+    tile_y0: u32,
+    damping: vec2<f32>,
+    shade_flags: u32,
+    // Mode D's interaction stride (1 or 2); the other engines read 1.
+    stride: u32,
+    _pad_shade1: u32,
+    _pad_shade2: u32,
+    fparams: array<vec4<f32>, 4>,
+    cparams: array<vec4<f32>, 4>,
+    fdata: array<vec4<f32>, 64>,
+}
+
+struct IfsRecord {
+    distance: f32,
+    level: f32,
+    address: f32,
+    color: f32,
+    point: vec2<f32>,
+    escaped: u32,
+    shade: f32,
+}
+
+@group(0) @binding(0) var<uniform> params: EscapeParams;
+@group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(2) var palette_texture: texture_2d<f32>;
+@group(0) @binding(3) var palette_sampler: sampler;
+@group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
+@group(0) @binding(5) var<storage, read> results: array<IfsRecord>;
+
+struct ContrastParams {
+    plane: vec3<f32>,
+    lo: f32,
+    hi: f32,
+    strength: f32,
+    turns: f32,
+    enabled: u32,
+}
+@group(0) @binding(6) var<uniform> contrast: ContrastParams;
+
+// Group 1 is the walk's own: the maps and the chain are bound because
+// the layout is shared, and only the geometry is read here.
+struct IfsMap3Gpu {
+    r0: vec4<f32>,
+    r1: vec4<f32>,
+    r2: vec4<f32>,
+    extra: vec4<f32>,
+    p0: vec4<f32>,
+    p1: vec4<f32>,
+    p2: vec4<f32>,
+    extra2: vec4<f32>,
+}
+@group(1) @binding(0) var<storage, read> ifs_maps: array<IfsMap3Gpu>;
+struct IfsLink {
+    pos: vec4<f32>,
+    r0: vec4<f32>,
+    r1: vec4<f32>,
+    r2: vec4<f32>,
+    extra: vec4<f32>,
+    esc: vec4<f32>,
+}
+@group(1) @binding(1) var<storage, read> ifs_links: array<IfsLink>;
+@group(1) @binding(2) var<storage, read_write> ifs_geom: array<vec4<u32>>;
+
+fn cparam(i: u32) -> f32 {
+    return params.cparams[i / 4u][i % 4u];
+}
+
+fn fparam(i: u32) -> f32 {
+    return params.fparams[i / 4u][i % 4u];
+}
+
+// The SOLID layout of the whole-IFS constants -- the same slots the
+// solid walk reads, which the planar recolor pass does not share.
+fn ifs_ball_centre() -> vec3<f32> {
+    return params.fdata[0].xyz;
+}
+
+fn ifs_centre() -> vec2<f32> {
+    return params.fdata[0].xy;
+}
+
+fn ifs_radius() -> f32 {
+    return params.fdata[0].w;
+}
+
+fn ifs_count() -> u32 {
+    return u32(max(params.fdata[1].y, 0.0));
+}
+
+fn ifs_fov() -> f32 { return params.fdata[2].w; }
+fn ifs_forward() -> vec3<f32> { return params.fdata[3].xyz; }
+fn ifs_right() -> vec3<f32> { return params.fdata[4].xyz; }
+fn ifs_up() -> vec3<f32> { return params.fdata[5].xyz; }
+fn ifs_shading_strength() -> f32 { return params.fdata[8].x; }
+fn ifs_ambient() -> f32 { return params.fdata[8].y; }
+fn ifs_diffuse() -> f32 { return params.fdata[8].z; }
+fn ifs_specular() -> f32 { return params.fdata[8].w; }
+fn ifs_shininess() -> f32 { return params.fdata[9].x; }
+fn ifs_occlusion_strength() -> f32 { return params.fdata[9].y; }
+fn ifs_fog_strength() -> f32 { return params.fdata[9].z; }
+fn ifs_fog_start() -> f32 { return params.fdata[9].w; }
+fn ifs_fog_color() -> vec3<f32> { return params.fdata[10].xyz; }
+// The `shadow` formula param -- a strength the RELIGHT applies.
+fn ifs_shadow_strength() -> f32 { return fparam(3u); }
+fn ifs_light_count() -> u32 { return u32(clamp(params.fdata[7].z, 0.0, 4.0)); }
+fn ifs_light_dir(i: u32) -> vec3<f32> { return params.fdata[11u + i * 2u].xyz; }
+fn ifs_light_power(i: u32) -> f32 { return params.fdata[11u + i * 2u].w; }
+fn ifs_light_color(i: u32) -> vec3<f32> { return params.fdata[12u + i * 2u].xyz; }
+
+fn ff_atan2(y: f32, x: f32) -> f32 {
+    if (y == 0.0 && x == 0.0) {
+        let pi = 3.14159265358979;
+        let mag = select(0.0, pi, (bitcast<u32>(x) & 0x80000000u) != 0u);
+        return select(mag, -mag, (bitcast<u32>(y) & 0x80000000u) != 0u);
+    }
+    return atan2(y, x);
+}
+
+struct IfsResult {
+    distance: f32,
+    level: f32,
+    address: f32,
+    color: f32,
+    point: vec2<f32>,
+    escaped: u32,
+    depth: u32,
+}
+
+struct IfsShade {
+    t: f32,
+    lum: f32,
+}
+
+fn ifs_halo(res: IfsResult, reach: f32) -> f32 {
+    if (!(reach > 0.0)) {
+        return 1.0;
+    }
+    return exp(-res.distance / reach);
+}
+
+//__IFS_COLORING__
+
+//__IFS_RIG__
+
+@compute @workgroup_size(8, 8, 1)
+fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= params.width || gid.y >= params.height) {
+        return;
+    }
+    // Block-aligned: a preview walk wrote one record per 2x2 block.
+    // The ray is this pixel's own, so the block is lit as four pixels
+    // rather than copied as one, which is the difference between
+    // "blockier" and "blocky".
+    let stride = max(params.stride, 1u);
+    let sx = (gid.x / stride) * stride;
+    let sy = (gid.y / stride) * stride;
+    let idx = sy * params.width + sx;
+    let r = results[idx];
+    let g = ifs_geom[idx];
+    let t = bitcast<f32>(g.w);
+
+    // Absent: the walk found nothing here, or has not reached this row
+    // yet (a cleared geometry record reads as depth zero). Left
+    // transparent so the tonemap's background fills it.
+    if ((r.escaped & 2u) != 0u || !(t > 0.0)) {
+        textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(0.0, 0.0, 0.0, 0.0));
+        textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(0.0));
+        return;
+    }
+
+    var res: IfsResult;
+    res.distance = r.distance;
+    res.level = r.level;
+    res.address = r.address;
+    res.color = r.color;
+    res.point = r.point;
+    res.escaped = r.escaped & 1u;
+    res.depth = 0u;
+
+    let shade = ifs_color(res);
+    let tt = fract(shade.t);
+    let height = select(shade.t, tt, params.shade_flags == 1u);
+    let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(tt, 0.5), 0.0).rgb;
+    let albedo = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2)) * clamp(shade.lum, 0.0, 4.0);
+
+    let nxy = unpack2x16float(g.x);
+    let nz_ao = unpack2x16float(g.y);
+    let n = vec3<f32>(nxy, nz_ao.x);
+    let sun = unpack4x8unorm(g.z);
+    let dir = ifs_ray(gid.x, gid.y);
+
+    let rgb = ifs_rig(albedo, n, nz_ao.y, sun, dir, t);
+    textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, 1.0));
+    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, 0.0, 0.0, 0.0));
+}"#;
+
+const IFS_3D_TEMPLATE: &str = r#"
+// Distance-march compute pass (mode D, 3D): each pixel casts one ray
+// and sphere-traces the attractor's distance function.
+//
+// A distance function samples the SET, so this is not the splat
+// pipeline with lights on it: the surface is where d crosses zero, the
+// normal is d's gradient rather than a reconstruction from neighbour
+// depths, and the occlusion is how hard the march had to work. None of
+// the three can speckle, because none of them is inferred from a
+// stochastic sample.
+
+struct EscapeParams {
+    center: vec2<f32>,
+    julia_c: vec2<f32>,
+    span: vec2<f32>,
+    rot_cs: vec2<f32>,
+    width: u32,
+    height: u32,
+    max_iter: u32,
+    flags: u32,
+    bailout: f32,
+    tile_y0: u32,
+    damping: vec2<f32>,
+    shade_flags: u32,
+    // Mode D's interaction stride (1 or 2); the other engines read 1.
+    stride: u32,
+    _pad_shade1: u32,
+    _pad_shade2: u32,
+    fparams: array<vec4<f32>, 4>,
+    cparams: array<vec4<f32>, 4>,
+    fdata: array<vec4<f32>, 64>,
+}
+
+@group(0) @binding(0) var<uniform> params: EscapeParams;
+@group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(2) var palette_texture: texture_2d<f32>;
+@group(0) @binding(3) var palette_sampler: sampler;
+@group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
+
+// Four vec4s and no vec3: a vec3<f32> aligns to sixteen bytes here
+// and to four in Rust, so a struct with one in it is a different size
+// on each side. See `escape::ifs::IfsMap3Gpu`.
+struct IfsMap3Gpu {
+    r0: vec4<f32>,
+    r1: vec4<f32>,
+    r2: vec4<f32>,
+    extra: vec4<f32>,
+    p0: vec4<f32>,
+    p1: vec4<f32>,
+    p2: vec4<f32>,
+    extra2: vec4<f32>,
+}
+
+@group(1) @binding(0) var<storage, read> ifs_maps: array<IfsMap3Gpu>;
+
+// The transition graph, when the flame has xaos (`ifs-general.md`
+// D4). Element 0 is the map count, and zero there means no xaos at
+// all -- the ordinary case, where every map may follow every map.
+// After it, `n*n` step probabilities in `[child * n + last]` order.
+//
+// One array for both questions the walk asks: a transition is
+// ADMISSIBLE exactly when its step probability is positive, so the
+// distance walk reads the sign and the measure walk reads the value.
+// Bound at a dummy element when there is no graph, like the coarse
+// pass beside it.
+@group(1) @binding(4) var<storage, read> ifs_xaos: array<f32>;
+
+const IFS_NO_LAST: u32 = 0xffffffffu;
+
+fn ifs_xaos_n() -> u32 {
+    if (arrayLength(&ifs_xaos) < 2u) {
+        return 0u;
+    }
+    return u32(max(ifs_xaos[0], 0.0));
+}
+
+// The factor an address's probability gains when `child` is appended
+// to a path whose last map is `last`. `IFS_NO_LAST` is the first
+// level, where the factor is the chain's stationary probability --
+// stored in the diagonal-free header row that follows the count.
+fn ifs_xaos_step(child: u32, last: u32) -> f32 {
+    let n = ifs_xaos_n();
+    if (n == 0u || child >= n) {
+        return -1.0;
+    }
+    if (last == IFS_NO_LAST) {
+        // The stationary row, packed after the n*n matrix.
+        return ifs_xaos[1u + n * n + child];
+    }
+    if (last >= n) {
+        return -1.0;
+    }
+    return ifs_xaos[1u + child * n + last];
+}
+
+// Whether `child` may be applied immediately BEFORE `last` in the
+// chaos game's own order -- which is what appending it to an address
+// means, since the forward chain runs an address backwards.
+fn ifs_admits(child: u32, last: u32) -> bool {
+    let s = ifs_xaos_step(child, last);
+    return s < 0.0 || s > 0.0;
+}
+
+// One link of the seed chain -- the beam's state after some number of
+// inverse maps applied to the TARGET, walked on the CPU at a precision
+// this shader does not have. Laid out by `escape::ifs::pack_chain3`.
+//
+// Six vec4s and no vec3 anywhere, for the reason on `IfsMap3Gpu`: a
+// vec3 aligns to sixteen bytes here and four in Rust, and the render
+// that mismatch produces is a plausible blob rather than an error.
+struct IfsLink {
+    // Reference position xyz; the matrix's binary exponent in w.
+    pos: vec4<f32>,
+    // Rows of the SCALED matrix in xyz. The true matrix is
+    // `mat * 2^pos.w`, applied with `ldexp` so that neither half has
+    // to be a number f32 can hold on its own -- the matrix runs like
+    // 2^level and the delta like 2^-zoom, and only their product is
+    // O(1).
+    r0: vec4<f32>,  // ... w = log2 of the matrix's reach
+    r1: vec4<f32>,  // ... w = the sigma product so far
+    r2: vec4<f32>,  // ... w = the running bound
+    // Address fraction, last sigma, escape level (-1 = none), flags.
+    extra: vec4<f32>,
+    // The point this link escaped at in xyz, first map's colour in w.
+    esc: vec4<f32>,
+}
+
+@group(1) @binding(1) var<storage, read> ifs_links: array<IfsLink>;
+
+// The geometry cache, one `vec4<u32>` a pixel; see `ifs_pack_geom`.
+@group(1) @binding(2) var<storage, read_write> ifs_geom: array<vec4<u32>>;
+
+struct IfsRecord {
+    distance: f32,
+    level: f32,
+    address: f32,
+    color: f32,
+    point: vec2<f32>,
+    // Bit 0: the walk left the ball. Bit 1: a SOLID render found no
+    // surface at this pixel.
+    escaped: u32,
+    // What the walk's own shading multiplied the colour by -- one for
+    // a plane, the lit factor for a solid.
+    //
+    // This word held `depth`, which was stored and never read: no
+    // colouring takes it, and the recolor pass only copied it back.
+    // A solid's LIGHTING, on the other hand, cannot be recomputed
+    // without the walk -- the normal is central differences of the
+    // distance function -- so a cached recolour came back flat until
+    // it was kept here.
+    shade: f32,
+}
+
+@group(0) @binding(5) var<storage, read_write> results: array<IfsRecord>;
+
+fn fparam(i: u32) -> f32 {
+    return params.fparams[i / 4u][i % 4u];
+}
+
+fn cparam(i: u32) -> f32 {
+    return params.cparams[i / 4u][i % 4u];
+}
+
+// The whole-IFS constants. Laid out by `escape::ifs::pack_globals3`:
+// 0. ball centre xyz, radius
+// 1. mean sigma, map count, unused, unused
+// 2. eye RELATIVE TO THE TARGET xyz, field of view (radians)
+// 3. camera forward xyz, unused
+// 4. camera right xyz, unused
+// 5. camera up xyz, unused
+// 6. target minus ball centre xyz, number of links in the chain
+// 7. beam slots per link, the handover cap, unused, unused
+//
+// Slot 2 is the reason a solid view can zoom at all. An ABSOLUTE eye
+// is quantised against a coordinate of order one, so by about 2^13 its
+// rounding is wider than a pixel and every ray in the frame starts
+// from the same wrong place. The eye's offset from the target has a
+// magnitude equal to the distance itself, so it shrinks WITH the zoom
+// and f32 resolves it to a part in ten million however deep the view
+// goes. Nothing below ever forms `target + delta`: that sum is the
+// cancellation the chain exists to avoid, and it is avoided by never
+// writing it down.
+// The ball's centre in three dimensions: the walk and the marcher's
+// sphere test.
+fn ifs_ball_centre() -> vec3<f32> {
+    return params.fdata[0].xyz;
+}
+
+// And the SAME point projected, which is what a colouring means by
+// `ifs_centre()`. The four colourings are shared between the planar
+// and solid templates -- a colouring maps one of the four quantities
+// to a palette position, and that is the same question in either
+// dimension -- so the name has to mean the same shape in both.
+fn ifs_centre() -> vec2<f32> {
+    return params.fdata[0].xy;
+}
+
+fn ifs_radius() -> f32 {
+    return params.fdata[0].w;
+}
+
+fn ifs_mean_sigma() -> f32 {
+    return params.fdata[1].x;
+}
+
+// The ball centre's scalar coordinate (plan 8.11 step 3), and the
+// slice the march's samples start at.
+fn ifs_ball_w() -> f32 {
+    return params.fdata[1].z;
+}
+
+fn ifs_slice_w() -> f32 {
+    return fparam(6u);
+}
+
+// Whether any map is nonlinear, which switches the walk's precision
+// early exit off (an affine argument; see pack_globals3).
+fn ifs_has_nonlinear() -> bool {
+    return params.fdata[1].w > 0.5;
+}
+
+// The beam's ranking key: sigma-weighted position when the CPU that
+// seeds this walk chose it, which it does when every map is an
+// inversion. See `ifs_estimate::RankKey::Auto` for the measurement.
+fn ifs_weighted_key() -> bool {
+    return params.fdata[3].w > 0.5;
+}
+
+fn ifs_count() -> u32 {
+    return u32(max(params.fdata[1].y, 0.0));
+}
+
+// Where the target sits relative to the ball's centre, which is what
+// turns a delta back into something the bounding sphere can be tested
+// against. O(1), and used for nothing finer than that test.
+fn ifs_target_offset() -> vec3<f32> {
+    return params.fdata[6].xyz;
+}
+
+fn ifs_link_levels() -> u32 {
+    return u32(max(params.fdata[6].w, 0.0));
+}
+
+fn ifs_beam_slots() -> u32 {
+    return u32(max(params.fdata[7].x, 1.0));
+}
+
+fn ifs_cap() -> f32 {
+    return params.fdata[7].y;
+}
+
+// The lighting rig, from the Solid Rendering panel (see
+// `escape::ifs::pack_rig3`). Slots 8-10 are the material and the fog;
+// 11 onward are the lights, two vec4s each, already rotated into world
+// space so the marcher does not do it per pixel.
+fn ifs_fov() -> f32 { return params.fdata[2].w; }
+fn ifs_forward() -> vec3<f32> { return params.fdata[3].xyz; }
+fn ifs_right() -> vec3<f32> { return params.fdata[4].xyz; }
+fn ifs_up() -> vec3<f32> { return params.fdata[5].xyz; }
+// The `shadow` formula param -- a strength the RELIGHT applies.
+fn ifs_shadow_strength() -> f32 { return fparam(3u); }
+fn ifs_shading_strength() -> f32 { return params.fdata[8].x; }
+fn ifs_ambient() -> f32 { return params.fdata[8].y; }
+fn ifs_diffuse() -> f32 { return params.fdata[8].z; }
+fn ifs_specular() -> f32 { return params.fdata[8].w; }
+fn ifs_shininess() -> f32 { return params.fdata[9].x; }
+fn ifs_occlusion_strength() -> f32 { return params.fdata[9].y; }
+fn ifs_fog_strength() -> f32 { return params.fdata[9].z; }
+fn ifs_fog_start() -> f32 { return params.fdata[9].w; }
+fn ifs_fog_color() -> vec3<f32> { return params.fdata[10].xyz; }
+fn ifs_light_count() -> u32 { return u32(clamp(params.fdata[7].z, 0.0, 4.0)); }
+fn ifs_light_dir(i: u32) -> vec3<f32> { return params.fdata[11u + i * 2u].xyz; }
+fn ifs_light_power(i: u32) -> f32 { return params.fdata[11u + i * 2u].w; }
+fn ifs_light_color(i: u32) -> vec3<f32> { return params.fdata[12u + i * 2u].xyz; }
+
+// The deepest link whose matrix still carries this delta no further
+// than the cap.
+//
+// The reach rises with the level -- every inverse map expands -- so
+// the qualifying links are a prefix and a binary search finds its end.
+// Compared in LOGARITHMS because the reach itself runs like 2^level
+// and stops being an f32 halfway down a deep chain, while the product
+// it stands for is a sum either way.
+//
+// Overstating the reach is the safe direction and the packing takes
+// it: a link that is rejected sends the sample to a SHALLOWER one, and
+// a shallower link is always valid -- it is the same walk with fewer
+// levels done in advance.
+fn ifs_pick_link(delta: vec3<f32>) -> u32 {
+    let levels = ifs_link_levels();
+    if (levels <= 1u) {
+        return 0u;
+    }
+    let slots = ifs_beam_slots();
+
+    // The delta's size in logarithms, WITHOUT ever forming its length.
+    //
+    // `length()` squares its components, and a square is the one
+    // operation a deep zoom cannot afford: by 2^64 a delta is around
+    // 1e-19 and its square is 1e-38, which is where f32 stops having
+    // normal numbers. Measured, `length()` returned 0 from there on,
+    // every link then qualified, and the walk started from a prefix
+    // whose piece the sample was not in -- an address that is simply
+    // WRONG, which reads as holes through the interior of a surface
+    // rather than as a blurred one. The largest component is within
+    // √3 of the length and needs no square at all.
+    //
+    // Over-stating the delta is the safe direction, as it is for the
+    // reach: it sends the sample to a SHALLOWER link, and a shallower
+    // link is the same walk with fewer levels done in advance.
+    let biggest = max(abs(delta.x), max(abs(delta.y), abs(delta.z)));
+    // log2 of the smallest subnormal is about -149; a delta under that
+    // is zero, and zero is the target itself, which belongs at the
+    // deepest link.
+    let log_len = log2(max(biggest, 1e-45)) + 0.7925;
+    let log_cap = log2(max(ifs_cap(), 1e-38));
+
+    var lo = 0u;
+    var hi = levels - 1u;
+    // `ok(j)` for a level is "every slot in it holds", because the
+    // walk starts from all of them.
+    var fits = true;
+    for (var b = 0u; b < slots; b = b + 1u) {
+        if (ifs_links[hi * slots + b].r0.w + log_len > log_cap) {
+            fits = false;
+            break;
+        }
+    }
+    if (fits) {
+        return hi;
+    }
+    loop {
+        if (hi - lo <= 1u) {
+            break;
+        }
+        let mid = (lo + hi) / 2u;
+        var ok = true;
+        for (var b = 0u; b < slots; b = b + 1u) {
+            if (ifs_links[mid * slots + b].r0.w + log_len > log_cap) {
+                ok = false;
+                break;
+            }
+        }
+        if (ok) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+// Where this link puts a sample: its reference, plus the sample's
+// delta carried through the accumulated inverse map.
+fn ifs_link_point(link: IfsLink, delta: vec3<f32>) -> vec3<f32> {
+    let d = vec3<f32>(
+        dot(link.r0.xyz, delta),
+        dot(link.r1.xyz, delta),
+        dot(link.r2.xyz, delta),
+    );
+    return link.pos.xyz + ldexp(d, vec3<i32>(i32(link.pos.w)));
+}
+
+fn ff_atan2(y: f32, x: f32) -> f32 {
+    if (y == 0.0 && x == 0.0) {
+        let pi = 3.14159265358979;
+        let mag = select(0.0, pi, (bitcast<u32>(x) & 0x80000000u) != 0u);
+        return select(mag, -mag, (bitcast<u32>(y) & 0x80000000u) != 0u);
+    }
+    return atan2(y, x);
+}
+
+// What one evaluation yields. The planar template's struct, with the
+// trap point in 3D -- the colourings only read `.point` through
+// `ifs_centre()`, which is why they are shared between the two.
+struct IfsResult {
+    distance: f32,
+    level: f32,
+    address: f32,
+    color: f32,
+    point: vec2<f32>,
+    escaped: u32,
+    depth: u32,
+}
+
+struct IfsShade {
+    t: f32,
+    lum: f32,
+}
+
+// The widest beam a walk may follow. The candidate arrays are
+// function-scope registers, so this is a register-pressure ceiling --
+// and a 3D candidate is wider than a planar one, so it binds harder
+// here.
+const IFS_MAX_BEAM: u32 = 8u;
+
+fn ifs_halo(res: IfsResult, reach: f32) -> f32 {
+    if (!(reach > 0.0)) {
+        return 1.0;
+    }
+    return exp(-res.distance / reach);
+}
+
+//__IFS__
+
+//__IFS_COLORING__
+
+// Ambient occlusion, asked of the distance function rather than of the
+// march that got here.
+//
+// Twelve probes over the HEMISPHERE about the normal -- the normal
+// itself and a ring at 55 degrees, two distances each -- comparing how
+// far the field lets each travel with how far it asked to. In the open
+// they agree; where walls close in, the reading drops.
+//
+// The hemisphere is the part that matters, and it replaced a version
+// that probed along the NORMAL alone. That one was not wrong so much
+// as blind in the one direction this shape needs: from the floor of a
+// Menger shaft the normal points straight up an OPEN shaft, so it read
+// unoccluded, correctly for that ray and uselessly for the picture.
+// The walls are to the side, and only a probe with a sideways
+// component finds them.
+//
+// Before that it was a free proxy -- one minus the fraction of the
+// march's step allowance a ray used -- which measured something real
+// but not this: a ray reaching a flat face and one reaching the floor
+// of a recess both converge in a handful of steps, so it read about
+// one everywhere.
+fn ifs_ao(p: vec3<f32>, n: vec3<f32>, reach: f32) -> f32 {
+    if (!(reach > 0.0)) {
+        return 1.0;
+    }
+    // A basis about the normal, picking the seed axis the normal is
+    // least parallel to so the cross product never degenerates.
+    var seed = vec3<f32>(0.0, 0.0, 1.0);
+    if (abs(n.z) > 0.9) {
+        seed = vec3<f32>(1.0, 0.0, 0.0);
+    }
+    let tx = normalize(cross(seed, n));
+    let ty = cross(n, tx);
+
+    var open = 0.0;
+    var free = 0.0;
+    for (var i = 0u; i < 6u; i = i + 1u) {
+        // The normal itself, then a ring at 55 degrees, which is about
+        // where a cosine-weighted hemisphere carries its mass.
+        var dir = n;
+        if (i > 0u) {
+            let a = 1.2566371 * f32(i - 1u);
+            dir = n * 0.5735764 + (tx * cos(a) + ty * sin(a)) * 0.8191520;
+        }
+        let cosd = max(dot(dir, n), 0.0);
+        for (var k = 1u; k <= 2u; k = k + 1u) {
+            let h = reach * 0.35 * f32(k);
+            // How far the field lets the probe travel, against how far
+            // it asked to. Open space gives 1, a wall gives 0.
+            let vis = clamp(ifs_distance_at(p + dir * h, h * 0.01) / h, 0.0, 1.0);
+            open = open + vis * cosd;
+            // What an unobstructed HALF-SPACE would have returned: a
+            // probe at angle t from the normal is only h*cos(t) above
+            // a flat plane, so its own reading is cos(t), not 1.
+            // Dividing by this is what pins a flat face at exactly 1
+            // -- normalising by the weights instead reads a plane as
+            // 0.68 and makes every surface in the picture look dirty.
+            free = free + cosd * cosd;
+        }
+    }
+    return clamp(open / max(free, 1e-30), 0.0, 1.0);
+}
+
+// How much of the light reaches `p`, marching the distance function
+// toward it.
+//
+// The penumbra is free, and that is the point. A sphere trace already
+// knows how CLOSE it passed to the surface at every step, and that
+// clearance over the distance travelled is the angle the blocker
+// missed the light by -- so the softness is a measurement of the
+// geometry rather than a blur applied to a hard answer. Inigo
+// Quilez's formulation, which is the standard one for distance
+// fields.
+fn ifs_shadow(p: vec3<f32>, light: vec3<f32>, k: f32, bias: f32, max_steps: u32) -> f32 {
+    // The ray leaves at the bounding sphere: past it every point is
+    // provably outside the set, so there is nothing left to occlude.
+    // `p` is an offset from the target, so the ball's centre is a
+    // target-offset away.
+    let oc = p + ifs_target_offset();
+    let b = dot(oc, light);
+    let disc = b * b - (dot(oc, oc) - ifs_radius() * ifs_radius());
+    if (!(disc > 0.0)) {
+        return 1.0;
+    }
+    let t_max = -b + sqrt(disc);
+
+    // Two different epsilons, and the RELATIONSHIP between them is the
+    // whole behaviour of this function.
+    //
+    // The BIAS is a few pixels: the ray has to clear the surface it
+    // starts on, and a pixel is how precisely that surface's position
+    // is known. The HIT test is a fraction of the attractor -- testing
+    // at a pixel's width would call the ray blocked as soon as it
+    // grazed anything within a pixel, which under light arriving at an
+    // angle is every point on a textured face. Measured, that erased
+    // the sponge's sub-squares: not a shadow but a flat repaint.
+    //
+    // But the two scale differently, and where they CROSS the function
+    // fails completely. The bias shrinks with the pixel and the hit
+    // test does not, so a surface close enough to the eye gets a bias
+    // smaller than the threshold -- and then every ray is blocked on
+    // its first sample, by the surface it started on. The picture goes
+    // uniformly to its ambient floor, spreading out from the centre of
+    // the frame as the eye closes in, and it arrives sooner at higher
+    // supersampling because that shrinks the pixel too. Reported from
+    // a Menger sponge at a zoom of 2^1.67, which is where the eye
+    // reaches the bounding sphere and the nearest surface is a
+    // hundredth of a unit away.
+    //
+    // So the threshold is capped at a tenth of the bias. Where the
+    // pixel is large -- which is everywhere the earlier measurement
+    // was made -- the geometric value is the smaller of the two and
+    // nothing changes; where it is not, the hit test follows the bias
+    // down and the ray can always clear its own surface.
+    let eps = max(min(ifs_radius() * 1e-4, bias * 0.1), 1e-30);
+    var t = bias;
+    var shade = 1.0;
+    var i = 0u;
+    loop {
+        if (i >= max_steps || t > t_max) {
+            break;
+        }
+        let d = ifs_distance_at(p + light * t, eps);
+        if (d < eps) {
+            return 0.0;
+        }
+        shade = min(shade, k * d / t);
+        t = t + d;
+        i = i + 1u;
+    }
+    return clamp(shade, 0.0, 1.0);
+}
+
+// Central differences of the distance function: the normal is a
+// PROPERTY of d, not a reconstruction from neighbouring depths. That
+// is the whole difference from the splat pipeline's screen-space
+// normals, and it is why this cannot speckle.
+fn ifs_normal(p: vec3<f32>, h: f32) -> vec3<f32> {
+    let dx = vec3<f32>(h, 0.0, 0.0);
+    let dy = vec3<f32>(0.0, h, 0.0);
+    let dz = vec3<f32>(0.0, 0.0, h);
+    let e = h * 0.01;
+    let n = vec3<f32>(
+        ifs_distance_at(p + dx, e) - ifs_distance_at(p - dx, e),
+        ifs_distance_at(p + dy, e) - ifs_distance_at(p - dy, e),
+        ifs_distance_at(p + dz, e) - ifs_distance_at(p - dz, e),
+    );
+    let len = length(n);
+    if (!(len > 0.0)) {
+        return vec3<f32>(0.0, 0.0, 1.0);
+    }
+    return n / len;
+}
+
+//__IFS_RIG__
+
+@compute @workgroup_size(8, 8, 1)
+fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    // The interaction stride: at 2, this thread owns a 2x2 block and
+    // walks its top-left pixel once; the relight reads block-aligned.
+    let stride = max(params.stride, 1u);
+    let px = gid.x * stride;
+    let py = gid.y * stride + params.tile_y0;
+    if (px >= params.width || py >= params.height) {
+        return;
+    }
+
+    // A pinhole camera (D8). Not the flame's `zr = 1 - persp*z`, which
+    // is depth scaling for splats rather than a projection, and which
+    // a marcher would have to be contorted to match.
+    //
+    // The eye is where the TARGET is, plus this: everything below is
+    // an offset from the target and the absolute position is never
+    // formed. See the note on slot 2 above for why.
+    let eye = params.fdata[2].xyz;
+    let fov = params.fdata[2].w;
+    let tan_half = tan(fov * 0.5);
+    let dir = ifs_ray(px, py);
+
+    // The march starts at the bounding sphere, not at the eye: every
+    // step before it is a step through provably empty space, and the
+    // ray may miss the sphere entirely.
+    let oc = eye + ifs_target_offset();
+    let b = dot(oc, dir);
+    let c_term = dot(oc, oc) - ifs_radius() * ifs_radius();
+    let disc = b * b - c_term;
+
+    // Zero geometry is "no surface here" (see `ifs_pack_geom`).
+    var geom = vec4<u32>(0u, 0u, 0u, 0u);
+
+    // A MISS still writes a record. The recolor cache reads every
+    // pixel's, so a pixel left unwritten keeps whatever the last view
+    // put there -- and a re-colour then paints the previous frame's
+    // geometry into this frame's empty space. Bit 1 of `escaped` is
+    // "no surface here", which the recolor pass turns back into
+    // absence.
+    var rec: IfsRecord;
+    rec.distance = 1e30;
+    rec.level = 0.0;
+    rec.address = 0.0;
+    rec.color = 0.0;
+    rec.point = vec2<f32>(0.0, 0.0);
+    rec.escaped = 3u;
+    rec.shade = 1.0;
+
+    if (disc >= 0.0 && ifs_count() > 0u) {
+        let root = sqrt(disc);
+        var t = max(-b - root, 0.0);
+        let t_max = -b + root;
+
+        // One pixel's width at the ray's depth: the march stops when
+        // the surface is closer than the pixel is wide, because past
+        // that it cannot show the difference. In a preview the block
+        // is the pixel.
+        let px_at = 2.0 * tan_half * f32(stride) / f32(max(params.height, 1u));
+
+        let max_steps = u32(clamp(fparam(2u), 4.0, 512.0));
+        var steps = 0u;
+        var hit = false;
+        var d = 0.0;
+        loop {
+            if (steps >= max_steps || t > t_max) {
+                break;
+            }
+            let p = eye + dir * t;
+            // A pixel's width at this depth is both the hit tolerance
+            // and the precision the walk is asked for. The
+            // floor here used to be 1e-7 -- a guard against an
+            // absolute position's own f32 resolution, which was the
+            // right scale while the marcher worked in absolute
+            // coordinates. Seeded, it is not: past about 2^20 a pixel
+            // is SMALLER than that floor, so the surface was found a
+            // fixed distance early and the picture stopped sharpening
+            // with the zoom. The remaining floor exists only so a
+            // sample at t = 0 cannot give an epsilon of zero.
+            let eps = max(px_at * t, 1e-30);
+            // The walk is asked for a HUNDREDTH of that. A pixel of
+            // slack in the distance is a pixel of slack in where the
+            // ray lands, and on structure that is itself a pixel
+            // across -- the sponge's pits at 512 -- that is a different
+            // face, a different normal, a different shade. Measured:
+            // at one pixel 2882 pixels changed by more than 24 of 765
+            // and 253 flipped between hit and miss; at a hundredth, 18
+            // and 2, which is f32 noise, for an extra 15% of the time.
+            d = ifs_distance_at(p, eps * 0.01);  // an offset from the target
+            if (d < eps) {
+                hit = true;
+                break;
+            }
+            t = t + d;
+            steps = steps + 1u;
+        }
+
+        if (hit) {
+            let p = eye + dir * t;
+            let res = ifs_evaluate3(p);
+
+            let eps0 = max(px_at * t, 1e-30);
+            let n = ifs_normal(p, eps0);
+            // The occlusion reach is a fraction of the attractor, not
+            // of the pixel: it is asking how enclosed this point is,
+            // which is a fact about the shape at the scale being
+            // looked at. Tied to the view instead, the same geometry
+            // would change how occluded it was as you zoomed.
+            let ao = ifs_ao(p, n, ifs_radius() * fparam(5u));
+
+            // One traced shadow per light, RAW -- the panel's shadow
+            // strength is applied at relight, so that changing it is
+            // not a walk. Skipped where the surface faces away from
+            // the light, since nothing lit is there to darken, and
+            // skipped entirely when shadows are off: that is the one
+            // shadow setting that IS a geometry input, because it
+            // decides whether these terms exist.
+            var sun = vec4<f32>(1.0, 1.0, 1.0, 1.0);
+            if (fparam(3u) > 0.0) {
+                let lights = ifs_light_count();
+                for (var li = 0u; li < lights; li = li + 1u) {
+                    let ld = ifs_light_dir(li);
+                    if (dot(n, ld) <= 0.0) {
+                        continue;
+                    }
+                    sun[li] = ifs_shadow(p + n * eps0 * 2.0, ld, fparam(4u), eps0 * 4.0, max_steps);
+                }
+            }
+
+            // The walk does not shade. It records what it found and the
+            // relight pass -- the same `ifs_rig`, over this record and
+            // the geometry -- owns the picture, every frame. That is
+            // what makes a lighting change a relight instead of a
+            // walk, and what stops a light edit part-way through a
+            // banded pass from striping the frame.
+            geom = ifs_pack_geom(n, ao, sun, t);
+
+            rec.distance = res.distance;
+            rec.level = res.level;
+            rec.address = res.address;
+            rec.color = res.color;
+            rec.point = res.point;
+            // Bit 1 clear: there IS a surface at this pixel.
+            rec.escaped = res.escaped & 1u;
+            rec.shade = 1.0;
+        }
+    }
+
+    // Both records, or neither: a solid render that cannot hold its
+    // records has nothing for the relight pass to draw from, and the
+    // renderer says so rather than drawing garbage.
+    if ((params.flags & 8u) != 0u) {
+        let idx = py * params.width + px;
+        results[idx] = rec;
+        ifs_geom[idx] = geom;
+    }
+    // No colour and no height: the relight pass writes both, from
+    // these two records, for every row -- including this one, this
+    // frame. See `IFS_RELIGHT_TEMPLATE`.
+}"#;
+
+/// Assemble the mode-D recolor pass for one coloring.
+///
+/// The colouring is the SAME def the walk template splices, and it
+/// sees the same `IfsResult` -- so a recolor reproduces the walk
+/// pass's picture rather than approximating it. That is what makes
+/// the cache safe to prefer, and it is asserted by test.
+pub fn assemble_ifs_recolor(coloring: &IfsColoringDef) -> String {
+    let mut out = Vec::new();
+    for line in IFS_RECOLOR_TEMPLATE.lines() {
+        match line.trim() {
+            "//__IFS_COLORING__" => out.push(coloring.wgsl.trim().to_string()),
+            _ => out.push(line.to_string()),
+        }
+    }
+    out.join("
+")
+}
+
+/// Assemble the SOLID relight pass: one colouring and the shared rig
+/// over the records and the geometry cache. See `IFS_RELIGHT_TEMPLATE`.
+pub fn assemble_ifs_relight(coloring: &IfsColoringDef) -> String {
+    assemble_ifs_relight_with_lens(coloring, None)
+}
+
+/// The same, with a camera lens -- see [`ifs_rig`] for why relight
+/// needs one at all.
+pub fn assemble_ifs_relight_with_lens(
+    coloring: &IfsColoringDef,
+    lens: Option<&str>,
+) -> String {
+    let mut out = Vec::new();
+    for line in IFS_RELIGHT_TEMPLATE.lines() {
+        match line.trim() {
+            "//__IFS_COLORING__" => out.push(coloring.wgsl.trim().to_string()),
+            "//__IFS_RIG__" => out.push(ifs_rig(lens)),
+            _ => out.push(line.to_string()),
+        }
+    }
+    out.join("
+")
+}
+
+/// Assemble a mode-D distance shader: splice one distance function
+/// and one coloring into [`IFS_TEMPLATE`]. Same marker discipline as
+/// [`assemble`].
+/// The widest beam a mode-D shader may be compiled for, and the value
+/// the templates carry before [`assemble_ifs`] replaces it.
+pub const IFS_MAX_BEAM: u32 = 8;
+
+/// `beam` is COMPILED IN, not read at run time, and the reason is
+/// registers. The walk keeps two arrays of candidates, each candidate
+/// a dozen scalars, and those arrays live in registers because that is
+/// what a function-scope `var` is. Sized for the widest beam they cost
+/// the same at a beam of one -- where the walk never touches slot two
+/// -- and what they cost is occupancy. Measured on the sponge at 512²,
+/// which walks at beam one: 245 ms with the arrays sized for eight,
+/// 146 ms sized for one. Same picture to the byte, because nothing in
+/// the algorithm changes; only how many registers the compiler has to
+/// reserve for slots that stay empty.
+
+/// The shared camera rig, with the lens folded into `ifs_ray`.
+///
+/// `IFS_RIG` is spliced as a whole block, so the line loop never sees
+/// the marker inside it -- it would survive into the WGSL as a stray
+/// comment and the solid's rays would silently miss the lens while
+/// the planar walk had it. The RELIGHT pass splices the same rig, and
+/// takes the same lens for the same reason: its shading is computed
+/// from a ray it rebuilds, and an unlensed ray against a lensed walk
+/// lights the wrong surface.
+fn ifs_rig(lens: Option<&str>) -> String {
+    let mut apply = Vec::new();
+    lens_apply_uv(&mut apply, lens, "uv");
+    IFS_RIG
+        .trim()
+        .replace("//__LENS_APPLY_RAY__", &apply.join("\n"))
+}
+
+pub fn assemble_ifs(def: &IfsDef, coloring: &IfsColoringDef, beam: u32) -> String {
+    assemble_ifs_with_lens(def, coloring, beam, None, false, false)
+}
+
+/// Push `text` a line at a time, filling the three SUM markers
+/// (`ifs-general.md` D3) -- or DROPPING them, which is what makes a
+/// shader with no sum in it the byte-identical text it was before the
+/// rung existed.
+///
+/// The dispatch has to go INSIDE `ifs_inv_point`, `ifs_inv_sigma` and
+/// `ifs_map_jacobian` rather than wrapping them: every caller of those
+/// three would otherwise have to learn about sums, and there are
+/// dozens across the walk, the beam and three colourings.
+fn push_ifs_sum_markers(out: &mut Vec<String>, text: &str, sums: bool) {
+    for l in text.lines() {
+        let call = match l.trim() {
+            "//__IFS_SUM_POINT__" => Some("return ifs_sum_inv_point(i, p);"),
+            "//__IFS_SUM_SIGMA__" => Some("return ifs_sum_inv_sigma(i, p);"),
+            "//__IFS_SUM_JACOBIAN__" => Some("return ifs_sum_inv_jacobian(i, q);"),
+            _ => None,
+        };
+        match call {
+            Some(c) if sums => out.push(format!("    if (ifs_maps[i].kind == 7.0) {{ {c} }}")),
+            Some(_) => {}
+            None => out.push(l.to_string()),
+        }
+    }
+}
+
+/// The same, with a camera lens.
+///
+/// Both of mode D's sites take it: the planar walk's screen offset,
+/// and the solid's ray direction. The relight pass derives its ray
+/// from the same `ifs_ray`, so it follows without a site of its own,
+/// and the recolor pass reads a cached walk that already has the lens
+/// baked into it.
+pub fn assemble_ifs_with_lens(
+    def: &IfsDef,
+    coloring: &IfsColoringDef,
+    beam: u32,
+    lens: Option<&str>,
+    delta: bool,
+    sums: bool,
+) -> String {
+    // A SUM row's inverse is a Newton solve over the kernel's forward
+    // body (`ifs-general.md` D3), which only a flame that HAS one
+    // pays for. Spliced or not, exactly as the delta walk is, so a
+    // flame without a sum keeps the WGSL it has always had.
+    let sums = sums && !def.solid;
+    // The DELTA walk is a different `ifs_evaluate`, not a branch
+    // inside one (`ifs-perturbation-delta.md` §3). Spliced or not, so
+    // the shipped path's WGSL is the same text it has always been and
+    // its pixels cannot move by this existing.
+    let delta = delta && !def.solid;
+    // The two templates share the walk's shape and all four
+    // colourings; what differs is everything around the walk -- a
+    // camera, a march, a normal and a shade.
+    let template = if def.solid { IFS_3D_TEMPLATE } else { IFS_TEMPLATE };
+    let beam = beam.clamp(1, IFS_MAX_BEAM);
+    // The MEASURE colouring does not paint the distance walk's answer
+    // -- it needs a different WALK, which a colouring cannot be (it
+    // receives an `IfsResult` and never the pixel). So the walk and
+    // everything it needs are spliced only for it, and every other
+    // mode-D shader is byte-identical without them.
+    let measure = !def.solid && coloring.name == "ifs_measure";
+    let mut out = Vec::new();
+    lens_prelude(&mut out, lens);
+    for line in template.lines() {
+        match line.trim() {
+            "//__LENS_APPLY_UV__" => lens_apply_uv(&mut out, lens, "uv"),
+            "//__LENS_APPLY_RAY__" => lens_apply_uv(&mut out, lens, "uv"),
+            "let res = ifs_evaluate(uv);" if delta && !measure => {
+                out.push("    let res = ifs_evaluate_delta(uv);".to_string());
+            }
+            "let res = ifs_evaluate(uv);" if measure => {
+                // The measure's answer rides in two of `IfsResult`'s
+                // fields, which is the one place mode D reuses them
+                // for something other than their names.
+                out.push("    var res: IfsResult;".to_string());
+                out.push("    let md = ifs_measure(uv, cparam(0u));".to_string());
+                out.push("    res.distance = md.x;".to_string());
+                out.push("    res.color = md.y;".to_string());
+                out.push("    res.level = md.z;".to_string());
+                out.push("    res.address = md.w;".to_string());
+                out.push("    res.point = vec2<f32>(0.0, 0.0);".to_string());
+                out.push("    res.escaped = select(0u, 1u, md.x <= 0.0);".to_string());
+                out.push("    res.depth = 0u;".to_string());
+            }
+            "//__IFS__" => {
+                // BEFORE the formula's own body: `ifs_inv_point` calls
+                // into the solve, and WGSL declares before it uses.
+                if sums {
+                    out.push(super::ifs::IFS_NEWTON.trim().to_string());
+                }
+                // The formula's body carries two marker lines of its
+                // own, which is how the sum dispatch gets INSIDE
+                // `ifs_inv_point` and `ifs_inv_sigma` rather than
+                // wrapping them. Dropped when there is no sum, so the
+                // text is what it was.
+                push_ifs_sum_markers(&mut out, def.wgsl.trim(), sums);
+                if measure {
+                    push_ifs_sum_markers(&mut out, super::ifs::IFS_JACOBIAN.trim(), sums);
+                    out.push(super::ifs::IFS_MEASURE.trim().to_string());
+                }
+                if delta {
+                    // The Taylor rung steps by the TRAPEZOID of the
+                    // Jacobian, so the delta walk needs the Jacobians
+                    // too -- and only once, when the measure
+                    // colouring has not already spliced them.
+                    if !measure {
+                        push_ifs_sum_markers(&mut out, super::ifs::IFS_JACOBIAN.trim(), sums);
+                    }
+                    out.push(super::ifs::IFS_DIFFERENCE.trim().to_string());
+                    out.push(super::ifs::IFS_DELTA_WALK.trim().to_string());
+                }
+            }
+            "//__IFS_COLORING__" => out.push(coloring.wgsl.trim().to_string()),
+            "//__IFS_RIG__" => out.push(ifs_rig(lens)),
+            "const IFS_MAX_BEAM: u32 = 8u;" => {
+                out.push(format!("const IFS_MAX_BEAM: u32 = {beam}u;"))
+            }
+            _ => out.push(line.to_string()),
+        }
+    }
+    out.join("\n")
+}
+
 /// Assemble a mode-B field shader: splice one field def and one field
 /// coloring into [`FIELD_TEMPLATE`]. Same marker discipline as
 /// [`assemble`].
 pub fn assemble_field(field: &FieldDef, coloring: &FieldColoringDef) -> String {
+    assemble_field_with_lens(field, coloring, None)
+}
+
+/// The same, with a camera lens.
+pub fn assemble_field_with_lens(
+    field: &FieldDef,
+    coloring: &FieldColoringDef,
+    lens: Option<&str>,
+) -> String {
     let mut out = Vec::new();
+    lens_prelude(&mut out, lens);
     for line in FIELD_TEMPLATE.lines() {
         match line.trim() {
+            "//__LENS_APPLY__" => lens_apply_span(&mut out, lens),
             "//__FIELD__" => out.push(field.wgsl.trim().to_string()),
             "//__FIELD_COLORING__" => out.push(coloring.wgsl.trim().to_string()),
             _ => out.push(line.to_string()),
@@ -4365,11 +6185,76 @@ pub fn assemble(formula: &FormulaDef, coloring: &ColoringDef, damped: bool) -> S
 /// As [`assemble`], with interior detection switchable. Disabling it
 /// exists for the agreement test (which asserts the two produce the
 /// SAME image); production always enables it.
+/// Prepend the lens block, when there is one.
+///
+/// Uniform across every template: the block declares its own structs,
+/// bindings and functions and shares none of them with the host, so
+/// the top of the module is always legal and no template needs a
+/// marker placed in exactly the right spot.
+fn lens_prelude(out: &mut Vec<String>, lens: Option<&str>) {
+    if let Some(src) = lens {
+        out.push(src.to_string());
+    }
+}
+
+/// `d` is a y-flipped WORLD offset. Half of the vertical span takes it
+/// to the half-height-one convention the lens is written in, and back.
+fn lens_apply_span(out: &mut Vec<String>, lens: Option<&str>) {
+    if lens.is_some() {
+        out.push("    let lens_h = max(abs(params.span.y) * 0.5, 1e-30);".to_string());
+        out.push("    d = esc_lens(d / lens_h) * lens_h;".to_string());
+    }
+}
+
+/// `dpx` is a y-flipped offset in PIXELS -- the perturbed path never
+/// forms a world position, because at its zooms no f32 could hold one.
+/// Half the height is the same half-height-one scale, reached without
+/// a span.
+fn lens_apply_pixels(out: &mut Vec<String>, lens: Option<&str>) {
+    if lens.is_some() {
+        out.push("    let lens_h = max(f32(params.height) * 0.5, 1e-30);".to_string());
+        out.push("    dpx = esc_lens(dpx / lens_h) * lens_h;".to_string());
+    }
+}
+
+/// `uv` spans [-1/2, 1/2] on BOTH axes, with the aspect applied later,
+/// so reaching half-height-one is a doubling and the aspect has to be
+/// put in and taken back out by hand -- otherwise a lens circle would
+/// come out an ellipse on a non-square image.
+fn lens_apply_uv(out: &mut Vec<String>, lens: Option<&str>, var: &str) {
+    if lens.is_some() {
+        out.push(
+            "    let lens_a = f32(params.width) / f32(max(params.height, 1u));".to_string(),
+        );
+        out.push(format!(
+            "    {var} = esc_lens(vec2<f32>({var}.x * 2.0 * lens_a, {var}.y * 2.0)) \
+* vec2<f32>(0.5 / lens_a, 0.5);"
+        ));
+    }
+}
+
 pub fn assemble_with(
     formula: &FormulaDef,
     coloring: &ColoringDef,
     damped: bool,
     interior_detect: bool,
+) -> String {
+    assemble_with_lens(formula, coloring, damped, interior_detect, None)
+}
+
+/// The same, with a camera lens spliced in.
+///
+/// `lens` is what `escape::lens::lens_source` produced: the variation
+/// functions, their libraries and `esc_lens`. `None` leaves both
+/// markers empty, which is what makes a lens-free shader byte-identical
+/// to the one this engine compiled before lenses existed --
+/// `a_shader_without_a_lens_is_byte_identical` pins exactly that.
+pub fn assemble_with_lens(
+    formula: &FormulaDef,
+    coloring: &ColoringDef,
+    damped: bool,
+    interior_detect: bool,
+    lens: Option<&str>,
 ) -> String {
     let needs_accum = coloring.has_feature(ColoringFeature::NeedsOrbitAccum);
     let colors_interior = coloring.has_feature(ColoringFeature::ColorsInterior);
@@ -4408,8 +6293,14 @@ pub fn assemble_with(
     };
 
     let mut out = Vec::new();
+    lens_prelude(&mut out, lens);
     for line in TEMPLATE.lines() {
         match line.trim() {
+            // The lens: its variation functions and helper
+            // libraries at top level, and the warp itself on the
+            // screen offset. Both empty without one, so the shader is
+            // unchanged.
+            "//__LENS_APPLY__" => lens_apply_span(&mut out, lens),
             "//__FORMULA__" => {
                 out.push(format!("// formula: {}", formula.name));
                 out.push(formula.wgsl.to_string());
@@ -4890,6 +6781,83 @@ mod tests {
         assert!(plain.contains("let c = select"));
     }
 
+    /// The delta walk assembles, validates, and is spliced ONLY when
+    /// asked (`ifs-perturbation-delta.md` §3).
+    ///
+    /// The last clause is the one that matters for G0: the shipped
+    /// walk's WGSL must be the same text with the delta walk in the
+    /// tree as without it, or the presets could move by this
+    /// existing. Checked as an equality on the source, not on a
+    /// render.
+    #[test]
+    fn the_delta_walk_assembles_and_is_spliced_only_when_asked() {
+        let Some(def) = crate::escape::ifs::get_ifs("ifs_flame") else {
+            panic!("ifs_flame")
+        };
+        for &coloring in crate::escape::ifs::IFS_COLORINGS {
+            if coloring.name == "ifs_measure" {
+                // The measure colouring replaces the whole evaluate
+                // call with its own walk, so there is nothing for the
+                // delta walk to be spliced into.
+                continue;
+            }
+            let off = assemble_ifs_with_lens(def, coloring, 4, None, false, false);
+            let on = assemble_ifs_with_lens(def, coloring, 4, None, true, false);
+            assert_eq!(
+                off,
+                assemble_ifs_with_lens(def, coloring, 4, None, false, false),
+                "{}: assembly is not deterministic",
+                coloring.name
+            );
+            assert!(
+                !off.contains("ifs_evaluate_delta"),
+                "{}: the delta walk is in the shipped shader",
+                coloring.name
+            );
+            assert!(
+                on.contains("fn ifs_evaluate_delta"),
+                "{}: asked for the delta walk and did not get it",
+                coloring.name
+            );
+            assert!(
+                on.contains("let res = ifs_evaluate_delta(uv);"),
+                "{}: the delta walk is spliced but never called",
+                coloring.name
+            );
+            assert!(
+                on.contains("fn ifs_map_difference"),
+                "{}: the delta walk has no difference forms to step with",
+                coloring.name
+            );
+            for (label, src) in [("off", &off), ("on", &on)] {
+                let module = naga::front::wgsl::parse_str(src).unwrap_or_else(|e| {
+                    panic!("ifs_flame/{} delta {label} failed to parse: {e}", coloring.name)
+                });
+                naga::valid::Validator::new(
+                    naga::valid::ValidationFlags::all(),
+                    naga::valid::Capabilities::all(),
+                )
+                .validate(&module)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "ifs_flame/{} delta {label} failed validation: {e}",
+                        coloring.name
+                    )
+                });
+            }
+        }
+        // ...and the SOLID formula never takes it: its walk is a
+        // different shape and the 3D twin is D5, not this.
+        let Some(solid) = crate::escape::ifs::get_ifs("ifs_flame_3d") else {
+            panic!("ifs_flame_3d")
+        };
+        let col = crate::escape::ifs::get_ifs_coloring("ifs_distance", solid);
+        assert!(
+            !assemble_ifs_with_lens(solid, col, 4, None, true, false).contains("ifs_evaluate_delta"),
+            "the solid walk took the delta path"
+        );
+    }
+
     /// The Tricorn tier compiles on both rungs, for every integer
     /// power, and actually carries the conjugation (a wrapper that
     /// silently emitted the plain power would render the Multibrot
@@ -5253,4 +7221,228 @@ mod tests {
             assert!(c.parameters.len() <= PARAM_VEC4S * 4, "{}", c.name);
         }
     }
+}
+
+#[cfg(test)]
+mod lens_tests {
+    use super::*;
+    use crate::config::escape::EscapeConfig;
+
+    fn mandelbrot() -> (&'static FormulaDef, &'static ColoringDef) {
+        (
+            crate::escape::get_formula("mandelbrot"),
+            crate::escape::get_coloring("smooth"),
+        )
+    }
+
+    fn validate_lens(src: &str, what: &str) {
+        // A marker is a LINE that is one, not any comment that
+        // mentions one -- the rig's own docs name `//__IFS_RIG__`.
+        if let Some(m) = src
+            .lines()
+            .map(str::trim)
+            .find(|l| l.starts_with("//__") && l.ends_with("__"))
+        {
+            panic!("{what} left a marker: {m}");
+        }
+        use wgpu::naga;
+        let module = naga::front::wgsl::parse_str(src)
+            .unwrap_or_else(|e| panic!("{what} parse: {e}"));
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("{what} validation: {e:?}"));
+    }
+
+    fn lens_for(name: &str) -> String {
+        let r = crate::variations::global_registry();
+        let mut cfg = EscapeConfig::default();
+        cfg.lens = name.to_string();
+        crate::escape::lens::lens_source(&cfg, &r)
+            .unwrap_or_else(|| panic!("{name}: no lens source"))
+    }
+
+    /// The shader an unlensed render compiles is the shader it
+    /// compiled before lenses existed. Byte identity, not "looks the
+    /// same": the markers must vanish without leaving so much as a
+    /// blank line, because every escape render in the visual suite is
+    /// compared by pixel hash.
+    #[test]
+    fn a_shader_without_a_lens_is_byte_identical() {
+        let (f, c) = mandelbrot();
+        for damped in [false, true] {
+            for interior in [false, true] {
+                let plain = assemble_with(f, c, damped, interior);
+                let none = assemble_with_lens(f, c, damped, interior, None);
+                assert_eq!(plain, none, "damped {damped} interior {interior}");
+                assert!(!plain.contains("__LENS"), "a marker survived");
+                assert!(!plain.contains("esc_lens"), "lens glue without a lens");
+            }
+        }
+    }
+
+    /// A lens actually reaches the screen offset, in the half-height
+    /// convention, and brings its variation with it.
+    #[test]
+    fn a_lens_warps_the_screen_offset() {
+        let (f, c) = mandelbrot();
+        let src = lens_for("eyefish");
+        let out = assemble_with_lens(f, c, false, true, Some(&src));
+        assert!(out.contains("d = esc_lens(d / lens_h) * lens_h;"), "not applied");
+        assert!(out.contains("fn variation_eyefish"), "the variation is missing");
+        assert!(out.contains("@group(2) @binding("), "not on the lens group");
+        validate_lens(&out, "eyefish lens");
+    }
+
+    /// EVERY variation compiles as a lens.
+    ///
+    /// The simulation's layer warp already asserts they all validate
+    /// in ITS host; this asserts the escape host too, which has its
+    /// own `params`, its own bindings and its own group. A variation
+    /// that collided with one of those would otherwise surface as a
+    /// black render for one entry in a 647-item picker.
+    #[test]
+    #[ignore = "compiles 647 shaders; run with --ignored"]
+    fn every_variation_compiles_as_a_lens() {
+        let (f, c) = mandelbrot();
+        let r = crate::variations::global_registry();
+        let mut n = 0;
+        for name in r.names() {
+            let out = assemble_with_lens(f, c, false, true, Some(&lens_for(name)));
+            validate_lens(&out, &format!("lens {name}"));
+            n += 1;
+        }
+        println!("{n} variations compile as a camera lens");
+        assert!(n > 600, "only {n} variations");
+    }
+    /// Every template that maps a pixel to a sample point applies the
+    /// lens, and none of them does without one.
+    ///
+    /// This is the gate the feature most needed. A lens wired only
+    /// into the direct template works until the user zooms past ~14,
+    /// where the perturbed kernel takes over, and then silently stops
+    /// -- the picture quietly becomes the unlensed one, with no error
+    /// anywhere to say so. Mode B and mode D are the same shape of
+    /// silence, and mode D twice: its planar walk and its solid ray.
+    #[test]
+    fn every_template_applies_the_lens() {
+        let (f, c) = mandelbrot();
+        let src = lens_for("eyefish");
+        let field = crate::escape::fields::FIELDS[0];
+        let fcol = crate::escape::fields::FIELD_COLORINGS[0];
+
+        let cases: Vec<(&str, String, String)> = vec![
+            (
+                "direct",
+                assemble_with_lens(f, c, false, true, Some(&src)),
+                assemble_with_lens(f, c, false, true, None),
+            ),
+            (
+                "perturbed",
+                assemble_perturbed_with_lens(c, false, PerturbTier::Power(2), Some(&src)),
+                assemble_perturbed_with_lens(c, false, PerturbTier::Power(2), None),
+            ),
+            (
+                "perturbed floatexp",
+                assemble_perturbed_with_lens(c, true, PerturbTier::Power(2), Some(&src)),
+                assemble_perturbed_with_lens(c, true, PerturbTier::Power(2), None),
+            ),
+            (
+                "field",
+                assemble_field_with_lens(field, fcol, Some(&src)),
+                assemble_field_with_lens(field, fcol, None),
+            ),
+        ];
+
+        for (label, lensed, plain) in &cases {
+            assert!(lensed.contains("esc_lens("), "{label}: the lens is not applied");
+            assert!(!plain.contains("esc_lens("), "{label}: lens glue without a lens");
+            assert!(
+                !plain.lines().map(str::trim).any(|l| l.starts_with("//__LENS")),
+                "{label}: a marker survived"
+            );
+            validate_lens(lensed, label);
+        }
+
+        // Mode D, both of its sites, planar and solid.
+        for def in crate::escape::ifs::IFS_DEFS {
+            let col = crate::escape::ifs::get_ifs_coloring("ifs_distance", def);
+            let lensed = assemble_ifs_with_lens(def, col, 4, Some(&src), false, false);
+            let plain = assemble_ifs_with_lens(def, col, 4, None, false, false);
+            let what = format!("ifs {}", def.name);
+            assert!(lensed.contains("esc_lens("), "{what}: the lens is not applied");
+            assert!(!plain.contains("esc_lens("), "{what}: lens glue without a lens");
+            assert!(
+                !plain.lines().map(str::trim).any(|l| l.starts_with("//__LENS")),
+                "{what}: a marker survived"
+            );
+            validate_lens(&lensed, &what);
+        }
+    }
+
+    /// Every mode-D combination still validates with the SUM rung
+    /// spliced (`ifs-general.md` D3), and every combination WITHOUT it
+    /// is the byte-identical text it was.
+    ///
+    /// The second half is the one that matters: the sum rung adds a
+    /// Newton solve, seven forward kernels and three dispatch lines
+    /// inside functions the shipped walk calls on every step, and the
+    /// only reason no shipped preset moved is that none of it is
+    /// SPLICED unless a row is a sum. A marker that stopped being
+    /// dropped would move every picture in mode D at once.
+    #[test]
+    fn the_sum_rung_validates_and_is_absent_when_no_row_is_a_sum() {
+        for def in crate::escape::ifs::IFS_DEFS {
+            for col in crate::escape::ifs::IFS_COLORINGS {
+                if crate::escape::ifs::get_ifs_coloring(col.name, def).name != col.name {
+                    continue;
+                }
+                for delta in [false, true] {
+                    let plain = assemble_ifs_with_lens(def, col, 4, None, delta, false);
+                    let summed = assemble_ifs_with_lens(def, col, 4, None, delta, true);
+                    let what = format!("ifs {} / {} / delta {delta}", def.name, col.name);
+                    assert!(
+                        !plain.lines().map(str::trim).any(|l| l.starts_with("//__IFS_SUM")),
+                        "{what}: a marker survived into the plain shader"
+                    );
+                    assert!(
+                        !summed.lines().map(str::trim).any(|l| l.starts_with("//__IFS_SUM")),
+                        "{what}: a marker survived into the summed shader"
+                    );
+                    assert!(
+                        !plain.contains("ifs_sum_solve"),
+                        "{what}: the solve is in a shader that has no sum in it"
+                    );
+                    if def.solid {
+                        // A solid flame cannot hold a sum -- `analyse_3d`
+                        // refuses one -- so the flag is ignored there and
+                        // the two texts are one text.
+                        assert_eq!(plain, summed, "{what}: the solid template took the flag");
+                        continue;
+                    }
+                    assert!(summed.contains("fn ifs_sum_solve"), "{what}: no solve");
+                    assert!(
+                        summed.contains("if (ifs_maps[i].kind == 7.0) { return ifs_sum_inv_point(i, p); }"),
+                        "{what}: the point dispatch is missing"
+                    );
+                    assert!(
+                        summed.contains("if (ifs_maps[i].kind == 7.0) { return ifs_sum_inv_sigma(i, p); }"),
+                        "{what}: the sigma dispatch is missing"
+                    );
+                    // The Jacobian is only spliced where a walk reads
+                    // it, so its dispatch follows it.
+                    let has_jac = summed.contains("fn ifs_map_jacobian");
+                    assert_eq!(
+                        has_jac,
+                        summed.contains("if (ifs_maps[i].kind == 7.0) { return ifs_sum_inv_jacobian(i, q); }"),
+                        "{what}: the Jacobian and its sum dispatch disagree about being here"
+                    );
+                    validate_lens(&summed, &what);
+                }
+            }
+        }
+    }
+
 }

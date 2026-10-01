@@ -527,7 +527,7 @@ mod tests {
         // snake_case casing (`"palette"`, `"density"`, `"2d"`, ...). Those
         // must still deserialize into the config's PascalCase enums.
         use crate::scene::palette::{
-            ColorMode, PathCaptureMode, PathMapStyle, PathTrackingMode, SqueezeMode,
+            ColorMode, PathMapStyle, SqueezeMode,
         };
         use crate::scene::tonemap::{HighlightMode, ToneMapMode};
 
@@ -569,8 +569,8 @@ mod tests {
         assert_eq!(config.highlight_mode, HighlightMode::MaxNorm);
         assert_eq!(config.palette_squeeze_mode, SqueezeMode::Geometric);
         assert_eq!(config.path_map_style, PathMapStyle::OriginRadial);
-        assert_eq!(config.path_capture_mode, PathCaptureMode::FirstAfterBurnIn);
-        assert_eq!(config.path_tracking_mode, PathTrackingMode::Recent);
+        // The old PathMap's capture and tracking modes are gone; a blob
+        // that still has them loads.
     }
 
     #[test]

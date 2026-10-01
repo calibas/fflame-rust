@@ -84,10 +84,12 @@ pub fn render_escape_content(
     // Mode B (field) formulas share the dropdown as a second group;
     // which registry resolves the name routes everything downstream.
     let field = crate::escape::fields::get_field(&esc.formula);
+    let ifs_def = crate::escape::ifs::get_ifs(&esc.formula);
     let formula = crate::escape::get_formula(&esc.formula);
-    let selected_label = match field {
-        Some(f) => f.display_name,
-        None => formula.display_name,
+    let selected_label = match (ifs_def, field) {
+        (Some(d), _) => d.display_name,
+        (None, Some(f)) => f.display_name,
+        (None, None) => formula.display_name,
     };
     ui.horizontal(|ui| {
         ui.label(t!("escape_panel.formula"));
@@ -146,8 +148,53 @@ pub fn render_escape_content(
                         }
                     }
                 }
+                // Mode D: distance functions. `ifs_flame` reads the
+                // LOADED FLAME rather than a formula of its own, so
+                // there is no default view to land on — the flame's
+                // own extent decides where to stand, and the panel
+                // offers a Frame button for it below.
+                ui.separator();
+                for d in crate::escape::ifs::IFS_DEFS {
+                    if ui
+                        .selectable_label(
+                            ifs_def.is_some_and(|sel| sel.name == d.name),
+                            d.display_name,
+                        )
+                        .clicked()
+                        && esc.formula != d.name
+                    {
+                        let _ = config_manager.update_batch(
+                            vec![
+                                (
+                                    ConfigPath::EscapeFormula,
+                                    ConfigValue::String(d.name.to_string()),
+                                ),
+                                (
+                                    ConfigPath::EscapeColoring,
+                                    ConfigValue::String(d.default_coloring.to_string()),
+                                ),
+                            ],
+                            "history.param.escape_formula".to_string(),
+                        );
+                    }
+                }
             });
     });
+
+    // ---- Mode D: does the loaded flame qualify? ----
+    //
+    // The criterion answers *why not* rather than *whether* (the
+    // analysis returns every reason, not the first), so the panel can
+    // list them: a flame with two non-affine transforms should say so
+    // once, not make the user fix one to discover the next.
+    if let Some(d) = ifs_def {
+        if d.needs_flame {
+            show_ifs_criterion(ui, config_manager, d.solid);
+        }
+        if d.solid {
+            show_solid_camera(ui, config_manager, &esc);
+        }
+    }
 
     // ---- Presets ----
     //
@@ -156,9 +203,10 @@ pub fn render_escape_content(
     // a normal thing to want after wandering off, not only something
     // that happens on a formula switch.
     {
-        let presets: &[crate::escape::EscapePreset] = match field {
-            Some(f) => f.presets,
-            None => crate::escape::get_formula(&esc.formula).presets,
+        let presets: &[crate::escape::EscapePreset] = match (ifs_def, field) {
+            (Some(d), _) => d.presets,
+            (None, Some(f)) => f.presets,
+            (None, None) => crate::escape::get_formula(&esc.formula).presets,
         };
         if !presets.is_empty() {
             ui.horizontal(|ui| {
@@ -225,9 +273,10 @@ pub fn render_escape_content(
     // Formula parameters, straight from the def (slider bounds and
     // tooltips included). Values read def defaults when unset — the
     // same value the shader's packer uses.
-    let formula_params = match field {
-        Some(f) => f.parameters,
-        None => formula.parameters,
+    let formula_params = match (ifs_def, field) {
+        (Some(d), _) => d.parameters,
+        (None, Some(f)) => f.parameters,
+        (None, None) => formula.parameters,
     };
     for p in formula_params {
         let mut v = esc.formula_params.get(p.name).copied().unwrap_or(p.default);
@@ -239,6 +288,8 @@ pub fn render_escape_content(
         }
     }
 
+    show_lens_section(ui, config_manager);
+
     // ---- Julia toggle ----
     //
     // Mode A only (fields have no Julia plane), and only where the map
@@ -247,6 +298,7 @@ pub fn render_escape_content(
     // planes render the same image and the control is inert. See
     // FormulaFeature::DynamicalOnly.
     let julia_meaningful = field.is_none()
+        && ifs_def.is_none()
         && crate::escape::formula_julia_is_meaningful(
             crate::escape::get_formula(&esc.formula),
         );
@@ -986,11 +1038,14 @@ pub fn render_escape_content(
     // formula. A field shader has none of the three -- no escape
     // test, no bailout, and a fixed-count accumulation with no step
     // to damp -- so all three sat in the panel doing nothing.
-    let controls = match field {
-        Some(_) => crate::escape::FIELD_ITERATION_CONTROLS,
-        None => crate::escape::iteration_controls(
-            crate::escape::get_formula(&esc.formula),
-        ),
+    // Mode D reads none of them either: its walk has no escape test,
+    // no bailout and no step to damp — the depth and the beam are its
+    // own parameters, drawn from the def above.
+    let controls = match (ifs_def, field) {
+        (Some(_), _) | (None, Some(_)) => crate::escape::FIELD_ITERATION_CONTROLS,
+        (None, None) => {
+            crate::escape::iteration_controls(crate::escape::get_formula(&esc.formula))
+        }
     };
 
     if controls.bailout {
@@ -1053,7 +1108,7 @@ pub fn render_escape_content(
     ui.separator();
 
     // ---- Coloring ----
-    show_coloring_section(ui, config_manager, &esc, field);
+    show_coloring_section(ui, config_manager, &esc, field, ifs_def);
 }
 
 /// A starting `scale` for a coloring, from the iteration cap.
@@ -1157,6 +1212,511 @@ fn suggested_coloring_scale(coloring: &str, max_iter: u32) -> f32 {
     }
 }
 
+/// The solid camera (D8), shown only when the loaded formula is a
+/// solid one.
+///
+/// D2: the 3D controls follow the CONFIG, not the render mode. Escape
+/// mode is not three-dimensional — one formula in it is — so gating on
+/// the mode would show these over a Mandelbrot and hide them over the
+/// thing they steer.
+fn show_solid_camera(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    esc: &crate::config::escape::EscapeConfig,
+) {
+    ui.separator();
+    ui.label(egui::RichText::new(t!("escape_panel.camera")).strong());
+
+    // The target is decimal STRINGS: a deep zoom is an approach to a
+    // point, so the target is the quantity that needs digits while the
+    // distance shrinks around it. An f32 here would cap 3D at a zoom
+    // the plane passed long ago.
+    let axes: [(&str, ConfigPath, &String); 3] = [
+        ("X", ConfigPath::EscapeCamTargetX, &esc.cam_target_x),
+        ("Y", ConfigPath::EscapeCamTargetY, &esc.cam_target_y),
+        ("Z", ConfigPath::EscapeCamTargetZ, &esc.cam_target_z),
+    ];
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.camera_target"));
+        for (name, path, value) in axes {
+            let mut text = value.clone();
+            ui.label(name);
+            let resp = ui.add(
+                egui::TextEdit::singleline(&mut text)
+                    .desired_width(78.0)
+                    .hint_text(t!("escape_panel.camera_target_auto")),
+            );
+            if resp.changed() {
+                let _ = config_manager
+                    .update_param(path, ConfigValue::String(text.trim().to_string()));
+            }
+        }
+    });
+    ui.label(
+        egui::RichText::new(t!("escape_panel.camera_target_tip")).small().weak(),
+    );
+
+    let mut angle = |ui: &mut egui::Ui,
+                     label: String,
+                     path: ConfigPath,
+                     value: f32,
+                     range: std::ops::RangeInclusive<f32>,
+                     tip: String| {
+        ui.horizontal(|ui| {
+            ui.label(label);
+            let mut deg = value.to_degrees();
+            if ui
+                .add(egui::Slider::new(&mut deg, *range.start()..=*range.end()).suffix("°"))
+                .on_hover_text(tip)
+                .changed()
+            {
+                let _ = config_manager.update_param(path, deg.to_radians().into());
+            }
+        });
+    };
+
+    angle(
+        ui,
+        t!("escape_panel.camera_pitch").to_string(),
+        ConfigPath::EscapeCamPitch,
+        esc.cam_pitch,
+        -90.0..=90.0,
+        t!("escape_panel.camera_pitch_tip").to_string(),
+    );
+    angle(
+        ui,
+        t!("escape_panel.camera_yaw").to_string(),
+        ConfigPath::EscapeCamYaw,
+        esc.cam_yaw,
+        -180.0..=180.0,
+        t!("escape_panel.camera_yaw_tip").to_string(),
+    );
+    angle(
+        ui,
+        t!("escape_panel.camera_bank").to_string(),
+        ConfigPath::EscapeCamBank,
+        esc.cam_bank,
+        -180.0..=180.0,
+        t!("escape_panel.camera_bank_tip").to_string(),
+    );
+    angle(
+        ui,
+        t!("escape_panel.camera_fov").to_string(),
+        ConfigPath::EscapeCamFov,
+        esc.cam_fov,
+        3.0..=170.0,
+        t!("escape_panel.camera_fov_tip").to_string(),
+    );
+}
+
+/// Mode D's criterion (the plan's §2.4), shown under the formula row.
+///
+/// The analysis returns EVERY reason a flame fails rather than the
+/// first, so this lists them: a flame with two non-affine transforms
+/// should say so once, not make the user fix one to discover the next.
+///
+/// It also says, when the flame does qualify, that the render draws
+/// the SET and not the measure — weights, colour speed and density do
+/// not apply here, and two flames differing only in weights render
+/// identically. That is D6, and the panel is where it stops being a
+/// surprise.
+/// Choosing a lens: the name, and every one of its parameters at its
+/// registry default, as ONE undo step.
+///
+/// Seeding rather than leaving them absent, for two reasons that both
+/// bite otherwise. An absent parameter reads back as 0.0 from the
+/// config manager -- a def's default is a registry concern, which is
+/// why `LensTarget` resolves it at the panel -- so an undo of the
+/// first edit would write that 0.0 as if it were the old value and
+/// leave the lens in a state the user never saw. And `lens_params` is
+/// keyed by parameter NAME alone, so a `c1` left behind by the
+/// previous lens would otherwise be inherited by the next one that
+/// happens to have a `c1`.
+///
+/// This is the same shape as `apply_preset` below, which enumerates a
+/// def's parameters into one batch for the same reason.
+fn lens_choice(name: &str) -> Vec<(ConfigPath, ConfigValue)> {
+    let mut changes = vec![(ConfigPath::EscapeLens, ConfigValue::String(name.to_string()))];
+    if let Some(info) = crate::variations::global_registry().get(name) {
+        for p in &info.parameters {
+            changes.push((
+                ConfigPath::EscapeLensParam { param: p.name.clone() },
+                p.default_value.into(),
+            ));
+        }
+    }
+    changes
+}
+
+/// The **camera lens**: a variation applied to the screen offset.
+///
+/// A lens warps the view rather than the fractal, which is the
+/// opposite direction from a flame's final transform, so a variation
+/// need not be invertible to be one and every shipped variation is
+/// offered. Most are not good lenses -- measured, 285 of 647 are
+/// smooth and in frame at their defaults -- but "good" here depends on
+/// parameters the user can edit, so the picker curates nothing and
+/// says so in its tooltip instead.
+///
+/// The parameters are rendered by `render_variation_params`, the same
+/// code the transforms panel uses, through a `ParamTarget` that reads
+/// the escape config's map instead of a transform. That is the whole
+/// reason the trait exists: a second parameter renderer here would
+/// have to reproduce the ParamType zoo, the undo coalescing and the
+/// "a quantising widget must not rewrite the value merely by being
+/// drawn" rule, and would drift from the original.
+fn show_lens_section(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
+    use crate::ui::variation_params::{render_variation_params, LensTarget};
+
+    let registry = crate::variations::global_registry();
+    let current = config_manager.active_config().escape.lens.clone();
+    let amount = config_manager.active_config().escape.lens_amount;
+
+    let label = if current.is_empty() {
+        t!("escape_panel.lens_none").to_string()
+    } else {
+        registry
+            .get(&current)
+            .map(|i| i.display_name.clone())
+            .unwrap_or_else(|| current.clone())
+    };
+
+    egui::CollapsingHeader::new(t!("escape_panel.lens"))
+        .id_salt("escape_lens")
+        .default_open(!current.is_empty())
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(t!("escape_panel.lens_tip"))
+                    .small()
+                    .weak(),
+            );
+
+            let mut pick: Option<String> = None;
+            let filter_id = egui::Id::new("escape_lens_filter");
+            // A Popup, not a ComboBox. A combo closes on ANY click
+            // inside it, so clicking the search box or the Show-all
+            // tick shut the list instead of using it -- reported from
+            // use. The Add Variation picker in the transforms panel
+            // already had this problem and solved it the same way:
+            // a button, a memory-backed popup, and
+            // `CloseOnClickOutside` so only a real choice or a click
+            // away dismisses it.
+            let popup_id = egui::Id::new("escape_lens_popup");
+            let focus_id = popup_id.with("focus_search");
+            let btn = ui.add(
+                egui::Button::new(format!("{label}  \u{25be}")).min_size(egui::vec2(220.0, 0.0)),
+            );
+            if btn.clicked() {
+                egui::Popup::toggle_id(ui.ctx(), popup_id);
+                // Focus the filter when it opens, so typing narrows
+                // the list straight away (consumed once, below).
+                ui.data_mut(|d| d.insert_temp(focus_id, true));
+            }
+            egui::Popup::from_response(&btn)
+                .id(popup_id)
+                .open_memory(None)
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                .show(|ui| {
+                    ui.set_min_width(250.0);
+                    ui.set_max_height(380.0);
+                    // 647 entries is a scroll, not a list. The filter
+                    // lives in egui memory rather than the config: it
+                    // is a way of finding a lens, not part of one, and
+                    // putting it in the config would make typing here
+                    // an undo step.
+                    let mut filter =
+                        ui.data_mut(|d| d.get_temp::<String>(filter_id).unwrap_or_default());
+                    let focus_search = ui.data_mut(|d| {
+                        let v = d.get_temp::<bool>(focus_id).unwrap_or(false);
+                        if v {
+                            d.remove::<bool>(focus_id);
+                        }
+                        v
+                    });
+                    let edit = ui.add(
+                        egui::TextEdit::singleline(&mut filter)
+                            .hint_text(t!("escape_panel.lens_filter"))
+                            .desired_width(230.0),
+                    );
+                    super::vkb_sync(ui, &edit, &filter);
+                    if focus_search {
+                        edit.request_focus();
+                    }
+                    if edit.changed() {
+                        ui.data_mut(|d| d.insert_temp(filter_id, filter.clone()));
+                    }
+                    let needle = filter.trim().to_lowercase();
+
+                    // The measured set by default, everything on
+                    // request. The classification describes a
+                    // variation's DEFAULT parameters and those are
+                    // editable, so it is a starting point rather than
+                    // a verdict -- but a picker whose entries mostly
+                    // do nothing is worse than a short one.
+                    let all_id = egui::Id::new("escape_lens_show_all");
+                    let mut show_all = ui.data_mut(|d| d.get_temp::<bool>(all_id).unwrap_or(false));
+                    if ui
+                        .checkbox(&mut show_all, t!("escape_panel.lens_show_all"))
+                        .on_hover_text(t!("escape_panel.lens_show_all_tip"))
+                        .changed()
+                    {
+                        ui.data_mut(|d| d.insert_temp(all_id, show_all));
+                    }
+
+                    if ui
+                        .selectable_label(current.is_empty(), t!("escape_panel.lens_none"))
+                        .clicked()
+                    {
+                        pick = Some(String::new());
+                        egui::Popup::close_id(ui.ctx(), popup_id);
+                    }
+                    ui.separator();
+
+                    // The recommended lenses first in their own
+                    // order, then everything else usable in the
+                    // registry's order -- the same order the
+                    // variations browser uses, so a lens is found
+                    // where a variation is found.
+                    let menu: Vec<String> = if show_all {
+                        registry.names().to_vec()
+                    } else {
+                        crate::escape::lens::lens_menu(&registry)
+                    };
+                    let head = if show_all {
+                        0
+                    } else {
+                        crate::escape::lens::LENS_RECOMMENDED
+                            .iter()
+                            .filter(|n| registry.get(n).is_some())
+                            .count()
+                    };
+                    egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                        for (i, name) in menu.iter().enumerate() {
+                            let Some(info) = registry.get(name) else { continue };
+                            if !needle.is_empty()
+                                && !name.to_lowercase().contains(&needle)
+                                && !info.display_name.to_lowercase().contains(&needle)
+                            {
+                                continue;
+                            }
+                            // A rule under the recommended ones, so
+                            // the head reads as a shortlist rather
+                            // than as an arbitrary reordering.
+                            if i == head && head > 0 && needle.is_empty() {
+                                ui.separator();
+                            }
+                            if ui
+                                .selectable_label(&current == name, &info.display_name)
+                                .clicked()
+                            {
+                                pick = Some(name.clone());
+                                egui::Popup::close_id(ui.ctx(), popup_id);
+                            }
+                        }
+                    });
+                });
+            if let Some(name) = pick {
+                let _ = config_manager
+                    .update_batch(lens_choice(&name), "history.param.escape_lens".to_string());
+            }
+
+            if current.is_empty() {
+                return;
+            }
+
+            let mut a = amount;
+            let lim = crate::escape::lens::LENS_AMOUNT_LIMIT;
+            if ui
+                .add(
+                    egui::Slider::new(&mut a, -lim..=lim)
+                        .text(t!("escape_panel.lens_amount")),
+                )
+                .on_hover_text(t!("escape_panel.lens_amount_tip"))
+                .changed()
+            {
+                let _ = config_manager.update_param(ConfigPath::EscapeLensAmount, a.into());
+            }
+
+            if let Some(info) = registry.get(&current) {
+                if !info.parameters.is_empty() {
+                    render_variation_params(
+                        ui,
+                        config_manager,
+                        &LensTarget,
+                        &current,
+                        &info.parameters,
+                    );
+                }
+            }
+        });
+}
+
+/// `solid` picks WHICH criterion: a solid formula walks the 3D IFS,
+/// and qualifying in three dimensions is a different question from
+/// qualifying in two. Reported against the plane regardless, this
+/// said "`quaternion_julia` is not affine" over a flame the solid
+/// walk was rendering perfectly well -- the variation is a kernel in
+/// `Space::Solid` and has no planar reading at all. The renderer had
+/// its own version of the same mistake (`pack_flame` required the
+/// planar analysis to pass first, plan §8.11 step 2) and was fixed
+/// there; this is the panel's half.
+/// What the criterion says about a flame, in the dimension the
+/// formula walks it in. Extracted from the panel so the CHOICE of
+/// analysis is testable: reading the plane's verdict over a solid
+/// formula is the bug this exists to pin.
+pub(crate) enum Verdict {
+    Ok {
+        maps: usize,
+        roots: usize,
+        lo: f64,
+        hi: f64,
+        has_final: bool,
+        centre: [f64; 3],
+        radius: f64,
+    },
+    No(Vec<String>),
+}
+
+pub(crate) fn ifs_verdict(flame: &crate::scene::transforms::Flame, solid: bool) -> Verdict {
+    let registry = crate::variations::global_registry();
+    macro_rules! verdict {
+        ($ifs:expr, $centre:expr) => {{
+            match $ifs {
+                Ok(ifs) => Verdict::Ok {
+                    maps: ifs.maps.len(),
+                    roots: ifs.maps.iter().filter(|m| !m.forward.is_affine()).count(),
+                    lo: ifs.maps.iter().map(|m| m.sigma_min).fold(f64::INFINITY, f64::min),
+                    hi: ifs.maps.iter().map(|m| m.sigma_max).fold(0.0f64, f64::max),
+                    has_final: ifs.final_map.is_some(),
+                    centre: $centre(&ifs.ball.centre),
+                    radius: ifs.ball.radius,
+                },
+                Err(why) => Verdict::No(why.iter().map(|d| d.to_string()).collect()),
+            }
+        }};
+    }
+    if solid {
+        verdict!(crate::scene::ifs_analysis::analyse_3d(flame, &registry), |c: &[f64; 3]| *c)
+    } else {
+        verdict!(crate::scene::ifs_analysis::analyse_2d(flame, &registry), |c: &[f64; 2]| [c[0], c[1], 0.0])
+    }
+}
+
+fn show_ifs_criterion(ui: &mut egui::Ui, config_manager: &mut ConfigManager, solid: bool) {
+    // Analyse first and drop the borrow, so the Frame button below can
+    // write through the same manager.
+    let verdict = ifs_verdict(&config_manager.active_config().flame, solid);
+
+    match verdict {
+        Verdict::Ok { maps, roots, lo, hi, has_final, centre, radius } => {
+            ui.horizontal_wrapped(|ui| {
+                ui.colored_label(
+                    egui::Color32::from_rgb(120, 190, 120),
+                    if roots == 0 {
+                        t!(
+                            "escape_panel.ifs_qualifies",
+                            count = maps.to_string(),
+                            lo = format!("{lo:.3}"),
+                            hi = format!("{hi:.3}")
+                        )
+                    } else {
+                        t!(
+                            "escape_panel.ifs_qualifies_roots",
+                            count = maps.to_string(),
+                            roots = roots.to_string()
+                        )
+                    },
+                );
+                if has_final {
+                    ui.label(
+                        egui::RichText::new(t!("escape_panel.ifs_has_final")).small().weak(),
+                    );
+                }
+            });
+            ui.label(
+                egui::RichText::new(t!("escape_panel.ifs_set_not_measure")).small().weak(),
+            );
+            if radius > 0.0 {
+                // The measured ball, so the Extent parameter has a
+                // number to be set to (plan §8.15).
+                ui.label(
+                    egui::RichText::new(t!("escape_panel.ifs_extent", radius = format!("{radius:.4}")))
+                        .small()
+                        .weak(),
+                );
+            }
+            if roots > 0 {
+                // Plan 8.8 J2: a root map's set is the FILLED one, and
+                // the flame draws its boundary. Said here, where the
+                // difference stops being a surprise.
+                ui.label(egui::RichText::new(t!("escape_panel.ifs_roots_filled")).small().weak());
+            }
+            if radius > 0.0
+                && ui
+                    .button(t!("escape_panel.ifs_frame"))
+                    .on_hover_text(t!("escape_panel.ifs_frame_tip"))
+                    .clicked()
+            {
+                // A solid's view is a CAMERA -- a target it orbits and
+                // a zoom that sets the distance -- and the distance is
+                // already `FRAME_DISTANCE · radius / 2^zoom`, so
+                // framing it is the target and a zoom of nothing. The
+                // planar centre this used to write is a quantity the
+                // solid camera does not read, so the button did
+                // nothing at all over a solid.
+                let updates = if solid {
+                    vec![
+                        (ConfigPath::EscapeCamTargetX, ConfigValue::String(format!("{:?}", centre[0]))),
+                        (ConfigPath::EscapeCamTargetY, ConfigValue::String(format!("{:?}", centre[1]))),
+                        (ConfigPath::EscapeCamTargetZ, ConfigValue::String(format!("{:?}", centre[2]))),
+                        (ConfigPath::EscapeZoomLog2, 0.0f32.into()),
+                    ]
+                } else {
+                    // The home view spans 4 units vertically, so a span
+                    // of 2.4 radii leaves the attractor a comfortable
+                    // margin.
+                    let span = (radius * 2.4).max(1e-12);
+                    vec![
+                        (
+                            ConfigPath::EscapeCenterRe,
+                            ConfigValue::String(format!("{centre:?}", centre = centre[0])),
+                        ),
+                        (
+                            ConfigPath::EscapeCenterIm,
+                            ConfigValue::String(format!("{centre:?}", centre = centre[1])),
+                        ),
+                        (ConfigPath::EscapeZoomLog2, ((4.0f64 / span).log2() as f32).into()),
+                    ]
+                };
+                let _ = config_manager
+                    .update_batch(updates, "history.param.escape_center".to_string());
+            }
+        }
+        Verdict::No(reasons) => {
+            ui.colored_label(
+                egui::Color32::from_rgb(220, 170, 90),
+                if solid {
+                    t!("escape_panel.ifs_rejected_solid")
+                } else {
+                    t!("escape_panel.ifs_rejected")
+                },
+            );
+            for r in &reasons {
+                ui.label(egui::RichText::new(format!("  \u{2022} {r}")).small().weak());
+            }
+            ui.label(
+                egui::RichText::new(if solid {
+                    t!("escape_panel.ifs_rejected_solid_tip")
+                } else {
+                    t!("escape_panel.ifs_rejected_tip")
+                })
+                .small()
+                .weak(),
+            );
+        }
+    }
+}
+
 /// Coloring dropdown + params. `field` = Some routes to the mode-B
 /// coloring registry (with the def's fallback resolution — the
 /// stored name usually still says "smooth" right after a switch).
@@ -1165,7 +1725,40 @@ fn show_coloring_section(
     config_manager: &mut ConfigManager,
     esc: &crate::config::escape::EscapeConfig,
     field: Option<&'static crate::escape::fields::FieldDef>,
+    ifs_def: Option<&'static crate::escape::ifs::IfsDef>,
 ) {
+    if let Some(d) = ifs_def {
+        let coloring = crate::escape::ifs::get_ifs_coloring(&esc.coloring, d);
+        ui.horizontal(|ui| {
+            ui.label(t!("escape_panel.coloring"));
+            egui::ComboBox::from_id_salt("escape_coloring")
+                .selected_text(coloring.display_name)
+                .show_ui(ui, |ui| {
+                    for c in crate::escape::ifs::IFS_COLORINGS {
+                        if ui
+                            .selectable_label(c.name == coloring.name, c.display_name)
+                            .clicked()
+                            && c.name != coloring.name
+                        {
+                            let _ = config_manager.update_param(
+                                ConfigPath::EscapeColoring,
+                                ConfigValue::String(c.name.to_string()),
+                            );
+                        }
+                    }
+                });
+        });
+        for p in coloring.parameters {
+            let mut v = esc.coloring_params.get(p.name).copied().unwrap_or(p.default);
+            if param_control(ui, &mut v, p, "coloring") {
+                let _ = config_manager.update_param(
+                    ConfigPath::EscapeColoringParam { param: p.name.to_string() },
+                    v.into(),
+                );
+            }
+        }
+        return;
+    }
     if let Some(f) = field {
         let coloring = crate::escape::fields::get_field_coloring(&esc.coloring, f);
         ui.horizontal(|ui| {
@@ -1593,6 +2186,62 @@ mod tests {
         }
     }
 
+    /// Mode D lays out for a flame that qualifies and for one that
+    /// does not — the criterion path runs the analysis and formats
+    /// every reason, which is a lot of panel code that only executes
+    /// when a flame fails.
+    #[test]
+    fn the_panel_lays_out_for_every_distance_function() {
+        use std::collections::HashMap;
+        let half = |tx: f32, ty: f32, var: &str| {
+            let mut t = crate::scene::transforms::Transform::default();
+            t.a = 0.5;
+            t.d = 0.5;
+            t.e = tx;
+            t.f = ty;
+            t.variations = HashMap::from([(var.to_string(), 1.0)]);
+            t.variation_order = vec![var.to_string()];
+            t
+        };
+        for d in crate::escape::ifs::IFS_DEFS {
+            for (label, var) in [("qualifying", "linear"), ("rejected", "spherical")] {
+                for c in crate::escape::ifs::IFS_COLORINGS {
+                    let mut config = crate::config::FractalConfig::default();
+                    config.render_mode = RenderMode::Escape;
+                    config.escape.formula = d.name.to_string();
+                    config.escape.coloring = c.name.to_string();
+                    config.flame.transforms =
+                        vec![half(0.0, 0.0, "linear"), half(0.5, 0.0, var)];
+                    config.flame.final_transforms.clear();
+                    config.flame.xaos = None;
+                    let _ = lay_out(config);
+                    let _ = label;
+                }
+            }
+        }
+    }
+
+    /// Every mode-D parameter and coloring must have somewhere to be
+    /// drawn. A def whose params the panel never reaches is a control
+    /// the user cannot touch, and the shader reads its default
+    /// silently — which looks like the parameter doing nothing.
+    #[test]
+    fn every_mode_d_parameter_is_reachable_from_the_panel() {
+        for d in crate::escape::ifs::IFS_DEFS {
+            assert!(!d.parameters.is_empty(), "{} has no parameters to draw", d.name);
+            assert!(
+                crate::escape::ifs::IFS_COLORINGS
+                    .iter()
+                    .any(|c| c.name == d.default_coloring),
+                "{} defaults to a coloring outside the registry",
+                d.name
+            );
+        }
+        for c in crate::escape::ifs::IFS_COLORINGS {
+            assert!(!c.parameters.is_empty(), "{} has no parameters to draw", c.name);
+        }
+    }
+
     #[test]
     fn the_panel_lays_out_for_every_coloring() {
         for c in crate::escape::COLORINGS {
@@ -1857,5 +2506,127 @@ mod zoom_display_tests {
             // ...and through the f32 path the panel actually writes.
             assert_eq!(back as f32, z2 as f32, "f32 config path moved zoom {z2}");
         }
+    }
+}
+
+#[cfg(test)]
+mod criterion_tests {
+    /// The criterion the panel reads must be the one the FORMULA
+    /// walks: a solid formula's is the 3D analysis.
+    ///
+    /// Reported from use: a flame of one inverse-mode
+    /// `quaternion_julia` transform rendered perfectly well under
+    /// `ifs_flame_3d` while the panel said the variation "is not
+    /// affine" -- which was the plane's verdict, and the plane has no
+    /// reading of that variation at all. `pack_flame` had had the
+    /// same mistake (plan 8.11 step 2) and was fixed there; this is
+    /// the panel's half, and the two now answer alike.
+    /// The lens picker must not be a `ComboBox`.
+    ///
+    /// A combo closes on ANY click inside it, so its search box and
+    /// its Show-all tick were unusable -- clicking either dismissed
+    /// the list instead of filtering it. Reported from use. The
+    /// transforms panel's Add Variation picker had already solved
+    /// this with a memory-backed `Popup` and `CloseOnClickOutside`,
+    /// and the lens picker now matches it.
+    ///
+    /// Source-scanning because the fault is a WIDGET CHOICE, and the
+    /// difference only shows up under a click that a headless UI test
+    /// does not deliver. The same technique guards the render-mode
+    /// writer (`src/ui/render_mode.rs`).
+    #[test]
+    fn the_lens_picker_stays_open_while_it_is_used() {
+        let src = include_str!("escape_panel.rs");
+        let start = src
+            .find("fn show_lens_section")
+            .expect("the lens section moved");
+        let end = src[start..]
+            .find("\nfn ")
+            .map(|i| start + i)
+            .unwrap_or(src.len());
+        // Code only: the comment above the popup explains what a
+        // ComboBox would do wrong, and must not trip the scan.
+        let body: String = src[start..end]
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("
+");
+
+        assert!(
+            !body.contains("ComboBox"),
+            "the lens picker is a ComboBox again: a click on its search box or \
+             its Show-all tick will close it instead of using it"
+        );
+        assert!(
+            body.contains("PopupCloseBehavior::CloseOnClickOutside"),
+            "the lens picker must close only on a click outside"
+        );
+        assert!(
+            body.contains("Popup::close_id"),
+            "choosing a lens must close the picker explicitly"
+        );
+    }
+
+    /// Picking a lens seeds every parameter at its registry default,
+    /// in one undo step with the name.
+    #[test]
+    fn choosing_a_lens_seeds_its_parameters() {
+        use crate::config::{ConfigPath, ConfigValue};
+        let registry = crate::variations::global_registry();
+        let changes = super::lens_choice("curl");
+        assert_eq!(changes[0].0, ConfigPath::EscapeLens);
+        let info = registry.get("curl").expect("curl");
+        assert_eq!(changes.len(), 1 + info.parameters.len(), "not every parameter seeded");
+        for p in &info.parameters {
+            let want = ConfigPath::EscapeLensParam { param: p.name.clone() };
+            let got = changes.iter().find(|(path, _)| *path == want).expect("seeded");
+            assert_eq!(got.1, ConfigValue::Float(p.default_value), "{} seeded wrong", p.name);
+        }
+        // Clearing the lens carries no parameters.
+        assert_eq!(super::lens_choice("").len(), 1);
+    }
+    #[test]
+    fn a_solid_formula_reads_the_solid_criterion() {
+        use crate::scene::transforms::{Flame, Transform};
+        let mut t = Transform::default();
+        t.a = 1.0;
+        t.d = 1.0;
+        t.variations = std::collections::HashMap::from([("quaternion_julia".to_string(), 1.0)]);
+        t.variation_order = vec!["quaternion_julia".to_string()];
+        for (k, v) in [("cx", 0.3f32), ("cy", 0.0), ("cz", 0.0), ("cw", -0.6), ("power", 2.0), ("inverse", 1.0)] {
+            t.set_variation_param("quaternion_julia", k, v);
+        }
+        let mut flame = Flame::default();
+        flame.transforms = vec![t];
+        flame.final_transforms.clear();
+        flame.xaos = None;
+
+        // The solid criterion accepts it, and says it is nonlinear.
+        match super::ifs_verdict(&flame, true) {
+            super::Verdict::Ok { maps, roots, radius, .. } => {
+                assert_eq!((maps, roots), (1, 1));
+                assert!(radius > 0.0 && radius.is_finite());
+            }
+            super::Verdict::No(why) => panic!("the solid criterion rejected it: {why:?}"),
+        }
+        // The plane's does not, which is correct and is what the panel
+        // used to say over a solid.
+        assert!(
+            matches!(super::ifs_verdict(&flame, false), super::Verdict::No(_)),
+            "the plane has no reading of quaternion_julia"
+        );
+
+        // And the panel agrees with the renderer: what `pack_for`
+        // builds for this formula has the solid the walk needs.
+        let mut cfg = crate::config::FractalConfig::default();
+        cfg.flame = flame;
+        cfg.escape.formula = "ifs_flame_3d".to_string();
+        let def = crate::escape::ifs::get_ifs(&cfg.escape.formula).expect("a mode-D def");
+        assert!(def.solid && def.needs_flame);
+        let registry = crate::variations::global_registry();
+        let packed = crate::escape::ifs::pack_for(def, &cfg, &registry).expect("packs");
+        let (ifs3, rows) = packed.solid.as_ref().expect("a solid reading");
+        assert_eq!((ifs3.maps.len(), rows.len()), (1, 1));
     }
 }

@@ -25,7 +25,7 @@ mod panel_viewer;
 /// panning internally). Re-exported for the keyboard handler.
 pub(crate) use panel_viewer::pan_fractal_view;
 pub(crate) use escape_panel::escape_zoom_by_factor;
-mod path_editor;
+mod paths_panel;
 mod performance;
 mod random_generator;
 mod scripts_panel;
@@ -33,6 +33,12 @@ pub mod response;
 mod settings;
 mod solid_panel;
 mod subflames;
+// `pub(crate)` for tests only: the animation exporter checks that it
+// applies every target this module offers, and that check has to
+// enumerate the real list rather than keep a second one in step.
+#[cfg(test)]
+pub(crate) mod target_selector;
+#[cfg(not(test))]
 mod target_selector;
 mod tone_mapping;
 pub mod track_editor;
@@ -694,11 +700,13 @@ pub struct PathClickInfo {
     /// Actual pixel with valid path data (may differ if click was empty)
     pub found_pixel: (u32, u32),
     /// Fractal space coordinates of the found pixel
-    pub fractal_coords: (f32, f32),
+    pub fractal_coords: (f64, f64),
     /// Distance from click to found pixel (0 if exact match)
     pub search_distance: f32,
-    /// Path data at the found pixel
-    pub path_entry: crate::renderer::PathEntry,
+    /// The path the pixel was last drawn through, and how many of its
+    /// last transforms every path on screen shares (docs/projects/
+    /// word-editing.md §10); `None` where no path drew it.
+    pub path: Option<(Vec<u32>, usize)>,
     /// 5x5 color preview centered on found pixel (RGBA, row-major)
     /// May be smaller if near edges
     pub color_preview: Vec<[u8; 4]>,
@@ -753,6 +761,32 @@ use egui_wgpu::{Renderer as EguiRenderer, RendererOptions};
 use egui_winit::State as EguiWinitState;
 use winit::{event::WindowEvent, window::Window};
 
+/// What the deep-zoom machinery is doing, for the View panel to
+/// report (docs/projects/flame-deep-zoom.md).
+///
+/// Both halves are MEASURED rather than requested: a ticked checkbox
+/// does not mean targeting is running (the renderer declines per
+/// view) and does not mean the exposure moved (the counters need
+/// landings). Reporting the decision is the difference between a
+/// control and a control you can believe.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeepZoom {
+    /// Measured share of plot attempts landing in frame. 1.0 when
+    /// auto exposure is off, or before anything has been measured.
+    pub coverage: f32,
+    pub targeting: crate::renderer::TargetingState,
+    /// Seconds the plan now being generated has been running, if one
+    /// is. The panel says so; `targeting` meanwhile describes the plan
+    /// still on screen.
+    pub planning: Option<f32>,
+}
+
+impl Default for DeepZoom {
+    fn default() -> Self {
+        Self { coverage: 1.0, targeting: crate::renderer::TargetingState::Off, planning: None }
+    }
+}
+
 pub struct EguiLayer {
     state: EguiWinitState,
     pub ctx: egui_dock::egui::Context,
@@ -799,9 +833,6 @@ pub struct EguiLayer {
     path_click_info: Option<PathClickInfo>,
     close_path_overlay: bool,
 
-    // Path editor state
-    path_editor_state: path_editor::PathEditorState,
-
     // Random generator panel state
     random_generator_panel: Option<random_generator::RandomGeneratorPanel>,
     scripts_panel: Option<scripts_panel::ScriptsPanel>,
@@ -841,6 +872,11 @@ pub struct EguiLayer {
 
     // Histogram for density visualization (levels now in ConfigManager)
     density_histogram: crate::renderer::DensityHistogram,
+
+    // What the deep-zoom machinery decided for the current view
+    // (docs/projects/flame-deep-zoom.md). Set by App each frame; read
+    // only to DESCRIBE what is happening, never to drive it.
+    deep_zoom: DeepZoom,
 
     // Xaos editor state
     xaos_editor_state: xaos_editor::XaosEditorState,
@@ -970,7 +1006,6 @@ impl EguiLayer {
             clicked_pixel: None,
             path_click_info: None,
             close_path_overlay: false,
-            path_editor_state: path_editor::PathEditorState::new(),
             random_generator_panel: None,
             allocated_textures: std::collections::HashSet::new(),
             scripts_panel: None,
@@ -991,6 +1026,7 @@ impl EguiLayer {
             cloud_palette_state: CloudPaletteState::default(),
             api_connectivity: crate::api::ApiConnectivity::Unknown,
             density_histogram: crate::renderer::DensityHistogram::default(),
+            deep_zoom: DeepZoom::default(),
             xaos_editor_state: xaos_editor::XaosEditorState::default(),
             signal_panel_state: signal_panel::SignalPanelState::new(),
             touch_tracker: panel_viewer::TouchTracker::default(),
@@ -1437,8 +1473,10 @@ impl EguiLayer {
         let mut variation_update_requested: Vec<String> = Vec::new();
         let mut script_cloud_request: Option<crate::app::script_cloud::ScriptCloudRequest> = None;
 
-        // Path filters
-        let mut path_filters_changed: Option<Vec<crate::gpu::buffers::GpuPathFilter>> = None;
+        // The Paths panel's solo button, held this frame, and a path it
+        // opened that the plan has not split
+        let mut word_solo: Option<Vec<u32>> = None;
+        let mut word_split: Option<Vec<u32>> = None;
 
         // Audio file loading
         let mut load_audio_file = false;
@@ -1468,6 +1506,7 @@ impl EguiLayer {
             is_paused: *paused,
             render_mode: config_manager.config().render_mode,
             tonemap_mode: config_manager.config().tonemap_mode,
+            solid: crate::ui::visibility::Solid::of(config_manager.config()),
             online_mode: config_manager.system_settings().online_mode,
             has_api_flame_id: api_state.flame_id.is_some(),
             api_flame_id: api_state.flame_id.clone(),
@@ -1753,9 +1792,9 @@ impl EguiLayer {
                         path_click_info: &self.path_click_info,
                         close_path_overlay: &mut self.close_path_overlay,
 
-                        // Path editor state
-                        path_editor_state: &mut self.path_editor_state,
-                        path_filters_changed: &mut path_filters_changed,
+                        // Paths panel
+                        word_solo: &mut word_solo,
+                        word_split: &mut word_split,
 
                         // Random generator panel state
                         random_generator_panel: &mut self.random_generator_panel,
@@ -1770,6 +1809,7 @@ impl EguiLayer {
 
                         // Histogram for density visualization (levels now in ConfigManager)
                         density_histogram: &self.density_histogram,
+                        deep_zoom: &self.deep_zoom,
 
                         // Xaos editor state
                         xaos_editor_state: &mut self.xaos_editor_state,
@@ -2389,7 +2429,8 @@ impl EguiLayer {
             load_subflame_into,
             animation_seek_changed,
             animation_seek_drag_stopped,
-            path_filters_changed,
+            word_solo,
+            word_split,
             generated_flame,
             script_generated,
             script_animation,
@@ -2509,6 +2550,11 @@ impl EguiLayer {
         if let Some(ref mut panel) = self.fractal_browser_panel {
             panel.switch_to_tab(tab);
         }
+    }
+
+    /// Tell the UI what deep zoom is doing this frame.
+    pub fn update_deep_zoom(&mut self, deep_zoom: DeepZoom) {
+        self.deep_zoom = deep_zoom;
     }
 
     /// Update the density histogram from computed data

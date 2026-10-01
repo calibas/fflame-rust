@@ -9,6 +9,7 @@ pub fn render_view_content(
     flame: &Flame,
     fly_mode_active: bool,
     fly_mode_toggle_requested: &mut bool,
+    deep_zoom: &super::DeepZoom,
 ) {
     use crate::config::slider::LazyUndoUi;
 
@@ -37,6 +38,51 @@ pub fn render_view_content(
     });
 
     ui.separator();
+
+    // ── Deep zoom ────────────────────────────────────────────────
+    // Both controls are REQUESTS; the renderer decides per view and
+    // the readout says what it decided. A ticked box that silently
+    // does nothing is the failure mode worth designing against here,
+    // because declining is the common case.
+    if crate::ui::visibility::control(
+        crate::ui::visibility::Control::DeepZoom,
+        config.render_mode,
+        config.tonemap_mode,
+    )
+    .is_show()
+    {
+        egui::CollapsingHeader::new(t!("view.deep_zoom").as_ref())
+            .default_open(false)
+            .show(ui, |ui| {
+                let mut auto_exposure = config.auto_exposure;
+                if ui
+                    .checkbox(&mut auto_exposure, t!("view.auto_exposure").as_ref())
+                    .on_hover_text(t!("view.tooltip_auto_exposure"))
+                    .changed()
+                {
+                    let _ =
+                        config_manager.update_param(ConfigPath::AutoExposure, auto_exposure.into());
+                }
+                if config.auto_exposure {
+                    // The measured number, not the request. Shown as a
+                    // percentage because that is what it is: the share
+                    // of plotted samples the frame is holding.
+                    ui.label(t!(
+                        "view.coverage_reading",
+                        percent = format!("{:.3}", deep_zoom.coverage * 100.0)
+                    ));
+                }
+
+                ui.add_space(4.0);
+
+                // Focused Rendering (cylinder targeting): the switch and
+                // what it is doing, shared with the Paths panel.
+                super::paths_panel::focused_rendering(ui, config_manager, &config, deep_zoom);
+            });
+    }
+
+    ui.separator();
+
 
     ui.label(t!("view.pan")).on_hover_text(t!("view.tooltip_pan"));
     ui.horizontal(|ui| {
@@ -85,7 +131,7 @@ pub fn render_view_content(
     ui.horizontal(|ui| {
         ui.add_space(36.0);
         if ui.button("  ^  ").clicked() {
-            let (dx, dy) = config.screen_delta_to_pan_frame(0.0, -pan_step);
+            let (dx, dy) = config.screen_delta_to_pan_frame(0.0, -pan_step as f64);
             let _ = config_manager.update_param(
                 ConfigPath::Pan,
                 (config.pan_x + dx, config.pan_y + dy).into()
@@ -94,21 +140,21 @@ pub fn render_view_content(
     });
     ui.horizontal(|ui| {
         if ui.button("  <  ").clicked() {
-            let (dx, dy) = config.screen_delta_to_pan_frame(-pan_step, 0.0);
+            let (dx, dy) = config.screen_delta_to_pan_frame(-pan_step as f64, 0.0);
             let _ = config_manager.update_param(
                 ConfigPath::Pan,
                 (config.pan_x + dx, config.pan_y + dy).into()
             );
         }
         if ui.button("  v  ").clicked() {
-            let (dx, dy) = config.screen_delta_to_pan_frame(0.0, pan_step);
+            let (dx, dy) = config.screen_delta_to_pan_frame(0.0, pan_step as f64);
             let _ = config_manager.update_param(
                 ConfigPath::Pan,
                 (config.pan_x + dx, config.pan_y + dy).into()
             );
         }
         if ui.button("  >  ").clicked() {
-            let (dx, dy) = config.screen_delta_to_pan_frame(pan_step, 0.0);
+            let (dx, dy) = config.screen_delta_to_pan_frame(pan_step as f64, 0.0);
             let _ = config_manager.update_param(
                 ConfigPath::Pan,
                 (config.pan_x + dx, config.pan_y + dy).into()

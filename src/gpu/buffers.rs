@@ -789,36 +789,6 @@ impl GpuVariationParams {
     }
 }
 
-/// Calculate bits needed per (normal) transform index based on the
-/// normal-transform count. Used by the PathMap color mode's per-pixel
-/// path-hash packing (`xform_idx` is the NORMAL transform's index, not
-/// a global xform_id, since chaos-game selection is among normals only).
-///
-/// - 1-2 transforms: 1 bit
-/// - 3-4 transforms: 2 bits
-/// - 5-8 transforms: 3 bits
-/// - 9-16 transforms: 4 bits
-/// - 17-32 transforms: 5 bits
-/// - 33-64 transforms: 6 bits
-/// - 65-128 transforms: 7 bits
-pub fn bits_per_transform(num_transforms: u32) -> u32 {
-    if num_transforms <= 2 {
-        1
-    } else if num_transforms <= 4 {
-        2
-    } else if num_transforms <= 8 {
-        3
-    } else if num_transforms <= 16 {
-        4
-    } else if num_transforms <= 32 {
-        5
-    } else if num_transforms <= 64 {
-        6
-    } else {
-        7  // Up to 128 transforms
-    }
-}
-
 /// Dispatch parameters for compute shader
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -860,12 +830,17 @@ pub struct GpuParams {
     pub dof_blur_strength: f32, // Depth of field: blur amount (0.0 = disabled, default: 0.0)
     pub fog_strength: f32, // Depth fog: exponential fog density (0.0 = disabled)
     pub fog_start: f32, // Depth fog: distance where fog begins
-    pub bits_per_transform: u32, // Bits needed per transform index (1-4 based on num_transforms)
-    pub path_map_style: u32, // 0=Prefix, 1=Suffix, 2=PrefixDistinct, 3=SuffixDistinct
-    pub path_capture_mode: u32, // 0=FirstHit, 1=FirstAfterBurnIn, 2=DeepestHit
-    pub path_tracking_mode: u32, // 0=First (first 32 iterations), 1=Recent (rolling window of 32)
-    pub num_path_filters: u32, // Number of active path filters (0 = disabled)
-    pub min_suffix_filter_length: u32, // Minimum length among depth=0 filters (for optimization)
+    pub path_map_style: u32, // PathMap: 0 Path, 1 Path (distinct), 2 Depth, 3-5 Origin radial / horizontal / vertical
+    /// PathMap's Origin styles: the attractor's centre `[x, y]` and
+    /// radius, the frame a point's position is read in. Where the path
+    /// history's capture and tracking modes, and its bit width, were.
+    /// Mirror in header.wgsl.
+    pub path_origin: [f32; 3],
+    /// Where the path filters' count and minimum length were: the Path
+    /// Editor they served was replaced by word editing
+    /// (docs/projects/word-editing.md). Kept as padding so `post_symmetry`
+    /// stays on its 16-byte boundary. Mirror in header.wgsl.
+    pub _pad_path_filters: [u32; 2],
     pub background_r: f32, // Background color R (for depth fog)
     pub background_g: f32, // Background color G (for depth fog)
     pub background_b: f32, // Background color B (for depth fog)
@@ -895,9 +870,32 @@ pub struct GpuParams {
     pub shadow_center_z: f32,
     pub shadow_radius: f32,
     pub shadow_count: u32,
-    pub _pad_shadow: [u32; 3],
+    /// The correction window `m` for biased selection
+    /// (docs/projects/flame-deep-zoom.md stage 1). Carved from the
+    /// first of the three shadow pads, so the struct's size and every
+    /// later field's offset are unchanged -- there is no layout churn
+    /// to get wrong, which is the whole reason it sits here rather
+    /// than at the end.
+    ///
+    /// Read only under the IMPORTANCE_SAMPLING builder flag.
+    pub importance_window: u32,
+    pub _pad_shadow: [u32; 2],
     // xyz = world-space direction TO each light, w unused.
     pub shadow_dirs: [[f32; 4]; 4],
+    /// **The leak probe: `[cx, cy, r, unused]`, off when `r <= 0`.**
+    ///
+    /// A region the render is asked to check itself against. Every
+    /// plot attempt outside the disc `D((cx, cy), r)` is counted into
+    /// `coverage[2]`, so an ORDINARY untargeted render measures what
+    /// share of the attractor's deposited work falls outside a claimed
+    /// region — the one number the enumeration cannot compute for
+    /// itself, because `Cylinders::lost` only sees words it tried to
+    /// bound, never the measure that was never in the root region at
+    /// all (`docs/projects/inversive-targeting.md` §1b).
+    ///
+    /// Appended after `shadow_dirs`, which is 16-byte aligned, so no
+    /// existing field's offset moves.
+    pub leak_probe: [f32; 4],
 }
 
 /// Plot-time symmetry params packed for the GPU uniform. Mirrors the
@@ -956,70 +954,6 @@ impl GpuPostSymmetry {
     }
 }
 
-/// Maximum number of path filters supported
-pub const MAX_PATH_FILTERS: usize = 64;
-
-/// GPU representation of a path filter (must match WGSL PathFilter struct)
-/// Used to block specific transform sequences during iteration
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct GpuPathFilter {
-    /// Packed pattern (up to 8 iterations at 4 bits each, LSB = first)
-    pub pattern: u32,
-    /// Number of iterations in pattern (1-8)
-    pub length: u32,
-    /// 0 = suffix match (any depth), >0 = match at this exact depth
-    pub depth: u32,
-    /// Padding for 16-byte alignment
-    pub _padding: u32,
-}
-
-impl GpuPathFilter {
-    /// Create an empty (unused) filter
-    pub fn empty() -> Self {
-        Self {
-            pattern: 0,
-            length: 0,
-            depth: 0,
-            _padding: 0,
-        }
-    }
-
-    /// Create a suffix filter (matches at any depth)
-    /// pattern: array of transform indices (0-15), up to 8 elements
-    pub fn suffix(pattern: &[u32]) -> Self {
-        assert!(pattern.len() <= 8, "Pattern can have at most 8 elements");
-        let mut packed = 0u32;
-        for (i, &idx) in pattern.iter().enumerate() {
-            packed |= (idx & 0xF) << (i * 4);
-        }
-        Self {
-            pattern: packed,
-            length: pattern.len() as u32,
-            depth: 0, // 0 = suffix match
-            _padding: 0,
-        }
-    }
-
-    /// Create an exact depth filter (only matches at specific iteration depth)
-    /// pattern: array of transform indices (0-15), up to 8 elements
-    /// depth: the iteration count at which this pattern should match
-    pub fn at_depth(pattern: &[u32], depth: u32) -> Self {
-        assert!(pattern.len() <= 8, "Pattern can have at most 8 elements");
-        assert!(depth >= pattern.len() as u32, "Depth must be >= pattern length");
-        let mut packed = 0u32;
-        for (i, &idx) in pattern.iter().enumerate() {
-            packed |= (idx & 0xF) << (i * 4);
-        }
-        Self {
-            pattern: packed,
-            length: pattern.len() as u32,
-            depth, // >0 = exact depth match
-            _padding: 0,
-        }
-    }
-}
-
 /// Tonemap parameters
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -1060,7 +994,25 @@ pub struct TonemapParams {
     pub levels_gamma: f32,  // Gamma/midpoint for density curve (1.0 = linear)
     pub highlight_mode: u32,  // 0 = Clip (per-channel clamp, Apophysis), 1 = MaxNorm (hue-preserving)
     pub levels_enabled: u32,  // 0 = Levels off (Apo-matching), 1 = on
-    pub _pad_levels: [u32; 2],  // Pad trailing chunk to 16 bytes for std140 alignment
+    /// Mean density of the pixels actually IN FRAME, which is what
+    /// Levels is expressed in multiples of.
+    ///
+    /// NOT `sample_density`, and the difference is why this field
+    /// exists. Cylinder targeting inflates `sample_density` by
+    /// `1/P(A_V)` so a forced render tone-maps to the brightness of
+    /// the unbiased one it stands in for -- 6.7e7 at a zoom of 1e5 on
+    /// a two-map fern. Levels divides per-pixel density by its mean,
+    /// so it saw every pixel as 1e-8 of the mean, clipped the opacity
+    /// to zero, and made the frame transparent: the brightness right
+    /// and the picture gone, with exposure unable to touch it because
+    /// the loss was in ALPHA.
+    ///
+    /// Brightness keeps the inflated count; Levels gets the real one,
+    /// `sample_density / cylinder_iteration_scale`. They are equal
+    /// whenever targeting is off, which is every render that existed
+    /// before it.
+    pub levels_density: f32,
+    pub _pad_levels: u32,  // Pad trailing chunk to 16 bytes for std140 alignment
 }
 
 /// Mirrored by `TonemapParams` in `shaders/tonemap.wgsl`, whose
@@ -1108,7 +1060,8 @@ impl Default for TonemapParams {
             levels_gamma: crate::config::defaults::DEFAULT_LEVELS_GAMMA,
             highlight_mode: 0,  // Clip (Apophysis-compatible)
             levels_enabled: 0,  // Levels off — Apo-matching default
-            _pad_levels: [0; 2],
+            levels_density: 1.0,
+            _pad_levels: 0,
         }
     }
 }
@@ -1252,15 +1205,9 @@ pub struct FlameBuffers {
     // None when path features are disabled to save ~58MB at 1920×1080
     pub path_buffer: Option<Buffer>,
 
-    // Path filter buffer for blocking specific transform sequences (OPTIONAL)
-    // Layout: MAX_PATH_FILTERS × GpuPathFilter (16 bytes each)
-    // None when path features are disabled
-    pub path_filter_buffer: Option<Buffer>,
-
-    // Dummy buffers for binding when path features are disabled
-    // WebGPU requires all bindings to be present, so we bind minimal buffers when disabled
+    // Dummy buffer for binding when path features are disabled
+    // WebGPU requires all bindings to be present, so we bind a minimal buffer when disabled
     pub dummy_path_buffer: Buffer,
-    pub dummy_filter_buffer: Buffer,
 
     // Xaos (chaos) transition weights buffer (OPTIONAL)
     // Layout: N × N matrix where N = num_transforms
@@ -1268,6 +1215,31 @@ pub struct FlameBuffers {
     // None when all xaos weights are 1.0 (default behavior)
     pub xaos_buffer: Option<Buffer>,
     pub dummy_xaos_buffer: Buffer,
+
+    // Biased selection weights and their likelihood ratios
+    // (docs/projects/flame-deep-zoom.md stage 1). Layout is
+    // `scene::importance::build_table`'s: N biased weights, then the
+    // N×N ratio matrix. None when the feature is off, and the dummy
+    // is bound then — the shader does not declare the binding at all
+    // in that case, but the bind group layout is one layout for both,
+    // so something has to sit in the slot.
+    pub bias_buffer: Option<Buffer>,
+    pub dummy_bias_buffer: Buffer,
+
+    // The enumerated cylinders (docs/projects/flame-deep-zoom.md
+    // stage 2), packed by `scene::cylinder::pack`. None when the view
+    // is not being targeted, which is the common case -- targeting is
+    // for depth and a shallow view has nothing to target.
+    pub cylinder_buffer: Option<Buffer>,
+    pub dummy_cylinder_buffer: Buffer,
+
+    // Frame-coverage counters for auto exposure: two u32s, [0] plot
+    // attempts that landed in frame and [1] plot attempts. Always
+    // allocated -- it is 32 bytes, and a buffer that is always there
+    // keeps the bind-group layout uniform whether or not the shader
+    // declares it. Cleared with the histogram, so the count always
+    // describes exactly the dispatches the histogram holds.
+    pub coverage_buffer: Buffer,
 
     // Analytic-blur per-transform mean-splat buffers, allocated at LOW
     // resolution (`ceil(W/D)×ceil(H/D) × 4 × u32 × slots`). The chaos game
@@ -1358,8 +1330,10 @@ impl FlameBuffers {
         self.histogram_buffer_scratch.destroy();
         // Optional / feature buffers.
         if let Some(b) = &self.path_buffer { b.destroy(); }
-        if let Some(b) = &self.path_filter_buffer { b.destroy(); }
         if let Some(b) = &self.xaos_buffer { b.destroy(); }
+        if let Some(b) = &self.bias_buffer { b.destroy(); }
+        if let Some(b) = &self.cylinder_buffer { b.destroy(); }
+        self.coverage_buffer.destroy();
         if let Some(b) = &self.accum_depth_buffer { b.destroy(); }
         if let Some(b) = &self.blur_splat_buffer { b.destroy(); }
         if let Some(b) = &self.blur_convolved_buffer { b.destroy(); }
@@ -1375,8 +1349,9 @@ impl FlameBuffers {
         self.histogram_blur_params_buffer_h.destroy();
         self.histogram_blur_params_buffer_v.destroy();
         self.dummy_path_buffer.destroy();
-        self.dummy_filter_buffer.destroy();
         self.dummy_xaos_buffer.destroy();
+        self.dummy_bias_buffer.destroy();
+        self.dummy_cylinder_buffer.destroy();
         self.dummy_blur_buffer.destroy();
         self.blur_kernel_weights_buffer.destroy();
         self.blur_convolve_params_buffer.destroy();
@@ -1485,12 +1460,9 @@ impl FlameBuffers {
             dof_blur_strength: crate::config::DEFAULT_DOF_BLUR_STRENGTH,
             fog_strength: crate::config::DEFAULT_FOG_STRENGTH,
             fog_start: crate::config::DEFAULT_FOG_START,
-            bits_per_transform: bits_per_transform(flame.transforms.len() as u32),
             path_map_style: 0,
-            path_capture_mode: 0, // FirstHit by default
-            path_tracking_mode: 0, // First (first 32 iterations) by default
-            num_path_filters: 0, // No filters by default
-            min_suffix_filter_length: 0, // No filters by default
+            path_origin: [0.0, 0.0, 1.0],
+            _pad_path_filters: [0; 2],
             background_r: 0.0,
             background_g: 0.0,
             background_b: 0.0,
@@ -1503,8 +1475,10 @@ impl FlameBuffers {
             shadow_center_z: 0.0,
             shadow_radius: 1.0,
             shadow_count: 0,
-            _pad_shadow: [0; 3],
+            importance_window: 0,
+            _pad_shadow: [0; 2],
             shadow_dirs: [[0.0; 4]; 4],
+            leak_probe: [0.0; 4],
         };
 
         let params_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
@@ -1630,27 +1604,39 @@ impl FlameBuffers {
         // See create_path_buffers() and drop_path_buffers() methods
         // Initially None to save memory (~58MB at 1920×1080)
         let path_buffer: Option<Buffer> = None;
-        let path_filter_buffer: Option<Buffer> = None;
 
-        // Create minimal dummy buffers for binding when path features are disabled
+        // Create a minimal dummy buffer for binding when path features are disabled
         // WebGPU requires all declared bindings to be bound, even if unused
-        // Path buffer: 28 bytes minimum (PathEntry = 7 × u32)
-        // Filter buffer: 16 bytes minimum (GpuPathFilter = 4 × u32)
+        // Path id buffer: 4 bytes minimum (one u32)
         let dummy_path_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Dummy Path Buffer"),
-            size: 28,  // PathEntry size: 7 × sizeof(u32) = 28 bytes
+            size: 4,  // One path id
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let dummy_filter_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("Dummy Filter Buffer"),
-            size: 16,  // GpuPathFilter size: 4 × sizeof(u32) = 16 bytes
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
         // Dummy xaos buffer for binding when xaos is disabled
         // Minimum size: 4 bytes (single f32)
+        // 32 bytes rather than 8: `BoundsTracker` reads a fixed
+        // 8-word window, and reusing it costs nothing here.
+        let coverage_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Frame Coverage Counters"),
+            size: 32,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let dummy_cylinder_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Dummy Cylinder Buffer"),
+            size: 48,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let dummy_bias_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Dummy Importance Bias Buffer"),
+            size: 4,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let dummy_xaos_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Dummy Xaos Buffer"),
             size: 4,  // Single f32
@@ -1844,10 +1830,13 @@ impl FlameBuffers {
             census_region: false,
             accum_depth_buffer: None,
             path_buffer,
-            path_filter_buffer,
             dummy_path_buffer,
-            dummy_filter_buffer,
             xaos_buffer: None,  // Created on demand when xaos is used
+            bias_buffer: None,  // Created on demand when the bias is enabled
+            dummy_bias_buffer,
+            cylinder_buffer: None,  // Created on demand when a view is targeted
+            dummy_cylinder_buffer,
+            coverage_buffer,
             dummy_xaos_buffer,
             blur_splat_buffer: None,  // Created on demand when analytic blur is active
             blur_convolved_buffer: None,
@@ -2085,6 +2074,11 @@ impl FlameBuffers {
     /// progressive accumulation, where depth persists across batches and
     /// the occlusion test tightens as the run converges.
     pub fn clear_histogram(&self, encoder: &mut CommandEncoder, reset_depth: bool) {
+        // The coverage counters describe the dispatches the histogram
+        // holds, so they are zeroed on exactly the same schedule. That
+        // is also what keeps them clear of u32 saturation on a long
+        // run -- a batch is far short of 4.3e9 plot attempts.
+        encoder.clear_buffer(&self.coverage_buffer, 0, None);
         if self.census_region {
             // RGBD only — the census tail accumulates across the whole
             // run and survives every clear (the runner reads it once at
@@ -2487,9 +2481,9 @@ impl FlameBuffers {
     }
 
     /// Create path buffers if not already created
-    /// Call when PathMap color mode is enabled or path filters are added
+    /// Call when PathMap color mode is enabled
     /// Returns true if buffers were created (bind groups need rebuilding)
-    pub fn create_path_buffers(&mut self, device: &Device, queue: &Queue) -> bool {
+    pub fn create_path_buffers(&mut self, device: &Device) -> bool {
         if self.path_buffer.is_some() {
             return false;  // Already created
         }
@@ -2498,11 +2492,11 @@ impl FlameBuffers {
             "Creating path buffers: {}×{} ({:.1}MB)",
             self.width,
             self.height,
-            (self.width as f64 * self.height as f64 * 7.0 * 4.0) / (1024.0 * 1024.0)
+            (self.width as f64 * self.height as f64 * 4.0) / (1024.0 * 1024.0)
         );
 
-        // Create path buffer (7 × u32 per pixel for PathEntry struct)
-        let path_buffer_size = (self.width * self.height * 7 * std::mem::size_of::<u32>() as u32) as u64;
+        // Create the path id buffer (one u32 per pixel: the path it was last drawn through)
+        let path_buffer_size = (self.width * self.height * std::mem::size_of::<u32>() as u32) as u64;
         self.path_buffer = Some(device.create_buffer(&BufferDescriptor {
             label: Some("Path Buffer"),
             size: path_buffer_size,
@@ -2510,28 +2504,11 @@ impl FlameBuffers {
             mapped_at_creation: false,
         }));
 
-        // Create path filter buffer (MAX_PATH_FILTERS × 16 bytes each)
-        let path_filter_buffer_size = (MAX_PATH_FILTERS * std::mem::size_of::<GpuPathFilter>()) as u64;
-        self.path_filter_buffer = Some(device.create_buffer(&BufferDescriptor {
-            label: Some("Path Filter Buffer"),
-            size: path_filter_buffer_size,
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        }));
-
-        // Initialize filter buffer with empty filters
-        let empty_filters = vec![GpuPathFilter::empty(); MAX_PATH_FILTERS];
-        queue.write_buffer(
-            self.path_filter_buffer.as_ref().unwrap(),
-            0,
-            bytemuck::cast_slice(&empty_filters),
-        );
-
         true  // Bind groups need rebuilding
     }
 
     /// Drop path buffers to free memory
-    /// Call when PathMap color mode is disabled AND no path filters are active
+    /// Call when PathMap color mode is disabled
     /// Returns true if buffers were dropped (bind groups need rebuilding)
     pub fn drop_path_buffers(&mut self) -> bool {
         if self.path_buffer.is_none() {
@@ -2540,11 +2517,10 @@ impl FlameBuffers {
 
         log::info!(
             "Dropping path buffers: {:.1}MB freed",
-            (self.width as f64 * self.height as f64 * 7.0 * 4.0) / (1024.0 * 1024.0)
+            (self.width as f64 * self.height as f64 * 4.0) / (1024.0 * 1024.0)
         );
 
         self.path_buffer = None;
-        self.path_filter_buffer = None;
 
         true  // Bind groups need rebuilding
     }
@@ -2553,23 +2529,6 @@ impl FlameBuffers {
     /// Use this when creating bind groups
     pub fn get_path_buffer_for_binding(&self) -> &Buffer {
         self.path_buffer.as_ref().unwrap_or(&self.dummy_path_buffer)
-    }
-
-    /// Get the path filter buffer for binding (real or dummy)
-    /// Use this when creating bind groups
-    pub fn get_filter_buffer_for_binding(&self) -> &Buffer {
-        self.path_filter_buffer.as_ref().unwrap_or(&self.dummy_filter_buffer)
-    }
-
-    /// Write path filters to the GPU buffer
-    /// Only writes if path buffers are enabled
-    pub fn write_path_filters(&self, queue: &Queue, filters: &[GpuPathFilter]) {
-        if let Some(ref filter_buffer) = self.path_filter_buffer {
-            // Pad with empty filters if needed
-            let mut padded_filters = filters.to_vec();
-            padded_filters.resize(MAX_PATH_FILTERS, GpuPathFilter::empty());
-            queue.write_buffer(filter_buffer, 0, bytemuck::cast_slice(&padded_filters));
-        }
     }
 
     // ============================================================
@@ -2701,6 +2660,106 @@ impl FlameBuffers {
 
     /// Update xaos weights from flame
     /// Only writes if xaos buffer is enabled
+    /// The cylinder table binding: the real buffer when a view is
+    /// targeted, the dummy otherwise.
+    pub fn cylinder_binding(&self) -> &Buffer {
+        self.cylinder_buffer.as_ref().unwrap_or(&self.dummy_cylinder_buffer)
+    }
+
+    /// Upload a packed cylinder table, or drop it. Returns true when
+    /// the bind groups need rebuilding.
+    pub fn update_cylinders(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        packed: Option<&[f32]>,
+    ) -> bool {
+        let Some(table) = packed.filter(|t| !t.is_empty()) else {
+            if let Some(b) = self.cylinder_buffer.take() {
+                b.destroy();
+                return true;
+            }
+            return false;
+        };
+        let want = (table.len() * std::mem::size_of::<f32>()) as u64;
+        let mut rebuilt = false;
+        if !self.cylinder_buffer.as_ref().is_some_and(|b| b.size() >= want) {
+            if let Some(b) = self.cylinder_buffer.take() {
+                b.destroy();
+            }
+            self.cylinder_buffer = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Cylinder Buffer"),
+                size: want.max(48),
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            rebuilt = true;
+        }
+        if let Some(b) = &self.cylinder_buffer {
+            queue.write_buffer(b, 0, bytemuck::cast_slice(table));
+        }
+        rebuilt
+    }
+
+    /// Write the replay table's `shift` -- the plan's centre less the
+    /// view's -- into its header (`scene::cylinder::pack_words`).
+    pub fn write_cylinder_shift(&self, queue: &Queue, shift: [f32; 2]) {
+        if let Some(b) = &self.cylinder_buffer {
+            queue.write_buffer(b, 16, bytemuck::cast_slice(&shift));
+        }
+    }
+
+    /// The bias table binding: the real buffer when the feature is
+    /// on, the dummy otherwise.
+    pub fn bias_binding(&self) -> &Buffer {
+        self.bias_buffer.as_ref().unwrap_or(&self.dummy_bias_buffer)
+    }
+
+    /// Size and fill the bias table for `flame` under `settings`,
+    /// creating or dropping the buffer as the feature turns on and
+    /// off. Returns true when the bind groups need rebuilding.
+    ///
+    /// The table is `N + N·N` floats, which at the 128-transform cap
+    /// is 64 KB and at a typical five is 120 bytes — the same shape
+    /// and the same order of size as the xaos buffer beside it.
+    pub fn update_bias(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        flame: &Flame,
+        settings: &crate::config::fractal_config::ImportanceSettings,
+    ) -> bool {
+        if !settings.enabled {
+            if self.bias_buffer.is_some() {
+                if let Some(b) = self.bias_buffer.take() {
+                    b.destroy();
+                }
+                return true;
+            }
+            return false;
+        }
+        let table = crate::scene::importance::build_table(flame, settings);
+        let want = (table.len() * std::mem::size_of::<f32>()) as u64;
+        let mut rebuilt = false;
+        let fits = self.bias_buffer.as_ref().is_some_and(|b| b.size() >= want);
+        if !fits {
+            if let Some(b) = self.bias_buffer.take() {
+                b.destroy();
+            }
+            self.bias_buffer = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Importance Bias Buffer"),
+                size: want.max(4),
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            rebuilt = true;
+        }
+        if let Some(b) = &self.bias_buffer {
+            queue.write_buffer(b, 0, bytemuck::cast_slice(&table));
+        }
+        rebuilt
+    }
+
     pub fn update_xaos(&self, queue: &Queue, flame: &Flame) {
         if let Some(ref xaos_buffer) = self.xaos_buffer {
             if let Some(flat) = flame.xaos_flat() {

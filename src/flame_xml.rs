@@ -31,7 +31,7 @@ use quick_xml::events::Event;
 use quick_xml::Reader;
 
 use crate::config::FractalConfig;
-use crate::scene::palette::{Palette, ColorMode, PathMapStyle, PathCaptureMode, PathTrackingMode};
+use crate::scene::palette::{Palette, ColorMode, PathMapStyle};
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
 use crate::scene::transforms::{Flame, RenderMode, Transform};
 use crate::variations::global_registry;
@@ -531,8 +531,7 @@ fn parse_flame_element(
         max_iterations: 1_000_000_000,
         color_mode,  // Detected based on palette presence
         path_map_style: PathMapStyle::default(),
-        path_capture_mode: PathCaptureMode::default(),
-        path_tracking_mode: PathTrackingMode::default(),
+        path_map_level: crate::config::fractal_config::default_path_map_level(),
         // Use parsed palette, or default if not present in XML
         palette: palette.unwrap_or_default(),
         palette_rotation: 0.0,  // Default, could parse from XML if present
@@ -550,6 +549,13 @@ fn parse_flame_element(
         hue_shift: 0.0,  // Default hue shift
         gamma_threshold,  // Use parsed Apophysis gamma_threshold
         deterministic_rng: false,
+        importance: crate::config::fractal_config::ImportanceSettings::default(),
+        cylinder_targeting: false,
+        cylinder_always: false,
+        cylinder_trim: 0.0,
+        cylinder_trim_levels: 2,
+        word_removals: Vec::new(),
+        auto_exposure: false,
         blend_factor: 0.1,
         use_dynamic_blend: true,
         alpha_blend_low: crate::config::defaults::DEFAULT_ALPHA_BLEND_LOW,
@@ -1400,7 +1406,7 @@ fn write_single_flame(out: &mut String, config: &FractalConfig, flame: &Flame) {
     out.push_str(&xml_escape_attr(&flame.name));
     out.push_str(&format!("\" version=\"{}\"", xml_escape_attr(&version)));
     out.push_str(&format!(" size=\"{} {}\"", size.0, size.1));
-    out.push_str(&format!(" center=\"{} {}\"", fmt_f32(config.pan_x), fmt_f32(config.pan_y)));
+    out.push_str(&format!(" center=\"{} {}\"", fmt_f32(config.pan_x as f32), fmt_f32(config.pan_y as f32)));
     out.push_str(&format!(" scale=\"{}\"", fmt_f32(apo_scale)));
     if rotate_deg.abs() > 1e-6 {
         out.push_str(&format!(" rotate=\"{}\"", fmt_f32(rotate_deg)));

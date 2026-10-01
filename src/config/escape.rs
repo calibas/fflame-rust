@@ -119,6 +119,80 @@ pub struct EscapeConfig {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub coloring_params: BTreeMap<String, f32>,
 
+    /// The **camera lens**: a variation applied to the normalised
+    /// screen offset before the view scale, by name. Empty is no lens.
+    ///
+    /// This warps the VIEW, not the fractal: the formula is untouched
+    /// and only which point each pixel samples changes, which is the
+    /// opposite direction from a flame's final transform. See
+    /// `docs/projects/escape-camera-lens.md`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub lens: String,
+
+    /// The lens variation's parameters, keyed by name inside that
+    /// variation's namespace -- the same shape as `formula_params`,
+    /// and preserved across a change of lens for the same reason.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub lens_params: BTreeMap<String, f32>,
+
+    /// How much of the lens to apply: `n` at 0, `L(n)` at 1, and
+    /// `n + amount * (L(n) - n)` in general -- so past 1 it overshoots
+    /// and below 0 it runs backwards.
+    ///
+    /// Without it a lens is all-or-nothing, and most of them are far
+    /// too strong at full strength to be a camera effect rather than
+    /// a subject. The simulation's layer warp reached for the same
+    /// control (`mix(q, mapped, rate)`) for the same reason.
+    ///
+    /// The negative half is not symmetry for its own sake. A lens
+    /// either magnifies the middle or shrinks it, and which one a
+    /// given variation does is a property of that variation; running
+    /// the displacement backwards turns any of them around, which is
+    /// the first-order inverse of the map.
+    #[serde(default = "default_lens_amount", skip_serializing_if = "is_one")]
+    pub lens_amount: f32,
+
+
+    /// Where a solid render looks: the point the camera orbits and
+    /// approaches, as exact decimal strings.
+    ///
+    /// Strings for the same reason the 2D centre is one. A deep zoom
+    /// is an approach to a POINT, and the eye's distance shrinks with
+    /// `zoom_log2` while the target holds still — so the target is the
+    /// quantity that needs digits, and an `f32` camera position would
+    /// cap 3D at a zoom the plane passed long ago (D8).
+    ///
+    /// Empty means "the attractor's own centre", which is what frames
+    /// a flame you have just switched to without being told where it
+    /// is. The moment the camera is moved they become explicit.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cam_target_x: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cam_target_y: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cam_target_z: String,
+
+    /// Elevation above the target's horizon, radians.
+    ///
+    /// The camera's frame is the flame's 4-angle chain
+    /// (`Rz(rotation)·Rx(pitch)·Ry(bank)·Rz(−yaw)`, see
+    /// `solid_camera`), in which this and `cam_yaw` are re-expressed
+    /// so that zero here is the horizon and not the flame's top-down
+    /// view. The poles are ordinary: the chain always has an up.
+    #[serde(default = "default_cam_pitch", skip_serializing_if = "is_default_cam_pitch")]
+    pub cam_pitch: f32,
+    /// Rotation about the target, radians.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub cam_yaw: f32,
+    /// The third angle, radians: the flame camera's bank, in the same
+    /// slot of the same chain. The screen roll is `rotation`, shared
+    /// with the plane.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub cam_bank: f32,
+    /// Vertical field of view, radians -- the frame's height; the
+    /// width follows the aspect.
+    #[serde(default = "default_cam_fov", skip_serializing_if = "is_default_cam_fov")]
+    pub cam_fov: f32,
 
     /// Supersampling factor: the image renders at N× resolution per
     /// axis and box-downsamples (N² samples per display pixel).
@@ -157,6 +231,25 @@ pub struct EscapeConfig {
     /// and skipped when off, so every existing file is byte-stable.
     #[serde(default, skip_serializing_if = "EscapeContrast::is_default")]
     pub contrast: EscapeContrast,
+}
+
+/// Looking down at about 24°, which shows a solid's top and one
+/// side rather than a silhouette.
+fn default_cam_pitch() -> f32 {
+    0.42
+}
+
+fn is_default_cam_pitch(v: &f32) -> bool {
+    (*v - default_cam_pitch()).abs() < f32::EPSILON
+}
+
+/// About 40°, which is a normal lens rather than a dramatic one.
+fn default_cam_fov() -> f32 {
+    0.7
+}
+
+fn is_default_cam_fov(v: &f32) -> bool {
+    (*v - default_cam_fov()).abs() < f32::EPSILON
 }
 
 fn default_supersample() -> u32 {
@@ -587,6 +680,24 @@ pub fn biomorph_from_str(s: &str) -> Option<BiomorphMode> {
     }
 }
 
+/// How far [`EscapeConfig::lens_amount`] may be pushed either way.
+///
+/// Positive bulges the middle out and negative pinches it in; past 1
+/// either way the lens overshoots rather than blends.
+///
+/// Here rather than beside the lens engine because the config module
+/// is compiled whether or not `engine-escape` is, and the clamp on
+/// the write path lives in the config manager. `escape::lens`
+/// re-exports it.
+pub const LENS_AMOUNT_LIMIT: f32 = 5.0;
+
+/// A lens at full strength. One rather than zero so that choosing a
+/// lens shows it: a default of nothing would look like a broken
+/// picker.
+fn default_lens_amount() -> f32 {
+    1.0
+}
+
 fn default_formula() -> String {
     "mandelbrot".to_string()
 }
@@ -727,6 +838,13 @@ impl Default for EscapeConfig {
             center_im: default_center_im(),
             zoom_log2: 0.0,
             rotation: 0.0,
+            cam_target_x: String::new(),
+            cam_target_y: String::new(),
+            cam_target_z: String::new(),
+            cam_pitch: default_cam_pitch(),
+            cam_yaw: 0.0,
+            cam_bank: 0.0,
+            cam_fov: default_cam_fov(),
             max_iter: default_max_iter(),
             bailout: default_bailout(),
             damping_re: default_damping_re(),
@@ -735,6 +853,9 @@ impl Default for EscapeConfig {
             coloring: default_coloring(),
             formula_params: BTreeMap::new(),
             coloring_params: BTreeMap::new(),
+            lens: String::new(),
+            lens_params: BTreeMap::new(),
+            lens_amount: default_lens_amount(),
             supersample: 1,
             downsample: DownsampleMode::Box,
             reference_period: None,
@@ -990,6 +1111,9 @@ mod tests {
             ConfigPath::EscapeColoring,
             ConfigPath::EscapeFormulaParam { param: "power".into() },
             ConfigPath::EscapeColoringParam { param: "trap_radius".into() },
+            ConfigPath::EscapeLens,
+            ConfigPath::EscapeLensAmount,
+            ConfigPath::EscapeLensParam { param: "power".into() },
         ];
         for p in paths {
             let key = p.to_string_key();

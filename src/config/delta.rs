@@ -7,7 +7,7 @@
 /// - ConfigChange: Batch of deltas (single undo point)
 /// - UpdateType: What kind of update is needed for a change
 
-use crate::scene::palette::{Palette, ColorMode, PathCaptureMode, PathMapStyle, PathTrackingMode};
+use crate::scene::palette::{Palette, ColorMode, PathMapStyle};
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
 use crate::scene::transforms::RenderMode;
 use std::fmt::{self, Display, Formatter};
@@ -56,15 +56,33 @@ pub enum ConfigPath {
     UseCurve,
     // Levels controls (density-to-opacity mapping)
     LevelsEnabled,
+    /// Auto exposure: normalise the tone map by the density of the
+    /// pixels in frame rather than by total iterations
+    /// (docs/projects/flame-deep-zoom.md §14).
+    AutoExposure,
+    /// Cylinder targeting: force an enumerated prefix so every sample
+    /// lands in the viewport (docs/projects/flame-deep-zoom.md stage
+    /// 2). A REQUEST -- the renderer still declines per view.
+    CylinderTargeting,
+    /// Keep the plan at every zoom, even where it renders more slowly
+    /// ("Always" in the UI's Focused Rendering switch).
+    CylinderAlways,
+    /// Trim: drop the plan's minor branches near the view
+    /// (docs/projects/word-editing.md §4). 0 = off.
+    CylinderTrim,
+    /// How many levels of the word tree, from the view, trim reaches.
+    CylinderTrimLevels,
+    /// The pieces of the picture removed by their words
+    /// (docs/projects/word-editing.md §5): a list of patterns.
+    WordRemovals,
     LevelsLow,
     LevelsHigh,
     LevelsGamma,
 
     // ===== Color (no iteration reset, just color buffer update) =====
     ColorMode,
-    PathMapStyle,  // Prefix or Suffix coloring for PathMap mode
-    PathCaptureMode,  // FirstHit, FirstAfterBurnIn, or LastHit
-    PathTrackingMode,  // First (first 32 iterations) or Recent (rolling window of 32 most recent)
+    PathMapStyle,  // How a path becomes a PathMap colour
+    PathMapLevel,  // How many transforms of a path decide its PathMap colour
     PaletteIndex,
     Palette, // Embedded palette data (custom palettes)
     PaletteRotation,
@@ -310,7 +328,17 @@ pub enum ConfigPath {
     /// below anything a slider or track produces. Phase 4 revisits if a
     /// deep dive ever needs finer undo steps.
     EscapeZoomLog2,
-    /// View rotation, radians.
+    /// The solid camera's target, one axis each, as decimal strings —
+    /// the precision a deep 3D zoom needs (D8).
+    EscapeCamTargetX,
+    EscapeCamTargetY,
+    EscapeCamTargetZ,
+    EscapeCamPitch,
+    EscapeCamYaw,
+    EscapeCamBank,
+    EscapeCamFov,
+    /// View rotation, radians. The plane's, and the solid camera's
+    /// screen roll.
     EscapeRotation,
     /// Per-pixel iteration ceiling.
     EscapeMaxIter,
@@ -462,6 +490,14 @@ pub enum ConfigPath {
     EscapeFormulaParam { param: String },
     /// One parameter of the active coloring, same shape.
     EscapeColoringParam { param: String },
+    /// The camera lens: a variation warping the screen offset, by
+    /// name. Empty is no lens.
+    EscapeLens,
+    /// How much of the lens to apply, 0 to 1.
+    EscapeLensAmount,
+    /// One parameter of the lens variation, keyed by name like
+    /// `EscapeFormulaParam`.
+    EscapeLensParam { param: String },
 
     // ===== System Settings (device-specific, not tracked for undo) =====
     SystemIterationsPerThread,
@@ -712,6 +748,12 @@ impl Display for ConfigPath {
             ConfigPath::TonemapCurve => write!(f, "Tone Curve"),
             ConfigPath::UseCurve => write!(f, "Use Tone Curve"),
             ConfigPath::LevelsEnabled => write!(f, "Levels Enabled"),
+            ConfigPath::AutoExposure => write!(f, "Auto Exposure"),
+            ConfigPath::CylinderTargeting => write!(f, "Cylinder Targeting"),
+            ConfigPath::CylinderAlways => write!(f, "Cylinder Always"),
+            ConfigPath::CylinderTrim => write!(f, "Cylinder Trim"),
+            ConfigPath::CylinderTrimLevels => write!(f, "Cylinder Trim Levels"),
+            ConfigPath::WordRemovals => write!(f, "Word Removals"),
             ConfigPath::LevelsLow => write!(f, "Levels Low"),
             ConfigPath::LevelsHigh => write!(f, "Levels High"),
             ConfigPath::LevelsGamma => write!(f, "Levels Midtones"),
@@ -719,8 +761,7 @@ impl Display for ConfigPath {
             // Color
             ConfigPath::ColorMode => write!(f, "Color Mode"),
             ConfigPath::PathMapStyle => write!(f, "PathMap Style"),
-            ConfigPath::PathCaptureMode => write!(f, "PathMap Capture Mode"),
-            ConfigPath::PathTrackingMode => write!(f, "PathMap Tracking Mode"),
+            ConfigPath::PathMapLevel => write!(f, "PathMap Level"),
             ConfigPath::PaletteIndex => write!(f, "Palette"),
             ConfigPath::Palette => write!(f, "Palette Data"),
             ConfigPath::PaletteRotation => write!(f, "Palette Rotation"),
@@ -949,6 +990,13 @@ impl Display for ConfigPath {
             ConfigPath::EscapeCenterRe => write!(f, "Escape Center Re"),
             ConfigPath::EscapeCenterIm => write!(f, "Escape Center Im"),
             ConfigPath::EscapeZoomLog2 => write!(f, "Escape Zoom"),
+            ConfigPath::EscapeCamTargetX => write!(f, "Camera Target X"),
+            ConfigPath::EscapeCamTargetY => write!(f, "Camera Target Y"),
+            ConfigPath::EscapeCamTargetZ => write!(f, "Camera Target Z"),
+            ConfigPath::EscapeCamPitch => write!(f, "Camera Pitch"),
+            ConfigPath::EscapeCamYaw => write!(f, "Camera Yaw"),
+            ConfigPath::EscapeCamBank => write!(f, "Camera Bank"),
+            ConfigPath::EscapeCamFov => write!(f, "Camera Field of View"),
             ConfigPath::EscapeRotation => write!(f, "Escape Rotation"),
             ConfigPath::EscapeMaxIter => write!(f, "Escape Max Iterations"),
             ConfigPath::SimModel => write!(f, "Simulation Model"),
@@ -1026,6 +1074,9 @@ impl Display for ConfigPath {
             ConfigPath::EscapeColoring => write!(f, "Escape Coloring"),
             ConfigPath::EscapeFormulaParam { param } => write!(f, "Formula → {param}"),
             ConfigPath::EscapeColoringParam { param } => write!(f, "Coloring → {param}"),
+            ConfigPath::EscapeLens => write!(f, "Lens"),
+            ConfigPath::EscapeLensAmount => write!(f, "Lens Amount"),
+            ConfigPath::EscapeLensParam { param } => write!(f, "Lens → {param}"),
 
             // Flame
             ConfigPath::RenderMode => write!(f, "Render Mode"),
@@ -1200,6 +1251,12 @@ impl ConfigPath {
             ConfigPath::TonemapCurve => I18nKey::simple("history.param.tone_curve"),
             ConfigPath::UseCurve => I18nKey::simple("history.param.use_tone_curve"),
             ConfigPath::LevelsEnabled => I18nKey::simple("history.param.levels_enabled"),
+            ConfigPath::AutoExposure => I18nKey::simple("history.param.auto_exposure"),
+            ConfigPath::CylinderTargeting => I18nKey::simple("history.param.cylinder_targeting"),
+            ConfigPath::CylinderAlways => I18nKey::simple("history.param.cylinder_always"),
+            ConfigPath::CylinderTrim => I18nKey::simple("history.param.cylinder_trim"),
+            ConfigPath::CylinderTrimLevels => I18nKey::simple("history.param.cylinder_trim_levels"),
+            ConfigPath::WordRemovals => I18nKey::simple("history.param.word_removals"),
             ConfigPath::LevelsLow => I18nKey::simple("history.param.levels_low"),
             ConfigPath::LevelsHigh => I18nKey::simple("history.param.levels_high"),
             ConfigPath::LevelsGamma => I18nKey::simple("history.param.levels_midtones"),
@@ -1207,8 +1264,7 @@ impl ConfigPath {
             // Color
             ConfigPath::ColorMode => I18nKey::simple("history.param.color_mode"),
             ConfigPath::PathMapStyle => I18nKey::simple("history.param.pathmap_style"),
-            ConfigPath::PathCaptureMode => I18nKey::simple("history.param.pathmap_capture_mode"),
-            ConfigPath::PathTrackingMode => I18nKey::simple("history.param.pathmap_tracking_mode"),
+            ConfigPath::PathMapLevel => I18nKey::simple("history.param.pathmap_level"),
             ConfigPath::PaletteIndex => I18nKey::simple("history.param.palette"),
             ConfigPath::Palette => I18nKey::simple("history.param.palette_data"),
             ConfigPath::PaletteRotation => I18nKey::simple("history.param.palette_rotation"),
@@ -1238,6 +1294,19 @@ impl ConfigPath {
             ConfigPath::EscapeCenterRe => I18nKey::simple("history.param.escape_center_re"),
             ConfigPath::EscapeCenterIm => I18nKey::simple("history.param.escape_center_im"),
             ConfigPath::EscapeZoomLog2 => I18nKey::simple("history.param.escape_zoom"),
+            ConfigPath::EscapeCamTargetX => {
+                I18nKey::simple("history.param.escape_cam_target_x")
+            }
+            ConfigPath::EscapeCamTargetY => {
+                I18nKey::simple("history.param.escape_cam_target_y")
+            }
+            ConfigPath::EscapeCamTargetZ => {
+                I18nKey::simple("history.param.escape_cam_target_z")
+            }
+            ConfigPath::EscapeCamPitch => I18nKey::simple("history.param.escape_cam_pitch"),
+            ConfigPath::EscapeCamYaw => I18nKey::simple("history.param.escape_cam_yaw"),
+            ConfigPath::EscapeCamBank => I18nKey::simple("history.param.escape_cam_bank"),
+            ConfigPath::EscapeCamFov => I18nKey::simple("history.param.escape_cam_fov"),
             ConfigPath::EscapeRotation => I18nKey::simple("history.param.escape_rotation"),
             ConfigPath::EscapeMaxIter => I18nKey::simple("history.param.escape_max_iter"),
             ConfigPath::SimModel => I18nKey::simple("history.param.sim_model"),
@@ -1344,6 +1413,12 @@ impl ConfigPath {
             ),
             ConfigPath::EscapeColoringParam { param } => I18nKey::with_params(
                 "history.param.escape_coloring_param",
+                vec![("param", param.clone())],
+            ),
+            ConfigPath::EscapeLens => I18nKey::simple("history.param.escape_lens"),
+            ConfigPath::EscapeLensAmount => I18nKey::simple("history.param.escape_lens_amount"),
+            ConfigPath::EscapeLensParam { param } => I18nKey::with_params(
+                "history.param.escape_lens_param",
                 vec![("param", param.clone())],
             ),
 
@@ -1711,14 +1786,19 @@ pub enum ConfigValue {
     String(String),
     /// Ordered list of strings — used for `variation_order` reordering.
     StringList(Vec<String>),
-    Vec2(f32, f32),  // For pan coordinates and other 2D values
+    /// The pan, and only the pan -- which is why it is f64. See
+    /// `FractalConfig::pan_x`.
+    Vec2(f64, f64),
+    /// A single f64 component, for `PanX`/`PanY`. `Float` stays f32
+    /// for the several hundred parameters that are genuinely f32; a
+    /// separate variant keeps the widening to the two paths that need
+    /// it instead of rippling through all of them.
+    Double(f64),
     ColorRgb([f32; 3]),
     ToneMapMode(ToneMapMode),
     HighlightMode(crate::scene::tonemap::HighlightMode),
     ColorMode(ColorMode),
     PathMapStyle(PathMapStyle),
-    PathCaptureMode(PathCaptureMode),
-    PathTrackingMode(PathTrackingMode),
     RenderMode(RenderMode),
     ToneCurve(ToneCurve),
     Palette(Palette),
@@ -1729,11 +1809,18 @@ impl ConfigValue {
     /// Check if two values are approximately equal (for floats)
     pub fn approx_eq(&self, other: &Self) -> bool {
         const EPSILON_F32: f32 = 1e-6;
+        const EPSILON_F64: f64 = 1e-15;
 
         match (self, other) {
             (ConfigValue::Float(a), ConfigValue::Float(b)) => (a - b).abs() < EPSILON_F32,
+            // The pan's own epsilon is far tighter than f32's,
+            // because at a deep zoom two centres 1e-6 apart are
+            // thousands of pixels apart. Coalescing undo entries on
+            // an f32 epsilon would silently merge pans that are not
+            // remotely the same view.
+            (ConfigValue::Double(a), ConfigValue::Double(b)) => (a - b).abs() < EPSILON_F64,
             (ConfigValue::Vec2(x1, y1), ConfigValue::Vec2(x2, y2)) => {
-                (x1 - x2).abs() < EPSILON_F32 && (y1 - y2).abs() < EPSILON_F32
+                (x1 - x2).abs() < EPSILON_F64 && (y1 - y2).abs() < EPSILON_F64
             }
             (ConfigValue::ColorRgb(a), ConfigValue::ColorRgb(b)) => a
                 .iter()
@@ -1761,13 +1848,16 @@ impl Display for ConfigValue {
         match self {
             ConfigValue::Unit => write!(f, "()"),
             ConfigValue::Float(v) => write!(f, "{:.3}", v),
+            // More digits than `Float`: a pan is a position, and
+            // three decimals of one is not a view.
+            ConfigValue::Double(v) => write!(f, "{v:.9}"),
             ConfigValue::Int(v) => write!(f, "{}", v),
             ConfigValue::UInt(v) => write!(f, "{}", v),
             ConfigValue::UInt64(v) => write!(f, "{}", v),
             ConfigValue::Bool(v) => write!(f, "{}", v),
             ConfigValue::String(v) => write!(f, "{}", v),
             ConfigValue::StringList(v) => write!(f, "[{}]", v.join(", ")),
-            ConfigValue::Vec2(x, y) => write!(f, "({:.3}, {:.3})", x, y),
+            ConfigValue::Vec2(x, y) => write!(f, "({x:.9}, {y:.9})"),
             ConfigValue::ColorRgb([r, g, b]) => {
                 write!(f, "RGB({:.2}, {:.2}, {:.2})", r, g, b)
             }
@@ -1776,8 +1866,6 @@ impl Display for ConfigValue {
             ConfigValue::ColorMode(m) => write!(f, "{:?}", m),
             ConfigValue::SqueezeMode(m) => write!(f, "{:?}", m),
             ConfigValue::PathMapStyle(m) => write!(f, "{:?}", m),
-            ConfigValue::PathCaptureMode(m) => write!(f, "{:?}", m),
-            ConfigValue::PathTrackingMode(m) => write!(f, "{:?}", m),
             ConfigValue::RenderMode(m) => write!(f, "{:?}", m),
             ConfigValue::ToneCurve(curve) => {
                 write!(f, "[Tone Curve: {} pts: {:?}]",
@@ -1801,6 +1889,14 @@ impl From<f32> for ConfigValue {
         ConfigValue::Float(v)
     }
 }
+
+// **Deliberately no `From<f64>`.** An untyped float literal infers
+// f64, so adding one silently turns every `2.0.into()` in the
+// codebase from `Float` into `Double` -- and the several hundred
+// genuinely-f32 parameters then fail with a type mismatch at
+// RUNTIME, not at compile time. The two paths that want a `Double`
+// name it. (The tuple impl below is safe for the opposite reason:
+// `Vec2` has exactly one user, the pan.)
 
 impl From<i32> for ConfigValue {
     fn from(v: i32) -> Self {
@@ -1844,8 +1940,8 @@ impl From<&str> for ConfigValue {
     }
 }
 
-impl From<(f32, f32)> for ConfigValue {
-    fn from((x, y): (f32, f32)) -> Self {
+impl From<(f64, f64)> for ConfigValue {
+    fn from((x, y): (f64, f64)) -> Self {
         ConfigValue::Vec2(x, y)
     }
 }
@@ -1886,17 +1982,6 @@ impl From<PathMapStyle> for ConfigValue {
     }
 }
 
-impl From<PathCaptureMode> for ConfigValue {
-    fn from(v: PathCaptureMode) -> Self {
-        ConfigValue::PathCaptureMode(v)
-    }
-}
-
-impl From<PathTrackingMode> for ConfigValue {
-    fn from(v: PathTrackingMode) -> Self {
-        ConfigValue::PathTrackingMode(v)
-    }
-}
 
 impl From<RenderMode> for ConfigValue {
     fn from(v: RenderMode) -> Self {
@@ -2539,15 +2624,11 @@ impl ConfigPath {
             | ConfigPath::PaletteSqueezeFalloff
             | ConfigPath::PaletteLogStrength
             | ConfigPath::PaletteReverse
-            | ConfigPath::SpeedFactor
-            // PathMapStyle affects color computation in compute shader, needs accumulation reset
-            | ConfigPath::PathMapStyle => UpdateType::ColorOnly,
+            | ConfigPath::SpeedFactor => UpdateType::ColorOnly,
 
-            // PathCaptureMode affects path buffer capture logic in compute shader
-            ConfigPath::PathCaptureMode => UpdateType::IterationReset,
-
-            // PathTrackingMode affects path tracking logic in compute shader
-            ConfigPath::PathTrackingMode => UpdateType::IterationReset,
+            // A path's PathMap colour is packed with the plan, and the
+            // level divides the plan: both redraw from scratch.
+            ConfigPath::PathMapStyle | ConfigPath::PathMapLevel => UpdateType::IterationReset,
 
             // Rendering settings - affect iteration behavior
             ConfigPath::BlendFactor
@@ -2630,7 +2711,16 @@ impl ConfigPath {
             | ConfigPath::PostSymmetryRotation
             | ConfigPath::PreserveZ
             | ConfigPath::MaxIterations
-            | ConfigPath::DeterministicRng => UpdateType::IterationReset,
+            | ConfigPath::DeterministicRng
+            // Both change the compute shader (FRAME_COVERAGE /
+            // CYLINDER_TARGETING) and what the accumulator holds,
+            // so neither is a tone-map-only refresh.
+            | ConfigPath::AutoExposure
+            | ConfigPath::CylinderTargeting
+            | ConfigPath::CylinderAlways
+            | ConfigPath::CylinderTrim
+            | ConfigPath::CylinderTrimLevels
+            | ConfigPath::WordRemovals => UpdateType::IterationReset,
 
             // Escape-time: the fragment renderer re-renders the frame;
             // no flame-style reset/accumulate distinction exists there.
@@ -2641,6 +2731,13 @@ impl ConfigPath {
             | ConfigPath::EscapeCenterRe
             | ConfigPath::EscapeCenterIm
             | ConfigPath::EscapeZoomLog2
+            | ConfigPath::EscapeCamTargetX
+            | ConfigPath::EscapeCamTargetY
+            | ConfigPath::EscapeCamTargetZ
+            | ConfigPath::EscapeCamPitch
+            | ConfigPath::EscapeCamYaw
+            | ConfigPath::EscapeCamBank
+            | ConfigPath::EscapeCamFov
             | ConfigPath::EscapeRotation
             | ConfigPath::EscapeMaxIter
             | ConfigPath::EscapeSupersample
@@ -2670,7 +2767,10 @@ impl ConfigPath {
             | ConfigPath::EscapeShadingTextureScale
             | ConfigPath::EscapeColoring
             | ConfigPath::EscapeFormulaParam { .. }
-            | ConfigPath::EscapeColoringParam { .. } => UpdateType::EscapeRerender,
+            | ConfigPath::EscapeColoringParam { .. }
+            | ConfigPath::EscapeLens
+            | ConfigPath::EscapeLensAmount
+            | ConfigPath::EscapeLensParam { .. } => UpdateType::EscapeRerender,
 
             // Simulation: split by how much of the run survives. This
             // grouping is the whole reason there are three update types
@@ -2802,6 +2902,12 @@ impl ConfigPath {
             ConfigPath::TonemapCurve => "TonemapCurve".to_string(),
             ConfigPath::UseCurve => "UseCurve".to_string(),
             ConfigPath::LevelsEnabled => "LevelsEnabled".to_string(),
+            ConfigPath::AutoExposure => "AutoExposure".to_string(),
+            ConfigPath::CylinderTargeting => "CylinderTargeting".to_string(),
+            ConfigPath::CylinderAlways => "CylinderAlways".to_string(),
+            ConfigPath::CylinderTrim => "CylinderTrim".to_string(),
+            ConfigPath::CylinderTrimLevels => "CylinderTrimLevels".to_string(),
+            ConfigPath::WordRemovals => "WordRemovals".to_string(),
             ConfigPath::LevelsLow => "LevelsLow".to_string(),
             ConfigPath::LevelsHigh => "LevelsHigh".to_string(),
             ConfigPath::LevelsGamma => "LevelsGamma".to_string(),
@@ -2809,8 +2915,7 @@ impl ConfigPath {
             // Color
             ConfigPath::ColorMode => "ColorMode".to_string(),
             ConfigPath::PathMapStyle => "PathMapStyle".to_string(),
-            ConfigPath::PathCaptureMode => "PathCaptureMode".to_string(),
-            ConfigPath::PathTrackingMode => "PathTrackingMode".to_string(),
+            ConfigPath::PathMapLevel => "PathMapLevel".to_string(),
             ConfigPath::PaletteIndex => "PaletteIndex".to_string(),
             ConfigPath::Palette => "Palette".to_string(),
             ConfigPath::PaletteRotation => "PaletteRotation".to_string(),
@@ -2980,6 +3085,13 @@ impl ConfigPath {
             ConfigPath::EscapeCenterRe => "Escape.CenterRe".to_string(),
             ConfigPath::EscapeCenterIm => "Escape.CenterIm".to_string(),
             ConfigPath::EscapeZoomLog2 => "Escape.ZoomLog2".to_string(),
+            ConfigPath::EscapeCamTargetX => "Escape.CamTargetX".to_string(),
+            ConfigPath::EscapeCamTargetY => "Escape.CamTargetY".to_string(),
+            ConfigPath::EscapeCamTargetZ => "Escape.CamTargetZ".to_string(),
+            ConfigPath::EscapeCamPitch => "Escape.CamPitch".to_string(),
+            ConfigPath::EscapeCamYaw => "Escape.CamYaw".to_string(),
+            ConfigPath::EscapeCamBank => "Escape.CamBank".to_string(),
+            ConfigPath::EscapeCamFov => "Escape.CamFov".to_string(),
             ConfigPath::EscapeRotation => "Escape.Rotation".to_string(),
             ConfigPath::EscapeMaxIter => "Escape.MaxIter".to_string(),
             ConfigPath::SimModel => "Sim.Model".to_string(),
@@ -3057,6 +3169,9 @@ impl ConfigPath {
             ConfigPath::EscapeColoring => "Escape.Coloring".to_string(),
             ConfigPath::EscapeFormulaParam { param } => format!("Escape.FormulaParam.{param}"),
             ConfigPath::EscapeColoringParam { param } => format!("Escape.ColoringParam.{param}"),
+            ConfigPath::EscapeLens => "Escape.Lens".to_string(),
+            ConfigPath::EscapeLensAmount => "Escape.LensAmount".to_string(),
+            ConfigPath::EscapeLensParam { param } => format!("Escape.LensParam.{param}"),
             ConfigPath::PerspectiveStrength => "PerspectiveStrength".to_string(),
             ConfigPath::DepthDensityCompensation => "DepthDensityCompensation".to_string(),
             ConfigPath::FarDensityFade => "FarDensityFade".to_string(),
@@ -3156,6 +3271,12 @@ impl ConfigPath {
             "TonemapCurve" => return Some(ConfigPath::TonemapCurve),
             "UseCurve" => return Some(ConfigPath::UseCurve),
             "LevelsEnabled" => return Some(ConfigPath::LevelsEnabled),
+            "AutoExposure" => return Some(ConfigPath::AutoExposure),
+            "CylinderTargeting" => return Some(ConfigPath::CylinderTargeting),
+            "CylinderAlways" => return Some(ConfigPath::CylinderAlways),
+            "CylinderTrim" => return Some(ConfigPath::CylinderTrim),
+            "CylinderTrimLevels" => return Some(ConfigPath::CylinderTrimLevels),
+            "WordRemovals" => return Some(ConfigPath::WordRemovals),
             "LevelsLow" => return Some(ConfigPath::LevelsLow),
             "LevelsHigh" => return Some(ConfigPath::LevelsHigh),
             "LevelsGamma" => return Some(ConfigPath::LevelsGamma),
@@ -3163,8 +3284,7 @@ impl ConfigPath {
             // Color
             "ColorMode" => return Some(ConfigPath::ColorMode),
             "PathMapStyle" => return Some(ConfigPath::PathMapStyle),
-            "PathCaptureMode" => return Some(ConfigPath::PathCaptureMode),
-            "PathTrackingMode" => return Some(ConfigPath::PathTrackingMode),
+            "PathMapLevel" => return Some(ConfigPath::PathMapLevel),
             "PaletteIndex" => return Some(ConfigPath::PaletteIndex),
             "Palette" => return Some(ConfigPath::Palette),
             "PaletteRotation" => return Some(ConfigPath::PaletteRotation),
@@ -3230,6 +3350,13 @@ impl ConfigPath {
                 ["CenterRe"] => return Some(ConfigPath::EscapeCenterRe),
                 ["CenterIm"] => return Some(ConfigPath::EscapeCenterIm),
                 ["ZoomLog2"] => return Some(ConfigPath::EscapeZoomLog2),
+                ["CamTargetX"] => return Some(ConfigPath::EscapeCamTargetX),
+                ["CamTargetY"] => return Some(ConfigPath::EscapeCamTargetY),
+                ["CamTargetZ"] => return Some(ConfigPath::EscapeCamTargetZ),
+                ["CamPitch"] => return Some(ConfigPath::EscapeCamPitch),
+                ["CamYaw"] => return Some(ConfigPath::EscapeCamYaw),
+                ["CamBank"] => return Some(ConfigPath::EscapeCamBank),
+                ["CamFov"] => return Some(ConfigPath::EscapeCamFov),
                 ["Rotation"] => return Some(ConfigPath::EscapeRotation),
                 ["MaxIter"] => return Some(ConfigPath::EscapeMaxIter),
                 ["Supersample"] => return Some(ConfigPath::EscapeSupersample),
@@ -3263,6 +3390,11 @@ impl ConfigPath {
                 }
                 ["ColoringParam", param] => {
                     return Some(ConfigPath::EscapeColoringParam { param: param.to_string() })
+                }
+                ["Lens"] => return Some(ConfigPath::EscapeLens),
+                ["LensAmount"] => return Some(ConfigPath::EscapeLensAmount),
+                ["LensParam", param] => {
+                    return Some(ConfigPath::EscapeLensParam { param: param.to_string() })
                 }
                 _ => return None,
             }
@@ -3778,6 +3910,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::LevelsLow
         | ConfigPath::LevelsHigh
         | ConfigPath::LevelsGamma
+        | ConfigPath::CylinderTrim
         | ConfigPath::PostSymmetryCenterX
         | ConfigPath::PostSymmetryCenterY
         | ConfigPath::PostSymmetryDistance
@@ -3818,8 +3951,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         ConfigPath::Pan => {
             if let Value::Array(arr) = json {
                 if arr.len() == 2 {
-                    let x = arr[0].as_f64()? as f32;
-                    let y = arr[1].as_f64()? as f32;
+                    let x = arr[0].as_f64()?;
+                    let y = arr[1].as_f64()?;
                     return Some(ConfigValue::Vec2(x, y));
                 }
             }
@@ -3842,6 +3975,9 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         // Boolean parameters
         ConfigPath::UseCurve
         | ConfigPath::LevelsEnabled
+        | ConfigPath::AutoExposure
+        | ConfigPath::CylinderTargeting
+        | ConfigPath::CylinderAlways
         | ConfigPath::UseDynamicBlend
         | ConfigPath::DeterministicRng
         | ConfigPath::PaletteReverse
@@ -3863,7 +3999,9 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SystemOrbitCacheMb
         | ConfigPath::SystemExportWidth
         | ConfigPath::SystemExportHeight
-        | ConfigPath::SystemPngStripMetadata => {
+        | ConfigPath::SystemPngStripMetadata
+        | ConfigPath::CylinderTrimLevels
+        | ConfigPath::PathMapLevel => {
             json_as_round_u64(json).map(|u| ConfigValue::UInt(u as u32))
         }
 
@@ -3915,26 +4053,14 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
                 .or_else(|| {
                     // Pre-serde legacy style names from very old config files.
                     json.as_str().and_then(|s| match s {
-                        "Similar" => Some(PathMapStyle::Prefix),
-                        "Distinct" | "ScrambledPrefix" => Some(PathMapStyle::PrefixDistinct),
-                        "ScrambledSuffix" => Some(PathMapStyle::SuffixDistinct),
+                        "Similar" => Some(PathMapStyle::Path),
+                        "Distinct" | "ScrambledPrefix" | "ScrambledSuffix" => Some(PathMapStyle::PathDistinct),
                         _ => None,
                     })
                 })
                 .map(ConfigValue::PathMapStyle)
         }
 
-        ConfigPath::PathCaptureMode => {
-            serde_json::from_value::<PathCaptureMode>(json.clone())
-                .ok()
-                .map(ConfigValue::PathCaptureMode)
-        }
-
-        ConfigPath::PathTrackingMode => {
-            serde_json::from_value::<PathTrackingMode>(json.clone())
-                .ok()
-                .map(ConfigValue::PathTrackingMode)
-        }
 
         ConfigPath::RenderMode => {
             serde_json::from_value::<RenderMode>(json.clone())
@@ -3964,7 +4090,9 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeDampingRe
         | ConfigPath::EscapeDampingIm
         | ConfigPath::EscapeFormulaParam { .. }
-        | ConfigPath::EscapeColoringParam { .. } => {
+        | ConfigPath::EscapeColoringParam { .. }
+        | ConfigPath::EscapeLensAmount
+        | ConfigPath::EscapeLensParam { .. } => {
             json.as_f64().map(|f| ConfigValue::Float(f as f32))
         }
         ConfigPath::EscapeMaxIter => json.as_u64().map(|v| ConfigValue::UInt(v as u32)),
@@ -4035,7 +4163,12 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeShadingTextureKind
         | ConfigPath::EscapeDownsample
         | ConfigPath::EscapeShadingShadowBlend
-        | ConfigPath::EscapeShadingHighlightBlend => None,
+        | ConfigPath::EscapeShadingHighlightBlend
+        // The lens NAME is a choice, not a quantity: there is no
+        // meaning to a value part-way between two variations, so it
+        // cannot carry an animation track. Its amount and its
+        // parameters can, and do.
+        | ConfigPath::EscapeLens => None,
         // Selectors and the deep-zoom center strings are structural /
         // exact — not animatable (centers deliberately: see the plan's
         // open questions on center-path animation).
@@ -4045,6 +4178,33 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeBiomorph
         | ConfigPath::EscapeCenterRe
         | ConfigPath::EscapeCenterIm => None,
+
+        // The camera's target is decimal STRINGS, like the planar
+        // centre, and for the same reason: a deep zoom needs more
+        // digits than a float holds. A track carries f64 anyway, so
+        // it is offered and the string is rebuilt from the number.
+        //
+        // The planar centre is NOT offered alongside it, and the
+        // difference is real rather than an oversight. A planar zoom
+        // runs past 2^100, where f64 has nothing like the digits the
+        // centre needs; a SOLID orbits an attractor of order one, so
+        // f64 is far more precision than the picture can show. The
+        // cost is a ceiling on how deep an animated solid camera can
+        // sit, and that ceiling is far beyond where a solid is
+        // legible at all.
+        ConfigPath::EscapeCamTargetX
+        | ConfigPath::EscapeCamTargetY
+        | ConfigPath::EscapeCamTargetZ => json
+            .as_f64()
+            .filter(|f| f.is_finite())
+            .map(|f| ConfigValue::String(format!("{f:?}"))),
+
+        // The camera's angles are ordinary floats, and orbiting one is
+        // exactly the sort of thing an animation track is for.
+        ConfigPath::EscapeCamPitch
+        | ConfigPath::EscapeCamYaw
+        | ConfigPath::EscapeCamBank
+        | ConfigPath::EscapeCamFov => json.as_f64().map(|v| ConfigValue::Float(v as f32)),
 
         // Complex types not supported for animation (yet)
         ConfigPath::TonemapCurve | ConfigPath::Palette => None,
@@ -4065,7 +4225,9 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         // Variation order is a structural reorder, not a continuous param.
         | ConfigPath::TransformVariationOrder { .. }
         | ConfigPath::LinkedTransformVariationOrder { .. }
-        | ConfigPath::FinalTransformVariationOrder { .. } => None,
+        | ConfigPath::FinalTransformVariationOrder { .. }
+        // A list of removed pieces is an edit, not a continuous param.
+        | ConfigPath::WordRemovals => None,
     }
 }
 
@@ -4439,6 +4601,12 @@ mod tests {
             ConfigPath::TonemapCurve,
             ConfigPath::UseCurve,
             ConfigPath::LevelsEnabled,
+            ConfigPath::AutoExposure,
+            ConfigPath::CylinderTargeting,
+            ConfigPath::CylinderAlways,
+            ConfigPath::CylinderTrim,
+            ConfigPath::CylinderTrimLevels,
+            ConfigPath::WordRemovals,
             ConfigPath::LevelsLow,
             ConfigPath::LevelsHigh,
             ConfigPath::LevelsGamma,
@@ -4446,8 +4614,7 @@ mod tests {
             // Color
             ConfigPath::ColorMode,
             ConfigPath::PathMapStyle,
-            ConfigPath::PathCaptureMode,
-            ConfigPath::PathTrackingMode,
+            ConfigPath::PathMapLevel,
             ConfigPath::PaletteIndex,
             ConfigPath::Palette,
             ConfigPath::PaletteRotation,

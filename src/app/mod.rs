@@ -394,6 +394,15 @@ pub(super) enum UrlLoadedData {
     },
 }
 
+/// How long after the last edit a mode-D render stays a preview.
+///
+/// Long enough that a drag never sees a full render between two of
+/// its own events, short enough that the full picture is there before
+/// the eye asks for it. The coalescing window in the config manager is
+/// 500 ms; this is deliberately shorter, because that one is about
+/// UNDO granularity and this one is about what is on screen.
+const ESCAPE_INTERACTION_WINDOW: std::time::Duration = std::time::Duration::from_millis(250);
+
 pub struct App {
     // Window reference (needed for fullscreen toggle)
     pub(super) window: Arc<Window>,
@@ -414,6 +423,11 @@ pub struct App {
     /// the escape pass (escape params, palette, structural loads).
     /// Starts true so the first escape frame always renders.
     pub(super) escape_dirty: bool,
+    /// When the user last EDITED something the escape pass renders.
+    /// For the interaction window: within it a mode-D render is a
+    /// quarter-resolution preview, after it a full one. See
+    /// `ESCAPE_INTERACTION_WINDOW`.
+    pub(super) escape_last_edit: Option<web_time::Instant>,
 
     /// The simulation's grid and step state. Lazily created on first
     /// use so a flame session never allocates it.
@@ -494,6 +508,10 @@ pub struct App {
     /// The previous two frames' budget ratios, for the governor's
     /// median-of-3 outlier filter. Neutral (1.0) at rest.
     pub(super) governor_ratio_prev: [f64; 2],
+    /// Whether shedding width still helps (`Knee`), and the dispatch
+    /// geometry it was judged for: a change of geometry starts over.
+    pub(super) governor_knee: crate::app::Knee,
+    pub(super) governor_batch: Option<crate::app::Batch>,
     // Display refresh in millihertz, and a counter that re-queries it every
     // 120 iterating frames. Under vsync this — not `target_fps` — is the
     // governor's budget; see `frame_budget`.
@@ -754,7 +772,7 @@ impl App {
 
         let flame = initial_config.flame.clone();
 
-        let flame_renderer = FlameRenderer::with_palette_size(
+        let mut flame_renderer = FlameRenderer::with_palette_size(
             &gpu.device,
             &gpu.queue,
             gpu.config.format,
@@ -763,6 +781,8 @@ impl App {
             &flame,
             initial_config.palette_size,
         );
+        // The app plans deep-zoom cylinders off the UI thread.
+        flame_renderer.set_background_planning(true);
 
         // ConfigManager loads SystemSettings automatically
         let config_manager = ConfigManager::new(initial_config.clone());
@@ -799,6 +819,7 @@ impl App {
             flame_renderer: Some(flame_renderer),
             escape_renderer: None,
             escape_dirty: true,
+            escape_last_edit: None,
             #[cfg(feature = "engine-sim")]
             sim_renderer: None,
             // Runs on entry: a simulation that sits still looks broken,
@@ -824,6 +845,8 @@ impl App {
             iter_scale: 1.0,
             last_iter_frame: None,
             governor_ratio_prev: [1.0, 1.0],
+            governor_knee: crate::app::Knee::Shedding { over: 0 },
+            governor_batch: None,
             display_refresh_mhz: None,
             display_refresh_age: 0,
             accumulation_batch_size: 4, // EXPERIMENT: Test batching
@@ -1135,6 +1158,9 @@ impl App {
                                             &config.flame,
                                             config.palette_size,
                                         ));
+                                        if let Some(r) = app.flame_renderer.as_mut() {
+                                            r.set_background_planning(true);
+                                        }
                                         app.effect_chain = crate::renderer::effect_chain::EffectChainRunner::new(
                                             &app.gpu.device,
                                             app.gpu.size.width,
@@ -1855,7 +1881,7 @@ impl App {
                     };
 
                     renderer.resize(&self.gpu.device, &mut resize_encoder, &self.gpu.queue, viewport_size.0, viewport_size.1,
-                        resize_source, self.config_manager.system_settings().iterations_per_thread, resize_config.zoom, resize_config.pan_x, resize_config.pan_y, resize_config.rotation,
+                        resize_source, self.config_manager.system_settings().iterations_per_thread, resize_config.zoom, resize_config.pan_x as f32, resize_config.pan_y as f32, resize_config.rotation,
                         resize_config.camera_rotation_x, resize_config.camera_rotation_y, resize_config.camera_bank, resize_config.camera_x, resize_config.camera_y, resize_config.camera_z, resize_config.speed_factor);
                     self.gpu.queue.submit(std::iter::once(resize_encoder.finish()));
 
@@ -1865,7 +1891,7 @@ impl App {
                     // Restore palette and color mode after buffer recreation
                     renderer.update_palette(&self.gpu.device, &self.gpu.queue, &resize_config.palette, resize_config.palette_rotation, resize_config.palette_squeeze, resize_config.palette_squeeze_mode, resize_config.palette_squeeze_falloff, resize_config.palette_log_strength, resize_config.palette_reverse);
                     renderer.set_color_mode(&self.gpu.queue, resize_config.color_mode, self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in,
-                        resize_config.zoom, resize_config.pan_x, resize_config.pan_y, resize_config.rotation,
+                        resize_config.zoom, resize_config.pan_x as f32, resize_config.pan_y as f32, resize_config.rotation,
                         resize_config.camera_rotation_x, resize_config.camera_rotation_y, resize_config.camera_bank, resize_config.camera_x, resize_config.camera_y, resize_config.camera_z, resize_config.speed_factor);
                     renderer.set_path_map_style(resize_config.path_map_style);
 
@@ -2189,8 +2215,8 @@ impl App {
                             iterations_per_thread,
                             20, // burn_in - use default for WASM export
                             export_config.zoom,
-                            export_config.pan_x,
-                            export_config.pan_y,
+                            export_config.pan_x as f32,
+                            export_config.pan_y as f32,
                             export_config.rotation,
                             export_config.camera_rotation_x,
                             export_config.camera_rotation_y,
@@ -2280,6 +2306,7 @@ impl App {
                                 &mut esc_encoder,
                                 &export_config.escape,
                                 temp_renderer.palette_view(),
+                                temp_renderer.palette_generation(),
                             );
                             self.gpu.queue.submit(std::iter::once(esc_encoder.finish()));
                             if settled {
@@ -2769,6 +2796,62 @@ impl App {
                 ) {
                     self.escape_dirty = true;
                 }
+                // Mode D renders the FLAME as a distance field, so a
+                // flame edit has to reach the escape image — and
+                // nothing else marks it dirty, because every other
+                // escape formula is a function of the escape config
+                // alone. Re-analysing each frame is a handful of
+                // affines and a ball refinement; `set_ifs` reports
+                // whether it actually changed, which is the cue.
+                if let Some(def) = crate::escape::ifs::get_ifs(&final_config.escape.formula) {
+                    let registry = crate::variations::global_registry();
+                    let packed = crate::escape::ifs::pack_for(def, &final_config, &registry);
+                    if escape.set_ifs(packed) {
+                        self.escape_dirty = true;
+                    }
+                    // The MEASURE colouring reads a coarse pass over
+                    // the ball; without one it renders black. Keyed on
+                    // the flame, so a pan or a zoom does not rebuild
+                    // it.
+                    escape.ensure_coarse(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        &final_config.escape,
+                        &final_config.flame,
+                    );
+                    if escape.set_solid_lighting(
+                        &final_config.solid_shading,
+                        (
+                            final_config.fog_strength,
+                            final_config.fog_start,
+                            final_config.background_color,
+                        ),
+                    ) {
+                        self.escape_dirty = true;
+                    }
+                }
+                // The interaction window. A mode-D walk at 1080p is
+                // hundreds of milliseconds; a drag that re-walks at
+                // every mouse event is a slideshow. Inside the window
+                // the render is a quarter-resolution preview -- same
+                // lighting, same look, blockier -- and when the edits
+                // stop, one full render lands. The window is measured
+                // from the LAST edit, so a drag stays in preview for
+                // as long as it lasts and the full render arrives a
+                // quarter-second after it ends.
+                let preview = self
+                    .escape_last_edit
+                    .is_some_and(|t| t.elapsed() < ESCAPE_INTERACTION_WINDOW);
+                if escape.set_preview(preview) {
+                    // The last preview settled; nothing else would
+                    // trigger the full render.
+                    self.escape_dirty = true;
+                }
+                if preview {
+                    // Keep the loop turning until the window lapses,
+                    // or the full render never gets asked for.
+                    self.window.request_redraw();
+                }
                 if self.escape_dirty {
                     let settled = escape.render(
                         &self.gpu.device,
@@ -2776,6 +2859,7 @@ impl App {
                         &mut render_encoder,
                         &final_config.escape,
                         renderer.palette_view(),
+                        renderer.palette_generation(),
                     );
                     // Progressive deep zoom: an unsettled frame keeps
                     // the dirty flag so the next frame re-renders with
@@ -2927,6 +3011,62 @@ impl App {
             let is_exporting = self.export_status.lock()
                 .map(|s| s.active)
                 .unwrap_or(false);
+            // Keep the cylinder enumeration current with the view --
+            // EVERY frame, not only while iterating: a plan made on the
+            // background thread has to be picked up even if the render
+            // it restarts had already finished.
+            //
+            // A true return means targeting started, stopped, or changed
+            // arm, which changes the SHADER -- and the only path that
+            // rebuilds it consistently with the sticky superset and the
+            // variation-params packing is a full load.
+            if !is_non_flame && !is_exporting {
+                if renderer.sync_cylinders(&self.gpu.device, &self.gpu.queue, &final_config) {
+                    renderer.load_config(
+                        &self.gpu.device,
+                        &mut render_encoder,
+                        &self.gpu.queue,
+                        &final_config,
+                        &final_config.palette,
+                        self.config_manager.system_settings().iterations_per_thread,
+                        self.config_manager.system_settings().burn_in,
+                    );
+                }
+                // A new plan arrived: what was accumulated was drawn
+                // under the previous one (or none) and carries a
+                // different weight, so the picture starts again.
+                if renderer.take_plan_arrived() {
+                    renderer.reset(
+                        &mut render_encoder,
+                        &self.gpu.queue,
+                        self.config_manager.system_settings().iterations_per_thread,
+                        final_config.zoom,
+                        final_config.pan_x as f32,
+                        final_config.pan_y as f32,
+                        final_config.rotation,
+                        final_config.camera_rotation_x,
+                        final_config.camera_rotation_y,
+                        final_config.camera_bank,
+                        final_config.camera_x,
+                        final_config.camera_y,
+                        final_config.camera_z,
+                        final_config.speed_factor,
+                    );
+                    self.frames_since_accumulation = 0;
+                    self.rendering_complete = false;
+                    // PathMap's per-pixel path ids are 1-based into the
+                    // plan's words: under another plan they name other
+                    // words, so they go with the picture.
+                    self.clear_paths_next_frame = true;
+                }
+                // Keep frames coming while a plan is being made, so it
+                // is picked up the moment it lands -- and, on the web,
+                // because each frame is what runs the next slice of it.
+                if renderer.plans_running() {
+                    self.window.request_redraw();
+                }
+            }
+
             let max_iterations = Some(final_config.max_iterations);
             let should_iterate = !is_non_flame && !self.paused && !is_exporting && (
                 is_controller_playing ||
@@ -2967,8 +3107,8 @@ impl App {
             if should_iterate
                 && renderer.maybe_refit_shadow(
                     final_config.zoom,
-                    final_config.pan_x,
-                    final_config.pan_y,
+                    final_config.pan_x as f32,
+                    final_config.pan_y as f32,
                     final_config.camera_rotation_x,
                     final_config.camera_rotation_y,
                     final_config.camera_bank,
@@ -2980,8 +3120,8 @@ impl App {
                     &self.gpu.queue,
                     self.config_manager.system_settings().iterations_per_thread,
                     final_config.zoom,
-                    final_config.pan_x,
-                    final_config.pan_y,
+                    final_config.pan_x as f32,
+                    final_config.pan_y as f32,
                     final_config.rotation,
                     final_config.camera_rotation_x,
                     final_config.camera_rotation_y,
@@ -3011,11 +3151,15 @@ impl App {
                 // it measures command ENCODING, not GPU execution — the
                 // frame delta is the only honest GPU-load signal here.)
                 //
-                // The governor scales WORKGROUPS, never iterations_per_
+                // The governor scales WORKGROUPS, not iterations_per_
                 // thread: trajectories do not persist across dispatches,
                 // so ipt IS the trajectory depth — a user-visible quality
                 // setting for long-memory fractals — while the workgroup
-                // count is pure throughput.
+                // count is pure throughput. Two exceptions (`Batch`,
+                // `Knee`): under targeting a sample's cost is its word's
+                // replay, so the dispatch is SHORTENED first, and where
+                // shedding width stops shortening the frame the width is
+                // grown back while that is free.
                 // Under vsync the compositor blocks until the next refresh, so
                 // this delta cannot go below the refresh interval however
                 // little work we submit — landing exactly ON the target is the
@@ -3028,7 +3172,26 @@ impl App {
                 // Windows with vsync off escaped it because Immediate lets the
                 // delta track real GPU time.
                 let now = web_time::Instant::now();
-                if let Some(prev) = self.last_iter_frame {
+                let batch = {
+                    let settings = self.config_manager.system_settings();
+                    crate::app::Batch {
+                        max_workgroups: NUM_WORKGROUPS,
+                        iterations_per_thread: settings.iterations_per_thread,
+                        burn_in: settings.burn_in,
+                        shorten: matches!(renderer.targeting_state(), crate::renderer::TargetingState::Active { .. }),
+                    }
+                };
+                if self.governor_batch != Some(batch) {
+                    self.governor_batch = Some(batch);
+                    self.governor_knee = crate::app::Knee::Shedding { over: 0 };
+                }
+                // **A tight plan being made** (tracker P10): the dispatch is
+                // capped so the planner's round trips, queued behind it,
+                // wait for little, and the governor HOLDS -- the planner's
+                // GPU work lengthens these frames, and read as the render's
+                // cost it would shed a batch that fits.
+                let planning = renderer.planning_elapsed().is_some();
+                if let Some(prev) = self.last_iter_frame.filter(|_| !planning) {
                     // Re-ask the platform every so often rather than every
                     // frame: the answer only changes when the window moves to
                     // a different display, and `current_monitor` is a syscall.
@@ -3062,8 +3225,10 @@ impl App {
                         a.max(b).min(a.min(b).max(c)) // median of {a, b, c}
                     };
                     self.governor_ratio_prev = [self.governor_ratio_prev[1], ratio];
-                    self.iter_scale =
-                        crate::app::adjust_iter_scale(self.iter_scale, median, ratio);
+                    let (knee, scale) =
+                        crate::app::governor_step(self.governor_knee, self.iter_scale, median, ratio, &batch);
+                    self.governor_knee = knee;
+                    self.iter_scale = scale;
                 }
                 self.last_iter_frame = Some(now);
                 // Floor of ONE workgroup: at extreme depth x emit x solid
@@ -3072,8 +3237,11 @@ impl App {
                 // remaining shed axis would be trajectory depth — which is
                 // exactly what the governor exists to protect. One
                 // workgroup still makes forward progress every frame.
-                let effective_workgroups =
-                    ((NUM_WORKGROUPS as f64 * self.iter_scale) as u32).max(1);
+                let (effective_workgroups, effective_ipt) = if planning {
+                    batch.while_planning(self.governor_knee, self.iter_scale)
+                } else {
+                    batch.shape(self.governor_knee, self.iter_scale)
+                };
 
                 self.frames_since_accumulation += 1;
 
@@ -3094,8 +3262,8 @@ impl App {
                 }
 
                 let samples_this_frame = renderer.compute_pass(&mut render_encoder, &self.gpu.queue, &self.gpu.device, effective_workgroups,
-                    self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in,
-                    final_config.zoom, final_config.pan_x, final_config.pan_y, final_config.rotation,
+                    effective_ipt, self.config_manager.system_settings().burn_in,
+                    final_config.zoom, final_config.pan_x as f32, final_config.pan_y as f32, final_config.rotation,
                     final_config.camera_rotation_x, final_config.camera_rotation_y, final_config.camera_bank, final_config.camera_x, final_config.camera_y, final_config.camera_z, final_config.speed_factor, clear_histogram, clear_paths);
 
                 self.metrics.record_compute_time(t_compute.elapsed().as_secs_f64() * 1000.0);
@@ -3126,6 +3294,7 @@ impl App {
                 // batch for no reason.
                 self.last_iter_frame = None;
                 self.governor_ratio_prev = [1.0, 1.0];
+                self.governor_knee = crate::app::Knee::Shedding { over: 0 };
             }
             
             let t_tonemap = Instant::now();
@@ -3177,8 +3346,8 @@ impl App {
                 &mut render_encoder,
                 final_config.zoom,
                 final_config.rotation,
-                final_config.pan_x,
-                final_config.pan_y,
+                final_config.pan_x as f32,
+                final_config.pan_y as f32,
                 final_config.camera_rotation_x,
                 final_config.camera_rotation_y,
                 final_config.camera_bank,
@@ -3284,6 +3453,17 @@ impl App {
         self.gpu.queue.submit(std::iter::once(render_encoder.finish()));
         self.metrics.record_submit_time(t_submit.elapsed().as_secs_f64() * 1000.0);
 
+
+        // Tell the UI what deep zoom decided this frame. Free: both
+        // halves are already-measured renderer state, and the panel
+        // needs them to report a DECISION rather than a request.
+        if let Some(ref renderer) = self.flame_renderer {
+            self.egui_layer.update_deep_zoom(crate::ui::DeepZoom {
+                coverage: renderer.frame_coverage_fraction(),
+                targeting: renderer.targeting_state().clone(),
+                planning: renderer.planning_elapsed().map(|d| d.as_secs_f32()),
+            });
+        }
 
         // Update density histogram for Levels controls (every ~30 frames)
         // Skip during animation playback to avoid frame drops from GPU readback
@@ -3410,12 +3590,12 @@ impl App {
                     let pixel_x = click_x.min(width - 1);
                     let pixel_y = click_y.min(height - 1);
 
-                    // Read path entry for this specific pixel
-                    let path_entry = match pollster::block_on(renderer.read_path_buffer(&self.gpu.device, &self.gpu.queue)) {
-                        Ok(path_buffer) => path_buffer[pixel_y as usize][pixel_x as usize],
+                    // The path this pixel was last drawn through.
+                    let path = match pollster::block_on(renderer.read_path_at(&self.gpu.device, &self.gpu.queue, pixel_x, pixel_y)) {
+                        Ok(path) => path,
                         Err(e) => {
-                            log::error!("Failed to read path buffer: {}", e);
-                            crate::renderer::PathEntry::default()
+                            log::error!("Failed to read the path at a pixel: {e}");
+                            None
                         }
                     };
 
@@ -3435,16 +3615,11 @@ impl App {
                         found_pixel: (pixel_x, pixel_y),
                         fractal_coords,
                         search_distance: 0.0, // No search, exact pixel
-                        path_entry,
+                        path,
                         color_preview,
                         preview_size: (9, 9),
                     };
 
-                    if path_entry.iteration_count > 0 {
-                        log::info!("Path at ({}, {}): {:?}", pixel_x, pixel_y, path_entry.to_vec());
-                    } else {
-                        log::debug!("No path data at ({}, {})", pixel_x, pixel_y);
-                    }
                     self.egui_layer.set_path_click_info(Some(click_info));
                 }
             }
@@ -3493,7 +3668,10 @@ impl App {
         width: u32,
         height: u32,
         config: &crate::config::FractalConfig,
-    ) -> (f32, f32) {
+        // f64 out, because this is an absolute position in the
+        // fractal plane and that is the one thing a deep zoom
+        // destroys -- the same reason `pan_x` is f64.
+    ) -> (f64, f64) {
         // Convert pixel to normalized device coordinates (-1 to 1)
         let ndc_x = (pixel_x as f32 / width as f32) * 2.0 - 1.0;
         let ndc_y = (pixel_y as f32 / height as f32) * 2.0 - 1.0;
@@ -3504,11 +3682,11 @@ impl App {
         let scaled_y = ndc_y;
 
         // Screen space → pan frame (rotation-aware in 2D, identity in 3D)
-        let (rotated_x, rotated_y) = config.screen_delta_to_pan_frame(scaled_x, scaled_y);
+        let (rotated_x, rotated_y) = config.screen_delta_to_pan_frame(scaled_x as f64, scaled_y as f64);
 
         // Apply inverse zoom and add pan
-        let fractal_x = rotated_x / config.zoom + config.pan_x;
-        let fractal_y = rotated_y / config.zoom + config.pan_y;
+        let fractal_x = rotated_x / config.zoom as f64 + config.pan_x;
+        let fractal_y = rotated_y / config.zoom as f64 + config.pan_y;
 
         (fractal_x, fractal_y)
     }
@@ -3596,12 +3774,334 @@ pub(crate) fn adjust_iter_scale(scale: f64, median_ratio: f64, raw_ratio: f64) -
     }
     // 1/256 lets the dispatch reach its 1-workgroup floor (128/256 -> 1
     // after the ceiling at the call site); the old 1/64 bottomed out at 2.
-    s.clamp(1.0 / 256.0, 1.0)
+    s.clamp(MIN_ITER_SCALE, 1.0)
+}
+
+/// The governor's smallest scale (`adjust_iter_scale`): its floor.
+pub(crate) const MIN_ITER_SCALE: f64 = 1.0 / 256.0;
+
+/// Frames over budget at the floor before the governor asks whether
+/// width was the constraint at all (`Knee`).
+const KNEE_AFTER: u32 = 8;
+/// Frames held at each probed width before its median is read: one of
+/// lag, since a frame's delta is read at the next frame's start, and
+/// three for the median.
+const KNEE_SETTLE: u32 = 4;
+/// A wider dispatch whose median frame costs at most this much more
+/// than the narrower one's costs nothing that matters: it is kept.
+const KNEE_FREE: f64 = 1.25;
+
+/// **The dispatch's geometry, and how the governor's scale maps onto
+/// it.** Normally the scale sheds WORKGROUPS and leaves
+/// `iterations_per_thread`, the trajectory depth, alone.
+///
+/// Under targeting (`shorten`) the dispatch is shortened first. A forced
+/// sample replays its word -- up to 96 maps at depth -- so one thread's
+/// iterations alone can outlast the frame: julian-disc at zoom 1,598 with
+/// 1,000 iterations per thread took about 58 ms at ANY width, and the
+/// governor, able only to shed width, went to one workgroup and stayed,
+/// at 1.1 million samples a second against the CLI's 76 million (the
+/// same view at full width and 256 per thread: 80-87 million, 45 fps).
+/// Shortening costs little there: the burn-in iterations skip the forced
+/// replay, and a forced sample's position comes from its word, not from
+/// how long the free orbit has run. Not for untargeted renders until
+/// orbits persist across dispatches (`docs/projects/persistent-orbits.md`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Batch {
+    pub max_workgroups: u32,
+    pub iterations_per_thread: u32,
+    pub burn_in: u32,
+    pub shorten: bool,
+}
+
+impl Batch {
+    /// The shortest dispatch a targeted batch is cut to: 64 iterations,
+    /// or three burn-ins, never more than the setting.
+    fn ipt_floor(&self) -> u32 {
+        self.iterations_per_thread.min((3 * self.burn_in).max(64)).max(1)
+    }
+
+    /// Workgroups and iterations per thread for this frame.
+    pub fn shape(&self, knee: Knee, scale: f64) -> (u32, u32) {
+        let ipt = self.iterations_per_thread.max(1);
+        let width = match knee {
+            Knee::Probing { width, .. } | Knee::Holding { width, .. } => Some(width.clamp(1, self.max_workgroups)),
+            Knee::Shedding { .. } => None,
+        };
+        if !self.shorten {
+            let w = width.unwrap_or(((self.max_workgroups as f64 * scale) as u32).max(1));
+            return (w, ipt);
+        }
+        let floor = self.ipt_floor();
+        if let Some(w) = width {
+            return (w, floor);
+        }
+        // The same work as the unshortened batch at this scale: full width
+        // while the dispatch can shorten, then narrower at its floor.
+        let short = ((ipt as f64 * scale).round() as u32).clamp(floor, ipt);
+        let work = scale * self.max_workgroups as f64 * ipt as f64;
+        let w = ((work / short as f64).round() as u32).clamp(1, self.max_workgroups);
+        (w, short)
+    }
+
+    /// **The dispatch while a tight plan is made** (tracker P10): the
+    /// governor's shape, no longer than the shortened floor. The planner
+    /// submits to the render's queue, so each of its round trips waits
+    /// behind the dispatch queued ahead of it: a 100,479-word julian-disc
+    /// plan at 1e6 took 8.2 s behind 128x256 and 4.0 s behind 128x64 (4.5 s
+    /// with no render at all). Whatever is drawn meanwhile is thrown away
+    /// when the plan lands, so the length it gives up costs nothing kept.
+    pub fn while_planning(&self, knee: Knee, scale: f64) -> (u32, u32) {
+        let (w, ipt) = self.shape(knee, scale);
+        (w, ipt.min(self.ipt_floor()))
+    }
+
+    /// The width of the floor's dispatch.
+    fn floor_width(&self) -> u32 {
+        self.shape(Knee::Shedding { over: 0 }, MIN_ITER_SCALE).0
+    }
+
+    /// The scale whose dispatch is `width` wide at the floor's length:
+    /// where shedding resumes when a hold ends.
+    fn scale_of(&self, width: u32) -> f64 {
+        let per = if self.shorten {
+            self.ipt_floor() as f64 / (self.max_workgroups as f64 * self.iterations_per_thread.max(1) as f64)
+        } else {
+            1.0 / self.max_workgroups as f64
+        };
+        (width as f64 * per).clamp(MIN_ITER_SCALE, 1.0)
+    }
+}
+
+/// **Whether shedding width still helps.** The governor assumed a
+/// frame's time grows with its width. On a GPU that runs every workgroup
+/// of the batch at once, it does not: the frame lasts as long as one
+/// thread's iterations, and shedding width throws throughput away
+/// without shortening the frame. So when the governor sits at its floor
+/// and frames are still over budget, it PROBES: it doubles the width
+/// while the frame costs at most `KNEE_FREE` times more, and holds the
+/// widest width that was free -- full width where the frame never grew.
+/// Gradually, not at once: where width does cost (heavy solid and emit
+/// stacks, the floor's reason), each step at most doubles the frame, and
+/// the first costly step ends the probe.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Knee {
+    /// Scaling by the budget (`adjust_iter_scale`); `over` counts frames
+    /// over budget at the floor.
+    Shedding { over: u32 },
+    /// Trying `width`; `free` is the median at the last width found free,
+    /// and `frames` how long `width` has been held.
+    Probing { width: u32, free: f64, frames: u32 },
+    /// Holding `width`, whose median was `at`.
+    Holding { width: u32, at: f64 },
+}
+
+/// One frame of the governor: the knee's state and the scale, from this
+/// frame's median and raw budget ratios.
+pub(crate) fn governor_step(knee: Knee, scale: f64, median: f64, raw: f64, batch: &Batch) -> (Knee, f64) {
+    match knee {
+        Knee::Shedding { over } => {
+            let s = adjust_iter_scale(scale, median, raw);
+            let floor_width = batch.floor_width();
+            if s <= MIN_ITER_SCALE && median > 1.3 && floor_width < batch.max_workgroups {
+                let over = over + 1;
+                if over >= KNEE_AFTER {
+                    let width = (floor_width * 2).min(batch.max_workgroups);
+                    return (Knee::Probing { width, free: median, frames: 0 }, s);
+                }
+                return (Knee::Shedding { over }, s);
+            }
+            (Knee::Shedding { over: 0 }, s)
+        }
+        Knee::Probing { width, free, frames } => {
+            // Under budget: the flame got lighter. Shed and grow from here.
+            if median < 1.05 {
+                return (Knee::Shedding { over: 0 }, batch.scale_of(width));
+            }
+            let narrower = (width / 2).max(batch.floor_width());
+            // One frame this far past the last free width: widening is not
+            // free, and waiting for the median would hold it.
+            if raw >= 4.0 * free {
+                return (Knee::Holding { width: narrower, at: free }, scale);
+            }
+            let frames = frames + 1;
+            if frames < KNEE_SETTLE {
+                return (Knee::Probing { width, free, frames }, scale);
+            }
+            if median <= free * KNEE_FREE {
+                if width >= batch.max_workgroups {
+                    return (Knee::Holding { width, at: median }, scale);
+                }
+                return (Knee::Probing { width: (width * 2).min(batch.max_workgroups), free: median, frames: 0 }, scale);
+            }
+            (Knee::Holding { width: narrower, at: free }, scale)
+        }
+        Knee::Holding { width, at } => {
+            if median < 1.05 {
+                // Under budget: the flame got lighter.
+                return (Knee::Shedding { over: 0 }, batch.scale_of(width));
+            }
+            if median > 2.0 * at {
+                // Heavier: back to the floor, and probe again from there.
+                return (Knee::Shedding { over: 0 }, MIN_ITER_SCALE);
+            }
+            (Knee::Holding { width, at }, scale)
+        }
+    }
 }
 
 #[cfg(test)]
 mod governor_tests {
-    use super::{adjust_iter_scale, frame_budget};
+    use super::{adjust_iter_scale, frame_budget, governor_step, Batch, Knee, MIN_ITER_SCALE};
+
+    /// The governor with the knee and the dispatch's shape, driven by a
+    /// model of what a dispatch costs: `frame(workgroups, ipt)` in
+    /// seconds, against a 60 Hz budget. Returns each frame's shape and
+    /// time.
+    fn drive(batch: Batch, frames: usize, frame: &dyn Fn(u32, u32) -> f64) -> Vec<(u32, u32, f64)> {
+        const BUDGET: f64 = 1.0 / 60.0;
+        let (mut scale, mut knee, mut prev) = (1.0f64, Knee::Shedding { over: 0 }, [1.0f64, 1.0]);
+        let mut out = Vec::new();
+        for _ in 0..frames {
+            let (w, ipt) = batch.shape(knee, scale);
+            let t = frame(w, ipt);
+            out.push((w, ipt, t));
+            let ratio = t / BUDGET;
+            let [a, b] = prev;
+            let median = a.max(b).min(a.min(b).max(ratio));
+            prev = [prev[1], ratio];
+            (knee, scale) = governor_step(knee, scale, median, ratio, &batch);
+        }
+        out
+    }
+
+    /// **While a tight plan is made the dispatch is short** (tracker P10),
+    /// and never heavier than the governor's own shape.
+    #[test]
+    fn a_dispatch_while_planning_is_short() {
+        for shorten in [false, true] {
+            let batch = Batch { max_workgroups: 128, iterations_per_thread: 256, burn_in: 20, shorten };
+            let knees = [
+                Knee::Shedding { over: 0 },
+                Knee::Probing { width: 16, free: 1.0, frames: 0 },
+                Knee::Holding { width: 64, at: 1.0 },
+            ];
+            for knee in knees {
+                for scale in [1.0, 0.5, 0.1, MIN_ITER_SCALE] {
+                    let (w, ipt) = batch.shape(knee, scale);
+                    let (pw, pipt) = batch.while_planning(knee, scale);
+                    assert_eq!(pw, w, "{knee:?} at {scale}: the width changed");
+                    assert!(pipt <= 64 && pipt <= ipt, "{knee:?} at {scale}: {pipt} iterations a thread, against {ipt}");
+                }
+            }
+            // The full batch, as the app runs it on a light flame.
+            assert_eq!(batch.while_planning(Knee::Shedding { over: 0 }, 1.0), (128, 64));
+        }
+        // A setting shorter than the floor stays as it is.
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 32, burn_in: 20, shorten: true };
+        assert_eq!(batch.while_planning(Knee::Shedding { over: 0 }, 1.0).1, 32);
+    }
+
+    /// A GPU that runs every workgroup of the batch at once: the frame
+    /// lasts as long as one thread's iterations. 80 us an iteration is a
+    /// targeted sample's replay at depth: 1,000 iterations, 84 ms.
+    fn latency_bound(_w: u32, ipt: u32) -> f64 {
+        0.004 + ipt as f64 * 80e-6
+    }
+
+    /// **A targeted render shortens its dispatch and keeps its width**
+    /// (reported: julian-disc at zoom 1,598, 1,000 iterations per thread,
+    /// one workgroup at 17 fps, 1.1 million samples a second).
+    #[test]
+    fn a_targeted_render_shortens_its_dispatch_and_keeps_its_width() {
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20, shorten: true };
+        let run = drive(batch, 300, &latency_bound);
+        let (w, ipt, t) = *run.last().unwrap();
+        assert_eq!(w, 128, "the width was shed: {run:?}");
+        assert!(ipt >= 100 && t <= 1.3 / 60.0, "{ipt} iterations per thread, {:.1} ms a frame", t * 1e3);
+        // Plotted samples a second, against one workgroup at the full length.
+        let now = w as f64 * 64.0 * (ipt - 20) as f64 / t;
+        let before = 64.0 * 980.0 / latency_bound(1, 1000);
+        assert!(now > 50.0 * before, "{now:.3e} samples a second against {before:.3e}");
+    }
+
+    /// **Shedding that does not shorten the frame is undone.** Untargeted
+    /// and latency-bound: the dispatch keeps its length (the trajectory
+    /// depth), and the width goes back to full once the floor proves no
+    /// faster.
+    #[test]
+    fn shedding_that_does_not_help_is_undone() {
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20, shorten: false };
+        let run = drive(batch, 400, &latency_bound);
+        let (w, ipt, _) = *run.last().unwrap();
+        assert_eq!((w, ipt), (128, 1000), "the batch stayed shed: {:?}", &run[run.len() - 5..]);
+    }
+
+    /// **Where width costs, the floor holds.** Each workgroup 20 ms: the
+    /// heavy solid and emit stacks the one-workgroup floor exists for. The
+    /// probe tries two workgroups, finds them costly, and goes back --
+    /// never a frame much past twice the floor's.
+    #[test]
+    fn where_width_costs_the_floor_holds() {
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20, shorten: false };
+        let heavy = |w: u32, _ipt: u32| 0.004 + w as f64 * 0.020;
+        let run = drive(batch, 400, &heavy);
+        let settled = &run[100..];
+        assert!(settled.iter().all(|(w, _, _)| *w == 1), "left the floor: {:?}", &run[run.len() - 5..]);
+        let worst = run[50..].iter().map(|(_, _, t)| *t).fold(0.0, f64::max);
+        assert!(worst <= 2.0 * heavy(1, 1000) + 1e-9, "a probe frame took {:.0} ms", worst * 1e3);
+    }
+
+    /// **The knee is where widening starts to cost**: a GPU that runs 16
+    /// workgroups at once, then another wave.
+    #[test]
+    fn the_knee_is_where_widening_starts_to_cost() {
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20, shorten: false };
+        let waves = |w: u32, ipt: u32| 0.004 + ipt as f64 * 20e-6 * ((w + 15) / 16) as f64;
+        let run = drive(batch, 400, &waves);
+        assert_eq!(run.last().unwrap().0, 16, "{:?}", &run[run.len() - 5..]);
+    }
+
+    /// **A lighter flame leaves the hold**, and the batch grows back to
+    /// full.
+    #[test]
+    fn a_lighter_flame_leaves_the_hold() {
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20, shorten: false };
+        let (mut scale, mut knee, mut prev) = (1.0f64, Knee::Shedding { over: 0 }, [1.0f64, 1.0]);
+        let mut shapes = Vec::new();
+        for i in 0..600 {
+            let (w, ipt) = batch.shape(knee, scale);
+            let t = if i < 300 { latency_bound(w, ipt) } else { 0.004 + w as f64 * 20e-6 };
+            let ratio = t * 60.0;
+            let [a, b] = prev;
+            let median = a.max(b).min(a.min(b).max(ratio));
+            prev = [prev[1], ratio];
+            (knee, scale) = governor_step(knee, scale, median, ratio, &batch);
+            shapes.push((w, knee));
+        }
+        assert!(matches!(shapes[299].1, Knee::Holding { width: 128, .. }), "not holding before: {:?}", shapes[299]);
+        assert!(matches!(knee, Knee::Shedding { .. }) && (scale - 1.0).abs() < 1e-9, "{knee:?} at scale {scale}");
+    }
+
+    /// The floor's dispatch, and a hold's return to shedding, keep the
+    /// shape consistent: the floor is one workgroup untargeted, and under
+    /// targeting the shortest dispatch at whatever width does the floor's
+    /// work.
+    #[test]
+    fn the_floor_is_the_smallest_batch() {
+        let plain = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20, shorten: false };
+        assert_eq!(plain.shape(Knee::Shedding { over: 0 }, MIN_ITER_SCALE), (1, 1000));
+        assert_eq!(plain.shape(Knee::Shedding { over: 0 }, 1.0), (128, 1000));
+        let targeted = Batch { shorten: true, ..plain };
+        assert_eq!(targeted.shape(Knee::Shedding { over: 0 }, 1.0), (128, 1000));
+        assert_eq!(targeted.shape(Knee::Shedding { over: 0 }, 0.25), (128, 250));
+        let (w, ipt) = targeted.shape(Knee::Shedding { over: 0 }, MIN_ITER_SCALE);
+        assert_eq!(ipt, 64);
+        assert!(w >= 1 && w < 128, "{w}");
+        // A setting under the floor is left alone.
+        let short = Batch { iterations_per_thread: 32, ..targeted };
+        assert_eq!(short.shape(Knee::Shedding { over: 0 }, MIN_ITER_SCALE).1, 32);
+    }
 
     /// Drive the governor the way the app does: a rolling median-of-3
     /// window over the per-frame ratios.

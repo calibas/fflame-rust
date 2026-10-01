@@ -2,6 +2,8 @@
 //!
 //! More complex 2D variations including polar coordinates, Julia sets, etc.
 
+use crate::scene::ifs_analysis::Kernel;
+use crate::variations::inverse::{InverseDef, InverseKernel, Refusal};
 use crate::variations::{
     definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
@@ -2236,4 +2238,116 @@ fn variation_cpow(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<funct
     return vec3<f32>(m * cos(ang), m * sin(ang), p.z);
 }
 "#,
+};
+
+// ------------------------------------------------- the inverse walks
+
+/// `julia`: the square root, both branches (`ifs-general.md` D1).
+///
+/// A fixed `Root { n: 2, d: 1 }` -- `julia` takes no parameters, and
+/// `julian` is the same kernel with them.
+pub static INVERSE_JULIA: InverseDef = InverseDef {
+    name: "julia",
+    kernel: InverseKernel::Planar(|_| Ok(Kernel::Root { n: 2, d: 1.0, mirror: false })),
+};
+
+/// `julian`: the `n`th root raised to `d`, every branch.
+///
+/// A zero power has no inverse and a zero distance collapses the
+/// radius, so both are refused here rather than producing a kernel
+/// the walk would divide by.
+pub static INVERSE_JULIAN: InverseDef = InverseDef {
+    name: "julian",
+    kernel: InverseKernel::Planar(|p| {
+        let (n, d) = (p("power").round() as i32, p("dist"));
+        if n == 0 || !(d != 0.0) || !d.is_finite() {
+            return Err(Refusal::Degenerate);
+        }
+        Ok(Kernel::Root { n, d, mirror: false })
+    }),
+};
+
+/// `bubble`: onto the unit disc and two-to-one, the branch picking
+/// the inner or outer preimage.
+pub static INVERSE_BUBBLE: InverseDef = InverseDef {
+    name: "bubble",
+    kernel: InverseKernel::Planar(|_| Ok(Kernel::Bubble)),
+};
+
+/// `disc`: polar coordinates read from the +y axis, periodic in the
+/// radius, so a branch picks the ring.
+pub static INVERSE_DISC: InverseDef = InverseDef {
+    name: "disc",
+    kernel: InverseKernel::Planar(|_| Ok(Kernel::Disc)),
+};
+
+/// `blob`: a reflection in the diagonal times an angular radial
+/// scale.
+///
+/// The scale must stay positive for the preimage to be one point; a
+/// `low` or `high` at or below zero puts a zero in the denominator of
+/// the inverse and the walk has no branch rule for what is past it.
+pub static INVERSE_BLOB: InverseDef = InverseDef {
+    name: "blob",
+    kernel: InverseKernel::Planar(|p| {
+        let (high, low, waves) = (p("high"), p("low"), p("waves"));
+        if !(high > 0.0) || !(low > 0.0) || !waves.is_finite() {
+            return Err(Refusal::Degenerate);
+        }
+        Ok(Kernel::Blob { high, low, waves })
+    }),
+};
+
+/// `cylinder`: `(sin x, y)`, two preimages a turn on the strip `|v.x| <
+/// 1`; the analysis counts the turns from the invariant ball (tracker
+/// C6). Until it does, turns −1 and 0: four branches round the origin,
+/// `x` from −5π/2 to 3π/2. The inverse walk's alone.
+pub static INVERSE_CYLINDER: InverseDef = InverseDef {
+    name: "cylinder",
+    kernel: InverseKernel::Planar(|_| Ok(Kernel::Cylinder { k0: -1 })),
+};
+
+/// `elliptic`: one-to-one onto the strip `|v.x| ≤ 1`, with a closed
+/// inverse there (tracker C6). The inverse walk's alone.
+pub static INVERSE_ELLIPTIC: InverseDef = InverseDef {
+    name: "elliptic",
+    kernel: InverseKernel::Planar(|_| Ok(Kernel::Elliptic)),
+};
+
+/// `splits`: a translation on each quadrant, `v + t_q`, its steps read
+/// off the body above -- `t.x = ±x + (y ≥ 0 ? ushear : −dshear)`, `t.y =
+/// ±y + (x ≥ 0 ? rshear : −lshear)` -- as the lower-left quadrant's step
+/// and what crossing each axis adds (tracker C6). The inverse walk's
+/// alone.
+pub static INVERSE_SPLITS: InverseDef = InverseDef {
+    name: "splits",
+    kernel: InverseKernel::Planar(|p| {
+        let (sx, sy) = (p("x"), p("y"));
+        let (l, r, u, d) = (p("lshear"), p("rshear"), p("ushear"), p("dshear"));
+        let all = [sx, sy, l, r, u, d];
+        if !all.iter().all(|v| v.is_finite()) {
+            return Err(Refusal::Degenerate);
+        }
+        Ok(Kernel::Splits { base: [-sx - d, -sy - l], x: [2.0 * sx, r + l], y: [u + d, 2.0 * sy] })
+    }),
+};
+
+/// `juliascope`: `julian` with its odd arms mirrored -- the root of
+/// `conj(z)` there -- so the inverse is the root's, conjugated in an odd
+/// arm's sector. The power is truncated to a whole number as the body's
+/// `i32(...)` does; a fractional one is refused, since the arm table
+/// (`bound::JULIASCOPE_ARMS`) counts its ceiling and the body its floor.
+/// The radius is `|z|^{dist/power}`, the power's sign kept, where the
+/// root's is over `|n|`: so `d = dist·sgn(power)`. The inverse walk's
+/// alone.
+pub static INVERSE_JULIASCOPE: InverseDef = InverseDef {
+    name: "juliascope",
+    kernel: InverseKernel::Planar(|p| {
+        let (power, dist) = (p("power"), p("dist"));
+        if !power.is_finite() || power.fract() != 0.0 || power == 0.0 || !(dist != 0.0) || !dist.is_finite() {
+            return Err(Refusal::Degenerate);
+        }
+        let n = power as i32;
+        Ok(Kernel::Root { n, d: dist * power.signum(), mirror: true })
+    }),
 };

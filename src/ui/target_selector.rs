@@ -340,10 +340,32 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
         TargetItem::new(ConfigPath::EscapeDampingRe, "Damping Re"),
         TargetItem::new(ConfigPath::EscapeDampingIm, "Damping Im"),
     ];
+
+    // The camera, for a SOLID formula. A planar view has no camera to
+    // move -- it has a centre and a zoom, already above -- so offering
+    // these there would be seven targets that animate nothing.
+    let ifs = crate::escape::ifs::get_ifs(&esc.formula);
+    if ifs.is_some_and(|d| d.solid) {
+        items.extend([
+            TargetItem::new(ConfigPath::EscapeCamTargetX, "Camera Position X"),
+            TargetItem::new(ConfigPath::EscapeCamTargetY, "Camera Position Y"),
+            TargetItem::new(ConfigPath::EscapeCamTargetZ, "Camera Position Z"),
+            TargetItem::new(ConfigPath::EscapeCamPitch, "Camera Pitch"),
+            TargetItem::new(ConfigPath::EscapeCamYaw, "Camera Yaw"),
+            TargetItem::new(ConfigPath::EscapeCamBank, "Camera Bank"),
+            TargetItem::new(ConfigPath::EscapeCamFov, "Camera FoV"),
+        ]);
+    }
+
+    // The formula's own parameters, from whichever registry owns it.
+    // Mode D was missing entirely, which is what hid Inverse Depth,
+    // Beam Width, March Steps, Shadows, Shadow Sharpness, Occlusion
+    // Reach and Slice Value -- every parameter the solid walk has.
     let (formula_params, formula_label): (&[crate::escape::EscapeParamDef], &str) =
-        match crate::escape::fields::get_field(&esc.formula) {
-            Some(f) => (f.parameters, f.display_name),
-            None => {
+        match (ifs, crate::escape::fields::get_field(&esc.formula)) {
+            (Some(d), _) => (d.parameters, d.display_name),
+            (None, Some(f)) => (f.parameters, f.display_name),
+            (None, None) => {
                 let f = crate::escape::get_formula(&esc.formula);
                 (f.parameters, f.display_name)
             }
@@ -355,9 +377,10 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
         ));
     }
     let coloring_params: &[crate::escape::EscapeParamDef] =
-        match crate::escape::fields::get_field(&esc.formula) {
-            Some(f) => crate::escape::fields::get_field_coloring(&esc.coloring, f).parameters,
-            None => crate::escape::get_coloring(&esc.coloring).parameters,
+        match (ifs, crate::escape::fields::get_field(&esc.formula)) {
+            (Some(d), _) => crate::escape::ifs::get_ifs_coloring(&esc.coloring, d).parameters,
+            (None, Some(f)) => crate::escape::fields::get_field_coloring(&esc.coloring, f).parameters,
+            (None, None) => crate::escape::get_coloring(&esc.coloring).parameters,
         };
     for p in coloring_params {
         items.push(TargetItem::new(
@@ -365,7 +388,33 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
             &format!("Coloring: {}", p.display_name),
         ));
     }
+
+    // The camera lens, when one is chosen. Its amount is the obvious
+    // thing to ramp; its parameters come from the variation registry,
+    // so the list follows the lens the way it follows the formula.
+    if !esc.lens.is_empty() {
+        let registry = crate::variations::global_registry();
+        if let Some(info) = registry.get(&esc.lens) {
+            items.push(TargetItem::new(ConfigPath::EscapeLensAmount, "Lens: Amount"));
+            for p in &info.parameters {
+                items.push(TargetItem::new(
+                    ConfigPath::EscapeLensParam { param: p.name.clone() },
+                    &format!("Lens: {}", p.display_name),
+                ));
+            }
+        }
+    }
     items
+}
+
+/// The escape targets' paths, for the exporter's coverage test.
+///
+/// The exporter has to apply everything this offers, and the only
+/// honest way to check that is to enumerate what is actually offered
+/// rather than to keep a second list in step by hand.
+#[cfg(test)]
+pub fn escape_items_for_test(config: &FractalConfig) -> Vec<ConfigPath> {
+    get_escape_items(config).into_iter().map(|i| i.path).collect()
 }
 
 /// Animation targets for simulation mode.
@@ -981,4 +1030,130 @@ fn capitalize_first(s: &str) -> String {
 pub fn config_path_display_name(path: &ConfigPath) -> String {
     // Use the Display implementation which provides good names
     format!("{}", path)
+}
+
+#[cfg(test)]
+mod escape_target_tests {
+    use super::*;
+    use crate::config::FractalConfig;
+
+    fn solid_config() -> FractalConfig {
+        let mut c = FractalConfig::default();
+        c.render_mode = crate::scene::transforms::RenderMode::Escape;
+        c.escape.formula = "ifs_flame_3d".to_string();
+        c.escape.coloring = "ifs_distance".to_string();
+        c
+    }
+
+    fn keys(c: &FractalConfig) -> Vec<String> {
+        get_escape_items(c)
+            .iter()
+            .map(|i| i.path.to_string_key())
+            .collect()
+    }
+
+    /// Every offered target must survive the whole chain, because
+    /// three separate places have to agree and only the first is
+    /// visible in the panel.
+    ///
+    /// A target the picker offers but `json_to_config_value` refuses
+    /// is a track that silently does nothing; one the exporter has no
+    /// arm for renders correctly in the app and wrong in the video,
+    /// which is worse. This walks every item the selector offers and
+    /// checks it parses.
+    #[test]
+    fn every_offered_escape_target_can_carry_a_track() {
+        for c in [solid_config(), FractalConfig::default()] {
+            for item in get_escape_items(&c) {
+                // Both shapes: a count target (Max Iterations) reads
+                // an integer and a fraction is not one.
+                let ok = [serde_json::json!(0.5), serde_json::json!(2)]
+                    .iter()
+                    .any(|p| crate::config::delta::json_to_config_value(p, &item.path).is_some());
+                assert!(
+                    ok,
+                    "`{}` is offered as a track target but cannot carry a value",
+                    item.path.to_string_key()
+                );
+            }
+        }
+    }
+
+    /// The solid walk's own parameters are offered.
+    ///
+    /// Reported missing from use, all seven of them: the selector only
+    /// ever consulted the plane's and the field's registries, so mode
+    /// D -- the whole solid engine -- had no animatable parameters at
+    /// all.
+    #[test]
+    fn the_solid_walks_parameters_are_offered() {
+        let c = solid_config();
+        let k = keys(&c);
+        for param in [
+            "levels", "beam", "steps", "shadow", "shadow_sharpness", "occlusion", "w_slice",
+        ] {
+            let want = format!("Escape.FormulaParam.{param}");
+            assert!(k.contains(&want), "`{param}` is not offered; have {k:?}");
+        }
+    }
+
+    /// The solid camera is offered, and only for a solid.
+    #[test]
+    fn the_solid_camera_is_offered_only_where_there_is_one() {
+        let k = keys(&solid_config());
+        for want in [
+            "Escape.CamTargetX", "Escape.CamTargetY", "Escape.CamTargetZ",
+            "Escape.CamPitch", "Escape.CamYaw", "Escape.CamBank", "Escape.CamFov",
+        ] {
+            assert!(k.contains(&want.to_string()), "`{want}` is not offered");
+        }
+
+        // A plane has a centre and a zoom instead; offering a camera
+        // there would be seven targets that animate nothing.
+        let plain = FractalConfig::default();
+        let pk = keys(&plain);
+        assert!(
+            !pk.iter().any(|s| s.starts_with("Escape.Cam")),
+            "the plane offers a camera it does not have: {pk:?}"
+        );
+    }
+
+    /// The lens follows the lens, the way the formula's parameters
+    /// follow the formula.
+    #[test]
+    fn the_lens_is_offered_once_one_is_chosen() {
+        let mut c = FractalConfig::default();
+        c.render_mode = crate::scene::transforms::RenderMode::Escape;
+        assert!(
+            !keys(&c).iter().any(|s| s.starts_with("Escape.Lens")),
+            "a lens is offered before one is chosen"
+        );
+
+        c.escape.lens = "curl".to_string();
+        let k = keys(&c);
+        assert!(k.contains(&"Escape.LensAmount".to_string()), "{k:?}");
+        assert!(k.contains(&"Escape.LensParam.c1".to_string()), "{k:?}");
+    }
+
+    /// A camera-target track carries a NUMBER and lands as the decimal
+    /// string the config stores.
+    #[test]
+    fn a_camera_target_track_becomes_a_decimal_string() {
+        let v = crate::config::delta::json_to_config_value(
+            &serde_json::json!(-0.375),
+            &ConfigPath::EscapeCamTargetX,
+        );
+        match v {
+            Some(crate::config::ConfigValue::String(s)) => {
+                assert_eq!(s.parse::<f64>().unwrap(), -0.375, "got {s}");
+            }
+            other => panic!("expected a decimal string, got {other:?}"),
+        }
+        // A wild signal must not write "NaN" into a decimal field.
+        assert!(crate::config::delta::json_to_config_value(
+            &serde_json::json!(f64::NAN),
+            &ConfigPath::EscapeCamTargetX
+        )
+        .is_none());
+    }
 }

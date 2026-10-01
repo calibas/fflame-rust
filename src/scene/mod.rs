@@ -1,4 +1,17 @@
 pub mod transforms;
+pub mod ifs_analysis;
+pub mod ifs_ball;
+pub mod mobius;
+pub mod ifs_estimate;
+pub mod forward_delta;
+pub mod ifs_real;
+pub mod importance;
+pub mod cylinder;
+pub mod backward;
+pub mod final_map;
+pub mod plan_gpu;
+pub mod slice;
+pub mod word_tree;
 pub mod xaos;
 pub mod presets;
 pub mod palette;

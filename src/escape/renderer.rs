@@ -153,6 +153,94 @@ pub const PERTURB_CHUNK_BUDGET_FE: u64 = 600_000_000;
 static DIRECT_BUDGET_SHIFT: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(0);
 
+/// Mode D's dispatch budget, in WALK STEPS: one candidate advanced
+/// down one branch at one level, so `levels * beam * maps` per pixel.
+///
+/// Separate from [`DIRECT_DISPATCH_BUDGET`] because a walk step is not
+/// an iteration and the two cannot share a unit. Measured on a
+/// 512x512 dragon at levels 40, beam 8, two maps -- 168M steps in
+/// 114 ms above the harness floor, so **1.5e9 steps/s**. At that rate
+/// this budget is a ~300 ms band, which is inside
+/// [`DIRECT_BAND_SLOW_MS`] and leaves the breaker room to halve if a
+/// slower device disagrees.
+///
+/// Getting this wrong is not a slow render, it is a hang: mode D's
+/// cost was first modelled as `levels * maps`, which is 8x low at the
+/// default beam and 250x low in absolute terms. A 1080p view then
+/// dispatched the whole image at once, took seconds, and the driver
+/// reset -- which surfaces on Windows as
+/// `STATUS_STACK_BUFFER_OVERRUN`, not as anything mentioning the GPU.
+/// The breaker cannot help: it only engages once a render is BANDED,
+/// and this estimate is what decides whether it ever is.
+pub const IFS_DISPATCH_BUDGET: u64 = 450_000_000;
+
+/// The same budget for a SOLID render, whose per-pixel cost counts the
+/// march.
+///
+/// A marcher walks the distance function once per STEP, not once per
+/// pixel, so its cost has a fourth factor the planar model does not.
+/// The budget is ninety-six times larger to match, which is the
+/// default step count -- so at the defaults this bands exactly as the
+/// planar model did (measured: a 1080p Menger sponge in three bands,
+/// about a second), and raising the step count shrinks the bands
+/// rather than silently lengthening them.
+///
+/// The ratio is a calibration, not a worst case. Most rays never take
+/// their full allowance: one that misses the bounding sphere costs
+/// nothing and one that hits converges in a few steps, so the average
+/// march is far shorter than the ceiling. Modelling the ceiling would
+/// band a 1080p view into one-row dispatches for nothing.
+pub const IFS_SOLID_BUDGET: u64 = 43_000_000_000;
+
+/// Rows per dispatch for a mode-D walk, as pure arithmetic.
+///
+/// `beam` and `levels` are the def's parameters, `maps` the analysed
+/// flame's transform count.
+/// `seed_beam_at` for the f64 fallback path, so the forced level
+/// applies whichever way the centre was built.
+#[cfg(test)]
+fn return_seeds_forced(
+    ifs: &crate::scene::ifs_analysis::Ifs2,
+    centre: [f64; 2],
+    basis: [[f64; 2]; 2],
+    px: f64,
+    budget: u32,
+    beam: u32,
+    level: u32,
+) -> crate::scene::ifs_estimate::Seeds {
+    crate::scene::ifs_estimate::seed_beam_at(ifs, centre, basis, px, budget, beam, level)
+}
+
+/// The coarse pass's grid, across the ball.
+///
+/// D1 wanted 2048. This is 1024 because the pass is a full flame
+/// render and a readback of `res² × 16` bytes -- 16 MB here, 67 at
+/// 2048 -- and the measure plan's §5a swept 128, 512 and 2048 and
+/// found the estimator resolution-stable across them, while §5f found
+/// 64 too coarse to be a measure at all. The floor matters and the
+/// ceiling buys little.
+const COARSE_RES: u32 = 1024;
+
+/// How many batches the coarse pass draws. Each is
+/// `256 × 64 × 256` samples, so this is about 400 million.
+const COARSE_BATCHES: u32 = 24;
+
+pub fn ifs_rows_per_dispatch(
+    width: u32,
+    height: u32,
+    levels: u32,
+    beam: u32,
+    maps: usize,
+    budget: u64,
+) -> u32 {
+    let per_pixel = (levels.max(1) as u64)
+        .saturating_mul(beam.max(1) as u64)
+        .saturating_mul(maps.max(1) as u64);
+    let per_row = (width.max(1) as u64).saturating_mul(per_pixel);
+    let rows = budget / per_row.max(1);
+    (rows.max(1) as u32).min(height.max(1))
+}
+
 /// True while a banded (multi-dispatch) direct render still has bands
 /// to go -- the window in which a device loss is attributed to our
 /// band size. (A loss during the LAST band goes uncounted; the next
@@ -436,7 +524,12 @@ struct EscapeParamsGpu {
     /// 1 = the relief pass slopes the WRAPPED palette coordinate
     /// rather than the coloring's raw value (`ShadingField::Banded`).
     shade_flags: u32,
-    _pad_shade: [u32; 3],
+    /// Mode D's interaction stride: 1 renders every pixel, 2 renders
+    /// one pixel in each 2×2 block and the relight (or the planar
+    /// walk) fills the block from it. Occupies a padding word, so the
+    /// layout is unchanged. See [`EscapeRenderer::set_preview`].
+    stride: u32,
+    _pad_shade: [u32; 2],
     fparams: [[f32; 4]; PARAM_VEC4S],
     cparams: [[f32; 4]; PARAM_VEC4S],
     /// CPU-derived formula data (`FormulaDef::derived_data`),
@@ -553,6 +646,120 @@ pub struct EscapeRenderer {
     /// accumulator; the palette is Rgba8Unorm and filters fine).
     palette_sampler: wgpu::Sampler,
     bind_group_layout: BindGroupLayout,
+    /// Mode D's second bind group: the flame's inverse maps (D5). Its
+    /// own group so no existing pipeline's layout moves and every
+    /// existing shader stays byte-identical.
+    ifs_bind_group_layout: BindGroupLayout,
+    /// The camera lens's third bind group: the one-transform flame
+    /// whose variation warps the screen offset. Its own group for the
+    /// same reason mode D has one -- no existing pipeline's layout
+    /// moves, and a lens-free shader stays byte-identical.
+    lens_bind_group_layout: BindGroupLayout,
+    lens_gpu: Option<super::lens::LensGpu>,
+    ifs_buffer: Buffer,
+    /// BYTES the buffer currently holds, so it only grows. Bytes
+    /// rather than rows because the planar and solid strides differ.
+    ifs_capacity: u32,
+    /// Which dimension the uploaded rows are, so a mode switch
+    /// re-uploads rather than reinterpreting one stride as the other.
+    ifs_uploaded_solid: Option<bool>,
+    /// A cheap identity for the packed maps, so a flame edit restarts
+    /// the row-band pass instead of striping the picture (see
+    /// [`Self::band_key`]). Hashed once on `set_ifs`, not per frame.
+    ifs_token: u64,
+    /// Test-only: hand over at THIS level rather than the one the
+    /// objective picks.
+    ///
+    /// The objective minimises a measured curvature plus a modelled
+    /// f32 cost, and an argmin is only as good as its ORDERING of the
+    /// levels. Measuring that needs the render at a level the walk
+    /// would not have chosen, which is what `seed_beam_at` is for on
+    /// the CPU and what this is for on the GPU.
+    /// `probe_what_the_f32_term_ranks_on_the_gpu` is the caller.
+    #[cfg(test)]
+    pub(crate) ifs_force_level: Option<u32>,
+    /// The beam's handover state for the current view, packed for
+    /// `fdata` (see `escape::ifs::pack_seeds`). Recomputed when the
+    /// VIEW changes, not just the flame — it is a function of the
+    /// centre, the zoom and the depth as much as of the maps.
+    ifs_seeds: Option<[[f32; 4]; 4 + super::ifs::SEED_VEC4S * super::ifs::MAX_SEEDS]>,
+    ifs_seed_key: String,
+    /// The SOLID handover: the beam's state at every level from the
+    /// target outward (see `escape::ifs::pack_chain3`).
+    ///
+    /// A chain rather than the plane's single handover because a ray
+    /// asks about a LINE, whose samples span the whole zoom — a pixel
+    /// from the target at one end and the far side of the attractor at
+    /// the other — so no one level is the handover for all of them.
+    /// The Solid Rendering panel's settings and the scene's fog,
+    /// which a SOLID mode-D walk lights itself with.
+    ///
+    /// Held here rather than read from the escape config because they
+    /// are not escape settings: they are the app's one description of
+    /// lighting, and a solid IFS has no business inventing a second
+    /// vocabulary for it. Set alongside the flame, by the same callers,
+    /// for the same reason.
+    solid_lighting: (crate::config::SolidShadingSettings, f32, f32, [f32; 3]),
+    ifs_chain: Option<Vec<super::ifs::IfsLinkGpu>>,
+    ifs_chain_key: String,
+    ifs_chain_buffer: Buffer,
+    ifs_chain_capacity: u32,
+    /// The SOLID geometry cache: sixteen bytes a pixel of what the walk
+    /// found at the surface (see the assembler's `ifs_pack_geom`),
+    /// beside the 32-byte record. Sized with the results buffer;
+    /// CLEARED at every restart of a banded pass, because a zero
+    /// record means "no surface", and that is what lets the relight
+    /// run over rows the walk has not reached yet.
+    ifs_geom_buffer: Buffer,
+    /// The coarse pass the MEASURE walk reads: an ordinary render of
+    /// the whole attractor, packed by `ifs::pack_coarse` as a header
+    /// and one `vec2<f32>` of (density, palette) per cell.
+    ///
+    /// View-independent -- it covers the ball and is rebuilt only when
+    /// the flame changes -- so it is uploaded beside the maps rather
+    /// than with the per-view seeds. Bound at one dummy element for
+    /// every other walk, which reads it never, for the same reason the
+    /// seed chain is bound for the planar walk: one layout for one
+    /// shader family.
+    ifs_coarse_buffer: Buffer,
+    /// The `ifs_token` the coarse pass was built for, so a flame edit
+    /// rebuilds it and a pan or a zoom does not. Zero means none.
+    ifs_coarse_token: u64,
+    /// The centre's beam at every level, for the DELTA walk
+    /// (`ifs-perturbation-delta.md` §3). One dummy row when the walk
+    /// is off, which is the default.
+    ifs_ref_buffer: Buffer,
+    /// The rows themselves, rebuilt with the seeds -- the beam
+    /// depends on the VIEW, not only on the flame.
+    ifs_ref_rows: Option<Vec<super::ifs::IfsRefRowGpu>>,
+    /// Whether the DELTA walk is the one running: the flame is on a
+    /// rung it can take AND the reference says a lineage carries past
+    /// the first level. Decided with the seeds, read by the pipeline,
+    /// so the buffer and the shader cannot disagree about which walk
+    /// this frame is.
+    ifs_delta_active: bool,
+    /// The transition graph a xaos flame's walk reads
+    /// (`ifs-general.md` D4), packed by
+    /// [`super::ifs::pack_xaos`]. One element -- a zero count -- for
+    /// every flame without one, which is the ordinary case.
+    ifs_xaos_buffer: Buffer,
+    /// The same pass, kept on the CPU.
+    ///
+    /// The measure's AUTO brightness samples `estimate_measure` across
+    /// the view, and that needs the coarse pass the shader is reading
+    /// -- not another one. A 1024 grid is 12 MB, and it is dropped
+    /// with the flame.
+    ifs_coarse_cpu: Option<crate::scene::ifs_estimate::CoarseMeasure>,
+    ifs_geom_px: u32,
+    /// Interaction preview (mode D): render one pixel in each 2×2
+    /// block while the user is still moving something, every pixel
+    /// once they stop. See [`Self::set_preview`].
+    preview: bool,
+    /// The analysed flame, or `None` when the loaded one does not
+    /// qualify (or mode D is not active). A mode-D render with no maps
+    /// draws nothing rather than garbage.
+    ifs: Option<super::ifs::PackedIfs>,
+    ifs_uploaded: Option<super::ifs::PackedIfs>,
     /// Compiled pipelines keyed `"formula|coloring"` — tiny shaders,
     /// but a live panel flips combinations and recompiles add up.
     pipelines: HashMap<String, ComputePipeline>,
@@ -1320,6 +1527,128 @@ impl EscapeRenderer {
             mapped_at_creation: false,
         });
 
+        // Mode D's map buffer starts at one row: a flame that
+        // qualifies grows it, and a device that never renders mode D
+        // pays 32 bytes.
+        let ifs_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Escape IFS Bind Group Layout"),
+            entries: &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // The seed chain. Bound for the planar walk too, at
+                // one empty link: a layout that differed by dimension
+                // would need two pipeline layouts for one shader
+                // family, and the planar template simply never reads
+                // it.
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // The geometry cache, written by the solid walk and
+                // read by the relight pass. Same reasoning: one layout.
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // The reference beam the DELTA walk follows. One
+                // dummy row when that walk is off, which is the
+                // default; same reasoning as the two below.
+                BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // The xaos transition graph. Same reasoning as the
+                // coarse pass below: one element when the flame has
+                // none, which is almost every flame.
+                BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // The coarse pass for the measure walk. Bound at a
+                // dummy element for every other walk; a layout entry
+                // the shader does not read is allowed and costs
+                // nothing.
+                BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let ifs_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Escape IFS Maps"),
+            size: std::mem::size_of::<super::ifs::IfsMapGpu>() as u64,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let ifs_chain_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Escape IFS Seed Chain"),
+            size: std::mem::size_of::<super::ifs::IfsLinkGpu>() as u64,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let ifs_geom_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Escape IFS Geometry"),
+            size: 16,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let ifs_ref_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Escape IFS Reference Beam"),
+            size: std::mem::size_of::<super::ifs::IfsRefRowGpu>() as u64,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let ifs_xaos_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Escape IFS Xaos Graph"),
+            size: 16,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let ifs_coarse_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Escape IFS Coarse Measure"),
+            size: 16,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         Self {
             width,
             height,
@@ -1328,6 +1657,34 @@ impl EscapeRenderer {
             params_buffer,
             palette_sampler,
             bind_group_layout,
+            ifs_bind_group_layout,
+            lens_bind_group_layout: super::lens::lens_layout(device),
+            lens_gpu: None,
+            ifs_buffer,
+            ifs_capacity: 0,
+            ifs_uploaded_solid: None,
+            ifs_token: 0,
+            #[cfg(test)]
+            ifs_force_level: None,
+            ifs_seeds: None,
+            ifs_seed_key: String::new(),
+            solid_lighting: (crate::config::SolidShadingSettings::default(), 0.0, 0.0, [0.0; 3]),
+            ifs_chain: None,
+            ifs_chain_key: String::new(),
+            ifs_chain_buffer,
+            ifs_chain_capacity: 0,
+            ifs_geom_buffer,
+            ifs_coarse_buffer,
+            ifs_xaos_buffer,
+            ifs_ref_buffer,
+            ifs_ref_rows: None,
+            ifs_delta_active: false,
+            ifs_coarse_token: 0,
+            ifs_coarse_cpu: None,
+            ifs_geom_px: 0,
+            preview: false,
+            ifs: None,
+            ifs_uploaded: None,
             pipelines: HashMap::new(),
             #[cfg(test)]
             force_perturbed: false,
@@ -2793,6 +3150,52 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// records made without a derivative orbit must not serve a
     /// coloring that reads one.
     fn iterate_key_for(&self, escape: &EscapeConfig) -> String {
+        // The camera is not in `EscapeConfig`'s view fields, but it is
+        // an input to what a SOLID render computes -- so a pass that
+        // spans frames has to restart when it moves, and a cache keyed
+        // without it would answer a camera change with the old
+        // geometry re-coloured.
+        fn camera_key(escape: &EscapeConfig) -> String {
+            format!(
+                "{}/{}/{}/{}/{}/{}/{}",
+                escape.cam_target_x,
+                escape.cam_target_y,
+                escape.cam_target_z,
+                escape.cam_pitch,
+                escape.cam_yaw,
+                escape.cam_bank,
+                escape.cam_fov,
+            )
+        }
+
+        // Mode D: everything the WALK depends on, and nothing the
+        // colouring does. The walk is the expensive half and none of
+        // it looks at the colouring or the palette, so a colouring
+        // edit hits this cache and costs one dispatch.
+        //
+        // `ifs_token` is in here for the same reason it is in the band
+        // key: the flame is an input to the walk that does not live in
+        // the escape config.
+        if super::ifs::get_ifs(&escape.formula).is_some() {
+            return format!(
+                "ifs|{}|{}|{}|{}|{}|{}|{}x{}|s{}|{}|{}|{}",
+                escape.formula,
+                Self::walk_params_key(escape),
+                escape.center_re,
+                escape.center_im,
+                escape.zoom_log2,
+                escape.rotation,
+                self.width,
+                self.height,
+                self.stride(escape),
+                self.ifs_token,
+                camera_key(escape),
+                // A light is an input to the walk's PICTURE, and the
+                // fourth input whose absence here would have shown as
+                // bands of different lighting scrolling down the frame.
+                self.lighting_key(),
+            );
+        }
         let coloring = super::get_coloring(&escape.coloring);
         let needs_accum = coloring.has_feature(super::ColoringFeature::NeedsOrbitAccum);
         let needs_period = coloring.has_feature(super::ColoringFeature::NeedsPeriod);
@@ -2875,6 +3278,35 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         escape: &EscapeConfig,
         palette_view: &TextureView,
     ) {
+        // Mode D recolours from its own record layout, through its
+        // own template, with the same coloring def the walk used.
+        let ifs_key = super::ifs::get_ifs(&escape.formula).map(|def| {
+            let coloring = super::ifs::get_ifs_coloring(&escape.coloring, def);
+            let key = format!("ifs_recolor|{}", coloring.name);
+            if !self.pipelines.contains_key(&key) {
+                let source = assembler::assemble_ifs_recolor(coloring);
+                let module = device.create_shader_module(ShaderModuleDescriptor {
+                    label: Some(&format!("Escape Shader {key}")),
+                    source: ShaderSource::Wgsl(source.into()),
+                });
+                let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+                    label: Some("Escape IFS Recolor Pipeline Layout"),
+                    bind_group_layouts: &[Some(&self.recolor_bind_group_layout)],
+                    immediate_size: 0,
+                });
+                let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+                    label: Some(&format!("Escape Pipeline {key}")),
+                    layout: Some(&layout),
+                    module: &module,
+                    entry_point: Some("escape_main"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                });
+                self.pipelines.insert(key.clone(), pipeline);
+            }
+            key
+        });
+
         let coloring = super::get_coloring(&escape.coloring);
         let deriv = self.derivative_active(escape);
         // The fit the shader will apply. `None` (nothing measured yet,
@@ -2887,7 +3319,10 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             None
         };
         queue_contrast(queue, &self.contrast_params, &escape.contrast, fit);
-        let key = format!("recolor|{}|{}", coloring.name, deriv);
+        let key = match ifs_key {
+            Some(k) => k,
+            None => format!("recolor|{}|{}", coloring.name, deriv),
+        };
         if !self.pipelines.contains_key(&key) {
             let source = assembler::assemble_recolor(coloring, deriv);
             let module = device.create_shader_module(ShaderModuleDescriptor {
@@ -2957,16 +3392,71 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
     }
 
+    /// The row-band pass's identity: everything a band's pixels
+    /// depend on.
+    ///
+    /// A band is a complete render of its own rows, dispatched in its
+    /// own frame, so a pass spread over several frames only looks like
+    /// one picture while its inputs hold still. Two of those inputs are
+    /// not in the escape config and so not in [`Self::chunk_key_for`]:
+    ///
+    /// - **the palette**, which lives in the flame renderer's texture.
+    ///   Rotating it part-way through a pass left the rows already
+    ///   drawn in the old colours and the rest in the new ones —
+    ///   reported as horizontal bands of different colours while the
+    ///   render scanned down.
+    /// - **the flame**, which only mode D reads, and which the app
+    ///   re-analyses every frame.
+    ///
+    /// Restarting is the honest answer for both: a band cannot be
+    /// re-coloured after the fact, because the walk that produced it is
+    /// gone. (Mode A escapes this through its recolor cache, which
+    /// keeps per-pixel records and re-colours without re-iterating;
+    /// mode D would need a cache of its own, and that is phase 2's
+    /// business.)
+    fn band_key(&self, escape: &EscapeConfig, palette_generation: u64) -> String {
+        Self::compose_band_key(
+            &self.chunk_key_for(escape, 0, true),
+            palette_generation,
+            self.ifs_token,
+        )
+    }
+
+    /// The composition, split out so it can be tested without a GPU.
+    pub(crate) fn compose_band_key(base: &str, palette_generation: u64, ifs_token: u64) -> String {
+        format!("{base}|pal{palette_generation}|ifs{ifs_token}")
+    }
+
     fn chunk_key_for(&self, escape: &EscapeConfig, orbit_tag: u64, orbit_done: bool) -> String {
+        // The camera is not in `EscapeConfig`'s view fields, but it is
+        // an input to what a SOLID render computes -- so a pass that
+        // spans frames has to restart when it moves, and a cache keyed
+        // without it would answer a camera change with the old
+        // geometry re-coloured.
+        fn camera_key(escape: &EscapeConfig) -> String {
+            format!(
+                "{}/{}/{}/{}/{}/{}/{}",
+                escape.cam_target_x,
+                escape.cam_target_y,
+                escape.cam_target_z,
+                escape.cam_pitch,
+                escape.cam_yaw,
+                escape.cam_bank,
+                escape.cam_fov,
+            )
+        }
         format!(
-            "{}|{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{:?}|{:?}|{:?}|{}x{}|{}|{}",
+            "{}|{}|s{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{:?}|{:?}|{:?}|{}x{}|{}|{}",
             escape.formula,
-            escape.formula_params,
+            Self::walk_params_key(escape),
+            self.stride(escape),
             escape.coloring,
             escape.center_re,
             escape.center_im,
             escape.zoom_log2,
             escape.rotation,
+            camera_key(escape),
+            self.lighting_key(),
             escape.max_iter,
             escape.bailout,
             escape.julia,
@@ -3070,7 +3560,9 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if Self::wants_perturbation(escape) {
             return Some(DerivativeGap::Perturbed);
         }
-        if super::fields::get_field(&escape.formula).is_some() {
+        if super::fields::get_field(&escape.formula).is_some()
+            || super::ifs::get_ifs(&escape.formula).is_some()
+        {
             return Some(DerivativeGap::Formula);
         }
         if super::get_formula(&escape.formula).wgsl_derivative.is_empty() {
@@ -3131,13 +3623,879 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// resume state: each band is a complete render of its own rows,
     /// and the output texture accumulates them. It also gives the
     /// direct path progressive top-to-bottom feedback it never had.
+    /// Hand the renderer the analysed flame for mode D.
+    ///
+    /// `None` means "no qualifying flame": a mode-D render then draws
+    /// nothing, which is the honest picture while the panel explains
+    /// which condition failed. Called by whoever owns the config —
+    /// the app on a flame edit, `render_with` once per job — so the
+    /// analysis is CPU work done once, not once per pixel.
+    ///
+    /// Returns whether this changed anything, which is the caller's
+    /// cue to mark the escape image dirty.
+    pub fn set_ifs(&mut self, packed: Option<super::ifs::PackedIfs>) -> bool {
+        if super::ifs::packed_bytes_eq(self.ifs.as_ref(), packed.as_ref()) {
+            return false;
+        }
+        self.ifs_token = match packed.as_ref() {
+            None => 0,
+            Some(p) => {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                bytemuck::bytes_of(&p.globals).hash(&mut h);
+                bytemuck::cast_slice::<super::ifs::IfsMapGpu, u8>(&p.rows).hash(&mut h);
+                // 0 means "no flame", so never collide with it.
+                h.finish() | 1
+            }
+        };
+        self.ifs = packed;
+        self.ifs_seed_key.clear();
+        true
+    }
+
+    /// Whether a qualifying flame is loaded.
+    pub fn has_ifs(&self) -> bool {
+        self.ifs.is_some()
+    }
+
+    /// Grow the map buffer if needed and write the rows, skipping both
+    /// when the packed data is unchanged from the last upload.
+    fn upload_ifs(&mut self, device: &Device, queue: &Queue, solid: bool) {
+        let Some(packed) = self.ifs.clone() else { return };
+        if self.ifs_uploaded_solid == Some(solid)
+            && super::ifs::packed_bytes_eq(self.ifs_uploaded.as_ref(), Some(&packed))
+        {
+            return;
+        }
+        // A solid row is sixty-four bytes against a planar row's
+        // thirty-two, so the buffer is sized in BYTES rather than
+        // rows: switching dimension changes the stride, not just the
+        // count.
+        let bytes = if solid {
+            packed.solid.as_ref().map_or(0, |(_, r)| {
+                r.len() * std::mem::size_of::<super::ifs::IfsMap3Gpu>()
+            })
+        } else {
+            packed.rows.len() * std::mem::size_of::<super::ifs::IfsMapGpu>()
+        }
+        .max(std::mem::size_of::<super::ifs::IfsMap3Gpu>()) as u32;
+
+        // The transition graph rides with the maps: it is indexed by
+        // MAP, so a map table that changed invalidates it, and the
+        // condition above is exactly "the maps changed".
+        self.set_xaos(device, queue, &packed.xaos);
+        if bytes > self.ifs_capacity {
+            self.ifs_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Escape IFS Maps"),
+                size: bytes as u64,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.ifs_capacity = bytes;
+        }
+        match (solid, packed.solid.as_ref()) {
+            (true, Some((_, rows3))) if !rows3.is_empty() => {
+                queue.write_buffer(&self.ifs_buffer, 0, bytemuck::cast_slice(rows3));
+            }
+            (false, _) if !packed.rows.is_empty() => {
+                queue.write_buffer(&self.ifs_buffer, 0, bytemuck::cast_slice(&packed.rows));
+            }
+            _ => {}
+        }
+        self.ifs_uploaded = Some(packed);
+        self.ifs_uploaded_solid = Some(solid);
+    }
+
+    /// Walk the solid handover chain for this view, if it is not
+    /// already walked.
+    ///
+    /// The 3D half of §2.5, and it differs from the plane's in shape
+    /// rather than in principle. A plane render hands over ONCE: every
+    /// pixel sits in the same shrinking view, so one level serves them
+    /// all. A ray's samples run from a pixel's width at the target out
+    /// to the far side of the bounding sphere, which at a deep zoom is
+    /// the entire zoom in span — so the handover is the beam's state
+    /// at EVERY level, and each sample takes the deepest one that
+    /// still holds it.
+    ///
+    /// Cached on the view, because a banded render calls this once per
+    /// band and the walk is the same every time.
+    fn ensure_ifs_chain(
+        &mut self,
+        escape: &EscapeConfig,
+        packed: &super::ifs::PackedIfs,
+        def: &super::ifs::IfsDef,
+    ) {
+        let Some((ifs3, _)) = packed
+            .solid
+            .as_ref()
+            .filter(|(i, _)| !i.maps.is_empty() && i.maps.iter().all(|m| m.inverse.is_affine()))
+        else {
+            // No maps, no chain: a flame-less def walks from the delta,
+            // and so does a nonlinear solid (plan 8.11 step 2), whose
+            // maps have no matrix to carry a delta through.
+            self.ifs_chain = None;
+            self.ifs_chain_key.clear();
+            return;
+        };
+        let param = |name: &str, fallback: f32| {
+            escape.formula_params.get(name).copied().unwrap_or_else(|| {
+                def.parameters.iter().find(|p| p.name == name).map_or(fallback, |p| p.default)
+            })
+        };
+        let beam = param("beam", 1.0).clamp(1.0, 8.0) as u32;
+        let key = format!(
+            "{}|{}|{}|{}|{}|{}|{}x{}|{beam}|{}",
+            escape.cam_target_x,
+            escape.cam_target_y,
+            escape.cam_target_z,
+            escape.zoom_log2,
+            escape.cam_pitch,
+            escape.cam_fov,
+            self.width,
+            self.height,
+            self.ifs_token,
+        );
+        if self.ifs_chain_key == key {
+            return;
+        }
+
+        let cam = super::ifs::solid_camera(escape, ifs3);
+        // One pixel at the target: the smallest offset any sample will
+        // ask about, and so where the chain can stop.
+        let finest = 2.0 * (cam.fov as f64 * 0.5).tan() * cam.distance
+            / self.height.max(1) as f64;
+        // Enough levels to reach the finest offset at any zoom this
+        // build claims, bounded so a pathological IFS cannot spin here
+        // and by what the packing can carry.
+        let budget = (escape.zoom_log2.max(0.0) as u32 + 64)
+            .min(super::ifs::MAX_CHAIN_LINKS as u32);
+
+        // The target at the precision the zoom asks for. Falling back
+        // to the camera's own f64 target when the strings will not
+        // parse keeps a malformed config rendering something rather
+        // than nothing -- at f64's depth, which is where it was.
+        let chain = match super::ifs::target_at_precision(escape, ifs3) {
+            Some(target) => crate::scene::ifs_estimate::seed_chain3(
+                ifs3, target, finest, budget, beam,
+            ),
+            None => crate::scene::ifs_estimate::seed_chain3(
+                ifs3, cam.target, finest, budget, beam,
+            ),
+        };
+
+        self.ifs_chain = Some(super::ifs::pack_chain3(
+            &chain,
+            packed.rows.len(),
+            &packed.colors,
+            beam as usize,
+        ));
+        self.ifs_chain_key = key;
+    }
+
+    /// The lighting a solid walk shades with, and the scene's fog.
+    ///
+    /// Returns whether anything changed, so the caller can restart a
+    /// progressive render — a light is an input to the picture like any
+    /// other, and this is the FOURTH input whose absence from the keys
+    /// would have shown as bands of different lighting scrolling down
+    /// the frame (the palette, the flame and the camera came first).
+    pub fn set_solid_lighting(
+        &mut self,
+        shading: &crate::config::SolidShadingSettings,
+        fog: (f32, f32, [f32; 3]),
+    ) -> bool {
+        let next = (shading.clone(), fog.0, fog.1, fog.2);
+        if self.solid_lighting == next {
+            return false;
+        }
+        self.solid_lighting = next;
+        true
+    }
+
+    /// A cheap identity for that lighting, for the band and chunk keys.
+    ///
+    /// Only what the WALK reads. A light's direction and whether it is
+    /// on decide which shadow rays are traced, so they are geometry;
+    /// its colour and intensity, the material, the occlusion strength,
+    /// the shadow strength and the fog are applied by the relight pass
+    /// and are deliberately NOT here -- a change to any of them must
+    /// hit the cache, not miss it. That is the whole point of caching
+    /// the geometry.
+    fn lighting_key(&self) -> String {
+        let (s, _, _, _) = &self.solid_lighting;
+        // The fallback rig has a light of its own; whether it is in
+        // force is a geometry fact.
+        let mut k = format!("{}", crate::config::SolidShadingSettings::is_default(s));
+        for l in &s.lights {
+            k.push_str(&format!("|{}:{}:{}", l.enabled, l.azimuth, l.elevation));
+        }
+        k
+    }
+
+    /// The walk's own parameters, for the keys -- with the one that is
+    /// not a walk input taken out. `shadow` is a STRENGTH the relight
+    /// applies; whether it is zero is what the walk reads, since that
+    /// decides if the shadow rays are traced at all.
+    ///
+    /// Built from the def's parameter LIST with defaults filled in, not
+    /// from whatever the map happens to hold: a parameter that is
+    /// absent (the default applies) and the same parameter set
+    /// explicitly to its default are the same walk, and a key that
+    /// told them apart would re-walk on the first touch of any slider.
+    /// Measured: setting `shadow` for the first time missed the cache
+    /// for exactly that reason.
+    fn walk_params_key(escape: &EscapeConfig) -> String {
+        let Some(def) = super::ifs::get_ifs(&escape.formula) else {
+            let mut items: Vec<String> =
+                escape.formula_params.iter().map(|(k, v)| format!("{k}={v}")).collect();
+            items.sort();
+            return items.join(",");
+        };
+        def.parameters
+            .iter()
+            .map(|p| {
+                let v = escape.formula_params.get(p.name).copied().unwrap_or(p.default);
+                if def.solid && p.name == "shadow" {
+                    format!("{}={}", p.name, v > 0.0)
+                } else {
+                    format!("{}={v}", p.name)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    /// Interaction preview: while the user is still dragging, render
+    /// one pixel in each 2×2 block and fill the block from it.
+    ///
+    /// A quarter of the walks for the same frame, with the same
+    /// lighting and the same look -- a blockier one, for as long as
+    /// the drag lasts. Shadows and occlusion are NOT switched off here
+    /// on purpose: they change what the picture IS, so the full render
+    /// landing would pop, where a resolution change only sharpens. The
+    /// stride is part of both render identities, so the preview's
+    /// records never masquerade as a full pass's, and turning the
+    /// preview off is a miss that re-walks at full resolution.
+    ///
+    /// Returns whether it changed, so the caller can mark the frame
+    /// dirty: the last preview frame settled, and nothing else would
+    /// trigger the full one.
+    pub fn set_preview(&mut self, on: bool) -> bool {
+        if self.preview == on {
+            return false;
+        }
+        self.preview = on;
+        true
+    }
+
+    /// Upload the coarse pass the measure walk reads.
+    ///
+    /// Packed by [`super::ifs::pack_coarse`]: a two-element header of
+    /// `(res, radius)` and the grid's centre, then one `vec2<f32>` of
+    /// (density per unit area, mean palette coordinate) per cell. The
+    /// shader's reader is `super::ifs::read_coarse` transcribed, and
+    /// `the_packed_coarse_grid_is_the_measure_it_came_from` is what
+    /// keeps the two from drifting.
+    ///
+    /// Keyed on nothing: the caller rebuilds this only when the flame
+    /// changes, since it covers the ball and no view moves it.
+    /// Returns whether anything was written.
+    pub fn set_coarse(&mut self, device: &Device, queue: &Queue, packed: &[[f32; 2]]) -> bool {
+        if packed.len() < super::ifs::COARSE_HEADER {
+            return false;
+        }
+        let bytes = bytemuck::cast_slice::<[f32; 2], u8>(packed);
+        let want = bytes.len() as u64;
+        if self.ifs_coarse_buffer.size() < want {
+            let old = std::mem::replace(
+                &mut self.ifs_coarse_buffer,
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Escape IFS Coarse Measure"),
+                    size: want,
+                    usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }),
+            );
+            old.destroy();
+            // A new buffer is a new binding, so every cached bind
+            // group that names the old one is stale.
+            self.ifs_token = self.ifs_token.wrapping_add(1) | 1;
+        }
+        queue.write_buffer(&self.ifs_coarse_buffer, 0, bytes);
+        true
+    }
+
+    /// Hand the shader the centre's beam, every level of it.
+    ///
+    /// Written with the SEEDS rather than with the maps: the beam is
+    /// the centre's own walk through this view, so it changes when
+    /// the view does and not when the flame does.
+    fn set_reference(&mut self, device: &Device, queue: &Queue) {
+        let one = [super::ifs::IfsRefRowGpu::default()];
+        let rows: &[super::ifs::IfsRefRowGpu] =
+            self.ifs_ref_rows.as_deref().filter(|r| !r.is_empty()).unwrap_or(&one);
+        let bytes = bytemuck::cast_slice::<super::ifs::IfsRefRowGpu, u8>(rows);
+        let want = bytes.len() as u64;
+        if self.ifs_ref_buffer.size() < want {
+            let old = std::mem::replace(
+                &mut self.ifs_ref_buffer,
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Escape IFS Reference Beam"),
+                    size: want,
+                    usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }),
+            );
+            old.destroy();
+            // A new buffer is a new binding, so every cached bind
+            // group naming the old one is stale.
+            self.ifs_token = self.ifs_token.wrapping_add(1) | 1;
+        }
+        queue.write_buffer(&self.ifs_ref_buffer, 0, bytes);
+    }
+
+    /// Hand the shader this flame's transition graph
+    /// (`ifs-general.md` D4).
+    ///
+    /// Written whenever the maps are, since the graph is indexed by
+    /// MAP and a map table that changed invalidates it. A flame with
+    /// no xaos writes a single zero, which is what
+    /// `ifs_xaos_n` reads as "no graph".
+    pub fn set_xaos(&mut self, device: &Device, queue: &Queue, packed: &[f32]) {
+        let padded: Vec<f32> =
+            if packed.len() < 4 { vec![0.0; 4] } else { packed.to_vec() };
+        let bytes = bytemuck::cast_slice::<f32, u8>(&padded);
+        let want = bytes.len() as u64;
+        if self.ifs_xaos_buffer.size() < want {
+            let old = std::mem::replace(
+                &mut self.ifs_xaos_buffer,
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Escape IFS Xaos Graph"),
+                    size: want,
+                    usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }),
+            );
+            old.destroy();
+            // A new buffer is a new binding, so every cached bind
+            // group that names the old one is stale.
+            self.ifs_token = self.ifs_token.wrapping_add(1) | 1;
+        }
+        queue.write_buffer(&self.ifs_xaos_buffer, 0, bytes);
+    }
+
+    /// Build the coarse pass if this flame needs one and has not got
+    /// one, and hand it to the shader.
+    ///
+    /// Only the MEASURE colouring reads it, so only that colouring
+    /// pays for it -- and it is keyed on `ifs_token`, which changes
+    /// with the flame and not with the view, because the pass covers
+    /// the ball and no pan or zoom moves it.
+    ///
+    /// Without this the measure colouring renders BLACK: the buffer
+    /// is bound at its one dummy element, every lookup reads no
+    /// measure, and every pixel reads zero density.
+    pub fn ensure_coarse(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        escape: &EscapeConfig,
+        flame: &crate::scene::transforms::Flame,
+    ) {
+        if escape.coloring != "ifs_measure" {
+            return;
+        }
+        let Some(packed) = self.ifs.as_ref() else { return };
+        if self.ifs_token == 0 || self.ifs_coarse_token == self.ifs_token {
+            return;
+        }
+        let (centre, radius) = (packed.ifs.ball.centre, packed.ifs.ball.radius);
+        let flame = flame.clone();
+        let Some(coarse) = super::ifs::coarse_measure_for(
+            device, queue, &flame, centre, radius, COARSE_RES, COARSE_BATCHES,
+        ) else {
+            return;
+        };
+        let packed_rows = super::ifs::pack_coarse(&coarse);
+        if self.set_coarse(device, queue, &packed_rows) {
+            self.ifs_coarse_token = self.ifs_token;
+            self.ifs_coarse_cpu = Some(coarse);
+        }
+    }
+
+    /// What the measure's density needs multiplying by for this view
+    /// to look like the last one.
+    ///
+    /// The flam3 tonemap normalises by iterations per pixel, which is
+    /// iteration-invariant and NOT zoom-invariant, and the measure is
+    /// neither: §5h of the measure plan put the density's climb at 6.5
+    /// stops over fifteen zoom levels on a gasket and 7.4 on a grand
+    /// julian, because density per unit AREA scales as `2^(z(2−D))`
+    /// and a flame's attractor has `D < 2`. Left alone the picture
+    /// brightens as it is zoomed, by a factor that depends on the
+    /// set's dimension.
+    ///
+    /// So the view's own median density is the divisor. Sampled
+    /// rather than reduced on the GPU: a reduction pass would be
+    /// exact and this is a brightness, and forty-nine
+    /// `estimate_measure` calls are a fraction of the prefix the same
+    /// view already pays for.
+    ///
+    /// `None` when there is nothing to normalise against, which
+    /// leaves the user's own scale alone.
+    fn measure_auto_scale(&self, escape: &EscapeConfig) -> Option<f32> {
+        let coarse = self.ifs_coarse_cpu.as_ref()?;
+        let packed = self.ifs.as_ref()?;
+        let maps = &packed.measure;
+        let span_y = 4.0 / escape.zoom_factor();
+        let span_x = span_y * (self.width as f64 / self.height.max(1) as f64);
+        let basis = super::ifs::view_basis(span_x, span_y, escape.rotation);
+        let px = span_y / self.height.max(1) as f64;
+        let (cx, cy) = escape.center_f64();
+        let beam = escape
+            .formula_params
+            .get("beam")
+            .copied()
+            .unwrap_or(8.0)
+            .clamp(1.0, 8.0) as usize;
+        let cells = escape
+            .coloring_params
+            .get("cells")
+            .copied()
+            .unwrap_or(crate::scene::ifs_estimate::MEASURE_CELLS as f32)
+            as f64;
+        let mut seen: Vec<f64> = Vec::with_capacity(49);
+        for gy in 0..7 {
+            for gx in 0..7 {
+                let uv = [gx as f64 / 6.0 - 0.5, gy as f64 / 6.0 - 0.5];
+                let at = [
+                    cx + basis[0][0] * uv[0] + basis[0][1] * uv[1],
+                    cy + basis[1][0] * uv[0] + basis[1][1] * uv[1],
+                ];
+                let e = crate::scene::ifs_estimate::estimate_measure(
+                    &packed.ifs, maps, coarse, at, px, beam, cells.max(1.0), 60,
+                );
+                if e.density > 0.0 && e.density.is_finite() {
+                    seen.push(e.density);
+                }
+            }
+        }
+        // Too little measure in view to say anything -- an exterior
+        // view, or one past where the walk reaches.
+        if seen.len() < 5 {
+            return None;
+        }
+        seen.sort_by(f64::total_cmp);
+        let median = seen[seen.len() / 2];
+        (median > 0.0).then(|| (1.0 / median) as f32)
+    }
+
+    /// The stride this render uses: 2 in preview for a mode-D formula,
+    /// 1 otherwise. Mode A and mode B are untouched.
+    fn stride(&self, escape: &EscapeConfig) -> u32 {
+        if self.preview && super::ifs::get_ifs(&escape.formula).is_some() {
+            2
+        } else {
+            1
+        }
+    }
+
+    /// Size the geometry cache to the frame, and say whether the frame
+    /// has one.
+    ///
+    /// Allocated beside the results buffer and only when the results
+    /// are (a solid render that cannot hold its records has nothing to
+    /// relight from either). A resize invalidates it the way it
+    /// invalidates the records: the next walk rewrites every row.
+    fn ensure_ifs_geom(&mut self, device: &Device, results_active: bool) -> bool {
+        if !results_active {
+            return false;
+        }
+        let px = self.width.max(1) * self.height.max(1);
+        if self.ifs_geom_px != px {
+            self.ifs_geom_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Escape IFS Geometry"),
+                size: (px as u64) * 16,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.ifs_geom_px = px;
+        }
+        true
+    }
+
+    /// The relight pass, over the whole frame: the colouring, the
+    /// palette and the rig from the records and the geometry cache.
+    ///
+    /// Runs after EVERY band of a solid walk and on the cache path. It
+    /// is the only thing that writes a solid's pixels, and it contains
+    /// no walk, so it costs a full-screen pass -- about a millisecond
+    /// at 1080p -- rather than a render. Rows the walk has not reached
+    /// yet read as absent from a cleared geometry record.
+    fn run_relight(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        encoder: &mut CommandEncoder,
+        escape: &EscapeConfig,
+        palette_view: &TextureView,
+    ) {
+        let Some(def) = super::ifs::get_ifs(&escape.formula) else { return };
+        let coloring = super::ifs::get_ifs_coloring(&escape.coloring, def);
+        let key = format!("ifs_relight|{}", coloring.name);
+        if !self.pipelines.contains_key(&key) {
+            let source = assembler::assemble_ifs_relight(coloring);
+            let module = device.create_shader_module(ShaderModuleDescriptor {
+                label: Some(&format!("Escape Shader {key}")),
+                source: ShaderSource::Wgsl(source.into()),
+            });
+            let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+                label: Some("Escape IFS Relight Pipeline Layout"),
+                bind_group_layouts: &[
+                    Some(&self.recolor_bind_group_layout),
+                    Some(&self.ifs_bind_group_layout),
+                ],
+                immediate_size: 0,
+            });
+            let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+                label: Some(&format!("Escape Pipeline {key}")),
+                layout: Some(&layout),
+                module: &module,
+                entry_point: Some("escape_main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+            self.pipelines.insert(key.clone(), pipeline);
+        }
+        // The recolor layout is shared with mode A, which applies a
+        // contrast fit; the relight does not, but the binding must be
+        // there. Identity.
+        queue_contrast(queue, &self.contrast_params, &escape.contrast, None);
+        let bind_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Escape Relight Bind Group"),
+            layout: &self.recolor_bind_group_layout,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: self.params_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::TextureView(&self.output_view),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::TextureView(palette_view),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: BindingResource::Sampler(&self.palette_sampler),
+                },
+                BindGroupEntry {
+                    binding: 4,
+                    resource: BindingResource::TextureView(&self.height_view),
+                },
+                BindGroupEntry {
+                    binding: 5,
+                    resource: self.results_binding(),
+                },
+                BindGroupEntry {
+                    binding: 6,
+                    resource: self.contrast_params.as_entire_binding(),
+                },
+            ],
+        });
+        let ifs_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Escape Relight IFS Bind Group"),
+            layout: &self.ifs_bind_group_layout,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: self.ifs_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: self.ifs_chain_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: self.ifs_geom_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: self.ifs_coarse_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 4,
+                    resource: self.ifs_xaos_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 5,
+                    resource: self.ifs_ref_buffer.as_entire_binding(),
+                },
+            ],
+        });
+        let pipeline = &self.pipelines[&key];
+        let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+            label: Some("Escape Relight Pass"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.set_bind_group(1, &ifs_group, &[]);
+        pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
+    }
+
+    /// Grow the chain buffer if needed and write the links.
+    ///
+    /// Always writes at least one link, because a bound storage buffer
+    /// may not be empty — and an empty chain is also a real state: a
+    /// flame that does not qualify has no target to walk from.
+    fn upload_ifs_chain(&mut self, device: &Device, queue: &Queue) {
+        let empty = [super::ifs::IfsLinkGpu::default()];
+        let links: &[super::ifs::IfsLinkGpu] = match self.ifs_chain.as_deref() {
+            Some(l) if !l.is_empty() => l,
+            _ => &empty,
+        };
+        let bytes = (links.len() * std::mem::size_of::<super::ifs::IfsLinkGpu>()) as u32;
+        if bytes > self.ifs_chain_capacity {
+            self.ifs_chain_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Escape IFS Seed Chain"),
+                size: bytes as u64,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.ifs_chain_capacity = bytes;
+        }
+        queue.write_buffer(&self.ifs_chain_buffer, 0, bytemuck::cast_slice(links));
+    }
+
+    /// Walk the reference orbit for this view, if it is not already
+    /// walked.
+    ///
+    /// This is the CPU half of §2.5: the levels every pixel in the view
+    /// shares, done once at a precision the shader does not have, so
+    /// the shader can continue in f32 from a point where f32 is
+    /// enough. Cached on the view because a banded render calls this
+    /// once per band and the answer is the same every time.
+    fn ensure_ifs_seeds(&mut self, escape: &EscapeConfig) {
+        let Some(packed) = self.ifs.clone() else {
+            self.ifs_seeds = None;
+            self.ifs_seed_key.clear();
+            return;
+        };
+        let Some(def) = super::ifs::get_ifs(&escape.formula) else { return };
+        if def.solid {
+            self.ifs_seeds = None;
+            self.ifs_seed_key.clear();
+            self.ensure_ifs_chain(escape, &packed, def);
+            return;
+        }
+        self.ifs_chain = None;
+        self.ifs_chain_key.clear();
+        let param = |name: &str, fallback: f32| {
+            escape.formula_params.get(name).copied().unwrap_or_else(|| {
+                def.parameters.iter().find(|p| p.name == name).map_or(fallback, |p| p.default)
+            })
+        };
+        let beam = param("beam", 8.0).clamp(1.0, 8.0) as u32;
+        #[cfg(test)]
+        let forced = self.ifs_force_level;
+        #[cfg(not(test))]
+        let forced: Option<u32> = None;
+        // Only where every map has an exact difference form: see
+        // `Ifs2::has_delta_forms`.
+        let delta = param("delta", 0.0) > 0.5 && packed.ifs.has_delta_forms();
+        let key = format!(
+            "{}|{}|{}|{}|{}x{}|{beam}|{}|{forced:?}|d{delta}",
+            escape.center_re,
+            escape.center_im,
+            escape.zoom_log2,
+            escape.rotation,
+            self.width,
+            self.height,
+            self.ifs_token,
+        );
+        if self.ifs_seed_key == key {
+            return;
+        }
+
+        let span_y = 4.0 / escape.zoom_factor();
+        let span_x = span_y * (self.width as f64 / self.height.max(1) as f64);
+        let basis = super::ifs::view_basis(span_x, span_y, escape.rotation);
+        let px = span_y / self.height.max(1) as f64;
+        // Enough levels to reach the handover at any zoom this build
+        // claims, and bounded so a pathological IFS cannot spin here.
+        let budget = (escape.zoom_log2.max(0.0) as u32 + 64).min(4096);
+        // The centre at the precision the zoom asks for. An f64 centre
+        // caps the zoom at about 2^49 whatever the walk does, because
+        // the walk spends roughly a bit of the centre per level.
+        // Falling back to f64 when the strings will not parse keeps a
+        // malformed config rendering something rather than nothing.
+        let seeds = match super::ifs::centre_at_precision(escape) {
+            #[cfg(test)]
+            Some(centre) if forced.is_some() => crate::scene::ifs_estimate::seed_beam_at(
+                &packed.ifs,
+                centre,
+                basis,
+                px,
+                budget,
+                beam,
+                forced.expect("guarded"),
+            ),
+            Some(centre) => crate::scene::ifs_estimate::seed_beam(
+                &packed.ifs,
+                centre,
+                basis,
+                px,
+                budget,
+                beam,
+            ),
+            None => {
+                // The centre strings would not parse at the precision
+                // the zoom asks for -- `from_decimal` takes plain
+                // decimals, and a small value written by `{:?}` comes
+                // out in scientific notation -- so fall back to f64
+                // and render something rather than nothing.
+                let (x, y) = escape.center_f64();
+                #[cfg(test)]
+                if let Some(level) = forced {
+                    // The forced level belongs on BOTH paths. It was
+                    // on the big-float one alone, so a config whose
+                    // centre did not parse silently ignored it, and a
+                    // gasket asked for level 0 handed over at level 2.
+                    return_seeds_forced(&packed.ifs, [x, y], basis, px, budget, beam, level)
+                } else {
+                    crate::scene::ifs_estimate::seed_beam(
+                        &packed.ifs, [x, y], basis, px, budget, beam,
+                    )
+                }
+                #[cfg(not(test))]
+                crate::scene::ifs_estimate::seed_beam(
+                    &packed.ifs,
+                    [x, y],
+                    basis,
+                    px,
+                    budget,
+                    beam,
+                )
+            }
+        };
+
+        // The centre's beam at EVERY level, for the delta walk. Off,
+        // nothing is walked and nothing is uploaded: the seeded path
+        // is what it has always been.
+        //
+        // This is a SECOND walk of the same centre, not the one above
+        // reused, because `seed_beam` stops at its handover and this
+        // one may not. Paid only when the walk is on, and the plan's
+        // end state is that the two become one.
+        self.ifs_delta_active = false;
+        self.ifs_ref_rows = if delta {
+            let b = match super::ifs::centre_at_precision(escape) {
+                Some(centre) => crate::scene::ifs_estimate::reference_beam(
+                    &packed.ifs, centre, basis, px, budget, beam,
+                ),
+                None => {
+                    let (x, y) = escape.center_f64();
+                    crate::scene::ifs_estimate::reference_beam(
+                        &packed.ifs, [x, y], basis, px, budget, beam,
+                    )
+                }
+            };
+            // ...and only if it buys anything on this view. A
+            // reference whose every lineage rebases at level 0 hands
+            // each pixel a LEVEL-0 handover in f32, which is worse
+            // than the chosen one the seeded walk already has --
+            // measured, 156 pixels against 1.7 on a julia dust at
+            // 2^24. See `ReferenceBeam::carries`.
+            if b.carries() {
+                self.ifs_delta_active = true;
+                Some(super::ifs::pack_reference(&b, packed.rows.len(), beam as usize))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let mut out = [[0.0f32; 4]; 4 + super::ifs::SEED_VEC4S * super::ifs::MAX_SEEDS];
+        out[..4].copy_from_slice(&packed.globals);
+        super::ifs::pack_seeds(
+            &packed.measure,
+            &seeds,
+            packed.rows.len(),
+            &packed.colors,
+            &mut out,
+        );
+        self.ifs_seeds = Some(out);
+        self.ifs_seed_key = key;
+    }
+
     fn direct_rows_per_dispatch(&self, escape: &EscapeConfig) -> u32 {
-        let per_row = (self.width as u64).saturating_mul(escape.max_iter.max(1) as u64);
         // The session shift only ever shrinks (see DIRECT_BUDGET_SHIFT),
         // and carries over from previous sessions.
         tuning::ensure_loaded();
-        let budget = DIRECT_DISPATCH_BUDGET
-            >> DIRECT_BUDGET_SHIFT.load(std::sync::atomic::Ordering::Relaxed);
+        let shift = DIRECT_BUDGET_SHIFT.load(std::sync::atomic::Ordering::Relaxed);
+
+        // Mode D iterates no `max_iter` at all: it walks, and a walk
+        // step is a different unit with a budget of its own.
+        if let Some(def) = super::ifs::get_ifs(&escape.formula) {
+            let param = |name: &str, fallback: f32| {
+                escape.formula_params.get(name).copied().unwrap_or_else(|| {
+                    def.parameters
+                        .iter()
+                        .find(|p| p.name == name)
+                        .map_or(fallback, |p| p.default)
+                })
+            };
+            // A solid render's per-pixel cost has the march in it, and
+            // its budget is scaled to match. Every walk a pixel can
+            // cost is counted: the primary march, one more march per
+            // LIGHT that casts a shadow, the twelve occlusion probes
+            // and the six the normal takes. It used to count shadows
+            // as one march whatever the light count, and neither the
+            // probes nor the normal at all -- an under-estimate of
+            // about 2x with four lights, which is the wrong direction
+            // for a number whose job is to keep a band under the
+            // driver's watchdog. The walks self-limit now, so the
+            // model is conservative in practice; it is still the
+            // model.
+            let (steps, budget) = if def.solid {
+                let steps = param("steps", 96.0) as u32;
+                let shadowed = if param("shadow", 0.7) > 0.0 {
+                    let (sh, _, _, _) = &self.solid_lighting;
+                    if crate::config::SolidShadingSettings::is_default(sh) {
+                        1
+                    } else {
+                        sh.lights.iter().filter(|l| l.enabled && l.intensity > 0.0).count() as u32
+                    }
+                } else {
+                    0
+                };
+                let occlusion = if param("occlusion", 0.15) > 0.0 { 12 } else { 0 };
+                (steps * (1 + shadowed) + occlusion + 6, IFS_SOLID_BUDGET)
+            } else {
+                (1, IFS_DISPATCH_BUDGET)
+            };
+            let maps = match (def.solid, self.ifs.as_ref()) {
+                (true, Some(p)) => p.solid.as_ref().map_or(1, |(_, r)| r.len()),
+                (_, Some(p)) => p.rows.len(),
+                (_, None) => 1,
+            };
+            return ifs_rows_per_dispatch(
+                self.width,
+                self.height,
+                param("levels", 24.0) as u32,
+                param("beam", 8.0).max(1.0) as u32 * steps.max(1),
+                maps,
+                budget >> shift,
+            );
+        }
+
+        let per_row = (self.width as u64).saturating_mul(escape.max_iter.max(1) as u64);
+        let budget = DIRECT_DISPATCH_BUDGET >> shift;
         let rows = budget / per_row.max(1);
         (rows.max(1) as u32).min(self.height.max(1))
     }
@@ -3503,6 +4861,9 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         });
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
+        if let Some(l) = self.lens_gpu.as_ref() {
+            pass.set_bind_group(2, l.bind_group(), &[]);
+        }
         pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
         drop(pass);
         if measure {
@@ -3524,16 +4885,36 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let coloring = super::get_coloring(&escape.coloring);
         let tier = Self::perturb_tier(escape)
             .unwrap_or(assembler::PerturbTier::Power(2));
-        let key = format!("perturbed|{}|{}|{:?}", coloring.name, floatexp, tier);
+        let lens_registry = crate::variations::global_registry();
+        let lens_src = super::lens::lens_source(escape, &lens_registry);
+        let lens_id = super::lens::lens_key(escape, &lens_registry);
+        let key = format!(
+            "perturbed|{}|{}|{:?}|{lens_id}",
+            coloring.name, floatexp, tier
+        );
         if !self.pipelines.contains_key(&key) {
-            let source = assembler::assemble_perturbed(coloring, floatexp, tier);
+            let source = assembler::assemble_perturbed_with_lens(
+                coloring,
+                floatexp,
+                tier,
+                lens_src.as_deref(),
+            );
             let module = device.create_shader_module(ShaderModuleDescriptor {
                 label: Some(&format!("Escape Shader {key}")),
                 source: ShaderSource::Wgsl(source.into()),
             });
+            let groups: Vec<Option<&BindGroupLayout>> = if lens_src.is_some() {
+                vec![
+                    Some(&self.perturb_bind_group_layout),
+                    None,
+                    Some(&self.lens_bind_group_layout),
+                ]
+            } else {
+                vec![Some(&self.perturb_bind_group_layout)]
+            };
             let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
                 label: Some("Escape Perturbed Pipeline Layout"),
-                bind_group_layouts: &[Some(&self.perturb_bind_group_layout)],
+                bind_group_layouts: &groups,
                 immediate_size: 0,
             });
             let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
@@ -5281,15 +6662,148 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
 
     /// Compile (or fetch from cache) the pipeline for this config's
     /// (formula, coloring) pair; returns its cache key.
+    /// Rebuild the lens buffers when the lens changes, rewrite them
+    /// when only its amount or parameters do.
+    ///
+    /// The key deliberately excludes the amount, so dragging that
+    /// slider writes a buffer instead of compiling a shader. The
+    /// parameters are IN the key because a variation's enum parameter
+    /// can pick a different branch of its formula, which is a
+    /// different map and so a different pipeline.
+    fn ensure_lens(&mut self, device: &Device, queue: &Queue, escape: &EscapeConfig) {
+        let registry = crate::variations::global_registry();
+        let Some(flame) = super::lens::lens_flame(escape, &registry) else {
+            self.lens_gpu = None;
+            return;
+        };
+        let key = super::lens::lens_key(escape, &registry);
+        match self.lens_gpu.as_ref() {
+            Some(l) if l.key == key => {
+                self.lens_gpu.as_ref().unwrap().write(queue, &flame);
+            }
+            _ => {
+                let l = super::lens::LensGpu::build(
+                    device,
+                    &self.lens_bind_group_layout,
+                    &flame,
+                    key,
+                );
+                l.write(queue, &flame);
+                self.lens_gpu = Some(l);
+            }
+        }
+    }
+
     fn ensure_pipeline(&mut self, device: &Device, escape: &EscapeConfig) -> String {
         // Mode B routing: a formula name resolving in the FIELD
         // registry compiles the field template instead. Same bind
         // group layout, same dispatch — only the shader differs.
+        // Mode D routing: a formula name resolving in the IFS
+        // registry compiles the distance template, which is the one
+        // shader that also binds group 1.
+        if let Some(def) = super::ifs::get_ifs(&escape.formula) {
+            let coloring = super::ifs::get_ifs_coloring(&escape.coloring, def);
+            // The beam is compiled in (see `assemble_ifs`), so it is
+            // part of the pipeline's identity. Eight values at most,
+            // and a panel that flips it recompiles once per value.
+            let beam = escape
+                .formula_params
+                .get("beam")
+                .copied()
+                .unwrap_or_else(|| {
+                    def.parameters
+                        .iter()
+                        .find(|p| p.name == "beam")
+                        .map_or(1.0, |p| p.default)
+                })
+                .clamp(1.0, assembler::IFS_MAX_BEAM as f32) as u32;
+            let lens_registry = crate::variations::global_registry();
+            let lens_src = super::lens::lens_source(escape, &lens_registry);
+            let lens_id = super::lens::lens_key(escape, &lens_registry);
+            // The DELTA walk is a different shader, not a branch in
+            // one, so it belongs in the pipeline's identity beside the
+            // beam.
+            let delta = escape
+                .formula_params
+                .get("delta")
+                .copied()
+                .unwrap_or_else(|| {
+                    def.parameters
+                        .iter()
+                        .find(|p| p.name == "delta")
+                        .map_or(0.0, |p| p.default)
+                })
+                > 0.5;
+            // ...and what the SEEDS decided, so the pipeline and the
+            // buffer cannot disagree about which walk this frame is.
+            let delta = delta && self.ifs_delta_active;
+            let dtag = if delta { "|delta" } else { "" };
+            // Whether any packed row is a SUM (`ifs-general.md` D3),
+            // read off the rows rather than carried in a field: the
+            // rows ARE the answer, and a field could disagree with
+            // them. In the key, so a flame with a sum and one without
+            // do not share a pipeline.
+            let sums = self
+                .ifs
+                .as_ref()
+                .is_some_and(|p| p.rows.iter().any(|r| r.kind == 7.0));
+            let stag = if sums { "|sum" } else { "" };
+            let key =
+                format!("ifs|{}|{}|b{beam}|{lens_id}{dtag}{stag}", def.name, coloring.name);
+            if !self.pipelines.contains_key(&key) {
+                let source = assembler::assemble_ifs_with_lens(
+                    def,
+                    coloring,
+                    beam,
+                    lens_src.as_deref(),
+                    delta,
+                    sums,
+                );
+                let module = device.create_shader_module(ShaderModuleDescriptor {
+                    label: Some(&format!("Escape Shader {key}")),
+                    source: ShaderSource::Wgsl(source.into()),
+                });
+                let groups: Vec<Option<&BindGroupLayout>> = if lens_src.is_some() {
+                    vec![
+                        Some(&self.bind_group_layout),
+                        Some(&self.ifs_bind_group_layout),
+                        Some(&self.lens_bind_group_layout),
+                    ]
+                } else {
+                    vec![
+                        Some(&self.bind_group_layout),
+                        Some(&self.ifs_bind_group_layout),
+                    ]
+                };
+                let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+                    label: Some("Escape IFS Pipeline Layout"),
+                    bind_group_layouts: &groups,
+                    immediate_size: 0,
+                });
+                let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+                    label: Some(&format!("Escape Pipeline {key}")),
+                    layout: Some(&layout),
+                    module: &module,
+                    entry_point: Some("escape_main"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                });
+                self.pipelines.insert(key.clone(), pipeline);
+            }
+            return key;
+        }
+        let lens_registry = crate::variations::global_registry();
+        let field_lens = super::lens::lens_source(escape, &lens_registry);
+        let field_lens_id = super::lens::lens_key(escape, &lens_registry);
         let (key, source_for) = if let Some(field) = super::fields::get_field(&escape.formula) {
             let coloring = super::fields::get_field_coloring(&escape.coloring, field);
             (
-                format!("field|{}|{}", field.name, coloring.name),
-                Some(assembler::assemble_field(field, coloring)),
+                format!("field|{}|{}|{field_lens_id}", field.name, coloring.name),
+                Some(assembler::assemble_field_with_lens(
+                    field,
+                    coloring,
+                    field_lens.as_deref(),
+                )),
             )
         } else {
             (String::new(), None)
@@ -5300,9 +6814,14 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     label: Some(&format!("Escape Shader {key}")),
                     source: ShaderSource::Wgsl(source.into()),
                 });
+                let groups: Vec<Option<&BindGroupLayout>> = if field_lens.is_some() {
+                    vec![Some(&self.bind_group_layout), None, Some(&self.lens_bind_group_layout)]
+                } else {
+                    vec![Some(&self.bind_group_layout)]
+                };
                 let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
                     label: Some("Escape Pipeline Layout"),
-                    bind_group_layouts: &[Some(&self.bind_group_layout)],
+                    bind_group_layouts: &groups,
                     immediate_size: 0,
                 });
                 let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
@@ -5324,16 +6843,40 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let interior = !self.disable_interior;
         #[cfg(not(test))]
         let interior = true;
-        let key = format!("{}|{}|{}|{}", formula.name, coloring.name, damped, interior);
+        let registry = crate::variations::global_registry();
+        let lens_src = super::lens::lens_source(escape, &registry);
+        let key = format!(
+            "{}|{}|{}|{}|{}",
+            formula.name,
+            coloring.name,
+            damped,
+            interior,
+            super::lens::lens_key(escape, &registry),
+        );
         if !self.pipelines.contains_key(&key) {
-            let source = assembler::assemble_with(formula, coloring, damped, interior);
+            let source = assembler::assemble_with_lens(
+                formula,
+                coloring,
+                damped,
+                interior,
+                lens_src.as_deref(),
+            );
             let module = device.create_shader_module(ShaderModuleDescriptor {
                 label: Some(&format!("Escape Shader {key}")),
                 source: ShaderSource::Wgsl(source.into()),
             });
+            // Group 1 is mode D's and unused here, so it stays empty;
+            // the lens sits at 2 either way, so a lensed and an
+            // unlensed mode-A pipeline differ only in whether the
+            // third slot is filled.
+            let groups: Vec<Option<&BindGroupLayout>> = if lens_src.is_some() {
+                vec![Some(&self.bind_group_layout), None, Some(&self.lens_bind_group_layout)]
+            } else {
+                vec![Some(&self.bind_group_layout)]
+            };
             let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
                 label: Some("Escape Pipeline Layout"),
-                bind_group_layouts: &[Some(&self.bind_group_layout)],
+                bind_group_layouts: &groups,
                 immediate_size: 0,
             });
             let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
@@ -5371,7 +6914,63 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let mut fparams = [[0.0f32; 4]; PARAM_VEC4S];
         let mut cparams = [[0.0f32; 4]; PARAM_VEC4S];
         let mut fdata = [[0.0f32; 4]; FDATA_VEC4S];
-        if let Some(field) = super::fields::get_field(&escape.formula) {
+        if let Some(def) = super::ifs::get_ifs(&escape.formula) {
+            // Mode D: the def's params, its coloring's, and the
+            // whole-IFS constants in the fdata block the other modes
+            // use for derived formula data.
+            let coloring = super::ifs::get_ifs_coloring(&escape.coloring, def);
+            super::pack_params(def.parameters, &escape.formula_params, fparams.as_flattened_mut());
+            super::pack_params(
+                coloring.parameters,
+                &escape.coloring_params,
+                cparams.as_flattened_mut(),
+            );
+            // Brightness 0 means AUTO: divide by the view's own median
+            // density, so zooming does not change the exposure. Any
+            // other value is the user's and is left alone.
+            if coloring.name == "ifs_measure" && cparams[0][1] <= 0.0 {
+                cparams[0][1] = self.measure_auto_scale(escape).unwrap_or(1.0);
+            }
+            if def.solid {
+                if let Some((ifs3, _)) = self.ifs.as_ref().and_then(|p| p.solid.as_ref()) {
+                    let cam = super::ifs::solid_camera(escape, ifs3);
+                    let beam = escape
+                        .formula_params
+                        .get("beam")
+                        .copied()
+                        .unwrap_or(1.0)
+                        .clamp(1.0, 8.0) as usize;
+                    let links = self.ifs_chain.as_ref().map_or(0, |l| l.len());
+                    super::ifs::pack_globals3(
+                        ifs3,
+                        &cam,
+                        links / beam.max(1),
+                        beam,
+                        &self.solid_lighting.0,
+                        (
+                            self.solid_lighting.1,
+                            self.solid_lighting.2,
+                            self.solid_lighting.3,
+                        ),
+                        &mut fdata,
+                    );
+                }
+                // A flame that is planar but not solid leaves the map
+                // count at zero, and the marcher draws nothing.
+            } else {
+                match self.ifs_seeds.as_ref() {
+                    Some(seeded) => fdata[..seeded.len()].copy_from_slice(seeded),
+                // No qualifying flame: the globals alone, whose map
+                // count of zero is what tells the shader to draw
+                // nothing.
+                    None => {
+                        if let Some(packed) = self.ifs.as_ref() {
+                            fdata[..4].copy_from_slice(&packed.globals);
+                        }
+                    }
+                }
+            }
+        } else if let Some(field) = super::fields::get_field(&escape.formula) {
             // Mode B: pack the field's params + its resolved coloring's.
             let coloring = super::fields::get_field_coloring(&escape.coloring, field);
             super::pack_params(field.parameters, &escape.formula_params, fparams.as_flattened_mut());
@@ -5411,7 +7010,8 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             tile_y0: 0,
             damping: [escape.damping_re, escape.damping_im],
             shade_flags: escape.shading.field.to_gpu(),
-            _pad_shade: [0; 3],
+            stride: self.stride(escape),
+            _pad_shade: [0; 2],
             fparams,
             cparams,
             fdata,
@@ -5433,6 +7033,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         encoder: &mut CommandEncoder,
         escape: &EscapeConfig,
         palette_view: &TextureView,
+        palette_generation: u64,
     ) -> bool {
         // Relief needs its scalar field and a destination distinct
         // from the colour it reads; both are allocated on demand, so
@@ -5443,6 +7044,14 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // early return it takes (the drop guard writes on exit).
         let _diag_cpu = super::diag::CpuTimer::start();
         let results_active = self.ensure_results(device);
+        // Once, at the top: every path below -- direct, field,
+        // perturbed, mode D -- binds the same lens group, and a
+        // pipeline compiled with one must find it bound.
+        self.ensure_lens(device, queue, escape);
+        self.ensure_ifs_seeds(escape);
+        // Whatever that walked, the shader reads: one dummy row when
+        // the delta walk is off, which is the default.
+        self.set_reference(device, queue);
         let mut params = self.params_for(escape);
         if results_active {
             // Bit 3: the iterate templates write their terminal
@@ -5458,16 +7067,29 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // dispatch over the records plus the usual resolve. This is
         // what makes palette and coloring edits real-time on the
         // perturbed path. Field formulas write no records.
+        // Field formulas write no terminal records, so they have no
+        // recolor cache to key. Mode D does write them: its walk is the
+        // engine's most expensive pass and none of it depends on the
+        // colouring.
         let iterate_key = if super::fields::get_field(&escape.formula).is_none() {
             Some(self.iterate_key_for(escape))
         } else {
             None
         };
+        let solid = super::ifs::get_ifs(&escape.formula).is_some_and(|d| d.solid);
+        let geom_active = if solid { self.ensure_ifs_geom(device, results_active) } else { false };
         if let Some(ik) = iterate_key.as_deref() {
             if results_active && self.results_key.as_deref() == Some(ik) {
                 let t0 = web_time::Instant::now();
                 self.measure_contrast(device, queue, escape, ik);
-                self.run_recolor(device, queue, encoder, escape, palette_view);
+                if solid && geom_active {
+                    // A solid's cache path IS the relight: the same
+                    // pass every band of the walk ended with, with
+                    // whatever the lighting is now.
+                    self.run_relight(device, queue, encoder, escape, palette_view);
+                } else {
+                    self.run_recolor(device, queue, encoder, escape, palette_view);
+                }
                 self.run_resolve(device, queue, encoder, &escape.shading, escape.downsample);
                 DIRECT_RENDER_IN_FLIGHT.store(false, std::sync::atomic::Ordering::Relaxed);
                 PERTURB_RENDER_IN_FLIGHT.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -5818,11 +7440,20 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // (direct and field). A band is a complete render of its own
         // rows, so no resume state is needed and the output texture
         // accumulates the frame top to bottom.
-        let key = self.chunk_key_for(escape, 0, true);
+        let solid_geom = super::ifs::get_ifs(&escape.formula).is_some_and(|d| d.solid)
+            && self.ifs_geom_px == self.width.max(1) * self.height.max(1)
+            && results_active;
+        let key = self.band_key(escape, palette_generation);
         if self.chunk_key.as_deref() != Some(key.as_str()) {
             self.chunk_key = Some(key);
             self.direct_tile_y = 0;
             self.direct_last = None;
+            if solid_geom {
+                // Zero is "no surface" (see `ifs_pack_geom`): rows the
+                // new pass has not reached yet must read as absent,
+                // not as the previous view relit.
+                encoder.clear_buffer(&self.ifs_geom_buffer, 0, None);
+            }
             super::diag::update(|d| {
                 d.restarts += 1;
                 d.inflight_frames = 0;
@@ -5848,7 +7479,15 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 }
             }
         }
-        let rows = self.direct_rows_per_dispatch(escape);
+        // A band of `rows` costs a quarter at stride 2, so it may be
+        // four times as tall; and its edges land on block boundaries,
+        // or a block straddling two bands would be walked by neither.
+        let stride = self.stride(escape);
+        let rows = (self.direct_rows_per_dispatch(escape) * stride * stride)
+            .min(self.height)
+            .max(stride)
+            / stride
+            * stride;
         if self.direct_tile_y >= self.height {
             self.direct_tile_y = 0;
         }
@@ -5891,6 +7530,46 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             ],
         });
 
+        // Mode D's maps. Uploaded here rather than in `set_ifs` so
+        // the queue write lands in this frame's submission, and only
+        // when the packed data actually changed.
+        let ifs_bind_group = if let Some(def) = super::ifs::get_ifs(&escape.formula) {
+            self.upload_ifs(device, queue, def.solid);
+            self.upload_ifs_chain(device, queue);
+            Some(device.create_bind_group(&BindGroupDescriptor {
+                label: Some("Escape IFS Bind Group"),
+                layout: &self.ifs_bind_group_layout,
+                entries: &[
+                    BindGroupEntry {
+                        binding: 0,
+                        resource: self.ifs_buffer.as_entire_binding(),
+                    },
+                    BindGroupEntry {
+                        binding: 1,
+                        resource: self.ifs_chain_buffer.as_entire_binding(),
+                    },
+                    BindGroupEntry {
+                        binding: 2,
+                        resource: self.ifs_geom_buffer.as_entire_binding(),
+                    },
+                    BindGroupEntry {
+                        binding: 3,
+                        resource: self.ifs_coarse_buffer.as_entire_binding(),
+                    },
+                    BindGroupEntry {
+                        binding: 4,
+                        resource: self.ifs_xaos_buffer.as_entire_binding(),
+                    },
+                    BindGroupEntry {
+                        binding: 5,
+                        resource: self.ifs_ref_buffer.as_entire_binding(),
+                    },
+                ],
+            }))
+        } else {
+            None
+        };
+
         let key = self.ensure_pipeline(device, escape);
         let pipeline = &self.pipelines[&key];
 
@@ -5900,8 +7579,23 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         });
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
-        pass.dispatch_workgroups(self.width.div_ceil(8), band.div_ceil(8), 1);
+        if let Some(bg) = ifs_bind_group.as_ref() {
+            pass.set_bind_group(1, bg, &[]);
+        }
+        if let Some(l) = self.lens_gpu.as_ref() {
+            pass.set_bind_group(2, l.bind_group(), &[]);
+        }
+        pass.dispatch_workgroups(
+            self.width.div_ceil(stride).div_ceil(8),
+            band.div_ceil(stride).div_ceil(8),
+            1,
+        );
         drop(pass);
+        if solid_geom {
+            // The picture, from everything walked so far and the
+            // lighting of now. The walk wrote no pixels.
+            self.run_relight(device, queue, encoder, escape, palette_view);
+        }
         self.run_resolve(device, queue, encoder, &escape.shading, escape.downsample);
         self.direct_tile_y = tile_y0.saturating_add(band);
         let mut done = self.direct_tile_y >= self.height;
@@ -6051,6 +7745,34 @@ mod tests {
     /// The budget shifts and in-flight flags are process-global, so
     /// the tests that drive them must not run concurrently.
     static BREAKER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// A row-band pass must restart when the palette changes.
+    ///
+    /// Bands are dispatched one per frame and each samples the palette
+    /// texture as it goes, so a palette edit part-way through leaves
+    /// the rows already drawn in the old colours and the rest in the
+    /// new ones. Reported from the app as horizontal bands of
+    /// different colours while the render scanned down, on rotating
+    /// the palette over a mode-D view.
+    ///
+    /// The band cursor already restarts when its key changes; the
+    /// palette simply was not in the key, because it lives in the
+    /// flame renderer's texture rather than the escape config. Nor was
+    /// the flame, which only mode D reads.
+    #[test]
+    fn the_band_key_changes_when_the_palette_or_the_flame_does() {
+        let base = "mandelbrot|{}|smooth|0|0|0";
+        let k = |pal, ifs| EscapeRenderer::compose_band_key(base, pal, ifs);
+
+        assert_eq!(k(1, 7), k(1, 7), "the same inputs must not restart a pass");
+        assert_ne!(k(1, 7), k(2, 7), "a palette edit must restart the pass");
+        assert_ne!(k(1, 7), k(1, 8), "a flame edit must restart the pass");
+        // The two fields must not be able to cancel each other out.
+        assert_ne!(k(1, 2), k(2, 1));
+        // And the base still decides: an escape-config edit restarts as
+        // it always did.
+        assert_ne!(k(1, 7), EscapeRenderer::compose_band_key("other", 1, 7));
+    }
 
     #[test]
     fn a_direct_render_is_split_into_bands_it_can_survive() {
