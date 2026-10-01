@@ -220,11 +220,13 @@ fn dbg_how_long_a_restart_shows() {
     }
 }
 
-/// **A varying dispatch keeps its brightness** (§6, Brightness): the
-/// governor changes the workgroup count between frames, and the cohort
-/// count (`OrbitFuses`) must follow every thread's burn-in through it. A
-/// sequence of 256, 16, 128, 64, 256 and 8 workgroups against 256 every
-/// time, by density.
+/// **A varying dispatch keeps its brightness** (§6, Brightness; step 6):
+/// the governor changes the workgroup count and, since it shortens every
+/// dispatch first, the length too, between frames, and the count
+/// (`OrbitFuses`) must follow every thread's burn-in through it. Widths of
+/// 256, 16, 128, 64, 256 and 8 workgroups, then the same with lengths of
+/// 64, 256, 1,000, 64, 20 and 512 a thread -- one under the burn-in --
+/// against 256 workgroups of 64 every time, by density.
 #[test]
 #[ignore = "needs a GPU"]
 fn a_varying_dispatch_keeps_its_brightness() {
@@ -232,12 +234,15 @@ fn a_varying_dispatch_keeps_its_brightness() {
     const N: u32 = 128;
     let (device, queue) = device();
     let steady = render_blocks(&device, &queue, &cfg, N, &Run { ipt: 64, frames: 24, persistent: true, ..Default::default() });
-    let varying = render_blocks(&device, &queue, &cfg, N, &Run { ipt: 64, frames: 48, persistent: true, workgroups: &[256, 16, 128, 64, 256, 8], ..Default::default() });
-    let c = compare_blocks(&varying.density, &steady.density, &steady.density);
-    print_compared("varying dispatch against 256 workgroups, persistent", &c);
-    let (_, _, mx, _, my, _, z) = c.pooled[0];
-    assert!(!(z.abs() > 4.0 && (mx / my - 1.0).abs() > 0.005), "the whole view's density is {:.4} of the steady dispatch's", mx / my);
-    assert!(c.worst_dense < 0.05, "a dense block is {:.3} off", c.worst_dense);
+    let widths = [256, 16, 128, 64, 256, 8];
+    for (what, lengths) in [("width", &[][..]), ("width and length", &[64, 256, 1000, 64, 20, 512][..])] {
+        let varying = render_blocks(&device, &queue, &cfg, N, &Run { ipt: 64, frames: 48, persistent: true, workgroups: &widths, lengths, ..Default::default() });
+        let c = compare_blocks(&varying.density, &steady.density, &steady.density);
+        print_compared(&format!("varying {what} against 256 workgroups of 64, persistent"), &c);
+        let (_, _, mx, _, my, _, z) = c.pooled[0];
+        assert!(!(z.abs() > 4.0 && (mx / my - 1.0).abs() > 0.005), "varying {what}: the whole view's density is {:.4} of the steady dispatch's", mx / my);
+        assert!(c.worst_dense < 0.05, "varying {what}: a dense block is {:.3} off", c.worst_dense);
+    }
 }
 
 /// **Restarts** (§6): a flame edit starts a new generation, and a render of

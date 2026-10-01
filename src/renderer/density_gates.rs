@@ -136,6 +136,9 @@ pub(crate) struct Run<'a> {
     pub persistent: bool,
     /// Workgroups of each dispatch, cycled through; empty is 256 each.
     pub workgroups: &'a [u32],
+    /// Iterations a thread of each dispatch, cycled through as the
+    /// governor varies them; empty is `ipt` each.
+    pub lengths: &'a [u32],
     /// A refresh period in place of the one the flame needs
     /// (persistent-orbits.md §3.7); none keeps the flame's.
     pub refresh: Option<u32>,
@@ -143,7 +146,7 @@ pub(crate) struct Run<'a> {
 
 impl Default for Run<'_> {
     fn default() -> Self {
-        Self { plan: None, ipt: 1024, frames: 4, reps: 8, persistent: true, workgroups: &[], refresh: None }
+        Self { plan: None, ipt: 1024, frames: 4, reps: 8, persistent: true, workgroups: &[], lengths: &[], refresh: None }
     }
 }
 
@@ -184,9 +187,10 @@ pub(crate) fn render_blocks(device: &wgpu::Device, queue: &wgpu::Queue, cfg: &Fr
         queue.submit(Some(enc.finish()));
         for f in 0..run.frames.max(1) {
             let groups = if run.workgroups.is_empty() { 256 } else { run.workgroups[f % run.workgroups.len()] };
+            let ipt = if run.lengths.is_empty() { run.ipt } else { run.lengths[f % run.lengths.len()] };
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
             let k = r.compute_pass(
-                &mut enc, queue, device, groups, run.ipt, 20, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, 0.0, 0.0, 0.0, 0.0, 0.0,
+                &mut enc, queue, device, groups, ipt, 20, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, 0.0, 0.0, 0.0, 0.0, 0.0,
                 0.0, 0.0, cfg.speed_factor, true, false,
             );
             r.accumulate_pass(&mut enc, queue, device, k);
