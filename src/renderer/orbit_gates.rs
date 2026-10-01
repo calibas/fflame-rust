@@ -290,6 +290,79 @@ fn an_edit_restarts_the_orbits_and_a_pan_does_not() {
     assert_eq!(after_edit, 64 * 64 * (256 - 20), "a restart pays the burn-in once");
 }
 
+/// **A pan restarts variation state** (persistent-orbits.md §3.3, as
+/// built): `curliecue2` walks on from its state and ignores its input, so
+/// its picture is the walk since the state started. Rendered at view A,
+/// panned to B (an accumulation reset, as the app does), and rendered on,
+/// it must be exactly a fresh render at B -- the walk starting again, as
+/// JWildfire starts it for every render. And overwrite-mode frames (a
+/// drag) restart it every frame. A flame without variation state keeps
+/// its orbits through both (`an_edit_restarts_the_orbits_and_a_pan_does_not`).
+#[test]
+#[ignore = "GPU gate: persistent orbits"]
+fn a_pan_restarts_variation_state() {
+    const N: u32 = 64;
+    let (device, queue) = device();
+    let mut a = FractalConfig::default();
+    a.flame.transforms.clear();
+    let mut t = crate::scene::transforms::Transform::default();
+    t.weight = 1.0;
+    t.variations.clear();
+    t.variation_order.clear();
+    t.set_variation("curliecue2", 1.0);
+    t.set_variation_param("curliecue2", "speed", 0.37);
+    a.flame.transforms.push(t);
+    a.deterministic_rng = true;
+    a.levels_enabled = false;
+    // The walk moves 0.001 a step: 2,048 steps span a few hundredths.
+    a.zoom = 40.0;
+    let mut b = a.clone();
+    (b.pan_x, b.pan_y) = (0.004, -0.003);
+    let frames = |r: &mut crate::renderer::FlameRenderer, cfg: &FractalConfig, k: usize| {
+        for _ in 0..k {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
+            let n = r.compute_pass(&mut enc, &queue, &device, 32, 256, 20, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, cfg.speed_factor, true, false);
+            r.accumulate_pass(&mut enc, &queue, &device, n);
+            queue.submit(Some(enc.finish()));
+        }
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+    };
+    let fresh = |cfg: &FractalConfig| {
+        let mut r = crate::renderer::FlameRenderer::with_palette_size(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, N, N, &cfg.flame, cfg.palette_size);
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("load") });
+        r.load_config(&device, &mut enc, &queue, cfg, &cfg.palette, 256, 20);
+        queue.submit(Some(enc.finish()));
+        r
+    };
+    let mut r = fresh(&b);
+    frames(&mut r, &b, 8);
+    let truth = r.read_density_blocking(&device, &queue);
+
+    let mut r = fresh(&a);
+    frames(&mut r, &a, 8);
+    let gen_a = r.orbit_generation();
+    let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pan") });
+    r.reset(&mut enc, &queue, 256, b.zoom, b.pan_x as f32, b.pan_y as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, b.speed_factor);
+    queue.submit(Some(enc.finish()));
+    frames(&mut r, &b, 8);
+    let panned = r.read_density_blocking(&device, &queue);
+    let lit = truth.iter().filter(|d| **d > 0.0).count();
+    let worst = truth.iter().zip(&panned).map(|(x, y)| (x - y).abs() / x.max(*y).max(f64::MIN_POSITIVE)).fold(0.0, f64::max);
+    println!("  panned against fresh: {lit} pixels lit, the worst pixel {worst:.2e} apart");
+    assert!(lit > 10, "the fixture drew {lit} pixels");
+    assert!(worst < 1e-6, "after a pan curliecue2 is not a fresh render: a pixel {worst:.3} apart");
+    assert_ne!(r.orbit_generation(), gen_a, "the pan kept curliecue2's orbits");
+
+    // A drag: every overwrite-mode frame starts the walk again.
+    r.set_overwrite_mode(true);
+    let mut gens = Vec::new();
+    for _ in 0..3 {
+        frames(&mut r, &b, 1);
+        gens.push(r.orbit_generation());
+    }
+    assert!(gens.windows(2).all(|w| w[0] != w[1]), "overwrite frames kept the orbits: generations {gens:?}");
+}
+
 /// **The count is the GPU's** (§3.5): the CPU's count (`OrbitFuses`) of plotted
 /// samples equals the shader's own tally of plot attempts, exactly,
 /// through a sequence whose width and length both vary -- burn-in longer

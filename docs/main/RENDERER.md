@@ -165,7 +165,12 @@ and stores them back. The random streams are still seeded per dispatch.
 - **What restarts them**: a new generation, `params.orbit_generation`,
   bumped when the orbit key changes -- a hash of the whole flame, the
   render mode, `preserve_z`, the colour mode and the speed factor. A pan,
-  zoom, palette or tone-map change keeps them.
+  zoom, palette or tone-map change keeps them -- unless the flame carries
+  variation state: then every restart of the accumulation (a pan, a reset,
+  each overwrite-mode frame) restarts its orbits too, because a state can
+  be a clock rather than a register that settles (`curliecue2` walks on
+  from wherever it was), and JWildfire initialises a variation's state
+  for every render.
 - **Burn-in** is paid once per restart, not once per dispatch, so
   iterations per thread only slices the work: the picture does not depend
   on it, and a short dispatch costs no orbit depth.
