@@ -336,8 +336,13 @@ fn rng_next(rng: ptr<function, RngState>) -> u32 {
 }
 
 // Generate random f32 in [0, 1)
+//
+// The top 24 bits, which an f32 holds exactly: a multiple of 2^-24, at
+// most 1 - 2^-24. `f32(u32) / 2^32` rounded the top 128 values up to 2^32
+// and returned exactly 1.0, one draw in 2^25 -- so `rng_nextf() < opacity`
+// dropped a plot at opacity 1, and `u32(rng_nextf() * n)` could be `n`.
 fn rng_nextf(rng: ptr<function, RngState>) -> f32 {
-    return f32(rng_next(rng)) / 4294967296.0;
+    return f32(rng_next(rng) >> 8u) * (1.0 / 16777216.0);
 }
 
 // Affine transformations for 3D mode

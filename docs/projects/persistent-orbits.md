@@ -535,11 +535,18 @@ iterations.
   a thread unaccumulated): with two frames a replicate, the restart's
   transient was half of one render and an eightieth of the other it was
   compared with.
-- **`rng_nextf` returns exactly 1.0** one draw in 2^25: `f32(u32)` rounds
-  the top 128 values up to 2^32. So `rng_nextf() < opacity` drops a plot
-  at opacity 1 (the count gate tolerates exactly this), and any
-  `u32(rng_nextf() * n)` can produce `n`. A fix (`f32(x >> 8u) /
-  16777216.0`) changes every render's bits, so it waits for a decision.
+- ~~**`rng_nextf` returns exactly 1.0**~~ *Fixed (2026-10-01).* `f32(u32)
+  rounded the top 128 values up to 2^32, one draw in 2^25, so
+  `rng_nextf() < opacity` dropped a plot at opacity 1 and `u32(rng_nextf()
+  * n)` -- 109 call sites in the variations -- could be `n`. It is now the
+  top 24 bits, which an f32 holds exactly: at most `1 - 2^-24`. The
+  targeting word draw had the same conversion and takes the same. Every
+  render's exact pixels move, by noise: the visual suite stays within
+  tolerance (330/330, no baseline rewritten), and the count gate is exact
+  again -- 20 runs of about 30 million draws each, where the old
+  conversion dropped about one plot a run. A draw of exactly 0 is now one
+  in 2^24 rather than 2^32; every `log` of a draw in the variations is
+  already guarded (`max(u, 1e-30)` or `u + 1e-10`).
 - **The exporter's GPU histogram is u32, scaled by 100**: a pixel holding
   more than 43 million samples wraps. Seen only at 34 billion samples on
   a 128x128 gasket.

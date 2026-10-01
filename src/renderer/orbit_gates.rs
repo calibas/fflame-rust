@@ -372,8 +372,7 @@ fn a_pan_restarts_variation_state() {
 /// flame, whose xaos walk decides its orbits' groups). The tally is the frame
 /// coverage's (`FRAME_COVERAGE`, switched on by auto exposure), which
 /// counts every iteration past the burn-in that is plotted; a gasket at
-/// full opacity never respawns, so it is every one -- but for the opacity
-/// draw's one in 2^25 (see the assertion).
+/// full opacity never respawns, so it is every one.
 #[test]
 #[ignore = "GPU gate: persistent orbits"]
 fn the_count_is_the_gpus() {
@@ -398,14 +397,12 @@ fn the_count_is_the_gpus() {
             let counted = r.compute_pass(&mut enc, &queue, &device, groups, ipt, 20, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, cfg.speed_factor, true, false);
             queue.submit(Some(enc.finish()));
             let words = r.read_coverage_blocking(&device, &queue).expect("the coverage counters");
-            // Exact but for the opacity draw: `rng_nextf` returns exactly
-            // 1.0 one draw in 2^25 (`f32` rounds the top 128 `u32`s up to
-            // 2^32), and `1.0 < opacity` drops that plot even at opacity 1.
+            // Exactly: `rng_nextf` is in [0, 1), so the opacity draw keeps
+            // every plot at opacity 1. (It once returned 1.0 one draw in
+            // 2^25 and dropped a plot now and then -- the first thing this
+            // gate found.)
             let gpu = words[1] as u64;
-            assert!(
-                gpu <= counted && counted - gpu <= 2 + counted / 10_000_000,
-                "{groups} workgroups of {ipt}: the CPU counted {counted}, the GPU plotted {gpu}"
-            );
+            assert_eq!(counted, gpu, "{groups} workgroups of {ipt}: the CPU counted {counted}, the GPU plotted {gpu}");
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("accumulate") });
             r.accumulate_pass(&mut enc, &queue, &device, counted);
             queue.submit(Some(enc.finish()));

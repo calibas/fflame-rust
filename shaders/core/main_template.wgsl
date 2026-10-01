@@ -553,7 +553,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // is a hash of the group and the iteration rather than a
                 // stream, so a thread that skipped one -- burning in after
                 // a respawn -- stays with its group.
-                let ct_i = ct_pick(f32(pcg_hash(pcg_hash((thread_id / 32u) ^ params.seed ^ 0x27D4EB2Fu) + i)) / 4294967296.0);
+                // In [0, 1) as `rng_nextf` makes it: the top 24 bits.
+                let ct_i = ct_pick(f32(pcg_hash(pcg_hash((thread_id / 32u) ^ params.seed ^ 0x27D4EB2Fu) + i) >> 8u) * (1.0 / 16777216.0));
                 let ct_b = ct_base(ct_i);
                 ct_weight = ct_word_weight(ct_i);
                 // Bounded by the table's own stride, so a table that is
