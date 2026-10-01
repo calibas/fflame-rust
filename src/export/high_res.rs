@@ -336,7 +336,7 @@ impl HighResExporter {
     /// `new`, with each thread's orbit kept between the export's dispatches
     /// (`docs/projects/persistent-orbits.md`), as `new` does, or restarted
     /// every dispatch, as a gate's baseline does.
-    pub async fn new_with_orbits(
+    pub(crate) async fn new_with_orbits(
         config: &FractalConfig,
         width: u32,
         height: u32,
@@ -2316,8 +2316,8 @@ impl HighResExporter {
         // not the user-passed target — feed that to the scale-invariant
         // sample_density formula (Phase 8a). Persistent orbits count what
         // plotted, as `render.rs` and the app do; restarted ones (a gate's
-        // baseline) every iteration, burn-in included, as this path did
-        // before orbits persisted.
+        // baseline, `new_with_orbits`) every iteration, burn-in included,
+        // as this path did before orbits persisted.
         let total_iters_dispatched = if self.orbit_words > 0 { plotted } else { num_dispatches * iterations_per_dispatch };
 
         // Auto exposure's share, exact over the export; as the app, it

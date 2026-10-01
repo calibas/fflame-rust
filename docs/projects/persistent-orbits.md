@@ -1,8 +1,9 @@
 # Persistent orbits: keeping each thread's chaos-game orbit between dispatches
 
 Status: **in progress** (2026-10-01), branch `persistent-orbits`. Steps
-0-6 done: on by default in every renderer since step 5, and the governor
-shortens every dispatch since step 6. Results in §8.
+0-7 done: every renderer keeps its orbits, with no setting to turn them
+off, and the governor shortens every dispatch. Step 8 (governor controls
+in Rendering) remains. Results in §8.
 
 Every compute dispatch today restarts every thread's orbit from scratch.
 Where a flame takes longer than the burn-in to forget that start, the
@@ -607,3 +608,20 @@ first.
 |---|---|
 | `governor_tests` (14), every batch shortening | pass; the floor is one workgroup of 64 |
 | a varying dispatch keeps its brightness: widths 256, 16, 128, 64, 256, 8 and lengths 64, 256, 1,000, 64, 20, 512 against 256 x 64 | whole view 1.0000, no block off |
+
+### Step 7: no setting
+
+The rule set for this plan was: always on if the cost is under 10%. It
+costs nothing measurable -- plotted samples a second rise at every setting
+-- and no flame was found that renders worse: every image that moved in
+the visual suite moved toward the long-orbit picture the reference
+renderers draw, except the identity map, which has no attractor to draw
+either way. So there is no setting. `set_persistent_orbits`,
+`RenderJob::with_persistent_orbits` and `HighResExporter::new_with_orbits`
+are test-only (`#[cfg(test)]` or crate-private): restarted orbits remain
+as the gates' measured baseline.
+
+The `PERSISTENT_ORBITS` codegen flag stays in `ShaderConstants`. Every
+renderer sets it; the harnesses that build a flame shader without running
+the chaos game -- the variation probe, the bounds analysis -- leave it
+off, and bind no orbit buffer.
