@@ -223,8 +223,14 @@ mod gpu_tests {
     }
 
     fn render(cfg: &FractalConfig, n: u32, iters: u64) -> Vec<u8> {
+        render_orbits(cfg, n, iters, false)
+    }
+
+    /// `render`, with each thread's orbit kept between dispatches or not
+    /// (`docs/projects/persistent-orbits.md`).
+    fn render_orbits(cfg: &FractalConfig, n: u32, iters: u64, persistent: bool) -> Vec<u8> {
         let (device, queue) = device();
-        let job = crate::renderer::RenderJob::new(cfg, n, n).with_iterations(iters);
+        let job = crate::renderer::RenderJob::new(cfg, n, n).with_iterations(iters).with_persistent_orbits(persistent);
         pollster::block_on(crate::renderer::render(
             &device,
             &queue,
@@ -253,6 +259,10 @@ mod gpu_tests {
     /// the gate is about; the warm-up's own effect is measured by
     /// `the_correction_renders_the_true_measure` below, where it is
     /// on and the answer still has to be right.
+    ///
+    /// **With persistent orbits too** (`docs/projects/persistent-orbits.md`):
+    /// the window and its weight are then carried from one dispatch to
+    /// the next, and carrying them must be as neutral as restarting them.
     #[test]
     #[ignore = "needs a GPU"]
     fn a_neutral_bias_renders_what_the_feature_off_renders() {
@@ -262,21 +272,24 @@ mod gpu_tests {
 
         const N: u32 = 128;
         const ITERS: u64 = 4_000_000;
-        let off = render(&base, N, ITERS);
-        let on = render(&neutral, N, ITERS);
+        for persistent in [false, true] {
+            let off = render_orbits(&base, N, ITERS, persistent);
+            let on = render_orbits(&neutral, N, ITERS, persistent);
 
-        let differing = off.iter().zip(&on).filter(|(a, b)| a != b).count();
-        let lit = off.chunks(4).filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24).count();
-        println!("  q≡p: {differing} of {} bytes differ, {lit} lit pixels", off.len());
-        // A gasket is measure zero, so a thin figure is the right
-        // answer: 820 of 16384 at this zoom and iteration count.
-        // The bar is only "not blank".
-        assert!(lit > 500, "the fixture rendered almost nothing ({lit} lit)");
-        assert_eq!(
-            differing, 0,
-            "the mechanism is not neutral at q ≡ p: {differing} bytes differ, so a ratio, the \
-             window product or the deposit's rounding is not exactly 1 where it has to be"
-        );
+            let differing = off.iter().zip(&on).filter(|(a, b)| a != b).count();
+            let lit = off.chunks(4).filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24).count();
+            let how = if persistent { "persistent orbits" } else { "restarted orbits" };
+            println!("  q≡p, {how}: {differing} of {} bytes differ, {lit} lit pixels", off.len());
+            // A gasket is measure zero, so a thin figure is the right
+            // answer: 820 of 16384 at this zoom and iteration count.
+            // The bar is only "not blank".
+            assert!(lit > 500, "{how}: the fixture rendered almost nothing ({lit} lit)");
+            assert_eq!(
+                differing, 0,
+                "{how}: the mechanism is not neutral at q ≡ p: {differing} bytes differ, so a ratio, \
+                 the window product or the deposit's rounding is not exactly 1 where it has to be"
+            );
+        }
     }
 
     /// PROBE: what the bias BUYS — and on this fixture it buys

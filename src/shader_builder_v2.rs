@@ -342,6 +342,14 @@ pub struct ShaderConstants {
     /// constants-changed check.
     pub cylinder_targeting: bool,
 
+    /// Whether each thread's orbit persists between dispatches
+    /// (`docs/projects/persistent-orbits.md`). Drives `PERSISTENT_ORBITS`:
+    /// the orbit buffer at binding 8, read at the top of `main` and
+    /// written back after the loop, so a dispatch resumes where the last
+    /// one left its thread. Off, the shader is byte-identical to one
+    /// built before the feature.
+    pub persistent_orbits: bool,
+
     /// Whether the analytic-blur feature is active for this flame
     /// (`Flame::analytic_blur_active`). Drives `HAS_ANALYTIC_BLUR` — when
     /// false, all mean-splat routing is stripped and the shader is
@@ -446,6 +454,7 @@ impl Default for ShaderConstants {
             has_analytic_blur: false,
             importance_sampling: false,
             cylinder_targeting: false,
+            persistent_orbits: false,
             frame_coverage: false,
             cylinder_replay: false,
             cylinder_relative: false,
@@ -680,6 +689,7 @@ impl ShaderConstants {
             // CONFIG, so a caller that has one sets this after.
             importance_sampling: false,
             cylinder_targeting: false,
+            persistent_orbits: false,
             frame_coverage: false,
             cylinder_replay: false,
             cylinder_relative: false,
@@ -1149,7 +1159,7 @@ impl ShaderBuilder {
         &self,
         flame: &crate::scene::transforms::Flame,
         active_variations: &[(String, u32)],
-    ) -> String {
+    ) -> (String, u32) {
         let local_map: std::collections::HashMap<String, u32> =
             active_variations.iter().map(|(n, i)| (n.clone(), *i)).collect();
         let layout = crate::scene::transforms::compute_state_layout(
@@ -1171,7 +1181,7 @@ impl ShaderBuilder {
                 .is_some_and(|info| info.state_count > 0)
         });
         if layout.is_empty() && !needs_accessors {
-            return String::new();
+            return (String::new(), 0);
         }
         // WGSL has no zero-length array, so keep one dummy slot alive for
         // the all-weights-zero case; the accessors are compiled but never
@@ -1233,7 +1243,7 @@ impl ShaderBuilder {
              \x20   thread_state[offset + slot] = value;\n\
              }\n",
         );
-        out
+        (out, total as u32)
     }
 
     /// Generate a per-flame `get_param` function with packed offsets baked
@@ -1707,6 +1717,7 @@ impl ShaderBuilder {
         // (docs/projects/flame-deep-zoom.md stage 2). Off strips the
         // binding, the draw and the prefix.
         processor.set("CYLINDER_TARGETING", constants.cylinder_targeting);
+        processor.set("PERSISTENT_ORBITS", constants.persistent_orbits);
         // FRAME_COVERAGE tallies plot attempts and in-frame landings so
         // the tone map can be told what share of the work the viewport
         // holds (docs/projects/flame-deep-zoom.md).
@@ -1917,7 +1928,15 @@ impl ShaderBuilder {
         // 8a. Per-thread variation state (only emits if any active variation
         //     declares state_count > 0; empty string for stateless flames).
         //     See docs/projects/intra-iteration-state-and-accum.md.
-        shader.push_str(&self.build_state_accessors(flame, &active));
+        let (state_block, state_slots) = self.build_state_accessors(flame, &active);
+        shader.push_str(&state_block);
+        // Each thread's variation slots, which a persistent orbit carries
+        // after its 16 fixed words (`ORBIT_WORDS` in header.wgsl). The
+        // renderer sizes the orbit buffer from it (`ShaderCache`).
+        if constants.persistent_orbits {
+            shader.push_str(&format!("const ORBIT_SLOTS: u32 = {state_slots}u;\n"));
+        }
+        processor.set("HAS_THREAD_STATE", state_slots > 0);
         shader.push('\n');
 
         // 8a-ii. Per-thread 4th coordinate `point_w` for 4D / quaternion
@@ -2005,6 +2024,7 @@ impl ShaderBuilder {
             has_analytic_blur: false,
             importance_sampling: false,
             cylinder_targeting: false,
+            persistent_orbits: false,
             frame_coverage: false,
             // Wraps the armed variations' draws to read the forced arm.
             cylinder_replay: true,
@@ -2047,6 +2067,7 @@ impl ShaderBuilder {
             has_analytic_blur: false,
             importance_sampling: false,
             cylinder_targeting: false,
+            persistent_orbits: false,
             frame_coverage: false,
             cylinder_replay: false,
             cylinder_relative: false,

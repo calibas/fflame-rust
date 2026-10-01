@@ -2352,6 +2352,7 @@ fn at_even(out: &mut Vec<f32>) -> f32 {
 #[cfg(test)]
 mod gpu_tests {
     use super::*;
+    use crate::renderer::density_gates::{compare_blocks, print_compared, render_blocks, replicated_blocks, Run};
     use crate::config::FractalConfig;
     use crate::scene::transforms::Transform;
 
@@ -5330,155 +5331,6 @@ mod gpu_tests {
         assert_eq!(short.len(), 2, "expected the swap and the plan: {short:?}");
     }
 
-    /// **A render's density, in replicates.** `reps` independent renders of
-    /// `cfg` (drawing `plan` if given, untargeted otherwise), each `frames`
-    /// dispatches of 256 x `ipt`, read as density per equivalent iteration
-    /// (`read_density_blocking`) and summed in 16x16 blocks. From the
-    /// replicates each block has a mean and a standard error, so two renders
-    /// can be compared where they are precise and not where they are noise.
-    /// Also the last replicate, tone-mapped, for looking at.
-    #[allow(clippy::too_many_arguments)]
-    fn replicated_blocks(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        cfg: &FractalConfig,
-        plan: Option<&Cylinders>,
-        n: u32,
-        ipt: u32,
-        frames: usize,
-        reps: usize,
-    ) -> (Vec<Vec<f64>>, Vec<u8>) {
-        let mut cfg = cfg.clone();
-        cfg.deterministic_rng = false;
-        cfg.cylinder_targeting = plan.is_some();
-        let mut r = crate::renderer::FlameRenderer::with_palette_size(device, queue, wgpu::TextureFormat::Rgba8Unorm, n, n, &cfg.flame, cfg.palette_size);
-        if let Some(p) = plan {
-            let _ = r.show_plan(device, queue, &cfg, p.clone());
-        }
-        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("load") });
-        r.load_config(device, &mut enc, queue, &cfg, &cfg.palette, 1, 0);
-        queue.submit(Some(enc.finish()));
-        let side = (n / 16) as usize;
-        let mut out = Vec::with_capacity(reps);
-        let mut last = Vec::new();
-        for rep in 0..reps {
-            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("reset") });
-            r.reset(&mut enc, queue, ipt, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, cfg.speed_factor);
-            queue.submit(Some(enc.finish()));
-            for _ in 0..frames.max(1) {
-                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
-                let k = r.compute_pass(
-                    &mut enc, queue, device, 256, ipt, 20, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, 0.0, 0.0, 0.0, 0.0, 0.0,
-                    0.0, 0.0, cfg.speed_factor, true, false,
-                );
-                r.accumulate_pass(&mut enc, queue, device, k);
-                queue.submit(Some(enc.finish()));
-                let _ = device.poll(wgpu::PollType::wait_indefinitely());
-            }
-            let d = r.read_density_blocking(device, queue);
-            let mut b = vec![0.0f64; side * side];
-            for (i, v) in d.iter().enumerate() {
-                let (x, y) = (i % n as usize / 16, i / n as usize / 16);
-                b[y * side + x] += v;
-            }
-            out.push(b);
-            if rep + 1 == reps {
-                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("tonemap") });
-                r.tonemap_pass(queue, &mut enc);
-                queue.submit(Some(enc.finish()));
-                last = pollster::block_on(r.read_fractal_pixels(device, queue, false, [0.0, 0.0, 0.0])).expect("pixels").2;
-            }
-        }
-        (out, last)
-    }
-
-    /// Mean and standard error of the mean, over replicates.
-    fn mean_se(xs: &[f64]) -> (f64, f64) {
-        let k = xs.len() as f64;
-        let m = xs.iter().sum::<f64>() / k;
-        let var = xs.iter().map(|x| (x - m) * (x - m)).sum::<f64>() / (k - 1.0).max(1.0);
-        (m, (var / k).sqrt())
-    }
-
-    /// **Two renders' densities, compared where they are precise.** Blocks
-    /// in three tiers by `tiers_of`'s density against its mean block --
-    /// dense (at least a tenth of it), middle, faint (under a hundredth,
-    /// not empty) -- each tier pooled over its blocks replicate by
-    /// replicate; and every block's own difference in standard errors.
-    struct Compared {
-        /// (x mean, x se, y mean, y se, z) for the whole view and each tier.
-        pooled: Vec<(&'static str, usize, f64, f64, f64, f64, f64)>,
-        /// The largest block |z|, and how many blocks pass 5.
-        worst_z: f64,
-        over_5: usize,
-        judged: usize,
-        /// The largest relative difference of a block that differs by more
-        /// than 5 standard errors, in the dense tier and the middle one.
-        worst_dense: f64,
-        worst_middle: f64,
-    }
-
-    fn compare_blocks(x: &[Vec<f64>], y: &[Vec<f64>], tiers_of: &[Vec<f64>]) -> Compared {
-        let nb = x[0].len();
-        let per_block = |reps: &[Vec<f64>], b: usize| mean_se(&reps.iter().map(|r| r[b]).collect::<Vec<_>>());
-        let reference: Vec<f64> = (0..nb).map(|b| per_block(tiers_of, b).0).collect();
-        let mean_block = reference.iter().sum::<f64>() / nb as f64;
-        let tier = |b: usize| -> &'static str {
-            let v = reference[b];
-            if v >= 0.1 * mean_block {
-                "dense"
-            } else if v >= 0.01 * mean_block {
-                "middle"
-            } else if v > 0.0 {
-                "faint"
-            } else {
-                "empty"
-            }
-        };
-        let mut pooled = Vec::new();
-        for name in ["all", "dense", "middle", "faint", "empty"] {
-            let in_tier: Vec<usize> = (0..nb).filter(|&b| name == "all" || tier(b) == name).collect();
-            let sums = |reps: &[Vec<f64>]| mean_se(&reps.iter().map(|r| in_tier.iter().map(|&b| r[b]).sum::<f64>()).collect::<Vec<_>>());
-            let ((mx, sx), (my, sy)) = (sums(x), sums(y));
-            let se = (sx * sx + sy * sy).sqrt();
-            let z = if se > 0.0 { (mx - my) / se } else if mx == my { 0.0 } else { f64::INFINITY };
-            pooled.push((name, in_tier.len(), mx, sx, my, sy, z));
-        }
-        let (mut worst_z, mut over_5, mut judged) = (0.0f64, 0usize, 0usize);
-        let (mut worst_dense, mut worst_middle) = (0.0f64, 0.0f64);
-        for b in 0..nb {
-            let ((mx, sx), (my, sy)) = (per_block(x, b), per_block(y, b));
-            let se = (sx * sx + sy * sy).sqrt();
-            if se > 0.0 {
-                judged += 1;
-                let z = ((mx - my) / se).abs();
-                worst_z = worst_z.max(z);
-                over_5 += (z > 5.0) as usize;
-                if z > 5.0 {
-                    let rel = (mx - my).abs() / mx.max(my);
-                    match tier(b) {
-                        "dense" => worst_dense = worst_dense.max(rel),
-                        "middle" => worst_middle = worst_middle.max(rel),
-                        _ => {}
-                    }
-                }
-            }
-        }
-        Compared { pooled, worst_z, over_5, judged, worst_dense, worst_middle }
-    }
-
-    fn print_compared(what: &str, c: &Compared) {
-        println!(
-            "  {what}: blocks judged {}, worst |z| {:.1}, over 5: {}; of those, the largest difference {:.3} dense, {:.3} middle",
-            c.judged, c.worst_z, c.over_5, c.worst_dense, c.worst_middle
-        );
-        for (name, n, mx, sx, my, sy, z) in &c.pooled {
-            if *n > 0 {
-                println!("    {name:<6} {n:>3} blocks: {mx:.4e} +- {sx:.1e}  against  {my:.4e} +- {sy:.1e}   ratio {:.4}  z {z:+.1}", mx / my.max(f64::MIN_POSITIVE));
-            }
-        }
-    }
-
     /// **Importance sampling's correction puts the light where it
     /// belongs.** The gasket with its first transform drawn 4x as often,
     /// corrected through the window, against importance sampling off, by
@@ -5529,8 +5381,7 @@ mod gpu_tests {
                 failures.push(format!("window {window}: the whole view is {:.4} of the truth ({z:+.1} standard errors)", mx / my));
             }
         }
-        assert!(failures.is_empty(), "{}", failures.join("
-"));
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     /// **Is the faint light a plan draws really there?** The untargeted chaos
@@ -5587,11 +5438,13 @@ mod gpu_tests {
         }
     }
 
-    /// **Does a short orbit bias a targeted render?** Every dispatch
-    /// restarts its orbits, and the governor shortens a targeted dispatch
-    /// to 64 iterations a thread. The landed plan and the first plan on the
-    /// way, by density in replicates, at 64, 256 and 1,024 iterations a
-    /// thread against 4,096, at the same total work. `FLAME`, `ZOOM`.
+    /// **Does a short orbit bias a targeted render?** The governor shortens
+    /// a dispatch to 64 iterations a thread. With restarted orbits that
+    /// moved light (tracker P11); persistent orbits do not restart. The
+    /// landed plan and the first plan on the way, by density in
+    /// replicates, at 64, 256 and 1,024 iterations a thread, restarted and
+    /// persistent, against 4,096 restarted, at the same total work.
+    /// `FLAME`, `ZOOM`.
     #[test]
     #[ignore = "debug: needs a GPU; reads output/flame-zoom"]
     fn dbg_orbit_length_by_density() {
@@ -5630,8 +5483,12 @@ mod gpu_tests {
             let work = |ipt: u32| ((64.0 * e_plan / drawn_efficiency(p)).ceil() as usize).clamp(64, 2560) * 4096 / ipt as usize / REPS;
             let (long, _) = replicated_blocks(&device, &queue, &cfg, Some(p), N, 4096, work(4096), REPS);
             for ipt in [64u32, 256, 1024] {
-                let (short, _) = replicated_blocks(&device, &queue, &cfg, Some(p), N, ipt, work(ipt), REPS);
-                print_compared(&format!("{what} ({} words, depth {}) at {ipt} a thread against 4096", p.words.len(), p.depth), &compare_blocks(&short, &long, &long));
+                // Restarted, and with persistent orbits (persistent-orbits.md).
+                for persistent in [false, true] {
+                    let short = render_blocks(&device, &queue, &cfg, N, &Run { plan: Some(p), ipt, frames: work(ipt), reps: REPS, persistent, ..Default::default() }).density;
+                    let how = if persistent { "persistent" } else { "restarted" };
+                    print_compared(&format!("{what} ({} words, depth {}) at {ipt} a thread, {how}, against 4096 restarted", p.words.len(), p.depth), &compare_blocks(&short, &long, &long));
+                }
             }
         }
     }
@@ -5833,8 +5690,8 @@ mod gpu_tests {
         const W: u32 = 1280;
         const H: u32 = 720;
         const FRAME: Duration = Duration::from_micros(16_667);
-        let floor = crate::app::Batch { max_workgroups: 128, iterations_per_thread: 256, burn_in: 20, shorten: true }
-            .shape(crate::app::Knee::Shedding { over: 0 }, crate::app::MIN_ITER_SCALE);
+        let batch = crate::app::Batch { max_workgroups: 128, iterations_per_thread: 256, burn_in: 20 };
+        let floor = batch.shape(crate::app::Knee::Shedding { over: 0 }, batch.min_scale());
         let loads: [(&str, Option<(u32, u32)>); 4] =
             [("paused", None), ("floor", Some(floor)), ("128x64", Some((128, 64))), ("128x256", Some((128, 256)))];
         let rounds: usize = std::env::var("ROUNDS").ok().and_then(|v| v.parse().ok()).unwrap_or(2);

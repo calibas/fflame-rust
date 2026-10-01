@@ -1,6 +1,17 @@
 use std::collections::HashMap;
 use super::transforms::Flame;
 
+/// The xaos chain's structure, for `xaos_closed_classes` and
+/// `xaos_walk_splits_orbits`.
+struct XaosGroups {
+    /// `reaches[i][j]`: the chain can go from transform `i` to `j`.
+    reaches: Vec<Vec<bool>>,
+    /// The transforms a first pick can land on.
+    first: Vec<bool>,
+    /// One member of each closed group an orbit can reach.
+    closed: Vec<usize>,
+}
+
 /// A detected linked transform pair
 #[derive(Debug, Clone, PartialEq)]
 pub struct LinkedPair {
@@ -27,6 +38,89 @@ impl Flame {
             }
         }
         false
+    }
+
+    /// **How many closed groups the xaos chain has** that an orbit can
+    /// reach: sets of transforms the chain, once in, never leaves. An orbit
+    /// starts at a transform drawn by weight and moves by `weight × xaos`,
+    /// as `select_transform_xaos` does (a row of zeros goes to transform 0,
+    /// as the shader's selection falls through to it).
+    ///
+    /// One for every flame without xaos, and for most with it: every orbit
+    /// then ends in the same group, and its light is shared out by the walk
+    /// itself. With two or more, which group an orbit ends in is drawn once,
+    /// so the share of the light each holds is the share of the orbits that
+    /// went there (`docs/projects/persistent-orbits.md` §3.7).
+    pub fn xaos_closed_classes(&self) -> usize {
+        self.xaos_groups().map_or(1, |g| g.closed.len())
+    }
+
+    /// **Whether the xaos walk, not the first pick, decides which closed
+    /// group an orbit ends in**: some transform an orbit can start at
+    /// reaches two or more closed groups. Where the first pick decides,
+    /// the shader's stratified first pick gives each group its share;
+    /// where the walk does, only restarting orbits redraws it
+    /// (`docs/projects/persistent-orbits.md` §3.7, refresh).
+    pub fn xaos_walk_splits_orbits(&self) -> bool {
+        let Some(g) = self.xaos_groups() else { return false };
+        if g.closed.len() < 2 {
+            return false;
+        }
+        (0..g.reaches.len())
+            .filter(|&i| g.first[i])
+            .any(|i| g.closed.iter().filter(|&&c| g.reaches[i][c]).count() > 1)
+    }
+
+    /// The xaos chain's reachability, which transforms a first pick can
+    /// land on, and one member of each closed group an orbit can reach.
+    /// None without xaos.
+    fn xaos_groups(&self) -> Option<XaosGroups> {
+        let n = self.transforms.len();
+        if n == 0 || !self.has_xaos() {
+            return None;
+        }
+        let w: Vec<f32> = self.transforms.iter().map(|t| t.weight.max(0.0)).collect();
+        let next: Vec<Vec<usize>> = (0..n)
+            .map(|i| {
+                let row: Vec<usize> = (0..n).filter(|&j| w[j] * self.get_xaos(i, j) > 0.0).collect();
+                if row.is_empty() {
+                    vec![0]
+                } else {
+                    row
+                }
+            })
+            .collect();
+        let reach = |from: usize| -> Vec<bool> {
+            let mut seen = vec![false; n];
+            let mut stack = vec![from];
+            seen[from] = true;
+            while let Some(i) = stack.pop() {
+                for &j in &next[i] {
+                    if !seen[j] {
+                        seen[j] = true;
+                        stack.push(j);
+                    }
+                }
+            }
+            seen
+        };
+        let reaches: Vec<Vec<bool>> = (0..n).map(reach).collect();
+        let first: Vec<bool> = w.iter().map(|&x| x > 0.0).collect();
+        // Where an orbit can be: everything reachable from a first pick.
+        let mut live = vec![false; n];
+        for i in (0..n).filter(|&i| first[i]) {
+            for j in 0..n {
+                live[j] |= reaches[i][j];
+            }
+        }
+        // A transform is in a closed group when everything it reaches
+        // reaches it back; each group once, by its lowest member.
+        let closed = (0..n)
+            .filter(|&i| live[i])
+            .filter(|&i| (0..n).all(|j| !reaches[i][j] || reaches[j][i]))
+            .filter(|&i| (0..i).all(|j| !(reaches[i][j] && reaches[j][i])))
+            .collect();
+        Some(XaosGroups { reaches, first, closed })
     }
 
     /// Get xaos weight for transition from src to dst
@@ -726,5 +820,74 @@ mod tests {
         ]);
         let changes = flame.link_transforms_changes(0, 0);
         assert!(changes.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod closed_class_tests {
+    use crate::scene::transforms::{Flame, Transform};
+
+    fn flame(n: usize) -> Flame {
+        let mut f = Flame::default();
+        f.transforms = (0..n)
+            .map(|_| {
+                let mut t = Transform::default();
+                t.weight = 1.0;
+                t
+            })
+            .collect();
+        f
+    }
+
+    #[test]
+    fn no_xaos_is_one_group() {
+        assert_eq!(flame(3).xaos_closed_classes(), 1);
+    }
+
+    #[test]
+    fn isolated_groups_are_counted() {
+        let mut f = flame(4);
+        for (i, j) in [(0, 2), (0, 3), (1, 2), (1, 3), (2, 0), (2, 1), (3, 0), (3, 1)] {
+            f.set_xaos(i, j, 0.0);
+        }
+        assert_eq!(f.xaos_closed_classes(), 2);
+        // A bridge from one group into the other leaves one closed group.
+        f.set_xaos(0, 2, 1.0);
+        assert_eq!(f.xaos_closed_classes(), 1);
+    }
+
+    #[test]
+    fn a_one_way_split_has_two_ends() {
+        // 0 leads to 1 or 2, each of which only repeats itself.
+        let mut f = flame(3);
+        for (i, j) in [(1, 0), (1, 2), (2, 0), (2, 1)] {
+            f.set_xaos(i, j, 0.0);
+        }
+        assert_eq!(f.xaos_closed_classes(), 2);
+        assert!(f.xaos_walk_splits_orbits(), "an orbit starting at 0 ends in either");
+    }
+
+    #[test]
+    fn isolated_groups_are_split_by_the_first_pick() {
+        let mut f = flame(4);
+        for (i, j) in [(0, 2), (0, 3), (1, 2), (1, 3), (2, 0), (2, 1), (3, 0), (3, 1)] {
+            f.set_xaos(i, j, 0.0);
+        }
+        assert!(!f.xaos_walk_splits_orbits(), "every first pick is already in its group");
+        assert!(!flame(3).xaos_walk_splits_orbits());
+    }
+
+    #[test]
+    fn a_group_no_first_pick_reaches_is_not_counted() {
+        // 2 is its own closed group, but has no weight and nothing leads
+        // to it.
+        let mut f = flame(3);
+        f.transforms[2].weight = 0.0;
+        for (i, j) in [(2, 0), (2, 1)] {
+            f.set_xaos(i, j, 0.0);
+        }
+        f.set_xaos(2, 2, 1.0);
+        f.set_xaos(0, 0, 0.5);
+        assert_eq!(f.xaos_closed_classes(), 1);
     }
 }

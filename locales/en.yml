@@ -73,6 +73,10 @@ menu:
   resume: "▶ Resume"
   reset_accumulation: "🔄 Reset Accumulation"
   iterations_per_thread: "Iterations per Thread"
+  frame_governor: "Frame-Time Governor"
+  tooltip_frame_governor: "Size each frame's GPU work to the frame budget: shorter dispatches first, then fewer workgroups.\nOff, every frame dispatches the workgroups chosen below, at the full iterations per thread."
+  workgroups: "Workgroups"
+  tooltip_workgroups: "Workgroups of 64 threads each frame dispatches while the governor is off.\nMore = more samples a frame and a longer frame."
   reset_rendering: "🔄 Reset to Defaults"
 
   # Window Menu - Panel items
@@ -959,6 +963,8 @@ history:
     # System Settings
     system_iterations_per_thread: "System: Iterations Per Thread"
     system_burn_in: "System: Burn-in Iterations"
+    system_frame_governor: "System: Frame-Time Governor"
+    system_manual_workgroups: "System: Workgroups"
     system_vsync_enabled: "System: VSync Enabled"
     system_target_fps: "System: Target FPS"
     system_export_width: "System: Export Width"
@@ -1611,13 +1617,13 @@ settings:
 
 
   # Tooltips
-  tooltip_iterations_per_thread: "GPU workgroup performance tuning.\nHigher values = fewer dispatches, better GPU utilization.\nLower values = more frequent updates, smoother animation."
+  tooltip_iterations_per_thread: "How the GPU's work is sliced into dispatches.\nEach orbit continues from one dispatch to the next, so this does not change the picture.\nHigher values = fewer dispatches, better GPU utilization.\nLower values = more frequent updates, smoother animation."
   orbit_cache_mb: "Orbit Cache (MB)"
   tooltip_orbit_cache_mb: "Disk budget for cached deep-zoom reference orbits. One 10M-iteration reference is ~200 MB and takes minutes of single-threaded arithmetic to rebuild, so this decides how many deep locations stay instant to revisit."
   orbit_cache_in_use: "Using %{used} MB"
   orbit_cache_clear: "Clear"
   tooltip_orbit_cache_clear: "Delete every cached reference orbit. The next visit to a deep location will rebuild its reference."
-  tooltip_burn_in: "Skip first N iterations before plotting.\nAllows points to 'settle' onto the attractor before contributing to the image.\nHigher values = cleaner results but slower convergence.\n0 = no burn-in (may show artifacts from random starting points)"
+  tooltip_burn_in: "Iterations an orbit runs before it plots, when it starts.\nAllows points to 'settle' onto the attractor before contributing to the image.\nOrbits continue from frame to frame, so this is paid once, when the flame is edited, not every frame.\n0 = no burn-in (may show artifacts from random starting points)"
   tooltip_use_dynamic_blend: "Exponential convergence.\nWhen enabled, blend rate adapts over time.\nWhen disabled, uses fixed blend rate below."
   tooltip_fixed_blend_rate: "Controls how quickly new samples blend with history.\nOnly active when Dynamic Blend is disabled.\n\n0.001 = Nearly permanent (very slow fade)\n0.01 = Very slow/smooth\n0.1 = Balanced (default)\n1.0 = Fast/flickery"
   tooltip_vsync: "Synchronize rendering with monitor refresh rate.\nEnabled = smoother, no tearing, capped at monitor refresh.\nDisabled = uncapped FPS, may tear, better for benchmarking."

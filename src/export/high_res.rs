@@ -126,7 +126,7 @@ pub struct HighResExporter {
     // from the same `build_table`.
     bias_buffer: Buffer,
     // Enumerated cylinders: the export view's plan, one for the whole
-    // image (`plan_view`), or a placeholder so the layout is uniform.
+    // image (`plan_view`), or a placeholder the layout leaves out.
     cylinder_buffer: Buffer,
     // Frame-coverage counters: read and cleared with each dispatch's
     // sample count when the config auto-exposes (`frame_coverage`).
@@ -136,9 +136,9 @@ pub struct HighResExporter {
     // Dummy path-tracking buffer — the unified shader's `header.wgsl`
     // declares `path_buffer` (binding 7) unconditionally, but the export
     // shader builds with PATH_TRACKING=false so the use-sites are
-    // stripped. WebGPU still requires every declared binding to be
-    // bound; a minimum-size dummy (4 bytes for one path id) satisfies
-    // the layout.
+    // stripped, and the compute layout, holding only what the shader
+    // uses (`used_bindings`), leaves it out. The tone map's bind group
+    // still binds it, at its path-id slot.
     dummy_path_buffer: Buffer,
     // Analytic-blur bindings (13/14) for the now-mode-independent routing.
     // In Phase 2 step 2a these are a dummy splat buffer + a params buffer with
@@ -251,6 +251,27 @@ pub struct HighResExporter {
     /// black: the app shows it at 1/coverage the unscaled exposure.
     frame_coverage: bool,
     frame_coverage_fraction: f32,
+    /// The group-0 bindings the compute shader uses
+    /// (`gpu::pipelines::used_bindings`): its layout and bind group hold
+    /// those and no others, as `FlameRenderer`'s do.
+    used_bindings: Vec<u32>,
+    /// **Persistent orbits** (`docs/projects/persistent-orbits.md` §3.8):
+    /// each thread's orbit, kept between the export's dispatches, at
+    /// binding 8. `orbit_words` is its stride, 0 when the shader was built
+    /// without them, and then the buffer is a placeholder.
+    orbit_buffer: Buffer,
+    orbit_words: u32,
+    /// Each thread's burn-in left: the exact plotted count.
+    orbit_fuses: crate::renderer::compute_kernel::OrbitFuses,
+    /// The refresh period the flame needs (persistent-orbits.md §3.7).
+    orbit_refresh_period: u32,
+    /// Added to every dispatch's seed: 0, except where a gate renders
+    /// independent replicates of one export.
+    seed_base: u32,
+    /// The export's histogram and the count it was normalised by, kept
+    /// for the gates that compare exports by density.
+    #[cfg(test)]
+    last_density: Option<(Vec<HistogramPixel>, u64)>,
 }
 
 impl HighResExporter {
@@ -308,6 +329,19 @@ impl HighResExporter {
         width: u32,
         height: u32,
         iterations_per_thread: Option<u32>,
+    ) -> Result<Self, String> {
+        Self::new_with_orbits(config, width, height, iterations_per_thread, true).await
+    }
+
+    /// `new`, with each thread's orbit kept between the export's dispatches
+    /// (`docs/projects/persistent-orbits.md`), as `new` does, or restarted
+    /// every dispatch, as a gate's baseline does.
+    pub(crate) async fn new_with_orbits(
+        config: &FractalConfig,
+        width: u32,
+        height: u32,
+        iterations_per_thread: Option<u32>,
+        persistent_orbits: bool,
     ) -> Result<Self, String> {
         let iterations_per_thread = iterations_per_thread.unwrap_or(Self::DEFAULT_ITERATIONS_PER_THREAD);
         // Create GPU instance
@@ -776,6 +810,7 @@ impl HighResExporter {
             || (config.render_mode == crate::scene::transforms::RenderMode::TwoD && has_needs_w);
         let shader_builder = ShaderBuilder::new(global_registry().clone());
         let mut constants = crate::shader_cache::ShaderCache::constants_from_config(config);
+        constants.persistent_orbits = persistent_orbits;
         if let Some(plan) = &targeting {
             constants.cylinder_targeting = true;
             constants.cylinder_replay = plan.replay;
@@ -807,6 +842,17 @@ impl HighResExporter {
                 );
             }
         }
+
+        let used_bindings = crate::gpu::pipelines::used_bindings(&shader_source);
+        let orbit_words = crate::shader_cache::ShaderCache::orbit_words_of(&shader_source, &used_bindings);
+        // Every thread of the widest dispatch (`export`'s 128 workgroups),
+        // created zeroed: generation 0, which no dispatch carries.
+        let orbit_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Export Orbit Buffer"),
+            size: if orbit_words > 0 { 128 * Self::THREADS_PER_WORKGROUP * orbit_words as u64 * 4 } else { 64 },
+            usage: BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
 
         let shader_module = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("Export Compute Shader"),
@@ -852,197 +898,208 @@ impl HighResExporter {
             None => (None, 0),
         };
 
-        // Create bind group layout matching the unified template's 11-slot
-        // scheme — same as the interactive renderer's layout but with
-        // sample-emit replacements at slots 2 (samples) and 6 (counter).
-        // Slot 7 (path_buffer) is a dummy binding: the export shader
-        // builds with PATH_TRACKING=false so the use-sites are stripped,
-        // but WebGPU still requires every declared binding to be bound.
-        // Slot 8 is a gap (the path filters, which word editing replaced).
+        // The bind group layout of the unified template's scheme -- the
+        // interactive renderer's, with sample-emit replacements at slots 2
+        // (samples) and 6 (counter) -- holding only the bindings this
+        // shader uses (`used_bindings`), as `FlameRenderer`'s does. A
+        // layout of every binding held 13 storage buffers.
+        let mut layout_entries = vec![
+            // binding 0: transforms
+            BindGroupLayoutEntry {
+                binding: 0,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            // binding 1: params (uniform)
+            BindGroupLayoutEntry {
+                binding: 1,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            // binding 2: samples (sample-emit output)
+            BindGroupLayoutEntry {
+                binding: 2,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            // binding 3: palette texture
+            BindGroupLayoutEntry {
+                binding: 3,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::Texture {
+                    sample_type: TextureSampleType::Float { filterable: true },
+                    view_dimension: TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            // binding 4: palette sampler
+            BindGroupLayoutEntry {
+                binding: 4,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                count: None,
+            },
+            // binding 5: variation params
+            BindGroupLayoutEntry {
+                binding: 5,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            // binding 6: sample counter (sample-emit write cursor)
+            BindGroupLayoutEntry {
+                binding: 6,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            // binding 7: path_buffer (dummy — PATH_TRACKING=false in export)
+            BindGroupLayoutEntry {
+                binding: 7,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            // binding 9: xaos weights
+            BindGroupLayoutEntry {
+                binding: 9,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            // binding 10: per-normal attachment lists (Linked + Final chains)
+            BindGroupLayoutEntry {
+                binding: 10,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            // binding 16: frame-coverage counters. The shader
+            // declares it only under FRAME_COVERAGE.
+            BindGroupLayoutEntry {
+                binding: 16,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            // binding 15: enumerated cylinders. The shader
+            // declares it only under CYLINDER_TARGETING.
+            BindGroupLayoutEntry {
+                binding: 15,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            // binding 11: biased selection table. Was the legacy
+            // subflame_transforms slot, empty since v2 of the
+            // subflame work. The shader declares it only under
+            // IMPORTANCE_SAMPLING.
+            BindGroupLayoutEntry {
+                binding: 11,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            // binding 12: subflame metadata (array<SubflameMeta>).
+            BindGroupLayoutEntry {
+                binding: 12,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            // binding 13: analytic-blur low-res splat buffer (used by the
+            // HAS_ANALYTIC_BLUR routing — now mode-independent). Bound to a
+            // real low-res buffer when wired, else a dummy with count=0
+            // params so the routing falls back to stochastic.
+            BindGroupLayoutEntry {
+                binding: 13,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            // binding 14: analytic-blur convolve params (D / lowres / count).
+            BindGroupLayoutEntry {
+                binding: 14,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+        ];
+        // binding 8: each thread's orbit (PERSISTENT_ORBITS).
+        layout_entries.push(BindGroupLayoutEntry {
+            binding: 8,
+            visibility: ShaderStages::COMPUTE,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Storage { read_only: false },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        });
+        layout_entries.retain(|e| used_bindings.contains(&e.binding));
         let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Export Bind Group Layout"),
-            entries: &[
-                // binding 0: transforms
-                BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // binding 1: params (uniform)
-                BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // binding 2: samples (sample-emit output)
-                BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // binding 3: palette texture
-                BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Float { filterable: true },
-                        view_dimension: TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                // binding 4: palette sampler
-                BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
-                    count: None,
-                },
-                // binding 5: variation params
-                BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // binding 6: sample counter (sample-emit write cursor)
-                BindGroupLayoutEntry {
-                    binding: 6,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // binding 7: path_buffer (dummy — PATH_TRACKING=false in export)
-                BindGroupLayoutEntry {
-                    binding: 7,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // binding 9: xaos weights
-                BindGroupLayoutEntry {
-                    binding: 9,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // binding 10: per-normal attachment lists (Linked + Final chains)
-                BindGroupLayoutEntry {
-                    binding: 10,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // binding 16: frame-coverage counters. The shader
-                // declares it only under FRAME_COVERAGE.
-                BindGroupLayoutEntry {
-                    binding: 16,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // binding 15: enumerated cylinders. The shader
-                // declares it only under CYLINDER_TARGETING.
-                BindGroupLayoutEntry {
-                    binding: 15,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // binding 11: biased selection table. Was the legacy
-                // subflame_transforms slot, empty since v2 of the
-                // subflame work. The layout always carries it; the
-                // shader declares it only under IMPORTANCE_SAMPLING.
-                BindGroupLayoutEntry {
-                    binding: 11,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // binding 12: subflame metadata (array<SubflameMeta>).
-                BindGroupLayoutEntry {
-                    binding: 12,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // binding 13: analytic-blur low-res splat buffer (used by the
-                // HAS_ANALYTIC_BLUR routing — now mode-independent). Bound to a
-                // real low-res buffer when wired, else a dummy with count=0
-                // params so the routing falls back to stochastic.
-                BindGroupLayoutEntry {
-                    binding: 13,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // binding 14: analytic-blur convolve params (D / lowres / count).
-                BindGroupLayoutEntry {
-                    binding: 14,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
+            entries: &layout_entries,
         });
 
         let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
@@ -1548,7 +1605,35 @@ impl HighResExporter {
             frame_coverage: config.auto_exposure,
             frame_coverage_fraction: 1.0,
             iterations_per_thread,
+            used_bindings,
+            orbit_buffer,
+            orbit_words,
+            orbit_fuses: Default::default(),
+            orbit_refresh_period: crate::renderer::compute_kernel::orbit_refresh_period_of(&config.flame),
+            seed_base: 0,
+            #[cfg(test)]
+            last_density: None,
         })
+    }
+
+    /// Offset every dispatch's seed, so exports of one config are
+    /// independent replicates. For the gates.
+    #[cfg(test)]
+    pub(crate) fn set_seed_base(&mut self, base: u32) {
+        self.seed_base = base;
+    }
+
+    /// The last export's histogram and the count it was normalised by.
+    #[cfg(test)]
+    pub(crate) fn last_density(&self) -> Option<&(Vec<HistogramPixel>, u64)> {
+        self.last_density.as_ref()
+    }
+
+    /// The storage buffers the compute shader's layout holds. For the
+    /// gate that keeps it within a browser's limit.
+    #[cfg(test)]
+    pub(crate) fn storage_bindings(&self) -> usize {
+        self.used_bindings.iter().filter(|b| ![1, 3, 4, 14].contains(*b)).count()
     }
 
     /// What targeting is doing for the export's view
@@ -1613,75 +1698,81 @@ impl HighResExporter {
 
         // Create bind group
         let palette_view = self.palette_texture.create_view(&TextureViewDescriptor::default());
+        let mut entries = vec![
+            BindGroupEntry {
+                binding: 0,
+                resource: self.transform_buffer.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 1,
+                resource: self.params_buffer.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 2,
+                resource: self.sample_buffer.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 3,
+                resource: BindingResource::TextureView(&palette_view),
+            },
+            BindGroupEntry {
+                binding: 4,
+                resource: BindingResource::Sampler(&self.palette_sampler),
+            },
+            BindGroupEntry {
+                binding: 5,
+                resource: self.variation_params_buffer.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 6,
+                resource: self.sample_counter_buffer.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 7,
+                resource: self.dummy_path_buffer.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 9,
+                resource: self.xaos_buffer.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 10,
+                resource: self.attachments_buffer.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 11,
+                resource: self.bias_buffer.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 15,
+                resource: self.cylinder_buffer.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 16,
+                resource: self.coverage_buffer.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 12,
+                resource: self.subflame_metadata_buffer.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 13,
+                resource: self.blur_splat_buffer.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 14,
+                resource: self.blur_convolve_params_buffer.as_entire_binding(),
+            },
+        ];
+        entries.push(BindGroupEntry {
+            binding: 8,
+            resource: self.orbit_buffer.as_entire_binding(),
+        });
+        entries.retain(|e| self.used_bindings.contains(&e.binding));
         let bind_group = self.device.create_bind_group(&BindGroupDescriptor {
             label: Some("Export Bind Group"),
             layout: &self.bind_group_layout,
-            entries: &[
-                BindGroupEntry {
-                    binding: 0,
-                    resource: self.transform_buffer.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 1,
-                    resource: self.params_buffer.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 2,
-                    resource: self.sample_buffer.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 3,
-                    resource: BindingResource::TextureView(&palette_view),
-                },
-                BindGroupEntry {
-                    binding: 4,
-                    resource: BindingResource::Sampler(&self.palette_sampler),
-                },
-                BindGroupEntry {
-                    binding: 5,
-                    resource: self.variation_params_buffer.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 6,
-                    resource: self.sample_counter_buffer.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 7,
-                    resource: self.dummy_path_buffer.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 9,
-                    resource: self.xaos_buffer.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 10,
-                    resource: self.attachments_buffer.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 11,
-                    resource: self.bias_buffer.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 15,
-                    resource: self.cylinder_buffer.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 16,
-                    resource: self.coverage_buffer.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 12,
-                    resource: self.subflame_metadata_buffer.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 13,
-                    resource: self.blur_splat_buffer.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 14,
-                    resource: self.blur_convolve_params_buffer.as_entire_binding(),
-                },
-            ],
+            entries: &entries,
         });
 
         // Run the variation init pass once if any active variation has
@@ -1819,6 +1910,9 @@ impl HighResExporter {
             (total_iterations + iterations_per_dispatch - 1) / iterations_per_dispatch;
 
         let mut total_samples_accumulated = 0u64;
+        // The samples persistent orbits plotted (`OrbitFuses`): a
+        // thread's burn-in is paid once, not every dispatch.
+        let mut plotted = 0u64;
         // Frame coverage over the whole export, in u64: a long export
         // passes 2^32 attempts, so each dispatch's counters are read and
         // cleared rather than left to accumulate on the GPU.
@@ -1840,7 +1934,7 @@ impl HighResExporter {
                 .write_buffer(&self.sample_counter_buffer, 0, &[0u8; 4]);
 
             // Update params
-            let seed = dispatch as u32 * 12345;
+            let seed = self.seed_base.wrapping_add(dispatch as u32 * 12345);
 
             let params = GpuParams {
                 num_transforms: config.flame.transforms.len() as u32,
@@ -1908,12 +2002,24 @@ impl HighResExporter {
                 shadow_radius: 1.0,
                 shadow_count: 0,
                 importance_window: config.importance.window.max(1),
-            _pad_shadow: [0; 2],
+                // One generation for the exporter: its orbit buffer is
+                // made for one flame, zeroed, and kept for its life.
+                orbit_generation: 1,
+                orbit_refresh_period: self.orbit_refresh_period,
                 shadow_dirs: [[0.0; 4]; 4],
                 leak_probe: [0.0; 4],
             };
             self.queue
                 .write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
+            if self.orbit_words > 0 {
+                plotted += self.orbit_fuses.dispatch(
+                    workgroups_per_dispatch * Self::THREADS_PER_WORKGROUP as u32,
+                    self.iterations_per_thread,
+                    20,
+                    self.orbit_refresh_period,
+                    seed,
+                );
+            }
 
             // Dispatch compute
             let mut encoder = self
@@ -2208,8 +2314,11 @@ impl HighResExporter {
         // Tonemap histogram to RGBA using GPU. The actual iteration
         // count is the loop's ceiling-rounded `num_dispatches × per-dispatch`,
         // not the user-passed target — feed that to the scale-invariant
-        // sample_density formula (Phase 8a).
-        let total_iters_dispatched = num_dispatches * iterations_per_dispatch;
+        // sample_density formula (Phase 8a). Persistent orbits count what
+        // plotted, as `render.rs` and the app do; restarted ones (a gate's
+        // baseline, `new_with_orbits`) every iteration, burn-in included,
+        // as this path did before orbits persisted.
+        let total_iters_dispatched = if self.orbit_words > 0 { plotted } else { num_dispatches * iterations_per_dispatch };
 
         // Auto exposure's share, exact over the export; as the app, it
         // needs enough hits to mean anything (`coverage_from`).
@@ -2242,6 +2351,10 @@ impl HighResExporter {
             1.0
         };
 
+        #[cfg(test)]
+        {
+            self.last_density = Some((histogram.clone(), total_iters_dispatched));
+        }
         let pixels = self.tonemap_gpu(&histogram, config, transparent, premultiplied, total_iters_dispatched).await?;
 
         reporter.progress(1.0, "Encoding…");

@@ -43,6 +43,64 @@ pub enum TargetingState {
     Active { words: usize, depth: usize, speedup: f64, mass: f64, lost: f64 },
 }
 
+/// **How often a refresh restarts a thread** (`docs/projects/
+/// persistent-orbits.md` §3.7): one dispatch in this many, on a flame whose
+/// xaos walk decides which of several closed groups an orbit ends in.
+pub(crate) const ORBIT_REFRESH_PERIOD: u32 = 4;
+
+/// The refresh period `flame` needs: `ORBIT_REFRESH_PERIOD` when its xaos
+/// walk splits orbits between closed groups, 0 (off) otherwise. Where the
+/// first pick alone decides the group, the shader's stratified first pick
+/// already gives each group its share.
+pub(crate) fn orbit_refresh_period_of(flame: &Flame) -> u32 {
+    if flame.xaos_walk_splits_orbits() {
+        ORBIT_REFRESH_PERIOD
+    } else {
+        0
+    }
+}
+
+/// **Each thread's burn-in left, as the shader holds it** (its `fuse`;
+/// `docs/projects/persistent-orbits.md` §3.5): the exact count of plotted
+/// samples, with no readback.
+///
+/// A dispatch of `N` threads runs threads `0..N`. One past every thread
+/// started so far starts, burning in `burn_in`; one the dispatch refreshes
+/// (§3.7: `(thread_id + seed) % period == 0`) starts again; the rest
+/// resume. Each plots `ipt - min(ipt, left)`, and threads above `N` keep
+/// what they have left. Respawns are not counted, as they were not before.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct OrbitFuses {
+    left: Vec<u32>,
+}
+
+impl OrbitFuses {
+    /// A new generation: no thread has started.
+    pub(crate) fn restart(&mut self) {
+        self.left.clear();
+    }
+
+    /// Advance a dispatch of `threads` threads of `ipt` iterations, where a
+    /// thread that starts burns in `burn_in`, refreshing with `period` (0:
+    /// none) under the dispatch's `seed`; the samples it plots.
+    pub(crate) fn dispatch(&mut self, threads: u32, ipt: u32, burn_in: u32, period: u32, seed: u32) -> u64 {
+        let n = threads as usize;
+        if self.left.len() < n {
+            self.left.resize(n, burn_in);
+        }
+        let mut plotted = 0u64;
+        for (tid, left) in self.left[..n].iter_mut().enumerate() {
+            if period != 0 && (tid as u32).wrapping_add(seed) % period == 0 {
+                *left = burn_in;
+            }
+            let burnt = (*left).min(ipt);
+            plotted += (ipt - burnt) as u64;
+            *left -= burnt;
+        }
+        plotted
+    }
+}
+
 impl TargetingState {
     /// The state of a plan being drawn.
     fn active(c: &crate::scene::cylinder::Cylinders) -> Self {
@@ -495,6 +553,34 @@ pub struct FlameRenderer {
     /// offsets (`docs/projects/deep-zoom-precision.md`): the plan
     /// carries references, and the plot is view-relative.
     cylinder_offsets: bool,
+    /// **Persistent orbits** (`docs/projects/persistent-orbits.md`): each
+    /// thread's orbit is kept between dispatches, so a dispatch resumes it
+    /// and only a change to the dynamics restarts it. Always on; a gate
+    /// turns it off (`set_persistent_orbits`) to measure what restarted
+    /// orbits did. Takes effect at the next shader build.
+    persistent_orbits: bool,
+    /// The generation a dispatch's orbits belong to (`params.
+    /// orbit_generation`): bumped when `orbit_key` changes. Never 0, which
+    /// is what a zeroed orbit buffer holds.
+    orbit_generation: u32,
+    /// What the current orbits were started for: the flame's hash and
+    /// everything else that changes the dynamics or the state an orbit
+    /// carries (`compute_pass`).
+    orbit_key: Option<u64>,
+    /// The accumulation has started again since the last dispatch
+    /// (`reset_iteration_counter`): a flame carrying variation state
+    /// restarts its orbits there (`compute_pass`).
+    accumulation_restarted: bool,
+    /// A hash of the whole flame, taken where flame edits land
+    /// (`load_config`, `update_flame`) -- the whole of it, because a field
+    /// left out would leave orbits on an old attractor, and a restart too
+    /// many costs one burn-in.
+    flame_hash: u64,
+    /// Each thread's burn-in left: the exact plotted count with no readback.
+    orbit_fuses: OrbitFuses,
+    /// The refresh period the flame needs (`orbit_refresh_period_of`), set
+    /// where flame edits land.
+    orbit_refresh_period: u32,
     /// The plan as made, before trim (`docs/projects/word-editing.md`);
     /// `cylinders` is what is drawn. Kept so moving the trim slider
     /// retrims without replanning.
@@ -729,6 +815,13 @@ impl FlameRenderer {
             cylinder_key_pending: None,
             cylinder_relative: false,
             cylinder_offsets: false,
+            persistent_orbits: true,
+            orbit_generation: 1,
+            orbit_key: None,
+            accumulation_restarted: false,
+            flame_hash: 0,
+            orbit_fuses: OrbitFuses::default(),
+            orbit_refresh_period: 0,
             cylinders_full: None,
             applied_trim: (0.0, 0),
             applied_removals: Vec::new(),
@@ -865,6 +958,7 @@ impl FlameRenderer {
     /// Reset iteration counters without clearing accumulation buffer
     /// Used when transitioning from overwrite mode to normal accumulation
     pub fn reset_iteration_counter(&mut self) {
+        self.accumulation_restarted = true;
         self.samples_accumulated = 0;
         self.total_iterations = 0;
         self.effective_iterations = 0; // Reset for new accumulation phase
@@ -889,6 +983,7 @@ impl FlameRenderer {
     /// zeros samples_in_buffer) because that path also clears the
     /// accumulator immediately afterward — both go to zero together.
     pub fn reset_iteration_counter_keep_buffer(&mut self) {
+        self.accumulation_restarted = true;
         self.samples_accumulated = 0;
         self.total_iterations = 0;
         self.effective_iterations = 0;
@@ -946,6 +1041,7 @@ impl FlameRenderer {
             cylinder_replay: self.cylinders.as_ref().is_some_and(|c| !c.composable),
             cylinder_relative: self.cylinder_relative,
             cylinder_offsets: self.cylinder_offsets,
+            persistent_orbits: self.persistent_orbits,
             frame_coverage: self.auto_exposure || self.leak_probe[2] > 0.0,
             flatten_z_per_iter: matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD)
                 && !preserve_z,
@@ -1005,6 +1101,54 @@ impl FlameRenderer {
         // 0.0 = orthographic (flat), higher values = increasing perspective
 
         let seed = self.get_rng_seed();
+
+        // **Persistent orbits** (docs/projects/persistent-orbits.md): the
+        // buffer holds this dispatch's threads, and a change to anything
+        // that moves the dynamics starts a new generation, which every
+        // thread meets as "start afresh". A view change is not one: the
+        // attractor does not depend on where it is looked at from.
+        let orbit_words = self.pipelines.orbit_words();
+        let threads = num_workgroups.saturating_mul(64);
+        // ...except where the flame carries VARIATION STATE. A state can be
+        // a clock rather than a register that settles -- `curliecue2`'s
+        // walker ignores its input and walks on from wherever it was, so
+        // its picture is the walk since its state started, and a pan would
+        // show the next stretch of it. JWildfire initialises a variation's
+        // state for every render, and any view change is a new render; so
+        // here every restart of the accumulation (a pan, a reset, each
+        // overwrite-mode frame) restarts these flames' orbits.
+        if orbit_words > crate::shader_cache::ShaderCache::ORBIT_FIXED_WORDS && (self.accumulation_restarted || self.overwrite_mode) {
+            self.orbit_key = None;
+        }
+        self.accumulation_restarted = false;
+        if orbit_words > 0 {
+            // Room for the app's widest dispatch (128 workgroups) from the
+            // start, so the governor widening again never drops the orbits;
+            // a wider dispatch (an export) grows it once.
+            let capacity = threads.max(128 * 64) as u64 * orbit_words as u64 * 4;
+            if self.buffers.ensure_orbit_capacity(device, capacity) {
+                // A new buffer: its orbits are gone, and the bind group
+                // must point at it.
+                self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+                self.orbit_key = None;
+            }
+            let key = {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                self.flame_hash.hash(&mut h);
+                std::mem::discriminant(&self.current_render_mode).hash(&mut h);
+                self.preserve_z.hash(&mut h);
+                (self.color_mode as u32).hash(&mut h);
+                speed_factor.to_bits().hash(&mut h);
+                orbit_words.hash(&mut h);
+                h.finish()
+            };
+            if self.orbit_key != Some(key) {
+                self.orbit_key = Some(key);
+                self.orbit_generation = self.orbit_generation.wrapping_add(1).max(1);
+                self.orbit_fuses.restart();
+            }
+        }
 
         // Depth-priming: the first batch after a full reset (while solid
         // rendering is active) records depth only — the SOLID shader path
@@ -1076,7 +1220,8 @@ impl FlameRenderer {
             shadow_count: sh_dirs.0,
             // The correction window, from the mirrored settings.
             importance_window: self.importance.window.max(1),
-            _pad_shadow: [0; 2],
+            orbit_generation: self.orbit_generation,
+            orbit_refresh_period: self.orbit_refresh_period,
             shadow_dirs: sh_dirs.1,
             leak_probe: self.leak_probe,
         };
@@ -1097,7 +1242,13 @@ impl FlameRenderer {
         // dimmer images.
         let threads_per_workgroup = 64u64;
         let plotted_per_thread = iterations_per_thread.saturating_sub(burn_in) as u64;
-        let samples_this_frame = num_workgroups as u64 * threads_per_workgroup * plotted_per_thread;
+        // With persistent orbits a thread pays its burn-in once per restart,
+        // not once per dispatch: `OrbitFuses` counts exactly what plots.
+        let samples_this_frame = if orbit_words > 0 {
+            self.orbit_fuses.dispatch(threads, iterations_per_thread, burn_in, self.orbit_refresh_period, seed)
+        } else {
+            num_workgroups as u64 * threads_per_workgroup * plotted_per_thread
+        };
         // In overwrite mode, total_iterations reflects only this frame's
         // samples — matches how the accumulator works (prev cleared
         // each frame in the overwrite branch of accumulate.wgsl). Keeps
@@ -2319,6 +2470,8 @@ impl FlameRenderer {
     /// Load a complete FractalConfig (preset or imported config)
     /// This ensures all GPU state is properly synchronized
     pub fn load_config(&mut self, device: &Device, encoder: &mut CommandEncoder, queue: &Queue, config: &FractalConfig, palette: &Palette, iterations_per_thread: u32, burn_in: u32) {
+        self.flame_hash = Self::orbit_flame_hash(&config.flame);
+        self.orbit_refresh_period = orbit_refresh_period_of(&config.flame);
         // Sticky superset (Layer B): adopt this flame's variations and
         // shadow `config` with a clone whose flame carries the retained
         // extras at weight 0. Everything below — shader cache, constants,
@@ -2375,6 +2528,7 @@ impl FlameRenderer {
             self.cylinder_relative,
             self.cylinder_offsets,
             self.leak_probe[2] > 0.0,
+            self.persistent_orbits,
         );
         // PathMap's per-pixel path ids (the right-click): a loaded
         // PathMap config needs them as surely as a switch to PathMap.
@@ -2588,7 +2742,8 @@ impl FlameRenderer {
             shadow_count: sh_dirs.0,
             // The correction window, from the mirrored settings.
             importance_window: self.importance.window.max(1),
-            _pad_shadow: [0; 2],
+            orbit_generation: self.orbit_generation,
+            orbit_refresh_period: self.orbit_refresh_period,
             shadow_dirs: sh_dirs.1,
             leak_probe: self.leak_probe,
         };
@@ -2624,6 +2779,8 @@ impl FlameRenderer {
 
     /// Update the flame being rendered
     pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_x: f32, camera_y: f32, camera_z: f32, speed_factor: f32, dof_focus_distance: f32, dof_blur_strength: f32, fog_strength: f32, fog_start: f32, background_color: [f32; 3], filter_radius: f32, filter_blur_edges: f32, render_mode: crate::scene::transforms::RenderMode, perspective_strength: f32, depth_density_compensation: f32, far_density_fade: f32, far_density_fade_start: f32, preserve_z: bool, solid_strength: f32, surface_thickness: f32, solid_shading: crate::config::SolidShadingSettings) {
+        self.flame_hash = Self::orbit_flame_hash(flame);
+        self.orbit_refresh_period = orbit_refresh_period_of(flame);
         // Sticky superset (Layer B): same shadowing as load_config, for
         // the editor's incremental path — this is what makes toggling a
         // variation off and back on a cache hit instead of two rebuilds.
@@ -2795,7 +2952,8 @@ impl FlameRenderer {
             shadow_count: sh_dirs.0,
             // The correction window, from the mirrored settings.
             importance_window: self.importance.window.max(1),
-            _pad_shadow: [0; 2],
+            orbit_generation: self.orbit_generation,
+            orbit_refresh_period: self.orbit_refresh_period,
             shadow_dirs: sh_dirs.1,
             leak_probe: self.leak_probe,
         };
@@ -3104,7 +3262,8 @@ impl FlameRenderer {
             shadow_count: sh_dirs.0,
             // The correction window, from the mirrored settings.
             importance_window: self.importance.window.max(1),
-            _pad_shadow: [0; 2],
+            orbit_generation: self.orbit_generation,
+            orbit_refresh_period: self.orbit_refresh_period,
             shadow_dirs: sh_dirs.1,
             leak_probe: self.leak_probe,
         };
@@ -3492,7 +3651,8 @@ impl FlameRenderer {
             shadow_count: sh_dirs.0,
             // The correction window, from the mirrored settings.
             importance_window: self.importance.window.max(1),
-            _pad_shadow: [0; 2],
+            orbit_generation: self.orbit_generation,
+            orbit_refresh_period: self.orbit_refresh_period,
             shadow_dirs: sh_dirs.1,
             leak_probe: self.leak_probe,
         };
@@ -4339,6 +4499,13 @@ impl FlameRenderer {
     /// untargeted one can be compared number for number. Row-major.
     #[cfg(test)]
     pub(crate) fn read_density_blocking(&self, device: &Device, queue: &Queue) -> Vec<f64> {
+        self.read_accumulator_blocking(device, queue).into_iter().map(|p| p[3]).collect()
+    }
+
+    /// Each pixel's mean colour and its density as `read_density_blocking`
+    /// reads it: `[r, g, b, density]`.
+    #[cfg(test)]
+    pub(crate) fn read_accumulator_blocking(&self, device: &Device, queue: &Queue) -> Vec<[f64; 4]> {
         let row = self.width * 16;
         let align = egui_wgpu::wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         let padded = row.div_ceil(align) * align;
@@ -4371,7 +4538,8 @@ impl FlameRenderer {
         for y in 0..self.height {
             let at = (y * padded) as usize;
             for px in data[at..at + row as usize].chunks_exact(16) {
-                out.push(f32::from_le_bytes([px[12], px[13], px[14], px[15]]) as f64 * per);
+                let f = |k: usize| f32::from_le_bytes([px[k], px[k + 1], px[k + 2], px[k + 3]]) as f64;
+                out.push([f(0), f(4), f(8), f(12) * per]);
             }
         }
         out
@@ -4633,6 +4801,52 @@ impl FlameRenderer {
                 before != self.cylinder_arm()
             }
         }
+    }
+
+    /// Restart every thread's orbit at every dispatch, as before orbits
+    /// persisted (`docs/projects/persistent-orbits.md`), from the next
+    /// shader build on -- the next `load_config`. The gates' baseline only:
+    /// every renderer keeps its orbits.
+    #[cfg(test)]
+    pub(crate) fn set_persistent_orbits(&mut self, on: bool) {
+        self.persistent_orbits = on;
+    }
+
+    /// The generation the orbits belong to. For the gates.
+    #[cfg(test)]
+    pub(crate) fn orbit_generation(&self) -> u32 {
+        self.orbit_generation
+    }
+
+    /// Start every orbit afresh at the next dispatch, as an edit would: for
+    /// the gates whose replicates must be independent.
+    #[cfg(test)]
+    pub(crate) fn restart_orbits(&mut self) {
+        self.orbit_key = None;
+    }
+
+    /// Refresh with `period` (0: never) whatever the flame needs, until the
+    /// next flame edit. For the measurement that chose the period.
+    #[cfg(test)]
+    pub(crate) fn set_orbit_refresh_period(&mut self, period: u32) {
+        self.orbit_refresh_period = period;
+    }
+
+    /// The frame-coverage counters as the GPU holds them now: `[landed,
+    /// attempted, leaked, ..]` since the histogram was last cleared. For
+    /// the gate that holds the orbit fuses' count to the GPU's.
+    #[cfg(test)]
+    pub(crate) fn read_coverage_blocking(&mut self, device: &Device, queue: &Queue) -> Option<[u32; 8]> {
+        self.coverage_stats.read_blocking(device, queue, &self.buffers.coverage_buffer, 0)
+    }
+
+    /// A hash of the whole flame, for the orbit key: its serialisation, so
+    /// no field is left out by choice.
+    fn orbit_flame_hash(flame: &Flame) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        serde_json::to_vec(flame).unwrap_or_default().hash(&mut h);
+        h.finish()
     }
 
     /// The factor the tone map's iteration count is inflated by.
@@ -5435,4 +5649,60 @@ pub fn encode_png_from_rgba(width: u32, height: u32, rgba_data: Vec<u8>, metadat
         .map_err(|e| format!("Failed to encode PNG: {}", e))?;
 
     Ok(png_data)
+}
+
+#[cfg(test)]
+mod orbit_fuse_tests {
+    use super::OrbitFuses;
+
+    /// A thread pays its burn-in once per restart, not once per dispatch.
+    #[test]
+    fn a_resumed_dispatch_pays_no_burn_in() {
+        let mut c = OrbitFuses::default();
+        assert_eq!(c.dispatch(8192, 256, 20, 0, 0), 8192 * 236);
+        assert_eq!(c.dispatch(8192, 256, 20, 0, 0), 8192 * 256);
+        c.restart();
+        assert_eq!(c.dispatch(8192, 256, 20, 0, 0), 8192 * 236, "a new generation burns in again");
+    }
+
+    /// A burn-in longer than a dispatch spans dispatches.
+    #[test]
+    fn a_long_burn_in_spans_dispatches() {
+        let mut c = OrbitFuses::default();
+        assert_eq!(c.dispatch(64, 64, 150, 0, 0), 0);
+        assert_eq!(c.dispatch(64, 64, 150, 0, 0), 0);
+        assert_eq!(c.dispatch(64, 64, 150, 0, 0), 64 * (192 - 150));
+        assert_eq!(c.dispatch(64, 64, 150, 0, 0), 64 * 64);
+    }
+
+    /// The governor's count changes: threads above a narrow dispatch keep
+    /// their burn-in; threads above every dispatch so far start when one
+    /// first reaches them.
+    #[test]
+    fn the_governor_s_width_is_followed() {
+        let mut c = OrbitFuses::default();
+        assert_eq!(c.dispatch(128, 256, 20, 0, 0), 128 * 236);
+        // Narrower: the lower 64 resume.
+        assert_eq!(c.dispatch(64, 256, 20, 0, 0), 64 * 256);
+        // Wider than ever: 128 resume, 128 start.
+        assert_eq!(c.dispatch(256, 256, 20, 0, 0), 128 * 256 + 128 * 236);
+        assert_eq!(c.dispatch(256, 256, 20, 0, 0), 256 * 256);
+        // With a burn-in longer than a dispatch, the threads above a
+        // narrow one are still burning in when it widens again.
+        c.restart();
+        assert_eq!(c.dispatch(128, 64, 100, 0, 0), 0);
+        assert_eq!(c.dispatch(64, 64, 100, 0, 0), 64 * 28);
+        assert_eq!(c.dispatch(128, 64, 100, 0, 0), 64 * 64 + 64 * 28);
+    }
+
+    /// A refresh restarts one thread in `period`, chosen by the seed.
+    #[test]
+    fn a_refresh_restarts_one_thread_in_a_period() {
+        let mut c = OrbitFuses::default();
+        assert_eq!(c.dispatch(1024, 256, 20, 16, 7), 1024 * 236);
+        // 64 of 1,024 restart: those with (tid + 3) % 16 == 0.
+        assert_eq!(c.dispatch(1024, 256, 20, 16, 3), 960 * 256 + 64 * 236);
+        // A seed past u32::MAX wraps as the shader's sum does.
+        assert_eq!(c.dispatch(16, 256, 20, 16, u32::MAX), 15 * 256 + 236);
+    }
 }
