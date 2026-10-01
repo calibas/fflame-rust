@@ -1,9 +1,9 @@
 # Persistent orbits: keeping each thread's chaos-game orbit between dispatches
 
-Status: **in progress** (2026-10-01), branch `persistent-orbits`. Steps
-0-7 done: every renderer keeps its orbits, with no setting to turn them
-off, and the governor shortens every dispatch. Step 8 (governor controls
-in Rendering) remains. Results in §8.
+Status: **done** (2026-10-01), branch `persistent-orbits`, steps 0-8:
+every renderer keeps its orbits, with no setting to turn them off; the
+governor shortens every dispatch; and the Rendering menu can switch the
+governor off and set the workgroups by hand. Results in §8.
 
 Every compute dispatch today restarts every thread's orbit from scratch.
 Where a flame takes longer than the burn-in to forget that start, the
@@ -625,3 +625,20 @@ The `PERSISTENT_ORBITS` codegen flag stays in `ShaderConstants`. Every
 renderer sets it; the harnesses that build a flame shader without running
 the chaos game -- the variation probe, the bounds analysis -- leave it
 off, and bind no orbit buffer.
+
+### Step 8: governor controls in Rendering
+
+Two system settings, `frame_governor` (default on) and
+`manual_workgroups` (default 128, the governor's full batch), through
+`ConfigPath::SystemFrameGovernor` / `SystemManualWorkgroups`, and two
+items in the Rendering menu: a Frame-Time Governor checkbox, and a
+Workgroups submenu (1 to 1,024) that is enabled while the governor is
+off. Off, every frame dispatches that many workgroups at the full
+iterations per thread (`Batch::fixed`), and the governor neither measures
+nor adapts; while a tight plan is made the dispatch is still capped to
+the shortest one, which is the planner's cap (tracker P10), not the
+governor's. Neither setting resets the accumulation: orbits persist, so
+how the work is sliced changes nothing. Past 128 workgroups the orbit
+buffer grows once, restarting the orbits. Reset to Defaults resets both.
+The new strings are in English only (`locales/en.yml`); the other
+languages fall back to it. The compact (mobile) menu does not carry them.

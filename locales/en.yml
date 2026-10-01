@@ -73,6 +73,10 @@ menu:
   resume: "▶ Resume"
   reset_accumulation: "🔄 Reset Accumulation"
   iterations_per_thread: "Iterations per Thread"
+  frame_governor: "Frame-Time Governor"
+  tooltip_frame_governor: "Size each frame's GPU work to the frame budget: shorter dispatches first, then fewer workgroups.\nOff, every frame dispatches the workgroups chosen below, at the full iterations per thread."
+  workgroups: "Workgroups"
+  tooltip_workgroups: "Workgroups of 64 threads each frame dispatches while the governor is off.\nMore = more samples a frame and a longer frame."
   reset_rendering: "🔄 Reset to Defaults"
 
   # Window Menu - Panel items
@@ -959,6 +963,8 @@ history:
     # System Settings
     system_iterations_per_thread: "System: Iterations Per Thread"
     system_burn_in: "System: Burn-in Iterations"
+    system_frame_governor: "System: Frame-Time Governor"
+    system_manual_workgroups: "System: Workgroups"
     system_vsync_enabled: "System: VSync Enabled"
     system_target_fps: "System: Target FPS"
     system_export_width: "System: Export Width"

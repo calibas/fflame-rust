@@ -125,7 +125,7 @@
 - **Architecture**: ConfigManager owns both
   - **FractalConfig**: per-fractal artistic parameters (undo/redo enabled)
   - **SystemSettings**: device preferences (no undo, persisted to disk immediately)
-- **System settings include**: VSync + target FPS, iterations per thread, language, export defaults, fly-mode input preferences (sensitivity, speed, sprint, invert-Y, camera mode), online-mode credentials, compact mode
+- **System settings include**: VSync + target FPS, iterations per thread, the frame-time governor on/off + manual workgroups (Rendering menu), language, export defaults, fly-mode input preferences (sensitivity, speed, sprint, invert-Y, camera mode), online-mode credentials, compact mode
 - **Storage backend** (`src/storage/backend.rs`):
   - Windows: `%APPDATA%\Fractals for All\Fractal Art Editor\data\`; macOS/Linux equivalents via `directories`
   - WASM: browser localStorage
@@ -333,7 +333,7 @@ Structural actions (transform add/delete, config import/export, preset loading) 
 
 ### Performance
 - Target 60+ FPS at 1080p; progressive refinement adds samples every frame
-- Dispatch = workgroups × 64 threads × `iterations_per_thread` (SystemSettings, default 256). In the app a frame-time governor sizes it: it shortens the dispatch first (down to 64 iterations a thread -- orbits persist, so that costs no trajectory depth), then sheds workgroups, to a floor of one workgroup of the shortest dispatch (`app/mod.rs`: `Batch`, `Batch::min_scale`, `Knee`). While a tight plan is made it caps the dispatch short and holds, since the planner shares the render's GPU queue (`Batch::while_planning`, tracker P10)
+- Dispatch = workgroups × 64 threads × `iterations_per_thread` (SystemSettings, default 256). In the app a frame-time governor sizes it: it shortens the dispatch first (down to 64 iterations a thread -- orbits persist, so that costs no trajectory depth), then sheds workgroups, to a floor of one workgroup of the shortest dispatch (`app/mod.rs`: `Batch`, `Batch::min_scale`, `Knee`). It can be switched off in the Rendering menu (`frame_governor`): every frame then dispatches `manual_workgroups` at the full length (`Batch::fixed`). While a tight plan is made it caps the dispatch short and holds, since the planner shares the render's GPU queue (`Batch::while_planning`, tracker P10)
 - Track total iterations for quality measurement; histogram density is iteration-count-normalized in the tonemap, so brightness is stable as accumulation runs
 
 ## Common Tasks

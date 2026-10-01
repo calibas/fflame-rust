@@ -502,6 +502,8 @@ pub enum ConfigPath {
     // ===== System Settings (device-specific, not tracked for undo) =====
     SystemIterationsPerThread,
     SystemBurnIn,
+    SystemFrameGovernor,
+    SystemManualWorkgroups,
     SystemOrbitCacheMb,
     SystemVsyncEnabled,
     SystemTargetFps,
@@ -1141,6 +1143,8 @@ impl Display for ConfigPath {
             // System Settings
             ConfigPath::SystemIterationsPerThread => write!(f, "System: Iterations Per Thread"),
             ConfigPath::SystemBurnIn => write!(f, "System: Burn-in Iterations"),
+            ConfigPath::SystemFrameGovernor => write!(f, "System: Frame-Time Governor"),
+            ConfigPath::SystemManualWorkgroups => write!(f, "System: Workgroups"),
             ConfigPath::SystemOrbitCacheMb => write!(f, "System: Orbit Cache Size (MB)"),
             ConfigPath::SystemVsyncEnabled => write!(f, "System: VSync Enabled"),
             ConfigPath::SystemTargetFps => write!(f, "System: Target FPS"),
@@ -1754,6 +1758,8 @@ impl ConfigPath {
             // System Settings
             ConfigPath::SystemIterationsPerThread => I18nKey::simple("history.param.system_iterations_per_thread"),
             ConfigPath::SystemBurnIn => I18nKey::simple("history.param.system_burn_in"),
+            ConfigPath::SystemFrameGovernor => I18nKey::simple("history.param.system_frame_governor"),
+            ConfigPath::SystemManualWorkgroups => I18nKey::simple("history.param.system_manual_workgroups"),
             ConfigPath::SystemOrbitCacheMb => {
                 I18nKey::simple("history.param.system_orbit_cache_mb")
             }
@@ -2850,6 +2856,9 @@ impl ConfigPath {
             ConfigPath::SystemIterationsPerThread | ConfigPath::SystemBurnIn => UpdateType::IterationReset,
             // Disk housekeeping only: nothing on the GPU changes.
             ConfigPath::SystemOrbitCacheMb => UpdateType::None,
+            // Read by the frame loop each frame; orbits persist, so how
+            // the work is sliced changes nothing to reset.
+            ConfigPath::SystemFrameGovernor | ConfigPath::SystemManualWorkgroups => UpdateType::None,
             ConfigPath::SystemVsyncEnabled | ConfigPath::SystemTargetFps | ConfigPath::SystemFlyMouseSensitivity | ConfigPath::SystemFlyMoveSpeed | ConfigPath::SystemFlySprintMultiplier | ConfigPath::SystemFlyInvertY | ConfigPath::SystemFlyCameraMode => UpdateType::ViewOnly,
             ConfigPath::SystemExportWidth | ConfigPath::SystemExportHeight | ConfigPath::SystemLanguage | ConfigPath::SystemShowHelpOnStartup
             // Nothing to re-render: it only changes what a future
@@ -3213,6 +3222,8 @@ impl ConfigPath {
             // System Settings (not typically animated, but included for completeness)
             ConfigPath::SystemIterationsPerThread => "System.IterationsPerThread".to_string(),
             ConfigPath::SystemBurnIn => "System.BurnIn".to_string(),
+            ConfigPath::SystemFrameGovernor => "System.FrameGovernor".to_string(),
+            ConfigPath::SystemManualWorkgroups => "System.ManualWorkgroups".to_string(),
             ConfigPath::SystemOrbitCacheMb => "System.OrbitCacheMb".to_string(),
             ConfigPath::SystemVsyncEnabled => "System.VsyncEnabled".to_string(),
             ConfigPath::SystemTargetFps => "System.TargetFps".to_string(),
@@ -3669,6 +3680,8 @@ impl ConfigPath {
             match parts[1] {
                 "IterationsPerThread" => return Some(ConfigPath::SystemIterationsPerThread),
                 "BurnIn" => return Some(ConfigPath::SystemBurnIn),
+                "FrameGovernor" => return Some(ConfigPath::SystemFrameGovernor),
+                "ManualWorkgroups" => return Some(ConfigPath::SystemManualWorkgroups),
                 "OrbitCacheMb" => return Some(ConfigPath::SystemOrbitCacheMb),
                 "VsyncEnabled" => return Some(ConfigPath::SystemVsyncEnabled),
                 "TargetFps" => return Some(ConfigPath::SystemTargetFps),
@@ -3985,6 +3998,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::LinkedTransformPostAffineEnabled { .. }
         | ConfigPath::FinalTransformPostAffineEnabled { .. }
         | ConfigPath::SystemVsyncEnabled
+        | ConfigPath::SystemFrameGovernor
         | ConfigPath::SystemShowHelpOnStartup
         | ConfigPath::PreserveZ
         => {
@@ -3996,6 +4010,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::TransformCount
         | ConfigPath::SystemIterationsPerThread
         | ConfigPath::SystemBurnIn
+        | ConfigPath::SystemManualWorkgroups
         | ConfigPath::SystemOrbitCacheMb
         | ConfigPath::SystemExportWidth
         | ConfigPath::SystemExportHeight
@@ -4712,6 +4727,8 @@ mod tests {
             // System
             ConfigPath::SystemIterationsPerThread,
             ConfigPath::SystemBurnIn,
+            ConfigPath::SystemFrameGovernor,
+            ConfigPath::SystemManualWorkgroups,
             ConfigPath::SystemVsyncEnabled,
             ConfigPath::SystemTargetFps,
             ConfigPath::SystemFlyMouseSensitivity,
