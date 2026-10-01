@@ -519,6 +519,11 @@ pub struct App {
     pub(super) display_refresh_age: u32,
     pub(super) accumulation_batch_size: u32,  // Process every N frames (1 = normal, 4 = batched)
     pub(super) frames_since_accumulation: u32,
+    // The samples the batch's frames plotted so far, each frame's as
+    // `compute_pass` counted it: frames differ (the first after a restart
+    // pays the burn-in, the governor changes the width), so a batch is
+    // their sum, not its last frame times its length.
+    pub(super) samples_in_batch: u64,
     // Overwrite mode timing (100ms window after parameter changes)
     // Note: This is intentionally separate from RenderModeFSM. The FSM manages high-level
     // state transitions (Normal/Animating/Overwrite), while this simple timer handles the
@@ -851,6 +856,7 @@ impl App {
             display_refresh_age: 0,
             accumulation_batch_size: 4, // EXPERIMENT: Test batching
             frames_since_accumulation: 0,
+            samples_in_batch: 0,
             use_overwrite_next_frame: false,
             last_param_change_time: None,
             rendering_complete: false,
@@ -2186,6 +2192,7 @@ impl App {
                     const BATCH_SIZE: u32 = 4;
 
                     let mut batch_frame_count = 0;
+                    let mut batch_samples = 0u64;
 
                     let is_escape_export = export_config.render_mode
                         == crate::scene::transforms::RenderMode::Escape;
@@ -2207,7 +2214,7 @@ impl App {
                         // Clear paths only on very first batch of the entire export
                         let clear_paths = total_rendered == 0 && clear_histogram;
 
-                        temp_renderer.compute_pass(
+                        let plotted = temp_renderer.compute_pass(
                             &mut encoder,
                             &self.gpu.queue,
                             &self.gpu.device,
@@ -2234,12 +2241,15 @@ impl App {
 
                         let samples_this_frame = NUM_WORKGROUPS as u64 * THREADS_PER_WORKGROUP * iterations_per_thread as u64;
                         total_rendered += samples_this_frame;
+                        // What plotted, as `render.rs` counts: the tone
+                        // map normalises by it.
+                        batch_samples += plotted;
                         batch_frame_count += 1;
 
                         if batch_frame_count >= BATCH_SIZE {
-                            let total_samples_in_batch = samples_this_frame * BATCH_SIZE as u64;
-                            temp_renderer.accumulate_pass(&mut encoder, &self.gpu.queue, &self.gpu.device, total_samples_in_batch);
+                            temp_renderer.accumulate_pass(&mut encoder, &self.gpu.queue, &self.gpu.device, batch_samples);
                             batch_frame_count = 0;
+                            batch_samples = 0;
                         }
 
                         self.gpu.queue.submit(std::iter::once(encoder.finish()));
@@ -2249,8 +2259,7 @@ impl App {
                                 let mut final_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                                     label: Some("WASM Export Final Accumulation"),
                                 });
-                                let total_samples_in_batch = samples_this_frame * batch_frame_count as u64;
-                                temp_renderer.accumulate_pass(&mut final_encoder, &self.gpu.queue, &self.gpu.device, total_samples_in_batch);
+                                temp_renderer.accumulate_pass(&mut final_encoder, &self.gpu.queue, &self.gpu.device, batch_samples);
                                 self.gpu.queue.submit(std::iter::once(final_encoder.finish()));
                             }
                             break;
@@ -3267,16 +3276,17 @@ impl App {
                     final_config.camera_rotation_x, final_config.camera_rotation_y, final_config.camera_bank, final_config.camera_x, final_config.camera_y, final_config.camera_z, final_config.speed_factor, clear_histogram, clear_paths);
 
                 self.metrics.record_compute_time(t_compute.elapsed().as_secs_f64() * 1000.0);
+                // The histogram holds every frame of the batch: count them
+                // all, frame by frame.
+                if clear_histogram {
+                    self.samples_in_batch = 0;
+                }
+                self.samples_in_batch += samples_this_frame;
 
                 let t_accumulate = Instant::now();
                 // 2. Accumulate samples - but only every N frames if batching enabled
                 if should_accumulate {
-                    // samples_this_frame is only THIS frame's samples, but histogram contains
-                    // accumulated samples from all frames in the batch
-                    // Pass total samples for proper blend_factor calculation
-                    let total_samples_in_batch = samples_this_frame * batch_size as u64;
-
-                    renderer.accumulate_pass(&mut render_encoder, &self.gpu.queue, &self.gpu.device, total_samples_in_batch);
+                    renderer.accumulate_pass(&mut render_encoder, &self.gpu.queue, &self.gpu.device, self.samples_in_batch);
 
                     self.frames_since_accumulation = 0;
                     self.metrics.record_accumulate_time(t_accumulate.elapsed().as_secs_f64() * 1000.0);

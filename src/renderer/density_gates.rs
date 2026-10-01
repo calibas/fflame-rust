@@ -131,7 +131,8 @@ pub(crate) struct Run<'a> {
     pub frames: usize,
     pub reps: usize,
     /// Keep each thread's orbit between dispatches
-    /// (docs/projects/persistent-orbits.md).
+    /// (docs/projects/persistent-orbits.md), as every renderer does; off
+    /// for a gate's restarted baseline.
     pub persistent: bool,
     /// Workgroups of each dispatch, cycled through; empty is 256 each.
     pub workgroups: &'a [u32],
@@ -142,7 +143,7 @@ pub(crate) struct Run<'a> {
 
 impl Default for Run<'_> {
     fn default() -> Self {
-        Self { plan: None, ipt: 1024, frames: 4, reps: 8, persistent: false, workgroups: &[], refresh: None }
+        Self { plan: None, ipt: 1024, frames: 4, reps: 8, persistent: true, workgroups: &[], refresh: None }
     }
 }
 

@@ -194,7 +194,10 @@ impl ShaderCache {
             has_analytic_blur: flame.analytic_blur_active(&crate::variations::global_registry(), RenderMode::TwoD),
             importance_sampling: false,
             cylinder_targeting: false,
-            persistent_orbits: false,
+            // The renderer's default (only `FlameRenderer::new` makes a
+            // cache), so its first config load is an early-out, not a
+            // rebuild.
+            persistent_orbits: true,
             frame_coverage: false,
             cylinder_replay: false,
             cylinder_relative: false,

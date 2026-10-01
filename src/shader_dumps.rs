@@ -113,6 +113,8 @@ impl Spec {
             num_transforms: flame.transforms.len() as u32,
             solid_enabled: self.solid,
             probe: false,
+            // Every renderer keeps its orbits (persistent-orbits.md).
+            persistent_orbits: true,
             ..ShaderConstants::default()
         };
 

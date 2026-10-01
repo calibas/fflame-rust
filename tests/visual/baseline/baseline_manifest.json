@@ -4,15 +4,15 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "aca5748d",
+  "git_hash": "8a03de2d",
   "images": {
     "2d-plastic-sierpinski.png": {
-      "bytes": 34406,
-      "sha256": "624a3681054ad6532833dcf7b6d4b108c6d25b674f68e3e8121b770fe5d0c4e4"
+      "bytes": 35102,
+      "sha256": "f76d821113ff80ff634d3ff999072332491223821a89d783254c1efc8534ad7c"
     },
     "2d-simple-linear.png": {
-      "bytes": 3183,
-      "sha256": "c1550a22c7ea03d609224edd8a25990acb5400eab7a88428a279c2482af8bce8"
+      "bytes": 4713,
+      "sha256": "ceb9bd8a49f298c09606ad1a8ddf104040474ff46f10e29f86e51878e407cced"
     },
     "2d-subflame-blob.png": {
       "bytes": 1107,
@@ -39,8 +39,8 @@
       "sha256": "cec98cd8689fb115b6973dc551eb968e8bc4f7fd7a9a00a0c403674e00ec4c22"
     },
     "3d-cpow3_wf-smoke.png": {
-      "bytes": 31000,
-      "sha256": "3ad4d56b0551f8a5fbb7be9c48b4bd452df201bbcabffd045497ccf11c0036de"
+      "bytes": 31344,
+      "sha256": "d4c07afafe01695c6e2f0147be6bd1962798201c76634e4710d2b4b3191088f7"
     },
     "3d-flatten-smoke.png": {
       "bytes": 4470,
@@ -987,8 +987,8 @@
       "sha256": "78c8b313c82521d8f3babcb41a75f65209d6fabc8c92548e31acf87fd425ed53"
     },
     "variations-curliecue2-smoke.png": {
-      "bytes": 13424,
-      "sha256": "16a43f89701c631c5c3ebca7df496907dcab6c7f535cd7ef4edb7d5ed9eef472"
+      "bytes": 21538,
+      "sha256": "efad7d40dea4e6f5386d3bf291c9df43e80264b3da53c07cbde3206c90a536e5"
     },
     "variations-dc-smoke.png": {
       "bytes": 588,
@@ -1055,8 +1055,8 @@
       "sha256": "a3581c6c17ee92746ece10052ecc49ef295c078b3a7ac42ec4142381484013b6"
     },
     "variations-hypertile-poincare.png": {
-      "bytes": 28825,
-      "sha256": "2ff16987ec71c714c136eabfbb1117642f8432df81db98182fe0f3e248178825"
+      "bytes": 23944,
+      "sha256": "c8bb0610058a84eaabdc1d1266bc517b28882f6b8168d7a761d5ae7696794970"
     },
     "variations-hypertile-smoke.png": {
       "bytes": 4079,
@@ -1291,8 +1291,8 @@
       "sha256": "94b9441af192e26a88e79faf32ece80fd4a6c6da55cf7044730c34607c35c3b1"
     },
     "variations-watchlist-misc-smoke.png": {
-      "bytes": 34836,
-      "sha256": "ea97c5ca1b9d1ed522227dc32f168ebd35ef025ff6c606d965cbf2b0d85f4c18"
+      "bytes": 35079,
+      "sha256": "ff9c062d30d6fc580a246cb248741ccc1feb169264c8b2fec293916a9d80d782"
     },
     "variations-waveblur_wf-smoke.png": {
       "bytes": 5058,

@@ -203,7 +203,7 @@ fn dbg_how_long_a_restart_shows() {
     };
     const N: u32 = 128;
     let (device, queue) = device();
-    let truth = render_blocks(&device, &queue, &cfg, N, &Run { ipt: 16384, frames: 4, reps: 8, ..Default::default() });
+    let truth = render_blocks(&device, &queue, &cfg, N, &Run { ipt: 16384, frames: 4, reps: 8, persistent: false, ..Default::default() });
     for frames in [1usize, 10, 100] {
         let mut b = Blocks { density: Vec::new(), light: [Vec::new(), Vec::new(), Vec::new()], image: Vec::new() };
         for _ in 0..8 {
