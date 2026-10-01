@@ -66,6 +66,17 @@ pub struct SystemSettings {
     #[serde(default = "default_burn_in")]
     pub burn_in: u32,
 
+    /// The frame-time governor (`app::Batch`, `app::Knee`): sizes each
+    /// frame's dispatch to the frame budget. Off, every frame dispatches
+    /// `manual_workgroups` workgroups of `iterations_per_thread`.
+    #[serde(default = "default_frame_governor")]
+    pub frame_governor: bool,
+
+    /// Workgroups of 64 threads each frame dispatches while the governor
+    /// is off (default: 128, the governor's full batch).
+    #[serde(default = "default_manual_workgroups")]
+    pub manual_workgroups: u32,
+
     /// Disk budget for cached deep-zoom reference orbits, in MB.
     /// A 10M-iteration reference is ~200 MB and takes minutes of
     /// single-threaded arithmetic to rebuild, so this is the knob
@@ -192,6 +203,14 @@ fn default_burn_in() -> u32 {
     20
 }
 
+fn default_frame_governor() -> bool {
+    true
+}
+
+fn default_manual_workgroups() -> u32 {
+    128
+}
+
 fn default_orbit_cache_mb() -> u32 {
     // 1 GB, not the 256 MB the store used to hard-code. One
     // 10M-iteration reference is ~200 MB and costs minutes of
@@ -246,6 +265,8 @@ impl Default for SystemSettings {
             target_fps: default_target_fps(),
             iterations_per_thread: default_iterations_per_thread(),
             burn_in: default_burn_in(),
+            frame_governor: default_frame_governor(),
+            manual_workgroups: default_manual_workgroups(),
             orbit_cache_mb: default_orbit_cache_mb(),
             language: default_language(),
             show_help_on_startup: default_show_help_on_startup(),
@@ -340,6 +361,12 @@ impl SystemSettings {
         }
         if current.burn_in == defaults.burn_in {
             obj.remove("burn_in");
+        }
+        if current.frame_governor == defaults.frame_governor {
+            obj.remove("frame_governor");
+        }
+        if current.manual_workgroups == defaults.manual_workgroups {
+            obj.remove("manual_workgroups");
         }
 
         // UI/UX
@@ -527,6 +554,8 @@ mod tests {
         assert_eq!(settings.vsync_enabled, true);
         assert_eq!(settings.target_fps, 60.0);
         assert_eq!(settings.iterations_per_thread, 256);
+        assert!(settings.frame_governor);
+        assert_eq!(settings.manual_workgroups, 128);
         assert_eq!(settings.language, "en");
         assert_eq!(settings.show_help_on_startup, true);
         assert_eq!(settings.default_export_width, 1920);
@@ -546,6 +575,8 @@ mod tests {
         assert!(!json.contains("\"vsync_enabled\""), "default vsync_enabled should be omitted");
         assert!(!json.contains("\"target_fps\""), "default target_fps should be omitted");
         assert!(!json.contains("\"iterations_per_thread\""), "default iterations_per_thread should be omitted");
+        assert!(!json.contains("\"frame_governor\""), "default frame_governor should be omitted");
+        assert!(!json.contains("\"manual_workgroups\""), "default manual_workgroups should be omitted");
         assert!(!json.contains("\"language\""), "default language should be omitted");
         assert!(!json.contains("\"show_help_on_startup\""), "default show_help_on_startup should be omitted");
         assert!(!json.contains("\"default_export_width\""), "default export_width should be omitted");
@@ -606,6 +637,8 @@ mod tests {
         assert_eq!(settings.vsync_enabled, true);
         assert_eq!(settings.target_fps, 60.0);
         assert_eq!(settings.iterations_per_thread, 256);
+        assert!(settings.frame_governor);
+        assert_eq!(settings.manual_workgroups, 128);
         assert_eq!(settings.language, "en");
         assert_eq!(settings.show_help_on_startup, true);
         assert_eq!(settings.default_export_width, 1920);
@@ -633,6 +666,8 @@ mod tests {
         assert_eq!(settings.target_fps, 90.0);
         // Other fields should use defaults
         assert_eq!(settings.iterations_per_thread, 256);
+        assert!(settings.frame_governor);
+        assert_eq!(settings.manual_workgroups, 128);
         assert_eq!(settings.language, "en");
     }
 

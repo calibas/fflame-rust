@@ -3197,7 +3197,14 @@ impl App {
                 // GPU work lengthens these frames, and read as the render's
                 // cost it would shed a batch that fits.
                 let planning = renderer.planning_elapsed().is_some();
-                if let Some(prev) = self.last_iter_frame.filter(|_| !planning) {
+                // The governor can be switched off (Rendering menu): every
+                // frame then dispatches the chosen workgroups, and the
+                // governor neither measures nor adapts.
+                let (governed, manual_workgroups) = {
+                    let settings = self.config_manager.system_settings();
+                    (settings.frame_governor, settings.manual_workgroups)
+                };
+                if let Some(prev) = self.last_iter_frame.filter(|_| !planning && governed) {
                     // Re-ask the platform every so often rather than every
                     // frame: the answer only changes when the window moves to
                     // a different display, and `current_monitor` is a syscall.
@@ -3243,7 +3250,9 @@ impl App {
                 // remaining shed axis would be trajectory depth — which is
                 // exactly what the governor exists to protect. One
                 // workgroup still makes forward progress every frame.
-                let (effective_workgroups, effective_ipt) = if planning {
+                let (effective_workgroups, effective_ipt) = if !governed {
+                    batch.fixed(manual_workgroups, planning)
+                } else if planning {
                     batch.while_planning(self.governor_knee, self.iter_scale)
                 } else {
                     batch.shape(self.governor_knee, self.iter_scale)
@@ -3865,6 +3874,15 @@ impl Batch {
         (w, ipt.min(self.ipt_floor()))
     }
 
+    /// **The dispatch with the governor off**: `workgroups` of the full
+    /// length, every frame. While a tight plan is made it is still capped
+    /// to the shortest dispatch -- that cap is the planner's, not the
+    /// governor's (tracker P10: the plan's round trips queue behind it).
+    pub fn fixed(&self, workgroups: u32, planning: bool) -> (u32, u32) {
+        let ipt = self.iterations_per_thread.max(1);
+        (workgroups.max(1), if planning { ipt.min(self.ipt_floor()) } else { ipt })
+    }
+
     /// The width of the floor's dispatch.
     fn floor_width(&self) -> u32 {
         self.shape(Knee::Shedding { over: 0 }, self.min_scale()).0
@@ -4095,6 +4113,16 @@ mod governor_tests {
         }
         assert!(matches!(shapes[299].1, Knee::Holding { width: 128, .. }), "not holding before: {:?}", shapes[299]);
         assert!(matches!(knee, Knee::Shedding { .. }) && (scale - 1.0).abs() < 1e-9, "{knee:?} at scale {scale}");
+    }
+
+    /// **With the governor off** every frame is the chosen workgroups at
+    /// the full length -- but for the planner's cap while a plan is made.
+    #[test]
+    fn with_the_governor_off_the_dispatch_is_fixed() {
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20 };
+        assert_eq!(batch.fixed(512, false), (512, 1000));
+        assert_eq!(batch.fixed(512, true), (512, 64));
+        assert_eq!(batch.fixed(0, false), (1, 1000));
     }
 
     /// The floor's dispatch, and a hold's return to shedding, keep the

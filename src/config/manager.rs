@@ -973,6 +973,13 @@ impl ConfigManager {
                 let value: u32 = new_value.try_into()?;
                 self.system_settings.burn_in = value;
             }
+            ConfigPath::SystemFrameGovernor => {
+                self.system_settings.frame_governor = new_value.try_into()?;
+            }
+            ConfigPath::SystemManualWorkgroups => {
+                let value: u32 = new_value.try_into()?;
+                self.system_settings.manual_workgroups = value.clamp(1, 65535);
+            }
             ConfigPath::SystemOrbitCacheMb => {
                 let value: u32 = new_value.try_into()?;
                 self.system_settings.orbit_cache_mb = value;
@@ -2531,6 +2538,8 @@ impl ConfigManager {
             | ConfigPath::SystemPngStripMetadata
             | ConfigPath::SystemLanguage
             | ConfigPath::SystemBurnIn
+            | ConfigPath::SystemFrameGovernor
+            | ConfigPath::SystemManualWorkgroups
             | ConfigPath::SystemOrbitCacheMb
             | ConfigPath::SystemShowHelpOnStartup => {
                 panic!("System settings should not be accessed via get_value(). Use config_manager.system_settings() instead.");
@@ -3925,6 +3934,8 @@ impl ConfigManager {
             | ConfigPath::SystemPngStripMetadata
             | ConfigPath::SystemLanguage
             | ConfigPath::SystemBurnIn
+            | ConfigPath::SystemFrameGovernor
+            | ConfigPath::SystemManualWorkgroups
             | ConfigPath::SystemOrbitCacheMb
             | ConfigPath::SystemShowHelpOnStartup => {
                 panic!("System settings should not be modified via apply_value(). Use config_manager.update_system_setting() instead.");

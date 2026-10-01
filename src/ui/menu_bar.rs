@@ -224,6 +224,28 @@ pub fn render_menu_bar(
                     }
                 });
 
+                // The frame-time governor, and the dispatch when it is off
+                let mut governor = menu_state.frame_governor;
+                if ui
+                    .checkbox(&mut governor, t!("menu.frame_governor"))
+                    .on_hover_text(t!("menu.tooltip_frame_governor"))
+                    .changed()
+                {
+                    menu_actions.rendering.set_frame_governor = Some(governor);
+                }
+                ui.add_enabled_ui(!menu_state.frame_governor, |ui| {
+                    ui.menu_button(format!("{}: {}", t!("menu.workgroups"), menu_state.manual_workgroups), |ui| {
+                        rows_do_not_wrap(ui);
+                        for &w in &[1u32, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024] {
+                            if ui.radio(menu_state.manual_workgroups == w, format!("{w}")).clicked() {
+                                menu_actions.rendering.set_manual_workgroups = Some(w);
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text(t!("menu.tooltip_workgroups"));
+                });
+
                 ui.separator();
 
                 // Reset Rendering to Defaults

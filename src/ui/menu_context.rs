@@ -44,6 +44,10 @@ pub struct RenderingMenuActions {
     pub pause_toggle: bool,
     pub reset_accumulation: bool,
     pub set_iterations_per_thread: Option<u32>, // Iterations per thread (64, 128, 256, 512, 1024)
+    /// Turn the frame-time governor on or off.
+    pub set_frame_governor: Option<bool>,
+    /// The workgroups a frame dispatches while the governor is off.
+    pub set_manual_workgroups: Option<u32>,
     pub reset_to_defaults: bool,
 }
 
@@ -82,6 +86,10 @@ pub struct MenuState {
     pub can_undo: bool,
     pub can_redo: bool,
     pub is_paused: bool,
+    /// Whether the frame-time governor sizes each frame's dispatch, and the
+    /// workgroups a frame dispatches when it does not.
+    pub frame_governor: bool,
+    pub manual_workgroups: u32,
     /// The active mode. It was a `render_mode_2d: bool`, which could
     /// not tell Escape and Simulation from 3D -- so the View menu drew
     /// "3D Mode" as selected in both, and Fly Mode stayed enabled.
