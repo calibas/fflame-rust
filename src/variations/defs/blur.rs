@@ -2,6 +2,8 @@
 //!
 //! These variations add randomized blur effects.
 
+use crate::scene::ifs_analysis::{AffineRole, Space};
+use crate::variations::inverse::{InverseDef, InverseKernel};
 use crate::variations::{
     definition::{Feature, VariationDef},
     VariationCategory, VariationPhase,
@@ -125,4 +127,18 @@ fn variation_pre_blur(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
     return vec3<f32>(p.x + rnd_g * cos(rnd_a), p.y + rnd_g * sin(rnd_a), p.z);
 }
 "#,
+};
+
+// ------------------------------------------------- the inverse walks
+
+/// `zblur`: nothing in the plane, where its 2D stub returns zero.
+///
+/// As a solid it is a MEASURE -- it adds gaussian noise on z -- and
+/// a measure has no map to invert, so no role there
+/// (`ifs-general.md` D1).
+pub static INVERSE_ZBLUR: InverseDef = InverseDef {
+    name: "zblur",
+    kernel: InverseKernel::Affine(|_, _, space| {
+        matches!(space, Space::Planar).then_some(AffineRole::Nothing)
+    }),
 };

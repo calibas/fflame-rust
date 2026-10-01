@@ -53,6 +53,56 @@ fn select_transform_const(rand_val: f32) -> u32 {
     return NUM_TRANSFORMS - 1u;
 }
 
+{{#if IMPORTANCE_SAMPLING}}
+// The two selections above against the BIASED weights `q` -- stage 1
+// of docs/projects/flame-deep-zoom.md. Identical in shape; only the
+// weight source differs, because that is the whole of the bias: the
+// support is untouched (q is positive exactly where the weight is)
+// and only the density on it changes, which the deposited likelihood
+// ratio then corrects.
+fn select_transform_biased(rand_val: f32) -> u32 {
+    var cumulative = 0.0;
+    var total_weight = 0.0;
+
+    for (var i = 0u; i < NUM_TRANSFORMS; i++) {
+        total_weight += bias_weight(i);
+    }
+
+    let ttarget = rand_val * total_weight;
+
+    for (var i = 0u; i < NUM_TRANSFORMS; i++) {
+        cumulative += bias_weight(i);
+        if (ttarget <= cumulative) {
+            return i;
+        }
+    }
+
+    return NUM_TRANSFORMS - 1u;
+}
+
+fn select_transform_biased_xaos(rand_val: f32, prev_xform: u32) -> u32 {
+    var cumulative = 0.0;
+    var total_weight = 0.0;
+
+    let xaos_base = prev_xform * NUM_TRANSFORMS;
+
+    for (var i = 0u; i < NUM_TRANSFORMS; i++) {
+        total_weight += bias_weight(i) * xaos_weights[xaos_base + i];
+    }
+
+    let threshold = rand_val * total_weight;
+
+    for (var i = 0u; i < NUM_TRANSFORMS; i++) {
+        cumulative += bias_weight(i) * xaos_weights[xaos_base + i];
+        if (threshold <= cumulative) {
+            return i;
+        }
+    }
+
+    return NUM_TRANSFORMS - 1u;
+}
+{{/if}}
+
 // Select transform with xaos (chaos) weighting
 // Uses hard-coded NUM_TRANSFORMS for loop unrolling
 // prev_xform: Index of the transform that was just applied
@@ -363,8 +413,18 @@ fn project_3d_full(p: vec3<f32>) -> Projection3D {
 
 // Convert 2D fractal coords to pixel coords
 fn world_to_pixel(p: vec2<f32>) -> vec2<i32> {
+{{#if CYLINDER_RELATIVE}}
+    // Cylinder targeting, relative mode: the forced prefix already
+    // delivered the point as an offset FROM the view centre, with the
+    // centre subtracted in f64 on the CPU (see `scene::cylinder::pack`).
+    // Subtracting the pan again would both double-count it and
+    // reintroduce the f32 cancellation the relative packing exists to
+    // avoid. The two changes are one change.
+    var transformed = p;
+{{else}}
     // Apply view transform: pan, rotation, and zoom
     var transformed = p - vec2<f32>(params.pan_x, params.pan_y);
+{{/if}}
 
     // Apply rotation
     let cos_r = cos(params.rotation);

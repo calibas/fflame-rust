@@ -1,116 +1,303 @@
 use egui_wgpu::wgpu::*;
 use crate::gpu::{buffers::*, pipelines::FlamePipelines};
 use crate::scene::transforms::Flame;
-use crate::scene::palette::{Palette, ColorMode, PathMapStyle, PathCaptureMode, PathTrackingMode};
+use crate::scene::palette::{Palette, ColorMode, PathMapStyle};
 use crate::config::FractalConfig;
 use crate::shader_builder_v2::ShaderConstants;
 
-/// Path entry storing first 32 iterations of transform sequence
-/// Also stores initial random X/Y coordinates for complete path reconstruction
-/// Matches GPU PathEntry struct layout (7 × u32 = 5 u32 + 2 f32)
-#[derive(Debug, Clone, Copy, Default)]
-#[repr(C)]
-pub struct PathEntry {
-    /// Iterations 0-7 (4 bits each, LSB = iteration 0)
-    pub path0: u32,
-    /// Iterations 8-15
-    pub path1: u32,
-    /// Iterations 16-23
-    pub path2: u32,
-    /// Iterations 24-31
-    pub path3: u32,
-    /// Number of valid iterations stored (0-32)
-    pub iteration_count: u32,
-    /// Initial random X coordinate [-1, 1]
-    pub initial_x: f32,
-    /// Initial random Y coordinate [-1, 1]
-    pub initial_y: f32,
-}
-
-impl PathEntry {
-    /// Extract transform index at given iteration (0-31)
-    /// Returns None if iteration >= iteration_count
-    pub fn get_transform(&self, iteration: u32) -> Option<u32> {
-        if iteration >= self.iteration_count {
-            return None;
-        }
-        let slot = iteration / 8;
-        let pos = (iteration % 8) * 4;
-        let path = match slot {
-            0 => self.path0,
-            1 => self.path1,
-            2 => self.path2,
-            3 => self.path3,
-            _ => return None,
-        };
-        Some((path >> pos) & 0xF)
-    }
-
-    /// Get full path as Vec of transform indices
-    pub fn to_vec(&self) -> Vec<u32> {
-        (0..self.iteration_count)
-            .filter_map(|i| self.get_transform(i))
-            .collect()
-    }
-
-    /// Get prefix data: first 8 iterations (path0 only)
-    /// Matches GPU get_prefix() function
-    pub fn get_prefix(&self) -> u32 {
-        self.path0
-    }
-
-    /// Get suffix data: last 8 valid iterations based on iteration_count
-    /// Matches GPU get_suffix() function
-    pub fn get_suffix(&self) -> u32 {
-        let count = self.iteration_count;
-        if count <= 8 {
-            self.path0
-        } else if count <= 16 {
-            self.path1
-        } else if count <= 24 {
-            self.path2
-        } else {
-            self.path3
-        }
-    }
-
-    /// Scramble hash for maximum color separation
-    /// Matches GPU scramble_hash() function (MurmurHash3 finalizer)
-    pub fn scramble_hash(x: u32) -> u32 {
-        let mut h = x;
-        h ^= h >> 16;
-        h = h.wrapping_mul(0x85ebca6b);
-        h ^= h >> 13;
-        h = h.wrapping_mul(0xc2b2ae35);
-        h ^= h >> 16;
-        h
-    }
-
-    /// Compute hue value for Prefix Distinct coloring mode (style 2)
-    /// Matches GPU path_to_color_prefix_distinct() function
-    /// Incorporates iteration_count to distinguish paths of different lengths
-    pub fn compute_prefix_distinct_hue(&self) -> f32 {
-        let value = self.get_prefix();
-        // Mix iteration_count into the value before hashing (same as GPU)
-        let mixed = value ^ (self.iteration_count.wrapping_mul(0x9E3779B9));
-        let scrambled = Self::scramble_hash(mixed);
-        let golden_ratio: f64 = 0.618033988749895;
-        let hue = (scrambled as f64 * golden_ratio / u32::MAX as f64).fract();
-        hue as f32
-    }
-
-    /// Compute hue value for Suffix Distinct coloring mode (style 3)
-    /// Matches GPU path_to_color_distinct() function
-    pub fn compute_suffix_distinct_hue(&self) -> f32 {
-        let value = self.get_suffix();
-        let scrambled = Self::scramble_hash(value);
-        let golden_ratio: f64 = 0.618033988749895;
-        let hue = (scrambled as f64 * golden_ratio / u32::MAX as f64).fract();
-        hue as f32
-    }
-}
-
 use crate::variations::analytic_blur::BlurSlotInfo;
+
+/// What cylinder targeting is doing for the current view.
+///
+/// Reported so the panel can say which of the four it is rather
+/// than leaving a ticked checkbox that silently does nothing —
+/// declining is the COMMON case (any nonlinear flame, any shallow
+/// view) and a user has no way to guess why.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum TargetingState {
+    /// Not asked for.
+    #[default]
+    Off,
+    /// Asked for, and the flame might well be enumerable — but the
+    /// enumeration is PLANAR and this is not a 2D render.
+    ///
+    /// Distinct from `Off` because the panel draws its line only
+    /// when the box is ticked, so folding this into `Off` printed
+    /// "Not running." to someone who had just ticked it. The
+    /// difference between "you did not ask" and "you asked and the
+    /// answer is no" is the whole content of the message.
+    NotPlanar,
+    /// Asked for, but this flame cannot be enumerated.
+    Declined(crate::scene::cylinder::NoCylinders),
+    /// Asked for and enumerable, but it would cost more than it
+    /// saves — a view shallow enough that the ordinary chaos game
+    /// already lands most of its samples in frame.
+    NotWorthIt { speedup: f64 },
+    /// Running.
+    ///
+    /// `lost` is the share of the attractor's measure the enumeration
+    /// could not account for — see [`crate::scene::cylinder::Cylinders::lost`].
+    /// Zero for every flame that targets today; the panel says so
+    /// when it is not, because a picture missing part of its
+    /// attractor has to admit it.
+    Active { words: usize, depth: usize, speedup: f64, mass: f64, lost: f64 },
+}
+
+impl TargetingState {
+    /// The state of a plan being drawn.
+    fn active(c: &crate::scene::cylinder::Cylinders) -> Self {
+        Self::Active { words: c.words.len(), depth: c.depth, speedup: c.speedup(), mass: c.mass, lost: c.lost }
+    }
+}
+
+/// **A plan for a view that does not move, packed for the shader** --
+/// what a render that is not a `FlameRenderer` needs in order to target
+/// as one would: the tiled exporter, which renders the whole image from
+/// one stream of dispatches and so has one view to plan, however it is
+/// tiled.
+pub struct ViewPlan {
+    /// The word table, bound where the renderer binds its own.
+    pub table: Vec<f32>,
+    /// The shader's constants, as `FlameRenderer` sets them for the same
+    /// plan: `cylinder_replay`, `cylinder_relative`, `cylinder_offsets`.
+    pub replay: bool,
+    pub relative: bool,
+    pub offsets: bool,
+    /// The factor the tone map's iteration count is scaled by
+    /// (`Cylinders::iteration_scale`).
+    pub iteration_scale: f64,
+}
+
+/// **Plan `config`'s view at `width` by `height`, as the renderer
+/// would**, and pack it: `None` with the state that says why where the
+/// view is not targeted -- not asked for, not 2D, not enumerable, not
+/// worth it.
+///
+/// The same decisions as `FlameRenderer::update_cylinders` and
+/// `apply_plan`, made once: the removals the walk makes no words for,
+/// PathMap's shortest word, the plan dropped where it does not pay
+/// unless it is kept, then the removals and the trim applied to what is
+/// drawn. What the renderer adds for its panels -- the Pieces panel's
+/// splits, the Words panel's solo, PathMap's colours -- is not part of
+/// the config and has no place here.
+///
+/// Planned on the GPU given on the desktop, as the renderer's inline
+/// plans are; the CPU on the web.
+pub fn plan_view(
+    device: &Device,
+    queue: &Queue,
+    config: &FractalConfig,
+    width: u32,
+    height: u32,
+) -> (TargetingState, Option<ViewPlan>) {
+    let two_d = matches!(config.render_mode, crate::scene::transforms::RenderMode::TwoD);
+    if !config.cylinder_targeting {
+        return (TargetingState::Off, None);
+    }
+    if !two_d {
+        return (TargetingState::NotPlanar, None);
+    }
+    let registry = crate::variations::global_registry();
+    let view = crate::scene::cylinder::View::of(
+        config.zoom.max(1e-6) as f64,
+        [config.pan_x, config.pan_y],
+        width.max(1),
+        height.max(1),
+    );
+    #[cfg(not(target_arch = "wasm32"))]
+    let gpu = std::sync::Mutex::new(crate::scene::plan_gpu::GpuPlanner::new(device, queue));
+    #[cfg(target_arch = "wasm32")]
+    let _ = (device, queue);
+    let removals = crate::scene::word_tree::parse_removals(&config.word_removals);
+    let outcome = crate::scene::cylinder::Cylinders::plan_opts(
+        &config.flame,
+        &registry,
+        view,
+        crate::scene::backward::PlanOptions {
+            #[cfg(not(target_arch = "wasm32"))]
+            gpu: Some(&gpu),
+            removals: &removals,
+            min_len: FlameRenderer::path_min_len(config),
+            ..Default::default()
+        },
+    );
+    let (state, planned) = FlameRenderer::judge_plan(config, outcome);
+    let Some(full) = planned else { return (state, None) };
+    let drawn = crate::scene::word_tree::trim_to(
+        &crate::scene::word_tree::remove(&full, &removals),
+        config.cylinder_trim as f64,
+        config.cylinder_trim_levels as usize,
+    );
+    let relative = FlameRenderer::relative_is_safe_for(&drawn, config);
+    let plan = ViewPlan {
+        table: FlameRenderer::pack_plan(&drawn, config),
+        replay: !drawn.composable,
+        relative,
+        // The replay table's shift -- the plan's centre less the view's
+        // (`write_cylinder_shift`) -- is zero here, and the packing
+        // leaves it so: the plan is made for exactly this view.
+        offsets: relative && !drawn.composable && !drawn.refs.is_empty(),
+        iteration_scale: drawn.iteration_scale(),
+    };
+    (TargetingState::active(&drawn), Some(plan))
+}
+
+
+/// A cylinder plan being made in the background -- on a worker thread on
+/// the desktop, and on the web as a future polled a slice at a time each
+/// frame (`gpu-cylinder-planning.md` phase 3). See
+/// `FlameRenderer::sync_cylinders`.
+struct PlanJob {
+    kind: PlanKind,
+    /// The disc the plan is made for: the view itself for a tight plan,
+    /// [`STANDBY_MARGIN`] times its radius for a standby.
+    view: crate::scene::cylinder::View,
+    /// The enumeration key the plan is for; a result for any other key
+    /// is stale and is discarded.
+    key: u64,
+    /// The flame part of that key, recorded with the plan once applied.
+    flame_key: u64,
+    started: web_time::Instant,
+    runner: Runner,
+}
+
+/// What makes a job's plan.
+enum Runner {
+    /// A worker thread: the desktop's. `cancel` is set when the view moves
+    /// on, and the planner stops at its next batch.
+    #[cfg(not(target_arch = "wasm32"))]
+    Thread { cancel: std::sync::Arc<std::sync::atomic::AtomicBool>, rx: std::sync::mpsc::Receiver<Delivery> },
+    /// The plan as a future, polled each frame for `slicer`'s budget or
+    /// until it waits on the GPU: the web's, and the desktop's when
+    /// [`FlameRenderer::set_plan_in_task`] asks, which is how the web's
+    /// path is tested. Dropping the job drops it.
+    Task {
+        task: std::pin::Pin<Box<dyn std::future::Future<Output = PlanOutcome>>>,
+        slicer: std::rc::Rc<crate::scene::backward::Slicer>,
+        /// The latest plan on the way, left here by the walk.
+        on_the_way: std::rc::Rc<std::cell::RefCell<Option<crate::scene::cylinder::Cylinders>>>,
+    },
+}
+
+type PlanOutcome = Result<crate::scene::cylinder::Cylinders, crate::scene::cylinder::NoCylinders>;
+
+/// What a job hands back: a plan on the way (tracker P8), or its plan.
+enum Delivery {
+    OnTheWay(crate::scene::cylinder::Cylinders),
+    Done(PlanOutcome),
+}
+
+/// **When a tight plan first hands over a plan on the way** (tracker P8),
+/// and after that at each doubling of its time: complete plans of what the
+/// walk has so far, shown while no plan on screen covers the view. A
+/// standby delivers none.
+const PLAN_ON_THE_WAY: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// The GPU planner a job plans with: shared with the worker threads on the
+/// desktop, with the page's own tasks on the web.
+#[cfg(not(target_arch = "wasm32"))]
+type SharedPlanner = std::sync::Arc<std::sync::Mutex<crate::scene::plan_gpu::GpuPlanner>>;
+#[cfg(target_arch = "wasm32")]
+type SharedPlanner = std::rc::Rc<std::cell::RefCell<crate::scene::plan_gpu::GpuPlanner>>;
+
+/// How much of a frame a web plan may take: its poll runs the walk until
+/// this is spent, or until the walk waits on the GPU.
+const WEB_PLAN_SLICE: std::time::Duration = std::time::Duration::from_millis(6);
+
+impl PlanJob {
+    /// The plan, once it is made, or the latest plan on the way; `None`
+    /// while nothing new has come.
+    fn try_take(&mut self) -> Option<Delivery> {
+        match &mut self.runner {
+            #[cfg(not(target_arch = "wasm32"))]
+            Runner::Thread { rx, .. } => {
+                use std::sync::mpsc::TryRecvError;
+                // The latest of what has come: the plan itself outranks any
+                // plan on the way before it.
+                let mut latest = None;
+                loop {
+                    match rx.try_recv() {
+                        Ok(Delivery::Done(r)) => return Some(Delivery::Done(r)),
+                        Ok(d) => latest = Some(d),
+                        Err(TryRecvError::Empty) => return latest,
+                        // The planner panicked. Said so, once, rather than
+                        // retried on every frame.
+                        Err(TryRecvError::Disconnected) => {
+                            return Some(Delivery::Done(Err(crate::scene::cylinder::NoCylinders::Unbounded {
+                                index: 0,
+                                why: "the planner failed on this view".to_string(),
+                            })))
+                        }
+                    }
+                }
+            }
+            Runner::Task { task, slicer, on_the_way } => {
+                slicer.begin();
+                let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+                match task.as_mut().poll(&mut cx) {
+                    std::task::Poll::Ready(r) => Some(Delivery::Done(r)),
+                    std::task::Poll::Pending => on_the_way.borrow_mut().take().map(Delivery::OnTheWay),
+                }
+            }
+        }
+    }
+
+}
+
+/// A job dropped is a job stopped: replaced by the next view's, or
+/// dropped with its renderer. A task stops by being dropped; a thread is
+/// told to, and stops at its next batch. Without this a thread planned on
+/// for a view nobody would see, competing for the CPU and the GPU with
+/// whatever came next -- a renderer's standby outliving the renderer.
+impl Drop for PlanJob {
+    fn drop(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Runner::Thread { cancel, .. } = &self.runner {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
+/// Which plan a background job is making.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PlanKind {
+    /// For the view: what the picture you stop on is drawn with.
+    Tight,
+    /// For a disc around it, held in reserve. See [`STANDBY_MARGIN`].
+    Standby,
+}
+
+/// A plan made for a wider disc than the view, held until the view
+/// leaves the plan on screen.
+struct Standby {
+    view: crate::scene::cylinder::View,
+    flame_key: u64,
+    plan: crate::scene::cylinder::Cylinders,
+}
+
+/// How much wider than the view the standby plan's disc is, in radius.
+///
+/// **A margin, but never the plan you look at.** Planning the view with
+/// a margin keeps small moves covered, and costs the picture you stop on
+/// its efficiency for as long as you look at it -- measured on
+/// `grand-julian`, the share of forced samples landing in frame falls
+/// from 0.93-0.96 to 0.28-0.65 at 1.5x and 0.19-0.46 at 2x, so the
+/// picture fills in 1.5x to 5x slower. So the view gets a tight plan,
+/// and once that lands a second plan is made for this wider disc and
+/// held in reserve. When the view moves outside the tight plan but
+/// inside this one -- a pan of up to one view radius, a zoom out of up
+/// to 2x -- the standby is swapped in on that frame, and the picture
+/// stays complete while a tight plan for the new view is made. Its
+/// lower efficiency only ever applies while the view is moving, when
+/// the accumulation restarts every frame anyway. Coverage at every
+/// margin measured was 0.99 or better.
+const STANDBY_MARGIN: f64 = 2.0;
+
+/// Whether disc `inner` lies wholly inside disc `outer`.
+fn disc_contains(outer: crate::scene::cylinder::View, inner: crate::scene::cylinder::View) -> bool {
+    let d = (outer.centre[0] - inner.centre[0]).hypot(outer.centre[1] - inner.centre[1]);
+    d + inner.radius <= outer.radius
+}
 
 pub struct FlameRenderer {
     /// Reachability-census mode (see `src/census/`). Set only by
@@ -120,7 +307,9 @@ pub struct FlameRenderer {
 
     pipelines: FlamePipelines,
     buffers: FlameBuffers,
-    compute_bind_group: BindGroup,
+    /// Bumped on every palette upload — see [`Self::palette_generation`].
+    palette_generation: u64,
+    compute_bind_group: crate::gpu::pipelines::ComputeBindGroup,
     accumulate_bind_group: BindGroup,
     histogram_blur_h_bind_group: BindGroup,
     histogram_blur_v_bind_group: BindGroup,
@@ -200,6 +389,12 @@ pub struct FlameRenderer {
     last_batch_samples: u64,
     /// Attractor-bounds readback (shadow-map auto-fit).
     bounds_stats: crate::renderer::density_stats::BoundsTracker,
+    /// Readback for the frame-coverage counters (auto exposure). A
+    /// second `BoundsTracker` rather than a new type: it already reads
+    /// an 8-word window off an arbitrary buffer, async for the
+    /// interactive path and blocking for exports, which is exactly the
+    /// pair of paths this needs.
+    coverage_stats: crate::renderer::density_stats::BoundsTracker,
 
     /// The sticky variation superset — Layer B of
     /// docs/projects/sticky-shader-compilation.md. Renderer state, never
@@ -235,8 +430,6 @@ pub struct FlameRenderer {
     shade_settle: u32,
     color_mode: ColorMode,
     path_map_style: PathMapStyle,
-    path_capture_mode: PathCaptureMode,
-    path_tracking_mode: PathTrackingMode,
     density_scale: f32,
     white_level: f32,
     highlight_mode: u32,
@@ -258,6 +451,16 @@ pub struct FlameRenderer {
     fog_strength: f32, // Depth fog: exponential fog density (0.0 = disabled)
     fog_start: f32, // Depth fog: distance where fog begins
     solid_strength: f32, // Solid rendering: occlusion strength (0 = off)
+    /// Biased selection and its correction, mirrored from the config
+    /// so the incremental shader-constants path can see it.
+    /// See docs/projects/flame-deep-zoom.md stage 1.
+    importance: crate::config::fractal_config::ImportanceSettings,
+    /// The enumerated cylinders for the CURRENT view, when it is
+    /// worth targeting (docs/projects/flame-deep-zoom.md stage 2).
+    /// `None` whenever the flame cannot be targeted or the view is
+    /// too shallow for it to pay -- which is most of the time, and is
+    /// the state that leaves the shader byte-identical.
+    cylinders: Option<crate::scene::cylinder::Cylinders>,
     surface_thickness: f32, // Solid rendering: depth shell (world units)
     needs_depth_prime: bool, // Next compute batch records depth only (set on reset while solid)
     solid_shading: crate::config::SolidShadingSettings, // Phase 1 lighting (shade pass); active() => depth capture even at solid_strength 0
@@ -265,6 +468,107 @@ pub struct FlameRenderer {
     dof_pass: crate::renderer::dof_pass::DofPass, // Post-process DoF (solid mode; at-splat DoF compiles out under SOLID)
     dof_dirty: bool, // DoF input (shade output / accumulator) changed since the last DoF dispatch
     solid_density_fraction: f32, // Measured accepted/dispatched fraction (1.0 = no correction); scales tonemap sample_density
+    /// Measured share of plot attempts that landed inside the frame
+    /// (1.0 = no correction). Scales the tonemap's `sample_density` so
+    /// a zoomed-in view is exposed for the work the VIEWPORT holds
+    /// rather than for every iteration the chaos game ran. Only ever
+    /// moves off 1.0 when `auto_exposure` is on.
+    frame_coverage_fraction: f32,
+    /// The region an ordinary render is asked to check itself
+    /// against: `[cx, cy, r, unused]`, off when `r <= 0`. See
+    /// [`crate::gpu::buffers::GpuParams::leak_probe`].
+    leak_probe: [f32; 4],
+    /// Share of plot attempts that fell outside it, from the last
+    /// readback. `None` until one has been read.
+    leak_fraction: Option<f32>,
+    /// A view change seen but not yet planned for, and when it was
+    /// first seen. See `targeting_settle_delay`.
+    cylinder_key_pending: Option<(u64, web_time::Instant)>,
+    /// What targeting decided for the current view — reported to the
+    /// panel, never read by the render path (which asks `cylinders`).
+    targeting_state: TargetingState,
+    /// Whether the current shader plots in view-relative coordinates.
+    /// Decided with the enumeration, because it depends on both the
+    /// flame and whether targeting is running at all.
+    cylinder_relative: bool,
+    /// Whether the current shader runs the replay's deep steps in
+    /// offsets (`docs/projects/deep-zoom-precision.md`): the plan
+    /// carries references, and the plot is view-relative.
+    cylinder_offsets: bool,
+    /// The plan as made, before trim (`docs/projects/word-editing.md`);
+    /// `cylinders` is what is drawn. Kept so moving the trim slider
+    /// retrims without replanning.
+    cylinders_full: Option<crate::scene::cylinder::Cylinders>,
+    /// The trim and its depth `cylinders` was cut with.
+    applied_trim: (f32, u32),
+    /// The removals `cylinders` was filtered with
+    /// (`FractalConfig::word_removals`).
+    applied_removals: Vec<String>,
+    /// A branch drawn alone while the Words panel's solo button is held
+    /// (docs/projects/word-editing.md §6): its pattern. Transient -- not
+    /// in the config, not undoable, not in the plan key.
+    word_solo: Option<Vec<u32>>,
+    /// The solo `cylinders` was cut with.
+    applied_solo: Option<Vec<u32>>,
+    /// PathMap (docs/projects/word-editing.md §10): the colouring the
+    /// packed table was coloured with -- style and level, `None` when
+    /// PathMap is off -- and each drawn word's colour, kept so a resize
+    /// can pack the table again.
+    applied_path_colouring: Option<(PathMapStyle, u32)>,
+    path_colours: Option<Vec<f32>>,
+    /// PathMap's Origin frame: the attractor's centre and radius, and the
+    /// flame it was measured for.
+    path_origin: [f32; 3],
+    path_origin_key: u64,
+    /// Pieces opened in the Pieces panel to see inside, which the plan
+    /// splits (`PlanOptions::refine`), with the flame they were opened
+    /// on. Transient and only ever grown -- a closed piece stays split,
+    /// so closing it does not replan -- until the flame changes.
+    word_split: (u64, Vec<Vec<u32>>),
+    /// The Words panel's tree of the plan on screen, built when first
+    /// asked for after each plan is applied.
+    word_tree: std::sync::OnceLock<std::sync::Arc<crate::scene::word_tree::Tree>>,
+    /// Fingerprint of everything the enumeration depends on, so the
+    /// per-frame sync can skip the work when nothing moved.
+    cylinder_key: Option<u64>,
+    /// Plan the expensive flames on a background thread. Set by the app;
+    /// the headless paths (CLI, export, tests) plan inline and see the
+    /// plan before the first sample.
+    background_planning: bool,
+    /// The plan being made, if one is.
+        plan_job: Option<PlanJob>,
+    /// A background plan has just been applied. The accumulation holds
+    /// samples drawn under the previous plan (or none), which carry a
+    /// different weight, so the app resets on this.
+    plan_arrived: bool,
+    /// The plan on screen is a plan on the way (tracker P8): a later one
+    /// may replace it, whatever it covers.
+    showing_on_the_way: bool,
+    /// The flame half of the key the plan on screen was made for. A plan
+    /// for another FLAME is dropped at once -- its words can name
+    /// transforms that no longer exist -- where one for another VIEW is
+    /// kept drawing until its successor arrives, since it still plots in
+    /// the right place.
+    applied_flame_key: Option<u64>,
+    /// The disc the plan on screen was made for. A view that moves but
+    /// stays inside it is still fully covered by the plan.
+    applied_view: Option<crate::scene::cylinder::View>,
+    /// The plan held in reserve. See [`STANDBY_MARGIN`].
+        standby: Option<Standby>,
+    /// The planner threads' GPU evaluator (`gpu-cylinder-planning.md`),
+    /// made on the first background plan and shared with every one after.
+    gpu_planner: Option<SharedPlanner>,
+    /// Whether background plans ask the GPU. On, unless
+    /// `FFLAME_PLAN_CPU` is set or [`Self::set_plan_on_gpu`] turned it off.
+        plan_on_gpu: bool,
+    /// Plan in a task polled each frame rather than on a worker thread:
+    /// always on the web; on the desktop only when asked, to test the
+    /// web's path. See [`Runner`].
+    plan_in_task: bool,
+    /// Whether this render is auto-exposing. Mirrors
+    /// `FractalConfig::auto_exposure`; decides both whether the shader
+    /// carries the counters and whether the fraction is read back.
+    auto_exposure: bool,
     filter_radius: f32, // Spatial filter (Apo's `filter`): Gaussian sigma in pixels on histogram, 0 = off
     filter_blur_edges: f32, // Bilateral edge-handling [0..1]: 0 = preserve edges (default), 1 = uniform Gaussian
     background_r: f32, // Background color R (for depth fog)
@@ -280,8 +584,6 @@ pub struct FlameRenderer {
     use_dynamic_blend: bool, // true = exponential convergence (old), false = fixed blend rate (new)
     overwrite_mode: bool, // When true, replace accumulation buffer instead of blending (for live preview)
     num_transforms: u32, // Number of normal transforms
-    path_filters: Vec<crate::gpu::buffers::GpuPathFilter>, // Active path filters
-    min_suffix_filter_length: u32, // Minimum length among depth=0 filters (optimization)
 }
 
 impl FlameRenderer {
@@ -350,6 +652,7 @@ impl FlameRenderer {
         Self {
             pipelines,
             buffers,
+            palette_generation: 0,
             compute_bind_group,
             accumulate_bind_group,
             histogram_blur_h_bind_group,
@@ -378,6 +681,7 @@ impl FlameRenderer {
             samples_in_buffer: 0,
             last_batch_samples: 0,
             bounds_stats: crate::renderer::density_stats::BoundsTracker::new(device),
+            coverage_stats: crate::renderer::density_stats::BoundsTracker::new(device),
             sticky: crate::renderer::sticky::StickyVariations::new(),
             measured_bounds: None,
             bounds_dirty: false,
@@ -388,8 +692,6 @@ impl FlameRenderer {
             shade_settle: 0,
             color_mode: ColorMode::Palette,
             path_map_style: PathMapStyle::default(),
-            path_capture_mode: PathCaptureMode::default(),
-            path_tracking_mode: PathTrackingMode::default(),
             density_scale: 1.0,
             white_level: crate::config::defaults::DEFAULT_WHITE_LEVEL,
             highlight_mode: 0,  // Clip — Apophysis-compatible default
@@ -411,6 +713,8 @@ impl FlameRenderer {
             fog_strength: crate::config::DEFAULT_FOG_STRENGTH,
             fog_start: crate::config::DEFAULT_FOG_START,
             solid_strength: crate::config::DEFAULT_SOLID_STRENGTH,
+            importance: Default::default(),
+            cylinders: None,
             surface_thickness: crate::config::DEFAULT_SURFACE_THICKNESS,
             needs_depth_prime: false,
             solid_shading: crate::config::SolidShadingSettings::default(),
@@ -418,6 +722,36 @@ impl FlameRenderer {
             dof_pass: crate::renderer::dof_pass::DofPass::new(device),
             dof_dirty: true,
             solid_density_fraction: 1.0,
+            frame_coverage_fraction: 1.0,
+            leak_probe: [0.0; 4],
+            leak_fraction: None,
+            targeting_state: TargetingState::default(),
+            cylinder_key_pending: None,
+            cylinder_relative: false,
+            cylinder_offsets: false,
+            cylinders_full: None,
+            applied_trim: (0.0, 0),
+            applied_removals: Vec::new(),
+            word_solo: None,
+            applied_solo: None,
+            applied_path_colouring: None,
+            path_colours: None,
+            path_origin: [0.0, 0.0, 1.0],
+            path_origin_key: 0,
+            word_split: (0, Vec::new()),
+            word_tree: std::sync::OnceLock::new(),
+            cylinder_key: None,
+            background_planning: false,
+            plan_job: None,
+            plan_arrived: false,
+            showing_on_the_way: false,
+            applied_flame_key: None,
+            applied_view: None,
+            standby: None,
+            gpu_planner: None,
+            plan_on_gpu: cfg!(target_arch = "wasm32") || std::env::var_os("FFLAME_PLAN_CPU").is_none(),
+            plan_in_task: cfg!(target_arch = "wasm32"),
+            auto_exposure: false,
             filter_radius: 0.0,
             filter_blur_edges: 0.0,
             background_r: 0.0,
@@ -429,8 +763,6 @@ impl FlameRenderer {
             use_dynamic_blend: true, // Default to clamped exponential (0.8 → 0.01)
             overwrite_mode: false, // Default to normal blending (progressive refinement)
             num_transforms: flame.transforms.len() as u32,
-            path_filters: Vec::new(), // No filters by default
-            min_suffix_filter_length: 0,
             census: false,
         }
     }
@@ -452,6 +784,26 @@ impl FlameRenderer {
         // Recreate buffers with new size (preserve palette_size)
         let palette_size = self.buffers.palette_size();
         self.buffers = FlameBuffers::with_palette_size(device, queue, width, height, flame, palette_size);
+
+        // **The plan on screen goes with them.** The fresh buffers hold
+        // the placeholder cylinder table, and the shader -- still compiled
+        // for targeting -- read its word count as zero. `ct_pick`'s search
+        // over zero words never ended: every resize of a targeted view
+        // hung the GPU, and with it the whole system, until the driver
+        // reset and the app died. The plan is still good -- it plots in
+        // world coordinates -- so it is packed again, before the bind
+        // groups below are made against the buffer.
+        if let Some(c) = &self.cylinders {
+            let mut packed = if c.composable {
+                crate::scene::cylinder::pack(c, flame, &crate::variations::global_registry())
+            } else {
+                crate::scene::cylinder::pack_words(c, flame)
+            };
+            if let Some(colours) = &self.path_colours {
+                crate::scene::word_tree::recolour(&mut packed, c.composable, colours);
+            }
+            self.buffers.update_cylinders(device, queue, Some(&packed));
+        }
 
         // Re-apply the solid depth region — fresh buffers default to none.
         // Bind groups referencing the histogram are recreated just below.
@@ -587,6 +939,14 @@ impl FlameRenderer {
             has_attachments: flame.has_attachments(),
             has_post_symmetry: flame.post_symmetry.ty != crate::scene::transforms::PostSymmetryType::None,
             has_analytic_blur: flame.analytic_blur_active(&crate::variations::global_registry(), render_mode),
+            // Mirrored from the config on load, like `solid_strength`:
+            // this path is the incremental one and has no config.
+            importance_sampling: self.importance.enabled,
+            cylinder_targeting: self.cylinders.is_some(),
+            cylinder_replay: self.cylinders.as_ref().is_some_and(|c| !c.composable),
+            cylinder_relative: self.cylinder_relative,
+            cylinder_offsets: self.cylinder_offsets,
+            frame_coverage: self.auto_exposure || self.leak_probe[2] > 0.0,
             flatten_z_per_iter: matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD)
                 && !preserve_z,
             solid_enabled: (self.solid_strength > 0.0 || self.solid_shading.active())
@@ -702,12 +1062,9 @@ impl FlameRenderer {
             dof_blur_strength: self.dof_blur_strength,
             fog_strength: self.atsplat_fog_strength(),
             fog_start: self.fog_start,
-            bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
-            path_capture_mode: self.path_capture_mode as u32,
-            path_tracking_mode: self.path_tracking_mode as u32,
-            num_path_filters: self.path_filters.len() as u32,
-            min_suffix_filter_length: self.min_suffix_filter_length,
+            path_origin: self.path_origin,
+            _pad_path_filters: [0; 2],
             background_r: self.background_r,
             background_g: self.background_g,
             background_b: self.background_b,
@@ -717,15 +1074,13 @@ impl FlameRenderer {
             shadow_center_z: sh_fit.0[2],
             shadow_radius: sh_fit.1,
             shadow_count: sh_dirs.0,
-            _pad_shadow: [0; 3],
+            // The correction window, from the mirrored settings.
+            importance_window: self.importance.window.max(1),
+            _pad_shadow: [0; 2],
             shadow_dirs: sh_dirs.1,
+            leak_probe: self.leak_probe,
         };
         self.buffers.update_params(queue, &params);
-
-        // Update path filter buffer if filters are active and buffers exist
-        if !self.path_filters.is_empty() {
-            self.buffers.write_path_filters(queue, &self.path_filters);
-        }
 
         // Track total iterations as the count of iterations that
         // actually contribute to the histogram — i.e. dispatched iters
@@ -794,6 +1149,13 @@ impl FlameRenderer {
             self.init_dirty = false;
         }
 
+        // **The bind group follows the shader's layout**, which holds only
+        // the bindings the shader uses (`gpu::pipelines::used_bindings`):
+        // a shader rebuilt with other bindings needs a new group, whichever
+        // of the paths that rebuild shaders did it.
+        if self.compute_bind_group.bindings != self.pipelines.compute_bindings() {
+            self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+        }
         let mut compute_pass = encoder.begin_compute_pass(&ComputePassDescriptor {
             label: Some("Flame Compute Pass"),
             timestamp_writes: None,
@@ -803,7 +1165,7 @@ impl FlameRenderer {
         let pipeline = self.pipelines.get_trajectory_pipeline(self.current_render_mode);
 
         compute_pass.set_pipeline(pipeline);
-        compute_pass.set_bind_group(0, &self.compute_bind_group, &[]);
+        compute_pass.set_bind_group(0, &self.compute_bind_group.group, &[]);
         compute_pass.dispatch_workgroups(num_workgroups, 1, 1);
 
         drop(compute_pass);
@@ -949,9 +1311,16 @@ impl FlameRenderer {
             //                                          extreme outliers
             //                                          preserved, close
             //                                          to uniform blur)
+            //
+            // A targeted batch is counted as the untargeted batch it stands
+            // for, as the tonemap's `sample_density` counts it: its samples
+            // land in the view, an untargeted one's `mass` of them, so a
+            // count of its own would tighten σ_d by 1/mass and keep edges
+            // the reference blurs (tracker C9). 1 untargeted.
             const HISTOGRAM_COLOR_SCALE: f32 = 100.0;
             let pixel_count = (self.width as f32) * (self.height as f32);
-            let mean_density_scaled = (samples_this_frame as f32 / pixel_count) * HISTOGRAM_COLOR_SCALE;
+            let standing_for = samples_this_frame as f64 * self.cylinder_iteration_scale();
+            let mean_density_scaled = (standing_for as f32 / pixel_count) * HISTOGRAM_COLOR_SCALE;
             let density_sigma = mean_density_scaled * 100.0_f32.powf(2.0 * self.filter_blur_edges - 1.0);
             self.buffers.update_histogram_blur_params(queue, self.width, self.height, self.filter_radius, density_sigma);
 
@@ -1030,7 +1399,31 @@ impl FlameRenderer {
         // dispatched samples; scale the normalization density by the
         // MEASURED accepted fraction (1.0 when solid is off) so solids
         // tone-map at the brightness their surviving samples deserve.
-        let sample_density = ((self.samples_in_buffer as f32) * self.solid_density_fraction
+        // Cylinder targeting (docs/projects/flame-deep-zoom.md stage
+        // 2) deposits weight ONE per forced sample rather than the
+        // estimator's `P(A_V)`, because `P(A_V)` is 2.6e-9 at a zoom
+        // of 2^20 and the u32 histogram would round every deposit to
+        // zero but for a one-in-a-hundred-million tail -- handing the
+        // whole advantage back to quantisation. The weight is applied
+        // HERE instead, as an iteration count: a forced render is
+        // doing the work of `N / P(A_V)` unbiased iterations, and
+        // saying so is what makes its brightness match theirs.
+        // Auto exposure (docs/projects/flame-deep-zoom.md): the
+        // shipped normalisation assumes the frame holds all the work.
+        // A deep view does not -- most of the attractor is off-screen
+        // -- so the measured in-frame share scales the count down to
+        // the work the viewport actually received. 1.0 when off.
+        //
+        // Note this is the exact INVERSE of the cylinder factor beside
+        // it, and for a targeted render the two cancel: every forced
+        // sample lands in frame, so its coverage is 1 and its exposure
+        // is the plain `samples / pixels`. That cancellation is not a
+        // coincidence -- it is the two halves (the estimator's weight,
+        // and the exposure policy) agreeing.
+        let sample_density = ((self.samples_in_buffer as f32)
+            * self.solid_density_fraction
+            * self.frame_coverage_fraction
+            * self.cylinder_iteration_scale() as f32
             / total_pixels.max(1.0))
             .max(1e-6);
         let offset = std::mem::offset_of!(TonemapParams, sample_density) as u64;
@@ -1038,6 +1431,20 @@ impl FlameRenderer {
             &self.buffers.tonemap_params_buffer,
             offset,
             bytemuck::bytes_of(&sample_density),
+        );
+        // Levels measures against the frame's REAL mean, which is this
+        // same number without the targeting inflation. Written HERE,
+        // beside its twin and from the same expression, because the
+        // whole-struct uploads that also set these fields compute a
+        // simpler `sample_density` of their own -- leaving this one
+        // stale was worth 15 grey levels across the visual suite.
+        let levels_density =
+            (sample_density / self.cylinder_iteration_scale() as f32).max(1e-6);
+        let offset = std::mem::offset_of!(TonemapParams, levels_density) as u64;
+        queue.write_buffer(
+            &self.buffers.tonemap_params_buffer,
+            offset,
+            bytemuck::bytes_of(&levels_density),
         );
     }
 
@@ -1145,6 +1552,23 @@ impl FlameRenderer {
     /// mode inherits the whole palette pipeline.
     pub fn palette_view(&self) -> &TextureView {
         &self.buffers.palette_view
+    }
+
+    /// How many times the palette texture has been rewritten.
+    ///
+    /// The escape engine renders large views in ROW BANDS across
+    /// frames, and every band samples this texture at dispatch time —
+    /// so a palette edit part-way through a pass leaves the rows
+    /// already drawn in the old colours and the rest in the new ones,
+    /// as horizontal stripes. The band cursor restarts when its key
+    /// changes, and this is what puts the palette in that key.
+    ///
+    /// A counter rather than a hash of the palette because
+    /// [`Self::update_palette`] is the single place the texture is
+    /// written: anything that can change it goes through here, and
+    /// nothing else has to be remembered.
+    pub fn palette_generation(&self) -> u64 {
+        self.palette_generation
     }
 
     pub fn get_accumulation_view(&self) -> &TextureView {
@@ -1603,6 +2027,33 @@ impl FlameRenderer {
                 occ_words = Some((words[6], words[7]));
             }
         }
+        // Frame coverage (auto exposure). Independent of everything
+        // above: its counters live in their own buffer, not the
+        // histogram tail, so no render mode or region has to be on.
+        if self.auto_exposure || self.leak_probe[2] > 0.0 {
+            if let Some(words) =
+                self.coverage_stats.tick(device, encoder, &self.buffers.coverage_buffer, 0)
+            {
+                if self.auto_exposure {
+                    if let Some(measured) = Self::coverage_from(words[0], words[1]) {
+                        // EMA, for the same reason the solid renorm has
+                        // one: a brightness scalar that jumps with each
+                        // measurement pumps the image while it converges.
+                        self.frame_coverage_fraction =
+                            self.frame_coverage_fraction * 0.7 + measured * 0.3;
+                    }
+                }
+                // No EMA: this is a measurement reported as-is, not a
+                // scalar multiplying the picture.
+                if self.leak_probe[2] > 0.0 && words[1] > 0 {
+                    self.leak_fraction = Some(words[2] as f32 / words[1] as f32);
+                }
+            }
+        }
+        if !self.auto_exposure {
+            self.frame_coverage_fraction = 1.0;
+        }
+
         let active = self.solid_strength > 0.0
             && matches!(self.current_render_mode, crate::scene::transforms::RenderMode::ThreeD)
             && self.buffers.solid_depth_region;
@@ -1627,9 +2078,221 @@ impl FlameRenderer {
         }
     }
 
+    /// Whether the forced plot can work in VIEW-RELATIVE coordinates.
+    ///
+    /// Relative packing is what keeps a deep zoom out of f32's teeth,
+    /// but it changes what `current` MEANS between the forced prefix
+    /// and the deposit: an offset from the view centre rather than a
+    /// world position. Everything that reads it in that window has to
+    /// be fine with that, and three things are not —
+    ///
+    /// - a **final** transform applies an affine defined in world
+    ///   coordinates, so it would be applied to the wrong point;
+    /// - **post-symmetry** rotates about the world origin, which is
+    ///   not the view centre;
+    /// - the **analytic blur** residual re-enters `world_to_pixel`
+    ///   with its own world-space offset.
+    ///
+    /// — so a flame with any of them keeps absolute packing and the
+    /// precision limit that comes with it. It is a narrowing rather
+    /// than a refusal: the picture is unchanged either way, and only
+    /// the depth at which it stops resolving differs.
+    ///
+    /// Composed arm only. The replay arm runs the transforms
+    /// themselves, in world coordinates, so there is no single
+    /// translation to shift.
+    /// Which kernel the plan on screen needs: composed or replayed, and
+    /// with offsets or without. A change of either is a new shader, so
+    /// every before-and-after of a plan compares this.
+    fn cylinder_arm(&self) -> Option<(bool, bool)> {
+        self.cylinders.as_ref().map(|c| (c.composable, !c.refs.is_empty()))
+    }
+
+    /// Write the replay table's shift for `config`'s view: the plan's
+    /// centre less the pan, formed in f64. A plan still drawing after a
+    /// pan then draws where it did (`scene::cylinder::pack_words`).
+    fn write_cylinder_shift(&self, queue: &Queue, config: &FractalConfig) {
+        if let Some(c) = self.cylinders.as_ref().filter(|c| !c.composable && !c.refs.is_empty()) {
+            let shift = [(c.view_centre[0] - config.pan_x) as f32, (c.view_centre[1] - config.pan_y) as f32];
+            self.buffers.write_cylinder_shift(queue, shift);
+        }
+    }
+
+    fn relative_is_safe(&self, config: &FractalConfig) -> bool {
+        self.cylinders.as_ref().is_some_and(|cyl| Self::relative_is_safe_for(cyl, config))
+    }
+
+    fn relative_is_safe_for(cyl: &crate::scene::cylinder::Cylinders, config: &FractalConfig) -> bool {
+        let registry = crate::variations::global_registry();
+        // The composed arm subtracts the centre as it composes; a replay
+        // does so where its plan carries references, and subtracts the
+        // pan in f32 for every other word -- so it plots view-relative
+        // throughout (`ct_offsets`).
+        // Final transforms are safe where the plan carries them into its
+        // offsets (`Cylinders::final_rows`): the replay applies them there,
+        // and to the absolute point before taking the pan off elsewhere.
+        (cyl.composable || !cyl.refs.is_empty())
+            && (!config.flame.has_attachments() || (!cyl.composable && !cyl.final_rows.is_empty()))
+            && config.flame.post_symmetry.ty
+                == crate::scene::transforms::PostSymmetryType::None
+            && !config.flame.analytic_blur_active(&registry, config.render_mode)
+    }
+
+    /// How long the view must hold still before an expensive
+    /// enumeration is attempted.
+    ///
+    /// Zero for the ordinary affine path, which costs well under a
+    /// millisecond and can simply run. The Möbius family is three
+    /// orders dearer and has to wait.
+    fn targeting_settle_delay(config: &FractalConfig) -> std::time::Duration {
+        if !config.cylinder_targeting {
+            return std::time::Duration::ZERO;
+        }
+        let reg = crate::variations::global_registry();
+        // An armed flame is planned by the inverse walk, which costs
+        // about a hundred milliseconds a pan and would stutter a drag
+        // planned on every event; like family M, it waits for the view
+        // to settle.
+        let armed = config.flame.transforms.iter().any(|t| {
+            t.weight > 0.0
+                && t.variations.iter().any(|(n, w)| {
+                    *w != 0.0 && crate::variations::bound::arms_for(n).is_some()
+                })
+        });
+        // A flame with final or linked transforms is planned by the same
+        // walk (`Cylinders::walked`), affine or not.
+        if armed
+            || config.flame.has_attachments()
+            || crate::scene::mobius::MobiusFlame::is_family_m(&config.flame, &reg)
+        {
+            std::time::Duration::from_millis(250)
+        } else {
+            // The affine and bounded paths cost well under a
+            // millisecond; making them wait would only add latency to
+            // something that was never the problem.
+            std::time::Duration::ZERO
+        }
+    }
+
+    /// What cylinder targeting is doing for the current view.
+    /// The Words panel's tree of the plan on screen (docs/projects/
+    /// word-editing.md §6), or `None` when no plan is drawn. Built on the
+    /// first call after a plan is applied, then shared.
+    pub fn word_tree(&self) -> Option<std::sync::Arc<crate::scene::word_tree::Tree>> {
+        let full = self.cylinders_full.as_ref()?;
+        let tree = self.word_tree.get_or_init(|| {
+            let removals = crate::scene::word_tree::parse_removals(&self.applied_removals);
+            std::sync::Arc::new(crate::scene::word_tree::Tree::of(
+                full,
+                &removals,
+                self.applied_trim.0 as f64,
+                self.applied_trim.1 as usize,
+            ))
+        });
+        Some(tree.clone())
+    }
+
+    /// Draw only the branch `pattern` names -- or everything, for `None`
+    /// -- from the next `sync_cylinders` on, restarting the picture
+    /// when it changes. For the Words panel's solo button, pressed and
+    /// released; not part of the config.
+    pub fn set_word_solo(&mut self, pattern: Option<Vec<u32>>) {
+        self.word_solo = pattern;
+    }
+
+    pub fn targeting_state(&self) -> &TargetingState {
+        &self.targeting_state
+    }
+
+    /// The measured share of plot attempts that landed in frame,
+    /// which is the factor auto exposure scaled the tone map by. 1.0
+    /// when the feature is off, and 1.0 before anything has been
+    /// measured.
+    pub fn frame_coverage_fraction(&self) -> f32 {
+        self.frame_coverage_fraction
+    }
+
+    /// **Ask an ordinary render to measure what falls outside a disc.**
+    ///
+    /// The enumeration cannot compute this for itself:
+    /// `Cylinders::lost` counts words whose bound FAILED, and says
+    /// nothing about measure that was never inside the root region to
+    /// begin with. Only the real chaos game knows that, so this asks
+    /// it — the counting rides the frame-coverage path, which the
+    /// probe switches on for as long as it is set.
+    ///
+    /// Takes effect on the next params upload; read the answer with
+    /// [`Self::leak_fraction`] after a render. `None` clears it.
+    pub fn set_leak_probe(&mut self, region: Option<([f64; 2], f64)>) {
+        self.leak_probe = match region {
+            Some((c, r)) if r > 0.0 => [c[0] as f32, c[1] as f32, r as f32, 0.0],
+            _ => [0.0; 4],
+        };
+        self.leak_fraction = None;
+    }
+
+    /// Share of plot attempts outside [`Self::set_leak_probe`]'s disc,
+    /// or `None` if no probe is set or none has been read back yet.
+    pub fn leak_fraction(&self) -> Option<f32> {
+        self.leak_fraction
+    }
+
+    /// Turn the two coverage counters into a usable fraction, or
+    /// `None` when they say nothing trustworthy.
+    ///
+    /// Refused in three cases, each of which would otherwise move the
+    /// exposure on no evidence:
+    ///
+    /// - **no attempts yet** — the first frame after a reset, where
+    ///   dividing by zero is the least of it;
+    /// - **too few landings** — under 32, the ratio is dominated by
+    ///   its own shot noise, and a frame holding a handful of samples
+    ///   has no exposure that makes it a picture. Refusing leaves the
+    ///   last good value (or the 1.0 identity) rather than setting the
+    ///   brightness from a coin flip;
+    /// - **saturation** — the counters are u32 and a long enough batch
+    ///   would wrap. Freezing at the last good value beats acting on a
+    ///   wrapped ratio, which is the same call the solid renorm makes.
+    ///
+    /// The floor is nominal rather than a policy: a minimum-hits rule
+    /// is the honest bound on how far this will brighten, so the clamp
+    /// only has to stop a zero reaching the divide. A magnitude floor
+    /// was tried first at 1e-6 and was quietly binding at a zoom of
+    /// 2^14, which is inside the range the feature is FOR.
+    fn coverage_from(hits: u32, attempts: u32) -> Option<f32> {
+        if attempts == 0 || hits < 32 || attempts >= 3_000_000_000 {
+            return None;
+        }
+        Some((hits as f32 / attempts as f32).clamp(1e-9, 1.0))
+    }
+
     /// Exact (blocking) density-fraction measurement for one-shot renders
     /// (CLI export) — sets the fraction the final tonemap will use.
     pub fn apply_exact_density_fraction(&mut self, device: &Device, queue: &Queue) {
+        // Frame coverage first, and unconditionally: it is not tied to
+        // solid rendering, and a one-shot render has exactly one
+        // chance to measure it before the final tonemap. The leak
+        // probe reads the same words and has the same one chance.
+        if self.auto_exposure || self.leak_probe[2] > 0.0 {
+            if let Some(words) =
+                self.coverage_stats.read_blocking(device, queue, &self.buffers.coverage_buffer, 0)
+            {
+                if self.leak_probe[2] > 0.0 && words[1] > 0 {
+                    self.leak_fraction = Some(words[2] as f32 / words[1] as f32);
+                }
+                if let Some(measured) = Self::coverage_from(words[0], words[1]) {
+                    self.frame_coverage_fraction = measured;
+                    log::info!(
+                        "auto exposure: frame coverage = {:.3e} ({} of {} plot attempts in frame)",
+                        measured,
+                        words[0],
+                        words[1]
+                    );
+                }
+            }
+        } else {
+            self.frame_coverage_fraction = 1.0;
+        }
         let active = self.solid_strength > 0.0
             && matches!(self.current_render_mode, crate::scene::transforms::RenderMode::ThreeD)
             && self.buffers.solid_depth_region;
@@ -1674,15 +2337,56 @@ impl FlameRenderer {
             config
         };
         // 0. Check if shaders need to be recompiled (variations or constants changed)
-        // Determine if path features are needed (PathMap mode or path filters active)
-        let path_features_enabled = config.color_mode == ColorMode::PathMap
-            || !self.path_filters.is_empty();
-        let shaders_changed = self.pipelines.ensure_shaders_current_with_config(device, config, path_features_enabled, self.census);
-        if shaders_changed {
+        // Determine if path features are needed (PathMap mode)
+        let path_features_enabled = config.color_mode == ColorMode::PathMap;
+        // The enumeration decides whether the shader is built with
+        // the forced prefix in it, so it has to run FIRST. It was
+        // below this for one commit and the render came out as the
+        // plain one -- the buffer uploaded, the shader never asking
+        // for it.
+        let key = self.enumeration_key(config);
+        let cyl_changed = if self.cylinder_key == Some(key) {
+            // Already planned for exactly this flame and view: the reload
+            // `sync_cylinders` asks for after a plan lands comes here, and
+            // planning again was the second of two identical plans on the
+            // UI thread.
+            false
+        } else if self.plans_in_background(config) {
+            // Left to the worker, which `sync_cylinders` starts on the
+            // next frame. A plan for another flame cannot stay on screen
+            // meanwhile.
+            self.drop_stale_flame_plan(device, queue, config)
+        } else {
+            self.cancel_plan_job();
+            let changed = self.update_cylinders(device, queue, config);
+            self.cylinder_key = Some(key);
+            self.applied_flame_key = Some(Self::flame_key(config));
+            changed
+        };
+        self.cylinder_relative = self.relative_is_safe(config);
+        self.cylinder_offsets = self.cylinder_relative && self.cylinders.as_ref().is_some_and(|c| !c.composable && !c.refs.is_empty());
+        let shaders_changed = self.pipelines.ensure_shaders_current_with_config(
+            device,
+            config,
+            path_features_enabled,
+            self.census,
+            self.cylinders.is_some(),
+            self.cylinders.as_ref().is_some_and(|c| !c.composable),
+            self.cylinder_relative,
+            self.cylinder_offsets,
+            self.leak_probe[2] > 0.0,
+        );
+        // PathMap's per-pixel path ids (the right-click): a loaded
+        // PathMap config needs them as surely as a switch to PathMap.
+        let path_buffers_changed = path_features_enabled
+            && !self.current_render_mode.is_non_flame()
+            && self.buffers.create_path_buffers(device);
+        if shaders_changed || path_buffers_changed {
             log::info!("Shaders recompiled during preset load - recreating bind group");
             // Recreate compute bind group with new pipeline
             self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
             self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
+            self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
         }
 
         // 1. Update transforms and variation parameters in GPU buffer
@@ -1704,20 +2408,35 @@ impl FlameRenderer {
 
         // 1b. Update xaos buffer (create/drop as needed)
         let xaos_buffer_changed = self.update_xaos_buffer(device, queue, &config.flame);
+        // 1b2. Biased selection (docs/projects/flame-deep-zoom.md
+        // stage 1). Mirrored onto the kernel so the incremental
+        // shader-constants path sees the flag, and uploaded here
+        // because the table is a function of the flame's weights and
+        // xaos as well as of the settings.
+        // Auto exposure: remembered so `update_density_stats` knows
+        // whether to read the counters back, and so the shader builder
+        // is asked for a shader that keeps them.
+        if self.auto_exposure != config.auto_exposure {
+            self.auto_exposure = config.auto_exposure;
+            // Leaving the feature must put the exposure back rather
+            // than freeze it at the last measured value.
+            self.frame_coverage_fraction = 1.0;
+        }
+        self.importance = config.importance.clone();
+        let bias_buffer_changed =
+            self.buffers.update_bias(device, queue, &config.flame, &config.importance);
         // 1c. Refresh analytic-blur slot list (buffers (re)allocate in
         // maybe_rebuild_blur_kernels on the next compute_pass).
         self.update_blur_buffers(&config.flame);
-        if xaos_buffer_changed {
-            // Recreate bind group with new xaos buffer
+        if xaos_buffer_changed || bias_buffer_changed || cyl_changed {
+            // Recreate bind group with the new xaos or bias buffer
             self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
             self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
         }
 
-        // 2. Update color mode, path map style, and capture mode
+        // 2. Update color mode and path map style
         self.color_mode = config.color_mode;
         self.path_map_style = config.path_map_style;
-        self.path_capture_mode = config.path_capture_mode;
-        self.path_tracking_mode = config.path_tracking_mode;
 
         // 3. Update density and background
         self.density_scale = config.density_scale;
@@ -1789,6 +2508,9 @@ impl FlameRenderer {
             config.palette_log_strength,
             config.palette_reverse,
         );
+        // Every write of the texture is a new palette to the escape
+        // renderer's band key, this one included.
+        self.palette_generation = self.palette_generation.wrapping_add(1);
 
         // Note: scale_buffer removed - scale is now in params.histogram_color_scale
 
@@ -1797,7 +2519,7 @@ impl FlameRenderer {
         // Update transform tracking
         self.num_transforms = config.flame.transforms.len() as u32;
 
-        self.frozen_shadow_fit = Some(self.shadow_placement(config.zoom, config.pan_x, config.pan_y, config.camera_rotation_x, config.camera_rotation_y, config.camera_bank, [config.camera_x, config.camera_y, config.camera_z]));
+        self.frozen_shadow_fit = Some(self.shadow_placement(config.zoom, config.pan_x as f32, config.pan_y as f32, config.camera_rotation_x, config.camera_rotation_y, config.camera_bank, [config.camera_x, config.camera_y, config.camera_z]));
         self.frozen_fit_measured = self.measured_bounds.is_some();
         self.fit_refit_done = false;
         let sh_fit = self.frozen_shadow_fit.unwrap();
@@ -1822,8 +2544,8 @@ impl FlameRenderer {
             },
             splat_size: 1.0,
             zoom: config.zoom,
-            pan_x: config.pan_x,
-            pan_y: config.pan_y,
+            pan_x: config.pan_x as f32,
+            pan_y: config.pan_y as f32,
             rotation: config.rotation,
             speed_factor: config.speed_factor,
             perspective_strength: self.perspective_strength,
@@ -1852,12 +2574,9 @@ impl FlameRenderer {
                 config.fog_strength
             },
             fog_start: config.fog_start,
-            bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
-            path_capture_mode: self.path_capture_mode as u32,
-            path_tracking_mode: self.path_tracking_mode as u32,
-            num_path_filters: self.path_filters.len() as u32,
-            min_suffix_filter_length: self.min_suffix_filter_length,
+            path_origin: self.path_origin,
+            _pad_path_filters: [0; 2],
             background_r: config.background_color[0],
             background_g: config.background_color[1],
             background_b: config.background_color[2],
@@ -1867,8 +2586,11 @@ impl FlameRenderer {
             shadow_center_z: sh_fit.0[2],
             shadow_radius: sh_fit.1,
             shadow_count: sh_dirs.0,
-            _pad_shadow: [0; 3],
+            // The correction window, from the mirrored settings.
+            importance_window: self.importance.window.max(1),
+            _pad_shadow: [0; 2],
             shadow_dirs: sh_dirs.1,
+            leak_probe: self.leak_probe,
         };
         self.buffers.update_params(queue, &params);
 
@@ -1945,8 +2667,7 @@ impl FlameRenderer {
 
         // Check if shaders need to be recompiled (variations or constants changed)
         let constants = self.build_shader_constants(flame, render_mode, preserve_z);
-        let path_features_enabled = self.color_mode == ColorMode::PathMap
-            || !self.path_filters.is_empty();
+        let path_features_enabled = self.color_mode == ColorMode::PathMap;
         let shaders_changed = self.pipelines.ensure_shaders_current_with_constants(
             device,
             flame,
@@ -1975,11 +2696,16 @@ impl FlameRenderer {
 
         // Update xaos buffer (create/drop as needed)
         let xaos_buffer_changed = self.update_xaos_buffer(device, queue, flame);
+        // The bias table depends on the flame's weights and xaos too,
+        // so a flame-only update has to rebuild it — against the
+        // settings last mirrored from a config.
+        let importance = self.importance.clone();
+        let bias_buffer_changed = self.buffers.update_bias(device, queue, flame, &importance);
         // Refresh analytic-blur slot list (buffers (re)allocate in
         // maybe_rebuild_blur_kernels on the next compute_pass).
         self.update_blur_buffers(flame);
-        if xaos_buffer_changed {
-            // Recreate bind group with new xaos buffer
+        if xaos_buffer_changed || bias_buffer_changed {
+            // Recreate bind group with the new xaos or bias buffer
             self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
             self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
         }
@@ -2055,12 +2781,9 @@ impl FlameRenderer {
             dof_blur_strength: self.dof_blur_strength,
             fog_strength: self.atsplat_fog_strength(),
             fog_start: self.fog_start,
-            bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
-            path_capture_mode: self.path_capture_mode as u32,
-            path_tracking_mode: self.path_tracking_mode as u32,
-            num_path_filters: self.path_filters.len() as u32,
-            min_suffix_filter_length: self.min_suffix_filter_length,
+            path_origin: self.path_origin,
+            _pad_path_filters: [0; 2],
             background_r: self.background_r,
             background_g: self.background_g,
             background_b: self.background_b,
@@ -2070,8 +2793,11 @@ impl FlameRenderer {
             shadow_center_z: sh_fit.0[2],
             shadow_radius: sh_fit.1,
             shadow_count: sh_dirs.0,
-            _pad_shadow: [0; 3],
+            // The correction window, from the mirrored settings.
+            importance_window: self.importance.window.max(1),
+            _pad_shadow: [0; 2],
             shadow_dirs: sh_dirs.1,
+            leak_probe: self.leak_probe,
         };
 
         self.buffers.update_params(queue, &params);
@@ -2118,7 +2844,13 @@ impl FlameRenderer {
             levels_gamma: 1.0,
             highlight_mode: self.highlight_mode,
             levels_enabled: 0,
-            _pad_levels: [0; 2],
+            // Equal to `sample_density` on every path that builds these
+            // directly: none of them targets, so there is no
+            // inflation to undo. The two differ only in the
+            // interactive/headless path that `refresh_sample_density`
+            // writes per frame.
+            levels_density: sample_density,
+            _pad_levels: 0,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -2358,12 +3090,9 @@ impl FlameRenderer {
             dof_blur_strength: self.dof_blur_strength,
             fog_strength: self.atsplat_fog_strength(),
             fog_start: self.fog_start,
-            bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
-            path_capture_mode: self.path_capture_mode as u32,
-            path_tracking_mode: self.path_tracking_mode as u32,
-            num_path_filters: self.path_filters.len() as u32,
-            min_suffix_filter_length: self.min_suffix_filter_length,
+            path_origin: self.path_origin,
+            _pad_path_filters: [0; 2],
             background_r: self.background_r,
             background_g: self.background_g,
             background_b: self.background_b,
@@ -2373,8 +3102,11 @@ impl FlameRenderer {
             shadow_center_z: sh_fit.0[2],
             shadow_radius: sh_fit.1,
             shadow_count: sh_dirs.0,
-            _pad_shadow: [0; 3],
+            // The correction window, from the mirrored settings.
+            importance_window: self.importance.window.max(1),
+            _pad_shadow: [0; 2],
             shadow_dirs: sh_dirs.1,
+            leak_probe: self.leak_probe,
         };
         self.buffers.update_params(queue, &params);
     }
@@ -2418,7 +3150,13 @@ impl FlameRenderer {
             levels_gamma: 1.0,
             highlight_mode: self.highlight_mode,
             levels_enabled: 0,
-            _pad_levels: [0; 2],
+            // Equal to `sample_density` on every path that builds these
+            // directly: none of them targets, so there is no
+            // inflation to undo. The two differ only in the
+            // interactive/headless path that `refresh_sample_density`
+            // writes per frame.
+            levels_density: sample_density,
+            _pad_levels: 0,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -2512,7 +3250,13 @@ impl FlameRenderer {
             levels_gamma: config.levels_gamma,
             highlight_mode: self.highlight_mode,
             levels_enabled: if config.effective_levels_enabled() { 1 } else { 0 },
-            _pad_levels: [0; 2],
+            // Equal to `sample_density` on every path that builds these
+            // directly: none of them targets, so there is no
+            // inflation to undo. The two differ only in the
+            // interactive/headless path that `refresh_sample_density`
+            // writes per frame.
+            levels_density: sample_density,
+            _pad_levels: 0,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -2618,7 +3362,13 @@ impl FlameRenderer {
             levels_gamma,
             highlight_mode: self.highlight_mode,
             levels_enabled: if levels_enabled { 1 } else { 0 },
-            _pad_levels: [0; 2],
+            // Equal to `sample_density` on every path that builds these
+            // directly: none of them targets, so there is no
+            // inflation to undo. The two differ only in the
+            // interactive/headless path that `refresh_sample_density`
+            // writes per frame.
+            levels_density: sample_density,
+            _pad_levels: 0,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -2654,6 +3404,7 @@ impl FlameRenderer {
         // Recreate compute bind group to ensure palette texture is bound
         self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
         self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
+        self.palette_generation = self.palette_generation.wrapping_add(1);
     }
 
     /// Change palette texture size (requires recreating buffers)
@@ -2666,6 +3417,8 @@ impl FlameRenderer {
         // Only the compute bind group references the palette texture view
         self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
         self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
+        // A new texture: a new palette to the escape renderer's band key.
+        self.palette_generation = self.palette_generation.wrapping_add(1);
 
         true
     }
@@ -2725,12 +3478,9 @@ impl FlameRenderer {
             dof_blur_strength: self.dof_blur_strength,
             fog_strength: self.atsplat_fog_strength(),
             fog_start: self.fog_start,
-            bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
-            path_capture_mode: self.path_capture_mode as u32,
-            path_tracking_mode: self.path_tracking_mode as u32,
-            num_path_filters: self.path_filters.len() as u32,
-            min_suffix_filter_length: self.min_suffix_filter_length,
+            path_origin: self.path_origin,
+            _pad_path_filters: [0; 2],
             background_r: self.background_r,
             background_g: self.background_g,
             background_b: self.background_b,
@@ -2740,8 +3490,11 @@ impl FlameRenderer {
             shadow_center_z: sh_fit.0[2],
             shadow_radius: sh_fit.1,
             shadow_count: sh_dirs.0,
-            _pad_shadow: [0; 3],
+            // The correction window, from the mirrored settings.
+            importance_window: self.importance.window.max(1),
+            _pad_shadow: [0; 2],
             shadow_dirs: sh_dirs.1,
+            leak_probe: self.leak_probe,
         };
         self.buffers.update_params(queue, &params);
     }
@@ -2762,66 +3515,7 @@ impl FlameRenderer {
         self.path_map_style
     }
 
-    /// Set path capture mode (FirstHit, FirstAfterBurnIn, or LastHit)
-    pub fn set_path_capture_mode(&mut self, path_capture_mode: PathCaptureMode) {
-        self.path_capture_mode = path_capture_mode;
-        // Note: GPU params will be updated on next render
-    }
-
-    /// Get current path capture mode
-    pub fn path_capture_mode(&self) -> PathCaptureMode {
-        self.path_capture_mode
-    }
-
-    /// Set path tracking mode (First = first 32 iterations, Recent = rolling window of 32 most recent)
-    pub fn set_path_tracking_mode(&mut self, path_tracking_mode: PathTrackingMode) {
-        self.path_tracking_mode = path_tracking_mode;
-        // Note: GPU params will be updated on next render
-    }
-
-    /// Get current path tracking mode
-    pub fn path_tracking_mode(&self) -> PathTrackingMode {
-        self.path_tracking_mode
-    }
-
-    /// Set path filters for blocking specific transform sequences
-    ///
-    /// # Arguments
-    /// * `filters` - Vector of GpuPathFilter structs defining patterns to block
-    ///
-    /// # Example
-    /// ```ignore
-    /// // Block all paths ending with transform [0,0,0,0,1] (suffix filter)
-    /// renderer.set_path_filters(vec![GpuPathFilter::suffix(&[0, 0, 0, 0, 1])]);
-    ///
-    /// // Block paths matching [0,1] at iteration depth 2 (exact depth filter)
-    /// renderer.set_path_filters(vec![GpuPathFilter::at_depth(&[0, 1], 2)]);
-    /// ```
-    pub fn set_path_filters(&mut self, filters: Vec<crate::gpu::buffers::GpuPathFilter>) {
-        // Calculate min_suffix_filter_length for optimization
-        self.min_suffix_filter_length = filters
-            .iter()
-            .filter(|f| f.depth == 0) // Only suffix filters
-            .map(|f| f.length)
-            .min()
-            .unwrap_or(0);
-
-        self.path_filters = filters;
-        // Note: GPU buffer will be updated on next compute pass
-    }
-
-    /// Clear all path filters
-    pub fn clear_path_filters(&mut self) {
-        self.path_filters.clear();
-        self.min_suffix_filter_length = 0;
-    }
-
-    /// Get current path filters
-    pub fn path_filters(&self) -> &[crate::gpu::buffers::GpuPathFilter] {
-        &self.path_filters
-    }
-
-    /// Check if path features (PathMap color mode or path filters) require buffers
+    /// Check if path features (the PathMap color mode) require buffers
     /// Returns true if path buffers should be enabled
     ///
     /// Never in a non-flame mode. Nothing writes the path buffer there
@@ -2830,9 +3524,7 @@ impl FlameRenderer {
     /// while the buffer costs 58 MB at 1080p and the shader is
     /// recompiled with path features for nothing.
     pub fn needs_path_features(&self) -> bool {
-        !self.current_render_mode.is_non_flame()
-            && (self.color_mode == crate::scene::palette::ColorMode::PathMap
-                || !self.path_filters.is_empty())
+        !self.current_render_mode.is_non_flame() && self.color_mode == crate::scene::palette::ColorMode::PathMap
     }
 
     /// Check if path buffers are currently allocated
@@ -2841,9 +3533,9 @@ impl FlameRenderer {
     }
 
     /// Enable or disable path features based on current state
-    /// Call this when color_mode or path_filters change
+    /// Call this when color_mode changes
     /// Returns true if bind groups or shaders were rebuilt
-    pub fn update_path_features(&mut self, device: &Device, queue: &Queue, flame: &crate::scene::transforms::Flame) -> bool {
+    pub fn update_path_features(&mut self, device: &Device, _queue: &Queue, flame: &crate::scene::transforms::Flame) -> bool {
         // Sticky superset: this refresh may rebuild the shader, and it
         // must rebuild against the SAME map the buffers are packed with —
         // the last adopt's. `augmented` (not `adopt`) re-applies exactly
@@ -2858,7 +3550,7 @@ impl FlameRenderer {
         // Update buffers if needed
         if needs_path && !has_path {
             // Need to create path buffers
-            if self.buffers.create_path_buffers(device, queue) {
+            if self.buffers.create_path_buffers(device) {
                 // Rebuild bind groups with new buffers
                 self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
                 self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
@@ -2983,6 +3675,985 @@ impl FlameRenderer {
         self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
         self.blur_convolve_bind_group = self.pipelines.create_blur_convolve_bind_group(device, &self.buffers);
         self.blur_upscale_bind_group = self.pipelines.create_blur_upscale_bind_group(device, &self.buffers);
+    }
+
+    /// Everything the cylinder enumeration depends on, as one number.
+    ///
+    /// The view AND the flame, because either changing invalidates
+    /// the word list: a new zoom selects different words, and an
+    /// edited transform changes where every word lands. Hashing f32
+    /// BITS rather than values so the comparison is exact — a key
+    /// that missed a change would leave the kernel forcing a prefix
+    /// computed for a flame that no longer exists.
+    fn enumeration_key(&self, config: &FractalConfig) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        config.cylinder_targeting.hash(&mut h);
+        matches!(config.render_mode, crate::scene::transforms::RenderMode::TwoD).hash(&mut h);
+        config.zoom.to_bits().hash(&mut h);
+        config.pan_x.to_bits().hash(&mut h);
+        config.pan_y.to_bits().hash(&mut h);
+        self.width.hash(&mut h);
+        self.height.hash(&mut h);
+        Self::flame_key(config).hash(&mut h);
+        config.word_removals.hash(&mut h);
+        // Whether a plan is kept where it does not pay: a plan declined
+        // before is made again when it is.
+        Self::keeps_plan(config).hash(&mut h);
+        self.split_for(config).hash(&mut h);
+        Self::path_min_len(config).hash(&mut h);
+        h.finish()
+    }
+
+    /// The part of the enumeration key that is the FLAME.
+    ///
+    /// **Zero-weight variations are left out.** `load_config` plans
+    /// against the sticky-adopted flame, which carries retained
+    /// variations at weight zero, and `sync_cylinders` against the raw
+    /// one. Hashing the zero weights made the two keys differ, so every
+    /// reload was followed by a replan on the next frame -- and the
+    /// inverse walk's per-flame analysis flipped between the two
+    /// flames, rebuilding its index each time. Nothing the planner
+    /// reads depends on a variation at weight zero.
+    fn flame_key(config: &FractalConfig) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        config.flame.has_xaos().hash(&mut h);
+        // The finals and linked transforms too: the walk pulls the view
+        // back through the finals, and refuses a linked transform.
+        let pools = [&config.flame.transforms, &config.flame.final_transforms, &config.flame.linked_transforms];
+        for (pool, t) in pools.iter().enumerate().flat_map(|(k, ts)| ts.iter().map(move |t| (k, t))) {
+            pool.hash(&mut h);
+            t.final_attachments.hash(&mut h);
+            t.linked_attachments.hash(&mut h);
+            for v in [
+                t.a, t.b, t.c, t.d, t.e, t.f, t.weight, t.color, t.color_speed, t.post_a,
+                t.post_b, t.post_c, t.post_d, t.post_e, t.post_f,
+            ] {
+                v.to_bits().hash(&mut h);
+            }
+            t.post_affine_enabled.hash(&mut h);
+            let live = |name: &str| t.variations.get(name).is_some_and(|w| *w != 0.0);
+            let mut vars: Vec<(&str, u32)> = t
+                .variations
+                .iter()
+                .filter(|(_, v)| **v != 0.0)
+                .map(|(k, v)| (k.as_str(), v.to_bits()))
+                .collect();
+            vars.sort_unstable();
+            vars.hash(&mut h);
+            let mut ps: Vec<(&str, u32)> = t
+                .variation_params
+                .iter()
+                .filter(|(k, _)| live(k.split('.').next().unwrap_or("")))
+                .map(|(k, v)| (k.as_str(), v.to_bits()))
+                .collect();
+            ps.sort_unstable();
+            ps.hash(&mut h);
+        }
+        h.finish()
+    }
+
+    /// Keep the enumeration current with the VIEW, once per frame.
+    ///
+    /// `load_config` alone was not enough and the panel sat at "Not
+    /// running" forever: it fires on a preset load, and the two
+    /// things that actually change here — ticking the checkbox and
+    /// zooming — do neither. Zoom is a `ViewOnly` update that never
+    /// reaches it, and the enumeration is a property of the view
+    /// above all.
+    ///
+    /// Returns **true when the caller must follow with a full
+    /// `load_config`**, which happens only when targeting starts,
+    /// stops, or crosses between the composed and replayed arms —
+    /// the three cases that change the SHADER.
+    ///
+    /// It does not rebuild the shader itself, and that restraint is
+    /// the whole correction here. An earlier version called
+    /// `ensure_shaders_current_with_config` directly, which looks
+    /// harmless and is not: `load_config` compiles against the
+    /// STICKY-ADOPTED flame (the retained superset, carried at weight
+    /// zero) and packs the variation-params buffer against that same
+    /// local index map. Rebuilding from the raw config produced a
+    /// shader whose variation indices did not match the buffer, so
+    /// `get_param` read the wrong slots and every flame collapsed to
+    /// a single pixel at the origin — on load, and again on every pan,
+    /// with a toggle of anything that forced a real reload appearing
+    /// to "fix" it.
+    ///
+    /// Only `load_config` knows how to do all of that consistently,
+    /// so this asks for one rather than half-doing it.
+    #[must_use]
+    pub fn sync_cylinders(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        config: &FractalConfig,
+    ) -> bool {
+        // Targeting off, and nothing of it held: nothing to sync. Every
+        // flame reaches here every frame, and the key below hashes the
+        // whole flame.
+        if !config.cylinder_targeting && self.cylinders.is_none() && self.plan_job.is_none() && self.standby.is_none() {
+            // ...but the panel says it is off, whatever it said before
+            // (a 3D flame's "2D only"), and the next sync with it on plans
+            // afresh rather than finding its old key unchanged.
+            self.targeting_state = TargetingState::Off;
+            self.cylinder_key = None;
+            return false;
+        }
+        let key = self.enumeration_key(config);
+        self.write_cylinder_shift(queue, config);
+
+        // The removals changed: a standby made with the old ones is no
+        // use, and one being made is stopped. The replan the key asks
+        // for below refines what the filter here cannot.
+        let removals_moved = config.word_removals != self.applied_removals;
+        if removals_moved {
+            self.standby = None;
+            if self.plan_job.as_ref().is_some_and(|j| j.kind == PlanKind::Standby) {
+                self.cancel_plan_job();
+            }
+            if self.cylinders_full.is_none() {
+                self.applied_removals.clone_from(&config.word_removals);
+            }
+        }
+        // The trim moved, or the removals: cut the plan on screen again
+        // at once, without waiting on a plan.
+        // A solo pressed or released restarts the picture: it draws
+        // something else.
+        let solo_moved = self.word_solo != self.applied_solo;
+        if solo_moved && self.cylinders_full.is_none() {
+            self.applied_solo.clone_from(&self.word_solo);
+        }
+        let colouring_moved = Self::path_colouring(config) != self.applied_path_colouring;
+        if self.cylinders_full.is_some()
+            && ((config.cylinder_trim, config.cylinder_trim_levels) != self.applied_trim
+                || removals_moved
+                || solo_moved
+                || colouring_moved)
+        {
+            if solo_moved {
+                self.plan_arrived = true;
+            }
+            let before = self.cylinder_arm();
+            let full = self.cylinders_full.take();
+            let buffers_changed = self.apply_plan(device, queue, config, full.map(Ok));
+            if buffers_changed {
+                self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+                self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
+            }
+            if before != self.cylinder_arm() {
+                return true;
+            }
+        }
+
+        // A plan from the background: applied if it is for this key,
+        // waited for if it is still coming.
+        if let Some(reload) = self.poll_plan_job(device, queue, config, key) {
+            return reload;
+        }
+        if self.cylinder_key == Some(key) {
+            return false;
+        }
+
+        // The view moved off the plan on screen: the standby, if it
+        // covers the new view, is swapped in on this frame rather than
+        // after the view settles and a plan is made.
+        if self.plans_in_background(config) {
+            if let Some(reload) = self.swap_in_standby(device, queue, config) {
+                return reload;
+            }
+        }
+
+        // **Do not plan while the view is still moving.**
+        //
+        // An expensive enumeration — the Möbius family costs up to a
+        // second — would otherwise run on the UI thread on every frame
+        // of a drag, which is the freeze this whole feature was
+        // reported for. Waiting for the view to hold still costs
+        // nothing that matters: the unbiased game renders the moving
+        // view perfectly well, and targeting is for the picture you
+        // stop on.
+        //
+        // Using the PREVIOUS plan instead was the other option and is
+        // worse: a plan carries the view it was made for, so forcing
+        // its words against a view that has moved puts the samples
+        // somewhere other than the frame.
+        let now = web_time::Instant::now();
+        let settle = Self::targeting_settle_delay(config);
+        if !settle.is_zero() {
+            match self.cylinder_key_pending {
+                Some((k, since)) if k == key => {
+                    if now.duration_since(since) < settle {
+                        return false;
+                    }
+                }
+                _ => {
+                    self.cylinder_key_pending = Some((key, now));
+                    return false;
+                }
+            }
+        }
+        self.cylinder_key_pending = None;
+
+        // **Planned on a background thread** where the plan is the
+        // expensive kind. The plan on screen keeps drawing meanwhile if
+        // only the view moved -- the replay arm plots in world
+        // coordinates, so an old plan still puts its samples in the
+        // right place, over part of the new frame -- and the panel says
+        // a plan is being generated.
+        if self.plans_in_background(config) {
+            return self.start_plan_job(device, queue, config, key);
+        }
+        self.cancel_plan_job();
+
+        self.cylinder_key = Some(key);
+        // `composable` and not just `is_some`: the two arms read
+        // different buffer layouts, so crossing between them needs the
+        // rebuild exactly as starting or stopping does.
+        let before = self.cylinder_arm();
+        let buffers_changed = self.update_cylinders(device, queue, config);
+        self.applied_flame_key = Some(Self::flame_key(config));
+        let after = self.cylinder_arm();
+
+        // **The bind group must follow the buffer.** A pan that
+        // changes how many words reach the view resizes the cylinder
+        // table, and resizing DESTROYS the old buffer and creates a
+        // new one. The bind group still referenced the dead one, so
+        // the next submit failed validation with "Buffer with
+        // 'Cylinder Buffer' label has been destroyed" and the renderer
+        // stayed broken until targeting was toggled off and on --
+        // which worked only because that runs a full `load_config`,
+        // and load_config has always rebuilt the bind group on this
+        // same flag.
+        //
+        // Rebinding is safe to do here, unlike recompiling: it just
+        // points the group at the current buffers, and touches neither
+        // the shader nor the sticky-adopted packing that the shader
+        // has to agree with.
+        if buffers_changed {
+            self.compute_bind_group =
+                self.pipelines.create_compute_bind_group(device, &self.buffers);
+            self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
+        }
+        before != after
+    }
+
+    /// Enumerate and upload the cylinders that reach this view, or
+    /// drop them.
+    ///
+    /// **Targeting is declined unless it pays.** Below about 2^2 the
+    /// whole attractor fits the frame, every sample of the ordinary
+    /// chaos game is already useful, and the forced prefix is pure
+    /// overhead -- `Cylinders::speedup` reads under one there and
+    /// this leaves the feature off. It is a decision about the view,
+    /// so it is remade whenever the view moves.
+    fn update_cylinders(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        config: &FractalConfig,
+    ) -> bool {
+        // The enumeration is PLANAR -- it asks whether a word's
+        // image disc meets a disc in the xy plane -- and in 3D what
+        // reaches the frame depends on the camera and the point's z,
+        // which that test knows nothing about. So targeting is 2D
+        // only, rather than quietly answering a question it was not
+        // asked.
+        let two_d = matches!(config.render_mode, crate::scene::transforms::RenderMode::TwoD);
+        let view = self.cylinder_view(config);
+        // Inline plans (export, the command line, tests) ask the GPU too.
+        #[cfg(not(target_arch = "wasm32"))]
+        let gpu = if config.cylinder_targeting && two_d { self.gpu_planner(device, queue) } else { None };
+        let removals = crate::scene::word_tree::parse_removals(&config.word_removals);
+        let refine = self.split_for(config).to_vec();
+        let min_len = Self::path_min_len(config);
+        let outcome = (config.cylinder_targeting && two_d).then(|| {
+            let registry = crate::variations::global_registry();
+            crate::scene::cylinder::Cylinders::plan_opts(
+                &config.flame,
+                &registry,
+                view,
+                crate::scene::backward::PlanOptions {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    gpu: gpu.as_deref(),
+                    removals: &removals,
+                    refine: &refine,
+                    min_len,
+                    ..Default::default()
+                },
+            )
+        });
+        let changed = self.apply_plan(device, queue, config, outcome);
+        self.applied_view = self.cylinders.is_some().then(|| self.cylinder_view(config));
+        changed
+    }
+
+    /// Whether the picture is being edited by its words -- trimmed or
+    /// with pieces removed -- which only a plan can draw.
+    fn edits_words(config: &FractalConfig) -> bool {
+        config.cylinder_trim > 0.0 || !config.word_removals.is_empty()
+    }
+
+    /// Whether a plan is drawn even where it does not pay: Focused
+    /// Rendering set to Always, or the picture edited by its words.
+    fn keeps_plan(config: &FractalConfig) -> bool {
+        config.cylinder_always || Self::edits_words(config) || config.color_mode == ColorMode::PathMap
+    }
+
+    /// What the panel says of a plan, and the plan to draw if it is drawn:
+    /// none where the flame could not be enumerated, or where the plan
+    /// does not pay -- unless it is kept anyway (`keeps_plan`).
+    fn judge_plan(
+        config: &FractalConfig,
+        outcome: Result<crate::scene::cylinder::Cylinders, crate::scene::cylinder::NoCylinders>,
+    ) -> (TargetingState, Option<crate::scene::cylinder::Cylinders>) {
+        match outcome {
+            Err(why) => (TargetingState::Declined(why), None),
+            // Unless the picture is being edited by its words, which
+            // needs the plan to draw at all.
+            Ok(c) if c.speedup() <= 1.0 && !Self::keeps_plan(config) => {
+                (TargetingState::NotWorthIt { speedup: c.speedup() }, None)
+            }
+            Ok(c) => (TargetingState::active(&c), Some(c)),
+        }
+    }
+
+    /// The word table for the shader. Two packings, because there are two
+    /// kernels: a flame whose maps are all affine folds each word into one
+    /// matrix, and anything else is handed the symbols to walk.
+    fn pack_plan(c: &crate::scene::cylinder::Cylinders, config: &FractalConfig) -> Vec<f32> {
+        if c.composable {
+            crate::scene::cylinder::pack(c, &config.flame, &crate::variations::global_registry())
+        } else {
+            crate::scene::cylinder::pack_words(c, &config.flame)
+        }
+    }
+
+    /// PathMap's colouring -- style and level -- or `None` when the
+    /// colour mode is not PathMap.
+    fn path_colouring(config: &FractalConfig) -> Option<(PathMapStyle, u32)> {
+        (config.color_mode == ColorMode::PathMap).then_some((config.path_map_style, config.path_map_level))
+    }
+
+    /// The shortest word the plan may keep: a path style reads
+    /// `path_map_level` maps of each path, and zoomed out the plan's
+    /// paths are one map long (`PlanOptions::min_len`).
+    fn path_min_len(config: &FractalConfig) -> usize {
+        match Self::path_colouring(config) {
+            Some((PathMapStyle::Path | PathMapStyle::PathDistinct, level)) => level.max(1) as usize,
+            _ => 0,
+        }
+    }
+
+    /// The pieces the plan splits for the Pieces panel, if they were
+    /// opened on this flame.
+    fn split_for(&self, config: &FractalConfig) -> &[Vec<u32>] {
+        if self.word_split.0 == Self::flame_key(config) {
+            &self.word_split.1
+        } else {
+            &[]
+        }
+    }
+
+    /// Split `pattern`'s piece in the plan, so the Pieces panel can show
+    /// what is inside it: replans when it is new. Pieces opened on
+    /// another flame are forgotten.
+    pub fn request_split(&mut self, config: &FractalConfig, pattern: Vec<u32>) {
+        let key = Self::flame_key(config);
+        if self.word_split.0 != key {
+            self.word_split = (key, Vec::new());
+        }
+        // Bounded: each opened piece deepens the plan a little.
+        if !self.word_split.1.contains(&pattern) && self.word_split.1.len() < 256 {
+            self.word_split.1.push(pattern);
+        }
+    }
+
+    /// The view a plan is made for.
+    fn cylinder_view(&self, config: &FractalConfig) -> crate::scene::cylinder::View {
+        crate::scene::cylinder::View::of(
+            config.zoom.max(1e-6) as f64,
+            [config.pan_x as f64, config.pan_y as f64],
+            self.width.max(1),
+            self.height.max(1),
+        )
+    }
+
+    /// Put a plan -- or none, for `outcome == None` -- on screen:
+    /// the panel's state, the packed word table, the buffers.
+    fn apply_plan(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        config: &FractalConfig,
+        outcome: Option<Result<crate::scene::cylinder::Cylinders, crate::scene::cylinder::NoCylinders>>,
+    ) -> bool {
+        let registry = crate::variations::global_registry();
+        let two_d = matches!(config.render_mode, crate::scene::transforms::RenderMode::TwoD);
+        self.showing_on_the_way = false;
+        let planned = if let Some(outcome) = outcome {
+            let (state, planned) = Self::judge_plan(config, outcome);
+            self.targeting_state = state;
+            planned
+        } else {
+            self.targeting_state = if config.cylinder_targeting && !two_d {
+                TargetingState::NotPlanar
+            } else {
+                // Off, or asked for and dropped while a plan for this
+                // flame is generated.
+                TargetingState::Off
+            };
+            None
+        };
+        // **Trim** (docs/projects/word-editing.md §4): the plan as made
+        // is kept, and what is drawn is cut from it -- so the slider
+        // retrims without replanning. The panel reports what is drawn.
+        //
+        // **Removals** (§5) first, so trim judges what is left: the
+        // inverse walk has made none of them if the plan was made with
+        // these removals, and for a plan made before a removal this
+        // takes the piece out until the replan lands.
+        let trim = (config.cylinder_trim, config.cylinder_trim_levels);
+        let removals = crate::scene::word_tree::parse_removals(&config.word_removals);
+        let full = planned;
+        let trimmed = full.as_ref().map(|c| {
+            let c = crate::scene::word_tree::remove(c, &removals);
+            crate::scene::word_tree::trim_to(&c, trim.0 as f64, trim.1 as usize)
+        });
+        let planned = trimmed.as_ref().map(|c| {
+            // **Solo** (§6): one branch alone, while its button is held
+            // -- unless nothing drawn is in it.
+            match &self.word_solo {
+                Some(p) => {
+                    let s = crate::scene::word_tree::solo(c, p);
+                    if s.words.is_empty() {
+                        c.clone()
+                    } else {
+                        s
+                    }
+                }
+                None => c.clone(),
+            }
+        });
+        // **PathMap** (§10): each drawn word's colour, measured in the
+        // trimmed plan so a solo keeps its colours; and, for the Origin
+        // styles, the attractor's frame, once per flame.
+        let colouring = Self::path_colouring(config);
+        let colours = match (colouring, &trimmed, &planned) {
+            (Some((style, level)), Some(t), Some(p)) => {
+                let alphabet = crate::scene::word_tree::alphabet(&config.flame, &registry);
+                Some(crate::scene::word_tree::path_colours(t, p, style, level, &alphabet))
+            }
+            _ => None,
+        };
+        if colouring.is_some() {
+            let key = Self::flame_key(config);
+            if self.path_origin_key != key {
+                self.path_origin_key = key;
+                self.path_origin = crate::scene::backward::Backward::cached(&config.flame, &registry)
+                    .map(|b| {
+                        let (c, r) = b.frame();
+                        [c[0] as f32, c[1] as f32, (r as f32).max(1e-12)]
+                    })
+                    .unwrap_or([0.0, 0.0, 1.0]);
+            }
+        }
+        if let (TargetingState::Active { .. }, Some(c)) = (&self.targeting_state, &planned) {
+            self.targeting_state = TargetingState::active(c);
+        }
+        self.cylinders_full = full;
+        self.applied_trim = trim;
+        self.applied_removals.clone_from(&config.word_removals);
+        self.applied_solo.clone_from(&self.word_solo);
+        self.word_tree = std::sync::OnceLock::new();
+        let packed = planned.as_ref().map(|c| {
+            let mut table = Self::pack_plan(c, config);
+            if let Some(colours) = &colours {
+                crate::scene::word_tree::recolour(&mut table, c.composable, colours);
+            }
+            table
+        });
+        self.applied_path_colouring = colouring;
+        self.path_colours = colours;
+        let changed = self.buffers.update_cylinders(device, queue, packed.as_deref());
+        let was = self.cylinder_arm();
+        self.cylinders = planned;
+        self.write_cylinder_shift(queue, config);
+        let now = self.cylinder_arm();
+        // After the assignment: the predicate asks `self.cylinders`.
+        self.cylinder_relative = self.relative_is_safe(config);
+        self.cylinder_offsets = self.cylinder_relative && self.cylinders.as_ref().is_some_and(|c| !c.composable && !c.refs.is_empty());
+        // The SHADER changes when targeting starts or stops, so the
+        // constants have to be seen to change even if the buffer did
+        // not resize.
+        changed || was != now
+    }
+
+    /// Plan on a background thread (the app). The headless paths leave
+    /// this off and plan inline, so their first sample already uses the
+    /// plan. No threads on the web: there it stays inline.
+    pub fn set_background_planning(&mut self, on: bool) {
+        self.background_planning = on;
+    }
+
+    /// Make background plans on the GPU (the default) or on the CPU.
+    /// The plans are the same either way to f32 rounding at the view's
+    /// rim; the GPU makes them faster.
+    pub fn set_plan_on_gpu(&mut self, on: bool) {
+        self.plan_on_gpu = on;
+    }
+
+    /// Make background plans as the web makes them -- a task on this
+    /// thread, polled a slice at a time each frame -- rather than on a
+    /// worker thread. The web always does; on the desktop this is for
+    /// testing the web's path.
+    pub fn set_plan_in_task(&mut self, on: bool) {
+        self.plan_in_task = on || cfg!(target_arch = "wasm32");
+    }
+
+    /// The GPU evaluator to hand a plan, made on first use.
+    fn gpu_planner(&mut self, device: &Device, queue: &Queue) -> Option<SharedPlanner> {
+        if !self.plan_on_gpu {
+            return None;
+        }
+        let make = || crate::scene::plan_gpu::GpuPlanner::new(device, queue);
+        #[cfg(not(target_arch = "wasm32"))]
+        let shared = self.gpu_planner.get_or_insert_with(|| std::sync::Arc::new(std::sync::Mutex::new(make())));
+        #[cfg(target_arch = "wasm32")]
+        let shared = self.gpu_planner.get_or_insert_with(|| std::rc::Rc::new(std::cell::RefCell::new(make())));
+        Some(shared.clone())
+    }
+
+    /// How long the plan now being generated has been running, if one
+    /// is. The panel shows it.
+    pub fn planning_elapsed(&self) -> Option<std::time::Duration> {
+        // A standby is idle-time work the panel need not mention.
+        self.plan_job.as_ref().filter(|j| j.kind == PlanKind::Tight).map(|j| j.started.elapsed())
+    }
+
+    /// Whether a background plan was applied since the last call. The
+    /// accumulation must be reset when it was: see `plan_arrived`.
+    pub fn take_plan_arrived(&mut self) -> bool {
+        std::mem::take(&mut self.plan_arrived)
+    }
+
+    /// Whether a plan of either kind -- the view's own, or the standby
+    /// around it -- is being made.
+    pub fn plans_running(&self) -> bool {
+        self.plan_job.is_some()
+    }
+
+    /// Whether this config's plan is made on the worker: background
+    /// planning on, targeting asked for in 2D, and a flame whose plan is
+    /// the expensive kind -- the ones that already wait for the view to
+    /// settle. The affine path costs well under a millisecond and stays
+    /// inline, where a thread per drag frame would only add overhead.
+    fn plans_in_background(&self, config: &FractalConfig) -> bool {
+        self.background_planning
+            && config.cylinder_targeting
+            && matches!(config.render_mode, crate::scene::transforms::RenderMode::TwoD)
+            && !Self::targeting_settle_delay(config).is_zero()
+    }
+
+    /// Drop the plan on screen if it was made for another flame. Returns
+    /// whether the buffers changed.
+    fn drop_stale_flame_plan(&mut self, device: &Device, queue: &Queue, config: &FractalConfig) -> bool {
+        let flame_key = Self::flame_key(config);
+        if self.standby.as_ref().is_some_and(|s| s.flame_key != flame_key) {
+            self.standby = None;
+        }
+        if self.cylinders.is_none() || self.applied_flame_key == Some(flame_key) {
+            return false;
+        }
+        self.applied_flame_key = None;
+        self.applied_view = None;
+        self.apply_plan(device, queue, config, None)
+    }
+
+    /// Whether a standby plan is held. For the gates.
+    pub fn has_standby_plan(&self) -> bool {
+        self.standby.is_some()
+    }
+
+    /// The view moved. If the plan on screen no longer contains it but
+    /// the standby does, swap the standby in now, so the picture stays
+    /// complete while a tight plan for the new view is made. `Some`
+    /// (whether the shader must change) when it swapped.
+        fn swap_in_standby(&mut self, device: &Device, queue: &Queue, config: &FractalConfig) -> Option<bool> {
+        let view = self.cylinder_view(config);
+        let flame_key = Self::flame_key(config);
+        if self.on_screen_covers(config) {
+            return None;
+        }
+        let covers = self
+            .standby
+            .as_ref()
+            .is_some_and(|s| s.flame_key == flame_key && disc_contains(s.view, view));
+        if !covers {
+            return None;
+        }
+        let sb = self.standby.take()?;
+        let before = self.cylinder_arm();
+        let buffers_changed = self.apply_plan(device, queue, config, Some(Ok(sb.plan)));
+        let after = self.cylinder_arm();
+        self.applied_view = Some(sb.view);
+        self.applied_flame_key = Some(flame_key);
+        // Samples drawn under the previous plan carry its weight.
+        self.plan_arrived = true;
+        if buffers_changed {
+            self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+            self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
+        }
+        Some(before != after)
+    }
+
+    /// **Draw `plan` from the next frame on**, as if it had just been made
+    /// for `config`'s view -- for gates that draw a plan they made
+    /// themselves. `true` when the shader must change: the caller follows
+    /// with `load_config`, which keeps this plan.
+    #[cfg(test)]
+    pub(crate) fn show_plan(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        config: &FractalConfig,
+        plan: crate::scene::cylinder::Cylinders,
+    ) -> bool {
+        let before = self.cylinder_arm();
+        let buffers_changed = self.apply_plan(device, queue, config, Some(Ok(plan)));
+        self.cylinder_key = Some(self.enumeration_key(config));
+        self.applied_flame_key = Some(Self::flame_key(config));
+        self.applied_view = self.cylinders.is_some().then(|| self.cylinder_view(config));
+        if buffers_changed {
+            self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+            self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
+        }
+        before != self.cylinder_arm()
+    }
+
+    /// **The accumulated density of each pixel, per iteration of the
+    /// unbiased chaos game it stands for**: the accumulator's weighted hit
+    /// count over `samples_in_buffer` times `cylinder_iteration_scale`. The
+    /// picture's measure, before any tone map, so a targeted render and an
+    /// untargeted one can be compared number for number. Row-major.
+    #[cfg(test)]
+    pub(crate) fn read_density_blocking(&self, device: &Device, queue: &Queue) -> Vec<f64> {
+        let row = self.width * 16;
+        let align = egui_wgpu::wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded = row.div_ceil(align) * align;
+        let buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Density Readback"),
+            size: (padded * self.height) as u64,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Density Readback") });
+        encoder.copy_texture_to_buffer(
+            TexelCopyTextureInfo {
+                texture: self.buffers.current_accumulation_texture(),
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded), rows_per_image: Some(self.height) },
+            },
+            Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 },
+        );
+        queue.submit(Some(encoder.finish()));
+        buffer.slice(..).map_async(MapMode::Read, |_| {});
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let data = buffer.slice(..).get_mapped_range();
+        let per = 1.0 / (self.samples_in_buffer.max(1) as f64 * self.cylinder_iteration_scale());
+        let mut out = Vec::with_capacity((self.width * self.height) as usize);
+        for y in 0..self.height {
+            let at = (y * padded) as usize;
+            for px in data[at..at + row as usize].chunks_exact(16) {
+                out.push(f32::from_le_bytes([px[12], px[13], px[14], px[15]]) as f64 * per);
+            }
+        }
+        out
+    }
+
+    /// Whether the plan on screen is this flame's and covers the view.
+    fn on_screen_covers(&self, config: &FractalConfig) -> bool {
+        let view = self.cylinder_view(config);
+        self.cylinders.is_some()
+            && self.applied_flame_key == Some(Self::flame_key(config))
+            && self.applied_view.is_some_and(|v| disc_contains(v, view))
+    }
+
+    fn cancel_plan_job(&mut self) {
+        // Dropping it stops it.
+        self.plan_job = None;
+    }
+
+    /// The worker's side of `sync_cylinders`. `Some(reload)` when this
+    /// frame is settled by the job -- it landed and was applied, or it is
+    /// still coming for this key; `None` when there is no job for this
+    /// key and the caller carries on.
+        fn poll_plan_job(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        config: &FractalConfig,
+        key: u64,
+    ) -> Option<bool> {
+        let job = self.plan_job.as_mut()?;
+        let (kind, job_key, job_view, job_flame, started) = (job.kind, job.key, job.view, job.flame_key, job.started);
+        // A standby never settles a frame: the view is already drawn.
+        let for_this_view = kind == PlanKind::Tight && job_key == key;
+        let outcome = match job.try_take() {
+            None => return for_this_view.then_some(false),
+            Some(Delivery::OnTheWay(plan)) => {
+                // **A plan on the way** (tracker P8): shown only where it
+                // cannot be worse than what is on screen -- no plan there
+                // covers the view (a long pan, a first plan, a zoom past the
+                // standby), or it is an earlier plan on the way -- and only
+                // if it would be drawn at all.
+                let drawn = plan.speedup() > 1.0 || Self::keeps_plan(config);
+                if for_this_view && drawn && (self.showing_on_the_way || !self.on_screen_covers(config)) {
+                    let before = self.cylinder_arm();
+                    let words = plan.words.len();
+                    let buffers_changed = self.apply_plan(device, queue, config, Some(Ok(plan)));
+                    let after = self.cylinder_arm();
+                    self.showing_on_the_way = self.cylinders.is_some();
+                    self.applied_flame_key = Some(job_flame);
+                    self.applied_view = self.cylinders.is_some().then_some(job_view);
+                    self.plan_arrived = true;
+                    log::info!("plan on the way after {:.2} s: {words} words", started.elapsed().as_secs_f64());
+                    if buffers_changed {
+                        self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+                        self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
+                    }
+                    return Some(before != after);
+                }
+                return for_this_view.then_some(false);
+            }
+            Some(Delivery::Done(outcome)) => outcome,
+        };
+        let job = self.plan_job.take()?;
+        if job.kind == PlanKind::Standby {
+            // Held, not shown -- and only if it is for this flame and
+            // worth using at all.
+            if job.flame_key == Self::flame_key(config) {
+                if let Ok(plan) = outcome {
+                    if plan.speedup() > 1.0 || Self::keeps_plan(config) {
+                        log::info!("standby plan ready after {:.2} s", job.started.elapsed().as_secs_f64());
+                        self.standby = Some(Standby { view: job.view, flame_key: job.flame_key, plan });
+                    }
+                }
+            }
+            return None;
+        }
+        if job.key != key {
+            // Made for a view the user has left.
+            return None;
+        }
+        let before = self.cylinder_arm();
+        let buffers_changed = self.apply_plan(device, queue, config, Some(outcome));
+        let after = self.cylinder_arm();
+        self.cylinder_key = Some(key);
+        self.applied_flame_key = Some(job.flame_key);
+        self.applied_view = self.cylinders.is_some().then_some(job.view);
+        self.plan_arrived = true;
+        log::info!("cylinder plan ready after {:.2} s", job.started.elapsed().as_secs_f64());
+        if buffers_changed {
+            self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+            self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
+        }
+        // The tight plan is up: now the standby around it, in reserve.
+        if self.cylinders.is_some() {
+            let wide = crate::scene::cylinder::View {
+                radius: job.view.radius * STANDBY_MARGIN,
+                ..job.view
+            };
+            let gpu = self.gpu_planner(device, queue);
+            self.plan_job = self.spawn_plan(config, PlanKind::Standby, wide, 0, gpu).ok();
+        }
+        Some(before != after)
+    }
+
+    /// Start planning `view` in a task on this thread: a future, polled a
+    /// slice at a time each frame by `poll_plan_job`. The web's way, and
+    /// the desktop's when [`Self::set_plan_in_task`] asks.
+    fn spawn_task(
+        &self,
+        config: &FractalConfig,
+        kind: PlanKind,
+        view: crate::scene::cylinder::View,
+        key: u64,
+        gpu: Option<SharedPlanner>,
+    ) -> PlanJob {
+        let flame = config.flame.clone();
+        let removals = crate::scene::word_tree::parse_removals(&config.word_removals);
+        let refine = self.split_for(config).to_vec();
+        let min_len = Self::path_min_len(config);
+        let slicer = std::rc::Rc::new(crate::scene::backward::Slicer::every(WEB_PLAN_SLICE));
+        let s = slicer.clone();
+        let on_the_way: std::rc::Rc<std::cell::RefCell<Option<crate::scene::cylinder::Cylinders>>> = Default::default();
+        let slot = on_the_way.clone();
+        let tight = kind == PlanKind::Tight;
+        let task = Box::pin(async move {
+            // A copy, not the lock: the task lives across frames, and a
+            // read guard held that long would stall any writer.
+            let registry = crate::variations::global_registry().clone();
+            let leave = move |p: crate::scene::cylinder::Cylinders| *slot.borrow_mut() = Some(p);
+            let deliver = tight.then_some((&leave as &dyn Fn(crate::scene::cylinder::Cylinders), PLAN_ON_THE_WAY));
+            match gpu {
+                Some(g) => {
+                    // One job at a time, and a job is dropped before the
+                    // next starts, so this is never contended.
+                    #[cfg(target_arch = "wasm32")]
+                    let mut g = g.borrow_mut();
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let mut g = g.lock().unwrap_or_else(|e| e.into_inner());
+                    crate::scene::cylinder::Cylinders::plan_sliced(&flame, &registry, view, Some(&mut g), &removals, &refine, min_len, deliver, &s).await
+                }
+                None => crate::scene::cylinder::Cylinders::plan_sliced(&flame, &registry, view, None, &removals, &refine, min_len, deliver, &s).await,
+            }
+        });
+        PlanJob {
+            kind,
+            view,
+            key,
+            flame_key: Self::flame_key(config),
+            started: web_time::Instant::now(),
+            runner: Runner::Task { task, slicer, on_the_way },
+        }
+    }
+
+    /// Start planning `view`: a task on the web, a worker thread on the
+    /// desktop unless asked for a task.
+    #[cfg(target_arch = "wasm32")]
+    fn spawn_plan(
+        &self,
+        config: &FractalConfig,
+        kind: PlanKind,
+        view: crate::scene::cylinder::View,
+        key: u64,
+        gpu: Option<SharedPlanner>,
+    ) -> std::io::Result<PlanJob> {
+        Ok(self.spawn_task(config, kind, view, key, gpu))
+    }
+
+    /// Start a planner thread for `view` (or a task, if asked).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn spawn_plan(
+        &self,
+        config: &FractalConfig,
+        kind: PlanKind,
+        view: crate::scene::cylinder::View,
+        key: u64,
+        gpu: Option<SharedPlanner>,
+    ) -> std::io::Result<PlanJob> {
+        if self.plan_in_task {
+            return Ok(self.spawn_task(config, kind, view, key, gpu));
+        }
+        use std::sync::atomic::AtomicBool;
+        use std::sync::Arc;
+        let flame = config.flame.clone();
+        let removals = crate::scene::word_tree::parse_removals(&config.word_removals);
+        let refine = self.split_for(config).to_vec();
+        let min_len = Self::path_min_len(config);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = cancel.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let on_the_way = (kind == PlanKind::Tight).then(|| tx.clone());
+        std::thread::Builder::new().name("cylinder-plan".into()).spawn(move || {
+            let registry = crate::variations::global_registry();
+            // A cancelled job's receiver is gone; nothing to tell.
+            let send = |p: crate::scene::cylinder::Cylinders| {
+                if let Some(tx) = &on_the_way {
+                    let _ = tx.send(Delivery::OnTheWay(p));
+                }
+            };
+            let result = crate::scene::cylinder::Cylinders::plan_opts(
+                &flame,
+                &registry,
+                view,
+                crate::scene::backward::PlanOptions {
+                    budget: crate::scene::backward::TIME_BUDGET,
+                    cancel: Some(&flag),
+                    gpu: gpu.as_deref(),
+                    removals: &removals,
+                    refine: &refine,
+                    min_len,
+                    deliver: on_the_way.is_some().then_some(&send as &dyn Fn(crate::scene::cylinder::Cylinders)),
+                    deliver_after: PLAN_ON_THE_WAY,
+                },
+            );
+            let _ = tx.send(Delivery::Done(result));
+        })?;
+        Ok(PlanJob {
+            kind,
+            view,
+            key,
+            flame_key: Self::flame_key(config),
+            started: web_time::Instant::now(),
+            runner: Runner::Thread { cancel, rx },
+        })
+    }
+
+    /// Start planning `key` on a worker thread, cancelling any plan for
+    /// another key. Returns whether the shader must change now -- which
+    /// it must when the plan on screen was for another flame and is
+    /// dropped.
+        fn start_plan_job(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, key: u64) -> bool {
+        if self.plan_job.as_ref().is_some_and(|j| j.kind == PlanKind::Tight && j.key == key) {
+            return false;
+        }
+        // Including a standby in flight: the view you stop on comes first.
+        self.cancel_plan_job();
+        let before = self.cylinder_arm();
+        if self.drop_stale_flame_plan(device, queue, config) {
+            self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+            self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
+        }
+        let reload = before != self.cylinder_arm();
+
+        let gpu = self.gpu_planner(device, queue);
+        match self.spawn_plan(config, PlanKind::Tight, self.cylinder_view(config), key, gpu) {
+            Ok(job) => {
+                self.plan_job = Some(job);
+                reload
+            }
+            Err(e) => {
+                // No thread: plan here, as before.
+                log::warn!("could not start the cylinder planner thread ({e}); planning inline");
+                self.cylinder_key = Some(key);
+                let buffers_changed = self.update_cylinders(device, queue, config);
+                self.applied_flame_key = Some(Self::flame_key(config));
+                if buffers_changed {
+                    self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+                    self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
+                }
+                before != self.cylinder_arm()
+            }
+        }
+    }
+
+    /// The factor the tone map's iteration count is inflated by.
+    ///
+    /// A forced sample carries weight `P(A_V)`, and depositing that
+    /// directly would be hopeless: at a zoom of 2^20 it is 2.6e-9, so
+    /// the u32 histogram would round every deposit to zero but for a
+    /// one-in-a-hundred-million tail -- handing the whole advantage
+    /// back to quantisation. So the deposit carries ONE, at full
+    /// resolution, and the tone map is told the render did
+    /// `N / P(A_V)` iterations instead of `N`.
+    ///
+    /// That is the same statement: the forced render is doing the
+    /// work of that many unbiased iterations, and saying so is what
+    /// makes its brightness match theirs.
+    ///
+    /// A plan that draws some words off their probability
+    /// (`Cylinder::draw`) deposits `1 / S` per draw on average, which is
+    /// `N / (P(A_V) · S)` iterations' worth.
+    pub fn cylinder_iteration_scale(&self) -> f64 {
+        self.cylinders.as_ref().map_or(1.0, |c| c.iteration_scale())
     }
 
     fn update_xaos_buffer(&mut self, device: &Device, queue: &Queue, flame: &crate::scene::transforms::Flame) -> bool {
@@ -3132,118 +4803,48 @@ impl FlameRenderer {
         Ok((self.width, self.height, rgba_data))
     }
 
-    /// Read path buffer from GPU for CPU-side path queries
-    /// Returns a 2D array of PathEntry indexed by [y][x]
-    /// Returns empty grid if path buffers are not enabled
-    pub async fn read_path_buffer(
-        &self,
-        device: &Device,
-        queue: &Queue,
-    ) -> Result<Vec<Vec<PathEntry>>, String> {
-        // Check if path buffer exists
-        let path_buffer = match &self.buffers.path_buffer {
-            Some(buf) => buf,
-            None => {
-                // Return empty PathEntry grid if path features are disabled
-                return Ok(vec![vec![PathEntry::default(); self.width as usize]; self.height as usize]);
-            }
-        };
-
-        // Wait for any pending rendering to complete
-        let sync_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("Pre-Read Path Sync"),
-        });
-        queue.submit(std::iter::once(sync_encoder.finish()));
-        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
-
-        // PathEntry is 7 × u32 = 28 bytes per pixel (5 u32 + 2 f32)
-        let bytes_per_entry = 7 * std::mem::size_of::<u32>() as u32;
-        let buffer_size = (self.width * self.height * bytes_per_entry) as u64;
-
-        // Create staging buffer for readback
-        let staging_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("Path Buffer Staging"),
-            size: buffer_size,
-            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-
-        // Copy path buffer to staging buffer
-        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("Path Buffer Read Encoder"),
-        });
-        encoder.copy_buffer_to_buffer(
-            path_buffer,
-            0,
-            &staging_buffer,
-            0,
-            buffer_size,
-        );
-        queue.submit(std::iter::once(encoder.finish()));
-
-        // Map and read
-        let buffer_slice = staging_buffer.slice(..);
-        let (tx, rx) = futures::channel::oneshot::channel();
-        buffer_slice.map_async(MapMode::Read, move |result| {
-            tx.send(result).unwrap();
-        });
-        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
-        rx.await
-            .map_err(|_| "Failed to map path buffer".to_string())?
-            .map_err(|e| format!("Path buffer map error: {:?}", e))?;
-
-        let data = buffer_slice.get_mapped_range();
-
-        // Convert raw bytes to PathEntry grid
-        let mut result = Vec::with_capacity(self.height as usize);
-        for y in 0..self.height {
-            let mut row = Vec::with_capacity(self.width as usize);
-            for x in 0..self.width {
-                let idx = ((y * self.width + x) * bytes_per_entry) as usize;
-                let path0 = u32::from_le_bytes([data[idx], data[idx + 1], data[idx + 2], data[idx + 3]]);
-                let path1 = u32::from_le_bytes([data[idx + 4], data[idx + 5], data[idx + 6], data[idx + 7]]);
-                let path2 = u32::from_le_bytes([data[idx + 8], data[idx + 9], data[idx + 10], data[idx + 11]]);
-                let path3 = u32::from_le_bytes([data[idx + 12], data[idx + 13], data[idx + 14], data[idx + 15]]);
-                let iteration_count = u32::from_le_bytes([data[idx + 16], data[idx + 17], data[idx + 18], data[idx + 19]]);
-                let initial_x = f32::from_le_bytes([data[idx + 20], data[idx + 21], data[idx + 22], data[idx + 23]]);
-                let initial_y = f32::from_le_bytes([data[idx + 24], data[idx + 25], data[idx + 26], data[idx + 27]]);
-
-                row.push(PathEntry {
-                    path0,
-                    path1,
-                    path2,
-                    path3,
-                    iteration_count,
-                    initial_x,
-                    initial_y,
-                });
-            }
-            result.push(row);
-        }
-
-        drop(data);
-        staging_buffer.unmap();
-        // Explicit, because dropping frees nothing on WebGPU.
-        staging_buffer.destroy();
-
-        Ok(result)
-    }
-
-    /// Get path at a specific pixel coordinate
-    /// This is a convenience method that reads the entire buffer
-    /// For frequent queries, cache the result of read_path_buffer()
-    pub async fn get_path_at(
-        &self,
-        device: &Device,
-        queue: &Queue,
-        x: u32,
-        y: u32,
-    ) -> Result<Option<PathEntry>, String> {
+    /// **The path a pixel was last drawn through** (PathMap's
+    /// right-click, docs/projects/word-editing.md §10): its word of the
+    /// plan on screen, and how many of its last maps every word on screen
+    /// shares; `None` where no path drew it or PathMap is off.
+    pub async fn read_path_at(&self, device: &Device, queue: &Queue, x: u32, y: u32) -> Result<Option<(Vec<u32>, usize)>, String> {
+        let Some(path_buffer) = &self.buffers.path_buffer else { return Ok(None) };
         if x >= self.width || y >= self.height {
             return Ok(None);
         }
-        let paths = self.read_path_buffer(device, queue).await?;
-        Ok(Some(paths[y as usize][x as usize]))
+        let staging = device.create_buffer(&BufferDescriptor {
+            label: Some("Path Id Staging"),
+            size: 4,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Path Id Read") });
+        encoder.copy_buffer_to_buffer(path_buffer, ((y * self.width + x) * 4) as u64, &staging, 0, 4);
+        queue.submit(std::iter::once(encoder.finish()));
+        let slice = staging.slice(..);
+        let (tx, rx) = futures::channel::oneshot::channel();
+        slice.map_async(MapMode::Read, move |result| {
+            let _ = tx.send(result);
+        });
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        rx.await
+            .map_err(|_| "Failed to map the path id".to_string())?
+            .map_err(|e| format!("Path id map error: {e:?}"))?;
+        let id = {
+            let data = slice.get_mapped_range();
+            u32::from_le_bytes([data[0], data[1], data[2], data[3]])
+        };
+        staging.unmap();
+        // Explicit, because dropping frees nothing on WebGPU.
+        staging.destroy();
+        // 1-based into the words drawn; the plan on screen is the one
+        // the ids were written against (a new plan restarts the picture,
+        // which clears them).
+        let Some(plan) = &self.cylinders else { return Ok(None) };
+        Ok(id
+            .checked_sub(1)
+            .and_then(|i| plan.words.get(i as usize))
+            .map(|c| (c.word.clone(), crate::scene::word_tree::common_suffix(plan))))
     }
 
     /// Read a region of pixels from the fractal texture centered at (center_x, center_y)
@@ -3725,13 +5326,14 @@ impl FlameRenderer {
             source: wgpu::ShaderSource::Wgsl(source.into()),
         });
 
-        // Reuse the render path's bind group layout rather than an auto
+        // Every binding, in a layout of them all, rather than an auto
         // layout: the probe entry point touches only a few of the
         // bindings, and an auto layout would derive a *narrower* one
-        // that the existing bind group no longer satisfies.
+        // that a bind group of them all would not satisfy.
+        let (full_layout, bind_group) = self.pipelines.create_full_compute_bind_group(device, &self.buffers);
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("probe pipeline layout"),
-            bind_group_layouts: &[Some(&self.pipelines.compute_bind_group_layout)],
+            bind_group_layouts: &[Some(&full_layout)],
             immediate_size: 0,
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -3775,7 +5377,7 @@ impl FlameRenderer {
                 timestamp_writes: None,
             });
             pass.set_pipeline(&pipeline);
-            pass.set_bind_group(0, &self.compute_bind_group, &[]);
+            pass.set_bind_group(0, &bind_group, &[]);
             pass.dispatch_workgroups(threads.div_ceil(64), 1, 1);
         }
         encoder.copy_buffer_to_buffer(

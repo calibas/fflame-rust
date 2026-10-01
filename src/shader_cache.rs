@@ -15,7 +15,7 @@ pub struct ShaderCache {
     /// Currently active variation names and weights
     active_variations: HashMap<String, f32>,
 
-    /// Whether path features (PathMap mode or path filters) are enabled
+    /// Whether path features (the PathMap mode) are enabled
     /// When false, uses simplified shaders without path tracking code
     path_features_enabled: bool,
 
@@ -42,6 +42,13 @@ pub struct ShaderCache {
     /// Compute pipelines
     pub compute_pipeline_2d: ComputePipeline,
     pub compute_pipeline_3d: ComputePipeline,
+
+    /// **The current pipeline's bind group layout**, and the bindings in it:
+    /// those its WGSL uses (`gpu::pipelines::used_bindings`), so a flame
+    /// with no Focused Rendering, auto exposure or importance sampling
+    /// asks nothing of the device for them.
+    pub compute_layout: BindGroupLayout,
+    pub compute_bindings: Vec<u32>,
 
     /// Init compute pipeline for variations with `wgsl_init`. `None` when no
     /// active variation in the current flame has init. Rebuilt alongside the
@@ -124,6 +131,9 @@ struct CachedPipelines {
     key: u64,
     source: String,
     pipeline: ComputePipeline,
+    /// The layout the pipeline was made with, and its bindings.
+    layout: BindGroupLayout,
+    bindings: Vec<u32>,
     init_source: Option<String>,
     init_pipeline: Option<ComputePipeline>,
     init_pair_count: u32,
@@ -157,7 +167,7 @@ impl ShaderCache {
     /// Create a new shader cache with initial flame configuration
     /// Initially uses simplified shaders (path_features_enabled = false, xaos_enabled = false)
     /// Only builds the shader for the flame's render mode (2D or 3D)
-    pub fn new(device: &Device, flame: &Flame, bind_group_layout: &BindGroupLayout) -> Self {
+    pub fn new(device: &Device, flame: &Flame) -> Self {
         let new_started = web_time::Instant::now();
         let builder = ShaderBuilder::new(crate::variations::global_registry().clone());
         let active_variations = flame.extract_active_variations();
@@ -178,6 +188,12 @@ impl ShaderCache {
             // arrive via `constants_from_config` on config load, which
             // triggers a rebuild if they differ.
             has_analytic_blur: flame.analytic_blur_active(&crate::variations::global_registry(), RenderMode::TwoD),
+            importance_sampling: false,
+            cylinder_targeting: false,
+            frame_coverage: false,
+            cylinder_replay: false,
+            cylinder_relative: false,
+            cylinder_offsets: false,
             flatten_z_per_iter: false,
             solid_enabled: false,
             probe: false,
@@ -215,9 +231,8 @@ impl ShaderCache {
         );
 
         // Create pipeline for the active mode
-        let compute_pipeline = Self::create_compute_pipeline(
+        let (compute_pipeline, compute_layout, compute_bindings) = Self::create_compute_pipeline(
             device,
-            bind_group_layout,
             &shader_source,
             if is_3d { "Trajectory 3D (Initial)" } else { "Trajectory 2D (Initial)" }
         );
@@ -247,6 +262,8 @@ impl ShaderCache {
             key: Self::cache_key(&shader_source_2d, init_shader_source.as_deref()),
             source: shader_source_2d.clone(),
             pipeline: compute_pipeline_2d.clone(),
+            layout: compute_layout.clone(),
+            bindings: compute_bindings.clone(),
             init_source: init_shader_source.clone(),
             init_pipeline: init_pipeline.clone(),
             init_pair_count,
@@ -267,6 +284,8 @@ impl ShaderCache {
             shader_source_3d,
             compute_pipeline_2d,
             compute_pipeline_3d,
+            compute_layout,
+            compute_bindings,
             init_pipeline,
             init_shader_source,
             init_pair_count,
@@ -380,6 +399,11 @@ impl ShaderCache {
                 );
                 constants.solid_enabled = config.solid_strength > 0.0
                     && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD);
+                constants.importance_sampling = config.importance.enabled;
+                constants.frame_coverage = config.auto_exposure;
+                constants.cylinder_replay = false;
+                constants.cylinder_relative = false;
+                constants.cylinder_offsets = false;
                 constants
             }
         } else {
@@ -402,6 +426,17 @@ impl ShaderCache {
                 has_attachments: config.flame.has_attachments(),
                 has_post_symmetry: config.flame.post_symmetry.ty != crate::scene::transforms::PostSymmetryType::None,
                 has_analytic_blur: config.flame.analytic_blur_active(&registry, config.render_mode),
+                importance_sampling: config.importance.enabled,
+                cylinder_targeting: false,
+                // Auto exposure is a config choice, so unlike
+                // targeting it can be read straight off the config
+                // here -- it needs no knowledge of the view.
+                frame_coverage: config.auto_exposure,
+                // Like targeting itself, decided by the renderer:
+                // it depends on the enumeration having run.
+                cylinder_replay: false,
+                cylinder_relative: false,
+            cylinder_offsets: false,
                 flatten_z_per_iter: matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD)
                     && !config.preserve_z,
                 solid_enabled: config.solid_strength > 0.0
@@ -420,8 +455,8 @@ impl ShaderCache {
 
     /// Check if shaders need recompilation and rebuild if necessary
     /// Returns true if shaders were recompiled
-    pub fn ensure_current(&mut self, device: &Device, bind_group_layout: &BindGroupLayout, flame: &Flame, render_mode: RenderMode) -> bool {
-        self.ensure_current_with_path_features(device, bind_group_layout, flame, self.path_features_enabled, render_mode)
+    pub fn ensure_current(&mut self, device: &Device, flame: &Flame, render_mode: RenderMode) -> bool {
+        self.ensure_current_with_path_features(device, flame, self.path_features_enabled, render_mode)
     }
 
     /// Check if shaders need recompilation, with explicit path_features_enabled state
@@ -429,13 +464,12 @@ impl ShaderCache {
     pub fn ensure_current_with_path_features(
         &mut self,
         device: &Device,
-        bind_group_layout: &BindGroupLayout,
         flame: &Flame,
         path_features_enabled: bool,
         render_mode: RenderMode,
     ) -> bool {
         // Use current constants (caller should use ensure_current_full for constant updates)
-        self.ensure_current_full(device, bind_group_layout, flame, path_features_enabled, self.constants.clone(), render_mode)
+        self.ensure_current_full(device, flame, path_features_enabled, self.constants.clone(), render_mode)
     }
 
     /// Full shader update check with explicit path features and constants
@@ -443,7 +477,6 @@ impl ShaderCache {
     pub fn ensure_current_full(
         &mut self,
         device: &Device,
-        bind_group_layout: &BindGroupLayout,
         flame: &Flame,
         path_features_enabled: bool,
         constants: ShaderConstants,
@@ -587,6 +620,8 @@ impl ShaderCache {
             self.shader_source_3d = entry.source.clone();
             self.compute_pipeline_2d = entry.pipeline.clone();
             self.compute_pipeline_3d = entry.pipeline.clone();
+            self.compute_layout = entry.layout.clone();
+            self.compute_bindings = entry.bindings.clone();
             self.init_shader_source = entry.init_source.clone();
             self.init_pipeline = entry.init_pipeline.clone();
             self.init_pair_count = entry.init_pair_count;
@@ -594,9 +629,8 @@ impl ShaderCache {
             self.cache_hits += 1;
             log::info!("Shader change served from pipeline cache (no compile)");
         } else {
-            let pipeline = Self::create_compute_pipeline(
+            let (pipeline, layout, bindings) = Self::create_compute_pipeline(
                 device,
-                bind_group_layout,
                 &source,
                 match (is_3d, path_features_enabled) {
                     (true, true) => "Trajectory 3D (Path)",
@@ -617,6 +651,8 @@ impl ShaderCache {
             self.shader_source_3d = source.clone();
             self.compute_pipeline_2d = pipeline.clone();
             self.compute_pipeline_3d = pipeline.clone();
+            self.compute_layout = layout.clone();
+            self.compute_bindings = bindings.clone();
             self.init_shader_source = init_source.clone();
             self.init_pipeline = init_pipeline.clone();
             self.init_pair_count = init_pair_count;
@@ -627,6 +663,8 @@ impl ShaderCache {
                     key,
                     source,
                     pipeline,
+                    layout,
+                    bindings,
                     init_source,
                     init_pipeline,
                     init_pair_count,
@@ -729,13 +767,10 @@ impl ShaderCache {
         Ok(())
     }
 
-    /// Create a compute pipeline from shader source
-    fn create_compute_pipeline(
-        device: &Device,
-        bind_group_layout: &BindGroupLayout,
-        source: &str,
-        label: &str,
-    ) -> ComputePipeline {
+    /// Create a compute pipeline from shader source, in the layout of the
+    /// bindings it uses (`gpu::pipelines::used_bindings`); the layout and
+    /// the bindings come back with it.
+    fn create_compute_pipeline(device: &Device, source: &str, label: &str) -> (ComputePipeline, BindGroupLayout, Vec<u32>) {
         if let Err(msg) = Self::validate_wgsl(source, label) {
             // Logged rather than swallowed: the caller has no error
             // channel today, so handing the source on unchanged keeps
@@ -749,20 +784,35 @@ impl ShaderCache {
             source: ShaderSource::Wgsl(source.into()),
         });
 
+        let bindings = crate::gpu::pipelines::used_bindings(source);
+        // Said plainly, rather than left to the device's layout error: a
+        // device that allows fewer storage buffers than this shader uses
+        // (a browser reports as few as 8 or 10) cannot run it.
+        let storage = crate::gpu::pipelines::storage_bindings(&bindings);
+        let allowed = device.limits().max_storage_buffers_per_shader_stage;
+        if storage.len() as u32 > allowed {
+            log::error!(
+                "`{label}` uses {} storage buffers (bindings {storage:?}) and this device allows {allowed}. \
+                 Turning off Focused Rendering, auto exposure or importance sampling frees one each.",
+                storage.len()
+            );
+        }
+        let layout = crate::gpu::pipelines::compute_layout(device, Some(&bindings));
         let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some(&format!("{} Layout", label)),
-            bind_group_layouts: &[Some(bind_group_layout)],
+            bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
 
-        device.create_compute_pipeline(&ComputePipelineDescriptor {
+        let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
             label: Some(label),
             layout: Some(&pipeline_layout),
             module: &shader_module,
             entry_point: Some("main"),
             compilation_options: Default::default(),
             cache: None,
-        })
+        });
+        (pipeline, layout, bindings)
     }
 
     /// Get the current 2D pipeline

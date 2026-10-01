@@ -83,6 +83,18 @@ fn main() {
                 2
             }
         },
+        Some("lens") => {
+            // lens [grid] [out.bin]  -- every variation as a camera lens
+            let grid = args
+                .get(1)
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(160);
+            let out = args
+                .get(2)
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("output/lens/lens-maps.bin"));
+            do_lens(grid, out)
+        }
         Some("compare") => match args.get(1..3) {
             Some([a, b]) => do_compare(Path::new(a), Path::new(b)),
             _ => {
@@ -96,6 +108,7 @@ fn main() {
                  variation_probe <path>                run the probe, write <path>\n\
                  variation_probe --no-sweep            skip the parameter sweep\n\
                  variation_probe compare <old> <new>   compare two reports\n\
+                 variation_probe lens [grid] [out]     every variation as a screen lens\n\
                  \n\
                  The sweep writes a second report beside the first, named\n\
                  <path>-sweep.txt. Compare it the same way."
@@ -107,6 +120,37 @@ fn main() {
         None => do_run(PathBuf::from(DEFAULT_REPORT), true),
     };
     std::process::exit(code);
+}
+
+/// Evaluate every variation as a screen-space camera lens and dump
+/// the maps. `scripts/lens_sheet.py` turns the dump into contact
+/// sheets; see `src/probe/lens.rs` for what a lens is.
+fn do_lens(grid: u32, out: PathBuf) -> i32 {
+    let maps = match pollster::block_on(fractal_flame_wgpu::probe::lens::run(
+        grid,
+        |i, total| {
+            print!("\r  batch {i}/{total}   ");
+            use std::io::Write;
+            let _ = std::io::stdout().flush();
+        },
+    )) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("\nlens survey failed: {e}");
+            return 1;
+        }
+    };
+    println!("\r  {} variations at {grid}x{grid}          ", maps.len());
+    match fractal_flame_wgpu::probe::lens::write_dump(&out, grid, &maps) {
+        Ok(()) => {
+            println!("wrote {}", out.display());
+            0
+        }
+        Err(e) => {
+            eprintln!("could not write {}: {e}", out.display());
+            1
+        }
+    }
 }
 
 fn do_run(out: PathBuf, sweep: bool) -> i32 {

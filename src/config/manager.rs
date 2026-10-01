@@ -1711,8 +1711,10 @@ impl ConfigManager {
             // View
             ConfigPath::Zoom => Ok(config.zoom.into()),
             ConfigPath::Pan => Ok((config.pan_x, config.pan_y).into()),
-            ConfigPath::PanX => Ok(config.pan_x.into()),
-            ConfigPath::PanY => Ok(config.pan_y.into()),
+            // Named rather than `.into()`: there is no `From<f64>`
+            // on purpose -- see the note beside the impls.
+            ConfigPath::PanX => Ok(ConfigValue::Double(config.pan_x)),
+            ConfigPath::PanY => Ok(ConfigValue::Double(config.pan_y)),
             ConfigPath::Rotation => Ok(config.rotation.into()),
             ConfigPath::CameraRotationX => Ok(config.camera_rotation_x.into()),
             ConfigPath::CameraRotationY => Ok(config.camera_rotation_y.into()),
@@ -1745,6 +1747,12 @@ impl ConfigManager {
             ConfigPath::UseCurve => Ok(config.use_curve.into()),
             // Levels controls
             ConfigPath::LevelsEnabled => Ok(config.levels_enabled.into()),
+            ConfigPath::AutoExposure => Ok(config.auto_exposure.into()),
+            ConfigPath::CylinderTargeting => Ok(config.cylinder_targeting.into()),
+            ConfigPath::CylinderAlways => Ok(config.cylinder_always.into()),
+            ConfigPath::CylinderTrim => Ok(config.cylinder_trim.into()),
+            ConfigPath::CylinderTrimLevels => Ok(config.cylinder_trim_levels.into()),
+            ConfigPath::WordRemovals => Ok(ConfigValue::StringList(config.word_removals.clone())),
             ConfigPath::LevelsLow => Ok(config.levels_low.into()),
             ConfigPath::LevelsHigh => Ok(config.levels_high.into()),
             ConfigPath::LevelsGamma => Ok(config.levels_gamma.into()),
@@ -1752,8 +1760,7 @@ impl ConfigManager {
             // Color
             ConfigPath::ColorMode => Ok(config.color_mode.into()),
             ConfigPath::PathMapStyle => Ok(config.path_map_style.into()),
-            ConfigPath::PathCaptureMode => Ok(config.path_capture_mode.into()),
-            ConfigPath::PathTrackingMode => Ok(config.path_tracking_mode.into()),
+            ConfigPath::PathMapLevel => Ok(config.path_map_level.into()),
             ConfigPath::PaletteIndex => {
                 // PaletteIndex is deprecated - return 0 for backward compatibility
                 Ok(0u32.into())
@@ -1788,6 +1795,19 @@ impl ConfigManager {
             ConfigPath::EscapeJuliaIm => Ok(config.escape.julia_im.into()),
             ConfigPath::EscapeCenterRe => Ok(ConfigValue::String(config.escape.center_re.clone())),
             ConfigPath::EscapeCenterIm => Ok(ConfigValue::String(config.escape.center_im.clone())),
+            ConfigPath::EscapeCamTargetX => {
+                Ok(ConfigValue::String(config.escape.cam_target_x.clone()))
+            }
+            ConfigPath::EscapeCamTargetY => {
+                Ok(ConfigValue::String(config.escape.cam_target_y.clone()))
+            }
+            ConfigPath::EscapeCamTargetZ => {
+                Ok(ConfigValue::String(config.escape.cam_target_z.clone()))
+            }
+            ConfigPath::EscapeCamPitch => Ok(config.escape.cam_pitch.into()),
+            ConfigPath::EscapeCamYaw => Ok(config.escape.cam_yaw.into()),
+            ConfigPath::EscapeCamBank => Ok(config.escape.cam_bank.into()),
+            ConfigPath::EscapeCamFov => Ok(config.escape.cam_fov.into()),
             // f32 view of an f64 field — see the ConfigPath doc for why
             // the precision ceiling is acceptable until phase 4.
             ConfigPath::EscapeZoomLog2 => Ok((config.escape.zoom_log2 as f32).into()),
@@ -1995,6 +2015,15 @@ impl ConfigManager {
             ConfigPath::EscapeColoringParam { param } => Ok(config
                 .escape
                 .coloring_params
+                .get(param)
+                .copied()
+                .unwrap_or(0.0)
+                .into()),
+            ConfigPath::EscapeLens => Ok(config.escape.lens.clone().into()),
+            ConfigPath::EscapeLensAmount => Ok(config.escape.lens_amount.into()),
+            ConfigPath::EscapeLensParam { param } => Ok(config
+                .escape
+                .lens_params
                 .get(param)
                 .copied()
                 .unwrap_or(0.0)
@@ -2597,7 +2626,7 @@ impl ConfigManager {
                 self.current.zoom = value.try_into()?;
             }
             ConfigPath::Pan => {
-                let (x, y): (f32, f32) = value.try_into()?;
+                let (x, y): (f64, f64) = value.try_into()?;
                 self.current.pan_x = x;
                 self.current.pan_y = y;
             }
@@ -2697,6 +2726,24 @@ impl ConfigManager {
             ConfigPath::LevelsEnabled => {
                 self.current.levels_enabled = value.try_into()?;
             }
+            ConfigPath::AutoExposure => {
+                self.current.auto_exposure = value.try_into()?;
+            }
+            ConfigPath::CylinderTargeting => {
+                self.current.cylinder_targeting = value.try_into()?;
+            }
+            ConfigPath::CylinderAlways => {
+                self.current.cylinder_always = value.try_into()?;
+            }
+            ConfigPath::CylinderTrim => {
+                self.current.cylinder_trim = value.try_into()?;
+            }
+            ConfigPath::CylinderTrimLevels => {
+                self.current.cylinder_trim_levels = value.try_into()?;
+            }
+            ConfigPath::WordRemovals => {
+                self.current.word_removals = value.try_into()?;
+            }
             ConfigPath::LevelsLow => {
                 self.current.levels_low = value.try_into()?;
             }
@@ -2714,11 +2761,8 @@ impl ConfigManager {
             ConfigPath::PathMapStyle => {
                 self.current.path_map_style = value.try_into()?;
             }
-            ConfigPath::PathCaptureMode => {
-                self.current.path_capture_mode = value.try_into()?;
-            }
-            ConfigPath::PathTrackingMode => {
-                self.current.path_tracking_mode = value.try_into()?;
+            ConfigPath::PathMapLevel => {
+                self.current.path_map_level = value.try_into()?;
             }
             ConfigPath::PaletteIndex => {
                 // PaletteIndex is deprecated - ignore updates
@@ -2818,6 +2862,32 @@ impl ConfigManager {
             }
             ConfigPath::EscapeCenterIm => {
                 self.current.escape.center_im = value.try_into()?;
+            }
+            ConfigPath::EscapeCamTargetX => {
+                self.current.escape.cam_target_x = value.try_into()?;
+            }
+            ConfigPath::EscapeCamTargetY => {
+                self.current.escape.cam_target_y = value.try_into()?;
+            }
+            ConfigPath::EscapeCamTargetZ => {
+                self.current.escape.cam_target_z = value.try_into()?;
+            }
+            ConfigPath::EscapeCamPitch => {
+                // To the poles and no further: past them the elevation
+                // would mean the same view with the yaw reversed, and
+                // a slider that wraps a view is a slider that jumps.
+                let v: f32 = value.try_into()?;
+                self.current.escape.cam_pitch = v.clamp(-1.5708, 1.5708);
+            }
+            ConfigPath::EscapeCamYaw => {
+                self.current.escape.cam_yaw = value.try_into()?;
+            }
+            ConfigPath::EscapeCamBank => {
+                self.current.escape.cam_bank = value.try_into()?;
+            }
+            ConfigPath::EscapeCamFov => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.cam_fov = v.clamp(0.05, 3.0);
             }
             ConfigPath::EscapeZoomLog2 => {
                 let v: f32 = value.try_into()?;
@@ -3274,6 +3344,18 @@ impl ConfigManager {
             ConfigPath::EscapeColoringParam { param } => {
                 let v: f32 = value.try_into()?;
                 self.current.escape.coloring_params.insert(param.clone(), v);
+            }
+            ConfigPath::EscapeLens => {
+                self.current.escape.lens = value.try_into()?;
+            }
+            ConfigPath::EscapeLensAmount => {
+                let v: f32 = value.try_into()?;
+                let lim = crate::config::escape::LENS_AMOUNT_LIMIT;
+                self.current.escape.lens_amount = v.clamp(-lim, lim);
+            }
+            ConfigPath::EscapeLensParam { param } => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.lens_params.insert(param.clone(), v);
             }
 
             // Transforms
@@ -4410,6 +4492,20 @@ impl TryFrom<ConfigValue> for f32 {
     }
 }
 
+impl TryFrom<ConfigValue> for f64 {
+    type Error = ConfigError;
+    fn try_from(v: ConfigValue) -> Result<Self, Self::Error> {
+        match v {
+            ConfigValue::Double(f) => Ok(f),
+            // A `Float` widens, so an animation track or a script
+            // that only knows f32 can still drive the pan -- it just
+            // cannot express a deep one.
+            ConfigValue::Float(f) => Ok(f as f64),
+            _ => Err(ConfigError::TypeMismatch),
+        }
+    }
+}
+
 impl TryFrom<ConfigValue> for i32 {
     type Error = ConfigError;
     fn try_from(v: ConfigValue) -> Result<Self, Self::Error> {
@@ -4460,7 +4556,7 @@ impl TryFrom<ConfigValue> for bool {
     }
 }
 
-impl TryFrom<ConfigValue> for (f32, f32) {
+impl TryFrom<ConfigValue> for (f64, f64) {
     type Error = ConfigError;
     fn try_from(v: ConfigValue) -> Result<Self, Self::Error> {
         match v {
@@ -4491,7 +4587,7 @@ impl TryFrom<ConfigValue> for String {
 }
 
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
-use crate::scene::palette::{ColorMode, PathCaptureMode, PathMapStyle, PathTrackingMode};
+use crate::scene::palette::{ColorMode, PathMapStyle};
 use crate::scene::transforms::RenderMode;
 
 impl TryFrom<ConfigValue> for ToneMapMode {
@@ -4539,26 +4635,6 @@ impl TryFrom<ConfigValue> for PathMapStyle {
     fn try_from(v: ConfigValue) -> Result<Self, Self::Error> {
         match v {
             ConfigValue::PathMapStyle(m) => Ok(m),
-            _ => Err(ConfigError::TypeMismatch),
-        }
-    }
-}
-
-impl TryFrom<ConfigValue> for PathCaptureMode {
-    type Error = ConfigError;
-    fn try_from(v: ConfigValue) -> Result<Self, Self::Error> {
-        match v {
-            ConfigValue::PathCaptureMode(m) => Ok(m),
-            _ => Err(ConfigError::TypeMismatch),
-        }
-    }
-}
-
-impl TryFrom<ConfigValue> for PathTrackingMode {
-    type Error = ConfigError;
-    fn try_from(v: ConfigValue) -> Result<Self, Self::Error> {
-        match v {
-            ConfigValue::PathTrackingMode(m) => Ok(m),
             _ => Err(ConfigError::TypeMismatch),
         }
     }

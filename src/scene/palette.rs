@@ -23,73 +23,46 @@ impl Default for ColorMode {
     }
 }
 
-/// PathMap capture mode - when to capture the path for each pixel
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum PathCaptureMode {
-    /// Capture on first hit to the pixel (original behavior)
-    #[default]
-    #[serde(rename = "first_hit", alias = "FirstHit")]
-    FirstHit,
-    /// Capture first hit after burn-in iterations complete
-    #[serde(rename = "first_after_burn_in", alias = "FirstAfterBurnIn")]
-    FirstAfterBurnIn,
-    /// Always overwrite - shows most recent path to hit pixel
-    #[serde(rename = "last_hit", alias = "LastHit")]
-    LastHit,
-}
-
-impl PathCaptureMode {
-    /// Check if this is the default value (for skip_serializing_if)
-    pub fn is_default(&self) -> bool {
-        *self == Self::default()
-    }
-}
-
-/// PathMap tracking mode - which iterations to store in the path
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum PathTrackingMode {
-    /// Store the first 32 iterations, then stop tracking
-    #[default]
-    #[serde(rename = "first", alias = "First")]
-    First,
-    /// Store the 32 most recent iterations (rolling window)
-    #[serde(rename = "recent", alias = "Recent")]
-    Recent,
-}
-
-impl PathTrackingMode {
-    /// Check if this is the default value (for skip_serializing_if)
-    pub fn is_default(&self) -> bool {
-        *self == Self::default()
-    }
-}
-
-/// PathMap coloring style - how path hash maps to colors
+/// **PathMap colouring** (docs/projects/word-editing.md §10): how a
+/// sample's path -- the transforms Focused Rendering drew it through --
+/// becomes a palette position. Every style reads the palette.
+///
+/// The first four names of the old history-based PathMap load as the two
+/// path styles: that history coloured by transforms a thread chose long
+/// before the point it plotted, which the chaos game has forgotten.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum PathMapStyle {
-    /// Color by path beginning (first ~8 transforms), similar paths = similar colors
+    /// A gradient by address: the last transform picks a range of the
+    /// palette, the one before it a range within that, and so on, so
+    /// each part of the picture gets its own range and neighbouring parts
+    /// neighbouring colours.
     #[default]
-    #[serde(rename = "prefix", alias = "Prefix")]
-    Prefix,
-    /// Color by path end (recent transforms), similar paths = similar colors
-    #[serde(rename = "suffix", alias = "Suffix")]
-    Suffix,
-    /// Color by path beginning with hash scrambling for distinct colors
-    #[serde(rename = "prefix_distinct", alias = "PrefixDistinct")]
-    PrefixDistinct,
-    /// Color by path end with hash scrambling for distinct colors
-    #[serde(rename = "suffix_distinct", alias = "SuffixDistinct")]
-    SuffixDistinct,
-    /// Color by iteration depth (burn_in to 32), uses palette gradient
+    #[serde(rename = "path", alias = "Path", alias = "prefix", alias = "Prefix", alias = "suffix", alias = "Suffix")]
+    Path,
+    /// Each path, to `path_map_level` transforms, its own palette
+    /// position, scattered so neighbours differ.
+    #[serde(
+        rename = "path_distinct",
+        alias = "PathDistinct",
+        alias = "prefix_distinct",
+        alias = "PrefixDistinct",
+        alias = "suffix_distinct",
+        alias = "SuffixDistinct"
+    )]
+    PathDistinct,
+    /// By how many transforms the path has, across the plan's shortest to
+    /// longest: where Focused Rendering had to divide the picture finely.
     #[serde(rename = "depth", alias = "Depth")]
     Depth,
-    /// Color by distance from origin (0 to sqrt(2)), uses palette gradient
+    /// By where the point was before its path carried it into the view --
+    /// a point of the fractal -- as its distance from the fractal's
+    /// centre.
     #[serde(rename = "origin_radial", alias = "OriginRadial")]
     OriginRadial,
-    /// Color by horizontal position (-1 to 1), uses palette gradient
+    /// ... as its horizontal position across the fractal.
     #[serde(rename = "origin_horizontal", alias = "OriginHorizontal")]
     OriginHorizontal,
-    /// Color by vertical position (-1 to 1), uses palette gradient
+    /// ... as its vertical position across the fractal.
     #[serde(rename = "origin_vertical", alias = "OriginVertical")]
     OriginVertical,
 }

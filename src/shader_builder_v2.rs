@@ -297,6 +297,51 @@ pub struct ShaderConstants {
     /// cache's constants-changed check.
     pub has_post_symmetry: bool,
 
+    /// Whether biased transform selection runs for this flame
+    /// (`FractalConfig::importance.enabled`). Drives
+    /// `IMPORTANCE_SAMPLING` — when false the binding, the biased
+    /// selection functions, the window state and the stochastic
+    /// deposit are all stripped and the shader is byte-identical to a
+    /// build without the feature. Tracked here so toggling it triggers
+    /// a rebuild via the cache's constants-changed check. See
+    /// docs/projects/flame-deep-zoom.md stage 1.
+    pub importance_sampling: bool,
+
+    /// Whether the forced prefix plots in VIEW-RELATIVE coordinates
+    /// (`docs/projects/flame-deep-zoom.md`). Only ever set together
+    /// with the composed arm, and only for a flame whose plot path
+    /// has nothing else that works in world coordinates.
+    pub cylinder_relative: bool,
+
+    /// Whether the forced prefix is REPLAYED symbol by symbol rather
+    /// than applied as one composed matrix
+    /// (`docs/projects/flame-deep-zoom.md`). Set when the flame has a
+    /// map that is bounded but not affine, where no single matrix
+    /// exists. Only read when `cylinder_targeting` is on.
+    pub cylinder_replay: bool,
+
+    /// Whether the replay's last steps run in OFFSETS from reference
+    /// orbits (`docs/projects/deep-zoom-precision.md`), which the plan
+    /// carries where the view is too deep for f32. Only with the replay,
+    /// in 2D, and with `cylinder_relative`, whose plot it feeds.
+    pub cylinder_offsets: bool,
+
+    /// Whether the frame-coverage counters are compiled in (auto
+    /// exposure — `docs/projects/flame-deep-zoom.md`). Drives
+    /// `FRAME_COVERAGE`; when false the binding, the per-thread
+    /// tallies and the flush are all stripped, so a render that is
+    /// not auto-exposing is byte-identical to one built before the
+    /// feature existed.
+    pub frame_coverage: bool,
+
+    /// Whether cylinder targeting runs for this flame and view
+    /// (`docs/projects/flame-deep-zoom.md` stage 2). Drives
+    /// `CYLINDER_TARGETING` — when false the binding, the word draw
+    /// and the forced prefix are stripped. Tracked here so entering
+    /// and leaving targeting triggers a rebuild through the cache's
+    /// constants-changed check.
+    pub cylinder_targeting: bool,
+
     /// Whether the analytic-blur feature is active for this flame
     /// (`Flame::analytic_blur_active`). Drives `HAS_ANALYTIC_BLUR` — when
     /// false, all mean-splat routing is stripped and the shader is
@@ -399,6 +444,12 @@ impl Default for ShaderConstants {
             has_attachments: false,
             has_post_symmetry: false,
             has_analytic_blur: false,
+            importance_sampling: false,
+            cylinder_targeting: false,
+            frame_coverage: false,
+            cylinder_replay: false,
+            cylinder_relative: false,
+            cylinder_offsets: false,
             flatten_z_per_iter: false,
             solid_enabled: false,
             probe: false,
@@ -625,6 +676,14 @@ impl ShaderConstants {
             has_attachments: flame.has_attachments(),
             has_post_symmetry: flame.post_symmetry.ty != crate::scene::transforms::PostSymmetryType::None,
             has_analytic_blur: flame.analytic_blur_active(registry, render_mode),
+            // Not derivable from a flame: the bias lives on the
+            // CONFIG, so a caller that has one sets this after.
+            importance_sampling: false,
+            cylinder_targeting: false,
+            frame_coverage: false,
+            cylinder_replay: false,
+            cylinder_relative: false,
+            cylinder_offsets: false,
             // Per-iteration Z flatten — only meaningful in 3D, and
             // only when preserve_z is false (JWF/Apo default).
             flatten_z_per_iter: matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD)
@@ -1436,6 +1495,7 @@ impl ShaderBuilder {
         flame: &crate::scene::transforms::Flame,
         active_variations: &[(String, u32)],
         render_3d: bool,
+        forced_arms: bool,
     ) -> String {
         // Inline helper: dispatches the per-flame WGSL specializer for
         // variations that opt in. Returning `None` means "use the static
@@ -1512,6 +1572,23 @@ impl ShaderBuilder {
                 }
             };
             let Some(source) = source else { continue };
+            // A replayed word names the ARM a many-valued variation
+            // must take, and the variation's body is where the draw
+            // happens; under a replay build the draw is wrapped so it
+            // reads the forced arm. Only then -- an untargeted build
+            // emits the body untouched, and the shader dumps say so.
+            let forced;
+            let source = if forced_arms {
+                match crate::variations::bound::force_arms(name, source) {
+                    Some(f) => {
+                        forced = f;
+                        forced.as_str()
+                    }
+                    None => source,
+                }
+            } else {
+                source
+            };
 
             for (fn_name, block) in split_wgsl_top_level_fns(source) {
                 if let Some((prev_block, prev_var)) = emitted.get(&fn_name) {
@@ -1615,6 +1692,34 @@ impl ShaderBuilder {
         // call sites above use — which is the point of putting it in
         // the template rather than generating it separately.
         processor.set("PROBE", constants.probe);
+        // IMPORTANCE_SAMPLING gates biased transform selection and the
+        // windowed likelihood-ratio correction that makes it unbiased
+        // (docs/projects/flame-deep-zoom.md stage 1). Off strips the
+        // binding, both biased selection functions, the per-thread
+        // window state and the stochastic deposit -- the shader is the
+        // text it was before the feature existed, which
+        // `importance_sampling_off_is_byte_identical` asserts. Sourced
+        // from `constants` so toggling it rebuilds through the cache's
+        // constants-changed check.
+        processor.set("IMPORTANCE_SAMPLING", constants.importance_sampling);
+        // CYLINDER_TARGETING forces an enumerated prefix at plot time
+        // so every sample lands in the viewport
+        // (docs/projects/flame-deep-zoom.md stage 2). Off strips the
+        // binding, the draw and the prefix.
+        processor.set("CYLINDER_TARGETING", constants.cylinder_targeting);
+        // FRAME_COVERAGE tallies plot attempts and in-frame landings so
+        // the tone map can be told what share of the work the viewport
+        // holds (docs/projects/flame-deep-zoom.md).
+        processor.set("FRAME_COVERAGE", constants.frame_coverage);
+        // CYLINDER_REPLAY picks which arm of the forced prefix is
+        // emitted: the composed matrix, or the symbol walk.
+        processor.set("CYLINDER_REPLAY", constants.cylinder_replay);
+        // CYLINDER_RELATIVE moves the forced plot into view-relative
+        // coordinates so a deep zoom is not quantised by f32.
+        processor.set("CYLINDER_RELATIVE", constants.cylinder_relative);
+        // CYLINDER_OFFSETS carries the replay's deep steps as offsets from
+        // reference orbits (docs/projects/deep-zoom-precision.md).
+        processor.set("CYLINDER_OFFSETS", constants.cylinder_offsets && constants.cylinder_replay);
         // FLATTEN_Z_PER_ITER used to insert a blanket `current.z = 0.0;`
         // at the end of each iteration under preserve_z=false. That
         // destroyed the z compounding JWF gets through unconditional
@@ -1678,7 +1783,12 @@ impl ShaderBuilder {
         shader.push('\n');
 
         // 5. Core variations from embedded VariationDef WGSL (only active ones)
-        shader.push_str(&self.generate_variation_code(flame, &active, render_3d));
+        shader.push_str(&self.generate_variation_code(
+            flame,
+            &active,
+            render_3d,
+            constants.cylinder_replay,
+        ));
         shader.push('\n');
 
         // 6b. Reachability-census helpers — module-scope functions the
@@ -1836,14 +1946,25 @@ impl ShaderBuilder {
         shader.push_str(include_str!("../shaders/core/complex.wgsl"));
         shader.push('\n');
 
-        // 9. Utilities
-        shader.push_str(include_str!("../shaders/core/utilities.wgsl"));
+        // 9. Utilities — through the processor, which utilities.wgsl did
+        //    not need until the biased selection functions arrived behind
+        //    IMPORTANCE_SAMPLING. A file with no markers comes out byte
+        //    for byte, so routing it here moved nothing.
+        shader.push_str(&processor.process(include_str!("../shaders/core/utilities.wgsl")));
         shader.push('\n');
 
-        // 10. Path filter utilities (only needed when path features enabled)
-        if path_features_enabled {
-            shader.push_str(include_str!("../shaders/core/path_filter.wgsl"));
+        // 11. The forced symbol of a cylinder replay -- one function the
+        //     render's replay arm and the planner's GPU kernel both call.
+        //     Only with the replay on, so every other shader is the text
+        //     it was.
+        if constants.cylinder_replay {
+            shader.push_str(&processor.process(include_str!("../shaders/core/replay.wgsl")));
             shader.push('\n');
+            // The forward difference forms the offset steps run.
+            if constants.cylinder_offsets {
+                shader.push_str(include_str!("../shaders/core/replay_delta.wgsl"));
+                shader.push('\n');
+            }
         }
 
         Definitions { source: shader, processor, active, has_dc, has_rgb }
@@ -1859,6 +1980,63 @@ impl ShaderBuilder {
     /// share a shader with the simulation's own prelude, which owns
     /// group 0 and the name `params`.
     pub fn build_layer_map(&self, flame: &crate::scene::transforms::Flame) -> String {
+        self.build_layer_map_at(flame, 1)
+    }
+
+    /// The planner's GPU kernel for `flame` -- see
+    /// `docs/projects/gpu-cylinder-planning.md` and `scene::plan_gpu`.
+    ///
+    /// The flame's definitions, built with the replay flag on so the
+    /// armed variations' draws read a forced arm, followed by
+    /// `plan_eval.wgsl`: an entry point that applies a word to sample
+    /// points and tests the view. The maps are the render's own, which
+    /// is the point of doing this on the GPU at all.
+    ///
+    /// Group 0 is the flame's (transforms, params, variation params,
+    /// attachments, subflame metadata, as the simulation's layer map
+    /// binds them); group 1 is the planner's.
+    pub fn build_plan_eval(&self, flame: &crate::scene::transforms::Flame) -> String {
+        let constants = ShaderConstants {
+            num_transforms: flame.transforms.len().max(1) as u32,
+            color_mode: 0,
+            has_post_affine: flame.has_post_affine(),
+            has_attachments: flame.has_attachments(),
+            has_post_symmetry: false,
+            has_analytic_blur: false,
+            importance_sampling: false,
+            cylinder_targeting: false,
+            frame_coverage: false,
+            // Wraps the armed variations' draws to read the forced arm.
+            cylinder_replay: true,
+            cylinder_relative: false,
+            cylinder_offsets: false,
+            flatten_z_per_iter: false,
+            solid_enabled: false,
+            probe: false,
+            census: false,
+            attachment_cap: flame.attachment_cap() as u32,
+            inlined_transforms: None,
+            cumulative_weights: None,
+            variation_priorities: std::collections::BTreeMap::new(),
+        };
+        let defs = self.build_definitions(flame, false, false, false, true, &constants);
+        let mut src = defs.source;
+        src.push('\n');
+        src.push_str(include_str!("../shaders/core/plan_eval.wgsl"));
+        src
+    }
+
+    /// The same, at a chosen bind group.
+    ///
+    /// The simulation owns group 0 and takes the map at 1. The escape
+    /// engine's mode D already binds its IFS rows at group 1, so a
+    /// camera lens there has to land at 2 -- the group is the caller's
+    /// to pick, not this function's to assume.
+    pub fn build_layer_map_at(
+        &self,
+        flame: &crate::scene::transforms::Flame,
+        group: u32,
+    ) -> String {
         let constants = ShaderConstants {
             num_transforms: flame.transforms.len().max(1) as u32,
             color_mode: 0,
@@ -1867,6 +2045,12 @@ impl ShaderBuilder {
             has_post_symmetry: false,
             // The blur is a plot-time device; a map has no plot.
             has_analytic_blur: false,
+            importance_sampling: false,
+            cylinder_targeting: false,
+            frame_coverage: false,
+            cylinder_replay: false,
+            cylinder_relative: false,
+            cylinder_offsets: false,
             flatten_z_per_iter: false,
             solid_enabled: false,
             probe: false,
@@ -1905,8 +2089,9 @@ fn flame_map(xform_id: u32, u: vec2<f32>, seed: u32) -> vec2<f32> {{\n\
     return v;\n\
 }}\n"
         ));
-        // Group 1, and the flame's `params` out of the simulation's way.
-        let src = src.replace("@group(0) @binding(", "@group(1) @binding(");
+        // The caller's group, and the flame's `params` out of the
+        // host's way.
+        let src = src.replace("@group(0) @binding(", &format!("@group({group}) @binding("));
         let re = regex_lite_replace_word(&src, "params", "flame_params");
         re
     }
@@ -3584,6 +3769,259 @@ mod tests {
         assert_eq!(keys.len(), total, "duplicate switch keys in get_inlined_var_param:\n{body}");
     }
 
+    /// Auto exposure's hard requirement, the same as both deep-zoom
+    /// stages': with `frame_coverage = false` the emitted WGSL
+    /// contains NO CODE from the feature.
+    ///
+    /// It sits against the bounds check that every plotted sample of
+    /// every flame passes, so anything leaking past the flag would
+    /// cost on every render there has ever been. The counters are
+    /// deliberately NOT subsampled, which makes this gate the thing
+    /// standing between that choice and a global tax.
+    #[test]
+    fn frame_coverage_off_is_byte_identical() {
+        use crate::scene::transforms::{Flame, Transform};
+        let registry = crate::variations::global_registry().clone();
+        let builder = ShaderBuilder::new(registry);
+
+        let mut flame = Flame::new();
+        let mut xform = Transform::new();
+        xform.variations.insert("linear".to_string(), 1.0);
+        flame.transforms.push(xform);
+        let mut active = HashMap::new();
+        active.insert("linear".to_string(), 1.0);
+
+        let base = ShaderConstants::default();
+        let mut on = ShaderConstants::default();
+        on.frame_coverage = true;
+
+        for render_3d in [false, true] {
+            let off = builder.build_from_template(&flame, &active, render_3d, false, false, true, &base);
+            let with = builder.build_from_template(&flame, &active, render_3d, false, false, true, &on);
+
+            for needle in ["coverage", "fc_in", "fc_att"] {
+                assert!(
+                    !off.contains(needle),
+                    "3d={render_3d}: `{needle}` leaked into a shader with auto exposure off"
+                );
+            }
+            assert!(
+                !off.lines().any(|l| l.trim().starts_with("{{")),
+                "3d={render_3d}: an unresolved template marker survived"
+            );
+
+            assert!(
+                with.contains("@binding(16) var<storage, read_write> coverage"),
+                "3d={render_3d}: no counter binding"
+            );
+            assert!(with.contains("fc_att = fc_att + 1u;"), "3d={render_3d}: nothing counts attempts");
+            assert!(with.contains("fc_in = fc_in + 1u;"), "3d={render_3d}: nothing counts landings");
+            assert!(with.contains("atomicAdd(&coverage[1], fc_att);"), "3d={render_3d}: no flush");
+
+            // The tally must precede the plot's own bounds check, and
+            // the flush must follow the whole iteration loop -- one
+            // pair of atomics per THREAD, not per iteration. A flush
+            // that slipped inside the loop would still be correct and
+            // would quietly cost a global atomic per sample.
+            let tally = with.find("fc_att = fc_att + 1u;").expect("tally");
+            let guard = with.find("// Check bounds and opacity").expect("guard");
+            let flush = with.find("atomicAdd(&coverage[1], fc_att);").expect("flush");
+            let loop_end = with.find("// PROBE-BLOCK-BEGIN").unwrap_or(with.len());
+            assert!(tally < guard, "3d={render_3d}: the tally is not at the plot's bounds check");
+            assert!(
+                guard < flush && flush < loop_end,
+                "3d={render_3d}: the flush is not after the iteration loop -- if it moved \
+                 inside, every sample pays a global atomic"
+            );
+        }
+    }
+
+    /// Stage 2's hard requirement, the same as stage 1's: with
+    /// `cylinder_targeting = false` the emitted WGSL contains NO CODE
+    /// from the feature.
+    ///
+    /// It sits at the plot, which every sample of every flame passes
+    /// through, so anything that leaked past the flag would cost and
+    /// move every render there has ever been.
+    #[test]
+    fn cylinder_targeting_off_is_byte_identical() {
+        use crate::scene::transforms::{Flame, Transform};
+        let registry = crate::variations::global_registry().clone();
+        let builder = ShaderBuilder::new(registry);
+
+        let mut flame = Flame::new();
+        let mut xform = Transform::new();
+        xform.variations.insert("linear".to_string(), 1.0);
+        flame.transforms.push(xform);
+        let mut active = HashMap::new();
+        active.insert("linear".to_string(), 1.0);
+
+        let base = ShaderConstants::default();
+        let mut on = ShaderConstants::default();
+        on.cylinder_targeting = true;
+
+        for render_3d in [false, true] {
+            let off = builder.build_from_template(&flame, &active, render_3d, false, false, true, &base);
+            let with = builder.build_from_template(&flame, &active, render_3d, false, false, true, &on);
+
+            for needle in ["cylinders", "ct_pick", "ct_saved", "ct_rng"] {
+                assert!(
+                    !off.contains(needle),
+                    "3d={render_3d}: `{needle}` leaked into a shader with targeting off"
+                );
+            }
+            assert!(
+                !off.lines().any(|l| l.trim().starts_with("{{")),
+                "3d={render_3d}: an unresolved template marker survived"
+            );
+
+            // With targeting on but REPLAY off, the composed arm is
+            // emitted and the symbol walk must not be: the two read
+            // incompatible buffer layouts, and emitting the wrong one
+            // renders an empty frame.
+            for needle in ["ct_stride", "ct_apply_symbol", "ct_len"] {
+                assert!(
+                    !with.contains(needle),
+                    "3d={render_3d}: `{needle}` leaked into the composed arm"
+                );
+            }
+            let mut replay = ShaderConstants::default();
+            replay.cylinder_targeting = true;
+            replay.cylinder_replay = true;
+            let walked =
+                builder.build_from_template(&flame, &active, render_3d, false, false, true, &replay);
+            assert!(walked.contains("fn ct_stride"), "3d={render_3d}: no replay accessor");
+            // The symbol walk goes through the one function the
+            // planner's GPU kernel also calls (`replay.wgsl`).
+            assert!(walked.contains("fn ct_apply_symbol"), "3d={render_3d}: the shared replay is missing");
+            assert!(
+                walked.contains("current = ct_apply_symbol(current,"),
+                "3d={render_3d}: the replay does not walk symbols through the shared function"
+            );
+            assert!(
+                !walked.contains("cylinders[ct_w + 4u]"),
+                "3d={render_3d}: the composed arm leaked into the replay"
+            );
+
+            assert!(with.contains("@binding(15) var<storage, read> cylinders"), "3d={render_3d}: no binding");
+            assert!(with.contains("fn ct_pick"), "3d={render_3d}: no word draw");
+            assert!(with.contains("let ct_saved = current;"), "3d={render_3d}: the free orbit is not saved");
+            assert!(with.contains("current = ct_saved;"), "3d={render_3d}: the free orbit is not restored");
+            // The restore must come AFTER the plot, or the forced
+            // point never reaches the histogram.
+            let save = with.find("let ct_saved = current;").expect("save");
+            let restore = with.find("current = ct_saved;").expect("restore");
+            let deposit = with.find("atomicAdd(&histogram[base_idx + 0u]").expect("deposit");
+            assert!(
+                save < deposit && deposit < restore,
+                "3d={render_3d}: the forced prefix does not bracket the deposit (save {save}, \
+                 deposit {deposit}, restore {restore}) -- the plot is of the wrong point"
+            );
+        }
+    }
+
+    /// Stage 1's hard requirement: with `importance_sampling = false`
+    /// the emitted WGSL contains NO CODE from the feature — no
+    /// binding, no biased selection functions, no window state, no
+    /// stochastic deposit.
+    ///
+    /// The regenerated canonical dumps are the other half of this and
+    /// say how exact it is. Against the eight dumps taken before the
+    /// feature, the whole diff is: the `Params` field `_pad_shadow0`
+    /// renamed to `importance_window` with its three-line comment (the
+    /// uniform layout is fixed and always declared, as the solid
+    /// fields are), and 106 blank lines where the stripped `{{#if}}`
+    /// blocks used to be. **Not one code line moved** — which is the
+    /// guarantee, since a blank line cannot change a picture and the
+    /// template processor has left one behind at every block it strips
+    /// since the first one.
+    ///
+    /// The bar is high because of where the code sits. The window's
+    /// product is accumulated in the chaos game's innermost loop and
+    /// the deposit is the splat every sample makes, so the feature
+    /// touches the two hottest lines in the renderer. Anything that
+    /// leaked past the flag would cost every flame, biased or not,
+    /// and would move every picture that has ever been rendered.
+    ///
+    /// The `Params` struct's `importance_window` field is exempt, as
+    /// the solid fields are: the uniform layout is fixed and always
+    /// declared, and declaring a field nobody reads costs nothing.
+    #[test]
+    fn importance_sampling_off_is_byte_identical() {
+        use crate::scene::transforms::{Flame, Transform};
+        let registry = crate::variations::global_registry().clone();
+        let builder = ShaderBuilder::new(registry);
+
+        let mut flame = Flame::new();
+        let mut xform = Transform::new();
+        xform.variations.insert("linear".to_string(), 1.0);
+        flame.transforms.push(xform);
+        let mut active = HashMap::new();
+        active.insert("linear".to_string(), 1.0);
+
+        let base = ShaderConstants::default();
+        let mut on = ShaderConstants::default();
+        on.importance_sampling = true;
+
+        // Both selection arms, since the feature has a different body
+        // in each: with xaos the ratio is row-conditional, without it
+        // the walk reads row zero and needs no `prev` at all.
+        for xaos in [false, true] {
+            let off = builder.build_from_template(&flame, &active, false, false, xaos, true, &base);
+            let with = builder.build_from_template(&flame, &active, false, false, xaos, true, &on);
+
+            assert!(
+                !off.contains("bias_table"),
+                "xaos={xaos}: the binding leaked into a shader with the feature off"
+            );
+            assert!(
+                !off.contains("is_weight"),
+                "xaos={xaos}: the window state leaked into a shader with the feature off"
+            );
+            assert!(
+                !off.contains("select_transform_biased"),
+                "xaos={xaos}: a biased selection function leaked in with the feature off"
+            );
+            assert!(
+                !off.contains("is_rng"),
+                "xaos={xaos}: the deposit's own RNG leaked in with the feature off"
+            );
+            assert!(
+                !off.lines().any(|l| l.trim().starts_with("{{")),
+                "xaos={xaos}: an unresolved template marker survived — utilities.wgsl now \
+                 goes through the processor and a typo there would show up as literal text"
+            );
+
+            // ...and with it on, every piece is present.
+            assert!(with.contains("@binding(11) var<storage, read> bias_table"), "xaos={xaos}: no binding");
+            assert!(with.contains("fn bias_ratio"), "xaos={xaos}: no ratio accessor");
+            assert!(with.contains("is_weight = is_weight * bias_ratio"), "xaos={xaos}: no accumulation");
+            assert!(with.contains("params.importance_window"), "xaos={xaos}: no window gate");
+            assert!(with.contains("rng_nextf(&is_rng)"), "xaos={xaos}: no stochastic deposit");
+            let want = if xaos { "select_transform_biased_xaos(" } else { "select_transform_biased(" };
+            assert!(with.contains(want), "xaos={xaos}: the walk does not call {want}");
+            // The UNBIASED selection must be gone from the walk when
+            // the feature is on — two selections in one loop would be
+            // two draws from the RNG and a different picture.
+            let called = if xaos { "= select_transform_xaos(" } else { "= select_transform_const(" };
+            let calls = with.matches(called).count();
+            // `select_transform_const` also seeds `prev_xform_idx`
+            // under xaos, which is not the loop's own selection.
+            let expect = usize::from(xaos && called.contains("const"));
+            assert_eq!(
+                calls, expect,
+                "xaos={xaos}: the unbiased selection is still called {calls} times in a biased walk"
+            );
+        }
+
+        // The feature is 2D and 3D alike — nothing about a likelihood
+        // ratio is dimensional.
+        let off3 = builder.build_from_template(&flame, &active, true, false, false, true, &base);
+        let on3 = builder.build_from_template(&flame, &active, true, false, false, true, &on);
+        assert_ne!(off3, on3, "the 3D build ignored the flag");
+        assert!(on3.contains("is_weight"), "no window state in the 3D build");
+    }
+
     /// Solid rendering hard requirement: with `solid_enabled = false` the
     /// emitted WGSL is BYTE-IDENTICAL to a default-constants build — no
     /// depth reads/writes, no extra branches, nothing. (The SOLID template
@@ -3712,7 +4150,7 @@ mod tests {
             // Per-flame specializer needs a flame for context. Test
             // doesn't use synth, so any flame works — default is fine.
             let flame = crate::scene::transforms::Flame::default();
-            let code = builder.generate_variation_code(&flame, &active, render_3d);
+            let code = builder.generate_variation_code(&flame, &active, render_3d, false);
             let n_helper = code.matches("fn pg_disc_noise(").count();
             let n_var_2d = code.matches("fn variation_pointgrid_wf(").count();
             let n_var_3d = code.matches("fn variation_pointgrid3d_wf(").count();

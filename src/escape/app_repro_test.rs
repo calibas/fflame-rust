@@ -63,7 +63,7 @@ mod tests {
                 let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("interior warm"),
                 });
-                escape.render(&device, &queue, &mut enc, &esc_cfg, renderer.palette_view());
+                escape.render(&device, &queue, &mut enc, &esc_cfg, renderer.palette_view(), renderer.palette_generation());
                 queue.submit(std::iter::once(enc.finish()));
                 let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
                 std::time::Instant::now()
@@ -74,7 +74,7 @@ mod tests {
                     label: Some("interior frame"),
                 });
                 let settled =
-                    escape.render(&device, &queue, &mut enc, &esc_cfg, renderer.palette_view());
+                    escape.render(&device, &queue, &mut enc, &esc_cfg, renderer.palette_view(), renderer.palette_generation());
                 queue.submit(std::iter::once(enc.finish()));
                 let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
                 if settled {
@@ -213,7 +213,7 @@ mod tests {
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("phoenix depth"),
             });
-            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view(), renderer.palette_generation());
             queue.submit(std::iter::once(enc.finish()));
             let _ = device.poll(wgpu::PollType::Wait {
                 submission_index: None,
@@ -374,7 +374,7 @@ mod tests {
                 label: Some("phoenix short orbit"),
             });
             let settled =
-                escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+                escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view(), renderer.palette_generation());
             queue.submit(std::iter::once(enc.finish()));
             let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
             if settled {
@@ -527,7 +527,7 @@ mod tests {
                     label: Some("phoenix threshold"),
                 });
                 let settled =
-                    escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+                    escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view(), renderer.palette_generation());
                 queue.submit(std::iter::once(enc.finish()));
                 let _ =
                     device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
@@ -670,7 +670,7 @@ mod tests {
                     label: Some("julia rung"),
                 });
                 let settled =
-                    escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+                    escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view(), renderer.palette_generation());
                 queue.submit(std::iter::once(enc.finish()));
                 let _ =
                     device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
@@ -781,7 +781,7 @@ mod tests {
                     label: Some("manowar depth"),
                 });
                 let settled =
-                    escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+                    escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view(), renderer.palette_generation());
                 queue.submit(std::iter::once(enc.finish()));
                 let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
                 if settled {
@@ -935,7 +935,7 @@ mod tests {
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("spiral trap"),
             });
-            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view(), renderer.palette_generation());
             queue.submit(std::iter::once(enc.finish()));
             let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
             if settled {
@@ -1094,7 +1094,7 @@ mod tests {
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("normal map"),
             });
-            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view(), renderer.palette_generation());
             queue.submit(std::iter::once(enc.finish()));
             let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
             if settled {
@@ -1299,7 +1299,7 @@ mod tests {
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("lambda sine"),
             });
-            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view(), renderer.palette_generation());
             queue.submit(std::iter::once(enc.finish()));
             let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
             if settled {
@@ -1517,7 +1517,7 @@ mod tests {
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("origami"),
             });
-            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view(), renderer.palette_generation());
             queue.submit(std::iter::once(enc.finish()));
             let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
             if settled {
@@ -1710,7 +1710,7 @@ mod tests {
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("position average"),
             });
-            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view(), renderer.palette_generation());
             queue.submit(std::iter::once(enc.finish()));
             let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
             if settled {
@@ -1881,7 +1881,7 @@ mod tests {
                     label: Some("relief"),
                 });
                 let settled =
-                    escape.render(&device, &queue, &mut enc, esc, renderer.palette_view());
+                    escape.render(&device, &queue, &mut enc, esc, renderer.palette_view(), renderer.palette_generation());
                 queue.submit(std::iter::once(enc.finish()));
                 let _ =
                     device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
@@ -2126,7 +2126,7 @@ mod tests {
                     label: Some("de"),
                 });
                 let settled =
-                    escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+                    escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view(), renderer.palette_generation());
                 queue.submit(std::iter::once(enc.finish()));
                 let _ =
                     device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
@@ -2322,7 +2322,7 @@ mod tests {
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("lambda depth"),
             });
-            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view(), renderer.palette_generation());
             queue.submit(std::iter::once(enc.finish()));
             let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
             if settled {
@@ -2529,7 +2529,7 @@ mod tests {
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("feather depth"),
             });
-            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view(), renderer.palette_generation());
             queue.submit(std::iter::once(enc.finish()));
             let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
             if settled {
@@ -2713,7 +2713,7 @@ mod tests {
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("mcmullen depth"),
             });
-            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view(), renderer.palette_generation());
             queue.submit(std::iter::once(enc.finish()));
             let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
             if settled {
@@ -2900,7 +2900,7 @@ mod tests {
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("oracle frame"),
             });
-            let settled = escape.render(&device, &queue, &mut enc, esc, renderer.palette_view());
+            let settled = escape.render(&device, &queue, &mut enc, esc, renderer.palette_view(), renderer.palette_generation());
             queue.submit(std::iter::once(enc.finish()));
             let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
             if settled {
@@ -3424,7 +3424,7 @@ mod tests {
                     label: Some("path probe"),
                 });
                 let settled =
-                    escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+                    escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view(), renderer.palette_generation());
                 queue.submit(std::iter::once(enc.finish()));
                 let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
                 if settled {
@@ -3597,7 +3597,7 @@ mod tests {
             loop {
                 let mut e = device.create_command_encoder(
                     &wgpu::CommandEncoderDescriptor { label: Some("contrast") });
-                let done = escape.render(&device, &queue, &mut e, &esc, renderer.palette_view());
+                let done = escape.render(&device, &queue, &mut e, &esc, renderer.palette_view(), renderer.palette_generation());
                 queue.submit(std::iter::once(e.finish()));
                 let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
                 if done { break; }
@@ -3753,7 +3753,7 @@ mod tests {
         loop {
             let mut e = device.create_command_encoder(
                 &wgpu::CommandEncoderDescriptor { label: Some("4k") });
-            let settled = escape.render(&device, &queue, &mut e, &esc, renderer.palette_view());
+            let settled = escape.render(&device, &queue, &mut e, &esc, renderer.palette_view(), renderer.palette_generation());
             queue.submit(std::iter::once(e.finish()));
             let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
             if settled { break; }
@@ -3809,14 +3809,14 @@ mod tests {
                 escape.set_sample_offset(off);
                 let mut enc = device.create_command_encoder(
                     &wgpu::CommandEncoderDescriptor { label: Some("acc") });
-                let mut settled = escape.render(&device, &queue, &mut enc, esc, renderer.palette_view());
+                let mut settled = escape.render(&device, &queue, &mut enc, esc, renderer.palette_view(), renderer.palette_generation());
                 let mut g = 0;
                 while !settled {
                     queue.submit(std::iter::once(enc.finish()));
                     let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
                     enc = device.create_command_encoder(
                         &wgpu::CommandEncoderDescriptor { label: Some("acc chunk") });
-                    settled = escape.render(&device, &queue, &mut enc, esc, renderer.palette_view());
+                    settled = escape.render(&device, &queue, &mut enc, esc, renderer.palette_view(), renderer.palette_generation());
                     g += 1;
                     assert!(g < 100_000);
                 }
@@ -3912,7 +3912,7 @@ mod tests {
             loop {
                 let mut e = device.create_command_encoder(
                     &wgpu::CommandEncoderDescriptor { label: Some("sing") });
-                let done = escape.render(&device, &queue, &mut e, &esc, renderer.palette_view());
+                let done = escape.render(&device, &queue, &mut e, &esc, renderer.palette_view(), renderer.palette_generation());
                 queue.submit(std::iter::once(e.finish()));
                 let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
                 if done { break; }
@@ -3979,7 +3979,7 @@ mod tests {
             loop {
                 let mut e = device.create_command_encoder(
                     &wgpu::CommandEncoderDescriptor { label: Some("budgeted") });
-                let done = escape.render(&device, &queue, &mut e, &esc, renderer.palette_view());
+                let done = escape.render(&device, &queue, &mut e, &esc, renderer.palette_view(), renderer.palette_generation());
                 queue.submit(std::iter::once(e.finish()));
                 let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
                 frames += 1;
@@ -4079,7 +4079,7 @@ mod tests {
         escape.inject_gpu_done_sample(12.0, 300, true);
         let mut enc = device.create_command_encoder(
             &wgpu::CommandEncoderDescriptor { label: Some("drain") });
-        let _ = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+        let _ = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view(), renderer.palette_generation());
         queue.submit(std::iter::once(enc.finish()));
         let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
         let got = escape.gpu_ms_per_iter().expect("the sample must land in the sizer");
@@ -4134,7 +4134,7 @@ mod tests {
             loop {
                 let mut e = device.create_command_encoder(
                     &wgpu::CommandEncoderDescriptor { label: Some("hold") });
-                let done = escape.render(&device, &queue, &mut e, &esc, renderer.palette_view());
+                let done = escape.render(&device, &queue, &mut e, &esc, renderer.palette_view(), renderer.palette_generation());
                 queue.submit(std::iter::once(e.finish()));
                 let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
                 frames += 1;
@@ -4221,7 +4221,7 @@ mod tests {
             loop {
                 let mut e = device.create_command_encoder(
                     &wgpu::CommandEncoderDescriptor { label: Some("slice") });
-                let done = escape.render(&device, &queue, &mut e, &esc, renderer.palette_view());
+                let done = escape.render(&device, &queue, &mut e, &esc, renderer.palette_view(), renderer.palette_generation());
                 queue.submit(std::iter::once(e.finish()));
                 let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
                 frames += 1;
@@ -5298,7 +5298,7 @@ fn main() {
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("magnet depth"),
             });
-            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view(), renderer.palette_generation());
             queue.submit(std::iter::once(enc.finish()));
             let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
             if settled {
@@ -5496,7 +5496,7 @@ fn main() {
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("magnet converge"),
             });
-            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view(), renderer.palette_generation());
             queue.submit(std::iter::once(enc.finish()));
             let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
             if settled {
@@ -5716,7 +5716,7 @@ fn main() {
                     label: Some("lattes"),
                 });
                 let settled =
-                    escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+                    escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view(), renderer.palette_generation());
                 queue.submit(std::iter::once(enc.finish()));
                 let _ =
                     device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
@@ -5955,7 +5955,7 @@ fn main() {
                     label: Some("softness"),
                 });
                 let settled =
-                    escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+                    escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view(), renderer.palette_generation());
                 queue.submit(std::iter::once(enc.finish()));
                 let _ =
                     device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
@@ -6114,7 +6114,7 @@ fn main() {
                 label: Some("blur"),
             });
             let settled =
-                escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+                escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view(), renderer.palette_generation());
             queue.submit(std::iter::once(enc.finish()));
             let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
             if settled {
@@ -6282,7 +6282,7 @@ fn main() {
                     label: Some("asym"),
                 });
                 let settled =
-                    escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+                    escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view(), renderer.palette_generation());
                 queue.submit(std::iter::once(enc.finish()));
                 let _ =
                     device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
@@ -6455,7 +6455,7 @@ fn main() {
                 let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("latency"),
                 });
-                let settled = escape.render(&device, &queue, &mut enc, esc, renderer.palette_view());
+                let settled = escape.render(&device, &queue, &mut enc, esc, renderer.palette_view(), renderer.palette_generation());
                 queue.submit(std::iter::once(enc.finish()));
                 let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
                 frames += 1;
@@ -6538,6 +6538,7 @@ fn main() {
                 );
                 let s = escape2.render(
                     &device, &queue, &mut enc, &esc2, renderer.palette_view(),
+                    renderer.palette_generation(),
                 );
                 queue.submit(std::iter::once(enc.finish()));
                 let _ = device.poll(
@@ -6566,6 +6567,7 @@ fn main() {
                 );
                 let _ = escape2.render(
                     &device, &queue, &mut enc, &esc2, renderer.palette_view(),
+                    renderer.palette_generation(),
                 );
                 queue.submit(std::iter::once(enc.finish()));
                 let _ = device.poll(
@@ -6651,7 +6653,7 @@ fn main() {
                     label: Some("cache frame"),
                 });
                 let settled =
-                    escape.render(&device, &queue, &mut enc, esc, renderer.palette_view());
+                    escape.render(&device, &queue, &mut enc, esc, renderer.palette_view(), renderer.palette_generation());
                 queue.submit(std::iter::once(enc.finish()));
                 let _ =
                     device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
@@ -6807,7 +6809,7 @@ fn main() {
                     label: Some("pan frame"),
                 });
                 let settled =
-                    escape.render(&device, &queue, &mut enc, esc, renderer.palette_view());
+                    escape.render(&device, &queue, &mut enc, esc, renderer.palette_view(), renderer.palette_generation());
                 queue.submit(std::iter::once(enc.finish()));
                 let _ =
                     device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
@@ -6999,7 +7001,7 @@ fn main() {
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("gesture frame"),
             });
-            let settled = escape.render(&device, &queue, &mut enc, esc, renderer.palette_view());
+            let settled = escape.render(&device, &queue, &mut enc, esc, renderer.palette_view(), renderer.palette_generation());
             queue.submit(std::iter::once(enc.finish()));
             let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
             settled
@@ -7187,7 +7189,7 @@ fn main() {
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("hold frame"),
             });
-            let settled = escape.render(&device, &queue, &mut enc, esc, renderer.palette_view());
+            let settled = escape.render(&device, &queue, &mut enc, esc, renderer.palette_view(), renderer.palette_generation());
             queue.submit(std::iter::once(enc.finish()));
             let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
             settled
@@ -7461,7 +7463,7 @@ fn main() {
                     label: Some("preset"),
                 });
                 let settled =
-                    escape.render(&device, &queue, &mut enc, esc, renderer.palette_view());
+                    escape.render(&device, &queue, &mut enc, esc, renderer.palette_view(), renderer.palette_generation());
                 queue.submit(std::iter::once(enc.finish()));
                 let _ =
                     device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
@@ -7700,7 +7702,7 @@ fn main() {
                     label: Some("aa"),
                 });
                 let settled =
-                    escape.render(&device, &queue, &mut enc, esc, renderer.palette_view());
+                    escape.render(&device, &queue, &mut enc, esc, renderer.palette_view(), renderer.palette_generation());
                 queue.submit(std::iter::once(enc.finish()));
                 let _ =
                     device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
@@ -7892,7 +7894,7 @@ fn main() {
                     label: Some("bg"),
                 });
                 let settled =
-                    escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+                    escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view(), renderer.palette_generation());
                 queue.submit(std::iter::once(enc.finish()));
                 let _ =
                     device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
@@ -8035,7 +8037,7 @@ fn main() {
                       palette: &wgpu::TextureView| {
             let mut guard = 0u32;
             loop {
-                let settled = escape.render(&device, &queue, enc, esc, palette);
+                let settled = escape.render(&device, &queue, enc, esc, palette, 0);
                 if settled {
                     break;
                 }
@@ -8368,7 +8370,7 @@ fn main() {
                     label: Some("ts frame"),
                 });
                 let settled =
-                    escape.render(&device, &queue, &mut enc, &esc_cfg, renderer.palette_view());
+                    escape.render(&device, &queue, &mut enc, &esc_cfg, renderer.palette_view(), renderer.palette_generation());
                 queue.submit(std::iter::once(enc.finish()));
                 // Wait, so map callbacks are delivered: the app does
                 // this with a non-blocking Poll once a frame.
@@ -8469,7 +8471,7 @@ fn main() {
                 label: Some("seam frame"),
             });
             let settled =
-                escape.render(&device, &queue, &mut enc, &esc_cfg, renderer.palette_view());
+                escape.render(&device, &queue, &mut enc, &esc_cfg, renderer.palette_view(), renderer.palette_generation());
             queue.submit(std::iter::once(enc.finish()));
             let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
             if settled {
@@ -8610,6 +8612,7 @@ fn main() {
                     &mut encoder,
                     &esc_cfg,
                     renderer.palette_view(),
+                    renderer.palette_generation(),
                 );
                 queue.submit(std::iter::once(encoder.finish()));
                 let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
@@ -8703,6 +8706,7 @@ fn main() {
                     &mut encoder,
                     &esc_cfg,
                     renderer.palette_view(),
+                    renderer.palette_generation(),
                 );
                 queue.submit(std::iter::once(encoder.finish()));
                 if settled {
@@ -8792,6 +8796,7 @@ fn main() {
                     &mut encoder,
                     &esc_cfg,
                     renderer.palette_view(),
+                    renderer.palette_generation(),
                 );
                 queue.submit(std::iter::once(encoder.finish()));
                 if settled {
@@ -8993,7 +8998,7 @@ fn main() {
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("timeline frame"),
             });
-            escape.render(&device, &queue, &mut encoder, &esc_cfg, renderer.palette_view());
+            escape.render(&device, &queue, &mut encoder, &esc_cfg, renderer.palette_view(), renderer.palette_generation());
             queue.submit(std::iter::once(encoder.finish()));
             let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
             let frame_ms = tf.elapsed().as_secs_f64() * 1e3;
@@ -9105,7 +9110,7 @@ fn main() {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("repro frame"),
         });
-        escape.render(&device, &queue, &mut encoder, &esc_cfg, renderer.palette_view());
+        escape.render(&device, &queue, &mut encoder, &esc_cfg, renderer.palette_view(), renderer.palette_generation());
 
         // App-style tonemap update: Linear mode, total_iterations = 0.
         renderer.update_density_scale(&queue, config.density_scale);
@@ -9299,7 +9304,7 @@ fn main() {
                 label: Some("agreement frame"),
             });
             let mut settled =
-                escape.render(&device, &queue, &mut encoder, esc_cfg, renderer.palette_view());
+                escape.render(&device, &queue, &mut encoder, esc_cfg, renderer.palette_view(), renderer.palette_generation());
             let mut guard = 0;
             while !settled {
                 queue.submit(std::iter::once(encoder.finish()));
@@ -9312,6 +9317,7 @@ fn main() {
                     &mut encoder,
                     esc_cfg,
                     renderer.palette_view(),
+                    renderer.palette_generation(),
                 );
                 guard += 1;
                 assert!(guard < 10_000, "chunk loop failed to settle");
@@ -9787,7 +9793,7 @@ fn main() {
                 let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("combo frame"),
                 });
-                escape.render(&device, &queue, &mut encoder, &esc_cfg, renderer.palette_view());
+                escape.render(&device, &queue, &mut encoder, &esc_cfg, renderer.palette_view(), renderer.palette_generation());
                 renderer.tonemap_pass_with_input(&device, &queue, &mut encoder, escape.output_view());
                 queue.submit(std::iter::once(encoder.finish()));
 

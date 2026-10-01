@@ -2,6 +2,17 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 pub mod definition;
+pub mod bound;
+// Desktop only: `wgpu` on wasm32 is built without the WGSL front end,
+// so `wgpu::naga` is not re-exported there and the evaluator has
+// nothing to parse with. Giving the web bundle its own `naga` is a
+// real download cost for a feature the web app may never ask for, so
+// it is a decision for phase 3 (when `ifs_ball` starts calling this)
+// rather than one to make by accident here. Until then the hand
+// bounds are what wasm has, exactly as before.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod derive;
+pub mod inverse;
 pub mod defs;
 pub mod docs;
 pub mod analytic_blur;
@@ -698,6 +709,19 @@ impl VariationRegistry {
     /// Get variation info by name. If the lookup misses, also tries the
     /// alias table so foreign-app names (e.g. `linear3D` from Apo 7X /
     /// JWildfire) resolve to our canonical variation.
+    /// What this variation supplies to the inverse walks, or
+    /// `None` -- which is most of them.
+    ///
+    /// `ifs-general.md` D1: the analysis asks this instead of
+    /// matching on the variation's name, so a new kernel is a new
+    /// [`InverseDef`](inverse::InverseDef) beside its forward WGSL
+    /// and nothing in `ifs_analysis.rs` moves. Resolved through
+    /// [`Self::get`], so an alias finds the canonical variation's
+    /// inverse and a name this registry does not hold has none.
+    pub fn inverse(&self, name: &str) -> Option<&'static inverse::InverseDef> {
+        inverse::for_name(&self.get(name)?.name)
+    }
+
     pub fn get(&self, name: &str) -> Option<&VariationInfo> {
         if let Some(info) = self.variations.get(name) {
             return Some(info);

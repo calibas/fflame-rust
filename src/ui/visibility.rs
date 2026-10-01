@@ -56,13 +56,51 @@ const LOG_ONLY: &str = "visibility.log_only";
 const LINEAR_ONLY: &str = "visibility.linear_only";
 /// Mixes between two values that are equal here.
 const ALPHA_BLEND_INERT: &str = "visibility.alpha_blend_inert";
+/// Focused Rendering plans in the plane.
+const TWO_D_ONLY: &str = "visibility.two_d_only";
+
+/// Whether the loaded config renders a SOLID SURFACE.
+///
+/// Not a render mode and deliberately not derivable from one (D2 in
+/// `ifs-distance-rendering.md`): escape mode is not three-dimensional,
+/// one FORMULA in it is, so gating on the mode would offer lighting
+/// over a Mandelbrot and withhold it from the thing it steers. A 3D
+/// flame is the other case, and it is the same question.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Solid {
+    Yes,
+    No,
+}
+
+impl Solid {
+    /// What a config says. The flame side is the render mode; the
+    /// escape side is the formula.
+    pub fn of(config: &crate::config::FractalConfig) -> Solid {
+        let yes = match config.render_mode {
+            RenderMode::ThreeD => true,
+            RenderMode::Escape => {
+                crate::escape::ifs::formula_is_solid(&config.escape.formula)
+            }
+            RenderMode::TwoD | RenderMode::Simulation => false,
+        };
+        if yes { Solid::Yes } else { Solid::No }
+    }
+
+    fn is_yes(self) -> bool {
+        self == Solid::Yes
+    }
+}
 
 /// Is this panel meaningful in this mode?
 ///
 /// Exhaustive by construction -- there is no `_` arm, so a new panel
 /// or a new mode does not compile until someone has decided what it
 /// means. That is the point of the function.
-pub fn panel(p: PanelType, m: RenderMode) -> Vis {
+///
+/// `solid` is the one thing the mode does not settle: lighting belongs
+/// to whatever renders a surface, and in escape mode that is a
+/// property of the formula.
+pub fn panel(p: PanelType, m: RenderMode, solid: Solid) -> Vis {
     use PanelType as P;
     use RenderMode as M;
     match p {
@@ -87,32 +125,43 @@ pub fn panel(p: PanelType, m: RenderMode) -> Vis {
         | P::Export
         | P::Rendering
         | P::LoginDialog
-        | P::SaveOnlineDialog => Vis::Show,
+        | P::SaveOnlineDialog
+        // The transform editors, in EVERY mode. Simulation uses the
+        // flame's transforms as its per-layer warps (simulation-layers
+        // plan, section 4), and escape mode D renders the flame's
+        // attractor as a distance field — so in both, editing a
+        // transform edits the picture. In mode A and mode B the flame
+        // is inert, but the panel is how you prepare one before
+        // switching, and greying it there would be a per-FORMULA
+        // answer from a per-mode policy.
+        | P::Transforms
+        | P::TriangleEditor
+        | P::Variations => Vis::Show,
 
         // Flame-only editing surfaces.
-        P::View | P::XaosEditor | P::Subflames | P::PathEditor => match m {
+        P::View | P::XaosEditor | P::Subflames | P::Paths => match m {
             M::TwoD | M::ThreeD => Vis::Show,
             M::Escape | M::Simulation => Vis::Grey(FLAME_ONLY),
         },
 
-        // The transform editors. Simulation uses the flame's
-        // transforms as its per-layer warps (simulation-layers plan,
-        // section 4), so they stay there and go in Escape. They are
-        // live only when `sim.use_transforms` is on, which is a
-        // control-level matter for phase 4, not a reason to hide the
-        // panel: it is how you turn the feature on.
-        P::Transforms | P::TriangleEditor | P::Variations => match m {
-            M::TwoD | M::ThreeD | M::Simulation => Vis::Show,
-            M::Escape => Vis::Grey(FLAME_ONLY),
-        },
-
-        // Occlusion and the shade pass are pseudo-3D flame features.
-        // The panel already says so itself; saying it in the menu too
-        // means you find out before opening it.
-        P::SolidLighting => match m {
-            M::ThreeD => Vis::Show,
-            M::TwoD | M::Escape | M::Simulation => Vis::Grey(THREE_D_ONLY),
-        },
+        // Lighting belongs to whatever renders a SURFACE, and two
+        // engines do: the 3D flame pipeline, and escape mode's solid
+        // distance marcher. Both read these same settings, so both
+        // offer the same panel -- a marcher lights itself rather than
+        // going through the shade pass, but the vocabulary is one.
+        P::SolidLighting => {
+            // The one rule written against `solid` alone rather than
+            // against the mode, because the mode is not what decides
+            // it -- `Solid::of` already answers for the 3D flame
+            // pipeline and for the escape marcher, and having the
+            // mode answer TOO would be two rules that can disagree.
+            let _ = m;
+            if solid.is_yes() {
+                Vis::Show
+            } else {
+                Vis::Grey(THREE_D_ONLY)
+            }
+        }
 
         // It works, but everything it produces is a flame, so using it
         // silently leaves the mode you are in.
@@ -208,12 +257,22 @@ pub enum Control {
     /// A real display-time view for the simulation is a feature, not a
     /// bug fix; when it exists this arm becomes `Show`.
     ViewNavigation,
+    /// The deep-zoom section: auto exposure and cylinder targeting.
+    /// Both are properties of the CHAOS GAME -- one counts the plot
+    /// attempts that land in frame, the other forces a prefix of
+    /// transforms -- so neither means anything in a mode that has no
+    /// chaos game to instrument.
+    DeepZoom,
     /// Colour mode, and what hangs off it: speed blend, path style,
     /// path capture and tracking. Neither generator reads the mode,
     /// and choosing PathMap allocates a path buffer, forces a flame
     /// shader recompile, and hides the palette controls both modes
     /// genuinely use.
     ColorMode,
+    /// Focused Rendering itself, and PathMap, which draws through it:
+    /// its planners enumerate discs in the PLANE, so a 3D flame gets
+    /// neither (the renderer reports `TargetingState::NotPlanar`).
+    FocusedRendering,
 }
 
 /// Is this control meaningful in this mode?
@@ -226,13 +285,23 @@ pub fn control(c: Control, m: RenderMode, tone: ToneMapMode) -> Vis {
     use Control as C;
     let flame = !matches!(m, RenderMode::Escape | RenderMode::Simulation);
     match c {
-        C::ChaosGame | C::TonemapPresets | C::SpatialFilter | C::DensityLevels | C::ColorMode => {
+        C::ChaosGame
+        | C::TonemapPresets
+        | C::SpatialFilter
+        | C::DensityLevels
+        | C::DeepZoom
+        | C::ColorMode => {
             if flame {
                 Vis::Show
             } else {
                 Vis::Hide
             }
         }
+        C::FocusedRendering => match m {
+            RenderMode::TwoD => Vis::Show,
+            RenderMode::ThreeD => Vis::Grey(TWO_D_ONLY),
+            RenderMode::Escape | RenderMode::Simulation => Vis::Hide,
+        },
         C::ViewNavigation => {
             if matches!(m, RenderMode::Simulation) {
                 Vis::Hide
@@ -329,7 +398,7 @@ pub static WINDOW_MENU: &[WindowMenuRow] = &[
     row(PanelType::FractalBrowser, "menu.window_fractal_browser"),
     row(PanelType::History, "menu.window_history"),
     row(PanelType::Animation, "menu.window_animation"),
-    row(PanelType::PathEditor, "menu.window_path_editor"),
+    row(PanelType::Paths, "menu.window_paths"),
     row(PanelType::RandomGenerator, "menu.window_random_generator"),
     row(PanelType::Effects, "menu.window_effects"),
     row(PanelType::Variations, "menu.window_variations"),
@@ -348,7 +417,7 @@ pub static WINDOW_MENU: &[WindowMenuRow] = &[
 /// transforms first -- but not its own labels. Palette Editor and
 /// Palette Library are deliberately absent: both are reachable from
 /// the Colors panel, and on a phone this menu was scrolling off the
-/// bottom. Path Editor, Random Generator and Account are absent too.
+/// bottom. Paths, Random Generator and Account are absent too.
 pub static COMPACT_WINDOW_MENU: &[PanelType] = &[
     PanelType::Transforms,
     PanelType::TriangleEditor,
@@ -402,7 +471,7 @@ mod tests {
         PanelType::Help,
         PanelType::KeyboardShortcuts,
         PanelType::ConfigDialog,
-        PanelType::PathEditor,
+        PanelType::Paths,
         PanelType::Export,
         PanelType::RandomGenerator,
         PanelType::Scripts,
@@ -422,6 +491,41 @@ mod tests {
     /// so this is the closest thing to one -- and `Display` panics on
     /// nothing, so a missing variant shows up as a count mismatch the
     /// moment someone adds one without updating the tests.
+    /// Lighting follows the CONFIG, not the mode (D2).
+    ///
+    /// Escape mode is not three-dimensional — one formula in it is —
+    /// so a rule written against the mode would offer the lighting
+    /// panel over a Mandelbrot, where it steers nothing, and withhold
+    /// it from the solid marcher, which reads these very settings.
+    #[test]
+    fn lighting_follows_the_formula_in_escape_mode() {
+        use crate::scene::transforms::RenderMode as M;
+
+        let solid_of = |formula: &str| {
+            let mut c = crate::config::FractalConfig::default();
+            c.render_mode = M::Escape;
+            c.escape.formula = formula.to_string();
+            Solid::of(&c)
+        };
+        assert_eq!(solid_of("ifs_flame_3d"), Solid::Yes);
+        assert_eq!(solid_of("ifs_flame"), Solid::No, "the planar walk renders no surface");
+        assert_eq!(solid_of("mandelbrot"), Solid::No);
+
+        assert!(panel(PanelType::SolidLighting, M::Escape, Solid::Yes).is_show());
+        assert!(!panel(PanelType::SolidLighting, M::Escape, Solid::No).is_show());
+        // The flame side is the same question, answered by the same flag.
+        assert!(panel(PanelType::SolidLighting, M::ThreeD, Solid::Yes).is_show());
+        // TwoD never reports Solid::Yes, so the flag alone deciding is
+        // not a licence for the 2D mode to show it -- `Solid::of` is.
+        assert_eq!(Solid::of(&crate::config::FractalConfig::default()), Solid::No);
+
+        // A 3D flame is the other thing that renders a surface, and
+        // `Solid::of` has to say so or the two answers disagree.
+        let mut flame3d = crate::config::FractalConfig::default();
+        flame3d.render_mode = M::ThreeD;
+        assert_eq!(Solid::of(&flame3d), Solid::Yes);
+    }
+
     #[test]
     fn the_test_list_covers_every_panel() {
         let mut seen: Vec<String> = ALL_PANELS.iter().map(|p| format!("{p:?}")).collect();
@@ -441,8 +545,10 @@ mod tests {
         Control::AlphaBlendCurve,
         Control::SpatialFilter,
         Control::DensityLevels,
+        Control::DeepZoom,
         Control::ColorMode,
         Control::ViewNavigation,
+        Control::FocusedRendering,
     ];
 
     /// Every reason a panel or control is greyed names a string that
@@ -453,7 +559,7 @@ mod tests {
         let mut checked = 0;
         for m in RenderMode::ALL {
             for p in ALL_PANELS {
-                if let Vis::Grey(key) = panel(*p, *m) {
+                if let Vis::Grey(key) = panel(*p, *m, Solid::No) {
                     let text = t!(key);
                     assert_ne!(text.as_ref(), key, "{p:?}/{m:?}: missing locale key {key}");
                     assert!(text.len() > 10, "{key} is too terse to explain anything");
@@ -487,12 +593,13 @@ mod tests {
 
     /// Every control is available in both flame modes under the
     /// logarithmic mapping, except the orbit cache, which is escape's
-    /// alone and does nothing in a flame.
+    /// alone and does nothing in a flame, and Focused Rendering in 3D,
+    /// whose planners work in the plane.
     #[test]
     fn the_flame_modes_offer_every_control_but_the_orbit_cache() {
         for m in [RenderMode::TwoD, RenderMode::ThreeD] {
             for c in ALL_CONTROLS {
-                let want = *c != Control::OrbitCache;
+                let want = *c != Control::OrbitCache && !(*c == Control::FocusedRendering && m == RenderMode::ThreeD);
                 assert_eq!(
                     control(*c, m, ToneMapMode::Logarithmic).is_show(),
                     want,
@@ -556,7 +663,9 @@ mod tests {
             assert!(hidden(Control::TonemapPresets), "{m:?} presets");
             assert!(hidden(Control::SpatialFilter), "{m:?} spatial filter");
             assert!(hidden(Control::DensityLevels), "{m:?} levels");
+            assert!(hidden(Control::DeepZoom), "{m:?} deep zoom");
             assert!(hidden(Control::ColorMode), "{m:?} colour mode");
+            assert!(hidden(Control::FocusedRendering), "{m:?} focused rendering");
             if m == RenderMode::Simulation {
                 assert!(hidden(Control::ViewNavigation), "sim viewport navigation");
             } else {
@@ -582,9 +691,12 @@ mod tests {
     #[test]
     fn the_flame_modes_offer_everything_but_solid_in_two_d() {
         for p in ALL_PANELS {
-            assert!(panel(*p, RenderMode::ThreeD).is_show(), "{p:?} missing in 3D");
+            assert!(
+                panel(*p, RenderMode::ThreeD, Solid::Yes).is_show(),
+                "{p:?} missing in 3D"
+            );
             let want = *p != PanelType::SolidLighting;
-            assert_eq!(panel(*p, RenderMode::TwoD).is_show(), want, "{p:?} in 2D");
+            assert_eq!(panel(*p, RenderMode::TwoD, Solid::No).is_show(), want, "{p:?} in 2D");
         }
     }
 
@@ -597,21 +709,24 @@ mod tests {
         let greyed = |m: RenderMode| -> Vec<String> {
             let mut v: Vec<String> = ALL_PANELS
                 .iter()
-                .filter(|p| !panel(**p, m).is_show())
+                .filter(|p| !panel(**p, m, Solid::No).is_show())
                 .map(|p| format!("{p:?}"))
                 .collect();
             v.sort();
             v
         };
+        // The transform editors are NOT here: escape mode D renders
+        // the flame's attractor as a distance field, so editing a
+        // transform edits the picture.
         let mut want_escape = vec![
-            "Transforms", "TriangleEditor", "Variations", "View", "XaosEditor",
-            "Subflames", "PathEditor", "SolidLighting", "RandomGenerator", "Simulation",
+            "View", "XaosEditor",
+            "Subflames", "Paths", "SolidLighting", "RandomGenerator", "Simulation",
         ];
         want_escape.sort();
         assert_eq!(greyed(RenderMode::Escape), want_escape, "Escape");
 
         let mut want_sim = vec![
-            "View", "XaosEditor", "Subflames", "PathEditor", "SolidLighting",
+            "View", "XaosEditor", "Subflames", "Paths", "SolidLighting",
             "RandomGenerator", "Escape",
         ];
         want_sim.sort();
@@ -622,12 +737,12 @@ mod tests {
     /// flame mode -- otherwise there would be no way in.
     #[test]
     fn each_engine_is_reachable_from_a_flame_mode_and_hides_the_other() {
-        assert!(panel(PanelType::Escape, RenderMode::TwoD).is_show());
-        assert!(panel(PanelType::Simulation, RenderMode::TwoD).is_show());
-        assert!(!panel(PanelType::Escape, RenderMode::Simulation).is_show());
-        assert!(!panel(PanelType::Simulation, RenderMode::Escape).is_show());
-        assert!(panel(PanelType::Escape, RenderMode::Escape).is_show());
-        assert!(panel(PanelType::Simulation, RenderMode::Simulation).is_show());
+        assert!(panel(PanelType::Escape, RenderMode::TwoD, Solid::No).is_show());
+        assert!(panel(PanelType::Simulation, RenderMode::TwoD, Solid::No).is_show());
+        assert!(!panel(PanelType::Escape, RenderMode::Simulation, Solid::No).is_show());
+        assert!(!panel(PanelType::Simulation, RenderMode::Escape, Solid::No).is_show());
+        assert!(panel(PanelType::Escape, RenderMode::Escape, Solid::No).is_show());
+        assert!(panel(PanelType::Simulation, RenderMode::Simulation, Solid::No).is_show());
     }
 
     /// The compact submenu picks from the desktop table rather than

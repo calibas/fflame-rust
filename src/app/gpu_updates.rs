@@ -90,8 +90,8 @@ impl App {
                         self.config_manager.system_settings().iterations_per_thread,
                         self.config_manager.system_settings().burn_in,
                         update_config.zoom,
-                        update_config.pan_x,
-                        update_config.pan_y,
+                        update_config.pan_x as f32,
+                        update_config.pan_y as f32,
                         update_config.rotation,
                         update_config.camera_rotation_x,
                         update_config.camera_rotation_y,
@@ -197,8 +197,8 @@ impl App {
                             self.config_manager.system_settings().iterations_per_thread,
                             self.config_manager.system_settings().burn_in,
                             update_config.zoom,
-                            update_config.pan_x,
-                            update_config.pan_y,
+                            update_config.pan_x as f32,
+                            update_config.pan_y as f32,
                             update_config.rotation,
                             update_config.camera_rotation_x,
                             update_config.camera_rotation_y,
@@ -237,8 +237,8 @@ impl App {
                         self.config_manager.system_settings().iterations_per_thread,
                         self.config_manager.system_settings().burn_in,
                         update_config.zoom,
-                        update_config.pan_x,
-                        update_config.pan_y,
+                        update_config.pan_x as f32,
+                        update_config.pan_y as f32,
                         update_config.rotation,
                         update_config.camera_rotation_x,
                         update_config.camera_rotation_y,
@@ -288,8 +288,8 @@ impl App {
                         self.config_manager.system_settings().iterations_per_thread,
                         self.config_manager.system_settings().burn_in,
                         update_config.zoom,
-                        update_config.pan_x,
-                        update_config.pan_y,
+                        update_config.pan_x as f32,
+                        update_config.pan_y as f32,
                         update_config.rotation,
                         update_config.camera_rotation_x,
                         update_config.camera_rotation_y,
@@ -342,8 +342,8 @@ impl App {
                         &self.gpu.queue,
                         self.config_manager.system_settings().iterations_per_thread,
                         update_config.zoom,
-                        update_config.pan_x,
-                        update_config.pan_y,
+                        update_config.pan_x as f32,
+                        update_config.pan_y as f32,
                         update_config.rotation,
                         update_config.camera_rotation_x,
                         update_config.camera_rotation_y,
@@ -399,6 +399,10 @@ impl App {
             || actions.reset_accumulation
         {
             self.escape_dirty = true;
+            // An EDIT, as opposed to the other reasons the pass
+            // re-runs (a resize, a mode switch): this is what opens
+            // the interaction window.
+            self.escape_last_edit = Some(web_time::Instant::now());
         }
 
         // Simulation: the three actions differ in how much of the run

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use crate::scene::transforms::{Flame, RenderMode};
-use crate::scene::palette::{ColorMode, Palette, PathCaptureMode, PathMapStyle, PathTrackingMode};
+use crate::scene::palette::{ColorMode, Palette, PathMapStyle};
 use crate::scene::tonemap::{HighlightMode, ToneMapMode, ToneCurve};
 use crate::effects::EffectInstance;
 
@@ -51,9 +51,33 @@ pub struct FractalConfig {
     #[serde(default = "default_zoom")]
     pub zoom: f32,
     #[serde(default)]
-    pub pan_x: f32,
+    /// View centre, in the fractal plane. **f64, unlike every other
+    /// view field**, because it is the only ABSOLUTE position among
+    /// them and absolute positions are what a deep zoom destroys.
+    ///
+    /// The forced-prefix packing already subtracts this centre in f64
+    /// (`scene::cylinder::pack`) so the kernel only touches small
+    /// numbers. That subtraction was exact and the input was not: an
+    /// f32 centre quantises to 3e-8 near 0.27, which is wider than
+    /// the whole viewport past a zoom of about 1e8, so the centre
+    /// could not be ADDRESSED however well the render was sampled.
+    ///
+    /// f64 moves that wall to roughly 1e11-1e13, where the word's own
+    /// composed translation runs out. Past that the answer is exact
+    /// decimal strings feeding `escape::fixedpoint`, and the seam for
+    /// it is an additive optional field rather than another change to
+    /// this one.
+    ///
+    /// `zoom` stays f32 deliberately: it is a SCALE, so only its
+    /// relative precision matters, and f32 has seven digits of that
+    /// at any magnitude.
+    ///
+    /// Serde-compatible both ways — a JSON number parses into f64
+    /// whatever it was written as — so no config migration and no
+    /// version bump.
+    pub pan_x: f64,
     #[serde(default)]
-    pub pan_y: f32,
+    pub pan_y: f64,
     #[serde(default)]
     pub rotation: f32,  // 2D rotation (around Z axis)
 
@@ -226,15 +250,16 @@ pub struct FractalConfig {
     /// Color settings
     #[serde(default)]
     pub color_mode: ColorMode,
-    /// PathMap coloring style (Prefix = color by path start, Suffix = color by path end)
+    /// PathMap colouring style (docs/projects/word-editing.md §10)
     #[serde(default, skip_serializing_if = "PathMapStyle::is_default")]
     pub path_map_style: PathMapStyle,
-    /// PathMap capture mode (FirstHit, FirstAfterBurnIn, LastHit)
-    #[serde(default, skip_serializing_if = "PathCaptureMode::is_default")]
-    pub path_capture_mode: PathCaptureMode,
-    /// PathMap tracking mode (First = first 32 iterations, Recent = rolling window of 32 most recent)
-    #[serde(default, skip_serializing_if = "PathTrackingMode::is_default")]
-    pub path_tracking_mode: PathTrackingMode,
+    /// How many transforms of each path decide its PathMap colour, for
+    /// the two path styles; Focused Rendering divides the picture at
+    /// least that finely so every part has them. The old history-based
+    /// PathMap's capture and tracking modes are gone with it: a file that
+    /// has them loads, and they are ignored.
+    #[serde(default = "default_path_map_level", skip_serializing_if = "is_default_path_map_level")]
+    pub path_map_level: u32,
     /// The palette data - always present (required)
     /// This is the single source of truth for the active palette
     #[serde(default = "default_palette", deserialize_with = "deserialize_palette")]
@@ -362,6 +387,196 @@ pub struct FractalConfig {
     /// Optional: Deterministic RNG for reproducible renders
     #[serde(default)]
     pub deterministic_rng: bool,
+
+    /// Importance-sampled transform selection
+    /// ([flame-deep-zoom.md](../../docs/projects/flame-deep-zoom.md)
+    /// stage 1). Off by default and skipped when off, so no existing
+    /// config gains a field and the shader is byte-identical.
+    #[serde(default, skip_serializing_if = "ImportanceSettings::is_default")]
+    pub importance: ImportanceSettings,
+
+    /// Cylinder targeting: force an enumerated prefix at plot time so
+    /// every sample lands in the viewport
+    /// ([flame-deep-zoom.md](../../docs/projects/flame-deep-zoom.md)
+    /// stage 2).
+    ///
+    /// Off by default and skipped when off. This only PERMITS it: a
+    /// flame the enumeration cannot take (nonlinear, xaos, expanding)
+    /// or a view too shallow for the prefix to pay renders the
+    /// ordinary way whatever this says, and the renderer decides per
+    /// view because which words reach the frame is a property of the
+    /// zoom and not of the flame.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub cylinder_targeting: bool,
+
+    /// Keep the plan at every zoom -- "Always" in the UI's Focused
+    /// Rendering switch, where `cylinder_targeting` alone is "Auto".
+    /// Zoomed out, a plan renders more slowly than the ordinary chaos
+    /// game, and Auto declines it there; Always keeps it, so the Pieces
+    /// panel has a plan to show and edit at any zoom. Read only with
+    /// `cylinder_targeting`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub cylinder_always: bool,
+
+    /// **Trim** (docs/projects/word-editing.md §4): drop the branches of
+    /// the plan's word tree, within `cylinder_trim_levels` levels of the
+    /// view, whose share of the view is under this times their largest
+    /// sibling's. An artistic choice -- it removes real parts of the
+    /// picture -- for the slivers that flicker in during an animation.
+    /// 0 is off.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub cylinder_trim: f32,
+
+    /// How many levels of the word tree, from the view, trim reaches.
+    /// Measured on the true Grand Julian's flicker: two remove it and
+    /// nothing else at any trim; three begin to cut real structure.
+    #[serde(default = "default_trim_levels", skip_serializing_if = "is_default_trim_levels")]
+    pub cylinder_trim_levels: u32,
+
+    /// **Removals** (docs/projects/word-editing.md §5): pieces of the
+    /// picture taken out by their words, each a pattern of maps matched
+    /// against a word's last-applied maps -- `"t1a1 t1a0"`, transform and
+    /// arm in the order the chaos game applies them, the map nearest the
+    /// view last (`scene::word_tree::parse_pattern`). Drawn only where a
+    /// plan is: with cylinder targeting on, in 2D.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub word_removals: Vec<String>,
+
+    /// Auto exposure: normalise the tone map by the density of the
+    /// pixels actually IN FRAME rather than by total iterations
+    /// (`docs/projects/flame-deep-zoom.md`).
+    ///
+    /// The shipped normalisation is `total_iters / pixel_count`, which
+    /// assumes the frame holds all the work. A zoomed-in view does
+    /// not: most of the attractor is off-screen, so the tone map
+    /// divides the samples that DID land by a count dominated by ones
+    /// that did not, and the picture goes black long before it runs
+    /// out of samples.
+    ///
+    /// **Off by default, and deliberately so.** Coverage is below one
+    /// for nearly every flame -- some samples always fly off-frame --
+    /// so switching this on changes the brightness of essentially
+    /// every render ever made. It is a mechanism here; when it should
+    /// engage on its own is a separate decision, and one worth taking
+    /// with the coverage curve in hand rather than in advance.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub auto_exposure: bool,
+}
+
+/// Biased transform selection with a windowed likelihood-ratio
+/// correction -- stage 1 of
+/// [flame-deep-zoom.md](../../docs/projects/flame-deep-zoom.md).
+///
+/// The chaos game samples the invariant measure over the WHOLE
+/// attractor, so the fraction of samples landing in a deep viewport
+/// falls off polynomially with zoom: the image starves long before
+/// anything numerical breaks. Boosting a transform's selection weight
+/// redirects iterations toward where the camera is looking, and on its
+/// own that is importance sampling with the correction dropped -- it
+/// works, and it changes the picture, because in a flame the density
+/// IS the image.
+///
+/// The correction is the likelihood ratio of the orbit's recent
+/// choices, `w = ∏ p(choice)/q(choice)`, deposited instead of 1. With
+/// it the rendered measure is the true one however aggressive the
+/// bias.
+///
+/// **This struct is the MECHANISM, not the policy.** It takes an
+/// arbitrary bias vector and makes it unbiased; choosing the vector
+/// (by hand, slaved to the zoom, or from stage 2's cylinder measure)
+/// is layered on top.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImportanceSettings {
+    /// Whether biased selection and its correction run at all. Off is
+    /// a byte-identical shader, not a neutral one.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub enabled: bool,
+
+    /// Per-transform bias factors, multiplied into the selection
+    /// weight. `1.0` is neutral; empty means every transform is
+    /// neutral, which is what `enabled` alone gives.
+    ///
+    /// Indexed by transform, and a shorter vector leaves the rest
+    /// neutral -- so adding a transform does not invalidate the
+    /// vector, and neither does deleting one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bias: Vec<f32>,
+
+    /// The correction window `m`: how many of the orbit's most recent
+    /// choices the deposited weight accounts for.
+    ///
+    /// The product over the orbit's ENTIRE history is the textbook
+    /// estimator and its variance grows without bound. It is also
+    /// unnecessary: contraction means the last `m` choices fix the
+    /// point's position to sub-pixel precision, and older choices only
+    /// select position WITHIN a sub-pixel. So a product over the last
+    /// `m` is correct below pixel resolution provided
+    ///
+    /// ```text
+    /// m ≥ log(pixel_size / attractor_size) / log(λ_max)
+    /// ```
+    ///
+    /// with `λ_max` the flame's largest per-transform Lipschitz
+    /// constant. **That constant does not exist yet** -- it is item 1
+    /// of the deep-zoom plan's §7, the shared piece the escape-time
+    /// plan also wants -- so this is a number the caller sets rather
+    /// than one the engine derives, and the default is a value that
+    /// covers a contraction of ½ at a hundredfold zoom. Deriving it
+    /// is what §7 item 1 unblocks.
+    ///
+    /// Under xaos there is a second requirement the formula above does
+    /// not state: `m` must also exceed the transition chain's mixing
+    /// time, because the weight is conditioned on the transform
+    /// BEFORE the window and the true chain's `m`-step distribution
+    /// has to have forgotten it.
+    #[serde(default = "default_importance_window", skip_serializing_if = "is_default_importance_window")]
+    pub window: u32,
+}
+
+fn default_importance_window() -> u32 {
+    16
+}
+
+fn is_default_importance_window(v: &u32) -> bool {
+    *v == default_importance_window()
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+
+impl Default for ImportanceSettings {
+    fn default() -> Self {
+        Self { enabled: false, bias: Vec::new(), window: default_importance_window() }
+    }
+}
+
+impl ImportanceSettings {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The bias factor for transform `i`: the vector's entry, or
+    /// neutral past its end.
+    ///
+    /// A non-positive or non-finite factor is neutral too. A zero
+    /// would make the transform unselectable, which CHANGES THE
+    /// SUPPORT -- the one thing importance sampling may not do, since
+    /// the attractor's point set depends on which weights are
+    /// positive and not on their values.
+    pub fn factor(&self, i: usize) -> f64 {
+        match self.bias.get(i) {
+            Some(&v) if v.is_finite() && v > 0.0 => v as f64,
+            _ => 1.0,
+        }
+    }
+
+    /// Whether this actually biases anything. `enabled` with an
+    /// all-neutral vector is the mechanism running with `q ≡ p`, which
+    /// is a render identical to off and is what the gate uses.
+    pub fn biases(&self) -> bool {
+        self.enabled && self.bias.iter().any(|v| v.is_finite() && *v > 0.0 && *v != 1.0)
+    }
 }
 
 fn default_zoom() -> f32 {
@@ -390,6 +605,22 @@ fn is_default_image_size(v: &(u32, u32)) -> bool {
 /// Skip-serialize helper — keeps fields free from existing flame
 /// JSON files unless the user actually changes them from zero.
 /// Shared by `camera_x` / `camera_y` and other zero-defaulted f32s.
+pub(crate) fn default_path_map_level() -> u32 {
+    2
+}
+
+fn is_default_path_map_level(v: &u32) -> bool {
+    *v == default_path_map_level()
+}
+
+fn default_trim_levels() -> u32 {
+    2
+}
+
+fn is_default_trim_levels(v: &u32) -> bool {
+    *v == default_trim_levels()
+}
+
 fn is_zero_f32(v: &f32) -> bool {
     *v == 0.0
 }
@@ -751,8 +982,7 @@ impl Default for FractalConfig {
             use_dynamic_blend: default_use_dynamic_blend(),
             color_mode: ColorMode::Palette,
             path_map_style: PathMapStyle::default(),
-            path_capture_mode: PathCaptureMode::default(),
-            path_tracking_mode: PathTrackingMode::default(),
+            path_map_level: default_path_map_level(),
             palette: default_palette(),
             palette_rotation: default_palette_rotation(),
             palette_size: default_palette_size(),
@@ -783,6 +1013,13 @@ impl Default for FractalConfig {
             density_effects: Vec::new(),
             color_effects: Vec::new(),
             deterministic_rng: false,
+            importance: ImportanceSettings::default(),
+            cylinder_targeting: false,
+            cylinder_always: false,
+            cylinder_trim: 0.0,
+            cylinder_trim_levels: default_trim_levels(),
+            word_removals: Vec::new(),
+            auto_exposure: false,
         }
     }
 }
@@ -797,6 +1034,35 @@ impl FractalConfig {
     /// CLI export, thumbnails, video -- agree with it, instead of
     /// passing the raw flag and relying on the arithmetic happening to
     /// come out the same.
+    /// How far the view controls will zoom in.
+    ///
+    /// The cap exists because a deep view of a flame is STARVED: the
+    /// chaos game's share of any small region falls off with the zoom,
+    /// so past a point the ordinary renderer draws a black frame and
+    /// the control is only letting you break the picture. 1,000 was
+    /// that point once; measurement puts it further out, so the
+    /// ordinary limit is 10,000 now.
+    ///
+    /// **Cylinder targeting removes the reason for a cap**, because it
+    /// forces every sample into the viewport and the share stops
+    /// falling off — so with it on, this is not a limit anyone should
+    /// hit. The value is large and finite rather than infinite so the
+    /// view arithmetic stays well defined (`2/zoom` must not be zero
+    /// and `zoom * 1.5` must not be `inf`).
+    ///
+    /// It is NOT a claim that any zoom resolves. The real wall is that
+    /// `pan_x`/`pan_y` are f32: past about 1e8 an ulp of the pan is
+    /// wider than the view, so the centre cannot be addressed at all.
+    /// That is a coordinate problem, not a sampling one, and raising
+    /// this does not solve it.
+    pub fn max_view_zoom(&self) -> f32 {
+        if self.cylinder_targeting {
+            1.0e30
+        } else {
+            10_000.0
+        }
+    }
+
     pub fn effective_levels_enabled(&self) -> bool {
         self.levels_enabled && !self.render_mode.is_non_flame()
     }
@@ -814,9 +1080,13 @@ impl FractalConfig {
     /// (mouse drag, arrow keys, zoom-to-cursor, pinch) must go
     /// through this so the inputs stay consistent with the
     /// pipelines and with each other.
-    pub fn screen_delta_to_pan_frame(&self, dx: f32, dy: f32) -> (f32, f32) {
-        let cos_r = (-self.rotation).cos();
-        let sin_r = (-self.rotation).sin();
+    /// f64 in and out, so the caller's `pan + delta` stays in the
+    /// pan's own precision. The DELTA itself never needs it -- a
+    /// one-pixel drag is small but perfectly representable at any
+    /// depth -- it is the accumulator that does.
+    pub fn screen_delta_to_pan_frame(&self, dx: f64, dy: f64) -> (f64, f64) {
+        let cos_r = (-self.rotation as f64).cos();
+        let sin_r = (-self.rotation as f64).sin();
         (dx * cos_r - dy * sin_r, dx * sin_r + dy * cos_r)
     }
 
@@ -1214,6 +1484,23 @@ fn fixup_flame_ids(flame: &mut Flame) {
 
 #[cfg(test)]
 mod tests {
+    /// The view's zoom limit follows the one thing that makes a deep
+    /// view resolvable.
+    #[test]
+    fn targeting_lifts_the_zoom_limit() {
+        let mut c = FractalConfig::default();
+        assert_eq!(c.max_view_zoom(), 10_000.0, "the ordinary cap");
+        c.cylinder_targeting = true;
+        assert!(
+            c.max_view_zoom() > 1.0e20,
+            "targeting forces every sample into the viewport, so the cap that existed to              stop you reaching a starved black frame no longer applies"
+        );
+        // Finite, so `2/zoom` is not zero and `zoom * 1.5` is not inf.
+        assert!(c.max_view_zoom().is_finite());
+        assert!((2.0f32 / c.max_view_zoom()) > 0.0);
+        assert!((c.max_view_zoom() * 1.5).is_finite());
+    }
+
     use super::*;
 
     #[test]

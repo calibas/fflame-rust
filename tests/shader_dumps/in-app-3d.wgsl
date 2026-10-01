@@ -106,12 +106,18 @@ struct Params {
     dof_blur_strength: f32,  // Depth of field: blur amount (0.0 = disabled)
     fog_strength: f32,  // Depth fog: exponential fog density (0.0 = disabled)
     fog_start: f32,  // Depth fog: distance where fog begins
-    bits_per_transform: u32,  // Bits needed per transform index (1-5 based on num_transforms)
-    path_map_style: u32,  // 0=Prefix, 1=Suffix, 2=Prefix (Distinct), 3=Suffix (Distinct)
-    path_capture_mode: u32,  // 0=FirstHit, 1=FirstAfterBurnIn, 2=LastHit
-    path_tracking_mode: u32,  // 0=First (first 32 iterations), 1=Recent (rolling window of 32 most recent)
-    num_path_filters: u32,  // Number of active path filters (0 = disabled)
-    min_suffix_filter_length: u32,  // Minimum length among depth=0 filters (for optimization)
+    path_map_style: u32,  // PathMap: 0 Path, 1 Path (distinct), 2 Depth, 3-5 Origin radial / horizontal / vertical
+    // PathMap's Origin styles: the attractor's centre and radius, the
+    // frame a point's position is read in (`pathmap_origin`). Where the
+    // path history's capture and tracking modes, and its bit width, were.
+    path_origin_x: f32,
+    path_origin_y: f32,
+    path_origin_r: f32,
+    // Where the path filters' count and minimum length were (the Path
+    // Editor, replaced by word editing): padding, so `post_symmetry`
+    // stays on its 16-byte boundary. Mirror in `src/gpu/buffers.rs`.
+    _pad_path_filters_0: u32,
+    _pad_path_filters_1: u32,
     background_r: f32,  // Background color R (for depth fog)
     background_g: f32,  // Background color G (for depth fog)
     background_b: f32,  // Background color B (for depth fog)
@@ -132,10 +138,15 @@ struct Params {
     shadow_center_z: f32,
     shadow_radius: f32,
     shadow_count: u32,
-    _pad_shadow0: u32,
+    // The biased-selection correction window `m`, carved from the
+    // first shadow pad so no offset moves. Mirror in
+    // src/gpu/buffers.rs. Read only under IMPORTANCE_SAMPLING.
+    importance_window: u32,
     _pad_shadow1: u32,
     _pad_shadow2: u32,
     shadow_dirs: array<vec4<f32>, 4>,
+    // [cx, cy, r, unused]; off when r <= 0. See GpuParams::leak_probe.
+    leak_probe: vec4<f32>,
 }
 
 // Plot-time symmetry. Matches `GpuPostSymmetry` in src/gpu/buffers.rs.
@@ -169,26 +180,6 @@ struct VariationParams {
 // Path storage for PathMap color mode
 // Stores up to 32 iterations losslessly (4 bits per transform, up to 16 transforms)
 // Also stores initial random X/Y coordinates for complete path reconstruction
-struct PathEntry {
-    path0: u32,  // Iterations 0-7 (4 bits each, LSB = iteration 0)
-    path1: u32,  // Iterations 8-15
-    path2: u32,  // Iterations 16-23
-    path3: u32,  // Iterations 24-31
-    iteration_count: u32,  // Actual iteration when pixel was hit (not capped at 32)
-    initial_x: f32,  // Initial random X coordinate [-1, 1]
-    initial_y: f32,  // Initial random Y coordinate [-1, 1]
-}
-
-// Path filter for blocking specific transform sequences
-// depth=0: suffix match (block paths ending with pattern at any depth)
-// depth>0: exact depth match (block paths matching pattern at specific iteration)
-struct PathFilter {
-    pattern: u32,  // Packed pattern (up to 8 iterations at 4 bits each, LSB = first)
-    length: u32,   // Number of iterations in pattern (1-8)
-    depth: u32,    // 0 = suffix match, >0 = match at this exact depth
-    _padding: u32, // Padding for 16-byte alignment
-}
-
 // Per-normal-transform attachment list — entries hold global xform_ids
 // pointing into the concatenated transforms[] array. The main loop walks
 // these after the chaos game picks a normal transform: linkeds advance
@@ -223,14 +214,23 @@ struct AttachmentList {
 // feature, removed because the feature was experimental and the
 // always-allocated buffer was just consuming GPU memory.
 
-@group(0) @binding(7) var<storage, read_write> path_buffer: array<PathEntry>;
-@group(0) @binding(8) var<storage, read> path_filters: array<PathFilter>;
+// PathMap: the path each pixel was last drawn through, 1-based into the
+// plan's words (0 = none), for the viewport's right-click.
+@group(0) @binding(7) var<storage, read_write> path_ids: array<u32>;
+
+// Binding 8 intentionally unused: the path filters, which word editing
+// replaced (docs/projects/word-editing.md).
 // Xaos (chaos) transition weights: xaos_weights[src * num_transforms + dst]
 // Modifies probability of selecting dst transform when coming from src
 @group(0) @binding(9) var<storage, read> xaos_weights: array<f32>;
 // Per-normal-transform attachment lists. Indexed by the normal's
 // xform_id (0..num_transforms). See AttachmentList struct above.
 @group(0) @binding(10) var<storage, read> attachments: array<AttachmentList>;
+
+
+
+
+
 
 // Per-subflame metadata: where each subflame's normals + finals live
 // inside the *unified* `transforms[]` buffer. Indexed by
@@ -652,6 +652,8 @@ fn select_transform_const(rand_val: f32) -> u32 {
     return NUM_TRANSFORMS - 1u;
 }
 
+
+
 // Select transform with xaos (chaos) weighting
 // Uses hard-coded NUM_TRANSFORMS for loop unrolling
 // prev_xform: Index of the transform that was just applied
@@ -962,8 +964,10 @@ fn project_3d_full(p: vec3<f32>) -> Projection3D {
 
 // Convert 2D fractal coords to pixel coords
 fn world_to_pixel(p: vec2<f32>) -> vec2<i32> {
+
     // Apply view transform: pan, rotation, and zoom
     var transformed = p - vec2<f32>(params.pan_x, params.pan_y);
+
 
     // Apply rotation
     let cos_r = cos(params.rotation);
@@ -1168,13 +1172,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // Starting point (random in [-1, 1])
 
-
     var current = vec3<f32>(
         rng_nextf(&rng) * 2.0 - 1.0,
         rng_nextf(&rng) * 2.0 - 1.0,
         rng_nextf(&rng) * 2.0 - 1.0
     );
-
 
 
 
@@ -1194,11 +1196,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 
 
+
+
     // Per-thread state initialization for stateful variations that need
     // values beyond zero-fill (var<private> thread_state is already zeroed
     // by WGSL spec; this block runs the wgsl_state_init fragments declared
     // by active variations). Emitted by shader builder; empty for flames
     // with no custom-init variations.
+
+
 
 
     // Iterate
@@ -1209,8 +1215,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Select random transform
         let rand_val = rng_nextf(&rng);
 
+
         // Standard: uses hard-coded NUM_TRANSFORMS for loop unrolling
         let xform_idx = select_transform_const(rand_val);
+
+
 
         let xform = transforms[xform_idx];
 
@@ -1218,6 +1227,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Note: We still apply the transform even when opacity=0 - opacity affects
         // visibility only, not IFS dynamics. Transform must update position for correct chaos game.
         var should_plot = rng_nextf(&rng) < xform.opacity;
+
 
         // doHide flag (JWildfire's pVarTP.doHide), reset each iteration. The
         // cut_* family of CanHide variations set it via the `hide` pointer
@@ -1323,6 +1333,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 
             fuse = params.burn_in;
+
             continue;
         }
 
@@ -1332,7 +1343,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 
         // Original Step 1 (palette mode), or speed-based color (speed mode).
-        if (COLOR_MODE == 0u) {
+        // PathMap runs the palette's flow: its paths override it at the
+        // plot, and without a plan it is the palette.
+        if (COLOR_MODE == 0u || COLOR_MODE == 2u) {
             let symmetry = xform.color_speed;
             let colorC1 = (1.0 + symmetry) / 2.0;
             let colorC2 = xform.color * (1.0 - symmetry) / 2.0;
@@ -1343,16 +1356,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
 
 
-        // Note: COLOR_MODE == 2 (PathMap) uses the full shader with path tracking
-
-
-
-
         // Skip burn-in / re-fuse iterations (the respawn above resets
         // the countdown so recovering points don't plot mid-flight)
         if (fuse > 0u) {
             fuse = fuse - 1u;
         } else {
+
 
             // No attachments: skip the chain — plot the post-Linked
             // (== post-Normal) point directly.
@@ -1382,16 +1391,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 
             // Pre-compute the iteration's base color OUTSIDE the
-            // symmetry loop. It depends only on color_index / color /
-            // (none for path-map) — none of which change between the
-            // K symmetric copies. Hoisting the palette texture sample
-            // alone gives a (K-1)/K speedup for palette mode at high
-            // Point-symmetry orders. Default of white covers the
-            // path-map COLOR_MODE branch (and any unhandled mode);
-            // fog inside the loop reads from this base into a local
-            // copy so its per-copy depth modulation doesn't bleed.
+            // symmetry loop. It depends only on color_index / color,
+            // neither of which changes between the K symmetric copies.
+            // Hoisting the palette texture sample alone gives a (K-1)/K
+            // speedup for palette mode at high Point-symmetry orders.
+            // PathMap reads the palette at its path's colour. Default
+            // of white covers any unhandled mode; fog inside the loop
+            // reads from this base into a local copy so its per-copy
+            // depth modulation doesn't bleed.
             var base_final_color: vec3<f32> = vec3<f32>(1.0, 1.0, 1.0);
-            if (COLOR_MODE == 0u) {
+            if (COLOR_MODE == 0u || COLOR_MODE == 2u) {
                 let palette_srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(color_index, 0.5), 0.0).rgb;
                 base_final_color = srgb_to_linear(palette_srgb);
             } else if (COLOR_MODE == 1u) {
@@ -1413,6 +1422,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // compensation below multiplies on top.
 
             var density_weight = 1.0;
+
 
 
 
@@ -1479,6 +1489,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     i32(round(sin(angle) * radius))
                 );
             }
+
 
 
 
@@ -1553,11 +1564,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // Convert colors to u32 using global scale. All four
                 // channels carry the same density_weight so the color
                 // recovery ratio Σcolor/Σdensity is weight-invariant.
+
                 let weighted_scale = color_scale * density_weight;
                 let r_u32 = u32(clamp(final_color.r, 0.0, 1.0) * weighted_scale);
                 let g_u32 = u32(clamp(final_color.g, 0.0, 1.0) * weighted_scale);
                 let b_u32 = u32(clamp(final_color.b, 0.0, 1.0) * weighted_scale);
                 let density_u32 = u32(weighted_scale);  // Density includes scale (u32 prevents overflow)
+
 
                 // Atomic add to histogram (4 separate u32 words)
                 atomicAdd(&histogram[base_idx + 0u], r_u32);
@@ -1569,8 +1582,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             }
             }  // end for (sym_k = 0..sym_count) — post-symmetry loop
 
+
         }
 
 
     }
+
 }

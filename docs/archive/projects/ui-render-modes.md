@@ -102,6 +102,15 @@ them lead to a dead stub in Escape.
 
 Legend: ● works · ◐ shown but partly or wholly inert · ○ hidden today
 
+> **Superseded for three rows, 2026-09-10.** Transforms, Triangle
+> Editor and Variations now **Show** in Escape mode, not grey. The
+> table below records what was true when escape mode was formulas and
+> fields alone and the flame was genuinely inert there; escape **mode
+> D** ([ifs-distance-rendering.md](../../projects/ifs-distance-rendering.md))
+> renders the flame's attractor as a distance field, so editing a
+> transform edits the picture. `src/ui/visibility.rs` is the live
+> answer, as it always was.
+
 | Panel | 2D | 3D | Esc | Sim | Note |
 |---|---|---|---|---|---|
 | FractalViewport | ● | ● | ● | ◐ | Sim: pan/zoom write flame config the sim ignores |

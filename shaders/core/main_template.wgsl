@@ -12,7 +12,11 @@
 // Uses hard-coded constants (compiled at shader build time):
 //   NUM_TRANSFORMS, COLOR_MODE, HAS_POST_AFFINE
 // These enable dead code elimination and loop unrolling optimizations.
-
+{{#if CYLINDER_REPLAY}}
+// The forced arm and `ct_apply_symbol` come from `replay.wgsl`,
+// appended to the definitions -- shared with the planner's GPU kernel
+// so the two apply a word identically.
+{{/if}}
 @compute @workgroup_size(64, 1, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let thread_id = global_id.x;
@@ -21,20 +25,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var rng = rng_init(thread_id, params.seed);
 
     // Starting point (random in [-1, 1])
-{{#if PATH_TRACKING}}
-    // Store initial coordinates for path reconstruction
-    let initial_x = rng_nextf(&rng) * 2.0 - 1.0;
-    let initial_y = rng_nextf(&rng) * 2.0 - 1.0;
-{{#if RENDER_3D}}
-    var current = vec3<f32>(
-        initial_x,
-        initial_y,
-        rng_nextf(&rng) * 2.0 - 1.0
-    );
-{{else}}
-    var current = vec2<f32>(initial_x, initial_y);
-{{/if}}
-{{else}}
 {{#if RENDER_3D}}
     var current = vec3<f32>(
         rng_nextf(&rng) * 2.0 - 1.0,
@@ -46,7 +36,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         rng_nextf(&rng) * 2.0 - 1.0,
         rng_nextf(&rng) * 2.0 - 1.0
     );
-{{/if}}
 {{/if}}
 
 {{#if HAS_W}}
@@ -66,12 +55,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var fuse = params.burn_in;
 
 {{#if PATH_TRACKING}}
-    // Path tracking for PathMap mode
-    // Stores first 32 iterations losslessly (4 bits per transform, supports up to 16 transforms)
-    // path[0] = iterations 0-7, path[1] = 8-15, path[2] = 16-23, path[3] = 24-31
-    // Also stores initial_x, initial_y for complete path reconstruction
-    var path = array<u32, 4>(0u, 0u, 0u, 0u);
-    var path_iteration = 0u;  // Count of iterations stored in path
+    // PathMap: the path this thread's sample is drawn through, 1-based
+    // into the plan's words (0 = none), for `path_ids`.
+    var ct_word = 0u;
 {{/if}}
 
 {{#if XAOS_ENABLED}}
@@ -84,6 +70,42 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var prev_xform_idx = select_transform_const(rng_nextf(&rng));
 {{/if}}
 
+{{#if CYLINDER_TARGETING}}
+    // A stream of its own for the word draw, so turning targeting on
+    // does not shift the chaos game's own sequence -- the free orbit
+    // has to be the same orbit it would have been.
+    var ct_rng = rng_init(thread_id, params.seed ^ 0x85EBCA6Bu);
+    // The drawn word's deposit (`ct_word_weight`), for the plot: a word
+    // drawn off its probability deposits the difference, every other
+    // forced sample one. Folded into `density_weight` inline, so an
+    // untargeted shader is byte-identical.
+    var ct_weight = 1.0;
+{{#if CYLINDER_OFFSETS}}
+{{#if HAS_ATTACHMENTS}}
+    // Where a plan carries the final transforms into its offsets
+    // (`scene::final_map`): a sample `ct_offsets` took through them skips
+    // the final chain, and one replayed in absolute f32 takes the pan off
+    // after it. Set on every forced sample.
+    var ct_final_done = false;
+    var ct_pan_late = false;
+{{/if}}
+{{/if}}
+{{/if}}
+{{#if IMPORTANCE_SAMPLING}}
+    // The window's likelihood ratio and how many choices it covers
+    // (docs/projects/flame-deep-zoom.md stage 1). `is_weight` is the
+    // product of `p/q` over the choices since the last epoch reset,
+    // which is what a deposit carries instead of 1.
+    var is_weight = 1.0;
+    var is_window = 0u;
+    // A stream of its own for the stochastic deposit below. Drawing
+    // from the walk's own `rng` would shift every later draw, so
+    // turning the feature on would reshuffle which points the opacity
+    // test plots -- a change to the picture for a reason that has
+    // nothing to do with the mechanism. Offset by a constant so two
+    // threads with adjacent seeds do not share a stream.
+    var is_rng = rng_init(thread_id, params.seed ^ 0x9E3779B9u);
+{{/if}}
 {{#if HAS_ANALYTIC_BLUR}}
     // Residual analytic-blur state, persists ACROSS iterations: after a blur
     // transform fires, the next `residual_remaining` plots are routed through
@@ -100,6 +122,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // with no custom-init variations.
 //__STATE_INIT_BLOCK__
 
+{{#if FRAME_COVERAGE}}
+    // Frame-coverage tallies for this thread (see header.wgsl binding
+    // 16). Registers, flushed once after the loop.
+    var fc_in: u32 = 0u;
+    var fc_att: u32 = 0u;
+    // Plot attempts landing outside params.leak_probe's disc.
+    var fc_leak: u32 = 0u;
+{{/if}}
+
     // Iterate
     for (var i = 0u; i < params.iterations_per_thread; i++) {
         // Save old position for speed calculation
@@ -108,12 +139,49 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Select random transform
         let rand_val = rng_nextf(&rng);
 {{#if XAOS_ENABLED}}
+{{#if IMPORTANCE_SAMPLING}}
+        // Biased selection: `q` in place of the true weights, with the
+        // ratio `p/q` for THIS transition folded into the window's
+        // product below. The row is the actual previous transform, so
+        // the ratio is exact whatever the epoch boundary did.
+        let is_prev_row = prev_xform_idx;
+        let xform_idx = select_transform_biased_xaos(rand_val, prev_xform_idx);
+{{else}}
         // Xaos: probability modified by transition weights from previous transform
         let xform_idx = select_transform_xaos(rand_val, prev_xform_idx);
+{{/if}}
         prev_xform_idx = xform_idx;
+{{else}}
+{{#if IMPORTANCE_SAMPLING}}
+        // Without xaos the choice is unconditional, so every row of
+        // the ratio matrix is the same and row zero is the one to
+        // read -- which is why this arm needs no `prev`.
+        let is_prev_row = 0u;
+        let xform_idx = select_transform_biased(rand_val);
 {{else}}
         // Standard: uses hard-coded NUM_TRANSFORMS for loop unrolling
         let xform_idx = select_transform_const(rand_val);
+{{/if}}
+{{/if}}
+{{#if IMPORTANCE_SAMPLING}}
+        // End of the epoch: start a fresh window. Resetting rather
+        // than keeping a ring buffer is what bounds the variance by
+        // construction -- the product over an orbit's whole history
+        // has variance that grows without bound, and is unnecessary
+        // because older choices only select position WITHIN a
+        // sub-pixel.
+        //
+        // HERE, before the next choice, and not after the colour update
+        // where it was: the 2m-th choice deposits too (the gate below
+        // passes `m` through `2m`, which is the `m + 1` the deposit's
+        // rate factor counts), and a reset before that deposit gave it
+        // a weight of one instead of the window's product.
+        if (is_window >= 2u * params.importance_window) {
+            is_weight = 1.0;
+            is_window = 0u;
+        }
+        is_weight = is_weight * bias_ratio(is_prev_row, xform_idx);
+        is_window = is_window + 1u;
 {{/if}}
         let xform = transforms[xform_idx];
 
@@ -121,6 +189,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Note: We still apply the transform even when opacity=0 - opacity affects
         // visibility only, not IFS dynamics. Transform must update position for correct chaos game.
         var should_plot = rng_nextf(&rng) < xform.opacity;
+{{#if IMPORTANCE_SAMPLING}}
+        // Warm-up: the product has to cover at least `m` choices
+        // before it is the right weight, because it is only over the
+        // last `m` that contraction has fixed the point's position to
+        // sub-pixel precision. Half of each 2m epoch deposits, which
+        // is the price of windowing -- and a cheap one at depth,
+        // where a BIASED deposit lands in the viewport nearly always
+        // against an unbiased one nearly never.
+        should_plot = should_plot && is_window >= params.importance_window;
+{{/if}}
 
         // doHide flag (JWildfire's pVarTP.doHide), reset each iteration. The
         // cut_* family of CanHide variations set it via the `hide` pointer
@@ -163,7 +241,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // (Final variations may also write *vc but it's discarded — Final
         //  is a plot-time filter, not part of dynamics.)
         var c_base: f32 = color_index;
-        if (COLOR_MODE == 0u) {
+        if (COLOR_MODE == 0u || COLOR_MODE == 2u) {
             let symmetry = xform.color_speed;
             c_base = color_index * (1.0 + symmetry) * 0.5 + xform.color * (1.0 - symmetry) * 0.5;
         }
@@ -322,6 +400,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             point_w = 0.0;
 {{/if}}
             fuse = params.burn_in;
+{{#if IMPORTANCE_SAMPLING}}
+            // A respawned point is a new orbit, so its window covers
+            // nothing yet. Carrying the old product would weight a
+            // fresh position by choices that never touched it.
+            is_weight = 1.0;
+            is_window = 0u;
+{{/if}}
             continue;
         }
 
@@ -331,7 +416,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 {{#if HAS_DC}}
         // Step 3 (palette mode), or speed-based color (speed mode).
-        if (COLOR_MODE == 0u) {
+        // PathMap runs the palette's flow: its paths override it at the
+        // plot, and without a plan it is the palette.
+        if (COLOR_MODE == 0u || COLOR_MODE == 2u) {
             color_index = c_base + xform.direct_color * (vc - c_base);
         } else if (COLOR_MODE == 1u) {
             let speed_color = speed_to_color(speed);
@@ -339,7 +426,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
 {{else}}
         // Original Step 1 (palette mode), or speed-based color (speed mode).
-        if (COLOR_MODE == 0u) {
+        // PathMap runs the palette's flow: its paths override it at the
+        // plot, and without a plan it is the palette.
+        if (COLOR_MODE == 0u || COLOR_MODE == 2u) {
             let symmetry = xform.color_speed;
             let colorC1 = (1.0 + symmetry) / 2.0;
             let colorC2 = xform.color * (1.0 - symmetry) / 2.0;
@@ -349,52 +438,159 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             color = mix(color, speed_color, params.speed_factor);
         }
 {{/if}}
-{{#if PATH_TRACKING}}
-        // Note: COLOR_MODE == 2 (PathMap) handled below with path buffer writes
-{{else}}
-        // Note: COLOR_MODE == 2 (PathMap) uses the full shader with path tracking
-{{/if}}
-
-{{#if PATH_TRACKING}}
-        // Path tracking: needed for path map mode OR when filters are active
-        let needs_path_tracking = (COLOR_MODE == 2u) || (params.num_path_filters > 0u);
-        if (needs_path_tracking) {
-            // For FirstAfterBurnIn mode (1), only track path after burn-in
-            // (fuse == 0 — also re-armed by the bad-value respawn)
-            let should_track = (params.path_capture_mode != 1u) || (fuse == 0u);
-            if (should_track) {
-                if (params.path_tracking_mode == 0u) {
-                    // First mode: store first 32 iterations, then stop writing to path array
-                    if (path_iteration < 32u) {
-                        let slot = path_iteration / 8u;  // Which u32 (0-3)
-                        let pos = (path_iteration % 8u) * 4u;  // Bit position within u32 (0,4,8,12,16,20,24,28)
-                        path[slot] = path[slot] | ((xform_idx & 0xFu) << pos);
-                    }
-                } else {
-                    // Recent mode: rolling window of 32 most recent iterations
-                    // Shift all values left by 4 bits, insert new value at low end of path[0]
-                    // path[3] loses its highest 4 bits, gains from path[2]'s highest 4 bits, etc.
-                    path[3] = (path[3] << 4u) | (path[2] >> 28u);
-                    path[2] = (path[2] << 4u) | (path[1] >> 28u);
-                    path[1] = (path[1] << 4u) | (path[0] >> 28u);
-                    path[0] = (path[0] << 4u) | (xform_idx & 0xFu);
-                }
-                // Always increment - this is the actual iteration count (not capped at 32)
-                path_iteration = path_iteration + 1u;
-
-                // Check path filters - terminate thread if path matches blocklist
-                if (check_path_filters(path, path_iteration)) {
-                    break;
-                }
-            }
-        }
-{{/if}}
 
         // Skip burn-in / re-fuse iterations (the respawn above resets
         // the countdown so recovering points don't plot mid-flight)
         if (fuse > 0u) {
             fuse = fuse - 1u;
         } else {
+{{#if CYLINDER_TARGETING}}
+            // The FORCED PREFIX (docs/projects/flame-deep-zoom.md
+            // stage 2). The free orbit above is the true chaos game
+            // and has `current ~ mu`; this carries that point through
+            // one enumerated word, whose image is inside the
+            // viewport, and plots THERE. Every sample lands in frame,
+            // where the unbiased game's share falls off polynomially
+            // with the zoom.
+            //
+            // The word is one affine and one colour fold, composed on
+            // the CPU, so a prefix of any length costs the same here.
+            //
+            // Applied to `current` and restored after the plot rather
+            // than threaded through as a second point: everything
+            // between -- the final chain, post-symmetry, the depth
+            // effects, the deposit -- then acts on the forced point
+            // with no change of its own, and the free orbit carries
+            // on from where it was.
+            let ct_saved = current;
+            let ct_saved_color = color_index;
+            {
+{{#if CYLINDER_REPLAY}}
+                // REPLAY. The word's maps are not all affine, so
+                // there is no single matrix to apply: walk the
+                // symbols and run each transform exactly as the chaos
+                // game would. `depth + 1` map applications per plot is
+                // what `speedup = 1/(mass·(depth+1))` has charged for
+                // all along, so this costs nothing the measurement did
+                // not already assume.
+                //
+                // `ct_rng` throughout, never `rng`: the forced prefix
+                // must not disturb the free orbit's stream, or the
+                // walk this thread is carrying stops being the chaos
+                // game.
+                // **One word per 32 threads** -- a warp on NVIDIA, a
+                // SIMD group on Apple, a wave on RDNA. A word's replay
+                // loops over its symbols and, past `m`, over its offset
+                // steps, so a warp whose threads walk different words
+                // runs the longest of each loop and every branch any of
+                // them takes. Measured on random1 (words of 14-26 maps),
+                // this doubled the targeted rate: 331 -> 644 Miter/s at
+                // zoom 3e3, 245 -> 536 at 1e4, 215 -> 419 at 1e5 (the true
+                // Grand Julian's 5-map words gain 1.0-1.3x). Cheaper steps
+                // did not move it; the divergence was the cost.
+                //
+                // Each sample still draws its word with the plan's
+                // probability, independently of its own point, so the
+                // estimate is the same; 32 samples share a draw. The draw
+                // is a hash of the group and the iteration rather than a
+                // stream, so a thread that skipped one -- burning in after
+                // a respawn -- stays with its group.
+                let ct_i = ct_pick(f32(pcg_hash(pcg_hash((thread_id / 32u) ^ params.seed ^ 0x27D4EB2Fu) + i)) / 4294967296.0);
+                let ct_b = ct_base(ct_i);
+                ct_weight = ct_word_weight(ct_i);
+                // Bounded by the table's own stride, so a table that is
+                // not what the shader was built for loops a word's length
+                // at most -- a loop that ran on a garbage count hangs the
+                // GPU, and the system with it.
+                let ct_len = min(u32(cylinders[ct_b + 3u]), max(ct_stride(), 4u) - 4u);
+{{#if CYLINDER_OFFSETS}}
+                // Absolute f32 only as far as it resolves the sample;
+                // the rest in offsets (`ct_offsets`).
+                let ct_blk = ct_block(ct_i);
+                let ct_m = min(select(ct_len, u32(cylinders[ct_blk]), ct_blk != 0u), ct_len);
+{{else}}
+                let ct_m = ct_len;
+{{/if}}
+                var ct_k0 = 0u;
+{{#if RENDER_3D}}
+{{else}}
+                // **A blur drawn where it lands** (C2b): a negative weight
+                // names the word's conditional draw (`ct_conditional`),
+                // which stands for its first symbol, the blur, and says
+                // what the sample deposits.
+                var ct_piece = -1;
+                var ct_d = vec2<f32>(0.0, 0.0);
+                if (ct_weight < 0.0) {
+                    let cb = u32(-ct_weight);
+                    let s = ct_conditional(cb, &ct_rng);
+                    ct_weight = s.z;
+                    ct_piece = i32(s.w);
+                    ct_d = s.xy;
+                    let o = cb + 10u + u32(ct_piece) * CT_PIECE;
+                    current = vec2<f32>(cylinders[o + 1u], cylinders[o + 2u]) + ct_d;
+                    ct_k0 = 1u;
+                }
+{{/if}}
+                for (var ct_k = ct_k0; ct_k < ct_m; ct_k = ct_k + 1u) {
+                    // The transform in the low byte; the arm, if the
+                    // transform's variation is many-valued, above it.
+                    // `replay.wgsl`, shared with the planner's kernel.
+                    current = ct_apply_symbol(current, u32(cylinders[ct_b + 4u + ct_k]), &ct_rng, color_index);
+                }
+                ct_forced_arm = -1;
+{{#if CYLINDER_OFFSETS}}
+                // Either way the plot is view-relative now -- past the
+                // final transforms, where the flame has any.
+{{#if HAS_ATTACHMENTS}}
+                ct_final_done = ct_blk != 0u;
+                ct_pan_late = ct_blk == 0u;
+{{/if}}
+                if (ct_blk != 0u) {
+                    if (ct_piece >= 0) {
+                        // From its piece's chain, the sample never absolute.
+                        current = ct_offsets_chain(ct_b, ct_blk, u32(ct_piece), ct_d, 1u, ct_len);
+                    } else {
+                        current = ct_offsets(current, ct_b, ct_blk, ct_m, ct_len);
+                    }
+                } else {
+{{#if HAS_ATTACHMENTS}}
+{{else}}
+                    current = current - vec2<f32>(params.pan_x, params.pan_y);
+{{/if}}
+                }
+{{/if}}
+                color_index = color_index * cylinders[ct_b + 1u] + cylinders[ct_b + 2u];
+{{#if PATH_TRACKING}}
+                // PathMap: the path's colour came with it (the CPU packs a
+                // path's colour as its fold, `H = 0`); Origin reads the
+                // point it started from.
+                ct_word = ct_i + 1u;
+                color_index = pathmap_origin(ct_saved.xy, color_index);
+{{/if}}
+{{else}}
+                // COMPOSED. Every map in the word is affine, so the
+                // CPU folded the whole prefix into one 2x2 and a
+                // translation: one matrix multiply however deep the
+                // word.
+                let ct_w = ct_pick(rng_nextf(&ct_rng)) * 12u;
+                let ct_p = current.xy;
+                let ct_x = cylinders[ct_w] * ct_p.x + cylinders[ct_w + 1u] * ct_p.y
+                    + cylinders[ct_w + 4u];
+                let ct_y = cylinders[ct_w + 2u] * ct_p.x + cylinders[ct_w + 3u] * ct_p.y
+                    + cylinders[ct_w + 5u];
+{{#if RENDER_3D}}
+                current = vec3<f32>(ct_x, ct_y, current.z);
+{{else}}
+                current = vec2<f32>(ct_x, ct_y);
+{{/if}}
+                color_index = color_index * cylinders[ct_w + 6u] + cylinders[ct_w + 7u];
+{{#if PATH_TRACKING}}
+                ct_word = ct_w / 12u + 1u;
+                color_index = pathmap_origin(ct_saved.xy, color_index);
+{{/if}}
+{{/if}}
+            }
+{{/if}}
 {{#if HAS_ATTACHMENTS}}
             // FINAL CHAIN — pure plot-time filter. Each Final's variations
             // and affine reshape what gets plotted but DON'T feed forward.
@@ -408,7 +604,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // like its xyz and color, shapes only the plot, not the walk.
             let point_w_before_final = point_w;
 {{/if}}
-            for (var fi = 0u; fi < attach.final_count; fi = fi + 1u) {
+            for (var fi = 0u; fi < {{#if CYLINDER_OFFSETS}}select(attach.final_count, 0u, ct_final_done){{else}}attach.final_count{{/if}}; fi = fi + 1u) {
                 let fid = attach.final_[fi];
                 let fxform = transforms[fid];
                 let faff = apply_affine(fxform, final_pos);
@@ -439,6 +635,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             }
 {{#if HAS_W}}
             point_w = point_w_before_final;
+{{/if}}
+{{#if CYLINDER_OFFSETS}}
+            if (ct_pan_late) {
+                final_pos = final_pos - vec2<f32>(params.pan_x, params.pan_y);
+            }
 {{/if}}
 {{else}}
             // No attachments: skip the chain — plot the post-Linked
@@ -485,16 +686,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 {{/if}}
 
             // Pre-compute the iteration's base color OUTSIDE the
-            // symmetry loop. It depends only on color_index / color /
-            // (none for path-map) — none of which change between the
-            // K symmetric copies. Hoisting the palette texture sample
-            // alone gives a (K-1)/K speedup for palette mode at high
-            // Point-symmetry orders. Default of white covers the
-            // path-map COLOR_MODE branch (and any unhandled mode);
-            // fog inside the loop reads from this base into a local
-            // copy so its per-copy depth modulation doesn't bleed.
+            // symmetry loop. It depends only on color_index / color,
+            // neither of which changes between the K symmetric copies.
+            // Hoisting the palette texture sample alone gives a (K-1)/K
+            // speedup for palette mode at high Point-symmetry orders.
+            // PathMap reads the palette at its path's colour. Default
+            // of white covers any unhandled mode; fog inside the loop
+            // reads from this base into a local copy so its per-copy
+            // depth modulation doesn't bleed.
             var base_final_color: vec3<f32> = vec3<f32>(1.0, 1.0, 1.0);
-            if (COLOR_MODE == 0u) {
+            if (COLOR_MODE == 0u || COLOR_MODE == 2u) {
                 let palette_srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(color_index, 0.5), 0.0).rgb;
                 base_final_color = srgb_to_linear(palette_srgb);
             } else if (COLOR_MODE == 1u) {
@@ -504,12 +705,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // Direct-RGB-writing variations override (or blend into) the
             // palette/speed-derived color. Same direct_color slider gates
             // it as the palette-index DC path: 0 keeps the existing color,
-            // 1 fully replaces with vrc, in-between mixes. Path-map mode
-            // (COLOR_MODE == 2) keeps the default white init regardless.
+            // 1 fully replaces with vrc, in-between mixes. PathMap
+            // (COLOR_MODE == 2) keeps its path's colour regardless.
             // Gate on the sentinel: only override when a WritesRgb variation
             // actually wrote a colour this iteration, so transforms with no
             // RGB variation keep their palette colour instead of going black.
-            if (vrc.x > -1.0e29) {
+            if (COLOR_MODE != 2u && vrc.x > -1.0e29) {
                 base_final_color = mix(base_final_color, vrc, xform.direct_color);
             }
 {{/if}}
@@ -603,9 +804,36 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // seeds it with the emission's weight; 3D depth-density
             // compensation below multiplies on top.
 {{#if HAS_PLOT_EMIT}}
-            var density_weight = src_weight;
+            var density_weight = src_weight{{#if CYLINDER_TARGETING}} * ct_weight{{/if}};
 {{else}}
-            var density_weight = 1.0;
+            var density_weight = 1.0{{#if CYLINDER_TARGETING}} * ct_weight{{/if}};
+{{/if}}
+{{#if IMPORTANCE_SAMPLING}}
+            // The window's likelihood ratio, which is what makes the
+            // biased selection unbiased. One more factor into the
+            // channel depth-density compensation and the far fade
+            // already use -- and colour recovery is Σcolour/Σdensity,
+            // so a factor common to all four channels cannot tint
+            // anything.
+            //
+            // ...times the WARM-UP's own rate. The gate deposits at
+            // window positions m..2m, which is `m+1` of every `2m`
+            // iterations, while the tone map normalises by
+            // `total_iters / pixel_count` -- it counts iterations, not
+            // deposits. Without this the picture is simply darker:
+            // measured at q ≡ p, where nothing is biased and nothing
+            // should move, the mean colour sat 0.038 below the truth
+            // at a window of 8 and stayed there at 16 and 32, because
+            // the rate is about one half whatever `m` is.
+            //
+            // Exact rather than approximate: the epoch is
+            // deterministic, so the rate is a ratio of integers. A
+            // respawn resets the epoch early and makes the true rate
+            // a hair lower, which is a bad-value event and rare
+            // enough to leave alone.
+            let is_m = max(params.importance_window, 1u);
+            density_weight = density_weight * is_weight
+                * (f32(2u * is_m) / f32(is_m + 1u));
 {{/if}}
 
 
@@ -787,6 +1015,35 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 {{/if}}
 {{/if}}
 
+{{#if FRAME_COVERAGE}}
+            // Frame coverage: count this plot attempt, and whether it
+            // landed. Gated on `should_plot` so that only the
+            // GEOMETRIC miss is measured -- a sample the opacity draw
+            // or the importance window already suppressed is in
+            // neither the numerator nor the denominator. Folding an
+            // artistic weight in here is exactly what made the solid
+            // renorm's far-fade and depth-compensation dials shift
+            // global brightness before it was narrowed to occlusion
+            // alone.
+            if (should_plot) {
+                fc_att = fc_att + 1u;
+                if (pixel.x >= 0 && pixel.x < i32(params.width) &&
+                    pixel.y >= 0 && pixel.y < i32(params.height)) {
+                    fc_in = fc_in + 1u;
+                }
+                // The leak probe, in WORLD space and so independent of
+                // the viewport: does this sample lie inside the region
+                // the enumeration assumed? Only the geometric position
+                // matters, so it rides the same `should_plot` gate as
+                // the coverage pair above.
+                if (params.leak_probe.z > 0.0) {
+                    let lk = current.xy - params.leak_probe.xy;
+                    if (dot(lk, lk) > params.leak_probe.z * params.leak_probe.z) {
+                        fc_leak = fc_leak + 1u;
+                    }
+                }
+            }
+{{/if}}
             // Check bounds and opacity (only plot if both pass)
             if (pixel.x >= 0 && pixel.x < i32(params.width) &&
                 pixel.y >= 0 && pixel.y < i32(params.height) && should_plot) {
@@ -799,28 +1056,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 var final_color: vec3<f32> = base_final_color;
 
 {{#if PATH_TRACKING}}
-                // Path-tracking write — depends on pixel_idx so it
-                // must stay inside the symmetry loop (each symmetric
-                // copy records the same path at its own pixel).
-                if (COLOR_MODE == 2u) {
-                    // Capture mode determines when to write:
-                    // 0 = FirstHit: only write if no path stored yet
-                    // 1 = FirstAfterBurnIn: same as FirstHit (we're already past burn-in here)
-                    // 2 = DeepestHit: overwrite only if new path has more iterations
-                    let existing_count = path_buffer[pixel_idx].iteration_count;
-                    let should_write = (params.path_capture_mode == 2u && path_iteration > existing_count) ||
-                                       (params.path_capture_mode != 2u && existing_count == 0u);
-
-                    if (should_write) {
-                        path_buffer[pixel_idx].path0 = path[0];
-                        path_buffer[pixel_idx].path1 = path[1];
-                        path_buffer[pixel_idx].path2 = path[2];
-                        path_buffer[pixel_idx].path3 = path[3];
-                        path_buffer[pixel_idx].iteration_count = path_iteration;
-                        path_buffer[pixel_idx].initial_x = initial_x;
-                        path_buffer[pixel_idx].initial_y = initial_y;
-                    }
-                }
+                // PathMap: the path this pixel was last drawn through, for
+                // the right-click. Inside the symmetry loop: each copy is
+                // drawn through the same path.
+                path_ids[pixel_idx] = ct_word;
 {{/if}}
 
 {{#if RENDER_3D}}
@@ -960,11 +1199,43 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // Convert colors to u32 using global scale. All four
                 // channels carry the same density_weight so the color
                 // recovery ratio Σcolor/Σdensity is weight-invariant.
+{{#if IMPORTANCE_SAMPLING}}
+                // The deposit's SCALE rounds stochastically. The
+                // histogram is u32, so the shipped path truncates,
+                // and a corrected weight below `1/color_scale` would
+                // vanish rather than being rare-and-large -- exactly
+                // the bias the correction exists to remove.
+                //
+                // Rounding each CHANNEL instead was tried and is
+                // WORSE, which is not what the theory says and is why
+                // it is recorded: per-channel rounding is unbiased in
+                // isolation, but the reference it has to agree with
+                // truncates its colour channels too, so matching that
+                // convention is what agrees. Measured at q = p, mean
+                // colour against the feature off: 0.0048 rounding the
+                // scale, 0.0130 rounding every channel.
+                //
+                // Scale-only also keeps the deposit EXACT at a window
+                // of 1, where the rate factor below is 1 and the
+                // scale is `color_scale` on the nose -- which is what
+                // lets `a_neutral_bias_renders_what_the_feature_off_renders`
+                // assert bit-identity rather than a tolerance.
+                let weighted_scale = color_scale * density_weight;
+                // One draw for all four channels, so Sigma colour /
+                // Sigma density -- the ratio colour recovery reads --
+                // rounds the same way in numerator and denominator.
+                let is_scale = f32(is_deposit(weighted_scale, rng_nextf(&is_rng)));
+                let r_u32 = u32(clamp(final_color.r, 0.0, 1.0) * is_scale);
+                let g_u32 = u32(clamp(final_color.g, 0.0, 1.0) * is_scale);
+                let b_u32 = u32(clamp(final_color.b, 0.0, 1.0) * is_scale);
+                let density_u32 = u32(is_scale);
+{{else}}
                 let weighted_scale = color_scale * density_weight;
                 let r_u32 = u32(clamp(final_color.r, 0.0, 1.0) * weighted_scale);
                 let g_u32 = u32(clamp(final_color.g, 0.0, 1.0) * weighted_scale);
                 let b_u32 = u32(clamp(final_color.b, 0.0, 1.0) * weighted_scale);
                 let density_u32 = u32(weighted_scale);  // Density includes scale (u32 prevents overflow)
+{{/if}}
 
                 // Atomic add to histogram (4 separate u32 words)
                 atomicAdd(&histogram[base_idx + 0u], r_u32);
@@ -1009,6 +1280,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 {{#if HAS_PLOT_EMIT}}
             }  // end for (src_i) — multi-emit source loop
 {{/if}}
+{{#if CYLINDER_TARGETING}}
+            // ...and the free orbit carries on from where it was. The
+            // forced point was a detour for the plot alone: feeding
+            // it forward would collapse the walk into the one cylinder
+            // the word names, and the next sample needs `current ~ mu`
+            // again.
+            current = ct_saved;
+            color_index = ct_saved_color;
+{{/if}}
         }
 
 {{#if FLATTEN_Z_PER_ITER}}
@@ -1025,6 +1305,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         current.z = 0.0;
 {{/if}}
     }
+{{#if FRAME_COVERAGE}}
+    // One pair of atomics per thread rather than per iteration: the
+    // contention is negligible and the count is exact.
+    if (fc_att > 0u) {
+        atomicAdd(&coverage[0], fc_in);
+        atomicAdd(&coverage[1], fc_att);
+        if (fc_leak > 0u) {
+            atomicAdd(&coverage[2], fc_leak);
+        }
+    }
+{{/if}}
 }
 {{#if PROBE}}
 // PROBE-BLOCK-BEGIN

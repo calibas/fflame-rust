@@ -19,6 +19,8 @@
 //!
 //! Source: `output/jwildfire-vars/output/affine3d.cpp`.
 
+use crate::scene::ifs_analysis::{Affine3, AffineRole};
+use crate::variations::inverse::{InverseDef, InverseKernel, ParamFn};
 use crate::variations::{
     definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
@@ -164,4 +166,64 @@ fn variation_affine3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
     return vec3<f32>(nx, ny, nz);
 }
 "#,
+};
+
+// ------------------------------------------------- the inverse walks
+
+/// `affine3D`: JWildfire's general 3D affine, all fifteen
+/// parameters, summed (`ifs-general.md` D1).
+///
+/// **This is the one that makes a solid affine IFS buildable.**
+/// Without it every 3D transform is an XY affine with a unit z
+/// scale, and the census found none that qualified.
+///
+/// The map mirrors the shader's body exactly: scale, then shear (the
+/// shear terms multiply the SCALED coordinates), then the rotation
+/// the body writes out longhand -- which is `Rz · Ry · Rx` -- then
+/// the translation. The weight multiplies every output term,
+/// translation included ("cpp uses VVAR consistently on every output
+/// term"), so the role scales the whole thing.
+fn affine3d_map(p: ParamFn) -> Affine3 {
+    let (tx, ty, tz) = (p("translateX"), p("translateY"), p("translateZ"));
+    let (sx, sy, sz) = (p("scaleX"), p("scaleY"), p("scaleZ"));
+    let d2r = std::f64::consts::PI / 180.0;
+    let (rx, ry, rz) = (p("rotateX") * d2r, p("rotateY") * d2r, p("rotateZ") * d2r);
+    let (shxy, shxz, shyx, shyz, shzx, shzy) =
+        (p("shearXY"), p("shearXZ"), p("shearYX"), p("shearYZ"), p("shearZX"), p("shearZY"));
+    // mx = sx·x + shxy·sy·y + shxz·sz·z, and so on: shear of the
+    // scaled point. With every shear zero this is diag(sx, sy, sz),
+    // which is the body's no-shear branch.
+    let shs = Affine3 {
+        m: [
+            [sx, shxy * sy, shxz * sz],
+            [shyx * sx, sy, shyz * sz],
+            [shzx * sx, shzy * sy, sz],
+        ],
+        t: [0.0; 3],
+    };
+    let (sinx, cosx, siny, cosy, sinz, cosz) =
+        (rx.sin(), rx.cos(), ry.sin(), ry.cos(), rz.sin(), rz.cos());
+    // nx = cosz·(cosy·mx + siny·(sinx·my + cosx·mz)) − sinz·(cosx·my − sinx·mz)
+    // ny = sinz·(cosy·mx + siny·(sinx·my + cosx·mz)) + cosz·(cosx·my − sinx·mz)
+    // nz = −siny·mx + cosy·(sinx·my + cosx·mz)
+    let rot = Affine3 {
+        m: [
+            [cosz * cosy, cosz * siny * sinx - sinz * cosx, cosz * siny * cosx + sinz * sinx],
+            [sinz * cosy, sinz * siny * sinx + cosz * cosx, sinz * siny * cosx - cosz * sinx],
+            [-siny, cosy * sinx, cosy * cosx],
+        ],
+        t: [tx, ty, tz],
+    };
+    rot.then_after(&shs)
+}
+
+pub static INVERSE_AFFINE3D: InverseDef = InverseDef {
+    name: "affine3D",
+    kernel: InverseKernel::Affine(|w, p, _| {
+        let a = affine3d_map(p);
+        Some(AffineRole::Sum(Affine3 {
+            m: a.m.map(|r| r.map(|v| w * v)),
+            t: a.t.map(|v| w * v),
+        }))
+    }),
 };

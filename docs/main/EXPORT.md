@@ -717,6 +717,15 @@ let row_bins: Vec<Vec<HistogramPixel>> = (0..height)
 - Runs same tonemap.wgsl shader as interactive rendering
 - Ensures visual consistency between preview and export
 
+**Focused Rendering (cylinder targeting):** a 2D config with targeting on
+is planned ONCE, for the whole export view, in `HighResExporter::new`
+(`renderer::compute_kernel::plan_view`, the renderer's own decisions).
+Every dispatch emits samples for the whole image and the tiles only
+scatter them, so one plan serves every tile. The table, the shader's
+targeting flags and the tone map's iteration scale are the renderer's
+for the same view, so a long in-app render routed here comes out as the
+viewport shows it. Gate: `a_targeted_export_is_the_targeted_render`.
+
 ### Performance
 
 - **4000×4000 @ 10M iterations**: ~24 seconds

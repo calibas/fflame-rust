@@ -99,12 +99,18 @@ struct Params {
     dof_blur_strength: f32,  // Depth of field: blur amount (0.0 = disabled)
     fog_strength: f32,  // Depth fog: exponential fog density (0.0 = disabled)
     fog_start: f32,  // Depth fog: distance where fog begins
-    bits_per_transform: u32,  // Bits needed per transform index (1-5 based on num_transforms)
-    path_map_style: u32,  // 0=Prefix, 1=Suffix, 2=Prefix (Distinct), 3=Suffix (Distinct)
-    path_capture_mode: u32,  // 0=FirstHit, 1=FirstAfterBurnIn, 2=LastHit
-    path_tracking_mode: u32,  // 0=First (first 32 iterations), 1=Recent (rolling window of 32 most recent)
-    num_path_filters: u32,  // Number of active path filters (0 = disabled)
-    min_suffix_filter_length: u32,  // Minimum length among depth=0 filters (for optimization)
+    path_map_style: u32,  // PathMap: 0 Path, 1 Path (distinct), 2 Depth, 3-5 Origin radial / horizontal / vertical
+    // PathMap's Origin styles: the attractor's centre and radius, the
+    // frame a point's position is read in (`pathmap_origin`). Where the
+    // path history's capture and tracking modes, and its bit width, were.
+    path_origin_x: f32,
+    path_origin_y: f32,
+    path_origin_r: f32,
+    // Where the path filters' count and minimum length were (the Path
+    // Editor, replaced by word editing): padding, so `post_symmetry`
+    // stays on its 16-byte boundary. Mirror in `src/gpu/buffers.rs`.
+    _pad_path_filters_0: u32,
+    _pad_path_filters_1: u32,
     background_r: f32,  // Background color R (for depth fog)
     background_g: f32,  // Background color G (for depth fog)
     background_b: f32,  // Background color B (for depth fog)
@@ -125,10 +131,15 @@ struct Params {
     shadow_center_z: f32,
     shadow_radius: f32,
     shadow_count: u32,
-    _pad_shadow0: u32,
+    // The biased-selection correction window `m`, carved from the
+    // first shadow pad so no offset moves. Mirror in
+    // src/gpu/buffers.rs. Read only under IMPORTANCE_SAMPLING.
+    importance_window: u32,
     _pad_shadow1: u32,
     _pad_shadow2: u32,
     shadow_dirs: array<vec4<f32>, 4>,
+    // [cx, cy, r, unused]; off when r <= 0. See GpuParams::leak_probe.
+    leak_probe: vec4<f32>,
 }
 
 // Plot-time symmetry. Matches `GpuPostSymmetry` in src/gpu/buffers.rs.
@@ -162,26 +173,6 @@ struct VariationParams {
 // Path storage for PathMap color mode
 // Stores up to 32 iterations losslessly (4 bits per transform, up to 16 transforms)
 // Also stores initial random X/Y coordinates for complete path reconstruction
-struct PathEntry {
-    path0: u32,  // Iterations 0-7 (4 bits each, LSB = iteration 0)
-    path1: u32,  // Iterations 8-15
-    path2: u32,  // Iterations 16-23
-    path3: u32,  // Iterations 24-31
-    iteration_count: u32,  // Actual iteration when pixel was hit (not capped at 32)
-    initial_x: f32,  // Initial random X coordinate [-1, 1]
-    initial_y: f32,  // Initial random Y coordinate [-1, 1]
-}
-
-// Path filter for blocking specific transform sequences
-// depth=0: suffix match (block paths ending with pattern at any depth)
-// depth>0: exact depth match (block paths matching pattern at specific iteration)
-struct PathFilter {
-    pattern: u32,  // Packed pattern (up to 8 iterations at 4 bits each, LSB = first)
-    length: u32,   // Number of iterations in pattern (1-8)
-    depth: u32,    // 0 = suffix match, >0 = match at this exact depth
-    _padding: u32, // Padding for 16-byte alignment
-}
-
 // Per-normal-transform attachment list — entries hold global xform_ids
 // pointing into the concatenated transforms[] array. The main loop walks
 // these after the chaos game picks a normal transform: linkeds advance
@@ -299,14 +290,308 @@ fn shadow_map_splat(p: vec3<f32>) {
 // Sample buffer write cursor.
 @group(0) @binding(6) var<storage, read_write> sample_counter: SampleCounter;
 {{/if}}
-@group(0) @binding(7) var<storage, read_write> path_buffer: array<PathEntry>;
-@group(0) @binding(8) var<storage, read> path_filters: array<PathFilter>;
+// PathMap: the path each pixel was last drawn through, 1-based into the
+// plan's words (0 = none), for the viewport's right-click.
+@group(0) @binding(7) var<storage, read_write> path_ids: array<u32>;
+{{#if PATH_TRACKING}}
+
+// **PathMap's Origin styles** (docs/projects/word-editing.md §10): where
+// the point was before its path carried it into the view -- a point of
+// the attractor -- read in the attractor's frame. Every other style keeps
+// `t`, the path's own colour, which the CPU packed with the path.
+fn pathmap_origin(p: vec2<f32>, t: f32) -> f32 {
+    let style = params.path_map_style;
+    if (style < 3u) {
+        return t;
+    }
+    let o = (p - vec2<f32>(params.path_origin_x, params.path_origin_y)) / max(params.path_origin_r, 1.0e-30);
+    if (style == 3u) {
+        return clamp(length(o), 0.0, 1.0);
+    }
+    if (style == 4u) {
+        return clamp(0.5 + 0.5 * o.x, 0.0, 1.0);
+    }
+    return clamp(0.5 + 0.5 * o.y, 0.0, 1.0);
+}
+{{/if}}
+// Binding 8 intentionally unused: the path filters, which word editing
+// replaced (docs/projects/word-editing.md).
 // Xaos (chaos) transition weights: xaos_weights[src * num_transforms + dst]
 // Modifies probability of selecting dst transform when coming from src
 @group(0) @binding(9) var<storage, read> xaos_weights: array<f32>;
 // Per-normal-transform attachment lists. Indexed by the normal's
 // xform_id (0..num_transforms). See AttachmentList struct above.
 @group(0) @binding(10) var<storage, read> attachments: array<AttachmentList>;
+{{#if IMPORTANCE_SAMPLING}}
+// Biased selection weights and their likelihood ratios -- stage 1 of
+// docs/projects/flame-deep-zoom.md. Two regions, N = num_transforms:
+//
+//   [0, N)            q[i]  -- the BIASED selection weight, bias × weight
+//   [N, N + N*N)      r[prev*N + i] = p(prev→i) / q(prev→i)
+//
+// The ratio is a matrix because under xaos the true and biased
+// probabilities are both row-conditional and their row normalizers
+// differ; without xaos every row is the same and the walk reads row
+// zero, which is why the shader needs no `prev` in that arm.
+//
+// Declared only under the flag: with it off this file is the text it
+// has always been, which is what `importance_sampling_off_is_byte_identical`
+// asserts.
+@group(0) @binding(11) var<storage, read> bias_table: array<f32>;
+
+// The biased weight of transform `i`, falling back to the true weight
+// if the table is short (a flame edited between upload and dispatch).
+fn bias_weight(i: u32) -> f32 {
+    if (i < arrayLength(&bias_table)) {
+        return bias_table[i];
+    }
+    return transforms[i].weight;
+}
+
+// The deposit's SCALE, rounded stochastically to the histogram's u32
+// resolution: `floor(v)`, plus one with probability `fract(v)`.
+//
+// Unbiased -- its expectation is `v` exactly -- where the shipped
+// path's `u32(v)` truncates and loses every deposit under one. A
+// corrected weight is routinely under one, so truncating would throw
+// away exactly the samples the correction exists to keep.
+fn is_deposit(v: f32, u: f32) -> u32 {
+    let fl = floor(v);
+    return u32(fl + select(0.0, 1.0, u < (v - fl)));
+}
+
+// `p(prev→i) / q(prev→i)`, the factor this choice contributes to the
+// window's likelihood ratio.
+fn bias_ratio(prev: u32, i: u32) -> f32 {
+    let n = NUM_TRANSFORMS;
+    let idx = n + prev * n + i;
+    if (idx < arrayLength(&bias_table)) {
+        return bias_table[idx];
+    }
+    return 1.0;
+}
+{{/if}}
+
+{{#if FRAME_COVERAGE}}
+// Frame-coverage counters (auto exposure --
+// docs/projects/flame-deep-zoom.md). Three words: [0] plot attempts that
+// landed INSIDE the frame, [1] plot attempts, and [2] plot attempts
+// whose WORLD position fell outside `params.leak_probe` -- see there.
+// Their ratio is the share
+// of the flame's deposited work the viewport actually holds, which is
+// what the tone map's `sample_density` has to be scaled by when the
+// view is a deep zoom and most of the attractor is off-screen.
+//
+// Counted per thread in registers and flushed once at the end of the
+// dispatch, NOT subsampled: at depth the in-frame count is small by
+// definition, and sampling one thread in a thousand would read zero
+// exactly where the number is needed.
+@group(0) @binding(16) var<storage, read_write> coverage: array<atomic<u32>>;
+{{/if}}
+
+{{#if CYLINDER_TARGETING}}
+// The enumerated cylinders -- stage 2 of
+// docs/projects/flame-deep-zoom.md. Twelve floats a word, packed by
+// `scene::cylinder::pack`:
+//
+//   0..4  the composed 2x2      4..6  its translation
+//   6..8  the colour fold H, G  8     the cumulative probability
+//
+// A word is ONE affine because every map here is affine, so forcing a
+// prefix of eighteen transforms costs one matrix multiply rather than
+// eighteen. The colour folds the same way: flam3's `c <- c*h + g` per
+// transform is an affine map of `c`, so a whole word is `c <- c*H + G`.
+@group(0) @binding(15) var<storage, read> cylinders: array<f32>;
+
+{{#if CYLINDER_REPLAY}}
+// Replay layout. A word whose maps are not all affine cannot be
+// composed into one matrix on the CPU, so the kernel is handed the
+// SYMBOLS and walks them. Header `[stride, count, rows, blocks, shift x,
+// shift y, _, _]`, then one word per stride: `[cdf, H, G, len, sym0,
+// sym1, ...]`. The rest of the header is the replay in offsets
+// (`scene::cylinder::pack_words`).
+//
+// Stride is uniform and set by the deepest word, which wastes a few
+// floats on the shallow ones and buys a multiply instead of an
+// indirection. At 4096 words and depth 96 the whole table is under
+// 1.6 MB.
+fn ct_stride() -> u32 {
+    return u32(cylinders[0]);
+}
+
+fn ct_count() -> u32 {
+    return u32(cylinders[1]);
+}
+
+fn ct_base(i: u32) -> u32 {
+    return 8u + i * ct_stride();
+}
+
+// Word `i`'s deposit (`Cylinder::draw`): 1 but for a word drawn off its
+// probability -- a blur's -- whose samples weigh `1 / draw`. The table's
+// header says where the weights are, or 0 when every deposit is one.
+fn ct_word_weight(i: u32) -> f32 {
+    let at = u32(cylinders[6]);
+    return select(1.0, cylinders[at + i], at != 0u);
+}
+
+{{#if RENDER_3D}}
+{{else}}
+// **The conditional draw** (tracker C2b, `backward::Conditional`): a word
+// whose weight is negative draws its blur's point from boxes of the
+// blur's polar frame, not from the whole blob. Its block, at minus the
+// weight (`scene::cylinder::pack_words`): `[pieces, kind, slices,
+// rotation, thickness, post linear (4), w]`, then CT_PIECE floats a piece,
+// `[cdf, centre (2), rho_c, phi_c, rho_lo - rho_c, rho span, phi_lo -
+// phi_c, phi span, density, full, _]`. Kinds: 0 `blur`, 1
+// `gaussian_blur`, 2 `pie`.
+const CT_PIECE: u32 = 12u;
+
+// sin(x) to the precision of x: see `fd_sin` in replay_delta.wgsl.
+fn ct_sin(x: f32) -> f32 {
+    if (abs(x) < 0.25) {
+        let x2 = x * x;
+        return x * (1.0 - x2 / 6.0 * (1.0 - x2 / 20.0 * (1.0 - x2 / 42.0 * (1.0 - x2 / 72.0))));
+    }
+    return sin(x);
+}
+
+// The blur's density per radius and angle, times 2pi
+// (`FreeBlur::polar_density`).
+fn ct_blur_density(cb: u32, rho: f32, phi: f32) -> f32 {
+    let kind = u32(cylinders[cb + 1u]);
+    if (kind == 1u) {
+        // Four uniforms less 2, folded: twice Irwin-Hall's at 2 + rho.
+        if (!(rho < 2.0)) {
+            return 0.0;
+        }
+        let x = 2.0 + rho;
+        var pdf = 0.0;
+        var c = array<f32, 4>(1.0, -4.0, 6.0, -4.0);
+        for (var k = 0u; k < 4u; k = k + 1u) {
+            let d = x - f32(k);
+            if (d > 0.0) {
+                pdf = pdf + c[k] * d * d * d;
+            }
+        }
+        return pdf / 3.0;
+    }
+    if (!(rho < 1.0)) {
+        return 0.0;
+    }
+    if (kind == 2u) {
+        let thickness = cylinders[cb + 4u];
+        let t = (phi - cylinders[cb + 3u]) / 6.28318530717959 * cylinders[cb + 2u];
+        return select(0.0, 1.0 / thickness, t - floor(t) < thickness);
+    }
+    return 1.0;
+}
+
+// Whether piece `o` holds `(rho, phi)`, the angle round the turn.
+fn ct_piece_holds(o: u32, rho: f32, phi: f32) -> bool {
+    let lo = cylinders[o + 3u] + cylinders[o + 5u];
+    let a0 = cylinders[o + 4u] + cylinders[o + 7u];
+    let t = phi - a0 - 6.28318530717959 * floor((phi - a0) / 6.28318530717959);
+    return rho >= lo && rho <= lo + cylinders[o + 6u] && (cylinders[o + 10u] > 0.5 || t <= cylinders[o + 8u]);
+}
+
+// One conditional draw from the block at `cb`: the point as an offset
+// from its piece's centre, formed without absolute coordinates; the
+// sample's deposit, the blur's density over the pieces' mixture there;
+// and the piece.
+fn ct_conditional(cb: u32, rng: ptr<function, RngState>) -> vec4<f32> {
+    let np = max(min(u32(cylinders[cb]), 16u), 1u);
+    let u0 = rng_nextf(rng);
+    var j = np - 1u;
+    for (var k = 0u; k < np; k = k + 1u) {
+        if (u0 <= cylinders[cb + 10u + k * CT_PIECE]) {
+            j = k;
+            break;
+        }
+    }
+    let o = cb + 10u + j * CT_PIECE;
+    let rho_c = cylinders[o + 3u];
+    let phi_c = cylinders[o + 4u];
+    let drho = cylinders[o + 5u] + rng_nextf(rng) * cylinders[o + 6u];
+    let dphi = cylinders[o + 7u] + rng_nextf(rng) * cylinders[o + 8u];
+    let rho = rho_c + drho;
+    let phi = phi_c + dphi;
+    var dv: vec2<f32>;
+    if (cylinders[o + 10u] > 0.5) {
+        // Round the frame's centre: the point itself, small.
+        dv = rho * vec2<f32>(cos(phi), sin(phi)) - rho_c * vec2<f32>(cos(phi_c), sin(phi_c));
+    } else {
+        // (rho_c + drho) e^{i(phi_c + dphi)} - rho_c e^{i phi_c}, every
+        // part the size of the offsets.
+        let mid = phi_c + 0.5 * dphi;
+        let h = 2.0 * ct_sin(0.5 * dphi);
+        dv = drho * vec2<f32>(cos(phi), sin(phi)) + rho_c * h * vec2<f32>(-sin(mid), cos(mid));
+    }
+    let w = cylinders[cb + 9u];
+    let dy = w * vec2<f32>(cylinders[cb + 5u] * dv.x + cylinders[cb + 6u] * dv.y, cylinders[cb + 7u] * dv.x + cylinders[cb + 8u] * dv.y);
+    // The mixture's density there: this piece's, and any other's that
+    // holds the point.
+    var mix = cylinders[o + 9u];
+    for (var k = 0u; k < np; k = k + 1u) {
+        let q = cb + 10u + k * CT_PIECE;
+        if (k != j && ct_piece_holds(q, rho, phi)) {
+            mix = mix + cylinders[q + 9u];
+        }
+    }
+    let deposit = ct_blur_density(cb, rho, phi) / (6.28318530717959 * mix);
+    return vec4<f32>(dy, deposit, f32(j));
+}
+{{/if}}
+
+{{#if CYLINDER_OFFSETS}}
+// Where word `i`'s references start, or 0 for a word replayed in
+// absolute f32 to its end.
+fn ct_block(i: u32) -> u32 {
+    return u32(cylinders[u32(cylinders[3]) + i]);
+}
+
+{{/if}}
+{{else}}
+// The table's own word count, in word 0's float 9 (`COUNT_AT` in
+// `scene::cylinder::pack`), not the buffer's length. The buffer is
+// reused while it is large enough, so past the table it holds the words
+// of a longer one drawn before; counted from the length, the search ran
+// into them, the new plan's last words were never drawn, and the old
+// plan's were drawn in their place. The length still bounds it.
+fn ct_count() -> u32 {
+    return min(u32(cylinders[9]), arrayLength(&cylinders) / 12u);
+}
+{{/if}}
+
+// The word a uniform draw selects, by binary search on the cumulative
+// probability -- which is `p_a / P(A_V)`, so the draw is exactly the
+// `pi(a) = p_a / P(A_V)` the estimator wants.
+fn ct_pick(u: f32) -> u32 {
+    let n = ct_count();
+    // An empty table -- the placeholder, bound while no plan is -- has
+    // no word to search for. `n - 1` wrapped, the midpoint wrapped with
+    // it, and the search never ended: a GPU hang that took the whole
+    // system down. Word 0 of the placeholder is a word of no symbols.
+    if (n == 0u) {
+        return 0u;
+    }
+    var lo = 0u;
+    var hi = n - 1u;
+    while (lo < hi) {
+        let mid = lo + (hi - lo) / 2u;
+{{#if CYLINDER_REPLAY}}
+        if (u <= cylinders[ct_base(mid)]) {
+{{else}}
+        if (u <= cylinders[mid * 12u + 8u]) {
+{{/if}}
+            hi = mid;
+        } else {
+            lo = mid + 1u;
+        }
+    }
+    return lo;
+}
+{{/if}}
 
 // Per-subflame metadata: where each subflame's normals + finals live
 // inside the *unified* `transforms[]` buffer. Indexed by

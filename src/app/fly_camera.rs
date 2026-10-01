@@ -478,8 +478,8 @@ impl App {
             // factor.
             let m_old_nr = CameraMatrix::build(pitch_old, yaw_old, 0.0);
             let m_new_nr = CameraMatrix::build(pitch_new, yaw_new, 0.0);
-            let off_old = m_old_nr.world_offset_for_camera_xy(pan_x, pan_y);
-            let off_new = m_new_nr.world_offset_for_camera_xy(pan_x, pan_y);
+            let off_old = m_old_nr.world_offset_for_camera_xy(pan_x as f32, pan_y as f32);
+            let off_new = m_new_nr.world_offset_for_camera_xy(pan_x as f32, pan_y as f32);
             changes.push((ConfigPath::CameraX, (cam_x + off_old[0] - off_new[0]).into()));
             changes.push((ConfigPath::CameraY, (cam_y + off_old[1] - off_new[1]).into()));
             changes.push((ConfigPath::CameraZ, (cam_z + off_old[2] - off_new[2]).into()));

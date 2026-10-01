@@ -324,9 +324,10 @@ pub struct PanelContext<'a> {
     pub path_click_info: &'a Option<super::PathClickInfo>,
     pub close_path_overlay: &'a mut bool,
 
-    // Path editor state
-    pub path_editor_state: &'a mut super::path_editor::PathEditorState,
-    pub path_filters_changed: &'a mut Option<Vec<crate::gpu::buffers::GpuPathFilter>>,
+    // Paths panel: the path whose solo button is held this frame, and a
+    // path opened to see inside that the plan has not split
+    pub word_solo: &'a mut Option<Vec<u32>>,
+    pub word_split: &'a mut Option<Vec<u32>>,
 
     // Random generator panel state
     pub random_generator_panel: &'a mut Option<super::random_generator::RandomGeneratorPanel>,
@@ -341,6 +342,9 @@ pub struct PanelContext<'a> {
 
     // Histogram for density visualization (levels now in ConfigManager)
     pub density_histogram: &'a crate::renderer::DensityHistogram,
+
+    // What deep zoom decided for this view (informational only).
+    pub deep_zoom: &'a super::DeepZoom,
 
     // Xaos editor state
     pub xaos_editor_state: &'a mut super::xaos_editor::XaosEditorState,
@@ -522,7 +526,7 @@ pub fn pan_fractal_view(
     let dy = -drag_delta.y * scale;
 
     // Screen space → pan frame (rotation-aware in 2D, identity in 3D)
-    let (fractal_dx, fractal_dy) = config.screen_delta_to_pan_frame(dx, dy);
+    let (fractal_dx, fractal_dy) = config.screen_delta_to_pan_frame(dx as f64, dy as f64);
 
     let new_pan_x = config.pan_x + fractal_dx;
     let new_pan_y = config.pan_y + fractal_dy;
@@ -600,19 +604,19 @@ pub fn zoom_fractal_view(
                 // identity in 3D). Same offset serves both zoom
                 // levels — the conversion doesn't depend on zoom.
                 let (rotated_offset_x, rotated_offset_y) =
-                    config.screen_delta_to_pan_frame(mouse_offset_x, mouse_offset_y);
+                    config.screen_delta_to_pan_frame(mouse_offset_x as f64, mouse_offset_y as f64);
 
-                let fractal_offset_x = rotated_offset_x / (scale * config.zoom);
-                let fractal_offset_y = rotated_offset_y / (scale * config.zoom);
+                let fractal_offset_x = rotated_offset_x / (scale * config.zoom) as f64;
+                let fractal_offset_y = rotated_offset_y / (scale * config.zoom) as f64;
 
                 // Calculate the point in fractal space that the mouse is pointing at
                 let point_x = config.pan_x + fractal_offset_x;
                 let point_y = config.pan_y + fractal_offset_y;
 
                 // Apply zoom and adjust pan so that point stays under the cursor
-                let new_zoom = (config.zoom * zoom_factor).clamp(0.01, 1000.0);
-                let new_fractal_offset_x = rotated_offset_x / (scale * new_zoom);
-                let new_fractal_offset_y = rotated_offset_y / (scale * new_zoom);
+                let new_zoom = (config.zoom * zoom_factor).clamp(0.01, config.max_view_zoom());
+                let new_fractal_offset_x = rotated_offset_x / (scale * new_zoom) as f64;
+                let new_fractal_offset_y = rotated_offset_y / (scale * new_zoom) as f64;
                 let new_pan_x = point_x - new_fractal_offset_x;
                 let new_pan_y = point_y - new_fractal_offset_y;
 
@@ -626,7 +630,7 @@ pub fn zoom_fractal_view(
                 );
             } else {
                 // No mouse position, zoom to center
-                let new_zoom = (config.zoom * zoom_factor).clamp(0.01, 1000.0);
+                let new_zoom = (config.zoom * zoom_factor).clamp(0.01, config.max_view_zoom());
                 let _ = config_manager.update_param(
                     crate::config::ConfigPath::Zoom,
                     new_zoom.into(),
@@ -634,7 +638,7 @@ pub fn zoom_fractal_view(
             }
         } else {
             // Zooming out - always zoom from center
-            let new_zoom = (config.zoom * zoom_factor).clamp(0.01, 1000.0);
+            let new_zoom = (config.zoom * zoom_factor).clamp(0.01, config.max_view_zoom());
             let _ = config_manager.update_param(
                 crate::config::ConfigPath::Zoom,
                 new_zoom.into(),
@@ -697,6 +701,28 @@ fn escape_pan_view(
     drag_delta: egui::Vec2,
     panel_size: egui::Vec2,
 ) {
+    // A solid has no centre to move: its view is a camera about a
+    // target, and a drag slides the target across the screen plane at
+    // its own depth, so the surface under the cursor follows the
+    // cursor. The centre strings are the plane's and the solid does
+    // not read them.
+    if let Some((ifs3, cam)) = solid_view(config_manager.active_config()) {
+        let esc = config_manager.active_config().escape.clone();
+        let shifted = solid_target_shifted(
+            &esc,
+            &ifs3,
+            &cam,
+            &[(&esc, -1.0)],
+            f64::from(drag_delta.x),
+            f64::from(drag_delta.y),
+            f64::from(panel_size.y),
+        );
+        let _ = config_manager.update_batch(
+            solid_target_updates(shifted),
+            "history.param.escape_cam_target_x".to_string(),
+        );
+        return;
+    }
     let esc = config_manager.active_config().escape.clone();
     // The center accumulates in FIXED-POINT with a SYMBOLIC delta
     // (mantissa · 2^exponent): an f64 round-trip caps the step at the
@@ -725,6 +751,75 @@ fn escape_pan_view(
         ],
         "history.param.escape_center_re".to_string(),
     );
+}
+
+/// The solid a config renders, if it renders one: the analysis and
+/// the camera it is looked at through. `None` for the plane, and for
+/// a solid formula over a flame that does not qualify, which renders
+/// nothing there is to steer.
+fn solid_view(
+    config: &crate::config::FractalConfig,
+) -> Option<(crate::scene::ifs_analysis::Ifs3, crate::escape::ifs::SolidCamera)> {
+    if !crate::escape::ifs::formula_is_solid(&config.escape.formula) {
+        return None;
+    }
+    let registry = crate::variations::global_registry();
+    let ifs3 = crate::scene::ifs_analysis::analyse_3d(&config.flame, &registry).ok()?;
+    let cam = crate::escape::ifs::solid_camera(&config.escape, &ifs3);
+    Some((ifs3, cam))
+}
+
+/// The solid's target after a screen offset `(dx, dy)` in pixels is
+/// applied in the target's plane -- once per `(view, sign)` in
+/// `terms`, each at that view's zoom, so a pan is one term and a
+/// zoom-to-cursor is the difference of two.
+///
+/// The offset becomes `dx · right − dy · up` (screen y grows
+/// downward) times the pixel's step at the target, which is the
+/// plane's `escape_pan_delta_symbolic` again: a mantissa and a
+/// power of two, added to the decimal target in fixed point so the
+/// step survives any depth. An empty target is the attractor's own
+/// centre, and becomes explicit here -- the moment the camera moves.
+fn solid_target_shifted(
+    digits_at: &crate::config::escape::EscapeConfig,
+    ifs3: &crate::scene::ifs_analysis::Ifs3,
+    cam: &crate::escape::ifs::SolidCamera,
+    terms: &[(&crate::config::escape::EscapeConfig, f64)],
+    dx_px: f64,
+    dy_px: f64,
+    height_px: f64,
+) -> [String; 3] {
+    use crate::escape::fixedpoint::FixedPoint;
+    let z = digits_at.zoom_log2;
+    let mut out: [String; 3] = std::array::from_fn(|k| {
+        let s = [&digits_at.cam_target_x, &digits_at.cam_target_y, &digits_at.cam_target_z][k];
+        if s.trim().is_empty() {
+            format!("{}", ifs3.ball.centre[k])
+        } else {
+            s.trim().to_string()
+        }
+    });
+    for &(view, sign) in terms {
+        let (m, e) = crate::escape::ifs::solid_pixel_step(view, ifs3, height_px);
+        for k in 0..3 {
+            let v = dx_px * cam.right[k] - dy_px * cam.up[k];
+            if let Some(next) = FixedPoint::decimal_add_floatexp(&out[k], sign * v * m, e, z) {
+                out[k] = next;
+            }
+        }
+    }
+    out
+}
+
+fn solid_target_updates(
+    target: [String; 3],
+) -> Vec<(crate::config::ConfigPath, crate::config::ConfigValue)> {
+    let [x, y, z] = target;
+    vec![
+        (crate::config::ConfigPath::EscapeCamTargetX, crate::config::ConfigValue::String(x)),
+        (crate::config::ConfigPath::EscapeCamTargetY, crate::config::ConfigValue::String(y)),
+        (crate::config::ConfigPath::EscapeCamTargetZ, crate::config::ConfigValue::String(z)),
+    ]
 }
 
 /// Wheel zoom for the escape view: zoom-in anchors to the cursor
@@ -756,8 +851,31 @@ fn escape_zoom_view(
         crate::config::ConfigValue::Float(new_zoom_log2 as f32),
     )];
 
+    // A solid anchors the zoom the same way, in the target's plane:
+    // the point of that plane under the cursor stays under it. What
+    // the eye approaches is the target, so a zoom towards the cursor
+    // is a zoom that walks the target under the cursor.
+    let solid = solid_view(config_manager.active_config());
+
     if zoom_factor > 1.0 {
-        if let Some(mouse_pos) = mouse_pos.filter(|_| zoom_to_cursor) {
+        if let Some((ifs3, cam)) = &solid {
+            if let Some(mouse_pos) = mouse_pos.filter(|_| zoom_to_cursor) {
+                let off_x = f64::from(mouse_pos.x - panel_rect.center().x);
+                let off_y = f64::from(mouse_pos.y - panel_rect.center().y);
+                let mut esc_new = esc.clone();
+                esc_new.zoom_log2 = new_zoom_log2;
+                let shifted = solid_target_shifted(
+                    &esc_new,
+                    ifs3,
+                    cam,
+                    &[(&esc, 1.0), (&esc_new, -1.0)],
+                    off_x,
+                    off_y,
+                    f64::from(panel_size.y),
+                );
+                updates.extend(solid_target_updates(shifted));
+            }
+        } else if let Some(mouse_pos) = mouse_pos.filter(|_| zoom_to_cursor) {
             // Keep the point under the cursor fixed: with the offset o
             // (screen → world) and scale ratio k = old/new span,
             // center' = center + o·(1 − 1/k) — computed here as the
@@ -814,8 +932,10 @@ impl<'a> PanelViewer<'a> {
         // "edits the flame and is inactive in Escape mode", including
         // in Simulation, and including for the two engine panels,
         // which edit no flame at all.
-        let mode = self.context.config_manager.active_config().render_mode;
-        if let super::visibility::Vis::Grey(reason) = super::visibility::panel(*tab, mode) {
+        let config = self.context.config_manager.active_config();
+        let mode = config.render_mode;
+        let solid = super::visibility::Solid::of(config);
+        if let super::visibility::Vis::Grey(reason) = super::visibility::panel(*tab, mode, solid) {
             ui.label(t!(reason));
             return;
         }
@@ -868,8 +988,8 @@ impl<'a> PanelViewer<'a> {
             PanelType::FractalBrowser => {
                 self.render_fractal_browser_panel(ui);
             }
-            PanelType::PathEditor => {
-                self.render_path_editor_panel(ui);
+            PanelType::Paths => {
+                self.render_paths_panel(ui);
             }
             PanelType::Export => {
                 self.render_export_panel(ui);
@@ -1060,6 +1180,7 @@ impl<'a> PanelViewer<'a> {
             self.context.flame,
             self.context.fly_mode_active,
             self.context.fly_mode_toggle_requested,
+            self.context.deep_zoom,
         );
     }
 
@@ -1626,7 +1747,7 @@ impl<'a> PanelViewer<'a> {
             return;
         }
 
-        let new_zoom = (config.zoom * zoom_delta).clamp(0.01, 1000.0);
+        let new_zoom = (config.zoom * zoom_delta).clamp(0.01, config.max_view_zoom());
 
         // Start with current pan, then apply zoom-toward-center adjustment
         let mut new_pan_x = config.pan_x;
@@ -1641,13 +1762,13 @@ impl<'a> PanelViewer<'a> {
 
             let scale = f32::min(panel_size.x, panel_size.y) * 0.25;
             // Screen space → pan frame (rotation-aware in 2D, identity in 3D)
-            let (rot_x, rot_y) = config.screen_delta_to_pan_frame(offset_x, offset_y);
+            let (rot_x, rot_y) = config.screen_delta_to_pan_frame(offset_x as f64, offset_y as f64);
 
-            let point_x = config.pan_x + rot_x / (scale * config.zoom);
-            let point_y = config.pan_y + rot_y / (scale * config.zoom);
+            let point_x = config.pan_x + rot_x / (scale * config.zoom) as f64;
+            let point_y = config.pan_y + rot_y / (scale * config.zoom) as f64;
 
-            new_pan_x = point_x - rot_x / (scale * new_zoom);
-            new_pan_y = point_y - rot_y / (scale * new_zoom);
+            new_pan_x = point_x - rot_x / (scale * new_zoom) as f64;
+            new_pan_y = point_y - rot_y / (scale * new_zoom) as f64;
         }
 
         // Apply two-finger translation on top of the zoom pan adjustment
@@ -1657,7 +1778,7 @@ impl<'a> PanelViewer<'a> {
             let dx = -translation.x * drag_scale;
             let dy = -translation.y * drag_scale;
 
-            let (pan_dx, pan_dy) = config.screen_delta_to_pan_frame(dx, dy);
+            let (pan_dx, pan_dy) = config.screen_delta_to_pan_frame(dx as f64, dy as f64);
             new_pan_x += pan_dx;
             new_pan_y += pan_dy;
         }
@@ -1679,23 +1800,6 @@ impl<'a> PanelViewer<'a> {
         _image_response: &egui::Response,
         click_info: &super::PathClickInfo,
     ) {
-        // Get transform names for display
-        let flame = &self.context.config_manager.active_config().flame;
-        let transform_count = flame.transforms.len();
-
-        // Build path string
-        let path_vec = click_info.path_entry.to_vec();
-
-        // Format path: show transform indices and names
-        let path_str: Vec<String> = path_vec.iter().map(|&idx| {
-            let idx = idx as usize;
-            if idx < transform_count {
-                format!("T{}", idx)
-            } else {
-                format!("?{}", idx)
-            }
-        }).collect();
-
         // Create overlay window anchored to top-left of viewport
         egui::Area::new(egui::Id::new("path_overlay"))
             .fixed_pos(ui.min_rect().min + egui::vec2(10.0, 10.0))
@@ -1726,6 +1830,7 @@ impl<'a> PanelViewer<'a> {
                             // Left column: coordinates and path info
                             ui.vertical(|ui| {
                                 ui.set_min_width(280.0);
+                                ui.set_max_width(280.0);
 
                                 // Pixel coordinates section
                                 ui.label(egui::RichText::new(t!("path_overlay.coordinates")).strong().color(egui::Color32::LIGHT_GRAY));
@@ -1752,74 +1857,45 @@ impl<'a> PanelViewer<'a> {
                                         .color(egui::Color32::LIGHT_GREEN));
                                 });
 
-                                // IFS starting point
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(t!("path_overlay.ifs_start")).color(egui::Color32::GRAY));
-                                    ui.label(egui::RichText::new(format!("({:.4}, {:.4})",
-                                        click_info.path_entry.initial_x, click_info.path_entry.initial_y))
-                                        .color(egui::Color32::LIGHT_BLUE));
-                                });
-
                                 ui.add_space(6.0);
-
-                                // Path section
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(t!("path_overlay.path_label")).strong().color(egui::Color32::LIGHT_GRAY));
-                                    ui.label(egui::RichText::new(t!("path_overlay.path_iterations", count = click_info.path_entry.iteration_count))
-                                        .small()
-                                        .color(egui::Color32::GRAY));
-                                });
-                                ui.add_space(2.0);
-
-                                // Wrap path in a scrollable area if it's long
-                                if !path_str.is_empty() {
-                                    egui::ScrollArea::horizontal().max_width(260.0).show(ui, |ui| {
-                                        ui.horizontal_wrapped(|ui| {
-                                            for (i, name) in path_str.iter().enumerate() {
-                                                if i > 0 {
-                                                    ui.label(egui::RichText::new(">").color(egui::Color32::DARK_GRAY));
+                                // The path, and the parts of the picture it
+                                // could remove: the last few transforms,
+                                // from where the paths on screen first
+                                // differ (fewer would remove the whole
+                                // view), up to the whole path.
+                                ui.label(egui::RichText::new(t!("path_overlay.path_label")).strong().color(egui::Color32::LIGHT_GRAY));
+                                match &click_info.path {
+                                    Some((word, shared)) => {
+                                        let flame = &self.context.config_manager.active_config().flame;
+                                        ui.label(
+                                            egui::RichText::new(super::paths_panel::label(word, flame))
+                                                .color(egui::Color32::from_rgb(100, 180, 255)),
+                                        );
+                                        ui.add_space(4.0);
+                                        let first = (*shared + 1).min(word.len());
+                                        let mut levels: Vec<usize> = (first..=word.len()).take(4).collect();
+                                        if levels.last() != Some(&word.len()) {
+                                            levels.push(word.len());
+                                        }
+                                        let mut remove: Option<Vec<u32>> = None;
+                                        for n in levels {
+                                            let part = word[word.len() - n..].to_vec();
+                                            ui.horizontal(|ui| {
+                                                if ui.small_button("🗑").on_hover_text(t!("path_overlay.tooltip_remove")).clicked() {
+                                                    remove = Some(part.clone());
                                                 }
-                                                ui.label(egui::RichText::new(name).color(egui::Color32::from_rgb(100, 180, 255)));
-                                            }
-                                        });
-                                    });
-                                } else {
-                                    ui.label(egui::RichText::new(t!("path_overlay.path_empty")).color(egui::Color32::GRAY));
+                                                ui.label(egui::RichText::new(super::paths_panel::label(&part, flame)).color(egui::Color32::WHITE));
+                                            });
+                                        }
+                                        if let Some(p) = remove {
+                                            super::paths_panel::remove_path(self.context.config_manager, p);
+                                            *self.context.close_path_overlay = true;
+                                        }
+                                    }
+                                    None => {
+                                        ui.label(egui::RichText::new(t!("path_overlay.path_none")).color(egui::Color32::GRAY));
+                                    }
                                 }
-
-                                ui.add_space(6.0);
-
-                                // Hash debug info (shows Prefix Distinct calculation)
-                                use crate::renderer::PathEntry;
-                                let prefix = click_info.path_entry.get_prefix();
-                                let iter_count = click_info.path_entry.iteration_count;
-                                // Mix iteration_count into value before hashing (matches GPU)
-                                let mixed = prefix ^ (iter_count.wrapping_mul(0x9E3779B9));
-                                let hash = PathEntry::scramble_hash(mixed);
-                                let hue = click_info.path_entry.compute_prefix_distinct_hue();
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(t!("path_overlay.debug_prefix_distinct")).strong().color(egui::Color32::LIGHT_GRAY));
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(t!("path_overlay.debug_path0", value = format!("{:08X}", prefix)))
-                                        .small()
-                                        .color(egui::Color32::YELLOW));
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(t!("path_overlay.debug_mixed", value = format!("{:08X}", mixed)))
-                                        .small()
-                                        .color(egui::Color32::YELLOW));
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(t!("path_overlay.debug_hash", value = format!("{:08X}", hash)))
-                                        .small()
-                                        .color(egui::Color32::YELLOW));
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(t!("path_overlay.debug_hue", value = format!("{:.6}", hue)))
-                                        .small()
-                                        .color(egui::Color32::YELLOW));
-                                });
                             });
 
                             ui.add_space(12.0);
@@ -1924,19 +2000,16 @@ impl<'a> PanelViewer<'a> {
             });
     }
 
-    /// Render Path Editor panel (manage path filters)
-    fn render_path_editor_panel(&mut self, ui: &mut egui::Ui) {
-        let num_transforms = self.context.flame.transforms.len();
-        let response = super::path_editor::render_path_editor_content(
+    /// Render the Paths panel (docs/projects/word-editing.md §6)
+    fn render_paths_panel(&mut self, ui: &mut egui::Ui) {
+        super::paths_panel::render_paths_content(
             ui,
-            self.context.path_editor_state,
-            num_transforms,
+            self.context.config_manager,
+            self.context.flame_renderer,
+            self.context.deep_zoom,
+            self.context.word_solo,
+            self.context.word_split,
         );
-
-        // Handle filter changes
-        if let Some(filters) = response.filters_changed {
-            *self.context.path_filters_changed = Some(filters);
-        }
     }
 
     /// Render Export panel (PNG export options)
@@ -2160,5 +2233,147 @@ impl<'a> PanelViewer<'a> {
             self.context.load_signal_file,
             self.context.save_signal_file,
         );
+    }
+}
+#[cfg(test)]
+mod solid_navigation_tests {
+    use super::*;
+    use crate::config::FractalConfig;
+
+    /// A shipped solid preset -- a real flame, a real camera.
+    fn solid_preset() -> FractalConfig {
+        crate::resources::presets::load_embedded_presets()
+            .expect("presets parse")
+            .into_iter()
+            .find(|c| crate::escape::ifs::formula_is_solid(&c.escape.formula))
+            .expect("a solid preset ships")
+    }
+
+    fn target_f64(t: &[String; 3]) -> [f64; 3] {
+        std::array::from_fn(|k| t[k].parse::<f64>().expect("decimal"))
+    }
+
+    /// A plane is not a solid, and neither is a solid formula over a
+    /// flame that does not qualify.
+    #[test]
+    fn only_a_qualifying_solid_has_a_solid_view() {
+        let plane = FractalConfig::default();
+        assert!(solid_view(&plane).is_none());
+        let mut broken = solid_preset();
+        assert!(solid_view(&broken).is_some());
+        // A non-affine variation disqualifies the flame.
+        broken.flame.transforms[0].variations.insert("spherical".to_string(), 1.0);
+        broken.flame.transforms[0].variation_order.push("spherical".to_string());
+        assert!(solid_view(&broken).is_none());
+    }
+
+    /// A drag slides the target across the screen plane at its own
+    /// depth: right by `dx` pixels moves the target `dx` steps along
+    /// −right (content follows the cursor), down by `dy` moves it
+    /// `dy` steps along +up. An empty target becomes explicit, from
+    /// the attractor's centre.
+    #[test]
+    fn a_solid_pan_moves_the_target_across_the_screen_plane() {
+        let cfg = solid_preset();
+        let (ifs3, cam) = solid_view(&cfg).unwrap();
+        let esc = &cfg.escape;
+        assert!(esc.cam_target_x.is_empty(), "the preset frames itself");
+        let (m, e) = crate::escape::ifs::solid_pixel_step(esc, &ifs3, 480.0);
+        let step = m * 2f64.powi(e as i32);
+
+        let right = solid_target_shifted(esc, &ifs3, &cam, &[(esc, -1.0)], 30.0, 0.0, 480.0);
+        let down = solid_target_shifted(esc, &ifs3, &cam, &[(esc, -1.0)], 0.0, 12.0, 480.0);
+        let r = target_f64(&right);
+        let d = target_f64(&down);
+        for k in 0..3 {
+            let want_r = ifs3.ball.centre[k] - 30.0 * step * cam.right[k];
+            let want_d = ifs3.ball.centre[k] + 12.0 * step * cam.up[k];
+            assert!((r[k] - want_r).abs() < 1e-12 * ifs3.ball.radius, "axis {k}: {} vs {want_r}", r[k]);
+            assert!((d[k] - want_d).abs() < 1e-12 * ifs3.ball.radius, "axis {k}: {} vs {want_d}", d[k]);
+        }
+    }
+
+    /// The pan follows the camera: with the screen rolled by the
+    /// view's rotation, a horizontal drag moves the target along the
+    /// rolled right, which is not the unrolled one.
+    #[test]
+    fn a_solid_pan_follows_the_rolled_screen() {
+        let mut cfg = solid_preset();
+        let (ifs3, cam0) = solid_view(&cfg).unwrap();
+        cfg.escape.rotation = 0.6;
+        let (_, cam) = solid_view(&cfg).unwrap();
+        let esc = &cfg.escape;
+        let shifted = solid_target_shifted(esc, &ifs3, &cam, &[(esc, -1.0)], 20.0, 0.0, 480.0);
+        let t = target_f64(&shifted);
+        let d: [f64; 3] = std::array::from_fn(|k| t[k] - ifs3.ball.centre[k]);
+        let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        let len = dot(d, d).sqrt();
+        // Along the rolled right, and visibly off the unrolled one.
+        assert!((dot(d, cam.right) / len + 1.0).abs() < 1e-9);
+        assert!((dot(d, cam0.right) / len + 1.0).abs() > 0.1);
+    }
+
+    /// Zooming towards the cursor keeps the point of the target's
+    /// plane under the cursor where it is: the target moves by the
+    /// offset's change of scale, and the point itself does not.
+    #[test]
+    fn a_solid_zoom_to_cursor_keeps_the_point_under_it() {
+        let cfg = solid_preset();
+        let (ifs3, cam) = solid_view(&cfg).unwrap();
+        let esc = &cfg.escape;
+        let mut esc_new = esc.clone();
+        esc_new.zoom_log2 = esc.zoom_log2 + 0.7;
+        let (ox, oy) = (137.0, -52.0);
+        let step_at = |e: &crate::config::escape::EscapeConfig| {
+            let (m, ex) = crate::escape::ifs::solid_pixel_step(e, &ifs3, 480.0);
+            m * 2f64.powi(ex as i32)
+        };
+        let shifted = solid_target_shifted(
+            &esc_new, &ifs3, &cam, &[(esc, 1.0), (&esc_new, -1.0)], ox, oy, 480.0,
+        );
+        let t = target_f64(&shifted);
+        for k in 0..3 {
+            let v = ox * cam.right[k] - oy * cam.up[k];
+            let before = ifs3.ball.centre[k] + v * step_at(esc);
+            let after = t[k] + v * step_at(&esc_new);
+            assert!((before - after).abs() < 1e-12 * ifs3.ball.radius, "axis {k}: {before} vs {after}");
+        }
+    }
+
+    /// And at a depth f64 cannot step: the target still moves, by a
+    /// pixel's worth, because the step is a mantissa and an exponent
+    /// added in fixed point -- the same arrangement that lets the
+    /// plane pan past zoom 1060.
+    #[test]
+    fn a_solid_pan_still_moves_at_a_depth_f64_cannot_step() {
+        let mut cfg = solid_preset();
+        cfg.escape.zoom_log2 = 1200.0;
+        let (ifs3, cam) = solid_view(&cfg).unwrap();
+        let esc = &cfg.escape;
+        let once = solid_target_shifted(esc, &ifs3, &cam, &[(esc, -1.0)], 1.0, 0.0, 480.0);
+        let (m, e) = crate::escape::ifs::solid_pixel_step(esc, &ifs3, 480.0);
+        assert!(e < -1100, "the step's exponent should be far below f64's range, got {e}");
+        // Moved: every axis with a non-zero right component changed.
+        for k in 0..3 {
+            let unmoved = format!("{}", ifs3.ball.centre[k]);
+            if cam.right[k].abs() > 1e-6 {
+                assert_ne!(once[k], unmoved, "axis {k} did not move at zoom 2^1200");
+            }
+        }
+        // And by the right amount: two one-pixel pans land where one
+        // two-pixel pan does, to every digit but the last, which is
+        // the decimal formatting's rounding and may differ by one.
+        let mut esc_moved = esc.clone();
+        esc_moved.cam_target_x = once[0].clone();
+        esc_moved.cam_target_y = once[1].clone();
+        esc_moved.cam_target_z = once[2].clone();
+        let twice = solid_target_shifted(&esc_moved, &ifs3, &cam, &[(esc, -1.0)], 1.0, 0.0, 480.0);
+        let direct = solid_target_shifted(esc, &ifs3, &cam, &[(esc, -1.0)], 2.0, 0.0, 480.0);
+        for k in 0..3 {
+            assert_eq!(twice[k].len(), direct[k].len());
+            assert!(twice[k].len() > 360, "axis {k} carries {} digits", twice[k].len());
+            assert_eq!(twice[k][..twice[k].len() - 1], direct[k][..direct[k].len() - 1], "axis {k}");
+        }
+        assert!((1.0..2.0).contains(&m));
     }
 }

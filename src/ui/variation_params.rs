@@ -5,9 +5,56 @@
 //! variation categories.
 
 use crate::{
-    config::{ConfigManager, TransformRef, UpdateType},
+    config::{ConfigManager, ConfigPath, TransformRef, UpdateType},
     variations::{ParamType, VariationParameter},
 };
+
+/// Where a variation's parameters are read from and written to.
+///
+/// The renderer below draws the whole `ParamType` zoo -- Float,
+/// UnlimitedFloat, Integer, UnlimitedInteger, Boolean, Angle, Enum --
+/// with tooltips, undo coalescing and the rule that a quantising
+/// widget must not rewrite the value merely by being drawn. None of
+/// that is specific to a transform, and a second copy of it elsewhere
+/// would drift from this one.
+///
+/// So the two things that WERE specific to a transform are this
+/// trait: where the current value lives, and which `ConfigPath` an
+/// edit writes to. `TransformRef` is one implementation; the escape
+/// engine's camera lens is another, reading a name-keyed map on the
+/// escape config instead of a transform in a flame.
+pub trait ParamTarget {
+    /// The value to show, or `None` if the target has gone (a pool
+    /// member deleted under the panel), in which case rendering stops
+    /// rather than inventing one.
+    fn stored(&self, config_manager: &ConfigManager, var_name: &str, param: &VariationParameter)
+        -> Option<f32>;
+
+    /// The path an edit writes to.
+    fn path(&self, var_name: &str, param_name: &str) -> ConfigPath;
+}
+
+impl ParamTarget for TransformRef {
+    fn stored(
+        &self,
+        config_manager: &ConfigManager,
+        var_name: &str,
+        param: &VariationParameter,
+    ) -> Option<f32> {
+        // Routes through `active_flame()` -- when editing a subflame,
+        // that is the subflame's slot; otherwise the main flame.
+        let transform = self.get(config_manager.active_flame())?;
+        Some(transform.get_variation_param_or_default(
+            var_name,
+            &param.name,
+            &crate::variations::global_registry(),
+        ))
+    }
+
+    fn path(&self, var_name: &str, param_name: &str) -> ConfigPath {
+        self.variation_param_path(var_name.to_string(), param_name.to_string())
+    }
+}
 
 /// Render parameter controls for an active variation on any pool member.
 ///
@@ -17,26 +64,18 @@ use crate::{
 pub fn render_variation_params(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
-    xref: TransformRef,
+    target: &dyn ParamTarget,
     var_name: &str,
     parameters: &[VariationParameter],
 ) -> UpdateType {
     let mut max_update = UpdateType::None;
 
     for param in parameters {
-        // Get current value from the active editing target (for live
-        // preview). Routes through `active_flame()` — when editing a
-        // subflame, that's the subflame's slot; otherwise it's the
-        // main flame.
-        let transform = match xref.get(config_manager.active_flame()) {
-            Some(t) => t,
-            None => return max_update, // Pool member missing — bail out.
+        // Current value from the target, for live preview.
+        let stored_value = match target.stored(config_manager, var_name, param) {
+            Some(v) => v,
+            None => return max_update, // Target missing — bail out.
         };
-        let stored_value = transform.get_variation_param_or_default(
-            var_name,
-            &param.name,
-            &crate::variations::global_registry(),
-        );
         let mut param_value = stored_value;
 
         let (param_changed, drag_stopped) = match &param.param_type {
@@ -49,7 +88,7 @@ pub fn render_variation_params(
             ParamType::Enum { choices } => render_enum_param(ui, param, &mut param_value, choices),
         };
 
-        let path = xref.variation_param_path(var_name.to_string(), param.name.clone());
+        let path = target.path(var_name, &param.name);
 
         // Writing only on `changed()` isn't enough on its own: a widget that
         // quantizes or clamps the value it was handed reports `changed()` on
@@ -69,6 +108,41 @@ pub fn render_variation_params(
     }
 
     max_update
+}
+
+/// The escape engine's **camera lens**.
+///
+/// Its parameters live in a name-keyed map on the escape config
+/// rather than in a transform, so an absent one reads the registry's
+/// default here. `ConfigManager::get_value` would report 0.0 instead
+/// -- deliberately, since a def's default is a registry concern -- and
+/// resolving it at the panel is the same dance the formula and
+/// coloring params already do.
+pub struct LensTarget;
+
+impl ParamTarget for LensTarget {
+    fn stored(
+        &self,
+        config_manager: &ConfigManager,
+        _var_name: &str,
+        param: &VariationParameter,
+    ) -> Option<f32> {
+        Some(
+            config_manager
+                .active_config()
+                .escape
+                .lens_params
+                .get(&param.name)
+                .copied()
+                .unwrap_or(param.default_value),
+        )
+    }
+
+    fn path(&self, _var_name: &str, param_name: &str) -> ConfigPath {
+        ConfigPath::EscapeLensParam {
+            param: param_name.to_string(),
+        }
+    }
 }
 
 /// Attach a hover tooltip to a widget response when the param has a
@@ -214,7 +288,7 @@ mod tests {
             render_variation_params(
                 ui,
                 &mut manager,
-                TransformRef::Normal(0),
+                &TransformRef::Normal(0),
                 "lsystem_path_3D",
                 &params,
             );
@@ -280,3 +354,99 @@ fn render_enum_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut 
     (changed, false)  // Dropdowns don't have drag states
 }
 
+#[cfg(test)]
+mod target_tests {
+    use super::*;
+    use crate::config::{ConfigManager, ConfigValue};
+
+    /// The lens target reads the REGISTRY default for a parameter the
+    /// config has never stored.
+    ///
+    /// `ConfigManager::get_value` answers 0.0 there, deliberately --
+    /// a def's default is a registry concern -- so a panel that used
+    /// it directly would open every lens with its parameters slammed
+    /// to zero and silently rewrite them on the first drag.
+    #[test]
+    fn an_unset_lens_parameter_reads_its_registry_default() {
+        let registry = crate::variations::global_registry();
+        let mut config = crate::config::FractalConfig::default();
+        config.escape.lens = "curl".to_string();
+        let cm = ConfigManager::new(config);
+
+        let info = registry.get("curl").expect("curl");
+        let c1 = info
+            .parameters
+            .iter()
+            .find(|p| p.name == "c1")
+            .expect("c1");
+        assert_eq!(c1.default_value, 1.0, "curl's c1 default moved");
+
+        let got = LensTarget
+            .stored(&cm, "curl", c1)
+            .expect("a value");
+        assert_eq!(got, 1.0, "an unset parameter did not read its default");
+
+        // And the raw config path still answers 0.0, which is the
+        // asymmetry this exists to absorb.
+        let raw = cm.get_value(&ConfigPath::EscapeLensParam { param: "c1".into() });
+        assert_eq!(raw.ok(), Some(ConfigValue::Float(0.0)));
+    }
+
+    /// An edit round-trips: the path the target hands back is the one
+    /// the manager writes, and the target reads that write back.
+    #[test]
+    fn a_lens_parameter_edit_round_trips() {
+        let registry = crate::variations::global_registry();
+        let mut config = crate::config::FractalConfig::default();
+        config.escape.lens = "curl".to_string();
+        // Seeded, as `lens_choice` seeds it when a lens is picked --
+        // without that an undo restores the absent-reads-zero value
+        // rather than the default, which is the wart the seeding
+        // exists to remove.
+        config.escape.lens_params.insert("c1".to_string(), 1.0);
+        let mut cm = ConfigManager::new(config);
+        let info = registry.get("curl").expect("curl");
+        let c1 = info.parameters.iter().find(|p| p.name == "c1").unwrap();
+
+        let path = LensTarget.path("curl", "c1");
+        assert_eq!(path, ConfigPath::EscapeLensParam { param: "c1".into() });
+        cm.update_param(path, 0.25f32.into()).expect("write");
+
+        assert_eq!(LensTarget.stored(&cm, "curl", c1), Some(0.25));
+        assert_eq!(cm.active_config().escape.lens_params.get("c1"), Some(&0.25));
+
+        // Undo must put it back, which is what routing through the
+        // manager rather than the config buys.
+        cm.undo().expect("undo");
+        assert_eq!(LensTarget.stored(&cm, "curl", c1), Some(1.0));
+    }
+
+    /// A transform target still behaves exactly as it did before the
+    /// trait existed.
+    #[test]
+    fn a_transform_target_is_unchanged() {
+        use crate::config::TransformRef;
+        let registry = crate::variations::global_registry();
+        let mut config = crate::config::FractalConfig::default();
+        if config.flame.transforms.is_empty() {
+            config.flame.transforms.push(Default::default());
+        }
+        config.flame.transforms[0].set_variation("curl", 1.0);
+        let cm = ConfigManager::new(config);
+        let xref = TransformRef::Normal(0);
+        let info = registry.get("curl").expect("curl");
+        let c1 = info.parameters.iter().find(|p| p.name == "c1").unwrap();
+
+        assert_eq!(
+            TransformRef::Normal(0).path("curl", "c1"),
+            ConfigPath::TransformVariationParam {
+                index: 0,
+                variation: "curl".into(),
+                param: "c1".into()
+            }
+        );
+        // Unset reads the registry default here too, via the
+        // transform's own resolver.
+        assert_eq!(xref.stored(&cm, "curl", c1), Some(1.0));
+    }
+}

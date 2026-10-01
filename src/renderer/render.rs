@@ -125,6 +125,11 @@ pub struct RenderOutput {
     pub rgba_data: Vec<u8>,
     pub total_iterations: u64,
     pub render_time_ms: f64,
+    /// The share of plot attempts that landed inside the frame, as
+    /// auto exposure measured it (`FractalConfig::auto_exposure`).
+    /// 1.0 when the feature is off, and always 1.0 for the two
+    /// non-flame generators, which have no chaos game to miss with.
+    pub frame_coverage: f32,
 }
 
 /// Progress callback for long-running renders
@@ -389,7 +394,7 @@ pub async fn render_with(
             renderer.compute_pass(
                 &mut enc, queue, device, NUM_WORKGROUPS,
                 job.iterations_per_thread, job.burn_in,
-                job.config.zoom, job.config.pan_x, job.config.pan_y, job.config.rotation,
+                job.config.zoom, job.config.pan_x as f32, job.config.pan_y as f32, job.config.rotation,
                 job.config.camera_rotation_x, job.config.camera_rotation_y, job.config.camera_bank,
                 job.config.camera_x, job.config.camera_y, job.config.camera_z,
                 job.config.speed_factor, true, false,
@@ -398,7 +403,7 @@ pub async fn render_with(
         }
         let changed = renderer.refresh_shadow_placement_blocking(
             device, queue,
-            job.config.zoom, job.config.pan_x, job.config.pan_y,
+            job.config.zoom, job.config.pan_x as f32, job.config.pan_y as f32,
             job.config.camera_rotation_x, job.config.camera_rotation_y, job.config.camera_bank,
             [job.config.camera_x, job.config.camera_y, job.config.camera_z],
         );
@@ -408,7 +413,7 @@ pub async fn render_with(
         });
         renderer.reset(
             &mut enc, queue, job.iterations_per_thread,
-            job.config.zoom, job.config.pan_x, job.config.pan_y, job.config.rotation,
+            job.config.zoom, job.config.pan_x as f32, job.config.pan_y as f32, job.config.rotation,
             job.config.camera_rotation_x, job.config.camera_rotation_y, job.config.camera_bank,
             job.config.camera_x, job.config.camera_y, job.config.camera_z,
             job.config.speed_factor,
@@ -441,8 +446,8 @@ pub async fn render_with(
             job.iterations_per_thread,
             job.burn_in,
             job.config.zoom,
-            job.config.pan_x,
-            job.config.pan_y,
+            job.config.pan_x as f32,
+            job.config.pan_y as f32,
             job.config.rotation,
             job.config.camera_rotation_x,
             job.config.camera_rotation_y,
@@ -545,8 +550,8 @@ pub async fn render_with(
         &mut tonemap_encoder,
         job.config.zoom,
         job.config.rotation,
-        job.config.pan_x,
-        job.config.pan_y,
+        job.config.pan_x as f32,
+        job.config.pan_y as f32,
         job.config.camera_rotation_x,
         job.config.camera_rotation_y,
         job.config.camera_bank,
@@ -666,6 +671,7 @@ pub async fn render_with(
         rgba_data,
         total_iterations: total_rendered,
         render_time_ms,
+        frame_coverage: renderer.frame_coverage_fraction(),
     })
 }
 
@@ -871,6 +877,7 @@ async fn render_sim(
         // record to make the picture reproducible.
         total_iterations: job.config.sim.steps as u64,
         render_time_ms,
+        frame_coverage: 1.0,
     })
 }
 
@@ -960,6 +967,28 @@ async fn render_escape(
     // CLI, thumbnails): a saved file reproduces exactly.
     let want_ss = job.config.escape.supersample.max(1);
     escape_renderer.resize(device, job.width, job.height, want_ss);
+    // Mode D reads the flame as an IFS, so the analysis runs once per
+    // job here rather than per pixel in the shader. A flame that does
+    // not qualify hands the renderer `None` and draws nothing — the
+    // panel is where the reason is explained.
+    if let Some(def) = crate::escape::ifs::get_ifs(&job.config.escape.formula) {
+        let registry = crate::variations::global_registry();
+        escape_renderer.set_ifs(crate::escape::ifs::pack_for(def, &job.config, &registry));
+        // The MEASURE colouring reads a coarse pass over the ball;
+        // without one it renders black. Keyed on the flame, so this
+        // is once per flame and not once per view.
+        escape_renderer.ensure_coarse(device, queue, &job.config.escape, &job.config.flame);
+        // A SOLID walk lights itself, from the app's own lighting
+        // settings rather than a second vocabulary of its own.
+        escape_renderer.set_solid_lighting(
+            &job.config.solid_shading,
+            (
+                job.config.fog_strength,
+                job.config.fog_start,
+                job.config.background_color,
+            ),
+        );
+    }
     // No UI to keep responsive here, and every chunk pays a downsample
     // pass over the supersampled image — so chunk for throughput.
     escape_renderer.set_chunk_time_target(200.0);
@@ -1003,6 +1032,7 @@ async fn render_escape(
             &mut encoder,
             &job.config.escape,
             renderer.palette_view(),
+            renderer.palette_generation(),
         );
         let mut guard = 0u32;
         while !settled {
@@ -1017,6 +1047,7 @@ async fn render_escape(
                 &mut encoder,
                 &job.config.escape,
                 renderer.palette_view(),
+            renderer.palette_generation(),
             );
             guard += 1;
             if guard > 4_000_000 {
@@ -1146,5 +1177,6 @@ async fn render_escape(
         // per-pixel ceiling, not a chaos-game sample count.
         total_iterations: job.config.escape.max_iter as u64,
         render_time_ms,
+        frame_coverage: 1.0,
     })
 }

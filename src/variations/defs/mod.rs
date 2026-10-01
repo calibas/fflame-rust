@@ -4,6 +4,20 @@
 //! This module exports all core variations for registration.
 
 mod basic;
+pub use advanced::{
+    INVERSE_BLOB, INVERSE_BUBBLE, INVERSE_CYLINDER, INVERSE_DISC, INVERSE_ELLIPTIC, INVERSE_JULIA,
+    INVERSE_JULIAN, INVERSE_JULIASCOPE, INVERSE_SPLITS,
+};
+pub use affine3d_misc::INVERSE_AFFINE3D;
+pub use basic::{INVERSE_LINEAR, INVERSE_LINEAR3D, INVERSE_SPHERICAL};
+pub use blur::INVERSE_ZBLUR;
+pub use depth3d::{INVERSE_FLATTEN, INVERSE_ZCONE, INVERSE_ZSCALE};
+pub use rotation3d::{
+    INVERSE_POST_ROTATE_X, INVERSE_POST_ROTATE_Y, INVERSE_PRE_ROTATE_X, INVERSE_PRE_ROTATE_Y,
+};
+pub use extended::{INVERSE_JULIA3D, INVERSE_JULIA3DZ, INVERSE_ZTRANSLATE};
+pub use full3d::INVERSE_HEMISPHERE;
+pub use quaternion_julia::INVERSE_QUATERNION_JULIA;
 mod advanced;
 mod depth3d;
 mod rotation3d;

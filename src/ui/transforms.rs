@@ -719,7 +719,7 @@ fn render_enabled_variation(
                     let param_update = render_variation_params(
                         ui,
                         config_manager,
-                        xref,
+                        &xref,
                         variation_name,
                         &var_info.parameters,
                     );

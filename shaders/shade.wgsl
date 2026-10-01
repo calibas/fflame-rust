@@ -70,10 +70,20 @@ struct ShadeParams {
     // Interactive: tex_y0 = 0, tex_height = height.
     tex_y0: u32,
     tex_height: u32,
-    // 1 = read normals from the pre-smoothed (normals + à-trous) texture
-    // at binding 4; 0 = estimate inline (strip-tiled exports, where the
-    // full-image normal textures don't exist). The texture is full-image
-    // sized and indexed with GLOBAL coordinates.
+    // Bit 0: read normals from the texture at binding 4 rather than
+    // estimating them inline. That texture is either the pre-smoothed
+    // one this pass builds from the depth field (normals + à-trous) or
+    // one a GENERATOR supplied — a distance marcher has the gradient
+    // of its own field and has no reason to hand this pass a depth
+    // buffer to guess from. Inline estimation is the fallback, used by
+    // the strip-tiled export path where the full-image textures do not
+    // exist. Either way the texture is full-image sized and indexed
+    // with GLOBAL coordinates.
+    //
+    // Bit 1: take ambient occlusion from the texture at binding 5
+    // instead of the screen-space estimate, for the same reason and
+    // with the same division of labour — the generator says what the
+    // geometry occludes, this pass says what the lights do.
     use_normal_tex: u32,
     // Surface closing (0 = off): fill pixels with NO sample when a ring
     // of neighbors within this radius agree they are one surface (valid
@@ -110,7 +120,9 @@ struct ShadeParams {
     background_r: f32,
     background_g: f32,
     background_b: f32,
-    _pad_fog: f32,
+    // Half-angle tangent of a PINHOLE projection, with `projection`
+    // below. Unused (and zero) for the splat convention.
+    tan_half: f32,
 
     // Light-space shadow maps (Stage 2): ortho fit (xyz center,
     // w radius) matching the splat's frozen fit exactly.
@@ -121,7 +133,11 @@ struct ShadeParams {
     shadow_word_offset: u32,
     shadow_res: u32,
     shadow_count: u32,
-    _pad_sm: u32,
+    // 0 = the splat pipeline's `zr = 1 − persp·z`, which is depth
+    // scaling rather than a projection; 1 = a pinhole with `tan_half`.
+    // The difference is confined to `reconstruct`, which is the only
+    // place a pixel and a depth become a position.
+    projection: u32,
 
     lights: array<ShadeLight, 4>,
 }
@@ -139,6 +155,10 @@ struct ShadeParams {
 @group(0) @binding(4) var normal_tex: texture_2d<f32>;
 // Previous frame's shade output (ping-pong partner of shade_out).
 // 1×1 dummy when temporal_ema == 0 — never read then.
+// Occlusion supplied by the generator, when bit 1 of `use_normal_tex`
+// is set. Bound to the 1x1 dummy otherwise.
+@group(0) @binding(5) var occlusion_tex: texture_2d<f32>;
+
 @group(0) @binding(7) var prev_shade: texture_2d<f32>;
 
 // ── Camera helpers (shadow-map lookup) ──
@@ -218,6 +238,19 @@ fn depth_at(px: i32, py: i32) -> f32 {
 // project_3d_full's pixel mapping. Camera looks down -z; the point sits
 // at camera z = -d.
 fn reconstruct(px: f32, py: f32, d: f32) -> vec3<f32> {
+    if (sp.projection == 1u) {
+        // A pinhole: the pixel names a ray and the depth says how far
+        // along it. Camera space keeps the same convention as below —
+        // the eye at the origin looking down −z — so everything
+        // downstream (the view vector, the specular half-angle, the
+        // fog's use of `d`) is unchanged.
+        let aspect = f32(sp.width) / f32(max(sp.height, 1u));
+        let uv = (vec2<f32>(px + 0.5, py + 0.5)
+            / vec2<f32>(f32(sp.width), f32(sp.height))) - vec2<f32>(0.5, 0.5);
+        let sx = uv.x * aspect * 2.0 * sp.tan_half;
+        let sy = -uv.y * 2.0 * sp.tan_half;
+        return vec3<f32>(sx, sy, -1.0) * d;
+    }
     let scale = f32(min(sp.width, sp.height)) * 0.25;
     let center = vec2<f32>(f32(sp.width), f32(sp.height)) * 0.5;
     var t = (vec2<f32>(px + 0.5, py + 0.5) - center) / scale;
@@ -272,7 +305,7 @@ fn shade_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // them (density-weighted so sparse neighbors grow in smoothly) —
         // the chaos game leaves pinholes wherever the IFS measure is
         // thin, and those read as see-through geometry.
-        if (sp.use_normal_tex != 0u && sp.gap_fill > 0u) {
+        if ((sp.use_normal_tex & 1u) != 0u && sp.gap_fill > 0u) {
             let win = max(sp.surface_thickness, 0.005) * 6.0;
             for (var g = 1; g <= i32(sp.gap_fill); g = g + 1) {
                 var cnt = 0.0;
@@ -344,7 +377,7 @@ fn shade_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var n: vec3<f32>;
     if (filled) {
         n = select(vec3<f32>(0.0, 0.0, 1.0), fill_normal, has_fill_normal);
-    } else if (sp.use_normal_tex != 0u) {
+    } else if ((sp.use_normal_tex & 1u) != 0u) {
         // Pre-computed + à-trous-smoothed normal (full-image texture,
         // global coordinates).
         n = textureLoad(normal_tex, vec2<i32>(px, py), 0).xyz;
@@ -410,7 +443,14 @@ fn shade_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // (bias grows with slope), with a range falloff so distant
     // foreground objects don't darken the background.
     var ao = 1.0;
-    if (sp.ssao_strength > 0.0) {
+    if ((sp.use_normal_tex & 2u) != 0u) {
+        // The generator's own occlusion. A screen-space estimate
+        // reconstructs what it can from neighbouring depths; a marcher
+        // asks the distance field directly and can also fold in a
+        // shadow it actually traced, so when one is offered it REPLACES
+        // the estimate rather than multiplying with it.
+        ao = clamp(textureLoad(occlusion_tex, vec2<i32>(px, py), 0).x, 0.0, 1.0);
+    } else if (sp.ssao_strength > 0.0) {
         let scale = f32(min(sp.width, sp.height)) * 0.25;
         let zr = 1.0 + sp.perspective_strength * d;
         let radius_px = max(sp.ssao_radius * scale * sp.zoom / max(zr, 1e-3), 1.5);

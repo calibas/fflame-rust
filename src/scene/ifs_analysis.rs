@@ -1,0 +1,8065 @@
+//! Affine-IFS analysis of a flame: composition, inverses, singular
+//! values, the qualifying criterion and a bounding ball.
+//!
+//! Phase 0 of `docs/projects/ifs-distance-rendering.md`, built as
+//! common analysis because three plans want the same numbers: that one
+//! (its distance estimate is inverse iteration with a σ_min product),
+//! the escape plan's Mode D (its pass count is a function of the
+//! largest singular value), and `flame-deep-zoom.md` §7 (its window,
+//! its bounds and its conditioning). None of it existed: the only
+//! contractiveness measure in the tree, `mean_log_scale`, is a
+//! whole-flame mean of `0.5·ln|det A|`, and the determinant is the
+//! AREA factor — it averages the two axes, so a map that stretches one
+//! and squashes the other reads as neutral, which is exactly the map a
+//! singular value exists to catch.
+//!
+//! Everything here is `f64` on the CPU. The shader that consumes it
+//! takes `f32`; the analysis should not be the thing that loses bits.
+//!
+//! # What a flame transform IS, as an affine
+//!
+//! The chaos game applies, per transform: the affine, then the
+//! PRE-phase variations (each replacing the point), then the weighted
+//! sum of normal-phase variations, then the POST-phase variations
+//! (each replacing the result), then the post-affine. When every
+//! variation is affine the whole thing is one affine map, and the
+//! composition here mirrors the shader exactly — the flat and full
+//! paths of `affine_3d.wgsl`, the translation summed from three
+//! sources, `g` dropped under active plane maps (a documented
+//! limitation the shader has and this reproduces rather than fixes),
+//! and pre/post variations composed in the order the shader emits
+//! them, which is the FLAME's first-occurrence order and not the
+//! transform's. Which variations count as affine, and what each one
+//! contributes in each space, is [`affine_role`], and the list is
+//! small on purpose.
+//!
+//! # Two kinds of "3D flame"
+//!
+//! `preserve_z` decides which. With it OFF — the default — the chaos
+//! game zeroes z at the end of every iteration, so the trajectory is a
+//! 2D IFS and z is a per-point height computed at plot time. The
+//! attractor is 2D. With it ON, z carries across iterations and the
+//! IFS is genuinely three-dimensional, and then contractivity in z
+//! is a real condition: an Apophysis-style transform (XY affine plus a
+//! z offset) has unit z scale and fails it. The analysis reports both
+//! honestly rather than folding them into one answer.
+
+use crate::scene::transforms::{Flame, Transform};
+use crate::variations::{VariationPhase, VariationRegistry};
+use crate::scene::ifs_real::{Real, Transcendental, hessian2, jacobian2};
+
+/// What a variation does to a transform's map, in one space.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AffineRole {
+    /// Contributes nothing: a z-only variation in the plane, where the
+    /// chaos game has no z, or a 2D stub that returns its input.
+    Nothing,
+    /// Summed into the normal phase: contributes `w · (M, t)`.
+    Sum(Affine3),
+    /// A pre-phase variation: replaces the affine's output with `R p`.
+    Pre(Affine3),
+    /// A post-phase variation: replaces the sum with `R p`.
+    Post(Affine3),
+}
+
+/// What variation `name` at weight `w` contributes in `space`, or
+/// `None` when it is not affine there.
+///
+/// `ifs-general.md` D1: the answer is the variation's own, from its
+/// [`InverseDef`](crate::variations::inverse::InverseDef), so
+/// nothing here has to know that `flatten` is singular as a solid
+/// and nothing in the plane, or that `affine3D` has fifteen
+/// parameters. A variation with no `InverseDef`, or one whose entry
+/// is a kernel rather than an affine role, is not affine -- which is
+/// what a kernel wants, since `variation_stage` treats a `None` here
+/// as "ask whether it is a kernel".
+///
+/// The list this replaced was deliberately short, and the reason
+/// still holds for whatever is added: growing it means proving each
+/// addition is affine, in each space, by reading its body.
+/// Conformal invertible maps -- Mobius, spherical inversion, the
+/// julia family -- are the next candidates and are NOT affine.
+pub fn affine_role(
+    name: &str,
+    w: f64,
+    t: &Transform,
+    registry: &VariationRegistry,
+    space: Space,
+) -> Option<AffineRole> {
+    let def = registry.inverse(name)?;
+    let crate::variations::inverse::InverseKernel::Affine(role) = def.kernel else {
+        return None;
+    };
+    let p = |q: &str| t.get_variation_param_or_default(name, q, registry) as f64;
+    role(w, &p, space)
+}
+
+// ---------------------------------------------------------------- 2D
+
+/// A 2D affine map `p ↦ M p + t`, row-major.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Affine2 {
+    pub m: [[f64; 2]; 2],
+    pub t: [f64; 2],
+}
+
+impl Affine2 {
+    pub const IDENTITY: Affine2 = Affine2 { m: [[1.0, 0.0], [0.0, 1.0]], t: [0.0, 0.0] };
+
+    pub fn apply(&self, p: [f64; 2]) -> [f64; 2] {
+        [
+            self.m[0][0] * p[0] + self.m[0][1] * p[1] + self.t[0],
+            self.m[1][0] * p[0] + self.m[1][1] * p[1] + self.t[1],
+        ]
+    }
+
+    /// `self ∘ other`: apply `other` first, then `self`.
+    pub fn then_after(&self, other: &Affine2) -> Affine2 {
+        let a = &self.m;
+        let b = &other.m;
+        Affine2 {
+            m: [
+                [a[0][0] * b[0][0] + a[0][1] * b[1][0], a[0][0] * b[0][1] + a[0][1] * b[1][1]],
+                [a[1][0] * b[0][0] + a[1][1] * b[1][0], a[1][0] * b[0][1] + a[1][1] * b[1][1]],
+            ],
+            t: self.apply(other.t),
+        }
+    }
+
+    pub fn det(&self) -> f64 {
+        self.m[0][0] * self.m[1][1] - self.m[0][1] * self.m[1][0]
+    }
+
+    /// The inverse, or `None` when the map is singular (nothing to
+    /// invert: the attractor collapses onto a line or a point).
+    pub fn inverse(&self) -> Option<Affine2> {
+        let d = self.det();
+        if !d.is_finite() || d.abs() < 1e-300 {
+            return None;
+        }
+        let inv = [
+            [self.m[1][1] / d, -self.m[0][1] / d],
+            [-self.m[1][0] / d, self.m[0][0] / d],
+        ];
+        let t = [
+            -(inv[0][0] * self.t[0] + inv[0][1] * self.t[1]),
+            -(inv[1][0] * self.t[0] + inv[1][1] * self.t[1]),
+        ];
+        Some(Affine2 { m: inv, t })
+    }
+
+    /// The singular values of `M`, `(σ_min, σ_max)`, in closed form.
+    ///
+    /// `σ_max` is the map's Lipschitz constant — how much it can
+    /// stretch any displacement — and `σ_min` how little. Contractive
+    /// means `σ_max < 1`. The determinant is their PRODUCT, which is
+    /// why it cannot tell a stretch-and-squash from a uniform scale.
+    pub fn singular_values(&self) -> (f64, f64) {
+        let [[a, b], [c, d]] = self.m;
+        // The two singular values of a 2×2 satisfy
+        //   σ² = (‖M‖²_F ± sqrt(‖M‖⁴_F − 4·det²)) / 2.
+        let fro2 = a * a + b * b + c * c + d * d;
+        let det = a * d - b * c;
+        let disc = (fro2 * fro2 - 4.0 * det * det).max(0.0).sqrt();
+        let s_max = ((fro2 + disc) * 0.5).max(0.0).sqrt();
+        let s_min = ((fro2 - disc) * 0.5).max(0.0).sqrt();
+        (s_min, s_max)
+    }
+
+    /// The map's fixed point `x = M x + t`, or `None` when `I − M` is
+    /// singular (a map with an eigenvalue of exactly 1 has none, or
+    /// has a line of them).
+    pub fn fixed_point(&self) -> Option<[f64; 2]> {
+        let i_minus_m = Affine2 {
+            m: [[1.0 - self.m[0][0], -self.m[0][1]], [-self.m[1][0], 1.0 - self.m[1][1]]],
+            t: [0.0, 0.0],
+        };
+        i_minus_m.inverse().map(|inv| inv.apply(self.t))
+    }
+}
+
+// ---------------------------------------------- the nonlinear maps
+
+/// The nonlinear part of a [`NonlinearMap2`], as the walk inverts it:
+/// with `v = post⁻¹(q) / w`, the kernel's inverse takes `v` to the
+/// point in the pre-frame, and its local factor multiplies the
+/// constant part of the forward map's σ_min (plan §8.8 J3, §8.9).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Kernel {
+    /// `julia` / `julian`: forward `|z|^{d/|n|} · e^{i(arg z + 2πk)/n}`,
+    /// every branch undone by `|v|^{|n|/d} · e^{i·n·arg v}` (J1).
+    ///
+    /// `mirror`: `juliascope`, whose odd arms take `−arg z` -- the
+    /// root of `conj(z)` -- so each arm fills the same sector as the
+    /// root's, reflected on the odd ones. Its inverse is the root's,
+    /// conjugated where `v` is in an odd arm's sector: continuous, since
+    /// a sector's edge is the image of the negative real axis either
+    /// side, and creased along the edges between arms of different
+    /// parity. `d` is taken as `juliascope` has it over `|n|`: its
+    /// radius is `|z|^{dist/n}`, the power's sign included, so
+    /// `d = dist·sgn(n)` (`INVERSE_JULIASCOPE`). **The walk's alone**
+    /// (`walk_only`).
+    Root { n: i32, d: f64, mirror: bool },
+    /// `spherical`: inversion in the circle, its own inverse (S2).
+    Spherical,
+    /// `bubble`: `4p/(|p|² + 4)`, onto the unit disc and 2-to-1; the
+    /// branch picks the inner (0) or outer (1) preimage (S4).
+    Bubble,
+    /// `hemisphere`: `p / √(|p|² + 1)`, onto the open unit disc,
+    /// 1-to-1 (plan §8.10 D1).
+    Hemisphere,
+    /// `disc`: `(θ/π)·(sin πr, cos πr)` with `θ` from the +y axis --
+    /// polar coordinates read the other way. Onto the unit disc and
+    /// periodic in `r`, so the branch `m` picks the ring
+    /// `r = φ/π + m` (D2).
+    Disc,
+    /// `blob`: `r·s(θ)·(cos θ, sin θ)`, a reflection in the diagonal
+    /// times an angular radial scale `s(θ) = low + (high − low)/2 ·
+    /// (sin(waves·θ) + 1)`; onto the plane while `s > 0` (D3).
+    Blob { high: f64, low: f64, waves: f64 },
+    /// `elliptic`: elliptic coordinates, `(2/π)·(asin(x/xmax),
+    /// ±ln(xmax + √(xmax − 1)))` with `xmax` half the sum of the
+    /// distances to the foci `(±1, 0)` and the sign `y`'s. One-to-one
+    /// onto the strip `|v.x| ≤ 1`, so one branch and none past the strip
+    /// (tracker C6). JWF's `√(xmax − 1)` where acosh would have
+    /// `√(xmax² − 1)` makes it C¹ and not C² across the segment between
+    /// the foci; `y` jumps across the rays `|x| > 1` beyond them.
+    /// **The walk's alone** (`walk_only`).
+    Elliptic,
+    /// `splits`: piecewise a translation, `v + base + [v.x ≥ 0]·x +
+    /// [v.y ≥ 0]·y`. Four branches, one per quadrant of the preimage,
+    /// each valid where its preimage lands in its quadrant: where the
+    /// steps overlap the quadrants' images a point has two (tracker C6).
+    /// A summed affine is folded in (`transform_map_2d_ordered`), so the
+    /// steps are in the frame the folded map leaves. **The walk's alone**
+    /// (`walk_only`).
+    Splits { base: [f64; 2], x: [f64; 2], y: [f64; 2] },
+    /// `cylinder`: `(sin x, y)`, onto the strip `|v.x| ≤ 1` and periodic
+    /// in `x`, so every point of the strip has two preimages a turn,
+    /// `asin(v.x) + 2πk` (even branches) and `π − asin(v.x) + 2πk` (odd),
+    /// with `k = k0 + branch/2`. `k0` is the lowest turn the invariant
+    /// ball reaches in the pre-frame, set once the ball is known
+    /// (`cylinder_turns`), as disc's rings are counted (tracker C6).
+    /// **The walk's alone** (`walk_only`).
+    Cylinder { k0: i32 },
+}
+
+impl Kernel {
+    /// Bubble's radial scale -- `u = v·s` -- and its derivative in
+    /// `x = |v|²`, along `branch`, written so nothing cancels.
+    ///
+    /// The inner branch's `f = 2 − 2√(1 − x)` is `x + x²/4 + …`
+    /// computed as a difference of two numbers either side of 2, so
+    /// it keeps only the digits `x` is below 1: at `|v| = 1e-4` that
+    /// is eight of f64's sixteen and three of f32's seven, and the
+    /// derivative `(f'x − f)/x²` then cancels what is left --
+    /// measured, it disagreed with a central difference by 102%.
+    /// With `x = (1 − root)(1 + root)` the root divides out and every
+    /// term is a sum of positives:
+    ///
+    /// ```text
+    /// inner:  s = 2/(1 + root)        s' = 1/(root·(1 + root)²)
+    /// outer:  s = 2(1 + root)/x       s' = −(1 + root)²/(x²·root)
+    /// ```
+    ///
+    /// The outer branch's pole at the origin is real, not a
+    /// cancellation: its preimage is at infinity.
+    fn bubble_scale(x: f64, branch: u32) -> (f64, f64) {
+        let root = (1.0 - x).max(0.0).sqrt();
+        let up = 1.0 + root;
+        if branch == 0 {
+            (2.0 / up, (root * up * up).recip())
+        } else {
+            (2.0 * up / x, -(up * up) / (x * x * root))
+        }
+    }
+
+    /// Distance from `v` to the ray leaving the origin at `phi` from
+    /// the +y axis -- the frame `disc` measures its angle in.
+    fn ray_distance(v: [f64; 2], phi: f64) -> f64 {
+        let d = [phi.sin(), phi.cos()];
+        let along = v[0] * d[0] + v[1] * d[1];
+        if along <= 0.0 {
+            return v[0].hypot(v[1]);
+        }
+        (v[0] - along * d[0]).hypot(v[1] - along * d[1])
+    }
+
+    /// Whether only the inverse walk (`backward.rs`) takes this kernel:
+    /// the escape engine's shader has no row for it, so `analyse_2d`
+    /// refuses it as it did before the walk had it.
+    pub fn walk_only(&self) -> bool {
+        matches!(self, Kernel::Elliptic | Kernel::Splits { .. } | Kernel::Cylinder { .. } | Kernel::Root { mirror: true, .. })
+    }
+
+    /// Whether a mirrored root with `n` takes arm `k` at the conjugate:
+    /// an odd arm, counted mod `|n|`.
+    pub(crate) fn mirrored_arm(n: i32, k: u32) -> bool {
+        (k % n.unsigned_abs().max(1)) % 2 == 1
+    }
+
+    /// The arm of a root with `n` whose sector holds `v`: the arm `k`
+    /// whose `(arg z + 2πk)/n` is `arg v` with `arg z` in `[−π, π]`. On
+    /// an edge between two arms either may come back, and both send the
+    /// negative real axis there.
+    pub(crate) fn root_arm(n: i32, v: [f64; 2]) -> u32 {
+        let nf = n as f64;
+        (nf * v[1].atan2(v[0]) / std::f64::consts::TAU).round().rem_euclid(nf.abs().max(1.0)) as u32
+    }
+
+    /// Splits' step for quadrant `q` (bit 0 `x ≥ 0`, bit 1 `y ≥ 0`).
+    pub(crate) fn splits_shift(base: [f64; 2], x: [f64; 2], y: [f64; 2], q: u32) -> [f64; 2] {
+        let (bx, by) = ((q & 1) as f64, ((q >> 1) & 1) as f64);
+        [base[0] + bx * x[0] + by * y[0], base[1] + bx * x[1] + by * y[1]]
+    }
+
+    /// The quadrant splits reads `v` in, as its shader does: `x ≥ 0` is
+    /// bit 0 and `y ≥ 0` bit 1, so a signed zero is on the `≥ 0` side.
+    pub(crate) fn splits_quadrant(v: [f64; 2]) -> u32 {
+        (v[0] >= 0.0) as u32 | (((v[1] >= 0.0) as u32) << 1)
+    }
+
+    /// Blob's angular scale at `theta`.
+    pub(crate) fn blob_scale(high: f64, low: f64, waves: f64, theta: f64) -> (f64, f64) {
+        let s = low + (high - low) / 2.0 * ((waves * theta).sin() + 1.0);
+        let ds = (high - low) / 2.0 * waves * (waves * theta).cos();
+        (s, ds)
+    }
+
+    /// The forward kernel on `z` in the pre-frame, along `k` -- a
+    /// root's branch, or the flame's ε-guarded body for the others.
+    pub fn forward(&self, z: [f64; 2], k: u32) -> [f64; 2] {
+        kernel_forward_gen(self, &z, k)
+    }
+
+    /// The inverse kernel on `v`, along `branch`. A `v` with no
+    /// preimage on that branch lands at infinity; the walk never asks
+    /// for one, because [`NonlinearMap2::image_gap`] answers first
+    /// with the piece's distance (S4, amended).
+    pub fn inverse(&self, v: [f64; 2], branch: u32) -> [f64; 2] {
+        kernel_inverse_gen(self, &v, branch)
+    }
+
+    /// The factor on the constant σ_min at the point whose image is
+    /// `v`, along `branch`.
+    pub fn local_sigma_factor(&self, v: [f64; 2], branch: u32) -> f64 {
+        let r2 = (v[0] * v[0] + v[1] * v[1]).max(f64::MIN_POSITIVE);
+        match *self {
+            // The radial singular value, (1 − |v|²)^{3/2}, the smaller
+            // of the two and exact (D1).
+            Kernel::Hemisphere => (1.0 - r2).max(0.0).powf(1.5),
+            // pi·|v| along the input's radius, 1/(pi·r) along its
+            // angle, orthogonal images, so the smaller is sigma_min
+            // (D2).
+            Kernel::Disc => {
+                let rho = r2.sqrt();
+                let phi = v[0].atan2(v[1]);
+                let r = phi / std::f64::consts::PI + branch as f64;
+                if r <= 0.0 {
+                    return 0.0;
+                }
+                (std::f64::consts::PI * rho).min(1.0 / (std::f64::consts::PI * r))
+            }
+            // [[s, s'], [0, s]] in the (radial, tangential) frame: the
+            // smaller singular value in closed form (D3).
+            //
+            // `(a − disc)/2` is a difference of two numbers that MEET
+            // wherever the map is conformal -- at `s' = 0`, twice a
+            // period -- so it keeps few of f64's digits there.
+            // Measured against the derivative
+            // (`the_kernels_jacobians_are_the_derivative`): 1.5e-13
+            // on a blob whose scale stays positive, 3.0e-5 on one
+            // whose scale crosses zero, against machine precision for
+            // every other kernel. `|det|/σ_max` -- `det = s²` exactly
+            // and `(a + disc)/2` adds two positives -- is the same
+            // number without the subtraction, and is two lines. It is
+            // NOT taken: 3e-5 of a bound is 3e-5 of a pixel, and the
+            // change moves 3 pixels of the Blob Flower preset, which
+            // is a worse trade than the inaccuracy. Recorded so the
+            // first measurement that needs those digits finds it.
+            Kernel::Blob { high, low, waves } => {
+                let theta = v[1].atan2(v[0]);
+                let (sc, ds) = Kernel::blob_scale(high, low, waves, theta);
+                let a = 2.0 * sc * sc + ds * ds;
+                let disc = (a * a - 4.0 * sc.powi(4)).max(0.0).sqrt();
+                ((a - disc) * 0.5).max(0.0).sqrt()
+            }
+            // A mirror is an isometry, so a mirrored root's is the root's.
+            Kernel::Root { n, d, .. } => r2.sqrt().powf(1.0 - (n as f64).abs() / d),
+            Kernel::Spherical => r2,
+            // A translation.
+            Kernel::Splits { .. } => 1.0,
+            // diag(cos x, 1) at the preimage, and |cos x| = √(1 − v.x²).
+            Kernel::Cylinder { .. } => {
+                let c = (1.0 - v[0] * v[0]).max(0.0).sqrt();
+                c.min(1.0)
+            }
+            // The inverse's derivative is the dual numbers' own, so the
+            // forward's σ_min is its largest singular value reciprocated
+            // -- exact by construction, and zero where it has none.
+            Kernel::Elliptic => match self.inverse_jacobian(v, branch) {
+                Some(j) => {
+                    let (_, hi) = singular_values_of(j);
+                    if hi > 0.0 {
+                        1.0 / hi
+                    } else {
+                        0.0
+                    }
+                }
+                None => 0.0,
+            },
+            Kernel::Bubble => {
+                // The smaller of the tangential derivative `|v|/|p|`
+                // and the RADIAL one, which the tangential alone is
+                // not (amended 2026-09-16).
+                //
+                // The forward `4p/(|p|² + 4)` FOLDS at `|p| = 2`: its
+                // radial derivative `4(4 − |p|²)/(|p|² + 4)²` passes
+                // through zero there while the tangential stays at
+                // ½. The fold's image is the image disc's edge, so
+                // the two branches meet at `|v| = 1` and the radial
+                // term is the smaller one everywhere between.
+                //
+                // In closed form the two differ by exactly the root:
+                // `1/σ_max(J⁻¹) = x/max(f, |2f'x − f|)` and
+                // `|2f'x − f| = f/√(1 − x)` on BOTH branches, so
+                // σ_min is the tangential times `√(1 − |v|²)`.
+                // Reporting the tangential alone overstated σ_min
+                // without bound as the fold was approached -- 21×
+                // at `|v| = 0.9989`, measured -- and an overstated
+                // σ_min is an over-read: the bound `σ·(r − R)` comes
+                // back too large and the pixel reads as exterior.
+                if r2 >= 1.0 {
+                    return 1.0;
+                }
+                let (s, _) = Kernel::bubble_scale(r2, branch);
+                (1.0 - r2).sqrt() / s
+            }
+        }
+    }
+
+    /// The Jacobian of [`Self::inverse`] at `v`, along `branch`, or
+    /// `None` where `v` has no preimage there or the map is not
+    /// differentiable (plan `ifs-nonlinear-perturbation.md` §3).
+    ///
+    /// Row-major `[[du_x/dv_x, du_x/dv_y], [du_y/dv_x, du_y/dv_y]]`.
+    /// This is what carries a pixel's offset past the affine
+    /// handover: `B_{k+1} = J·B_k` in place of the affine's constant
+    /// `M⁻¹·B_k`.
+    ///
+    /// The inverse of the forward map's derivative, so its singular
+    /// values are the forward's reciprocated and swapped --
+    /// `σ_max(J) = 1/σ_min(forward)` -- which is what ties it to
+    /// [`Self::local_sigma_factor`] and is checked against it.
+    ///
+    /// **By dual numbers, not by derivation** (`ifs-general.md` D2):
+    /// this differentiates [`kernel_inverse_gen`], the same body
+    /// [`Self::inverse`] runs, so there is no second expression to
+    /// slip a sign in. The six closed forms it replaces agreed with
+    /// it to a relative 1e-9 at every point of
+    /// `the_dual_jacobian_is_the_derivation`, which is the evidence
+    /// for dropping them. The domain guards they carried survive as
+    /// [`kernel_inverse_domain`], since a derivative of the
+    /// no-preimage sentinel is a finite number meaning nothing.
+    pub fn inverse_jacobian(&self, v: [f64; 2], branch: u32) -> Option<[[f64; 2]; 2]> {
+        if !kernel_inverse_domain(self, v, branch) {
+            return None;
+        }
+        jacobian2(v, |z| kernel_inverse_gen(self, &z, branch))
+    }
+
+    /// How far `z` may move before the FORWARD kernel stops being
+    /// smooth there -- the other side of [`Self::singular_distance`],
+    /// and what a sum needs, since a sum's inverse is a Newton solve
+    /// on the forward map and it is the forward map that has to be
+    /// differentiable.
+    ///
+    /// Only the origin matters for most of them: `z^{1/n}`, `z/|z|²`
+    /// and the blob's radial scale all have their pole there and are
+    /// smooth elsewhere. Disc's forward reads `atan2`, so its cut
+    /// counts too. Hemisphere and bubble's forwards are smooth on the
+    /// whole plane -- their branching is in the INVERSE -- so they
+    /// report no bound at all.
+    pub fn forward_singular_distance(&self, z: [f64; 2]) -> f64 {
+        let rho = z[0].hypot(z[1]);
+        // The negative x axis, in the `[sin φ, cos φ]` frame
+        // `ray_distance` measures in.
+        const NEG_X: f64 = -std::f64::consts::FRAC_PI_2;
+        match *self {
+            Kernel::Hemisphere | Kernel::Bubble => f64::INFINITY,
+            Kernel::Disc => rho.min(Kernel::ray_distance(z, std::f64::consts::PI)),
+            // A root's forward DIVIDES the angle, so `atan2`'s jump
+            // from +π to −π across the negative x axis lands on a
+            // DIFFERENT branch: the map restricted to one branch is
+            // discontinuous there, not merely non-smooth.
+            //
+            // The inverse has no such cut -- it multiplies the angle
+            // by a whole number, and a whole turn is a whole turn --
+            // which is why [`Self::singular_distance`] says the pole
+            // and nothing else and this does not. Measured: seven of
+            // four hundred solves on `julia 0.6 + linear 0.4` failed,
+            // and every one of the seven had its preimage within 0.03
+            // of this ray.
+            Kernel::Root { n, .. } if n.unsigned_abs() > 1 => {
+                rho.min(Kernel::ray_distance(z, NEG_X))
+            }
+            // Its `y` jumps across the rays beyond the foci. (Across the
+            // segment between them it is C¹, which is all Newton asks.)
+            Kernel::Elliptic => {
+                let ax = z[0].abs();
+                if ax >= 1.0 {
+                    z[1].abs()
+                } else {
+                    (1.0 - ax).hypot(z[1])
+                }
+            }
+            // It jumps across both axes.
+            Kernel::Splits { .. } => z[0].abs().min(z[1].abs()),
+            // `sin` is smooth everywhere; its folds are the INVERSE's edge.
+            Kernel::Cylinder { .. } => f64::INFINITY,
+            _ => rho,
+        }
+    }
+
+    /// How far `v` may move before [`Self::inverse`] stops being
+    /// smooth along `branch` -- its pole, its image's edge, or the
+    /// cut a branch is taken along.
+    ///
+    /// The perturbation handover stops when a pixel's offset
+    /// approaches this: inside it the second-order term is a bounded
+    /// fraction `offset / distance` of the first, and past it there
+    /// is no linearisation to stop being good (plan
+    /// `ifs-nonlinear-perturbation.md` §2).
+    pub fn singular_distance(&self, v: [f64; 2], branch: u32) -> f64 {
+        let rho = v[0].hypot(v[1]);
+        match *self {
+            // The pole at the origin, and nothing else: `|v|^m` is
+            // smooth away from it, and `e^{i·n·arg v}` has no cut for
+            // an integer `n` -- arg jumps by 2π and `n·2π` is a whole
+            // turn.
+            //
+            // A mirrored root's is creased as well, along the edges of
+            // `v`'s sector: its inverse is the root's on one side and
+            // the conjugate on the other.
+            Kernel::Root { n, mirror: true, .. } if n.unsigned_abs() > 1 => {
+                use std::f64::consts::{FRAC_PI_2, PI, TAU};
+                let nf = n as f64;
+                let j = (nf * v[1].atan2(v[0]) / TAU).round();
+                let edge = |s: f64| Kernel::ray_distance(v, FRAC_PI_2 - (TAU * j + s * PI) / nf);
+                rho.min(edge(1.0)).min(edge(-1.0))
+            }
+            Kernel::Root { .. } | Kernel::Spherical => rho,
+            // The image's edge, where the square root branches.
+            Kernel::Hemisphere => (1.0 - rho).max(0.0),
+            // The edge both branches share, and for the outer branch
+            // the origin as well, where `f/|v|²` blows up. The inner
+            // branch is smooth there: `f/|v|² → 1`.
+            Kernel::Bubble => {
+                let edge = (1.0 - rho).max(0.0);
+                if branch == 0 {
+                    edge
+                } else {
+                    edge.min(rho)
+                }
+            }
+            // Four ways out, and the nearest wins: `atan2(x, y)` cuts
+            // along the negative y axis; the ring `r = φ/π + branch`
+            // reaches zero along the ray at `φ = −branch·π`, past
+            // which this branch has no preimage; the image's edge,
+            // across which none of them does; and the origin, where
+            // the angle is undefined.
+            Kernel::Disc => {
+                // The cut, as a ray from the origin at `φ = π` from
+                // +y -- the negative y axis.
+                let mut d = Kernel::ray_distance(v, std::f64::consts::PI).min(rho);
+                let zero = -(branch as f64) * std::f64::consts::PI;
+                if zero.abs() <= std::f64::consts::PI {
+                    d = d.min(Kernel::ray_distance(v, zero));
+                }
+                d.min((1.0 - rho).max(0.0))
+            }
+            // The angle's pole, and the angles where the radial scale
+            // vanishes -- a first-order estimate of the distance to
+            // one, in arc length.
+            Kernel::Blob { high, low, waves } => {
+                let theta = v[1].atan2(v[0]);
+                let (sc, ds) = Kernel::blob_scale(high, low, waves, theta);
+                if low > 0.0 && high > 0.0 {
+                    return rho;
+                }
+                if ds == 0.0 {
+                    return if sc == 0.0 { 0.0 } else { rho };
+                }
+                rho.min(rho * (sc / ds).abs())
+            }
+            // The strip's edge, where the preimage reaches the rays, and
+            // the line `v.y = 0`, the segment's image, across which the
+            // inverse is C¹ and not C².
+            Kernel::Elliptic => (1.0 - v[0].abs()).max(0.0).min(v[1].abs()),
+            // The preimage's distance to its quadrant's edges.
+            Kernel::Splits { base, x, y } => {
+                let s = Kernel::splits_shift(base, x, y, branch);
+                let u = [v[0] - s[0], v[1] - s[1]];
+                if Kernel::splits_quadrant(u) != branch {
+                    return 0.0;
+                }
+                u[0].abs().min(u[1].abs())
+            }
+            // The strip's edge, the image of the folds.
+            Kernel::Cylinder { .. } => (1.0 - v[0].abs()).max(0.0),
+        }
+    }
+
+    /// The constant parts of the kernel's singular values, before the
+    /// local factor: the root's `min(d,1)/|n|` and `max(d,1)/|n|`;
+    /// one for the others.
+    fn sigma_const(&self) -> (f64, f64) {
+        match *self {
+            Kernel::Root { n, d, .. } => {
+                // A negative distance is a root of the inverted
+                // radius; the derivative's magnitude is what a
+                // singular value is.
+                let (n, d) = ((n as f64).abs(), d.abs());
+                (d.min(1.0) / n, d.max(1.0) / n)
+            }
+            _ => (1.0, 1.0),
+        }
+    }
+
+    /// Whether the forward kernel sends a neighbourhood of the
+    /// pre-origin to infinity, so that no ball is invariant and the
+    /// ball has to be measured (S3): the inversion, and a root with a
+    /// negative distance, which is a root of the inverted radius.
+    pub fn unbounded_at_origin(&self) -> bool {
+        match *self {
+            Kernel::Spherical => true,
+            Kernel::Root { d, .. } => d < 0.0,
+            Kernel::Bubble | Kernel::Hemisphere | Kernel::Disc | Kernel::Blob { .. } => false,
+            Kernel::Elliptic | Kernel::Splits { .. } | Kernel::Cylinder { .. } => false,
+        }
+    }
+
+    /// The radius of the HOLE in this kernel's image of a disc of
+    /// radius `r_pre` about the origin, or 0 for a kernel whose image
+    /// has none.
+    ///
+    /// An inversion turns the disc inside out: `spherical` sends
+    /// `|z| <= R` to `|v| >= 1/R`, and a root with a negative distance
+    /// sends it to `|v| >= R^{d/|n|}`. Nothing of the piece can lie
+    /// inside that circle, so a point there is a known distance from
+    /// the piece -- and, more to the point, is the point whose inverse
+    /// flies toward infinity. Scoring it as a gap instead of expanding
+    /// it is what keeps the walk out of the region where its
+    /// arithmetic overflows: in f64 that is `|v| < 1e-20` on a
+    /// power-15 root, in f32 it is `|v| < 0.003`, and the GPU was
+    /// freezing paths there some 10^17 times more often than the CPU
+    /// reference.
+    pub fn hole_radius(&self, r_pre: f64) -> f64 {
+        if !(r_pre > 0.0) {
+            return 0.0;
+        }
+        match *self {
+            Kernel::Spherical => 1.0 / r_pre,
+            Kernel::Root { n, d, .. } if d < 0.0 => r_pre.powf(d / (n as f64).abs()),
+            _ => 0.0,
+        }
+    }
+
+    /// Whether the kernel's image is the unit disc of `v`, so that a
+    /// `v` outside it is an image gap away from the piece (S4).
+    pub fn image_is_unit_disc(&self) -> bool {
+        matches!(self, Kernel::Bubble | Kernel::Hemisphere | Kernel::Disc)
+    }
+
+    pub fn variation(&self) -> &'static str {
+        match self {
+            Kernel::Root { mirror: true, .. } => "juliascope",
+            Kernel::Root { n: 2, d, .. } if *d == 1.0 => "julia",
+            Kernel::Root { .. } => "julian",
+            Kernel::Spherical => "spherical",
+            Kernel::Bubble => "bubble",
+            Kernel::Hemisphere => "hemisphere",
+            Kernel::Disc => "disc",
+            Kernel::Blob { .. } => "blob",
+            Kernel::Elliptic => "elliptic",
+            Kernel::Splits { .. } => "splits",
+            Kernel::Cylinder { .. } => "cylinder",
+        }
+    }
+}
+
+
+// ------------------------------------------ the kernels, written once
+
+/// An affine, over any [`Real`].
+///
+/// The coefficients are `f64` -- an affine's numbers come from the
+/// flame and are `f32` there -- so they enter through
+/// [`Real::lit`] at the point's own precision.
+pub fn affine_apply_gen<T: Real>(a: &Affine2, p: &[T; 2]) -> [T; 2] {
+    let l = |v: f64| p[0].lit(v);
+    [
+        l(a.m[0][0]).mul(&p[0]).add(&l(a.m[0][1]).mul(&p[1])).add(&l(a.t[0])),
+        l(a.m[1][0]).mul(&p[0]).add(&l(a.m[1][1]).mul(&p[1])).add(&l(a.t[1])),
+    ]
+}
+
+/// Bubble's radial scale `s` with `u = v·s`, generically.
+///
+/// Written as [`Kernel::bubble_scale`] explains: `x = (1 − root)(1 +
+/// root)` divides the root out, so nothing cancels. The derivative
+/// that function also returns is not here, because at `Dual` the
+/// derivative comes from differentiating this.
+fn bubble_scale_gen<T: Real>(x: &T, branch: u32) -> T {
+    let one_minus = x.one().sub(x);
+    let clamped = if one_minus.to_f64() < 0.0 { x.zero() } else { one_minus };
+    let root = clamped.sqrt();
+    let up = root.one().add(&root);
+    if branch == 0 {
+        up.lit(2.0).div(&up)
+    } else {
+        up.lit(2.0).mul(&up).div(x)
+    }
+}
+
+/// Blob's angular scale at `theta`, generically.
+pub(crate) fn blob_scale_gen<T: Transcendental>(high: f64, low: f64, waves: f64, theta: &T) -> T {
+    let wave = theta.lit(waves).mul(theta).sin().add(&theta.one());
+    theta.lit(low).add(&theta.lit((high - low) / 2.0).mul(&wave))
+}
+
+/// `d − k` for `d = √(k² + y²)`, without cancelling: `y²/(d + k)` where
+/// `k ≥ 0`, which is where `d − k` would subtract two numbers that meet.
+/// Zero at `d = k = 0` (a focus of `elliptic`).
+///
+/// Elliptic's `xmax − 1`, `xmax − x` and `xmax + x` are each half a sum
+/// of two of these (`elliptic_parts`): the plain body forms `xmax` and
+/// subtracts, and loses every digit of `xmax − 1` near the segment
+/// between the foci -- where its square root is the whole of the
+/// output's `y` -- and of `xmax − |x|` near the rays beyond them.
+pub(crate) fn elliptic_h<T: Real>(d: &T, k: &T, y2: &T) -> T {
+    if k.to_f64() >= 0.0 {
+        let den = d.add(k);
+        if den.to_f64() == 0.0 {
+            return d.zero();
+        }
+        y2.div(&den)
+    } else {
+        d.sub(k)
+    }
+}
+
+/// Elliptic's parts at `z`, none of them a cancellation: the distances
+/// to the foci `(d1, d2)`, and `A = d1 − (x+1)`, `B = d2 − (1−x)`,
+/// `As = d1 + (x+1)`, `Bs = d2 + (1−x)` by [`elliptic_h`]. Then
+/// `xmax − 1 = (A + B)/2`, `xmax − x = (A + Bs)/2`, `xmax + x = (As +
+/// B)/2`.
+pub(crate) struct EllipticParts<T> {
+    pub d1: T,
+    pub d2: T,
+    pub a: T,
+    pub b: T,
+    pub a_s: T,
+    pub b_s: T,
+}
+
+pub(crate) fn elliptic_parts<T: Real>(z: &[T; 2]) -> EllipticParts<T> {
+    let one = z[0].one();
+    let y2 = z[1].mul(&z[1]);
+    let kp = z[0].add(&one);
+    let km = one.sub(&z[0]);
+    let d1 = kp.mul(&kp).add(&y2).sqrt();
+    let d2 = km.mul(&km).add(&y2).sqrt();
+    let a = elliptic_h(&d1, &kp, &y2);
+    let b = elliptic_h(&d2, &km, &y2);
+    let a_s = elliptic_h(&d1, &kp.neg(), &y2);
+    let b_s = elliptic_h(&d2, &km.neg(), &y2);
+    EllipticParts { d1, d2, a, b, a_s, b_s }
+}
+
+/// The forward kernel, over any [`Transcendental`].
+///
+/// The one body [`Kernel::forward`] is, and the one the `BigFloat`
+/// walk and the dual-number derivatives call. Every branch decision
+/// reads [`Real::to_f64`], which is the VALUE at a `Dual` and so
+/// takes the same branch the point does.
+pub fn kernel_forward_gen<T: Transcendental>(k: &Kernel, z: &[T; 2], branch: u32) -> [T; 2] {
+    use std::f64::consts::{PI, TAU};
+    let r2 = z[0].hypot2(&z[1]);
+    match *k {
+        Kernel::Hemisphere => {
+            let t = r2.add(&r2.one()).sqrt().recip();
+            [z[0].mul(&t), z[1].mul(&t)]
+        }
+        Kernel::Disc => {
+            // Apophysis: theta = atan2(x, y), the angle from +y.
+            let theta = T::atan2(&z[0], &z[1]);
+            let r = r2.sqrt();
+            let rho = theta.div(&theta.lit(PI));
+            let (sa, ca) = r.lit(PI).mul(&r).sin_cos();
+            [rho.mul(&sa), rho.mul(&ca)]
+        }
+        Kernel::Blob { high, low, waves } => {
+            let theta = T::atan2(&z[0], &z[1]);
+            let sc = blob_scale_gen(high, low, waves, &theta);
+            let r = r2.sqrt();
+            let (st, ct) = theta.sin_cos();
+            [r.mul(&sc).mul(&ct), r.mul(&sc).mul(&st)]
+        }
+        Kernel::Root { n, d, mirror } => {
+            let nf = n as f64;
+            let rr = r2.sqrt().powf(&r2.lit(d / nf.abs()));
+            // A mirrored root's odd arm is the root's of `conj(z)`.
+            // `atan2(−y, x)` is `−atan2(y, x)` bit for bit, the negative
+            // real axis included, where both are ∓π. An arm past `|n|`
+            // is its remainder's, as the root's own angle has it.
+            let y = if mirror && Kernel::mirrored_arm(n, branch) { z[1].neg() } else { z[1].clone() };
+            let a = T::atan2(&y, &z[0])
+                .add(&z[0].lit(TAU * branch as f64))
+                .div(&z[0].lit(nf));
+            let (sa, ca) = a.sin_cos();
+            [rr.mul(&ca), rr.mul(&sa)]
+        }
+        Kernel::Spherical => {
+            let s = r2.add(&r2.lit(1e-6)).recip();
+            [z[0].mul(&s), z[1].mul(&s)]
+        }
+        Kernel::Bubble => {
+            let s = r2.lit(4.0).div(&r2.add(&r2.lit(4.0)));
+            [z[0].mul(&s), z[1].mul(&s)]
+        }
+        // The flame's `(2/π)(atan2(x/xmax, √(1 − (x/xmax)²)), ±ln(xmax +
+        // √(xmax − 1)))`, as `atan2(x, C)` with `C = xmax·√(1 − a²) =
+        // √((xmax − x)(xmax + x))`, from the parts that do not cancel.
+        Kernel::Elliptic => {
+            let p = elliptic_parts(z);
+            let half = z[0].lit(0.5);
+            let m = p.a.add(&p.b).mul(&half);
+            let c = p.a.add(&p.b_s).mul(&p.a_s.add(&p.b)).sqrt().mul(&half);
+            let theta = T::atan2(&z[0], &c);
+            let g = m.one().add(&m).add(&m.sqrt()).ln();
+            let g = if z[1].to_f64() < 0.0 { g.neg() } else { g };
+            let k = z[0].lit(2.0 / PI);
+            [theta.mul(&k), g.mul(&k)]
+        }
+        Kernel::Splits { base, x, y } => {
+            let s = Kernel::splits_shift(base, x, y, Kernel::splits_quadrant([z[0].to_f64(), z[1].to_f64()]));
+            [z[0].add(&z[0].lit(s[0])), z[1].add(&z[1].lit(s[1]))]
+        }
+        Kernel::Cylinder { .. } => [z[0].sin(), z[1].clone()],
+    }
+}
+
+/// The inverse kernel, over any [`Transcendental`].
+///
+/// The sentinels a `v` with no preimage lands on are the same
+/// arithmetic as [`Kernel::inverse`]'s, so the f64 call is that
+/// function. A caller that needs to know rather than to compute asks
+/// [`kernel_inverse_domain`], which is also what stops a Jacobian
+/// being taken of a sentinel.
+pub fn kernel_inverse_gen<T: Transcendental>(k: &Kernel, v: &[T; 2], branch: u32) -> [T; 2] {
+    use std::f64::consts::PI;
+    let r2 = v[0].hypot2(&v[1]);
+    let r2v = r2.to_f64();
+    let far = |v: &[T; 2]| [v[0].mul(&v[0].lit(1e30)), v[1].mul(&v[1].lit(1e30))];
+    match *k {
+        Kernel::Hemisphere => {
+            if r2v >= 1.0 {
+                return far(v);
+            }
+            let t = r2.one().sub(&r2).sqrt().recip();
+            [v[0].mul(&t), v[1].mul(&t)]
+        }
+        Kernel::Disc => {
+            let rho = r2.sqrt();
+            if rho.to_f64() > 1.0 {
+                return far(v);
+            }
+            let phi = T::atan2(&v[0], &v[1]);
+            let r = phi.div(&phi.lit(PI)).add(&phi.lit(branch as f64));
+            if r.to_f64() < 0.0 {
+                return [v[0].lit(1e30), v[1].lit(1e30)];
+            }
+            let theta = if branch % 2 == 0 {
+                phi.lit(PI).mul(&rho)
+            } else {
+                phi.lit(-PI).mul(&rho)
+            };
+            let (st, ct) = theta.sin_cos();
+            [r.mul(&st), r.mul(&ct)]
+        }
+        Kernel::Blob { high, low, waves } => {
+            let theta = T::atan2(&v[1], &v[0]);
+            let sc = blob_scale_gen(high, low, waves, &theta);
+            [v[1].div(&sc), v[0].div(&sc)]
+        }
+        Kernel::Root { n, d, mirror } => {
+            let nf = n as f64;
+            let rr = r2.sqrt().powf(&r2.lit(nf.abs() / d));
+            let a = v[0].lit(nf).mul(&T::atan2(&v[1], &v[0]));
+            let (sa, ca) = a.sin_cos();
+            // The arm is `v`'s sector's, so the inverse has one branch;
+            // a mirrored root's odd sector has the conjugate preimage.
+            if mirror && Kernel::mirrored_arm(n, Kernel::root_arm(n, [v[0].to_f64(), v[1].to_f64()])) {
+                return [rr.mul(&ca), rr.mul(&sa).neg()];
+            }
+            [rr.mul(&ca), rr.mul(&sa)]
+        }
+        Kernel::Spherical => {
+            let den = if r2v < f64::MIN_POSITIVE { r2.lit(f64::MIN_POSITIVE) } else { r2 };
+            let s = den.recip();
+            [v[0].mul(&s), v[1].mul(&s)]
+        }
+        Kernel::Bubble => {
+            if r2v > 1.0 || !(r2v > 0.0) {
+                if r2v > 1.0 {
+                    return far(v);
+                }
+                // The origin: the inner preimage is the origin, the
+                // outer is at infinity.
+                return if branch == 0 {
+                    [v[0].zero(), v[1].zero()]
+                } else {
+                    [v[0].lit(1e30), v[1].zero()]
+                };
+            }
+            let s = bubble_scale_gen(&r2, branch);
+            [v[0].mul(&s), v[1].mul(&s)]
+        }
+        // `ln(1 + s² + s) = L` for `s = √(xmax − 1)`, `L = (π/2)|v.y|`:
+        // `s = 2E/(√(1 + 4E) + 1)` with `E = e^L − 1`, the root of the
+        // quadratic taken without its cancellation. Then `x = xmax·sin θ`
+        // and `|y| = √(xmax² − 1)·cos θ = s·√(2 + s²)·cos θ` on the
+        // ellipse `xmax`, `θ = (π/2)v.x`; `y` takes `v.y`'s sign as the
+        // forward gave it.
+        Kernel::Elliptic => {
+            if !(v[0].to_f64().abs() <= 1.0) || !v[1].to_f64().is_finite() {
+                return [v[0].lit(1e30), v[1].lit(1e30)];
+            }
+            let one = v[0].one();
+            let half_pi = v[0].lit(PI / 2.0);
+            let e = v[1].abs().mul(&half_pi).exp().sub(&one);
+            let s = e.add(&e).div(&one.add(&e.mul(&e.lit(4.0))).sqrt().add(&one));
+            let m = s.mul(&s);
+            let (st, ct) = v[0].mul(&half_pi).sin_cos();
+            let y = s.mul(&m.add(&m.lit(2.0)).sqrt()).mul(&ct);
+            [st.mul(&one.add(&m)), if v[1].to_f64() < 0.0 { y.neg() } else { y }]
+        }
+        Kernel::Splits { base, x, y } => {
+            let s = Kernel::splits_shift(base, x, y, branch);
+            let u = [v[0].sub(&v[0].lit(s[0])), v[1].sub(&v[1].lit(s[1]))];
+            if branch > 3 || Kernel::splits_quadrant([u[0].to_f64(), u[1].to_f64()]) != branch {
+                return [v[0].lit(1e30), v[1].lit(1e30)];
+            }
+            u
+        }
+        // `asin(u) = atan2(u, √((1 − u)(1 + u)))`, the root without its
+        // cancellation at the strip's edge.
+        Kernel::Cylinder { k0 } => {
+            if !(v[0].to_f64().abs() <= 1.0) || !v[1].to_f64().is_finite() {
+                return [v[0].lit(1e30), v[1].lit(1e30)];
+            }
+            let one = v[0].one();
+            let a = T::atan2(&v[0], &one.sub(&v[0]).mul(&one.add(&v[0])).sqrt());
+            let turn = v[0].lit(2.0 * PI * (k0 as f64 + (branch / 2) as f64));
+            let x = if branch % 2 == 0 { a.add(&turn) } else { v[0].lit(PI).sub(&a).add(&turn) };
+            [x, v[1].clone()]
+        }
+    }
+}
+
+/// A root's inverse as `v^a · conj(v)^b`, when it is one.
+///
+/// `m⁻¹(v) = |v|^{|n|/d} · e^{i·n·arg v}`, and in polar form that is
+/// `ρ^{a+b} e^{i(a−b)θ}`: a polynomial in `v` and `conj(v)` exactly
+/// when `a = (|n|/d + n)/2` and `b = (|n|/d − n)/2` are both
+/// non-negative whole numbers. `julia` and any `julian` at `dist` 1
+/// are `(n, 0)`; a negative power at `dist` 1 is `(0, |n|)`, the
+/// conjugate power; `dist` `1/k` gives whole numbers too. Anything
+/// else -- `dist` 2, say -- has a fractional exponent and no
+/// polynomial form, so no exact difference either.
+///
+/// The tolerance is 1e-9 on each exponent, which is far tighter than
+/// any parameter a user sets and far looser than the rounding of
+/// `power` through an f32 slider.
+pub fn root_powers(n: i32, d: f64) -> Option<(u32, u32)> {
+    if d == 0.0 || !d.is_finite() {
+        return None;
+    }
+    let m = (n as f64).abs() / d;
+    let (a, b) = ((m + n as f64) * 0.5, (m - n as f64) * 0.5);
+    let whole = |v: f64| {
+        (v >= -1e-9 && (v - v.round()).abs() < 1e-9 && v.round() <= 64.0)
+            .then(|| v.round().max(0.0) as u32)
+    };
+    Some((whole(a)?, whole(b)?))
+}
+
+/// The inverse kernel over [`Real`] alone -- no transcendentals.
+///
+/// `ifs-perturbation-delta.md` §3's rungs, in one function. The
+/// rational and algebraic kernels are the four operations and a
+/// square root: spherical is `v/|v|²`, hemisphere `v/√(1 − |v|²)`,
+/// bubble `v·s(|v|²)`, and a root whose exponents are whole is
+/// `v^a·conj(v)^b`. None of them needs `exp`, `sin`, `cos` or
+/// `atan2`, and that matters because `BigFloat` has none of those
+/// (item 8 of the delta plan's order of work).
+///
+/// So this is the body the `BigFloat` reference walk can run TODAY
+/// on those kernels, and the one the difference forms are gated
+/// against. `None` for the disc, the blob and a fractional root,
+/// which are transcendental and must go through
+/// [`kernel_inverse_gen`].
+///
+/// It is not bit-identical to that function on a root -- the polar
+/// form takes an `atan2` and a `powf` where this takes `a + b`
+/// complex multiplications -- and
+/// `the_algebraic_inverse_is_the_polar_one` measures the gap.
+pub fn kernel_inverse_real<T: Real>(k: &Kernel, v: &[T; 2], branch: u32) -> Option<[T; 2]> {
+    use crate::scene::ifs_real::{cconj, cmul, cnorm2, cpow, cscale};
+    let r2 = cnorm2(v);
+    let r2v = r2.to_f64();
+    match *k {
+        // Reciprocal-then-scale, not divide: that is the spelling
+        // `kernel_inverse_gen` uses, and the two bodies are then
+        // BIT-identical rather than an ulp apart, which is what
+        // `the_algebraic_inverse_is_the_polar_one` asserts.
+        Kernel::Spherical => {
+            let den = if r2v < f64::MIN_POSITIVE { r2.lit(f64::MIN_POSITIVE) } else { r2 };
+            Some(cscale(v, &den.recip()))
+        }
+        Kernel::Hemisphere => {
+            if !(r2v < 1.0) {
+                return None;
+            }
+            Some(cscale(v, &r2.one().sub(&r2).sqrt().recip()))
+        }
+        Kernel::Bubble => {
+            if !(r2v > 0.0) || !(r2v < 1.0) {
+                return None;
+            }
+            // The same cancellation-free scale `kernel_inverse_gen`
+            // uses, since `bubble_scale_gen` is already `Real`-only.
+            Some(cscale(v, &bubble_scale_gen(&r2, branch)))
+        }
+        // A mirrored root is the walk's alone, which never asks.
+        Kernel::Root { mirror: true, .. } => None,
+        Kernel::Root { n, d, .. } => {
+            let (a, b) = root_powers(n, d)?;
+            Some(cmul(&cpow(v, a), &cpow(&cconj(v), b)))
+        }
+        Kernel::Splits { base, x, y } => {
+            let s = Kernel::splits_shift(base, x, y, branch);
+            let u = [v[0].sub(&v[0].lit(s[0])), v[1].sub(&v[1].lit(s[1]))];
+            (branch <= 3 && Kernel::splits_quadrant([u[0].to_f64(), u[1].to_f64()]) == branch).then_some(u)
+        }
+        Kernel::Disc | Kernel::Blob { .. } | Kernel::Elliptic | Kernel::Cylinder { .. } => None,
+    }
+}
+
+/// [`root_powers`] for a kernel, or `None` when it is not a root or
+/// its exponents are not whole. What the GPU row carries, so the two
+/// sides cannot disagree about a borderline `dist`.
+pub fn root_powers_of(k: &Kernel) -> Option<(u32, u32)> {
+    match *k {
+        Kernel::Root { n, d, mirror: false } => root_powers(n, d),
+        _ => None,
+    }
+}
+
+/// Whether [`kernel_difference_gen`] has an EXACT form for this
+/// kernel on this branch.
+///
+/// False for the disc, the blob and a root with a fractional
+/// exponent, which the delta plan's §3 puts on the Taylor rung
+/// instead.
+pub fn kernel_has_difference(k: &Kernel) -> bool {
+    match *k {
+        Kernel::Spherical | Kernel::Bubble | Kernel::Hemisphere | Kernel::Splits { .. } => true,
+        // A mirrored root's is not needed: the difference forms are the
+        // escape engine's, and it is the walk's alone.
+        Kernel::Root { n, d, mirror } => !mirror && root_powers(n, d).is_some(),
+        Kernel::Disc | Kernel::Blob { .. } | Kernel::Elliptic | Kernel::Cylinder { .. } => false,
+    }
+}
+
+/// `m⁻¹(Z + δ) − m⁻¹(Z)`, computed **without forming the
+/// difference** (`ifs-perturbation-delta.md` §3).
+///
+/// This is what a perturbed lineage carries instead of a position.
+/// The direct subtraction loses every digit of the answer below
+/// `m⁻¹(Z)`'s last one, and at a deep zoom that is all of them --
+/// the same reason Mandelbrot perturbation computes `2Zδ + δ²`
+/// rather than `(Z+δ)² − Z²`. Each form below is algebraically
+/// identical to the subtraction and has every term `O(δ)`:
+///
+/// | kernel | form |
+/// |---|---|
+/// | Root `(a, b)` | `Z^a·Q + P·conj(Z)^b + P·Q`, with `P`, `Q` the two power differences |
+/// | Spherical | `(δ|Z|² − Z·(2Z·δ + |δ|²)) / (|Z|²·|W|²)` |
+/// | Hemisphere | `(Z·t/(√A + √B) + δ√A) / (√A·√B)` |
+/// | Bubble, inner | `2(Z·t/(r + r') + δ(1 + r)) / ((1 + r)(1 + r'))` |
+/// | Bubble, outer | `2(−Z·x·t/(r + r') + δ·x·(1 + r') − Z(1 + r)·t) / (x·x')` |
+///
+/// where `W = Z + δ`, `t = 2Z·δ + |δ|²` (the norm's own difference,
+/// itself cancellation-free), `A = 1 − |Z|²`, `B = A − t`,
+/// `r = √(1 − |Z|²)`, `r' = √(1 − |W|²)`, `x = |Z|²`, `x' = x + t`.
+/// The square-root differences go through `(a − b)/(√a + √b)`, which
+/// is the conjugate form and cancels nothing.
+///
+/// `W` is taken rather than recomputed so the caller's own `Z + δ`
+/// is the one used: at `BigFloat` that sum is exact, and forming it
+/// twice would round twice.
+///
+/// `None` where the kernel has no exact form, or where `Z` or `W`
+/// is outside the branch's domain -- a difference of two points, one
+/// of which has no preimage, is not a difference.
+pub fn kernel_difference_gen<T: Real>(
+    k: &Kernel,
+    z: &[T; 2],
+    w: &[T; 2],
+    d: &[T; 2],
+    branch: u32,
+) -> Option<[T; 2]> {
+    use crate::scene::ifs_real::{
+        cadd, cconj, cdiv_real, cmul, cnorm2, cpow, cpow_delta, cscale, csub,
+    };
+    let zf = [z[0].to_f64(), z[1].to_f64()];
+    let wf = [w[0].to_f64(), w[1].to_f64()];
+    if !kernel_inverse_domain(k, zf, branch) || !kernel_inverse_domain(k, wf, branch) {
+        return None;
+    }
+    // `t = |W|² − |Z|² = 2Z·δ + |δ|²`, the norm's difference, which is
+    // itself written so nothing cancels.
+    let dot2 = z[0].mul(&d[0]).add(&z[1].mul(&d[1]));
+    let t = dot2.add(&dot2).add(&cnorm2(d));
+    let x = cnorm2(z);
+
+    match *k {
+        Kernel::Root { mirror: true, .. } => None,
+        Kernel::Root { n, d: dist, .. } => {
+            let (a, b) = root_powers(n, dist)?;
+            // P = W^a − Z^a, Q = conj(W)^b − conj(Z)^b, and
+            // (Z^a + P)(conj(Z)^b + Q) − Z^a·conj(Z)^b
+            //   = Z^a·Q + P·conj(Z)^b + P·Q.
+            let p = cpow_delta(z, w, d, a);
+            let q = cconj(&cpow_delta(z, w, d, b));
+            let za = cpow(z, a);
+            let zb = cpow(&cconj(z), b);
+            Some(cadd(&cadd(&cmul(&za, &q), &cmul(&p, &zb)), &cmul(&p, &q)))
+        }
+        Kernel::Spherical => {
+            let xw = cnorm2(w);
+            let num = csub(&cscale(d, &x), &cscale(z, &t));
+            Some(cdiv_real(&num, &x.mul(&xw)))
+        }
+        Kernel::Hemisphere => {
+            // u = v/√(1 − |v|²); A = 1 − |Z|², B = A − t.
+            let a_ = x.one().sub(&x);
+            let b_ = a_.sub(&t);
+            let (ra, rb) = (a_.sqrt(), b_.sqrt());
+            let sum = ra.add(&rb);
+            if !(sum.to_f64() > 0.0) {
+                return None;
+            }
+            let num = cadd(&cscale(z, &t.div(&sum)), &cscale(d, &ra));
+            Some(cdiv_real(&num, &ra.mul(&rb)))
+        }
+        Kernel::Bubble => {
+            // r and r' are the same roots `bubble_scale_gen` takes.
+            let r = x.one().sub(&x).sqrt();
+            let xw = x.add(&t);
+            let rw = x.one().sub(&xw).sqrt();
+            let rsum = r.add(&rw);
+            if !(rsum.to_f64() > 0.0) {
+                return None;
+            }
+            let one = x.one();
+            if branch == 0 {
+                // 2·(Z·t/(r + r') + δ·(1 + r)) / ((1 + r)(1 + r'))
+                let num = cadd(&cscale(z, &t.div(&rsum)), &cscale(d, &one.add(&r)));
+                let den = one.add(&r).mul(&one.add(&rw));
+                Some(cdiv_real(&cscale(&num, &one.lit(2.0)), &den))
+            } else {
+                // 2·(−Z·x·t/(r + r') + δ·x·(1 + r') − Z·(1 + r)·t) / (x·x')
+                let term1 = cscale(z, &x.mul(&t).div(&rsum).neg());
+                let term2 = cscale(d, &x.mul(&one.add(&rw)));
+                let term3 = cscale(z, &one.add(&r).mul(&t).neg());
+                let num = cadd(&cadd(&term1, &term2), &term3);
+                Some(cdiv_real(&cscale(&num, &one.lit(2.0)), &x.mul(&xw)))
+            }
+        }
+        // A translation on the branch's quadrant, which both ends are in.
+        Kernel::Splits { .. } => Some(d.clone()),
+        Kernel::Disc | Kernel::Blob { .. } | Kernel::Elliptic | Kernel::Cylinder { .. } => None,
+    }
+}
+
+impl Kernel {
+    /// [`kernel_difference_gen`] at `f64`, forming `Z + δ` itself.
+    pub fn difference(&self, z: [f64; 2], d: [f64; 2], branch: u32) -> Option<[f64; 2]> {
+        let w = [z[0] + d[0], z[1] + d[1]];
+        kernel_difference_gen(self, &z, &w, &d, branch)
+    }
+}
+
+/// Whether `v` has a preimage on `branch` that
+/// [`kernel_inverse_gen`] differentiates.
+///
+/// False at the kernel's pole, past the edge of its image, and on a
+/// ring the branch does not reach -- the places the generic body
+/// returns a sentinel, where a derivative of that sentinel would be
+/// a finite number meaning nothing. These are the guards the
+/// hand-derived [`Kernel::inverse_jacobian`] carried, kept as a
+/// predicate now that the derivative itself is not hand-derived.
+pub fn kernel_inverse_domain(k: &Kernel, v: [f64; 2], branch: u32) -> bool {
+    let r2 = v[0] * v[0] + v[1] * v[1];
+    match *k {
+        Kernel::Hemisphere => r2 < 1.0,
+        Kernel::Spherical => r2 > 0.0,
+        Kernel::Bubble => r2 > 0.0 && r2 < 1.0,
+        Kernel::Root { d, .. } => r2 > 0.0 && d != 0.0,
+        Kernel::Disc => {
+            let rho = r2.sqrt();
+            rho > 0.0
+                && rho <= 1.0
+                && v[0].atan2(v[1]) / std::f64::consts::PI + branch as f64 >= 0.0
+        }
+        Kernel::Blob { high, low, waves } => {
+            r2 > 0.0 && Kernel::blob_scale(high, low, waves, v[1].atan2(v[0])).0 != 0.0
+        }
+        // Inside the strip: on its edge the preimage is on a ray.
+        Kernel::Elliptic => v[0].abs() < 1.0 && v[1].is_finite(),
+        Kernel::Splits { base, x, y } => {
+            let s = Kernel::splits_shift(base, x, y, branch);
+            branch <= 3 && Kernel::splits_quadrant([v[0] - s[0], v[1] - s[1]]) == branch
+        }
+        // Inside the strip: on its edge the preimage is on a fold.
+        Kernel::Cylinder { .. } => v[0].abs() < 1.0 && v[1].is_finite(),
+    }
+}
+
+/// A transform whose one nonlinear variation the walk can invert
+/// (plan §8.8, §8.9): forward `p ↦ post(w · K(pre(p)))`, inverse
+/// `q ↦ pre⁻¹(K⁻¹(post⁻¹(q) / w))` along this map's `branch`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NonlinearMap2 {
+    pub kernel: Kernel,
+    /// Which preimage this map follows, of `kernel.branches()`.
+    pub branch: u32,
+    /// The affine applied before the kernel: the transform's affine
+    /// composed with its pre-phase variations.
+    pub pre: Affine2,
+    /// The affine applied after: the post-phase variations composed
+    /// with the post-affine.
+    pub post: Affine2,
+    pub pre_inv: Affine2,
+    pub post_inv: Affine2,
+    /// The hole in the image, in the frame `before_kernel` measures
+    /// in, or 0. Set by `analyse_2d` once the ball is known, since it
+    /// depends on the ball's reach in the pre-frame.
+    pub hole: f64,
+    /// The variation's weight; the kernel's output is scaled by it.
+    pub w: f64,
+    /// A bound on the size of this map's inverse's THIRD derivative
+    /// over the ball -- what the Taylor rung's remainder is measured
+    /// in (D4).
+    ///
+    /// **Sampled, not derived, and the plan asks which.** The third
+    /// derivative of six kernels through two affines is six more hand
+    /// derivations of the kind D2 exists to remove, and what the walk
+    /// needs of it is an order of magnitude rather than a value. So
+    /// [`Self::measure_third`] central-differences the DUAL Hessian
+    /// over a grid of the ball and takes the largest, with a margin.
+    /// Zero until `analyse_2d` fills it, and zero on a map with an
+    /// exact difference form, which never asks.
+    pub third: f64,
+}
+
+impl NonlinearMap2 {
+    /// The forward map along `k` (a root's branch; the others ignore
+    /// it).
+    pub fn apply_branch(&self, p: [f64; 2], k: u32) -> [f64; 2] {
+        let z = self.kernel.forward(self.pre.apply(p), k);
+        self.post.apply([self.w * z[0], self.w * z[1]])
+    }
+
+    /// Measure [`Self::third`] over a ball, by central-differencing
+    /// the dual-number Hessian.
+    ///
+    /// The margin is a factor of four on the sampled maximum. A
+    /// sampled bound can miss a spike between its samples, and the
+    /// consequence of missing one is a lineage carrying a delta a
+    /// level longer than it should; the consequence of being
+    /// generous is a lineage rebasing a level early, into the
+    /// absolute walk it would have used anyway. The cheap direction
+    /// is up.
+    pub fn measure_third(&mut self, centre: [f64; 2], radius: f64) {
+        self.third = sampled_third(&Map2::NonlinearInverse(*self), centre, radius);
+    }
+}
+
+/// A bound on the largest third derivative of `inv` over the ball
+/// `(centre, radius)`, by central-differencing its Hessian.
+///
+/// The margin is a factor of four on the sampled maximum. A sampled
+/// bound can miss a spike between its samples, and the consequence of
+/// missing one is a lineage carrying a delta a level longer than it
+/// should; the consequence of being generous is a lineage rebasing a
+/// level early, into the absolute walk it would have used anyway. The
+/// cheap direction is up.
+fn sampled_third(inv: &Map2, centre: [f64; 2], radius: f64) -> f64 {
+    {
+        let mut worst = 0.0f64;
+        const N: i32 = 24;
+        for i in 0..=N {
+            for j in 0..=N {
+                let q = [
+                    centre[0] + radius * (2.0 * i as f64 / N as f64 - 1.0),
+                    centre[1] + radius * (2.0 * j as f64 / N as f64 - 1.0),
+                ];
+                let clear = inv.singular_distance(q);
+                if !(clear > 0.0) {
+                    continue;
+                }
+                let step = (clear * 0.05).clamp(1e-9, radius * 0.05);
+                let (Some(a), Some(b)) = (
+                    inv.hessian([q[0] + step, q[1]]),
+                    inv.hessian([q[0] - step, q[1]]),
+                ) else {
+                    continue;
+                };
+                let (Some(c), Some(d)) = (
+                    inv.hessian([q[0], q[1] + step]),
+                    inv.hessian([q[0], q[1] - step]),
+                ) else {
+                    continue;
+                };
+                let diff = |x: &[[[f64; 2]; 2]; 2], y: &[[[f64; 2]; 2]; 2]| {
+                    x.iter()
+                        .flatten()
+                        .flatten()
+                        .zip(y.iter().flatten().flatten())
+                        .fold(0.0f64, |m, (p, q)| m.max((p - q).abs()))
+                        / (2.0 * step)
+                };
+                let t = diff(&a, &b).max(diff(&c, &d));
+                if t.is_finite() {
+                    worst = worst.max(t);
+                }
+            }
+        }
+        worst * 4.0
+    }
+}
+
+impl NonlinearMap2 {
+    /// This map's whole inverse, over any [`Transcendental`]:
+    /// `pre⁻¹(K⁻¹(post⁻¹(q) / w))`.
+    ///
+    /// The composition [`Self::apply_inverse`] performs, in one
+    /// expression, so a derivative of it is a derivative of the
+    /// composition and not of a chain rule written out by hand.
+    /// [`Map2::hessian`] is the caller that needs that.
+    pub fn apply_inverse_gen<T: Transcendental>(&self, q: &[T; 2]) -> [T; 2] {
+        let v = affine_apply_gen(&self.post_inv, q);
+        let w = q[0].lit(self.w);
+        let z = [v[0].div(&w), v[1].div(&w)];
+        let u = kernel_inverse_gen(&self.kernel, &z, self.branch);
+        affine_apply_gen(&self.pre_inv, &u)
+    }
+
+    /// Whether `q` has a preimage this map can be differentiated at
+    /// -- [`kernel_inverse_domain`] carried into `q`'s own frame.
+    pub fn inverse_domain(&self, q: [f64; 2]) -> bool {
+        kernel_inverse_domain(&self.kernel, self.before_kernel(q), self.branch)
+    }
+
+    /// The point before the kernel's inverse, `post⁻¹(q) / w`.
+    fn before_kernel(&self, q: [f64; 2]) -> [f64; 2] {
+        let v = self.post_inv.apply(q);
+        [v[0] / self.w, v[1] / self.w]
+    }
+
+    /// The inverse along this map's branch.
+    pub fn apply_inverse(&self, q: [f64; 2]) -> [f64; 2] {
+        let u = self.kernel.inverse(self.before_kernel(q), self.branch);
+        if !(u[0].is_finite() && u[1].is_finite()) || u[0].abs() > 1e29 || u[1].abs() > 1e29 {
+            return [f64::INFINITY, f64::INFINITY];
+        }
+        self.pre_inv.apply(u)
+    }
+
+    /// `S⁻¹(q + δ) − S⁻¹(q)`, **without forming the difference**
+    /// (`ifs-perturbation-delta.md` §3).
+    ///
+    /// The affines drop out of a difference exactly -- a translation
+    /// cancels and a linear part distributes -- so this is the
+    /// kernel's own difference form with `post⁻¹/w` applied to `δ`
+    /// going in and `pre⁻¹`'s linear part applied coming out. No
+    /// approximation anywhere: the only rounding is f64's own, on
+    /// terms that are all `O(δ)`.
+    ///
+    /// The kernel-frame point is formed as `v + δv` rather than by
+    /// re-applying the affine to `q + δ`: algebraically the same, one
+    /// rounding instead of an affine evaluation, and it is the sum
+    /// the shader will form too.
+    ///
+    /// `None` where the kernel has no exact form -- the disc, the
+    /// blob, a fractional root -- which the delta plan puts on the
+    /// Taylor rung instead.
+    pub fn inverse_difference(&self, q: [f64; 2], d: [f64; 2]) -> Option<[f64; 2]> {
+        let v = self.before_kernel(q);
+        let a = &self.post_inv.m;
+        let iw = 1.0 / self.w;
+        let dv = [
+            (a[0][0] * d[0] + a[0][1] * d[1]) * iw,
+            (a[1][0] * d[0] + a[1][1] * d[1]) * iw,
+        ];
+        let vw = [v[0] + dv[0], v[1] + dv[1]];
+        let du = kernel_difference_gen(&self.kernel, &v, &vw, &dv, self.branch)?;
+        let b = &self.pre_inv.m;
+        let out = [
+            b[0][0] * du[0] + b[0][1] * du[1],
+            b[1][0] * du[0] + b[1][1] * du[1],
+        ];
+        out.iter().all(|x| x.is_finite()).then_some(out)
+    }
+
+    /// The Jacobian of [`Self::apply_inverse`] at `q`, or `None`
+    /// where there is no preimage.
+    ///
+    /// `pre⁻¹ · J_K(before_kernel(q)) · post⁻¹ / w`: the affines
+    /// contribute their matrices and the weight its reciprocal, since
+    /// each is applied to the kernel's argument or its result.
+    pub fn inverse_jacobian(&self, q: [f64; 2]) -> Option<[[f64; 2]; 2]> {
+        let jk = self.kernel.inverse_jacobian(self.before_kernel(q), self.branch)?;
+        // (J_K / w) · post_inv.m, then pre_inv.m on the left.
+        let a = &self.post_inv.m;
+        let iw = 1.0 / self.w;
+        let mid = [
+            [
+                (jk[0][0] * a[0][0] + jk[0][1] * a[1][0]) * iw,
+                (jk[0][0] * a[0][1] + jk[0][1] * a[1][1]) * iw,
+            ],
+            [
+                (jk[1][0] * a[0][0] + jk[1][1] * a[1][0]) * iw,
+                (jk[1][0] * a[0][1] + jk[1][1] * a[1][1]) * iw,
+            ],
+        ];
+        let b = &self.pre_inv.m;
+        let out = [
+            [
+                b[0][0] * mid[0][0] + b[0][1] * mid[1][0],
+                b[0][0] * mid[0][1] + b[0][1] * mid[1][1],
+            ],
+            [
+                b[1][0] * mid[0][0] + b[1][1] * mid[1][0],
+                b[1][0] * mid[0][1] + b[1][1] * mid[1][1],
+            ],
+        ];
+        out.iter().flatten().all(|x| x.is_finite()).then_some(out)
+    }
+
+    /// [`Kernel::singular_distance`] carried back to `q`'s own frame,
+    /// with this map's HOLE among the edges.
+    ///
+    /// A step `δ` in `q` reaches at most `σ_max(post⁻¹)·|δ|/|w|` in
+    /// the kernel's frame, so a kernel-frame clearance of `s` is at
+    /// least `|w|·s/σ_max(post⁻¹)` here -- the conservative direction,
+    /// which is the one a stopping rule wants.
+    ///
+    /// The hole belongs here rather than in the kernel because it is
+    /// the BALL's reach in the pre-frame, not a property of the
+    /// kernel: inside it a point has no preimage and is scored as a
+    /// gap, outside it the branch is taken, and a view straddling
+    /// that circle does not agree on which.
+    pub fn singular_distance(&self, q: [f64; 2]) -> f64 {
+        let v = self.before_kernel(q);
+        let mut s = self.kernel.singular_distance(v, self.branch);
+        if self.hole > 0.0 {
+            s = s.min((v[0].hypot(v[1]) - self.hole).abs());
+        }
+        let (_, post_hi) = self.post_inv.singular_values();
+        if !(post_hi > 0.0) {
+            return f64::INFINITY;
+        }
+        s * self.w.abs() / post_hi
+    }
+
+    /// This map's kernel, branch and affines, for a caller that has to
+    /// take the inverse itself at a precision f64 cannot hold.
+    ///
+    /// The post-inverse comes back with `1/w` folded in, so it is the
+    /// whole of [`Self::before_kernel`] as one affine: the weight
+    /// scales the kernel's OUTPUT going forward, so undoing it is a
+    /// scale on the way in, and a scale composes with an affine.
+    pub fn parts(&self) -> (Kernel, u32, &Affine2, Affine2) {
+        let iw = 1.0 / self.w;
+        let post = Affine2 {
+            m: [
+                [self.post_inv.m[0][0] * iw, self.post_inv.m[0][1] * iw],
+                [self.post_inv.m[1][0] * iw, self.post_inv.m[1][1] * iw],
+            ],
+            t: [self.post_inv.t[0] * iw, self.post_inv.t[1] * iw],
+        };
+        (self.kernel, self.branch, &self.pre_inv, post)
+    }
+
+    /// The local factor on the forward map's σ_min at the point whose
+    /// image is `q`.
+    pub fn local_sigma_factor(&self, q: [f64; 2]) -> f64 {
+        self.kernel.local_sigma_factor(self.before_kernel(q), self.branch)
+    }
+
+    /// When `q` is outside this map's IMAGE, a lower bound on its
+    /// distance to the image -- and so to this map's piece of the set
+    /// -- in `q`'s own frame; `None` when `q` is inside it (S4).
+    ///
+    /// Only `bubble` has one: its image is the disc `|v| ≤ 1`, so a
+    /// `q` with `|v| > 1` has no preimage on either branch, and its
+    /// distance to the piece is at least `(|v| − 1)` scaled back
+    /// through `w` and the post-affine's smallest stretch. Reporting
+    /// "no preimage" as infinitely far was wrong by exactly this: the
+    /// piece is not far, it is just not reachable by inversion.
+    pub fn image_gap(&self, q: [f64; 2]) -> Option<f64> {
+        if self.hole > 0.0 {
+            // Inside the hole of an inversion's image: the piece is at
+            // least the hole's remaining radius away, scaled by the
+            // post-affine's smallest stretch, exactly as the unit-disc
+            // gap is.
+            let v = self.before_kernel(q);
+            let r = v[0].hypot(v[1]);
+            if r < self.hole {
+                let (post_lo, _) = self.post.singular_values();
+                return Some((self.hole - r) * self.w.abs() * post_lo);
+            }
+            return None;
+        }
+        if !self.kernel.image_is_unit_disc() {
+            return None;
+        }
+        let v = self.before_kernel(q);
+        let r = v[0].hypot(v[1]);
+        if r > 1.0 {
+            let (post_lo, _) = self.post.singular_values();
+            Some((r - 1.0) * self.w.abs() * post_lo)
+        } else {
+            None
+        }
+    }
+
+    /// How many branches this map has, given the ball: bubble's two;
+    /// disc's rings up to the ball's reach in the pre-frame,
+    /// `⌊r_max⌋ + 2` with `r_max = |pre(c)| + σ_max(pre)·R`, capped
+    /// at twelve (D2); one for the rest.
+    pub fn branch_count(&self, ball: &Ball<[f64; 2]>) -> u32 {
+        match self.kernel {
+            Kernel::Bubble => 2,
+            Kernel::Disc => {
+                let c = self.pre.apply(ball.centre);
+                let (_, pre_hi) = self.pre.singular_values();
+                let r_max = c[0].hypot(c[1]) + pre_hi * ball.radius;
+                (r_max.floor() as u32 + 2).min(12)
+            }
+            // One per quadrant; one whose preimages miss its quadrant has
+            // none, and the walk finds that point by point.
+            Kernel::Splits { .. } => 4,
+            // Two a turn, over the turns the ball reaches.
+            Kernel::Cylinder { .. } => {
+                let (lo, hi) = self.cylinder_turns(ball);
+                2 * (hi - lo + 1) as u32
+            }
+            _ => 1,
+        }
+    }
+
+    /// The turns `[lo, hi]` of `cylinder`'s preimages the ball reaches:
+    /// turn `k` holds `[2πk − π/2, 2πk + 3π/2)` of the pre-frame's `x`, and
+    /// the ball's `x` there is `pre(centre).x ± |pre's first row|·radius`.
+    /// At most [`CYLINDER_TURNS`] of them, centred on the ball's.
+    pub fn cylinder_turns(&self, ball: &Ball<[f64; 2]>) -> (i32, i32) {
+        use std::f64::consts::PI;
+        let c = self.pre.apply(ball.centre)[0];
+        let reach = self.pre.m[0][0].hypot(self.pre.m[0][1]) * ball.radius;
+        let turn = |x: f64| ((x + PI / 2.0) / (2.0 * PI)).floor();
+        let (lo, hi) = (turn(c - reach), turn(c + reach));
+        let mid = turn(c);
+        let half = (CYLINDER_TURNS / 2) as f64;
+        let lo = lo.max(mid - half);
+        let hi = hi.min(lo + CYLINDER_TURNS as f64 - 1.0);
+        if !(lo.is_finite() && hi.is_finite()) {
+            return (0, 0);
+        }
+        (lo as i32, hi.max(lo) as i32)
+    }
+
+    /// The constant parts of the forward map's singular values:
+    /// `σ(post) · |w| · σ(pre)` times the kernel's constants, to be
+    /// multiplied by the local factor.
+    pub fn singular_values(&self) -> (f64, f64) {
+        let (pre_lo, pre_hi) = self.pre.singular_values();
+        let (post_lo, post_hi) = self.post.singular_values();
+        let (k_lo, k_hi) = self.kernel.sigma_const();
+        let w = self.w.abs();
+        (post_lo * w * pre_lo * k_lo, post_hi * w * pre_hi * k_hi)
+    }
+}
+
+/// What a 2D map is: the affine case, or a nonlinear map (J8), in
+/// either direction. `Nonlinear` applies the forward map's principal
+/// branch; `NonlinearInverse` the inverse along the map's branch.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Map2 {
+    Affine(Affine2),
+    Nonlinear(NonlinearMap2),
+    NonlinearInverse(NonlinearMap2),
+    /// A kernel SUMMED with an affine, whose inverse is a Newton
+    /// solve rather than a formula (`ifs-general.md` D3). `Sum` is
+    /// the forward direction and `SumInverse` the one the walk
+    /// takes, as the two nonlinear variants are.
+    Sum(SumMap2),
+    SumInverse(SumMap2),
+}
+
+impl Map2 {
+    pub fn apply(&self, p: [f64; 2]) -> [f64; 2] {
+        match self {
+            Map2::Affine(a) => a.apply(p),
+            Map2::Nonlinear(r) => r.apply_branch(p, 0),
+            Map2::NonlinearInverse(r) => r.apply_inverse(p),
+            Map2::Sum(r) => r.apply_branch(p, r.branch),
+            // A Newton solve that did not converge is not a point.
+            // Infinity is what the walk reads as "no step here", the
+            // same answer a non-finite inverse gives it.
+            Map2::SumInverse(r) => {
+                r.solve(p).map_or([f64::INFINITY, f64::INFINITY], |(z, _)| z)
+            }
+        }
+    }
+
+    pub fn inverse(&self) -> Option<Map2> {
+        match self {
+            Map2::Affine(a) => a.inverse().map(Map2::Affine),
+            Map2::Nonlinear(r) => Some(Map2::NonlinearInverse(*r)),
+            Map2::NonlinearInverse(r) => Some(Map2::Nonlinear(*r)),
+            Map2::Sum(r) => Some(Map2::SumInverse(*r)),
+            Map2::SumInverse(r) => Some(Map2::Sum(*r)),
+        }
+    }
+
+    /// The Jacobian of [`Self::apply`] at `q`, where the walk has one.
+    ///
+    /// `None` for a forward nonlinear map: the walk only ever
+    /// inverts (the forward is not even uploaded to the shader), so
+    /// the forward kernels' derivatives are not derived.
+    pub fn jacobian(&self, q: [f64; 2]) -> Option<[[f64; 2]; 2]> {
+        match self {
+            Map2::Affine(a) => Some(a.m),
+            Map2::NonlinearInverse(r) => r.inverse_jacobian(q),
+            Map2::SumInverse(r) => r.inverse_jacobian(q),
+            Map2::Nonlinear(_) | Map2::Sum(_) => None,
+        }
+    }
+
+    /// `S⁻¹(q + δ) − S⁻¹(q)`, without forming the difference: what a
+    /// perturbed lineage carries in place of a position
+    /// (`ifs-perturbation-delta.md` §3).
+    ///
+    /// For an AFFINE map this is `M⁻¹δ` -- the basis carry the walk
+    /// has always done, in the same arithmetic -- which is why the
+    /// affine presets cannot move.
+    ///
+    /// `None` for a forward map, and for a kernel with no exact
+    /// form; [`Self::has_difference`] answers that ahead of time.
+    pub fn difference(&self, q: [f64; 2], d: [f64; 2]) -> Option<[f64; 2]> {
+        match self {
+            Map2::Affine(a) => Some([
+                a.m[0][0] * d[0] + a.m[0][1] * d[1],
+                a.m[1][0] * d[0] + a.m[1][1] * d[1],
+            ]),
+            Map2::NonlinearInverse(r) => r.inverse_difference(q, d),
+            // A sum has no closed-form inverse, so it has no closed-
+            // form DIFFERENCE either. The Taylor rung takes it, as it
+            // takes the disc and the blob.
+            Map2::Nonlinear(_) | Map2::Sum(_) | Map2::SumInverse(_) => None,
+        }
+    }
+
+    /// `S⁻¹(q + δ) − S⁻¹(q)` to SECOND order, for a map with no
+    /// exact form -- the delta plan's Taylor rung (D4).
+    ///
+    /// **The TRAPEZOID of the Jacobian**, not a Taylor series:
+    ///
+    /// ```text
+    /// S⁻¹(q + δ) − S⁻¹(q) = ∫₀¹ J(q + tδ)·δ dt ≈ ½(J(q) + J(q+δ))·δ
+    /// ```
+    ///
+    /// Algebraically that is `J·δ + ½H[δ,δ] + O(|δ|³)` -- the same
+    /// second-order step, with the same error class -- and it needs
+    /// no Hessian at all. That is what makes the rung reachable from
+    /// WGSL, where the Jacobians exist and the Hessians do not, and
+    /// it means the two sides run the SAME rule rather than two rules
+    /// that agree to third order.
+    ///
+    /// Neither half ever forms the difference of two positions: `J·δ`
+    /// is a product, and `q + δ` enters only as a place to evaluate a
+    /// Jacobian, where it is needed to relative precision alone.
+    ///
+    /// Returns the step and a bound on what was dropped: `M·|δ|³/6`
+    /// with `M` the third derivative's size over the ball, which
+    /// [`NonlinearMap2::third`] measures. The trapezoid's own error
+    /// is `M|δ|³/12`, so that bound is conservative by a factor of
+    /// two, which is the direction a rebase criterion should err in.
+    ///
+    /// **A lineage rebases on that bound rather than on a level.**
+    /// That is what makes this a rung and not a guess: the truncation
+    /// is a number the walk can read, so a lineage leaves the
+    /// reference exactly when carrying on would cost more than the
+    /// absolute continuation it leaves for.
+    pub fn difference_taylor(&self, q: [f64; 2], d: [f64; 2]) -> Option<([f64; 2], f64)> {
+        let a = self.jacobian(q)?;
+        let b = self.jacobian([q[0] + d[0], q[1] + d[1]])?;
+        let m = |i: usize, j: usize| 0.5 * (a[i][j] + b[i][j]);
+        let out = [
+            m(0, 0) * d[0] + m(0, 1) * d[1],
+            m(1, 0) * d[0] + m(1, 1) * d[1],
+        ];
+        if !out.iter().all(|v| v.is_finite()) {
+            return None;
+        }
+        let third = match self {
+            Map2::NonlinearInverse(r) => r.third,
+            Map2::SumInverse(r) => r.third,
+            _ => 0.0,
+        };
+        let mag = f64::hypot(d[0], d[1]);
+        Some((out, third * mag * mag * mag / 6.0))
+    }
+
+    /// Whether [`Self::difference`] is exact here, rather than
+    /// needing the Taylor rung.
+    pub fn has_difference(&self) -> bool {
+        match self {
+            Map2::Affine(_) => true,
+            Map2::NonlinearInverse(r) => kernel_has_difference(&r.kernel),
+            Map2::Nonlinear(_) | Map2::Sum(_) | Map2::SumInverse(_) => false,
+        }
+    }
+
+    /// The σ_min this map contributes at `q`: its constant part
+    /// times the kernel's local factor.
+    ///
+    /// [`crate::scene::ifs_estimate::IfsSpace::step`] computes the
+    /// same thing alongside the point; this is for a walk whose point
+    /// is not an `[f64; 2]` and which therefore takes the two apart.
+    pub fn local_sigma(&self, q: [f64; 2], sigma_min: f64) -> f64 {
+        match self {
+            Map2::NonlinearInverse(r) => sigma_min * r.local_sigma_factor(q),
+            // A sum has no constant part to scale: its σ_min is the
+            // whole derivative's, measured at the preimage, and the
+            // map's stored `sigma_min` is 1.
+            Map2::SumInverse(r) => sigma_min * r.local_sigma(q),
+            _ => sigma_min,
+        }
+    }
+
+    /// The SECOND derivative of [`Self::apply`] at `q`:
+    /// `H[i][j][k] = ∂²u_i/∂q_j∂q_k`, symmetric in the last two.
+    ///
+    /// By nested dual numbers (`ifs-general.md` D2):
+    /// [`NonlinearMap2::apply_inverse_gen`] evaluated at
+    /// `Dual<Dual<f64>>`, which carries the second derivative of the
+    /// whole composition exactly. No step size is chosen.
+    ///
+    /// That matters where the handover runs. The central difference
+    /// this replaces took its step as a fraction of the clearance,
+    /// and `probe_what_the_exact_hessian_buys` measured what that
+    /// cost as the clearance shrank -- worst relative gap, which is
+    /// the difference's own error since the dual is exact:
+    ///
+    /// ```text
+    /// clearance <    1e-8     1e-6     1e-4     1e-2     more
+    /// spherical      58       2.8e-8   2.8e-8   2.8e-8   2.8e-8
+    /// bubble          4.7     1.5e-4   1.1e-6   1.6e-8   1.6e-8
+    /// hemisphere     23       5.7e-5   6.4e-7   1.8e-8   2.4e-8
+    /// julian        240       6.3e-8   6.3e-8   6.3e-8   7.1e-8
+    /// ```
+    ///
+    /// Eight digits in the open plane, and NO digits within 1e-8 of
+    /// a pole -- a relative error of 58 is not a worse answer, it is
+    /// a different tensor. A correction built on it would add noise
+    /// where it was meant to subtract curvature.
+    ///
+    /// Zero for an affine -- exactly, not nearly -- so the affine
+    /// delta stays the exact thing it has always been.
+    ///
+    /// `None` where `q` has no preimage on this branch. That test is
+    /// [`NonlinearMap2::inverse_domain`] now, not a positive
+    /// clearance: the clearance was the step's constraint, and there
+    /// is no step.
+    pub fn hessian(&self, q: [f64; 2]) -> Option<[[[f64; 2]; 2]; 2]> {
+        match self {
+            Map2::Affine(_) => Some([[[0.0; 2]; 2]; 2]),
+            Map2::Nonlinear(_) | Map2::Sum(_) => None,
+            // By central differences of the inverse's Jacobian, which
+            // is itself a Newton solve: nesting dual numbers through
+            // a solve would differentiate the ITERATION, not the map.
+            Map2::SumInverse(r) => {
+                let step = 1e-5 * f64::hypot(q[0], q[1]).max(1.0);
+                let mut out = [[[0.0f64; 2]; 2]; 2];
+                for k in 0..2 {
+                    let (mut a, mut b) = (q, q);
+                    a[k] += step;
+                    b[k] -= step;
+                    let (ja, jb) = (r.inverse_jacobian(a)?, r.inverse_jacobian(b)?);
+                    for i in 0..2 {
+                        for j in 0..2 {
+                            out[i][j][k] = (ja[i][j] - jb[i][j]) / (2.0 * step);
+                        }
+                    }
+                }
+                for i in 0..2 {
+                    let mid = (out[i][0][1] + out[i][1][0]) * 0.5;
+                    out[i][0][1] = mid;
+                    out[i][1][0] = mid;
+                }
+                out.iter().flatten().flatten().all(|x| x.is_finite()).then_some(out)
+            }
+            Map2::NonlinearInverse(r) => {
+                if !r.inverse_domain(q) {
+                    return None;
+                }
+                let h = hessian2(q, |z| r.apply_inverse_gen(&z))?;
+                // `h[c][i][j]` is `∂²out_c/∂q_i∂q_j`; the carry reads
+                // `[i][j][k]` as `∂²u_i/∂q_j∂q_k`, which is the same
+                // thing under the same name.
+                Some(h)
+            }
+        }
+    }
+
+    /// How far `q` may move before [`Self::jacobian`] stops
+    /// describing this map: infinite for an affine, the kernel's
+    /// clearance for an inverted nonlinear one.
+    pub fn singular_distance(&self, q: [f64; 2]) -> f64 {
+        match self {
+            Map2::Affine(_) => f64::INFINITY,
+            Map2::NonlinearInverse(r) => r.singular_distance(q),
+            Map2::SumInverse(r) => r.singular_clearance(q),
+            Map2::Nonlinear(_) | Map2::Sum(_) => 0.0,
+        }
+    }
+
+    /// The singular values, or for a nonlinear map the constant parts
+    /// of them.
+    pub fn singular_values(&self) -> (f64, f64) {
+        match self {
+            Map2::Affine(a) => a.singular_values(),
+            Map2::Nonlinear(r) | Map2::NonlinearInverse(r) => r.singular_values(),
+            // Constant parts a sum does not have. One, so the local
+            // factor above is the whole of it.
+            Map2::Sum(_) | Map2::SumInverse(_) => (1.0, 1.0),
+        }
+    }
+
+    /// An affine map's fixed point; a nonlinear map has no closed form.
+    pub fn fixed_point(&self) -> Option<[f64; 2]> {
+        match self {
+            Map2::Affine(a) => a.fixed_point(),
+            _ => None,
+        }
+    }
+
+    pub fn as_affine(&self) -> Option<Affine2> {
+        match self {
+            Map2::Affine(a) => Some(*a),
+            _ => None,
+        }
+    }
+
+    pub fn is_affine(&self) -> bool {
+        matches!(self, Map2::Affine(_))
+    }
+
+    /// The nonlinear map behind a map, either direction.
+    pub fn nonlinear(&self) -> Option<&NonlinearMap2> {
+        match self {
+            Map2::Nonlinear(r) | Map2::NonlinearInverse(r) => Some(r),
+            _ => None,
+        }
+    }
+
+    /// The SUM behind a map, either direction.
+    pub fn sum(&self) -> Option<&SumMap2> {
+        match self {
+            Map2::Sum(r) | Map2::SumInverse(r) => Some(r),
+            _ => None,
+        }
+    }
+}
+
+/// Whether the criterion checks a map's σ_max against 1. An affine
+/// map contracts or does not; a root map expands near its critical
+/// point and contracts far from it, and whether the IFS is bounded is
+/// the ball's question (J5), not this one.
+pub trait MapKind {
+    fn contraction_is_checked(&self) -> bool;
+}
+
+impl MapKind for Affine2 {
+    fn contraction_is_checked(&self) -> bool {
+        true
+    }
+}
+
+impl MapKind for Affine3 {
+    fn contraction_is_checked(&self) -> bool {
+        true
+    }
+}
+
+impl MapKind for Map2 {
+    fn contraction_is_checked(&self) -> bool {
+        self.is_affine()
+    }
+}
+
+impl MapKind for Map3 {
+    fn contraction_is_checked(&self) -> bool {
+        self.is_affine()
+    }
+}
+
+// ------------------------------------------------ the 3D nonlinear maps
+
+/// The nonlinear part of a [`NonlinearMap3`] (plan §8.11 step 2).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Kernel3 {
+    /// `julia3D`: a root whose radius is the 3D radius with `z` scaled
+    /// by `1/|n|`, whose elevation is kept and whose azimuth is
+    /// divided by `n`.
+    Root3 { n: i32 },
+    /// `julia3Dz`: the plane's root on `xy`, with `z` scaled by
+    /// `r^{1/n − 1}/|n|`.
+    RootZ3 { n: i32 },
+    /// `quaternion_julia` in inverse mode (plan §8.11 step 3): the
+    /// forward map is the root `(q − c)^{1/n}` with radius exponent
+    /// `d/n`, on the quaternion `(xyz, w)` whose scalar `w` is the
+    /// walk's `aux`; the walk's inverse is `qⁿ + c`.
+    ///
+    /// `depth` is the variation's **projection 1**: the kernel's
+    /// result disassembles as `(r.x, r.y, r.w)` for the 3D point with
+    /// `r.z` carried, instead of `r.xyz` with `r.w` carried. That is a
+    /// permutation of ℝ⁴ and so an isometry — every singular value,
+    /// and every bound built from one, is untouched — but it decides
+    /// WHICH 3D slice of the 4D set is drawn: with it the scalar is in
+    /// the picture and `k` is hidden, which is the slice Bourke's
+    /// lobed solids live in (step 4).
+    Quaternion { n: i32, d: f64, c: [f64; 4], depth: bool },
+}
+
+/// The Hamilton product of `(x, y, z, w)` quaternions, scalar `w`.
+fn qmul(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
+    let (av, aw) = ([a[0], a[1], a[2]], a[3]);
+    let (bv, bw) = ([b[0], b[1], b[2]], b[3]);
+    let cross = [av[1] * bv[2] - av[2] * bv[1], av[2] * bv[0] - av[0] * bv[2], av[0] * bv[1] - av[1] * bv[0]];
+    [
+        aw * bv[0] + bw * av[0] + cross[0],
+        aw * bv[1] + bw * av[1] + cross[1],
+        aw * bv[2] + bw * av[2] + cross[2],
+        aw * bw - (av[0] * bv[0] + av[1] * bv[1] + av[2] * bv[2]),
+    ]
+}
+
+/// A quaternion `(x, y, z, w)`, scalar part `w`, to an INTEGER power
+/// by Hamilton products -- exact, where the polar form's `acos(w/|q|)`
+/// loses half its digits near the real axis, which is exactly where
+/// the walk's first inverse step lands every slice point (`(xyz, 0)²`
+/// is real). A negative power is the conjugate's, over `|q|^{2|n|}`.
+fn qpow(q: [f64; 4], n: f64) -> [f64; 4] {
+    let k = n.round() as i32;
+    let mut base = if k < 0 {
+        let m2 = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
+        if m2 < 1e-300 {
+            return [0.0; 4];
+        }
+        [-q[0] / m2, -q[1] / m2, -q[2] / m2, q[3] / m2]
+    } else {
+        q
+    };
+    let mut e = k.unsigned_abs();
+    let mut out = [0.0, 0.0, 0.0, 1.0];
+    while e > 0 {
+        if e & 1 == 1 {
+            out = qmul(out, base);
+        }
+        base = qmul(base, base);
+        e >>= 1;
+    }
+    out
+}
+
+/// One of the `|n|` quaternion roots of `q`, branch `k`, with radius
+/// exponent `d/n` -- the variation's `qjulia_qroot`.
+fn qroot(q: [f64; 4], n: f64, k: u32, d: f64) -> [f64; 4] {
+    let mag = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+    if mag < 1e-300 {
+        return [0.0; 4];
+    }
+    let rad = mag.powf(d / n);
+    let ang = ((q[3] / mag).clamp(-1.0, 1.0).acos() + std::f64::consts::TAU * k as f64) / n;
+    let vlen = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2]).sqrt();
+    let nhat = if vlen > 1e-300 { [q[0] / vlen, q[1] / vlen, q[2] / vlen] } else { [1.0, 0.0, 0.0] };
+    let sn = rad * ang.sin();
+    [sn * nhat[0], sn * nhat[1], sn * nhat[2], rad * ang.cos()]
+}
+
+/// An [`Affine3`] applied over any [`Real`] -- the 3D twin of
+/// [`affine_apply_gen`], and the same reason: a composition a `Dual`
+/// can be pushed through.
+pub fn affine3_apply_gen<T: Real>(a: &Affine3, p: &[T; 3]) -> [T; 3] {
+    let row = |i: usize| {
+        p[0]
+            .mul(&p[0].lit(a.m[i][0]))
+            .add(&p[1].mul(&p[0].lit(a.m[i][1])))
+            .add(&p[2].mul(&p[0].lit(a.m[i][2])))
+            .add(&p[0].lit(a.t[i]))
+    };
+    [row(0), row(1), row(2)]
+}
+
+/// The Hamilton product over any [`Real`], with the same association
+/// as [`qmul`] so a `Dual` of it is the derivative of THAT arithmetic
+/// and an f64 of it is bit-identical to it.
+fn qmul_gen<T: Real>(a: &[T; 4], b: &[T; 4]) -> [T; 4] {
+    let cross = [
+        a[1].mul(&b[2]).sub(&a[2].mul(&b[1])),
+        a[2].mul(&b[0]).sub(&a[0].mul(&b[2])),
+        a[0].mul(&b[1]).sub(&a[1].mul(&b[0])),
+    ];
+    [
+        a[3].mul(&b[0]).add(&b[3].mul(&a[0])).add(&cross[0]),
+        a[3].mul(&b[1]).add(&b[3].mul(&a[1])).add(&cross[1]),
+        a[3].mul(&b[2]).add(&b[3].mul(&a[2])).add(&cross[2]),
+        a[3].mul(&b[3]).sub(
+            &a[0].mul(&b[0]).add(&a[1].mul(&b[1])).add(&a[2].mul(&b[2])),
+        ),
+    ]
+}
+
+/// [`qpow`] over any [`Real`]: an integer power by Hamilton products,
+/// the negative case through the conjugate over `|q|²`.
+fn qpow_gen<T: Real>(q: &[T; 4], n: f64) -> [T; 4] {
+    let k = n.round() as i32;
+    let m2 = q[0]
+        .sqr()
+        .add(&q[1].sqr())
+        .add(&q[2].sqr())
+        .add(&q[3].sqr());
+    let zero = q[0].zero();
+    let mut base = if k < 0 {
+        if m2.cmp_f64(1e-300) == std::cmp::Ordering::Less {
+            return [zero.clone(), zero.clone(), zero.clone(), zero];
+        }
+        // Divided, not multiplied by a reciprocal: the two differ by
+        // an ulp and the body this replaced divides.
+        [
+            q[0].neg().div(&m2),
+            q[1].neg().div(&m2),
+            q[2].neg().div(&m2),
+            q[3].div(&m2),
+        ]
+    } else {
+        q.clone()
+    };
+    let mut e = k.unsigned_abs();
+    let mut out = [zero.clone(), zero.clone(), zero, base[0].one()];
+    while e > 0 {
+        if e & 1 == 1 {
+            out = qmul_gen(&out, &base);
+        }
+        base = qmul_gen(&base, &base);
+        e >>= 1;
+    }
+    out
+}
+
+/// The solid kernels' inverse, over any [`Transcendental`]
+/// (`ifs-general.md` D8).
+///
+/// The 3D twin of [`kernel_inverse_gen`], and written for the same
+/// two reasons: a `Dual` of it is [`Map3::jacobian`] with no second
+/// derivation to keep in step, and a `BigFloat` of it is the solid
+/// prefix at arbitrary precision.
+///
+/// The `aux` scalar goes in and comes out. Root3 and RootZ3 PASS IT
+/// THROUGH untouched, which is what makes their delta carry a 3×3
+/// matrix and nothing more; the quaternion's inverse moves it, so a
+/// carry that is only 3×3 describes the quaternion's step on the
+/// slice and not its step in ℝ⁴. See [`Map3::jacobian`], which
+/// declines for that reason.
+pub fn kernel3_inverse_gen<T: Transcendental>(
+    k: &Kernel3,
+    v: &[T; 3],
+    aux: &T,
+) -> ([T; 3], T) {
+    let n = k.power() as f64;
+    let nf = v[0].lit(n);
+    let rxy = v[0].hypot(&v[1]);
+    let theta = T::atan2(&v[1], &v[0]).mul(&nf);
+    match *k {
+        Kernel3::Quaternion { d, c, depth, .. } => {
+            let q = if depth {
+                [v[0].clone(), v[1].clone(), aux.clone(), v[2].clone()]
+            } else {
+                [v[0].clone(), v[1].clone(), v[2].clone(), aux.clone()]
+            };
+            let mag = q[0]
+                .sqr()
+                .add(&q[1].sqr())
+                .add(&q[2].sqr())
+                .add(&q[3].sqr())
+                .sqrt();
+            let p = qpow_gen(&q, n);
+            let scale = if mag.cmp_f64(1e-300) == std::cmp::Ordering::Greater {
+                mag.powf(&nf.div(&nf.lit(d))).div(&mag.powf(&nf))
+            } else {
+                nf.zero()
+            };
+            (
+                [
+                    p[0].mul(&scale).add(&nf.lit(c[0])),
+                    p[1].mul(&scale).add(&nf.lit(c[1])),
+                    p[2].mul(&scale).add(&nf.lit(c[2])),
+                ],
+                p[3].mul(&scale).add(&nf.lit(c[3])),
+            )
+        }
+        Kernel3::Root3 { .. } => {
+            let rho_out = rxy.sqr().add(&v[2].sqr()).sqrt();
+            if rho_out.to_f64() == 0.0 {
+                let z = nf.zero();
+                return ([z.clone(), z.clone(), z], aux.clone());
+            }
+            let rho = rho_out.powf(&nf);
+            // `x / rho` and `x · (1/rho)` differ by an ulp, and the
+            // body this replaced divides -- which the bit-identity
+            // gate caught in 71 of 1152 outputs.
+            let (cos_e, sin_e) = (rxy.div(&rho_out), v[2].div(&rho_out));
+            let sqrt_r2d = rho.mul(&cos_e);
+            let zz = rho.mul(&sin_e);
+            let (st, ct) = theta.sin_cos();
+            (
+                [
+                    sqrt_r2d.mul(&ct),
+                    sqrt_r2d.mul(&st),
+                    zz.mul(&nf.lit(n.abs())),
+                ],
+                aux.clone(),
+            )
+        }
+        Kernel3::RootZ3 { .. } => {
+            if rxy.to_f64() == 0.0 {
+                let z = nf.zero();
+                return ([z.clone(), z.clone(), z], aux.clone());
+            }
+            let sqrt_r2d = rxy.powf(&nf);
+            let (st, ct) = theta.sin_cos();
+            (
+                [
+                    sqrt_r2d.mul(&ct),
+                    sqrt_r2d.mul(&st),
+                    v[2]
+                        .mul(&nf.lit(n.abs()))
+                        .mul(&rxy.powf(&nf.lit(n - 1.0))),
+                ],
+                aux.clone(),
+            )
+        }
+    }
+}
+
+impl Kernel3 {
+    pub fn power(&self) -> i32 {
+        match *self {
+            Kernel3::Root3 { n } | Kernel3::RootZ3 { n } | Kernel3::Quaternion { n, .. } => n,
+        }
+    }
+
+    /// The forward kernel on `z` in the pre-frame with the scalar
+    /// `aux`, along branch `k`; the 3D roots pass `aux` through.
+    pub fn forward(&self, z: [f64; 3], aux: f64, k: u32) -> ([f64; 3], f64) {
+        let n = self.power() as f64;
+        let r2d = z[0] * z[0] + z[1] * z[1];
+        let a = (z[1].atan2(z[0]) + std::f64::consts::TAU * k as f64) / n;
+        match *self {
+            Kernel3::Quaternion { d, c, depth, .. } => {
+                let q = [z[0] - c[0], z[1] - c[1], z[2] - c[2], aux - c[3]];
+                let r = qroot(q, n, k, d);
+                if depth {
+                    ([r[0], r[1], r[3]], r[2])
+                } else {
+                    ([r[0], r[1], r[2]], r[3])
+                }
+            }
+            Kernel3::Root3 { .. } => {
+                let zz = z[2] / n.abs();
+                let rho = (r2d + zz * zz).sqrt();
+                if rho == 0.0 {
+                    return ([0.0; 3], aux);
+                }
+                let f = rho.powf(1.0 / n - 1.0);
+                let rxy = r2d.sqrt();
+                ([f * rxy * a.cos(), f * rxy * a.sin(), f * zz], aux)
+            }
+            Kernel3::RootZ3 { .. } => {
+                if r2d == 0.0 {
+                    return ([0.0; 3], aux);
+                }
+                let r = r2d.powf(1.0 / (2.0 * n));
+                let z_out = r * z[2] / (r2d.sqrt() * n.abs());
+                ([r * a.cos(), r * a.sin(), z_out], aux)
+            }
+        }
+    }
+
+    /// The inverse kernel on `v` with the scalar `aux`, single-valued.
+    /// The kernel's inverse at `v` with scalar `aux`, and the scalar
+    /// that comes out with it.
+    ///
+    /// One body -- [`kernel3_inverse_gen`] at f64 -- as the plane's
+    /// [`Kernel::inverse`] is [`kernel_inverse_gen`] at f64. It was a
+    /// second transcription until `ifs-general.md` D8, and
+    /// [`the_solid_kernels_generic_body_is_the_one_it_replaced`] pins
+    /// the two BIT-identical, against a table taken from the old body
+    /// before it was deleted.
+    ///
+    /// [`the_solid_kernels_generic_body_is_the_one_it_replaced`]: tests::the_solid_kernels_generic_body_is_the_one_it_replaced
+    pub fn inverse(&self, v: [f64; 3], aux: f64) -> ([f64; 3], f64) {
+        kernel3_inverse_gen(self, &v, &aux)
+    }
+
+    /// The kernels the solid gates run over.
+    #[cfg(test)]
+    pub fn gate_fixtures() -> Vec<Kernel3> {
+        vec![
+            Kernel3::Root3 { n: 2 },
+            Kernel3::Root3 { n: 3 },
+            Kernel3::Root3 { n: -2 },
+            Kernel3::RootZ3 { n: 2 },
+            Kernel3::RootZ3 { n: -3 },
+            Kernel3::Quaternion { n: 2, d: 1.0, c: [-0.2, 0.6, 0.1, 0.0], depth: false },
+            Kernel3::Quaternion { n: 3, d: 2.0, c: [0.1, -0.3, 0.0, 0.2], depth: true },
+            Kernel3::Quaternion { n: -2, d: 1.0, c: [0.0, 0.0, 0.0, 0.0], depth: false },
+        ]
+    }
+
+    /// The points they run at: ordinary, on each axis, at the origin,
+    /// and large and small enough to reach the guards.
+    #[cfg(test)]
+    pub fn gate_points() -> Vec<([f64; 3], f64)> {
+        let mut out = Vec::new();
+        for v in [
+            [0.7, 0.3, -0.2],
+            [-1.4, 0.9, 0.5],
+            [0.05, -0.02, 0.01],
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, 0.0, -1.0],
+            [2.6, -3.1, 1.7],
+            [1e-8, 1e-8, 1e-8],
+            [3.0, 4.0, 12.0],
+        ] {
+            for aux in [0.0f64, 0.4, -0.7] {
+                out.push((v, aux));
+            }
+        }
+        out
+    }
+
+    /// The factor on the constant σ_min at the point whose image is
+    /// `v` with scalar `aux`.
+    pub fn local_sigma_factor(&self, v: [f64; 3], aux: f64) -> f64 {
+        let n = self.power() as f64;
+        match *self {
+            // The plane's root formula on the 4D magnitude (step 3):
+            // |v|^(1 - n/d), the transverse directions being no
+            // smaller a stretch than the root's own plane.
+            Kernel3::Quaternion { d, .. } => {
+                let mag = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2] + aux * aux).sqrt().max(f64::MIN_POSITIVE);
+                mag.powf(1.0 - n / d)
+            }
+            Kernel3::Root3 { .. } => {
+                let rho_out = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(f64::MIN_POSITIVE);
+                rho_out.powf(1.0 - n)
+            }
+            Kernel3::RootZ3 { .. } => {
+                // In the (r, theta, z) frame: the 2D root's a on xy, c on
+                // z, and a shear b from z into r; the smaller singular
+                // value of [[a, 0], [b, c]] against a.
+                let rxy = v[0].hypot(v[1]).max(f64::MIN_POSITIVE);
+                let r = rxy.powf(n);
+                let z = v[2] * n.abs() * rxy.powf(n - 1.0);
+                let a = r.powf(1.0 / n - 1.0) / n.abs();
+                let c = a;
+                let b = z * (1.0 / n - 1.0) * r.powf(1.0 / n - 2.0) / n.abs();
+                let s = a * a + b * b + c * c;
+                let disc = (s * s - 4.0 * a * a * c * c).max(0.0).sqrt();
+                ((s - disc) * 0.5).max(0.0).sqrt().min(a)
+            }
+        }
+    }
+
+    /// The constant parts of the kernel's singular values.
+    fn sigma_const(&self) -> (f64, f64) {
+        match *self {
+            Kernel3::Root3 { n } => {
+                let n = (n as f64).abs();
+                (1.0 / (n * n), 1.0)
+            }
+            Kernel3::RootZ3 { .. } => (1.0, 1.0),
+            // A permutation of the output changes no singular value,
+            // so `depth` does not appear here.
+            Kernel3::Quaternion { n, d, .. } => {
+                let (n, d) = ((n as f64).abs(), d.abs());
+                (d.min(1.0) / n, d.max(1.0) / n)
+            }
+        }
+    }
+
+    pub fn unbounded_at_origin(&self) -> bool {
+        match *self {
+            Kernel3::Quaternion { d, .. } => d < 0.0,
+            _ => self.power() < 0,
+        }
+    }
+
+    /// Whether the kernel reads and writes the walk's scalar `aux`.
+    pub fn uses_aux(&self) -> bool {
+        matches!(self, Kernel3::Quaternion { .. })
+    }
+
+    pub fn variation(&self) -> &'static str {
+        match self {
+            Kernel3::Root3 { .. } => "julia3D",
+            Kernel3::RootZ3 { .. } => "julia3Dz",
+            Kernel3::Quaternion { .. } => "quaternion_julia",
+        }
+    }
+}
+
+/// A 3D transform whose one nonlinear variation the walk can invert:
+/// forward `p ↦ post(w · K(pre(p)))`, inverse
+/// `q ↦ pre⁻¹(K⁻¹(post⁻¹(q) / w))`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NonlinearMap3 {
+    pub kernel: Kernel3,
+    pub pre: Affine3,
+    pub post: Affine3,
+    pub pre_inv: Affine3,
+    pub post_inv: Affine3,
+    pub w: f64,
+}
+
+impl NonlinearMap3 {
+    /// The forward map along `k`, carrying the scalar `aux`. The
+    /// affines act on xyz; the weight scales the kernel's whole
+    /// quaternion, as the variation's weighted sum does.
+    pub fn apply_branch_aux(&self, p: [f64; 3], aux: f64, k: u32) -> ([f64; 3], f64) {
+        let (z, aux) = self.kernel.forward(self.pre.apply(p), aux, k);
+        (self.post.apply([self.w * z[0], self.w * z[1], self.w * z[2]]), self.w * aux)
+    }
+
+    pub fn apply_branch(&self, p: [f64; 3], k: u32) -> [f64; 3] {
+        self.apply_branch_aux(p, 0.0, k).0
+    }
+
+    fn before_kernel(&self, q: [f64; 3], aux: f64) -> ([f64; 3], f64) {
+        let v = self.post_inv.apply(q);
+        ([v[0] / self.w, v[1] / self.w, v[2] / self.w], aux / self.w)
+    }
+
+    pub fn apply_inverse_aux(&self, q: [f64; 3], aux: f64) -> ([f64; 3], f64) {
+        let (v, a) = self.before_kernel(q, aux);
+        let (u, a) = self.kernel.inverse(v, a);
+        if !(u[0].is_finite() && u[1].is_finite() && u[2].is_finite() && a.is_finite()) {
+            return ([f64::INFINITY; 3], a);
+        }
+        (self.pre_inv.apply(u), a)
+    }
+
+    pub fn apply_inverse(&self, q: [f64; 3]) -> [f64; 3] {
+        self.apply_inverse_aux(q, 0.0).0
+    }
+
+    /// This map's whole inverse over any [`Transcendental`]:
+    /// `pre⁻¹(K⁻¹(post⁻¹(q)/w))`, the composition
+    /// [`Self::apply_inverse_aux`] performs, in one expression.
+    ///
+    /// `aux` goes in as a CONSTANT: the pixel's delta lives in the 3D
+    /// slice and the slice's scalar does not move with it, so a
+    /// derivative taken here is a derivative along the slice, which is
+    /// the one the walk carries.
+    pub fn apply_inverse_gen<T: Transcendental>(&self, q: &[T; 3], aux: &T) -> ([T; 3], T) {
+        let v = affine3_apply_gen(&self.post_inv, q);
+        let w = q[0].lit(self.w);
+        let z = [v[0].div(&w), v[1].div(&w), v[2].div(&w)];
+        let (u, a) = kernel3_inverse_gen(&self.kernel, &z, &aux.div(&w));
+        (affine3_apply_gen(&self.pre_inv, &u), a)
+    }
+
+    /// Whether the scalar this map's inverse hands on is the one it
+    /// was given.
+    ///
+    /// `Root3` and `RootZ3` pass `aux` through untouched, so a
+    /// composed step along the slice is described completely by a
+    /// 3×3 matrix. The quaternion's inverse MOVES it -- the scalar is
+    /// the fourth component of `qⁿ + c` -- so the next level's input
+    /// scalar depends on this level's position, and a 3×3 carry
+    /// leaves that dependence out. The walk declines rather than
+    /// carrying an incomplete derivative.
+    pub fn aux_is_carried(&self) -> bool {
+        !matches!(self.kernel, Kernel3::Quaternion { .. })
+    }
+
+    pub fn local_sigma_factor(&self, q: [f64; 3], aux: f64) -> f64 {
+        let (v, a) = self.before_kernel(q, aux);
+        self.kernel.local_sigma_factor(v, a)
+    }
+
+    pub fn singular_values(&self) -> (f64, f64) {
+        let (pre_lo, pre_hi) = self.pre.singular_values();
+        let (post_lo, post_hi) = self.post.singular_values();
+        let (k_lo, k_hi) = self.kernel.sigma_const();
+        let w = self.w.abs();
+        (post_lo * w * pre_lo * k_lo, post_hi * w * pre_hi * k_hi)
+    }
+}
+
+/// What a 3D map is: the affine case, or a nonlinear map in either
+/// direction (plan §8.11 step 2), as the plane's [`Map2`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Map3 {
+    Affine(Affine3),
+    Nonlinear(NonlinearMap3),
+    NonlinearInverse(NonlinearMap3),
+}
+
+impl Map3 {
+    pub fn apply(&self, p: [f64; 3]) -> [f64; 3] {
+        match self {
+            Map3::Affine(a) => a.apply(p),
+            Map3::Nonlinear(r) => r.apply_branch(p, 0),
+            Map3::NonlinearInverse(r) => r.apply_inverse(p),
+        }
+    }
+
+    pub fn inverse(&self) -> Option<Map3> {
+        match self {
+            Map3::Affine(a) => a.inverse().map(Map3::Affine),
+            Map3::Nonlinear(r) => Some(Map3::NonlinearInverse(*r)),
+            Map3::NonlinearInverse(r) => Some(Map3::Nonlinear(*r)),
+        }
+    }
+
+    pub fn singular_values(&self) -> (f64, f64) {
+        match self {
+            Map3::Affine(a) => a.singular_values(),
+            Map3::Nonlinear(r) | Map3::NonlinearInverse(r) => r.singular_values(),
+        }
+    }
+
+    pub fn fixed_point(&self) -> Option<[f64; 3]> {
+        match self {
+            Map3::Affine(a) => a.fixed_point(),
+            _ => None,
+        }
+    }
+
+    pub fn as_affine(&self) -> Option<Affine3> {
+        match self {
+            Map3::Affine(a) => Some(*a),
+            _ => None,
+        }
+    }
+
+    pub fn is_affine(&self) -> bool {
+        matches!(self, Map3::Affine(_))
+    }
+
+    /// The Jacobian of [`Self::apply`] at `q`, where the walk has one
+    /// (`ifs-general.md` D8, and item 9 of the delta plan's order of
+    /// work).
+    ///
+    /// By [`Dual3`] through [`NonlinearMap3::apply_inverse_gen`], so
+    /// it is the derivative of the composition the walk actually runs
+    /// and not of a chain rule written out beside it.
+    ///
+    /// `None` for a forward map -- the walk only ever inverts -- and
+    /// `None` for a quaternion, whose inverse moves the slice's scalar
+    /// and so is not described by a 3×3 (see
+    /// [`NonlinearMap3::aux_is_carried`]).
+    pub fn jacobian(&self, q: [f64; 3], aux: f64) -> Option<[[f64; 3]; 3]> {
+        match self {
+            Map3::Affine(a) => Some(a.m),
+            Map3::Nonlinear(_) => None,
+            Map3::NonlinearInverse(r) => {
+                if !r.aux_is_carried() {
+                    return None;
+                }
+                let a = crate::scene::ifs_real::Dual3::constant(aux);
+                crate::scene::ifs_real::jacobian3(q, |z| r.apply_inverse_gen(&z, &a).0)
+            }
+        }
+    }
+
+    /// The factor on this map's constant σ_min at `q`: one for an
+    /// affine, the kernel's local factor for an inverted nonlinear
+    /// map -- the 3D twin of [`Map2::local_sigma`].
+    pub fn local_sigma_factor3(&self, q: [f64; 3], aux: f64) -> f64 {
+        match self {
+            Map3::NonlinearInverse(r) => r.local_sigma_factor(q, aux),
+            _ => 1.0,
+        }
+    }
+
+    pub fn nonlinear(&self) -> Option<&NonlinearMap3> {
+        match self {
+            Map3::Affine(_) => None,
+            Map3::Nonlinear(r) | Map3::NonlinearInverse(r) => Some(r),
+        }
+    }
+}
+
+// ---------------------------------------------------------------- 3D
+
+/// A 3D affine map `p ↦ M p + t`, row-major.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Affine3 {
+    pub m: [[f64; 3]; 3],
+    pub t: [f64; 3],
+}
+
+impl Affine3 {
+    pub const IDENTITY: Affine3 = Affine3 {
+        m: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        t: [0.0, 0.0, 0.0],
+    };
+
+    pub fn apply(&self, p: [f64; 3]) -> [f64; 3] {
+        let m = &self.m;
+        [
+            m[0][0] * p[0] + m[0][1] * p[1] + m[0][2] * p[2] + self.t[0],
+            m[1][0] * p[0] + m[1][1] * p[1] + m[1][2] * p[2] + self.t[1],
+            m[2][0] * p[0] + m[2][1] * p[1] + m[2][2] * p[2] + self.t[2],
+        ]
+    }
+
+    /// `self ∘ other`: apply `other` first, then `self`.
+    pub fn then_after(&self, other: &Affine3) -> Affine3 {
+        let mut m = [[0.0; 3]; 3];
+        for (i, row) in m.iter_mut().enumerate() {
+            for (j, cell) in row.iter_mut().enumerate() {
+                *cell = (0..3).map(|k| self.m[i][k] * other.m[k][j]).sum();
+            }
+        }
+        Affine3 { m, t: self.apply(other.t) }
+    }
+
+    pub fn det(&self) -> f64 {
+        let m = &self.m;
+        m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+            - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+            + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+    }
+
+    pub fn inverse(&self) -> Option<Affine3> {
+        let d = self.det();
+        if !d.is_finite() || d.abs() < 1e-300 {
+            return None;
+        }
+        let m = &self.m;
+        // Adjugate over the determinant.
+        let inv = [
+            [
+                (m[1][1] * m[2][2] - m[1][2] * m[2][1]) / d,
+                (m[0][2] * m[2][1] - m[0][1] * m[2][2]) / d,
+                (m[0][1] * m[1][2] - m[0][2] * m[1][1]) / d,
+            ],
+            [
+                (m[1][2] * m[2][0] - m[1][0] * m[2][2]) / d,
+                (m[0][0] * m[2][2] - m[0][2] * m[2][0]) / d,
+                (m[0][2] * m[1][0] - m[0][0] * m[1][2]) / d,
+            ],
+            [
+                (m[1][0] * m[2][1] - m[1][1] * m[2][0]) / d,
+                (m[0][1] * m[2][0] - m[0][0] * m[2][1]) / d,
+                (m[0][0] * m[1][1] - m[0][1] * m[1][0]) / d,
+            ],
+        ];
+        let linear = Affine3 { m: inv, t: [0.0; 3] };
+        let mt = linear.apply(self.t);
+        Some(Affine3 { m: inv, t: [-mt[0], -mt[1], -mt[2]] })
+    }
+
+    /// The singular values of `M`, `(σ_min, σ_max)`.
+    ///
+    /// The squares of the singular values are the eigenvalues of the
+    /// symmetric matrix `MᵀM`, found in closed form (the trigonometric
+    /// solution of the characteristic cubic for a real symmetric 3×3,
+    /// which is exact and has no iteration to converge).
+    pub fn singular_values(&self) -> (f64, f64) {
+        let m = &self.m;
+        // A = MᵀM, symmetric.
+        let mut a = [[0.0f64; 3]; 3];
+        for (i, row) in a.iter_mut().enumerate() {
+            for (j, cell) in row.iter_mut().enumerate() {
+                *cell = (0..3).map(|k| m[k][i] * m[k][j]).sum();
+            }
+        }
+        let eig = symmetric3_eigenvalues(&a);
+        let lo = eig.iter().cloned().fold(f64::INFINITY, f64::min).max(0.0);
+        let hi = eig.iter().cloned().fold(0.0f64, f64::max).max(0.0);
+        (lo.sqrt(), hi.sqrt())
+    }
+
+    pub fn fixed_point(&self) -> Option<[f64; 3]> {
+        let mut m = [[0.0; 3]; 3];
+        for (i, row) in m.iter_mut().enumerate() {
+            for (j, cell) in row.iter_mut().enumerate() {
+                *cell = if i == j { 1.0 - self.m[i][j] } else { -self.m[i][j] };
+            }
+        }
+        Affine3 { m, t: [0.0; 3] }.inverse().map(|inv| inv.apply(self.t))
+    }
+}
+
+/// Eigenvalues of a real symmetric 3×3, in closed form.
+///
+/// Smith's trigonometric method: shift by the mean, scale by the
+/// deviation, and the three roots are `2 cos((φ + 2πk)/3)` for the
+/// angle the reduced cubic gives. Exact for a symmetric matrix, which
+/// always has three real eigenvalues; the clamp on the cosine argument
+/// absorbs the rounding that can push it a hair past ±1.
+fn symmetric3_eigenvalues(a: &[[f64; 3]; 3]) -> [f64; 3] {
+    let p1 = a[0][1] * a[0][1] + a[0][2] * a[0][2] + a[1][2] * a[1][2];
+    if p1 == 0.0 {
+        // Already diagonal.
+        return [a[0][0], a[1][1], a[2][2]];
+    }
+    let q = (a[0][0] + a[1][1] + a[2][2]) / 3.0;
+    let p2 = (a[0][0] - q).powi(2) + (a[1][1] - q).powi(2) + (a[2][2] - q).powi(2) + 2.0 * p1;
+    let p = (p2 / 6.0).sqrt();
+    // B = (A − qI) / p
+    let mut b = [[0.0f64; 3]; 3];
+    for (i, row) in b.iter_mut().enumerate() {
+        for (j, cell) in row.iter_mut().enumerate() {
+            *cell = (a[i][j] - if i == j { q } else { 0.0 }) / p;
+        }
+    }
+    let det_b = b[0][0] * (b[1][1] * b[2][2] - b[1][2] * b[2][1])
+        - b[0][1] * (b[1][0] * b[2][2] - b[1][2] * b[2][0])
+        + b[0][2] * (b[1][0] * b[2][1] - b[1][1] * b[2][0]);
+    let r = (det_b / 2.0).clamp(-1.0, 1.0);
+    let phi = r.acos() / 3.0;
+    let two_pi_3 = 2.0 * std::f64::consts::PI / 3.0;
+    [
+        q + 2.0 * p * phi.cos(),
+        q + 2.0 * p * (phi + 2.0 * two_pi_3).cos(),
+        q + 2.0 * p * (phi + two_pi_3).cos(),
+    ]
+}
+
+// ---------------------------------------------------------- composition
+
+/// Why a transform is not one affine map.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotAffine {
+    /// A variation [`affine_role`] cannot answer for in this space.
+    Variation(String),
+    /// An affine variation whose `fx_priority` moved it out of the
+    /// weighted sum, so it composes instead of summing. Rare, and the
+    /// composition would still be affine — deliberately not derived in
+    /// this version rather than derived wrongly.
+    Priority(String),
+    /// No variation at all: the chaos game's normal result is the
+    /// origin, so the map is constant. Affine, but degenerate; the
+    /// attractor of a constant map is a point.
+    NoVariations,
+    /// A root variation summed with something else in the normal
+    /// phase: a weighted sum of a root and an affine has no
+    /// closed-form inverse (plan §8.4, J4).
+    MixedSum(String),
+    /// A root variation with a power or distance of zero, which is
+    /// not a map with an inverse.
+    Degenerate(String),
+    /// A variation in a mode the walk does not invert: a
+    /// `quaternion_julia` in forward mode or with a projection other
+    /// than the vector one (plan §8.11 step 3).
+    Mode(String),
+}
+
+/// A transform's variations as three affine maps: the pre-phase
+/// composition `P`, the weighted normal-phase sum `V`, and the
+/// post-phase composition `Q`, so that the variation stage is
+/// `q ↦ Q(V(P(q)))`.
+struct VariationStage {
+    pre: Affine3,
+    sum: Affine3,
+    post: Affine3,
+    /// Whether anything was summed.
+    any: bool,
+    /// The nonlinear variations met, with their weights (planar only).
+    roots: Vec<(&'static str, f64)>,
+}
+
+/// The variation stage, or why it is not affine in `space`.
+///
+/// `order` is the order the shader emits variations in — the flame's
+/// first-occurrence order (`Flame::active_variation_names_ordered`),
+/// which is what decides how two pre-rotations about different axes
+/// compose. A sum does not care; a composition does.
+fn variation_stage(
+    t: &Transform,
+    registry: &VariationRegistry,
+    space: Space,
+    order: &[String],
+) -> Result<VariationStage, NotAffine> {
+    let mut stage = VariationStage {
+        pre: Affine3::IDENTITY,
+        sum: Affine3 { m: [[0.0; 3]; 3], t: [0.0; 3] },
+        post: Affine3::IDENTITY,
+        any: false,
+        roots: Vec::new(),
+    };
+    let mut any = false;
+    // Every active variation, in the shader's order; the transform's
+    // own order is the fallback for names the flame order lacks.
+    let own = t.ordered_variation_names(registry);
+    let names = order.iter().filter(|n| t.variations.contains_key(*n)).chain(own.iter().filter(|n| !order.contains(n)));
+    for name in names {
+        let w = t.variations.get(name).copied().unwrap_or(0.0) as f64;
+        if w == 0.0 {
+            continue;
+        }
+        let Some(role) = affine_role(name, w, t, registry, space) else {
+            // A kernel is a nonlinear map the analysis knows (plan
+            // §8.8, §8.9), and which variations those are is the
+            // REGISTRY's answer now, not a list here
+            // (`ifs-general.md` D1). The transform's kind is decided
+            // once the whole stage is known.
+            let root = registry.inverse(name).filter(|d| d.is_kernel_in(space));
+            let Some(root) = root.map(|d| d.name) else {
+                return Err(NotAffine::Variation(name.clone()));
+            };
+            let summed = match registry.get(name).map(|i| i.phase.clone()) {
+                Some(VariationPhase::Any) => {
+                    t.variation_priorities.get(name).copied().unwrap_or(0) == 0
+                }
+                Some(VariationPhase::Normal) | None => true,
+                Some(_) => false,
+            };
+            if !summed {
+                return Err(NotAffine::Priority(name.clone()));
+            }
+            stage.roots.push((root, w));
+            continue;
+        };
+        match role {
+            AffineRole::Nothing => {}
+            AffineRole::Sum(a) => {
+                // The same rule `mean_log_scale` mirrors from the shader
+                // builder: `Any`-phase variations sum unless a non-zero
+                // priority moved them.
+                let summed = match registry.get(name).map(|i| i.phase.clone()) {
+                    Some(VariationPhase::Normal) => true,
+                    Some(VariationPhase::Any) => {
+                        t.variation_priorities.get(name).copied().unwrap_or(0) == 0
+                    }
+                    Some(_) => false,
+                    None => true,
+                };
+                if !summed {
+                    return Err(NotAffine::Priority(name.clone()));
+                }
+                any = true;
+                for i in 0..3 {
+                    for j in 0..3 {
+                        stage.sum.m[i][j] += a.m[i][j];
+                    }
+                    stage.sum.t[i] += a.t[i];
+                }
+            }
+            // Later variations apply after earlier ones.
+            AffineRole::Pre(r) => stage.pre = r.then_after(&stage.pre),
+            AffineRole::Post(r) => stage.post = r.then_after(&stage.post),
+        }
+    }
+    stage.any = any;
+    if !any && stage.roots.is_empty() {
+        return Err(NotAffine::NoVariations);
+    }
+    Ok(stage)
+}
+
+/// The kernel `kind` is, from its own
+/// [`InverseDef`](crate::variations::inverse::InverseDef).
+///
+/// `ifs-general.md` D1: the parameters are read by the variation's
+/// own constructor through a lookup closure, so `ifs_analysis.rs`
+/// no longer knows that `julian` has a `dist` or that `blob` has
+/// three. A [`Refusal`] becomes this transform's refusal, naming the
+/// variation, which is what the flame panel shows.
+fn kernel_from_registry(
+    t: &Transform,
+    registry: &VariationRegistry,
+    kind: &str,
+    space: Space,
+) -> Result<Kernel, NotAffine> {
+    let p = |name: &str| t.get_variation_param_or_default(kind, name, registry) as f64;
+    let def = registry
+        .inverse(kind)
+        .filter(|d| d.is_kernel_in(space))
+        .ok_or_else(|| NotAffine::Variation(kind.to_string()))?;
+    let crate::variations::inverse::InverseKernel::Planar(build) = def.kernel else {
+        return Err(NotAffine::Variation(kind.to_string()));
+    };
+    build(&p).map_err(|r| refusal(r, kind))
+}
+
+/// The solid kernel `kind` is. [`kernel_from_registry`]'s twin.
+fn kernel3_from_registry(
+    t: &Transform,
+    registry: &VariationRegistry,
+    kind: &str,
+) -> Result<Kernel3, NotAffine> {
+    let p = |name: &str| t.get_variation_param_or_default(kind, name, registry) as f64;
+    let def = registry.inverse(kind).ok_or_else(|| NotAffine::Variation(kind.to_string()))?;
+    let crate::variations::inverse::InverseKernel::Solid(build) = def.kernel else {
+        return Err(NotAffine::Variation(kind.to_string()));
+    };
+    build(&p).map_err(|r| refusal(r, kind))
+}
+
+/// A variation's [`Refusal`] as the transform's own.
+fn refusal(r: crate::variations::inverse::Refusal, kind: &str) -> NotAffine {
+    match r {
+        crate::variations::inverse::Refusal::Degenerate => NotAffine::Degenerate(kind.to_string()),
+        crate::variations::inverse::Refusal::Mode => NotAffine::Mode(kind.to_string()),
+    }
+}
+
+/// A transform whose normal phase SUMS a kernel with an affine
+/// (`ifs-general.md` D3): forward `p ↦ post(L(z) + w·K(z))` with
+/// `z = pre(p)`.
+///
+/// **This is the commonest transform in the census that the walk
+/// refused.** `linear 0.5 + spherical 0.5` and its kin are everywhere
+/// in real flames, and a weighted sum of a kernel and an affine has
+/// no closed-form inverse -- so before this the analysis returned
+/// `MixedSum` and the flame drew nothing.
+///
+/// It does have a JACOBIAN, exactly, from the affine's matrix and the
+/// kernel's own; and a Jacobian is all Newton needs, because Newton's
+/// accuracy comes from the RESIDUAL and not from the derivative it
+/// steps with. So the inverse is Newton from a seed, and what the
+/// walk gets is an answer with a residual it can check rather than a
+/// refusal.
+///
+/// One kernel and one affine, not a general sum. Two kernels summed
+/// have no dominant term to seed from and no branch rule; the
+/// analysis still refuses those, naming them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SumMap2 {
+    /// The transform's own affine composed with its pre-phase: what
+    /// the summed terms are applied to.
+    pub pre: Affine2,
+    pub pre_inv: Affine2,
+    /// The post-phase composition and the post-affine.
+    pub post: Affine2,
+    pub post_inv: Affine2,
+    /// The affine part of the normal-phase sum, already weighted.
+    pub lin: Affine2,
+    /// Its inverse, for the seed when the affine dominates. `None`
+    /// when the affine part is singular, which is common -- a
+    /// `linear` of weight zero in one axis -- and then the kernel
+    /// seeds.
+    pub lin_inv: Option<Affine2>,
+    pub kernel: Kernel,
+    /// The kernel variation's own name, for the refusal a caller that
+    /// cannot take a sum has to write.
+    pub kind: &'static str,
+    /// Which of the kernel's preimages this map follows.
+    pub branch: u32,
+    /// The kernel's weight in the sum.
+    pub kw: f64,
+    /// A bound on the third derivative of the INVERSE over the ball,
+    /// which is the Taylor rung's remainder. A sum has no exact
+    /// difference form, so every one of them needs this. Zero until
+    /// `analyse_2d` fills it.
+    pub third: f64,
+    /// Whether the KERNEL is the dominant term, which decides where
+    /// Newton starts.
+    pub kernel_leads: bool,
+}
+
+/// How close Newton has to get, relative to `|q|`, before its answer
+/// is taken.
+///
+/// The plan's figure. Below it the residual is the arithmetic's own
+/// and another step buys nothing; above it the point is not a
+/// preimage and saying so is better than returning it.
+pub const NEWTON_TOL: f64 = 1e-12;
+
+/// The most turns of `cylinder`'s preimages a map carries as branches (two
+/// a turn): a pre-frame reaching two hundred units across. Past it the
+/// turns nearest the ball's centre are kept.
+pub const CYLINDER_TURNS: i32 = 32;
+
+/// How many steps it may take.
+///
+/// The plan expects three to six, and away from a fold that is what
+/// it costs -- measured on `linear 0.5 + julia`, four or five steps
+/// to 1e-12 at five of six sample points, with the residual squaring
+/// each step once it starts.
+///
+/// The sixth point is why this is twelve and not six. At `p =
+/// (0.9, 0.4)` on branch 1 the map's derivative `0.5 − 1/(2√z)`
+/// nearly vanishes -- the fold sits at `|z| = 1` and the point is at
+/// `0.985` -- and the dominant term's seed lands at `|z| = 0.27`,
+/// the wrong side of it. Newton then wanders for six steps, its
+/// residual RISING at the fourth, before finding the basin and
+/// converging in three more: nine in total.
+///
+/// A halving safeguard was measured against that and bought one step
+/// of the nine and nothing at all at the other five points, so it is
+/// not here: the cost of a wide cap is paid only where the loop
+/// actually wanders, since it returns the moment the residual is
+/// met, while the safeguard's extra forward evaluation is paid at
+/// every step of every solve.
+pub const NEWTON_STEPS: usize = 12;
+
+impl SumMap2 {
+    /// The normal phase at `z`: `L(z) + w·K(z)`.
+    fn phase(&self, z: [f64; 2], k: u32) -> [f64; 2] {
+        let a = self.lin.apply(z);
+        let b = self.kernel.forward(z, k);
+        [a[0] + self.kw * b[0], a[1] + self.kw * b[1]]
+    }
+
+    /// Its derivative: `L_M + w·J_K(z)`.
+    fn phase_jacobian(&self, z: [f64; 2]) -> Option<[[f64; 2]; 2]> {
+        let j = forward_kernel_jacobian(&self.kernel, z, self.branch)?;
+        let m = &self.lin.m;
+        let out = [
+            [m[0][0] + self.kw * j[0][0], m[0][1] + self.kw * j[0][1]],
+            [m[1][0] + self.kw * j[1][0], m[1][1] + self.kw * j[1][1]],
+        ];
+        out.iter().flatten().all(|v| v.is_finite()).then_some(out)
+    }
+
+    /// The forward map along the kernel's branch `k`.
+    pub fn apply_branch(&self, p: [f64; 2], k: u32) -> [f64; 2] {
+        self.post.apply(self.phase(self.pre.apply(p), k))
+    }
+
+    /// Newton's seed for `v = post⁻¹(q)`, from whichever term leads
+    /// AT THIS POINT.
+    ///
+    /// D3 says "the seed from the transform's dominant term's own
+    /// inverse", and [`Self::kernel_leads`] answers that from the
+    /// weights -- once, for the whole map. That is not where the
+    /// question is asked. On `spherical 0.1 + linear 0.9` the weights
+    /// say the affine leads, and they are right over most of the
+    /// plane and wrong near the origin, where `z/|z|²` is unbounded
+    /// and 0.1 of it dwarfs 0.9 of anything: measured, the affine
+    /// seed there ran the full twelve steps and stopped at a residual
+    /// of 2.3e-10, four orders past the tolerance.
+    ///
+    /// So both seeds are formed where both exist and the one with the
+    /// smaller residual starts. That is the same rule read locally
+    /// rather than globally -- the dominant term at `v`, not the
+    /// dominant term of the map -- and it costs two forward
+    /// evaluations against a solve that is otherwise eight of them.
+    /// `kernel_leads` remains the tiebreak, for the case where only
+    /// one seed exists or the two residuals are equal.
+    fn seed(&self, v: [f64; 2]) -> Option<[f64; 2]> {
+        let from_kernel = {
+            let s = [v[0] / self.kw, v[1] / self.kw];
+            let z = self.kernel.inverse(s, self.branch);
+            (z[0].is_finite() && z[1].is_finite() && z[0].abs() < 1e29 && z[1].abs() < 1e29)
+                .then_some(z)
+        };
+        let from_affine = self
+            .lin_inv
+            .map(|l| l.apply(v))
+            .filter(|z| z.iter().all(|c| c.is_finite()));
+        let residual = |z: [f64; 2]| {
+            let f = self.phase(z, self.branch);
+            let r = f64::hypot(f[0] - v[0], f[1] - v[1]);
+            if r.is_finite() { r } else { f64::INFINITY }
+        };
+        match (from_kernel, from_affine) {
+            (Some(a), Some(b)) => {
+                let (ra, rb) = (residual(a), residual(b));
+                Some(if ra < rb || (ra == rb && self.kernel_leads) { a } else { b })
+            }
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        }
+    }
+
+    /// The inverse along this map's branch, by Newton.
+    ///
+    /// Returns the preimage and the residual it converged to, both
+    /// `None` when it did not. **A failure here is not a gap.** A gap
+    /// is a proof that no preimage exists; a solve that ran out of
+    /// steps proves nothing, so the walk's lineage keeps the bound it
+    /// had -- a valid lower bound, and loose -- rather than claiming
+    /// a distance it has not earned.
+    pub fn solve(&self, q: [f64; 2]) -> Option<([f64; 2], f64)> {
+        self.solve_counted(q).map(|(z, res, _)| (z, res))
+    }
+
+    /// [`Self::solve`], and how many steps it took -- what G3 reports
+    /// and what a GPU budget would be set from.
+    pub fn solve_counted(&self, q: [f64; 2]) -> Option<([f64; 2], f64, usize)> {
+        let v = self.post_inv.apply(q);
+        let scale = f64::hypot(v[0], v[1]).max(1.0);
+        let mut z = self.seed(v)?;
+        for step in 0..NEWTON_STEPS {
+            let f = self.phase(z, self.branch);
+            let r = [f[0] - v[0], f[1] - v[1]];
+            let res = f64::hypot(r[0], r[1]);
+            if res <= NEWTON_TOL * scale {
+                return Some((self.pre_inv.apply(z), res / scale, step));
+            }
+            let j = self.phase_jacobian(z)?;
+            let det = j[0][0] * j[1][1] - j[0][1] * j[1][0];
+            if !(det.abs() > 1e-300) || !det.is_finite() {
+                return None;
+            }
+            let step = [
+                (j[1][1] * r[0] - j[0][1] * r[1]) / det,
+                (j[0][0] * r[1] - j[1][0] * r[0]) / det,
+            ];
+            let next = [z[0] - step[0], z[1] - step[1]];
+            if !next.iter().all(|v| v.is_finite()) {
+                return None;
+            }
+            z = next;
+        }
+        // One last look: eight steps that never met the tolerance may
+        // still have landed somewhere usable, and the caller is told
+        // the residual either way.
+        let f = self.phase(z, self.branch);
+        let res = f64::hypot(f[0] - v[0], f[1] - v[1]) / scale;
+        (res <= 1e-6).then(|| (self.pre_inv.apply(z), res, NEWTON_STEPS))
+    }
+
+    /// The inverse's Jacobian at `q`: the forward's, inverted.
+    pub fn inverse_jacobian(&self, q: [f64; 2]) -> Option<[[f64; 2]; 2]> {
+        let (p, _) = self.solve(q)?;
+        let j = self.forward_jacobian(p)?;
+        let det = j[0][0] * j[1][1] - j[0][1] * j[1][0];
+        if !(det.abs() > 1e-300) || !det.is_finite() {
+            return None;
+        }
+        let out = [
+            [j[1][1] / det, -j[0][1] / det],
+            [-j[1][0] / det, j[0][0] / det],
+        ];
+        out.iter().flatten().all(|v| v.is_finite()).then_some(out)
+    }
+
+    /// The FORWARD map's derivative at `p`, affines and all.
+    pub fn forward_jacobian(&self, p: [f64; 2]) -> Option<[[f64; 2]; 2]> {
+        let j = self.phase_jacobian(self.pre.apply(p))?;
+        let a = &self.pre.m;
+        let b = &self.post.m;
+        let mid = [
+            [j[0][0] * a[0][0] + j[0][1] * a[1][0], j[0][0] * a[0][1] + j[0][1] * a[1][1]],
+            [j[1][0] * a[0][0] + j[1][1] * a[1][0], j[1][0] * a[0][1] + j[1][1] * a[1][1]],
+        ];
+        let out = [
+            [
+                b[0][0] * mid[0][0] + b[0][1] * mid[1][0],
+                b[0][0] * mid[0][1] + b[0][1] * mid[1][1],
+            ],
+            [
+                b[1][0] * mid[0][0] + b[1][1] * mid[1][0],
+                b[1][0] * mid[0][1] + b[1][1] * mid[1][1],
+            ],
+        ];
+        out.iter().flatten().all(|v| v.is_finite()).then_some(out)
+    }
+
+    /// The forward map's smallest singular value at the preimage of
+    /// `q` -- what one level of the walk contracts by there.
+    ///
+    /// Zero when Newton did not converge, which the walk reads as a
+    /// step it cannot take.
+    pub fn local_sigma(&self, q: [f64; 2]) -> f64 {
+        let Some((p, _)) = self.solve(q) else { return 0.0 };
+        let Some(j) = self.forward_jacobian(p) else { return 0.0 };
+        singular_values_of(j).0
+    }
+
+    /// How far `q` may move before this map's inverse stops being
+    /// smooth.
+    ///
+    /// A sum's inverse is a Newton solve on the forward map, so what
+    /// has to stay smooth is the FORWARD kernel, at the preimage --
+    /// [`Kernel::forward_singular_distance`] there, carried into
+    /// `q`'s frame by the forward map's smallest singular value,
+    /// since `|Δq| ≥ σ_min·|Δz|` makes that a sound under-estimate.
+    ///
+    /// It does NOT cover a fold, where `det J` passes through zero
+    /// and two preimages meet: there the inverse is non-smooth at a
+    /// point this reports clearance at. A fold is where Newton stops
+    /// converging, so the walk meets it as a failed solve rather than
+    /// as a wrong answer -- loose, and sound, which is the whole
+    /// bargain D3 strikes.
+    pub fn singular_clearance(&self, q: [f64; 2]) -> f64 {
+        let Some((p, _)) = self.solve(q) else { return 0.0 };
+        let Some(j) = self.forward_jacobian(p) else { return 0.0 };
+        let dom = self.kernel.forward_singular_distance(self.pre.apply(p));
+        let s = singular_values_of(j).0;
+        if !(s > 0.0) {
+            return 0.0;
+        }
+        s * dom
+    }
+
+    /// Measure [`Self::third`] over a ball, as
+    /// [`NonlinearMap2::measure_third`] does and by the same sampling
+    /// -- EVERY sum needs it, since no sum has an exact difference
+    /// form and so every one of them rides the Taylor rung.
+    pub fn measure_third(&mut self, centre: [f64; 2], radius: f64) {
+        self.third = sampled_third(&Map2::SumInverse(*self), centre, radius);
+    }
+
+    /// How many preimages to follow: the kernel's own branch count,
+    /// since the sum's branches are the kernel's.
+    pub fn branches(&self) -> u32 {
+        match self.kernel {
+            Kernel::Root { n, .. } => n.unsigned_abs().max(1),
+            Kernel::Bubble => 2,
+            _ => 1,
+        }
+    }
+}
+
+/// The FORWARD kernel's Jacobian at `z`, by dual numbers.
+///
+/// The walk has never needed this -- it only ever inverts, and
+/// `Kernel::inverse_jacobian` is the derivative of the inverse -- but
+/// a Newton solve steps on the forward map, so here it is, from the
+/// same generic body and with no second derivation.
+/// The branch is not decoration: a root's second preimage is the
+/// NEGATIVE of its first, so a Jacobian taken on branch 0 while the
+/// residual is taken on branch 1 has the wrong sign and Newton walks
+/// away from the answer rather than towards it. Measured: every solve
+/// on branch 1 of `linear + julia` failed until this argument existed.
+pub fn forward_kernel_jacobian(k: &Kernel, z: [f64; 2], branch: u32) -> Option<[[f64; 2]; 2]> {
+    jacobian2(z, |v| kernel_forward_gen(k, &v, branch))
+}
+
+/// `(σ_min, σ_max)` of a 2x2, in closed form -- [`Affine2::singular_values`]
+/// for a bare matrix.
+pub fn singular_values_of(m: [[f64; 2]; 2]) -> (f64, f64) {
+    let [[a, b], [c, d]] = m;
+    let fro2 = a * a + b * b + c * c + d * d;
+    let det = a * d - b * c;
+    let disc = (fro2 * fro2 - 4.0 * det * det).max(0.0).sqrt();
+    (
+        ((fro2 - disc) * 0.5).max(0.0).sqrt(),
+        ((fro2 + disc) * 0.5).max(0.0).sqrt(),
+    )
+}
+
+/// The 2D map a transform composes to -- affine, or a nonlinear map
+/// with its kernel -- or why it is neither. A `bubble` returns its
+/// inner branch; `analyse_2d` adds the outer (S1).
+///
+/// A kernel must be ALONE in the normal phase (J4): summed with an
+/// affine it has no closed-form inverse. The pre-affine and pre-phase
+/// affines compose before it, the post-phase affines and the
+/// post-affine after.
+pub fn transform_map_2d_ordered(
+    t: &Transform,
+    registry: &VariationRegistry,
+    order: &[String],
+) -> Result<Map2, NotAffine> {
+    let stage = variation_stage(t, registry, Space::Planar, order)?;
+    if stage.roots.is_empty() {
+        return transform_affine_2d_ordered(t, registry, order).map(Map2::Affine);
+    }
+    let (kind, w) = stage.roots[0];
+    // TWO kernels summed have no dominant term to seed Newton from
+    // and no branch rule, so they are still refused. One kernel and
+    // an affine is the case D3 is about, and the commonest transform
+    // in the census the walk used to turn away.
+    if stage.roots.len() > 1 {
+        return Err(NotAffine::MixedSum(kind.to_string()));
+    }
+    let kernel = kernel_from_registry(t, registry, kind, Space::Planar)?;
+    if !(w != 0.0) || !w.is_finite() {
+        return Err(NotAffine::Degenerate(kind.to_string()));
+    }
+    let xy = |a: &Affine3| Affine2 { m: [[a.m[0][0], a.m[0][1]], [a.m[1][0], a.m[1][1]]], t: [a.t[0], a.t[1]] };
+    let affine = Affine2 {
+        m: [[t.a as f64, t.b as f64], [t.c as f64, t.d as f64]],
+        t: [t.e as f64, t.f as f64],
+    };
+    let pre = xy(&stage.pre).then_after(&affine);
+    let mut post = xy(&stage.post);
+    if t.post_affine_enabled {
+        let post_affine = Affine2 {
+            m: [[t.post_a as f64, t.post_b as f64], [t.post_c as f64, t.post_d as f64]],
+            t: [t.post_e as f64, t.post_f as f64],
+        };
+        post = post_affine.then_after(&post);
+    }
+    // A singular pre or post affine is a singular map; the caller's
+    // `inverse()` reports it, so hand back a map whose inverse is None.
+    let (Some(pre_inv), Some(post_inv)) = (pre.inverse(), post.inverse()) else {
+        return Ok(Map2::Affine(Affine2 { m: [[0.0; 2]; 2], t: [0.0; 2] }));
+    };
+    // **Splits is folded, never summed** (tracker C6). With the sum's
+    // affine part `L v + c`, the normal phase `L v + c + w·K(v)` is still
+    // a translation on each quadrant of `v`: `M·(v + M⁻¹(c + w·base) +
+    // [x ≥ 0]·w·M⁻¹X + [y ≥ 0]·w·M⁻¹Y)` with `M = L + wI`. So `M` joins
+    // the post-affine, the weight becomes one, and the kernel keeps its
+    // quadrants -- where a Newton sum would find SOME preimage from each
+    // seed rather than its branch's.
+    if let Kernel::Splits { base, x, y } = kernel {
+        let lin = xy(&stage.sum);
+        let m = Affine2 { m: [[lin.m[0][0] + w, lin.m[0][1]], [lin.m[1][0], lin.m[1][1] + w]], t: [0.0, 0.0] };
+        let Some(m_inv) = m.inverse() else {
+            return Err(NotAffine::Degenerate(kind.to_string()));
+        };
+        let base = m_inv.apply([lin.t[0] + w * base[0], lin.t[1] + w * base[1]]);
+        let x = m_inv.apply([w * x[0], w * x[1]]);
+        let y = m_inv.apply([w * y[0], w * y[1]]);
+        let post = post.then_after(&m);
+        let Some(post_inv) = post.inverse() else {
+            return Err(NotAffine::Degenerate(kind.to_string()));
+        };
+        return Ok(Map2::Nonlinear(NonlinearMap2 {
+            kernel: Kernel::Splits { base, x, y },
+            branch: 0,
+            pre,
+            post,
+            pre_inv,
+            post_inv,
+            hole: 0.0,
+            third: 0.0,
+            w: 1.0,
+        }));
+    }
+    // A cylinder summed with an affine has no branch rule: Newton's seeds
+    // would not respect the turn.
+    if stage.any && matches!(kernel, Kernel::Cylinder { .. }) {
+        return Err(NotAffine::MixedSum(kind.to_string()));
+    }
+    if stage.any {
+        // A kernel SUMMED with an affine (D3). The affine part is
+        // `stage.sum`'s xy block, already weighted, applied to the
+        // same point the kernel is.
+        let lin = xy(&stage.sum);
+        let (_, lin_hi) = lin.singular_values();
+        // Which term Newton starts from. The kernel's own inverse is
+        // the better seed where it dominates the sum's size; the
+        // affine's where it does not. `w` scales the kernel's output,
+        // and the affine's scale is its largest singular value, so
+        // that is the comparison.
+        let kernel_leads = w.abs() > lin_hi;
+        return Ok(Map2::Sum(SumMap2 {
+            pre,
+            pre_inv,
+            post,
+            post_inv,
+            lin,
+            lin_inv: lin.inverse(),
+            kernel,
+            kind,
+            branch: 0,
+            kw: w,
+            third: 0.0,
+            kernel_leads,
+        }));
+    }
+    Ok(Map2::Nonlinear(NonlinearMap2 {
+        kernel,
+        branch: 0,
+        pre,
+        post,
+        pre_inv,
+        post_inv,
+        hole: 0.0,
+        third: 0.0,
+        w,
+    }))
+}
+
+/// The 2D affine a transform composes to, or why it does not, with
+/// the variations in the transform's own order — which is the
+/// shader's whenever the transform is alone in its flame.
+pub fn transform_affine_2d(t: &Transform, registry: &VariationRegistry) -> Result<Affine2, NotAffine> {
+    transform_affine_2d_ordered(t, registry, &t.ordered_variation_names(registry))
+}
+
+/// The 2D affine a transform composes to, or why it does not.
+///
+/// The z-only variations, the 2D stubs and `flatten` contribute
+/// nothing in the plane and are accepted; `linear3D` is the identity
+/// in 2D as `linear` is.
+pub fn transform_affine_2d_ordered(
+    t: &Transform,
+    registry: &VariationRegistry,
+    order: &[String],
+) -> Result<Affine2, NotAffine> {
+    let stage = variation_stage(t, registry, Space::Planar, order)?;
+    if let Some((kind, _)) = stage.roots.first() {
+        return Err(NotAffine::Variation(kind.to_string()));
+    }
+    // Nothing composes in the plane: every pre/post variation the
+    // analysis knows is a stub there.
+    debug_assert_eq!(stage.pre, Affine3::IDENTITY);
+    debug_assert_eq!(stage.post, Affine3::IDENTITY);
+    let sum = stage.sum;
+    let affine = Affine2 {
+        m: [[t.a as f64, t.b as f64], [t.c as f64, t.d as f64]],
+        t: [t.e as f64, t.f as f64],
+    };
+    // In 2D the chaos game has no z, so the sum's z column multiplies
+    // zero and its xy block with the xy translation is the whole map.
+    let vsum = Affine2 {
+        m: [[sum.m[0][0], sum.m[0][1]], [sum.m[1][0], sum.m[1][1]]],
+        t: [sum.t[0], sum.t[1]],
+    };
+    let mut map = vsum.then_after(&affine);
+    if t.post_affine_enabled {
+        let post = Affine2 {
+            m: [[t.post_a as f64, t.post_b as f64], [t.post_c as f64, t.post_d as f64]],
+            t: [t.post_e as f64, t.post_f as f64],
+        };
+        map = post.then_after(&map);
+    }
+    Ok(map)
+}
+
+/// The flat-or-full 3D affine of `affine_3d.wgsl`, from an XY affine,
+/// a z offset, and the two plane maps with their identity flags.
+fn plane_affine(
+    xy: [[f64; 2]; 2],
+    xy_t: [f64; 2],
+    g: f64,
+    yz: Option<[f64; 6]>,
+    zx: Option<[f64; 6]>,
+) -> Affine3 {
+    match (yz, zx) {
+        // The flat path: XY affine, z passes through plus the offset.
+        (None, None) => Affine3 {
+            m: [[xy[0][0], xy[0][1], 0.0], [xy[1][0], xy[1][1], 0.0], [0.0, 0.0, 1.0]],
+            t: [xy_t[0], xy_t[1], g],
+        },
+        // The full path, exactly as the shader composes it: XY linear,
+        // then YZ on (y, z), then ZX on (x, z), then a translation
+        // summed from three sources -- and `g` is NOT among them,
+        // which the shader documents as a limitation and this mirrors.
+        _ => {
+            let yz = yz.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+            let zx = zx.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+            let xy3 = Affine3 {
+                m: [[xy[0][0], xy[0][1], 0.0], [xy[1][0], xy[1][1], 0.0], [0.0, 0.0, 1.0]],
+                t: [0.0; 3],
+            };
+            // ny = yz[0]·y + yz[2]·z ; nz = yz[1]·y + yz[3]·z
+            let yz3 = Affine3 {
+                m: [[1.0, 0.0, 0.0], [0.0, yz[0], yz[2]], [0.0, yz[1], yz[3]]],
+                t: [0.0; 3],
+            };
+            // nx = zx[0]·x + zx[2]·z ; nz = zx[1]·x + zx[3]·z
+            let zx3 = Affine3 {
+                m: [[zx[0], 0.0, zx[2]], [0.0, 1.0, 0.0], [zx[1], 0.0, zx[3]]],
+                t: [0.0; 3],
+            };
+            let mut map = zx3.then_after(&yz3.then_after(&xy3));
+            map.t = [xy_t[0] + zx[4], xy_t[1] + yz[4], yz[5] + zx[5]];
+            map
+        }
+    }
+}
+
+const IDENTITY_PLANE: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+
+fn plane(coefs: [f32; 6]) -> Option<[f64; 6]> {
+    if coefs == IDENTITY_PLANE {
+        None
+    } else {
+        Some(coefs.map(|c| c as f64))
+    }
+}
+
+/// The 3D affine a transform composes to, or why it does not, with
+/// the variations in the transform's own order — the shader's whenever
+/// the transform is alone in its flame.
+pub fn transform_affine_3d(t: &Transform, registry: &VariationRegistry) -> Result<Affine3, NotAffine> {
+    transform_affine_3d_ordered(t, registry, &t.ordered_variation_names(registry))
+}
+
+/// The 3D affine a transform composes to, or why it does not.
+///
+/// This is the map the chaos game applies when `preserve_z` is ON:
+/// the affine, the pre-phase composition, the sum, the post-phase
+/// composition, the post-affine. With `preserve_z` off the trajectory
+/// is 2D and this map's z row describes the plotted height, not the
+/// dynamics; see [`analyse_2d`].
+pub fn transform_affine_3d_ordered(
+    t: &Transform,
+    registry: &VariationRegistry,
+    order: &[String],
+) -> Result<Affine3, NotAffine> {
+    let stage = variation_stage(t, registry, Space::Solid, order)?;
+    if let Some((kind, _)) = stage.roots.first() {
+        return Err(NotAffine::Variation(kind.to_string()));
+    }
+    let affine = plane_affine(
+        [[t.a as f64, t.b as f64], [t.c as f64, t.d as f64]],
+        [t.e as f64, t.f as f64],
+        t.g as f64,
+        plane(t.yz_coefs),
+        plane(t.zx_coefs),
+    );
+    let mut map = stage.post.then_after(&stage.sum.then_after(&stage.pre.then_after(&affine)));
+    if t.post_affine_enabled {
+        let post = plane_affine(
+            [[t.post_a as f64, t.post_b as f64], [t.post_c as f64, t.post_d as f64]],
+            [t.post_e as f64, t.post_f as f64],
+            t.post_g as f64,
+            plane(t.yz_post_coefs),
+            plane(t.zx_post_coefs),
+        );
+        map = post.then_after(&map);
+    }
+    Ok(map)
+}
+
+// -------------------------------------------------------------- criterion
+
+/// Why a flame does not qualify. Every variant names the transform
+/// (or the flame-level feature) so the panel can say which, and the
+/// order here is the order they are worth fixing in.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Disqualification {
+    /// The flame has no transforms.
+    Empty,
+    /// Transform `index` is not one affine map.
+    NotAffine { index: usize, why: NotAffine },
+    /// Transform `index`'s map is singular: no inverse.
+    Singular { index: usize },
+    /// Transform `index` is not contractive: its largest singular value
+    /// is `sigma_max ≥ 1`. In 3D under `preserve_z`, an Apophysis-style
+    /// transform fails here with `sigma_max == 1.0` exactly, because
+    /// its z scale is one.
+    NotContractive { index: usize, sigma_max: f64 },
+    /// A final transform is not affine, or is singular. `why` is `None`
+    /// for singular.
+    FinalNotAffine { why: Option<NotAffine> },
+    /// More than one final transform. The composition would be affine
+    /// too, but the chaos game picks among them, which is a choice this
+    /// analysis does not model.
+    MultipleFinals { count: usize },
+    /// No ball every map sends into itself was found (plan §8.8 J5):
+    /// the nonlinear maps do not keep the set bounded.
+    NoBall,
+}
+
+impl std::fmt::Display for Disqualification {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Empty => write!(f, "the flame has no transforms"),
+            Self::NotAffine { index, why } => match why {
+                NotAffine::Variation(v) => write!(f, "transform {index} uses `{v}`, which is not affine"),
+                NotAffine::Priority(v) => write!(f, "transform {index} moves `{v}` out of the weighted sum"),
+                NotAffine::NoVariations => write!(f, "transform {index} has no variations"),
+                NotAffine::MixedSum(v) => write!(
+                    f,
+                    "transform {index} sums `{v}` with another variation; a root must be alone in its sum"
+                ),
+                NotAffine::Degenerate(v) => write!(f, "transform {index}'s `{v}` has a parameter that leaves it no single inverse (a zero power or distance, a scale that reaches zero)"),
+                NotAffine::Mode(v) => write!(f, "transform {index}'s `{v}` must be in inverse mode with the vector projection"),
+            },
+            Self::Singular { index } => write!(f, "transform {index} is singular (no inverse)"),
+            Self::NotContractive { index, sigma_max } => {
+                write!(f, "transform {index} is not contractive (σ_max = {sigma_max:.3})")
+            }
+            Self::FinalNotAffine { why: Some(NotAffine::Variation(v)) } => {
+                write!(f, "the final transform uses `{v}`, which is not affine")
+            }
+            Self::FinalNotAffine { why: Some(w) } => write!(f, "the final transform is not affine ({w:?})"),
+            Self::FinalNotAffine { why: None } => write!(f, "the final transform is singular"),
+            Self::MultipleFinals { count } => write!(f, "{count} final transforms; at most one is supported"),
+            Self::NoBall => write!(f, "no bounding ball: the nonlinear maps do not keep the set bounded"),
+        }
+    }
+}
+
+/// One map of a qualifying IFS, with what the distance estimate needs
+/// of it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IfsMap<A> {
+    pub forward: A,
+    pub inverse: A,
+    pub sigma_min: f64,
+    pub sigma_max: f64,
+    /// The transform's index in the flame, so a colouring can look up
+    /// its colour.
+    pub transform_index: usize,
+}
+
+
+/// The transition graph a xaos matrix makes of an IFS
+/// (`ifs-general.md` D4).
+///
+/// **The direction is the thing to get right.** A candidate's address
+/// is `[a_1, a_2, ...]` in DISCOVERY order, and the forward chain runs
+/// it backwards: `x = S_{a_1}(S_{a_2}(...S_{a_k}(q)))`. So appending a
+/// child `i` to a path whose last map is `l` puts `i` immediately
+/// BEFORE `l` in the chaos game's own order, and the transition that
+/// has to be admissible is `i → l`, not `l → i`.
+///
+/// The chaos game picks its next transform with probability
+/// proportional to `weight_j · xaos[i][j]`, which is what
+/// `select_transform_xaos` in `utilities.wgsl` does; this mirrors it.
+/// Indices here are MAP indices, so a transform that expanded into
+/// several maps (a bubble's two branches) shares its transform's row
+/// and column.
+#[derive(Debug, Clone, PartialEq)]
+pub struct XaosGraph {
+    n: usize,
+    /// `π_i`, the chain's stationary probability of being in map `i`.
+    /// Without xaos this is the normalised weight.
+    pi: Vec<f64>,
+    /// `step[i * n + l] = π_i · p_{i l} / π_l` -- the factor an
+    /// address's probability gains when `i` is appended to a path
+    /// whose last map is `l`.
+    ///
+    /// The rule it makes incremental: a cylinder's weight is
+    /// `π_{a_k} · Π p_{a_{m+1} a_m}`, and `weight_{k+1} = weight_k ·
+    /// step[a_{k+1}][a_k]` with `weight_1 = π_{a_1}`. Without xaos
+    /// `p_{i l} = w_i` for every `l`, so `step` is `w_i · w_l / w_l =
+    /// w_i` and the product collapses to today's `Π w`.
+    step: Vec<f64>,
+}
+
+impl XaosGraph {
+    /// A state whose stationary probability is below this is treated
+    /// as unreachable: the chain leaves it and never returns, so no
+    /// part of the attractor is there.
+    ///
+    /// Power iteration on a stochastic matrix loses a transient
+    /// state's mass geometrically, and a hundred steps on the
+    /// matrices a flame can have (128 transforms at most) is far past
+    /// where the remainder matters. A threshold rather than an exact
+    /// reachability analysis because the answer feeds a probability,
+    /// and a state with 1e-14 of the measure draws nothing.
+    const UNREACHABLE: f64 = 1e-12;
+
+    /// The graph a flame's xaos makes of `maps`, or `None` when the
+    /// flame has none -- in which case the caller uses the plain
+    /// weights and nothing about the walk changes.
+    pub fn of<A>(flame: &Flame, maps: &[IfsMap<A>]) -> Option<Self> {
+        if !flame.has_xaos() {
+            return None;
+        }
+        let n = maps.len();
+        if n == 0 {
+            return None;
+        }
+        let tx = |i: usize| maps[i].transform_index;
+        let weight = |i: usize| flame.transforms.get(i).map_or(0.0, |t| t.weight as f64).max(0.0);
+        // `p[i][j]`, at MAP granularity, mirroring the shader: the
+        // row is normalised over the transforms actually present, so
+        // a transform the analysis dropped cannot take probability
+        // with it.
+        let mut p = vec![0.0f64; n * n];
+        for i in 0..n {
+            let row: Vec<f64> = (0..n)
+                .map(|j| weight(tx(j)) * flame.get_xaos(tx(i), tx(j)).max(0.0) as f64)
+                .collect();
+            let total: f64 = row.iter().sum();
+            if total > 0.0 {
+                for j in 0..n {
+                    p[i * n + j] = row[j] / total;
+                }
+            }
+        }
+        // The stationary distribution, by power iteration.
+        let mut pi = vec![1.0 / n as f64; n];
+        for _ in 0..200 {
+            let mut next = vec![0.0f64; n];
+            for i in 0..n {
+                for j in 0..n {
+                    next[j] += pi[i] * p[i * n + j];
+                }
+            }
+            let total: f64 = next.iter().sum();
+            if !(total > 0.0) {
+                break;
+            }
+            for v in next.iter_mut() {
+                *v /= total;
+            }
+            pi = next;
+        }
+        let mut step = vec![0.0f64; n * n];
+        for i in 0..n {
+            for l in 0..n {
+                // A path that ends in an unreachable state carries no
+                // measure, so it gains nothing rather than dividing
+                // by zero.
+                if pi[l] > Self::UNREACHABLE {
+                    step[i * n + l] = pi[i] * p[i * n + l] / pi[l];
+                }
+            }
+        }
+        Some(XaosGraph { n, pi, step })
+    }
+
+    /// Whether map `child` may be appended to a path whose last map is
+    /// `last` -- that is, whether the chaos game may apply `child`
+    /// and then `last`.
+    ///
+    /// `None` for `last` is the first level, where the path has no
+    /// successor yet and any map the chain actually visits will do.
+    pub fn admits(&self, child: usize, last: Option<u32>) -> bool {
+        match last {
+            None => self.pi.get(child).is_some_and(|&v| v > Self::UNREACHABLE),
+            Some(l) => {
+                let (l, i) = (l as usize, child);
+                l < self.n && i < self.n && self.step[i * self.n + l] > 0.0
+            }
+        }
+    }
+
+    /// The factor an address's probability gains when `child` is
+    /// appended to a path whose last map is `last`.
+    pub fn step_probability(&self, child: usize, last: Option<u32>) -> f64 {
+        match last {
+            None => self.pi.get(child).copied().unwrap_or(0.0),
+            Some(l) => self.step.get(child * self.n + l as usize).copied().unwrap_or(0.0),
+        }
+    }
+
+    /// The stationary probabilities, one per map.
+    pub fn stationary(&self) -> &[f64] {
+        &self.pi
+    }
+}
+
+/// A ball `B(centre, radius)` that every map of the IFS sends into
+/// itself, so the attractor lies inside it and a point outside it is
+/// outside the attractor by at least the excess.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Ball<P> {
+    pub centre: P,
+    pub radius: f64,
+}
+
+/// A flame that qualifies, as an IFS: its maps, its optional final map
+/// (applied after, to the whole attractor), and a bounding ball.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Ifs<A, P> {
+    pub maps: Vec<IfsMap<A>>,
+    pub final_map: Option<IfsMap<A>>,
+    pub ball: Ball<P>,
+    /// The MEASURED ball's radius, which is what a solid's camera
+    /// frames. Equal to `ball.radius` unless [`Ifs2::with_extent`] /
+    /// [`Ifs3::with_extent`] moved the cut: the cut is the walk's
+    /// business and must not dolly the camera.
+    pub frame_radius: f64,
+    /// The ball centre's scalar coordinate, for a solid whose kernels
+    /// carry a fourth one (plan §8.11 step 3); zero otherwise.
+    pub aux_centre: f64,
+    /// The transition graph, when the flame has xaos
+    /// (`ifs-general.md` D4). `None` is the ordinary case, where
+    /// every map may follow every map and the address probability is
+    /// a plain product of weights.
+    ///
+    /// The BALL is still one ball for every node. A graph-directed
+    /// IFS has one attractor per node in principle, and the walk's
+    /// escape test needs only `B ⊇ A`, which a ball every map sends
+    /// into itself gives for all of them at once -- stricter than
+    /// necessary, and sound. Per-node balls wait for a flame that
+    /// shows the single one too loose.
+    pub xaos: Option<XaosGraph>,
+}
+
+impl Ifs2 {
+    /// Whether every map is on a rung the delta walk can take
+    /// (`ifs-perturbation-delta.md` §3, D4).
+    ///
+    /// A map qualifies on either: an exact difference form, or the
+    /// TAYLOR one with a measured remainder. What it may not have is
+    /// a third derivative nobody measured, because then there is no
+    /// criterion for when to stop carrying.
+    ///
+    /// **Whether to keep carrying is not asked here, or by either
+    /// walk.** It is a THRESHOLD, and asked independently in f64 and
+    /// in f32 the two crossed it at different levels: on a julia dust
+    /// at 2^24 the truncation at level 0 lands within a factor of
+    /// three of the tenth-of-a-pixel bar, and one extra level of a
+    /// kernel whose third derivative is that large read 25x further
+    /// from the reference than the walk it replaces. So the reference
+    /// decides it once per row and both sides read the bit -- see
+    /// `RefRow::carry`.
+    ///
+    /// `estimate_delta` does not consult this at all; it walks
+    /// whatever it is handed. This is the RENDERER's question, about
+    /// whether the shader can be given the flame.
+    pub fn has_delta_forms(&self) -> bool {
+        !self.maps.is_empty()
+            && self.maps.iter().all(|m| {
+                m.inverse.has_difference()
+                    || match m.inverse {
+                        Map2::NonlinearInverse(r) => r.third > 0.0 && r.third.is_finite(),
+                        _ => false,
+                    }
+            })
+    }
+}
+
+pub type Ifs2 = Ifs<Map2, [f64; 2]>;
+pub type Ifs3 = Ifs<Map3, [f64; 3]>;
+
+/// Which dynamics to analyse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Space {
+    /// The 2D IFS — what the chaos game runs in 2D mode, and ALSO what
+    /// it runs in 3D mode with `preserve_z` off, where z is zeroed
+    /// every iteration and only the plot has depth.
+    Planar,
+    /// The 3D IFS the chaos game runs with `preserve_z` on.
+    Solid,
+}
+
+/// The criterion, answering *why not* rather than *whether*.
+///
+/// Returns every disqualification found rather than the first, so the
+/// panel can list them: a flame with two non-affine transforms should
+/// say so once, not make the user fix one to discover the next.
+pub fn analyse_2d(flame: &Flame, registry: &VariationRegistry) -> Result<Ifs2, Vec<Disqualification>> {
+    analyse_2d_with(flame, registry, true)
+}
+
+/// [`analyse_2d`] without what only the escape engine reads: the
+/// inversions' hole radii and the Taylor rung's remainders (`set_holes`).
+/// For the inverse walk (`backward.rs`), which applies the maps and never
+/// bounds them. The remainders are sampled over the ball and were most of
+/// the analysis -- 22 ms of random1's 26 -- which a web frame cannot hold.
+pub fn analyse_2d_maps(flame: &Flame, registry: &VariationRegistry) -> Result<Ifs2, Vec<Disqualification>> {
+    analyse_2d_with(flame, registry, false)
+}
+
+/// [`analyse_2d_maps`], yielding at `slicer`'s ticks: the invariant ball
+/// is a numeric search of a few milliseconds natively, more than a web
+/// frame's share in the browser. The same arithmetic either way.
+pub async fn analyse_2d_maps_sliced(
+    flame: &Flame,
+    registry: &VariationRegistry,
+    slicer: &super::slice::Slicer,
+) -> Result<Ifs2, Vec<Disqualification>> {
+    analyse_2d_with_sliced(flame, registry, false, slicer).await
+}
+
+/// A transform's `pre_blur`, taken out for the planner: see
+/// [`analyse_2d_maps_blurred_sliced`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PreBlur {
+    /// The variation's weight. JWF's draw is `weight·(six uniforms − 3)`
+    /// at a uniform angle, so it moves the point at most `3·|weight|`.
+    pub weight: f64,
+}
+
+impl PreBlur {
+    /// The furthest the blur moves a point, in the frame the kernel sees.
+    pub fn reach(&self) -> f64 {
+        3.0 * self.weight.abs()
+    }
+}
+
+/// **A variation that ignores its input** (tracker C2c): its output is a
+/// random point drawn the same way wherever the point came from. A
+/// transform made of one alone forgets its input entirely, as a blur
+/// that reaches across the attractor does -- a renewal by construction.
+/// The Grand JuliaN generator's blob is one of these half the time.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FreeKind {
+    /// `blur`: a uniform angle, and a radius uniform in [0, 1).
+    Disc,
+    /// `gaussian_blur`: a uniform angle, and a radius the sum of four
+    /// uniforms less 2.
+    Gaussian,
+    /// `pie`, and `pie3D` in the plane: a radius uniform in [0, 1) in one
+    /// of `slices` wedges. `rotation` is in radians, as the shader and
+    /// JWF read it.
+    Pie { slices: f64, rotation: f64, thickness: f64 },
+    /// `starblur`: a point in a star of `power` points at radius 1,
+    /// whose inner vertices sit at `range`. `alpha` and `length` are its
+    /// init-derived slots.
+    Star { power: f64, alpha: f64, length: f64 },
+}
+
+/// A transform whose one variation ignores its input: see [`FreeKind`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FreeBlur {
+    pub kind: FreeKind,
+    /// The variation's weight: it scales the draw.
+    pub weight: f64,
+}
+
+impl FreeBlur {
+    /// The variation `name` on `t`, if it is one that ignores its input.
+    pub fn of(name: &str, t: &Transform, registry: &VariationRegistry) -> Option<Self> {
+        let p = |param: &str| t.get_variation_param_or_default(name, param, registry) as f64;
+        let kind = match name {
+            "blur" => FreeKind::Disc,
+            "gaussian_blur" => FreeKind::Gaussian,
+            "pie" | "pie3D" => FreeKind::Pie { slices: p("slices").max(1.0), rotation: p("rotation"), thickness: p("thickness") },
+            "starblur" => {
+                // `init_starblur`.
+                let power = p("power").max(1.0);
+                let range = p("range");
+                let alpha0 = std::f64::consts::PI / power;
+                let length = (1.0 + range * range - 2.0 * range * alpha0.cos()).max(1e-30).sqrt();
+                FreeKind::Star { power, alpha: (alpha0.sin() * range / length).asin(), length }
+            }
+            _ => return None,
+        };
+        let weight = t.variations.get(name).copied().unwrap_or(0.0) as f64;
+        (weight != 0.0 && weight.is_finite()).then_some(Self { kind, weight })
+    }
+
+    /// A radius every draw lies within, at weight 1.
+    pub fn radius(&self) -> f64 {
+        match self.kind {
+            FreeKind::Disc | FreeKind::Pie { .. } => 1.0,
+            FreeKind::Gaussian => 2.0,
+            // The star's edge is furthest from the centre at an end of
+            // its `x`: 1 at a point, or the far end of an edge.
+            FreeKind::Star { alpha, length, .. } => (1.0 + length * length - 2.0 * length * alpha.cos()).max(1.0).sqrt(),
+        }
+    }
+
+    /// **Whether its draw restricts to a polar box** (the conditional
+    /// draw, tracker C2b): a radius and an angle drawn independently, with
+    /// a density in closed form. `starblur`'s is not; `pie`'s is for a
+    /// whole number of slices of some thickness.
+    pub fn boxable(&self) -> bool {
+        match self.kind {
+            FreeKind::Disc | FreeKind::Gaussian => true,
+            FreeKind::Pie { slices, thickness, .. } => slices.fract() == 0.0 && thickness > 0.0,
+            FreeKind::Star { .. } => false,
+        }
+    }
+
+    /// The draw's density per unit radius and angle at `(rho, phi)` of its
+    /// unweighted output, times 2pi: 1 for `blur` inside its disc.
+    pub fn polar_density(&self, rho: f64, phi: f64) -> f64 {
+        match self.kind {
+            FreeKind::Disc => f64::from(rho < 1.0),
+            FreeKind::Gaussian => gaussian_radial(rho),
+            FreeKind::Pie { slices, rotation, thickness } => {
+                let t = (phi - rotation) / std::f64::consts::TAU * slices;
+                if rho < 1.0 && t - t.floor() < thickness {
+                    1.0 / thickness
+                } else {
+                    0.0
+                }
+            }
+            FreeKind::Star { .. } => 0.0,
+        }
+    }
+
+    /// **The draw's probability of a polar box** `[rho_lo, rho_hi] x
+    /// [phi_lo, phi_hi]` of its unweighted output. See [`Self::boxable`].
+    pub fn box_mass(&self, rho_lo: f64, rho_hi: f64, phi_lo: f64, phi_hi: f64) -> f64 {
+        let radial = match self.kind {
+            FreeKind::Gaussian => gaussian_radial_cdf(rho_hi) - gaussian_radial_cdf(rho_lo),
+            _ => (rho_hi.min(1.0) - rho_lo.min(1.0)).max(0.0),
+        };
+        let angular = match self.kind {
+            FreeKind::Pie { slices, rotation, thickness } => {
+                // The share of an angle interval inside the wedges: per
+                // slice `t`, a wedge is `frac(t) < thickness`.
+                let g = |phi: f64| {
+                    let t = (phi - rotation) / std::f64::consts::TAU * slices;
+                    t.floor() * thickness + (t - t.floor()).min(thickness)
+                };
+                std::f64::consts::TAU / slices * (g(phi_hi) - g(phi_lo)) / thickness
+            }
+            _ => phi_hi - phi_lo,
+        };
+        radial * angular / std::f64::consts::TAU
+    }
+
+    /// One draw, weighted, as the variation's WGSL makes it.
+    pub fn draw(&self, u: &mut impl FnMut() -> f64) -> [f64; 2] {
+        use std::f64::consts::{FRAC_PI_2, TAU};
+        let (r, a) = match self.kind {
+            FreeKind::Disc => {
+                let a = u() * TAU;
+                (u(), a)
+            }
+            FreeKind::Gaussian => {
+                let a = u() * TAU;
+                (u() + u() + u() + u() - 2.0, a)
+            }
+            FreeKind::Pie { slices, rotation, thickness } => {
+                let sl = (u() * slices + 0.5).floor();
+                let a = rotation + TAU * (sl + u() * thickness) / slices;
+                (u(), a)
+            }
+            FreeKind::Star { power, alpha, length } => {
+                let mut f = u() * power * 2.0;
+                let arm = f.trunc();
+                f -= arm;
+                let x = f * length;
+                let z0 = (1.0 + x * x - 2.0 * x * alpha.cos()).max(1e-30).sqrt();
+                let arm_i = arm as i64;
+                let turn = TAU / power * (arm_i / 2) as f64;
+                let off = (alpha.sin() * x / z0).asin();
+                let ang = if arm_i % 2 == 0 { turn + off } else { turn - off };
+                (z0 * u().sqrt(), ang - FRAC_PI_2)
+            }
+        };
+        [self.weight * r * a.cos(), self.weight * r * a.sin()]
+    }
+}
+
+/// The Irwin-Hall distribution of four uniforms: its density and its
+/// distribution function on `[0, 4]`.
+fn irwin_hall_4(x: f64) -> (f64, f64) {
+    let x = x.clamp(0.0, 4.0);
+    let c = [1.0, -4.0, 6.0, -4.0, 1.0];
+    let (mut pdf, mut cdf) = (0.0, 0.0);
+    for (k, ck) in c.iter().enumerate() {
+        let d = x - k as f64;
+        if d > 0.0 {
+            pdf += ck * d * d * d;
+            cdf += ck * d * d * d * d;
+        }
+    }
+    (pdf / 6.0, (cdf / 24.0).clamp(0.0, 1.0))
+}
+
+/// `gaussian_blur`'s radius: `|r|` for `r` four uniforms less 2, which is
+/// symmetric, so its density is twice `r`'s at `2 + rho`.
+fn gaussian_radial(rho: f64) -> f64 {
+    if (0.0..2.0).contains(&rho) {
+        2.0 * irwin_hall_4(2.0 + rho).0
+    } else {
+        0.0
+    }
+}
+
+/// Its distribution function.
+fn gaussian_radial_cdf(rho: f64) -> f64 {
+    2.0 * irwin_hall_4(2.0 + rho.clamp(0.0, 2.0)).1 - 1.0
+}
+
+/// What the planner takes out of a transform to draw itself: a
+/// `pre_blur`, or a variation that ignores its input. See
+/// [`analyse_2d_maps_blurred_sliced`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Blur {
+    Pre(PreBlur),
+    Free(FreeBlur),
+}
+
+/// [`analyse_2d_maps_sliced`], with each transform's `pre_blur` taken
+/// out and handed back beside the maps, by transform index (tracker item
+/// C2, `docs/projects/deep-zoom-tracker.md`). The maps are the flame's
+/// with the blur removed; the walk adds it back where it draws the
+/// sample and replays, and decides whether it can plan it at all.
+///
+/// Only a `pre_blur` that is its transform's one pre-phase variation is
+/// taken out: `pre` then is the transform's affine, and the blur lands
+/// exactly where the kernel reads. Beside another, it stays in and is
+/// refused as before. The escape engine's analysis never sees this: a
+/// random map has no escape time.
+///
+/// **A transform whose one variation ignores its input** ([`FreeBlur`])
+/// is taken out whole. The analysis is handed a stand-in with the same
+/// reach: `bubble` scaled to the draw's radius, on an identity affine,
+/// whose image is the disc every draw lies in. The walk never evaluates
+/// it where the draw matters -- its sample and replays draw the real
+/// variation, and the GPU runs the flame's own code -- so what the
+/// stand-in carries is the output's extent: the invariant ball, and the
+/// renewal's output disc.
+pub async fn analyse_2d_maps_blurred_sliced(
+    flame: &Flame,
+    registry: &VariationRegistry,
+    slicer: &super::slice::Slicer,
+) -> Result<(Ifs2, Vec<Option<Blur>>), Vec<Disqualification>> {
+    let mut stripped = flame.clone();
+    let mut blurs = vec![None; flame.transforms.len()];
+    for (i, t) in stripped.transforms.iter_mut().enumerate() {
+        let live: Vec<&String> = t.variations.iter().filter(|(_, w)| **w != 0.0).map(|(n, _)| n).collect();
+        if let [name] = live.as_slice() {
+            if let Some(free) = FreeBlur::of(name, t, registry) {
+                let stand_in = (free.weight * free.radius()) as f32;
+                t.variations.clear();
+                t.variation_order.clear();
+                t.variation_params.clear();
+                t.variation_priorities.clear();
+                t.set_variation("bubble", stand_in);
+                (t.a, t.b, t.c, t.d, t.e, t.f) = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+                blurs[i] = Some(Blur::Free(free));
+                continue;
+            }
+        }
+        let w = t.variations.get("pre_blur").copied().unwrap_or(0.0);
+        if w == 0.0 {
+            continue;
+        }
+        let other_pre = t.variations.iter().any(|(n, &vw)| {
+            vw != 0.0 && n != "pre_blur" && registry.get(n).is_some_and(|d| d.phase == VariationPhase::Pre)
+        });
+        if other_pre {
+            continue;
+        }
+        t.variations.remove("pre_blur");
+        t.variation_order.retain(|n| n != "pre_blur");
+        blurs[i] = Some(Blur::Pre(PreBlur { weight: w as f64 }));
+    }
+    analyse_2d_with_sliced(&stripped, registry, false, slicer).await.map(|ifs| (ifs, blurs))
+}
+
+fn analyse_2d_with(flame: &Flame, registry: &VariationRegistry, holes: bool) -> Result<Ifs2, Vec<Disqualification>> {
+    super::slice::drive(analyse_2d_with_sliced(flame, registry, holes, &super::slice::Slicer::never()))
+}
+
+async fn analyse_2d_with_sliced(
+    flame: &Flame,
+    registry: &VariationRegistry,
+    holes: bool,
+    slicer: &super::slice::Slicer,
+) -> Result<Ifs2, Vec<Disqualification>> {
+    let order = flame.active_variation_names_ordered(registry);
+    let maps = collect(flame, |t| transform_map_2d_ordered(t, registry, &order).map(|a| (a, a.inverse(), a.singular_values())));
+    // The final transform stays affine (J4).
+    let final_map = collect_final(flame, |t| {
+        transform_affine_2d_ordered(t, registry, &order)
+            .map(|a| (Map2::Affine(a), a.inverse().map(Map2::Affine), a.singular_values()))
+    });
+    let (maps, final_map, mut errs) = merge(maps, final_map, flame);
+    // The escape engine's (`holes`): a kernel its shader has no row for
+    // is refused as it was before the walk took it.
+    if holes {
+        for m in &maps {
+            let k = match &m.forward {
+                Map2::Nonlinear(n) => Some(n.kernel),
+                Map2::Sum(s) => Some(s.kernel),
+                _ => None,
+            };
+            if let Some(k) = k.filter(Kernel::walk_only) {
+                errs.push(Disqualification::NotAffine {
+                    index: m.transform_index,
+                    why: NotAffine::Variation(k.variation().to_string()),
+                });
+            }
+        }
+    }
+    if !errs.is_empty() {
+        return Err(errs);
+    }
+    // The ball first, on the unexpanded maps -- a forward map does
+    // not depend on the branch -- because a disc's branch count is
+    // read off it (D2).
+    // The walk (`!holes`) takes a bulk where no ball is invariant: it
+    // counts branches by the ball and bounds nothing with it (C6).
+    let Some(ball) = ball_2d(&maps, !holes, slicer).await else {
+        errs.push(Disqualification::NoBall);
+        return Err(errs);
+    };
+    let aux_centre = 0.0;
+    // One map per (transform, branch): a kernel with several
+    // preimages is several maps that share a transform and differ in
+    // the branch (S1), so the walk's loops and the address keep their
+    // shape.
+    let maps: Vec<IfsMap<Map2>> = maps
+        .into_iter()
+        .flat_map(|m| {
+            // A sum's branches are its KERNEL's (D3: "the branch count
+            // is the dominant term's, and each of its branches seeds
+            // one Newton solve"), so the two cases read the same
+            // count from the same kernel.
+            // Cylinder's turns start where the ball does.
+            let mut m = m;
+            if let (Map2::Nonlinear(f), Map2::NonlinearInverse(i)) = (&mut m.forward, &mut m.inverse) {
+                if let Kernel::Cylinder { .. } = f.kernel {
+                    let (lo, _) = f.cylinder_turns(&ball);
+                    f.kernel = Kernel::Cylinder { k0: lo };
+                    i.kernel = f.kernel;
+                }
+            }
+            let branches = match (m.forward.nonlinear(), m.forward.sum()) {
+                (Some(n), _) => n.branch_count(&ball),
+                (_, Some(r)) => r.branches(),
+                _ => 1,
+            };
+            (0..branches).map(move |b| {
+                let mut mb = m;
+                match (&mut mb.forward, &mut mb.inverse) {
+                    (Map2::Nonlinear(f), Map2::NonlinearInverse(i)) => {
+                        f.branch = b;
+                        i.branch = b;
+                    }
+                    (Map2::Sum(f), Map2::SumInverse(i)) => {
+                        f.branch = b;
+                        i.branch = b;
+                    }
+                    _ => {}
+                }
+                mb
+            })
+        })
+        .collect();
+    let mut maps = maps;
+    if holes {
+        set_holes(&mut maps, &ball);
+    }
+    let xaos = XaosGraph::of(flame, &maps);
+    Ok(Ifs { maps, final_map, frame_radius: ball.radius, ball, aux_centre, xaos })
+}
+
+/// Each inversion's hole, once the ball's reach in its pre-frame is
+/// known: the disc about the pre-frame origin that holds the whole
+/// attractor. The holes FOLLOW the ball, so whatever sets the ball's
+/// radius sets them.
+fn set_holes(maps: &mut [IfsMap<Map2>], ball: &Ball<[f64; 2]>) {
+    for m in maps.iter_mut() {
+        if let Map2::Nonlinear(r) | Map2::NonlinearInverse(r) = &mut m.inverse {
+            let c = r.pre.apply(ball.centre);
+            let (_, pre_hi) = r.pre.singular_values();
+            let r_pre = c[0].hypot(c[1]) + pre_hi * ball.radius;
+            r.hole = r.kernel.hole_radius(r_pre);
+            // The Taylor rung's remainder, for a kernel with no exact
+            // difference form. Measured HERE because it is a property
+            // of the map over the BALL, and the ball is not known
+            // until now -- the same reason the hole above is set here
+            // and not where the map is built. A kernel with an exact
+            // form never reads it and does not pay for it.
+            if !kernel_has_difference(&r.kernel) {
+                let (bc, br) = (ball.centre, ball.radius);
+                r.measure_third(bc, br);
+            }
+        }
+        // A sum has no hole -- its image is not the kernel's, because
+        // the affine term moves it -- but it always rides the Taylor
+        // rung, so it always needs the remainder.
+        if let Map2::Sum(r) | Map2::SumInverse(r) = &mut m.inverse {
+            r.measure_third(ball.centre, ball.radius);
+        }
+    }
+}
+
+impl Ifs2 {
+    /// The same set cut at `radius` about the measured centre, every
+    /// hole following -- the user's Extent (plan §8.15).
+    ///
+    /// For a set with inversions the ball is a cut through an
+    /// unbounded set and its radius is a sampled statistic, which
+    /// drifts as the flame animates; every far-field reading is
+    /// `σ·(r − R)` or a hole's edge, so the drift moves the exterior
+    /// of the picture bodily -- 16 pixels for a six-degree turn of one
+    /// transform, measured, while the set there moved 94. Holding the
+    /// radius holds the exterior to within a tenth of a pixel.
+    pub fn with_extent(mut self, radius: f64) -> Self {
+        self.ball.radius = radius.max(1e-9);
+        set_holes(&mut self.maps, &self.ball);
+        self
+    }
+}
+
+impl Ifs3 {
+    /// The solid's twin of [`Ifs2::with_extent`]. The solid's kernels
+    /// carry no hole, so only the walk's radius moves; `frame_radius`
+    /// stays, so the camera does not.
+    pub fn with_extent(mut self, radius: f64) -> Self {
+        self.ball.radius = radius.max(1e-9);
+        self
+    }
+}
+
+/// The 3D criterion, for a flame run with `preserve_z` on. A flame
+/// run with it off is a planar IFS and should be analysed as one.
+pub fn analyse_3d(flame: &Flame, registry: &VariationRegistry) -> Result<Ifs3, Vec<Disqualification>> {
+    let order = flame.active_variation_names_ordered(registry);
+    let maps = collect(flame, |t| transform_map_3d_ordered(t, registry, &order).map(|a| (a, a.inverse(), a.singular_values())));
+    // The final transform stays affine (J4).
+    let final_map = collect_final(flame, |t| {
+        transform_affine_3d_ordered(t, registry, &order)
+            .map(|a| (Map3::Affine(a), a.inverse().map(Map3::Affine), a.singular_values()))
+    });
+    let (maps, final_map, mut errs) = merge(maps, final_map, flame);
+    if !errs.is_empty() {
+        return Err(errs);
+    }
+    let Some((ball, aux_centre)) = ball_3d(&maps) else {
+        errs.push(Disqualification::NoBall);
+        return Err(errs);
+    };
+    let xaos = XaosGraph::of(flame, &maps);
+    Ok(Ifs { maps, final_map, frame_radius: ball.radius, ball, aux_centre, xaos })
+}
+
+/// The 3D map a transform composes to -- affine, or a nonlinear map
+/// with its kernel -- or why it is neither (plan §8.11 step 2). The
+/// same rules as the plane's [`transform_map_2d_ordered`].
+pub fn transform_map_3d_ordered(
+    t: &Transform,
+    registry: &VariationRegistry,
+    order: &[String],
+) -> Result<Map3, NotAffine> {
+    let stage = variation_stage(t, registry, Space::Solid, order)?;
+    if stage.roots.is_empty() {
+        return transform_affine_3d_ordered(t, registry, order).map(Map3::Affine);
+    }
+    let (kind, w) = stage.roots[0];
+    if stage.roots.len() > 1 || stage.any {
+        return Err(NotAffine::MixedSum(kind.to_string()));
+    }
+    if !(w != 0.0) || !w.is_finite() {
+        return Err(NotAffine::Degenerate(kind.to_string()));
+    }
+    let kernel = kernel3_from_registry(t, registry, kind)?;
+    let affine = plane_affine(
+        [[t.a as f64, t.b as f64], [t.c as f64, t.d as f64]],
+        [t.e as f64, t.f as f64],
+        t.g as f64,
+        plane(t.yz_coefs),
+        plane(t.zx_coefs),
+    );
+    let pre = stage.pre.then_after(&affine);
+    let mut post = stage.post;
+    if t.post_affine_enabled {
+        let post_affine = plane_affine(
+            [[t.post_a as f64, t.post_b as f64], [t.post_c as f64, t.post_d as f64]],
+            [t.post_e as f64, t.post_f as f64],
+            t.post_g as f64,
+            plane(t.yz_post_coefs),
+            plane(t.zx_post_coefs),
+        );
+        post = post_affine.then_after(&post);
+    }
+    let (Some(pre_inv), Some(post_inv)) = (pre.inverse(), post.inverse()) else {
+        return Ok(Map3::Affine(Affine3 { m: [[0.0; 3]; 3], t: [0.0; 3] }));
+    };
+    Ok(Map3::Nonlinear(NonlinearMap3 { kernel, pre, post, pre_inv, post_inv, w }))
+}
+
+type Raw<A> = Result<(A, Option<A>, (f64, f64)), NotAffine>;
+
+fn collect<A: Copy>(flame: &Flame, f: impl Fn(&Transform) -> Raw<A>) -> Vec<(usize, Raw<A>)> {
+    flame.transforms.iter().enumerate().map(|(i, t)| (i, f(t))).collect()
+}
+
+fn collect_final<A: Copy>(flame: &Flame, f: impl Fn(&Transform) -> Raw<A>) -> Vec<Raw<A>> {
+    flame.final_transforms.iter().map(f).collect()
+}
+
+fn merge<A: Copy + MapKind>(
+    maps: Vec<(usize, Raw<A>)>,
+    finals: Vec<Raw<A>>,
+    flame: &Flame,
+) -> (Vec<IfsMap<A>>, Option<IfsMap<A>>, Vec<Disqualification>) {
+    let mut errs = Vec::new();
+    let mut out = Vec::new();
+    if maps.is_empty() {
+        errs.push(Disqualification::Empty);
+    }
+    for (index, raw) in maps {
+        match raw {
+            Err(why) => errs.push(Disqualification::NotAffine { index, why }),
+            Ok((forward, None, _)) => {
+                let _ = forward;
+                errs.push(Disqualification::Singular { index });
+            }
+            Ok((forward, Some(inverse), (sigma_min, sigma_max))) => {
+                if forward.contraction_is_checked() && !(sigma_max < 1.0) {
+                    errs.push(Disqualification::NotContractive { index, sigma_max });
+                }
+                out.push(IfsMap { forward, inverse, sigma_min, sigma_max, transform_index: index });
+            }
+        }
+    }
+    let final_map = match finals.len() {
+        0 => None,
+        1 => match finals.into_iter().next().expect("len 1") {
+            Err(why) => {
+                errs.push(Disqualification::FinalNotAffine { why: Some(why) });
+                None
+            }
+            Ok((_, None, _)) => {
+                errs.push(Disqualification::FinalNotAffine { why: None });
+                None
+            }
+            Ok((forward, Some(inverse), (sigma_min, sigma_max))) => Some(IfsMap {
+                forward,
+                inverse,
+                sigma_min,
+                sigma_max,
+                transform_index: usize::MAX,
+            }),
+        },
+        count => {
+            errs.push(Disqualification::MultipleFinals { count });
+            None
+        }
+    };
+    (out, final_map, errs)
+}
+
+// ----------------------------------------------------------------- ball
+
+/// Relative slack on the bounding ball's radius, so points ON the
+/// attractor are strictly inside it rather than a rounding error
+/// outside. See [`ball_2d`].
+pub const BALL_MARGIN: f64 = 1e-9;
+
+/// How many times [`ball_2d`] / [`ball_3d`] refine their first ball.
+///
+/// The fixed ball's radius bounds a ball each map sends into ITSELF, which
+/// is a much stronger property than the estimate needs — the walk only
+/// needs the attractor to be inside. So the first ball can be far
+/// larger than the set: the Heighway dragon's is 1.707 around a set of
+/// circumradius ~0.75, and a ball that loose leaves the greedy branch
+/// choice guessing over a region where every branch keeps the point
+/// inside.
+///
+/// Refining is one line of set theory: if `A ⊆ B` then
+/// `A = ∪ Sᵢ(A) ⊆ ∪ Sᵢ(B)`, so a ball containing the images is another
+/// valid ball, and iterating contracts it toward the attractor's own
+/// bounding ball. Every iterate is valid, so the smallest one wins.
+const BALL_REFINEMENTS: usize = 64;
+
+/// A ball every map sends into itself, then
+/// refined [`BALL_REFINEMENTS`] times toward the attractor.
+///
+/// For centre `c`, map `S` with Lipschitz `L < 1` sends `B(c, R)` into
+/// `B(S(c), L·R)`, which lies inside `B(c, R)` whenever
+/// `|S(c) − c| + L·R ≤ R`, i.e. `R ≥ |S(c) − c| / (1 − L)`. The radius is
+/// the largest such bound over the maps. The centre is the mean of the
+/// maps' fixed points, which lie on the attractor and so sit where the
+/// bound is tight; a map without a fixed point (none here, since every
+/// map is contractive) would fall back to the origin.
+///
+/// The radius carries [`BALL_MARGIN`]. The bound above is a supremum
+/// the attractor ATTAINS -- the Sierpinski apex sits exactly on the
+/// sphere -- so in f64 an attractor point lands a few ulps outside and
+/// the distance walk reads it as having escaped at level 0. Growing
+/// the ball is always safe (any radius above the bound still satisfies
+/// `S(B) subset B`) and costs 1e-9 of relative tightness.
+async fn ball_2d(maps: &[IfsMap<Map2>], bulk: bool, slicer: &super::slice::Slicer) -> Option<Ball<[f64; 2]>> {
+    if maps.iter().all(|m| m.forward.is_affine()) {
+        let affine: Vec<IfsMap<Affine2>> = maps
+            .iter()
+            .map(|m| IfsMap {
+                forward: m.forward.as_affine().expect("affine"),
+                inverse: m.inverse.as_affine().expect("affine"),
+                sigma_min: m.sigma_min,
+                sigma_max: m.sigma_max,
+                transform_index: m.transform_index,
+            })
+            .collect();
+        return Some(ball_2d_affine(&affine));
+    }
+    ball_2d_numeric(maps, bulk, slicer).await
+}
+
+/// A ball every map sends into itself, found numerically (J5), for
+/// an IFS with root maps -- which have no fixed-point formula and no
+/// global σ_max.
+///
+/// The centre is the mean of a short chaos game over the forward maps
+/// (a root's branch drawn at random). The radius starts at that
+/// sample's extent and grows until every map sends the sampled disc
+/// -- its boundary circle and interior rings -- into the disc; a
+/// margin of 5% then covers the sampling. A radius that has not
+/// settled in sixty rounds is no ball: the maps do not keep the set
+/// bounded.
+///
+/// With `bulk`, a set no ball holds -- one whose maps expand often enough
+/// that its tail thins as a power law, as bipolar-elliptic-splits's
+/// `splits` does (tracker C6) -- has the bulk's ball instead, as the
+/// inversions do: for the walk, which counts branches by it and bounds
+/// nothing.
+async fn ball_2d_numeric(maps: &[IfsMap<Map2>], bulk: bool, slicer: &super::slice::Slicer) -> Option<Ball<[f64; 2]>> {
+    // A fixed-seed LCG: the ball must be the same ball every time.
+    let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut next = || {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (state >> 11) as f64 / (1u64 << 53) as f64
+    };
+    let branch = |m: &Map2, p: [f64; 2], u: f64| -> [f64; 2] {
+        match m {
+            Map2::Nonlinear(r) => match r.kernel {
+                Kernel::Root { n, .. } => r.apply_branch(p, (u * (n.unsigned_abs() as f64)).floor() as u32),
+                _ => r.apply_branch(p, 0),
+            },
+            other => other.apply(p),
+        }
+    };
+
+    let mut p = [0.0, 0.0];
+    let mut sample = Vec::with_capacity(4000);
+    let mut lost = 0usize;
+    for i in 0..4200 {
+        let m = &maps[(next() * maps.len() as f64).floor() as usize % maps.len()];
+        p = branch(&m.forward, p, next());
+        if !(p[0].is_finite() && p[1].is_finite()) {
+            // A kernel unbounded at its pre-origin sends the odd point
+            // to infinity, as the flame's chaos game respawns it; the
+            // sample restarts and the point is not kept. A game that
+            // keeps leaving has no bulk to measure.
+            lost += 1;
+            if lost > 400 {
+                return None;
+            }
+            // Not the origin: `disc` sends the origin to itself and a
+            // root of a negative distance sends it to infinity, so a
+            // game restarted there never leaves (Julian Disc, which
+            // is exactly those two maps).
+            p = [0.1234, 0.0567];
+            continue;
+        }
+        if i >= 200 {
+            sample.push(p);
+        }
+        if i % 1024 == 0 {
+            slicer.tick().await;
+        }
+    }
+    if sample.len() < 1000 {
+        return None;
+    }
+    let n = sample.len() as f64;
+    let centre = [sample.iter().map(|p| p[0]).sum::<f64>() / n, sample.iter().map(|p| p[1]).sum::<f64>() / n];
+    let dist = |p: [f64; 2]| ((p[0] - centre[0]).powi(2) + (p[1] - centre[1]).powi(2)).sqrt();
+
+    // A set built from a kernel that sends the pre-origin to infinity
+    // -- an inversion, a root of a negative distance -- is unbounded
+    // through it, and no ball is invariant. Its ball is the BULK of
+    // a sample, with a 30% margin, and not a proof (S3): the sparse
+    // tail beyond it is drawn as exterior.
+    //
+    // The bulk has to be a CONTINUOUS function of the flame, because
+    // every bound the walk forms is `σ·(r − R)` and a jump in R moves
+    // the whole distance field at once. Reported from use as bands
+    // that "snap back and forth" under a small rotation: measured, a
+    // 0.6-degree turn of one transform moved the true set at 0 of
+    // 1024 points and this radius by 1.3%, which was 65 pixels of
+    // field. The 99.5th percentile of one long chaos-game orbit is not
+    // continuous in the parameters twice over -- an order statistic
+    // rests on twenty points, and the orbit restarts whenever a point
+    // flies through a pole, a discrete event after which the whole
+    // sample is a different draw. So the bulk is measured from many
+    // SHORT chains, each on its own seed so one chain blowing up
+    // cannot shift the others, and as the mean of the top few percent
+    // of radii rather than one of them. Each chain's points are
+    // compositions of continuous maps of a fixed start, and a mean
+    // over hundreds of them moves by a hair when one crosses a
+    // branch cut.
+    if maps.iter().any(|m| m.forward.nonlinear().is_some_and(|n| n.kernel.unbounded_at_origin())) {
+        return bulk_ball_2d(maps, slicer).await;
+    }
+    let mut radius = sample.iter().map(|&p| dist(p)).fold(0.0f64, f64::max).max(1e-9);
+
+    // Grow until the sampled disc maps into the disc: sixty rounds of
+    // the plain fixed-point iteration, which is what the julia and
+    // bubble balls were found by, then twenty more overshooting.
+    for round in 0..80 {
+        let mut reach = 0.0f64;
+        for ring in [1.0f64, 0.75, 0.5, 0.25] {
+            let count = if ring == 1.0 { 256 } else { 64 };
+            for j in 0..count {
+                let a = std::f64::consts::TAU * j as f64 / count as f64;
+                let q = [centre[0] + radius * ring * a.cos(), centre[1] + radius * ring * a.sin()];
+                for m in maps {
+                    let branches = match m.forward.nonlinear().map(|r| r.kernel) {
+                        Some(Kernel::Root { n, .. }) => n.unsigned_abs(),
+                        _ => 1,
+                    };
+                    for k in 0..branches {
+                        let img = match &m.forward {
+                            Map2::Nonlinear(r) => r.apply_branch(q, k),
+                            other => other.apply(q),
+                        };
+                        let d = dist(img);
+                        if !d.is_finite() {
+                            return if bulk { bulk_ball_2d(maps, slicer).await } else { None };
+                        }
+                        reach = reach.max(d);
+                    }
+                }
+            }
+        }
+        if reach <= radius {
+            return Some(Ball { centre, radius: radius * (1.0 + BALL_MARGIN) });
+        }
+        // The plain iteration `radius = reach` climbs toward its limit
+        // from below by a geometric step and can fail to satisfy
+        // `reach <= radius` exactly -- a blob IFS was still creeping
+        // at 0.51 after sixty rounds. Past sixty, five percent over
+        // the reach lands above the limit the moment the maps contract
+        // in the large. Not from the start, because the balls the
+        // shipped julia presets were framed on came from the plain
+        // iteration and an overshoot moves them.
+        radius = if round < 60 { reach } else { reach * 1.05 };
+        slicer.tick().await;
+    }
+    if bulk {
+        return bulk_ball_2d(maps, slicer).await;
+    }
+    None
+}
+
+/// The BULK of a set no ball is invariant for, with a margin: the mean of
+/// the top 5% of radii over many short chains, times 1.5 (S3). Not a
+/// proof; the sparse tail beyond it is outside.
+async fn bulk_ball_2d(maps: &[IfsMap<Map2>], slicer: &super::slice::Slicer) -> Option<Ball<[f64; 2]>> {
+    let branch = |m: &Map2, p: [f64; 2], u: f64| -> [f64; 2] {
+        match m {
+            Map2::Nonlinear(r) => match r.kernel {
+                Kernel::Root { n, .. } => r.apply_branch(p, (u * (n.unsigned_abs() as f64)).floor() as u32),
+                _ => r.apply_branch(p, 0),
+            },
+            other => other.apply(p),
+        }
+    };
+    {
+        let mut pts: Vec<[f64; 2]> = Vec::with_capacity(4000 * 10);
+        for chain in 0..4000u64 {
+            let mut st: u64 = 0x9E37_79B9_7F4A_7C15 ^ chain.wrapping_mul(0xD1B5_4A32_D192_ED03);
+            let mut draw = || {
+                st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                (st >> 11) as f64 / (1u64 << 53) as f64
+            };
+            let mut q = [0.1234, 0.0567];
+            for step in 0..14 {
+                let m = &maps[(draw() * maps.len() as f64).floor() as usize % maps.len()];
+                q = branch(&m.forward, q, draw());
+                if !(q[0].is_finite() && q[1].is_finite()) {
+                    break;
+                }
+                if step >= 4 {
+                    pts.push(q);
+                }
+            }
+            if chain % 256 == 0 {
+                slicer.tick().await;
+            }
+        }
+        if pts.len() < 1000 {
+            return None;
+        }
+        let n = pts.len() as f64;
+        let c = [pts.iter().map(|p| p[0]).sum::<f64>() / n, pts.iter().map(|p| p[1]).sum::<f64>() / n];
+        let mut radii: Vec<f64> = pts
+            .iter()
+            .map(|p| ((p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2)).sqrt())
+            .collect();
+        radii.sort_by(|a, b| a.total_cmp(b));
+        let tail = radii.len() / 20; // the top 5%
+        let bulk = radii[radii.len() - tail.max(1)..].iter().sum::<f64>() / tail.max(1) as f64;
+        // 1.5 rather than the percentile's 1.3: a mean of the top 5% sits
+        // below the 99.5th percentile, and this keeps the ball's edge
+        // where it was -- just outside the sample's 99.5% -- so the
+        // pictures do not change coverage along with continuity.
+        return Some(Ball { centre: c, radius: bulk.max(1e-9) * 1.5 });
+    }
+}
+
+fn ball_2d_affine(maps: &[IfsMap<Affine2>]) -> Ball<[f64; 2]> {
+    let fixed: Vec<[f64; 2]> = maps.iter().filter_map(|m| m.forward.fixed_point()).collect();
+    let centre = if fixed.is_empty() {
+        [0.0, 0.0]
+    } else {
+        let n = fixed.len() as f64;
+        [fixed.iter().map(|p| p[0]).sum::<f64>() / n, fixed.iter().map(|p| p[1]).sum::<f64>() / n]
+    };
+    let radius = maps
+        .iter()
+        .map(|m| {
+            let sc = m.forward.apply(centre);
+            let d = ((sc[0] - centre[0]).powi(2) + (sc[1] - centre[1]).powi(2)).sqrt();
+            d / (1.0 - m.sigma_max)
+        })
+        .fold(0.0f64, f64::max);
+
+    // Refine: the images' own bounding ball is another valid one.
+    let (mut c, mut r) = (centre, radius);
+    let (mut best_c, mut best_r) = (centre, radius);
+    for _ in 0..BALL_REFINEMENTS {
+        let n = maps.len() as f64;
+        let images: Vec<[f64; 2]> = maps.iter().map(|m| m.forward.apply(c)).collect();
+        let nc = [
+            images.iter().map(|p| p[0]).sum::<f64>() / n,
+            images.iter().map(|p| p[1]).sum::<f64>() / n,
+        ];
+        let nr = maps
+            .iter()
+            .zip(&images)
+            .map(|(m, im)| {
+                let d = ((im[0] - nc[0]).powi(2) + (im[1] - nc[1]).powi(2)).sqrt();
+                d + m.sigma_max * r
+            })
+            .fold(0.0f64, f64::max);
+        c = nc;
+        r = nr;
+        if r < best_r {
+            best_c = c;
+            best_r = r;
+        }
+    }
+    Ball { centre: best_c, radius: best_r * (1.0 + BALL_MARGIN) }
+}
+
+fn ball_3d(maps: &[IfsMap<Map3>]) -> Option<(Ball<[f64; 3]>, f64)> {
+    if maps.iter().all(|m| m.forward.is_affine()) {
+        let affine: Vec<IfsMap<Affine3>> = maps
+            .iter()
+            .map(|m| IfsMap {
+                forward: m.forward.as_affine().expect("affine"),
+                inverse: m.inverse.as_affine().expect("affine"),
+                sigma_min: m.sigma_min,
+                sigma_max: m.sigma_max,
+                transform_index: m.transform_index,
+            })
+            .collect();
+        return Some((ball_3d_affine(&affine), 0.0));
+    }
+    ball_3d_numeric(maps)
+}
+
+/// The 3D ball for an IFS with nonlinear maps, found as the plane's
+/// (J5, S3): a chaos-game sample for the centre, then a radius grown
+/// until every map sends the sampled ball -- a Fibonacci sphere and
+/// interior shells -- into it, or the sample's bulk when a kernel is
+/// unbounded at its pre-origin.
+/// Returns the ball and the centre's scalar coordinate. The sample and
+/// the search run in four dimensions when a kernel carries the scalar
+/// (step 3): the walk's escape radius is the 4D distance, and a 3D
+/// slice point's distance to the slice-set is at least its 4D distance
+/// to the 4D set.
+fn ball_3d_numeric(maps: &[IfsMap<Map3>]) -> Option<(Ball<[f64; 3]>, f64)> {
+    let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut next = || {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (state >> 11) as f64 / (1u64 << 53) as f64
+    };
+    let four_d = maps.iter().any(|m| m.forward.nonlinear().is_some_and(|n| n.kernel.uses_aux()));
+    let branches_of = |m: &Map3| m.nonlinear().map_or(1, |n| n.kernel.power().unsigned_abs());
+    let step = |m: &Map3, p: [f64; 3], aux: f64, k: u32| -> ([f64; 3], f64) {
+        match m {
+            Map3::Nonlinear(r) => r.apply_branch_aux(p, aux, k),
+            other => (other.apply(p), aux),
+        }
+    };
+
+    let mut p = [0.0; 3];
+    let mut aux = 0.0;
+    let mut sample: Vec<[f64; 4]> = Vec::with_capacity(4000);
+    let mut lost = 0usize;
+    for i in 0..4200 {
+        let m = &maps[(next() * maps.len() as f64).floor() as usize % maps.len()];
+        let k = (next() * branches_of(&m.forward) as f64).floor() as u32;
+        let (np, na) = step(&m.forward, p, aux, k);
+        p = np;
+        aux = na;
+        if !(p[0].is_finite() && p[1].is_finite() && p[2].is_finite() && aux.is_finite()) {
+            lost += 1;
+            if lost > 400 {
+                return None;
+            }
+            p = [0.1234, 0.0567, 0.0891];
+            aux = 0.0;
+            continue;
+        }
+        if i >= 200 {
+            sample.push([p[0], p[1], p[2], aux]);
+        }
+    }
+    if sample.len() < 1000 {
+        return None;
+    }
+    let n = sample.len() as f64;
+    let centre4 = [
+        sample.iter().map(|p| p[0]).sum::<f64>() / n,
+        sample.iter().map(|p| p[1]).sum::<f64>() / n,
+        sample.iter().map(|p| p[2]).sum::<f64>() / n,
+        if four_d { sample.iter().map(|p| p[3]).sum::<f64>() / n } else { 0.0 },
+    ];
+    let centre = [centre4[0], centre4[1], centre4[2]];
+    let dist = |p: [f64; 4]| {
+        ((p[0] - centre4[0]).powi(2) + (p[1] - centre4[1]).powi(2) + (p[2] - centre4[2]).powi(2) + (p[3] - centre4[3]).powi(2)).sqrt()
+    };
+
+    if maps.iter().any(|m| m.forward.nonlinear().is_some_and(|n| n.kernel.unbounded_at_origin())) {
+        let mut radii: Vec<f64> = sample.iter().map(|&p| dist(p)).collect();
+        radii.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let bulk = radii[(radii.len() as f64 * 0.995) as usize].max(1e-9);
+        return Some((Ball { centre, radius: bulk * 1.3 }, centre4[3]));
+    }
+
+    let mut radius = sample.iter().map(|&p| dist(p)).fold(0.0f64, f64::max).max(1e-9);
+    let golden = std::f64::consts::PI * (3.0 - 5f64.sqrt());
+    // Directions: a Fibonacci sphere in 3D, and in 4D a fixed set of
+    // pseudo-random unit vectors, which is even enough for a maximum.
+    let mut dirs: Vec<[f64; 4]> = Vec::new();
+    if four_d {
+        let mut st: u64 = 0x1234_5678_9ABC_DEF1;
+        let mut rnd = || {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (st >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0
+        };
+        while dirs.len() < 512 {
+            let v = [rnd(), rnd(), rnd(), rnd()];
+            let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2] + v[3] * v[3]).sqrt();
+            if (0.2..=1.0).contains(&l) {
+                dirs.push([v[0] / l, v[1] / l, v[2] / l, v[3] / l]);
+            }
+        }
+    } else {
+        for j in 0..256 {
+            let y = 1.0 - 2.0 * (j as f64 + 0.5) / 256.0;
+            let rr = (1.0 - y * y).sqrt();
+            let phi = golden * j as f64;
+            dirs.push([rr * phi.cos(), y, rr * phi.sin(), 0.0]);
+        }
+    }
+    for round in 0..80 {
+        let mut reach = 0.0f64;
+        for shell in [1.0f64, 0.7, 0.4] {
+            let stride = if shell == 1.0 { 1 } else { 3 };
+            for (j, d) in dirs.iter().enumerate() {
+                if j % stride != 0 {
+                    continue;
+                }
+                let q = [
+                    centre4[0] + radius * shell * d[0],
+                    centre4[1] + radius * shell * d[1],
+                    centre4[2] + radius * shell * d[2],
+                ];
+                let qa = centre4[3] + radius * shell * d[3];
+                for m in maps {
+                    for k in 0..branches_of(&m.forward) {
+                        let (img, ia) = step(&m.forward, q, qa, k);
+                        let dd = dist([img[0], img[1], img[2], ia]);
+                        if !dd.is_finite() {
+                            return None;
+                        }
+                        reach = reach.max(dd);
+                    }
+                }
+            }
+        }
+        if reach <= radius {
+            return Some((Ball { centre, radius: radius * (1.0 + BALL_MARGIN) }, centre4[3]));
+        }
+        radius = if round < 60 { reach } else { reach * 1.05 };
+    }
+    None
+}
+
+fn ball_3d_affine(maps: &[IfsMap<Affine3>]) -> Ball<[f64; 3]> {
+    let fixed: Vec<[f64; 3]> = maps.iter().filter_map(|m| m.forward.fixed_point()).collect();
+    let centre = if fixed.is_empty() {
+        [0.0; 3]
+    } else {
+        let n = fixed.len() as f64;
+        [
+            fixed.iter().map(|p| p[0]).sum::<f64>() / n,
+            fixed.iter().map(|p| p[1]).sum::<f64>() / n,
+            fixed.iter().map(|p| p[2]).sum::<f64>() / n,
+        ]
+    };
+    let radius = maps
+        .iter()
+        .map(|m| {
+            let sc = m.forward.apply(centre);
+            let d = ((sc[0] - centre[0]).powi(2) + (sc[1] - centre[1]).powi(2) + (sc[2] - centre[2]).powi(2)).sqrt();
+            d / (1.0 - m.sigma_max)
+        })
+        .fold(0.0f64, f64::max);
+
+    let (mut c, mut r) = (centre, radius);
+    let (mut best_c, mut best_r) = (centre, radius);
+    for _ in 0..BALL_REFINEMENTS {
+        let n = maps.len() as f64;
+        let images: Vec<[f64; 3]> = maps.iter().map(|m| m.forward.apply(c)).collect();
+        let nc = [
+            images.iter().map(|p| p[0]).sum::<f64>() / n,
+            images.iter().map(|p| p[1]).sum::<f64>() / n,
+            images.iter().map(|p| p[2]).sum::<f64>() / n,
+        ];
+        let nr = maps
+            .iter()
+            .zip(&images)
+            .map(|(m, im)| {
+                let d = ((im[0] - nc[0]).powi(2)
+                    + (im[1] - nc[1]).powi(2)
+                    + (im[2] - nc[2]).powi(2))
+                .sqrt();
+                d + m.sigma_max * r
+            })
+            .fold(0.0f64, f64::max);
+        c = nc;
+        r = nr;
+        if r < best_r {
+            best_c = c;
+            best_r = r;
+        }
+    }
+    Ball { centre: best_c, radius: best_r * (1.0 + BALL_MARGIN) }
+}
+
+// ---------------------------------------------------------------- tests
+
+/// Every kernel, at a grid dense enough to reach each branch and
+/// each guard.
+#[cfg(test)]
+pub(crate) fn kernel_fixtures() -> Vec<(Kernel, u32)> {
+    let mut out = vec![
+        (Kernel::Spherical, 0),
+        (Kernel::Hemisphere, 0),
+        (Kernel::Bubble, 0),
+        (Kernel::Bubble, 1),
+        (Kernel::Disc, 0),
+        (Kernel::Disc, 1),
+        (Kernel::Disc, 2),
+        (Kernel::Blob { high: 1.3, low: 0.4, waves: 3.0 }, 0),
+        (Kernel::Blob { high: 1.0, low: 1.0, waves: 0.0 }, 0),
+        (Kernel::Elliptic, 0),
+    ];
+    // Steps that overlap two quadrants' images and leave a gap between
+    // two others, so every branch has points with and without a preimage.
+    for q in 0..4 {
+        out.push((Kernel::Splits { base: [-0.4, 0.1], x: [0.8, 0.3], y: [-0.2, -0.9] }, q));
+    }
+    // Both families of two turns.
+    for b in 0..4 {
+        out.push((Kernel::Cylinder { k0: -1 }, b));
+    }
+    for n in [-3i32, -2, 2, 3, 5] {
+        for d in [1.0f64, 2.0, 0.5] {
+            for k in 0..(n.unsigned_abs().max(1)) {
+                out.push((Kernel::Root { n, d, mirror: false }, k));
+            }
+        }
+    }
+    // juliascope: an odd count, where the last arm and the first are
+    // both even and meet without a crease, and an even one.
+    for n in [-4i32, 3, 5] {
+        for d in [1.0f64, -1.0, 2.0] {
+            for k in 0..n.unsigned_abs() {
+                out.push((Kernel::Root { n, d, mirror: true }, k));
+            }
+        }
+    }
+    out
+}
+
+/// A grid over the plane, the unit disc and the neighbourhood of
+/// every guard: the origin, the unit circle either side, and points
+/// far out.
+#[cfg(test)]
+pub(crate) fn kernel_probe_points() -> Vec<[f64; 2]> {
+    let mut pts = vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [-1.0, 0.0], [0.0, -1.0]];
+    for i in 0..24 {
+        let a = std::f64::consts::TAU * i as f64 / 24.0;
+        for r in [1e-9, 1e-4, 0.13, 0.5, 0.7071, 0.999, 1.0, 1.0001, 1.7, 9.0, 1e4] {
+            pts.push([r * a.cos(), r * a.sin()]);
+        }
+    }
+    pts
+}
+
+#[cfg(test)]
+mod difference_tests {
+    use super::*;
+    use crate::escape::bigfloat::BigFloat;
+    use crate::scene::ifs_real::Real;
+
+    const LIMBS: usize = 8;
+
+    fn big(v: f64) -> BigFloat {
+        BigFloat::from_f64(v, LIMBS)
+    }
+
+    fn big2(v: [f64; 2]) -> [BigFloat; 2] {
+        [big(v[0]), big(v[1])]
+    }
+
+    /// The kernels with an exact difference, and a point in each
+    /// one's domain to test around.
+    fn cases() -> Vec<(Kernel, u32, Vec<[f64; 2]>)> {
+        // Inside the unit disc for the three whose image it is; the
+        // whole plane for spherical and the roots.
+        let disc: Vec<[f64; 2]> = (0..12)
+            .map(|i| {
+                let a = std::f64::consts::TAU * i as f64 / 12.0;
+                let r = 0.1 + 0.07 * i as f64;
+                [r * a.cos(), r * a.sin()]
+            })
+            .collect();
+        let plane: Vec<[f64; 2]> = (0..12)
+            .map(|i| {
+                let a = std::f64::consts::TAU * i as f64 / 12.0;
+                let r = 0.05 * 3.0f64.powi(i % 6);
+                [r * a.cos(), r * a.sin()]
+            })
+            .collect();
+        vec![
+            (Kernel::Spherical, 0, plane.clone()),
+            (Kernel::Hemisphere, 0, disc.clone()),
+            (Kernel::Bubble, 0, disc.clone()),
+            (Kernel::Bubble, 1, disc.clone()),
+            (Kernel::Root { n: 2, d: 1.0, mirror: false }, 0, plane.clone()),
+            (Kernel::Root { n: 3, d: 1.0, mirror: false }, 0, plane.clone()),
+            (Kernel::Root { n: -2, d: 1.0, mirror: false }, 0, plane.clone()),
+            (Kernel::Root { n: 5, d: 1.0, mirror: false }, 0, plane.clone()),
+            (Kernel::Root { n: 2, d: 0.5, mirror: false }, 0, plane),
+        ]
+    }
+
+    /// The algebraic inverse is the polar one.
+    ///
+    /// [`kernel_inverse_real`] reaches the same map without `atan2`,
+    /// `powf`, `sin` or `cos`, which is what lets `BigFloat` run it.
+    /// Not bit-identical on a root -- the polar form is a magnitude
+    /// raised to a power and an angle multiplied, this is `a + b`
+    /// complex multiplications -- so the gate is a tolerance, and a
+    /// tight one, because a disagreement here would be a wrong
+    /// exponent pair rather than a rounding.
+    #[test]
+    fn the_algebraic_inverse_is_the_polar_one() {
+        let mut worst = 0.0f64;
+        let mut checked = 0usize;
+        for (k, branch, points) in cases() {
+            for z in points {
+                if !kernel_inverse_domain(&k, z, branch) {
+                    continue;
+                }
+                let want = kernel_inverse_gen(&k, &z, branch);
+                let got = kernel_inverse_real(&k, &z, branch).expect("algebraic");
+                let norm = f64::hypot(want[0], want[1]);
+                if !(norm > 0.0) || !norm.is_finite() {
+                    continue;
+                }
+                let err = (got[0] - want[0]).hypot(got[1] - want[1]) / norm;
+                worst = worst.max(err);
+                checked += 1;
+                // Spherical, hemisphere and bubble are the same
+                // expression either way, so those must be EXACT.
+                if !matches!(k, Kernel::Root { .. }) {
+                    assert_eq!(
+                        got[0].to_bits(),
+                        want[0].to_bits(),
+                        "{k:?} at {z:?}: {got:?} vs {want:?}"
+                    );
+                }
+            }
+        }
+        println!("  {checked} algebraic inverses; worst relative gap {worst:.2e}");
+        assert!(checked > 80, "only {checked}");
+        assert!(worst < 1e-12, "worst relative gap {worst:.2e}");
+    }
+
+    /// G1: the difference forms are EXACT.
+    ///
+    /// `D(Z, δ)` in f64 against `m⁻¹(Z+δ) − m⁻¹(Z)` taken in
+    /// `BigFloat` at eight limbs -- 512 bits, so the subtraction
+    /// there keeps every digit f64 could have carried -- at δ from
+    /// 1e-30 to 1 relative to `|Z|`.
+    ///
+    /// **The tolerance is relative to `|D|`, not to `|m⁻¹(Z)|`, and
+    /// that is the whole test.** A form that merely computes the
+    /// right answer to f64's absolute precision passes the loose
+    /// version at every δ and is useless at a deep zoom, where δ is
+    /// thirty orders below the position it sits beside. Judged this
+    /// way, the direct subtraction scores 1.0 -- no correct digits
+    /// at all -- for δ under about 1e-17 of `|Z|`, which
+    /// `the_direct_subtraction_fails_this_gate` demonstrates rather
+    /// than asserts by assumption.
+    #[test]
+    fn the_difference_forms_are_exact() {
+        let mut worst = 0.0f64;
+        let mut worst_where = String::new();
+        let mut checked = 0usize;
+        for (k, branch, points) in cases() {
+            assert!(kernel_has_difference(&k), "{k:?} should have an exact form");
+            for z in points {
+                if !kernel_inverse_domain(&k, z, branch) {
+                    continue;
+                }
+                let scale = f64::hypot(z[0], z[1]).max(1e-300);
+                for e in 0..31 {
+                    let mag = scale * 10f64.powi(-e);
+                    for dir in [[1.0, 0.0], [0.0, 1.0], [0.6, -0.8], [-0.3, -0.954]] {
+                        let d = [mag * dir[0], mag * dir[1]];
+                        let w = [z[0] + d[0], z[1] + d[1]];
+                        // f64 must be able to tell W from Z at all,
+                        // or there is no difference to check.
+                        if w == z || !kernel_inverse_domain(&k, w, branch) {
+                            continue;
+                        }
+                        let Some(got) = k.difference(z, d, branch) else { continue };
+
+                        // The reference: the same inverse, at 512
+                        // bits, subtracted there.
+                        let (bz, bd) = (big2(z), big2(d));
+                        let bw = [bz[0].add(&bd[0]), bz[1].add(&bd[1])];
+                        let iz = kernel_inverse_real(&k, &bz, branch).expect("algebraic");
+                        let iw = kernel_inverse_real(&k, &bw, branch).expect("algebraic");
+                        let want = [iw[0].sub(&iz[0]), iw[1].sub(&iz[1])];
+                        let want_f = [want[0].to_f64(), want[1].to_f64()];
+                                let norm = f64::hypot(want_f[0], want_f[1]);
+                        if !(norm > 0.0) || !norm.is_finite() {
+                            continue;
+                        }
+                        let err = (got[0] - want_f[0]).hypot(got[1] - want_f[1]) / norm;
+                        if !err.is_finite() {
+                            continue;
+                        }
+                        if err > worst {
+                            worst = err;
+                            worst_where =
+                                format!("{k:?} branch {branch} at {z:?} with |δ| {mag:.2e}");
+                        }
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        println!("  {checked} differences; worst relative error {worst:.2e} at {worst_where}");
+        assert!(checked > 3000, "only {checked} points were checkable");
+        assert!(
+            worst < 1e-13,
+            "worst relative error {worst:.2e} at {worst_where} -- a form that loses \
+             digits of δ is a form with a cancellation in it"
+        );
+    }
+
+    /// What the exact forms are FOR, stated as a measurement.
+    ///
+    /// The same comparison against the obvious `m⁻¹(Z+δ) − m⁻¹(Z)`
+    /// in f64. It agrees at δ near `|Z|` and has nothing left by
+    /// 1e-20 of it -- a relative error of 1, meaning not one correct
+    /// digit. Asserted, because if it ever stopped being true the
+    /// exact forms would be dead weight.
+    #[test]
+    fn the_direct_subtraction_fails_this_gate() {
+        let k = Kernel::Root { n: 2, d: 1.0, mirror: false };
+        let z = [0.31, -0.47];
+        let mut rows: Vec<(i32, f64, f64)> = Vec::new();
+        for e in [0i32, 4, 8, 12, 16, 20, 24] {
+            let mag = f64::hypot(z[0], z[1]) * 10f64.powi(-e);
+            let d = [mag * 0.6, mag * -0.8];
+            let w = [z[0] + d[0], z[1] + d[1]];
+            let direct = {
+                let a = k.inverse(w, 0);
+                let b = k.inverse(z, 0);
+                [a[0] - b[0], a[1] - b[1]]
+            };
+            let exact = k.difference(z, d, 0).expect("an exact form");
+
+            let (bz, bd) = (big2(z), big2(d));
+            let bw = [bz[0].add(&bd[0]), bz[1].add(&bd[1])];
+            let iz = kernel_inverse_real(&k, &bz, 0).expect("algebraic");
+            let iw = kernel_inverse_real(&k, &bw, 0).expect("algebraic");
+            let want = [iw[0].sub(&iz[0]).to_f64(), iw[1].sub(&iz[1]).to_f64()];
+            let norm = want[0].hypot(want[1]);
+            rows.push((
+                e,
+                (direct[0] - want[0]).hypot(direct[1] - want[1]) / norm,
+                (exact[0] - want[0]).hypot(exact[1] - want[1]) / norm,
+            ));
+        }
+        println!("  |δ|/|Z|      direct        exact");
+        for (e, dv, ev) in &rows {
+            println!("  1e-{e:<8}  {dv:.2e}      {ev:.2e}");
+        }
+        let (_, deep_direct, deep_exact) = *rows.last().expect("rows");
+        assert!(
+            deep_direct > 0.3,
+            "the direct subtraction still has {deep_direct:.2e} relative error at \
+             1e-24 of |Z| -- if it were accurate there the exact forms would not be \
+             needed"
+        );
+        assert!(deep_exact < 1e-13, "the exact form should not care: {deep_exact:.2e}");
+    }
+
+    /// The forms survive f32, which is where the shader will run
+    /// them -- and the one place they do not is the one the walk
+    /// already refuses to run in.
+    ///
+    /// G1's second half: the same expression in f32 against its own
+    /// f64 value, relative to `|D|`. A cancellation the f64 mantissa
+    /// hides shows up at once here, with sixteen fewer bits to hide
+    /// in.
+    ///
+    /// **Split by `|Z + δ| ≥ |δ|`,** which is the delta plan's third
+    /// rebase criterion (§3, the Zhuoran-style one) stated exactly.
+    /// Below it `Z` and `δ` nearly cancel, so `Z + δ` in f32 has lost
+    /// digits before any kernel touches it, and an outer bubble --
+    /// whose inverse is `O(1/|W|²)` -- squares what is left. That is
+    /// not a flaw in the difference form; it is why the criterion
+    /// exists, and the numbers printed below are its justification.
+    #[test]
+    fn the_difference_forms_survive_f32() {
+        let (mut worst_ok, mut worst_rebase) = (0.0f64, 0.0f64);
+        let mut where_ok = String::new();
+        let mut where_rebase = String::new();
+        let (mut n_ok, mut n_rebase) = (0usize, 0usize);
+        for (k, branch, points) in cases() {
+            for z in points {
+                if !kernel_inverse_domain(&k, z, branch) {
+                    continue;
+                }
+                let scale = f64::hypot(z[0], z[1]).max(1e-300);
+                // f32 holds about seven decades below its own value,
+                // and a δ below that is not representable beside Z at
+                // all. This range is where the shader's arithmetic
+                // lives.
+                for e in 0..8 {
+                    let mag = scale * 10f64.powi(-e);
+                    for dir in [[1.0, 0.0], [0.6, -0.8], [-0.3, -0.954]] {
+                        let d = [mag * dir[0], mag * dir[1]];
+                        let w = [z[0] + d[0], z[1] + d[1]];
+                        if !kernel_inverse_domain(&k, w, branch) {
+                            continue;
+                        }
+                        let Some(want) = k.difference(z, d, branch) else { continue };
+                        let norm = f64::hypot(want[0], want[1]);
+                        if !(norm > 0.0) || !norm.is_finite() {
+                            continue;
+                        }
+                        let zf = [z[0] as f32, z[1] as f32];
+                        let df = [d[0] as f32, d[1] as f32];
+                        let wf = [zf[0] + df[0], zf[1] + df[1]];
+                        let Some(got) =
+                            kernel_difference_gen(&k, &zf, &wf, &df, branch)
+                        else {
+                            continue;
+                        };
+                        let err = (got[0] as f64 - want[0]).hypot(got[1] as f64 - want[1])
+                            / norm;
+                        if !err.is_finite() {
+                            continue;
+                        }
+                        let at = format!("{k:?} branch {branch} at {z:?} |δ| {mag:.2e}");
+                        // The rebase criterion, in the f32 the walk
+                        // would actually test it in.
+                        if f32::hypot(wf[0], wf[1]) >= f32::hypot(df[0], df[1]) {
+                            n_ok += 1;
+                            if err > worst_ok {
+                                worst_ok = err;
+                                where_ok = at;
+                            }
+                        } else {
+                            n_rebase += 1;
+                            if err > worst_rebase {
+                                worst_rebase = err;
+                                where_rebase = at;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        println!("  |Z+δ| >= |δ| : {n_ok} points, worst {worst_ok:.2e} at {where_ok}");
+        println!(
+            "  |Z+δ| <  |δ| : {n_rebase} points, worst {worst_rebase:.2e} at \
+             {where_rebase}  (the walk rebases here)"
+        );
+        assert!(n_ok > 300 && n_rebase > 0, "{n_ok} / {n_rebase} points");
+        assert!(
+            worst_ok < 1e-5,
+            "worst f32 relative error {worst_ok:.2e} at {where_ok}, where the walk does \
+             NOT rebase -- the form has a cancellation f64 was hiding"
+        );
+        // And the rebase side has to be WORSE, or the criterion is
+        // guarding nothing and the split is a story rather than a
+        // measurement.
+        assert!(
+            worst_rebase > 10.0 * worst_ok,
+            "the rebase side's worst is {worst_rebase:.2e} against {worst_ok:.2e} -- \
+             this fixture set does not reach the regime the criterion is for"
+        );
+    }
+}
+
+#[cfg(test)]
+mod generic_kernel_tests {
+    use super::*;
+
+    /// The generic body IS the body it replaces -- bit for bit.
+    ///
+    /// Not a tolerance: [`kernel_forward_gen`] and
+    /// [`kernel_inverse_gen`] were written operation for operation
+    /// against the f64 bodies, so any difference is a transcription
+    /// slip and not a rounding one. This is the check that lets the
+    /// f64 bodies BE the generic ones, which is what removes the
+    /// second copy.
+    #[test]
+    fn the_generic_kernel_is_the_f64_kernel() {
+        for (k, branch) in kernel_fixtures() {
+            for p in kernel_probe_points() {
+                let want = k.forward(p, branch);
+                let got = kernel_forward_gen(&k, &p, branch);
+                for i in 0..2 {
+                    assert!(
+                        want[i].to_bits() == got[i].to_bits()
+                            || (want[i].is_nan() && got[i].is_nan()),
+                        "forward {k:?} branch {branch} at {p:?}: {want:?} vs {got:?}"
+                    );
+                }
+                let want = k.inverse(p, branch);
+                let got = kernel_inverse_gen(&k, &p, branch);
+                for i in 0..2 {
+                    assert!(
+                        want[i].to_bits() == got[i].to_bits()
+                            || (want[i].is_nan() && got[i].is_nan()),
+                        "inverse {k:?} branch {branch} at {p:?}: {want:?} vs {got:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The dual-number Jacobian is the hand-derived one.
+    ///
+    /// Six closed forms, each a chance to slip a sign, against one
+    /// differentiation rule applied by the compiler. They agree to a
+    /// relative 1e-9 wherever the hand form exists; where they
+    /// differ is where the hand form was the suspect, and this is
+    /// the evidence for replacing it.
+    #[test]
+    fn the_dual_jacobian_is_the_derivation() {
+        let mut checked = 0usize;
+        for (k, branch) in kernel_fixtures() {
+            for p in kernel_probe_points() {
+                let Some(want) = k.inverse_jacobian(p, branch) else { continue };
+                assert!(
+                    kernel_inverse_domain(&k, p, branch),
+                    "{k:?} branch {branch} at {p:?}: a Jacobian outside the domain"
+                );
+                let got = jacobian2(p, |z| kernel_inverse_gen(&k, &z, branch))
+                    .unwrap_or_else(|| panic!("{k:?} branch {branch} at {p:?}: no dual"));
+                let scale = want.iter().flatten().fold(0.0f64, |m, x| m.max(x.abs()));
+                for i in 0..2 {
+                    for j in 0..2 {
+                        assert!(
+                            (want[i][j] - got[i][j]).abs() <= 1e-9 * scale.max(1e-30),
+                            "{k:?} branch {branch} at {p:?}: J[{i}][{j}] hand {} dual {}",
+                            want[i][j],
+                            got[i][j]
+                        );
+                    }
+                }
+                checked += 1;
+            }
+        }
+        assert!(checked > 2000, "only {checked} points had a Jacobian");
+        println!("  dual against hand-derived: {checked} Jacobians agree");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The solid Jacobian is the derivative of the solid inverse.
+    ///
+    /// [`Map3::jacobian`] pushes [`Dual3`](crate::scene::ifs_real::Dual3)
+    /// through the same composition the walk runs, so the thing it
+    /// differentiates is the thing that moves. Checked against central
+    /// differences, which is a weaker instrument -- it loses half its
+    /// digits near a pole, which is exactly why the plane stopped
+    /// using it (D2) -- so the tolerance is the difference's, not the
+    /// dual's.
+    ///
+    /// A quaternion declines, and that is asserted rather than
+    /// tolerated: its inverse moves the slice's scalar, so no 3×3
+    /// describes its step and a walk that carried one would be
+    /// carrying a derivative that is missing a term.
+    #[test]
+    fn the_solid_jacobian_is_the_derivative_of_the_solid_inverse() {
+        use super::{Kernel3, Map3, NonlinearMap3};
+        let id = Affine3::IDENTITY;
+        let tilt = Affine3 {
+            m: [[0.9, 0.2, 0.0], [-0.2, 0.9, 0.1], [0.0, -0.1, 0.95]],
+            t: [0.15, -0.1, 0.05],
+        };
+        let mk = |kernel: Kernel3| -> Map3 {
+            let pre = tilt;
+            let post = tilt;
+            Map3::NonlinearInverse(NonlinearMap3 {
+                kernel,
+                pre,
+                post,
+                pre_inv: pre.inverse().expect("invertible"),
+                post_inv: post.inverse().expect("invertible"),
+                w: 0.8,
+            })
+        };
+        let points = [
+            [0.7, 0.3, -0.2],
+            [-1.4, 0.9, 0.5],
+            [0.35, -0.6, 0.15],
+            [2.6, -3.1, 1.7],
+        ];
+        let (mut compared, mut worst) = (0usize, 0.0f64);
+        for kernel in [
+            Kernel3::Root3 { n: 2 },
+            Kernel3::Root3 { n: 3 },
+            Kernel3::Root3 { n: -2 },
+            Kernel3::RootZ3 { n: 2 },
+            Kernel3::RootZ3 { n: -3 },
+        ] {
+            let m = mk(kernel);
+            for q in points {
+                for aux in [0.0f64, 0.4] {
+                    let Some(j) = m.jacobian(q, aux) else { continue };
+                    let step = 1e-6 * q[0].abs().max(q[1].abs()).max(q[2].abs()).max(1.0);
+                    let inv = m.nonlinear().expect("nonlinear");
+                    for k in 0..3 {
+                        let (mut a, mut b) = (q, q);
+                        a[k] += step;
+                        b[k] -= step;
+                        let fa = inv.apply_inverse_aux(a, aux).0;
+                        let fb = inv.apply_inverse_aux(b, aux).0;
+                        for i in 0..3 {
+                            let fd = (fa[i] - fb[i]) / (2.0 * step);
+                            let scale = fd.abs().max(j[i][k].abs()).max(1e-6);
+                            let e = (j[i][k] - fd).abs() / scale;
+                            worst = worst.max(e);
+                            assert!(
+                                e < 2e-5,
+                                "{kernel:?} at {q:?} aux {aux}: J[{i}][{k}] = {} but the \
+                                 difference says {fd} ({e:.2e})",
+                                j[i][k]
+                            );
+                            compared += 1;
+                        }
+                    }
+                }
+            }
+        }
+        println!("  {compared} entries, worst {worst:.2e} from a central difference");
+        assert!(compared > 200, "only {compared} entries compared");
+
+        // And the quaternion declines, for the stated reason.
+        for depth in [false, true] {
+            let m = mk(Kernel3::Quaternion { n: 2, d: 1.0, c: [-0.2, 0.6, 0.1, 0.0], depth });
+            assert!(
+                m.jacobian([0.4, 0.2, -0.1], 0.3).is_none(),
+                "a quaternion handed back a 3x3 for a step that moves the slice's scalar"
+            );
+        }
+    }
+
+    /// D8's move is bit-identical: the generic solid kernel is the
+    /// f64 body it replaced.
+    ///
+    /// `Kernel3::inverse` was a second transcription of the same
+    /// arithmetic that `kernel3_inverse_gen` now holds once. A
+    /// rewrite of a numerical body is the kind of change that alters
+    /// a picture in the last two digits and is noticed a month later,
+    /// so this does not compare to a tolerance: the table below is the
+    /// OLD body's output, bit for bit, taken before it was deleted.
+    ///
+    /// Eight kernels -- three `Root3`, two `RootZ3`, three
+    /// `Quaternion` including a `depth` slice and a negative power --
+    /// at thirty-six `(v, aux)` points each, chosen to reach every
+    /// guard: the origin, each axis, a point at 1e-8 where the
+    /// magnitude guards live, and ordinary points.
+    #[test]
+    fn the_solid_kernels_generic_body_is_the_one_it_replaced() {
+        const WANT: &[u64] = &[
+        0x3fda77d197d9a9aa, 0x3fdbca9c12a48bc0, 0xbfd4284f4f12c1f8, 0x0000000000000000, 0x3fda77d197d9a9aa, 0x3fdbca9c12a48bc0,
+        0xbfd4284f4f12c1f8, 0x3fd999999999999a, 0x3fda77d197d9a9aa, 0x3fdbca9c12a48bc0, 0xbfd4284f4f12c1f8, 0xbfe6666666666666,
+        0x3ff3365f3cc49212, 0xc0050cd332ff7150, 0x3ffbce16ceb9c8b8, 0x0000000000000000, 0x3ff3365f3cc49212, 0xc0050cd332ff7150,
+        0x3ffbce16ceb9c8b8, 0x3fd999999999999a, 0x3ff3365f3cc49212, 0xc0050cd332ff7150, 0x3ffbce16ceb9c8b8, 0xbfe6666666666666,
+        0x3f617f4e99b9715c, 0xbf60aa01b6f9c14c, 0x3f51f2a13c62d574, 0x0000000000000000, 0x3f617f4e99b9715c, 0xbf60aa01b6f9c14c,
+        0x3f51f2a13c62d574, 0x3fd999999999999a, 0x3f617f4e99b9715c, 0xbf60aa01b6f9c14c, 0x3f51f2a13c62d574, 0xbfe6666666666666,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0x3ff0000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x3ff0000000000000, 0x0000000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0x3ff0000000000000, 0x0000000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0xbff0000000000000, 0x3ca1a62633145c07, 0x0000000000000000, 0x0000000000000000, 0xbff0000000000000, 0x3ca1a62633145c07,
+        0x0000000000000000, 0x3fd999999999999a, 0xbff0000000000000, 0x3ca1a62633145c07, 0x0000000000000000, 0xbfe6666666666666,
+        0x0000000000000000, 0x0000000000000000, 0x4000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+        0x4000000000000000, 0x3fd999999999999a, 0x0000000000000000, 0x0000000000000000, 0x4000000000000000, 0xbfe6666666666666,
+        0x3ff0000000000000, 0xbcb1a62633145c07, 0x0000000000000000, 0x0000000000000000, 0x3ff0000000000000, 0xbcb1a62633145c07,
+        0x0000000000000000, 0x3fd999999999999a, 0x3ff0000000000000, 0xbcb1a62633145c07, 0x0000000000000000, 0xbfe6666666666666,
+        0x0000000000000000, 0x0000000000000000, 0xc000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+        0xc000000000000000, 0x3fd999999999999a, 0x0000000000000000, 0x0000000000000000, 0xc000000000000000, 0xbfe6666666666666,
+        0xc008bb1783481560, 0xc0317c3168f1d76f, 0x402dd7b66b0c612a, 0x0000000000000000, 0xc008bb1783481560, 0xc0317c3168f1d76f,
+        0x402dd7b66b0c612a, 0x3fd999999999999a, 0xc008bb1783481560, 0xc0317c3168f1d76f, 0x402dd7b66b0c612a, 0xbfe6666666666666,
+        0x39537834b1d84fd4, 0x3cb1a682d37e40ed, 0x3cb8f623bc6e4df7, 0x0000000000000000, 0x39537834b1d84fd4, 0x3cb1a682d37e40ed,
+        0x3cb8f623bc6e4df7, 0x3fd999999999999a, 0x39537834b1d84fd4, 0x3cb1a682d37e40ed, 0x3cb8f623bc6e4df7, 0xbfe6666666666666,
+        0xc032333333333332, 0x404f333333333334, 0x4073800000000000, 0x0000000000000000, 0xc032333333333332, 0x404f333333333334,
+        0x4073800000000000, 0x3fd999999999999a, 0xc032333333333332, 0x404f333333333334, 0x4073800000000000, 0xbfe6666666666666,
+        0x3fc5124a6f282ee3, 0x3fdc52c4777d7e34, 0xbfd7ced916872b03, 0x0000000000000000, 0x3fc5124a6f282ee3, 0x3fdc52c4777d7e34,
+        0xbfd7ced916872b03, 0x3fd999999999999a, 0x3fc5124a6f282ee3, 0x3fdc52c4777d7e34, 0xbfd7ced916872b03, 0xbfe6666666666666,
+        0x3fe6f4d41340af9e, 0x4013e63807282b3b, 0x40121eb851eb851d, 0x0000000000000000, 0x3fe6f4d41340af9e, 0x4013e63807282b3b,
+        0x40121eb851eb851d, 0x3fd999999999999a, 0x3fe6f4d41340af9e, 0x4013e63807282b3b, 0x40121eb851eb851d, 0xbfe6666666666666,
+        0x3f11a07e19ad7ca0, 0xbf234107c566dad7, 0x3f1797cc39ffd611, 0x0000000000000000, 0x3f11a07e19ad7ca0, 0xbf234107c566dad7,
+        0x3f1797cc39ffd611, 0x3fd999999999999a, 0x3f11a07e19ad7ca0, 0xbf234107c566dad7, 0x3f1797cc39ffd611, 0xbfe6666666666666,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0x3ff0000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x3ff0000000000000, 0x0000000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0x3ff0000000000000, 0x0000000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0xbcaa79394c9e8a0a, 0xbff0000000000000, 0x0000000000000000, 0x0000000000000000, 0xbcaa79394c9e8a0a, 0xbff0000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0xbcaa79394c9e8a0a, 0xbff0000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0x0000000000000000, 0x0000000000000000, 0x4008000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+        0x4008000000000000, 0x3fd999999999999a, 0x0000000000000000, 0x0000000000000000, 0x4008000000000000, 0xbfe6666666666666,
+        0xbff0000000000000, 0x3cba79394c9e8a0a, 0x0000000000000000, 0x0000000000000000, 0xbff0000000000000, 0x3cba79394c9e8a0a,
+        0x0000000000000000, 0x3fd999999999999a, 0xbff0000000000000, 0x3cba79394c9e8a0a, 0x0000000000000000, 0xbfe6666666666666,
+        0x0000000000000000, 0x0000000000000000, 0xc008000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+        0xc008000000000000, 0x3fd999999999999a, 0x0000000000000000, 0x0000000000000000, 0xc008000000000000, 0xbfe6666666666666,
+        0xc050e0ca7e37212f, 0xc043754fb3acbe70, 0x40588e76c8b43959, 0x0000000000000000, 0xc050e0ca7e37212f, 0xc043754fb3acbe70,
+        0x40588e76c8b43959, 0x3fd999999999999a, 0xc050e0ca7e37212f, 0xc043754fb3acbe70, 0x40588e76c8b43959, 0xbfe6666666666666,
+        0xbb0d03a3e67cd5fd, 0x3b0d03a3e67cd5fe, 0x3b25c2baecdda07e, 0x0000000000000000, 0xbb0d03a3e67cd5fd, 0x3b0d03a3e67cd5fe,
+        0x3b25c2baecdda07e, 0x3fd999999999999a, 0xbb0d03a3e67cd5fd, 0x3b0d03a3e67cd5fe, 0x3b25c2baecdda07e, 0xbfe6666666666666,
+        0xc088b75c28f5c28f, 0x4072970a3d70a3db, 0x40b7c40000000000, 0x0000000000000000, 0xc088b75c28f5c28f, 0x4072970a3d70a3db,
+        0x40b7c40000000000, 0x3fd999999999999a, 0xc088b75c28f5c28f, 0x4072970a3d70a3db, 0x40b7c40000000000, 0xbfe6666666666666,
+        0x3ff136bffcbb1cd3, 0xbff2131662f7ab11, 0xbfea38295b65eafb, 0x0000000000000000, 0x3ff136bffcbb1cd3, 0xbff2131662f7ab11,
+        0xbfea38295b65eafb, 0x3fd999999999999a, 0x3ff136bffcbb1cd3, 0xbff2131662f7ab11, 0xbfea38295b65eafb, 0xbfe6666666666666,
+        0x3fc0da2c158d1bee, 0x3fd276d50807af51, 0x3fc863a9f8f43fc1, 0x0000000000000000, 0x3fc0da2c158d1bee, 0x3fd276d50807af51,
+        0x3fc863a9f8f43fc1, 0x3fd999999999999a, 0x3fc0da2c158d1bee, 0x3fd276d50807af51, 0x3fc863a9f8f43fc1, 0xbfe6666666666666,
+        0x406daa4fad75fca5, 0x406c40ad683f9b48, 0x405e6dd4f94be5ed, 0x0000000000000000, 0x406daa4fad75fca5, 0x406c40ad683f9b48,
+        0x405e6dd4f94be5ed, 0x3fd999999999999a, 0x406daa4fad75fca5, 0x406c40ad683f9b48, 0x405e6dd4f94be5ed, 0xbfe6666666666666,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0x3ff0000000000000, 0x8000000000000000, 0x0000000000000000, 0x0000000000000000, 0x3ff0000000000000, 0x8000000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0x3ff0000000000000, 0x8000000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0xbff0000000000000, 0xbca1a62633145c07, 0x0000000000000000, 0x0000000000000000, 0xbff0000000000000, 0xbca1a62633145c07,
+        0x0000000000000000, 0x3fd999999999999a, 0xbff0000000000000, 0xbca1a62633145c07, 0x0000000000000000, 0xbfe6666666666666,
+        0x0000000000000000, 0x8000000000000000, 0x4000000000000000, 0x0000000000000000, 0x0000000000000000, 0x8000000000000000,
+        0x4000000000000000, 0x3fd999999999999a, 0x0000000000000000, 0x8000000000000000, 0x4000000000000000, 0xbfe6666666666666,
+        0x3ff0000000000000, 0x3cb1a62633145c07, 0x0000000000000000, 0x0000000000000000, 0x3ff0000000000000, 0x3cb1a62633145c07,
+        0x0000000000000000, 0x3fd999999999999a, 0x3ff0000000000000, 0x3cb1a62633145c07, 0x0000000000000000, 0xbfe6666666666666,
+        0x0000000000000000, 0x8000000000000000, 0xc000000000000000, 0x0000000000000000, 0x0000000000000000, 0x8000000000000000,
+        0xc000000000000000, 0x3fd999999999999a, 0x0000000000000000, 0x8000000000000000, 0xc000000000000000, 0xbfe6666666666666,
+        0xbf81113dbb049580, 0x3fa82242a126d19e, 0x3fa4985a2de1596b, 0x0000000000000000, 0xbf81113dbb049580, 0x3fa82242a126d19e,
+        0x3fa4985a2de1596b, 0x3fd999999999999a, 0xbf81113dbb049580, 0x3fa82242a126d19e, 0x3fa4985a2de1596b, 0xbfe6666666666666,
+        0x3fc554e561241e1b, 0xc32356a97f1c30dc, 0x432b594b2169e500, 0x0000000000000000, 0x3fc554e561241e1b, 0xc32356a97f1c30dc,
+        0x432b594b2169e500, 0x3fd999999999999a, 0x3fc554e561241e1b, 0xc32356a97f1c30dc, 0x432b594b2169e500, 0xbfe6666666666666,
+        0xbf44e17e911806e5, 0xbf61e5da33392a7d, 0x3f865f50c007751b, 0x0000000000000000, 0xbf44e17e911806e5, 0xbf61e5da33392a7d,
+        0x3f865f50c007751b, 0x3fd999999999999a, 0xbf44e17e911806e5, 0xbf61e5da33392a7d, 0x3f865f50c007751b, 0xbfe6666666666666,
+        0x3fd9999999999998, 0x3fdae147ae147ae1, 0xbfd37f12b43c02d7, 0x0000000000000000, 0x3fd9999999999998, 0x3fdae147ae147ae1,
+        0xbfd37f12b43c02d7, 0x3fd999999999999a, 0x3fd9999999999998, 0x3fdae147ae147ae1, 0xbfd37f12b43c02d7, 0xbfe6666666666666,
+        0x3ff2666666666662, 0xc00428f5c28f5c29, 0x3ffaa11a4635b927, 0x0000000000000000, 0x3ff2666666666662, 0xc00428f5c28f5c29,
+        0x3ffaa11a4635b927, 0x3fd999999999999a, 0x3ff2666666666662, 0xc00428f5c28f5c29, 0x3ffaa11a4635b927, 0xbfe6666666666666,
+        0x3f613404ea4a8c17, 0xbf60624dd2f1a9fe, 0x3f51a56756258fbc, 0x0000000000000000, 0x3f613404ea4a8c17, 0xbf60624dd2f1a9fe,
+        0x3f51a56756258fbc, 0x3fd999999999999a, 0x3f613404ea4a8c17, 0xbf60624dd2f1a9fe, 0x3f51a56756258fbc, 0xbfe6666666666666,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0x3ff0000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x3ff0000000000000, 0x0000000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0x3ff0000000000000, 0x0000000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0xbff0000000000000, 0x3ca1a62633145c07, 0x0000000000000000, 0x0000000000000000, 0xbff0000000000000, 0x3ca1a62633145c07,
+        0x0000000000000000, 0x3fd999999999999a, 0xbff0000000000000, 0x3ca1a62633145c07, 0x0000000000000000, 0xbfe6666666666666,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0x3ff0000000000000, 0xbcb1a62633145c07, 0x0000000000000000, 0x0000000000000000, 0x3ff0000000000000, 0xbcb1a62633145c07,
+        0x0000000000000000, 0x3fd999999999999a, 0x3ff0000000000000, 0xbcb1a62633145c07, 0x0000000000000000, 0xbfe6666666666666,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0xc006ccccccccccca, 0xc0301eb851eb851f, 0x402b834078ef90f0, 0x0000000000000000, 0xc006ccccccccccca, 0xc0301eb851eb851f,
+        0x402b834078ef90f0, 0x3fd999999999999a, 0xc006ccccccccccca, 0xc0301eb851eb851f, 0x402b834078ef90f0, 0xbfe6666666666666,
+        0x394fcb2c8ea9e7fd, 0x3cacd2b297d889be, 0x3cb46186f2001a75, 0x0000000000000000, 0x394fcb2c8ea9e7fd, 0x3cacd2b297d889be,
+        0x3cb46186f2001a75, 0x3fd999999999999a, 0x394fcb2c8ea9e7fd, 0x3cacd2b297d889be, 0x3cb46186f2001a75, 0xbfe6666666666666,
+        0xc01bfffffffffffe, 0x4038000000000001, 0x405e000000000000, 0x0000000000000000, 0xc01bfffffffffffe, 0x4038000000000001,
+        0x405e000000000000, 0x3fd999999999999a, 0xc01bfffffffffffe, 0x4038000000000001, 0x405e000000000000, 0xbfe6666666666666,
+        0x3fe941dda264536d, 0xc000f990ccb973eb, 0xbffc8996ad81fa89, 0x0000000000000000, 0x3fe941dda264536d, 0xc000f990ccb973eb,
+        0xbffc8996ad81fa89, 0x3fd999999999999a, 0x3fe941dda264536d, 0xc000f990ccb973eb, 0xbffc8996ad81fa89, 0xbfe6666666666666,
+        0x3f9fb3b5b46a2e5a, 0xbfcb7af389aa6f94, 0x3fc905ec11783016, 0x0000000000000000, 0x3f9fb3b5b46a2e5a, 0xbfcb7af389aa6f94,
+        0x3fc905ec11783016, 0x3fd999999999999a, 0x3f9fb3b5b46a2e5a, 0xbfcb7af389aa6f94, 0x3fc905ec11783016, 0xbfe6666666666666,
+        0x40a4d245978f39a5, 0x40b6be4c0412998e, 0x40abde5d2570eea0, 0x0000000000000000, 0x40a4d245978f39a5, 0x40b6be4c0412998e,
+        0x40abde5d2570eea0, 0x3fd999999999999a, 0x40a4d245978f39a5, 0x40b6be4c0412998e, 0x40abde5d2570eea0, 0xbfe6666666666666,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0x3ff0000000000000, 0x8000000000000000, 0x0000000000000000, 0x0000000000000000, 0x3ff0000000000000, 0x8000000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0x3ff0000000000000, 0x8000000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0xbcaa79394c9e8a0a, 0x3ff0000000000000, 0x0000000000000000, 0x0000000000000000, 0xbcaa79394c9e8a0a, 0x3ff0000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0xbcaa79394c9e8a0a, 0x3ff0000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0xbff0000000000000, 0xbcba79394c9e8a0a, 0x0000000000000000, 0x0000000000000000, 0xbff0000000000000, 0xbcba79394c9e8a0a,
+        0x0000000000000000, 0x3fd999999999999a, 0xbff0000000000000, 0xbcba79394c9e8a0a, 0x0000000000000000, 0xbfe6666666666666,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+        0x0000000000000000, 0x3fd999999999999a, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbfe6666666666666,
+        0xbf8aca08684b85f7, 0x3f7ee26c05352be2, 0x3f937cfdc048fb78, 0x0000000000000000, 0xbf8aca08684b85f7, 0x3f7ee26c05352be2,
+        0x3f937cfdc048fb78, 0x3fd999999999999a, 0xbf8aca08684b85f7, 0x3f7ee26c05352be2, 0x3f937cfdc048fb78, 0xbfe6666666666666,
+        0xc4ca784379d99db1, 0xc4ca784379d99db2, 0x44e3da329b633645, 0x0000000000000000, 0xc4ca784379d99db1, 0xc4ca784379d99db2,
+        0x44e3da329b633645, 0x3fd999999999999a, 0xc4ca784379d99db1, 0xc4ca784379d99db2, 0x44e3da329b633645, 0xbfe6666666666666,
+        0xbf7eabbcb1cc9646, 0xbf6711947cfa26a7, 0x3fad7dbf487fcb93, 0x0000000000000000, 0xbf7eabbcb1cc9646, 0xbf6711947cfa26a7,
+        0x3fad7dbf487fcb93, 0x3fd999999999999a, 0xbf7eabbcb1cc9646, 0xbf6711947cfa26a7, 0x3fad7dbf487fcb93, 0xbfe6666666666666,
+        0xbfc999999999999a, 0x3fe3333333333333, 0x3fb999999999999a, 0xbfe3d70a3d70a3d7, 0x3fd70a3d70a3d709, 0x3feae147ae147ae1,
+        0xbfaeb851eb851ebc, 0xbfdd70a3d70a3d70, 0xbff2e147ae147ae1, 0x3fc70a3d70a3d70a, 0x3fd851eb851eb852, 0xbfc0a3d70a3d70a6,
+        0xbfc999999999999a, 0x3fe3333333333333, 0x3fb999999999999a, 0xc00828f5c28f5c28, 0xbff51eb851eb851e, 0x3ff51eb851eb851f,
+        0x3fe0000000000000, 0xc006e147ae147ae0, 0x3ffc28f5c28f5c28, 0xbfe51eb851eb851f, 0xbfe3333333333333, 0xc0043d70a3d70a3d,
+        0xbfc999999999999a, 0x3fe3333333333333, 0x3fb999999999999a, 0xbf689374bc6a7efb, 0xbfc47ae147ae147b, 0x3fe2b020c49ba5e3,
+        0x3fbba5e353f7ceda, 0x3fc4189374bc6a80, 0xbfd147ae147ae148, 0x3fe4189374bc6a7f, 0x3fb604189374bc6b, 0x3fdf2b020c49ba5d,
+        0xbfc999999999999a, 0x3fe3333333333333, 0x3fb999999999999a, 0x0000000000000000, 0xbfc999999999999a, 0x3fe3333333333333,
+        0x3fb999999999999a, 0x3fc47ae147ae147c, 0xbfc999999999999a, 0x3fe3333333333333, 0x3fb999999999999a, 0x3fdf5c28f5c28f5b,
+        0xbfc999999999999a, 0x3fe3333333333333, 0x3fb999999999999a, 0xbff0000000000000, 0x3fe3333333333334, 0x3fe3333333333333,
+        0x3fb999999999999a, 0xbfeae147ae147ae1, 0xbff9999999999999, 0x3fe3333333333333, 0x3fb999999999999a, 0xbfe051eb851eb852,
+        0xbfc999999999999a, 0x3fe3333333333333, 0x3fb999999999999a, 0xbff0000000000000, 0xbfc999999999999a, 0x3ff6666666666666,
+        0x3fb999999999999a, 0xbfeae147ae147ae1, 0xbfc999999999999a, 0xbfe9999999999999, 0x3fb999999999999a, 0xbfe051eb851eb852,
+        0xbfc999999999999a, 0x3fe3333333333333, 0x3fb999999999999a, 0xbff0000000000000, 0xbfc999999999999a, 0x3fe3333333333333,
+        0x3feccccccccccccd, 0xbfeae147ae147ae1, 0xbfc999999999999a, 0x3fe3333333333333, 0xbff4cccccccccccc, 0xbfe051eb851eb852,
+        0xbfc999999999999a, 0x3fe3333333333333, 0x3fb999999999999a, 0xbff0000000000000, 0xbff0000000000000, 0x3fe3333333333333,
+        0x3fb999999999999a, 0xbfeae147ae147ae1, 0x3ff3333333333333, 0x3fe3333333333333, 0x3fb999999999999a, 0xbfe051eb851eb852,
+        0xbfc999999999999a, 0x3fe3333333333333, 0x3fb999999999999a, 0xbff0000000000000, 0xbfc999999999999a, 0x3fe3333333333333,
+        0xbfe6666666666667, 0xbfeae147ae147ae1, 0xbfc999999999999a, 0x3fe3333333333333, 0x3ff8000000000000, 0xbfe051eb851eb852,
+        0xbfc999999999999a, 0x3fe3333333333333, 0x3fb999999999999a, 0xc033428f5c28f5c3, 0x3ffe147ae147ae15, 0xbffe147ae147ae16,
+        0x3ff75c28f5c28f5d, 0xc03319999999999a, 0xc00eb851eb851eb8, 0x4013c28f5c28f5c2, 0xc0023d70a3d70a3d, 0xc032c51eb851eb86,
+        0xbfc999999999999a, 0x3fe3333333333333, 0x3fb999999999999a, 0xbcb59e05f1e2674e, 0xbfc99999886b8db2, 0x3fe33333377eb62d,
+        0x3fb99999bbf5b16a, 0x3fc47ae147ae1471, 0xbfc99999b7aa2e70, 0x3fe333332baf0dfd, 0x3fb999995d786fed, 0x3fdf5c28f5c28f56,
+        0xbfc999999999999a, 0x3fe3333333333333, 0x3fb999999999999a, 0xc065200000000000, 0x400199999999999a, 0x400e666666666667,
+        0x4023666666666667, 0xc0651ae147ae147b, 0xc011999999999999, 0xc014000000000000, 0xc030b33333333332, 0xc0651051eb851eb8,
+        0xbfd71835c836f6e6, 0xbfdfd72cfe08ed78, 0x0000000000000000, 0x3fe5f8bf37751ba2, 0xbfdb10cbd8c22c2a, 0xbfe0c56d82900226,
+        0xbfd31f8a6d3bc177, 0x3fe735bcfc18dcda, 0xbfe07a598e4658c0, 0xbfe2088cc7f2434a, 0x3fe3ad8cc1798bf3, 0x3fe9291dde912342,
+        0x3ff559ea4fb3dfde, 0xbff17f49d426d566, 0x0000000000000000, 0xbff8f23a6296a1e8, 0x3ff61b2cc6d20d15, 0xbff1fb86d795a953,
+        0xbfd76f83a1651644, 0xbff97d63850577c4, 0x3ff7866c5b562af8, 0xbff2e50b24c605ae, 0x3fe5ecd2c1bc915e, 0xbffa87d05c529e4f,
+        0x3fb700f761138c24, 0xbfd2f0bc93f29841, 0x0000000000000000, 0x3fc8bdc277265e03, 0x3fb17ca1d4ed5096, 0xbfd26380d2bb924c,
+        0xbfd039ef89589209, 0x3fc7297cde60194b, 0x3fadc425a7203955, 0xbfd220d8ec32404e, 0x3fe2c12bda909aa3, 0x3fc66218b4779211,
+        0x3fb999999999999a, 0xbfd3333333333333, 0x0000000000000000, 0x3fc999999999999a, 0x3fb999999999999a, 0xbfd3333333333333,
+        0xbfd030dc4ea03a73, 0x3fc999999999999a, 0x3fb999999999999a, 0xbfd3333333333333, 0x3fe2bdbe460916e0, 0x3fc999999999999a,
+        0xbfeccccccccccccd, 0xbfd3333333333333, 0x0000000000000000, 0x3fc999999999999a, 0xbfee02794f50379d, 0xbfd3333333333333,
+        0xbfda9156cecf88a7, 0x3fc999999999999a, 0xbff013cb9469da0b, 0xbfd3333333333333, 0x3fe8bf8da6d1a1e6, 0x3fc999999999999a,
+        0x3fb999999999999a, 0xbff4cccccccccccd, 0x0000000000000000, 0x3fc999999999999a, 0x3fb999999999999a, 0xbff567a30e0e8235,
+        0xbfda9156cecf88a7, 0x3fc999999999999a, 0x3fb999999999999a, 0xbff67a31fad04072, 0x3fe8bf8da6d1a1e6, 0x3fc999999999999a,
+        0x3fb999999999999a, 0xbfd3333333333333, 0x0000000000000000, 0x3ff3333333333333, 0x3fb999999999999a, 0xbfd3333333333333,
+        0x3ff042e37a2b29b5, 0x3fe5497ec4376150, 0x3fb999999999999a, 0xbfd3333333333333, 0xbff4d8525efa72e3, 0xbfc3023076dd11f0,
+        0x3ff199999999999a, 0xbfd3333333333333, 0x0000000000000000, 0x3fc999999999999a, 0x3ff2346fdadb4f02, 0xbfd3333333333333,
+        0xbfda9156cecf88a7, 0x3fc999999999999a, 0x3ff346fec79d0d3f, 0xbfd3333333333333, 0x3fe8bf8da6d1a1e6, 0x3fc999999999999a,
+        0x3fb999999999999a, 0xbfd3333333333333, 0x0000000000000000, 0xbfe999999999999a, 0x3fb999999999999a, 0xbfd3333333333333,
+        0x3ff042e37a2b29b5, 0xbfd0f963eed52906, 0x3fb999999999999a, 0xbfd3333333333333, 0xbff4d8525efa72e3, 0x3fe18d58ea841149,
+        0xc0009edc53bb5d94, 0x40025ee3406355fa, 0x0000000000000000, 0xc020b1643373db2b, 0xc000df5ec033d4ce, 0x4002abcd86a432e6,
+        0xbfd5c03599d9646e, 0xc020c37c9182fb5e, 0xc001621dc657b27a, 0x400347b1490a09f8, 0x3fe394fc9e7612ea, 0xc020e848f908c8f8,
+        0x3fb99999999a1515, 0xbfd3333333331454, 0x0000000000000000, 0x3fc99999999864e6, 0x3fb999997e6fad8a, 0xbfd3333339fdae37,
+        0xbfd030dc4ea03a68, 0x3fc9999970dab782, 0x3fb9999975aa6cfd, 0xbfd333333c2efe5a, 0x3fe2bdbe460916dd, 0x3fc9999963b2d6ae,
+        0x403a264a855dd38c, 0x40413764e171c03b, 0x0000000000000000, 0x4031dd7515200d21, 0x403a1ef0ab3dd973, 0x4041327e50071980,
+        0x400bc16df0af330a, 0x4031bacfe46612e0, 0x403a0fd0ab68ebbb, 0x40412868face7b05, 0xc0183b2254e3a1fb, 0x4031738378f23eb2,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbff9ce739ce739ce, 0xbfed744d6c3939bb, 0xbfd93f1dca7a317c,
+        0x3fd0d4be86fc20fe, 0xbfe831d1e20a6f69, 0x3fe973d5b26aabff, 0x3fd5d1004fc925b6, 0xbfcd16ab150c3249, 0xbfbb02c36ef90a1c,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbfd5312a6254c4ab, 0x3fbc5a727233fce4, 0xbfb23a250045fe01,
+        0xbfa4409ae3dbfdc8, 0xbfd219bda20c9e03, 0xbfc45d0c70bf445d, 0x3fba2e7db5883353, 0x3fad173657ecaacf, 0xbfca491696c2a54e,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xc074d55555555554, 0xbff81695ca4afb56, 0x3fe34544a1d595de,
+        0xbfd34544a1d595de, 0x4017a2f62e7ff9d3, 0x3fd26eb8221e36ee, 0xbfbd7df369c9f17d, 0x3fad7df369c9f17d, 0x40000799baed79d3,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+        0x0000000000000000, 0x4018fffffffffffe, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x40005397829cbc15,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbff0000000000000, 0xbfe3066473abfc58, 0x0000000000000000,
+        0x0000000000000000, 0xbfe3f9e9797495c3, 0x3fe42de4b7b64b35, 0x0000000000000000, 0x0000000000000000, 0xbfcd6771d87ea81c,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbff0000000000000, 0x0000000000000000, 0xbfe3066473abfc58,
+        0x0000000000000000, 0xbfe3f9e9797495c3, 0x0000000000000000, 0x3fe42de4b7b64b35, 0x0000000000000000, 0xbfcd6771d87ea81c,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbff0000000000000, 0x0000000000000000, 0x0000000000000000,
+        0xbfe3066473abfc58, 0xbfe3f9e9797495c3, 0x0000000000000000, 0x0000000000000000, 0x3fe42de4b7b64b35, 0xbfcd6771d87ea81c,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbff0000000000000, 0x3fe3066473abfc58, 0x0000000000000000,
+        0x0000000000000000, 0xbfe3f9e9797495c3, 0xbfe42de4b7b64b35, 0x0000000000000000, 0x0000000000000000, 0xbfcd6771d87ea81c,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbff0000000000000, 0x0000000000000000, 0x0000000000000000,
+        0x3fe3066473abfc58, 0xbfe3f9e9797495c3, 0x0000000000000000, 0x0000000000000000, 0xbfe42de4b7b64b35, 0xbfcd6771d87ea81c,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbfaa956658ca0909, 0xbf7697278f43474f, 0x3f7aef4cb4a8d504,
+        0xbf6d8a96317f5d3e, 0xbfa9ee1db73625d7, 0x3f831c9212e5f74c, 0xbf86c97316885816, 0x3f78fdfa18b69229, 0xbfa8a33fd3ca91fa,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xc327af4c4a80aaa8, 0xbe94f8b588e368d7, 0xbe94f8b588e368d7,
+        0xbe94f8b588e368d7, 0x4018ffffffffffd5, 0x3e6f4deee2b9b53e, 0x3e6f4deee2b9b53e, 0x3e6f4deee2b9b53e, 0x40005397829cbc0e,
+        0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xbf783c977ab2bede, 0xbf15fc8a4dc2c300, 0xbf1d50b867ae5955,
+        0xbf35fc8a4dc2c300, 0xbf782aff39e04926, 0x3f2329d0391d776b, 0x3f298d15a17c9f3a, 0x3f4329d0391d776b, 0xbf7806e1ed18a8c0,
+        ];
+        let mut got = Vec::new();
+        for k in super::Kernel3::gate_fixtures() {
+            for (v, aux) in super::Kernel3::gate_points() {
+                let (q, a) = k.inverse(v, aux);
+                got.extend_from_slice(&[q[0].to_bits(), q[1].to_bits(), q[2].to_bits(), a.to_bits()]);
+            }
+        }
+        assert_eq!(got.len(), WANT.len(), "the fixture list changed shape");
+        let mut differ = Vec::new();
+        for (i, (g, w)) in got.iter().zip(WANT).enumerate() {
+            if g != w {
+                differ.push((i, *g, *w));
+            }
+        }
+        assert!(
+            differ.is_empty(),
+            "{} of {} outputs differ from the body this replaced; first three: {:?}",
+            differ.len(),
+            got.len(),
+            &differ[..differ.len().min(3)]
+        );
+    }
+
+    use super::*;
+    use crate::variations::global_registry;
+    use std::collections::HashMap;
+
+    fn affine_xform(a: f32, b: f32, c: f32, d: f32, e: f32, f: f32) -> Transform {
+        let mut t = Transform::default();
+        t.a = a;
+        t.b = b;
+        t.c = c;
+        t.d = d;
+        t.e = e;
+        t.f = f;
+        t.variations = HashMap::from([("linear".to_string(), 1.0)]);
+        t.variation_order = vec!["linear".to_string()];
+        t
+    }
+
+    fn flame_of(transforms: Vec<Transform>) -> Flame {
+        let mut fl = Flame::default();
+        fl.transforms = transforms;
+        fl.final_transforms.clear();
+        fl.xaos = None;
+        fl
+    }
+
+    /// Inputs are `f32` (a transform's coefficients), so a tolerance
+    /// tighter than f32's own rounding would fail on 0.3 itself.
+    fn close(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-6
+    }
+
+    // ---- what each variation contributes, per space -----------------
+
+    fn with(mut t: Transform, name: &str, w: f32) -> Transform {
+        t.variations.insert(name.to_string(), w);
+        t.variation_order.push(name.to_string());
+        t
+    }
+
+    /// A transform of `name` at `w` alone.
+    fn only(name: &str, w: f32) -> Transform {
+        let mut t = Transform::default();
+        t.variations.clear();
+        t.variation_order.clear();
+        with(t, name, w)
+    }
+
+    /// **A variation that ignores its input draws inside its radius**
+    /// (tracker C2c): the radius is what the renewal's output disc and
+    /// the analysis's stand-in are made of, so a draw outside it is a
+    /// point the plan says cannot be there. And the radius is tight.
+    #[test]
+    fn a_free_blur_draws_within_its_radius() {
+        let guard = global_registry();
+        let r = &*guard;
+        let mut st = 7u64;
+        let mut u = move || {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((st >> 11) as f64) / ((1u64 << 53) as f64)
+        };
+        let cases: [(&str, &[(&str, f32)]); 6] = [
+            ("blur", &[]),
+            ("gaussian_blur", &[]),
+            ("pie", &[("slices", 5.0), ("thickness", 0.3)]),
+            ("pie3D", &[]),
+            ("starblur", &[("power", 6.0), ("range", 0.4)]),
+            ("starblur", &[("range", 1.7)]),
+        ];
+        for (name, params) in cases {
+            let mut t = only(name, -0.5);
+            for (k, v) in params {
+                t.set_variation_param(name, k, *v);
+            }
+            let f = FreeBlur::of(name, &t, r).expect("a free blur");
+            let reach = 0.5 * f.radius();
+            let far = (0..200_000).map(|_| f.draw(&mut u)).map(|p| p[0].hypot(p[1])).fold(0.0f64, f64::max);
+            assert!(far <= reach * (1.0 + 1e-12), "{name} {params:?}: a draw at {far}, past its radius {reach}");
+            assert!(far > 0.8 * reach, "{name} {params:?}: the radius {reach} is loose; the furthest draw was {far}");
+        }
+        assert!(FreeBlur::of("julian", &only("julian", 1.0), r).is_none());
+        assert!(FreeBlur::of("blur", &only("blur", 0.0), r).is_none(), "a zero weight is no variation");
+    }
+
+    /// **A polar box's mass is the draw's** (the conditional draw, C2b):
+    /// against how often the variation's own draws fall in it, for boxes
+    /// inside the support, across its edge, round the centre and across
+    /// `pie`'s wedges; and the density integrates to the mass.
+    #[test]
+    fn a_polar_box_holds_what_the_draw_puts_in_it() {
+        let guard = global_registry();
+        let r = &*guard;
+        let mut st = 17u64;
+        let mut u = move || {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((st >> 11) as f64) / ((1u64 << 53) as f64)
+        };
+        let mut pie = only("pie", 1.0);
+        pie.set_variation_param("pie", "slices", 5.0);
+        pie.set_variation_param("pie", "thickness", 0.3);
+        pie.set_variation_param("pie", "rotation", 0.4);
+        let blurs = [("blur", only("blur", 1.0)), ("gaussian_blur", only("gaussian_blur", 1.0)), ("pie", pie)];
+        let boxes = [(0.2, 0.5, 0.3, 1.1), (0.8, 1.3, -2.0, -1.0), (0.0, 0.4, -3.0, 3.2), (1.2, 1.9, 0.5, 2.5), (0.1, 0.9, 5.0, 7.5)];
+        const N: usize = 400_000;
+        for (name, t) in &blurs {
+            let f = FreeBlur::of(name, t, r).expect("free");
+            assert!(f.boxable(), "{name}");
+            let draws: Vec<(f64, f64)> = (0..N)
+                .map(|_| {
+                    let p = f.draw(&mut u);
+                    (p[0].hypot(p[1]), p[1].atan2(p[0]))
+                })
+                .collect();
+            for &(r0, r1, a0, a1) in &boxes {
+                let tau = std::f64::consts::TAU;
+                let inside = draws
+                    .iter()
+                    .filter(|(rho, phi)| {
+                        // Any turn of the angle the box spans.
+                        let k = ((a0 - phi) / tau).ceil();
+                        *rho >= r0 && *rho < r1 && phi + k * tau <= a1
+                    })
+                    .count() as f64
+                    / N as f64;
+                let mass = f.box_mass(r0, r1, a0, a1);
+                let sd = (mass * (1.0 - mass) / N as f64).sqrt();
+                assert!((inside - mass).abs() <= 5.0 * sd + 1e-4, "{name} box {:?}: draws {inside:.5}, mass {mass:.5}", (r0, r1, a0, a1));
+                // The density integrates to the mass: fine in the angle,
+                // where `pie`'s wedges have edges.
+                let (nr, na) = (400, 4000);
+                let mut integral = 0.0;
+                for i in 0..nr {
+                    for j in 0..na {
+                        let rho = r0 + (i as f64 + 0.5) / nr as f64 * (r1 - r0);
+                        let phi = a0 + (j as f64 + 0.5) / na as f64 * (a1 - a0);
+                        integral += f.polar_density(rho, phi);
+                    }
+                }
+                integral *= (r1 - r0) * (a1 - a0) / (nr * na) as f64 / tau;
+                assert!((integral - mass).abs() < 2e-3, "{name} box {:?}: density integrates to {integral:.5}, mass {mass:.5}", (r0, r1, a0, a1));
+            }
+        }
+    }
+
+    /// **The analysis takes a lone free blur out, and nothing else**: a
+    /// transform whose one variation is `blur` is handed back as a
+    /// [`Blur::Free`] beside a stand-in map; `blur` beside another
+    /// variation is refused as before.
+    #[test]
+    fn the_analysis_takes_out_a_lone_free_blur() {
+        let guard = global_registry();
+        let r = &*guard;
+        let julian = || {
+            let mut t = only("julian", 1.0);
+            t.set_variation_param("julian", "power", 3.0);
+            (t.a, t.d) = (0.6, 0.6);
+            t
+        };
+        let fl = flame_of(vec![only("blur", 0.3), julian(), julian()]);
+        let slicer = crate::scene::slice::Slicer::never();
+        let (ifs, blurs) = crate::scene::slice::drive(analyse_2d_maps_blurred_sliced(&fl, r, &slicer)).expect("analysed");
+        assert!(matches!(blurs[0], Some(Blur::Free(FreeBlur { kind: FreeKind::Disc, weight })) if close(weight, 0.3)), "{blurs:?}");
+        assert!(blurs[1].is_none() && blurs[2].is_none());
+        assert!(ifs.maps.iter().any(|m| m.transform_index == 0));
+
+        let mut mixed = fl.clone();
+        mixed.transforms[0] = with(only("blur", 0.3), "linear", 0.5);
+        let refused = crate::scene::slice::drive(analyse_2d_maps_blurred_sliced(&mixed, r, &slicer));
+        assert!(refused.is_err(), "blur beside linear depends on its input and is not taken out");
+    }
+
+    /// In the plane the chaos game has no z, and a variation that
+    /// only writes z -- or whose 2D body returns its input -- does
+    /// nothing there. The analysis used to reject them by name; the
+    /// census counted five shipped flames lost to `flatten` alone.
+    /// With them present the gasket is still the gasket, map for map.
+    #[test]
+    fn flatten_and_the_z_only_variations_are_nothing_in_the_plane() {
+        let guard = global_registry();
+        let r = &*guard;
+        let plain = flame_of(vec![
+            affine_xform(0.5, 0.0, 0.0, 0.5, 0.0, 0.0),
+            affine_xform(0.5, 0.0, 0.0, 0.5, 0.5, 0.0),
+            affine_xform(0.5, 0.0, 0.0, 0.5, 0.0, 0.5),
+        ]);
+        let mut dressed = plain.clone();
+        dressed.transforms[0] = with(dressed.transforms[0].clone(), "flatten", 1.0);
+        dressed.transforms[1] = with(dressed.transforms[1].clone(), "zcone", 0.7);
+        dressed.transforms[1] = with(dressed.transforms[1].clone(), "zblur", 0.3);
+        dressed.transforms[2] = with(dressed.transforms[2].clone(), "pre_rotate_x", 1.2);
+        dressed.transforms[2] = with(dressed.transforms[2].clone(), "post_rotate_y", -0.4);
+        dressed.transforms[2] = with(dressed.transforms[2].clone(), "ztranslate", 2.0);
+        let a = analyse_2d(&plain, r).expect("the gasket qualifies");
+        let b = analyse_2d(&dressed, r).expect("dressed in z-only variations it still does");
+        for (x, y) in a.maps.iter().zip(&b.maps) {
+            assert_eq!(x.forward, y.forward);
+        }
+        assert_eq!(a.ball, b.ball);
+    }
+
+    /// As a solid `flatten` is affine and singular: it projects to
+    /// z = 0 and has no inverse. The criterion says which, rather than
+    /// calling it non-affine.
+    #[test]
+    fn flatten_is_singular_as_a_solid() {
+        let guard = global_registry();
+        let r = &*guard;
+        let mut t = affine_xform(0.5, 0.0, 0.0, 0.5, 0.0, 0.0);
+        t.variations.clear();
+        t.variation_order.clear();
+        let t = with(with(t, "linear3D", 1.0), "flatten", 1.0);
+        let m = transform_affine_3d(&t, r).expect("affine");
+        assert_eq!(m.apply([1.0, 2.0, 3.0]), [0.5, 1.0, 0.0]);
+        let errs = analyse_3d(&flame_of(vec![t]), r).unwrap_err();
+        assert!(errs.iter().any(|e| matches!(e, Disqualification::Singular { index: 0 })), "{errs:?}");
+        assert!(!errs.iter().any(|e| matches!(e, Disqualification::NotAffine { .. })), "{errs:?}");
+    }
+
+    /// A pre-rotation turns the affine's output before the sum and a
+    /// post-rotation turns the sum, each by its weight in radians
+    /// about its axis, exactly as the bodies write them. Worked by
+    /// hand: (1, 2, 3) through a unit affine, pre_rotate_x by π/2
+    /// ((x, z, −y) → (1, 3, −2)), a half-scale sum ((0.5, 1.5, −1)),
+    /// post_rotate_y by π/2 ((−z, y, x) → (1, 1.5, 0.5)).
+    #[test]
+    fn a_pre_rotation_turns_the_affines_output_and_a_post_rotation_the_sum() {
+        let guard = global_registry();
+        let r = &*guard;
+        let mut t = affine_xform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+        t.variations.clear();
+        t.variation_order.clear();
+        let half_pi = std::f32::consts::FRAC_PI_2;
+        let t = with(with(with(t, "linear3D", 0.5), "pre_rotate_x", half_pi), "post_rotate_y", half_pi);
+        let m = transform_affine_3d(&t, r).expect("affine");
+        let p = m.apply([1.0, 2.0, 3.0]);
+        assert!(close(p[0], 1.0) && close(p[1], 1.5) && close(p[2], 0.5), "{p:?}");
+        // Isometries: the singular values are the sum's.
+        let (lo, hi) = m.singular_values();
+        assert!(close(lo, 0.5) && close(hi, 0.5), "({lo}, {hi})");
+        // And it qualifies as a solid, contractive with an inverse.
+        let ifs = analyse_3d(&flame_of(vec![t]), r).expect("qualifies");
+        let q = [0.3, -0.2, 0.9];
+        let back = ifs.maps[0].inverse.apply(ifs.maps[0].forward.apply(q));
+        for k in 0..3 {
+            assert!(close(back[k], q[k]));
+        }
+    }
+
+    /// Two pre-rotations about different axes do not commute, and the
+    /// shader applies them in the FLAME's first-occurrence order, not
+    /// the transform's: `resolve_phase_buckets` walks
+    /// `active_variation_names_ordered`. So a transform listing x then
+    /// y, in a flame whose first transform listed y then x, rotates
+    /// about y first. The analysis takes the order it is given, and
+    /// `analyse_3d` gives it the flame's.
+    #[test]
+    fn two_pre_rotations_compose_in_the_flames_order() {
+        let guard = global_registry();
+        let r = &*guard;
+        let half_pi = std::f32::consts::FRAC_PI_2;
+        let base = |names: [&str; 2]| {
+            let mut t = affine_xform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+            t.variations.clear();
+            t.variation_order.clear();
+            let t = with(t, "linear3D", 0.5);
+            with(with(t, names[0], half_pi), names[1], half_pi)
+        };
+        let xy = base(["pre_rotate_x", "pre_rotate_y"]);
+        let yx = base(["pre_rotate_y", "pre_rotate_x"]);
+        // Alone, each transform's own order is the shader's.
+        // x then y: (1,2,3) → (1, 3, −2) → (c·x − s·z, y, s·x + c·z) = (2, 3, 1); half → (1, 1.5, 0.5).
+        let a = transform_affine_3d(&xy, r).unwrap().apply([1.0, 2.0, 3.0]);
+        assert!(close(a[0], 1.0) && close(a[1], 1.5) && close(a[2], 0.5), "{a:?}");
+        // y then x: (1,2,3) → (−3, 2, 1) → (x, z, −y) = (−3, 1, −2); half → (−1.5, 0.5, −1).
+        let b = transform_affine_3d(&yx, r).unwrap().apply([1.0, 2.0, 3.0]);
+        assert!(close(b[0], -1.5) && close(b[1], 0.5) && close(b[2], -1.0), "{b:?}");
+
+        // In a flame led by the y-then-x transform, the x-then-y one
+        // is emitted y first too, and analyses to the same map.
+        let fl = flame_of(vec![yx.clone(), xy.clone()]);
+        let order = fl.active_variation_names_ordered(r);
+        assert_eq!(
+            order.iter().position(|n| n == "pre_rotate_y").unwrap() < order.iter().position(|n| n == "pre_rotate_x").unwrap(),
+            true
+        );
+        let ifs = analyse_3d(&fl, r).expect("qualifies");
+        let c = ifs.maps[1].forward.apply([1.0, 2.0, 3.0]);
+        assert!(close(c[0], b[0]) && close(c[1], b[1]) && close(c[2], b[2]), "{c:?} vs {b:?}");
+    }
+
+    // ---- the root maps (plan 8.8) -----------------------------------
+
+    /// One `julia` transform with pre-translation `−c`: forward
+    /// `±sqrt(p − c)`, inverse `q² + c`.
+    fn julia_xform(c: [f32; 2]) -> Transform {
+        let mut t = affine_xform(1.0, 0.0, 0.0, 1.0, -c[0], -c[1]);
+        t.variations.clear();
+        t.variation_order.clear();
+        with(t, "julia", 1.0)
+    }
+
+    /// A julia transform is a root map whose single-valued inverse
+    /// undoes EVERY branch of the forward map (J1), and whose local
+    /// scale factor is `|v|^(1 − |n|/d)`.
+    #[test]
+    fn a_julia_transform_is_a_root_map_with_one_inverse() {
+        let guard = global_registry();
+        let r = &*guard;
+        let t = julia_xform([0.3, -0.4]);
+        let m = transform_map_2d_ordered(&t, r, &t.ordered_variation_names(r)).expect("a root map");
+        let Map2::Nonlinear(root) = m else { panic!("expected a root map, got {m:?}") };
+        assert_eq!((root.kernel, root.w), (Kernel::Root { n: 2, d: 1.0, mirror: false }, 1.0));
+        // ±sqrt(p − c): both branches square back to p − c, and the
+        // inverse returns p.
+        let p = [0.7, 0.2];
+        for k in 0..2 {
+            let q = root.apply_branch(p, k);
+            let back = root.apply_inverse(q);
+            assert!(close(back[0], p[0]) && close(back[1], p[1]), "branch {k}: {back:?} vs {p:?}");
+            // The inverse is q² + c.
+            let want = [q[0] * q[0] - q[1] * q[1] + 0.3, 2.0 * q[0] * q[1] - 0.4];
+            assert!(close(back[0], want[0]) && close(back[1], want[1]));
+        }
+        // The two branches differ by a sign.
+        let (q0, q1) = (root.apply_branch(p, 0), root.apply_branch(p, 1));
+        assert!(close(q0[0], -q1[0]) && close(q0[1], -q1[1]));
+        // Local factor at q: |q|^(1 − 2) = 1/|q|, so the forward σ_min
+        // there is (1/2)/|q| -- the chain rule of z² + c.
+        let q = [0.5, 0.5];
+        let (lo, _) = root.singular_values();
+        assert!(close(lo, 0.5));
+        assert!(close(root.local_sigma_factor(q) * lo, 0.5 / q[0].hypot(q[1])));
+
+        // julian carries its own power and distance.
+        let mut j = affine_xform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+        j.variations.clear();
+        j.variation_order.clear();
+        let mut j = with(j, "julian", 0.8);
+        j.set_variation_param("julian", "power", 3.0);
+        j.set_variation_param("julian", "dist", 1.5);
+        let m = transform_map_2d_ordered(&j, r, &j.ordered_variation_names(r)).expect("a root map");
+        let root = m.nonlinear().copied().expect("root");
+        assert_eq!(root.kernel, Kernel::Root { n: 3, d: 1.5, mirror: false });
+        assert!(close(root.w, 0.8));
+        for k in 0..3 {
+            let back = root.apply_inverse(root.apply_branch(p, k));
+            assert!(close(back[0], p[0]) && close(back[1], p[1]), "branch {k}: {back:?}");
+        }
+    }
+
+    /// A root summed with an affine is a [`SumMap2`], inverted by
+    /// Newton (`ifs-general.md` D3); a root summed with ANOTHER root
+    /// still is not a map this can invert, and says so; a root with a
+    /// power of zero is not a map at all.
+    ///
+    /// The first of those three used to be the second. `linear 0.5 +
+    /// julia 1.0` is the shape of the commonest transform the census
+    /// turned away, and it is taken now -- but two kernels summed have
+    /// no dominant term to seed Newton from and no branch rule, so
+    /// that refusal stands, with the reason naming one of them.
+    #[test]
+    fn a_root_must_be_alone_in_its_sum_and_have_a_power() {
+        let guard = global_registry();
+        let r = &*guard;
+        let mixed = with(julia_xform([0.0, 0.0]), "linear", 0.5);
+        let ifs = analyse_2d(&flame_of(vec![mixed]), r).expect("a sum is a map now");
+        let sum = ifs.maps[0].forward.sum().copied().expect("a sum");
+        assert_eq!(sum.kernel, Kernel::Root { n: 2, d: 1.0, mirror: false });
+        assert_eq!(sum.kind, "julia");
+        assert!(close(sum.kw, 1.0) && close(sum.lin.m[0][0], 0.5));
+        // A root's two preimages are the sum's two, and each is a
+        // Newton solve of its own (D3).
+        assert_eq!(ifs.maps.len(), 2);
+        assert_eq!((ifs.maps[0].inverse.sum().unwrap().branch, ifs.maps[1].inverse.sum().unwrap().branch), (0, 1));
+        // And both of them invert: the branch reaches the Newton
+        // JACOBIAN as well as its residual, which it did not at first
+        // -- branch 1 of a root is the negative of branch 0, so a
+        // Jacobian on the wrong branch has the wrong sign and every
+        // solve failed.
+        for m in ifs.maps.iter() {
+            let f = m.forward.sum().expect("a sum");
+            let inv = m.inverse.sum().expect("a sum");
+            for p in [[0.31, -0.22], [0.9, 0.4], [-0.5, 0.7]] {
+                let q = f.apply_branch(p, f.branch);
+                let (back, res, steps) = inv
+                    .solve_counted(q)
+                    .unwrap_or_else(|| panic!("branch {}: no solve at {p:?}", f.branch));
+                // Four or five steps, except branch 1 at (0.9, 0.4),
+                // which takes NINE: the fold of `0.5z − √z` sits at
+                // `|z| = 1` and that point is at 0.985, so the seed
+                // lands the wrong side of it and Newton wanders six
+                // steps before it finds the basin. That is the
+                // measurement [`NEWTON_STEPS`] is set from, pinned
+                // here so a change to the seed rule has to face it.
+                assert!(steps <= 9, "branch {}: {steps} steps at {p:?}", f.branch);
+                assert!(res < 1e-12, "branch {}: residual {res:.2e}", f.branch);
+                assert!(
+                    close(back[0], p[0]) && close(back[1], p[1]),
+                    "branch {}: {back:?} not {p:?}",
+                    f.branch
+                );
+            }
+        }
+
+        // TWO kernels in one sum: still refused, and the reason names
+        // a kernel rather than saying "not affine".
+        let two = with(with(julia_xform([0.0, 0.0]), "spherical", 0.4), "linear", 0.5);
+        let errs = analyse_2d(&flame_of(vec![two]), r).unwrap_err();
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                Disqualification::NotAffine { why: NotAffine::MixedSum(v), .. }
+                    if v == "julia" || v == "spherical"
+            )),
+            "{errs:?}"
+        );
+        let mut j = affine_xform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+        j.variations.clear();
+        j.variation_order.clear();
+        let mut j = with(j, "julian", 1.0);
+        j.set_variation_param("julian", "power", 0.0);
+        let errs = analyse_2d(&flame_of(vec![j]), r).unwrap_err();
+        assert!(
+            errs.iter().any(|e| matches!(e, Disqualification::NotAffine { why: NotAffine::Degenerate(v), .. } if v == "julian")),
+            "{errs:?}"
+        );
+        // And the affine-only reading still says what it always did.
+        let why = transform_affine_2d(&julia_xform([0.0, 0.0]), r).unwrap_err();
+        assert_eq!(why, NotAffine::Variation("julia".to_string()));
+    }
+
+    /// The ball is found numerically (J5) and holds the set: for
+    /// `c = −1` the filled Julia set reaches the fixed point
+    /// `(1 + √5)/2 ≈ 1.618` on the real axis, so the ball must reach
+    /// past it, and every branch of the map must send the ball into
+    /// itself.
+    #[test]
+    fn a_julia_ifs_gets_a_ball_every_branch_keeps() {
+        let guard = global_registry();
+        let r = &*guard;
+        let ifs = analyse_2d(&flame_of(vec![julia_xform([-1.0, 0.0])]), r).expect("qualifies");
+        assert_eq!(ifs.maps.len(), 1);
+        let b = ifs.ball;
+        let reach = |p: [f64; 2]| (p[0] - b.centre[0]).hypot(p[1] - b.centre[1]);
+        let phi = (1.0 + 5f64.sqrt()) / 2.0;
+        assert!(reach([phi, 0.0]) <= b.radius, "the ball {b:?} misses the fixed point");
+        assert!(b.radius < 6.0, "the ball {b:?} is looser than it should be");
+        let root = ifs.maps[0].forward.nonlinear().unwrap();
+        for j in 0..360 {
+            let a = (j as f64).to_radians();
+            let q = [b.centre[0] + b.radius * a.cos(), b.centre[1] + b.radius * a.sin()];
+            for k in 0..2 {
+                assert!(reach(root.apply_branch(q, k)) <= b.radius * (1.0 + 1e-9), "branch {k} leaves the ball at {j} degrees");
+            }
+        }
+        // A root that does not keep the set bounded has no ball: a
+        // julian with dist = 4 on power 2 is |z|² -- the map doubles
+        // the exponent and nothing contains it.
+        let mut j = affine_xform(1.0, 0.0, 0.0, 1.0, 1.0, 0.0);
+        j.variations.clear();
+        j.variation_order.clear();
+        let mut j = with(j, "julian", 1.0);
+        j.set_variation_param("julian", "power", 2.0);
+        j.set_variation_param("julian", "dist", 4.0);
+        let errs = analyse_2d(&flame_of(vec![j]), r).unwrap_err();
+        assert!(errs.iter().any(|e| matches!(e, Disqualification::NoBall)), "{errs:?}");
+    }
+
+    /// The composed difference is the map's own difference, checked
+    /// from both ends.
+    ///
+    /// `Map2::difference` wraps the kernel's form in the two affines
+    /// and the weight, and a slip there -- the wrong matrix, the
+    /// weight on the wrong side -- would not show in the kernel gates
+    /// at all. Two independent checks bracket it:
+    ///
+    /// - **large δ**, a thousandth of the frame, where the DIRECT
+    ///   subtraction of `apply_inverse` still has eleven good digits,
+    ///   so it is a reference;
+    /// - **small δ**, where the answer must approach `J·δ` with the
+    ///   Jacobian the dual numbers give, to first order in `δ`. That
+    ///   pins the linear part, which is the half the affines live in.
+    ///
+    /// Neither alone is enough: the first passes on a form that is
+    /// right to first order and wrong in its curvature, the second on
+    /// a form scaled by any constant that happens to match `J`.
+    #[test]
+    fn the_composed_difference_is_the_maps_own() {
+        let guard = global_registry();
+        let r = &*guard;
+        let build = |name: &str, w: f32, set: &dyn Fn(&mut Transform)| -> Map2 {
+            let mut t = affine_xform(0.83, -0.24, 0.31, 0.77, 0.19, -0.12);
+            t.variations.clear();
+            t.variation_order.clear();
+            let mut t = with(t, name, w);
+            set(&mut t);
+            let m = transform_map_2d_ordered(&t, r, &t.ordered_variation_names(r))
+                .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            m.inverse().expect("invertible")
+        };
+        let noop = |_: &mut Transform| {};
+        let cases: Vec<(&str, Map2)> = vec![
+            ("affine", Map2::Affine(
+                Affine2 { m: [[0.7, -0.2], [0.3, 0.9]], t: [0.1, -0.2] }
+                    .inverse()
+                    .expect("invertible"),
+            )),
+            ("spherical", build("spherical", 0.7, &noop)),
+            ("bubble", build("bubble", 1.3, &noop)),
+            ("hemisphere", build("hemisphere", 0.9, &noop)),
+            ("julian 3", build("julian", 0.5, &|t: &mut Transform| {
+                t.set_variation_param("julian", "power", 3.0);
+                t.set_variation_param("julian", "dist", 1.0);
+            })),
+            ("julian -2", build("julian", 0.6, &|t: &mut Transform| {
+                t.set_variation_param("julian", "power", -2.0);
+                t.set_variation_param("julian", "dist", 1.0);
+            })),
+        ];
+
+        let mut st: u64 = 0xD1B5_4A32_D192_ED03;
+        let mut next = move || {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (st >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for (name, m) in cases {
+            assert!(m.has_difference(), "{name} should have an exact form");
+            let (mut n_far, mut n_near) = (0usize, 0usize);
+            let (mut worst_far, mut worst_near) = (0.0f64, 0.0f64);
+            for _ in 0..4000 {
+                let q = [(next() - 0.5) * 1.6, (next() - 0.5) * 1.6];
+                let dir = {
+                    let a = next() * std::f64::consts::TAU;
+                    [a.cos(), a.sin()]
+                };
+                let base = m.apply(q);
+                if !base[0].is_finite() || !base[1].is_finite() {
+                    continue;
+                }
+
+                // Far: the direct subtraction is the reference.
+                let big = [dir[0] * 1e-3, dir[1] * 1e-3];
+                if let (Some(got), true) = (m.difference(q, big), m.singular_distance(q) > 1e-2)
+                {
+                    let other = m.apply([q[0] + big[0], q[1] + big[1]]);
+                    if other[0].is_finite() && other[1].is_finite() {
+                        let want = [other[0] - base[0], other[1] - base[1]];
+                        let norm = f64::hypot(want[0], want[1]);
+                        if norm > 1e-12 {
+                            let e = f64::hypot(got[0] - want[0], got[1] - want[1]) / norm;
+                            if e.is_finite() {
+                                worst_far = worst_far.max(e);
+                                n_far += 1;
+                            }
+                        }
+                    }
+                }
+
+                // Near: `J·δ` is the reference, to first order.
+                let Some(j) = m.jacobian(q) else { continue };
+                let tiny = [dir[0] * 1e-9, dir[1] * 1e-9];
+                let Some(got) = m.difference(q, tiny) else { continue };
+                let want = [
+                    j[0][0] * tiny[0] + j[0][1] * tiny[1],
+                    j[1][0] * tiny[0] + j[1][1] * tiny[1],
+                ];
+                let norm = f64::hypot(want[0], want[1]);
+                if !(norm > 1e-300) {
+                    continue;
+                }
+                let e = f64::hypot(got[0] - want[0], got[1] - want[1]) / norm;
+                if e.is_finite() {
+                    worst_near = worst_near.max(e);
+                    n_near += 1;
+                }
+            }
+            println!(
+                "  {name:<12} far {worst_far:.2e} ({n_far}) | near J-δ {worst_near:.2e} ({n_near})"
+            );
+            assert!(n_far > 200 && n_near > 200, "{name}: {n_far} / {n_near} points");
+            assert!(worst_far < 1e-6, "{name}: far {worst_far:.2e}");
+            // The near check is second-order, so the residual scales
+            // with |δ|/s. At 1e-9 and a clearance of order one that
+            // is a part in 1e-6 or better; the bar is loose because
+            // what it is pinning is the LINEAR part, not the size of
+            // the curvature.
+            assert!(worst_near < 1e-3, "{name}: near {worst_near:.2e}");
+        }
+    }
+
+    /// What `measure_third` costs, per map.
+    ///
+    /// It runs inside `analyse_2d`, which the renderer calls on every
+    /// flame edit, so this is a number the interactive path pays.
+    #[test]
+    #[ignore = "a measurement; run with --ignored --nocapture"]
+    fn probe_what_the_third_derivative_costs() {
+        let guard = global_registry();
+        let r = &*guard;
+        for name in ["disc", "blob", "spherical"] {
+            let mut t = affine_xform(0.83, -0.24, 0.31, 0.77, 0.19, -0.12);
+            t.variations.clear();
+            t.variation_order.clear();
+            let mut t = with(t, name, 0.9);
+            if name == "blob" {
+                t.set_variation_param("blob", "high", 1.2);
+                t.set_variation_param("blob", "low", 0.5);
+                t.set_variation_param("blob", "waves", 5.0);
+            }
+            let m = transform_map_2d_ordered(&t, r, &t.ordered_variation_names(r))
+                .expect("a kernel");
+            let Map2::Nonlinear(mut n) = m else { panic!("{name}") };
+            let t0 = std::time::Instant::now();
+            n.measure_third([0.0, 0.0], 1.5);
+            println!(
+                "  {name:<10} {:>8.1} ms  third = {:.3e}",
+                t0.elapsed().as_secs_f64() * 1e3,
+                n.third
+            );
+        }
+    }
+
+    /// What the exact Hessian buys, by clearance.
+    ///
+    /// The dual is exact to f64 rounding, so the gap between it and
+    /// the central difference it replaces IS the difference's error.
+    /// Reported in bands of `clearance`, which is the quantity the
+    /// old step was a fraction of: the claim being measured is that
+    /// the error grew as the clearance shrank, which is the regime
+    /// the perturbation handover actually runs in.
+    #[test]
+    #[ignore = "a survey; run with --ignored --nocapture"]
+    fn probe_what_the_exact_hessian_buys() {
+        let guard = global_registry();
+        let r = &*guard;
+        let build = |name: &str, w: f32, tweak: &dyn Fn(&mut Transform)| -> Map2 {
+            let mut t = affine_xform(0.83, -0.24, 0.31, 0.77, 0.19, -0.12);
+            t.variations.clear();
+            t.variation_order.clear();
+            let mut t = with(t, name, w);
+            tweak(&mut t);
+            let m = transform_map_2d_ordered(&t, r, &t.ordered_variation_names(r))
+                .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            m.inverse().expect("invertible")
+        };
+        let noop = |_: &mut Transform| {};
+        let cases: Vec<(&str, Map2)> = vec![
+            ("spherical", build("spherical", 0.7, &noop)),
+            ("bubble", build("bubble", 1.3, &noop)),
+            ("hemisphere", build("hemisphere", 0.9, &noop)),
+            ("disc", build("disc", 0.6, &noop)),
+            ("julian", build("julian", 0.5, &|t: &mut Transform| {
+                t.set_variation_param("julian", "power", 3.0);
+                t.set_variation_param("julian", "dist", -1.0);
+            })),
+        ];
+        // The central difference this replaced, verbatim.
+        let old = |m: &Map2, q: [f64; 2]| -> Option<[[[f64; 2]; 2]; 2]> {
+            let clear = m.singular_distance(q);
+            if !(clear > 0.0) {
+                return None;
+            }
+            let h = (clear * 1e-4).clamp(1e-12, 1e-3);
+            let mut out = [[[0.0f64; 2]; 2]; 2];
+            for k in 0..2 {
+                let (mut a, mut b) = (q, q);
+                a[k] += h;
+                b[k] -= h;
+                let (ja, jb) = (m.jacobian(a)?, m.jacobian(b)?);
+                for i in 0..2 {
+                    for j in 0..2 {
+                        out[i][j][k] = (ja[i][j] - jb[i][j]) / (2.0 * h);
+                    }
+                }
+            }
+            for i in 0..2 {
+                let mid = (out[i][0][1] + out[i][1][0]) * 0.5;
+                out[i][0][1] = mid;
+                out[i][1][0] = mid;
+            }
+            out.iter().flatten().flatten().all(|x| x.is_finite()).then_some(out)
+        };
+
+        let mut st: u64 = 0x2545_F491_4F6C_DD1D;
+        let mut next = move || {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (st >> 11) as f64 / (1u64 << 53) as f64
+        };
+        // A uniform sample almost never lands near a singularity, and
+        // near a singularity is the whole question -- the handover
+        // runs there. So walk DOWNHILL in clearance: random steps that
+        // reduce it, with the step shrinking, which reaches the
+        // singular set without needing its equation.
+        let mut descend = |m: &Map2, mut q: [f64; 2], next: &mut dyn FnMut() -> f64| -> [f64; 2] {
+            let mut step = 0.5f64;
+            for _ in 0..400 {
+                let c = m.singular_distance(q);
+                if !c.is_finite() {
+                    break;
+                }
+                let t = [q[0] + (next() - 0.5) * step, q[1] + (next() - 0.5) * step];
+                let ct = m.singular_distance(t);
+                if ct.is_finite() && ct < c && m.hessian(t).is_some() {
+                    q = t;
+                } else {
+                    step *= 0.9;
+                }
+            }
+            q
+        };
+
+        let bands = [1e-8f64, 1e-6, 1e-4, 1e-2, f64::INFINITY];
+        println!("  worst relative gap between the central difference and the exact Hessian");
+        println!(
+            "  {:<11} {:>9} {:>9} {:>9} {:>9} {:>9}",
+            "clearance <", "1e-8", "1e-6", "1e-4", "1e-2", "more"
+        );
+        for (name, m) in cases {
+            let mut worst = [0.0f64; 5];
+            let mut count = [0usize; 5];
+            let mut record = |q: [f64; 2]| {
+                let (Some(exact), Some(fd)) = (m.hessian(q), old(&m, q)) else { return };
+                let clear = m.singular_distance(q);
+                let band = bands.iter().position(|b| clear < *b).unwrap_or(4);
+                let scale = exact.iter().flatten().flatten().fold(0.0f64, |a, x| a.max(x.abs()));
+                if !(scale > 0.0) {
+                    return;
+                }
+                let gap = exact
+                    .iter()
+                    .flatten()
+                    .flatten()
+                    .zip(fd.iter().flatten().flatten())
+                    .fold(0.0f64, |a, (e, f)| a.max((e - f).abs()))
+                    / scale;
+                if gap.is_finite() {
+                    worst[band] = worst[band].max(gap);
+                    count[band] += 1;
+                }
+            };
+            for _ in 0..20_000 {
+                record([(next() - 0.5) * 6.0, (next() - 0.5) * 6.0]);
+            }
+            // ...and the same again, walked in toward the singular set,
+            // recording the whole descent so every band is populated.
+            for _ in 0..300 {
+                let start = [(next() - 0.5) * 6.0, (next() - 0.5) * 6.0];
+                if m.hessian(start).is_none() {
+                    continue;
+                }
+                let end = descend(&m, start, &mut next);
+                // Geometric in `1 − t`, so the sweep spends its
+                // points where the clearance is small -- linear
+                // spacing lands almost all of them far away.
+                for i in 0..60 {
+                    let t = 1.0 - 0.5f64.powi(i);
+                    record([
+                        start[0] + (end[0] - start[0]) * t,
+                        start[1] + (end[1] - start[1]) * t,
+                    ]);
+                }
+                record(end);
+            }
+            let cell = |i: usize| {
+                if count[i] == 0 {
+                    "--".to_string()
+                } else {
+                    format!("{:.1e}", worst[i])
+                }
+            };
+            println!(
+                "  {name:<11} {:>9} {:>9} {:>9} {:>9} {:>9}   ({} points)",
+                cell(0),
+                cell(1),
+                cell(2),
+                cell(3),
+                cell(4),
+                count.iter().sum::<usize>()
+            );
+        }
+    }
+
+    /// Gate 2 of plan 8.9: every kernel's inverse undoes each of its
+    /// branches, and a bubble transform is two maps that share its
+    /// colour and differ in the branch.
+    /// [`Map2::hessian`] is the second derivative, checked the long
+    /// way round.
+    ///
+    /// It comes from nested dual numbers, so differencing the MAP
+    /// twice is an independent route to the same tensor -- it never
+    /// touches `jacobian` or a dual at all. One side is exact and
+    /// one is an approximation, so this is a loose agreement by
+    /// design; what it catches is a transposed index, a missing
+    /// half, or a pair symmetrised the wrong way round.
+    #[test]
+    fn a_maps_hessian_is_its_second_derivative() {
+        let guard = global_registry();
+        let r = &*guard;
+        let build = |name: &str, w: f32, set: &dyn Fn(&mut Transform)| -> Map2 {
+            let mut t = affine_xform(0.83, -0.24, 0.31, 0.77, 0.19, -0.12);
+            t.variations.clear();
+            t.variation_order.clear();
+            let mut t = with(t, name, w);
+            set(&mut t);
+            let m = transform_map_2d_ordered(&t, r, &t.ordered_variation_names(r))
+                .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            m.inverse().expect("invertible")
+        };
+        let noop = |_: &mut Transform| {};
+        let cases: Vec<(&str, Map2)> = vec![
+            ("spherical", build("spherical", 0.7, &noop)),
+            ("bubble", build("bubble", 1.3, &noop)),
+            ("hemisphere", build("hemisphere", 0.9, &noop)),
+            ("disc", build("disc", 0.6, &noop)),
+            ("blob", build("blob", 1.1, &|t: &mut Transform| {
+                t.set_variation_param("blob", "high", 1.4);
+                t.set_variation_param("blob", "low", 0.3);
+                t.set_variation_param("blob", "waves", 3.0);
+            })),
+            ("julian 3 dist -1", build("julian", 0.5, &|t: &mut Transform| {
+                t.set_variation_param("julian", "power", 3.0);
+                t.set_variation_param("julian", "dist", -1.0);
+            })),
+        ];
+        // An affine's is exactly zero, which is what keeps the affine
+        // delta exact.
+        let aff = Map2::Affine(Affine2 { m: [[0.7, -0.2], [0.3, 0.9]], t: [0.1, -0.2] });
+        let z = aff.hessian([0.3, 0.4]).expect("an affine has one");
+        assert!(z.iter().flatten().flatten().all(|&x| x == 0.0), "an affine's second derivative is zero");
+
+        let mut st: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = move || {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (st >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for (name, m) in cases {
+            let mut checked = 0usize;
+            for _ in 0..2000 {
+                let q = [(next() - 0.5) * 4.0, (next() - 0.5) * 4.0];
+                let Some(h) = m.hessian(q) else { continue };
+                let clear = m.singular_distance(q);
+                // Well clear of the edges, and a step big enough that a
+                // second difference is not all rounding.
+                if !(clear > 0.05) {
+                    continue;
+                }
+                let step = (clear * 0.02).min(1e-3);
+                let at = |a: f64, b: f64| -> Option<[f64; 2]> {
+                    let p = [q[0] + a, q[1] + b];
+                    let u = m.apply(p);
+                    (u[0].is_finite() && u[1].is_finite()).then_some(u)
+                };
+                let mut ok = true;
+                for j in 0..2 {
+                    for k in 0..2 {
+                        let (mut pp, mut pm, mut mp, mut mm) = ([0.0; 2], [0.0; 2], [0.0; 2], [0.0; 2]);
+                        pp[j] += step;
+                        pp[k] += step;
+                        pm[j] += step;
+                        pm[k] -= step;
+                        mp[j] -= step;
+                        mp[k] += step;
+                        mm[j] -= step;
+                        mm[k] -= step;
+                        let (Some(a), Some(b), Some(c), Some(d)) = (
+                            at(pp[0], pp[1]),
+                            at(pm[0], pm[1]),
+                            at(mp[0], mp[1]),
+                            at(mm[0], mm[1]),
+                        ) else {
+                            ok = false;
+                            break;
+                        };
+                        for i in 0..2 {
+                            let fd = (a[i] - b[i] - c[i] + d[i]) / (4.0 * step * step);
+                            let an = h[i][j][k];
+                            let scale = an.abs().max(fd.abs()).max(1e-6);
+                            assert!(
+                                (fd - an).abs() / scale < 5e-2,
+                                "{name} at {q:?}: H[{i}][{j}][{k}] is {an}, a second difference says {fd}"
+                            );
+                        }
+                    }
+                    if !ok {
+                        break;
+                    }
+                }
+                if ok {
+                    checked += 1;
+                }
+            }
+            // Twenty-five, not a hundred: `disc`'s branch is one ring
+            // of the plane and `blob`'s scale has to stay clear of
+            // zero, so most of a square of random points is not in a
+            // place where a second difference means anything.
+            assert!(checked > 25, "{name}: only {checked} points were checkable");
+        }
+    }
+
+    /// G1 of `ifs-nonlinear-perturbation.md`: every kernel's
+    /// [`Kernel::inverse_jacobian`] IS the derivative of its
+    /// [`Kernel::inverse`], and ties to
+    /// [`Kernel::local_sigma_factor`] exactly.
+    ///
+    /// Two things at once, and the second is the one that found a
+    /// bug. A Jacobian is checked against central differences, which
+    /// says it is the right derivative. Its largest singular value is
+    /// then checked against the forward map's smallest -- they are
+    /// reciprocal, since the inverse's derivative is the inverse of
+    /// the forward's -- which says the σ the WALK scales its bounds
+    /// by is the σ this derivative implies. Bubble's was not: it
+    /// reported the tangential derivative alone, which overstates
+    /// σ_min without bound as the fold at `|p| = 2` is approached
+    /// (21× at `|v| = 0.9989`, measured), and an overstated σ_min is
+    /// an over-read.
+    ///
+    /// The finite differences also found that bubble's inner branch
+    /// could not be differentiated numerically at all near the origin
+    /// -- 102% disagreement -- because `2 − 2√(1 − x)` cancels.
+    /// [`Kernel::bubble_scale`] is what both fixes live in.
+    #[test]
+    fn the_kernels_jacobians_are_the_derivative() {
+        let cases: Vec<(&str, Kernel, u32)> = vec![
+            ("root n2 d1", Kernel::Root { n: 2, d: 1.0, mirror: false }, 0),
+            ("root n3 d-1", Kernel::Root { n: 3, d: -1.0, mirror: false }, 0),
+            ("root n-5 d2", Kernel::Root { n: -5, d: 2.0, mirror: false }, 0),
+            ("root n8 d-1", Kernel::Root { n: 8, d: -1.0, mirror: false }, 0),
+            ("spherical", Kernel::Spherical, 0),
+            ("bubble in", Kernel::Bubble, 0),
+            ("bubble out", Kernel::Bubble, 1),
+            ("hemisphere", Kernel::Hemisphere, 0),
+            ("disc m0", Kernel::Disc, 0),
+            ("disc m1", Kernel::Disc, 1),
+            ("disc m2", Kernel::Disc, 2),
+            ("blob", Kernel::Blob { high: 1.4, low: 0.3, waves: 3.0 }, 0),
+            ("blob neg low", Kernel::Blob { high: 1.2, low: -0.4, waves: 2.0 }, 0),
+            ("elliptic", Kernel::Elliptic, 0),
+            ("splits q0", Kernel::Splits { base: [-0.4, 0.1], x: [0.8, 0.3], y: [-0.2, -0.9] }, 0),
+            ("splits q3", Kernel::Splits { base: [-0.4, 0.1], x: [0.8, 0.3], y: [-0.2, -0.9] }, 3),
+            ("cylinder even", Kernel::Cylinder { k0: -1 }, 0),
+            ("cylinder odd", Kernel::Cylinder { k0: -1 }, 3),
+            // juliascope, last so the others keep their samples. Every
+            // sector, so across the creases between arms of different
+            // parity, which the clearance must hold off.
+            ("scope n5 d1", Kernel::Root { n: 5, d: 1.0, mirror: true }, 0),
+            ("scope n-4 d-1", Kernel::Root { n: -4, d: -1.0, mirror: true }, 0),
+            ("scope n3 d2", Kernel::Root { n: 3, d: 2.0, mirror: true }, 0),
+        ];
+        // The largest singular value, stably: the larger eigenvalue of
+        // `MᵀM` is `(p + r)/2 + sqrt(((p − r)/2)² + q²)`, where the
+        // square root is a sum of squares and is ADDED, so nothing
+        // cancels. `Affine2::singular_values` reads both values out of
+        // `sqrt(||M||⁴ − 4 det²)` instead, which is exactly zero for a
+        // conformal map and so keeps half of f64's digits there.
+        let sv = |j: [[f64; 2]; 2]| {
+            let p = j[0][0] * j[0][0] + j[1][0] * j[1][0];
+            let r = j[0][1] * j[0][1] + j[1][1] * j[1][1];
+            let q = j[0][0] * j[0][1] + j[1][0] * j[1][1];
+            let half = (p - r) * 0.5;
+            let mid = (p + r) * 0.5;
+            (0.0, (mid + (half * half + q * q).sqrt()).max(0.0).sqrt())
+        };
+
+        let mut st: u64 = 0x2545_F491_4F6C_DD1D;
+        let mut next = move || {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (st >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for (name, k, branch) in cases {
+            let mut checked = 0usize;
+            for _ in 0..4000 {
+                let rad = if k.image_is_unit_disc() { next() * 0.999 } else { next() * 3.0 };
+                let ang = next() * std::f64::consts::TAU;
+                let v = [rad * ang.cos(), rad * ang.sin()];
+                let Some(j) = k.inverse_jacobian(v, branch) else { continue };
+                // Away from the edges, where a central difference of
+                // a function with a square-root branch point is not a
+                // derivative of anything.
+                let clear = k.singular_distance(v, branch);
+                if !(clear > 1e-3) {
+                    continue;
+                }
+                let h = (1e-6f64).min(clear * 1e-3);
+                for axis in 0..2 {
+                    let mut a = v;
+                    let mut b = v;
+                    a[axis] += h;
+                    b[axis] -= h;
+                    let ua = k.inverse(a, branch);
+                    let ub = k.inverse(b, branch);
+                    for row in 0..2 {
+                        let fd = (ua[row] - ub[row]) / (2.0 * h);
+                        let an = j[row][axis];
+                        let scale = an.abs().max(fd.abs()).max(1e-12);
+                        assert!(
+                            (fd - an).abs() / scale < 1e-3,
+                            "{name} at {v:?}: d u[{row}]/d v[{axis}] is {an}, a central difference says {fd}"
+                        );
+                    }
+                }
+                // The inverse of the forward's derivative, so the
+                // largest singular value here is the reciprocal of
+                // the smallest there.
+                let (_, hi) = sv(j);
+                let (klo, _) = k.sigma_const();
+                let ratio = hi * klo * k.local_sigma_factor(v, branch);
+                // Machine precision everywhere but one case: 1.5e-13
+                // is the worst of the other twelve. The exception is
+                // a blob whose angular scale CROSSES ZERO, where the
+                // shipped σ_min reads the smaller root of a
+                // discriminant whose two roots meet -- 3.0e-5,
+                // deliberately left there rather than move a preset
+                // (see `local_sigma_factor`). The error this gate
+                // exists to catch is a factor of 21.
+                let tol = if name == "blob neg low" { 1e-4 } else { 1e-12 };
+                assert!(
+                    (ratio - 1.0).abs() < tol,
+                    "{name} at {v:?}: sigma_max(J) * sigma_min(forward) is {ratio}, not 1"
+                );
+                // The clearance is a real one: half of it keeps the
+                // branch.
+                let step = [v[0] + clear * 0.5 * ang.cos(), v[1] + clear * 0.5 * ang.sin()];
+                assert!(
+                    k.inverse_jacobian(step, branch).is_some(),
+                    "{name}: half of the clearance {clear} at {v:?} left the branch"
+                );
+                checked += 1;
+            }
+            assert!(checked > 400, "{name}: only {checked} points were checkable");
+        }
+    }
+
+    /// The map level of G1: the affines and the weight compose onto
+    /// the kernel's Jacobian, and the σ_min the walk reports is never
+    /// ABOVE the derivative's -- the direction that decides whether a
+    /// bound is a lower bound.
+    #[test]
+    fn a_nonlinear_maps_jacobian_composes_through_its_affines() {
+        let guard = global_registry();
+        let r = &*guard;
+        let build = |name: &str, w: f32, set: &dyn Fn(&mut Transform)| -> NonlinearMap2 {
+            let mut t = affine_xform(0.83, -0.24, 0.31, 0.77, 0.19, -0.12);
+            t.variations.clear();
+            t.variation_order.clear();
+            let mut t = with(t, name, w);
+            set(&mut t);
+            let m = transform_map_2d_ordered(&t, r, &t.ordered_variation_names(r))
+                .unwrap_or_else(|e| panic!("{name} should be a nonlinear map: {e:?}"));
+            m.nonlinear().copied().expect("nonlinear")
+        };
+        let noop = |_: &mut Transform| {};
+        let cases: Vec<(&str, NonlinearMap2, u32)> = vec![
+            ("spherical", build("spherical", 0.7, &noop), 0),
+            ("bubble in", build("bubble", 1.3, &noop), 0),
+            ("bubble out", build("bubble", 1.3, &noop), 1),
+            ("hemisphere", build("hemisphere", 0.9, &noop), 0),
+            ("disc", build("disc", 0.6, &noop), 1),
+            ("blob", build("blob", 1.1, &|t: &mut Transform| {
+                t.set_variation_param("blob", "high", 1.4);
+                t.set_variation_param("blob", "low", 0.3);
+                t.set_variation_param("blob", "waves", 3.0);
+            }), 0),
+            ("julian 3 dist -1", build("julian", 0.5, &|t: &mut Transform| {
+                t.set_variation_param("julian", "power", 3.0);
+                t.set_variation_param("julian", "dist", -1.0);
+            }), 0),
+        ];
+        let mut st: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = move || {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (st >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for (name, base, branch) in cases {
+            let mut m = base;
+            m.branch = branch;
+            let (c_lo, _) = m.singular_values();
+            let mut checked = 0usize;
+            for _ in 0..3000 {
+                // Sample in the map's own image, by pushing a point
+                // through the forward map.
+                let p = [(next() - 0.5) * 6.0, (next() - 0.5) * 6.0];
+                let q = m.apply_branch(p, 0);
+                if !(q[0].is_finite() && q[1].is_finite()) {
+                    continue;
+                }
+                let Some(j) = m.inverse_jacobian(q) else { continue };
+                let clear = m.singular_distance(q);
+                if !(clear > 1e-4) {
+                    continue;
+                }
+                let h = (1e-6f64).min(clear * 1e-3);
+                let mut ok = true;
+                for axis in 0..2 {
+                    let mut a = q;
+                    let mut b = q;
+                    a[axis] += h;
+                    b[axis] -= h;
+                    let ua = m.apply_inverse(a);
+                    let ub = m.apply_inverse(b);
+                    if !(ua[0].is_finite() && ub[0].is_finite()) {
+                        ok = false;
+                        break;
+                    }
+                    for row in 0..2 {
+                        let fd = (ua[row] - ub[row]) / (2.0 * h);
+                        let an = j[row][axis];
+                        let scale = an.abs().max(fd.abs()).max(1e-9);
+                        assert!(
+                            (fd - an).abs() / scale < 1e-3,
+                            "{name} at {q:?}: d u[{row}]/d q[{axis}] is {an}, a central difference says {fd}"
+                        );
+                    }
+                }
+                if !ok {
+                    continue;
+                }
+                // Soundness: the walk's sigma is at most the true
+                // one. The constants multiply as a bound rather than
+                // exactly, so this is an inequality where the
+                // kernel's own was an equality.
+                let (_, hi) = Affine2 { m: j, t: [0.0, 0.0] }.singular_values();
+                let reported = c_lo * m.local_sigma_factor(q);
+                assert!(
+                    reported <= 1.0 / hi * (1.0 + 1e-6),
+                    "{name} at {q:?}: the walk scales by {reported}, above the derivative's {}",
+                    1.0 / hi
+                );
+                checked += 1;
+            }
+            assert!(checked > 200, "{name}: only {checked} points were checkable");
+        }
+    }
+    /// G1: every REGISTERED inverse, not a list written here.
+    ///
+    /// `ifs-general.md` D1's point. Three things, over
+    /// `variations::inverse::INVERSES`:
+    ///
+    /// 1. the analysis reaches it -- a transform carrying only that
+    ///    variation analyses to a map with that kernel, which is the
+    ///    whole wiring from the definition through the registry to
+    ///    `transform_map_2d_ordered`;
+    /// 2. every forward branch is undone by SOME inverse branch,
+    ///    which is the kernel property the walk depends on and the
+    ///    one Bubble's inverse failed by 102% before it was rewritten;
+    /// 3. the dual Jacobian exists wherever the domain says it does.
+    ///
+    /// A seventh kernel gets all three by being appended to that
+    /// list. The solid kernels take (1) only: their round trip
+    /// carries an `aux` and a quaternion branch rule, which
+    /// `the_solid_kernels_invert_their_branches` covers in its own
+    /// terms.
+    #[test]
+    fn every_registered_inverse_is_reachable_and_inverts() {
+        use crate::variations::inverse::{InverseKernel, INVERSES};
+        let guard = global_registry();
+        let r = &*guard;
+        // The two MODE refusals, set to the arm the walk inverts,
+        // and a power of three. The power is not cosmetic: `julian`
+        // at its default power 2 and dist 1 IS `julia`, the same
+        // `Root { n: 2, d: 1 }`, so at the defaults check (1) below
+        // cannot tell which definition produced it. Nothing else is
+        // overridden -- the rest is what a user who drops the
+        // variation on a transform gets.
+        let overrides: &[(&str, f32)] = &[("inverse", 1.0), ("projection", 0.0), ("power", 3.0)];
+
+        let (mut affine, mut planar, mut solid) = (0usize, 0usize, 0usize);
+        for def in INVERSES {
+            let info = r.get(def.name).expect("a registered variation");
+            let mut t = affine_xform(0.83, -0.24, 0.31, 0.77, 0.19, -0.12);
+            t.variations.clear();
+            t.variation_order.clear();
+            let mut t = with(t, def.name, 0.8);
+            for (k, v) in overrides {
+                if info.parameters.iter().any(|q| q.name == *k) {
+                    t.set_variation_param(def.name, k, *v);
+                }
+            }
+
+            // (1) the analysis reaches it.
+            let order = t.ordered_variation_names(r);
+            match def.kernel {
+                InverseKernel::Planar(_) => {
+                    let m = transform_map_2d_ordered(&t, r, &order)
+                        .unwrap_or_else(|e| panic!("{}: {e:?}", def.name));
+                    let kernel = m
+                        .nonlinear()
+                        .unwrap_or_else(|| panic!("{}: analysed as affine", def.name))
+                        .kernel;
+                    assert_eq!(
+                        kernel.variation(),
+                        def.name,
+                        "{} analysed to {:?}",
+                        def.name,
+                        kernel
+                    );
+
+                    // (2) every forward branch is undone by one of
+                    // the inverse's.
+                    let mut checked = 0usize;
+                    // The annulus this runs in is chosen, not
+                    // arbitrary. Below it `spherical`'s forward
+                    // carries the flame's `1e-6` guard --
+                    // `z/(|z|² + 1e-6)` -- which its inverse
+                    // deliberately does not undo, so the round trip
+                    // is off by `1e-6/|z|²`: a millionth at radius
+                    // 1, and everything at the origin. Above it
+                    // `disc`'s forward is periodic in the radius and
+                    // the ring would be past the four branches
+                    // tried below. The tolerance is that guard's
+                    // own size at the inner edge.
+                    for z in kernel_probe_points() {
+                        let rad = z[0].hypot(z[1]);
+                        if !(0.2..=2.0).contains(&rad) {
+                            continue;
+                        }
+                        for k in 0..4u32 {
+                            let v = kernel.forward(z, k);
+                            if !(v[0].is_finite() && v[1].is_finite()) {
+                                continue;
+                            }
+                            let scale = z[0].hypot(z[1]).max(1e-3);
+                            let best = (0..4u32)
+                                .map(|b| {
+                                    let u = kernel.inverse(v, b);
+                                    (u[0] - z[0]).hypot(u[1] - z[1])
+                                })
+                                .fold(f64::INFINITY, f64::min);
+                            if !best.is_finite() {
+                                continue;
+                            }
+                            assert!(
+                                best <= 3e-5 * scale,
+                                "{}: forward branch {k} at {z:?} -> {v:?}, no inverse \
+                                 branch returns it (closest {best:.3e}, scale {scale:.3e})",
+                                def.name
+                            );
+                            checked += 1;
+
+                            // (3) a Jacobian wherever the domain says.
+                            for b in 0..4u32 {
+                                if kernel_inverse_domain(&kernel, v, b) {
+                                    assert!(
+                                        kernel.inverse_jacobian(v, b).is_some(),
+                                        "{}: in the domain at {v:?} branch {b} with no \
+                                         Jacobian",
+                                        def.name
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    assert!(checked > 100, "{}: only {checked} round trips", def.name);
+                    planar += 1;
+                }
+                InverseKernel::Solid(_) => {
+                    let m = transform_map_3d_ordered(&t, r, &order)
+                        .unwrap_or_else(|e| panic!("{}: {e:?}", def.name));
+                    let kernel = m
+                        .nonlinear()
+                        .unwrap_or_else(|| panic!("{}: analysed as affine", def.name))
+                        .kernel;
+                    assert_eq!(kernel.variation(), def.name, "{} analysed to {:?}", def.name, kernel);
+                    solid += 1;
+                }
+                InverseKernel::Affine(role) => {
+                    // An affine role is checked against the analysis
+                    // the other way round: alongside a `linear`, so
+                    // the transform has something to be affine WITH
+                    // -- several of these contribute nothing in the
+                    // plane, and a transform with no contribution at
+                    // all is refused as having no variations, which
+                    // would say nothing about the role.
+                    let mut t = t.clone();
+                    let t = with(t.clone(), "linear", 1.0);
+                    let order = t.ordered_variation_names(r);
+                    let p = |q: &str| t.get_variation_param_or_default(def.name, q, r) as f64;
+
+                    let planar_role = role(0.8, &p, Space::Planar);
+                    assert!(
+                        planar_role.is_some(),
+                        "{}: no role in the plane -- every affine entry answers there, \
+                         even if the answer is Nothing",
+                        def.name
+                    );
+                    let m = transform_map_2d_ordered(&t, r, &order)
+                        .unwrap_or_else(|e| panic!("{}: {e:?}", def.name));
+                    assert!(m.is_affine(), "{}: analysed to a kernel in the plane", def.name);
+
+                    // In space the role may be absent, and then the
+                    // transform must be REFUSED, naming this
+                    // variation -- which is what the flame panel
+                    // shows and what `zcone` and `zblur` exercise.
+                    match role(0.8, &p, Space::Solid) {
+                        Some(_) => {
+                            let m3 = transform_map_3d_ordered(&t, r, &order)
+                                .unwrap_or_else(|e| panic!("{} in space: {e:?}", def.name));
+                            assert!(
+                                m3.is_affine(),
+                                "{}: analysed to a kernel in space",
+                                def.name
+                            );
+                        }
+                        None => {
+                            let e = transform_map_3d_ordered(&t, r, &order)
+                                .expect_err(&format!("{}: no solid role, yet accepted", def.name));
+                            assert!(
+                                matches!(&e, NotAffine::Variation(v) if v == def.name),
+                                "{}: refused as {e:?}, which does not name it",
+                                def.name
+                            );
+                        }
+                    }
+                    affine += 1;
+                }
+            }
+        }
+        assert_eq!(
+            (affine, planar, solid),
+            (12, 11, 3),
+            "twelve affine roles, eleven planar kernels and three solid"
+        );
+    }
+
+    #[test]
+    fn every_kernel_inverse_undoes_each_of_its_branches() {
+        let guard = global_registry();
+        let r = &*guard;
+        let mut sph = affine_xform(0.6, 0.2, -0.1, 0.5, 0.3, -0.2);
+        sph.variations.clear();
+        sph.variation_order.clear();
+        let sph = with(sph, "spherical", 0.7);
+        let mut bub = affine_xform(0.9, -0.3, 0.3, 0.9, -0.4, 0.1);
+        bub.variations.clear();
+        bub.variation_order.clear();
+        let bub = with(bub, "bubble", 1.3);
+        let mut neg = affine_xform(1.0, 0.0, 0.0, 1.0, 0.2, 0.1);
+        neg.variations.clear();
+        neg.variation_order.clear();
+        let mut neg = with(neg, "julian", 0.5);
+        neg.set_variation_param("julian", "power", 3.0);
+        neg.set_variation_param("julian", "dist", -1.0);
+
+        for (t, kernel) in [(&sph, Kernel::Spherical), (&bub, Kernel::Bubble), (&neg, Kernel::Root { n: 3, d: -1.0, mirror: false })] {
+            let m = transform_map_2d_ordered(t, r, &t.ordered_variation_names(r)).expect("a nonlinear map");
+            let base = m.nonlinear().copied().expect("nonlinear");
+            assert_eq!(base.kernel, kernel);
+            let (lo, hi) = base.singular_values();
+            assert!(lo > 0.0 && hi >= lo, "({lo}, {hi})");
+            // Points on both sides of bubble's fold circle |pre(p)| = 2,
+            // and off the origin for the others.
+            for p in [[0.3, 0.4], [-1.7, 2.6], [4.0, -3.5], [0.05, -0.02]] {
+                let q = base.apply_branch(p, 0);
+                // Which branch of a bubble holds p is decided by |pre(p)|.
+                let z = base.pre.apply(p);
+                let inner = z[0].hypot(z[1]) <= 2.0;
+                let branch = if kernel == Kernel::Bubble && !inner { 1 } else { 0 };
+                let mut mb = base;
+                mb.branch = branch;
+                let back = mb.apply_inverse(q);
+                // The inversion's forward keeps the flame's 1e-6 and
+                // its inverse drops it (S2): the round trip is off by
+                // about ε/|z|², which at |z| ~ 0.5 is 4e-6.
+                let tol = if kernel == Kernel::Spherical { 1e-4 } else { 1e-6 };
+                assert!((back[0] - p[0]).abs() < tol && (back[1] - p[1]).abs() < tol, "{kernel:?} branch {branch}: {p:?} -> {q:?} -> {back:?}");
+                // The local factor is the forward derivative's scale,
+                // checked by finite differences along the tangent for
+                // bubble and along both axes for the conformal ones.
+                let (c_lo, _) = base.singular_values();
+                let s = c_lo * mb.local_sigma_factor(q);
+                let h = 1e-6;
+                let d1 = base.apply_branch([p[0] + h, p[1]], 0);
+                let d2 = base.apply_branch([p[0], p[1] + h], 0);
+                let g1 = ((d1[0] - q[0]).hypot(d1[1] - q[1])) / h;
+                let g2 = ((d2[0] - q[0]).hypot(d2[1] - q[1])) / h;
+                // The product of parts is a lower bound on the stretch
+                // in any direction. Bubble was excepted here until its
+                // sigma_min gained the radial term it was missing --
+                // see `the_kernels_jacobians_are_the_derivative`.
+                assert!(s <= g1.min(g2) * (1.0 + 1e-4) + 1e-9, "{kernel:?} at {p:?}: sigma {s} exceeds stretch {g1}/{g2}");
+            }
+        }
+
+        // A bubble transform is two maps of the IFS.
+        let ifs = analyse_2d(&flame_of(vec![bub.clone()]), r).expect("qualifies");
+        assert_eq!(ifs.maps.len(), 2);
+        assert_eq!(ifs.maps[0].transform_index, ifs.maps[1].transform_index);
+        assert_eq!(ifs.maps[0].inverse.nonlinear().unwrap().branch, 0);
+        assert_eq!(ifs.maps[1].inverse.nonlinear().unwrap().branch, 1);
+        // Its ball is invariant: the image is the post-affine of the
+        // unit disc scaled by w.
+        for j in 0..90 {
+            let a = (j as f64 * 4.0).to_radians();
+            let q = [ifs.ball.centre[0] + ifs.ball.radius * a.cos(), ifs.ball.centre[1] + ifs.ball.radius * a.sin()];
+            let img = ifs.maps[0].forward.apply(q);
+            let d = (img[0] - ifs.ball.centre[0]).hypot(img[1] - ifs.ball.centre[1]);
+            assert!(d <= ifs.ball.radius * (1.0 + 1e-9));
+        }
+        // A point outside the unit disc in the pre-frame of the inverse
+        // has no preimage on either branch: it lands at infinity.
+        let far = ifs.maps[0].inverse.apply(ifs.maps[0].forward.apply([100.0, 0.0]).map(|x| x * 1.5 + 5.0));
+        let _ = far;
+        let mut mb = ifs.maps[0].inverse.nonlinear().copied().unwrap();
+        let q_out = mb.post.apply([2.0 * mb.w, 0.0]);
+        for b in 0..2 {
+            mb.branch = b;
+            let u = mb.apply_inverse(q_out);
+            assert!(!u[0].is_finite(), "branch {b} of a point with no preimage should be at infinity, got {u:?}");
+        }
+
+        // A spherical IFS gets the measured ball (S3), and a
+        // negative-distance root does too.
+        let ifs = analyse_2d(&flame_of(vec![sph.clone(), affine_xform(0.5, 0.0, 0.0, 0.5, 1.0, 0.0)]), r).expect("qualifies");
+        assert!(ifs.ball.radius > 0.0 && ifs.ball.radius.is_finite());
+        let ifs = analyse_2d(&flame_of(vec![neg.clone(), affine_xform(0.5, 0.0, 0.0, 0.5, 1.0, 0.0)]), r).expect("qualifies");
+        assert!(ifs.ball.radius > 0.0 && ifs.ball.radius.is_finite());
+    }
+
+    /// Plan 8.10 gate 1: hemisphere, disc and blob round-trip, disc
+    /// on every ring the ball allows, and each local factor is the
+    /// forward map's smallest stretch to a finite difference.
+    #[test]
+    fn the_fold_kernels_undo_each_of_their_branches() {
+        let guard = global_registry();
+        let r = &*guard;
+        let mut hemi = affine_xform(0.8, 0.1, -0.2, 0.7, 0.2, -0.1);
+        hemi.variations.clear();
+        hemi.variation_order.clear();
+        let hemi = with(hemi, "hemisphere", 1.4);
+        let mut disc = affine_xform(0.9, 0.3, -0.3, 0.9, 0.5, 0.2);
+        disc.variations.clear();
+        disc.variation_order.clear();
+        let disc = with(disc, "disc", 1.1);
+        let mut blob = affine_xform(0.6, 0.0, 0.0, 0.6, 0.1, 0.3);
+        blob.variations.clear();
+        blob.variation_order.clear();
+        let mut blob = with(blob, "blob", 0.9);
+        blob.set_variation_param("blob", "high", 1.4);
+        blob.set_variation_param("blob", "low", 0.6);
+        blob.set_variation_param("blob", "waves", 5.0);
+
+        for (t, kernel) in [
+            (&hemi, Kernel::Hemisphere),
+            (&disc, Kernel::Disc),
+            (&blob, Kernel::Blob { high: 1.4, low: 0.6, waves: 5.0 }),
+        ] {
+            let m = transform_map_2d_ordered(t, r, &t.ordered_variation_names(r)).expect("a nonlinear map");
+            let base = m.nonlinear().copied().expect("nonlinear");
+            let got = base.kernel;
+            let same = match (got, kernel) {
+                (Kernel::Blob { high: a, low: b, waves: c }, Kernel::Blob { high: x, low: y, waves: z }) => {
+                    close(a, x) && close(b, y) && close(c, z)
+                }
+                (a, b) => a == b,
+            };
+            assert!(same, "{got:?} vs {kernel:?}");
+            for p in [[0.3, 0.4], [-1.7, 2.6], [4.0, -3.5], [0.05, -0.02], [2.9, 0.1]] {
+                let q = base.apply_branch(p, 0);
+                // Which ring of a disc holds p: r = |pre(p)| on the ring
+                // floor(r - phi/pi + 1/2)... simpler, try every ring and
+                // require exactly the one that lands back on p.
+                let branches = if kernel == Kernel::Disc { 12 } else { 1 };
+                let mut hits = 0;
+                for b in 0..branches {
+                    let mut mb = base;
+                    mb.branch = b;
+                    let back = mb.apply_inverse(q);
+                    if (back[0] - p[0]).abs() < 1e-6 && (back[1] - p[1]).abs() < 1e-6 {
+                        hits += 1;
+                        // The local factor is a lower bound on the
+                        // forward stretch in any direction.
+                        let (c_lo, _) = base.singular_values();
+                        let sg = c_lo * mb.local_sigma_factor(q);
+                        let h = 1e-6;
+                        let d1 = base.apply_branch([p[0] + h, p[1]], 0);
+                        let d2 = base.apply_branch([p[0], p[1] + h], 0);
+                        let g1 = (d1[0] - q[0]).hypot(d1[1] - q[1]) / h;
+                        let g2 = (d2[0] - q[0]).hypot(d2[1] - q[1]) / h;
+                        assert!(sg <= g1.min(g2) * (1.0 + 1e-3) + 1e-9, "{kernel:?} at {p:?}: sigma {sg} exceeds stretch {g1}/{g2}");
+                    }
+                }
+                assert_eq!(hits, 1, "{kernel:?}: {p:?} came back on {hits} branches");
+            }
+        }
+
+        // A disc IFS gets as many rings as its ball reaches, and no
+        // more than twelve; a hemisphere's ball is invariant.
+        let ifs = analyse_2d(&flame_of(vec![disc.clone(), affine_xform(0.5, 0.0, 0.0, 0.5, 0.5, 0.0)]), r).expect("qualifies");
+        let rings = ifs.maps.iter().filter(|m| m.transform_index == 0).count();
+        assert!((2..=12).contains(&rings), "{rings} rings");
+        let ifs = analyse_2d(&flame_of(vec![hemi.clone(), affine_xform(0.5, 0.0, 0.0, 0.5, 0.5, 0.0)]), r).expect("qualifies");
+        for j in 0..90 {
+            let a = (j as f64 * 4.0).to_radians();
+            let q = [ifs.ball.centre[0] + ifs.ball.radius * a.cos(), ifs.ball.centre[1] + ifs.ball.radius * a.sin()];
+            for m in &ifs.maps {
+                let img = m.forward.apply(q);
+                let d = (img[0] - ifs.ball.centre[0]).hypot(img[1] - ifs.ball.centre[1]);
+                assert!(d <= ifs.ball.radius * (1.0 + 1e-9));
+            }
+        }
+        // A blob whose scale reaches zero has no single inverse.
+        let mut flat = blob.clone();
+        flat.set_variation_param("blob", "low", 0.0);
+        let errs = analyse_2d(&flame_of(vec![flat]), r).unwrap_err();
+        assert!(errs.iter().any(|e| matches!(e, Disqualification::NotAffine { why: NotAffine::Degenerate(v), .. } if v == "blob")), "{errs:?}");
+    }
+
+    /// A 3D transform carrying one julia-family 3D root at `power`,
+    /// with the given XY affine and z offset; `linear3D` is dropped.
+    fn root3_xform(variation: &str, power: f32, a: [f32; 6], g: f32, w: f32) -> Transform {
+        let mut t = affine_xform(a[0], a[1], a[2], a[3], a[4], a[5]);
+        t.g = g;
+        t.variations.clear();
+        t.variation_order.clear();
+        let mut t = with(t, variation, w);
+        t.set_variation_param(variation, "power", power);
+        t
+    }
+
+    /// Plan 8.11 step 2, gate 1: julia3D and julia3Dz round-trip on
+    /// every branch, and each local factor is the forward map's
+    /// smallest stretch to a finite difference in three directions.
+    #[test]
+    fn the_3d_root_kernels_undo_each_of_their_branches() {
+        let guard = global_registry();
+        let r = &*guard;
+        let cases = [
+            (root3_xform("julia3D", 3.0, [1.0, 0.0, 0.0, 1.0, 0.3, -0.2], 0.1, 0.9), Kernel3::Root3 { n: 3 }),
+            (root3_xform("julia3D", 2.0, [0.9, 0.2, -0.2, 0.9, 0.0, 0.4], -0.3, 1.1), Kernel3::Root3 { n: 2 }),
+            (root3_xform("julia3Dz", 2.0, [1.0, 0.0, 0.0, 1.0, -0.4, 0.1], 0.2, 0.8), Kernel3::RootZ3 { n: 2 }),
+            (root3_xform("julia3Dz", 4.0, [0.8, 0.0, 0.0, 0.8, 0.1, 0.1], 0.0, 1.0), Kernel3::RootZ3 { n: 4 }),
+        ];
+        for (t, kernel) in &cases {
+            let m = transform_map_3d_ordered(t, r, &t.ordered_variation_names(r)).expect("a nonlinear map");
+            let base = m.nonlinear().copied().expect("nonlinear");
+            assert_eq!(base.kernel, *kernel);
+            let n = kernel.power().unsigned_abs();
+            for p in [[0.3, 0.4, 0.2], [-1.2, 0.7, -0.5], [2.0, -1.5, 1.1], [0.05, -0.02, 0.4]] {
+                for k in 0..n {
+                    let q = base.apply_branch(p, k);
+                    let back = base.apply_inverse(q);
+                    for i in 0..3 {
+                        assert!((back[i] - p[i]).abs() < 1e-6, "{kernel:?} branch {k}: {p:?} -> {q:?} -> {back:?}");
+                    }
+                }
+                // The local factor is below the forward stretch in
+                // every axis direction.
+                let q = base.apply_branch(p, 0);
+                let (c_lo, _) = base.singular_values();
+                let sg = c_lo * base.local_sigma_factor(q, 0.0);
+                let h = 1e-6;
+                for axis in 0..3 {
+                    let mut pp = p;
+                    pp[axis] += h;
+                    let d = base.apply_branch(pp, 0);
+                    let g = ((d[0] - q[0]).powi(2) + (d[1] - q[1]).powi(2) + (d[2] - q[2]).powi(2)).sqrt() / h;
+                    assert!(sg <= g * (1.0 + 1e-3) + 1e-9, "{kernel:?} at {p:?} axis {axis}: sigma {sg} exceeds stretch {g}");
+                }
+            }
+        }
+
+        // A pair of 3D roots with a contracting affine qualifies as a
+        // solid and gets a ball every branch keeps.
+        // A unit affine with linear3D at a half: the sum is 0.5·I in
+        // all three axes. (linear3D at one on a half-scale XY affine
+        // leaves z at unit scale and is not a contraction.)
+        let mut aff = affine_xform(1.0, 0.0, 0.0, 1.0, 0.6, 0.0);
+        aff.g = 0.2;
+        aff.variations.clear();
+        aff.variation_order.clear();
+        let aff = with(aff, "linear3D", 0.5);
+        let fl = flame_of(vec![cases[0].0.clone(), cases[1].0.clone(), aff]);
+        let ifs3 = analyse_3d(&fl, r).expect("qualifies");
+        assert_eq!(ifs3.maps.len(), 3);
+        assert!(ifs3.ball.radius.is_finite() && ifs3.ball.radius > 0.0);
+        // Sampled more finely than the search samples, and on a
+        // different lattice: the search's sampling plus its margin
+        // must cover what it did not visit.
+        let golden = std::f64::consts::PI * (3.0 - 5f64.sqrt());
+        let mut worst = 0.0f64;
+        for j in 0..2000 {
+            let y = 1.0 - 2.0 * (j as f64 + 0.37) / 2000.0;
+            let rr = (1.0 - y * y).sqrt();
+            let phi = golden * j as f64 + 0.5;
+            let q = [
+                ifs3.ball.centre[0] + ifs3.ball.radius * rr * phi.cos(),
+                ifs3.ball.centre[1] + ifs3.ball.radius * y,
+                ifs3.ball.centre[2] + ifs3.ball.radius * rr * phi.sin(),
+            ];
+            for m in &ifs3.maps {
+                let branches = m.forward.nonlinear().map_or(1, |nl| nl.kernel.power().unsigned_abs());
+                for k in 0..branches {
+                    let img = match &m.forward {
+                        Map3::Nonlinear(nl) => nl.apply_branch(q, k),
+                        other => other.apply(q),
+                    };
+                    let d = ((img[0] - ifs3.ball.centre[0]).powi(2) + (img[1] - ifs3.ball.centre[1]).powi(2) + (img[2] - ifs3.ball.centre[2]).powi(2)).sqrt();
+                    worst = worst.max(d / ifs3.ball.radius);
+                }
+            }
+        }
+        println!("  the ball's images reach {worst:.4} of its radius on a finer sphere than the search's");
+        // Measured 1.0014: the search samples 256 directions and adds
+        // 5%, and a finer sphere finds images a seventh of a percent
+        // past the reported radius. Invariant to sampling, then, and
+        // a set point can sit at most that far outside the ball.
+        assert!(worst <= 1.005, "an image reaches {worst:.4} of the ball's radius");
+        // And a root summed with an affine is refused, as in the plane.
+        let mixed = with(cases[0].0.clone(), "linear3D", 0.5);
+        let errs = analyse_3d(&flame_of(vec![mixed]), r).unwrap_err();
+        assert!(errs.iter().any(|e| matches!(e, Disqualification::NotAffine { why: NotAffine::MixedSum(v), .. } if v == "julia3D")), "{errs:?}");
+    }
+
+    /// An inverse-mode `quaternion_julia` transform at `c`, identity
+    /// affine, weight `w`.
+    fn qjulia_xform(c: [f32; 4], power: f32, dist: f32, w: f32) -> Transform {
+        let mut t = affine_xform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+        t.variations.clear();
+        t.variation_order.clear();
+        let mut t = with(t, "quaternion_julia", w);
+        t.set_variation_param("quaternion_julia", "cx", c[0]);
+        t.set_variation_param("quaternion_julia", "cy", c[1]);
+        t.set_variation_param("quaternion_julia", "cz", c[2]);
+        t.set_variation_param("quaternion_julia", "cw", c[3]);
+        t.set_variation_param("quaternion_julia", "power", power);
+        t.set_variation_param("quaternion_julia", "dist", dist);
+        t.set_variation_param("quaternion_julia", "inverse", 1.0);
+        t
+    }
+
+    /// Plan 8.11 step 3, gate 1: the quaternion kernel round-trips in
+    /// four dimensions on every branch, with the scalar carried, and
+    /// its local factor is below the forward stretch in every axis of
+    /// the 4D point. Forward mode and the other projections are
+    /// refused by name.
+    #[test]
+    fn the_quaternion_kernel_undoes_each_of_its_branches_in_4d() {
+        let guard = global_registry();
+        let r = &*guard;
+        for (c, power, dist, w) in [
+            ([-1.0f32, 0.2, 0.0, 0.0], 2.0f32, 1.0f32, 1.0f32),
+            ([-0.3, 0.5, 0.4, 0.1], 3.0, 1.0, 0.9),
+            ([0.2, -0.4, 0.1, -0.3], 2.0, 1.4, 1.1),
+        ] {
+            let t = qjulia_xform(c, power, dist, w);
+            let m = transform_map_3d_ordered(&t, r, &t.ordered_variation_names(r)).expect("a nonlinear map");
+            let base = m.nonlinear().copied().expect("nonlinear");
+            let Kernel3::Quaternion { n, d, c: kc, depth } = base.kernel else { panic!("{:?}", base.kernel) };
+            assert!(!depth, "projection 0 is the vector one");
+            assert_eq!(n, power as i32);
+            assert!(close(d, dist as f64));
+            for i in 0..4 {
+                assert!(close(kc[i], c[i] as f64));
+            }
+            for (p, aux) in [([0.3, 0.4, 0.2], 0.1), ([-1.2, 0.7, -0.5], -0.6), ([2.0, -1.5, 1.1], 0.8), ([0.05, -0.02, 0.4], 0.0)] {
+                for k in 0..(power as u32) {
+                    let (q, qa) = base.apply_branch_aux(p, aux, k);
+                    let (back, ba) = base.apply_inverse_aux(q, qa);
+                    for i in 0..3 {
+                        assert!((back[i] - p[i]).abs() < 1e-6, "c {c:?} branch {k}: {p:?}/{aux} -> {q:?}/{qa} -> {back:?}/{ba}");
+                    }
+                    assert!((ba - aux).abs() < 1e-6, "c {c:?} branch {k}: aux {aux} came back {ba}");
+                }
+                let (q, qa) = base.apply_branch_aux(p, aux, 0);
+                let (c_lo, _) = base.singular_values();
+                let sg = c_lo * base.local_sigma_factor(q, qa);
+                let h = 1e-6;
+                for axis in 0..4 {
+                    let (mut pp, mut aa) = (p, aux);
+                    if axis < 3 { pp[axis] += h } else { aa += h }
+                    let (dq, da) = base.apply_branch_aux(pp, aa, 0);
+                    let g = ((dq[0] - q[0]).powi(2) + (dq[1] - q[1]).powi(2) + (dq[2] - q[2]).powi(2) + (da - qa).powi(2)).sqrt() / h;
+                    assert!(sg <= g * (1.0 + 1e-3) + 1e-9, "c {c:?} at {p:?}/{aux} axis {axis}: sigma {sg} exceeds stretch {g}");
+                }
+            }
+        }
+        // Projection 1 (Depth) is the same kernel with the output's
+        // last two coordinates swapped -- a permutation, so it must
+        // round-trip on every branch just as the vector one does, and
+        // its singular values must be unchanged.
+        for c in [[-1.0f32, 0.2, 0.0, 0.0], [0.3, 0.0, 0.0, -0.6]] {
+            let mut t = qjulia_xform(c, 2.0, 1.0, 1.0);
+            t.set_variation_param("quaternion_julia", "projection", 1.0);
+            let m = transform_map_3d_ordered(&t, r, &t.ordered_variation_names(r)).expect("a nonlinear map");
+            let base = m.nonlinear().copied().expect("nonlinear");
+            let Kernel3::Quaternion { depth, .. } = base.kernel else { panic!("{:?}", base.kernel) };
+            assert!(depth, "projection 1 is the depth one");
+            // The same constants with projection 0, for the singular
+            // values a permutation cannot move.
+            let flat = transform_map_3d_ordered(&qjulia_xform(c, 2.0, 1.0, 1.0), r, &["quaternion_julia".to_string()])
+                .expect("a nonlinear map");
+            let (a_lo, a_hi) = base.singular_values();
+            let (b_lo, b_hi) = flat.nonlinear().unwrap().singular_values();
+            assert!(close(a_lo, b_lo) && close(a_hi, b_hi), "a permutation moved a singular value");
+            for (p, aux) in [([0.3, 0.4, 0.2], 0.1), ([-1.2, 0.7, -0.5], -0.6), ([0.05, -0.02, 0.4], 0.0)] {
+                for k in 0..2 {
+                    let (q, qa) = base.apply_branch_aux(p, aux, k);
+                    let (back, ba) = base.apply_inverse_aux(q, qa);
+                    for i in 0..3 {
+                        assert!((back[i] - p[i]).abs() < 1e-6, "depth c {c:?} branch {k}: {p:?}/{aux} -> {q:?}/{qa} -> {back:?}/{ba}");
+                    }
+                    assert!((ba - aux).abs() < 1e-6, "depth c {c:?} branch {k}: aux {aux} came back {ba}");
+                }
+                // The depth map's 3D point IS the vector map's, with
+                // the scalar and k exchanged -- which is what "the
+                // slice Bourke's lobes live in" means, said as an
+                // identity rather than a claim.
+                let (q0, a0) = flat.nonlinear().unwrap().apply_branch_aux(p, aux, 0);
+                let (q1, a1) = base.apply_branch_aux(p, aux, 0);
+                assert!(close(q1[0], q0[0]) && close(q1[1], q0[1]));
+                assert!(close(q1[2], a0) && close(a1, q0[2]), "the swap is not the projection's");
+            }
+        }
+
+        // Forward mode is refused, and so is the perspective projection.
+        let mut fwd = qjulia_xform([-1.0, 0.2, 0.0, 0.0], 2.0, 1.0, 1.0);
+        fwd.set_variation_param("quaternion_julia", "inverse", 0.0);
+        let errs = analyse_3d(&flame_of(vec![fwd]), r).unwrap_err();
+        assert!(errs.iter().any(|e| matches!(e, Disqualification::NotAffine { why: NotAffine::Mode(v), .. } if v == "quaternion_julia")), "{errs:?}");
+        let mut persp = qjulia_xform([-1.0, 0.2, 0.0, 0.0], 2.0, 1.0, 1.0);
+        persp.set_variation_param("quaternion_julia", "projection", 2.0);
+        let errs = analyse_3d(&flame_of(vec![persp]), r).unwrap_err();
+        assert!(errs.iter().any(|e| matches!(e, Disqualification::NotAffine { why: NotAffine::Mode(_), .. })), "{errs:?}");
+        // And a single transform qualifies, with a 4D ball.
+        let ifs3 = analyse_3d(&flame_of(vec![qjulia_xform([-1.0, 0.2, 0.0, 0.0], 2.0, 1.0, 1.0)]), r).expect("qualifies");
+        assert_eq!(ifs3.maps.len(), 1);
+        assert!(ifs3.ball.radius > 1.0 && ifs3.ball.radius < 4.0, "{:?}", ifs3.ball);
+    }
+
+    /// A single inverse-mode quaternion transform: the walk's
+    /// membership (never leaves the ball within L levels) against the
+    /// direct 4D iteration q -> q^2 + c from the same slice point,
+    /// which is what the set IS for one transform. Prints a
+    /// measurement of disagreement on a grid through the ball.
+    #[test]
+    fn a_single_quaternion_transforms_walk_is_the_direct_iteration() {
+        let guard = global_registry();
+        let r = &*guard;
+        // Which constants have an interior on the pure-vector slice
+        // (scalar w = 0)? Printed, so the fixtures below can be chosen
+        // from what the set is rather than from a guess: a c in the
+        // variation's (i, j, k, scalar) layout.
+        for cand in [
+            [-1.0f32, 0.2, 0.0, 0.0],
+            [0.2, 0.0, 0.0, -1.0],
+            [0.0, 0.0, 0.0, -1.0],
+            [0.0, 0.0, 0.0, -0.5],
+            [0.3, 0.0, 0.0, -0.6],
+            [0.3, 0.5, 0.4, 0.1],
+            [-0.2, 0.8, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.25],
+        ] {
+            let cf = [cand[0] as f64, cand[1] as f64, cand[2] as f64, cand[3] as f64];
+            let mut inside = 0usize;
+            let mut total = 0usize;
+            for iz in 0..16 {
+                for iy in 0..16 {
+                    for ix in 0..16 {
+                        let f = |i: usize| 3.0 * (i as f64 + 0.5) / 16.0 - 1.5;
+                        let mut q = [f(ix), f(iy), f(iz), 0.0];
+                        let mut escaped = false;
+                        for _ in 0..40 {
+                            if q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3] > 16.0 {
+                                escaped = true;
+                                break;
+                            }
+                            let sq = qmul(q, q);
+                            q = [sq[0] + cf[0], sq[1] + cf[1], sq[2] + cf[2], sq[3] + cf[3]];
+                        }
+                        total += 1;
+                        inside += (!escaped) as usize;
+                    }
+                }
+            }
+            println!("  c {cand:?}: {inside} of {total} grid points bounded on the w = 0 slice");
+        }
+        // -0.6 + 0.3i as a quaternion, scalar -0.6, i 0.3: 360 of 4096
+        // bounded above, an interior to agree on. And Bourke's
+        // -1 + 0.2i, whose vector slice is a dust and whose DEPTH
+        // slice (the scalar in the picture, k hidden) is the classic
+        // lobed set -- which is the point of projection 1.
+        // Projection 1's constants are NOT the Julia ones: its step is
+        // the polynomial after a swap, a different dynamical system,
+        // and every constant with Julia structure has an empty set
+        // under it (measured; see the record). These two have an
+        // interior to agree on.
+        for (c, projection) in [
+            ([0.3f32, 0.0, 0.0, -0.6], 0.0f32),
+            ([0.0, 0.0, 0.0, 0.25], 1.0),
+            ([0.1, 0.0, 0.0, 0.0], 1.0),
+        ] {
+            let mut t = qjulia_xform(c, 2.0, 1.0, 1.0);
+            t.set_variation_param("quaternion_julia", "projection", projection);
+            let ifs3 = analyse_3d(&flame_of(vec![t]), r).expect("qualifies");
+            let cf = [c[0] as f64, c[1] as f64, c[2] as f64, c[3] as f64];
+            let radius = ifs3.ball.radius;
+            let centre = ifs3.ball.centre;
+            let (mut n, mut bad, mut walk_in, mut direct_in) = (0usize, 0usize, 0usize, 0usize);
+            const G: usize = 24;
+            for iz in 0..G {
+                for iy in 0..G {
+                    for ix in 0..G {
+                        let f = |i: usize| 2.0 * (i as f64 + 0.5) / G as f64 - 1.0;
+                        let (u, v, w) = (f(ix), f(iy), f(iz));
+                        if (u * u + v * v + w * w).sqrt() > 0.8 {
+                            continue;
+                        }
+                        let p = [centre[0] + radius * u, centre[1] + radius * v, centre[2] + radius * w];
+                        let e = crate::scene::ifs_estimate::estimate_aux(&ifs3, p, 0.0, 24, 1);
+                        // Direct, in the walk's own terms: the state
+                        // is (3D point, carried scalar) as a 4-vector,
+                        // and one inverse step is the polynomial
+                        // AFTER the projection's reassembly -- which
+                        // for `depth` swaps the last two coordinates
+                        // EVERY step, not just the first. The
+                        // variation's comment says so in as many
+                        // words ("z and w swap roles each step"), and
+                        // the set is the attractor of poly∘P rather
+                        // than of poly: iterating the bare polynomial
+                        // agreed on the first step and then diverged,
+                        // which read as the walk finding no interior
+                        // at all.
+                        let assemble = |s: [f64; 4]| {
+                            if projection == 1.0 {
+                                [s[0], s[1], s[3], s[2]]
+                            } else {
+                                s
+                            }
+                        };
+                        let mut q = [p[0], p[1], p[2], 0.0];
+                        let mut escaped = false;
+                        for _ in 0..24 {
+                            let d4 = ((q[0] - centre[0]).powi(2) + (q[1] - centre[1]).powi(2) + (q[2] - centre[2]).powi(2) + (q[3] - ifs3.aux_centre).powi(2)).sqrt();
+                            if d4 > radius {
+                                escaped = true;
+                                break;
+                            }
+                            let r4 = assemble(q);
+                            let sq = qmul(r4, r4);
+                            q = [sq[0] + cf[0], sq[1] + cf[1], sq[2] + cf[2], sq[3] + cf[3]];
+                        }
+                        n += 1;
+                        walk_in += (!e.escaped) as usize;
+                        direct_in += (!escaped) as usize;
+                        if e.escaped != escaped {
+                            bad += 1;
+                        }
+                    }
+                }
+            }
+            println!("  c {c:?} projection {projection}: {n} points, walk interior {walk_in}, direct interior {direct_in}, membership disagreements {bad}");
+            assert_eq!(bad, 0, "c {c:?} projection {projection}: the walk and the direct iteration disagree on {bad} of {n}");
+            assert!(walk_in > 0, "c {c:?} projection {projection}: no interior to agree on");
+        }
+    }
+
+    /// Sierpiński: three half-scale maps. Every singular value is 0.5,
+    /// every map inverts to a doubling, and the fixed points are the
+    /// triangle's corners.
+    #[test]
+    fn sierpinski_is_three_half_scale_maps() {
+        let guard = global_registry();
+        let r = &*guard;
+        let fl = flame_of(vec![
+            affine_xform(0.5, 0.0, 0.0, 0.5, 0.0, 0.0),
+            affine_xform(0.5, 0.0, 0.0, 0.5, 0.5, 0.0),
+            affine_xform(0.5, 0.0, 0.0, 0.5, 0.0, 0.5),
+        ]);
+        let ifs = analyse_2d(&fl, r).expect("qualifies");
+        assert_eq!(ifs.maps.len(), 3);
+        for m in &ifs.maps {
+            assert!(close(m.sigma_min, 0.5) && close(m.sigma_max, 0.5), "{m:?}");
+            // The inverse of a half-scale-and-shift is a double-and-unshift.
+            let p = [0.3, 0.7];
+            let back = m.inverse.apply(m.forward.apply(p));
+            assert!(close(back[0], p[0]) && close(back[1], p[1]));
+        }
+        // Fixed points: (0,0), (1,0), (0,1).
+        let fp: Vec<[f64; 2]> = ifs.maps.iter().map(|m| m.forward.fixed_point().unwrap()).collect();
+        assert!(close(fp[0][0], 0.0) && close(fp[0][1], 0.0));
+        assert!(close(fp[1][0], 1.0) && close(fp[1][1], 0.0));
+        assert!(close(fp[2][0], 0.0) && close(fp[2][1], 1.0));
+        // The ball contains the triangle: every corner is inside.
+        for p in &fp {
+            let d = ((p[0] - ifs.ball.centre[0]).powi(2) + (p[1] - ifs.ball.centre[1]).powi(2)).sqrt();
+            assert!(d <= ifs.ball.radius + 1e-9, "corner {p:?} outside ball {:?}", ifs.ball);
+        }
+        // And every map sends the ball into itself.
+        for m in &ifs.maps {
+            let sc = m.forward.apply(ifs.ball.centre);
+            let shift = ((sc[0] - ifs.ball.centre[0]).powi(2) + (sc[1] - ifs.ball.centre[1]).powi(2)).sqrt();
+            assert!(shift + m.sigma_max * ifs.ball.radius <= ifs.ball.radius + 1e-9);
+        }
+    }
+
+    /// The case the determinant cannot see: a map that stretches x by
+    /// 2 and squashes y by 0.25 has |det| = 0.5 -- "contractive" by
+    /// area -- and σ_max = 2. It is not contractive, and the old
+    /// measure would have said it was.
+    #[test]
+    fn a_stretch_and_squash_is_caught_by_the_singular_value_not_the_determinant() {
+        let guard = global_registry();
+        let r = &*guard;
+        let t = affine_xform(2.0, 0.0, 0.0, 0.25, 0.0, 0.0);
+        let a = transform_affine_2d(&t, r).unwrap();
+        assert!(close(a.det().abs(), 0.5), "area factor reads contractive");
+        let (lo, hi) = a.singular_values();
+        assert!(close(lo, 0.25) && close(hi, 2.0));
+        let fl = flame_of(vec![t]);
+        let errs = analyse_2d(&fl, r).unwrap_err();
+        assert!(
+            matches!(errs[0], Disqualification::NotContractive { index: 0, sigma_max } if close(sigma_max, 2.0)),
+            "{errs:?}"
+        );
+        // A rotation composed with it does not change the singular values.
+        let rot = Affine2 { m: [[0.6, -0.8], [0.8, 0.6]], t: [0.0, 0.0] };
+        let (lo2, hi2) = rot.then_after(&a).singular_values();
+        assert!(close(lo2, 0.25) && close(hi2, 2.0));
+    }
+
+    /// An Apophysis-style 3D flame -- XY affine plus a z offset, no
+    /// plane maps -- has unit z scale. As a SOLID it is not contractive
+    /// and must fail with σ_max exactly 1; as a PLANAR IFS (the
+    /// preserve_z = false default, where z is zeroed each iteration) it
+    /// is a perfectly good half-scale IFS.
+    #[test]
+    fn an_apophysis_3d_flame_is_planar_not_solid() {
+        let guard = global_registry();
+        let r = &*guard;
+        let mut t = affine_xform(0.5, 0.0, 0.0, 0.5, 0.1, 0.0);
+        t.g = 0.3;
+        let fl = flame_of(vec![t]);
+        // Planar: qualifies.
+        let ifs2 = analyse_2d(&fl, r).expect("planar qualifies");
+        assert!(close(ifs2.maps[0].sigma_max, 0.5));
+        // Solid: the z row is (0, 0, 1), σ_max = 1 exactly.
+        let errs = analyse_3d(&fl, r).unwrap_err();
+        assert!(
+            matches!(errs[0], Disqualification::NotContractive { index: 0, sigma_max } if close(sigma_max, 1.0)),
+            "{errs:?}"
+        );
+        // Give it a zscale below one and it becomes a solid IFS.
+        let mut t3 = fl.transforms[0].clone();
+        t3.variations.insert("zscale".to_string(), -0.5);
+        t3.variation_order.push("zscale".to_string());
+        let fl3 = flame_of(vec![t3]);
+        let ifs3 = analyse_3d(&fl3, r).expect("with zscale it is contractive in z");
+        // z scale = w_linear + w_zscale = 1 - 0.5 = 0.5.
+        assert!(close(ifs3.maps[0].forward.as_affine().unwrap().m[2][2], 0.5), "{:?}", ifs3.maps[0].forward);
+        assert!(close(ifs3.maps[0].sigma_max, 0.5));
+        // ...and the g offset survives on the flat path -- SCALED, because
+        // the affine (which carries g) runs before the variation sum
+        // (which scales z by 0.5): 0.5 · (z + 0.3) has offset 0.15.
+        assert!(close(ifs3.maps[0].forward.as_affine().unwrap().t[2], 0.15), "{:?}", ifs3.maps[0].forward.as_affine().unwrap().t);
+    }
+
+    /// The 3D composition follows the shader's full path exactly, and
+    /// the test carries a finding: a plane ROTATION does not make an
+    /// Apophysis flame contractive. A 90° YZ rotation on an XY
+    /// half-scale map sends the unit z scale into y, and σ_max is
+    /// exactly 1. The plane map has to scale as well as rotate.
+    #[test]
+    fn plane_maps_compose_as_the_shader_does() {
+        let guard = global_registry();
+        let r = &*guard;
+        // (yz[0]·y + yz[2]·z, yz[1]·y + yz[3]·z): a pure 90° rotation is
+        // ny = -z, nz = y -> [0, 1, -1, 0, 0, 0].
+        let mut rot = affine_xform(0.5, 0.0, 0.0, 0.5, 0.0, 0.0);
+        rot.yz_coefs = [0.0, 1.0, -1.0, 0.0, 0.0, 0.0];
+        rot.variations.insert("zscale".to_string(), -0.5);
+        rot.variation_order.push("zscale".to_string());
+        let a = transform_affine_3d(&rot, r).unwrap();
+        // Affine: (x, y, z) -> (0.5x, -z, 0.5y); the sum then scales z
+        // by (1 - 0.5). M = [[0.5,0,0],[0,0,-1],[0,0.25,0]]: the -1 is z
+        // feeding y unscaled.
+        let (lo, hi) = a.singular_values();
+        assert!(close(hi, 1.0) && close(lo, 0.25), "({lo}, {hi})");
+
+        // Scale the rotation by 0.5 and it is contractive, with singular
+        // values that can be written down: M = [[0.5,0,0],[0,0,-0.5],[0,0.125,0]].
+        let mut scaled = rot.clone();
+        scaled.yz_coefs = [0.0, 0.5, -0.5, 0.0, 0.0, 0.0];
+        let a = transform_affine_3d(&scaled, r).unwrap();
+        let p = a.apply([0.0, 1.0, 0.0]);
+        // (0,1,0) -> xy (0,0.5,0) -> yz (0, 0, 0.25) -> z scaled 0.5 -> (0, 0, 0.125)
+        assert!(close(p[0], 0.0) && close(p[1], 0.0) && close(p[2], 0.125), "{p:?}");
+        let (lo, hi) = a.singular_values();
+        assert!(close(hi, 0.5) && close(lo, 0.125), "({lo}, {hi})");
+        let q = [0.2, -0.4, 0.9];
+        let back = a.inverse().unwrap().apply(a.apply(q));
+        for k in 0..3 {
+            assert!(close(back[k], q[k]), "{back:?} vs {q:?}");
+        }
+    }
+
+    /// `affine3D` composes to the map its shader body computes, checked
+    /// by evaluating the body's own formula at a point with every
+    /// parameter non-trivial. Rotation alone has σ = 1 and is refused;
+    /// with the scales below one it is a solid IFS map.
+    #[test]
+    fn affine3d_matches_its_shader_body_and_can_make_a_solid_map() {
+        let guard = global_registry();
+        let r = &*guard;
+        let mut t = Transform::default();
+        t.a = 1.0; t.d = 1.0; // identity XY affine
+        t.variations = HashMap::from([("affine3D".to_string(), 0.5)]);
+        t.variation_order = vec!["affine3D".to_string()];
+        let set = |t: &mut Transform, k: &str, v: f32| { t.variation_params.insert(format!("affine3D.{k}"), v); };
+        set(&mut t, "scaleX", 0.8); set(&mut t, "scaleY", 0.6); set(&mut t, "scaleZ", 0.7);
+        set(&mut t, "rotateX", 20.0); set(&mut t, "rotateY", -35.0); set(&mut t, "rotateZ", 50.0);
+        set(&mut t, "shearXY", 0.1); set(&mut t, "shearXZ", -0.2); set(&mut t, "shearYX", 0.05);
+        set(&mut t, "shearYZ", 0.15); set(&mut t, "shearZX", -0.1); set(&mut t, "shearZY", 0.25);
+        set(&mut t, "translateX", 0.3); set(&mut t, "translateY", -0.2); set(&mut t, "translateZ", 0.4);
+
+        // The shader body, transcribed, at weight 0.5.
+        let w = 0.5f64;
+        let (sx, sy, sz) = (0.8f64, 0.6, 0.7);
+        let (shxy, shxz, shyx, shyz, shzx, shzy) = (0.1f64, -0.2, 0.05, 0.15, -0.1, 0.25);
+        let d2r = std::f64::consts::PI / 180.0;
+        let (sinx, cosx) = ((20.0 * d2r).sin(), (20.0 * d2r).cos());
+        let (siny, cosy) = ((-35.0 * d2r).sin(), (-35.0 * d2r).cos());
+        let (sinz, cosz) = ((50.0 * d2r).sin(), (50.0 * d2r).cos());
+        let body = |x: f64, y: f64, z: f64| -> [f64; 3] {
+            let mx = shxy * sy * y + shxz * sz * z + sx * x;
+            let my = shyx * sx * x + shyz * sz * z + sy * y;
+            let mz = shzx * sx * x + shzy * sy * y + sz * z;
+            let nx = cosz * (cosy * mx + siny * (sinx * my + cosx * mz)) - sinz * (cosx * my - sinx * mz) + 0.3;
+            let ny = sinz * (cosy * mx + siny * (sinx * my + cosx * mz)) + cosz * (cosx * my - sinx * mz) - 0.2;
+            let nz = -siny * mx + cosy * (sinx * my + cosx * mz) + 0.4;
+            [w * nx, w * ny, w * nz]
+        };
+        let a = transform_affine_3d(&t, r).unwrap();
+        for q in [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.3, -0.7, 0.9], [-1.2, 0.4, -0.5]] {
+            let got = a.apply(q);
+            let want = body(q[0], q[1], q[2]);
+            for k in 0..3 {
+                assert!((got[k] - want[k]).abs() < 1e-6, "at {q:?}: {got:?} vs {want:?}");
+            }
+        }
+        // At weight 0.5 with scales ≤ 0.8 and small shears it is contractive.
+        let (_, hi) = a.singular_values();
+        assert!(hi < 1.0, "σ_max = {hi}");
+        let fl = flame_of(vec![t.clone()]);
+        assert!(analyse_3d(&fl, r).is_ok(), "a scaled affine3D is a solid IFS map");
+
+        // The 2D reading is the xy block: the same body with z = 0,
+        // first two outputs.
+        let a2 = transform_affine_2d(&t, r).unwrap();
+        let got = a2.apply([0.3, -0.7]);
+        let want = body(0.3, -0.7, 0.0);
+        assert!((got[0] - want[0]).abs() < 1e-6 && (got[1] - want[1]).abs() < 1e-6, "{got:?} vs {want:?}");
+    }
+
+    /// The symmetric-3×3 eigenvalue closed form, against a matrix with
+    /// known eigenvalues (a rotation of diag(1, 4, 9)).
+    #[test]
+    fn symmetric_eigenvalues_are_exact() {
+        // Q diag(1,4,9) Qᵀ for a rotation about z by 30°.
+        let c = 30f64.to_radians().cos();
+        let s = 30f64.to_radians().sin();
+        let q = [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]];
+        let d = [1.0, 4.0, 9.0];
+        let mut a = [[0.0; 3]; 3];
+        for i in 0..3 {
+            for j in 0..3 {
+                a[i][j] = (0..3).map(|k| q[i][k] * d[k] * q[j][k]).sum();
+            }
+        }
+        let mut e = symmetric3_eigenvalues(&a);
+        e.sort_by(|x, y| x.partial_cmp(y).unwrap());
+        assert!(close(e[0], 1.0) && close(e[1], 4.0) && close(e[2], 9.0), "{e:?}");
+        // And a diagonal input takes the early path.
+        let e2 = symmetric3_eigenvalues(&[[2.0, 0.0, 0.0], [0.0, 3.0, 0.0], [0.0, 0.0, 5.0]]);
+        assert_eq!(e2, [2.0, 3.0, 5.0]);
+    }
+
+    /// Every disqualification is reported, with the transform named,
+    /// and a non-affine variation is the first thing said.
+    #[test]
+    fn every_reason_is_reported_not_just_the_first() {
+        // The xaos matrix here is all ones, which is no xaos at all --
+        // `Flame::has_xaos` says so -- and since `ifs-general.md` D4
+        // a real one is not a reason either. It stays because the
+        // flame it is on is the one with two other reasons, and the
+        // point of this gate is that BOTH are reported.
+        let guard = global_registry();
+        let r = &*guard;
+        let mut bad = affine_xform(0.5, 0.0, 0.0, 0.5, 0.0, 0.0);
+        bad.variations.insert("sinusoidal".to_string(), 0.5);
+        bad.variation_order.push("sinusoidal".to_string());
+        let big = affine_xform(1.5, 0.0, 0.0, 0.5, 0.0, 0.0);
+        let mut fl = flame_of(vec![affine_xform(0.5, 0.0, 0.0, 0.5, 0.0, 0.0), bad, big]);
+        fl.xaos = Some(vec![vec![1.0; 3]; 3]);
+        let errs = analyse_2d(&fl, r).unwrap_err();
+        let text: Vec<String> = errs.iter().map(|e| e.to_string()).collect();
+        assert!(text.iter().any(|s| s == "transform 1 uses `sinusoidal`, which is not affine"), "{text:?}");
+        assert!(text.iter().any(|s| s.starts_with("transform 2 is not contractive")), "{text:?}");
+        assert_eq!(errs.len(), 2, "{text:?}");
+    }
+
+    /// A final transform is applied to the whole attractor and rides
+    /// along inverted; a second one is refused.
+    #[test]
+    fn a_single_affine_final_is_carried_and_two_are_refused() {
+        let guard = global_registry();
+        let r = &*guard;
+        let mut fl = flame_of(vec![affine_xform(0.5, 0.0, 0.0, 0.5, 0.0, 0.0)]);
+        fl.final_transforms = vec![affine_xform(0.0, -1.0, 1.0, 0.0, 0.2, 0.0)];
+        let ifs = analyse_2d(&fl, r).expect("one affine final is fine");
+        let f = ifs.final_map.expect("carried");
+        assert!(close(f.sigma_max, 1.0), "a rotation has σ = 1, and a final need not contract");
+        fl.final_transforms.push(affine_xform(0.5, 0.0, 0.0, 0.5, 0.0, 0.0));
+        let errs = analyse_2d(&fl, r).unwrap_err();
+        assert!(matches!(errs[0], Disqualification::MultipleFinals { count: 2 }));
+    }
+}
+
+/// The census: which of the shipped flames qualify, and why the rest
+/// do not.
+///
+/// Not a pass/fail test. It is the plan's phase-0 gate — *"a script or
+/// test that runs the criterion over every shipped flame preset and
+/// reports the count and the reasons; that number goes in this
+/// document"* — and it prints rather than asserts, because the number
+/// is the deliverable and a threshold would only rot. The one thing it
+/// does assert is that the analysis ran on every flame without a panic.
+#[cfg(test)]
+mod census {
+    use super::*;
+    use crate::variations::global_registry;
+    use std::collections::BTreeMap;
+
+    /// Every shipped flame: the embedded preset library, then the
+    /// visual-regression configs on disk when present.
+    fn shipped() -> Vec<(String, crate::config::FractalConfig)> {
+        let mut out: Vec<(String, crate::config::FractalConfig)> = Vec::new();
+        for (i, c) in crate::resources::presets::load_presets_with_fallback().into_iter().enumerate() {
+            out.push((format!("preset[{i}] {}", c.flame.name), c));
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/visual/configs");
+        for sub in ["2d", "3d", "solid", "variations", "tonemap"] {
+            let dir = root.join(sub);
+            if dir.is_dir() {
+                for c in crate::scene::assets::load_configs_from_dir(&dir) {
+                    out.push((format!("{sub}/{}", c.flame.name), c));
+                }
+            }
+        }
+        out
+    }
+
+    /// D7's row for D3, and the shipped corpus does not have it.
+    ///
+    /// `ifs-general.md` says `linear 0.5 + spherical 0.5` "is among
+    /// the commonest transforms in the census". Of the 170 shipped
+    /// flames, **not one** is refused for it -- `MixedSum` does not
+    /// appear in
+    /// [`how_many_shipped_flames_are_affine_ifss`]'s reason table at
+    /// all, before this rung or after, and the count of flames that
+    /// qualify is the same twenty either way. Those configs are our
+    /// own, mostly one-variation smoke tests, and a smoke test for one
+    /// variation does not sum it with a `linear`.
+    ///
+    /// So the row is measured where D4's was: the imported `.flame`
+    /// files in `output/`, which are Apophysis and JWildfire exports
+    /// and are what a real flame looks like. **That corpus is
+    /// gitignored**, so this is `#[ignore]`d and prints rather than
+    /// asserts -- it is a meter, and a meter with no corpus in front
+    /// of it reports that.
+    ///
+    /// Measured 2026-09-18 over the 45 files then present:
+    ///
+    /// ```text
+    ///   files 45 | flames 45 | transforms 109
+    ///   transforms that SUM a kernel with an affine: 4 in 4 flames
+    ///   flames unlocked by the sum rung alone: 0
+    ///   still refused: 0 sum TWO kernels; 87 name a variation with no inverse
+    ///   the sums, by kernel: spherical 3, bubble 1
+    /// ```
+    ///
+    /// Read flat, four transforms in a hundred and nine is not
+    /// "among the commonest". Read against what this rung can
+    /// possibly reach, it is: eighty-seven of those transforms name
+    /// a variation with no `InverseDef` at all and never get as far
+    /// as the sum, so of the twenty-two that do, **four are sums** --
+    /// close to one in five.
+    ///
+    /// And ZERO flames are unlocked, because each of those four sits
+    /// in a flame that also carries one of the eighty-seven. That is
+    /// the shape of this rung and it is worth saying plainly: the
+    /// catalogue is the wall, and the sum is a second wall behind it.
+    /// Taking the sum down makes no flame render today; it stops the
+    /// sum from being the NEXT refusal every time D1's registry gains
+    /// an entry. Not one of the four sums two kernels, so the case
+    /// D3 leaves refused did not occur at all here.
+    #[test]
+    #[ignore]
+    fn how_often_a_real_flame_sums_a_kernel_with_an_affine() {
+        let guard = global_registry();
+        let r = &*guard;
+        let dir = std::path::Path::new("output");
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(dir) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.extension().and_then(|x| x.to_str()) == Some("flame") {
+                    files.push(p);
+                }
+            }
+        }
+        files.sort();
+        if files.is_empty() {
+            println!(
+                "no `.flame` corpus in output/ -- this meter has nothing in front of it"
+            );
+            return;
+        }
+        let (mut flames, mut xforms, mut sums, mut sum_flames, mut unlocked) = (0, 0, 0, 0, 0);
+        let (mut two_kernels, mut unknown_var) = (0usize, 0usize);
+        let mut by_kernel: BTreeMap<String, usize> = BTreeMap::new();
+        for f in &files {
+            let Ok(text) = std::fs::read_to_string(f) else { continue };
+            let Ok(configs) = crate::flame_xml::parse_flame_xml(&text) else { continue };
+            for c in configs {
+                flames += 1;
+                let order = c.flame.active_variation_names_ordered(r);
+                let mut any_sum = false;
+                let mut all_known = true;
+                for t in c.flame.transforms.iter() {
+                    xforms += 1;
+                    match transform_map_2d_ordered(t, r, &order) {
+                        Ok(m) => {
+                            if let Some(su) = m.sum() {
+                                sums += 1;
+                                any_sum = true;
+                                *by_kernel.entry(su.kind.to_string()).or_default() += 1;
+                            }
+                        }
+                        Err(why) => {
+                            all_known = false;
+                            match why {
+                                NotAffine::MixedSum(_) => two_kernels += 1,
+                                NotAffine::Variation(_) => unknown_var += 1,
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                if any_sum {
+                    sum_flames += 1;
+                    // "Unlocked by this rung alone" means: every other
+                    // transform reads, so the sum was the only wall.
+                    if all_known && analyse_2d(&c.flame, r).is_ok() {
+                        unlocked += 1;
+                    }
+                }
+            }
+        }
+        let mut v: Vec<_> = by_kernel.iter().collect();
+        v.sort_by(|a, b| b.1.cmp(a.1));
+        println!("\n=== the sum rung's census row ===");
+        println!("  files {} | flames {flames} | transforms {xforms}", files.len());
+        println!("  transforms that SUM a kernel with an affine: {sums} in {sum_flames} flames");
+        println!("  flames unlocked by the sum rung alone: {unlocked}");
+        println!(
+            "  still refused: {two_kernels} sum TWO kernels; {unknown_var} name a variation with no inverse"
+        );
+        println!(
+            "  the sums, by kernel: {}",
+            v.iter().map(|(k, n)| format!("{k} {n}")).collect::<Vec<_>>().join(", ")
+        );
+    }
+
+    #[test]
+    fn how_many_shipped_flames_are_affine_ifss() {
+        let guard = global_registry();
+        let r = &*guard;
+        let all = shipped();
+        let mut planar_ok = Vec::new();
+        let mut solid_ok = Vec::new();
+        let mut reasons: BTreeMap<String, usize> = BTreeMap::new();
+        let mut first_reason: BTreeMap<String, usize> = BTreeMap::new();
+        for (name, c) in &all {
+            match analyse_2d(&c.flame, r) {
+                Ok(_) => planar_ok.push(name.clone()),
+                Err(errs) => {
+                    // Count every reason, and separately the FIRST one,
+                    // which is the one a user would be told.
+                    let mut seen = std::collections::BTreeSet::new();
+                    for e in &errs {
+                        let key = match e {
+                            Disqualification::NotAffine { why: NotAffine::Variation(v), .. } => {
+                                format!("non-affine variation `{v}`")
+                            }
+                            Disqualification::NotAffine { why, .. } => format!("{why:?}"),
+                            Disqualification::NotContractive { .. } => "not contractive".to_string(),
+                            Disqualification::Singular { .. } => "singular".to_string(),
+                            Disqualification::FinalNotAffine { .. } => "non-affine final".to_string(),
+                            Disqualification::MultipleFinals { .. } => "multiple finals".to_string(),
+                            Disqualification::Empty => "empty".to_string(),
+                            Disqualification::NoBall => "no invariant ball".to_string(),
+                        };
+                        seen.insert(key);
+                    }
+                    for k in &seen {
+                        *reasons.entry(k.clone()).or_default() += 1;
+                    }
+                    if let Some(k) = seen.iter().next() {
+                        *first_reason.entry(k.clone()).or_default() += 1;
+                    }
+                }
+            }
+            // A 3D flame with preserve_z on is a solid IFS candidate.
+            if c.render_mode == crate::scene::transforms::RenderMode::ThreeD && c.preserve_z {
+                if analyse_3d(&c.flame, r).is_ok() {
+                    solid_ok.push(name.clone());
+                }
+            }
+        }
+        let preserve_z_on = all
+            .iter()
+            .filter(|(_, c)| c.render_mode == crate::scene::transforms::RenderMode::ThreeD && c.preserve_z)
+            .count();
+        // The second column, plan §8.4: past affine the practical rule
+        // is ONE nonlinear normal-phase variation per transform, with
+        // affine variations summed beside it and the pre/post affines
+        // composing around it. Which shipped flames have that shape,
+        // and which variation each would need supported? Structural
+        // only -- it says nothing about whether the variation has a
+        // closed-form inverse or whether the map contracts.
+        let mut one_nonlinear: BTreeMap<String, usize> = BTreeMap::new();
+        let mut needs: BTreeMap<String, usize> = BTreeMap::new();
+        // What the plane can already invert: an affine role, or a
+        // root (plan 8.8).
+        let known = |name: &str, w: f64, t: &Transform| {
+            affine_role(name, w, t, r, Space::Planar).is_some()
+                || matches!(name, "julia" | "julian" | "spherical" | "bubble" | "hemisphere" | "disc" | "blob")
+        };
+        for (_, c) in &all {
+            if c.flame.xaos.is_some() || c.flame.final_transforms.len() > 1 {
+                continue;
+            }
+            let mut set = std::collections::BTreeSet::new();
+            let mut shape_ok = true;
+            for t in c.flame.transforms.iter().chain(&c.flame.final_transforms) {
+                let mut nonlinear = Vec::new();
+                for name in t.ordered_variation_names(r) {
+                    let w = t.variations.get(&name).copied().unwrap_or(0.0) as f64;
+                    if w == 0.0 {
+                        continue;
+                    }
+                    if !known(&name, w, t) {
+                        nonlinear.push(name);
+                    }
+                }
+                if nonlinear.len() > 1 {
+                    shape_ok = false;
+                    break;
+                }
+                set.extend(nonlinear);
+            }
+            if shape_ok && !set.is_empty() {
+                for n in &set {
+                    *needs.entry(n.clone()).or_default() += 1;
+                }
+                let key: Vec<&str> = set.iter().map(|s| s.as_str()).collect();
+                *one_nonlinear.entry(key.join(" + ")).or_default() += 1;
+            }
+        }
+        let presets = all.iter().filter(|(n, _)| n.starts_with("preset[")).count();
+        // D7 of `ifs-general.md`: the rung's own row. Xaos was a
+        // blanket refusal until D4, and it fired on `xaos.is_some()`
+        // -- an all-ones matrix, which means nothing, refused a flame
+        // just as a real graph did.
+        let has_matrix = all.iter().filter(|(_, c)| c.flame.xaos.is_some()).count();
+        let real_xaos = all.iter().filter(|(_, c)| c.flame.has_xaos()).count();
+        let matrix_ok = all
+            .iter()
+            .filter(|(_, c)| c.flame.xaos.is_some() && analyse_2d(&c.flame, r).is_ok())
+            .count();
+        println!("\n=== affine-IFS census over {} shipped flames ===", all.len());
+        // The shipped corpus is our own configs and carries none, so
+        // this row reads zero and says nothing about D4's reach. What
+        // does: Apophysis and JWildfire write the matrix into every
+        // export, so of 45 imported `.flame` files to hand, 27 carried
+        // one and 8 were non-trivial -- and the check D4 removed was
+        // `xaos.is_some()`, which refused all 27.
+        println!(
+            "  xaos: {has_matrix} carry a matrix ({real_xaos} of them non-trivial); \
+             {matrix_ok} of those qualify"
+        );
+        println!(
+            "  ({presets} from the preset library, the rest visual-regression configs; \
+             {preserve_z_on} are 3D with preserve_z on, which is what a SOLID candidate needs)"
+        );
+        println!("qualify as a PLANAR affine IFS: {}", planar_ok.len());
+        for n in &planar_ok {
+            println!("    {n}");
+        }
+        println!("qualify as a SOLID affine IFS (3D + preserve_z): {}", solid_ok.len());
+        for n in &solid_ok {
+            println!("    {n}");
+        }
+        println!("why the other {} do not (a flame may count under several):", all.len() - planar_ok.len());
+        let mut v: Vec<_> = reasons.iter().collect();
+        v.sort_by(|a, b| b.1.cmp(a.1));
+        for (k, n) in v.iter().take(25) {
+            println!("    {n:4}  {k}");
+        }
+        // The preset library alone is the catalogue a user meets; the
+        // visual-regression configs are mostly one-variation smoke
+        // tests and inflate every count above.
+        println!("the preset library alone: {} of {presets} qualify; the others need", planar_ok.iter().filter(|n| n.starts_with("preset[")).count());
+        for (name, c) in all.iter().filter(|(n, _)| n.starts_with("preset[")) {
+            if planar_ok.contains(name) {
+                continue;
+            }
+            let mut set = std::collections::BTreeSet::new();
+            for t in c.flame.transforms.iter().chain(&c.flame.final_transforms) {
+                for v in t.ordered_variation_names(r) {
+                    let w = t.variations.get(&v).copied().unwrap_or(0.0) as f64;
+                    if w != 0.0 && !known(&v, w, t) {
+                        set.insert(v);
+                    }
+                }
+            }
+            let set: Vec<String> = set.into_iter().collect();
+            if set.is_empty() {
+                let why: Vec<String> = analyse_2d(&c.flame, r).err().unwrap_or_default().iter().map(|d| d.to_string()).collect();
+                println!("    {name}: every variation is known, but: {}", why.join("; "));
+            } else {
+                println!("    {name}: {}", set.join(", "));
+            }
+        }
+        let shaped: usize = one_nonlinear.values().sum();
+        println!(
+            "of the rest, {shaped} have ONE nonlinear variation per transform (plan §8.4's shape), \
+             and would need these supported:"
+        );
+        let mut v: Vec<_> = needs.iter().collect();
+        v.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        for (k, n) in v.iter().take(20) {
+            println!("    {n:4}  {k}");
+        }
+        println!("  by the set a flame needs:");
+        let mut v: Vec<_> = one_nonlinear.iter().collect();
+        v.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        for (k, n) in v.iter().take(12) {
+            println!("    {n:4}  {k}");
+        }
+        assert!(!all.is_empty(), "the census found no shipped flames at all");
+    }
+}

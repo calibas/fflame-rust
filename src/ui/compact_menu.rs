@@ -91,7 +91,7 @@ fn render_compact_menu_items(
         for panel_type in super::visibility::COMPACT_WINDOW_MENU {
             let is_open = workspace.panel_exists(*panel_type);
             let label = t!(super::visibility::label_key_of(*panel_type));
-            match super::visibility::panel(*panel_type, mode) {
+            match super::visibility::panel(*panel_type, mode, menu_state.solid) {
                 super::visibility::Vis::Show => {
                     if ui.selectable_label(is_open, label.as_ref()).clicked() {
                         workspace.open_compact_panel(*panel_type, ctx);

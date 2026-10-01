@@ -1,3 +1,104 @@
+# Escape-time / IFS research
+
+> ## Status, 2026-09-10 — absorbed. This is a source, not a to-do list.
+>
+> Everything below was research for what became
+> [escape-time-fractals.md](../projects/escape-time-fractals.md), which
+> cites this file throughout as ***[ETI]***. **That plan is the live
+> document**: it is more accurate than this one, it has phases and
+> status, and where the two disagree it is right. Read this for the
+> reasoning and the sources; plan against that.
+>
+> Most of what this document proposed **now ships**.
+>
+> **The "missed fractals" sweep (§2) is largely done.** Of 26 registered
+> formulas, these came from this list: `mcmullen`, `lambda`,
+> `lambda_sine`, `collatz`, `spider`, `manowar`, `barnsley`,
+> `tetration`, `cactus`. Still absent: Frothy Basin, Volterra–Lotka,
+> Unity.
+>
+> **Both "implement it as a modifier, not a formula" calls were taken.**
+> Biomorph is a toggle on every formula (two bits in the escape params,
+> `|Re|` or `|Im|`), and the iteration-scheme axis shipped as Mann
+> damping plus a complex relaxation parameter. Root-finder schemes
+> shipped as closed forms over (f, f′, f″): Newton, Halley, Chebyshev.
+>
+> **The proposed "field mode" shipped as Mode B** — and as its own
+> registry pair rather than as formulas, which is the shape this
+> document guessed at. `FieldDef` / `FieldColoringDef` in
+> [src/escape/fields.rs](../../src/escape/fields.rs), spliced by
+> `assemble_field`, with exactly the three families named here:
+> **Weierstrass**, **Markus–Lyapunov** and **Standard-map FTLE**, three
+> field colourings (value, diverging, hillshade), panel UI and presets.
+> The recommendation to "unpark Lyapunov" was taken.
+>
+> **One bridge shipped**: the JFA distance field (§4, bridge 3) is the
+> `distance_field` colour effect. And bridge 1 (inverse iteration) was
+> already true when this was written — the `julia` / `julian` /
+> `juliascope` variations are IIM in miniature — while a random-walk
+> Buddhabrot exists as a flame *variation*.
+>
+> ### What is actually still open
+>
+> **The escape buffer, and only the escape buffer.** It is the plan's
+> **Mode C** (§6 there), scheduled in its phase 5, and recorded as *"a
+> project, not a tail item"* — deliberately sequenced last. Its
+> prerequisites are its own scope: an invertible-variation registry,
+> the largest-singular-value contractiveness extension, the
+> bounding-disk fit, the ping-pong pipeline with per-map layers for
+> RIFS/xaos, and index-map colouring shipped with the mode.
+>
+> ### Three claims here are wrong about the code
+>
+> Correct them before planning against this file.
+>
+> 1. **There is no "existing per-transform SVD contractivity
+>    measurement"** (§4, escape-buffer caveats). What exists is
+>    `mean_log_scale` — a *whole-flame* weighted mean of
+>    `0.5·ln|det A|`, exposed to scripts as `contractiveness`. Because
+>    `|det|` is the area factor it averages the two axes, so a
+>    stretch/squash map reads as neutral, which is exactly the case a
+>    largest-singular-value test is needed for. The plan already caught
+>    this and scopes the extension as shared work with
+>    [flame-deep-zoom.md](../projects/flame-deep-zoom.md) §7. (A
+>    largest-singular-value helper for a 2×2 does exist, in
+>    `variations/analytic_blur.rs`, sizing blur kernels.)
+> 2. **There is no affine-inverse helper.** Nothing inverts a flame's
+>    `(a,b,c,d,e,f)`. The only `inverse` in the tree is for
+>    determinant-1 complex Möbius matrices in the script builtins.
+> 3. **Nothing enforces invertibility on a variation.** The layer-map
+>    builder that already feeds flame transforms into another engine
+>    (`build_layer_map`) accepts *any* variation. The
+>    invertible-variation registry Mode C needs does not exist in any
+>    form.
+>
+> ### And one thing that changed underneath this document
+>
+> **A third render engine shipped** (simulation, 2026-09), and it did
+> not exist when Mode C was scoped. It is a grid of cells stepped by a
+> neighbour-coupled rule with ping-pong buffers, a boundary rule for
+> reads past the edge, bilinear and bicubic resampling at arbitrary
+> mapped positions, and a step count as its reproducibility contract.
+> Its layer-warp pass already does a *backward resample through a flame
+> transform* — `flame_map`, with the transforms bound — which is one
+> gather short of the escape buffer's recurrence, and its step count is
+> the paper's pass count.
+>
+> That is an observation, not a decision. Whoever picks up Mode C should
+> weigh two candidate homes rather than one: the escape engine's
+> multi-pass fragment pipeline as planned, or a simulation *model*,
+> which would inherit the ping-pong, the boundary rule, the resample,
+> the step contract and the panel for free. What it would still need
+> either way is items 1–3 above.
+>
+> **The mode question this document raises is already answered**, and
+> not in the direction of a new `RenderMode`. Modes A, B and C are
+> modes *within* the escape engine; A and B ship that way today. A
+> render mode costs a config-version bump, a wire form, an API enum, a
+> visibility policy, a workspace, a menu entry and ~55 call sites; a
+> formula, a field or a simulation model costs a registry entry and its
+> baselines. Nothing here has asked for the former.
+
 Research results first, then the missed-fractals sweep, then the bridge.
 
 ## The researched items
@@ -12,6 +113,14 @@ Research results first, then the missed-fractals sweep, then the bridge.
 So it's **not** escape-time and not chaos-game — it's a **Weierstrass-type self-affine field**, evaluated directly per point. (One caveat if you reimplement: his `gg[x_,y_]` actually passes `x` twice — `g[Mod[Abs[x],1], Mod[Abs[x],1]]` — so the published surfaces are 1D fields in disguise. Decide deliberately whether to reproduce the bug or the evident intent.)
 
 **Besicovitch–Ursell.** Same family, and that's the punchline: B–U (1937) is the generalization of Weierstrass graphs to $\sum a_k^{-s} g(b_k x)$ with general lacunary sequences and generators, studied for graph dimension. Bagula's construction *is* a 2D Besicovitch–Ursell surface with a Koch-cartoon generator. So both research items collapse into one implementable thing, and it's a **perfect fragment-shader match**: ~20-term per-pixel sum, trivially parallel, no iteration state, no precision problems (the sum converges absolutely; f32 is plenty). This suggests a third fragment mode alongside escape-time: a **field mode** — evaluate $F(x,y)$ directly, color by value / analytic gradient (normals for hillshading come free by differentiating the sum) / contour bands / trap distance. One `FormulaDef` covers Weierstrass, Weierstrass–Mandelbrot, B–U, Riemann's function, Takagi/blancmange, and Bagula fields as generator+sequence presets.
+
+> **[2026-09-10] Shipped, as Mode B.** Not as a `FormulaDef` but as its
+> own registry pair — `FieldDef` / `FieldColoringDef` in
+> `src/escape/fields.rs`, spliced by `assemble_field` — because a field
+> has no iteration state and no escape test, so sharing the formula
+> template would have meant a dead branch in every one. `WEIERSTRASS`
+> ships with the generator-and-sequence presets described here;
+> hillshading is one of the three field colourings.
 
 **The tetration name cluster.** Those names (Tower Julia, Tetration Star, Schröder's Basin, Halley's Comet, Biomorph Tower, Root-finder Alloy, Oscillating Tower, Deep Tetration Web) are Daniel Geisler's — his tetration.org fractal atlas names identifiable features of the infinite-tetration fractal, the set of points where $^\infty x$ becomes periodic rather than escaping. They're gallery/feature names, not distinct algorithms. Mathematically the whole cluster is *one* formula family with axes:
 
@@ -85,7 +194,21 @@ Three properties make it the right choice over porting the per-pixel tree traver
 **The caveats, honestly assessed:**
 
 - *Affine-only as written.* The recurrence only needs each map to be invertible, so it extends to affine+variation transforms where the variation has a closed-form inverse (spherical, swirl, Möbius, polar do; sinusoidal and most folds don't). So this mode covers the invertible-IFS subset of your catalog, not arbitrary flames. That's still a large and interesting subset.
+
+  > **[2026-09-10]** Nothing in the tree knows which variations those
+  > are. `VariationDef` has no inverse and no feature flag for one, and
+  > the existing path that feeds flame transforms into another engine
+  > (`build_layer_map`, for the simulation's layer warps) accepts any
+  > variation without asking. There is also no affine-inverse helper.
+  > Both are Mode C prerequisites and neither is started.
 - *$\lambda \to 1$ blows up the pass count.* Their own benchmarks show the grid method beating the escape buffer at Lip 0.9. Eq. 12 tells you exactly when: near-isometric transforms need hundreds of passes. Your existing per-transform SVD contractivity measurement is precisely the input for deciding whether the mode is viable for a given flame — nice synergy with machinery you've already built.
+
+> **[2026-09-10] Wrong: that machinery does not exist.** What exists is
+> `mean_log_scale`, a whole-flame weighted mean of `0.5·ln|det A|`. The
+> determinant is the AREA factor, so it averages the two axes and reads
+> a stretch/squash as neutral — precisely the case a largest singular
+> value would catch. The extension is real work, and the plan scopes it
+> as shared with flame-deep-zoom §7, which needs the same number.
 - *Bounding-disk condition.* You need $R$ with $\mathcal{T}(D_R) \subset D_R$, and they note the smallest such disk isn't the smallest disk containing the attractor. With nonlinear variations you'll want a conservative bound — again your contractivity/Lyapunov prepass work.
 - *WebGPU filtering wrinkle they couldn't know about:* sampling the buffer at non-integer inverse-mapped positions wants bilinear filtering, but `float32-filterable` is an optional wgpu feature. Fallback: manual 4-tap bilinear or `r16float` (escape-time values are small integers plus a [0,1) residual, so fp16 is actually sufficient).
 

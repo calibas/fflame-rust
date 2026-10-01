@@ -35,6 +35,8 @@ pub mod nucleus;
 pub mod orbit_store;
 pub mod reference;
 pub mod fields;
+pub mod ifs;
+pub mod lens;
 pub mod formulas;
 pub mod presets;
 pub mod diag;
