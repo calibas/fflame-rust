@@ -2669,8 +2669,7 @@ mod criterion_tests {
             .lines()
             .filter(|l| !l.trim_start().starts_with("//"))
             .collect::<Vec<_>>()
-            .join("
-");
+            .join("\n");
 
         assert!(
             !body.contains("ComboBox"),

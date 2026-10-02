@@ -70,8 +70,7 @@ fn process_shader_includes(source: String) -> String {
             out.push(line.to_string());
         }
     }
-    out.join("
-")
+    out.join("\n")
 }
 
 /// An effect's WGSL, includes spliced.
