@@ -76,7 +76,7 @@ pub fn render_progress() -> Option<(u32, u32)> {
 /// Why the derivative-based colorings have nothing to read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DerivativeGap {
-    /// The formula defines no `wgsl_derivative` (13 of 25 do not).
+    /// The formula defines no `wgsl_derivative` (14 of 26 do not).
     Formula,
     /// The perturbed rungs do not iterate a derivative orbit, whatever
     /// the formula defines.
@@ -6268,11 +6268,11 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             return;
         };
 
-        // The light: azimuth from the config, elevation fixed at 45°.
-        // One angle rather than two because the elevation is the one
-        // nobody adjusts — too low and the relief is all shadow, too
-        // high and it vanishes — while the azimuth decides whether the
-        // surface reads as raised or sunken, which is a real choice.
+        // The light: an azimuth only, counter-clockwise from east in a
+        // y-up frame. There is no elevation term -- `shade_pixel`'s
+        // response is the signed tilt toward the azimuth, zero on flat
+        // ground -- and the azimuth decides whether the surface reads as
+        // raised or sunken, which is a real choice.
         let a = shading.light_angle.to_radians();
         let params = ShadeParamsGpu {
             light: [a.cos(), a.sin()],

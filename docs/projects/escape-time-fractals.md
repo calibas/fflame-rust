@@ -2259,9 +2259,10 @@ on — but colorings differ by orders of magnitude in how many turns
 they spend across a view. `smooth` on the Mandelbrot at scale 0.03
 runs about 0.04 turns/px; a bounded coloring runs far less. So the
 slider is logarithmic over 0.01–1000 and the default is 10, which puts
-both of those into visible relief. `normalize()` on the surface normal
-doubles as the saturation, so an over-large value tips the normal flat
-against the surface rather than blowing the lighting out.
+both of those into visible relief. The response is the slope along the
+light times `inverseSqrt(1 + |g|²)` -- sin of the tilt -- which doubles
+as the saturation, so an over-large value tips the surface toward
+vertical rather than blowing the lighting out.
 
 **Two source fields, because they are two different pictures.**
 `Smooth` slopes the coloring's raw value; `Banded` slopes the wrapped
