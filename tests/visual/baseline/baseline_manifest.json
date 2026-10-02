@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "e9acd490",
+  "git_hash": "25ac5d60",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 35102,
@@ -250,6 +250,10 @@
       "bytes": 4148,
       "sha256": "a1343da3a4eb1cc4717bdcdfb92384eb5c0f1af0c2164d77992b86ab654d3b23"
     },
+    "escape-mandelbrot-de-pixels.png": {
+      "bytes": 16165,
+      "sha256": "0288e91935b3e179d2fddbb7ce4b4d1d624df2864943d0cb953e4f6b4fb40632"
+    },
     "escape-mandelbrot-de.png": {
       "bytes": 11140,
       "sha256": "c2f24d04a83beb589bbe901548eab25a0eb47022883eafa3b31f633cf33d978e"
@@ -289,6 +293,10 @@
     "escape-mandelbrot-tia.png": {
       "bytes": 14970,
       "sha256": "97b0034afd92ab60d08378bb97d283ed7b1632cc1c81b3f96bf04df847e95aab"
+    },
+    "escape-mandelbrot-trap-box-average.png": {
+      "bytes": 39023,
+      "sha256": "59b71d0b30570b10e23ee32a6e476b52543238aaedde2356486b5d0741a8b44e"
     },
     "escape-manowar-deep.png": {
       "bytes": 36492,

@@ -83,6 +83,12 @@ fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
 /// (after Nylander's golden-ratio spiral trap). Unlike the other
 /// three it is not a distance in z-units but in TURNS, doubled to
 /// span 0..1; `scale` maps it onto the palette as before.
+///
+/// Ultra Fractal's richer traps (survey C9), all appended so a saved
+/// trap draws as it did: the trap's centre and rotation; a ring, box,
+/// line and diamond with a radius; and the reduction -- the closest
+/// approach (the original), the farthest, the mean, or the first
+/// approach within a threshold.
 pub static ORBIT_TRAP: ColoringDef = ColoringDef {
     name: "orbit_trap",
     display_name: "Orbit Trap",
@@ -93,10 +99,21 @@ pub static ORBIT_TRAP: ColoringDef = ColoringDef {
             display_name: "Trap shape",
             default: 0.0,
             min: 0.0,
-            max: 3.0,
-            tooltip: "0: point at origin, 1: coordinate axes (cross), 2: unit circle, \
-                      3: logarithmic spiral (golden by default).",
-            choices: &["Point at origin", "Cross (axes)", "Unit circle", "Logarithmic spiral"],
+            max: 7.0,
+            tooltip: "The shape the orbit is measured against, at the trap's \
+                      centre and rotation: a point, the axes' cross, the unit circle, \
+                      a logarithmic spiral (golden by default), or a ring, box, line \
+                      or diamond of the given radius.",
+            choices: &[
+                "Point",
+                "Cross (axes)",
+                "Unit circle",
+                "Logarithmic spiral",
+                "Ring",
+                "Box",
+                "Line",
+                "Diamond",
+            ],
         },
         EscapeParamDef {
             name: "scale",
@@ -119,21 +136,104 @@ pub static ORBIT_TRAP: ColoringDef = ColoringDef {
                       spiral, and values near 1 wind tightly.",
             choices: &[],
         },
+        EscapeParamDef {
+            name: "center_re",
+            display_name: "Centre (re)",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Where the trap sits in the plane.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "center_im",
+            display_name: "Centre (im)",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Where the trap sits in the plane.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "rotation",
+            display_name: "Rotation",
+            default: 0.0,
+            min: -180.0,
+            max: 180.0,
+            tooltip: "The trap's rotation in degrees, about its centre.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "mode",
+            display_name: "Reduction",
+            default: 0.0,
+            min: 0.0,
+            max: 3.0,
+            tooltip: "Which of the orbit's distances colours the pixel: the \
+                      closest approach, the farthest, their mean, or the first \
+                      that came within the threshold (the closest if none did).",
+            choices: &["Closest", "Farthest", "Average", "First within threshold"],
+        },
+        EscapeParamDef {
+            name: "threshold",
+            display_name: "Threshold",
+            default: 0.1,
+            min: 0.0001,
+            max: 4.0,
+            tooltip: "How close an iterate must come to count as caught, for the \
+                      First reduction.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "radius",
+            display_name: "Radius",
+            default: 1.0,
+            min: 0.001,
+            max: 4.0,
+            tooltip: "The size of the ring, box and diamond, and the line's offset \
+                      from the centre.",
+            choices: &[],
+        },
     ],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
-    return state.x * cparam(1u);
+    // state = (closest, farthest, sum of distances, first within the
+    // threshold, or -1).
+    let mode = u32(clamp(cparam(6u), 0.0, 3.0));
+    var d = state.x;
+    if (mode == 1u) {
+        d = state.y;
+    } else if (mode == 2u) {
+        d = state.z / max(f32(sum.n), 1.0);
+    } else if (mode == 3u && state.w >= 0.0) {
+        d = state.w;
+    }
+    return d * cparam(1u);
 }
 "#,
-    accum_init: "vec4<f32>(1e30, 0.0, 0.0, 0.0)",
+    accum_init: "vec4<f32>(1e30, 0.0, 0.0, -1.0)",
     wgsl_accum: r#"
-fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32>) -> vec4<f32> {
-    let shape = u32(clamp(cparam(0u), 0.0, 3.0));
+fn coloring_accum(z_in: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32>) -> vec4<f32> {
+    let shape = u32(clamp(cparam(0u), 0.0, 7.0));
+    // Into the trap's frame: about its centre, turned by its rotation.
+    let a = -cparam(5u) * 0.017453292;
+    let ca = cos(a);
+    let sa = sin(a);
+    let zc = z_in - vec2<f32>(cparam(3u), cparam(4u));
+    // Unturned at rotation 0, not turned by sin 0 = 0: an infinite
+    // iterate (the exponential families escape to one) times zero is
+    // NaN, and a saved trap must draw as it did.
+    let z = select(vec2<f32>(zc.x * ca - zc.y * sa, zc.x * sa + zc.y * ca), zc, cparam(5u) == 0.0);
+    let rad = cparam(8u);
     var d: f32;
     switch shape {
         case 0u: { d = length(z); }
         case 1u: { d = min(abs(z.x), abs(z.y)); }
         case 2u: { d = abs(length(z) - 1.0); }
+        case 4u: { d = abs(length(z) - rad); }
+        case 5u: { d = abs(max(abs(z.x), abs(z.y)) - rad); }
+        case 6u: { d = abs(z.y - rad); }
+        case 7u: { d = abs(abs(z.x) + abs(z.y) - rad); }
         default: {
             // Logarithmic spiral, golden by default.
             //
@@ -163,7 +263,13 @@ fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32
             }
         }
     }
-    return vec4<f32>(min(state.x, d), state.y, state.zw);
+    // A sample that says nothing (the spiral's centre) leaves every
+    // reduction untouched.
+    if (d >= 1e29) {
+        return state;
+    }
+    let first = select(state.w, d, state.w < 0.0 && d < cparam(7u));
+    return vec4<f32>(min(state.x, d), max(state.y, d), state.z + d, first);
 }
 "#,
     recommended_bailout: None,
@@ -582,15 +688,42 @@ pub static DISTANCE_ESTIMATE: ColoringDef = ColoringDef {
     name: "distance_estimate",
     display_name: "Distance Estimate",
     features: &[ColoringFeature::NeedsDerivative],
-    parameters: &[EscapeParamDef {
-        name: "scale",
-        display_name: "Scale",
-        default: 0.05,
-        min: 0.000001,
-        max: 1.0,
-        tooltip: "Palette distance per doubling of boundary distance.",
-        choices: &[],
-    }],
+    parameters: &[
+        EscapeParamDef {
+            name: "scale",
+            display_name: "Scale",
+            default: 0.05,
+            min: 0.000001,
+            max: 1.0,
+            tooltip: "Palette distance per doubling of boundary distance (Log), \
+                      or per unit of it (Linear, Square root).",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "mapping",
+            display_name: "Mapping",
+            default: 0.0,
+            min: 0.0,
+            max: 2.0,
+            tooltip: "How the distance becomes a palette position (Kalles \
+                      Fraktaler's distance colourings): Log, equal steps per \
+                      doubling; Linear, the distance itself; Square root, between \
+                      the two.",
+            choices: &["Log", "Linear", "Square root"],
+        },
+        EscapeParamDef {
+            name: "units",
+            display_name: "Units",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Measure the distance in the plane, or in pixels. In pixels \
+                      the boundary is always about one pixel away, so the \
+                      colours hold still as you zoom (as Fraktaler 3 and Kalles \
+                      Fraktaler draw it).",
+            choices: &["Plane", "Pixels"],
+        },
+    ],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
     // No derivative compiled => dz is the constant seed, so this
@@ -607,7 +740,18 @@ fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
     // Escaped only; |z| > 1 at escape so ln|z| > 0.
     let r = max(length(sum.z), 1.0000001);
     let deriv = max(length(sum.dz), 1e-30);
-    let d = max(r * log(r) / deriv, 1e-30);
+    var d = max(r * log(r) / deriv, 1e-30);
+    if (cparam(2u) > 0.5) {
+        // In pixels: the view's height over its pixel count.
+        d = max(d * f32(params.height) / params.span.y, 1e-30);
+    }
+    let mapping = u32(clamp(cparam(1u), 0.0, 2.0));
+    if (mapping == 1u) {
+        return d * cparam(0u);
+    }
+    if (mapping == 2u) {
+        return sqrt(d) * cparam(0u);
+    }
     return -log2(d) * cparam(0u);
 }
 "#,
