@@ -3720,6 +3720,7 @@ mod tests {
         let stride = crate::escape::assembler::iter_state_bytes(
             crate::escape::assembler::PerturbTier::Ducks(0),
             false,
+            crate::escape::accum_is_wide_named(&esc.coloring),
         );
         let lim = device.limits();
         let cap = lim.max_buffer_size.min(lim.max_storage_buffer_binding_size as u64);
@@ -6965,6 +6966,103 @@ fn main() {
             // Every curve, Linear-on-Linear included, reads within one
             // 8-bit level (worst 0.004).
             assert!(worst < 0.01, "{transfer:?}/{curve:?}: a pixel is {worst:.4} off its curve");
+        }
+    }
+
+    /// Debanding removes the step an average takes at every iteration
+    /// boundary.
+    ///
+    /// A plain mean of per-iteration terms jumps where the escape count
+    /// does: one more term enters the sum. Across neighbouring pixels
+    /// whose counts differ by one that jump dwarfs the difference
+    /// between ordinary neighbours; debanded, the two should be alike.
+    /// Read through a grey ramp, each average's value in 0..1 being its
+    /// grey, with the escape counts from the terminal records.
+    ///
+    /// At the bailout these colourings recommend (1e4). The blend is
+    /// first order in the escape fraction, so at the classic 4 it only
+    /// halves the step -- measured 3.37 -> 1.62 for stripes and 16.5 ->
+    /// 4.9 for the triangle inequality -- which is why Ultra Fractal
+    /// runs its Triangle Inequality Average at a bailout of 1e20.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn debanding_removes_the_step_at_an_iteration_boundary() {
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        let stop = |position: f32, v: f32| crate::scene::palette::ColorStop { position, color: [v, v, v] };
+        config.palette.stops = vec![stop(0.0, 0.0), stop(1.0, 1.0)];
+        // The whole set: the exterior's escape counts are small, so one
+        // more term moves a mean a long way, and neighbours in the same
+        // band differ little.
+        config.escape.center_re = "-0.6".to_string();
+        config.escape.center_im = "0.0".to_string();
+        config.escape.zoom_log2 = 0.3;
+        config.escape.max_iter = 200;
+        for coloring in ["stripe_average", "triangle_inequality"] {
+            let ratio = |deband: f32| -> f64 {
+                let mut c = config.clone();
+                c.escape.coloring = coloring.to_string();
+                c.escape.coloring_params.insert("deband".to_string(), deband);
+                // Keep the value inside one palette turn: the averages
+                // run 0..1 at scale 1, and a wrap would read as a step.
+                c.escape.coloring_params.insert("scale".to_string(), 0.98);
+                c.escape.bailout = 1.0e4;
+                let records = records_via(&c.escape, w, h, false, false);
+                let job = crate::renderer::RenderJob::new(&c, w, h);
+                let out = pollster::block_on(crate::renderer::render(
+                    &device,
+                    &queue,
+                    job,
+                    &mut crate::renderer::NoProgress,
+                ))
+                .expect("render");
+                let grey = |i: usize| out.rgba_data[i * 4] as f64 / 255.0;
+                // Along each row, a boundary x|x+1 (counts differing by
+                // one) flanked by a step inside each band: x-1|x and
+                // x+1|x+2. A band step stands out against its flanks;
+                // a continuous value does not.
+                let (mut across, mut flanks, mut count) = (0.0f64, 0.0f64, 0usize);
+                for y in 0..h as usize {
+                    for x in 1..w as usize - 2 {
+                        let i = |dx: usize| y * w as usize + x - 1 + dx;
+                        let r: Vec<_> = (0..4).map(|k| &records[i(k)]).collect();
+                        if r.iter().any(|r| (r.tags & 1) == 0)
+                            || r[0].n != r[1].n
+                            || r[2].n != r[3].n
+                            || r[1].n.abs_diff(r[2].n) != 1
+                        {
+                            continue;
+                        }
+                        let g: Vec<f64> = (0..4).map(|k| grey(i(k))).collect();
+                        across += (g[2] - g[1]).abs();
+                        flanks += ((g[1] - g[0]).abs() + (g[3] - g[2]).abs()) / 2.0;
+                        count += 1;
+                    }
+                }
+                assert!(count > 200, "{coloring}: only {count} boundaries to measure");
+                let r = across / flanks.max(1e-12);
+                println!(
+                    "{coloring} deband {deband}: {count} boundaries, step {:.4} against flanks {:.4}, ratio {r:.2}",
+                    across / count as f64,
+                    flanks / count as f64
+                );
+                r
+            };
+            let banded = ratio(0.0);
+            let debanded = ratio(1.0);
+            // Measured: stripe 1.22 -> 1.03, triangle inequality 2.44
+            // -> 1.04.
+            let shows = if coloring == "stripe_average" { 1.15 } else { 2.0 };
+            assert!(banded > shows, "{coloring}: the plain mean barely steps ({banded:.2}) -- the fixture shows nothing");
+            assert!(debanded < 1.1, "{coloring}: debanded still steps at the boundary ({debanded:.2})");
         }
     }
 

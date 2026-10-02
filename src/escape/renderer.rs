@@ -812,14 +812,18 @@ pub struct EscapeRenderer {
     /// extra bindings: the orbit buffer and the perturb uniform).
     orbit_cache: OrbitCache,
     /// Recolor cache: per-pixel terminal iteration records
-    /// (32 B/px), plus the identity of the settled iterate render
+    /// (32 B/px, 40 with a wide accumulator), plus the identity of the
+    /// settled iterate render
     /// that produced them. When a frame's iterate identity matches,
     /// the render is one cheap recolor dispatch -- no orbit, no BLA,
     /// no iteration. `None` key = records absent or stale.
     results_buffer: Option<Buffer>,
     results_px: u32,
+    /// Bytes per record in `results_buffer`: 32, or 40 for a colouring
+    /// with a wide accumulator (`assembler::result_bytes`).
+    results_stride: u64,
     results_key: Option<String>,
-    /// 32-byte stand-in bound when the pixel count exceeds the
+    /// One-record stand-in bound when the pixel count exceeds the
     /// storage-binding limit (giant exports): layouts need SOMETHING
     /// at the slot, and the shader's write is gated off.
     results_dummy: Option<Buffer>,
@@ -1707,6 +1711,7 @@ impl EscapeRenderer {
             orbit_cache: OrbitCache::default(),
             results_buffer: None,
             results_px: 0,
+            results_stride: assembler::RESULT_BYTES,
             results_key: None,
             results_dummy: None,
             recolor_bind_group_layout,
@@ -2653,7 +2658,7 @@ impl EscapeRenderer {
     /// resize clamp caps pixels against the WIDER iter-state stride);
     /// giant CLI exports may not, and simply render uncached.
     fn results_fit(&self, device: &Device) -> bool {
-        let bytes = (self.width as u64) * (self.height as u64) * 32;
+        let bytes = (self.width as u64) * (self.height as u64) * self.results_stride;
         bytes <= device.limits().max_storage_buffer_binding_size as u64
             && bytes <= device.limits().max_buffer_size
     }
@@ -2662,13 +2667,24 @@ impl EscapeRenderer {
     /// whether records are ACTIVE (fit the device). When they do not,
     /// the 32-byte dummy is kept for the layouts and the shader-side
     /// write is gated off via params.flags bit 3.
-    fn ensure_results(&mut self, device: &Device) -> bool {
+    fn ensure_results(&mut self, device: &Device, stride: u64) -> bool {
+        if stride != self.results_stride {
+            // A new record layout: the stored records cannot be read
+            // as it, so they are gone along with the buffer.
+            self.results_stride = stride;
+            if let Some(old) = self.results_buffer.take() {
+                old.destroy();
+            }
+            self.results_key = None;
+        }
         if !self.results_fit(device) {
             self.results_key = None;
             if self.results_dummy.is_none() {
                 self.results_dummy = Some(device.create_buffer(&BufferDescriptor {
                     label: Some("Escape Results Dummy"),
-                    size: 32,
+                    // One record of the widest layout: a binding must
+                    // hold at least one element of the shader's array.
+                    size: assembler::RESULT_BYTES_WIDE,
                     usage: BufferUsages::STORAGE,
                     mapped_at_creation: false,
                 }));
@@ -2682,7 +2698,7 @@ impl EscapeRenderer {
             }
             self.results_buffer = Some(device.create_buffer(&BufferDescriptor {
                 label: Some("Escape Iter Results"),
-                size: (px as u64) * 32,
+                size: (px as u64) * self.results_stride,
                 // COPY_SRC: read back by ground-truth comparison
                 // tests; free otherwise.
                 usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
@@ -2720,7 +2736,8 @@ impl EscapeRenderer {
     ) -> Option<Vec<IterRecord>> {
         let src = self.results_buffer.as_ref()?;
         let px = (self.width as u64) * (self.height as u64);
-        let size = px * 32;
+        let stride = self.results_stride as usize;
+        let size = px * self.results_stride;
         let staging = device.create_buffer(&BufferDescriptor {
             label: Some("results staging"),
             size,
@@ -2741,14 +2758,19 @@ impl EscapeRenderer {
         rx.recv().ok()?.ok()?;
         let data = slice.get_mapped_range();
         let f = |rec: &[u8], at: usize| f32::from_le_bytes(rec[at..at + 4].try_into().unwrap());
+        // A wide record puts `accum2` after `accum`, which moves n and
+        // the tags along by eight bytes.
+        let wide = stride == assembler::RESULT_BYTES_WIDE as usize;
+        let tail = if wide { 32 } else { 24 };
         let out = data
-            .chunks_exact(32)
+            .chunks_exact(stride)
             .map(|rec| IterRecord {
                 z: [f(rec, 0), f(rec, 4)],
                 dz: [f(rec, 8), f(rec, 12)],
                 accum: [f(rec, 16), f(rec, 20)],
-                n: u32::from_le_bytes(rec[24..28].try_into().unwrap()),
-                tags: u32::from_le_bytes(rec[28..32].try_into().unwrap()),
+                accum2: if wide { [f(rec, 24), f(rec, 28)] } else { [0.0, 0.0] },
+                n: u32::from_le_bytes(rec[tail..tail + 4].try_into().unwrap()),
+                tags: u32::from_le_bytes(rec[tail + 4..tail + 8].try_into().unwrap()),
             })
             .collect();
         drop(data);
@@ -2810,7 +2832,7 @@ impl EscapeRenderer {
         let floatexp = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM
             || matches!(tier, assembler::PerturbTier::Manowar);
         let need = (width as u64) * (height as u64)
-            * assembler::iter_state_bytes(tier, floatexp);
+            * assembler::iter_state_bytes(tier, floatexp, super::accum_is_wide_named(&escape.coloring));
         let lim = device.limits();
         need <= lim.max_buffer_size && need <= lim.max_storage_buffer_binding_size as u64
     }
@@ -2844,7 +2866,8 @@ impl EscapeRenderer {
                 .unwrap_or(assembler::PerturbTier::Power(2));
             let floatexp = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM
                 || matches!(tier, assembler::PerturbTier::Manowar);
-            let need = px * assembler::iter_state_bytes(tier, floatexp);
+            let need = px
+                * assembler::iter_state_bytes(tier, floatexp, super::accum_is_wide_named(&escape.coloring));
             let cap = lim.max_storage_buffer_binding_size as u64;
             if need > cap {
                 return Some(format!(
@@ -5936,7 +5959,8 @@ fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         supersample: u32,
     ) -> u32 {
         let mut ss = supersample.clamp(1, MAX_SUPERSAMPLE);
-        const BYTES_PER_RENDER_PX: u64 = assembler::ITER_STATE_BYTES_MAX + 32 + 16 + 4 + 8;
+        const BYTES_PER_RENDER_PX: u64 =
+            assembler::ITER_STATE_BYTES_MAX + assembler::RESULT_BYTES_WIDE + 16 + 4 + 8;
         const RENDER_BUDGET_BYTES: u64 = 3 * 1024 * 1024 * 1024 / 2;
         const MAX_RENDER_PX: u64 = RENDER_BUDGET_BYTES / BYTES_PER_RENDER_PX;
         let device_px_cap = device.limits().max_storage_buffer_binding_size as u64
@@ -7074,7 +7098,10 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // Diagnostics: CPU time of this whole call, whatever path or
         // early return it takes (the drop guard writes on exit).
         let _diag_cpu = super::diag::CpuTimer::start();
-        let results_active = self.ensure_results(device);
+        let results_active = self.ensure_results(
+            device,
+            assembler::result_bytes(super::accum_is_wide_named(&escape.coloring)),
+        );
         // Once, at the top: every path below -- direct, field,
         // perturbed, mode D -- binds the same lens group, and a
         // pipeline compiled with one must find it bound.
@@ -7313,7 +7340,11 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 self.ensure_params_pool(device, batch);
                 if !self.ensure_iter_state(
                     device,
-                    assembler::iter_state_bytes(tier, floatexp),
+                    assembler::iter_state_bytes(
+                        tier,
+                        floatexp,
+                        super::accum_is_wide_named(&escape.coloring),
+                    ),
                 ) {
                     // `perturb_state_fits` should have routed this to
                     // the direct path already; report settled rather
@@ -8318,6 +8349,8 @@ pub(crate) struct IterRecord {
     pub z: [f32; 2],
     pub dz: [f32; 2],
     pub accum: [f32; 2],
+    /// The accumulator's `.zw`, for a wide colouring; zero otherwise.
+    pub accum2: [f32; 2],
     pub n: u32,
     pub tags: u32,
 }

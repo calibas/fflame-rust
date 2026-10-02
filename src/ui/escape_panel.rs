@@ -1213,6 +1213,9 @@ fn pick_coloring(
     coloring: &crate::escape::ColoringDef,
 ) {
     let mut changes = vec![(ConfigPath::EscapeColoring, ConfigValue::String(coloring.name.to_string()))];
+    for (param, v) in coloring.pick_params {
+        changes.push((ConfigPath::EscapeColoringParam { param: param.to_string() }, (*v).into()));
+    }
     let biomorph_off = esc.biomorph == crate::config::escape::BiomorphMode::Off;
     let fparams = crate::escape::packed_formula_params(formula, &esc.formula_params);
     if let Some(b) = crate::escape::suggested_bailout(formula, &fparams, coloring, biomorph_off) {
@@ -2106,12 +2109,19 @@ pub fn apply_preset(
         ));
     }
     for p in coloring.parameters {
+        // Not named: what a fresh pick of the colouring takes, which is
+        // the definition's default unless the colouring says otherwise.
+        let fresh = coloring
+            .pick_params
+            .iter()
+            .find(|(k, _)| *k == p.name)
+            .map_or(p.default, |(_, v)| *v);
         let v = preset
             .coloring_params
             .iter()
             .find(|(k, _)| *k == p.name)
             .map(|(_, v)| *v)
-            .unwrap_or(p.default);
+            .unwrap_or(fresh);
         changes.push((
             ConfigPath::EscapeColoringParam { param: p.name.to_string() },
             v.into(),

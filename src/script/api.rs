@@ -1706,6 +1706,12 @@ fn register_escape(engine: &mut Engine) {
             enter(&mut cfg);
             if cfg.escape.coloring != name {
                 cfg.escape.coloring_params.clear();
+                // What a fresh pick in the panel takes (debanded
+                // averages), so a script and a click agree.
+                let def = crate::escape::get_coloring(name);
+                for (param, v) in def.pick_params {
+                    cfg.escape.coloring_params.insert(param.to_string(), *v);
+                }
             }
             cfg.escape.coloring = name.to_string();
             Ok(())

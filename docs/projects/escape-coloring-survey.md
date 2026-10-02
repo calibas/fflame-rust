@@ -1,7 +1,8 @@
 # Escape-time colouring: how other renderers do it, and what we could add
 
-Status: **survey done, decisions made, fixes and the smooth count done;
-feature work next** (2026-10-02).
+Status: **survey done, decisions made; items 1–4 of the order of work
+done** (fixes, smooth count, palette mapping, accumulator and
+debanding); the texture layer next (2026-10-02).
 This compares our escape-time colouring with four other programs and lists
 what we could add (§5). The decisions and the order of work are in §7.
 
@@ -426,10 +427,12 @@ Read from the code, not reproduced by render, except where noted.
      out 21, 51 comes out 49. Mid-grey is exact.
    - Fix: sample at `(255x + 0.5)/256`. The two item-3 GPU tests turn
      the curve off until then.
-9. **Five IFS cache tests fail when run in parallel** and pass alone:
-   they read the global `escape::diag` snapshot without the
-   `diag_lock` the `app_repro_test` tests take, so another test's
-   render overwrites the path they check.
+9. **Four IFS cache tests failed when run in parallel** and passed
+   alone: they read the global `escape::diag` snapshot, which any
+   other test's render rewrites between their render and their check.
+   Fixed: they read their own renderer's `last_path`. A fifth,
+   `a_preview_is_a_quarter_of_the_walks_and_leaves_no_trace`, times
+   the walk and can still lose under parallel load.
 
 ---
 
@@ -556,6 +559,36 @@ Read from the code, not reproduced by render, except where noted.
      sampler's filtering softens;
    - all 87 escape visual tests and the 2D flame tests pass unchanged.
 4. **A bigger accumulator** (P6), then **debanded averages** (P4).
+   *Done 2026-10-02*, on branch `escape-coloring`:
+   - **The accumulator is a `vec4` to every colouring**
+     (`coloring_map(sum, state: vec4)`, `coloring_accum(..) -> vec4`),
+     but only an accumulating colouring stores all four floats: its
+     records grow from 32 to 40 bytes a pixel and its perturbed resume
+     state by 8. Everything else keeps the narrow layouts, so the
+     deep-zoom pixel budget only shrinks while an averaging colouring
+     is in use. One pre-pass per colouring resolves the width
+     (`with_accum_width`); a test measures both layouts in the
+     assembled shader against the Rust strides.
+   - **Debanding**, on orbit, stripe, magnitude, position and
+     triangle-inequality averages: each keeps (sum, count, last term)
+     and blends the mean without the last term into the mean with it
+     by how far through its last step the orbit escaped,
+     `1 − log_p(ln|z| / ln R)`. That is Ultra Fractal's smoothing of its
+     Triangle Inequality Average. Sphere average is left out: its
+     stride counts calls, not terms.
+   - **Saved pictures do not move.** The `deband` parameter's default
+     is off, which is what a file without the key means. A fresh pick
+     of the colouring turns it on, from the panel, a preset that does
+     not name it, or a script (`ColoringDef::pick_params`, the same
+     pattern as the recommended bailout).
+   - **The bailout matters.** The blend is first order in the escape
+     fraction. Measured as the step across an iteration boundary
+     against the steps beside it (1 is continuous): stripes 1.22 →
+     1.03 and triangle inequality 2.44 → 1.04 at bailout 1e4, but only
+     3.37 → 1.62 and 16.5 → 4.9 at 4. So stripe and triangle inequality,
+     whose terms are bounded, recommend 1e4 as smooth does. The
+     averages of |z| and of positions do not, because a larger radius
+     changes what they average.
 5. **The texture layer** (P5): a second colouring blended before the
    palette. This brings techmatt's composites (C2, C3, C4).
 6. **New colourings** (§5.2), in an order to be picked.
