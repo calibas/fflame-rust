@@ -4242,7 +4242,7 @@ fn escape_relief_lighting_from_a_script() {
     let out = run(
         r#"
         script("Lit", "generator");
-        escape.shading(135.0, 10.0);
+        escape.shading(135, 10);
         escape.shading_light("lambert", 40, 0.25);
         escape.shading_slope("least_squares");
         escape.shading_height_curve("sin", 2.0, 0.5);
@@ -4268,6 +4268,44 @@ fn escape_relief_lighting_from_a_script() {
         let msg = format!("{e:?}");
         assert!(msg.contains(expect), "expected `{expect}` in the error, got: {msg}");
     }
+}
+
+/// Every escape number takes an int where it takes a float, as the
+/// reference promises: these used to fail with "function not found".
+#[cfg(feature = "engine-escape")]
+#[test]
+fn escape_numbers_accept_ints() {
+    let out = run(
+        r#"
+        script("Ints", "generator");
+        escape.formula("phoenix");
+        escape.coloring("smooth");
+        escape.zoom = 3;
+        escape.bailout = 16;
+        escape.rotation = 1;
+        escape.supersample = 8;
+        escape.param("p_re", 0);
+        escape.coloring_param("scale", 1);
+        escape.layer("stripe_average", "screen", 1);
+        escape.layer_param("density", 7);
+        escape.shading(135, 10);
+        escape.shading_shadow(0, 0, 0, 1, "multiply");
+        escape.shading_highlight(1, 1, 1, 1, "screen");
+        escape.shading_softness(2);
+        escape.julia(0, 1);
+        "#,
+        1,
+    )
+    .expect("script ran");
+    let esc = &out.config.escape;
+    assert_eq!((esc.zoom_log2, esc.bailout, esc.rotation), (3.0, 16.0, 1.0));
+    assert_eq!(esc.supersample, crate::config::escape::MAX_SUPERSAMPLE);
+    assert_eq!(esc.formula_params.get("p_re"), Some(&0.0));
+    assert_eq!(esc.coloring_params.get("scale"), Some(&1.0));
+    assert_eq!(esc.layer.params.get("density"), Some(&7.0));
+    assert_eq!((esc.shading.light_angle, esc.shading.height), (135.0, 10.0));
+    assert_eq!(esc.shading.softness, 2.0);
+    assert_eq!((esc.julia, esc.julia_re, esc.julia_im), (true, 0.0, 1.0));
 }
 
 /// Switching formula drops the previous formula's parameters.

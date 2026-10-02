@@ -1757,13 +1757,17 @@ fn register_escape(engine: &mut Engine) {
         e.cfg.borrow().escape.center_im.clone()
     });
 
-    engine.register_get_set(
+    // A getter and a Dynamic setter, not register_get_set, so an int
+    // works where the reference promises a float (see `num`).
+    engine.register_get("zoom", |e: &mut EscapeHandle| e.cfg.borrow().escape.zoom_log2);
+    engine.register_set(
         "zoom",
-        |e: &mut EscapeHandle| e.cfg.borrow().escape.zoom_log2,
-        |e: &mut EscapeHandle, v: f64| {
+        |e: &mut EscapeHandle, v: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let v = num(&v, "zoom")?;
             let mut cfg = e.cfg.borrow_mut();
             enter(&mut cfg);
             cfg.escape.zoom_log2 = v;
+            Ok(())
         },
     );
     engine.register_get_set(
@@ -1775,13 +1779,17 @@ fn register_escape(engine: &mut Engine) {
             cfg.escape.max_iter = v.clamp(1, 10_000_000) as u32;
         },
     );
-    engine.register_get_set(
+    // A getter and a Dynamic setter, not register_get_set, so an int
+    // works where the reference promises a float (see `num`).
+    engine.register_get("bailout", |e: &mut EscapeHandle| e.cfg.borrow().escape.bailout as f64);
+    engine.register_set(
         "bailout",
-        |e: &mut EscapeHandle| e.cfg.borrow().escape.bailout as f64,
-        |e: &mut EscapeHandle, v: f64| {
+        |e: &mut EscapeHandle, v: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let v = num(&v, "bailout")?;
             let mut cfg = e.cfg.borrow_mut();
             enter(&mut cfg);
             cfg.escape.bailout = v as f32;
+            Ok(())
         },
     );
     engine.register_get_set(
@@ -1790,16 +1798,20 @@ fn register_escape(engine: &mut Engine) {
         |e: &mut EscapeHandle, v: i64| {
             let mut cfg = e.cfg.borrow_mut();
             enter(&mut cfg);
-            cfg.escape.supersample = v.clamp(1, 3) as u32;
+            cfg.escape.supersample = v.clamp(1, crate::config::escape::MAX_SUPERSAMPLE as i64) as u32;
         },
     );
-    engine.register_get_set(
+    // A getter and a Dynamic setter, not register_get_set, so an int
+    // works where the reference promises a float (see `num`).
+    engine.register_get("rotation", |e: &mut EscapeHandle| e.cfg.borrow().escape.rotation as f64);
+    engine.register_set(
         "rotation",
-        |e: &mut EscapeHandle| e.cfg.borrow().escape.rotation as f64,
-        |e: &mut EscapeHandle, v: f64| {
+        |e: &mut EscapeHandle, v: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let v = num(&v, "rotation")?;
             let mut cfg = e.cfg.borrow_mut();
             enter(&mut cfg);
             cfg.escape.rotation = v as f32;
+            Ok(())
         },
     );
 
@@ -1810,12 +1822,15 @@ fn register_escape(engine: &mut Engine) {
     // could debug. `shading_off()` is the inverse.
     engine.register_fn(
         "shading",
-        |e: &mut EscapeHandle, light_angle: f64, height: f64| {
+        |e: &mut EscapeHandle, light_angle: Dynamic, height: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let light_angle = num(&light_angle, "light_angle")?;
+            let height = num(&height, "height")?;
             let mut cfg = e.cfg.borrow_mut();
             enter(&mut cfg);
             cfg.escape.shading.enabled = true;
             cfg.escape.shading.light_angle = (light_angle as f32).rem_euclid(360.0);
             cfg.escape.shading.height = (height as f32).clamp(0.0, 100_000.0);
+            Ok(())
         },
     );
     engine.register_fn("shading_off", |e: &mut EscapeHandle| {
@@ -1825,33 +1840,43 @@ fn register_escape(engine: &mut Engine) {
     });
     engine.register_fn(
         "shading_shadow",
-        |e: &mut EscapeHandle, r: f64, g: f64, b: f64, strength: f64, blend: &str| {
+        |e: &mut EscapeHandle, r: Dynamic, g: Dynamic, b: Dynamic, strength: Dynamic, blend: &str| -> Result<(), Box<EvalAltResult>> {
+            let rgb = [num(&r, "r")?, num(&g, "g")?, num(&b, "b")?];
+            let strength = num(&strength, "strength")?;
             let mut cfg = e.cfg.borrow_mut();
             enter(&mut cfg);
-            cfg.escape.shading.shadow_color =
-                [r as f32, g as f32, b as f32].map(|v| v.clamp(0.0, 1.0));
+            cfg.escape.shading.shadow_color = rgb.map(|v| (v as f32).clamp(0.0, 1.0));
             cfg.escape.shading.shadow_strength = (strength as f32).clamp(0.0, 4.0);
             cfg.escape.shading.shadow_blend =
                 crate::config::escape::shading_blend_from_str(blend);
+            Ok(())
         },
     );
     engine.register_fn(
         "shading_highlight",
-        |e: &mut EscapeHandle, r: f64, g: f64, b: f64, strength: f64, blend: &str| {
+        |e: &mut EscapeHandle, r: Dynamic, g: Dynamic, b: Dynamic, strength: Dynamic, blend: &str| -> Result<(), Box<EvalAltResult>> {
+            let rgb = [num(&r, "r")?, num(&g, "g")?, num(&b, "b")?];
+            let strength = num(&strength, "strength")?;
             let mut cfg = e.cfg.borrow_mut();
             enter(&mut cfg);
-            cfg.escape.shading.highlight_color =
-                [r as f32, g as f32, b as f32].map(|v| v.clamp(0.0, 1.0));
+            cfg.escape.shading.highlight_color = rgb.map(|v| (v as f32).clamp(0.0, 1.0));
             cfg.escape.shading.highlight_strength = (strength as f32).clamp(0.0, 4.0);
             cfg.escape.shading.highlight_blend =
                 crate::config::escape::shading_blend_from_str(blend);
+            Ok(())
         },
     );
-    engine.register_fn("shading_softness", |e: &mut EscapeHandle, r: f64| {
-        let mut cfg = e.cfg.borrow_mut();
-        enter(&mut cfg);
-        cfg.escape.shading.softness = (r as f32).clamp(0.0, 8.0);
-    });
+    engine.register_fn(
+        "shading_softness",
+        |e: &mut EscapeHandle, r: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let r = num(&r, "radius")?;
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            // The panel's range.
+            cfg.escape.shading.softness = (r as f32).clamp(0.0, 16.0);
+            Ok(())
+        },
+    );
     engine.register_fn("shading_field", |e: &mut EscapeHandle, field: &str| {
         let mut cfg = e.cfg.borrow_mut();
         enter(&mut cfg);
@@ -1956,12 +1981,14 @@ fn register_escape(engine: &mut Engine) {
         cfg.escape.palette_map.stepped = on;
     });
 
-    engine.register_fn("julia", |e: &mut EscapeHandle, re: f64, im: f64| {
+    engine.register_fn("julia", |e: &mut EscapeHandle, re: Dynamic, im: Dynamic| -> Result<(), Box<EvalAltResult>> {
+        let (re, im) = (num(&re, "re")?, num(&im, "im")?);
         let mut cfg = e.cfg.borrow_mut();
         enter(&mut cfg);
         cfg.escape.julia = true;
         cfg.escape.julia_re = re as f32;
         cfg.escape.julia_im = im as f32;
+        Ok(())
     });
     engine.register_fn("no_julia", |e: &mut EscapeHandle| {
         let mut cfg = e.cfg.borrow_mut();
@@ -1973,7 +2000,8 @@ fn register_escape(engine: &mut Engine) {
     // is a typo that would otherwise sit in the config doing nothing.
     engine.register_fn(
         "param",
-        |e: &mut EscapeHandle, name: &str, value: f64| -> Result<(), Box<EvalAltResult>> {
+        |e: &mut EscapeHandle, name: &str, value: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let value = num(&value, name)?;
             let mut cfg = e.cfg.borrow_mut();
             let def = crate::escape::FORMULAS
                 .iter()
@@ -1994,7 +2022,8 @@ fn register_escape(engine: &mut Engine) {
     );
     engine.register_fn(
         "coloring_param",
-        |e: &mut EscapeHandle, name: &str, value: f64| -> Result<(), Box<EvalAltResult>> {
+        |e: &mut EscapeHandle, name: &str, value: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let value = num(&value, name)?;
             let mut cfg = e.cfg.borrow_mut();
             let def = crate::escape::COLORINGS
                 .iter()
@@ -2048,7 +2077,8 @@ fn register_escape(engine: &mut Engine) {
     );
     engine.register_fn(
         "layer_param",
-        |e: &mut EscapeHandle, name: &str, value: f64| -> Result<(), Box<EvalAltResult>> {
+        |e: &mut EscapeHandle, name: &str, value: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let value = num(&value, name)?;
             let mut cfg = e.cfg.borrow_mut();
             let def = crate::escape::COLORINGS
                 .iter()
