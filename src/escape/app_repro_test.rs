@@ -2916,6 +2916,45 @@ mod tests {
         out
     }
 
+    /// **The accumulator colourings see the right c when perturbed.** The
+    /// perturbed templates handed every pixel the VIEW CENTRE as c: close
+    /// to the pixel's c on the parameter plane, but in Julia mode not c at
+    /// all -- there c is the Julia constant. The triangle inequality, the
+    /// one accumulator that reads c, then averaged the wrong bounds. A
+    /// Julia view through the direct path and through the perturbed one:
+    /// where both escape at the same iteration, their averages must agree.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_perturbed_triangle_inequality_reads_the_julia_constant() {
+        // Julia mode, and the parameter plane, where c is the pixel's own.
+        for (what, julia, centre) in [("julia", true, ("0.2", "0.15")), ("parameter plane", false, ("-0.745", "0.11"))] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.julia = julia;
+            esc.julia_re = -0.8;
+            esc.julia_im = 0.156;
+            esc.center_re = centre.0.to_string();
+            esc.center_im = centre.1.to_string();
+            esc.zoom_log2 = 6.0;
+            esc.max_iter = 400;
+            esc.bailout = 1.0e4;
+            esc.coloring = "triangle_inequality".to_string();
+            let (w, h) = (64u32, 48u32);
+            let direct = records_via(&esc, w, h, false, false);
+            let perturbed = records_via(&esc, w, h, false, true);
+            let mean = |r: &crate::escape::renderer::IterRecord| r.accum[0] / r.accum[1].max(1.0);
+            let (mut compared, mut agree) = (0usize, 0usize);
+            for (d, p) in direct.iter().zip(&perturbed) {
+                if d.n == p.n && d.n < esc.max_iter && d.accum[1] > 0.0 {
+                    compared += 1;
+                    agree += ((mean(d) - mean(p)).abs() < 0.01) as usize;
+                }
+            }
+            println!("  {what}: {compared} pixels escape at the same iteration on both paths; {agree} agree on the average");
+            assert!(compared > (w * h / 4) as usize, "{what}: only {compared} pixels comparable");
+            assert!(agree * 100 >= compared * 95, "{what}: the perturbed average disagrees on {} of {compared}", compared - agree);
+        }
+    }
+
     type C64 = (f64, f64);
 
     fn c64_mul(a: C64, b: C64) -> C64 {
