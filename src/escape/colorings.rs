@@ -474,7 +474,7 @@ fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
 /// than a visibly missing one. So the coloring returns a flat value
 /// instead, exactly as [`NORMAL_MAP`] returns flat light.
 ///
-/// Two cases reach it: the 13 of 25 formulas that define no
+/// Two cases reach it: the 14 of 26 formulas that define no
 /// derivative, and EVERY perturbed render — the deep rungs do not
 /// iterate a derivative orbit at all, so a Mandelbrot dive past
 /// `PERTURB_MIN_ZOOM` loses it even though the formula has one. The
@@ -597,7 +597,7 @@ fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
     // surface. Return flat illumination instead — an obviously
     // unshaded image beats a convincing wrong one. This is the case on
     // every perturbed render (the deep rungs do not iterate a
-    // derivative) and on the 12 formulas that define no derivative.
+    // derivative) and on the 14 formulas that define no derivative.
     if (!HAS_DERIVATIVE) {
         return cparam(2u);
     }
