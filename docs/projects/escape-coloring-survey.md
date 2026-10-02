@@ -1,8 +1,8 @@
 # Escape-time colouring: how other renderers do it, and what we could add
 
-Status: **survey only** (2026-10-02). No colouring code has changed. This
-compares our escape-time colouring with four other programs and lists what
-we could add. The candidates in §5 are options, not a plan.
+Status: **survey done, decisions made, fixes in progress** (2026-10-02).
+This compares our escape-time colouring with four other programs and lists
+what we could add (§5). The decisions and the order of work are in §7.
 
 **Sources**, read from source or official documentation (nothing was built
 or run):
@@ -393,17 +393,59 @@ Read from the code, not reproduced by render, except where noted.
 
 ---
 
-## 7. Questions for you
+## 7. Decisions and order of work
 
-1. **The bailout.** Keep 10, or go larger (1e4 or more) together with P2?
-   Or make it a per-colouring setting as UF does? The evidence in §1 says a
-   larger radius is what removes the smooth banding.
-2. **Where the transfer curve applies** (P1): to the raw value (UF, KF2:
-   then density and offset sit around it), or to a value normalised to 0..1
-   by AutoRange (techmatt)?
-3. **Layers** (P5): a texture blended into one palette lookup (techmatt,
-   cheaper), or full coloured layers with merge modes (UF, more general)?
-4. **Relief:** which of R1–R10 matter to you? R1, R2, R4 and R9 are small;
-   R5–R7 change what the relief can show.
-5. **The light direction** (§6.2): fix the comment, or move the default to
-   the upper left?
+### Decisions (2026-10-02)
+
+1. **Escape-time only for now.** No flame or Colors-panel changes. A curve
+   on the colour index would be a palette-table warp for flames — what Log
+   Redistribute already is — but the two engines don't share enough of the
+   palette path to make the options general yet. Everything below lives in
+   the escape panel.
+2. **Bailout per colouring.** Each colouring declares a recommended bailout.
+   The panel applies it when the colouring is picked, and the user can still
+   edit it. The escape test stays one bailout per render, since it belongs
+   to the formula.
+3. **Transfer on the raw value** (P1), before the wrap, as UF and KF2 do.
+   When Auto contrast is on, the transfer applies after its stretch, which
+   gives techmatt's normalised behaviour as an option.
+4. **Two kinds of curve, kept separate:**
+   - **The value transfer** changes how far apart the palette cycles are
+     across the picture.
+   - **A palette curve** reshapes a single cycle; it is the escape-side
+     counterpart of Log Redistribute.
+5. **The palette's ends are the palette's business.** A user who wants the
+   wrap to blend picks a palette whose ends match; there is no wrap option.
+6. **Stepped palettes:** an option that draws each palette stop as a flat
+   band (posterised), alongside the current blended lookup.
+7. **Layers: blend before the palette** (P5, techmatt's composites). A
+   second colouring and a blend mode mix into one value, which takes one
+   palette lookup. Full coloured layers with merge modes stay possible
+   later.
+8. **Relief: all of R1–R10.**
+9. **The light moves to the upper left.** The default becomes 135°
+   (counter-clockwise from east), and the comment is corrected. Saved files
+   keep their angle.
+
+### Order of work
+
+1. **Fixes** (§6), each its own commit:
+   - boundary darkening;
+   - the light default and its comment;
+   - triangle inequality's `c` under perturbation;
+   - the Bounded / Banded height mismatch;
+   - stale comments;
+   - checking whether relief strength depends on export resolution (any
+     fix there changes how saved renders look, so it gets measured and
+     decided first).
+2. **The smooth count** (P2): correct it for power and bailout, and give
+   each colouring a recommended bailout (decision 2).
+3. **The value transfer** (P1) and the palette curve, plus stepped palettes
+   (decisions 3, 4 and 6).
+4. **A bigger accumulator** (P6), then **debanded averages** (P4).
+5. **The texture layer** (P5): a second colouring blended before the
+   palette. This brings techmatt's composites (C2, C3, C4).
+6. **New colourings** (§5.2), in an order to be picked.
+7. **Relief** (§5.3): the small ones (R1, R2, R4, R8, R9) first, then
+   analytic relief (R5), offset orbits (R6) and Embossed (R7). Analytic
+   relief at deep zoom waits for the derivative under perturbation (P11).
