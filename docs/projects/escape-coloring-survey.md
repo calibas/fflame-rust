@@ -657,11 +657,23 @@ Read from the code, not reproduced by render, except where noted.
    stripes, binary decomposition, Gaussian integer, exponential
    smoothing on Newton, and a log transfer with a stepped palette.
 
+   *Second batch done*, same branch:
+   - **Distance-estimate variants** (C11): log (as before), linear and
+     square-root mappings, in plane units (as before) or pixels. In
+     pixels the boundary is always about a pixel away, so the colours
+     hold still under zoom, as F3 and KF2 draw it. KF2's
+     "DE + Standard" is a texture layer now.
+   - **Richer orbit traps** (C9), appended so a saved trap draws as it
+     did: the trap's centre and rotation; a ring, box, line and
+     diamond with a radius; and the reduction: closest (as before),
+     farthest, mean, or first within a threshold.
+   Checked the same way, within one 8-bit level; two visual tests.
+
    **Not yet:** external-angle rays (C7) need F3's exact definition of
    the angle and the width factor, which this survey only paraphrases;
-   itinerary (C8) needs rank equalisation (P7); richer traps (C9),
-   distance-estimate variants (C11), rainbow fringe (C12) and infinite
-   waves (C13) remain; direct orbit traps (C10) need a new output path.
+   itinerary (C8) needs rank equalisation (P7); rainbow fringe (C12)
+   and infinite waves (C13) want a colour per pixel rather than a
+   palette position; direct orbit traps (C10) need a new output path.
 7. **Relief** (§5.3): the small ones (R1, R2, R4, R8, R9) first, then
    analytic relief (R5), offset orbits (R6) and Embossed (R7). Analytic
    relief at deep zoom waits for the derivative under perturbation (P11).

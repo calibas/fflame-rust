@@ -7699,6 +7699,159 @@ fn main() {
         );
     }
 
+    /// The distance-estimate mappings and the richer orbit traps
+    /// compute what they say (survey C11, C9), checked as the first
+    /// batch of colourings is: maps through a grey ramp against the
+    /// same records on the CPU, the trap's accumulator against an
+    /// orbit replayed in f64 -- for orbits that escape within 30 steps,
+    /// at the classic bailout, where f32 and f64 still agree.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn distance_mappings_and_positioned_traps_compute_what_they_say() {
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        let stop = |position: f32, v: f32| crate::scene::palette::ColorStop { position, color: [v, v, v] };
+        config.palette.stops = vec![stop(0.0, 0.0), stop(1.0, 1.0)];
+        config.escape.center_re = "-0.6".to_string();
+        config.escape.center_im = "0.1".to_string();
+        config.escape.zoom_log2 = 0.4;
+        config.escape.max_iter = 200;
+        config.escape.bailout = 4.0;
+        let span_y = 4.0 / (config.escape.zoom_log2).exp2();
+        let span_x = span_y * w as f64 / h as f64;
+        let render = |c: &crate::config::FractalConfig| {
+            let job = crate::renderer::RenderJob::new(c, w, h);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+        let compare = |name: &str, out: &[u8], want: &dyn Fn(&crate::escape::renderer::IterRecord) -> Option<f64>, records: &[crate::escape::renderer::IterRecord]| {
+            let (mut checked, mut worst) = (0usize, 0.0f64);
+            for (r, p) in records.iter().zip(out.chunks_exact(4)) {
+                let Some(v) = want(r) else { continue };
+                let v = v.rem_euclid(1.0);
+                if !(0.01..=0.99).contains(&v) {
+                    continue;
+                }
+                worst = worst.max((p[0] as f64 / 255.0 - v).abs());
+                checked += 1;
+            }
+            println!("{name}: map on {checked} pixels, worst {worst:.4}");
+            assert!(checked > 500, "{name}: only {checked} pixels to check");
+            assert!(worst < 0.01, "{name}: a pixel is {worst:.4} off its map");
+        };
+
+        // Distance estimate: linear in pixels, and the square root in
+        // the plane.
+        for (mapping, units, scale) in [(1.0f32, 1.0f32, 0.02f32), (2.0, 0.0, 2.0)] {
+            let mut c = config.clone();
+            c.escape.coloring = "distance_estimate".to_string();
+            c.escape.coloring_params = [
+                ("scale".to_string(), scale),
+                ("mapping".to_string(), mapping),
+                ("units".to_string(), units),
+            ]
+            .into_iter()
+            .collect();
+            let records = records_via(&c.escape, w, h, false, false);
+            let out = render(&c);
+            let want = |r: &crate::escape::renderer::IterRecord| -> Option<f64> {
+                if (r.tags & 1) == 0 {
+                    return None;
+                }
+                let rz = (r.z[0] as f64).hypot(r.z[1] as f64).max(1.0000001);
+                let dz = (r.dz[0] as f64).hypot(r.dz[1] as f64).max(1e-30);
+                let mut d = (rz * rz.ln() / dz).max(1e-30);
+                if units > 0.5 {
+                    d *= h as f64 / span_y;
+                }
+                Some(if mapping == 1.0 { d } else { d.sqrt() } * scale as f64)
+            };
+            compare(&format!("distance_estimate {mapping}/{units}"), &out, &want, &records);
+        }
+
+        // A ring off the origin, turned 30 degrees, in all four
+        // reductions.
+        let (tc, rot, rad, thr) = ([0.3f64, -0.2f64], 30.0f64, 0.5f64, 0.2f64);
+        for mode in 0..4u32 {
+            let mut c = config.clone();
+            c.escape.coloring = "orbit_trap".to_string();
+            c.escape.coloring_params = [
+                ("shape".to_string(), 4.0),
+                ("scale".to_string(), 1.0),
+                ("center_re".to_string(), tc[0] as f32),
+                ("center_im".to_string(), tc[1] as f32),
+                ("rotation".to_string(), rot as f32),
+                ("mode".to_string(), mode as f32),
+                ("threshold".to_string(), thr as f32),
+                ("radius".to_string(), rad as f32),
+            ]
+            .into_iter()
+            .collect();
+            let records = records_via(&c.escape, w, h, false, false);
+            let mut checked = 0usize;
+            let mut off = 0usize;
+            for (i, r) in records.iter().enumerate() {
+                if (r.tags & 1) == 0 || r.n > 30 {
+                    continue;
+                }
+                let (px, py) = ((i % w as usize) as f64, (i / w as usize) as f64);
+                let cc = [
+                    ((px + 0.5) / w as f64 - 0.5) * span_x - 0.6,
+                    -(((py + 0.5) / h as f64 - 0.5) * span_y) + 0.1,
+                ];
+                let mut z = [0.0f64, 0.0f64];
+                let mut s = [1e30f64, 0.0, 0.0, -1.0];
+                let (sa, ca) = (-rot.to_radians()).sin_cos();
+                for _ in 0..r.n {
+                    z = [z[0] * z[0] - z[1] * z[1] + cc[0], 2.0 * z[0] * z[1] + cc[1]];
+                    let q = [z[0] - tc[0], z[1] - tc[1]];
+                    let t = [q[0] * ca - q[1] * sa, q[0] * sa + q[1] * ca];
+                    let d = (t[0].hypot(t[1]) - rad).abs();
+                    let first = if s[3] < 0.0 && d < thr { d } else { s[3] };
+                    s = [s[0].min(d), s[1].max(d), s[2] + d, first];
+                }
+                let got = [r.accum[0] as f64, r.accum[1] as f64, r.accum2[0] as f64, r.accum2[1] as f64];
+                // The last escaping step's distance can be large and so
+                // its f32 error: relative tolerance on max and sum.
+                let e = (got[0] - s[0])
+                    .abs()
+                    .max((got[1] - s[1]).abs() / s[1].abs().max(1.0))
+                    .max((got[2] - s[2]).abs() / s[2].abs().max(1.0))
+                    .max((got[3] - s[3]).abs());
+                if e > 1e-3 {
+                    off += 1;
+                }
+                checked += 1;
+            }
+            println!("orbit_trap ring, reduction {mode}: accumulator on {checked} orbits, {off} off");
+            assert!(checked > 500, "only {checked} orbits to replay");
+            assert!(off * 200 <= checked, "reduction {mode}: {off} of {checked} accumulators disagree");
+            let out = render(&c);
+            let want = |r: &crate::escape::renderer::IterRecord| -> Option<f64> {
+                if (r.tags & 1) == 0 {
+                    return None;
+                }
+                let s = [r.accum[0] as f64, r.accum[1] as f64, r.accum2[0] as f64, r.accum2[1] as f64];
+                Some(match mode {
+                    0 => s[0],
+                    1 => s[1],
+                    2 => s[2] / (r.n as f64).max(1.0),
+                    _ => if s[3] >= 0.0 { s[3] } else { s[0] },
+                })
+            };
+            compare(&format!("orbit_trap ring {mode}"), &out, &want, &records);
+        }
+    }
+
     /// A stepped palette draws every stop as a flat band: an escape
     /// render through it shows the stops' colours and next to nothing
     /// in between, where the blended palette shows a continuum.
