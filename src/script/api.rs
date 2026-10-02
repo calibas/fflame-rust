@@ -1858,6 +1858,58 @@ fn register_escape(engine: &mut Engine) {
         cfg.escape.shading.field = crate::config::escape::shading_field_from_str(field);
     });
 
+    // ---- Relief lighting, slope and height curve ----------------------
+    engine.register_fn(
+        "shading_light",
+        |e: &mut EscapeHandle, model: &str, elevation: Dynamic, ambient: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            use crate::config::escape::ReliefModel;
+            let m = ReliefModel::ALL.into_iter().find(|m| m.as_str() == model).ok_or_else(|| {
+                let names: Vec<&str> = ReliefModel::ALL.iter().map(|m| m.as_str()).collect();
+                err(format!("unknown relief model '{model}'; one of {}", names.join(", ")))
+            })?;
+            let elevation = num(&elevation, "elevation")? as f32;
+            let ambient = num(&ambient, "ambient")? as f32;
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            cfg.escape.shading.model = m;
+            cfg.escape.shading.elevation = elevation.clamp(0.0, 90.0);
+            cfg.escape.shading.ambient = ambient.clamp(0.0, 1.0);
+            Ok(())
+        },
+    );
+    engine.register_fn(
+        "shading_slope",
+        |e: &mut EscapeHandle, stencil: &str| -> Result<(), Box<EvalAltResult>> {
+            use crate::config::escape::SlopeStencil;
+            let m = SlopeStencil::ALL.into_iter().find(|m| m.as_str() == stencil).ok_or_else(|| {
+                let names: Vec<&str> = SlopeStencil::ALL.iter().map(|m| m.as_str()).collect();
+                err(format!("unknown slope stencil '{stencil}'; one of {}", names.join(", ")))
+            })?;
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            cfg.escape.shading.stencil = m;
+            Ok(())
+        },
+    );
+    engine.register_fn(
+        "shading_height_curve",
+        |e: &mut EscapeHandle, curve: &str, pre: Dynamic, post: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            use crate::config::escape::HeightTransfer;
+            let m = HeightTransfer::ALL.into_iter().find(|m| m.as_str() == curve).ok_or_else(|| {
+                let names: Vec<&str> = HeightTransfer::ALL.iter().map(|m| m.as_str()).collect();
+                err(format!("unknown height curve '{curve}'; one of {}", names.join(", ")))
+            })?;
+            let pre = num(&pre, "pre")? as f32;
+            let post = num(&post, "post")? as f32;
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            cfg.escape.shading.height_curve = m;
+            cfg.escape.shading.height_pre = pre.clamp(1e-3, 1e3);
+            cfg.escape.shading.height_post = post.clamp(1e-3, 1e3);
+            Ok(())
+        },
+    );
+
     // ---- Palette mapping --------------------------------------------
     // Curve names are checked, unlike the shading selectors: a typo in
     // a curve renders a perfectly plausible Linear picture, and nobody

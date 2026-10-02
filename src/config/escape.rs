@@ -297,6 +297,13 @@ pub enum ShadingBlend {
     /// Straight linear interpolation toward the layer colour. Flattens,
     /// but it is the one that shows a coloured light honestly.
     Mix,
+    /// The W3C soft light: a gentle multiply below the middle, a gentle
+    /// screen above it. Ultra Fractal recommends it (and Hard Light) for
+    /// lighting layers, which land on mid-grey where the ground is flat.
+    SoftLight,
+    /// Overlay with the roles swapped: the light colour decides between
+    /// multiply and screen, so the light reads harder than the base.
+    HardLight,
 }
 
 impl ShadingBlend {
@@ -307,15 +314,19 @@ impl ShadingBlend {
             ShadingBlend::Screen => 1,
             ShadingBlend::Overlay => 2,
             ShadingBlend::Mix => 3,
+            ShadingBlend::SoftLight => 4,
+            ShadingBlend::HardLight => 5,
         }
     }
 
-    pub fn all() -> [ShadingBlend; 4] {
+    pub fn all() -> [ShadingBlend; 6] {
         [
             ShadingBlend::Multiply,
             ShadingBlend::Screen,
             ShadingBlend::Overlay,
             ShadingBlend::Mix,
+            ShadingBlend::SoftLight,
+            ShadingBlend::HardLight,
         ]
     }
 }
@@ -327,6 +338,8 @@ pub fn shading_blend_to_str(m: ShadingBlend) -> &'static str {
         ShadingBlend::Screen => "screen",
         ShadingBlend::Overlay => "overlay",
         ShadingBlend::Mix => "mix",
+        ShadingBlend::SoftLight => "soft_light",
+        ShadingBlend::HardLight => "hard_light",
     }
 }
 
@@ -335,6 +348,8 @@ pub fn shading_blend_from_str(s: &str) -> ShadingBlend {
         "screen" => ShadingBlend::Screen,
         "overlay" => ShadingBlend::Overlay,
         "mix" => ShadingBlend::Mix,
+        "soft_light" => ShadingBlend::SoftLight,
+        "hard_light" => ShadingBlend::HardLight,
         _ => ShadingBlend::Multiply,
     }
 }
@@ -846,6 +861,167 @@ impl ColoringLayer {
     }
 }
 
+/// How the relief turns a slope into light and shade.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReliefModel {
+    /// The signed tilt toward the light's azimuth: zero on flat
+    /// ground, symmetric, monotonic in the slope (see `shade_pixel`).
+    #[default]
+    Tilt,
+    /// Lambert's law with the light raised `elevation` above the
+    /// horizon, as Ultra Fractal lights: flat ground reads as the light
+    /// does there, and a slope facing away falls into shadow sooner the
+    /// lower the light.
+    Lambert,
+}
+
+impl ReliefModel {
+    pub const ALL: [ReliefModel; 2] = [ReliefModel::Tilt, ReliefModel::Lambert];
+    pub fn to_gpu(self) -> u32 {
+        match self {
+            ReliefModel::Tilt => 0,
+            ReliefModel::Lambert => 1,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReliefModel::Tilt => "tilt",
+            ReliefModel::Lambert => "lambert",
+        }
+    }
+    pub fn from_name(s: &str) -> Self {
+        Self::ALL.into_iter().find(|m| m.as_str() == s).unwrap_or_default()
+    }
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// How the relief estimates the slope from neighbouring heights
+/// (Kalles Fraktaler offers the same family).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SlopeStencil {
+    /// `(h(p+1) - h(p-1)) / 2`: the sharpest symmetric estimate.
+    #[default]
+    Central,
+    /// `h(p+1) - h(p)`: half a pixel off-centre, and crisper for it.
+    Forward,
+    /// The two diagonal differences of a 2x2 block, turned back onto
+    /// the axes: picks up diagonal detail the axes miss.
+    Roberts,
+    /// The plane fitted to the 3x3 neighbourhood by least squares: the
+    /// smoothest of the four, and the least sensitive to one bad pixel.
+    LeastSquares,
+}
+
+impl SlopeStencil {
+    pub const ALL: [SlopeStencil; 4] = [
+        SlopeStencil::Central,
+        SlopeStencil::Forward,
+        SlopeStencil::Roberts,
+        SlopeStencil::LeastSquares,
+    ];
+    pub fn to_gpu(self) -> u32 {
+        match self {
+            SlopeStencil::Central => 0,
+            SlopeStencil::Forward => 1,
+            SlopeStencil::Roberts => 2,
+            SlopeStencil::LeastSquares => 3,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SlopeStencil::Central => "central",
+            SlopeStencil::Forward => "forward",
+            SlopeStencil::Roberts => "roberts",
+            SlopeStencil::LeastSquares => "least_squares",
+        }
+    }
+    pub fn from_name(s: &str) -> Self {
+        Self::ALL.into_iter().find(|m| m.as_str() == s).unwrap_or_default()
+    }
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// A curve on the height before its slope is taken (Ultra Fractal's
+/// Slope height transfers): `post * f(pre * h)`, mirrored for negative
+/// heights where `f` is not odd already. Sine and cosine ripple the
+/// surface into terraces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HeightTransfer {
+    #[default]
+    Linear,
+    Log,
+    SquareRoot,
+    CubeRoot,
+    Square,
+    Cube,
+    Sin,
+    Cos,
+}
+
+impl HeightTransfer {
+    pub const ALL: [HeightTransfer; 8] = [
+        HeightTransfer::Linear,
+        HeightTransfer::Log,
+        HeightTransfer::SquareRoot,
+        HeightTransfer::CubeRoot,
+        HeightTransfer::Square,
+        HeightTransfer::Cube,
+        HeightTransfer::Sin,
+        HeightTransfer::Cos,
+    ];
+    pub fn to_gpu(self) -> u32 {
+        match self {
+            HeightTransfer::Linear => 0,
+            HeightTransfer::Log => 1,
+            HeightTransfer::SquareRoot => 2,
+            HeightTransfer::CubeRoot => 3,
+            HeightTransfer::Square => 4,
+            HeightTransfer::Cube => 5,
+            HeightTransfer::Sin => 6,
+            HeightTransfer::Cos => 7,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HeightTransfer::Linear => "linear",
+            HeightTransfer::Log => "log",
+            HeightTransfer::SquareRoot => "square_root",
+            HeightTransfer::CubeRoot => "cube_root",
+            HeightTransfer::Square => "square",
+            HeightTransfer::Cube => "cube",
+            HeightTransfer::Sin => "sin",
+            HeightTransfer::Cos => "cos",
+        }
+    }
+    pub fn from_name(s: &str) -> Self {
+        Self::ALL.into_iter().find(|m| m.as_str() == s).unwrap_or_default()
+    }
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+    /// `f(x)`; the relief shader's `relief_height_curve` is the same in
+    /// f32.
+    pub fn apply(self, x: f32) -> f32 {
+        match self {
+            HeightTransfer::Linear => x,
+            HeightTransfer::Log => x.signum() * x.abs().ln_1p(),
+            HeightTransfer::SquareRoot => x.signum() * x.abs().sqrt(),
+            HeightTransfer::CubeRoot => x.cbrt(),
+            HeightTransfer::Square => x.signum() * x * x,
+            HeightTransfer::Cube => x * x * x,
+            HeightTransfer::Sin => x.sin(),
+            HeightTransfer::Cos => x.cos(),
+        }
+    }
+}
+
 /// Relief shading: a lit-surface layer composited over the coloring.
 ///
 /// Deliberately NOT a `ColoringDef`. A coloring returns one scalar
@@ -859,7 +1035,7 @@ impl ColoringLayer {
 /// The surface comes from the SLOPE of the coloring's own value field,
 /// finite-differenced at render resolution. That is what makes it
 /// universal: it needs no derivative, so it works on the perturbed
-/// rungs and on the 13 of 25 formulas that define none.
+/// rungs and on the 14 of 26 formulas that define none.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EscapeShading {
     #[serde(default, skip_serializing_if = "is_false")]
@@ -931,6 +1107,41 @@ pub struct EscapeShading {
     /// Feature size in DISPLAY pixels — how coarse the grain is.
     #[serde(default = "default_texture_scale")]
     pub texture_scale: f32,
+
+    /// How a slope becomes light: the signed tilt (the default, and
+    /// every picture before this option) or Lambert's law.
+    #[serde(default, skip_serializing_if = "ReliefModel::is_default")]
+    pub model: ReliefModel,
+    /// The light's height above the horizon in degrees, for Lambert;
+    /// Ultra Fractal's default is 30.
+    #[serde(default = "default_relief_elevation", skip_serializing_if = "is_default_relief_elevation")]
+    pub elevation: f32,
+    /// A floor under the shadow, 0..1: how much of the base survives on
+    /// the side facing away from the light.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub ambient: f32,
+    /// How the slope is estimated from neighbouring heights.
+    #[serde(default, skip_serializing_if = "SlopeStencil::is_default")]
+    pub stencil: SlopeStencil,
+    /// A curve on the height before its slope is taken.
+    #[serde(default, skip_serializing_if = "HeightTransfer::is_default")]
+    pub height_curve: HeightTransfer,
+    /// Scale applied to the height before the curve.
+    #[serde(default = "default_one", skip_serializing_if = "is_one")]
+    pub height_pre: f32,
+    /// Scale applied after it.
+    #[serde(default = "default_one", skip_serializing_if = "is_one")]
+    pub height_post: f32,
+}
+
+fn default_relief_elevation() -> f32 {
+    30.0
+}
+fn is_default_relief_elevation(v: &f32) -> bool {
+    *v == default_relief_elevation()
+}
+fn default_one() -> f32 {
+    1.0
 }
 
 fn default_light_angle() -> f32 {
@@ -996,6 +1207,13 @@ impl Default for EscapeShading {
             texture_kind: ShadingTexture::None,
             texture_strength: 0.0,
             texture_scale: default_texture_scale(),
+            model: ReliefModel::default(),
+            elevation: default_relief_elevation(),
+            ambient: 0.0,
+            stencil: SlopeStencil::default(),
+            height_curve: HeightTransfer::default(),
+            height_pre: 1.0,
+            height_post: 1.0,
         }
     }
 }
@@ -1377,10 +1595,35 @@ mod shading_tests {
             texture_kind: ShadingTexture::Paper,
             texture_strength: 0.6,
             texture_scale: 3.5,
+            model: ReliefModel::Lambert,
+            elevation: 55.0,
+            ambient: 0.3,
+            stencil: SlopeStencil::Roberts,
+            height_curve: HeightTransfer::Cos,
+            height_pre: 4.0,
+            height_post: 0.25,
         };
         let json = serde_json::to_string(&esc).unwrap();
         let back: EscapeConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(back.shading, esc.shading);
+        // A shading block written before these options reads as the
+        // relief it drew: the tilt, no ambient, the central stencil, no
+        // curve.
+        let old: EscapeShading = serde_json::from_str(r#"{"enabled":true}"#).unwrap();
+        assert_eq!(
+            (old.model, old.ambient, old.stencil, old.height_curve, old.height_pre, old.height_post),
+            (ReliefModel::Tilt, 0.0, SlopeStencil::Central, HeightTransfer::Linear, 1.0, 1.0)
+        );
+        for m in ReliefModel::ALL {
+            assert_eq!(ReliefModel::from_name(m.as_str()), m);
+        }
+        for m in SlopeStencil::ALL {
+            assert_eq!(SlopeStencil::from_name(m.as_str()), m);
+        }
+        for m in HeightTransfer::ALL {
+            assert_eq!(HeightTransfer::from_name(m.as_str()), m);
+            assert!(m.apply(0.7).is_finite() && m.apply(-0.7).is_finite(), "{m:?}");
+        }
     }
 
     /// The wire strings are the config's public surface (scripting,

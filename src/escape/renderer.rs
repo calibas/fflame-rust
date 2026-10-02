@@ -575,11 +575,23 @@ struct ShadeParamsGpu {
     texture_scale: f32,
     /// Which combine the downsample uses (`DownsampleMode::to_gpu`).
     downsample: u32,
+    /// `ReliefModel::to_gpu`: 0 the signed tilt, 1 Lambert.
+    model: u32,
+    /// The light's elevation in radians (Lambert only).
+    elevation: f32,
+    /// The shadow's floor, 0..1.
+    ambient: f32,
+    /// `SlopeStencil::to_gpu`.
+    stencil: u32,
+    /// `HeightTransfer::to_gpu`, and the scales either side of it.
+    height_curve: u32,
+    height_pre: f32,
+    height_post: f32,
     /// std140 rounds the struct up to a multiple of its largest
-    /// member alignment (vec3 → 16), so WGSL sees 80 bytes where Rust
-    /// would otherwise pack 76. Without this the bind group is
+    /// member alignment (vec3 → 16), so WGSL sees 112 bytes where Rust
+    /// would otherwise pack 104. Without these the bind group is
     /// rejected outright.
-    _pad: u32,
+    _pad: [u32; 2],
 }
 
 /// Uniform for the perturbed pipeline — must match `PerturbParams`
@@ -6352,7 +6364,14 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // how coarse the grain looks.
             texture_scale: (shading.texture_scale * factor as f32).max(0.25),
             downsample: mode.to_gpu(),
-            _pad: 0,
+            model: shading.model.to_gpu(),
+            elevation: shading.elevation.clamp(0.0, 90.0).to_radians(),
+            ambient: shading.ambient.clamp(0.0, 1.0),
+            stencil: shading.stencil.to_gpu(),
+            height_curve: shading.height_curve.to_gpu(),
+            height_pre: shading.height_pre,
+            height_post: shading.height_post,
+            _pad: [0; 2],
         };
         queue.write_buffer(&self.shade_params_buffer, 0, bytemuck::bytes_of(&params));
 
@@ -6387,6 +6406,13 @@ struct ShadeParams {{
     texture_strength: f32,
     texture_scale: f32,
     downsample: u32,
+    model: u32,
+    elevation: f32,
+    ambient: f32,
+    stencil: u32,
+    height_curve: u32,
+    height_pre: f32,
+    height_post: f32,
 }}
 
 @group(0) @binding(0) var src_tex: texture_2d<f32>;
@@ -6394,9 +6420,29 @@ struct ShadeParams {{
 @group(0) @binding(2) var height_tex: texture_2d<f32>;
 @group(0) @binding(3) var<uniform> shade: ShadeParams;
 
+// The height curve (HeightTransfer): post * f(pre * h), mirrored for a
+// negative height where f is not odd already. Applied as the slope
+// reads the field, after any softening, so the contrast probe -- which
+// reads the same texture -- still sees the colouring's raw value.
+fn relief_height_curve(h: f32) -> f32 {{
+    let x = shade.height_pre * h;
+    var f = x;
+    switch shade.height_curve {{
+        case 1u: {{ f = sign(x) * log(1.0 + abs(x)); }}
+        case 2u: {{ f = sign(x) * sqrt(abs(x)); }}
+        case 3u: {{ f = sign(x) * select(0.0, exp2(log2(abs(x)) / 3.0), abs(x) > 0.0); }}
+        case 4u: {{ f = sign(x) * x * x; }}
+        case 5u: {{ f = x * x * x; }}
+        case 6u: {{ f = sin(x); }}
+        case 7u: {{ f = cos(x); }}
+        default: {{}}
+    }}
+    return shade.height_post * f;
+}}
+
 fn height_at(p: vec2<i32>, dims: vec2<i32>) -> f32 {{
     let q = clamp(p, vec2<i32>(0, 0), dims - vec2<i32>(1, 1));
-    return textureLoad(height_tex, q, 0).r;
+    return relief_height_curve(textureLoad(height_tex, q, 0).r);
 }}
 
 // 0 multiply, 1 screen, 2 overlay, 3 mix. `amt` is how far to travel
@@ -6434,6 +6480,21 @@ fn shade_blend(base: vec3<f32>, layer: vec3<f32>, mode: u32, amt: f32) -> vec3<f
             1.0 - 2.0 * (1.0 - bp) * (1.0 - layer),
             2.0 * bp * layer,
             bp < vec3<f32>(0.5),
+        );
+    }} else if (mode == 4u) {{
+        // Soft light, the W3C compositing formula.
+        let d = select(sqrt(bp), ((16.0 * bp - 12.0) * bp + 4.0) * bp, bp <= vec3<f32>(0.25));
+        res = select(
+            bp + (2.0 * layer - 1.0) * (d - bp),
+            bp - (1.0 - 2.0 * layer) * bp * (1.0 - bp),
+            layer <= vec3<f32>(0.5),
+        );
+    }} else if (mode == 5u) {{
+        // Hard light: overlay with the layer deciding.
+        res = select(
+            1.0 - 2.0 * (1.0 - bp) * (1.0 - layer),
+            2.0 * bp * layer,
+            layer < vec3<f32>(0.5),
         );
     }}
     // CLAMPED: the strengths now range past 1 so a shadow can be
@@ -6494,8 +6555,30 @@ fn shade_pixel(rgb: vec3<f32>, p: vec2<i32>) -> vec3<f32> {{
     // 3 equally sharp parts"). Softness now low-passes the height
     // field itself, in `run_height_blur`, and this reads whatever it
     // produced.
-    let dx = (height_at(p + vec2<i32>(1, 0), dims) - height_at(p - vec2<i32>(1, 0), dims)) * 0.5;
-    let dy = (height_at(p + vec2<i32>(0, 1), dims) - height_at(p - vec2<i32>(0, 1), dims)) * 0.5;
+    var dx = (height_at(p + vec2<i32>(1, 0), dims) - height_at(p - vec2<i32>(1, 0), dims)) * 0.5;
+    var dy = (height_at(p + vec2<i32>(0, 1), dims) - height_at(p - vec2<i32>(0, 1), dims)) * 0.5;
+    // The other stencils (SlopeStencil). Forward: half a pixel off
+    // centre. Roberts: the two diagonals of the 2x2 block, turned back
+    // onto the axes. Least squares: the plane fitted to the 3x3 block.
+    if (shade.stencil == 1u) {{
+        let h0 = height_at(p, dims);
+        dx = height_at(p + vec2<i32>(1, 0), dims) - h0;
+        dy = height_at(p + vec2<i32>(0, 1), dims) - h0;
+    }} else if (shade.stencil == 2u) {{
+        let d1 = height_at(p + vec2<i32>(1, 1), dims) - height_at(p, dims);
+        let d2 = height_at(p + vec2<i32>(1, 0), dims) - height_at(p + vec2<i32>(0, 1), dims);
+        dx = (d1 + d2) * 0.5;
+        dy = (d1 - d2) * 0.5;
+    }} else if (shade.stencil == 3u) {{
+        var sx = 0.0;
+        var sy = 0.0;
+        for (var j = -1; j <= 1; j = j + 1) {{
+            sx = sx + height_at(p + vec2<i32>(1, j), dims) - height_at(p + vec2<i32>(-1, j), dims);
+            sy = sy + height_at(p + vec2<i32>(j, 1), dims) - height_at(p + vec2<i32>(j, -1), dims);
+        }}
+        dx = sx / 6.0;
+        dy = sy / 6.0;
+    }}
 
     // Exaggerated gradient. +y is DOWN in pixel space, so dy is
     // negated to put the light where the azimuth says it is.
@@ -6542,9 +6625,26 @@ fn shade_pixel(rgb: vec3<f32>, p: vec2<i32>) -> vec3<f32> {{
     // what makes one log slider workable across colorings whose value
     // scales differ by orders of magnitude.
     let s = dot(g, shade.light);
-    let response = s * inverseSqrt(1.0 + dot(g, g));
+    var response = s * inverseSqrt(1.0 + dot(g, g));
+    // LAMBERT (ReliefModel::Lambert): the light raised `elevation` above
+    // the horizon, against the surface normal (g, 1). Measured from what
+    // flat ground receives, sin(elevation), so flat ground still sits at
+    // zero and the shadow and highlight scales keep their meaning: full
+    // highlight facing the light square on, full shadow facing away.
+    if (shade.model == 1u) {{
+        let ce = cos(shade.elevation);
+        let se = sin(shade.elevation);
+        let l = vec3<f32>(shade.light * ce, se);
+        let lambert = max(dot(vec3<f32>(g, 1.0), l) * inverseSqrt(1.0 + dot(g, g)), 0.0);
+        response = select(
+            (lambert - se) / max(se, 1e-4),
+            (lambert - se) / max(1.0 - se, 1e-4),
+            lambert >= se,
+        );
+    }}
     let hi = clamp(response, 0.0, 1.0);
-    let lo = clamp(-response, 0.0, 1.0);
+    // The ambient floor keeps that much of the base on the dark side.
+    let lo = clamp(-response, 0.0, 1.0) * (1.0 - shade.ambient);
     var out = rgb;
     out = shade_blend(out, shade.shadow_color, shade.shadow_blend, lo * shade.shadow_strength);
     out = shade_blend(out, shade.highlight_color, shade.highlight_blend, hi * shade.highlight_strength);

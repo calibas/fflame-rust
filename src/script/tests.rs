@@ -4234,6 +4234,42 @@ fn escape_texture_layer_from_a_script() {
     }
 }
 
+/// The relief's lighting model, slope stencil and height curve from a
+/// script, with misspelt names failing.
+#[cfg(feature = "engine-escape")]
+#[test]
+fn escape_relief_lighting_from_a_script() {
+    let out = run(
+        r#"
+        script("Lit", "generator");
+        escape.shading(135.0, 10.0);
+        escape.shading_light("lambert", 40, 0.25);
+        escape.shading_slope("least_squares");
+        escape.shading_height_curve("sin", 2.0, 0.5);
+        escape.shading_shadow(0.0, 0.0, 0.0, 1.0, "soft_light");
+        "#,
+        1,
+    )
+    .expect("script ran");
+    let sh = &out.config.escape.shading;
+    assert_eq!(sh.model, crate::config::escape::ReliefModel::Lambert);
+    assert_eq!((sh.elevation, sh.ambient), (40.0, 0.25));
+    assert_eq!(sh.stencil, crate::config::escape::SlopeStencil::LeastSquares);
+    assert_eq!(sh.height_curve, crate::config::escape::HeightTransfer::Sin);
+    assert_eq!((sh.height_pre, sh.height_post), (2.0, 0.5));
+    assert_eq!(sh.shadow_blend, crate::config::escape::ShadingBlend::SoftLight);
+    for (src, expect) in [
+        (r#"escape.shading_light("phong", 30, 0);"#, "unknown relief model"),
+        (r#"escape.shading_slope("sobel");"#, "unknown slope stencil"),
+        (r#"escape.shading_height_curve("tan", 1, 1);"#, "unknown height curve"),
+    ] {
+        let text = format!("script(\"X\", \"generator\");\n{src}");
+        let e = run(&text, 1).expect_err("must fail");
+        let msg = format!("{e:?}");
+        assert!(msg.contains(expect), "expected `{expect}` in the error, got: {msg}");
+    }
+}
+
 /// Switching formula drops the previous formula's parameters.
 ///
 /// They are keyed by name and belong to the formula that declared

@@ -490,6 +490,15 @@ pub enum ConfigPath {
     EscapeShadingTextureKind,
     EscapeShadingTextureStrength,
     EscapeShadingTextureScale,
+    // Relief lighting (survey item 7): model, elevation, ambient, the
+    // slope stencil, and a curve on the height.
+    EscapeShadingModel,
+    EscapeShadingElevation,
+    EscapeShadingAmbient,
+    EscapeShadingStencil,
+    EscapeShadingHeightCurve,
+    EscapeShadingHeightPre,
+    EscapeShadingHeightPost,
     /// Coloring registry name.
     EscapeColoring,
     /// One parameter of the ACTIVE formula, by name — keyed like
@@ -1090,6 +1099,13 @@ impl Display for ConfigPath {
             ConfigPath::EscapeShadingTextureKind => write!(f, "Relief Texture"),
             ConfigPath::EscapeShadingTextureStrength => write!(f, "Relief Texture Strength"),
             ConfigPath::EscapeShadingTextureScale => write!(f, "Relief Texture Scale"),
+            ConfigPath::EscapeShadingModel => write!(f, "Relief Lighting Model"),
+            ConfigPath::EscapeShadingElevation => write!(f, "Relief Light Elevation"),
+            ConfigPath::EscapeShadingAmbient => write!(f, "Relief Ambient"),
+            ConfigPath::EscapeShadingStencil => write!(f, "Relief Slope Stencil"),
+            ConfigPath::EscapeShadingHeightCurve => write!(f, "Relief Height Curve"),
+            ConfigPath::EscapeShadingHeightPre => write!(f, "Relief Height Pre-scale"),
+            ConfigPath::EscapeShadingHeightPost => write!(f, "Relief Height Post-scale"),
             ConfigPath::EscapeColoring => write!(f, "Escape Coloring"),
             ConfigPath::EscapeFormulaParam { param } => write!(f, "Formula → {param}"),
             ConfigPath::EscapeColoringParam { param } => write!(f, "Coloring → {param}"),
@@ -1435,6 +1451,13 @@ impl ConfigPath {
             ConfigPath::EscapeShadingTextureKind => I18nKey::simple("history.param.escape_shading_texture_kind"),
             ConfigPath::EscapeShadingTextureStrength => I18nKey::simple("history.param.escape_shading_texture_strength"),
             ConfigPath::EscapeShadingTextureScale => I18nKey::simple("history.param.escape_shading_texture_scale"),
+            ConfigPath::EscapeShadingModel => I18nKey::simple("history.param.escape_shading_model"),
+            ConfigPath::EscapeShadingElevation => I18nKey::simple("history.param.escape_shading_elevation"),
+            ConfigPath::EscapeShadingAmbient => I18nKey::simple("history.param.escape_shading_ambient"),
+            ConfigPath::EscapeShadingStencil => I18nKey::simple("history.param.escape_shading_stencil"),
+            ConfigPath::EscapeShadingHeightCurve => I18nKey::simple("history.param.escape_shading_height_curve"),
+            ConfigPath::EscapeShadingHeightPre => I18nKey::simple("history.param.escape_shading_height_pre"),
+            ConfigPath::EscapeShadingHeightPost => I18nKey::simple("history.param.escape_shading_height_post"),
             ConfigPath::EscapeColoring => I18nKey::simple("history.param.escape_coloring"),
             ConfigPath::EscapeFormulaParam { param } => I18nKey::with_params(
                 "history.param.escape_formula_param",
@@ -2807,6 +2830,13 @@ impl ConfigPath {
             | ConfigPath::EscapeShadingTextureKind
             | ConfigPath::EscapeShadingTextureStrength
             | ConfigPath::EscapeShadingTextureScale
+            | ConfigPath::EscapeShadingModel
+            | ConfigPath::EscapeShadingElevation
+            | ConfigPath::EscapeShadingAmbient
+            | ConfigPath::EscapeShadingStencil
+            | ConfigPath::EscapeShadingHeightCurve
+            | ConfigPath::EscapeShadingHeightPre
+            | ConfigPath::EscapeShadingHeightPost
             | ConfigPath::EscapeColoring
             | ConfigPath::EscapeFormulaParam { .. }
             | ConfigPath::EscapeColoringParam { .. }
@@ -3219,6 +3249,13 @@ impl ConfigPath {
             ConfigPath::EscapeShadingTextureKind => "Escape.Shading.TextureKind".to_string(),
             ConfigPath::EscapeShadingTextureStrength => "Escape.Shading.TextureStrength".to_string(),
             ConfigPath::EscapeShadingTextureScale => "Escape.Shading.TextureScale".to_string(),
+            ConfigPath::EscapeShadingModel => "Escape.Shading.Model".to_string(),
+            ConfigPath::EscapeShadingElevation => "Escape.Shading.Elevation".to_string(),
+            ConfigPath::EscapeShadingAmbient => "Escape.Shading.Ambient".to_string(),
+            ConfigPath::EscapeShadingStencil => "Escape.Shading.Stencil".to_string(),
+            ConfigPath::EscapeShadingHeightCurve => "Escape.Shading.HeightCurve".to_string(),
+            ConfigPath::EscapeShadingHeightPre => "Escape.Shading.HeightPre".to_string(),
+            ConfigPath::EscapeShadingHeightPost => "Escape.Shading.HeightPost".to_string(),
             ConfigPath::EscapeColoring => "Escape.Coloring".to_string(),
             ConfigPath::EscapeFormulaParam { param } => format!("Escape.FormulaParam.{param}"),
             ConfigPath::EscapeColoringParam { param } => format!("Escape.ColoringParam.{param}"),
@@ -3447,6 +3484,13 @@ impl ConfigPath {
                 ["Shading", "TextureKind"] => return Some(ConfigPath::EscapeShadingTextureKind),
                 ["Shading", "TextureStrength"] => return Some(ConfigPath::EscapeShadingTextureStrength),
                 ["Shading", "TextureScale"] => return Some(ConfigPath::EscapeShadingTextureScale),
+                ["Shading", "Model"] => return Some(ConfigPath::EscapeShadingModel),
+                ["Shading", "Elevation"] => return Some(ConfigPath::EscapeShadingElevation),
+                ["Shading", "Ambient"] => return Some(ConfigPath::EscapeShadingAmbient),
+                ["Shading", "Stencil"] => return Some(ConfigPath::EscapeShadingStencil),
+                ["Shading", "HeightCurve"] => return Some(ConfigPath::EscapeShadingHeightCurve),
+                ["Shading", "HeightPre"] => return Some(ConfigPath::EscapeShadingHeightPre),
+                ["Shading", "HeightPost"] => return Some(ConfigPath::EscapeShadingHeightPost),
                 ["Coloring"] => return Some(ConfigPath::EscapeColoring),
                 ["FormulaParam", param] => {
                     return Some(ConfigPath::EscapeFormulaParam { param: param.to_string() })
@@ -4219,7 +4263,11 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeShadingHighlightStrength
         | ConfigPath::EscapeShadingSoftness
         | ConfigPath::EscapeShadingTextureStrength
-        | ConfigPath::EscapeShadingTextureScale => {
+        | ConfigPath::EscapeShadingTextureScale
+        | ConfigPath::EscapeShadingElevation
+        | ConfigPath::EscapeShadingAmbient
+        | ConfigPath::EscapeShadingHeightPre
+        | ConfigPath::EscapeShadingHeightPost => {
             json.as_f64().map(|v| ConfigValue::Float(v as f32))
         }
         ConfigPath::EscapeShadingShadowColor | ConfigPath::EscapeShadingHighlightColor => {
@@ -4234,6 +4282,9 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
             Some(ConfigValue::ColorRgb(rgb))
         }
         ConfigPath::EscapeShadingEnabled
+        | ConfigPath::EscapeShadingModel
+        | ConfigPath::EscapeShadingStencil
+        | ConfigPath::EscapeShadingHeightCurve
         | ConfigPath::EscapeContrastMode
         | ConfigPath::EscapeTransfer
         | ConfigPath::EscapePaletteCurve

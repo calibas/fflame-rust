@@ -7536,6 +7536,100 @@ fn main() {
         }
     }
 
+    /// The relief's lighting options keep the promises their controls
+    /// make, checked as properties of the output rather than against a
+    /// reference picture:
+    /// - an ambient floor of 1 with no highlight leaves the picture as
+    ///   it was (the shadow is all floor);
+    /// - Lambert with only a shadow can only darken;
+    /// - Soft Light and Hard Light with a mid-grey light change nothing
+    ///   (UF's reason for recommending them: flat ground is mid-grey);
+    /// - every slope stencil and height curve does change it.
+    /// "As it was" allows one 8-bit level: the shade pass blends in a
+    /// perceptual space and back.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_relief_lighting_options_keep_their_promises() {
+        use crate::config::escape::{HeightTransfer, ReliefModel, ShadingBlend, SlopeStencil};
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.escape.center_re = "-0.7453".to_string();
+        config.escape.center_im = "0.1127".to_string();
+        config.escape.zoom_log2 = 7.0;
+        config.escape.max_iter = 600;
+        config.escape.coloring_params.insert("scale".to_string(), 0.05);
+        let render = |c: &crate::config::FractalConfig| {
+            let job = crate::renderer::RenderJob::new(c, w, h);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+        let plain = render(&config);
+        let diff = |a: &[u8], b: &[u8]| a.iter().zip(b).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0);
+        let differing = |a: &[u8], b: &[u8]| a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count();
+        let mut lit = config.clone();
+        lit.escape.shading.enabled = true;
+        lit.escape.shading.height = 10.0;
+        let relief = render(&lit);
+        assert!(differing(&relief, &plain) > (w * h / 10) as usize, "the relief itself shows nothing");
+
+        // Ambient 1, highlight off: nothing left to change.
+        for model in ReliefModel::ALL {
+            let mut c = lit.clone();
+            c.escape.shading.model = model;
+            c.escape.shading.ambient = 1.0;
+            c.escape.shading.highlight_strength = 0.0;
+            let d = diff(&render(&c), &plain);
+            assert!(d <= 1, "{model:?}: an ambient floor of 1 still moved a pixel by {d}");
+        }
+
+        // Lambert with only a shadow only darkens.
+        let mut c = lit.clone();
+        c.escape.shading.model = ReliefModel::Lambert;
+        c.escape.shading.elevation = 30.0;
+        c.escape.shading.highlight_strength = 0.0;
+        let shadowed = render(&c);
+        // In u16: a saturated channel plus one would wrap in u8.
+        let up = |a: &[u8], b: &[u8]| (0..3).any(|k| a[k] as u16 > b[k] as u16 + 1);
+        let brighter = shadowed.chunks(4).zip(plain.chunks(4)).filter(|(s, p)| up(s, p)).count();
+        let darker = shadowed.chunks(4).zip(plain.chunks(4)).filter(|(s, p)| up(p, s)).count();
+        assert_eq!(brighter, 0, "a Lambert shadow brightened {brighter} pixels");
+        assert!(darker > (w * h / 20) as usize, "a Lambert shadow darkened only {darker} pixels");
+
+        // A mid-grey light under Soft Light or Hard Light is no light.
+        for blend in [ShadingBlend::SoftLight, ShadingBlend::HardLight] {
+            let mut c = lit.clone();
+            c.escape.shading.shadow_color = [0.5; 3];
+            c.escape.shading.highlight_color = [0.5; 3];
+            c.escape.shading.shadow_blend = blend;
+            c.escape.shading.highlight_blend = blend;
+            let d = diff(&render(&c), &plain);
+            assert!(d <= 1, "{blend:?} with a mid-grey light moved a pixel by {d}");
+        }
+
+        // Every stencil and every curve is a different picture.
+        for stencil in &SlopeStencil::ALL[1..] {
+            let mut c = lit.clone();
+            c.escape.shading.stencil = *stencil;
+            let n = differing(&render(&c), &relief);
+            assert!(n > (w * h / 100) as usize, "{stencil:?} changed only {n} pixels");
+        }
+        for curve in &HeightTransfer::ALL[1..] {
+            let mut c = lit.clone();
+            c.escape.shading.height_curve = *curve;
+            c.escape.shading.height_pre = 0.5;
+            let n = differing(&render(&c), &relief);
+            assert!(n > (w * h / 100) as usize, "{curve:?} changed only {n} pixels");
+        }
+    }
+
     /// A stepped palette draws every stop as a flat band: an escape
     /// render through it shows the stops' colours and next to nothing
     /// in between, where the blended palette shows a continuum.
