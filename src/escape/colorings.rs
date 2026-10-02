@@ -3,8 +3,8 @@
 //! One `static ColoringDef` per coloring, WGSL inline. The template
 //! wraps the returned coordinate with `fract()` so colorings can
 //! return unbounded ramps and let the palette cycle. Signature:
-//! `coloring_map(z, n, escaped, state)` where `state` is the orbit
-//! accumulator (meaningful only with `NeedsOrbitAccum`).
+//! `coloring_map(sum, state)` where `state` is the orbit accumulator, a
+//! `vec4` (meaningful only with `NeedsOrbitAccum`; zero otherwise).
 
 use super::{ColoringDef, ColoringFeature, EscapeParamDef};
 
@@ -23,13 +23,14 @@ pub static ESCAPE_COUNT: ColoringDef = ColoringDef {
         choices: &[],
     }],
     wgsl: r#"
-fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
+fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
     return f32(sum.n) * cparam(0u);
 }
 "#,
     accum_init: "",
     wgsl_accum: "",
     recommended_bailout: None,
+    pick_params: &[],
 };
 
 /// Smooth (continuous) iteration count — the standard fractional
@@ -49,7 +50,7 @@ pub static SMOOTH: ColoringDef = ColoringDef {
         choices: &[],
     }],
     wgsl: r#"
-fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
+fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
     // |z|^2 at escape is > bailout >= 1, so log2 is safe; the max()
     // guards the first-iteration corner (bailout < 1 configs) without
     // any fast-math-hazard idiom (no self-compare, no self-divide).
@@ -69,6 +70,7 @@ fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
     accum_init: "",
     wgsl_accum: "",
     recommended_bailout: Some(1.0e4),
+    pick_params: &[],
 };
 
 /// Orbit trap: minimum distance the orbit ever came to a trap shape
@@ -119,13 +121,13 @@ pub static ORBIT_TRAP: ColoringDef = ColoringDef {
         },
     ],
     wgsl: r#"
-fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
+fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
     return state.x * cparam(1u);
 }
 "#,
-    accum_init: "vec2<f32>(1e30, 0.0)",
+    accum_init: "vec4<f32>(1e30, 0.0, 0.0, 0.0)",
     wgsl_accum: r#"
-fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec2<f32>) -> vec2<f32> {
+fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32>) -> vec4<f32> {
     let shape = u32(clamp(cparam(0u), 0.0, 3.0));
     var d: f32;
     switch shape {
@@ -161,10 +163,11 @@ fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec2<f32
             }
         }
     }
-    return vec2<f32>(min(state.x, d), state.y);
+    return vec4<f32>(min(state.x, d), state.y, state.zw);
 }
 "#,
     recommended_bailout: None,
+    pick_params: &[],
 };
 
 /// Orbit average — the Kali glow (plan §8: "REQUIRED for NonEscaping;
@@ -175,29 +178,47 @@ pub static ORBIT_AVERAGE: ColoringDef = ColoringDef {
     name: "orbit_average",
     display_name: "Orbit Average",
     features: &[ColoringFeature::NeedsOrbitAccum, ColoringFeature::ColorsInterior],
-    parameters: &[EscapeParamDef {
-        name: "scale",
-        display_name: "Scale",
-        default: 1.0,
-        min: 0.01,
-        max: 20.0,
-        tooltip: "Palette distance per unit of averaged trap value.",
-        choices: &[],
-    }],
+    parameters: &[
+        EscapeParamDef {
+            name: "scale",
+            display_name: "Scale",
+            default: 1.0,
+            min: 0.01,
+            max: 20.0,
+            tooltip: "Palette distance per unit of averaged trap value.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "deband",
+            display_name: "Deband",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Blends the mean with and without the orbit's last term by how \
+                      far through its last step the orbit escaped, so the colour \
+                      moves smoothly across an iteration boundary instead of \
+                      stepping (Ultra Fractal's smoothing of its Triangle \
+                      Inequality Average). Works with the escape radius: the \
+                      larger the bailout, the more terms there are to blend.",
+            choices: &["Off", "On"],
+        },
+    ],
     wgsl: r#"
-fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
-    // state.x = sum of min(|re|, |im|) over the orbit, state.y = count.
-    let mean = state.x / max(state.y, 1.0);
+fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
+    // state = (sum of min(|re|, |im|), count, last term, -).
+    let mean = select(state.x / max(state.y, 1.0), esc_debanded_mean(sum, state), cparam(1u) > 0.5);
     return mean * cparam(0u);
 }
 "#,
-    accum_init: "vec2<f32>(0.0, 0.0)",
+    accum_init: "vec4<f32>(0.0)",
     wgsl_accum: r#"
-fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec2<f32>) -> vec2<f32> {
-    return state + vec2<f32>(min(abs(z.x), abs(z.y)), 1.0);
+fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32>) -> vec4<f32> {
+    let t = min(abs(z.x), abs(z.y));
+    return vec4<f32>(state.x + t, state.y + 1.0, t, state.w);
 }
 "#,
     recommended_bailout: None,
+    pick_params: &[("deband", 1.0)],
 };
 
 /// Stripe average — mean of `0.5 + 0.5·sin(density·arg z)` over the
@@ -226,16 +247,31 @@ pub static STRIPE_AVERAGE: ColoringDef = ColoringDef {
             tooltip: "Palette distance per unit of averaged stripe value.",
             choices: &[],
         },
+        EscapeParamDef {
+            name: "deband",
+            display_name: "Deband",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Blends the mean with and without the orbit's last term by how \
+                      far through its last step the orbit escaped, so the colour \
+                      moves smoothly across an iteration boundary instead of \
+                      stepping (Ultra Fractal's smoothing of its Triangle \
+                      Inequality Average). Works with the escape radius: the \
+                      larger the bailout, the more terms there are to blend.",
+            choices: &["Off", "On"],
+        },
     ],
     wgsl: r#"
-fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
-    let mean = state.x / max(state.y, 1.0);
+fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
+    // state = (sum of stripe terms, count, last term, -).
+    let mean = select(state.x / max(state.y, 1.0), esc_debanded_mean(sum, state), cparam(2u) > 0.5);
     return mean * cparam(1u);
 }
 "#,
-    accum_init: "vec2<f32>(0.0, 0.0)",
+    accum_init: "vec4<f32>(0.0)",
     wgsl_accum: r#"
-fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec2<f32>) -> vec2<f32> {
+fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32>) -> vec4<f32> {
     // Skip exact zero: atan2 at a zero pair is the Metal fast-math
     // hazard (garbage or NaN, see CLAUDE.md) — the branch keeps it
     // from ever being evaluated there, and dropping one sample from
@@ -244,10 +280,11 @@ fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec2<f32
         return state;
     }
     let stripe = 0.5 + 0.5 * sin(cparam(0u) * atan2(z.y, z.x));
-    return state + vec2<f32>(stripe, 1.0);
+    return vec4<f32>(state.x + stripe, state.y + 1.0, stripe, state.w);
 }
 "#,
-    recommended_bailout: None,
+    recommended_bailout: Some(1.0e4),
+    pick_params: &[("deband", 1.0)],
 };
 
 /// Magnitude average — mean of |z| over the orbit. THE Ducks
@@ -282,21 +319,37 @@ pub static MAGNITUDE_AVERAGE: ColoringDef = ColoringDef {
                       this way).",
             choices: &[],
         },
+        EscapeParamDef {
+            name: "deband",
+            display_name: "Deband",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Blends the mean with and without the orbit's last term by how \
+                      far through its last step the orbit escaped, so the colour \
+                      moves smoothly across an iteration boundary instead of \
+                      stepping (Ultra Fractal's smoothing of its Triangle \
+                      Inequality Average). Works with the escape radius: the \
+                      larger the bailout, the more terms there are to blend.",
+            choices: &["Off", "On"],
+        },
     ],
     wgsl: r#"
-fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
-    // state.x = sum of |z| over the orbit, state.y = count.
-    let mean = state.x / max(state.y, 1.0);
+fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
+    // state = (sum of |z|, count, last term, -).
+    let mean = select(state.x / max(state.y, 1.0), esc_debanded_mean(sum, state), cparam(2u) > 0.5);
     return (mean - cparam(1u)) * cparam(0u);
 }
 "#,
-    accum_init: "vec2<f32>(0.0, 0.0)",
+    accum_init: "vec4<f32>(0.0)",
     wgsl_accum: r#"
-fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec2<f32>) -> vec2<f32> {
-    return state + vec2<f32>(length(z), 1.0);
+fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32>) -> vec4<f32> {
+    let t = length(z);
+    return vec4<f32>(state.x + t, state.y + 1.0, t, state.w);
 }
 "#,
     recommended_bailout: None,
+    pick_params: &[("deband", 1.0)],
 };
 
 /// Root basin — for Convergent formulas over `zᵖ − 1`: which root the
@@ -345,7 +398,7 @@ pub static ROOT_BASIN: ColoringDef = ColoringDef {
         },
     ],
     wgsl: r#"
-fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
+fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
     // Origin guard throughout: never hand atan2 a zero pair (Metal
     // fast-math hazard, CLAUDE.md).
     var t = 0.0;
@@ -394,6 +447,7 @@ fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
     accum_init: "",
     wgsl_accum: "",
     recommended_bailout: None,
+    pick_params: &[],
 };
 
 /// Triangle-inequality average (plan §8): at each step, where |z|
@@ -404,24 +458,41 @@ pub static TRIANGLE_INEQUALITY: ColoringDef = ColoringDef {
     name: "triangle_inequality",
     display_name: "Triangle Inequality",
     features: &[ColoringFeature::NeedsOrbitAccum, ColoringFeature::ColorsInterior],
-    parameters: &[EscapeParamDef {
-        name: "scale",
-        display_name: "Scale",
-        default: 1.0,
-        min: 0.01,
-        max: 20.0,
-        tooltip: "Palette distance per unit of averaged TIA value.",
-        choices: &[],
-    }],
+    parameters: &[
+        EscapeParamDef {
+            name: "scale",
+            display_name: "Scale",
+            default: 1.0,
+            min: 0.01,
+            max: 20.0,
+            tooltip: "Palette distance per unit of averaged TIA value.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "deband",
+            display_name: "Deband",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Blends the mean with and without the orbit's last term by how \
+                      far through its last step the orbit escaped, so the colour \
+                      moves smoothly across an iteration boundary instead of \
+                      stepping (Ultra Fractal's smoothing of its Triangle \
+                      Inequality Average). Works with the escape radius: the \
+                      larger the bailout, the more terms there are to blend.",
+            choices: &["Off", "On"],
+        },
+    ],
     wgsl: r#"
-fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
-    let mean = state.x / max(state.y, 1.0);
+fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
+    // state = (sum of TIA terms, count, last term, -).
+    let mean = select(state.x / max(state.y, 1.0), esc_debanded_mean(sum, state), cparam(1u) > 0.5);
     return mean * cparam(0u);
 }
 "#,
-    accum_init: "vec2<f32>(0.0, 0.0)",
+    accum_init: "vec4<f32>(0.0)",
     wgsl_accum: r#"
-fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec2<f32>) -> vec2<f32> {
+fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32>) -> vec4<f32> {
     let x = length(z - c);
     let mc = length(c);
     let lo = abs(x - mc);
@@ -431,10 +502,11 @@ fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec2<f32
         return state;
     }
     let t = clamp((length(z) - lo) / span, 0.0, 1.0);
-    return state + vec2<f32>(t, 1.0);
+    return vec4<f32>(state.x + t, state.y + 1.0, t, state.w);
 }
 "#,
-    recommended_bailout: None,
+    recommended_bailout: Some(1.0e4),
+    pick_params: &[("deband", 1.0)],
 };
 
 /// Interior / period coloring (plan §8, §5.8, §5.17): pixels whose
@@ -467,7 +539,7 @@ pub static PERIOD: ColoringDef = ColoringDef {
         },
     ],
     wgsl: r#"
-fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
+fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
     if (sum.period > 0u) {
         return f32(sum.period) * cparam(0u);
     }
@@ -480,6 +552,7 @@ fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
     accum_init: "",
     wgsl_accum: "",
     recommended_bailout: None,
+    pick_params: &[],
 };
 
 /// Exterior distance estimation (plan §8): `d = |z|·ln|z| / |dz|`
@@ -519,7 +592,7 @@ pub static DISTANCE_ESTIMATE: ColoringDef = ColoringDef {
         choices: &[],
     }],
     wgsl: r#"
-fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
+fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
     // No derivative compiled => dz is the constant seed, so this
     // would reduce to |z|.ln|z|: a smooth function of the escape
     // radius that looks like a distance estimate and is not one.
@@ -541,6 +614,7 @@ fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
     accum_init: "",
     wgsl_accum: "",
     recommended_bailout: Some(1.0e4),
+    pick_params: &[],
 };
 
 /// Analytic normal shading — the "fake 3D" relief.
@@ -612,7 +686,7 @@ pub static NORMAL_MAP: ColoringDef = ColoringDef {
         },
     ],
     wgsl: r#"
-fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
+fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
     // Without a compiled derivative `dz` is the constant seed, so
     // `z/dz` would be `z` and the shading would be a smooth function
     // of arg(z): plausible relief that encodes nothing about the
@@ -653,6 +727,7 @@ fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
     accum_init: "",
     wgsl_accum: "",
     recommended_bailout: Some(1.0e4),
+    pick_params: &[],
 };
 
 /// Position average — the mean POSITION of the orbit, not the mean
@@ -746,7 +821,7 @@ pub static POSITION_MAP: ColoringDef = ColoringDef {
         },
     ],
     wgsl: r#"
-fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
+fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
     let z = sum.z;
     let plasma = 0.5
         + 0.25 * sin(6.2831853 * cparam(0u) * z.x)
@@ -754,18 +829,19 @@ fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
     return fract(plasma + state.x * cparam(2u));
 }
 "#,
-    accum_init: "vec2<f32>(0.0, 0.0)",
+    accum_init: "vec4<f32>(0.0)",
     wgsl_accum: r#"
-fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec2<f32>) -> vec2<f32> {
+fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32>) -> vec4<f32> {
     // Binary branch address: 0.5 into the low bit when this step moved
     // the point. An unmoved point returns from the formula bit-exact,
     // so the comparison is reliable (and it is z against z_prev — two
     // distinct values — not a fast-math-hazard self-compare).
     let moved = select(0.0, 0.5, any(z != z_prev));
-    return vec2<f32>(state.x * 0.5 + moved, 0.0);
+    return vec4<f32>(state.x * 0.5 + moved, 0.0, state.zw);
 }
 "#,
     recommended_bailout: None,
+    pick_params: &[],
 };
 
 /// Sphere average — the orbit's mean CHORDAL distance to a chosen
@@ -863,7 +939,7 @@ pub static SPHERE_AVERAGE: ColoringDef = ColoringDef {
         },
     ],
     wgsl: r#"
-fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
+fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
     // state.x sums the accepted distances; state.y counts CALLS, not
     // accepted samples -- with a stride those differ, and dividing by
     // the wrong one scales the mean by the stride. The accepted count
@@ -873,17 +949,16 @@ fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
     return (state.x / samples) * cparam(4u);
 }
 "#,
-    accum_init: "vec2<f32>(0.0, 0.0)",
+    accum_init: "vec4<f32>(0.0)",
     wgsl_accum: r#"
-fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec2<f32>) -> vec2<f32> {
+fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32>) -> vec4<f32> {
     // state.y counts CALLS, which is what the stride test needs; the
-    // accepted-sample count is derived in coloring_map. Two floats of
-    // state cannot hold both, and the call index is the one that
-    // cannot be reconstructed afterwards.
+    // accepted-sample count is derived in coloring_map, since the call
+    // index is the one that cannot be reconstructed afterwards.
     let stride = max(u32(cparam(3u)), 1u);
     let calls = u32(state.y);
     if (stride > 1u && (calls % stride) != 0u) {
-        return vec2<f32>(state.x, state.y + 1.0);
+        return vec4<f32>(state.x, state.y + 1.0, state.zw);
     }
     let zz = dot(z, z);
     var d: f32;
@@ -895,10 +970,11 @@ fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec2<f32
         let dz = z - t;
         d = 2.0 * sqrt(dot(dz, dz)) * inverseSqrt((1.0 + zz) * (1.0 + dot(t, t)));
     }
-    return vec2<f32>(state.x + d, state.y + 1.0);
+    return vec4<f32>(state.x + d, state.y + 1.0, state.zw);
 }
 "#,
     recommended_bailout: None,
+    pick_params: &[],
 };
 
 pub static POSITION_AVERAGE: ColoringDef = ColoringDef {
@@ -929,12 +1005,31 @@ pub static POSITION_AVERAGE: ColoringDef = ColoringDef {
                       raising this is how the structure becomes visible.",
             choices: &[],
         },
+        EscapeParamDef {
+            name: "deband",
+            display_name: "Deband",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Blends the mean with and without the orbit's last term by how \
+                      far through its last step the orbit escaped, so the colour \
+                      moves smoothly across an iteration boundary instead of \
+                      stepping (Ultra Fractal's smoothing of its Triangle \
+                      Inequality Average). Works with the escape radius: the \
+                      larger the bailout, the more terms there are to blend.",
+            choices: &["Off", "On"],
+        },
     ],
     wgsl: r#"
-fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
-    // state is the running SUM of orbit positions; n is how many.
+fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
+    // state.xy is the running SUM of orbit positions, n is how many,
+    // and state.zw the last of them.
     let n = max(f32(sum.n), 1.0);
-    let avg = state / n;
+    var avg = state.xy / n;
+    if (cparam(2u) > 0.5 && n > 1.5) {
+        let prev = (state.xy - state.zw) / (n - 1.0);
+        avg = mix(prev, avg, esc_escape_fraction(sum));
+    }
     if (cparam(0u) < 0.5) {
         // Angle. The origin guard matters: atan2 at a zero pair is
         // the Metal fast-math hazard (pi/4 for same-sign zeros, NaN
@@ -948,11 +1043,12 @@ fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
     return length(avg) * cparam(1u);
 }
 "#,
-    accum_init: "vec2<f32>(0.0, 0.0)",
+    accum_init: "vec4<f32>(0.0)",
     wgsl_accum: r#"
-fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec2<f32>) -> vec2<f32> {
-    return state + z;
+fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32>) -> vec4<f32> {
+    return vec4<f32>(state.xy + z, z);
 }
 "#,
     recommended_bailout: None,
+    pick_params: &[("deband", 1.0)],
 };

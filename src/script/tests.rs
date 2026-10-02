@@ -4165,6 +4165,32 @@ fn escape_palette_map_from_a_script() {
     }
 }
 
+/// A script's colouring pick matches the panel's: the averages start
+/// debanded, and a value the script sets afterwards still wins.
+#[cfg(feature = "engine-escape")]
+#[test]
+fn escape_coloring_takes_the_panels_pick_values() {
+    let out = run(
+        r#"
+        script("Bands", "generator");
+        escape.coloring("stripe_average");
+        "#,
+        1,
+    )
+    .expect("script ran");
+    assert_eq!(out.config.escape.coloring_params.get("deband"), Some(&1.0));
+    let out = run(
+        r#"
+        script("Bands", "generator");
+        escape.coloring("stripe_average");
+        escape.coloring_param("deband", 0.0);
+        "#,
+        1,
+    )
+    .expect("script ran");
+    assert_eq!(out.config.escape.coloring_params.get("deband"), Some(&0.0));
+}
+
 /// Switching formula drops the previous formula's parameters.
 ///
 /// They are keyed by name and belong to the formula that declared

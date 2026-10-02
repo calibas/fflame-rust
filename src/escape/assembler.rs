@@ -89,6 +89,7 @@ struct IterResult {
     z: vec2<f32>,
     dz: vec2<f32>,
     accum: vec2<f32>,
+    //__ACCUM_WIDE__
     n: u32,
     // bit 0 escaped, bit 1 converged, bits 2.. detected period.
     tags: u32,
@@ -304,7 +305,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     if ((params.flags & 8u) != 0u) {
         results[py * params.width + gid.x] = IterResult(
-            z, dz, accum_state, n,
+            z, dz, accum_state.xy, /*ACCUM2_STORE*/ n,
             select(0u, 1u, escaped) | select(0u, 2u, converged) | (period << 2u),
         );
     }
@@ -376,6 +377,105 @@ fn esc_palette(t: f32) -> vec3<f32> {
     return pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
 }
 "#;
+
+/// How far through its last step the orbit had gone when it escaped,
+/// for a colouring to call ([`orbit_helpers`]).
+const ESCAPE_FRACTION_WGSL: &str = r#"
+// How far through its last step the orbit had gone when it escaped:
+// 1 just past the escape radius R, 0 at R^p, where the step before had
+// only just stayed inside. The smooth count's fraction measured
+// against the bailout, as Ultra Fractal's Triangle Inequality Average
+// takes it; 1 for a pixel that never escaped, which has no last step.
+// Meaningful for a |z|^2 escape test: under the exponential and trig
+// families' raw tests it is only a clamped approximation.
+fn esc_escape_fraction(sum: OrbitSummary) -> f32 {
+    if (!sum.escaped) {
+        return 1.0;
+    }
+    let lr = log2(max(params.bailout, 1.0000001));
+    let lz = log2(max(dot(sum.z, sum.z), 1.0000001));
+    let f = 1.0 - log2(max(lz / lr, 1e-6)) / log2(max(params.degree, 1.0001));
+    return clamp(f, 0.0, 1.0);
+}
+"#;
+
+/// The same for a formula that never escapes: its pixels have no last
+/// step to be part-way through.
+const ESCAPE_FRACTION_NEVER_WGSL: &str = r#"
+// The formula never escapes, so no pixel has a last step to be
+// part-way through.
+fn esc_escape_fraction(sum: OrbitSummary) -> f32 {
+    return 1.0;
+}
+"#;
+
+const DEBANDED_MEAN_WGSL: &str = r#"
+// The mean of an accumulator kept as (sum, count, last term, -),
+// blended between the mean without its last term and with it by the
+// escape fraction -- so it moves continuously across an iteration
+// boundary instead of stepping there.
+fn esc_debanded_mean(sum: OrbitSummary, state: vec4<f32>) -> f32 {
+    let mean = state.x / max(state.y, 1.0);
+    if (state.y < 1.5) {
+        return mean;
+    }
+    let prev = (state.x - state.z) / (state.y - 1.0);
+    return mix(prev, mean, esc_escape_fraction(sum));
+}
+"#;
+
+/// The orbit helpers a colouring calls, spliced just before it, and
+/// nothing for one that calls none. A formula that never escapes gets
+/// an escape fraction that reads no bailout: a shader that read it
+/// anyway would contradict the panel, which hides the control there
+/// (`iteration_controls_match_the_assembled_shader`).
+fn orbit_helpers(coloring: &ColoringDef, escaping: bool) -> String {
+    let src = coloring.wgsl;
+    if !src.contains("esc_escape_fraction") && !src.contains("esc_debanded_mean") {
+        return String::new();
+    }
+    let fraction = if escaping { ESCAPE_FRACTION_WGSL } else { ESCAPE_FRACTION_NEVER_WGSL };
+    format!("{}\n\n{}", fraction.trim(), DEBANDED_MEAN_WGSL.trim())
+}
+
+/// Resolve a mode-A template's accumulator width ([`accum_is_wide`]).
+///
+/// A wide colouring stores all four accumulator floats: the records
+/// and the perturbed resume state gain `accum2` after `accum`, and the
+/// stores and loads carry `.zw` through it. A narrow one stores `.xy`
+/// and resumes with zeros, so its layouts are what they always were.
+///
+/// [`accum_is_wide`]: crate::escape::accum_is_wide
+fn with_accum_width(template: &str, wide: bool) -> String {
+    let mut out = Vec::new();
+    for line in template.lines() {
+        if line.trim() == "//__ACCUM_WIDE__" {
+            if wide {
+                out.push("    accum2: vec2<f32>,".to_string());
+            }
+            continue;
+        }
+        out.push(
+            line.replace("/*ACCUM2_STORE*/ ", if wide { "accum_state.zw, " } else { "" })
+                .replace("/*ST_ACCUM2*/", if wide { "st.accum2" } else { "vec2<f32>(0.0)" })
+                .replace("/*R_ACCUM2*/", if wide { "r.accum2" } else { "vec2<f32>(0.0)" }),
+        );
+    }
+    out.join("\n")
+}
+
+/// Bytes of one terminal record (`IterResult`): z, dz, the
+/// accumulator's `.xy`, n and the tags -- and `.zw` for a wide one.
+pub const RESULT_BYTES: u64 = 32;
+pub const RESULT_BYTES_WIDE: u64 = 40;
+
+pub fn result_bytes(wide: bool) -> u64 {
+    if wide {
+        RESULT_BYTES_WIDE
+    } else {
+        RESULT_BYTES
+    }
+}
 
 /// The escape test spliced into the loop for escaping formulas.
 /// The base metric is per-formula (plan §5.9): squared norm for the
@@ -511,7 +611,8 @@ struct PerturbParams {
 struct IterState {
     w: vec2<f32>,       // scaled: w | floatexp: DF mantissa hi
     z: vec2<f32>,       // last full orbit value
-    accum: vec2<f32>,   // coloring accumulator
+    accum: vec2<f32>,   // coloring accumulator (.xy)
+    //__ACCUM_WIDE__
     w_lo: vec2<f32>,    // floatexp DF mantissa lo (zero on the scaled rung)
     w_e: i32,           // floatexp exponent (unused by the scaled rung)
     m: u32,             // reference index
@@ -585,6 +686,7 @@ struct IterResult {
     z: vec2<f32>,
     dz: vec2<f32>,
     accum: vec2<f32>,
+    //__ACCUM_WIDE__
     n: u32,
     // bit 0 escaped, bit 1 converged, bits 2.. detected period.
     tags: u32,
@@ -738,7 +840,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         w_prev = st.w_lo;
         z = st.z;
         m = st.m;
-        accum_state = st.accum;
+        accum_state = vec4<f32>(st.accum, /*ST_ACCUM2*/);
         i = max(i, st.i_at);
         if ((st.n_done & ITER_ESCAPED_BIT) != 0u) {
             escaped = true;
@@ -845,7 +947,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (perturb.iter_end < params.max_iter) {
         // More chunks follow: persist the registers.
         iter_state[px_index] = IterState(
-            w, z, accum_state, w_prev, 0, m,
+            w, z, accum_state.xy, /*ACCUM2_STORE*/ w_prev, 0, m,
             select(0u, n | ITER_ESCAPED_BIT, escaped),
             i,
         );
@@ -885,7 +987,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     if ((params.flags & 8u) != 0u && perturb.iter_end >= params.max_iter) {
         results[px_index] = IterResult(
-            z, dz, accum_state, n,
+            z, dz, accum_state.xy, /*ACCUM2_STORE*/ n,
             select(0u, 1u, escaped) | select(0u, 2u, converged) | (period << 2u),
         );
     }
@@ -999,7 +1101,8 @@ struct PerturbParams {
 struct IterState {
     w: vec2<f32>,       // scaled: w | floatexp: DF mantissa hi
     z: vec2<f32>,       // last full orbit value
-    accum: vec2<f32>,   // coloring accumulator
+    accum: vec2<f32>,   // coloring accumulator (.xy)
+    //__ACCUM_WIDE__
     w_lo: vec2<f32>,    // floatexp DF mantissa lo (zero on the scaled rung)
     w_e: i32,           // floatexp exponent (unused by the scaled rung)
     m: u32,             // reference index
@@ -1074,6 +1177,7 @@ struct IterResult {
     z: vec2<f32>,
     dz: vec2<f32>,
     accum: vec2<f32>,
+    //__ACCUM_WIDE__
     n: u32,
     // bit 0 escaped, bit 1 converged, bits 2.. detected period.
     tags: u32,
@@ -1663,7 +1767,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         //__STATE_RESUME_TAIL__
         z = st.z;
         m = st.m;
-        accum_state = st.accum;
+        accum_state = vec4<f32>(st.accum, /*ST_ACCUM2*/);
         i = max(i, st.i_at);
         if ((st.n_done & ITER_ESCAPED_BIT) != 0u) {
             escaped = true;
@@ -1749,7 +1853,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     if (perturb.iter_end < params.max_iter) {
         iter_state[px_index] = IterState(
-            w.hi, z, accum_state, w.lo, w.e, m,
+            w.hi, z, accum_state.xy, /*ACCUM2_STORE*/ w.lo, w.e, m,
             select(0u, n | ITER_ESCAPED_BIT, escaped),
             i,
             //__STATE_SAVE_TAIL__
@@ -1790,7 +1894,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     if ((params.flags & 8u) != 0u && perturb.iter_end >= params.max_iter) {
         results[px_index] = IterResult(
-            z, dz, accum_state, n,
+            z, dz, accum_state.xy, /*ACCUM2_STORE*/ n,
             select(0u, 1u, escaped) | select(0u, 2u, converged) | (period << 2u),
         );
     }
@@ -2502,7 +2606,8 @@ fn rebase_default() -> String {
 }
 
 /// Bytes of per-pixel iteration state the assembled deep-rung shader
-/// declares, per tier.
+/// declares, per tier and accumulator width (a wide accumulator adds
+/// `accum2`, eight bytes).
 ///
 /// The renderer allocates `iter_state` from this, so it is the single
 /// place the Rust buffer and the WGSL struct agree -- and
@@ -2514,18 +2619,23 @@ pub const ITER_STATE_BYTES: u64 = 48;
 /// a pad word to keep the struct 8-byte aligned.
 pub const ITER_STATE_BYTES_PHOENIX: u64 = 72;
 
-/// The widest state any tier declares. The render-pixel cap uses this
-/// so a tier switch can never need a buffer the device will not bind.
-pub const ITER_STATE_BYTES_MAX: u64 = ITER_STATE_BYTES_PHOENIX;
+/// What a wide accumulator adds to the state: `accum2`.
+pub const ITER_STATE_BYTES_WIDE_EXTRA: u64 = 8;
 
-/// Per-pixel state a given tier needs.
-pub fn iter_state_bytes(tier: PerturbTier, floatexp: bool) -> u64 {
-    match (tier, floatexp) {
+/// The widest state any tier declares. The render-pixel cap uses this
+/// so a tier or colouring switch can never need a buffer the device
+/// will not bind.
+pub const ITER_STATE_BYTES_MAX: u64 = ITER_STATE_BYTES_PHOENIX + ITER_STATE_BYTES_WIDE_EXTRA;
+
+/// Per-pixel state a given tier needs, at an accumulator width.
+pub fn iter_state_bytes(tier: PerturbTier, floatexp: bool, wide: bool) -> u64 {
+    let base = match (tier, floatexp) {
         // The scaled rung hides Phoenix's history in `w_lo`, which is
         // dead there, so only the deep rung actually grows.
         (PerturbTier::Phoenix, true) | (PerturbTier::Manowar, true) => ITER_STATE_BYTES_PHOENIX,
         _ => ITER_STATE_BYTES,
-    }
+    };
+    base + if wide { ITER_STATE_BYTES_WIDE_EXTRA } else { 0 }
 }
 
 /// The struct tail, resume and save splices for a tier. They are
@@ -3974,11 +4084,14 @@ pub fn assemble_perturbed_with_lens(
     // On this path the TIER is the map's identity -- there is no
     // FormulaDef in scope -- so convergence is a property of the tier.
     let convergent = tier.is_convergent();
-    let template = if floatexp {
-        PERTURBED_FE_TEMPLATE
-    } else {
-        PERTURBED_TEMPLATE
-    };
+    let template = with_accum_width(
+        if floatexp {
+            PERTURBED_FE_TEMPLATE
+        } else {
+            PERTURBED_TEMPLATE
+        },
+        crate::escape::accum_is_wide(coloring),
+    );
 
     let mut out = Vec::new();
     lens_prelude(&mut out, lens);
@@ -4067,6 +4180,10 @@ pub fn assemble_perturbed_with_lens(
                 if !helpers.is_empty() {
                     out.push(helpers);
                 }
+                let helpers = orbit_helpers(coloring, true);
+                if !helpers.is_empty() {
+                    out.push(helpers);
+                }
                 out.push(format!("// coloring: {}", coloring.name));
                 out.push(coloring.wgsl.to_string());
             }
@@ -4078,13 +4195,13 @@ pub fn assemble_perturbed_with_lens(
             "//__ACCUM_DECL__" => {
                 if needs_accum {
                     out.push(format!(
-                        "    var accum_state: vec2<f32> = {};",
+                        "    var accum_state: vec4<f32> = {};",
                         coloring.accum_init
                     ));
                 } else {
                     // `var`, not `let`: the perturbed templates' chunk
                     // resume assigns it even when no accumulator runs.
-                    out.push("    var accum_state = vec2<f32>(0.0, 0.0);".to_string());
+                    out.push("    var accum_state = vec4<f32>(0.0);".to_string());
                 }
             }
             "//__CONVERGE_TEST__" => {
@@ -4161,6 +4278,7 @@ struct IterResult {
     z: vec2<f32>,
     dz: vec2<f32>,
     accum: vec2<f32>,
+    //__ACCUM_WIDE__
     n: u32,
     tags: u32,
 }
@@ -4240,7 +4358,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var height = 0.0;
     if (escaped || COLORING_COLORS_INTERIOR) {
         let summary = OrbitSummary(r.z, r.n, escaped, converged, period, r.dz);
-        let raw = coloring_map(summary, r.accum);
+        let raw = coloring_map(summary, vec4<f32>(r.accum, /*R_ACCUM2*/));
         // The height field keeps the PRE-contrast value: the probe
         // measures this texture, so remapping it here would feed the
         // fit its own output and compound every frame. Banded is the
@@ -4271,7 +4389,8 @@ pub fn assemble_recolor(coloring: &ColoringDef, has_derivative: bool) -> String 
     let colors_interior = coloring.has_feature(ColoringFeature::ColorsInterior);
     let bounded = coloring.has_feature(ColoringFeature::Bounded);
     let mut out = Vec::new();
-    for line in RECOLOR_TEMPLATE.lines() {
+    let template = with_accum_width(RECOLOR_TEMPLATE, crate::escape::accum_is_wide(coloring));
+    for line in template.lines() {
         match line.trim() {
             "//__PALETTE_MAP__" => out.push(PALETTE_MAP_WGSL.trim().to_string()),
             "//__COLORING__" => {
@@ -4280,6 +4399,10 @@ pub fn assemble_recolor(coloring: &ColoringDef, has_derivative: bool) -> String 
                 ));
                 out.push(format!("const HAS_DERIVATIVE: bool = {has_derivative};"));
                 out.push(format!("const COLORING_IS_BOUNDED: bool = {bounded};"));
+                let helpers = orbit_helpers(coloring, true);
+                if !helpers.is_empty() {
+                    out.push(helpers);
+                }
                 out.push(format!("// coloring: {}", coloring.name));
                 out.push(coloring.wgsl.to_string());
             }
@@ -6386,7 +6509,8 @@ pub fn assemble_with_lens(
 
     let mut out = Vec::new();
     lens_prelude(&mut out, lens);
-    for line in TEMPLATE.lines() {
+    let template = with_accum_width(TEMPLATE, crate::escape::accum_is_wide(coloring));
+    for line in template.lines() {
         match line.trim() {
             "//__PALETTE_MAP__" => out.push(PALETTE_MAP_WGSL.trim().to_string()),
             // The lens: its variation functions and helper
@@ -6407,6 +6531,10 @@ pub fn assemble_with_lens(
                 ));
                 out.push(format!("const HAS_DERIVATIVE: bool = {needs_derivative};"));
                 out.push(format!("const COLORING_IS_BOUNDED: bool = {bounded};"));
+                let helpers = orbit_helpers(coloring, !non_escaping);
+                if !helpers.is_empty() {
+                    out.push(helpers);
+                }
                 out.push(format!("// coloring: {}", coloring.name));
                 out.push(coloring.wgsl.to_string());
             }
@@ -6418,13 +6546,13 @@ pub fn assemble_with_lens(
             "//__ACCUM_DECL__" => {
                 if needs_accum {
                     out.push(format!(
-                        "    var accum_state: vec2<f32> = {};",
+                        "    var accum_state: vec4<f32> = {};",
                         coloring.accum_init
                     ));
                 } else {
                     // `var`, not `let`: the perturbed templates' chunk
                     // resume assigns it even when no accumulator runs.
-                    out.push("    var accum_state = vec2<f32>(0.0, 0.0);".to_string());
+                    out.push("    var accum_state = vec4<f32>(0.0);".to_string());
                 }
             }
             "//__ACCUM_UPDATE__" => {
@@ -7124,26 +7252,38 @@ mod tests {
             (PerturbTier::Magnet(1), false),
             (PerturbTier::Magnet(1), true),
         ] {
-            let src = assemble_perturbed(&colorings::SMOOTH, floatexp, tier);
+            for coloring in [&colorings::SMOOTH, &colorings::STRIPE_AVERAGE] {
+            let wide = crate::escape::accum_is_wide(coloring);
+            let src = assemble_perturbed(coloring, floatexp, tier);
             let module = naga::front::wgsl::parse_str(&src)
                 .unwrap_or_else(|e| panic!("{tier:?} fe={floatexp} parse: {e}"));
             let mut layouter = naga::proc::Layouter::default();
             layouter
                 .update(module.to_ctx())
                 .unwrap_or_else(|e| panic!("{tier:?} fe={floatexp} layout: {e}"));
-            let handle = module
-                .types
-                .iter()
-                .find(|(_, t)| t.name.as_deref() == Some("IterState"))
-                .map(|(h, _)| h)
-                .expect("IterState must exist");
-            let shader_bytes = layouter[handle].size as u64;
+            let size_of = |name: &str| {
+                let handle = module
+                    .types
+                    .iter()
+                    .find(|(_, t)| t.name.as_deref() == Some(name))
+                    .map(|(h, _)| h)
+                    .unwrap_or_else(|| panic!("{name} must exist"));
+                layouter[handle].size as u64
+            };
+            assert_eq!(
+                size_of("IterResult"),
+                result_bytes(wide),
+                "{tier:?} fe={floatexp} wide={wide}: the records' stride disagrees"
+            );
+            let shader_bytes = size_of("IterState");
             assert_eq!(
                 shader_bytes,
-                iter_state_bytes(tier, floatexp),
-                "{tier:?} fe={floatexp}: the shader's IterState is {shader_bytes} B but the                  renderer allocates {} B per pixel",
-                iter_state_bytes(tier, floatexp)
+                iter_state_bytes(tier, floatexp, wide),
+                "{tier:?} fe={floatexp} wide={wide}: the shader's IterState is {shader_bytes} B \
+                 but the renderer allocates {} B per pixel",
+                iter_state_bytes(tier, floatexp, wide)
             );
+            }
         }
     }
 

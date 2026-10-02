@@ -223,7 +223,7 @@ Log-calibrated values under which escape output renders black.
 | call | returns | what it does |
 |---|---|---|
 | `escape.formula(name)` | — | Picks the formula. An unknown name throws and lists where to look. Changing formula **clears the formula parameters**, which belong to the formula that declared them. |
-| `escape.coloring(name)` | — | Picks the coloring; likewise clears the coloring parameters. |
+| `escape.coloring(name)` | — | Picks the coloring; likewise clears the coloring parameters, then sets the ones a fresh pick in the panel does (the averages start debanded). |
 | `escape.formulas()` | array | Every formula name, so a script can iterate the catalog instead of copying a list out of these docs. |
 | `escape.colorings()` | array | Every coloring name. |
 | `escape.shading(light_angle, height)` | — | Turns on **relief shading** and sets it up: light azimuth in degrees (counter-clockwise from east, so 90 is up; 135, the upper left, is the cartographic convention and the panel's default) and vertical exaggeration of the slope. A layer over whatever coloring is active, so it composes with all of them — including the ones with no derivative. `height` is logarithmic in feel: 10 is the default, and the useful value depends on how many palette turns the coloring spends across the view. |

@@ -383,10 +383,15 @@ impl FormulaDef {
 /// A coloring: maps the per-pixel orbit summary to a palette position.
 ///
 /// The WGSL must define
-/// `fn coloring_map(z: vec2<f32>, n: u32, escaped: bool, state: vec2<f32>) -> f32`
+/// `fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32`
 /// returning a palette coordinate (wrapped into [0,1) by the caller),
 /// reading parameters via `cparam(slot)`. `state` is the orbit
 /// accumulator (zero unless [`ColoringFeature::NeedsOrbitAccum`]).
+///
+/// The accumulator is four floats to every colouring, but only an
+/// accumulating colouring STORES four ([`accum_is_wide`]): records and
+/// resumed perturbed state carry `.xy` alone otherwise, so a colouring
+/// without one pays nothing for the width.
 pub struct ColoringDef {
     /// Registry name — the string `EscapeConfig::coloring` stores.
     pub name: &'static str,
@@ -395,11 +400,11 @@ pub struct ColoringDef {
     pub parameters: &'static [EscapeParamDef],
     pub wgsl: &'static str,
     /// WGSL expression initializing the accumulator (e.g.
-    /// `"vec2<f32>(1e30, 0.0)"` for a running min). Required with
-    /// `NeedsOrbitAccum`, ignored otherwise.
+    /// `"vec4<f32>(1e30, 0.0, 0.0, 0.0)"` for a running min). Required
+    /// with `NeedsOrbitAccum`, ignored otherwise.
     pub accum_init: &'static str,
     /// WGSL defining
-    /// `fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec2<f32>) -> vec2<f32>`
+    /// `fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32>) -> vec4<f32>`
     /// — the per-iteration accumulator update (`z_prev` is the
     /// pre-step iterate, `c` the current parameter). Required with
     /// `NeedsOrbitAccum`, ignored otherwise.
@@ -410,8 +415,18 @@ pub struct ColoringDef {
     /// smooth count's error falls off with the escape radius: measured
     /// on the Mandelbrot, the worst pixel is 0.75 iterations off at 4,
     /// 0.12 at 10, 0.005 at 100 and nothing measurable at 1e4
-    /// (`dbg_smooth_count_error_against_bailout`).
+    /// (`dbg_smooth_count_error_against_bailout`). The stripe and
+    /// triangle-inequality averages ask for it too: their debanding is
+    /// first order in the escape fraction and only halves the step at 4
+    /// (`debanding_removes_the_step_at_an_iteration_boundary`).
     pub recommended_bailout: Option<f32>,
+    /// Parameter values a FRESH pick of this colouring takes -- from
+    /// the panel, a preset that does not name them, or a script --
+    /// where they differ from the definition's default. The default is
+    /// what a saved file without the key means, so it keeps the old
+    /// behaviour; this is how a new picture gets the new one (debanded
+    /// averages) without moving an old one.
+    pub pick_params: &'static [(&'static str, f32)],
 }
 
 /// The degree of a formula that is polynomial at infinity, when it
@@ -464,6 +479,22 @@ impl ColoringDef {
     pub fn has_feature(&self, f: ColoringFeature) -> bool {
         self.features.contains(&f)
     }
+}
+
+/// Whether a colouring stores the WIDE accumulator: all four floats in
+/// every terminal record and in every perturbed pixel's resume state,
+/// rather than `.xy`. Exactly the accumulating colourings, which are
+/// the only ones with anything in it -- so the others keep the narrow
+/// records (32 B) and state, and the deep-zoom pixel budget with them.
+pub fn accum_is_wide(coloring: &ColoringDef) -> bool {
+    coloring.has_feature(ColoringFeature::NeedsOrbitAccum)
+}
+
+/// [`accum_is_wide`] for a config's colouring name. A name that is not
+/// a mode-A colouring (a field's, a mode-D walk's) is narrow, and is
+/// not warned about as `get_coloring` would.
+pub fn accum_is_wide_named(coloring: &str) -> bool {
+    COLORINGS.iter().any(|c| c.name == coloring && accum_is_wide(c))
 }
 
 /// Ordered formula registry. **Append-only** — UI ordering and any
@@ -704,6 +735,36 @@ mod tests {
             suggested_bailout(formula, &fparams, get_coloring(&esc.coloring), true),
             Some(esc.bailout)
         );
+    }
+
+    /// A fresh pick's values must land on parameters the colouring has,
+    /// inside their ranges -- a misspelt name would be carried in the
+    /// config and read by nothing.
+    #[test]
+    fn every_pick_param_is_a_parameter_in_range() {
+        for c in COLORINGS {
+            for (name, v) in c.pick_params {
+                let p = c
+                    .parameters
+                    .iter()
+                    .find(|p| p.name == *name)
+                    .unwrap_or_else(|| panic!("{}: pick_params names `{name}`, which it does not have", c.name));
+                assert!(
+                    *v >= p.min && *v <= p.max,
+                    "{}.{name}: pick value {v} outside {}..{}",
+                    c.name,
+                    p.min,
+                    p.max
+                );
+            }
+        }
+        // The averages that deband start debanded.
+        for name in ["stripe_average", "triangle_inequality", "orbit_average", "magnitude_average", "position_average"] {
+            assert!(
+                get_coloring(name).pick_params.contains(&("deband", 1.0)),
+                "{name} should start debanded"
+            );
+        }
     }
 
     #[test]
