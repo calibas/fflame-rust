@@ -242,6 +242,12 @@ pub struct EscapeConfig {
     /// existing file is byte-stable.
     #[serde(default, skip_serializing_if = "PaletteMap::is_default")]
     pub palette_map: PaletteMap,
+
+    /// A second colouring blended into the first before the palette
+    /// lookup (`docs/projects/escape-coloring-survey.md`, item 5). No
+    /// colouring is no layer, which is the default and is skipped.
+    #[serde(default, skip_serializing_if = "ColoringLayer::is_default")]
+    pub layer: ColoringLayer,
 }
 
 /// Looking down at about 24°, which shows a solid's top and one
@@ -720,6 +726,126 @@ impl PaletteMap {
     }
 }
 
+/// How a texture layer's palette position combines with the base's.
+/// Each works on the two wrapped positions, `a` the base's and `b` the
+/// layer's, and all but Add travel `weight` of the way from `a`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LayerBlend {
+    /// `1 - (1 - a)(1 - b)`: brightens where the texture is high.
+    /// techmatt's choice for stripes and curvature over smooth.
+    #[default]
+    Screen,
+    /// `ab`: darkens where the texture is low.
+    Multiply,
+    /// `fract(a + weight * b)`: shifts the palette by the texture, so
+    /// a cycling palette keeps cycling.
+    Add,
+    /// Multiply below the middle, Screen above: contrast.
+    Overlay,
+    /// `b`: the texture alone, faded in by the weight.
+    Mix,
+}
+
+impl LayerBlend {
+    pub const ALL: [LayerBlend; 5] = [
+        LayerBlend::Screen,
+        LayerBlend::Multiply,
+        LayerBlend::Add,
+        LayerBlend::Overlay,
+        LayerBlend::Mix,
+    ];
+    /// The shader's code for it (`esc_layer`).
+    pub fn to_gpu(self) -> u32 {
+        match self {
+            LayerBlend::Screen => 0,
+            LayerBlend::Multiply => 1,
+            LayerBlend::Add => 2,
+            LayerBlend::Overlay => 3,
+            LayerBlend::Mix => 4,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LayerBlend::Screen => "screen",
+            LayerBlend::Multiply => "multiply",
+            LayerBlend::Add => "add",
+            LayerBlend::Overlay => "overlay",
+            LayerBlend::Mix => "mix",
+        }
+    }
+    pub fn from_name(s: &str) -> Self {
+        Self::ALL.into_iter().find(|b| b.as_str() == s).unwrap_or_default()
+    }
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+    /// The blend of positions `a` (base) and `b` (layer) at `weight`;
+    /// the shader's `esc_layer` is the same arithmetic in f32.
+    pub fn apply(self, a: f32, b: f32, weight: f32) -> f32 {
+        let blended = match self {
+            LayerBlend::Screen => 1.0 - (1.0 - a) * (1.0 - b),
+            LayerBlend::Multiply => a * b,
+            LayerBlend::Add => return (a + weight * b).rem_euclid(1.0),
+            LayerBlend::Overlay => {
+                if a < 0.5 {
+                    2.0 * a * b
+                } else {
+                    1.0 - 2.0 * (1.0 - a) * (1.0 - b)
+                }
+            }
+            LayerBlend::Mix => b,
+        };
+        a + (blended - a) * weight
+    }
+}
+
+/// A texture layer: a second escape colouring and how it blends.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ColoringLayer {
+    /// A mode-A colouring, by registry name; empty is no layer.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub coloring: String,
+    /// The layer colouring's parameters, keyed as `coloring_params`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: BTreeMap<String, f32>,
+    #[serde(default, skip_serializing_if = "LayerBlend::is_default")]
+    pub blend: LayerBlend,
+    /// How far the blend travels from the base, 0..1.
+    #[serde(default = "default_layer_weight", skip_serializing_if = "is_default_layer_weight")]
+    pub weight: f32,
+}
+
+/// techmatt's weight for a Screen-blended texture over smooth.
+fn default_layer_weight() -> f32 {
+    0.85
+}
+fn is_default_layer_weight(v: &f32) -> bool {
+    *v == default_layer_weight()
+}
+
+impl Default for ColoringLayer {
+    fn default() -> Self {
+        Self {
+            coloring: String::new(),
+            params: BTreeMap::new(),
+            blend: LayerBlend::default(),
+            weight: default_layer_weight(),
+        }
+    }
+}
+
+impl ColoringLayer {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+    /// Whether a layer is named at all (it may still be refused: see
+    /// `escape::layer_of`).
+    pub fn is_on(&self) -> bool {
+        !self.coloring.is_empty()
+    }
+}
+
 /// Relief shading: a lit-surface layer composited over the coloring.
 ///
 /// Deliberately NOT a `ColoringDef`. A coloring returns one scalar
@@ -1111,6 +1237,7 @@ impl Default for EscapeConfig {
             shading: EscapeShading::default(),
             contrast: EscapeContrast::default(),
             palette_map: PaletteMap::default(),
+            layer: ColoringLayer::default(),
         }
     }
 }

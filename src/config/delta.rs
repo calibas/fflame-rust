@@ -497,6 +497,12 @@ pub enum ConfigPath {
     EscapeFormulaParam { param: String },
     /// One parameter of the active coloring, same shape.
     EscapeColoringParam { param: String },
+    /// The texture layer (`ColoringLayer`): its colouring by name
+    /// (empty is none), one of its parameters, its blend and weight.
+    EscapeLayerColoring,
+    EscapeLayerParam { param: String },
+    EscapeLayerBlend,
+    EscapeLayerWeight,
     /// The camera lens: a variation warping the screen offset, by
     /// name. Empty is no lens.
     EscapeLens,
@@ -1087,6 +1093,10 @@ impl Display for ConfigPath {
             ConfigPath::EscapeColoring => write!(f, "Escape Coloring"),
             ConfigPath::EscapeFormulaParam { param } => write!(f, "Formula → {param}"),
             ConfigPath::EscapeColoringParam { param } => write!(f, "Coloring → {param}"),
+            ConfigPath::EscapeLayerColoring => write!(f, "Texture Layer"),
+            ConfigPath::EscapeLayerParam { param } => write!(f, "Texture Layer → {param}"),
+            ConfigPath::EscapeLayerBlend => write!(f, "Texture Layer Blend"),
+            ConfigPath::EscapeLayerWeight => write!(f, "Texture Layer Weight"),
             ConfigPath::EscapeLens => write!(f, "Lens"),
             ConfigPath::EscapeLensAmount => write!(f, "Lens Amount"),
             ConfigPath::EscapeLensParam { param } => write!(f, "Lens → {param}"),
@@ -1434,6 +1444,13 @@ impl ConfigPath {
                 "history.param.escape_coloring_param",
                 vec![("param", param.clone())],
             ),
+            ConfigPath::EscapeLayerColoring => I18nKey::simple("history.param.escape_layer_coloring"),
+            ConfigPath::EscapeLayerParam { param } => I18nKey::with_params(
+                "history.param.escape_layer_param",
+                vec![("param", param.clone())],
+            ),
+            ConfigPath::EscapeLayerBlend => I18nKey::simple("history.param.escape_layer_blend"),
+            ConfigPath::EscapeLayerWeight => I18nKey::simple("history.param.escape_layer_weight"),
             ConfigPath::EscapeLens => I18nKey::simple("history.param.escape_lens"),
             ConfigPath::EscapeLensAmount => I18nKey::simple("history.param.escape_lens_amount"),
             ConfigPath::EscapeLensParam { param } => I18nKey::with_params(
@@ -2793,6 +2810,10 @@ impl ConfigPath {
             | ConfigPath::EscapeColoring
             | ConfigPath::EscapeFormulaParam { .. }
             | ConfigPath::EscapeColoringParam { .. }
+            | ConfigPath::EscapeLayerColoring
+            | ConfigPath::EscapeLayerParam { .. }
+            | ConfigPath::EscapeLayerBlend
+            | ConfigPath::EscapeLayerWeight
             | ConfigPath::EscapeLens
             | ConfigPath::EscapeLensAmount
             | ConfigPath::EscapeLensParam { .. } => UpdateType::EscapeRerender,
@@ -3201,6 +3222,10 @@ impl ConfigPath {
             ConfigPath::EscapeColoring => "Escape.Coloring".to_string(),
             ConfigPath::EscapeFormulaParam { param } => format!("Escape.FormulaParam.{param}"),
             ConfigPath::EscapeColoringParam { param } => format!("Escape.ColoringParam.{param}"),
+            ConfigPath::EscapeLayerColoring => "Escape.Layer.Coloring".to_string(),
+            ConfigPath::EscapeLayerParam { param } => format!("Escape.Layer.Param.{param}"),
+            ConfigPath::EscapeLayerBlend => "Escape.Layer.Blend".to_string(),
+            ConfigPath::EscapeLayerWeight => "Escape.Layer.Weight".to_string(),
             ConfigPath::EscapeLens => "Escape.Lens".to_string(),
             ConfigPath::EscapeLensAmount => "Escape.LensAmount".to_string(),
             ConfigPath::EscapeLensParam { param } => format!("Escape.LensParam.{param}"),
@@ -3429,6 +3454,12 @@ impl ConfigPath {
                 ["ColoringParam", param] => {
                     return Some(ConfigPath::EscapeColoringParam { param: param.to_string() })
                 }
+                ["Layer", "Coloring"] => return Some(ConfigPath::EscapeLayerColoring),
+                ["Layer", "Param", param] => {
+                    return Some(ConfigPath::EscapeLayerParam { param: param.to_string() })
+                }
+                ["Layer", "Blend"] => return Some(ConfigPath::EscapeLayerBlend),
+                ["Layer", "Weight"] => return Some(ConfigPath::EscapeLayerWeight),
                 ["Lens"] => return Some(ConfigPath::EscapeLens),
                 ["LensAmount"] => return Some(ConfigPath::EscapeLensAmount),
                 ["LensParam", param] => {
@@ -4133,6 +4164,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeDampingIm
         | ConfigPath::EscapeFormulaParam { .. }
         | ConfigPath::EscapeColoringParam { .. }
+        | ConfigPath::EscapeLayerParam { .. }
+        | ConfigPath::EscapeLayerWeight
         | ConfigPath::EscapeLensAmount
         | ConfigPath::EscapeLensParam { .. } => {
             json.as_f64().map(|f| ConfigValue::Float(f as f32))
@@ -4220,6 +4253,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         // open questions on center-path animation).
         ConfigPath::EscapeFormula
         | ConfigPath::EscapeColoring
+        | ConfigPath::EscapeLayerColoring
+        | ConfigPath::EscapeLayerBlend
         | ConfigPath::EscapeReferencePeriod
         | ConfigPath::EscapeBiomorph
         | ConfigPath::EscapeCenterRe

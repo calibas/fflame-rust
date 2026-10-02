@@ -501,7 +501,7 @@ const CHUNK_SEED_HEADROOM: u32 = 64;
 
 /// Uniform block — must match `EscapeParams` in the WGSL template
 /// (std140: vec2 pairs pack the head, the vec4s start at a 16-byte
-/// boundary, total 1248 bytes).
+/// boundary, total 1312 bytes).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct EscapeParamsGpu {
@@ -540,6 +540,8 @@ struct EscapeParamsGpu {
     pmap: [f32; 4],
     fparams: [[f32; 4]; PARAM_VEC4S],
     cparams: [[f32; 4]; PARAM_VEC4S],
+    /// The texture layer's colouring parameters (`ColoringLayer`).
+    lparams: [[f32; 4]; PARAM_VEC4S],
     /// CPU-derived formula data (`FormulaDef::derived_data`),
     /// vec4-packed; zero for formulas without the hook.
     fdata: [[f32; 4]; FDATA_VEC4S],
@@ -1867,10 +1869,10 @@ impl EscapeRenderer {
             assembler::PerturbTier::Kaliset | assembler::PerturbTier::Ducks(_) => return false,
         };
         // Skipped iterations never run the accumulator/period updates,
-        // so those colorings keep the per-step path.
-        let coloring = super::get_coloring(&escape.coloring);
-        if coloring.has_feature(super::ColoringFeature::NeedsOrbitAccum)
-            || coloring.has_feature(super::ColoringFeature::NeedsPeriod)
+        // so those colorings -- base or texture layer -- keep the
+        // per-step path.
+        if Self::colourings_have(escape, super::ColoringFeature::NeedsOrbitAccum)
+            || Self::colourings_have(escape, super::ColoringFeature::NeedsPeriod)
         {
             return false;
         }
@@ -2832,7 +2834,7 @@ impl EscapeRenderer {
         let floatexp = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM
             || matches!(tier, assembler::PerturbTier::Manowar);
         let need = (width as u64) * (height as u64)
-            * assembler::iter_state_bytes(tier, floatexp, super::accum_is_wide_named(&escape.coloring));
+            * assembler::iter_state_bytes(tier, floatexp, super::config_accum_is_wide(escape));
         let lim = device.limits();
         need <= lim.max_buffer_size && need <= lim.max_storage_buffer_binding_size as u64
     }
@@ -2867,7 +2869,7 @@ impl EscapeRenderer {
             let floatexp = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM
                 || matches!(tier, assembler::PerturbTier::Manowar);
             let need = px
-                * assembler::iter_state_bytes(tier, floatexp, super::accum_is_wide_named(&escape.coloring));
+                * assembler::iter_state_bytes(tier, floatexp, super::config_accum_is_wide(escape));
             let cap = lim.max_storage_buffer_binding_size as u64;
             if need > cap {
                 return Some(format!(
@@ -3169,9 +3171,15 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             return false;
         }
         let formula = super::get_formula(&escape.formula);
-        let coloring = super::get_coloring(&escape.coloring);
-        coloring.has_feature(super::ColoringFeature::NeedsDerivative)
+        Self::colourings_have(escape, super::ColoringFeature::NeedsDerivative)
             && !formula.wgsl_derivative.is_empty()
+    }
+
+    /// Whether the base colouring or the texture layer has a feature:
+    /// the assembler compiles the loop for the union of the two.
+    fn colourings_have(escape: &EscapeConfig, f: super::ColoringFeature) -> bool {
+        super::get_coloring(&escape.coloring).has_feature(f)
+            || super::layer_of(escape).is_some_and(|l| l.has_feature(f))
     }
 
     /// Identity of everything the ITERATION depends on -- the recolor
@@ -3234,8 +3242,8 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             );
         }
         let coloring = super::get_coloring(&escape.coloring);
-        let needs_accum = coloring.has_feature(super::ColoringFeature::NeedsOrbitAccum);
-        let needs_period = coloring.has_feature(super::ColoringFeature::NeedsPeriod);
+        let needs_accum = Self::colourings_have(escape, super::ColoringFeature::NeedsOrbitAccum);
+        let needs_period = Self::colourings_have(escape, super::ColoringFeature::NeedsPeriod);
         let colors_interior = coloring.has_feature(super::ColoringFeature::ColorsInterior);
         #[cfg(test)]
         let interior = !self.disable_interior;
@@ -3265,8 +3273,13 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let no_bla = self.disable_bla;
         #[cfg(not(test))]
         let no_bla = false;
+        // Both colourings, when either runs inside the loop: the layer
+        // may be the one that owns the accumulator.
         let coloring_fold = if needs_accum || needs_period {
-            format!("{}|{:?}", escape.coloring, escape.coloring_params)
+            let layer = super::layer_of(escape).map_or(String::new(), |l| {
+                format!("|{}|{:?}", l.name, escape.layer.params)
+            });
+            format!("{}|{:?}{layer}", escape.coloring, escape.coloring_params)
         } else {
             String::new()
         };
@@ -3356,12 +3369,13 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             None
         };
         queue_contrast(queue, &self.contrast_params, &escape.contrast, fit);
+        let layer = super::layer_of(escape);
         let key = match ifs_key {
             Some(k) => k,
-            None => format!("recolor|{}|{}", coloring.name, deriv),
+            None => format!("recolor|{}|{}|{}", coloring.name, layer.map_or("", |l| l.name), deriv),
         };
         if !self.pipelines.contains_key(&key) {
-            let source = assembler::assemble_recolor(coloring, deriv);
+            let source = assembler::assemble_recolor_layered(coloring, layer, deriv);
             let module = device.create_shader_module(ShaderModuleDescriptor {
                 label: Some(&format!("Escape Shader {key}")),
                 source: ShaderSource::Wgsl(source.into()),
@@ -3508,7 +3522,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             self.height,
             orbit_tag,
             orbit_done,
-        ) + format!("|{:?}", escape.palette_map).as_str()
+        ) + format!("|{:?}|{:?}", escape.palette_map, escape.layer).as_str()
     }
 
     /// (Re)allocate the perturbed path's per-pixel resume state.
@@ -4921,18 +4935,23 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         floatexp: bool,
     ) -> String {
         let coloring = super::get_coloring(&escape.coloring);
+        let layer = super::layer_of(escape);
         let tier = Self::perturb_tier(escape)
             .unwrap_or(assembler::PerturbTier::Power(2));
         let lens_registry = crate::variations::global_registry();
         let lens_src = super::lens::lens_source(escape, &lens_registry);
         let lens_id = super::lens::lens_key(escape, &lens_registry);
         let key = format!(
-            "perturbed|{}|{}|{:?}|{lens_id}",
-            coloring.name, floatexp, tier
+            "perturbed|{}|{}|{}|{:?}|{lens_id}",
+            coloring.name,
+            layer.map_or("", |l| l.name),
+            floatexp,
+            tier
         );
         if !self.pipelines.contains_key(&key) {
-            let source = assembler::assemble_perturbed_with_lens(
+            let source = assembler::assemble_perturbed_layered(
                 coloring,
+                layer,
                 floatexp,
                 tier,
                 lens_src.as_deref(),
@@ -6894,18 +6913,21 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let interior = true;
         let registry = crate::variations::global_registry();
         let lens_src = super::lens::lens_source(escape, &registry);
+        let layer = super::layer_of(escape);
         let key = format!(
-            "{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}",
             formula.name,
             coloring.name,
+            layer.map_or("", |l| l.name),
             damped,
             interior,
             super::lens::lens_key(escape, &registry),
         );
         if !self.pipelines.contains_key(&key) {
-            let source = assembler::assemble_with_lens(
+            let source = assembler::assemble_layered(
                 formula,
                 coloring,
+                layer,
                 damped,
                 interior,
                 lens_src.as_deref(),
@@ -6962,6 +6984,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
 
         let mut fparams = [[0.0f32; 4]; PARAM_VEC4S];
         let mut cparams = [[0.0f32; 4]; PARAM_VEC4S];
+        let mut lparams = [[0.0f32; 4]; PARAM_VEC4S];
         let mut fdata = [[0.0f32; 4]; FDATA_VEC4S];
         // The smooth count's log base: the formula's degree in mode A, 2
         // elsewhere.
@@ -7032,6 +7055,9 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             let coloring = super::get_coloring(&escape.coloring);
             super::pack_params(formula.parameters, &escape.formula_params, fparams.as_flattened_mut());
             super::pack_params(coloring.parameters, &escape.coloring_params, cparams.as_flattened_mut());
+            if let Some(layer) = super::layer_of(escape) {
+                super::pack_params(layer.parameters, &escape.layer.params, lparams.as_flattened_mut());
+            }
             degree = super::escape_degree_of(formula, fparams.as_flattened());
 
             if let Some(derive) = formula.derived_data {
@@ -7065,10 +7091,11 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             shade_flags: escape.shading.field.to_gpu(),
             stride: self.stride(escape),
             degree,
-            pmap_flags: escape.palette_map.gpu_flags(),
-            pmap: [escape.palette_map.gpu_pivot(), 0.0, 0.0, 0.0],
+            pmap_flags: escape.palette_map.gpu_flags() | (escape.layer.blend.to_gpu() << 16),
+            pmap: [escape.palette_map.gpu_pivot(), escape.layer.weight.clamp(0.0, 1.0), 0.0, 0.0],
             fparams,
             cparams,
+            lparams,
             fdata,
         }
     }
@@ -7100,7 +7127,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let _diag_cpu = super::diag::CpuTimer::start();
         let results_active = self.ensure_results(
             device,
-            assembler::result_bytes(super::accum_is_wide_named(&escape.coloring)),
+            assembler::result_bytes(super::config_accum_is_wide(escape)),
         );
         // Once, at the top: every path below -- direct, field,
         // perturbed, mode D -- binds the same lens group, and a
@@ -7343,7 +7370,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     assembler::iter_state_bytes(
                         tier,
                         floatexp,
-                        super::accum_is_wide_named(&escape.coloring),
+                        super::config_accum_is_wide(escape),
                     ),
                 ) {
                     // `perturb_state_fits` should have routed this to
@@ -8144,16 +8171,17 @@ mod tests {
     fn params_struct_matches_wgsl_layout() {
         // 4 vec2 (32) + 4 u32 (16) + bailout, tile row, damping (16) +
         // shading flags, stride, degree, palette-map flags (16) + the
-        // palette map's vec4 (16) + 2 param arrays (128) + the
-        // derived-data table (1024) = 1248, and every vec4 must start
+        // palette map's vec4 (16) + 3 param arrays (192) + the
+        // derived-data table (1024) = 1312, and every vec4 must start
         // 16-byte aligned.
-        assert_eq!(std::mem::size_of::<EscapeParamsGpu>(), 1248);
+        assert_eq!(std::mem::size_of::<EscapeParamsGpu>(), 1312);
         assert_eq!(std::mem::offset_of!(EscapeParamsGpu, shade_flags), 64);
         assert_eq!(std::mem::offset_of!(EscapeParamsGpu, pmap_flags), 76);
         assert_eq!(std::mem::offset_of!(EscapeParamsGpu, pmap), 80);
         assert_eq!(std::mem::offset_of!(EscapeParamsGpu, fparams), 96);
         assert_eq!(std::mem::offset_of!(EscapeParamsGpu, cparams), 160);
-        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, fdata), 224);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, lparams), 224);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, fdata), 288);
     }
 }
 

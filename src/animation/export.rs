@@ -854,6 +854,12 @@ fn apply_config_value(
         (ConfigPath::EscapeContrastTurns, ConfigValue::Float(v)) => {
             config.escape.contrast.turns = v.clamp(0.05, 64.0);
         }
+        (ConfigPath::EscapeLayerParam { param }, ConfigValue::Float(v)) => {
+            config.escape.layer.params.insert(param.clone(), *v);
+        }
+        (ConfigPath::EscapeLayerWeight, ConfigValue::Float(v)) => {
+            config.escape.layer.weight = v.clamp(0.0, 1.0);
+        }
         (ConfigPath::EscapeTransferPivot, ConfigValue::Float(v)) => {
             let (lo, hi) = crate::config::escape::PIVOT_RANGE;
             config.escape.palette_map.pivot = v.clamp(lo, hi);
@@ -2248,6 +2254,8 @@ mod tests {
             (EditingTarget::Main, "Escape.Contrast.Strength".to_string(), json!(0.5)),
             (EditingTarget::Main, "Escape.Contrast.Turns".to_string(), json!(3.0)),
             (EditingTarget::Main, "Escape.PaletteMap.Pivot".to_string(), json!(12.0)),
+            (EditingTarget::Main, "Escape.Layer.Weight".to_string(), json!(0.4)),
+            (EditingTarget::Main, "Escape.Layer.Param.density".to_string(), json!(6.0)),
         ];
         apply_animation_values(&mut config, &values);
 
@@ -2274,6 +2282,8 @@ mod tests {
         assert_eq!(config.escape.contrast.strength, 0.5);
         assert_eq!(config.escape.contrast.turns, 3.0);
         assert_eq!(config.escape.palette_map.pivot, 12.0);
+        assert_eq!(config.escape.layer.weight, 0.4);
+        assert_eq!(config.escape.layer.params.get("density"), Some(&6.0));
 
         // Clamps mirror ConfigManager: a wild signal cannot poison
         // the view or ask for an unsupported supersample factor.

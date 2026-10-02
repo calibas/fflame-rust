@@ -2030,6 +2030,132 @@ fn show_coloring_section(
             );
         }
     }
+
+    // ---- Texture layer ----
+    // A second colouring blended into this one before the palette, so
+    // it sits with the colouring it modifies. Collapsed unless in use.
+    egui::CollapsingHeader::new(t!("escape_panel.layer"))
+        .default_open(esc.layer.is_on())
+        .show(ui, |ui| texture_layer_controls(ui, config_manager, esc, formula_def, coloring));
+}
+
+/// The Texture Layer section (`ColoringLayer`): which colouring, how it
+/// blends, how strongly, and its own parameters.
+fn texture_layer_controls(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    esc: &crate::config::escape::EscapeConfig,
+    formula: &crate::escape::FormulaDef,
+    base: &crate::escape::ColoringDef,
+) {
+    use crate::config::escape::LayerBlend;
+    let layer = &esc.layer;
+    let current = crate::escape::COLORINGS.iter().copied().find(|c| c.name == layer.coloring);
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.layer_coloring"));
+        let label = current.map_or_else(
+            || t!("escape_panel.layer_none").to_string(),
+            |c| c.display_name.to_string(),
+        );
+        egui::ComboBox::from_id_salt("escape_layer_coloring")
+            .selected_text(label)
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(current.is_none(), t!("escape_panel.layer_none")).clicked()
+                    && current.is_some()
+                {
+                    let _ = config_manager.update_param(
+                        ConfigPath::EscapeLayerColoring,
+                        ConfigValue::String(String::new()),
+                    );
+                }
+                for c in crate::escape::COLORINGS {
+                    if !crate::escape::coloring_suits_formula(formula, c) {
+                        continue;
+                    }
+                    let fits = crate::escape::layer_fits(base, c);
+                    let selected = current.is_some_and(|x| x.name == c.name);
+                    let resp = ui
+                        .add_enabled_ui(fits, |ui| ui.selectable_label(selected, c.display_name))
+                        .inner
+                        .on_disabled_hover_text(t!("escape_panel.layer_needs_accumulator"));
+                    if resp.clicked() && !selected {
+                        pick_layer(config_manager, c);
+                    }
+                }
+            })
+            .response
+            .on_hover_text(t!("escape_panel.tooltip_layer"));
+    });
+    let Some(l) = current else {
+        return;
+    };
+    if !crate::escape::layer_fits(base, l) {
+        ui.colored_label(
+            egui::Color32::from_rgb(220, 170, 90),
+            t!("escape_panel.layer_refused", layer = l.display_name, base = base.display_name),
+        );
+        return;
+    }
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.layer_blend"));
+        let name = |b: LayerBlend| match b {
+            LayerBlend::Screen => t!("escape_panel.blend_screen"),
+            LayerBlend::Multiply => t!("escape_panel.blend_multiply"),
+            LayerBlend::Add => t!("escape_panel.blend_add"),
+            LayerBlend::Overlay => t!("escape_panel.blend_overlay"),
+            LayerBlend::Mix => t!("escape_panel.blend_mix"),
+        };
+        egui::ComboBox::from_id_salt("escape_layer_blend")
+            .selected_text(name(layer.blend))
+            .show_ui(ui, |ui| {
+                for b in LayerBlend::ALL {
+                    if ui.selectable_label(b == layer.blend, name(b)).clicked() && b != layer.blend {
+                        let _ = config_manager.update_param(
+                            ConfigPath::EscapeLayerBlend,
+                            ConfigValue::String(b.as_str().to_string()),
+                        );
+                    }
+                }
+            })
+            .response
+            .on_hover_text(t!("escape_panel.tooltip_layer_blend"));
+    });
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.layer_weight"));
+        let mut w = layer.weight;
+        if ui
+            .add(egui::Slider::new(&mut w, 0.0..=1.0))
+            .on_hover_text(t!("escape_panel.tooltip_layer_weight"))
+            .changed()
+        {
+            let _ = config_manager.update_param(ConfigPath::EscapeLayerWeight, w.into());
+        }
+    });
+    for p in l.parameters {
+        let mut v = layer.params.get(p.name).copied().unwrap_or(p.default);
+        if param_control(ui, &mut v, p, "layer") {
+            let _ = config_manager.update_param(
+                ConfigPath::EscapeLayerParam { param: p.name.to_string() },
+                v.into(),
+            );
+        }
+    }
+}
+
+/// Pick a texture layer colouring as one undo step, with the values a
+/// fresh pick of it takes (`ColoringDef::pick_params`) -- the layer's
+/// parameters belong to the colouring, so they start over.
+fn pick_layer(config_manager: &mut ConfigManager, c: &crate::escape::ColoringDef) {
+    let mut changes = vec![(ConfigPath::EscapeLayerColoring, ConfigValue::String(c.name.to_string()))];
+    for p in c.parameters {
+        let v = c
+            .pick_params
+            .iter()
+            .find(|(k, _)| *k == p.name)
+            .map_or(p.default, |(_, v)| *v);
+        changes.push((ConfigPath::EscapeLayerParam { param: p.name.to_string() }, v.into()));
+    }
+    let _ = config_manager.update_batch(changes, "history.param.escape_layer_coloring".to_string());
 }
 
 /// Switch render mode, defaulting the tonemap to Linear on the way
