@@ -62,6 +62,13 @@ pub fn switch_render_mode(
     let default_tonemap = entering_non_flame
         && config.tonemap_mode == crate::scene::tonemap::ToneMapMode::Logarithmic;
     if default_tonemap {
+        // Escape output has its own calibration; a simulation keeps the
+        // flame defaults.
+        let (exposure, gamma) = if mode == RenderMode::Escape {
+            (crate::config::defaults::ESCAPE_EXPOSURE, crate::config::defaults::ESCAPE_GAMMA)
+        } else {
+            (crate::config::defaults::DEFAULT_EXPOSURE, crate::config::defaults::DEFAULT_GAMMA)
+        };
         config_manager
             .update_batch(
                 vec![
@@ -70,14 +77,8 @@ pub fn switch_render_mode(
                         ConfigPath::TonemapMode,
                         crate::scene::tonemap::ToneMapMode::Linear.into(),
                     ),
-                    (
-                        ConfigPath::Exposure,
-                        crate::config::defaults::DEFAULT_EXPOSURE.into(),
-                    ),
-                    (
-                        ConfigPath::Gamma,
-                        crate::config::defaults::DEFAULT_GAMMA.into(),
-                    ),
+                    (ConfigPath::Exposure, exposure.into()),
+                    (ConfigPath::Gamma, gamma.into()),
                 ],
                 "history.param.render_mode".to_string(),
             )
@@ -226,6 +227,12 @@ mod tests {
                 let got = m.active_config().tonemap_mode;
                 if want_reset {
                     assert_eq!(got, ToneMapMode::Linear, "{from:?} -> {to:?} should reset");
+                    // Escape has its own exposure and gamma; a simulation
+                    // keeps the flame defaults.
+                    use crate::config::defaults::{DEFAULT_EXPOSURE, DEFAULT_GAMMA, ESCAPE_EXPOSURE, ESCAPE_GAMMA};
+                    let want = if *to == RenderMode::Escape { (ESCAPE_EXPOSURE, ESCAPE_GAMMA) } else { (DEFAULT_EXPOSURE, DEFAULT_GAMMA) };
+                    let c = m.active_config();
+                    assert_eq!((c.exposure, c.gamma), want, "{from:?} -> {to:?}: exposure and gamma");
                 } else {
                     assert_eq!(
                         got,
