@@ -1,6 +1,6 @@
 # Escape-time colouring: how other renderers do it, and what we could add
 
-Status: **survey done, decisions made, fixes in progress** (2026-10-02).
+Status: **survey done, decisions made, fixes done; feature work next** (2026-10-02).
 This compares our escape-time colouring with four other programs and lists
 what we could add (§5). The decisions and the order of work are in §7.
 
