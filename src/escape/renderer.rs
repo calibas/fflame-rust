@@ -2969,9 +2969,15 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (q.x >= dims.x || q.y >= dims.y) {
         return;
     }
-    let s = textureLoad(src_tex, q, 0) * p.inv_n;
+    let s = textureLoad(src_tex, q, 0);
     let prev = select(textureLoad(prev_tex, q, 0), vec4<f32>(0.0), p.clear != 0u);
-    textureStore(dst_tex, q, prev + s);
+    // Straight alpha in and out, as the downsample writes it: each
+    // render's colour counts by its coverage, so a pixel one render did
+    // not draw keeps the colour of those that did, at their share of
+    // the alpha. Averaging the colours directly darkened every edge.
+    let a = prev.a + s.a * p.inv_n;
+    let c = prev.rgb * prev.a + s.rgb * (s.a * p.inv_n);
+    textureStore(dst_tex, q, vec4<f32>(select(vec3<f32>(0.0), c / a, a > 0.0), a));
 }
 "#;
             let module = device.create_shader_module(ShaderModuleDescriptor {
@@ -6531,12 +6537,22 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             // samples had, and restore it below.
             let mx = max(texel.r, max(texel.g, texel.b));
             let mn = min(texel.r, min(texel.g, texel.b));
-            satsum = satsum + select(0.0, (mx - mn) / mx, mx > 1e-6);
-            sum = sum + texel;
+            // Weighted by the sample's coverage (1 where the colouring
+            // drew, 0 elsewhere), so only drawn samples carry colour.
+            let w = texel.a;
+            satsum = satsum + select(0.0, (mx - mn) / mx, mx > 1e-6) * w;
+            sum = sum + vec4<f32>(texel.rgb * w, w);
             wsum = wsum + 1.0;
         }}
     }}
-    var outc = sum / max(wsum, 1e-6);
+    // STRAIGHT alpha, as the tone map composites it: the colour is the
+    // mean over the samples that were drawn, the alpha their share.
+    // Averaging the undrawn samples' zero colour in as well scaled the
+    // colour by coverage, and the tone map's composite scaled it by
+    // coverage again -- an edge half covered showed a quarter of its
+    // colour (`a_supersampled_edge_is_weighted_by_its_coverage_once`).
+    let cov = sum.a;
+    var outc = vec4<f32>(sum.rgb / max(cov, 1e-6), cov / max(wsum, 1e-6));
     if (shade.downsample == 1u) {{
         outc = vec4<f32>(pow(max(outc.rgb, vec3<f32>(0.0)), vec3<f32>(2.2)), outc.a);
     }} else if (shade.downsample == 2u) {{
@@ -6545,7 +6561,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // energy-preserving: it is the answer to "antialiasing washes
         // the colour out of fine detail", which a correct average
         // does by construction.
-        let want = satsum / max(wsum, 1e-6);
+        let want = satsum / max(cov, 1e-6);
         let mx = max(outc.r, max(outc.g, outc.b));
         let mn = min(outc.r, min(outc.g, outc.b));
         let have = select(0.0, (mx - mn) / mx, mx > 1e-6);
