@@ -18,6 +18,11 @@
 // Histogram & Color
 pub const DEFAULT_EXPOSURE: f32 = 1.0; // Was 1.0 — calibrated against scale-invariant Levels
 pub const DEFAULT_GAMMA: f32 = 4.0; // Was 1.0 — same recalibration
+/// Exposure and gamma set on entering escape-time mode from a flame's
+/// Log tone map (`ui::render_mode`): the flame defaults above are
+/// calibrated for log density, and escape output is Linear.
+pub const ESCAPE_EXPOSURE: f32 = 2.0;
+pub const ESCAPE_GAMMA: f32 = 1.0;
 pub const DEFAULT_BRIGHTNESS: f32 = 4.0;
 pub const DEFAULT_SATURATION: f32 = 1.0; // 1.0 = no change, >1.0 = more saturated
 pub const DEFAULT_HUE_SHIFT: f32 = 0.0; // 0.0 = no shift, range -180.0 to 180.0 degrees

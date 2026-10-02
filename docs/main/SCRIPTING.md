@@ -236,7 +236,7 @@ Log-calibrated values under which escape output renders black.
 | `escape.center_re` / `escape.center_im` | string | Read the centre back, still as text. |
 | `escape.zoom` | float | Read/write `zoom_log2`: the **exponent in BASE 2**, so zoom 30 is 2³⁰×, and animating it linearly reads as constant zoom speed. Note the panel displays base 10 (log10) — the engine, the `.fflame` field and this API are all base 2, which is what the deep-zoom maths needs; multiply by 3.3219 to go from a displayed log10 to this. |
 | `escape.max_iter` | int | Read/write the iteration cap. Deep views need far more than shallow ones; too low reads as a flat wash. |
-| `escape.bailout` | float | Read/write the escape radius squared (4.0 is the usual). |
+| `escape.bailout` | float | Read/write the escape radius squared. A new config starts at 10.0 (radius ≈ 3.2), which bands less in the smooth colourings than the classic 4.0. |
 | `escape.supersample` | int | Read/write 1–3. |
 | `escape.rotation` | float | Read/write the view rotation, in radians. |
 | `escape.julia(re, im)` | — | Switch to the Julia plane at that constant. |

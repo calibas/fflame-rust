@@ -83,7 +83,11 @@ pub struct EscapeConfig {
     pub max_iter: u32,
     /// Escape radius squared for escaping formulas. Non-escaping and
     /// convergent formulas read their own thresholds from params.
-    #[serde(default = "default_bailout")]
+    ///
+    /// A new config starts at `default_bailout` (10); a file without the
+    /// key means 4, the default it was written under, so it renders as
+    /// it did. The app always writes the key.
+    #[serde(default = "legacy_bailout")]
     pub bailout: f32,
 
     /// Damped / Mann iteration (plan §3): `z ← (1−α)z + α·f(z)` with
@@ -715,7 +719,14 @@ fn default_center_im() -> String {
 fn default_max_iter() -> u32 {
     256
 }
+/// A new config's bailout: a radius of about 3.2 shows less banding in
+/// the smooth colourings than 4's radius of 2.
 fn default_bailout() -> f32 {
+    10.0
+}
+/// The bailout of a file that does not name one: the default until
+/// 2026-10-02.
+fn legacy_bailout() -> f32 {
     4.0
 }
 fn default_damping_re() -> f32 {
@@ -1044,6 +1055,18 @@ mod tests {
             !json.contains("escape"),
             "default config JSON must not carry an escape section:\n{json}"
         );
+    }
+
+    /// A new config starts at a bailout of 10, but a file that names none
+    /// keeps the 4 it was written under, and a saved config always names
+    /// one -- so the default can move without moving a saved picture.
+    #[test]
+    fn a_file_without_a_bailout_keeps_the_old_default() {
+        assert_eq!(EscapeConfig::default().bailout, 10.0);
+        let old: EscapeConfig = serde_json::from_str(r#"{"formula":"mandelbrot"}"#).expect("an old escape block");
+        assert_eq!(old.bailout, 4.0);
+        let json = serde_json::to_string(&EscapeConfig { formula: "burning_ship".into(), ..EscapeConfig::default() }).unwrap();
+        assert!(json.contains("\"bailout\":10.0"), "the bailout must be written: {json}");
     }
 
     #[test]
