@@ -1052,3 +1052,395 @@ fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32
     recommended_bailout: None,
     pick_params: &[("deband", 1.0)],
 };
+
+/// Curvature average (techmatt): the mean turn between consecutive
+/// steps of the orbit, `|arg((z_n - z_{n-1}) / (z_{n-1} - z_{n-2}))| / pi`,
+/// in 0..1. Smooth where the orbit sweeps, bright where it doubles
+/// back -- the texture techmatt Screen-blends over smooth.
+pub static CURVATURE_AVERAGE: ColoringDef = ColoringDef {
+    name: "curvature_average",
+    display_name: "Curvature Average",
+    features: &[ColoringFeature::NeedsOrbitAccum, ColoringFeature::ColorsInterior],
+    parameters: &[
+        EscapeParamDef {
+            name: "scale",
+            display_name: "Scale",
+            default: 1.0,
+            min: 0.01,
+            max: 20.0,
+            tooltip: "Palette distance per unit of averaged turn (a full reversal is 1).",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "deband",
+            display_name: "Deband",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Blends the mean with and without the orbit's last term by how \
+                      far through its last step the orbit escaped, so the colour \
+                      moves smoothly across an iteration boundary instead of \
+                      stepping.",
+            choices: &["Off", "On"],
+        },
+    ],
+    wgsl: r#"
+fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
+    // state = (sum of turns, last turn, z_{n-2}). A turn is taken at
+    // every call but the first, which has no earlier step to turn
+    // from, so there are n - 1 of them.
+    let count = max(f32(sum.n) - 1.0, 1.0);
+    var mean = state.x / count;
+    if (cparam(1u) > 0.5 && count > 1.5) {
+        let prev = (state.x - state.y) / (count - 1.0);
+        mean = mix(prev, mean, esc_escape_fraction(sum));
+    }
+    return mean * cparam(0u);
+}
+"#,
+    accum_init: "vec4<f32>(0.0, 0.0, 1e30, 0.0)",
+    wgsl_accum: r#"
+fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32>) -> vec4<f32> {
+    // This call's z_prev is the next call's z_{n-2}.
+    let next = vec4<f32>(state.x, state.y, z_prev);
+    if (state.z > 1e29) {
+        return next;
+    }
+    let a = z - z_prev;
+    let b = z_prev - state.zw;
+    // A step of zero has no direction: skip it rather than ask atan2
+    // about a zero pair (the Metal fast-math hazard, CLAUDE.md).
+    if (dot(a, a) < 1e-30 || dot(b, b) < 1e-30) {
+        return next;
+    }
+    // a * conj(b): its argument is the turn from step b to step a.
+    let q = vec2<f32>(a.x * b.x + a.y * b.y, a.y * b.x - a.x * b.y);
+    let t = abs(atan2(q.y, q.x)) * 0.31830988;
+    return vec4<f32>(state.x + t, t, z_prev);
+}
+"#,
+    recommended_bailout: Some(1.0e4),
+    pick_params: &[("deband", 1.0)],
+};
+
+/// Velocity (techmatt): the mean step length `|z_n - z_{n-1}|` over the
+/// orbit. Unbounded -- the last steps of an escaping orbit are as long
+/// as the escape radius -- so it is best debanded, and drawn at a
+/// small bailout or as a layer.
+pub static VELOCITY: ColoringDef = ColoringDef {
+    name: "velocity",
+    display_name: "Velocity",
+    features: &[ColoringFeature::NeedsOrbitAccum, ColoringFeature::ColorsInterior],
+    parameters: &[
+        EscapeParamDef {
+            name: "scale",
+            display_name: "Scale",
+            default: 0.25,
+            min: 0.001,
+            max: 20.0,
+            tooltip: "Palette distance per unit of averaged step length.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "deband",
+            display_name: "Deband",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Blends the mean with and without the orbit's last term by how \
+                      far through its last step the orbit escaped, so the colour \
+                      moves smoothly across an iteration boundary instead of \
+                      stepping.",
+            choices: &["Off", "On"],
+        },
+    ],
+    wgsl: r#"
+fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
+    // state = (sum of step lengths, count, last step, -).
+    let mean = select(state.x / max(state.y, 1.0), esc_debanded_mean(sum, state), cparam(1u) > 0.5);
+    return mean * cparam(0u);
+}
+"#,
+    accum_init: "vec4<f32>(0.0)",
+    wgsl_accum: r#"
+fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32>) -> vec4<f32> {
+    let t = length(z - z_prev);
+    return vec4<f32>(state.x + t, state.y + 1.0, t, state.w);
+}
+"#,
+    recommended_bailout: None,
+    pick_params: &[("deband", 1.0)],
+};
+
+/// Threads (techmatt): the mean of `exp(-D^2 / w^2)`, `D` the distance
+/// from the iterate to the nearer axis -- thin bright filaments where
+/// orbits graze the axes. techmatt Adds it over smooth; here it is
+/// meant as a texture layer.
+pub static THREADS: ColoringDef = ColoringDef {
+    name: "threads",
+    display_name: "Threads",
+    features: &[ColoringFeature::NeedsOrbitAccum, ColoringFeature::ColorsInterior],
+    parameters: &[
+        EscapeParamDef {
+            name: "width",
+            display_name: "Thread width",
+            default: 0.1,
+            min: 0.005,
+            max: 2.0,
+            tooltip: "How far from an axis an iterate still counts: the w of exp(-D^2 / w^2).",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "scale",
+            display_name: "Scale",
+            default: 1.0,
+            min: 0.01,
+            max: 20.0,
+            tooltip: "Palette distance per unit of averaged thread value.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "deband",
+            display_name: "Deband",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Blends the mean with and without the orbit's last term by how \
+                      far through its last step the orbit escaped, so the colour \
+                      moves smoothly across an iteration boundary instead of \
+                      stepping.",
+            choices: &["Off", "On"],
+        },
+    ],
+    wgsl: r#"
+fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
+    // state = (sum of thread terms, count, last term, -).
+    let mean = select(state.x / max(state.y, 1.0), esc_debanded_mean(sum, state), cparam(2u) > 0.5);
+    return mean * cparam(1u);
+}
+"#,
+    accum_init: "vec4<f32>(0.0)",
+    wgsl_accum: r#"
+fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32>) -> vec4<f32> {
+    let d = min(abs(z.x), abs(z.y));
+    let w = max(cparam(0u), 1e-6);
+    let t = exp(-(d * d) / (w * w));
+    return vec4<f32>(state.x + t, state.y + 1.0, t, state.w);
+}
+"#,
+    recommended_bailout: Some(1.0e4),
+    pick_params: &[("deband", 1.0)],
+};
+
+/// Exponential smoothing (Ultra Fractal): `sum exp(-|z|)` over a
+/// diverging orbit, `sum exp(-1/|z - z_prev|)` over a converging one.
+/// Each term vanishes as the orbit runs away or settles, so the sum
+/// is continuous with no bands -- the standard smooth colouring for
+/// Newton and Nova, which otherwise have only Root Basin.
+pub static EXPONENTIAL_SMOOTHING: ColoringDef = ColoringDef {
+    name: "exponential_smoothing",
+    display_name: "Exponential Smoothing",
+    features: &[ColoringFeature::NeedsOrbitAccum, ColoringFeature::ColorsInterior],
+    parameters: &[
+        EscapeParamDef {
+            name: "mode",
+            display_name: "Orbits",
+            default: 2.0,
+            min: 0.0,
+            max: 2.0,
+            tooltip: "Which sum to keep: diverging orbits (exp(-|z|)), converging \
+                      ones (exp(-1/|z - z_prev|)), or both, for formulas that do \
+                      either.",
+            choices: &["Diverging", "Converging", "Both"],
+        },
+        EscapeParamDef {
+            name: "scale",
+            display_name: "Scale",
+            default: 0.5,
+            min: 0.001,
+            max: 20.0,
+            tooltip: "Palette distance per unit of the sum.",
+            choices: &[],
+        },
+    ],
+    wgsl: r#"
+fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
+    return state.x * cparam(1u);
+}
+"#,
+    accum_init: "vec4<f32>(0.0)",
+    wgsl_accum: r#"
+fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32>) -> vec4<f32> {
+    let mode = u32(clamp(cparam(0u), 0.0, 2.0));
+    var t = 0.0;
+    if (mode != 1u) {
+        t = t + exp(-length(z));
+    }
+    if (mode != 0u) {
+        // A settled step is 1/0 away from contributing: keep the
+        // reciprocal finite and let exp take it to zero.
+        t = t + exp(-1.0 / max(length(z - z_prev), 1e-30));
+    }
+    return vec4<f32>(state.x + t, state.yzw);
+}
+"#,
+    recommended_bailout: None,
+    pick_params: &[],
+};
+
+/// Decomposition (Ultra Fractal, Fraktaler 3): the angle of z where it
+/// escaped, as a palette position. With sectors, the angle is cut into
+/// that many flat bands -- 2 is binary decomposition, the sign of
+/// `Im z`, whose cells trace the external rays.
+pub static DECOMPOSITION: ColoringDef = ColoringDef {
+    name: "decomposition",
+    display_name: "Decomposition",
+    features: &[],
+    parameters: &[
+        EscapeParamDef {
+            name: "sectors",
+            display_name: "Sectors",
+            default: 0.0,
+            min: 0.0,
+            max: 16.0,
+            tooltip: "0 draws the angle itself; 2 or more cuts it into that many \
+                      bands -- 2 is binary decomposition.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "scale",
+            display_name: "Scale",
+            default: 1.0,
+            min: 0.01,
+            max: 20.0,
+            tooltip: "Palette turns per full turn of the angle.",
+            choices: &[],
+        },
+    ],
+    wgsl: r#"
+fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
+    // An escaped z is far from the origin, so this atan2 never sees
+    // the zero pair Metal's fast-math gets wrong.
+    let a = atan2(sum.z.y, sum.z.x) * 0.15915494 + 0.5;
+    let m = round(cparam(0u));
+    let v = select(a, floor(a * m) / m, m >= 1.5);
+    return v * cparam(1u);
+}
+"#,
+    accum_init: "",
+    wgsl_accum: "",
+    recommended_bailout: Some(4.0),
+    pick_params: &[],
+};
+
+/// Basic (Ultra Fractal's Basic colouring, its real / imaginary / sum
+/// modes): `0.05 (4 + v)` of where the orbit escaped. A classic look
+/// that wants the classic bailout of 4, where `v` stays within a few
+/// units of zero.
+pub static BASIC: ColoringDef = ColoringDef {
+    name: "basic",
+    display_name: "Basic",
+    features: &[],
+    parameters: &[
+        EscapeParamDef {
+            name: "part",
+            display_name: "Part",
+            default: 0.0,
+            min: 0.0,
+            max: 2.0,
+            tooltip: "Which part of the escaped z: its real part, its imaginary \
+                      part, or their sum.",
+            choices: &["Real", "Imaginary", "Sum"],
+        },
+        EscapeParamDef {
+            name: "scale",
+            display_name: "Scale",
+            default: 1.0,
+            min: 0.01,
+            max: 20.0,
+            tooltip: "Palette distance per unit of 0.05 (4 + v).",
+            choices: &[],
+        },
+    ],
+    wgsl: r#"
+fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
+    let part = u32(clamp(cparam(0u), 0.0, 2.0));
+    var v = sum.z.x;
+    if (part == 1u) {
+        v = sum.z.y;
+    } else if (part == 2u) {
+        v = sum.z.x + sum.z.y;
+    }
+    return 0.05 * (4.0 + v) * cparam(1u);
+}
+"#,
+    accum_init: "",
+    wgsl_accum: "",
+    recommended_bailout: Some(4.0),
+    pick_params: &[],
+};
+
+/// Gaussian integer (techmatt, Ultra Fractal): the distance from each
+/// iterate to the nearest Gaussian integer -- the lattice point
+/// `round(z)` -- reduced over the orbit. Never more than sqrt(2)/2, so
+/// it is normalised to 0..1. It colours the interior as well.
+pub static GAUSSIAN_INTEGER: ColoringDef = ColoringDef {
+    name: "gaussian_integer",
+    display_name: "Gaussian Integer",
+    features: &[ColoringFeature::NeedsOrbitAccum, ColoringFeature::ColorsInterior],
+    parameters: &[
+        EscapeParamDef {
+            name: "reduction",
+            display_name: "Reduction",
+            default: 0.0,
+            min: 0.0,
+            max: 3.0,
+            tooltip: "How the orbit's distances become one value: the smallest, \
+                      their mean, the largest, or the direction from the lattice \
+                      point at the smallest (techmatt's angle at minimum).",
+            choices: &["Smallest", "Mean", "Largest", "Angle at smallest"],
+        },
+        EscapeParamDef {
+            name: "scale",
+            display_name: "Scale",
+            default: 1.0,
+            min: 0.01,
+            max: 20.0,
+            tooltip: "Palette distance per unit of the normalised value.",
+            choices: &[],
+        },
+    ],
+    wgsl: r#"
+fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
+    // state = (smallest distance, sum of distances, largest distance,
+    // angle at the smallest); distances normalised by sqrt(2)/2.
+    let r = u32(clamp(cparam(0u), 0.0, 3.0));
+    var v = state.x;
+    if (r == 1u) {
+        v = state.y / max(f32(sum.n), 1.0);
+    } else if (r == 2u) {
+        v = state.z;
+    } else if (r == 3u) {
+        v = state.w;
+    }
+    return v * cparam(1u);
+}
+"#,
+    accum_init: "vec4<f32>(1.0, 0.0, 0.0, 0.0)",
+    wgsl_accum: r#"
+fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32>) -> vec4<f32> {
+    let g = z - round(z);
+    let d = length(g) * 1.4142135;
+    var st = vec4<f32>(state.x, state.y + d, max(state.z, d), state.w);
+    if (d < state.x) {
+        st.x = d;
+        // At a lattice point the direction is undefined: 0, and no
+        // zero pair reaches atan2.
+        st.w = select(0.0, atan2(g.y, g.x) * 0.15915494 + 0.5, d > 1e-6);
+    }
+    return st;
+}
+"#,
+    recommended_bailout: None,
+    pick_params: &[],
+};

@@ -629,6 +629,39 @@ Read from the code, not reproduced by render, except where noted.
      as base and layer, direct, perturbed and recolour; the 49 pairs of
      two accumulating colourings are refused.
 6. **New colourings** (§5.2), in an order to be picked.
+   *First batch done 2026-10-02*, on branch `escape-coloring`: the
+   colourings that complete techmatt's composites now that layers
+   exist, then the cheap classics.
+   - **Curvature average** (C1), **velocity** (C15) and **threads**
+     (C4), debanded like the other averages. Curvature and threads,
+     whose terms are bounded, recommend a bailout of 1e4.
+   - **Exponential smoothing** (C5): diverging, converging or both,
+     the smooth colouring Newton and Nova lacked.
+   - **Decomposition** (C6): the escape angle, or that many flat
+     sectors of it; 2 is binary decomposition. Recommends the classic
+     bailout of 4, as UF does, since the angle at escape depends on it.
+   - **Basic** (C14): UF's real, imaginary and sum, `0.05 (4 + v)`,
+     also at bailout 4.
+   - **Gaussian integer** (C3): the distance to the nearest lattice
+     point, reduced to its smallest, mean, largest, or the angle at the
+     smallest. It colours the interior.
+
+   Each is checked against a transcription of its definition: the
+   accumulator by replaying the orbit on the CPU, the map through a grey
+   ramp. Both agree within one 8-bit level. One caveat measured on the
+   way: an escaping orbit's last iterates are so sensitive to c that at
+   bailout 1e4 the Gaussian-integer distance of the final step is f32
+   noise. f32 and f64 disagree on it, so that colouring's look at a
+   large radius depends on rounding; at 4 they agree.
+   Visual tests added for a curvature layer over smooth, debanded
+   stripes, binary decomposition, Gaussian integer, exponential
+   smoothing on Newton, and a log transfer with a stepped palette.
+
+   **Not yet:** external-angle rays (C7) need F3's exact definition of
+   the angle and the width factor, which this survey only paraphrases;
+   itinerary (C8) needs rank equalisation (P7); richer traps (C9),
+   distance-estimate variants (C11), rainbow fringe (C12) and infinite
+   waves (C13) remain; direct orbit traps (C10) need a new output path.
 7. **Relief** (§5.3): the small ones (R1, R2, R4, R8, R9) first, then
    analytic relief (R5), offset orbits (R6) and Embossed (R7). Analytic
    relief at deep zoom waits for the derivative under perturbation (P11).

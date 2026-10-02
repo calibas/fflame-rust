@@ -571,6 +571,13 @@ pub static COLORINGS: &[&ColoringDef] = &[
     &colorings::POSITION_AVERAGE,
     &colorings::POSITION_MAP,
     &colorings::SPHERE_AVERAGE,
+    &colorings::CURVATURE_AVERAGE,
+    &colorings::VELOCITY,
+    &colorings::THREADS,
+    &colorings::EXPONENTIAL_SMOOTHING,
+    &colorings::DECOMPOSITION,
+    &colorings::BASIC,
+    &colorings::GAUSSIAN_INTEGER,
 ];
 
 /// Look up a formula by name. An unknown name renders the default

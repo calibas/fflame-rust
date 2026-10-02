@@ -7238,6 +7238,304 @@ fn main() {
         }
     }
 
+    /// The colourings added with the texture layer compute what their
+    /// definitions say, accumulator and map alike.
+    ///
+    /// Accumulators: each pixel's orbit is replayed on the CPU in f64
+    /// and its accumulator rebuilt by a transcription of the WGSL, then
+    /// compared with the one in the GPU's terminal record. Only orbits
+    /// that escape within 30 steps, where f32 and f64 still agree.
+    /// Maps: the rendered grey, through a black-to-white ramp, against
+    /// the map applied on the CPU to that same record -- debanding and
+    /// the escape fraction included.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_new_colourings_compute_what_they_say() {
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        let stop = |position: f32, v: f32| crate::scene::palette::ColorStop { position, color: [v, v, v] };
+        config.palette.stops = vec![stop(0.0, 0.0), stop(1.0, 1.0)];
+        config.escape.center_re = "-0.6".to_string();
+        config.escape.center_im = "0.1".to_string();
+        config.escape.zoom_log2 = 0.4;
+        config.escape.max_iter = 200;
+        config.escape.bailout = 1.0e4;
+        let (cx, cy) = (-0.6f64, 0.1f64);
+        let span_y = 4.0 / (config.escape.zoom_log2).exp2();
+        let span_x = span_y * w as f64 / h as f64;
+        let bailout = config.escape.bailout as f64;
+
+        // The orbit of pixel i, as the template runs it: z0 = 0, then
+        // z <- z^2 + c, the accumulator after each step, the escape
+        // test last.
+        let orbit = |i: usize, bailout: f64| -> (Vec<[f64; 2]>, [f64; 2]) {
+            let (px, py) = ((i % w as usize) as f64, (i / w as usize) as f64);
+            let c = [
+                ((px + 0.5) / w as f64 - 0.5) * span_x + cx,
+                -(((py + 0.5) / h as f64 - 0.5) * span_y) + cy,
+            ];
+            let mut zs = vec![[0.0, 0.0]];
+            for _ in 0..config.escape.max_iter {
+                let z = *zs.last().unwrap();
+                let n = [z[0] * z[0] - z[1] * z[1] + c[0], 2.0 * z[0] * z[1] + c[1]];
+                zs.push(n);
+                if n[0] * n[0] + n[1] * n[1] > bailout {
+                    break;
+                }
+            }
+            (zs, c)
+        };
+        let len = |a: [f64; 2]| a[0].hypot(a[1]);
+        let sub = |a: [f64; 2], b: [f64; 2]| [a[0] - b[0], a[1] - b[1]];
+        let atan2 = |a: [f64; 2]| a[1].atan2(a[0]);
+        // The escape fraction and debanded mean, as ORBIT_HELPERS have them.
+        let fraction = move |z: [f64; 2], escaped: bool| -> f64 {
+            if !escaped {
+                return 1.0;
+            }
+            let lr = bailout.log2();
+            let lz = (z[0] * z[0] + z[1] * z[1]).max(1.0000001).log2();
+            (1.0 - (lz / lr).max(1e-6).log2() / 2f64.log2()).clamp(0.0, 1.0)
+        };
+        let debanded = move |s: [f64; 4], z: [f64; 2], escaped: bool| -> f64 {
+            let mean = s[0] / s[1].max(1.0);
+            if s[1] < 1.5 {
+                return mean;
+            }
+            let prev = (s[0] - s[2]) / (s[1] - 1.0);
+            prev + (mean - prev) * fraction(z, escaped)
+        };
+
+        type Accum = Box<dyn Fn(&[[f64; 2]], [f64; 2]) -> [f64; 4]>;
+        type Map = Box<dyn Fn([f64; 4], [f64; 2], u32, bool) -> f64>;
+        let cases: Vec<(&str, Vec<(&str, f32)>, Option<Accum>, Map)> = vec![
+            (
+                "curvature_average",
+                vec![("scale", 1.0), ("deband", 1.0)],
+                Some(Box::new(move |zs: &[[f64; 2]], _c| {
+                    let mut s = [0.0, 0.0, 1e30, 0.0];
+                    for k in 1..zs.len() {
+                        let (z, zp) = (zs[k], zs[k - 1]);
+                        let next = [s[0], s[1], zp[0], zp[1]];
+                        if s[2] > 1e29 {
+                            s = next;
+                            continue;
+                        }
+                        let a = sub(z, zp);
+                        let b = sub(zp, [s[2], s[3]]);
+                        if len(a).powi(2) < 1e-30 || len(b).powi(2) < 1e-30 {
+                            s = next;
+                            continue;
+                        }
+                        let q = [a[0] * b[0] + a[1] * b[1], a[1] * b[0] - a[0] * b[1]];
+                        let t = atan2(q).abs() / std::f64::consts::PI;
+                        s = [s[0] + t, t, zp[0], zp[1]];
+                    }
+                    s
+                })),
+                Box::new(move |s, z, n, escaped| {
+                    let count = (n as f64 - 1.0).max(1.0);
+                    let mean = s[0] / count;
+                    if count < 1.5 {
+                        return mean;
+                    }
+                    let prev = (s[0] - s[1]) / (count - 1.0);
+                    prev + (mean - prev) * fraction(z, escaped)
+                }),
+            ),
+            (
+                "velocity",
+                vec![("scale", 0.25), ("deband", 1.0)],
+                Some(Box::new(move |zs: &[[f64; 2]], _c| {
+                    let mut s = [0.0; 4];
+                    for k in 1..zs.len() {
+                        let t = len(sub(zs[k], zs[k - 1]));
+                        s = [s[0] + t, s[1] + 1.0, t, s[3]];
+                    }
+                    s
+                })),
+                Box::new(move |s, z, _n, escaped| 0.25 * debanded(s, z, escaped)),
+            ),
+            (
+                "threads",
+                vec![("width", 0.1), ("scale", 1.0), ("deband", 1.0)],
+                Some(Box::new(move |zs: &[[f64; 2]], _c| {
+                    let mut s = [0.0; 4];
+                    for z in &zs[1..] {
+                        let d = z[0].abs().min(z[1].abs());
+                        let t = (-(d * d) / 0.01).exp();
+                        s = [s[0] + t, s[1] + 1.0, t, s[3]];
+                    }
+                    s
+                })),
+                Box::new(move |s, z, _n, escaped| debanded(s, z, escaped)),
+            ),
+            (
+                "exponential_smoothing",
+                vec![("mode", 2.0), ("scale", 0.5)],
+                Some(Box::new(move |zs: &[[f64; 2]], _c| {
+                    let mut sum = 0.0;
+                    for k in 1..zs.len() {
+                        sum += (-len(zs[k])).exp() + (-1.0 / len(sub(zs[k], zs[k - 1])).max(1e-30)).exp();
+                    }
+                    [sum, 0.0, 0.0, 0.0]
+                })),
+                Box::new(move |s, _z, _n, _e| 0.5 * s[0]),
+            ),
+            (
+                "gaussian_integer",
+                vec![("reduction", 1.0), ("scale", 1.0)],
+                Some(Box::new(move |zs: &[[f64; 2]], _c| {
+                    let mut s = [1.0, 0.0, 0.0, 0.0];
+                    for z in &zs[1..] {
+                        let g = [z[0] - z[0].round_ties_even(), z[1] - z[1].round_ties_even()];
+                        let d = len(g) * std::f64::consts::SQRT_2;
+                        let mut st = [s[0], s[1] + d, s[2].max(d), s[3]];
+                        if d < s[0] {
+                            st[0] = d;
+                            st[3] = if d > 1e-6 { atan2(g) / std::f64::consts::TAU + 0.5 } else { 0.0 };
+                        }
+                        s = st;
+                    }
+                    s
+                })),
+                Box::new(move |s, _z, n, _e| s[1] / (n as f64).max(1.0)),
+            ),
+            (
+                "decomposition",
+                vec![("sectors", 4.0), ("scale", 1.0)],
+                None,
+                Box::new(move |_s, z, _n, _e| {
+                    let a = atan2(z) / std::f64::consts::TAU + 0.5;
+                    (a * 4.0).floor() / 4.0
+                }),
+            ),
+            (
+                "basic",
+                vec![("part", 2.0), ("scale", 1.0)],
+                None,
+                Box::new(move |_s, z, _n, _e| 0.05 * (4.0 + z[0] + z[1])),
+            ),
+        ];
+
+        for (name, params, accum, map) in cases {
+            let mut c = config.clone();
+            c.escape.coloring = name.to_string();
+            c.escape.coloring_params = params.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+            if name == "gaussian_integer" {
+                // An escaping orbit's last iterates are hypersensitive to
+                // c, and a lattice distance reads their absolute error:
+                // at radius 100 f32 and f64 put them at unrelated lattice
+                // offsets. At the classic radius they stay small enough
+                // to agree.
+                c.escape.bailout = 4.0;
+            }
+            let records = records_via(&c.escape, w, h, false, false);
+            if let Some(accum) = &accum {
+                let (mut checked, mut off) = (0usize, 0usize);
+                let mut worst = (0.0f64, [0.0f64; 4], [0.0f64; 4]);
+                for (i, r) in records.iter().enumerate() {
+                    if (r.tags & 1) == 0 || r.n > 30 {
+                        continue;
+                    }
+                    let (zs, cc) = orbit(i, c.escape.bailout as f64);
+                    if zs.len() - 1 != r.n as usize {
+                        continue;
+                    }
+                    let want = accum(&zs, cc);
+                    let got = [r.accum[0] as f64, r.accum[1] as f64, r.accum2[0] as f64, r.accum2[1] as f64];
+                    // Only the components a narrow record keeps, for a
+                    // colouring that stores two.
+                    let k = if crate::escape::accum_is_wide(crate::escape::get_coloring(name)) { 4 } else { 2 };
+                    let e = if name == "gaussian_integer" {
+                        // A lattice distance reads z's ABSOLUTE error,
+                        // which the last escaping steps make large in
+                        // f32 against f64: compare in absolute terms,
+                        // and the angle only where the minima agree and
+                        // it is not at its wrap.
+                        let n = r.n as f64;
+                        let mut e = (got[0] - want[0]).abs().max((got[1] - want[1]).abs() / n).max((got[2] - want[2]).abs()) / 20.0;
+                        // The angle names WHICH iterate came closest.
+                        // Near escape |z| is large and its f32 error
+                        // large in lattice terms, so an iterate there
+                        // can win on the GPU and lose in f64: compare
+                        // only where the winner is an early, small
+                        // iterate that clearly beats the runner-up.
+                        let ds: Vec<f64> = zs[1..]
+                            .iter()
+                            .map(|z| len([z[0] - z[0].round_ties_even(), z[1] - z[1].round_ties_even()]) * std::f64::consts::SQRT_2)
+                            .collect();
+                        let (k, d0) = ds
+                            .iter()
+                            .copied()
+                            .enumerate()
+                            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+                            .unwrap();
+                        let runner_up = ds
+                            .iter()
+                            .enumerate()
+                            .filter(|(j, _)| *j != k)
+                            .map(|(_, d)| *d)
+                            .fold(f64::INFINITY, f64::min);
+                        let clear = len(zs[k + 1]) < 4.0
+                            && runner_up - d0 > 1e-2
+                            && (got[0] - want[0]).abs() < 1e-4;
+                        if clear && (0.02..0.98).contains(&want[3]) {
+                            e = e.max((got[3] - want[3]).abs());
+                        }
+                        e
+                    } else {
+                        (0..k)
+                            .map(|j| (got[j] - want[j]).abs() / want[j].abs().max(1.0))
+                            .fold(0.0, f64::max)
+                    };
+                    if e > 1e-3 {
+                        off += 1;
+                        if e > worst.0 {
+                            worst = (e, got, want);
+                        }
+                    }
+                    checked += 1;
+                }
+                println!("{name}: accumulator on {checked} orbits, {off} off (worst {:.2e}: got {:?} want {:?})", worst.0, worst.1, worst.2);
+                assert!(checked > 500, "{name}: only {checked} orbits to replay");
+                // The angle at a smallest distance can flip between two
+                // near-equal candidates; everything else must agree.
+                assert!(off * 200 <= checked, "{name}: {off} of {checked} accumulators disagree");
+            }
+
+            let job = crate::renderer::RenderJob::new(&c, w, h);
+            let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data;
+            let (mut checked, mut worst) = (0usize, 0.0f64);
+            for (r, p) in records.iter().zip(out.chunks_exact(4)) {
+                let escaped = (r.tags & 1) != 0;
+                if !escaped {
+                    continue;
+                }
+                let s = [r.accum[0] as f64, r.accum[1] as f64, r.accum2[0] as f64, r.accum2[1] as f64];
+                let v = map(s, [r.z[0] as f64, r.z[1] as f64], r.n, escaped).rem_euclid(1.0);
+                if !(0.01..=0.99).contains(&v) {
+                    continue;
+                }
+                worst = worst.max((p[0] as f64 / 255.0 - v).abs());
+                checked += 1;
+            }
+            println!("{name}: map on {checked} pixels, worst {worst:.4}");
+            assert!(checked > 500, "{name}: only {checked} pixels to check");
+            assert!(worst < 0.01, "{name}: a pixel is {worst:.4} off its map");
+        }
+    }
+
     /// A stepped palette draws every stop as a flat band: an escape
     /// render through it shows the stops' colours and next to nothing
     /// in between, where the blended palette shows a continuum.
