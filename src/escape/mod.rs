@@ -578,6 +578,7 @@ pub static COLORINGS: &[&ColoringDef] = &[
     &colorings::DECOMPOSITION,
     &colorings::BASIC,
     &colorings::GAUSSIAN_INTEGER,
+    &colorings::EXTERNAL_RAYS,
 ];
 
 /// Look up a formula by name. An unknown name renders the default
