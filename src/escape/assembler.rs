@@ -54,7 +54,8 @@ struct EscapeParams {
     // error the first time this ran).
     _pad_shade0: u32,
     degree: f32,           // the formula's degree at infinity (the smooth count's log base)
-    _pad_shade2: u32,
+    pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
+    pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
     fparams: array<vec4<f32>, 4>,  // formula params, slot-ordered
     cparams: array<vec4<f32>, 4>,  // coloring params, slot-ordered
     // CPU-derived formula data (FormulaDef::derived_data), vec4-packed.
@@ -70,6 +71,7 @@ struct EscapeParams {
 @group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var palette_texture: texture_2d<f32>;
 @group(0) @binding(3) var palette_sampler: sampler;
+//__PALETTE_MAP__
 // The coloring's scalar value, kept for the relief pass to
 // finite-difference. Bound to a 1x1 dummy when shading is off, where
 // every store but one falls out of bounds and WGSL discards it -- so
@@ -292,14 +294,11 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // the palette's bottom and the brightest points render
         // darkest. See ColoringFeature::Bounded.
         let raw = coloring_map(summary, accum_state);
-        let t = select(fract(raw), clamp(raw, 0.0, 1.0), COLORING_IS_BOUNDED);
+        let t = esc_wrap(esc_transfer(raw), COLORING_IS_BOUNDED);
         // SHADING_BANDED picks the wrapped coordinate instead, which
         // turns every palette band into a step (the engraved look).
         height = select(raw, t, params.shade_flags == 1u);
-        // textureSampleLevel: explicit LOD, legal in non-uniform
-        // control flow (unlike textureSample) -- WASM-safe.
-        let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
-        rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
+        rgb = esc_palette(t);
         coverage = 1.0;
     }
 
@@ -311,6 +310,70 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(rgb, coverage));
     textureStore(height_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(height, 0.0, 0.0, 0.0));
+}
+"#;
+
+/// The value-to-palette map (`PaletteMap`), spliced after the palette
+/// bindings of every template that looks the palette up, so the
+/// iterate, recolour and relight passes cannot disagree about it.
+///
+/// Linear transfer and Linear curve return their input untouched,
+/// so a render that uses neither keeps its old arithmetic exactly.
+/// `textureSampleLevel` (explicit LOD) because it is legal in
+/// non-uniform control flow, unlike `textureSample` -- WASM-safe.
+const PALETTE_MAP_WGSL: &str = r#"
+// The value transfer: k f(v/k), mirrored for negative v; f(1) = 1,
+// so the pivot k is where every curve agrees with Linear.
+fn esc_transfer(v: f32) -> f32 {
+    let curve = params.pmap_flags & 0xffu;
+    if (curve == 0u) {
+        return v;
+    }
+    let k = params.pmap.x;
+    let u = abs(v) / k;
+    var f = u;
+    switch curve {
+        case 1u: { f = sqrt(u); }
+        case 2u: { f = select(0.0, exp2(log2(u) / 3.0), u > 0.0); }
+        case 3u: { f = log2(1.0 + u); }
+        // ln(1 + ln(1 + u)) / ln(1 + ln 2)
+        case 4u: { f = log2(1.0 + log(1.0 + u)) * 1.3162963; }
+        // Capped so the square stays finite: fract has nothing left
+        // to show long before 1e30 anyway.
+        case 5u: { let w = min(u, 1e15); f = w * w; }
+        // atan(u) / atan(1)
+        case 6u: { f = atan(u) * 1.2732395; }
+        default: {}
+    }
+    return sign(v) * k * f;
+}
+
+// A value's place in the palette: wrapped so an unbounded colouring
+// cycles, clamped for a Bounded one (its 1.0 must not wrap to 0).
+fn esc_wrap(x: f32, bounded: bool) -> f32 {
+    return select(fract(x), clamp(x, 0.0, 1.0), bounded);
+}
+
+// The palette curve, on the position within one cycle.
+fn esc_palette_curve(t: f32) -> f32 {
+    var r = t;
+    switch ((params.pmap_flags >> 8u) & 0xffu) {
+        case 1u: { r = sqrt(t); }
+        case 2u: { r = t * t; }
+        case 3u: { r = log2(1.0 + t); }
+        case 4u: { r = exp2(t) - 1.0; }
+        case 5u: { r = t * t * (3.0 - 2.0 * t); }
+        case 6u: { r = 0.5 - sin(asin(clamp(1.0 - 2.0 * t, -1.0, 1.0)) / 3.0); }
+        default: {}
+    }
+    return r;
+}
+
+// The palette colour at cycle position `t`, decoded to linear light.
+fn esc_palette(t: f32) -> vec3<f32> {
+    let u = esc_palette_curve(t);
+    let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(u, 0.5), 0.0).rgb;
+    return pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
 }
 "#;
 
@@ -377,7 +440,8 @@ struct EscapeParams {
     // Mode D's interaction stride (1 or 2); the other engines read 1.
     stride: u32,
     degree: f32,           // the formula's degree at infinity (the smooth count's log base)
-    _pad_shade2: u32,
+    pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
+    pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
     // CPU-derived formula data — see the direct template's header.
@@ -440,6 +504,7 @@ struct PerturbParams {
 @group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var palette_texture: texture_2d<f32>;
 @group(0) @binding(3) var palette_sampler: sampler;
+//__PALETTE_MAP__
 @group(0) @binding(4) var<storage, read> ref_orbit: array<vec2<f32>>;
 @group(0) @binding(5) var<uniform> perturb: PerturbParams;
 // Per-pixel iteration state for chunked dispatches (48 bytes/px).
@@ -810,12 +875,11 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // the palette's bottom and the brightest points render
         // darkest. See ColoringFeature::Bounded.
         let raw = coloring_map(summary, accum_state);
-        let t = select(fract(raw), clamp(raw, 0.0, 1.0), COLORING_IS_BOUNDED);
+        let t = esc_wrap(esc_transfer(raw), COLORING_IS_BOUNDED);
         // SHADING_BANDED picks the wrapped coordinate instead, which
         // turns every palette band into a step (the engraved look).
         height = select(raw, t, params.shade_flags == 1u);
-        let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
-        rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
+        rgb = esc_palette(t);
         coverage = 1.0;
     }
 
@@ -873,7 +937,8 @@ struct EscapeParams {
     // Mode D's interaction stride (1 or 2); the other engines read 1.
     stride: u32,
     degree: f32,           // the formula's degree at infinity (the smooth count's log base)
-    _pad_shade2: u32,
+    pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
+    pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
     // CPU-derived formula data — see the direct template's header.
@@ -927,6 +992,7 @@ struct PerturbParams {
 @group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var palette_texture: texture_2d<f32>;
 @group(0) @binding(3) var palette_sampler: sampler;
+//__PALETTE_MAP__
 @group(0) @binding(4) var<storage, read> ref_orbit: array<vec2<f32>>;
 @group(0) @binding(5) var<uniform> perturb: PerturbParams;
 // Per-pixel iteration state for chunked dispatches (48 bytes/px).
@@ -1714,12 +1780,11 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // the palette's bottom and the brightest points render
         // darkest. See ColoringFeature::Bounded.
         let raw = coloring_map(summary, accum_state);
-        let t = select(fract(raw), clamp(raw, 0.0, 1.0), COLORING_IS_BOUNDED);
+        let t = esc_wrap(esc_transfer(raw), COLORING_IS_BOUNDED);
         // SHADING_BANDED picks the wrapped coordinate instead, which
         // turns every palette band into a step (the engraved look).
         height = select(raw, t, params.shade_flags == 1u);
-        let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
-        rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
+        rgb = esc_palette(t);
         coverage = 1.0;
     }
 
@@ -3919,6 +3984,7 @@ pub fn assemble_perturbed_with_lens(
     lens_prelude(&mut out, lens);
     for line in template.lines() {
         match line.trim() {
+            "//__PALETTE_MAP__" => out.push(PALETTE_MAP_WGSL.trim().to_string()),
             "//__LENS_APPLY_PX__" => lens_apply_pixels(&mut out, lens),
             "//__DELTA_STEP__" => out.push(match tier {
                 PerturbTier::Power(p) => delta_step_scaled(p.clamp(2, 12)),
@@ -4084,7 +4150,8 @@ struct EscapeParams {
     // Mode D's interaction stride (1 or 2); the other engines read 1.
     stride: u32,
     degree: f32,           // the formula's degree at infinity (the smooth count's log base)
-    _pad_shade2: u32,
+    pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
+    pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
     fdata: array<vec4<f32>, 64>,
@@ -4102,6 +4169,7 @@ struct IterResult {
 @group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var palette_texture: texture_2d<f32>;
 @group(0) @binding(3) var palette_sampler: sampler;
+//__PALETTE_MAP__
 @group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
 @group(0) @binding(5) var<storage, read> results: array<IterResult>;
 
@@ -4119,16 +4187,20 @@ struct ContrastParams {
 }
 @group(0) @binding(6) var<uniform> contrast: ContrastParams;
 
-// Re-expose the coloring's value on the measured range. `p` is the
-// pixel, normalized, because Flatten's fit is a PLANE in screen space.
+// Re-expose the coloring's value on the measured range, through the
+// value transfer. `p` is the pixel, normalized, because Flatten's fit
+// is a PLANE in screen space. The transfer applies to the FITTED value
+// in its 0..1 range, before the palette turns, so at pivot 1 it is a
+// curve over the field's whole range; off, it applies to the raw value
+// exactly as the iterate pass does.
 fn apply_contrast(raw: f32, p: vec2<f32>) -> f32 {
     if (contrast.enabled == 0u) {
-        return raw;
+        return esc_transfer(raw);
     }
     let base = contrast.plane.x + contrast.plane.y * p.x + contrast.plane.z * p.y;
     let span = max(contrast.hi - contrast.lo, 1e-30);
-    let mapped = ((raw - base) - contrast.lo) / span * contrast.turns;
-    return mix(raw, mapped, clamp(contrast.strength, 0.0, 1.0));
+    let mapped = esc_transfer(((raw - base) - contrast.lo) / span) * contrast.turns;
+    return mix(esc_transfer(raw), mapped, clamp(contrast.strength, 0.0, 1.0));
 }
 
 fn cparam(i: u32) -> f32 {
@@ -4172,14 +4244,14 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // The height field keeps the PRE-contrast value: the probe
         // measures this texture, so remapping it here would feed the
         // fit its own output and compound every frame. Banded is the
-        // value as the palette shows it -- clamped for a Bounded
-        // colouring, wrapped otherwise -- as the iterate pass stores it.
-        height = select(raw, select(fract(raw), clamp(raw, 0.0, 1.0), COLORING_IS_BOUNDED), params.shade_flags == 1u);
+        // value as the palette wraps it -- transferred, then clamped
+        // for a Bounded colouring and wrapped otherwise -- as the
+        // iterate pass stores it.
+        height = select(raw, esc_wrap(esc_transfer(raw), COLORING_IS_BOUNDED), params.shade_flags == 1u);
         let dims = vec2<f32>(f32(params.width), f32(params.height));
         let rawc = apply_contrast(raw, vec2<f32>(f32(gid.x), f32(gid.y)) / max(dims - 1.0, vec2<f32>(1.0)));
-        let t = select(fract(rawc), clamp(rawc, 0.0, 1.0), COLORING_IS_BOUNDED);
-        let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
-        rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
+        let t = esc_wrap(rawc, COLORING_IS_BOUNDED);
+        rgb = esc_palette(t);
         coverage = 1.0;
     }
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, coverage));
@@ -4201,6 +4273,7 @@ pub fn assemble_recolor(coloring: &ColoringDef, has_derivative: bool) -> String 
     let mut out = Vec::new();
     for line in RECOLOR_TEMPLATE.lines() {
         match line.trim() {
+            "//__PALETTE_MAP__" => out.push(PALETTE_MAP_WGSL.trim().to_string()),
             "//__COLORING__" => {
                 out.push(format!(
                     "const COLORING_COLORS_INTERIOR: bool = {colors_interior};"
@@ -4246,7 +4319,8 @@ struct EscapeParams {
     // Mode D's interaction stride (1 or 2); the other engines read 1.
     stride: u32,
     degree: f32,           // the formula's degree at infinity (the smooth count's log base)
-    _pad_shade2: u32,
+    pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
+    pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
     // CPU-derived formula data — see the direct template's header.
@@ -4257,6 +4331,7 @@ struct EscapeParams {
 @group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var palette_texture: texture_2d<f32>;
 @group(0) @binding(3) var palette_sampler: sampler;
+//__PALETTE_MAP__
 // The coloring's scalar value, kept for the relief pass to
 // finite-difference. Bound to a 1x1 dummy when shading is off, where
 // every store but one falls out of bounds and WGSL discards it -- so
@@ -4364,11 +4439,10 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     let shade = field_color(sum, grad, terms);
-    let t = fract(shade.t);
+    let t = esc_wrap(esc_transfer(shade.t), false);
     // Relief source, as in the escape templates.
     let height = select(shade.t, t, params.shade_flags == 1u);
-    let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
-    let rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2)) * clamp(shade.lum, 0.0, 4.0);
+    let rgb = esc_palette(t) * clamp(shade.lum, 0.0, 4.0);
 
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(rgb, 1.0));
     textureStore(height_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(height, 0.0, 0.0, 0.0));
@@ -4400,7 +4474,8 @@ struct EscapeParams {
     // Mode D's interaction stride (1 or 2); the other engines read 1.
     stride: u32,
     degree: f32,           // the formula's degree at infinity (the smooth count's log base)
-    _pad_shade2: u32,
+    pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
+    pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
     // Mode D keeps the whole-IFS constants here: see
@@ -4412,6 +4487,7 @@ struct EscapeParams {
 @group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var palette_texture: texture_2d<f32>;
 @group(0) @binding(3) var palette_sampler: sampler;
+//__PALETTE_MAP__
 @group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
 
 // One map of the IFS, as `escape::ifs::IfsMapGpu` packs it. Group 1 so
@@ -4730,10 +4806,9 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     let shade = ifs_color(res);
-    let t = fract(shade.t);
+    let t = esc_wrap(esc_transfer(shade.t), false);
     let height = select(shade.t, t, params.shade_flags == 1u);
-    let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
-    let rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2)) * clamp(shade.lum, 0.0, 4.0);
+    let rgb = esc_palette(t) * clamp(shade.lum, 0.0, 4.0);
 
     // The whole block, from the one walk.
     for (var dy = 0u; dy < stride; dy = dy + 1u) {
@@ -4861,7 +4936,8 @@ struct EscapeParams {
     // Mode D's interaction stride (1 or 2); the other engines read 1.
     stride: u32,
     degree: f32,           // the formula's degree at infinity (the smooth count's log base)
-    _pad_shade2: u32,
+    pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
+    pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
     fdata: array<vec4<f32>, 64>,
@@ -4892,6 +4968,7 @@ struct IfsRecord {
 @group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var palette_texture: texture_2d<f32>;
 @group(0) @binding(3) var palette_sampler: sampler;
+//__PALETTE_MAP__
 @group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
 @group(0) @binding(5) var<storage, read> results: array<IfsRecord>;
 
@@ -4995,10 +5072,9 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     let shade = ifs_color(res);
-    let t = fract(shade.t);
+    let t = esc_wrap(esc_transfer(shade.t), false);
     let height = select(shade.t, t, params.shade_flags == 1u);
-    let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
-    let rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2))
+    let rgb = esc_palette(t)
         * clamp(shade.lum, 0.0, 4.0)
         * r.shade;
 
@@ -5041,7 +5117,8 @@ struct EscapeParams {
     // Mode D's interaction stride (1 or 2); the other engines read 1.
     stride: u32,
     degree: f32,           // the formula's degree at infinity (the smooth count's log base)
-    _pad_shade2: u32,
+    pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
+    pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
     fdata: array<vec4<f32>, 64>,
@@ -5061,6 +5138,7 @@ struct IfsRecord {
 @group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var palette_texture: texture_2d<f32>;
 @group(0) @binding(3) var palette_sampler: sampler;
+//__PALETTE_MAP__
 @group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
 @group(0) @binding(5) var<storage, read> results: array<IfsRecord>;
 
@@ -5215,10 +5293,9 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     res.depth = 0u;
 
     let shade = ifs_color(res);
-    let tt = fract(shade.t);
+    let tt = esc_wrap(esc_transfer(shade.t), false);
     let height = select(shade.t, tt, params.shade_flags == 1u);
-    let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(tt, 0.5), 0.0).rgb;
-    let albedo = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2)) * clamp(shade.lum, 0.0, 4.0);
+    let albedo = esc_palette(tt) * clamp(shade.lum, 0.0, 4.0);
 
     let nxy = unpack2x16float(g.x);
     let nz_ao = unpack2x16float(g.y);
@@ -5258,7 +5335,8 @@ struct EscapeParams {
     // Mode D's interaction stride (1 or 2); the other engines read 1.
     stride: u32,
     degree: f32,           // the formula's degree at infinity (the smooth count's log base)
-    _pad_shade2: u32,
+    pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
+    pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
     fdata: array<vec4<f32>, 64>,
@@ -5268,6 +5346,7 @@ struct EscapeParams {
 @group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var palette_texture: texture_2d<f32>;
 @group(0) @binding(3) var palette_sampler: sampler;
+//__PALETTE_MAP__
 @group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
 
 // Four vec4s and no vec3: a vec3<f32> aligns to sixteen bytes here
@@ -5965,6 +6044,7 @@ pub fn assemble_ifs_recolor(coloring: &IfsColoringDef) -> String {
     let mut out = Vec::new();
     for line in IFS_RECOLOR_TEMPLATE.lines() {
         match line.trim() {
+            "//__PALETTE_MAP__" => out.push(PALETTE_MAP_WGSL.trim().to_string()),
             "//__IFS_COLORING__" => out.push(coloring.wgsl.trim().to_string()),
             _ => out.push(line.to_string()),
         }
@@ -5988,6 +6068,7 @@ pub fn assemble_ifs_relight_with_lens(
     let mut out = Vec::new();
     for line in IFS_RELIGHT_TEMPLATE.lines() {
         match line.trim() {
+            "//__PALETTE_MAP__" => out.push(PALETTE_MAP_WGSL.trim().to_string()),
             "//__IFS_COLORING__" => out.push(coloring.wgsl.trim().to_string()),
             "//__IFS_RIG__" => out.push(ifs_rig(lens)),
             _ => out.push(line.to_string()),
@@ -6101,6 +6182,7 @@ pub fn assemble_ifs_with_lens(
     lens_prelude(&mut out, lens);
     for line in template.lines() {
         match line.trim() {
+            "//__PALETTE_MAP__" => out.push(PALETTE_MAP_WGSL.trim().to_string()),
             "//__LENS_APPLY_UV__" => lens_apply_uv(&mut out, lens, "uv"),
             "//__LENS_APPLY_RAY__" => lens_apply_uv(&mut out, lens, "uv"),
             "let res = ifs_evaluate(uv);" if delta && !measure => {
@@ -6176,6 +6258,7 @@ pub fn assemble_field_with_lens(
     lens_prelude(&mut out, lens);
     for line in FIELD_TEMPLATE.lines() {
         match line.trim() {
+            "//__PALETTE_MAP__" => out.push(PALETTE_MAP_WGSL.trim().to_string()),
             "//__LENS_APPLY__" => lens_apply_span(&mut out, lens),
             "//__FIELD__" => out.push(field.wgsl.trim().to_string()),
             "//__FIELD_COLORING__" => out.push(coloring.wgsl.trim().to_string()),
@@ -6305,6 +6388,7 @@ pub fn assemble_with_lens(
     lens_prelude(&mut out, lens);
     for line in TEMPLATE.lines() {
         match line.trim() {
+            "//__PALETTE_MAP__" => out.push(PALETTE_MAP_WGSL.trim().to_string()),
             // The lens: its variation functions and helper
             // libraries at top level, and the warp itself on the
             // screen offset. Both empty without one, so the shader is
@@ -6971,9 +7055,11 @@ mod tests {
                 "{} (direct) did not declare bounded={expect_bounded}",
                 coloring.name
             );
-            // And the template must actually consult it.
+            // And the template must actually consult it, in the wrap
+            // the palette map's helpers provide.
             assert!(
-                direct.contains("clamp(raw, 0.0, 1.0), COLORING_IS_BOUNDED"),
+                direct.contains("esc_wrap(esc_transfer(raw), COLORING_IS_BOUNDED)")
+                    && direct.contains("select(fract(x), clamp(x, 0.0, 1.0), bounded)"),
                 "the palette lookup ignores the bounded flag"
             );
         }

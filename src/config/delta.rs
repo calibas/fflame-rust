@@ -473,6 +473,13 @@ pub enum ConfigPath {
     EscapeContrastClip,
     EscapeContrastStrength,
     EscapeContrastTurns,
+    // The value-to-palette map (`PaletteMap`): a transfer curve on the
+    // coloring's value, its pivot, a curve on each palette cycle, and
+    // stepped bands.
+    EscapeTransfer,
+    EscapeTransferPivot,
+    EscapePaletteCurve,
+    EscapePaletteStepped,
     EscapeShadingShadowColor,
     EscapeShadingShadowStrength,
     EscapeShadingShadowBlend,
@@ -1063,6 +1070,10 @@ impl Display for ConfigPath {
             ConfigPath::EscapeContrastClip => write!(f, "Contrast Clip"),
             ConfigPath::EscapeContrastStrength => write!(f, "Contrast Strength"),
             ConfigPath::EscapeContrastTurns => write!(f, "Contrast Turns"),
+            ConfigPath::EscapeTransfer => write!(f, "Value Transfer"),
+            ConfigPath::EscapeTransferPivot => write!(f, "Transfer Pivot"),
+            ConfigPath::EscapePaletteCurve => write!(f, "Palette Curve"),
+            ConfigPath::EscapePaletteStepped => write!(f, "Stepped Palette"),
             ConfigPath::EscapeShadingShadowColor => write!(f, "Relief Shadow Colour"),
             ConfigPath::EscapeShadingShadowStrength => write!(f, "Relief Shadow Strength"),
             ConfigPath::EscapeShadingShadowBlend => write!(f, "Relief Shadow Blend"),
@@ -1400,6 +1411,10 @@ impl ConfigPath {
                 I18nKey::simple("history.param.escape_contrast_strength")
             }
             ConfigPath::EscapeContrastTurns => I18nKey::simple("history.param.escape_contrast_turns"),
+            ConfigPath::EscapeTransfer => I18nKey::simple("history.param.escape_transfer"),
+            ConfigPath::EscapeTransferPivot => I18nKey::simple("history.param.escape_transfer_pivot"),
+            ConfigPath::EscapePaletteCurve => I18nKey::simple("history.param.escape_palette_curve"),
+            ConfigPath::EscapePaletteStepped => I18nKey::simple("history.param.escape_palette_stepped"),
             ConfigPath::EscapeShadingShadowColor => I18nKey::simple("history.param.escape_shading_shadow_color"),
             ConfigPath::EscapeShadingShadowStrength => I18nKey::simple("history.param.escape_shading_shadow_strength"),
             ConfigPath::EscapeShadingShadowBlend => I18nKey::simple("history.param.escape_shading_shadow_blend"),
@@ -2760,6 +2775,10 @@ impl ConfigPath {
             | ConfigPath::EscapeContrastClip
             | ConfigPath::EscapeContrastStrength
             | ConfigPath::EscapeContrastTurns
+            | ConfigPath::EscapeTransfer
+            | ConfigPath::EscapeTransferPivot
+            | ConfigPath::EscapePaletteCurve
+            | ConfigPath::EscapePaletteStepped
             | ConfigPath::EscapeShadingField
             | ConfigPath::EscapeShadingShadowColor
             | ConfigPath::EscapeShadingShadowStrength
@@ -3165,6 +3184,10 @@ impl ConfigPath {
             ConfigPath::EscapeContrastClip => "Escape.Contrast.Clip".to_string(),
             ConfigPath::EscapeContrastStrength => "Escape.Contrast.Strength".to_string(),
             ConfigPath::EscapeContrastTurns => "Escape.Contrast.Turns".to_string(),
+            ConfigPath::EscapeTransfer => "Escape.PaletteMap.Transfer".to_string(),
+            ConfigPath::EscapeTransferPivot => "Escape.PaletteMap.Pivot".to_string(),
+            ConfigPath::EscapePaletteCurve => "Escape.PaletteMap.Curve".to_string(),
+            ConfigPath::EscapePaletteStepped => "Escape.PaletteMap.Stepped".to_string(),
             ConfigPath::EscapeShadingShadowColor => "Escape.Shading.ShadowColor".to_string(),
             ConfigPath::EscapeShadingShadowStrength => "Escape.Shading.ShadowStrength".to_string(),
             ConfigPath::EscapeShadingShadowBlend => "Escape.Shading.ShadowBlend".to_string(),
@@ -3384,6 +3407,10 @@ impl ConfigPath {
                 ["Contrast", "Clip"] => return Some(ConfigPath::EscapeContrastClip),
                 ["Contrast", "Strength"] => return Some(ConfigPath::EscapeContrastStrength),
                 ["Contrast", "Turns"] => return Some(ConfigPath::EscapeContrastTurns),
+                ["PaletteMap", "Transfer"] => return Some(ConfigPath::EscapeTransfer),
+                ["PaletteMap", "Pivot"] => return Some(ConfigPath::EscapeTransferPivot),
+                ["PaletteMap", "Curve"] => return Some(ConfigPath::EscapePaletteCurve),
+                ["PaletteMap", "Stepped"] => return Some(ConfigPath::EscapePaletteStepped),
                 ["Shading", "Field"] => return Some(ConfigPath::EscapeShadingField),
                 ["Shading", "ShadowColor"] => return Some(ConfigPath::EscapeShadingShadowColor),
                 ["Shading", "ShadowStrength"] => return Some(ConfigPath::EscapeShadingShadowStrength),
@@ -4154,6 +4181,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeContrastClip
         | ConfigPath::EscapeContrastStrength
         | ConfigPath::EscapeContrastTurns
+        | ConfigPath::EscapeTransferPivot
         | ConfigPath::EscapeShadingShadowStrength
         | ConfigPath::EscapeShadingHighlightStrength
         | ConfigPath::EscapeShadingSoftness
@@ -4174,6 +4202,9 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         }
         ConfigPath::EscapeShadingEnabled
         | ConfigPath::EscapeContrastMode
+        | ConfigPath::EscapeTransfer
+        | ConfigPath::EscapePaletteCurve
+        | ConfigPath::EscapePaletteStepped
         | ConfigPath::EscapeShadingField
         | ConfigPath::EscapeShadingTextureKind
         | ConfigPath::EscapeDownsample

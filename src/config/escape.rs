@@ -235,6 +235,13 @@ pub struct EscapeConfig {
     /// and skipped when off, so every existing file is byte-stable.
     #[serde(default, skip_serializing_if = "EscapeContrast::is_default")]
     pub contrast: EscapeContrast,
+
+    /// How the coloring's value becomes a palette colour: a transfer
+    /// curve on the value, a curve on each palette cycle, and stepped
+    /// bands. The default is the identity and is skipped, so every
+    /// existing file is byte-stable.
+    #[serde(default, skip_serializing_if = "PaletteMap::is_default")]
+    pub palette_map: PaletteMap,
 }
 
 /// Looking down at about 24°, which shows a solid's top and one
@@ -491,6 +498,225 @@ impl EscapeContrast {
     /// Whether the renderer must measure the field at all.
     pub fn is_active(&self) -> bool {
         !self.mode.is_off() && self.strength > 0.0
+    }
+}
+
+/// A curve on the coloring's value, applied before the palette wraps
+/// it (`docs/projects/escape-coloring-survey.md` P1).
+///
+/// Every curve is `g(v) = k f(v/k)` with `f(1) = 1`, where `k` is
+/// [`PaletteMap::pivot`]: the value every curve leaves where Linear
+/// would. Below it the root and log curves stretch the value, above it
+/// they compress it, so palette cycles crowd or spread across the
+/// picture. Negative values are mirrored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransferCurve {
+    #[default]
+    Linear,
+    SquareRoot,
+    CubeRoot,
+    /// `log2(1 + u)`, techmatt's.
+    Log,
+    /// `ln(1 + ln(1 + u)) / ln(1 + ln 2)`, KF2's: flatter still.
+    LogLog,
+    Square,
+    /// `atan(u) / atan(1)`: bounded, so however far the value runs the
+    /// palette cycles at most twice the pivot.
+    ArcTan,
+}
+
+impl TransferCurve {
+    pub const ALL: [TransferCurve; 7] = [
+        TransferCurve::Linear,
+        TransferCurve::SquareRoot,
+        TransferCurve::CubeRoot,
+        TransferCurve::Log,
+        TransferCurve::LogLog,
+        TransferCurve::Square,
+        TransferCurve::ArcTan,
+    ];
+    /// The shader's code for it (`esc_transfer`).
+    pub fn to_gpu(self) -> u32 {
+        match self {
+            TransferCurve::Linear => 0,
+            TransferCurve::SquareRoot => 1,
+            TransferCurve::CubeRoot => 2,
+            TransferCurve::Log => 3,
+            TransferCurve::LogLog => 4,
+            TransferCurve::Square => 5,
+            TransferCurve::ArcTan => 6,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TransferCurve::Linear => "linear",
+            TransferCurve::SquareRoot => "square_root",
+            TransferCurve::CubeRoot => "cube_root",
+            TransferCurve::Log => "log",
+            TransferCurve::LogLog => "log_log",
+            TransferCurve::Square => "square",
+            TransferCurve::ArcTan => "arc_tan",
+        }
+    }
+    /// An unknown name is Linear, as an unknown contrast mode is Off.
+    pub fn from_name(s: &str) -> Self {
+        Self::ALL.into_iter().find(|c| c.as_str() == s).unwrap_or_default()
+    }
+    /// `f(u)` for `u >= 0`, the shape before the pivot scales it. The
+    /// shader's `esc_transfer` is the same arithmetic in f32.
+    pub fn shape(self, u: f32) -> f32 {
+        match self {
+            TransferCurve::Linear => u,
+            TransferCurve::SquareRoot => u.sqrt(),
+            TransferCurve::CubeRoot => u.cbrt(),
+            TransferCurve::Log => (1.0 + u).log2(),
+            TransferCurve::LogLog => {
+                (1.0 + (1.0 + u).ln()).ln() / (1.0 + std::f32::consts::LN_2).ln()
+            }
+            TransferCurve::Square => u * u,
+            TransferCurve::ArcTan => u.atan() / std::f32::consts::FRAC_PI_4,
+        }
+    }
+}
+
+/// A curve on the position within one palette cycle, applied after the
+/// wrap: it changes which colours a cycle dwells on, not how many
+/// cycles there are. The escape-side counterpart of the Colors panel's
+/// Log Redistribute, computed in the shader so the table keeps its
+/// resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PaletteCurve {
+    #[default]
+    Linear,
+    SquareRoot,
+    Square,
+    /// `log2(1 + t)`.
+    Log,
+    /// `2^t - 1`, Log's mirror.
+    Exp,
+    /// Smoothstep: lingers at both ends.
+    SCurve,
+    /// Smoothstep's inverse: lingers in the middle.
+    InverseS,
+}
+
+impl PaletteCurve {
+    pub const ALL: [PaletteCurve; 7] = [
+        PaletteCurve::Linear,
+        PaletteCurve::SquareRoot,
+        PaletteCurve::Square,
+        PaletteCurve::Log,
+        PaletteCurve::Exp,
+        PaletteCurve::SCurve,
+        PaletteCurve::InverseS,
+    ];
+    /// The shader's code for it (`esc_palette_curve`).
+    pub fn to_gpu(self) -> u32 {
+        match self {
+            PaletteCurve::Linear => 0,
+            PaletteCurve::SquareRoot => 1,
+            PaletteCurve::Square => 2,
+            PaletteCurve::Log => 3,
+            PaletteCurve::Exp => 4,
+            PaletteCurve::SCurve => 5,
+            PaletteCurve::InverseS => 6,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PaletteCurve::Linear => "linear",
+            PaletteCurve::SquareRoot => "square_root",
+            PaletteCurve::Square => "square",
+            PaletteCurve::Log => "log",
+            PaletteCurve::Exp => "exp",
+            PaletteCurve::SCurve => "s_curve",
+            PaletteCurve::InverseS => "inverse_s",
+        }
+    }
+    pub fn from_name(s: &str) -> Self {
+        Self::ALL.into_iter().find(|c| c.as_str() == s).unwrap_or_default()
+    }
+    /// The curve on `t` in 0..1; the shader's `esc_palette_curve`.
+    pub fn apply(self, t: f32) -> f32 {
+        match self {
+            PaletteCurve::Linear => t,
+            PaletteCurve::SquareRoot => t.sqrt(),
+            PaletteCurve::Square => t * t,
+            PaletteCurve::Log => (1.0 + t).log2(),
+            PaletteCurve::Exp => t.exp2() - 1.0,
+            PaletteCurve::SCurve => t * t * (3.0 - 2.0 * t),
+            PaletteCurve::InverseS => {
+                0.5 - ((1.0 - 2.0 * t).clamp(-1.0, 1.0).asin() / 3.0).sin()
+            }
+        }
+    }
+}
+
+/// How the coloring's value becomes a palette colour. See
+/// [`EscapeConfig::palette_map`] and the survey's section 7, item 3.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PaletteMap {
+    #[serde(default, skip_serializing_if = "is_linear_transfer")]
+    pub transfer: TransferCurve,
+    /// The value the transfer leaves unchanged (see [`TransferCurve`]).
+    #[serde(default = "default_pivot", skip_serializing_if = "is_one")]
+    pub pivot: f32,
+    #[serde(default, skip_serializing_if = "is_linear_curve")]
+    pub curve: PaletteCurve,
+    /// Each palette stop as a flat band from its position to the next
+    /// stop, instead of a blend between them.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub stepped: bool,
+}
+
+fn default_pivot() -> f32 {
+    1.0
+}
+fn is_linear_transfer(c: &TransferCurve) -> bool {
+    *c == TransferCurve::Linear
+}
+fn is_linear_curve(c: &PaletteCurve) -> bool {
+    *c == PaletteCurve::Linear
+}
+
+/// The pivot's range: wide enough for a raw smooth count (thousands)
+/// and a fitted 0..1 field alike.
+pub const PIVOT_RANGE: (f32, f32) = (1.0e-3, 1.0e4);
+
+impl Default for PaletteMap {
+    fn default() -> Self {
+        Self {
+            transfer: TransferCurve::Linear,
+            pivot: default_pivot(),
+            curve: PaletteCurve::Linear,
+            stepped: false,
+        }
+    }
+}
+
+impl PaletteMap {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+    /// The two curve codes in one word: transfer in bits 0-7, palette
+    /// curve in bits 8-15.
+    pub fn gpu_flags(&self) -> u32 {
+        self.transfer.to_gpu() | (self.curve.to_gpu() << 8)
+    }
+    /// The pivot as the shader reads it: clamped into range, so a
+    /// hand-edited 0 cannot divide by zero.
+    pub fn gpu_pivot(&self) -> f32 {
+        self.pivot.clamp(PIVOT_RANGE.0, PIVOT_RANGE.1)
+    }
+    /// `g(v)`: the transfer at this pivot, mirrored for negative values.
+    pub fn transfer_value(&self, v: f32) -> f32 {
+        if self.transfer == TransferCurve::Linear {
+            return v;
+        }
+        let k = self.gpu_pivot();
+        v.signum() * k * self.transfer.shape(v.abs() / k)
     }
 }
 
@@ -884,6 +1110,7 @@ impl Default for EscapeConfig {
             reference_period: None,
             shading: EscapeShading::default(),
             contrast: EscapeContrast::default(),
+            palette_map: PaletteMap::default(),
         }
     }
 }
@@ -1091,6 +1318,68 @@ mod tests {
         assert_eq!(old.light_angle, 315.0);
         let json = serde_json::to_string(&EscapeShading { enabled: true, ..EscapeShading::default() }).unwrap();
         assert!(json.contains("\"light_angle\":135.0"), "the light must be written: {json}");
+    }
+
+    /// The palette map is skipped while it is the identity, and a set
+    /// one comes back exactly.
+    #[test]
+    fn a_palette_map_is_written_only_when_set_and_round_trips() {
+        let json = serde_json::to_string(&EscapeConfig::default()).unwrap();
+        assert!(!json.contains("palette_map"), "{json}");
+        let esc = EscapeConfig {
+            palette_map: PaletteMap {
+                transfer: TransferCurve::LogLog,
+                pivot: 12.5,
+                curve: PaletteCurve::InverseS,
+                stepped: true,
+            },
+            ..EscapeConfig::default()
+        };
+        let json = serde_json::to_string(&esc).unwrap();
+        assert!(json.contains(r#""transfer":"log_log""#), "{json}");
+        assert!(json.contains(r#""curve":"inverse_s""#), "{json}");
+        let back: EscapeConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.palette_map, esc.palette_map);
+    }
+
+    /// Every transfer leaves the pivot where Linear would, rises
+    /// monotonically, and mirrors for negative values -- the three
+    /// promises the pivot control's tooltip makes.
+    #[test]
+    fn every_transfer_meets_linear_at_the_pivot() {
+        for transfer in TransferCurve::ALL {
+            assert!((transfer.shape(1.0) - 1.0).abs() < 1e-6, "{transfer:?}: f(1) = {}", transfer.shape(1.0));
+            assert_eq!(transfer.shape(0.0), 0.0, "{transfer:?}");
+            let mut prev = 0.0f32;
+            for i in 1..=400 {
+                let u = i as f32 * 0.05;
+                let f = transfer.shape(u);
+                assert!(f > prev, "{transfer:?} is not increasing at {u}");
+                prev = f;
+            }
+            let pm = PaletteMap { transfer, pivot: 7.0, ..PaletteMap::default() };
+            assert!((pm.transfer_value(7.0) - 7.0).abs() < 1e-4, "{transfer:?}");
+            assert_eq!(pm.transfer_value(-3.0), -pm.transfer_value(3.0), "{transfer:?}");
+            assert_eq!(TransferCurve::from_name(transfer.as_str()), transfer);
+        }
+        assert_eq!(TransferCurve::from_name("from_the_future"), TransferCurve::Linear);
+    }
+
+    /// A palette curve keeps both ends of the cycle where they were and
+    /// only moves what lies between.
+    #[test]
+    fn every_palette_curve_keeps_the_ends_of_a_cycle() {
+        for curve in PaletteCurve::ALL {
+            assert!(curve.apply(0.0).abs() < 1e-6, "{curve:?} at 0");
+            assert!((curve.apply(1.0) - 1.0).abs() < 1e-6, "{curve:?} at 1");
+            let mut prev = curve.apply(0.0);
+            for i in 1..=100 {
+                let t = curve.apply(i as f32 / 100.0);
+                assert!(t > prev, "{curve:?} is not increasing at {}", i as f32 / 100.0);
+                prev = t;
+            }
+            assert_eq!(PaletteCurve::from_name(curve.as_str()), curve);
+        }
     }
 
     #[test]

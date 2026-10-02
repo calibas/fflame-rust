@@ -840,6 +840,13 @@ pub fn render_escape_content(
             });
         });
 
+    // ---- Palette mapping ----
+    // Below Auto contrast because the transfer applies after its fit:
+    // the order of the sections is the order of the pipeline.
+    egui::CollapsingHeader::new(t!("escape_panel.palette_map"))
+        .default_open(!esc.palette_map.is_default())
+        .show(ui, |ui| palette_map_controls(ui, config_manager, &esc.palette_map));
+
     // ---- Relief shading ----
     // A LAYER, not a coloring: it runs after the palette lookup, so it
     // composes with whatever is above it. Collapsed by default because
@@ -1214,6 +1221,77 @@ fn pick_coloring(
         }
     }
     let _ = config_manager.update_batch(changes, "history.param.escape_coloring".to_string());
+}
+
+/// The Palette mapping section: the value transfer and its pivot, the
+/// palette curve, and stepped bands (`PaletteMap`).
+fn palette_map_controls(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    pm: &crate::config::escape::PaletteMap,
+) {
+    use crate::config::escape::{PaletteCurve, TransferCurve};
+    let curve_name = |key: &str| t!(format!("escape_panel.curve_{key}"));
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.transfer"));
+        egui::ComboBox::from_id_salt("escape_transfer")
+            .selected_text(curve_name(pm.transfer.as_str()))
+            .show_ui(ui, |ui| {
+                for c in TransferCurve::ALL {
+                    if ui.selectable_label(c == pm.transfer, curve_name(c.as_str())).clicked()
+                        && c != pm.transfer
+                    {
+                        let _ = config_manager.update_param(
+                            ConfigPath::EscapeTransfer,
+                            ConfigValue::String(c.as_str().to_string()),
+                        );
+                    }
+                }
+            })
+            .response
+            .on_hover_text(t!("escape_panel.tooltip_transfer"));
+    });
+    ui.add_enabled_ui(pm.transfer != TransferCurve::Linear, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(t!("escape_panel.transfer_pivot"));
+            let mut v = pm.pivot;
+            let (lo, hi) = crate::config::escape::PIVOT_RANGE;
+            if ui
+                .add(egui::Slider::new(&mut v, lo..=hi).logarithmic(true))
+                .on_hover_text(t!("escape_panel.tooltip_transfer_pivot"))
+                .changed()
+            {
+                let _ = config_manager.update_param(ConfigPath::EscapeTransferPivot, v.into());
+            }
+        });
+    });
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.palette_curve"));
+        egui::ComboBox::from_id_salt("escape_palette_curve")
+            .selected_text(curve_name(pm.curve.as_str()))
+            .show_ui(ui, |ui| {
+                for c in PaletteCurve::ALL {
+                    if ui.selectable_label(c == pm.curve, curve_name(c.as_str())).clicked()
+                        && c != pm.curve
+                    {
+                        let _ = config_manager.update_param(
+                            ConfigPath::EscapePaletteCurve,
+                            ConfigValue::String(c.as_str().to_string()),
+                        );
+                    }
+                }
+            })
+            .response
+            .on_hover_text(t!("escape_panel.tooltip_palette_curve"));
+    });
+    let mut stepped = pm.stepped;
+    if ui
+        .checkbox(&mut stepped, t!("escape_panel.palette_stepped"))
+        .on_hover_text(t!("escape_panel.tooltip_palette_stepped"))
+        .changed()
+    {
+        let _ = config_manager.update_param(ConfigPath::EscapePaletteStepped, stepped.into());
+    }
 }
 
 fn suggested_coloring_scale(coloring: &str, max_iter: u32) -> f32 {
@@ -2659,5 +2737,26 @@ mod criterion_tests {
         let packed = crate::escape::ifs::pack_for(def, &cfg, &registry).expect("packs");
         let (ifs3, rows) = packed.solid.as_ref().expect("a solid reading");
         assert_eq!((ifs3.maps.len(), rows.len()), (1, 1));
+    }
+}
+
+#[cfg(test)]
+mod palette_map_tests {
+    /// The curve menus build their label keys at runtime
+    /// (`escape_panel.curve_<name>`), so a curve added without a
+    /// locale entry would ship a label reading its own key, and no
+    /// literal-key scan would notice.
+    #[test]
+    fn every_curve_has_a_label() {
+        use crate::config::escape::{PaletteCurve, TransferCurve};
+        let names = TransferCurve::ALL
+            .iter()
+            .map(|c| c.as_str())
+            .chain(PaletteCurve::ALL.iter().map(|c| c.as_str()));
+        for name in names {
+            let key = format!("escape_panel.curve_{name}");
+            let got = rust_i18n::t!(&key, locale = "en");
+            assert_ne!(got, key, "no label for curve `{name}` in locales/en.yml");
+        }
     }
 }

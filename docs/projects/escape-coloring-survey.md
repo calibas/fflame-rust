@@ -413,6 +413,23 @@ Read from the code, not reproduced by render, except where noted.
    - A linear correction by width, as KF2 does, would therefore overshoot
      about 3× here.
    - Left as it is. R9 is where a better-founded normalisation would go.
+8. **The tone curve crushes the darkest values, flames included**
+   (measured while testing item 3; not fixed, since it moves every
+   render's dark pixels).
+   - The curve is on by default (`use_curve`), and its 256-entry LUT
+     holds `f(i/255)` in texel `i`. `tonemap.wgsl` samples it at
+     `u = x` with linear filtering, which reads texel position
+     `256x − 0.5`, so even the identity curve returns
+     `x + (x − 0.5)/255`.
+   - Near black that subtracts about 0.002 in linear light. Through an
+     escape render: palette bytes below about 15 come out 0, 25 comes
+     out 21, 51 comes out 49. Mid-grey is exact.
+   - Fix: sample at `(255x + 0.5)/256`. The two item-3 GPU tests turn
+     the curve off until then.
+9. **Five IFS cache tests fail when run in parallel** and pass alone:
+   they read the global `escape::diag` snapshot without the
+   `diag_lock` the `app_repro_test` tests take, so another test's
+   render overwrites the path they check.
 
 ---
 
@@ -491,7 +508,53 @@ Read from the code, not reproduced by render, except where noted.
      exact-orbit references escape at 4 but took the default. They now
      name 4.
 3. **The value transfer** (P1) and the palette curve, plus stepped palettes
-   (decisions 3, 4 and 6).
+   (decisions 3, 4 and 6). The design:
+   - **Config:** `EscapeConfig::palette_map` (`PaletteMap`): `transfer`,
+     `pivot`, `curve`, `stepped`; written only when not the default. The
+     panel shows them in a *Palette mapping* section under Auto contrast.
+   - **Value transfer**, on the colouring's value before it wraps:
+     Linear, Square Root, Cube Root, Log, Log-Log, Square, ArcTan. Each
+     is `g(v) = k·f(v/k)` with `f(1) = 1`, so the **pivot** `k` is the
+     value every curve leaves unchanged: below it Square Root and Log
+     stretch, above it they compress. The colouring's own scale still
+     sets the density. Negative values are mirrored (`g(−v) = −g(v)`).
+     `f` is techmatt's for Log (`log2(1 + u)`); KF2's for Log-Log; UF's
+     for the rest. No Exp or Cube: past a few hundred they overflow f32
+     or leave `fract` nothing but rounding.
+   - **With Auto contrast** the transfer applies to the fitted value, in
+     its 0..1 range, before the palette turns: `mix(g(raw), turns ·
+     g(u), strength)`. At pivot 1 that is techmatt's normalised curve.
+   - **Palette curve**, on the wrapped position within one cycle:
+     Linear, Square Root, Square, Log (`log2(1 + t)`), Exp (`2^t − 1`),
+     S-curve (smoothstep), Inverse S. Computed in the shader, so it
+     does not lower the table's resolution as a table warp would.
+   - **Relief** keeps the raw value, and Banded relief the wrapped value
+     after the transfer (the band edges), not after the palette curve.
+   - **Stepped:** each stop is a flat band from its position to the
+     next stop (constant interpolation, as Blender's ColorRamp). A stop
+     at 1.0 therefore shows only at the very top. The flame renderer
+     keeps a second palette table built that way, through the same
+     rotation, squeeze, log and reverse pipeline; an escape render binds
+     it when stepped is on. The flame and simulation renders never see
+     it.
+   - **Shader:** one set of helpers (`esc_transfer`, `esc_wrap`,
+     `esc_palette`) spliced into every template that looks up the
+     palette, so the iterate and recolour passes cannot disagree. Two
+     uniform words carry the choices; Linear and Linear take the old
+     arithmetic exactly, so existing renders do not move.
+
+   *Done 2026-10-02*, on branch `escape-coloring`, as designed, with a
+   script API (`escape.transfer`, `escape.palette_curve`,
+   `escape.stepped_palette`). Measured:
+   - every curve, rendered through a grey ramp, lands within one 8-bit
+     level of `TransferCurve::shape` / `PaletteCurve::apply` (worst
+     0.004, Linear-on-Linear included);
+   - a palette-map change takes the recolour path and matches a fresh
+     render byte for byte: direct, perturbed, and under Auto contrast;
+   - a four-stop stepped palette puts 98.5% of lit pixels on a stop
+     colour (7% blended); the rest sit on band edges, which the
+     sampler's filtering softens;
+   - all 87 escape visual tests and the 2D flame tests pass unchanged.
 4. **A bigger accumulator** (P6), then **debanded averages** (P4).
 5. **The texture layer** (P5): a second colouring blended before the
    palette. This brings techmatt's composites (C2, C3, C4).

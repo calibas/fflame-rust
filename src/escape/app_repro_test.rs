@@ -6700,8 +6700,14 @@ fn main() {
                 let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("cache frame"),
                 });
-                let settled =
-                    escape.render(&device, &queue, &mut enc, esc, renderer.palette_view(), renderer.palette_generation());
+                let settled = escape.render(
+                    &device,
+                    &queue,
+                    &mut enc,
+                    esc,
+                    renderer.escape_palette_view(esc.palette_map.stepped),
+                    renderer.palette_generation(),
+                );
                 queue.submit(std::iter::once(enc.finish()));
                 let _ =
                     device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
@@ -6826,6 +6832,218 @@ fn main() {
             );
             escape.destroy();
         }
+
+        // The palette map is applied where the colouring is, so a
+        // change to it is a recolour too -- and the iterate and
+        // recolour passes share its helpers, so the two must agree to
+        // the byte. Direct and perturbed, and with Auto contrast,
+        // where the transfer runs inside the fit.
+        for (zoom, contrast) in [(13.0, false), (15.0, false), (13.0, true)] {
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            let mut esc = mk("smooth", zoom);
+            if contrast {
+                esc.contrast.mode = crate::config::escape::ContrastMode::AutoRange;
+                esc.contrast.turns = 6.0;
+            }
+            let first = read(&mut escape, &esc, &mut renderer);
+            esc.palette_map = crate::config::escape::PaletteMap {
+                transfer: crate::config::escape::TransferCurve::Log,
+                pivot: if contrast { 0.25 } else { 3.0 },
+                curve: crate::config::escape::PaletteCurve::SCurve,
+                stepped: true,
+            };
+            let mapped = read(&mut escape, &esc, &mut renderer);
+            assert_eq!(
+                escape.last_path, "recolor",
+                "palette map @{zoom} contrast={contrast}: a palette-map change re-iterated"
+            );
+            assert_ne!(mapped, first, "palette map @{zoom} contrast={contrast}: changed nothing");
+            let truth = fresh(&esc, &mut renderer);
+            assert_eq!(
+                mapped, truth,
+                "palette map @{zoom} contrast={contrast}: cached recolor differs from a fresh render"
+            );
+            escape.destroy();
+        }
+    }
+
+    /// The shader's curves are the ones `TransferCurve::shape` and
+    /// `PaletteCurve::apply` define -- the panel's tooltips describe
+    /// those, and nothing else would catch a WGSL constant typed wrong.
+    ///
+    /// Through a black-to-white ramp, so a pixel's grey IS its palette
+    /// position: rendered against the position computed on the CPU
+    /// from the same pixel's terminal record (its smooth count, then
+    /// the transfer, the wrap and the palette curve). Pixels near a
+    /// wrap are skipped, where a hair of rounding is a whole cycle.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_palette_map_draws_what_its_curves_say() {
+        use crate::config::escape::{PaletteCurve, PaletteMap, TransferCurve};
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        // The tone curve's LUT is sampled half a texel off, which
+        // takes about 0.002 off every channel in linear light even
+        // when the curve is the identity: it floors the darkest
+        // palette entries to black. Off, so this measures the palette
+        // map alone.
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        let stop = |position: f32, v: f32| crate::scene::palette::ColorStop { position, color: [v, v, v] };
+        config.palette.stops = vec![stop(0.0, 0.0), stop(1.0, 1.0)];
+        config.escape.center_re = "-0.75".to_string();
+        config.escape.center_im = "0.1".to_string();
+        config.escape.zoom_log2 = 1.5;
+        config.escape.max_iter = 300;
+        config.escape.coloring_params.insert("scale".to_string(), 0.05);
+        let records = records_via(&config.escape, w, h, false, false);
+
+        for (transfer, pivot, curve) in [
+            (TransferCurve::Linear, 1.0, PaletteCurve::Linear),
+            (TransferCurve::SquareRoot, 2.0, PaletteCurve::Linear),
+            (TransferCurve::CubeRoot, 2.0, PaletteCurve::Linear),
+            (TransferCurve::Log, 2.0, PaletteCurve::Linear),
+            (TransferCurve::LogLog, 2.0, PaletteCurve::Linear),
+            (TransferCurve::Square, 0.5, PaletteCurve::Linear),
+            (TransferCurve::ArcTan, 3.0, PaletteCurve::Linear),
+            (TransferCurve::Linear, 1.0, PaletteCurve::SquareRoot),
+            (TransferCurve::Linear, 1.0, PaletteCurve::Square),
+            (TransferCurve::Linear, 1.0, PaletteCurve::Log),
+            (TransferCurve::Linear, 1.0, PaletteCurve::Exp),
+            (TransferCurve::Linear, 1.0, PaletteCurve::SCurve),
+            (TransferCurve::Linear, 1.0, PaletteCurve::InverseS),
+        ] {
+            let pm = PaletteMap { transfer, pivot, curve, stepped: false };
+            let mut c = config.clone();
+            c.escape.palette_map = pm.clone();
+            let job = crate::renderer::RenderJob::new(&c, w, h);
+            let out = pollster::block_on(crate::renderer::render(
+                &device,
+                &queue,
+                job,
+                &mut crate::renderer::NoProgress,
+            ))
+            .expect("render");
+            let (mut checked, mut worst, mut sum) = (0usize, 0.0f32, 0.0f32);
+            let mut worst_at = (0.0f32, 0.0f32, 0.0f32);
+            for (r, p) in records.iter().zip(out.rgba_data.chunks_exact(4)) {
+                if (r.tags & 1) == 0 {
+                    continue;
+                }
+                let r2 = (r.z[0] * r.z[0] + r.z[1] * r.z[1]).max(1.0000001);
+                let mu = r.n as f32 + 1.0 - (0.5 * r2.log2()).log2();
+                let wrapped = pm.transfer_value(mu * 0.05).rem_euclid(1.0);
+                if !(0.03..=0.97).contains(&wrapped) {
+                    continue;
+                }
+                let want = curve.apply(wrapped);
+                // The tone map encodes with a 2.2 power; the ramp's
+                // 8-bit table and the output's 8 bits both round.
+                let got = p[0] as f32 / 255.0;
+                let e = (got - want).abs();
+                if e > worst {
+                    worst = e;
+                    worst_at = (wrapped, want, got);
+                }
+                sum += e;
+                checked += 1;
+            }
+            println!(
+                "{transfer:?} pivot {pivot} / {curve:?}: {checked} pixels, mean {:.4}, worst {worst:.4} (wrapped {:.3}, want {:.3}, got {:.3})",
+                sum / checked.max(1) as f32,
+                worst_at.0,
+                worst_at.1,
+                worst_at.2
+            );
+            assert!(checked > 1000, "{transfer:?}/{curve:?}: only {checked} pixels to check");
+            // Every curve, Linear-on-Linear included, reads within one
+            // 8-bit level (worst 0.004).
+            assert!(worst < 0.01, "{transfer:?}/{curve:?}: a pixel is {worst:.4} off its curve");
+        }
+    }
+
+    /// A stepped palette draws every stop as a flat band: an escape
+    /// render through it shows the stops' colours and next to nothing
+    /// in between, where the blended palette shows a continuum.
+    ///
+    /// Through the unified render API, so the headless path's choice
+    /// of palette table is what is tested. The Linear tone map at
+    /// exposure and gamma 1 hands an 8-bit stop back within a few
+    /// levels (25 comes back 21); pixels within a texel of a band edge
+    /// are blended by the sampler's filtering, hence a share rather
+    /// than all of them. The last stop sits at 1.0, so the blended
+    /// palette has no flat run past it -- and the stepped one shows it
+    /// only at the very top.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_stepped_palette_draws_only_its_stops() {
+        let (device, queue) = repro_device();
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        // See `the_palette_map_draws_what_its_curves_say`.
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        let stops = [[0.9f32, 0.1, 0.1], [0.1, 0.8, 0.2], [0.1, 0.2, 0.9], [0.95, 0.9, 0.2]];
+        config.palette = crate::scene::palette::Palette {
+            name: "four".to_string(),
+            stops: stops
+                .iter()
+                .enumerate()
+                .map(|(i, c)| crate::scene::palette::ColorStop {
+                    position: i as f32 / (stops.len() - 1) as f32,
+                    color: *c,
+                })
+                .collect(),
+            locked: false,
+            built_in: false,
+        };
+        config.escape.center_re = "-0.7436438870371587".to_string();
+        config.escape.center_im = "0.1318259042053119".to_string();
+        config.escape.zoom_log2 = 9.0;
+        config.escape.max_iter = 800;
+        let bytes: Vec<[i32; 3]> =
+            stops.iter().map(|c| c.map(|v| (v * 255.0) as u8 as i32)).collect();
+
+        let share_on_stops = |stepped: bool| -> f64 {
+            let mut c = config.clone();
+            c.escape.palette_map.stepped = stepped;
+            let job = crate::renderer::RenderJob::new(&c, 160, 120);
+            let out = pollster::block_on(crate::renderer::render(
+                &device,
+                &queue,
+                job,
+                &mut crate::renderer::NoProgress,
+            ))
+            .expect("render");
+            let mut lit = 0usize;
+            let mut on_stop = 0usize;
+            for p in out.rgba_data.chunks_exact(4) {
+                if p[..3].iter().all(|v| *v <= 8) {
+                    continue;
+                }
+                lit += 1;
+                if bytes.iter().any(|b| (0..3).all(|k| (p[k] as i32 - b[k]).abs() <= 5)) {
+                    on_stop += 1;
+                }
+            }
+            assert!(lit > 160 * 120 / 4, "the view is mostly interior: {lit} lit");
+            on_stop as f64 / lit as f64
+        };
+        let stepped = share_on_stops(true);
+        let blended = share_on_stops(false);
+        println!("pixels on a stop colour: stepped {stepped:.3}, blended {blended:.3}");
+        assert!(stepped > 0.9, "a stepped palette left {stepped:.3} of pixels on its stops");
+        assert!(blended < 0.2, "the blended palette is already banded ({blended:.3})");
     }
 
     /// A pan must REUSE the reference orbit (relocation), and the

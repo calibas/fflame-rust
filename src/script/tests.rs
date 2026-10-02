@@ -4133,6 +4133,38 @@ fn escape_rejects_names_that_do_not_exist() {
     }
 }
 
+/// The palette map is reachable from a script, and a misspelt curve
+/// fails rather than quietly drawing Linear.
+#[cfg(feature = "engine-escape")]
+#[test]
+fn escape_palette_map_from_a_script() {
+    let out = run(
+        r#"
+        script("Mapped", "generator");
+        escape.formula("mandelbrot");
+        escape.transfer("log_log", 4);
+        escape.palette_curve("s_curve");
+        escape.stepped_palette(true);
+        "#,
+        1,
+    )
+    .expect("script ran");
+    let pm = &out.config.escape.palette_map;
+    assert_eq!(pm.transfer, crate::config::escape::TransferCurve::LogLog);
+    assert_eq!(pm.pivot, 4.0);
+    assert_eq!(pm.curve, crate::config::escape::PaletteCurve::SCurve);
+    assert!(pm.stepped);
+    for (src, expect) in [
+        (r#"escape.transfer("logg", 1.0);"#, "unknown transfer curve"),
+        (r#"escape.palette_curve("s");"#, "unknown palette curve"),
+    ] {
+        let text = format!("script(\"X\", \"generator\");\n{src}");
+        let e = run(&text, 1).expect_err("must fail");
+        let msg = format!("{e:?}");
+        assert!(msg.contains(expect), "expected `{expect}` in the error, got: {msg}");
+    }
+}
+
 /// Switching formula drops the previous formula's parameters.
 ///
 /// They are keyed by name and belong to the formula that declared
