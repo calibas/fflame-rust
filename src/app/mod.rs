@@ -1405,7 +1405,8 @@ impl App {
             let probe = 0u8;
             let sp = core::ptr::addr_of!(probe) as usize;
             log::info!(
-                "load #{load_gen}: wasm memory {mib:.1} MiB ({pages} pages),                  stack headroom {:.2} MiB, undo depth {}",
+                "load #{load_gen}: wasm memory {mib:.1} MiB ({pages} pages), \
+                 stack headroom {:.2} MiB, undo depth {}",
                 sp as f64 / (1024.0 * 1024.0),
                 self.config_manager.history_len()
             );

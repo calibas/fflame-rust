@@ -275,7 +275,11 @@ pub static MAGNITUDE_AVERAGE: ColoringDef = ColoringDef {
             default: 0.0,
             min: -10.0,
             max: 10.0,
-            tooltip: "Baseline subtracted from the mean before scaling. A Ducks                       julia field can span only ~0.2 around a large mean -- offset                       to the field's floor, then scale up, to stretch that range                       across the palette (the reference images normalize contrast                       this way).",
+            tooltip: "Baseline subtracted from the mean before scaling. A Ducks \
+                      julia field can span only ~0.2 around a large mean -- offset \
+                      to the field's floor, then scale up, to stretch that range \
+                      across the palette (the reference images normalize contrast \
+                      this way).",
             choices: &[],
         },
     ],

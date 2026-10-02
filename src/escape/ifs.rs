@@ -827,7 +827,10 @@ pub static IFS_FLAME_3D: IfsDef = IfsDef {
             tooltip: "How many branch addresses the walk follows at once. Every address \
                       bounds the distance to ITS piece and the truth is the smallest, so \
                       following one can only read too far -- which a marcher turns into \
-                      a surface that is not there. Raise it for a solid whose pieces \n                      OVERLAP; one whose pieces TILE needs nothing, and a march \n                      pays the beam on every step rather than once per pixel -- \n                      measured at 2.8x the time for two bytes of difference.",
+                      a surface that is not there. Raise it for a solid whose pieces \
+                      OVERLAP; one whose pieces TILE needs nothing, and a march \
+                      pays the beam on every step rather than once per pixel -- \
+                      measured at 2.8x the time for two bytes of difference.",
             choices: &[],
         },
         EscapeParamDef {
@@ -888,7 +891,9 @@ pub static IFS_FLAME_3D: IfsDef = IfsDef {
             default: 0.0,
             min: -2.0,
             max: 2.0,
-            tooltip: "For a solid of quaternion maps (plan 8.11 step 3): the scalar                       coordinate the 3D picture is a slice of. Sweep it to walk                       through the 4D set. Nothing else reads it.",
+            tooltip: "For a solid of quaternion maps (plan 8.11 step 3): the scalar \
+                      coordinate the 3D picture is a slice of. Sweep it to walk \
+                      through the 4D set. Nothing else reads it.",
             choices: &[],
         },
         EscapeParamDef {
@@ -1505,7 +1510,10 @@ pub static IFS_DISTANCE: IfsColoringDef = IfsColoringDef {
             default: 0.5,
             min: 0.0,
             max: 1.0,
-            tooltip: "Palette position for the set itself. Not 0 by default: most                       palettes are black at their low end, so a set drawn there is                       invisible against the background and the render reads as                       empty.",
+            tooltip: "Palette position for the set itself. Not 0 by default: most \
+                      palettes are black at their low end, so a set drawn there is \
+                      invisible against the background and the render reads as \
+                      empty.",
             choices: &[],
         },
     ],
