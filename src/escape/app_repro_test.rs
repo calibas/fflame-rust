@@ -8054,6 +8054,49 @@ fn main() {
     /// accumulation, and requires them to agree closely: same sample
     /// positions, same average, so the difference is f32 ordering and
     /// the per-sample shading pass, not method.
+    /// MEASUREMENT: does relief strength depend on the output size? The
+    /// slope is taken per render pixel, so a field that spans the view
+    /// rises less per pixel at a larger size. Renders one view with and
+    /// without relief at 200x150 and at 800x600 and reports how far the
+    /// relief moves the picture at each.
+    #[test]
+    #[ignore = "measurement: needs a GPU"]
+    fn dbg_relief_strength_against_output_size() {
+        let (device, queue) = repro_device();
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.escape.center_re = "-0.7436438870371587".to_string();
+        config.escape.center_im = "0.1318259042053119".to_string();
+        config.escape.zoom_log2 = 9.0;
+        config.escape.max_iter = 1200;
+        config.escape.coloring = "smooth".to_string();
+        config.escape.coloring_params.insert("scale".to_string(), 0.03);
+        let lum = |p: &[u8]| (p[0] as f64 + p[1] as f64 + p[2] as f64) / 765.0;
+        // The default height, which saturates the response over much of
+        // the view, and a gentle one, which keeps it near linear.
+        for height in [10.0f32, 1.0] {
+        println!("  height {height}:");
+        let mut prev: Option<f64> = None;
+        for (w, h) in [(200u32, 150u32), (800, 600)] {
+            let render = |shaded: bool| {
+                let mut c = config.clone();
+                c.escape.shading.enabled = shaded;
+                c.escape.shading.height = height;
+                let job = crate::renderer::RenderJob::new(&c, w, h);
+                pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)).expect("render").rgba_data
+            };
+            let (plain, lit) = (render(false), render(true));
+            let moved = plain.chunks(4).zip(lit.chunks(4)).map(|(a, b)| (lum(a) - lum(b)).abs()).sum::<f64>() / (w * h) as f64;
+            println!("    {w}x{h}: relief moves the mean pixel by {moved:.4}{}", prev.map_or(String::new(), |p| format!(" ({:.2}x the smaller render's)", moved / p)));
+            prev = Some(moved);
+        }
+        }
+    }
+
     /// **A supersampled edge is weighted by its coverage once.** A pixel
     /// half covered by the exterior must show half the exterior's colour
     /// over the background. The downsample used to average the samples'

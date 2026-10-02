@@ -387,9 +387,18 @@ Read from the code, not reproduced by render, except where noted.
      it is 12 of 26.
 6. **Bounded colourings with Banded relief** store the clamped value as
    height in the iterate pass, but `fract(raw)` in the recolour pass.
-7. **Relief strength may depend on export resolution** (to check by
-   render). Slope is measured per pixel, and the strength is compensated for
-   supersampling but not for output size.
+7. **Relief strength depends on export resolution, but only a little.**
+   - Slope is measured per pixel, and the strength is compensated for
+     supersampling but not for output size.
+   - *Measured* (`dbg_relief_strength_against_output_size`, smooth
+     colouring near the set): at 800×600 relief moves the picture 0.79×
+     as much as at 200×150, at heights 10 and 1 alike.
+   - It is not the quarter a smooth field would give. The colouring
+     steepens toward the set at every scale, so a larger render finds
+     steeper slopes per pixel.
+   - A linear correction by width, as KF2 does, would therefore overshoot
+     about 3× here.
+   - Left as it is. R9 is where a better-founded normalisation would go.
 
 ---
 
@@ -429,15 +438,16 @@ Read from the code, not reproduced by render, except where noted.
 
 ### Order of work
 
-1. **Fixes** (§6), each its own commit:
-   - boundary darkening;
-   - the light default and its comment;
-   - triangle inequality's `c` under perturbation;
-   - the Bounded / Banded height mismatch;
-   - stale comments;
-   - checking whether relief strength depends on export resolution (any
-     fix there changes how saved renders look, so it gets measured and
-     decided first).
+1. **Fixes** (§6). *Done 2026-10-02*, each its own commit on `main`:
+   - boundary darkening (`3dc705b6`);
+   - the light default and its comment (`6dbbc178`);
+   - triangle inequality's `c` under perturbation (`e67e9ba7`). This
+     turned out to matter in Julia mode, where the view centre is not c
+     at all;
+   - the Bounded / Banded height mismatch (`950bb136`);
+   - stale comments (`710225e4`);
+   - relief strength against export resolution: measured, and left as it
+     is (§6.7).
 2. **The smooth count** (P2): correct it for power and bailout, and give
    each colouring a recommended bailout (decision 2).
 3. **The value transfer** (P1) and the palette curve, plus stepped palettes
