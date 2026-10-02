@@ -650,8 +650,11 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let period = 0u;
     let dz = vec2<f32>(1.0, 0.0);
     // The f32 value of c for the accumulator colorings (trap geometry
-    // lives at O(1) scale, where f32 c is exact enough).
-    let c_f32 = params.center;
+    // lives at O(1) scale, where f32 c is exact enough): the pixel's own
+    // c on the parameter plane and the constant in Julia mode, as the
+    // direct path has them. It was the view centre for every pixel --
+    // close on the parameter plane, but in Julia mode not c at all.
+    let c_f32 = select(params.center + (d0 - perturb.ref_offset) * perturb.s, params.julia_c, is_julia_perturb);
 
     //__ACCUM_DECL__
 
@@ -1577,7 +1580,11 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var converged = false;
     let period = 0u;
     let dz = vec2<f32>(1.0, 0.0);
-    let c_f32 = params.center;
+    // c for the accumulator colorings: the constant in Julia mode; on
+    // the parameter plane the view centre, which on this rung is the
+    // pixel's c to f32 -- the pixel's offset is far below what an f32 c
+    // resolves.
+    let c_f32 = select(params.center, params.julia_c, is_julia_perturb);
 
     //__ACCUM_DECL__
 
