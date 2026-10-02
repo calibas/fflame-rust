@@ -712,7 +712,8 @@ fn map_error(err: Box<rhai::EvalAltResult>) -> ScriptError {
             .unwrap_or_else(|_| "stopped".to_string());
         return ScriptError {
             message: format!(
-                "{reason} — this script (and anything it called) did too much work.                  Reduce a loop count, or the depth of whatever it is building."
+                "{reason} — this script (and anything it called) did too much work. \
+                 Reduce a loop count, or the depth of whatever it is building."
             ),
             line: pos.line(),
             column: pos.position(),

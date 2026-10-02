@@ -750,7 +750,10 @@ pub static HODGEPODGE: ModelDef = ModelDef {
             default: 2.0,
             min: 1.0,
             max: 16.0,
-            tooltip: "Divides a neighbour count when a healthy cell catches the infection —                       the ill count under Gerhardt–Schuster's rule, the infected count under                       Dewdney's, which is one of the three places the two differ. Larger                       values make infection harder to catch.",
+            tooltip: "Divides a neighbour count when a healthy cell catches the infection — \
+                      the ill count under Gerhardt–Schuster's rule, the infected count under \
+                      Dewdney's, which is one of the three places the two differ. Larger \
+                      values make infection harder to catch.",
             choices: &[],
         },
         SimParamDef {
@@ -759,7 +762,8 @@ pub static HODGEPODGE: ModelDef = ModelDef {
             default: 3.0,
             min: 1.0,
             max: 16.0,
-            tooltip: "Divides the other neighbour count — infected under Gerhardt–Schuster,                       ill under Dewdney. With k₁ it sets how readily waves nucleate.",
+            tooltip: "Divides the other neighbour count — infected under Gerhardt–Schuster, \
+                      ill under Dewdney. With k₁ it sets how readily waves nucleate.",
             choices: &[],
         },
         SimParamDef {
@@ -768,7 +772,8 @@ pub static HODGEPODGE: ModelDef = ModelDef {
             default: 25.0,
             min: 1.0,
             max: 200.0,
-            tooltip: "How fast an infected cell progresses toward ill. Sets the wave speed                       and therefore the spiral pitch.",
+            tooltip: "How fast an infected cell progresses toward ill. Sets the wave speed \
+                      and therefore the spiral pitch.",
             choices: &[],
         },
         SimParamDef {
@@ -777,7 +782,11 @@ pub static HODGEPODGE: ModelDef = ModelDef {
             default: 0.0,
             min: 0.0,
             max: 1.0,
-            tooltip: "Which published rule to run. Gerhardt–Schuster is the 1989 paper's                       own: k₁ divides the ill count, and an infected cell averages the                       states of the infected cells around it. Dewdney's is the version that                       circulated afterwards — the counts swapped, and the average taken over                       every neighbour — and gives coarser, rounder scrolls.",
+            tooltip: "Which published rule to run. Gerhardt–Schuster is the 1989 paper's \
+                      own: k₁ divides the ill count, and an infected cell averages the \
+                      states of the infected cells around it. Dewdney's is the version that \
+                      circulated afterwards — the counts swapped, and the average taken over \
+                      every neighbour — and gives coarser, rounder scrolls.",
             choices: &["Gerhardt–Schuster", "Dewdney"],
         },
     ],
@@ -3926,7 +3935,11 @@ pub static DLA: ModelDef = ModelDef {
             default: 2.0,
             min: 0.5,
             max: 16.0,
-            tooltip: "How many walkers may work the cluster at once, per cell of its                       circumference. This is the speed-against-fidelity knob: DLA is what                       it is because particles arrive ONE AT A TIME, so low values grow a                       truer aggregate slowly and high values grow a denser, blunter one                       fast.",
+            tooltip: "How many walkers may work the cluster at once, per cell of its \
+                      circumference. This is the speed-against-fidelity knob: DLA is what \
+                      it is because particles arrive ONE AT A TIME, so low values grow a \
+                      truer aggregate slowly and high values grow a denser, blunter one \
+                      fast.",
             choices: &[],
         },
         SimParamDef {

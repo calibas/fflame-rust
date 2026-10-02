@@ -3507,7 +3507,8 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let lim = device.limits();
         if need > lim.max_buffer_size || need > lim.max_storage_buffer_binding_size as u64 {
             log::error!(
-                "escape: a deep-zoom render of {}x{} needs a {} MB iteration-state buffer,                  past this GPU's {} MB limit -- rendering the direct path instead",
+                "escape: a deep-zoom render of {}x{} needs a {} MB iteration-state buffer, \
+                 past this GPU's {} MB limit -- rendering the direct path instead",
                 self.width,
                 self.height,
                 need / (1024 * 1024),

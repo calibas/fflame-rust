@@ -1620,7 +1620,10 @@ pub async fn export_animation(
             rh,
         ) {
             return Err(AnimationExportError::InvalidConfig(format!(
-                "this GPU cannot hold the deep-zoom state for a {rw}x{rh} frame.                  Export at a smaller size (or lower the antialiasing): past the                  perturbation threshold every pixel carries its own iteration                  state, and there is no way to render this size without it."
+                "this GPU cannot hold the deep-zoom state for a {rw}x{rh} frame. \
+                 Export at a smaller size (or lower the antialiasing): past the \
+                 perturbation threshold every pixel carries its own iteration \
+                 state, and there is no way to render this size without it."
             )));
         }
     }
