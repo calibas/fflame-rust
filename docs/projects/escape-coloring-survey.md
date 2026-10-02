@@ -691,9 +691,18 @@ Read from the code, not reproduced by render, except where noted.
    only darkens; Soft and Hard Light with a mid-grey light change
    nothing; every stencil and curve changes the picture.
 
-   **Found on the way:** with Banded relief, or any field left on
-   Banded, auto contrast fits the wrapped value, because the probe and
-   the relief share one height texture. The planned fix: an `rg32float`
-   height texture, raw value for the probe and the relief's own source
-   beside it. That also gives R3 a cheap form, relief from the texture
-   layer's value.
+   **Found on the way, and fixed:** with Banded relief, or any field
+   left on Banded, auto contrast fitted the wrapped value, because the
+   probe and the relief shared one height texture. The height texture
+   is now `rg32float`: red the colouring's raw value, which the probe
+   reads, green the relief's own source, which the blur and the slope
+   read. Measured: with the relief at zero strength, Smooth and Banded
+   now draw byte-identical contrast-fitted pictures.
+   - **R3**, in the form that split made cheap: a third relief source,
+     **Layer**, slopes the texture layer's value, so the relief follows
+     one field and the colour another. Without a layer it is the
+     colouring's own value, byte for byte.
+
+   **Still to do:** analytic relief from the distance-estimate vector
+   (R5), offset-orbit relief (R6), Embossed (R7) and an image texture
+   (R10).

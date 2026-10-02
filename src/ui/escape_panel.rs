@@ -984,15 +984,19 @@ pub fn render_escape_content(
                         .selected_text(match cur {
                             ShadingField::Smooth => t!("escape_panel.shading_field_smooth"),
                             ShadingField::Banded => t!("escape_panel.shading_field_banded"),
+                            ShadingField::Layer => t!("escape_panel.shading_field_layer"),
                         })
                         .show_ui(ui, |ui| {
-                            for f in [ShadingField::Smooth, ShadingField::Banded] {
+                            for f in [ShadingField::Smooth, ShadingField::Banded, ShadingField::Layer] {
                                 let label = match f {
                                     ShadingField::Smooth => {
                                         t!("escape_panel.shading_field_smooth")
                                     }
                                     ShadingField::Banded => {
                                         t!("escape_panel.shading_field_banded")
+                                    }
+                                    ShadingField::Layer => {
+                                        t!("escape_panel.shading_field_layer")
                                     }
                                 };
                                 if ui.selectable_label(f == cur, label).clicked() && f != cur {
