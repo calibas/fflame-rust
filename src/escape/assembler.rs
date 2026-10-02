@@ -78,7 +78,7 @@ struct EscapeParams {
 // every store but one falls out of bounds and WGSL discards it -- so
 // the cost of always writing is a single dead store per pixel, and
 // there is no second shader variant to keep in step.
-@group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
+@group(0) @binding(4) var height_tex: texture_storage_2d<rg32float, write>;
 
 // Terminal per-pixel iteration record (32 B/px), written on a pass
 // that completes the pixel's iteration when params.flags bit 3 is
@@ -284,11 +284,16 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // downsample like everything else, so the boundary antialiases
     // against the background instead of against black.
     var coverage = 0.0;
-    // The relief pass slopes THIS, not the rendered colour: the value
-    // before the palette, so a cycling palette's band edges are not
-    // mistaken for cliffs. Interior pixels keep 0 -- flat, which puts
-    // the rim light exactly on the set boundary.
+    // Two heights. `height` (red) is the colouring's raw value, which
+    // the auto-contrast probe measures; `relief` (green) is what the
+    // relief slopes -- the raw value, the wrapped one (Banded) or the
+    // texture layer's (Layer). Kept apart so a relief source can never
+    // change what contrast fits. The relief slopes the value before the
+    // palette, so a cycling palette's band edges are not mistaken for
+    // cliffs; interior pixels keep 0 -- flat, which puts the rim light
+    // exactly on the set boundary.
     var height = 0.0;
+    var relief = 0.0;
     if (escaped || COLORING_COLORS_INTERIOR) {
         let summary = OrbitSummary(z, n, escaped, converged, period, dz);
         // `fract` so unbounded colorings cycle as they grow; a
@@ -299,7 +304,8 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let t = esc_wrap(esc_transfer(raw), COLORING_IS_BOUNDED);
         // SHADING_BANDED picks the wrapped coordinate instead, which
         // turns every palette band into a step (the engraved look).
-        height = select(raw, t, params.shade_flags == 1u);
+        height = raw;
+        relief = esc_relief_source(raw, t, summary, accum_state);
         rgb = esc_palette(esc_layer(t, summary, accum_state));
         coverage = 1.0;
     }
@@ -311,7 +317,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         );
     }
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(rgb, coverage));
-    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(height, 0.0, 0.0, 0.0));
+    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(height, relief, 0.0, 0.0));
 }
 "#;
 
@@ -502,6 +508,11 @@ fn layer_wgsl(layer: Option<&ColoringDef>) -> String {
         return "// no texture layer\n\
                 fn esc_layer(t: f32, sum: OrbitSummary, state: vec4<f32>) -> f32 {\n\
                 \x20   return t;\n\
+                }\n\
+                // The relief's source (ShadingField): 1 is Banded; Layer,\n\
+                // with no layer, falls back to the raw value.\n\
+                fn esc_relief_source(raw: f32, t: f32, sum: OrbitSummary, state: vec4<f32>) -> f32 {\n\
+                \x20   return select(raw, t, params.shade_flags == 1u);\n\
                 }"
             .to_string();
     };
@@ -519,8 +530,20 @@ fn layer_wgsl(layer: Option<&ColoringDef>) -> String {
 }
 
 /// Blending the layer into the base (`LayerBlend`): `t` is the base's
-/// wrapped palette position, the result the position looked up.
+/// wrapped palette position, the result the position looked up. And
+/// the relief's source, which can be the layer's own value.
 const ESC_LAYER_WGSL: &str = r#"
+// The relief's source (ShadingField): the raw value, the wrapped one
+// (1, Banded), or the texture layer's raw value (2, Layer) -- relief
+// from one field and colour from another, as UF's Slope lights a
+// different value than the one it colours (survey R3).
+fn esc_relief_source(raw: f32, t: f32, sum: OrbitSummary, state: vec4<f32>) -> f32 {
+    if (params.shade_flags == 2u && (sum.escaped || LAYER_COLORS_INTERIOR)) {
+        return layer_coloring_map(sum, state);
+    }
+    return select(raw, t, params.shade_flags == 1u);
+}
+
 // The texture layer blended into the base's palette position before
 // the palette (ColoringLayer). Where the layer has nothing to say -- an
 // interior pixel it does not colour -- the base stands alone.
@@ -789,7 +812,7 @@ struct BlaBuf {
 @group(0) @binding(9) var<storage, read> ref_orbit_e: array<i32>;
 // See the direct template: the coloring's scalar value for the relief
 // pass, bound to a 1x1 dummy when shading is off.
-@group(0) @binding(10) var height_tex: texture_storage_2d<r32float, write>;
+@group(0) @binding(10) var height_tex: texture_storage_2d<rg32float, write>;
 // |Z|² per reference entry as a DF pair (hi, lo), CPU-computed in f64.
 // The escape margin needs (|Z|² - bailout) to better than f32 ulp --
 // see the margin comment at the escape test.
@@ -1084,11 +1107,16 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // downsample like everything else, so the boundary antialiases
     // against the background instead of against black.
     var coverage = 0.0;
-    // The relief pass slopes THIS, not the rendered colour: the value
-    // before the palette, so a cycling palette's band edges are not
-    // mistaken for cliffs. Interior pixels keep 0 -- flat, which puts
-    // the rim light exactly on the set boundary.
+    // Two heights. `height` (red) is the colouring's raw value, which
+    // the auto-contrast probe measures; `relief` (green) is what the
+    // relief slopes -- the raw value, the wrapped one (Banded) or the
+    // texture layer's (Layer). Kept apart so a relief source can never
+    // change what contrast fits. The relief slopes the value before the
+    // palette, so a cycling palette's band edges are not mistaken for
+    // cliffs; interior pixels keep 0 -- flat, which puts the rim light
+    // exactly on the set boundary.
     var height = 0.0;
+    var relief = 0.0;
     if (escaped || COLORING_COLORS_INTERIOR) {
         let summary = OrbitSummary(z, n, escaped, converged, period, dz);
         // `fract` so unbounded colorings cycle as they grow; a
@@ -1099,7 +1127,8 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let t = esc_wrap(esc_transfer(raw), COLORING_IS_BOUNDED);
         // SHADING_BANDED picks the wrapped coordinate instead, which
         // turns every palette band into a step (the engraved look).
-        height = select(raw, t, params.shade_flags == 1u);
+        height = raw;
+        relief = esc_relief_source(raw, t, summary, accum_state);
         rgb = esc_palette(esc_layer(t, summary, accum_state));
         coverage = 1.0;
     }
@@ -1120,7 +1149,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // settled image is byte-identical.
     if (escaped || perturb.iter_end >= params.max_iter) {
         textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, coverage));
-        textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, 0.0, 0.0, 0.0));
+        textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, relief, 0.0, 0.0));
     }
 }
 "#;
@@ -1281,7 +1310,7 @@ struct BlaBuf {
 @group(0) @binding(9) var<storage, read> ref_orbit_e: array<i32>;
 // See the direct template: the coloring's scalar value for the relief
 // pass, bound to a 1x1 dummy when shading is off.
-@group(0) @binding(10) var height_tex: texture_storage_2d<r32float, write>;
+@group(0) @binding(10) var height_tex: texture_storage_2d<rg32float, write>;
 // |Z|² per reference entry as a DF pair (hi, lo), CPU-computed in f64.
 // The escape margin needs (|Z|² - bailout) to better than f32 ulp --
 // see the margin comment at the escape test.
@@ -1992,11 +2021,16 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // downsample like everything else, so the boundary antialiases
     // against the background instead of against black.
     var coverage = 0.0;
-    // The relief pass slopes THIS, not the rendered colour: the value
-    // before the palette, so a cycling palette's band edges are not
-    // mistaken for cliffs. Interior pixels keep 0 -- flat, which puts
-    // the rim light exactly on the set boundary.
+    // Two heights. `height` (red) is the colouring's raw value, which
+    // the auto-contrast probe measures; `relief` (green) is what the
+    // relief slopes -- the raw value, the wrapped one (Banded) or the
+    // texture layer's (Layer). Kept apart so a relief source can never
+    // change what contrast fits. The relief slopes the value before the
+    // palette, so a cycling palette's band edges are not mistaken for
+    // cliffs; interior pixels keep 0 -- flat, which puts the rim light
+    // exactly on the set boundary.
     var height = 0.0;
+    var relief = 0.0;
     if (escaped || COLORING_COLORS_INTERIOR) {
         let summary = OrbitSummary(z, n, escaped, converged, period, dz);
         // `fract` so unbounded colorings cycle as they grow; a
@@ -2007,7 +2041,8 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let t = esc_wrap(esc_transfer(raw), COLORING_IS_BOUNDED);
         // SHADING_BANDED picks the wrapped coordinate instead, which
         // turns every palette band into a step (the engraved look).
-        height = select(raw, t, params.shade_flags == 1u);
+        height = raw;
+        relief = esc_relief_source(raw, t, summary, accum_state);
         rgb = esc_palette(esc_layer(t, summary, accum_state));
         coverage = 1.0;
     }
@@ -2028,7 +2063,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // settled image is byte-identical.
     if (escaped || perturb.iter_end >= params.max_iter) {
         textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, coverage));
-        textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, 0.0, 0.0, 0.0));
+        textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, relief, 0.0, 0.0));
     }
 }
 "#;
@@ -4423,7 +4458,7 @@ struct IterResult {
 @group(0) @binding(2) var palette_texture: texture_2d<f32>;
 @group(0) @binding(3) var palette_sampler: sampler;
 //__PALETTE_MAP__
-@group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
+@group(0) @binding(4) var height_tex: texture_storage_2d<rg32float, write>;
 @group(0) @binding(5) var<storage, read> results: array<IterResult>;
 
 // The measured contrast fit (see EscapeContrast). `enabled = 0` makes
@@ -4490,7 +4525,10 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // downsample like everything else, so the boundary antialiases
     // against the background instead of against black.
     var coverage = 0.0;
+    // Red the raw value for the probe, green the relief's source: see
+    // the iterate templates.
     var height = 0.0;
+    var relief = 0.0;
     if (escaped || COLORING_COLORS_INTERIOR) {
         let summary = OrbitSummary(r.z, r.n, escaped, converged, period, r.dz);
         let state = vec4<f32>(r.accum, /*R_ACCUM2*/);
@@ -4501,7 +4539,8 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // value as the palette wraps it -- transferred, then clamped
         // for a Bounded colouring and wrapped otherwise -- as the
         // iterate pass stores it.
-        height = select(raw, esc_wrap(esc_transfer(raw), COLORING_IS_BOUNDED), params.shade_flags == 1u);
+        height = raw;
+        relief = esc_relief_source(raw, esc_wrap(esc_transfer(raw), COLORING_IS_BOUNDED), summary, state);
         let dims = vec2<f32>(f32(params.width), f32(params.height));
         let rawc = apply_contrast(raw, vec2<f32>(f32(gid.x), f32(gid.y)) / max(dims - 1.0, vec2<f32>(1.0)));
         let t = esc_wrap(rawc, COLORING_IS_BOUNDED);
@@ -4509,7 +4548,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         coverage = 1.0;
     }
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, coverage));
-    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, 0.0, 0.0, 0.0));
+    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, relief, 0.0, 0.0));
 }
 "#;
 
@@ -4611,7 +4650,7 @@ struct EscapeParams {
 // every store but one falls out of bounds and WGSL discards it -- so
 // the cost of always writing is a single dead store per pixel, and
 // there is no second shader variant to keep in step.
-@group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
+@group(0) @binding(4) var height_tex: texture_storage_2d<rg32float, write>;
 
 fn fparam(i: u32) -> f32 {
     return params.fparams[i / 4u][i % 4u];
@@ -4719,7 +4758,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let rgb = esc_palette(t) * clamp(shade.lum, 0.0, 4.0);
 
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(rgb, 1.0));
-    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(height, 0.0, 0.0, 0.0));
+    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(shade.t, height, 0.0, 0.0));
 }
 "#;
 
@@ -4763,7 +4802,7 @@ struct EscapeParams {
 @group(0) @binding(2) var palette_texture: texture_2d<f32>;
 @group(0) @binding(3) var palette_sampler: sampler;
 //__PALETTE_MAP__
-@group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
+@group(0) @binding(4) var height_tex: texture_storage_2d<rg32float, write>;
 
 // One map of the IFS, as `escape::ifs::IfsMapGpu` packs it. Group 1 so
 // mode D is the only pipeline whose layout mentions it and no existing
@@ -5092,7 +5131,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let y = py + dy;
             if (x < params.width && y < params.height) {
                 textureStore(out_tex, vec2<i32>(i32(x), i32(y)), vec4<f32>(rgb, 1.0));
-                textureStore(height_tex, vec2<i32>(i32(x), i32(y)), vec4<f32>(height, 0.0, 0.0, 0.0));
+                textureStore(height_tex, vec2<i32>(i32(x), i32(y)), vec4<f32>(shade.t, height, 0.0, 0.0));
             }
         }
     }
@@ -5245,7 +5284,7 @@ struct IfsRecord {
 @group(0) @binding(2) var palette_texture: texture_2d<f32>;
 @group(0) @binding(3) var palette_sampler: sampler;
 //__PALETTE_MAP__
-@group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
+@group(0) @binding(4) var height_tex: texture_storage_2d<rg32float, write>;
 @group(0) @binding(5) var<storage, read> results: array<IfsRecord>;
 
 // Bound because the layout is shared with mode A's recolor pass. Mode
@@ -5355,7 +5394,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         * r.shade;
 
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, 1.0));
-    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, 0.0, 0.0, 0.0));
+    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(shade.t, height, 0.0, 0.0));
 }"#;
 
 const IFS_RELIGHT_TEMPLATE: &str = r#"
@@ -5416,7 +5455,7 @@ struct IfsRecord {
 @group(0) @binding(2) var palette_texture: texture_2d<f32>;
 @group(0) @binding(3) var palette_sampler: sampler;
 //__PALETTE_MAP__
-@group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
+@group(0) @binding(4) var height_tex: texture_storage_2d<rg32float, write>;
 @group(0) @binding(5) var<storage, read> results: array<IfsRecord>;
 
 struct ContrastParams {
@@ -5582,7 +5621,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let rgb = ifs_rig(albedo, n, nz_ao.y, sun, dir, t);
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, 1.0));
-    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, 0.0, 0.0, 0.0));
+    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(shade.t, height, 0.0, 0.0));
 }"#;
 
 const IFS_3D_TEMPLATE: &str = r#"
@@ -5625,7 +5664,7 @@ struct EscapeParams {
 @group(0) @binding(2) var palette_texture: texture_2d<f32>;
 @group(0) @binding(3) var palette_sampler: sampler;
 //__PALETTE_MAP__
-@group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
+@group(0) @binding(4) var height_tex: texture_storage_2d<rg32float, write>;
 
 // Four vec4s and no vec3: a vec3<f32> aligns to sixteen bytes here
 // and to four in Rust, so a struct with one in it is a different size

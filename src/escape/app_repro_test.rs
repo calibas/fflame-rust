@@ -7630,6 +7630,75 @@ fn main() {
         }
     }
 
+    /// The relief's source cannot change what auto contrast fits.
+    ///
+    /// The probe and the relief once shared one height channel, so
+    /// Banded relief handed the probe the WRAPPED value and contrast
+    /// fitted a sawtooth: the same view drew differently depending on
+    /// a relief setting, even with the relief at zero strength. With
+    /// the raw value in red and the relief's source in green, those
+    /// pictures are identical. And the Layer source draws its own
+    /// relief with a layer, and the colouring's without one.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_relief_source_cannot_move_auto_contrast() {
+        use crate::config::escape::{ColoringLayer, ContrastMode, LayerBlend, ShadingField};
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.escape.center_re = "-0.7453".to_string();
+        config.escape.center_im = "0.1127".to_string();
+        config.escape.zoom_log2 = 7.0;
+        config.escape.max_iter = 600;
+        config.escape.contrast.mode = ContrastMode::AutoRange;
+        config.escape.contrast.turns = 3.0;
+        config.escape.shading.enabled = true;
+        config.escape.shading.shadow_strength = 0.0;
+        config.escape.shading.highlight_strength = 0.0;
+        let render = |c: &crate::config::FractalConfig| {
+            let job = crate::renderer::RenderJob::new(c, w, h);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+        let with_field = |f: ShadingField| {
+            let mut c = config.clone();
+            c.escape.shading.field = f;
+            render(&c)
+        };
+        let smooth = with_field(ShadingField::Smooth);
+        assert_eq!(with_field(ShadingField::Banded), smooth, "Banded relief moved the contrast fit");
+        assert_eq!(with_field(ShadingField::Layer), smooth, "Layer relief with no layer moved the contrast fit");
+
+        // Lit, the Layer source draws the layer's relief.
+        let mut lit = config.clone();
+        lit.escape.contrast.mode = ContrastMode::Off;
+        lit.escape.shading.shadow_strength = 1.0;
+        lit.escape.shading.highlight_strength = 0.5;
+        lit.escape.shading.height = 10.0;
+        let own = render(&lit);
+        lit.escape.shading.field = ShadingField::Layer;
+        assert_eq!(render(&lit), own, "Layer relief with no layer is not the colouring's");
+        lit.escape.layer = ColoringLayer {
+            coloring: "stripe_average".to_string(),
+            params: [("density".to_string(), 6.0)].into_iter().collect(),
+            blend: LayerBlend::Screen,
+            weight: 0.0,
+        };
+        let layered = render(&lit);
+        let differing = layered.chunks(4).zip(own.chunks(4)).filter(|(a, b)| a != b).count();
+        assert!(
+            differing > (w * h / 20) as usize,
+            "the layer's relief (at blend weight 0, so only the relief differs) changed only {differing} pixels"
+        );
+    }
+
     /// A stepped palette draws every stop as a flat band: an escape
     /// render through it shows the stops' colours and next to nothing
     /// in between, where the blended palette shows a continuum.

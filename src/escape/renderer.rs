@@ -1359,7 +1359,7 @@ impl EscapeRenderer {
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::StorageTexture {
                         access: StorageTextureAccess::WriteOnly,
-                        format: TextureFormat::R32Float,
+                        format: TextureFormat::Rg32Float,
                         view_dimension: TextureViewDimension::D2,
                     },
                     count: None,
@@ -1434,7 +1434,7 @@ impl EscapeRenderer {
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::StorageTexture {
                         access: StorageTextureAccess::WriteOnly,
-                        format: TextureFormat::R32Float,
+                        format: TextureFormat::Rg32Float,
                         view_dimension: TextureViewDimension::D2,
                     },
                     count: None,
@@ -1504,7 +1504,7 @@ impl EscapeRenderer {
                         visibility: ShaderStages::COMPUTE,
                         ty: BindingType::StorageTexture {
                             access: StorageTextureAccess::WriteOnly,
-                            format: TextureFormat::R32Float,
+                            format: TextureFormat::Rg32Float,
                             view_dimension: TextureViewDimension::D2,
                         },
                         count: None,
@@ -5879,7 +5879,7 @@ fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             mip_level_count: 1,
             sample_count: 1,
             dimension: TextureDimension::D2,
-            format: TextureFormat::R32Float,
+            format: TextureFormat::Rg32Float,
             // COPY_SRC so a test can read the height field back and
             // check the softening blur against a CPU one.
             usage: TextureUsages::STORAGE_BINDING
@@ -6082,8 +6082,9 @@ fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             &self.height_texture
         };
         let (w, h) = (tex.width(), tex.height());
-        // 256-byte row alignment for the copy.
-        let row = (w * 4).div_ceil(256) * 256;
+        // Two floats a texel (the raw value, then the relief's source),
+        // and 256-byte row alignment for the copy.
+        let row = (w * 8).div_ceil(256) * 256;
         let staging = device.create_buffer(&BufferDescriptor {
             label: Some("Escape Height Readback"),
             size: (row * h) as u64,
@@ -6123,7 +6124,8 @@ fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             for y in 0..h {
                 let base = (y * row) as usize;
                 for x in 0..w {
-                    let i = base + (x * 4) as usize;
+                    // Green: the relief's source, which the blur blurs.
+                    let i = base + (x * 8) as usize + 4;
                     out.push(f32::from_le_bytes(view[i..i + 4].try_into().ok()?));
                 }
             }
@@ -6197,7 +6199,7 @@ struct BlurParams {
 }
 
 @group(0) @binding(0) var src_tex: texture_2d<f32>;
-@group(0) @binding(1) var dst_tex: texture_storage_2d<r32float, write>;
+@group(0) @binding(1) var dst_tex: texture_storage_2d<rg32float, write>;
 @group(0) @binding(2) var<uniform> blur: BlurParams;
 
 @compute @workgroup_size(8, 8, 1)
@@ -6215,10 +6217,12 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let fi = f32(i);
         let wt = exp(-fi * fi * inv);
         let q = clamp(p + blur.dir * i, vec2<i32>(0, 0), dims - vec2<i32>(1, 1));
-        acc = acc + textureLoad(src_tex, q, 0).r * wt;
+        // Green: the relief's source (red is the raw value the
+        // contrast probe reads, and no business of the relief's).
+        acc = acc + textureLoad(src_tex, q, 0).g * wt;
         wsum = wsum + wt;
     }
-    textureStore(dst_tex, p, vec4<f32>(acc / wsum, 0.0, 0.0, 0.0));
+    textureStore(dst_tex, p, vec4<f32>(acc / wsum, acc / wsum, 0.0, 0.0));
 }
 "#;
             let module = device.create_shader_module(ShaderModuleDescriptor {
@@ -6243,7 +6247,7 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                         visibility: ShaderStages::COMPUTE,
                         ty: BindingType::StorageTexture {
                             access: StorageTextureAccess::WriteOnly,
-                            format: TextureFormat::R32Float,
+                            format: TextureFormat::Rg32Float,
                             view_dimension: TextureViewDimension::D2,
                         },
                         count: None,
@@ -6442,7 +6446,9 @@ fn relief_height_curve(h: f32) -> f32 {{
 
 fn height_at(p: vec2<i32>, dims: vec2<i32>) -> f32 {{
     let q = clamp(p, vec2<i32>(0, 0), dims - vec2<i32>(1, 1));
-    return relief_height_curve(textureLoad(height_tex, q, 0).r);
+    // Green: the relief's source. Red holds the raw value for the
+    // contrast probe.
+    return relief_height_curve(textureLoad(height_tex, q, 0).g);
 }}
 
 // 0 multiply, 1 screen, 2 overlay, 3 mix. `amt` is how far to travel
