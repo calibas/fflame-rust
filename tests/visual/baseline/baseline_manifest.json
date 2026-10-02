@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "25ac5d60",
+  "git_hash": "8c685c7c",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 35102,
@@ -225,6 +225,10 @@
     "escape-layer-curvature-over-smooth.png": {
       "bytes": 15816,
       "sha256": "8a6e8c0f537fa9c1988b7e4c849a11703f144f9d5b85a322044a58e103dee236"
+    },
+    "escape-layer-rays-over-smooth.png": {
+      "bytes": 27159,
+      "sha256": "a220367f381dadf93ca615603f28d37b21284d89bc9c1864a445066191b8456e"
     },
     "escape-littlewood.png": {
       "bytes": 14682,

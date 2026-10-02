@@ -1594,3 +1594,54 @@ fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32
     recommended_bailout: None,
     pick_params: &[],
 };
+
+/// External rays (Fraktaler 3's `flying-fish` example, survey C7): lines
+/// where the angle of the escaped z, `T = arg(z) / 2pi`, sits within a
+/// band of a whole number of turns -- the external rays the binary
+/// decomposition's cells are bounded by. T doubles with each step of a
+/// quadratic map, so a fixed band would break at every escape band;
+/// narrowing it by `(1/p)^NF`, NF the escape fraction, keeps the lines
+/// continuous (F3's `0.05 * pow(0.5, getNF())`, p = 2). 1 on a ray and
+/// 0 off it, for a texture layer to draw over another colouring.
+pub static EXTERNAL_RAYS: ColoringDef = ColoringDef {
+    name: "external_rays",
+    display_name: "External Rays",
+    features: &[ColoringFeature::Bounded],
+    parameters: &[
+        EscapeParamDef {
+            name: "width",
+            display_name: "Width",
+            default: 0.05,
+            min: 0.001,
+            max: 0.5,
+            tooltip: "Half the width of a ray, in turns of the escape angle, \
+                      where the orbit has just escaped (Fraktaler 3 draws 0.05).",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "count",
+            display_name: "Rays",
+            default: 1.0,
+            min: 1.0,
+            max: 64.0,
+            tooltip: "How many rays per turn of the angle: 1 is the one through \
+                      angle 0, 2 adds the one through a half turn, and so on.",
+            choices: &[],
+        },
+    ],
+    wgsl: r#"
+fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
+    // An escaped z is far from the origin: no zero pair reaches atan2.
+    let m = max(round(cparam(1u)), 1.0);
+    let t = atan2(sum.z.y, sum.z.x) * 0.15915494;
+    // Distance in turns from the nearest k/m.
+    let off = abs(fract(m * t + 0.5) - 0.5) / m;
+    let band = cparam(0u) * pow(1.0 / max(params.degree, 1.0001), esc_escape_fraction(sum));
+    return select(0.0, 1.0, off < band);
+}
+"#,
+    accum_init: "",
+    wgsl_accum: "",
+    recommended_bailout: Some(1.0e4),
+    pick_params: &[],
+};

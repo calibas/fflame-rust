@@ -669,9 +669,15 @@ Read from the code, not reproduced by render, except where noted.
      farthest, mean, or first within a threshold.
    Checked the same way, within one 8-bit level; two visual tests.
 
-   **Not yet:** external-angle rays (C7) need F3's exact definition of
-   the angle and the width factor, which this survey only paraphrases;
-   itinerary (C8) needs rank equalisation (P7); rainbow fringe (C12)
+   - **External rays** (C7), from F3's own example (`flying-fish.f3.toml`,
+     read from source): lines where `|fract(T + ½) − ½| < w · (1/p)^NF`,
+     `T` the escape angle in turns and `NF` the escape fraction, which
+     F3 computes exactly as the debanding here does. 1 on a ray, 0 off,
+     meant as a texture layer; a count of rays per turn generalises F3's
+     one. Checked against the definition on every escaped pixel of a
+     view (none disagree); one visual test.
+
+   **Not yet:** itinerary (C8) needs rank equalisation (P7); rainbow fringe (C12)
    and infinite waves (C13) want a colour per pixel rather than a
    palette position; direct orbit traps (C10) need a new output path.
 7. **Relief** (§5.3): the small ones (R1, R2, R4, R8, R9) first, then

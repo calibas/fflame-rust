@@ -7852,6 +7852,59 @@ fn main() {
         }
     }
 
+    /// External rays mark what Fraktaler 3's `flying-fish` marks: the
+    /// pixels whose escape angle lies within `width * (1/2)^NF` turns of
+    /// a ray. Checked from each pixel's record against the rendered
+    /// mask; a pixel within a hair of the band's edge may land either
+    /// side, so a share rather than all.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn external_rays_mark_what_fraktaler_marks() {
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        let stop = |position: f32, v: f32| crate::scene::palette::ColorStop { position, color: [v, v, v] };
+        config.palette.stops = vec![stop(0.0, 0.0), stop(1.0, 1.0)];
+        config.escape.center_re = "-0.6".to_string();
+        config.escape.center_im = "0.1".to_string();
+        config.escape.zoom_log2 = 0.4;
+        config.escape.max_iter = 300;
+        config.escape.bailout = 1.0e4;
+        config.escape.coloring = "external_rays".to_string();
+        config.escape.coloring_params = [("width".to_string(), 0.05), ("count".to_string(), 2.0)].into_iter().collect();
+        let records = records_via(&config.escape, w, h, false, false);
+        let job = crate::renderer::RenderJob::new(&config, w, h);
+        let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+            .expect("render")
+            .rgba_data;
+        let (mut checked, mut on, mut wrong) = (0usize, 0usize, 0usize);
+        for (r, p) in records.iter().zip(out.chunks_exact(4)) {
+            if (r.tags & 1) == 0 {
+                continue;
+            }
+            let z = [r.z[0] as f64, r.z[1] as f64];
+            let t = z[1].atan2(z[0]) / std::f64::consts::TAU;
+            let off = ((2.0 * t + 0.5).rem_euclid(1.0) - 0.5).abs() / 2.0;
+            let lz = (z[0] * z[0] + z[1] * z[1]).log2();
+            let nf = (1.0 - (lz / 1.0e4f64.log2()).max(1e-6).log2()).clamp(0.0, 1.0);
+            let ray = off < 0.05 * 0.5f64.powf(nf);
+            let lit = p[0] > 127;
+            checked += 1;
+            on += ray as usize;
+            wrong += (ray != lit) as usize;
+        }
+        println!("external rays: {checked} escaped pixels, {on} on a ray, {wrong} disagree");
+        assert!(on > checked / 50 && on < checked / 2, "the fixture shows {on} ray pixels of {checked}");
+        assert!(wrong * 200 <= checked, "{wrong} of {checked} pixels disagree with the definition");
+    }
+
     /// A stepped palette draws every stop as a flat band: an escape
     /// render through it shows the stops' colours and next to nothing
     /// in between, where the blended palette shows a continuum.
