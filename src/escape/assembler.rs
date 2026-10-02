@@ -53,7 +53,7 @@ struct EscapeParams {
     // differently (1248 vs 1232 -- caught as a bind-group validation
     // error the first time this ran).
     _pad_shade0: u32,
-    _pad_shade1: u32,
+    degree: f32,           // the formula's degree at infinity (the smooth count's log base)
     _pad_shade2: u32,
     fparams: array<vec4<f32>, 4>,  // formula params, slot-ordered
     cparams: array<vec4<f32>, 4>,  // coloring params, slot-ordered
@@ -376,7 +376,7 @@ struct EscapeParams {
     shade_flags: u32,
     // Mode D's interaction stride (1 or 2); the other engines read 1.
     stride: u32,
-    _pad_shade1: u32,
+    degree: f32,           // the formula's degree at infinity (the smooth count's log base)
     _pad_shade2: u32,
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
@@ -872,7 +872,7 @@ struct EscapeParams {
     shade_flags: u32,
     // Mode D's interaction stride (1 or 2); the other engines read 1.
     stride: u32,
-    _pad_shade1: u32,
+    degree: f32,           // the formula's degree at infinity (the smooth count's log base)
     _pad_shade2: u32,
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
@@ -4083,7 +4083,7 @@ struct EscapeParams {
     shade_flags: u32,
     // Mode D's interaction stride (1 or 2); the other engines read 1.
     stride: u32,
-    _pad_shade1: u32,
+    degree: f32,           // the formula's degree at infinity (the smooth count's log base)
     _pad_shade2: u32,
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
@@ -4245,7 +4245,7 @@ struct EscapeParams {
     shade_flags: u32,
     // Mode D's interaction stride (1 or 2); the other engines read 1.
     stride: u32,
-    _pad_shade1: u32,
+    degree: f32,           // the formula's degree at infinity (the smooth count's log base)
     _pad_shade2: u32,
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
@@ -4399,7 +4399,7 @@ struct EscapeParams {
     shade_flags: u32,
     // Mode D's interaction stride (1 or 2); the other engines read 1.
     stride: u32,
-    _pad_shade1: u32,
+    degree: f32,           // the formula's degree at infinity (the smooth count's log base)
     _pad_shade2: u32,
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
@@ -4860,7 +4860,7 @@ struct EscapeParams {
     shade_flags: u32,
     // Mode D's interaction stride (1 or 2); the other engines read 1.
     stride: u32,
-    _pad_shade1: u32,
+    degree: f32,           // the formula's degree at infinity (the smooth count's log base)
     _pad_shade2: u32,
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
@@ -5040,7 +5040,7 @@ struct EscapeParams {
     shade_flags: u32,
     // Mode D's interaction stride (1 or 2); the other engines read 1.
     stride: u32,
-    _pad_shade1: u32,
+    degree: f32,           // the formula's degree at infinity (the smooth count's log base)
     _pad_shade2: u32,
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
@@ -5257,7 +5257,7 @@ struct EscapeParams {
     shade_flags: u32,
     // Mode D's interaction stride (1 or 2); the other engines read 1.
     stride: u32,
-    _pad_shade1: u32,
+    degree: f32,           // the formula's degree at infinity (the smooth count's log base)
     _pad_shade2: u32,
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,

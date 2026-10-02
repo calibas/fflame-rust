@@ -529,7 +529,11 @@ struct EscapeParamsGpu {
     /// walk) fills the block from it. Occupies a padding word, so the
     /// layout is unchanged. See [`EscapeRenderer::set_preview`].
     stride: u32,
-    _pad_shade: [u32; 2],
+    /// The formula's degree at infinity, which the smooth count takes
+    /// its log in (`escape_degree_of`); 2 outside mode A. Occupies a
+    /// padding word, so the layout is unchanged.
+    degree: f32,
+    _pad_shade: u32,
     fparams: [[f32; 4]; PARAM_VEC4S],
     cparams: [[f32; 4]; PARAM_VEC4S],
     /// CPU-derived formula data (`FormulaDef::derived_data`),
@@ -6930,6 +6934,9 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let mut fparams = [[0.0f32; 4]; PARAM_VEC4S];
         let mut cparams = [[0.0f32; 4]; PARAM_VEC4S];
         let mut fdata = [[0.0f32; 4]; FDATA_VEC4S];
+        // The smooth count's log base: the formula's degree in mode A, 2
+        // elsewhere.
+        let mut degree = 2.0f32;
         if let Some(def) = super::ifs::get_ifs(&escape.formula) {
             // Mode D: the def's params, its coloring's, and the
             // whole-IFS constants in the fdata block the other modes
@@ -6996,6 +7003,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             let coloring = super::get_coloring(&escape.coloring);
             super::pack_params(formula.parameters, &escape.formula_params, fparams.as_flattened_mut());
             super::pack_params(coloring.parameters, &escape.coloring_params, cparams.as_flattened_mut());
+            degree = super::escape_degree_of(formula, fparams.as_flattened());
 
             if let Some(derive) = formula.derived_data {
                 let flat = fdata.as_flattened_mut();
@@ -7027,7 +7035,8 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             damping: [escape.damping_re, escape.damping_im],
             shade_flags: escape.shading.field.to_gpu(),
             stride: self.stride(escape),
-            _pad_shade: [0; 2],
+            degree,
+            _pad_shade: 0,
             fparams,
             cparams,
             fdata,
