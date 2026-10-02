@@ -270,6 +270,35 @@ impl Palette {
         data
     }
 
+    /// The same table with every stop drawn as a flat band, from its
+    /// position up to the next stop's (constant interpolation, as
+    /// Blender's ColorRamp has it). Before the first stop is the first
+    /// stop's colour, and a stop at 1.0 shows only at the very top.
+    pub fn generate_stepped_texture_data(&self, size: usize) -> Vec<f32> {
+        let mut data = Vec::with_capacity(size * 4);
+        for i in 0..size {
+            let t = i as f32 / (size - 1) as f32;
+            let color = self.sample_color_stepped(t);
+            data.extend_from_slice(&[color[0], color[1], color[2], 1.0]);
+        }
+        data
+    }
+
+    /// The colour of the last stop at or before `t` (the first stop's
+    /// before it).
+    pub fn sample_color_stepped(&self, t: f32) -> [f32; 3] {
+        let Some(first) = self.stops.first() else {
+            return [1.0, 1.0, 1.0];
+        };
+        let t = t.clamp(0.0, 1.0);
+        self.stops
+            .iter()
+            .take_while(|s| s.position <= t)
+            .last()
+            .unwrap_or(first)
+            .color
+    }
+
     /// Sample color at position t (0.0 to 1.0) using linear interpolation
     pub fn sample_color(&self, t: f32) -> [f32; 3] {
         if self.stops.is_empty() {
@@ -589,11 +618,24 @@ pub fn render_palette_lookup(
     transform: &PaletteTransform,
     size: usize,
 ) -> Vec<f32> {
-    let base = palette.generate_texture_data(size);
+    transform_lookup_table(palette.generate_texture_data(size), transform, size)
+}
 
+/// [`render_palette_lookup`] with every stop drawn as a flat band
+/// ([`Palette::generate_stepped_texture_data`]), through the same
+/// pipeline: the escape engine's stepped palette.
+pub fn render_stepped_palette_lookup(
+    palette: &Palette,
+    transform: &PaletteTransform,
+    size: usize,
+) -> Vec<f32> {
+    transform_lookup_table(palette.generate_stepped_texture_data(size), transform, size)
+}
+
+fn transform_lookup_table(base: Vec<f32>, transform: &PaletteTransform, size: usize) -> Vec<f32> {
     // Stage 1: Squeeze. Maps output index → source index in the base table.
     let squeezed = match transform.squeeze_mode {
-        SqueezeMode::Linear if transform.squeeze_factor == 1.0 => base.clone(),
+        SqueezeMode::Linear if transform.squeeze_factor == 1.0 => base,
         SqueezeMode::Linear => {
             let factor = transform.squeeze_factor;
             let mut out = vec![0.0f32; size * 4];

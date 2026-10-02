@@ -2314,7 +2314,7 @@ impl App {
                                 &self.gpu.queue,
                                 &mut esc_encoder,
                                 &export_config.escape,
-                                temp_renderer.palette_view(),
+                                temp_renderer.escape_palette_view(export_config.escape.palette_map.stepped),
                                 temp_renderer.palette_generation(),
                             );
                             self.gpu.queue.submit(std::iter::once(esc_encoder.finish()));
@@ -2867,7 +2867,7 @@ impl App {
                         &self.gpu.queue,
                         &mut render_encoder,
                         &final_config.escape,
-                        renderer.palette_view(),
+                        renderer.escape_palette_view(final_config.escape.palette_map.stepped),
                         renderer.palette_generation(),
                     );
                     // Progressive deep zoom: an unsettled frame keeps

@@ -1052,7 +1052,7 @@ async fn render_escape(
             queue,
             &mut encoder,
             &job.config.escape,
-            renderer.palette_view(),
+            renderer.escape_palette_view(job.config.escape.palette_map.stepped),
             renderer.palette_generation(),
         );
         let mut guard = 0u32;
@@ -1067,7 +1067,7 @@ async fn render_escape(
                 queue,
                 &mut encoder,
                 &job.config.escape,
-                renderer.palette_view(),
+                renderer.escape_palette_view(job.config.escape.palette_map.stepped),
             renderer.palette_generation(),
             );
             guard += 1;

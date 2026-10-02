@@ -500,8 +500,8 @@ fn perturb_chunk_ceiling(seed: u32) -> u32 {
 const CHUNK_SEED_HEADROOM: u32 = 64;
 
 /// Uniform block — must match `EscapeParams` in the WGSL template
-/// (std140: vec2 pairs pack the head, the vec4 arrays start at a
-/// 16-byte boundary, total 192 bytes).
+/// (std140: vec2 pairs pack the head, the vec4s start at a 16-byte
+/// boundary, total 1248 bytes).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct EscapeParamsGpu {
@@ -533,7 +533,11 @@ struct EscapeParamsGpu {
     /// its log in (`escape_degree_of`); 2 outside mode A. Occupies a
     /// padding word, so the layout is unchanged.
     degree: f32,
-    _pad_shade: u32,
+    /// The value-to-palette map's two curves (`PaletteMap::gpu_flags`).
+    /// Occupies a padding word.
+    pmap_flags: u32,
+    /// x: the transfer's pivot (`PaletteMap::gpu_pivot`); yzw spare.
+    pmap: [f32; 4],
     fparams: [[f32; 4]; PARAM_VEC4S],
     cparams: [[f32; 4]; PARAM_VEC4S],
     /// CPU-derived formula data (`FormulaDef::derived_data`),
@@ -3481,7 +3485,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             self.height,
             orbit_tag,
             orbit_done,
-        )
+        ) + format!("|{:?}", escape.palette_map).as_str()
     }
 
     /// (Re)allocate the perturbed path's per-pixel resume state.
@@ -7036,7 +7040,8 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             shade_flags: escape.shading.field.to_gpu(),
             stride: self.stride(escape),
             degree,
-            _pad_shade: 0,
+            pmap_flags: escape.palette_map.gpu_flags(),
+            pmap: [escape.palette_map.gpu_pivot(), 0.0, 0.0, 0.0],
             fparams,
             cparams,
             fdata,
@@ -8105,15 +8110,18 @@ mod tests {
 
     #[test]
     fn params_struct_matches_wgsl_layout() {
-        // 4 vec2 (32) + 4 u32 (16) + f32 + 3 pad (16) + the shading
-        // flags + 3 pad (16) + 2 param arrays (128) + the derived-data
-        // table (1024) = 1232, and the arrays must start 16-byte
-        // aligned.
-        assert_eq!(std::mem::size_of::<EscapeParamsGpu>(), 1232);
+        // 4 vec2 (32) + 4 u32 (16) + bailout, tile row, damping (16) +
+        // shading flags, stride, degree, palette-map flags (16) + the
+        // palette map's vec4 (16) + 2 param arrays (128) + the
+        // derived-data table (1024) = 1248, and every vec4 must start
+        // 16-byte aligned.
+        assert_eq!(std::mem::size_of::<EscapeParamsGpu>(), 1248);
         assert_eq!(std::mem::offset_of!(EscapeParamsGpu, shade_flags), 64);
-        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, fparams), 80);
-        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, cparams), 144);
-        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, fdata), 208);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, pmap_flags), 76);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, pmap), 80);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, fparams), 96);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, cparams), 160);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, fdata), 224);
     }
 }
 

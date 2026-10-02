@@ -1852,6 +1852,52 @@ fn register_escape(engine: &mut Engine) {
         cfg.escape.shading.field = crate::config::escape::shading_field_from_str(field);
     });
 
+    // ---- Palette mapping --------------------------------------------
+    // Curve names are checked, unlike the shading selectors: a typo in
+    // a curve renders a perfectly plausible Linear picture, and nobody
+    // would know to look for it.
+    engine.register_fn(
+        "transfer",
+        |e: &mut EscapeHandle, name: &str, pivot: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            use crate::config::escape::{TransferCurve, PIVOT_RANGE};
+            let curve = TransferCurve::ALL
+                .into_iter()
+                .find(|c| c.as_str() == name)
+                .ok_or_else(|| {
+                    let names: Vec<&str> = TransferCurve::ALL.iter().map(|c| c.as_str()).collect();
+                    err(format!("unknown transfer curve '{name}'; one of {}", names.join(", ")))
+                })?;
+            let pivot = num(&pivot, "pivot")? as f32;
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            cfg.escape.palette_map.transfer = curve;
+            cfg.escape.palette_map.pivot = pivot.clamp(PIVOT_RANGE.0, PIVOT_RANGE.1);
+            Ok(())
+        },
+    );
+    engine.register_fn(
+        "palette_curve",
+        |e: &mut EscapeHandle, name: &str| -> Result<(), Box<EvalAltResult>> {
+            use crate::config::escape::PaletteCurve;
+            let curve = PaletteCurve::ALL
+                .into_iter()
+                .find(|c| c.as_str() == name)
+                .ok_or_else(|| {
+                    let names: Vec<&str> = PaletteCurve::ALL.iter().map(|c| c.as_str()).collect();
+                    err(format!("unknown palette curve '{name}'; one of {}", names.join(", ")))
+                })?;
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            cfg.escape.palette_map.curve = curve;
+            Ok(())
+        },
+    );
+    engine.register_fn("stepped_palette", |e: &mut EscapeHandle, on: bool| {
+        let mut cfg = e.cfg.borrow_mut();
+        enter(&mut cfg);
+        cfg.escape.palette_map.stepped = on;
+    });
+
     engine.register_fn("julia", |e: &mut EscapeHandle, re: f64, im: f64| {
         let mut cfg = e.cfg.borrow_mut();
         enter(&mut cfg);

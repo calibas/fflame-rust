@@ -1969,6 +1969,14 @@ impl ConfigManager {
             ConfigPath::EscapeContrastClip => Ok(config.escape.contrast.clip.into()),
             ConfigPath::EscapeContrastStrength => Ok(config.escape.contrast.strength.into()),
             ConfigPath::EscapeContrastTurns => Ok(config.escape.contrast.turns.into()),
+            ConfigPath::EscapeTransfer => Ok(ConfigValue::String(
+                config.escape.palette_map.transfer.as_str().to_string(),
+            )),
+            ConfigPath::EscapeTransferPivot => Ok(config.escape.palette_map.pivot.into()),
+            ConfigPath::EscapePaletteCurve => Ok(ConfigValue::String(
+                config.escape.palette_map.curve.as_str().to_string(),
+            )),
+            ConfigPath::EscapePaletteStepped => Ok(config.escape.palette_map.stepped.into()),
             ConfigPath::EscapeShadingShadowColor => {
                 Ok(ConfigValue::ColorRgb(config.escape.shading.shadow_color))
             }
@@ -3283,6 +3291,24 @@ impl ConfigManager {
             ConfigPath::EscapeContrastTurns => {
                 let v: f32 = value.try_into()?;
                 self.current.escape.contrast.turns = v.clamp(0.05, 64.0);
+            }
+            ConfigPath::EscapeTransfer => {
+                let v: String = value.try_into()?;
+                self.current.escape.palette_map.transfer =
+                    crate::config::escape::TransferCurve::from_name(&v);
+            }
+            ConfigPath::EscapeTransferPivot => {
+                let v: f32 = value.try_into()?;
+                let (lo, hi) = crate::config::escape::PIVOT_RANGE;
+                self.current.escape.palette_map.pivot = v.clamp(lo, hi);
+            }
+            ConfigPath::EscapePaletteCurve => {
+                let v: String = value.try_into()?;
+                self.current.escape.palette_map.curve =
+                    crate::config::escape::PaletteCurve::from_name(&v);
+            }
+            ConfigPath::EscapePaletteStepped => {
+                self.current.escape.palette_map.stepped = value.try_into()?;
             }
             ConfigPath::EscapeShadingShadowColor => {
                 self.current.escape.shading.shadow_color = value.try_into()?;
