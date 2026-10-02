@@ -913,6 +913,7 @@ pub fn render_escape_content(
                             .update_param(ConfigPath::EscapeShadingSoftness, sf.into());
                     }
                 });
+                relief_lighting_controls(ui, config_manager, &sh);
                 // ---- Surface texture ----
                 ui.horizontal(|ui| {
                     ui.label(t!("escape_panel.shading_texture"));
@@ -2690,12 +2691,149 @@ fn shading_side(
     });
 }
 
+/// The relief's lighting model, ambient floor, slope stencil and
+/// height curve (survey item 7: R1, R4, R8).
+fn relief_lighting_controls(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    sh: &crate::config::escape::EscapeShading,
+) {
+    use crate::config::escape::{HeightTransfer, ReliefModel, SlopeStencil};
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.shading_model"));
+        let name = |m: ReliefModel| match m {
+            ReliefModel::Tilt => t!("escape_panel.model_tilt"),
+            ReliefModel::Lambert => t!("escape_panel.model_lambert"),
+        };
+        egui::ComboBox::from_id_salt("escape_shading_model")
+            .selected_text(name(sh.model))
+            .show_ui(ui, |ui| {
+                for m in ReliefModel::ALL {
+                    if ui.selectable_label(m == sh.model, name(m)).clicked() && m != sh.model {
+                        let _ = config_manager.update_param(
+                            ConfigPath::EscapeShadingModel,
+                            ConfigValue::String(m.as_str().to_string()),
+                        );
+                    }
+                }
+            })
+            .response
+            .on_hover_text(t!("escape_panel.tooltip_shading_model"));
+    });
+    ui.add_enabled_ui(sh.model == ReliefModel::Lambert, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(t!("escape_panel.shading_elevation"));
+            let mut v = sh.elevation;
+            if ui
+                .add(egui::Slider::new(&mut v, 0.0..=90.0).suffix("°"))
+                .on_hover_text(t!("escape_panel.tooltip_shading_elevation"))
+                .changed()
+            {
+                let _ = config_manager.update_param(ConfigPath::EscapeShadingElevation, v.into());
+            }
+        });
+    });
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.shading_ambient"));
+        let mut v = sh.ambient;
+        if ui
+            .add(egui::Slider::new(&mut v, 0.0..=1.0))
+            .on_hover_text(t!("escape_panel.tooltip_shading_ambient"))
+            .changed()
+        {
+            let _ = config_manager.update_param(ConfigPath::EscapeShadingAmbient, v.into());
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.shading_stencil"));
+        let name = |m: SlopeStencil| match m {
+            SlopeStencil::Central => t!("escape_panel.stencil_central"),
+            SlopeStencil::Forward => t!("escape_panel.stencil_forward"),
+            SlopeStencil::Roberts => t!("escape_panel.stencil_roberts"),
+            SlopeStencil::LeastSquares => t!("escape_panel.stencil_least_squares"),
+        };
+        egui::ComboBox::from_id_salt("escape_shading_stencil")
+            .selected_text(name(sh.stencil))
+            .show_ui(ui, |ui| {
+                for m in SlopeStencil::ALL {
+                    if ui.selectable_label(m == sh.stencil, name(m)).clicked() && m != sh.stencil {
+                        let _ = config_manager.update_param(
+                            ConfigPath::EscapeShadingStencil,
+                            ConfigValue::String(m.as_str().to_string()),
+                        );
+                    }
+                }
+            })
+            .response
+            .on_hover_text(t!("escape_panel.tooltip_shading_stencil"));
+    });
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.shading_height_curve"));
+        let name = |m: HeightTransfer| match m {
+            HeightTransfer::Linear => t!("escape_panel.curve_linear"),
+            HeightTransfer::Log => t!("escape_panel.curve_log"),
+            HeightTransfer::SquareRoot => t!("escape_panel.curve_square_root"),
+            HeightTransfer::CubeRoot => t!("escape_panel.curve_cube_root"),
+            HeightTransfer::Square => t!("escape_panel.curve_square"),
+            HeightTransfer::Cube => t!("escape_panel.curve_cube"),
+            HeightTransfer::Sin => t!("escape_panel.curve_sin"),
+            HeightTransfer::Cos => t!("escape_panel.curve_cos"),
+        };
+        egui::ComboBox::from_id_salt("escape_shading_height_curve")
+            .selected_text(name(sh.height_curve))
+            .show_ui(ui, |ui| {
+                for m in HeightTransfer::ALL {
+                    if ui.selectable_label(m == sh.height_curve, name(m)).clicked()
+                        && m != sh.height_curve
+                    {
+                        let _ = config_manager.update_param(
+                            ConfigPath::EscapeShadingHeightCurve,
+                            ConfigValue::String(m.as_str().to_string()),
+                        );
+                    }
+                }
+            })
+            .response
+            .on_hover_text(t!("escape_panel.tooltip_shading_height_curve"));
+    });
+    ui.add_enabled_ui(sh.height_curve != HeightTransfer::Linear, |ui| {
+        for (label, tip, value, path) in [
+            (
+                t!("escape_panel.shading_height_pre"),
+                t!("escape_panel.tooltip_shading_height_pre"),
+                sh.height_pre,
+                ConfigPath::EscapeShadingHeightPre,
+            ),
+            (
+                t!("escape_panel.shading_height_post"),
+                t!("escape_panel.tooltip_shading_height_post"),
+                sh.height_post,
+                ConfigPath::EscapeShadingHeightPost,
+            ),
+        ] {
+            ui.horizontal(|ui| {
+                ui.label(label);
+                let mut v = value;
+                if ui
+                    .add(egui::Slider::new(&mut v, 1e-3..=1e3).logarithmic(true))
+                    .on_hover_text(tip)
+                    .changed()
+                {
+                    let _ = config_manager.update_param(path, v.into());
+                }
+            });
+        }
+    });
+}
+
 fn blend_label(b: ShadingBlend) -> String {
     match b {
         ShadingBlend::Multiply => t!("escape_panel.blend_multiply").to_string(),
         ShadingBlend::Screen => t!("escape_panel.blend_screen").to_string(),
         ShadingBlend::Overlay => t!("escape_panel.blend_overlay").to_string(),
         ShadingBlend::Mix => t!("escape_panel.blend_mix").to_string(),
+        ShadingBlend::SoftLight => t!("escape_panel.blend_soft_light").to_string(),
+        ShadingBlend::HardLight => t!("escape_panel.blend_hard_light").to_string(),
     }
 }
 

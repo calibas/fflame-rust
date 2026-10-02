@@ -845,6 +845,18 @@ fn apply_config_value(
         (ConfigPath::EscapeShadingTextureScale, ConfigValue::Float(v)) => {
             config.escape.shading.texture_scale = v.clamp(0.25, 64.0);
         }
+        (ConfigPath::EscapeShadingElevation, ConfigValue::Float(v)) => {
+            config.escape.shading.elevation = v.clamp(0.0, 90.0);
+        }
+        (ConfigPath::EscapeShadingAmbient, ConfigValue::Float(v)) => {
+            config.escape.shading.ambient = v.clamp(0.0, 1.0);
+        }
+        (ConfigPath::EscapeShadingHeightPre, ConfigValue::Float(v)) => {
+            config.escape.shading.height_pre = v.clamp(1e-3, 1e3);
+        }
+        (ConfigPath::EscapeShadingHeightPost, ConfigValue::Float(v)) => {
+            config.escape.shading.height_post = v.clamp(1e-3, 1e3);
+        }
         (ConfigPath::EscapeContrastClip, ConfigValue::Float(v)) => {
             config.escape.contrast.clip = v.clamp(0.0, 0.25);
         }
@@ -2250,6 +2262,10 @@ mod tests {
             (EditingTarget::Main, "Escape.Shading.Softness".to_string(), json!(3.0)),
             (EditingTarget::Main, "Escape.Shading.TextureStrength".to_string(), json!(0.25)),
             (EditingTarget::Main, "Escape.Shading.TextureScale".to_string(), json!(8.0)),
+            (EditingTarget::Main, "Escape.Shading.Elevation".to_string(), json!(45.0)),
+            (EditingTarget::Main, "Escape.Shading.Ambient".to_string(), json!(0.2)),
+            (EditingTarget::Main, "Escape.Shading.HeightPre".to_string(), json!(3.0)),
+            (EditingTarget::Main, "Escape.Shading.HeightPost".to_string(), json!(0.5)),
             (EditingTarget::Main, "Escape.Contrast.Clip".to_string(), json!(0.05)),
             (EditingTarget::Main, "Escape.Contrast.Strength".to_string(), json!(0.5)),
             (EditingTarget::Main, "Escape.Contrast.Turns".to_string(), json!(3.0)),
@@ -2278,6 +2294,10 @@ mod tests {
         assert_eq!(config.escape.shading.softness, 3.0);
         assert_eq!(config.escape.shading.texture_strength, 0.25);
         assert_eq!(config.escape.shading.texture_scale, 8.0);
+        assert_eq!(config.escape.shading.elevation, 45.0);
+        assert_eq!(config.escape.shading.ambient, 0.2);
+        assert_eq!(config.escape.shading.height_pre, 3.0);
+        assert_eq!(config.escape.shading.height_post, 0.5);
         assert_eq!(config.escape.contrast.clip, 0.05);
         assert_eq!(config.escape.contrast.strength, 0.5);
         assert_eq!(config.escape.contrast.turns, 3.0);

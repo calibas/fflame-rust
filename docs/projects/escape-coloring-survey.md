@@ -665,3 +665,35 @@ Read from the code, not reproduced by render, except where noted.
 7. **Relief** (§5.3): the small ones (R1, R2, R4, R8, R9) first, then
    analytic relief (R5), offset orbits (R6) and Embossed (R7). Analytic
    relief at deep zoom waits for the derivative under perturbation (P11).
+   *First part done 2026-10-02*, on branch `escape-coloring`:
+   - **R1:** a Lambert lighting model beside the signed tilt, with the
+     light's elevation (UF's default 30°), measured from what flat
+     ground receives so the shadow and highlight scales keep their
+     meaning; and an ambient floor under the shadow, for either model.
+   - **R2:** Soft Light (the W3C formula) and Hard Light among the
+     shadow and highlight blends.
+   - **R4:** a height curve, `post · f(pre · h)`: log, square root,
+     cube root, square, cube, sine, cosine. Applied as the relief reads
+     the height, after any softening, so the contrast probe, which
+     reads the same texture, still sees the raw value.
+   - **R8:** slope stencils: central (as before), forward, Roberts
+     cross, and the least-squares plane over 3×3. KF2's Laplacian is
+     left out: it is a curvature, not a slope, and how KF2 lights it is
+     not in what this survey read.
+   - **R9 is deliberately not done.** §6.7 measured relief at 4× the
+     output size moving the picture 0.79× as much, and a linear
+     correction like KF2's would overshoot about 3×. A normalisation
+     worth having needs a better-founded model than either.
+
+   Every default draws what it drew before (the relief visual tests are
+   unchanged). A GPU test checks the options as properties: ambient 1
+   with no highlight leaves the picture as it was; a Lambert shadow
+   only darkens; Soft and Hard Light with a mid-grey light change
+   nothing; every stencil and curve changes the picture.
+
+   **Found on the way:** with Banded relief, or any field left on
+   Banded, auto contrast fits the wrapped value, because the probe and
+   the relief share one height texture. The planned fix: an `rg32float`
+   height texture, raw value for the probe and the relief's own source
+   beside it. That also gives R3 a cheap form, relief from the texture
+   layer's value.

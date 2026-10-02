@@ -2000,6 +2000,19 @@ impl ConfigManager {
             ConfigPath::EscapeShadingTextureStrength => {
                 Ok(config.escape.shading.texture_strength.into())
             }
+            ConfigPath::EscapeShadingModel => Ok(ConfigValue::String(
+                config.escape.shading.model.as_str().to_string(),
+            )),
+            ConfigPath::EscapeShadingElevation => Ok(config.escape.shading.elevation.into()),
+            ConfigPath::EscapeShadingAmbient => Ok(config.escape.shading.ambient.into()),
+            ConfigPath::EscapeShadingStencil => Ok(ConfigValue::String(
+                config.escape.shading.stencil.as_str().to_string(),
+            )),
+            ConfigPath::EscapeShadingHeightCurve => Ok(ConfigValue::String(
+                config.escape.shading.height_curve.as_str().to_string(),
+            )),
+            ConfigPath::EscapeShadingHeightPre => Ok(config.escape.shading.height_pre.into()),
+            ConfigPath::EscapeShadingHeightPost => Ok(config.escape.shading.height_post.into()),
             ConfigPath::EscapeShadingTextureScale => {
                 Ok(config.escape.shading.texture_scale.into())
             }
@@ -3358,6 +3371,35 @@ impl ConfigManager {
             ConfigPath::EscapeShadingTextureScale => {
                 let v: f32 = value.try_into()?;
                 self.current.escape.shading.texture_scale = v.clamp(0.25, 64.0);
+            }
+            ConfigPath::EscapeShadingModel => {
+                let v: String = value.try_into()?;
+                self.current.escape.shading.model = crate::config::escape::ReliefModel::from_name(&v);
+            }
+            ConfigPath::EscapeShadingElevation => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.shading.elevation = v.clamp(0.0, 90.0);
+            }
+            ConfigPath::EscapeShadingAmbient => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.shading.ambient = v.clamp(0.0, 1.0);
+            }
+            ConfigPath::EscapeShadingStencil => {
+                let v: String = value.try_into()?;
+                self.current.escape.shading.stencil = crate::config::escape::SlopeStencil::from_name(&v);
+            }
+            ConfigPath::EscapeShadingHeightCurve => {
+                let v: String = value.try_into()?;
+                self.current.escape.shading.height_curve =
+                    crate::config::escape::HeightTransfer::from_name(&v);
+            }
+            ConfigPath::EscapeShadingHeightPre => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.shading.height_pre = v.clamp(1e-3, 1e3);
+            }
+            ConfigPath::EscapeShadingHeightPost => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.shading.height_post = v.clamp(1e-3, 1e3);
             }
             ConfigPath::EscapeShadingHighlightBlend => {
                 let v: String = value.try_into()?;
