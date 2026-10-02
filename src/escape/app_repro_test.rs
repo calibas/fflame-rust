@@ -8005,6 +8005,97 @@ fn main() {
     /// accumulation, and requires them to agree closely: same sample
     /// positions, same average, so the difference is f32 ordering and
     /// the per-sample shading pass, not method.
+    /// **A supersampled edge is weighted by its coverage once.** A pixel
+    /// half covered by the exterior must show half the exterior's colour
+    /// over the background. The downsample used to average the samples'
+    /// colour WITH the uncovered samples' zero colour -- colour already
+    /// scaled by coverage -- and the tone map then composited it by
+    /// coverage again, so the edge got coverage squared: a quarter, not
+    /// half.
+    ///
+    /// White everywhere the colouring draws, black behind, Linear with
+    /// exposure 1 and gamma 1. Through a 4x4 grid every edge pixel must
+    /// read k/16 in linear light, its coverage, and not (k/16)^2. Through
+    /// the export's accumulated antialiasing -- 8x asked of a device whose
+    /// textures stop at 384 pixels, so a 4x grid folded from 2x2
+    /// displaced renders -- it must read k/64.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_supersampled_edge_is_weighted_by_its_coverage_once() {
+        let (device, queue) = repro_device();
+        // A device whose textures stop at 384 pixels: an 8x grid over 96
+        // pixels does not fit, so the export accumulates.
+        let (small_device, small_queue) = {
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+                backends: wgpu::Backends::all(),
+                ..wgpu::InstanceDescriptor::new_without_display_handle()
+            });
+            let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+                compatible_surface: None,
+            }))
+            .expect("adapter");
+            let al = adapter.limits();
+            let mut limits = wgpu::Limits::default();
+            limits.max_storage_buffers_per_shader_stage = al.max_storage_buffers_per_shader_stage;
+            limits.max_storage_buffer_binding_size = al.max_storage_buffer_binding_size;
+            limits.max_buffer_size = al.max_buffer_size;
+            limits.max_texture_dimension_2d = 384;
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                label: Some("small textures"),
+                required_features: wgpu::Features::CLEAR_TEXTURE,
+                required_limits: limits,
+                ..Default::default()
+            }))
+            .expect("device")
+        };
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        let white = |position: f32| crate::scene::palette::ColorStop { position, color: [1.0, 1.0, 1.0] };
+        config.palette.stops = vec![white(0.0), white(1.0)];
+        config.escape.coloring = "smooth".to_string();
+        config.escape.max_iter = 200;
+        config.escape.zoom_log2 = 1.0;
+        // The tone map encodes with a plain 2.2 power (`tonemap.wgsl`), not
+        // the piecewise sRGB curve.
+        let srgb_to_linear = |c: u8| (c as f64 / 255.0).powf(2.2);
+        // Edge pixels' linear values, and how many sit within `tol` of a
+        // multiple of 1/steps -- the coverage a correct edge reads.
+        let edge_of = |device: &wgpu::Device, queue: &wgpu::Queue, ss: u32, steps: f64, top: f64, tol: f64| {
+            let mut c = config.clone();
+            c.escape.supersample = ss;
+            let job = crate::renderer::RenderJob::new(&c, 96, 96);
+            let out = pollster::block_on(crate::renderer::render(device, queue, job, &mut crate::renderer::NoProgress)).expect("render");
+            let edge: Vec<f64> = out.rgba_data.chunks(4).map(|p| srgb_to_linear(p[0])).filter(|v| *v > 0.03 && *v < top).collect();
+            let on = edge.iter().filter(|v| ((**v * steps).round() / steps - **v).abs() <= tol).count();
+            (edge, on)
+        };
+
+        // The grid: steps of 1/16, which 8-bit output resolves easily.
+        let (edge, on) = edge_of(&device, &queue, 4, 16.0, 0.97, 0.012);
+        println!("  4x grid: {} edge pixels, {on} at their coverage", edge.len());
+        assert!(edge.len() > 20, "the fixture has {} edge pixels", edge.len());
+        assert_eq!(on, edge.len(), "4x grid: {} of {} edge pixels are not their coverage", edge.len() - on, edge.len());
+
+        // Accumulated: steps of 1/64, so only the darker half, where 8-bit
+        // output still resolves them, and a share rather than all -- a
+        // squared coverage lands near a 1/64 step about half the time.
+        assert!(
+            crate::escape::EscapeRenderer::allocation_error(&small_device, &config.escape, 96, 96, 8).is_some(),
+            "an 8x grid fits this device, so nothing accumulates"
+        );
+        let (edge, on) = edge_of(&small_device, &small_queue, 8, 64.0, 0.6, 0.004);
+        println!("  accumulated (4x grid, 2x2 renders): {} edge pixels, {on} at their coverage", edge.len());
+        assert!(edge.len() > 20, "the fixture has {} edge pixels", edge.len());
+        assert!(on * 100 >= edge.len() * 95, "accumulated: only {on} of {} edge pixels are their coverage", edge.len());
+    }
+
     #[test]
     #[ignore = "needs a GPU"]
     fn accumulated_antialiasing_matches_the_grid() {
