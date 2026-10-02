@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "b0be537f",
+  "git_hash": "e9acd490",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 35102,
@@ -222,6 +222,10 @@
       "bytes": 30802,
       "sha256": "6ae83d6f086fa48eedbbc1d0aa874d02b0879c316490d8dbf8471c5705f5f151"
     },
+    "escape-layer-curvature-over-smooth.png": {
+      "bytes": 15816,
+      "sha256": "8a6e8c0f537fa9c1988b7e4c849a11703f144f9d5b85a322044a58e103dee236"
+    },
     "escape-littlewood.png": {
       "bytes": 14682,
       "sha256": "9cd25b898aba2cd36a5f6c250d15d20a8f979a63c58626e8649ae67275064124"
@@ -233,6 +237,10 @@
     "escape-magnet-deep.png": {
       "bytes": 21932,
       "sha256": "f5c50b840ef41c83fe74b53edbad7ba61823fec6890b1b31c2c0088b31b4fb17"
+    },
+    "escape-mandelbrot-binary-decomposition.png": {
+      "bytes": 6919,
+      "sha256": "241aa8e27d2cfb5835187dc04200322545d3f14d3451b717b30019b7c6210819"
     },
     "escape-mandelbrot-biomorph-re.png": {
       "bytes": 4211,
@@ -250,9 +258,17 @@
       "bytes": 4393,
       "sha256": "8c8d5d47ce6f555631806d140fff5970e74db6439fae24eacede45b0b17c3c2e"
     },
+    "escape-mandelbrot-gaussian-integer.png": {
+      "bytes": 22323,
+      "sha256": "ea863ecf1240bcbcdff657f9c51b6c94f5f2e239796da72b760f55241966d202"
+    },
     "escape-mandelbrot-orbit-trap.png": {
       "bytes": 20238,
       "sha256": "1c5f8884b25bec68a4425af666742854972ea781ba7d5d4a7b99b81234f500f1"
+    },
+    "escape-mandelbrot-palette-map-stepped.png": {
+      "bytes": 18889,
+      "sha256": "6189dd4948670a35c15e3695179998e63994c187041bc4f78cf7615c0a3ec058"
     },
     "escape-mandelbrot-seahorse-zoom.png": {
       "bytes": 11055,
@@ -261,6 +277,10 @@
     "escape-mandelbrot-smooth.png": {
       "bytes": 3848,
       "sha256": "52a76b8a0e00a3493074b3738c295778edfe0ea5347aebbfce7c895afe156700"
+    },
+    "escape-mandelbrot-stripe-debanded.png": {
+      "bytes": 27325,
+      "sha256": "7ee43a9b4b797e4a70668af213bdf3cc20785e74293ac9474790946e6afa9a72"
     },
     "escape-mandelbrot-stripe.png": {
       "bytes": 24472,
@@ -309,6 +329,10 @@
     "escape-newton-deep.png": {
       "bytes": 11546,
       "sha256": "ed2e73fccee69bc74859d5744cbf3914ffc05141ae998e6819488dbc806a8192"
+    },
+    "escape-newton-exponential-smoothing.png": {
+      "bytes": 11283,
+      "sha256": "4ac9d9efb417944e2d8062728cb42ef3922c2684de24aef481a9c31811404cc7"
     },
     "escape-newton-halley-cubic.png": {
       "bytes": 5613,
