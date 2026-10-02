@@ -2498,6 +2498,9 @@ mod tests {
         esc.zoom_log2 = 30.0;
         esc.max_iter = 600;
         esc.formula_params.insert("power".to_string(), P as f32);
+        // The exact orbit below escapes at 4; at power 3 Feather grows
+        // linearly and would not reach the default 1e4 in 600 steps.
+        esc.bailout = 4.0;
 
         let (w, h) = (96u32, 72u32);
         let mut config = crate::config::FractalConfig::default();
@@ -5306,6 +5309,10 @@ fn main() {
         esc.zoom_log2 = 30.0;
         esc.max_iter = 400;
         esc.formula_params.insert("variant".to_string(), variant as f32);
+        // The exact orbit below escapes at 4. Magnet's orbits can pass
+        // radius 2 and come back to converge, so a larger bailout
+        // redraws the escape set rather than refining it.
+        esc.bailout = 4.0;
 
         let (w, h) = (96u32, 72u32);
         let mut config = crate::config::FractalConfig::default();
@@ -5523,6 +5530,8 @@ fn main() {
         esc.center_im = format!("{cy:.17}");
         esc.zoom_log2 = 30.0;
         esc.max_iter = MAX_ITER;
+        // The oracle below escapes at 4, as the exact-orbit test does.
+        esc.bailout = 4.0;
         esc.formula_params.insert("variant".to_string(), 0.0);
         // One palette turn across the whole iteration range, so a
         // count of 5 and a count of 400 cannot land on the same
@@ -8054,6 +8063,68 @@ fn main() {
     /// accumulation, and requires them to agree closely: same sample
     /// positions, same average, so the difference is f32 ordering and
     /// the per-sample shading pass, not method.
+    /// MEASUREMENT: how far the smooth count is from exact, against the
+    /// bailout. The usual smooth count assumes |z_{n+1}| = |z_n|^p, which
+    /// ignores + c, and the error of that shrinks as the escape radius
+    /// grows. Per pixel, read the final z and n at each bailout, compute
+    /// the count `n + 1 - ln(ln|z|) / ln p` and compare it with the same
+    /// count at
+    /// bailout 1e15, as near exact as f32 orbits get. The worst and the
+    /// 99th-percentile error, in iterations, over pixels that escape
+    /// both times; Mandelbrot (p = 2) and Multibrot p = 3.
+    #[test]
+    #[ignore = "measurement: needs a GPU"]
+    fn dbg_smooth_count_error_against_bailout() {
+        // The continuous escape potential's count: no ln R in it, so it
+        // does not move with the bailout (subtracting log_p(ln R), as
+        // KF2 and techmatt do to line bands up with n, shifts it by
+        // exactly that).
+        let nu = |r: &crate::escape::renderer::IterRecord, _bailout: f64, p: f64| {
+            let z = ((r.z[0] as f64).powi(2) + (r.z[1] as f64).powi(2)).sqrt();
+            r.n as f64 + 1.0 - z.ln().ln() / p.ln()
+        };
+        for (what, formula, p) in [("mandelbrot", "mandelbrot", 2.0f64), ("multibrot p=3", "multibrot", 3.0)] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = formula.to_string();
+            if formula == "multibrot" {
+                esc.formula_params.insert("power".to_string(), p as f32);
+            }
+            esc.center_re = "-0.6".to_string();
+            esc.center_im = "0.3".to_string();
+            esc.zoom_log2 = 1.5;
+            esc.max_iter = 500;
+            let (w, h) = (96u32, 72u32);
+            let at = |bailout: f64| {
+                let mut e = esc.clone();
+                e.bailout = bailout as f32;
+                records_via(&e, w, h, false, false)
+            };
+            let truth_bail = 1e15;
+            let truth = at(truth_bail);
+            println!("  {what}:");
+            for bailout in [4.0f64, 10.0, 100.0, 1e4, 1e6, 1e8] {
+                let got = at(bailout);
+                let mut errs: Vec<f64> = got
+                    .iter()
+                    .zip(&truth)
+                    .filter(|(g, t)| g.n < esc.max_iter && t.n < esc.max_iter)
+                    .map(|(g, t)| (nu(g, bailout, p) - nu(t, truth_bail, p)).abs())
+                    .filter(|e| e.is_finite())
+                    .collect();
+                errs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                let n = errs.len().max(1);
+                println!(
+                    "    bailout {bailout:>8.0e} (radius {:>8.1}): mean {:.4}, p99 {:.4}, worst {:.4} iterations, over {} pixels",
+                    bailout.sqrt(),
+                    errs.iter().sum::<f64>() / n as f64,
+                    errs[(n * 99 / 100).min(n - 1)],
+                    errs[n - 1],
+                    errs.len()
+                );
+            }
+        }
+    }
+
     /// MEASUREMENT: does relief strength depend on the output size? The
     /// slope is taken per render pixel, so a field that spans the view
     /// rises less per pixel at a larger size. Renders one view with and

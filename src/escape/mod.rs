@@ -199,13 +199,20 @@ pub struct EscapePreset {
     pub formula_params: &'static [(&'static str, f32)],
     pub coloring_params: &'static [(&'static str, f32)],
     /// Escape radius, when the preset needs one other than the
-    /// config default. `None` leaves the current value alone.
+    /// config default. `None` takes the colouring's recommendation
+    /// ([`suggested_bailout`]) where it has one, and otherwise
+    /// `LEGACY_BAILOUT`, the 4 every such preset was drawn at.
     ///
     /// Root-finders are why this exists: Newton's iterates wander far
     /// outside the unit disc before settling, and a function whose
     /// ROOTS lie past the default bailout (z^8 + 15z^4 - 16 has four
     /// at |z| = 2) would have every one of them classified as an
     /// escape — the basins vanish and the view renders flat.
+    ///
+    /// The exponential and trig families name theirs for the opposite
+    /// reason: their test is a RAW `Re z` or `|Im z|`, and a bailout
+    /// carried over from a `|z|²` formula -- 1e4 under a smooth
+    /// colouring -- would overflow `exp` long before it tripped.
     pub bailout: Option<f32>,
 }
 
@@ -329,6 +336,21 @@ pub struct FormulaDef {
     pub wgsl_prev_init: &'static str,
     /// Which quantity the escape test compares (see [`EscapeMetric`]).
     pub escape_metric: EscapeMetric,
+    /// The formula's degree at infinity -- the `p` of `|z_{n+1}| ~
+    /// |z_n|^p` near escape -- from its resolved, slot-ordered params,
+    /// for a formula that is POLYNOMIAL there: past a large enough
+    /// radius every orbit escapes, so a larger bailout refines the
+    /// smooth count without changing which pixels escape.
+    ///
+    /// The smooth count divides by `log p`, so a degree other than 2
+    /// without it leaves a seam at every band; `None` counts in 2, as
+    /// everything did ([`escape_degree_of`]). Only a formula that
+    /// declares one is offered a colouring's recommended bailout
+    /// ([`suggested_bailout`]): Magnet also grows as `z^2` but its
+    /// orbits can pass radius 2 and come back to converge, so a larger
+    /// bailout redraws its escape set, and a degree of 1 (Feather at
+    /// power 3, Barnsley) may never reach radius 100 at all.
+    pub escape_degree: Option<fn(&[f32]) -> f32>,
     /// Computes per-render data on the CPU from the RESOLVED formula
     /// params (slot-ordered, defaults applied) and uploads it into the
     /// uniform's `fdata` array — read in WGSL via `fdata4(i)`. At most
@@ -382,6 +404,60 @@ pub struct ColoringDef {
     /// pre-step iterate, `c` the current parameter). Required with
     /// `NeedsOrbitAccum`, ignored otherwise.
     pub wgsl_accum: &'static str,
+    /// The squared bailout this colouring is best drawn at, which the
+    /// panel applies when the colouring is picked
+    /// ([`suggested_bailout`]). `None` leaves the bailout alone. The
+    /// smooth count's error falls off with the escape radius: measured
+    /// on the Mandelbrot, the worst pixel is 0.75 iterations off at 4,
+    /// 0.12 at 10, 0.005 at 100 and nothing measurable at 1e4
+    /// (`dbg_smooth_count_error_against_bailout`).
+    pub recommended_bailout: Option<f32>,
+}
+
+/// The degree of a formula that is polynomial at infinity, when it
+/// grows faster than linearly at these params (see
+/// [`FormulaDef::escape_degree`]); `None` otherwise.
+pub fn polynomial_degree(formula: &FormulaDef, fparams: &[f32]) -> Option<f32> {
+    let p = formula.escape_degree?(fparams);
+    (p > 1.0001 && p <= 1.0e6).then_some(p)
+}
+
+/// The degree the smooth count divides by: the formula's own, or 2.
+/// A degree of 1 or less (linear growth: Feather at power 3) has no
+/// log-log smooth count, so it keeps 2, as everything did.
+pub fn escape_degree_of(formula: &FormulaDef, fparams: &[f32]) -> f32 {
+    polynomial_degree(formula, fparams).unwrap_or(2.0)
+}
+
+/// A formula's params in slot order, defaults filled in.
+pub fn packed_formula_params(
+    formula: &FormulaDef,
+    values: &std::collections::BTreeMap<String, f32>,
+) -> Vec<f32> {
+    let mut out = vec![0.0; formula.parameters.len()];
+    pack_params(formula.parameters, values, &mut out);
+    out
+}
+
+/// **The bailout to set when `coloring` is picked for `formula`**, or
+/// `None` to leave it. Only for a formula that is polynomial at
+/// infinity ([`polynomial_degree`]), whose escape test is `|z|^2`
+/// with no biomorph: the exponential and trig families test a RAW
+/// `Re z` or `|Im z|` against it, where a smooth colouring's 1e4 would
+/// overflow `exp` long before it tripped.
+pub fn suggested_bailout(
+    formula: &FormulaDef,
+    fparams: &[f32],
+    coloring: &ColoringDef,
+    biomorph_off: bool,
+) -> Option<f32> {
+    if !biomorph_off
+        || formula.escape_metric != EscapeMetric::NormSq
+        || polynomial_degree(formula, fparams).is_none()
+    {
+        return None;
+    }
+    coloring.recommended_bailout
 }
 
 impl ColoringDef {
@@ -574,6 +650,60 @@ mod tests {
             );
         }
         assert!(checked >= 15, "expected the known discrete params, found {checked}");
+    }
+
+    /// The smooth count's log base: the formula's degree at infinity,
+    /// and 2 wherever there is none to read -- including the degrees a
+    /// log-log count cannot use (linear growth, a negative power).
+    #[test]
+    fn the_escape_degree_is_the_formulas_own_or_two() {
+        assert_eq!(escape_degree_of(&formulas::MANDELBROT, &[]), 2.0);
+        assert_eq!(escape_degree_of(&formulas::MULTIBROT, &[3.0]), 3.0);
+        assert_eq!(escape_degree_of(&formulas::MULTIBROT, &[-2.0]), 2.0);
+        assert_eq!(escape_degree_of(&formulas::MULTIBROT, &[1.0]), 2.0);
+        assert_eq!(escape_degree_of(&formulas::CACTUS, &[]), 3.0);
+        assert_eq!(escape_degree_of(&formulas::FEATHER, &[5.0]), 3.0);
+        // Feather at its default power 3 grows linearly: no smooth base.
+        assert_eq!(escape_degree_of(&formulas::FEATHER, &[3.0]), 2.0);
+        assert_eq!(escape_degree_of(&formulas::BARNSLEY, &[]), 2.0);
+        // Only a formula that declares a degree is polynomial at
+        // infinity; Magnet's z^2 growth does not make it one.
+        assert_eq!(polynomial_degree(&formulas::MANDELBROT, &[]), Some(2.0));
+        assert_eq!(polynomial_degree(&formulas::MAGNET, &[0.0]), None);
+        assert_eq!(polynomial_degree(&formulas::BARNSLEY, &[0.0]), None);
+        assert_eq!(polynomial_degree(&formulas::FEATHER, &[3.0]), None);
+    }
+
+    /// Picking the smooth colouring raises a polynomial formula's
+    /// bailout, and leaves alone a formula that tests a raw coordinate
+    /// against it, one whose escape set the bailout moves (Magnet) or
+    /// that may never reach it (Feather at power 3), a biomorph, and a
+    /// colouring with no recommendation.
+    #[test]
+    fn a_recommended_bailout_applies_only_to_a_polynomial_norm_test() {
+        let smooth = &colorings::SMOOTH;
+        let s = |f: &FormulaDef, p: &[f32], biomorph_off: bool| suggested_bailout(f, p, smooth, biomorph_off);
+        assert_eq!(s(&formulas::MANDELBROT, &[], true), Some(1.0e4));
+        assert_eq!(s(&formulas::MULTIBROT, &[4.0], true), Some(1.0e4));
+        assert_eq!(s(&formulas::MANDELBROT, &[], false), None);
+        assert_eq!(s(&formulas::EXPONENTIAL, &[], true), None);
+        assert_eq!(s(&formulas::TRIG, &[0.0], true), None);
+        assert_eq!(s(&formulas::MAGNET, &[0.0], true), None);
+        assert_eq!(s(&formulas::FEATHER, &[3.0], true), None);
+        assert_eq!(s(&formulas::FEATHER, &[5.0], true), Some(1.0e4));
+        assert_eq!(
+            suggested_bailout(&formulas::MANDELBROT, &[], &colorings::ORBIT_TRAP, true),
+            None
+        );
+        // The default config already sits at the default colouring's
+        // recommendation, so a new picture needs no adjustment.
+        let esc = crate::config::escape::EscapeConfig::default();
+        let formula = get_formula(&esc.formula);
+        let fparams = packed_formula_params(formula, &esc.formula_params);
+        assert_eq!(
+            suggested_bailout(formula, &fparams, get_coloring(&esc.coloring), true),
+            Some(esc.bailout)
+        );
     }
 
     #[test]

@@ -84,7 +84,7 @@ pub struct EscapeConfig {
     /// Escape radius squared for escaping formulas. Non-escaping and
     /// convergent formulas read their own thresholds from params.
     ///
-    /// A new config starts at `default_bailout` (10); a file without the
+    /// A new config starts at `default_bailout` (1e4); a file without the
     /// key means 4, the default it was written under, so it renders as
     /// it did. The app always writes the key.
     #[serde(default = "legacy_bailout")]
@@ -727,15 +727,19 @@ fn default_center_im() -> String {
 fn default_max_iter() -> u32 {
     256
 }
-/// A new config's bailout: a radius of about 3.2 shows less banding in
-/// the smooth colourings than 4's radius of 2.
+/// A new config's bailout: the default colouring's recommendation
+/// (smooth, `ColoringDef::recommended_bailout`). The smooth count's
+/// error falls off with the escape radius -- worst pixel 0.75
+/// iterations at 4, 0.12 at 10, nothing measurable at 1e4 (radius 100).
 fn default_bailout() -> f32 {
-    10.0
+    1.0e4
 }
 /// The bailout of a file that does not name one: the default until
-/// 2026-10-02.
+/// 2026-10-02, and so the one every built-in preset that names none
+/// was drawn at.
+pub const LEGACY_BAILOUT: f32 = 4.0;
 fn legacy_bailout() -> f32 {
-    4.0
+    LEGACY_BAILOUT
 }
 fn default_damping_re() -> f32 {
     1.0
@@ -1065,16 +1069,16 @@ mod tests {
         );
     }
 
-    /// A new config starts at a bailout of 10, but a file that names none
+    /// A new config starts at a bailout of 1e4, but a file that names none
     /// keeps the 4 it was written under, and a saved config always names
     /// one -- so the default can move without moving a saved picture.
     #[test]
     fn a_file_without_a_bailout_keeps_the_old_default() {
-        assert_eq!(EscapeConfig::default().bailout, 10.0);
+        assert_eq!(EscapeConfig::default().bailout, 1.0e4);
         let old: EscapeConfig = serde_json::from_str(r#"{"formula":"mandelbrot"}"#).expect("an old escape block");
         assert_eq!(old.bailout, 4.0);
         let json = serde_json::to_string(&EscapeConfig { formula: "burning_ship".into(), ..EscapeConfig::default() }).unwrap();
-        assert!(json.contains("\"bailout\":10.0"), "the bailout must be written: {json}");
+        assert!(json.contains("\"bailout\":10000.0"), "the bailout must be written: {json}");
     }
 
     /// New relief is lit from the upper left (135 degrees counter-clockwise

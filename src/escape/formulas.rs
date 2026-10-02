@@ -13,6 +13,32 @@
 
 use super::{EscapeMetric, EscapeParamDef, FormulaDef, FormulaFeature};
 
+// Degrees at infinity, for the smooth count (`FormulaDef::escape_degree`).
+
+/// The power is the first param: Multibrot's and Tricorn's `power`,
+/// McMullen's `m` in `z^m + lambda / z^n`.
+fn degree_is_param0(p: &[f32]) -> f32 {
+    p.first().copied().unwrap_or(2.0)
+}
+
+/// The quadratic family: Mandelbrot, the Burning Ship variants (folds
+/// of a square), Phoenix, Lambda, Spider and Manowar, whose memory and
+/// `c` terms fall behind `z^2` at infinity.
+fn degree_two(_: &[f32]) -> f32 {
+    2.0
+}
+
+/// Cactus: `z^3 + (c - 1) z - c`.
+fn degree_three(_: &[f32]) -> f32 {
+    3.0
+}
+
+/// Feather: `z^p / (1 + x^2 - i y^2) + c`, whose denominator grows as
+/// `|z|^2`.
+fn feather_degree(p: &[f32]) -> f32 {
+    p.first().copied().unwrap_or(3.0) - 2.0
+}
+
 
 /// The classic quadratic map `z ← z² + c` (plan §5.1).
 ///
@@ -34,6 +60,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    escape_degree: Some(degree_two),
     derived_data: None,
     wgsl_derivative: r#"
 fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
@@ -67,6 +94,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    escape_degree: Some(degree_is_param0),
     derived_data: None,
     wgsl_derivative: r#"
 fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
@@ -101,6 +129,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    escape_degree: Some(degree_is_param0),
     derived_data: None,
     wgsl_derivative: r#"
 fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
@@ -184,6 +213,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    escape_degree: Some(degree_two),
     derived_data: None,
     wgsl_derivative: "",
 };
@@ -235,6 +265,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    escape_degree: Some(degree_is_param0),
     derived_data: None,
     wgsl_derivative: r#"
 fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
@@ -291,6 +322,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    escape_degree: None,
     derived_data: None,
     wgsl_derivative: "",
 };
@@ -333,6 +365,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>, z_prev: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    escape_degree: Some(degree_two),
     derived_data: None,
     wgsl_derivative: "",
 };
@@ -355,6 +388,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "vec2<f32>(0.5, 0.0)",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    escape_degree: Some(degree_two),
     derived_data: None,
     wgsl_derivative: r#"
 fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
@@ -385,6 +419,7 @@ fn formula_step(z: vec2<f32>, c: ptr<function, vec2<f32>>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    escape_degree: Some(degree_two),
     derived_data: None,
     wgsl_derivative: r#"
 fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
@@ -413,6 +448,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>, z_prev: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "z",
     escape_metric: EscapeMetric::NormSq,
+    escape_degree: Some(degree_two),
     derived_data: None,
     wgsl_derivative: "",
 };
@@ -467,6 +503,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    escape_degree: None,
     derived_data: None,
     wgsl_derivative: r#"
 fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
@@ -520,6 +557,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    escape_degree: Some(degree_three),
     derived_data: None,
     wgsl_derivative: r#"
 fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
@@ -549,6 +587,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::Re,
+    escape_degree: None,
     derived_data: None,
     wgsl_derivative: r#"
 fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
@@ -586,6 +625,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::AbsIm,
+    escape_degree: None,
     derived_data: None,
     wgsl_derivative: r#"
 fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
@@ -635,6 +675,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "vec2<f32>(1.5707964, 0.0)",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::AbsIm,
+    escape_degree: None,
     derived_data: None,
     wgsl_derivative: r#"
 fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
@@ -772,6 +813,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>, i: u32) -> vec2<f32> {
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    escape_degree: None,
     derived_data: Some(origami_derived_lines),
     wgsl_derivative: "",
 };
@@ -964,6 +1006,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    escape_degree: None,
     derived_data: None,
     wgsl_derivative: "",
 };
@@ -1029,6 +1072,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    escape_degree: None,
     derived_data: None,
     wgsl_derivative: "",
 };
@@ -1053,6 +1097,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::Re,
+    escape_degree: None,
     derived_data: None,
     wgsl_derivative: r#"
 fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
@@ -1089,6 +1134,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::AbsIm,
+    escape_degree: None,
     derived_data: None,
     wgsl_derivative: "",
 };
@@ -1127,6 +1173,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    escape_degree: Some(feather_degree),
     derived_data: None,
     wgsl_derivative: "",
 };
@@ -1305,6 +1352,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    escape_degree: None,
     derived_data: None,
     wgsl_derivative: "",
 };
@@ -1358,6 +1406,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "vec2<f32>(1.0, 0.0)",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    escape_degree: None,
     derived_data: None,
     wgsl_derivative: "",
 };
@@ -1403,6 +1452,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    escape_degree: None,
     derived_data: None,
     wgsl_derivative: "",
 };
@@ -1454,6 +1504,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "esc_cpow(pixel * -0.0729490168, 0.3333333333)",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    escape_degree: None,
     derived_data: None,
     wgsl_derivative: "",
 };
@@ -1515,6 +1566,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "vec2<f32>(1.0, 0.0)",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    escape_degree: None,
     derived_data: None,
     wgsl_derivative: "",
 };

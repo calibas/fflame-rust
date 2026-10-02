@@ -1,6 +1,7 @@
 # Escape-time colouring: how other renderers do it, and what we could add
 
-Status: **survey done, decisions made, fixes done; feature work next** (2026-10-02).
+Status: **survey done, decisions made, fixes and the smooth count done;
+feature work next** (2026-10-02).
 This compares our escape-time colouring with four other programs and lists
 what we could add (§5). The decisions and the order of work are in §7.
 
@@ -45,12 +46,18 @@ or run):
    - This is the cheapest broad improvement on the list: one step that every
      colouring passes through.
 
-2. **Our smooth count is the plain textbook form, and our bailout is small.**
-   - Ours is `n + 1 − log2(log2|z|)`, with no correction for the formula's
-     power and no normalisation by the bailout.
-   - All four others divide by `ln(power)`. techmatt, KF2, UF and F3 all
-     normalise by the escape radius, so the value does not jump when the
-     radius changes.
+2. **Our smooth count was the plain textbook form, and our bailout was
+   small.** (Both fixed since: §7, item 2.)
+   - Ours was `n + 1 − log2(log2|z|)`, with no correction for the formula's
+     power.
+   - All four others divide by `ln(power)`.
+   - They also normalise by the escape radius, `ln(ln|z| / ln R)`. An
+     earlier draft of this survey said that keeps the value from moving
+     when the radius changes. It does the opposite: it shifts every pixel
+     by `log_p(ln R)`, so a new bailout slides the palette. What it buys is
+     bands that line up with whole iterations. The unnormalised form is
+     the one that settles as the radius grows (measured, below), so we
+     keep it.
    - All four escape at a much larger radius:
 
      | Renderer | Escape radius |
@@ -60,12 +67,19 @@ or run):
      | F3 | 625 |
      | UF Smooth | radius ≈ 11 (its bailout 128 is squared) |
      | UF Triangle Inequality Average | squared bailout 1e20 |
-     | **Ours, new default** | ≈ 3.2 (squared bailout 10) |
+     | **Ours, new default** | 100 (squared bailout 1e4) |
 
    - The banding you saw at bailout 4 is the error of that formula at a small
-     radius: it assumes `|z_{n+1}| ≈ |z_n|²`, which ignores `+c`. The error
-     shrinks quickly as the radius grows, so 10 helps and 1e4 or more makes
-     it negligible.
+     radius: it assumes `|z_{n+1}| ≈ |z_n|^p`, which ignores `+c`. The error
+     shrinks quickly as the radius grows.
+   - *Measured* (`dbg_smooth_count_error_against_bailout`): the worst
+     pixel's error in iterations, against the same view escaped at a
+     squared bailout of 1e15.
+
+     | Squared bailout | 4 | 10 | 100 | 1e4 |
+     |---|---|---|---|---|
+     | Mandelbrot | 0.75 | 0.12 | 0.005 | 0.0000 |
+     | Multibrot, p = 3 | 0.067 | 0.011 | 0.0001 | 0.0000 |
    - UF's reason for keeping the bailout as a colouring parameter is a
      conflict between colourings. Smooth colouring wants a large bailout.
      Binary decomposition, decomposition and UF's Basic want a small one (UF
@@ -257,9 +271,9 @@ From `src/escape/colorings.rs`, `src/escape/assembler.rs`,
 | Capability | Ours | techmatt | KF2 | F3 | UF6 |
 |---|---|---|---|---|---|
 | Transfer curve on the value | — | 4 | 12 | in shader | 10 |
-| Smooth count corrected for power | — | yes | yes | yes | yes |
-| Smooth count normalised by bailout | — | yes | yes | yes | yes |
-| Default escape radius | ≈ 3.2 | 65,536 | 10,000 | 625 | ≈ 11 |
+| Smooth count corrected for power | yes (was —) | yes | yes | yes | yes |
+| Smooth count normalised by bailout | — (on purpose, §1.2) | yes | yes | yes | yes |
+| Default escape radius | 100 (was 2) | 65,536 | 10,000 | 625 | ≈ 11 |
 | Averages debanded by smooth fraction | — | yes | TIA | stripes | TIA |
 | Percentile stretch / auto range | AutoRange, Flatten | yes | "Stretched" | — | — |
 | Histogram equalisation | — | rank | — | yes | — |
@@ -289,7 +303,7 @@ needs an engine change first.
 | # | Candidate | What it is | From | Effort |
 |---|---|---|---|---|
 | P1 | **Transfer curve** | Applied to the value before the palette. Two sets to choose from: (a) techmatt's four, `x`, `√x`, `ln(1+x)/ln 2`, `x²(3−2x)`; (b) UF's ten, adding Sqr, Cube, CubeRoot, Exp, Sin, ArcTan; KF2 adds Log-Log `ln(1+ln(1+x))` and fourth root. Where it applies matters: techmatt curves a value already normalised to 0..1, while UF and KF2 curve the raw index and so need a density and offset around them. | all | S |
-| P2 | **Corrected smooth count** | `n + 1 − ln(ln|z| / ln R) / ln p`, with p the formula's power. It removes the dependence on the bailout and the banding on power ≠ 2 formulas. | all | S |
+| P2 | **Corrected smooth count** | `n + 1 − ln(ln|z|) / ln p`, with p the formula's power, which removes the banding on power ≠ 2 formulas. The others' `ln(ln|z| / ln R)` would move the value with the bailout (§1.2). | all | S |
 | P3 | **Larger default bailout for smooth colourings** | Or a bailout per colouring, as UF does, or a recommended value the panel suggests. Decomposition-style colourings keep a small one. | all | S |
 | P4 | **Debanded averages** | Keep the last term and blend `mean_all` against `mean_without_last` by the smooth fraction. Needs a bigger accumulator (P6). | all | M |
 | P5 | **A second colouring layer** | Base colouring + texture colouring, blended before the palette (techmatt: Screen / Multiply / Add / Overlay, weight), or two coloured layers merged after it (UF's modes). The first is cheaper and covers techmatt's composites. | techmatt, UF | M |
@@ -448,8 +462,34 @@ Read from the code, not reproduced by render, except where noted.
    - stale comments (`710225e4`);
    - relief strength against export resolution: measured, and left as it
      is (§6.7).
-2. **The smooth count** (P2): correct it for power and bailout, and give
-   each colouring a recommended bailout (decision 2).
+2. **The smooth count** (P2): correct it for power, and give each
+   colouring a recommended bailout (decision 2). *Done 2026-10-02*, on
+   branch `escape-coloring`:
+   - each formula reports its degree at infinity (`FormulaDef::escape_degree`:
+     the power for Multibrot, Tricorn and McMullen, 3 for Cactus, power − 2
+     for Feather). A degree of 1 or less, or none, keeps 2: linear growth
+     has no log-log count. The count divides by `log2(degree)` only when
+     it is not 2, so every degree-2 picture is unchanged;
+   - smooth, distance estimate and normal map recommend a squared bailout
+     of 1e4, which the panel sets when one of them is picked. Only for
+     formulas that test `|z|^2` with no biomorph: the exponential and trig
+     families test a raw `Re z` or `|Im z|`, and their presets now carry
+     50 (10 for Collatz);
+   - and only for a formula that is **polynomial at infinity** (it
+     declares its degree): past radius 2 its orbits really escape, so a
+     larger bailout refines the count without moving the escape set. Not
+     so elsewhere. Magnet grows as `z^2` too, but its orbits can pass
+     radius 2 and come back to converge, so a larger bailout redraws it.
+     Feather at power 3 grows linearly and never reached radius 100 in
+     600 iterations: a deep view rendered empty;
+   - a preset that names no bailout takes its colouring's recommendation,
+     or else 4, the bailout it was drawn at (it used to keep whatever the
+     last picture had);
+   - a new config starts at 1e4; a file without a bailout still reads as 4.
+   - The escape GPU tests turned up three tests (Feather, two Magnet)
+     that had failed since the default moved to 10 (`d4bfd323`): their
+     exact-orbit references escape at 4 but took the default. They now
+     name 4.
 3. **The value transfer** (P1) and the palette curve, plus stepped palettes
    (decisions 3, 4 and 6).
 4. **A bigger accumulator** (P6), then **debanded averages** (P4).

@@ -29,6 +29,7 @@ fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
 "#,
     accum_init: "",
     wgsl_accum: "",
+    recommended_bailout: None,
 };
 
 /// Smooth (continuous) iteration count — the standard fractional
@@ -53,12 +54,21 @@ fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
     // guards the first-iteration corner (bailout < 1 configs) without
     // any fast-math-hazard idiom (no self-compare, no self-divide).
     let r2 = max(dot(sum.z, sum.z), 1.0000001);
-    let mu = f32(sum.n) + 1.0 - log2(0.5 * log2(r2));
+    // Each iteration near escape takes |z| to its power p, the formula's
+    // degree at infinity, so the fraction is a log BASE p: base 2 only
+    // for the quadratics, and any other degree left a seam at every
+    // band. Exactly the old count at p = 2 (no divide by a log2(2.0)
+    // that need not round to 1). No log R in it, so it does not move
+    // with the bailout.
+    let ll = log2(0.5 * log2(r2));
+    let frac = select(ll / log2(params.degree), ll, params.degree == 2.0);
+    let mu = f32(sum.n) + 1.0 - frac;
     return mu * cparam(0u);
 }
 "#,
     accum_init: "",
     wgsl_accum: "",
+    recommended_bailout: Some(1.0e4),
 };
 
 /// Orbit trap: minimum distance the orbit ever came to a trap shape
@@ -154,6 +164,7 @@ fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec2<f32
     return vec2<f32>(min(state.x, d), state.y);
 }
 "#,
+    recommended_bailout: None,
 };
 
 /// Orbit average — the Kali glow (plan §8: "REQUIRED for NonEscaping;
@@ -186,6 +197,7 @@ fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec2<f32
     return state + vec2<f32>(min(abs(z.x), abs(z.y)), 1.0);
 }
 "#,
+    recommended_bailout: None,
 };
 
 /// Stripe average — mean of `0.5 + 0.5·sin(density·arg z)` over the
@@ -235,6 +247,7 @@ fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec2<f32
     return state + vec2<f32>(stripe, 1.0);
 }
 "#,
+    recommended_bailout: None,
 };
 
 /// Magnitude average — mean of |z| over the orbit. THE Ducks
@@ -279,6 +292,7 @@ fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec2<f32
     return state + vec2<f32>(length(z), 1.0);
 }
 "#,
+    recommended_bailout: None,
 };
 
 /// Root basin — for Convergent formulas over `zᵖ − 1`: which root the
@@ -375,6 +389,7 @@ fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
 "#,
     accum_init: "",
     wgsl_accum: "",
+    recommended_bailout: None,
 };
 
 /// Triangle-inequality average (plan §8): at each step, where |z|
@@ -415,6 +430,7 @@ fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec2<f32
     return state + vec2<f32>(t, 1.0);
 }
 "#,
+    recommended_bailout: None,
 };
 
 /// Interior / period coloring (plan §8, §5.8, §5.17): pixels whose
@@ -459,6 +475,7 @@ fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
 "#,
     accum_init: "",
     wgsl_accum: "",
+    recommended_bailout: None,
 };
 
 /// Exterior distance estimation (plan §8): `d = |z|·ln|z| / |dz|`
@@ -519,6 +536,7 @@ fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
 "#,
     accum_init: "",
     wgsl_accum: "",
+    recommended_bailout: Some(1.0e4),
 };
 
 /// Analytic normal shading — the "fake 3D" relief.
@@ -630,6 +648,7 @@ fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
 "#,
     accum_init: "",
     wgsl_accum: "",
+    recommended_bailout: Some(1.0e4),
 };
 
 /// Position average — the mean POSITION of the orbit, not the mean
@@ -742,6 +761,7 @@ fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec2<f32
     return vec2<f32>(state.x * 0.5 + moved, 0.0);
 }
 "#,
+    recommended_bailout: None,
 };
 
 /// Sphere average — the orbit's mean CHORDAL distance to a chosen
@@ -874,6 +894,7 @@ fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec2<f32
     return vec2<f32>(state.x + d, state.y + 1.0);
 }
 "#,
+    recommended_bailout: None,
 };
 
 pub static POSITION_AVERAGE: ColoringDef = ColoringDef {
@@ -929,4 +950,5 @@ fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec2<f32
     return state + z;
 }
 "#,
+    recommended_bailout: None,
 };

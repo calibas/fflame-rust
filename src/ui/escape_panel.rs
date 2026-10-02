@@ -1195,6 +1195,27 @@ fn param_control(
     false
 }
 
+/// Pick `coloring`, and with it the bailout it is best drawn at
+/// (`suggested_bailout`) -- one undo step. The smooth count bands at a
+/// small escape radius, so a smooth colouring brings a large one; the
+/// bailout stays editable after.
+fn pick_coloring(
+    config_manager: &mut ConfigManager,
+    formula: &crate::escape::FormulaDef,
+    esc: &crate::config::escape::EscapeConfig,
+    coloring: &crate::escape::ColoringDef,
+) {
+    let mut changes = vec![(ConfigPath::EscapeColoring, ConfigValue::String(coloring.name.to_string()))];
+    let biomorph_off = esc.biomorph == crate::config::escape::BiomorphMode::Off;
+    let fparams = crate::escape::packed_formula_params(formula, &esc.formula_params);
+    if let Some(b) = crate::escape::suggested_bailout(formula, &fparams, coloring, biomorph_off) {
+        if b != esc.bailout {
+            changes.push((ConfigPath::EscapeBailout, b.into()));
+        }
+    }
+    let _ = config_manager.update_batch(changes, "history.param.escape_coloring".to_string());
+}
+
 fn suggested_coloring_scale(coloring: &str, max_iter: u32) -> f32 {
     match coloring {
         "smooth" | "escape_count" | "period" => {
@@ -1840,10 +1861,7 @@ fn show_coloring_section(
                         .clicked()
                         && c.name != coloring.name
                     {
-                        let _ = config_manager.update_param(
-                            ConfigPath::EscapeColoring,
-                            ConfigValue::String(c.name.to_string()),
-                        );
+                        pick_coloring(config_manager, formula_def, esc, c);
                     }
                 }
             });
@@ -1869,10 +1887,7 @@ fn show_coloring_section(
                     .small_button(t!("escape_panel.coloring_use", name = fix.display_name))
                     .clicked()
                 {
-                    let _ = config_manager.update_param(
-                        ConfigPath::EscapeColoring,
-                        ConfigValue::String(fix.name.to_string()),
-                    );
+                    pick_coloring(config_manager, formula_def, esc, fix);
                 }
             }
         });
@@ -1981,9 +1996,25 @@ pub fn apply_preset(
         changes.push((ConfigPath::EscapeJuliaRe, re.into()));
         changes.push((ConfigPath::EscapeJuliaIm, im.into()));
     }
-    if let Some(b) = preset.bailout {
-        changes.push((ConfigPath::EscapeBailout, b.into()));
-    }
+    // A preset that names no bailout takes its colouring's
+    // recommendation, as picking the colouring by hand would, and
+    // otherwise the bailout it was drawn at. Leaving the current one
+    // would carry a smooth colouring's 1e4 into a formula that grows
+    // linearly (Feather at power 3 never reaches it) or whose escape
+    // set moves with it (Magnet).
+    let biomorph_off =
+        config_manager.config().escape.biomorph == crate::config::escape::BiomorphMode::Off;
+    let preset_params: std::collections::BTreeMap<String, f32> = preset
+        .formula_params
+        .iter()
+        .map(|(k, v)| (k.to_string(), *v))
+        .collect();
+    let fparams = crate::escape::packed_formula_params(formula, &preset_params);
+    let bailout = preset
+        .bailout
+        .or_else(|| crate::escape::suggested_bailout(formula, &fparams, coloring, biomorph_off))
+        .unwrap_or(crate::config::escape::LEGACY_BAILOUT);
+    changes.push((ConfigPath::EscapeBailout, bailout.into()));
     for p in formula.parameters {
         let v = preset
             .formula_params
