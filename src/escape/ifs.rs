@@ -12826,7 +12826,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             let mut engines = crate::renderer::RenderEngines::default();
             let _warm = render_on(Some(&mut engines), "ifs_distance");
             let cached = render_on(Some(&mut engines), coloring);
-            let path = crate::escape::diag::snapshot().path;
+            let path = engines.escape.as_ref().map_or("", |e| e.last_path);
 
             // A renderer that has never seen it: a full walk.
             let fresh = render_on(None, coloring);
@@ -12909,11 +12909,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             .find(|c| c.flame.name == "Heighway Dragon")
             .expect("the dragon preset");
 
-        let time = |engines: Option<&mut crate::renderer::RenderEngines>, coloring: &str| {
+        let time = |mut engines: Option<&mut crate::renderer::RenderEngines>, coloring: &str| {
             let mut c = cfg.clone();
             c.escape.coloring = coloring.to_string();
             let mut job = crate::renderer::RenderJob::new(&c, 1920, 1080);
-            if let Some(e) = engines {
+            if let Some(e) = engines.as_deref_mut() {
                 job = job.with_engines(e);
             }
             let t0 = web_time::Instant::now();
@@ -12924,7 +12924,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 &mut crate::renderer::NoProgress,
             ))
             .expect("render");
-            (t0.elapsed().as_secs_f64() * 1000.0, crate::escape::diag::snapshot().path)
+            // The renderer's own record of its path, not the global
+            // diagnostics, which a test rendering in parallel rewrites.
+            let path = engines
+                .as_ref()
+                .and_then(|e| e.escape.as_ref())
+                .map_or("", |e| e.last_path);
+            (t0.elapsed().as_secs_f64() * 1000.0, path)
         };
 
         // The floor: a `render_with` round trip at this size does
@@ -13495,7 +13501,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // And a COLOURING change must still take the cache, or the
         // fix has simply disabled it.
         let recoloured = shot(Some(&mut engines), 1.3, "ifs_level");
-        let path = crate::escape::diag::snapshot().path;
+        let path = engines.escape.as_ref().map_or("", |e| e.last_path);
         assert_eq!(path, "recolor", "a colouring change stopped using the cache");
         let fresh_level = shot(None, 1.3, "ifs_level");
         // Byte-identity, again. It was relaxed to a last-place
@@ -14744,7 +14750,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         ];
         for (name, f) in &relights {
             let warm = shot(Some(&mut engines), f.as_ref());
-            let path = crate::escape::diag::snapshot().path;
+            let path = engines.escape.as_ref().map_or("", |e| e.last_path);
             assert_eq!(path, "recolor", "changing {name} did not take the cache");
             let fresh = shot(None, f.as_ref());
             let d = diff(&warm, &fresh);
@@ -14764,7 +14770,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         ];
         for (name, f) in &walks {
             let warm = shot(Some(&mut engines), f.as_ref());
-            let path = crate::escape::diag::snapshot().path;
+            let path = engines.escape.as_ref().map_or("", |e| e.last_path);
             assert_ne!(path, "recolor", "changing {name} took the cache, but the walk reads it");
             let fresh = shot(None, f.as_ref());
             let d = diff(&warm, &fresh);
@@ -14795,7 +14801,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 &mut crate::renderer::NoProgress,
             ))
             .expect("render");
-            (t0.elapsed().as_secs_f64() * 1000.0, crate::escape::diag::snapshot().path)
+            (t0.elapsed().as_secs_f64() * 1000.0, engines.escape.as_ref().map_or("", |e| e.last_path))
         };
         let _ = go(&c, &mut engines);
         let (walk_ms, walk_path) = go(&c, &mut engines);
