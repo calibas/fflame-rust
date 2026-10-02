@@ -1371,6 +1371,12 @@ fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
     } else if (part == 2u) {
         v = sum.z.x + sum.z.y;
     }
+    // The exponential families escape with z infinite, and fract of an
+    // infinity is NaN, which draws black: an escape past any meaning
+    // reads as zero instead. A NaN fails the comparison, which is the
+    // bad-value test main_template.wgsl relies on under Metal's
+    // fast-math (CLAUDE.md), unlike a self-compare.
+    v = select(0.0, v, abs(v) <= 1e30);
     return 0.05 * (4.0 + v) * cparam(1u);
 }
 "#,
