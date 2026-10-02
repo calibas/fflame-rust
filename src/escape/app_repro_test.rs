@@ -6765,21 +6765,31 @@ fn main() {
         };
 
 
-        for (coloring, zoom, expect_hit) in [
+        for (coloring, zoom, expect_hit, banded_relief) in [
             // map-only: hits on both paths
-            ("smooth", 13.0, true),
-            ("smooth", 15.0, true),
+            ("smooth", 13.0, true, false),
+            ("smooth", 15.0, true, false),
             // derivative (direct path only renders it meaningfully)
-            ("distance_estimate", 13.0, true),
+            ("distance_estimate", 13.0, true, false),
             // accumulator: the param feeds the loop, must MISS
-            ("stripe_average", 15.0, false),
+            ("stripe_average", 15.0, false, false),
+            // A Bounded colouring under Banded relief: the recolour pass
+            // must store the height the iterate pass does (it wrapped a
+            // value the iterate pass clamped).
+            ("normal_map", 13.0, true, true),
         ] {
             let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
             let mut esc = mk(coloring, zoom);
+            if banded_relief {
+                esc.shading.enabled = true;
+                esc.shading.field = crate::config::escape::ShadingField::Banded;
+                esc.shading.height = 400.0;
+            }
             let _first = read(&mut escape, &esc, &mut renderer);
 
-            // The coloring-param tick.
-            esc.coloring_params.insert("scale".to_string(), 0.11);
+            // The coloring-param tick. The relief case ticks past 1, where
+            // clamping and wrapping part ways.
+            esc.coloring_params.insert("scale".to_string(), if banded_relief { 3.0 } else { 0.11 });
             let ticked = read(&mut escape, &esc, &mut renderer);
             let hit = escape.last_path == "recolor";
             assert_eq!(

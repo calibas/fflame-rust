@@ -4171,8 +4171,10 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let raw = coloring_map(summary, r.accum);
         // The height field keeps the PRE-contrast value: the probe
         // measures this texture, so remapping it here would feed the
-        // fit its own output and compound every frame.
-        height = select(raw, fract(raw), params.shade_flags == 1u);
+        // fit its own output and compound every frame. Banded is the
+        // value as the palette shows it -- clamped for a Bounded
+        // colouring, wrapped otherwise -- as the iterate pass stores it.
+        height = select(raw, select(fract(raw), clamp(raw, 0.0, 1.0), COLORING_IS_BOUNDED), params.shade_flags == 1u);
         let dims = vec2<f32>(f32(params.width), f32(params.height));
         let rawc = apply_contrast(raw, vec2<f32>(f32(gid.x), f32(gid.y)) / max(dims - 1.0, vec2<f32>(1.0)));
         let t = select(fract(rawc), clamp(rawc, 0.0, 1.0), COLORING_IS_BOUNDED);
