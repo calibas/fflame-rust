@@ -513,11 +513,14 @@ pub struct EscapeShading {
     #[serde(default, skip_serializing_if = "is_false")]
     pub enabled: bool,
 
-    /// Light azimuth in degrees, counter-clockwise from +x (east).
-    /// 315 (north-west) is the cartographic convention and the
-    /// default, because relief lit from any other quadrant reads as
-    /// inverted to most people.
-    #[serde(default = "default_light_angle")]
+    /// Light azimuth in degrees, counter-clockwise from +x (east): 90 is
+    /// up, 180 west. A new config starts at 135, the upper left -- the
+    /// cartographic convention, because relief lit from any other
+    /// quadrant reads as inverted to most people. A file without the key
+    /// means 315, the lower right, the default it was written under (the
+    /// old comment called 315 north-west; counter-clockwise from east it
+    /// is south-east).
+    #[serde(default = "legacy_light_angle")]
     pub light_angle: f32,
     /// Vertical exaggeration of the slope before lighting. This is the
     /// only control whose useful range depends on the coloring: an
@@ -579,6 +582,11 @@ pub struct EscapeShading {
 }
 
 fn default_light_angle() -> f32 {
+    135.0
+}
+/// The light of a file that does not name one: the default until
+/// 2026-10-02.
+fn legacy_light_angle() -> f32 {
     315.0
 }
 fn default_relief_height() -> f32 {
@@ -1067,6 +1075,18 @@ mod tests {
         assert_eq!(old.bailout, 4.0);
         let json = serde_json::to_string(&EscapeConfig { formula: "burning_ship".into(), ..EscapeConfig::default() }).unwrap();
         assert!(json.contains("\"bailout\":10.0"), "the bailout must be written: {json}");
+    }
+
+    /// New relief is lit from the upper left (135 degrees counter-clockwise
+    /// from east); a file that names no angle keeps the lower right it
+    /// was written under, and a saved shading block always names one.
+    #[test]
+    fn relief_without_a_light_angle_keeps_the_old_light() {
+        assert_eq!(EscapeShading::default().light_angle, 135.0);
+        let old: EscapeShading = serde_json::from_str(r#"{"enabled":true}"#).expect("an old shading block");
+        assert_eq!(old.light_angle, 315.0);
+        let json = serde_json::to_string(&EscapeShading { enabled: true, ..EscapeShading::default() }).unwrap();
+        assert!(json.contains("\"light_angle\":135.0"), "the light must be written: {json}");
     }
 
     #[test]
