@@ -6891,8 +6891,7 @@ mod tests {
         // half a size assertion cannot see.
         let src = crate::escape::assembler::assemble_ifs(&IFS_FLAME_3D, &IFS_ADDRESS, 8);
         let start = src.find("struct IfsMap3Gpu {").expect("declared");
-        let decl = &src[start..start + src[start..].find("
-}").expect("closes")];
+        let decl = &src[start..start + src[start..].find("\n}").expect("closes")];
         assert!(
             !decl.contains("vec3"),
             "the solid row declares a vec3, whose alignment differs between              WGSL and Rust: {decl}"

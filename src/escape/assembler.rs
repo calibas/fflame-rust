@@ -4234,8 +4234,7 @@ pub fn assemble_perturbed_with_lens(
             _ => out.push(line.to_string()),
         }
     }
-    out.join("
-")
+    out.join("\n")
 }
 
 /// Recolor pass: re-run the coloring + palette lookup from the
@@ -6172,8 +6171,7 @@ pub fn assemble_ifs_recolor(coloring: &IfsColoringDef) -> String {
             _ => out.push(line.to_string()),
         }
     }
-    out.join("
-")
+    out.join("\n")
 }
 
 /// Assemble the SOLID relight pass: one colouring and the shared rig
@@ -6197,8 +6195,7 @@ pub fn assemble_ifs_relight_with_lens(
             _ => out.push(line.to_string()),
         }
     }
-    out.join("
-")
+    out.join("\n")
 }
 
 /// Assemble a mode-D distance shader: splice one distance function
