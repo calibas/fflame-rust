@@ -490,6 +490,33 @@ pub fn accum_is_wide(coloring: &ColoringDef) -> bool {
     coloring.has_feature(ColoringFeature::NeedsOrbitAccum)
 }
 
+/// Whether `layer` can be drawn over `base` in one shader: they share
+/// one accumulator, so two accumulating colourings cannot (survey,
+/// item 5). Anything else can.
+pub fn layer_fits(base: &ColoringDef, layer: &ColoringDef) -> bool {
+    !(base.has_feature(ColoringFeature::NeedsOrbitAccum)
+        && layer.has_feature(ColoringFeature::NeedsOrbitAccum))
+}
+
+/// The texture layer a config draws: its colouring, when it names a
+/// mode-A colouring that fits over the base ([`layer_fits`]). `None`
+/// draws the base alone -- no layer, an unknown name, or a refused
+/// pair -- and is what every renderer path asks.
+pub fn layer_of(escape: &crate::config::escape::EscapeConfig) -> Option<&'static ColoringDef> {
+    if !escape.layer.is_on() {
+        return None;
+    }
+    let layer = COLORINGS.iter().copied().find(|c| c.name == escape.layer.coloring)?;
+    let base = COLORINGS.iter().copied().find(|c| c.name == escape.coloring)?;
+    layer_fits(base, layer).then_some(layer)
+}
+
+/// Whether a config's records carry the wide accumulator: the base's,
+/// or a layer's that owns the accumulator.
+pub fn config_accum_is_wide(escape: &crate::config::escape::EscapeConfig) -> bool {
+    accum_is_wide_named(&escape.coloring) || layer_of(escape).is_some_and(accum_is_wide)
+}
+
 /// [`accum_is_wide`] for a config's colouring name. A name that is not
 /// a mode-A colouring (a field's, a mode-D walk's) is narrow, and is
 /// not warned about as `get_coloring` would.

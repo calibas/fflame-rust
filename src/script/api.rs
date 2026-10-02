@@ -1961,6 +1961,65 @@ fn register_escape(engine: &mut Engine) {
             Ok(())
         },
     );
+    // ---- Texture layer ----------------------------------------------
+    engine.register_fn(
+        "layer",
+        |e: &mut EscapeHandle, name: &str, blend: &str, weight: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            use crate::config::escape::LayerBlend;
+            let def = crate::escape::COLORINGS
+                .iter()
+                .find(|c| c.name == name)
+                .ok_or_else(|| err(format!("unknown escape coloring `{name}` - see escape.colorings()")))?;
+            let blend = LayerBlend::ALL
+                .into_iter()
+                .find(|b| b.as_str() == blend)
+                .ok_or_else(|| {
+                    let names: Vec<&str> = LayerBlend::ALL.iter().map(|b| b.as_str()).collect();
+                    err(format!("unknown layer blend '{blend}'; one of {}", names.join(", ")))
+                })?;
+            let weight = num(&weight, "weight")? as f32;
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            if cfg.escape.layer.coloring != name {
+                // The parameters belong to the colouring: start over,
+                // with what a fresh pick in the panel takes.
+                cfg.escape.layer.params.clear();
+                for (param, v) in def.pick_params {
+                    cfg.escape.layer.params.insert(param.to_string(), *v);
+                }
+            }
+            cfg.escape.layer.coloring = name.to_string();
+            cfg.escape.layer.blend = blend;
+            cfg.escape.layer.weight = weight.clamp(0.0, 1.0);
+            Ok(())
+        },
+    );
+    engine.register_fn(
+        "layer_param",
+        |e: &mut EscapeHandle, name: &str, value: f64| -> Result<(), Box<EvalAltResult>> {
+            let mut cfg = e.cfg.borrow_mut();
+            let def = crate::escape::COLORINGS
+                .iter()
+                .find(|c| c.name == cfg.escape.layer.coloring)
+                .ok_or_else(|| err("no texture layer - call escape.layer(...) first"))?;
+            if !def.parameters.iter().any(|p| p.name == name) {
+                let known: Vec<&str> = def.parameters.iter().map(|p| p.name).collect();
+                return Err(err(format!(
+                    "layer coloring `{}` has no parameter `{name}` (it has: {})",
+                    def.name,
+                    if known.is_empty() { "none".to_string() } else { known.join(", ") }
+                )));
+            }
+            enter(&mut cfg);
+            cfg.escape.layer.params.insert(name.to_string(), value as f32);
+            Ok(())
+        },
+    );
+    engine.register_fn("no_layer", |e: &mut EscapeHandle| {
+        let mut cfg = e.cfg.borrow_mut();
+        enter(&mut cfg);
+        cfg.escape.layer = crate::config::escape::ColoringLayer::default();
+    });
     engine.register_fn("params", |e: &mut EscapeHandle| -> Array {
         let cfg = e.cfg.borrow();
         crate::escape::FORMULAS

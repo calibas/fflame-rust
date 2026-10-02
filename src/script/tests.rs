@@ -4191,6 +4191,49 @@ fn escape_coloring_takes_the_panels_pick_values() {
     assert_eq!(out.config.escape.coloring_params.get("deband"), Some(&0.0));
 }
 
+/// A texture layer from a script: named, blended, weighted, with its
+/// own parameters -- and a misspelt name or blend fails.
+#[cfg(feature = "engine-escape")]
+#[test]
+fn escape_texture_layer_from_a_script() {
+    let out = run(
+        r#"
+        script("Layered", "generator");
+        escape.coloring("smooth");
+        escape.layer("stripe_average", "overlay", 0.6);
+        escape.layer_param("density", 6.0);
+        "#,
+        1,
+    )
+    .expect("script ran");
+    let layer = &out.config.escape.layer;
+    assert_eq!(layer.coloring, "stripe_average");
+    assert_eq!(layer.blend, crate::config::escape::LayerBlend::Overlay);
+    assert_eq!(layer.weight, 0.6);
+    assert_eq!(layer.params.get("density"), Some(&6.0));
+    assert_eq!(layer.params.get("deband"), Some(&1.0), "a fresh pick's values");
+    let out = run(
+        r#"
+        script("Layered", "generator");
+        escape.layer("stripe_average", "screen", 0.5);
+        escape.no_layer();
+        "#,
+        1,
+    )
+    .expect("script ran");
+    assert!(!out.config.escape.layer.is_on());
+    for (src, expect) in [
+        (r#"escape.layer("stripes", "screen", 0.5);"#, "unknown escape coloring"),
+        (r#"escape.layer("smooth", "dodge", 0.5);"#, "unknown layer blend"),
+        (r#"escape.layer_param("density", 1.0);"#, "no texture layer"),
+    ] {
+        let text = format!("script(\"X\", \"generator\");\n{src}");
+        let e = run(&text, 1).expect_err("must fail");
+        let msg = format!("{e:?}");
+        assert!(msg.contains(expect), "expected `{expect}` in the error, got: {msg}");
+    }
+}
+
 /// Switching formula drops the previous formula's parameters.
 ///
 /// They are keyed by name and belong to the formula that declared

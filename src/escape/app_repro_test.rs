@@ -7066,6 +7066,178 @@ fn main() {
         }
     }
 
+    /// A texture layer blends as `LayerBlend::apply` says, in every
+    /// mode -- and at weight 0 it is no layer at all, to the byte.
+    ///
+    /// Escape count as both colourings, at two scales, so each pixel's
+    /// two positions follow from its count alone; through a grey ramp,
+    /// so the rendered grey IS the blended position. Pixels whose
+    /// positions sit near a wrap are skipped, where a rounding is a
+    /// whole cycle.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_texture_layer_blends_as_its_mode_says() {
+        use crate::config::escape::{ColoringLayer, LayerBlend};
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        let stop = |position: f32, v: f32| crate::scene::palette::ColorStop { position, color: [v, v, v] };
+        config.palette.stops = vec![stop(0.0, 0.0), stop(1.0, 1.0)];
+        config.escape.center_re = "-0.6".to_string();
+        config.escape.center_im = "0.0".to_string();
+        config.escape.zoom_log2 = 0.5;
+        config.escape.max_iter = 200;
+        config.escape.coloring = "escape_count".to_string();
+        let (sa, sb) = (0.037f32, 0.091f32);
+        config.escape.coloring_params.insert("scale".to_string(), sa);
+        let records = records_via(&config.escape, w, h, false, false);
+        let render = |c: &crate::config::FractalConfig| {
+            let job = crate::renderer::RenderJob::new(c, w, h);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+        let plain = render(&config);
+        for blend in LayerBlend::ALL {
+            let mut c = config.clone();
+            c.escape.layer = ColoringLayer {
+                coloring: "escape_count".to_string(),
+                params: [("scale".to_string(), sb)].into_iter().collect(),
+                blend,
+                weight: 0.0,
+            };
+            if blend != LayerBlend::Add {
+                assert_eq!(render(&c), plain, "{blend:?} at weight 0 moved the picture");
+            }
+            let weight = 0.7;
+            c.escape.layer.weight = weight;
+            let out = render(&c);
+            let (mut checked, mut worst) = (0usize, 0.0f32);
+            for (r, p) in records.iter().zip(out.chunks_exact(4)) {
+                if (r.tags & 1) == 0 {
+                    continue;
+                }
+                let a = (r.n as f32 * sa).rem_euclid(1.0);
+                let b = (r.n as f32 * sb).rem_euclid(1.0);
+                let want = blend.apply(a, b, weight);
+                let near_wrap = |x: f32| !(0.01..=0.99).contains(&x);
+                if near_wrap(a) || near_wrap(b) || near_wrap(want) {
+                    continue;
+                }
+                worst = worst.max((p[0] as f32 / 255.0 - want).abs());
+                checked += 1;
+            }
+            println!("{blend:?}: {checked} pixels, worst {worst:.4}");
+            assert!(checked > 1000, "{blend:?}: only {checked} pixels to check");
+            assert!(worst < 0.01, "{blend:?}: a pixel is {worst:.4} off the blend");
+        }
+    }
+
+    /// A texture layer that runs nothing inside the loop is a recolour:
+    /// adding it, retuning it or changing its blend re-colours the
+    /// cached records and matches a fresh render to the byte. One that
+    /// owns the accumulator, or needs the derivative orbit, changes what
+    /// the loop runs, so adding it must iterate again. Smooth over
+    /// smooth is the same colouring twice in one shader.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_texture_layer_recolours_from_the_cache_unless_it_changes_the_loop() {
+        use crate::config::escape::{ColoringLayer, LayerBlend};
+        let _diag = diag_lock();
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let config = crate::config::FractalConfig::default();
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        renderer.update_background_color(&queue, [0.0, 0.0, 0.0]);
+        let mut settle = |escape: &mut crate::escape::EscapeRenderer, esc: &crate::config::escape::EscapeConfig| {
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("layer cache"),
+                });
+                let settled = escape.render(
+                    &device,
+                    &queue,
+                    &mut enc,
+                    esc,
+                    renderer.escape_palette_view(esc.palette_map.stepped),
+                    renderer.palette_generation(),
+                );
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "render did not settle");
+            }
+            // Through the tone map, as the visual suite reads it.
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("layer cache tonemap"),
+            });
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+                &device, &queue, false, [0.0, 0.0, 0.0],
+            ))
+            .expect("readback");
+            rgba
+        };
+        let mut base = crate::config::escape::EscapeConfig::default();
+        base.center_re = "-0.74364388703715870475".to_string();
+        base.center_im = "0.13182590420531197049".to_string();
+        base.zoom_log2 = 13.0;
+        base.max_iter = 600;
+
+        for (layer, blend, changes_the_loop) in [
+            ("escape_count", LayerBlend::Screen, false),
+            ("smooth", LayerBlend::Overlay, false),
+            ("distance_estimate", LayerBlend::Mix, true),
+            ("stripe_average", LayerBlend::Screen, true),
+        ] {
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            let _ = settle(&mut escape, &base);
+            let mut esc = base.clone();
+            esc.layer = ColoringLayer {
+                coloring: layer.to_string(),
+                params: Default::default(),
+                blend,
+                weight: 0.85,
+            };
+            let layered = settle(&mut escape, &esc);
+            assert_eq!(
+                escape.last_path == "recolor",
+                !changes_the_loop,
+                "adding {layer}: path {}",
+                escape.last_path
+            );
+            let mut fresh_renderer = crate::escape::EscapeRenderer::new(&device, w, h);
+            assert_eq!(layered, settle(&mut fresh_renderer, &esc), "{layer}: cached differs from fresh");
+            fresh_renderer.destroy();
+
+            // A retune of the layer is a recolour whatever it is, as
+            // long as nothing it changes runs in the loop.
+            esc.layer.blend = LayerBlend::Multiply;
+            esc.layer.weight = 0.5;
+            let retuned = settle(&mut escape, &esc);
+            assert_eq!(escape.last_path, "recolor", "{layer}: a blend change re-iterated");
+            let mut fresh_renderer = crate::escape::EscapeRenderer::new(&device, w, h);
+            assert_eq!(retuned, settle(&mut fresh_renderer, &esc), "{layer}: retuned differs from fresh");
+            fresh_renderer.destroy();
+            escape.destroy();
+        }
+    }
+
     /// A stepped palette draws every stop as a flat band: an escape
     /// render through it shows the stops' colours and next to nothing
     /// in between, where the blended palette shows a continuum.

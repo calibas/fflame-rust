@@ -2034,6 +2034,19 @@ impl ConfigManager {
                 .copied()
                 .unwrap_or(0.0)
                 .into()),
+            ConfigPath::EscapeLayerColoring => Ok(config.escape.layer.coloring.clone().into()),
+            ConfigPath::EscapeLayerParam { param } => Ok(config
+                .escape
+                .layer
+                .params
+                .get(param)
+                .copied()
+                .unwrap_or(0.0)
+                .into()),
+            ConfigPath::EscapeLayerBlend => Ok(ConfigValue::String(
+                config.escape.layer.blend.as_str().to_string(),
+            )),
+            ConfigPath::EscapeLayerWeight => Ok(config.escape.layer.weight.into()),
             ConfigPath::EscapeLens => Ok(config.escape.lens.clone().into()),
             ConfigPath::EscapeLensAmount => Ok(config.escape.lens_amount.into()),
             ConfigPath::EscapeLensParam { param } => Ok(config
@@ -3379,6 +3392,21 @@ impl ConfigManager {
             ConfigPath::EscapeColoringParam { param } => {
                 let v: f32 = value.try_into()?;
                 self.current.escape.coloring_params.insert(param.clone(), v);
+            }
+            ConfigPath::EscapeLayerColoring => {
+                self.current.escape.layer.coloring = value.try_into()?;
+            }
+            ConfigPath::EscapeLayerParam { param } => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.layer.params.insert(param.clone(), v);
+            }
+            ConfigPath::EscapeLayerBlend => {
+                let v: String = value.try_into()?;
+                self.current.escape.layer.blend = crate::config::escape::LayerBlend::from_name(&v);
+            }
+            ConfigPath::EscapeLayerWeight => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.layer.weight = v.clamp(0.0, 1.0);
             }
             ConfigPath::EscapeLens => {
                 self.current.escape.lens = value.try_into()?;

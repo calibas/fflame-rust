@@ -1,8 +1,8 @@
 # Escape-time colouring: how other renderers do it, and what we could add
 
-Status: **survey done, decisions made; items 1–4 of the order of work
+Status: **survey done, decisions made; items 1–5 of the order of work
 done** (fixes, smooth count, palette mapping, accumulator and
-debanding); the texture layer next (2026-10-02).
+debanding, texture layer); new colourings next (2026-10-02).
 This compares our escape-time colouring with four other programs and lists
 what we could add (§5). The decisions and the order of work are in §7.
 
@@ -590,7 +590,44 @@ Read from the code, not reproduced by render, except where noted.
      averages of |z| and of positions do not, because a larger radius
      changes what they average.
 5. **The texture layer** (P5): a second colouring blended before the
-   palette. This brings techmatt's composites (C2, C3, C4).
+   palette. This brings techmatt's composites (C2, C3, C4). The design:
+   - **Config:** `EscapeConfig::layer` (`ColoringLayer`): a colouring
+     name (empty is no layer), its own parameters, a blend mode and a
+     weight. Mode A only; the panel shows it under the colouring.
+   - **Blend**, on the two wrapped palette positions, before the
+     palette curve: Screen `1 − (1 − a)(1 − b)`, Multiply `ab`, Overlay,
+     Mix `b`, each as `mix(a, blend, weight)`; and Add, `fract(a + w·b)`,
+     which shifts the palette by the texture. The base's value
+     transfer, contrast and relief height are the base's alone.
+   - **Accumulator:** whichever of the two colourings accumulates owns
+     it, so smooth + stripes, curvature or threads (techmatt's
+     composites) all fit. Two accumulating colourings would need a
+     second one; v1 refuses that pair (the panel greys it out, the
+     renderer draws the base alone).
+   - **Shader:** the layer's WGSL is spliced after the base's, with
+     `coloring_map` renamed `layer_map`, `cparam` renamed `lparam` (a
+     second parameter block in the uniform), and any helper function
+     or constant prefixed. Period detection and the derivative orbit
+     compile in when either colouring needs them. `esc_layer(t, ..)`
+     is the identity without a layer, so existing renders do not move.
+   - **Caches:** the layer is part of the pipeline keys and the band
+     key, and of the recolour cache's identity when it accumulates or
+     reads periods, exactly as the base colouring is.
+   - **Script API:** `escape.layer(name, blend, weight)`,
+     `escape.layer_param(name, value)`, `escape.no_layer()`.
+
+   *Done 2026-10-02*, on branch `escape-coloring`, as designed. Measured:
+   - every blend mode, rendered through a grey ramp with escape count
+     as both colourings, lands within one 8-bit level of
+     `LayerBlend::apply` (worst 0.004); at weight 0 a layer is
+     byte-identical to none;
+   - a layer that runs nothing in the loop recolours from the cache and
+     matches a fresh render to the byte, including smooth over smooth.
+     One that accumulates or needs the derivative orbit (distance
+     estimate) re-iterates, as it must;
+   - every fitting pair of the 14 colourings assembles and validates
+     as base and layer, direct, perturbed and recolour; the 49 pairs of
+     two accumulating colourings are refused.
 6. **New colourings** (§5.2), in an order to be picked.
 7. **Relief** (§5.3): the small ones (R1, R2, R4, R8, R9) first, then
    analytic relief (R5), offset orbits (R6) and Embossed (R7). Analytic

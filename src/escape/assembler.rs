@@ -58,6 +58,7 @@ struct EscapeParams {
     pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
     fparams: array<vec4<f32>, 4>,  // formula params, slot-ordered
     cparams: array<vec4<f32>, 4>,  // coloring params, slot-ordered
+    lparams: array<vec4<f32>, 4>,  // the texture layer's params, slot-ordered
     // CPU-derived formula data (FormulaDef::derived_data), vec4-packed.
     // Zero for formulas without the hook. Origami's fold-line table
     // lives here: identical for every pixel, so computing it per
@@ -299,7 +300,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // SHADING_BANDED picks the wrapped coordinate instead, which
         // turns every palette band into a step (the engraved look).
         height = select(raw, t, params.shade_flags == 1u);
-        rgb = esc_palette(t);
+        rgb = esc_palette(esc_layer(t, summary, accum_state));
         coverage = 1.0;
     }
 
@@ -424,18 +425,135 @@ fn esc_debanded_mean(sum: OrbitSummary, state: vec4<f32>) -> f32 {
 }
 "#;
 
-/// The orbit helpers a colouring calls, spliced just before it, and
-/// nothing for one that calls none. A formula that never escapes gets
-/// an escape fraction that reads no bailout: a shader that read it
-/// anyway would contradict the panel, which hides the control there
+/// The orbit helpers the colourings call, spliced just before them,
+/// and nothing when neither calls any. A formula that never escapes
+/// gets an escape fraction that reads no bailout: a shader that read
+/// it anyway would contradict the panel, which hides the control there
 /// (`iteration_controls_match_the_assembled_shader`).
-fn orbit_helpers(coloring: &ColoringDef, escaping: bool) -> String {
-    let src = coloring.wgsl;
-    if !src.contains("esc_escape_fraction") && !src.contains("esc_debanded_mean") {
+fn orbit_helpers(coloring: &ColoringDef, layer: Option<&ColoringDef>, escaping: bool) -> String {
+    let calls = |c: &ColoringDef| {
+        c.wgsl.contains("esc_escape_fraction") || c.wgsl.contains("esc_debanded_mean")
+    };
+    if !calls(coloring) && !layer.is_some_and(calls) {
         return String::new();
     }
     let fraction = if escaping { ESCAPE_FRACTION_WGSL } else { ESCAPE_FRACTION_NEVER_WGSL };
     format!("{}\n\n{}", fraction.trim(), DEBANDED_MEAN_WGSL.trim())
+}
+
+/// Replace the identifier `from` with `to` wherever it stands as a
+/// whole word -- not inside a longer name.
+fn rename_ident(src: &str, from: &str, to: &str) -> String {
+    let word = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut out = String::with_capacity(src.len());
+    let mut rest = src;
+    while let Some(at) = rest.find(from) {
+        let before = rest[..at].chars().next_back();
+        let after = rest[at + from.len()..].chars().next();
+        out.push_str(&rest[..at]);
+        if before.is_some_and(word) || after.is_some_and(word) {
+            out.push_str(from);
+        } else {
+            out.push_str(to);
+        }
+        rest = &rest[at + from.len()..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// A colouring's WGSL made safe to splice as the texture layer beside
+/// the base: every function and constant it declares gains a `layer_`
+/// prefix -- so `coloring_map` becomes `layer_coloring_map` and two
+/// colourings with a helper of the same name, or the same colouring
+/// twice, cannot collide -- and its parameters read the layer's block.
+/// `coloring_accum` keeps its name: the template calls it, and when
+/// the layer owns the accumulator the base has none.
+fn layer_source(src: &str) -> String {
+    let mut names: Vec<String> = Vec::new();
+    for marker in ["fn ", "const "] {
+        let mut rest = src;
+        while let Some(at) = rest.find(marker) {
+            let tail = &rest[at + marker.len()..];
+            let name: String = tail
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            let starts_word = rest[..at].chars().next_back().is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
+            if starts_word && !name.is_empty() && name != "coloring_accum" && !names.contains(&name) {
+                names.push(name);
+            }
+            rest = tail;
+        }
+    }
+    let mut out = src.to_string();
+    for name in &names {
+        out = rename_ident(&out, name, &format!("layer_{name}"));
+    }
+    rename_ident(&out, "cparam", "lparam")
+}
+
+/// The texture layer's WGSL, spliced after the base colouring: its
+/// parameter reader, its renamed source and `esc_layer`, which blends
+/// it into the base's palette position. Without a layer `esc_layer` is
+/// the identity, so a render without one keeps its arithmetic.
+fn layer_wgsl(layer: Option<&ColoringDef>) -> String {
+    let Some(l) = layer else {
+        return "// no texture layer\n\
+                fn esc_layer(t: f32, sum: OrbitSummary, state: vec4<f32>) -> f32 {\n\
+                \x20   return t;\n\
+                }"
+            .to_string();
+    };
+    let colors_interior = l.has_feature(ColoringFeature::ColorsInterior);
+    let bounded = l.has_feature(ColoringFeature::Bounded);
+    format!(
+        "fn lparam(i: u32) -> f32 {{\n    return params.lparams[i / 4u][i % 4u];\n}}\n\
+         const LAYER_COLORS_INTERIOR: bool = {colors_interior};\n\
+         const LAYER_IS_BOUNDED: bool = {bounded};\n\
+         // texture layer: {}\n{}\n{}",
+        l.name,
+        layer_source(l.wgsl).trim(),
+        ESC_LAYER_WGSL.trim()
+    )
+}
+
+/// Blending the layer into the base (`LayerBlend`): `t` is the base's
+/// wrapped palette position, the result the position looked up.
+const ESC_LAYER_WGSL: &str = r#"
+// The texture layer blended into the base's palette position before
+// the palette (ColoringLayer). Where the layer has nothing to say -- an
+// interior pixel it does not colour -- the base stands alone.
+fn esc_layer(t: f32, sum: OrbitSummary, state: vec4<f32>) -> f32 {
+    if (!(sum.escaped || LAYER_COLORS_INTERIOR)) {
+        return t;
+    }
+    let b = esc_wrap(layer_coloring_map(sum, state), LAYER_IS_BOUNDED);
+    let w = params.pmap.y;
+    var blended = b;
+    switch ((params.pmap_flags >> 16u) & 0xffu) {
+        case 0u: { blended = 1.0 - (1.0 - t) * (1.0 - b); }
+        case 1u: { blended = t * b; }
+        case 2u: { return fract(t + w * b); }
+        case 3u: { blended = select(1.0 - 2.0 * (1.0 - t) * (1.0 - b), 2.0 * t * b, t < 0.5); }
+        default: {}
+    }
+    return t + (blended - t) * w;
+}
+"#;
+
+/// Which of the two colourings owns the accumulator, if either runs
+/// one ([`crate::escape::layer_fits`] guarantees at most one), and its
+/// update as the template should splice it.
+fn accum_owner<'a>(
+    coloring: &'a ColoringDef,
+    layer: Option<&'a ColoringDef>,
+) -> Option<(&'a ColoringDef, String)> {
+    if coloring.has_feature(ColoringFeature::NeedsOrbitAccum) {
+        return Some((coloring, coloring.wgsl_accum.to_string()));
+    }
+    let l = layer.filter(|l| l.has_feature(ColoringFeature::NeedsOrbitAccum))?;
+    Some((l, layer_source(l.wgsl_accum)))
 }
 
 /// Resolve a mode-A template's accumulator width ([`accum_is_wide`]).
@@ -544,6 +662,7 @@ struct EscapeParams {
     pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
+    lparams: array<vec4<f32>, 4>,
     // CPU-derived formula data — see the direct template's header.
     fdata: array<vec4<f32>, 64>,
 }
@@ -981,7 +1100,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // SHADING_BANDED picks the wrapped coordinate instead, which
         // turns every palette band into a step (the engraved look).
         height = select(raw, t, params.shade_flags == 1u);
-        rgb = esc_palette(t);
+        rgb = esc_palette(esc_layer(t, summary, accum_state));
         coverage = 1.0;
     }
 
@@ -1043,6 +1162,7 @@ struct EscapeParams {
     pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
+    lparams: array<vec4<f32>, 4>,
     // CPU-derived formula data — see the direct template's header.
     fdata: array<vec4<f32>, 64>,
 }
@@ -1888,7 +2008,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // SHADING_BANDED picks the wrapped coordinate instead, which
         // turns every palette band into a step (the engraved look).
         height = select(raw, t, params.shade_flags == 1u);
-        rgb = esc_palette(t);
+        rgb = esc_palette(esc_layer(t, summary, accum_state));
         coverage = 1.0;
     }
 
@@ -4078,7 +4198,21 @@ pub fn assemble_perturbed_with_lens(
     tier: PerturbTier,
     lens: Option<&str>,
 ) -> String {
-    let needs_accum = coloring.has_feature(ColoringFeature::NeedsOrbitAccum);
+    assemble_perturbed_layered(coloring, None, floatexp, tier, lens)
+}
+
+/// [`assemble_perturbed_with_lens`] with a texture layer, combined as
+/// [`assemble_layered`] combines it.
+pub fn assemble_perturbed_layered(
+    coloring: &ColoringDef,
+    layer: Option<&ColoringDef>,
+    floatexp: bool,
+    tier: PerturbTier,
+    lens: Option<&str>,
+) -> String {
+    let layer = layer.filter(|l| crate::escape::layer_fits(coloring, l));
+    let owner = accum_owner(coloring, layer);
+    let needs_accum = owner.is_some();
     let colors_interior = coloring.has_feature(ColoringFeature::ColorsInterior);
     let bounded = coloring.has_feature(ColoringFeature::Bounded);
     // On this path the TIER is the map's identity -- there is no
@@ -4090,7 +4224,7 @@ pub fn assemble_perturbed_with_lens(
         } else {
             PERTURBED_TEMPLATE
         },
-        crate::escape::accum_is_wide(coloring),
+        owner.as_ref().is_some_and(|(o, _)| crate::escape::accum_is_wide(o)),
     );
 
     let mut out = Vec::new();
@@ -4180,23 +4314,24 @@ pub fn assemble_perturbed_with_lens(
                 if !helpers.is_empty() {
                     out.push(helpers);
                 }
-                let helpers = orbit_helpers(coloring, true);
+                let helpers = orbit_helpers(coloring, layer, true);
                 if !helpers.is_empty() {
                     out.push(helpers);
                 }
                 out.push(format!("// coloring: {}", coloring.name));
                 out.push(coloring.wgsl.to_string());
+                out.push(layer_wgsl(layer));
             }
             "//__COLORING_ACCUM__" => {
-                if needs_accum {
-                    out.push(coloring.wgsl_accum.to_string());
+                if let Some((_, accum)) = &owner {
+                    out.push(accum.clone());
                 }
             }
             "//__ACCUM_DECL__" => {
-                if needs_accum {
+                if let Some((o, _)) = &owner {
                     out.push(format!(
                         "    var accum_state: vec4<f32> = {};",
-                        coloring.accum_init
+                        o.accum_init
                     ));
                 } else {
                     // `var`, not `let`: the perturbed templates' chunk
@@ -4270,6 +4405,7 @@ struct EscapeParams {
     pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
+    lparams: array<vec4<f32>, 4>,
     fdata: array<vec4<f32>, 64>,
 }
 
@@ -4357,7 +4493,8 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var height = 0.0;
     if (escaped || COLORING_COLORS_INTERIOR) {
         let summary = OrbitSummary(r.z, r.n, escaped, converged, period, r.dz);
-        let raw = coloring_map(summary, vec4<f32>(r.accum, /*R_ACCUM2*/));
+        let state = vec4<f32>(r.accum, /*R_ACCUM2*/);
+        let raw = coloring_map(summary, state);
         // The height field keeps the PRE-contrast value: the probe
         // measures this texture, so remapping it here would feed the
         // fit its own output and compound every frame. Banded is the
@@ -4368,7 +4505,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let dims = vec2<f32>(f32(params.width), f32(params.height));
         let rawc = apply_contrast(raw, vec2<f32>(f32(gid.x), f32(gid.y)) / max(dims - 1.0, vec2<f32>(1.0)));
         let t = esc_wrap(rawc, COLORING_IS_BOUNDED);
-        rgb = esc_palette(t);
+        rgb = esc_palette(esc_layer(t, summary, state));
         coverage = 1.0;
     }
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, coverage));
@@ -4385,10 +4522,23 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 /// under each, and the renderer folds the flag into both the cache
 /// key and the pipeline key so the two always agree.
 pub fn assemble_recolor(coloring: &ColoringDef, has_derivative: bool) -> String {
+    assemble_recolor_layered(coloring, None, has_derivative)
+}
+
+/// [`assemble_recolor`] with a texture layer. The records were written
+/// by an iterate pass assembled with the same pair, so the accumulator
+/// they carry is the owner's, at its width.
+pub fn assemble_recolor_layered(
+    coloring: &ColoringDef,
+    layer: Option<&ColoringDef>,
+    has_derivative: bool,
+) -> String {
+    let layer = layer.filter(|l| crate::escape::layer_fits(coloring, l));
     let colors_interior = coloring.has_feature(ColoringFeature::ColorsInterior);
     let bounded = coloring.has_feature(ColoringFeature::Bounded);
+    let wide = accum_owner(coloring, layer).is_some_and(|(o, _)| crate::escape::accum_is_wide(o));
     let mut out = Vec::new();
-    let template = with_accum_width(RECOLOR_TEMPLATE, crate::escape::accum_is_wide(coloring));
+    let template = with_accum_width(RECOLOR_TEMPLATE, wide);
     for line in template.lines() {
         match line.trim() {
             "//__PALETTE_MAP__" => out.push(PALETTE_MAP_WGSL.trim().to_string()),
@@ -4398,12 +4548,13 @@ pub fn assemble_recolor(coloring: &ColoringDef, has_derivative: bool) -> String 
                 ));
                 out.push(format!("const HAS_DERIVATIVE: bool = {has_derivative};"));
                 out.push(format!("const COLORING_IS_BOUNDED: bool = {bounded};"));
-                let helpers = orbit_helpers(coloring, true);
+                let helpers = orbit_helpers(coloring, layer, true);
                 if !helpers.is_empty() {
                     out.push(helpers);
                 }
                 out.push(format!("// coloring: {}", coloring.name));
                 out.push(coloring.wgsl.to_string());
+                out.push(layer_wgsl(layer));
             }
             _ => out.push(line.to_string()),
         }
@@ -4445,6 +4596,7 @@ struct EscapeParams {
     pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
+    lparams: array<vec4<f32>, 4>,
     // CPU-derived formula data — see the direct template's header.
     fdata: array<vec4<f32>, 64>,
 }
@@ -4600,6 +4752,7 @@ struct EscapeParams {
     pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
+    lparams: array<vec4<f32>, 4>,
     // Mode D keeps the whole-IFS constants here: see
     // `escape::ifs::pack_globals` for the layout.
     fdata: array<vec4<f32>, 64>,
@@ -5062,6 +5215,7 @@ struct EscapeParams {
     pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
+    lparams: array<vec4<f32>, 4>,
     fdata: array<vec4<f32>, 64>,
 }
 
@@ -5243,6 +5397,7 @@ struct EscapeParams {
     pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
+    lparams: array<vec4<f32>, 4>,
     fdata: array<vec4<f32>, 64>,
 }
 
@@ -5461,6 +5616,7 @@ struct EscapeParams {
     pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
+    lparams: array<vec4<f32>, 4>,
     fdata: array<vec4<f32>, 64>,
 }
 
@@ -6468,7 +6624,25 @@ pub fn assemble_with_lens(
     interior_detect: bool,
     lens: Option<&str>,
 ) -> String {
-    let needs_accum = coloring.has_feature(ColoringFeature::NeedsOrbitAccum);
+    assemble_layered(formula, coloring, None, damped, interior_detect, lens)
+}
+
+/// [`assemble_with_lens`] with a texture layer (`ColoringLayer`): the
+/// two colourings' needs combine -- an accumulator, period detection or
+/// a derivative orbit compiles in when either asks -- and the layer is
+/// spliced after the base. A layer that does not fit is ignored.
+pub fn assemble_layered(
+    formula: &FormulaDef,
+    coloring: &ColoringDef,
+    layer: Option<&ColoringDef>,
+    damped: bool,
+    interior_detect: bool,
+    lens: Option<&str>,
+) -> String {
+    let layer = layer.filter(|l| crate::escape::layer_fits(coloring, l));
+    let either = |f: ColoringFeature| coloring.has_feature(f) || layer.is_some_and(|l| l.has_feature(f));
+    let owner = accum_owner(coloring, layer);
+    let needs_accum = owner.is_some();
     let colors_interior = coloring.has_feature(ColoringFeature::ColorsInterior);
     let bounded = coloring.has_feature(ColoringFeature::Bounded);
     let non_escaping = formula.has_feature(FormulaFeature::NonEscaping);
@@ -6476,7 +6650,7 @@ pub fn assemble_with_lens(
     let needs_index = formula.has_feature(FormulaFeature::NeedsIndex);
     let mutates_c = formula.has_feature(FormulaFeature::MutatesC);
     let convergent = formula.has_feature(FormulaFeature::Convergent);
-    let needs_period = coloring.has_feature(ColoringFeature::NeedsPeriod);
+    let needs_period = either(ColoringFeature::NeedsPeriod);
     // Interior detection may only stop an orbit where stopping is
     // INVISIBLE. A coloring that draws the interior reads the final z
     // (and its accumulator, and its derivative) for exactly those
@@ -6489,7 +6663,7 @@ pub fn assemble_with_lens(
         && !colors_interior
         && !needs_accum
         && !needs_period;
-    let needs_derivative = coloring.has_feature(ColoringFeature::NeedsDerivative)
+    let needs_derivative = either(ColoringFeature::NeedsDerivative)
         && !formula.wgsl_derivative.is_empty();
     let param_seed = if formula.wgsl_param_seed.is_empty() {
         "vec2<f32>(0.0, 0.0)"
@@ -6506,7 +6680,10 @@ pub fn assemble_with_lens(
 
     let mut out = Vec::new();
     lens_prelude(&mut out, lens);
-    let template = with_accum_width(TEMPLATE, crate::escape::accum_is_wide(coloring));
+    let template = with_accum_width(
+        TEMPLATE,
+        owner.as_ref().is_some_and(|(o, _)| crate::escape::accum_is_wide(o)),
+    );
     for line in template.lines() {
         match line.trim() {
             "//__PALETTE_MAP__" => out.push(PALETTE_MAP_WGSL.trim().to_string()),
@@ -6528,23 +6705,24 @@ pub fn assemble_with_lens(
                 ));
                 out.push(format!("const HAS_DERIVATIVE: bool = {needs_derivative};"));
                 out.push(format!("const COLORING_IS_BOUNDED: bool = {bounded};"));
-                let helpers = orbit_helpers(coloring, !non_escaping);
+                let helpers = orbit_helpers(coloring, layer, !non_escaping);
                 if !helpers.is_empty() {
                     out.push(helpers);
                 }
                 out.push(format!("// coloring: {}", coloring.name));
                 out.push(coloring.wgsl.to_string());
+                out.push(layer_wgsl(layer));
             }
             "//__COLORING_ACCUM__" => {
-                if needs_accum {
-                    out.push(coloring.wgsl_accum.to_string());
+                if let Some((_, accum)) = &owner {
+                    out.push(accum.clone());
                 }
             }
             "//__ACCUM_DECL__" => {
-                if needs_accum {
+                if let Some((o, _)) = &owner {
                     out.push(format!(
                         "    var accum_state: vec4<f32> = {};",
-                        coloring.accum_init
+                        o.accum_init
                     ));
                 } else {
                     // `var`, not `let`: the perturbed templates' chunk
@@ -6873,6 +7051,66 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Every pair of colourings that fits together assembles and
+    /// validates with the second as a texture layer -- direct,
+    /// perturbed and recolour -- and the pairs that do not fit are
+    /// refused rather than spliced (two accumulators).
+    #[test]
+    fn every_fitting_coloring_pair_validates_as_a_texture_layer() {
+        let validate = |src: &str, what: &str| {
+            assert!(!src.contains("//__"), "{what}: left a marker");
+            let module = naga::front::wgsl::parse_str(src)
+                .unwrap_or_else(|e| panic!("{what}: parse: {}", e.emit_to_string(src)));
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("{what}: validation: {e:?}"));
+        };
+        let mandelbrot = crate::escape::get_formula("mandelbrot");
+        let (mut pairs, mut refused) = (0, 0);
+        for base in crate::escape::COLORINGS {
+            for layer in crate::escape::COLORINGS {
+                if !crate::escape::layer_fits(base, layer) {
+                    refused += 1;
+                    let src = assemble_layered(mandelbrot, base, Some(layer), false, true, None);
+                    assert!(!src.contains("texture layer:"), "{} over {} was spliced", layer.name, base.name);
+                    continue;
+                }
+                pairs += 1;
+                let what = format!("{} over {}", layer.name, base.name);
+                let direct = assemble_layered(mandelbrot, base, Some(layer), false, true, None);
+                assert!(direct.contains("fn layer_coloring_map("), "{what}: the layer was not renamed");
+                validate(&direct, &format!("{what} (direct)"));
+                validate(
+                    &assemble_perturbed_layered(base, Some(layer), false, PerturbTier::Power(2), None),
+                    &format!("{what} (perturbed)"),
+                );
+                validate(&assemble_recolor_layered(base, Some(layer), true), &format!("{what} (recolour)"));
+            }
+        }
+        assert!(pairs > 100 && refused > 0, "{pairs} pairs, {refused} refused");
+    }
+
+    /// The layer's renaming touches whole identifiers only.
+    #[test]
+    fn a_layer_renames_whole_identifiers_only() {
+        let src = "fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {\n\
+                   \x20   let x = cparam(0u) + my_cparam(1u) + cparams;\n\
+                   \x20   return helper(x);\n\
+                   }\n\
+                   fn helper(x: f32) -> f32 { return x; }\n\
+                   const K: f32 = 2.0;\n\
+                   fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32>) -> vec4<f32> { return state * K; }";
+        let out = layer_source(src);
+        assert!(out.contains("fn layer_coloring_map("));
+        assert!(out.contains("lparam(0u) + my_cparam(1u) + cparams"), "{out}");
+        assert!(out.contains("return layer_helper(x)") && out.contains("fn layer_helper("));
+        assert!(out.contains("const layer_K") && out.contains("state * layer_K"));
+        assert!(out.contains("fn coloring_accum("), "the template calls the accumulator by name");
     }
 
     /// The two copies of `esc_reduce` must not drift.
