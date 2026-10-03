@@ -1077,6 +1077,10 @@ pub struct EscapeRenderer {
     contrast_fit: Option<ContrastFit>,
     /// Identity the current fit was measured under.
     contrast_fit_key: Option<String>,
+    /// The palette the current render is drawn with (`render`'s
+    /// `palette_generation`): part of the iteration's identity for a
+    /// colouring that samples it inside the loop (`PaletteInLoop`).
+    palette_generation: u64,
 }
 
 /// GPU-time pacing for the perturbed path (TDR-safety plan item C).
@@ -1767,6 +1771,7 @@ impl EscapeRenderer {
             contrast_readback: None,
             contrast_fit: None,
             contrast_fit_key: None,
+            palette_generation: 0,
             current_ref_offset: [0.0, 0.0],
             iter_state_buffer: None,
             iter_state_px: 0,
@@ -3296,7 +3301,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let layer = super::layer_of(escape).map_or(String::new(), |l| {
                 format!("|{}|{:?}", l.name, escape.layer.params)
             });
-            format!("{}|{:?}{layer}", escape.coloring, escape.coloring_params)
+            format!("{}|{:?}{layer}{}", escape.coloring, escape.coloring_params, self.palette_in_loop_key(escape))
         } else {
             String::new()
         };
@@ -3539,7 +3544,20 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             self.height,
             orbit_tag,
             orbit_done,
-        ) + format!("|{:?}|{:?}", escape.palette_map, escape.layer).as_str()
+        ) + format!("|{:?}|{:?}{}", escape.palette_map, escape.layer, self.palette_in_loop_key(escape)).as_str()
+    }
+
+    /// The palette, for a colouring that samples it inside the loop
+    /// (`PaletteInLoop`, direct orbit traps): its colour is fixed during
+    /// iteration, so the palette and how it is mapped belong to the
+    /// iteration's identity, and to a chunked render's. Empty otherwise,
+    /// which keeps every other colouring's keys as they were.
+    fn palette_in_loop_key(&self, escape: &EscapeConfig) -> String {
+        if Self::colourings_have(escape, super::ColoringFeature::PaletteInLoop) {
+            format!("|pal{}|{:?}", self.palette_generation, escape.palette_map)
+        } else {
+            String::new()
+        }
     }
 
     /// (Re)allocate the perturbed path's per-pixel resume state.
@@ -7420,6 +7438,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         palette_view: &TextureView,
         palette_generation: u64,
     ) -> bool {
+        self.palette_generation = palette_generation;
         // Relief needs its scalar field and a destination distinct
         // from the colour it reads; both are allocated on demand, so
         // an escape view with shading off carries neither.

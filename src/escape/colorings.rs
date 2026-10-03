@@ -2261,3 +2261,244 @@ fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32
     recommended_bailout: None,
     pick_params: &[],
 };
+
+/// Direct orbit traps (survey C10), from techmatt's engine
+/// (`direct_trap.rs`, the `direct_trap_*` modes in `mode.rs`, read from
+/// source); Ultra Fractal's Direct Orbit Traps are the same idea with
+/// more options. It never makes a value. Every iterate that comes within
+/// `threshold` of the shape takes a sample from the palette and
+/// composites it into the pixel, in the order the orbit made them, so the
+/// colour is the stack of every near miss -- the lacy, overlapping look.
+///
+/// Per near miss, as techmatt has it: `key = transform(d / threshold)`
+/// picks the sample (a close approach reads from the bottom of the
+/// palette) and feathers it, `alpha = opacity (1 - key)`; then, per
+/// channel in linear light, `blend(standing, sample)` (or the sample
+/// under the standing colour, Top down) mixed in by `alpha`. It starts
+/// from black or white, paints the interior too, and tests the escaping
+/// iterate as well (the trap is checked before the escape).
+///
+/// Kept: the palette is read clamped, not wrapped, on the same
+/// `i/(N-1)` table positions; a threshold of 0 takes the shape's own
+/// default (techmatt's per-shape calibration); and a Screen cross is
+/// held to opacity 0.15 and threshold 0.08, where techmatt measured it
+/// blowing out to white. The defaults are his `direct_trap_ring`.
+///
+/// The palette is sampled inside the loop, so a palette edit
+/// re-iterates (`PaletteInLoop`).
+pub static DIRECT_TRAPS: ColoringDef = ColoringDef {
+    name: "direct_traps",
+    display_name: "Direct Orbit Traps",
+    features: &[
+        ColoringFeature::NeedsOrbitAccum,
+        ColoringFeature::ColorsInterior,
+        ColoringFeature::DirectColor,
+        ColoringFeature::PaletteInLoop,
+    ],
+    parameters: &[
+        EscapeParamDef {
+            name: "shape",
+            display_name: "Trap shape",
+            default: 1.0,
+            min: 0.0,
+            max: 7.0,
+            tooltip: "The shape each iterate is measured against, at the origin: \
+                      a point (beads), a ring of the given radius (overlapping \
+                      scales), the axes' cross, the cross with its diagonals, \
+                      diamond and square contours, a four-pointed astroid, or the \
+                      real axis alone (horizontal bands).",
+            choices: &["Point", "Ring", "Cross", "Hypercross", "Diamond", "Box", "Astroid", "Lines"],
+        },
+        EscapeParamDef {
+            name: "radius",
+            display_name: "Ring radius",
+            default: 1.0,
+            min: 0.01,
+            max: 4.0,
+            tooltip: "The ring's radius (the other shapes do not use it).",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "threshold",
+            display_name: "Threshold",
+            default: 0.0597,
+            min: 0.0,
+            max: 4.0,
+            tooltip: "How near an iterate must come to paint. 0 takes the shape's \
+                      own default, calibrated so every shape paints about the \
+                      same share of a frame: point 0.6, ring 0.078, cross 0.1, \
+                      hypercross 0.074, diamond 0.8, box 0.55, astroid 1.06, \
+                      lines 0.127.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "opacity",
+            display_name: "Opacity",
+            default: 0.45,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How strongly each near miss paints, before its feathering \
+                      by closeness. A Screen cross is held to 0.15, where it \
+                      would otherwise blow out to white.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "blend",
+            display_name: "Blend",
+            default: 2.0,
+            min: 0.0,
+            max: 5.0,
+            tooltip: "How each sample merges with the colour so far: Screen \
+                      brightens (start from black), Multiply darkens (start from \
+                      white), Overlay does both, Min clamps, Add lifts by the same \
+                      amount everywhere, Normal replaces.",
+            choices: &["Normal", "Multiply", "Screen", "Overlay", "Min", "Add"],
+        },
+        EscapeParamDef {
+            name: "order",
+            display_name: "Order",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Bottom up: each near miss goes over the ones before it. Top \
+                      down: the earliest stays on top.",
+            choices: &["Bottom up", "Top down"],
+        },
+        EscapeParamDef {
+            name: "start",
+            display_name: "Start",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "The colour the samples land on, where no near miss paints.",
+            choices: &["Black", "White"],
+        },
+        EscapeParamDef {
+            name: "transform",
+            display_name: "Curve",
+            default: 0.0,
+            min: 0.0,
+            max: 3.0,
+            tooltip: "A curve on the closeness before it picks the sample and its \
+                      feathering.",
+            choices: &["Linear", "Square root", "Log", "S-curve"],
+        },
+    ],
+    wgsl: r#"
+// The value the relief and auto contrast read: the colour's luminance.
+fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
+    return dot(state.xyz, vec3<f32>(0.2126, 0.7152, 0.0722));
+}
+
+fn coloring_color(sum: OrbitSummary, state: vec4<f32>, v: f32) -> vec3<f32> {
+    return max(state.xyz, vec3<f32>(0.0));
+}
+"#,
+    accum_init: "vec4<f32>(vec3<f32>(select(0.0, 1.0, cparam(6u) > 0.5)), 0.0)",
+    wgsl_accum: r#"
+// Distance from an iterate to the shape, at the origin.
+fn direct_traps_distance(shape: u32, z: vec2<f32>, radius: f32) -> f32 {
+    let re = abs(z.x);
+    let im = abs(z.y);
+    switch shape {
+        case 0u: { return length(z); }
+        case 1u: { return abs(length(z) - radius); }
+        case 3u: {
+            let diagonal = min(abs(z.x - z.y), abs(z.x + z.y)) * 0.70710678;
+            return min(min(re, im), diagonal);
+        }
+        case 4u: { return re + im; }
+        case 5u: { return max(re, im); }
+        case 6u: {
+            // (|x|^(2/3) + |y|^(2/3))^(3/2), with the zeros written out
+            // rather than handed to pow.
+            let a = select(0.0, pow(re, 2.0 / 3.0), re > 0.0);
+            let b = select(0.0, pow(im, 2.0 / 3.0), im > 0.0);
+            return select(0.0, pow(a + b, 1.5), a + b > 0.0);
+        }
+        case 7u: { return im; }
+        default: { return min(re, im); }
+    }
+}
+
+// techmatt's per-shape thresholds, each calibrated to paint about the
+// share of a frame the cross does at 0.1.
+fn direct_traps_default_threshold(shape: u32) -> f32 {
+    switch shape {
+        case 0u: { return 0.60; }
+        case 1u: { return 0.078; }
+        case 3u: { return 0.074; }
+        case 4u: { return 0.80; }
+        case 5u: { return 0.55; }
+        case 6u: { return 1.06; }
+        case 7u: { return 0.127; }
+        default: { return 0.10; }
+    }
+}
+
+fn direct_traps_blend(blend: u32, under: f32, over: f32) -> f32 {
+    switch blend {
+        case 0u: { return over; }
+        case 1u: { return under * over; }
+        case 3u: {
+            return select(1.0 - 2.0 * (1.0 - under) * (1.0 - over), 2.0 * under * over, under < 0.5);
+        }
+        case 4u: { return min(under, over); }
+        case 5u: { return min(under + over, 1.0); }
+        default: { return 1.0 - (1.0 - under) * (1.0 - over); }
+    }
+}
+
+// The palette at `key`, CLAMPED as techmatt's colormap lookup is (not
+// wrapped): position key (N - 1) over the table's N entries, which sit
+// at i/(N-1), read with the sampler's linear filter at texel centres.
+fn direct_traps_sample(key: f32) -> vec3<f32> {
+    let k = clamp(esc_palette_curve(key), 0.0, 1.0);
+    let n = f32(textureDimensions(palette_texture).x);
+    let u = (k * (n - 1.0) + 0.5) / n;
+    let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(u, 0.5), 0.0).rgb;
+    return pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
+}
+
+// state.xyz: the colour so far, in linear light.
+fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32>) -> vec4<f32> {
+    let shape = u32(clamp(cparam(0u), 0.0, 7.0));
+    let blend = u32(clamp(cparam(4u), 0.0, 5.0));
+    var threshold = select(direct_traps_default_threshold(shape), cparam(2u), cparam(2u) > 0.0);
+    var opacity = clamp(cparam(3u), 0.0, 1.0);
+    if (blend == 2u && shape == 2u) {
+        opacity = min(opacity, 0.15);
+        threshold = min(threshold, 0.08);
+    }
+    threshold = max(threshold, 1e-12);
+    let d = direct_traps_distance(shape, z, cparam(1u));
+    // Negated, so a non-finite distance paints nothing (CLAUDE.md).
+    if (!(d < threshold)) {
+        return state;
+    }
+    var key = clamp(d / threshold, 0.0, 1.0);
+    switch u32(clamp(cparam(7u), 0.0, 3.0)) {
+        case 1u: { key = sqrt(key); }
+        case 2u: { key = log2(1.0 + key); }
+        case 3u: { key = key * key * (3.0 - 2.0 * key); }
+        default: {}
+    }
+    let sample = direct_traps_sample(key);
+    let alpha = opacity * (1.0 - key);
+    let top_down = cparam(5u) > 0.5;
+    var col = state.xyz;
+    for (var k = 0u; k < 3u; k = k + 1u) {
+        let blended = select(
+            direct_traps_blend(blend, col[k], sample[k]),
+            direct_traps_blend(blend, sample[k], col[k]),
+            top_down,
+        );
+        col[k] = blended * alpha + col[k] * (1.0 - alpha);
+    }
+    return vec4<f32>(col, state.w);
+}
+"#,
+    // techmatt's escape radius, 2^16, squared.
+    recommended_bailout: Some(4_294_967_296.0),
+    pick_params: &[],
+};
