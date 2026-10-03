@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "5fe6d896",
+  "git_hash": "465b5c52",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 35102,
@@ -273,6 +273,14 @@
     "escape-mandelbrot-infinite-waves.png": {
       "bytes": 17702,
       "sha256": "16fb6500e4acd94318697b1c41d6d84d1b687b3d0f39d3a8bdba1ef2854d6380"
+    },
+    "escape-mandelbrot-itinerary-modulate.png": {
+      "bytes": 11986,
+      "sha256": "bd7fa953fe9336b49b36aa79fe0f7496348372f8a0a66518946c963dffa4478b"
+    },
+    "escape-mandelbrot-itinerary-tail.png": {
+      "bytes": 24612,
+      "sha256": "dcf1652260e1d66acd0e811a59c206fb8c14682ce1987310e794f2f9659ae054"
     },
     "escape-mandelbrot-orbit-trap.png": {
       "bytes": 20238,

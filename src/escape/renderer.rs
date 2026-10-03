@@ -5892,7 +5892,99 @@ fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             escape.contrast.mode,
             escape.contrast.clip,
         );
+        if self.contrast_fit.is_some() {
+            let layer = self.measure_layer(device, queue, escape);
+            if let Some(fit) = self.contrast_fit.as_mut() {
+                fit.layer = layer;
+            }
+        }
         self.contrast_fit_key = Some(key.to_string());
+    }
+
+    /// The texture layer's stretch: its value at the probe's cells, read
+    /// from the recolour cache's records by the layer probe (an entry
+    /// point of the recolour module), clipped as the base is. `None`
+    /// without a layer, outside mode A, or without records.
+    fn measure_layer(&mut self, device: &Device, queue: &Queue, escape: &EscapeConfig) -> Option<(f32, f32)> {
+        if super::ifs::get_ifs(&escape.formula).is_some() || super::fields::get_field(&escape.formula).is_some() {
+            return None;
+        }
+        let layer = super::layer_of(escape)?;
+        let coloring = super::get_coloring(&escape.coloring);
+        let deriv = self.derivative_active(escape);
+        let results = self.results_buffer.as_ref()?;
+        let (probe, readback) = (self.contrast_probe.as_ref()?, self.contrast_readback.as_ref()?);
+        let key = format!("layer-probe|{}|{}|{}", coloring.name, layer.name, deriv);
+        if !self.pipelines.contains_key(&key) {
+            let source = assembler::assemble_layer_probe(coloring, layer, deriv);
+            let module = device.create_shader_module(ShaderModuleDescriptor {
+                label: Some(&format!("Escape Shader {key}")),
+                source: ShaderSource::Wgsl(source.into()),
+            });
+            let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+                label: Some(&format!("Escape Pipeline {key}")),
+                layout: None,
+                module: &module,
+                entry_point: Some("layer_probe_main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+            self.pipelines.insert(key.clone(), pipeline);
+        }
+        let pipeline = &self.pipelines[&key];
+        let grid = device.create_buffer(&BufferDescriptor {
+            label: Some("Escape Layer Probe Params"),
+            size: 16,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&grid, 0, bytemuck::cast_slice(&[self.width, self.height, PROBE_W, PROBE_H]));
+        let bg = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Escape Layer Probe Bind Group"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                BindGroupEntry { binding: 0, resource: self.params_buffer.as_entire_binding() },
+                BindGroupEntry { binding: 5, resource: results.as_entire_binding() },
+                BindGroupEntry { binding: 10, resource: probe.as_entire_binding() },
+                BindGroupEntry { binding: 11, resource: grid.as_entire_binding() },
+            ],
+        });
+        let bytes = (PROBE_W * PROBE_H) as u64 * 8;
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Escape Layer Probe"),
+        });
+        {
+            let mut pass = enc.begin_compute_pass(&ComputePassDescriptor {
+                label: Some("Escape Layer Probe Pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.dispatch_workgroups(PROBE_W.div_ceil(8), PROBE_H.div_ceil(8), 1);
+        }
+        enc.copy_buffer_to_buffer(probe, 0, readback, 0, bytes);
+        queue.submit(std::iter::once(enc.finish()));
+        let (tx, rx) = std::sync::mpsc::channel();
+        readback.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r.is_ok());
+        });
+        let polled = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).is_ok();
+        if !polled || !rx.recv().unwrap_or(false) {
+            return None;
+        }
+        let samples: Vec<(f32, f32)> = {
+            let data = readback.slice(..).get_mapped_range();
+            data.chunks_exact(8)
+                .map(|c| {
+                    (
+                        f32::from_le_bytes(c[0..4].try_into().unwrap()),
+                        f32::from_le_bytes(c[4..8].try_into().unwrap()),
+                    )
+                })
+                .collect()
+        };
+        readback.unmap();
+        fit_layer_stretch(&samples, escape.contrast.clip)
     }
 
     fn create_height(device: &Device, width: u32, height: u32) -> (Texture, TextureView) {
@@ -8491,6 +8583,10 @@ pub(crate) struct ContrastFit {
     /// smallest to largest (linear interpolation between order
     /// statistics). Zero for the other modes.
     pub cdf: [f32; CDF_LEN],
+    /// The texture layer's own range in the frame, clipped as the base
+    /// is, when there is a layer: what the recolour pass stretches its
+    /// value to (survey C8, techmatt's modulate).
+    pub layer: Option<(f32, f32)>,
 }
 
 /// Entries in Equalize's quantile table: 256, a piecewise-linear CDF
@@ -8512,7 +8608,10 @@ struct ContrastParamsGpu {
     enabled: u32,
     /// `ContrastMode::to_gpu`.
     mode: u32,
-    _pad: [u32; 3],
+    /// The texture layer's stretch (`ContrastFit::layer`): 1 to apply.
+    layer_enabled: u32,
+    layer_lo: f32,
+    layer_hi: f32,
     cdf: [[f32; 4]; CDF_LEN / 4],
 }
 
@@ -8534,7 +8633,9 @@ fn queue_contrast(
             turns: cfg.turns.max(0.001),
             enabled: 1,
             mode: cfg.mode.to_gpu(),
-            _pad: [0; 3],
+            layer_enabled: u32::from(f.layer.is_some()),
+            layer_lo: f.layer.map_or(0.0, |l| l.0),
+            layer_hi: f.layer.map_or(1.0, |l| l.1),
             cdf: bytemuck::cast(f.cdf),
         },
         _ => ContrastParamsGpu {
@@ -8545,7 +8646,9 @@ fn queue_contrast(
             turns: 1.0,
             enabled: 0,
             mode: 0,
-            _pad: [0; 3],
+            layer_enabled: 0,
+            layer_lo: 0.0,
+            layer_hi: 1.0,
             cdf: [[0.0; 4]; CDF_LEN / 4],
         },
     };
@@ -8603,7 +8706,7 @@ pub(crate) fn fit_contrast(
             let next = sorted[(i + 1).min(sorted.len() - 1)];
             *slot = (sorted[i] as f64 + (next as f64 - sorted[i] as f64) * t) as f32;
         }
-        return Some(ContrastFit { plane: [0.0; 3], lo, hi, cdf });
+        return Some(ContrastFit { plane: [0.0; 3], lo, hi, cdf, layer: None });
     }
     let n = live.len() as f64;
     let mut plane = [0.0f32; 3];
@@ -8658,7 +8761,25 @@ pub(crate) fn fit_contrast(
     if !(hi > lo) || !lo.is_finite() || !hi.is_finite() {
         return None;
     }
-    Some(ContrastFit { plane, lo, hi, cdf: [0.0; CDF_LEN] })
+    Some(ContrastFit { plane, lo, hi, cdf: [0.0; CDF_LEN], layer: None })
+}
+
+/// The layer's stretch from its probe samples: the clipped range of the
+/// cells where it showed. `None` with too few of them, or none of range.
+pub(crate) fn fit_layer_stretch(samples: &[(f32, f32)], clip: f32) -> Option<(f32, f32)> {
+    let mut live: Vec<f32> = samples
+        .iter()
+        .filter(|(v, ok)| *ok > 0.5 && v.is_finite())
+        .map(|(v, _)| *v)
+        .collect();
+    if live.len() < 64 {
+        return None;
+    }
+    live.sort_by(f32::total_cmp);
+    let k = ((live.len() as f32) * clip.clamp(0.0, 0.25)) as usize;
+    let lo = live[k.min(live.len() - 1)];
+    let hi = live[(live.len() - 1).saturating_sub(k)];
+    (hi > lo).then_some((lo, hi))
 }
 
 /// One terminal record (the shader's `IterResult`), read back for the

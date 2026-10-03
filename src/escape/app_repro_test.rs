@@ -8764,6 +8764,20 @@ fn main() {
         e.contrast.mode = ContrastMode::AutoRange;
         e.contrast.clip = 0.1;
         steps.push(("auto range with another clip", e.clone()));
+        // The layer is stretched to its own range under contrast: adding
+        // one, and retuning it, must re-measure that too.
+        e.coloring = "smooth".to_string();
+        e.coloring_params.clear();
+        e.contrast.mode = ContrastMode::Equalize;
+        e.layer = crate::config::escape::ColoringLayer {
+            coloring: "itinerary".to_string(),
+            params: Default::default(),
+            blend: crate::config::escape::LayerBlend::Add,
+            weight: 0.5,
+        };
+        steps.push(("techmatt's itinerary mode", e.clone()));
+        e.layer.params.insert("scale".to_string(), 3.0);
+        steps.push(("a layer parameter", e.clone()));
 
         let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
         let _ = settle(&mut escape, &base);
@@ -8777,6 +8791,146 @@ fn main() {
             assert_eq!(differ, 0, "{what}: drawn through a stale fit");
         }
         escape.destroy();
+    }
+
+    /// The itinerary is techmatt's address (`iterate.rs` `Address`):
+    /// each iterate's sector, `floor((atan2 + pi)/2pi * k)`, as the next
+    /// base-k digit -- the first `depth` from z1 (Head), or the last
+    /// `depth` (Tail, `fract(v k) + s k^-depth`). Replayed on the CPU in
+    /// f64 from each pixel's orbit, against the accumulator the GPU
+    /// stored. Orbits with an iterate near a sector boundary are skipped:
+    /// there f32 and f64 may honestly disagree on the digit.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_itinerary_is_techmatts_address() {
+        let (w, h) = (128u32, 96u32);
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.center_re = "-0.6".to_string();
+        esc.center_im = "0.1".to_string();
+        esc.zoom_log2 = 0.4;
+        esc.max_iter = 64;
+        esc.bailout = 1.0e4;
+        esc.supersample = 1;
+        esc.coloring = "itinerary".to_string();
+        let (cx, cy) = (-0.6f64, 0.1f64);
+        let span_y = 4.0 / (esc.zoom_log2).exp2();
+        let span_x = span_y * w as f64 / h as f64;
+        for (k, depth, tail) in [(4u32, 12u32, false), (4, 12, true), (3, 8, false)] {
+            let mut e = esc.clone();
+            e.coloring_params = [
+                ("sectors".to_string(), k as f32),
+                ("depth".to_string(), depth as f32),
+                ("window".to_string(), if tail { 1.0 } else { 0.0 }),
+            ]
+            .into_iter()
+            .collect();
+            let records = records_via(&e, w, h, false, false);
+            let (mut checked, mut worst) = (0usize, 0.0f64);
+            for (i, r) in records.iter().enumerate() {
+                let (px, py) = ((i % w as usize) as f64, (i / w as usize) as f64);
+                let c = [
+                    ((px + 0.5) / w as f64 - 0.5) * span_x + cx,
+                    -(((py + 0.5) / h as f64 - 0.5) * span_y) + cy,
+                ];
+                let mut z = [0.0f64, 0.0];
+                let mut value = 0.0f64;
+                let mut count = 0u32;
+                let mut near_cut = false;
+                for _ in 0..e.max_iter {
+                    z = [z[0] * z[0] - z[1] * z[1] + c[0], 2.0 * z[0] * z[1] + c[1]];
+                    let turns = (z[1].atan2(z[0]) + std::f64::consts::PI) / std::f64::consts::TAU;
+                    let x = turns * k as f64;
+                    if (x - x.round()).abs() < 1e-3 && (tail || count < depth + 2) {
+                        near_cut = true;
+                    }
+                    let sector = x.floor().clamp(0.0, (k - 1) as f64);
+                    if tail {
+                        value = (value * k as f64).fract() + sector * (k as f64).powi(-(depth as i32));
+                    } else if count < depth {
+                        value += sector * (k as f64).powi(-(count as i32 + 1));
+                    }
+                    count += 1;
+                    if z[0] * z[0] + z[1] * z[1] > e.bailout as f64 {
+                        break;
+                    }
+                }
+                // The tail reads every symbol up to the escape, so a cut
+                // anywhere in the orbit can move it; the head only reads
+                // its first `depth`.
+                if near_cut || (r.accum[1] as u32) != count {
+                    continue;
+                }
+                worst = worst.max((r.accum[0] as f64 - value).abs());
+                checked += 1;
+            }
+            println!("itinerary k={k} depth={depth} tail={tail}: {checked} orbits, worst {worst:.2e}");
+            assert!(checked > 2000, "only {checked} orbits to check");
+            assert!(worst < 1e-6, "an address is {worst:.2e} off techmatt's");
+        }
+    }
+
+    /// Under Auto contrast the texture layer is stretched to its own
+    /// range in the frame, as techmatt places a modulate's texture: a
+    /// layer whose values sit in a narrow band spans the whole palette.
+    /// Escape count under a Mix layer of smooth scaled to 0.001 (so the
+    /// layer's value is the pixel's position): without contrast the
+    /// picture lives in a sliver of the ramp; with it, from the clip to
+    /// the clip. And the stretched recolour matches a fresh render.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn auto_contrast_stretches_the_texture_layer_to_the_frame() {
+        use crate::config::escape::{ColoringLayer, ContrastMode, LayerBlend};
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        let stop = |position: f32, v: f32| crate::scene::palette::ColorStop { position, color: [v, v, v] };
+        config.palette.stops = vec![stop(0.0, 0.0), stop(1.0, 1.0)];
+        config.escape.center_re = "-0.6".to_string();
+        config.escape.center_im = "0.1".to_string();
+        config.escape.zoom_log2 = 0.4;
+        config.escape.max_iter = 300;
+        config.escape.bailout = 1.0e4;
+        config.escape.supersample = 1;
+        config.escape.coloring = "escape_count".to_string();
+        config.escape.layer = ColoringLayer {
+            coloring: "smooth".to_string(),
+            params: [("scale".to_string(), 0.001)].into_iter().collect(),
+            blend: LayerBlend::Mix,
+            weight: 1.0,
+        };
+        let render = |c: &crate::config::FractalConfig| {
+            let job = crate::renderer::RenderJob::new(c, w, h);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+        let spread = |out: &[u8]| -> (f64, f64) {
+            let mut v: Vec<u8> = out
+                .chunks_exact(4)
+                .filter(|p| p[3] > 0 && (p[0] > 0 || p[1] > 0 || p[2] > 0))
+                .map(|p| p[0])
+                .collect();
+            v.sort_unstable();
+            let at = |q: f64| v[((v.len() - 1) as f64 * q) as usize] as f64 / 255.0;
+            (at(0.02), at(0.98))
+        };
+        let plain = spread(&render(&config));
+        // Clipped at 2% each end, so the stretch puts the frame's 2nd
+        // and 98th percentiles at the two ends of the ramp.
+        let mut c = config.clone();
+        c.escape.contrast.mode = ContrastMode::AutoRange;
+        c.escape.contrast.clip = 0.02;
+        let stretched = spread(&render(&c));
+        println!("layer value, 2nd..98th percentile: plain {plain:.3?}, stretched {stretched:.3?}");
+        assert!(plain.1 - plain.0 < 0.35, "the layer was not narrow to begin with: {plain:?}");
+        assert!(stretched.0 < 0.06 && stretched.1 > 0.94, "the layer was not stretched to the frame: {stretched:?}");
     }
 
     /// A stepped palette draws every stop as a flat band: an escape

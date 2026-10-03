@@ -2140,7 +2140,7 @@ escape_panel:
   contrast_strength: "Strength"
   contrast_turns: "Palette turns"
   contrast_clip: "Clip"
-  tooltip_contrast: "Fits the palette to the coloring's measured value range. Orbit-average colorings are SMOOTH functions of c, so a deep zoom flattens them into a plane and the picture goes blank. Auto range stretches the measured range across the palette; Flatten subtracts the fitted plane first and shows what is left. Equalize ranks every value against the rest of the frame, so each part of the palette covers the same area of the picture (histogram equalisation; the clip does not apply). Measured once per settled view."
+  tooltip_contrast: "Fits the palette to the coloring's measured value range. Orbit-average colorings are SMOOTH functions of c, so a deep zoom flattens them into a plane and the picture goes blank. Auto range stretches the measured range across the palette; Flatten subtracts the fitted plane first and shows what is left. Equalize ranks every value against the rest of the frame, so each part of the palette covers the same area of the picture (histogram equalisation; the clip does not apply). With a texture layer, the layer is stretched to its own range in the frame too. Measured once per settled view."
   tooltip_contrast_strength: "How far to travel from the coloring's own scale and offset toward the measured fit. 0 is off."
   tooltip_contrast_turns: "How many times the palette cycles across the fitted range. 1 gives a single sweep with no repeats."
   tooltip_contrast_clip: "Fraction trimmed from each end before fitting. Keeps one singular pixel (a log guard, say) from setting the whole scale."

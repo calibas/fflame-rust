@@ -752,8 +752,94 @@ Read from the code, not reproduced by render, except where noted.
      puts 92% in the first tenth. On escape count's integer plateaus the
      mean palette position is 0.499.
 
-   **Not yet:** itinerary (C8); direct orbit traps (C10) need the
-   palette inside the loop.
+   - **Itinerary** (C8), from techmatt's engine (`iterate.rs`
+     `Address`, `mode.rs` `itinerary` / `tail_itinerary`), read from
+     source. It is the orbit's angular address. Each iterate lands in
+     one of k sectors, counted counter-clockwise from the negative real
+     axis, and the sectors are the digits of one base-k fraction.
+     - **Head** is the first `depth` symbols. **Tail** rolls,
+       `fract(v·k) + s·k^−depth`, and keeps the last ones.
+     - Both open on z1. techmatt opens a head on z0 where z0 is constant
+       (the parameter plane). That prepends a constant digit, an affine
+       change the frame stretch removes.
+     - Colours the interior, as techmatt's does.
+     - Place values are carried in the accumulator rather than computed
+       with `pow`, which GPUs approximate; at a power-of-two k the
+       address is then exact.
+
+     *Measured:* against a CPU port of `Address` on about 12,000 orbits
+     a case, head at k = 4 is exact. Tail is within one bottom place
+     (the escaping iterate's own sector, where f32 and f64 orbits part).
+     k = 3 is within rounding.
+   - **techmatt's itinerary mode is a combination, not a colouring:**
+     smooth with Equalize, and the itinerary as a texture layer, Add at
+     0.5, which is `fract(rank(smooth) + 0.5 · stretch(address))`. The
+     stretch is the new part. **Under Auto contrast the texture layer is
+     now stretched to its own clipped range in the frame**, as techmatt
+     places a modulate's texture.
+     - A second probe measures it: an entry point appended to the
+       recolour module reads the layer's value from the recolour
+       cache's records at the probe's cells, so it measures the value
+       the recolour pass blends, by construction.
+     - The iterate passes never change. Nothing runs without a layer
+       and contrast.
+     - *Measured:* a layer confined to 0.004–0.059 of the ramp spans
+       0.004–0.984 under a 2% clip. Retuning recolours and matches a
+       fresh render.
+     - Two visual tests: the mode at a shallow view, and the tail at
+       zoom 2⁷, where the head has collapsed.
+
+     **Found on the way, and fixed** (`465b5c52`, older than this
+     branch): the contrast fit was keyed by the iterate key alone. An
+     edit that only recolours (another colouring with the same loop, a
+     colouring parameter, the clip) drew through the old fit, about
+     30,000 bytes of 76,800 off a fresh render. The probe also read the
+     previous colouring's height field.
+
+   - **What a deeper itinerary would need** (for later). The head
+     address collapses as you zoom in: every pixel in the frame shares
+     its leading symbols, the stretch has nothing left to spread, and
+     the texture vanishes. Measured on the CPU, in a 96×54 frame at
+     k = 4, as distinct head addresses at 12 / 24 / 26 symbols:
+
+     | Zoom | seahorse | elephant | spiral | antenna |
+     |---|---|---|---|---|
+     | 2⁰ | 743 / 758 / 758 | 741 / 756 / 756 | 747 / 761 / 761 | 736 / 752 / 754 |
+     | 2⁴ | 23 / 444 / 500 | 315 / 663 / 671 | 22 / 565 / 640 | 1062 / 1407 / 1408 |
+     | 2⁶ | 1 / 57 / 183 | 32 / 825 / 881 | 1 / 248 / 468 | 358 / 2349 / 2369 |
+     | 2⁸ | 1 / 1 / 3 | 2 / 764 / 804 | 1 / 16 / 71 | 36 / 858 / 1086 |
+     | 2¹⁰ | 1 / 1 / 2 | 1 / 707 / 796 | 1 / 2 / 3 | 10 / 27 / 27 |
+     | 2¹² | 1 / 1 / 1 | 1 / 37 / 98 | 1 / 1 / 1 | 3 / 3 / 3 |
+
+     Twelve symbols (one f32, what ships) hold to about zoom 2⁴–2⁶.
+     Twenty-four hold about two to four doublings further. techmatt's
+     26 (f64) barely improve on 24, and by 2¹² everything has collapsed:
+     **the head itinerary is a shallow-zoom colouring in techmatt's
+     engine too.** The shared prefix depends heavily on the location (in
+     seahorse valley the orbits circle the parabolic point and spell the
+     same route for many steps), so there is no rule like "a symbol per
+     doubling".
+     - **The tail does not collapse.** It reads the end of the orbit,
+       and 12 symbols keep 270–870 distinct addresses down to 2¹⁶ in
+       the same frames (seahorse, spiral, elephant). f32 is enough
+       there, and it is the deep option that already works.
+     - **Two floats for a deeper head.** Hold the address as hi and lo,
+       12 symbols each. Then three things must carry both halves:
+       1. the record and the layer probe, both of which store one f32
+          for the value today;
+       2. the CPU's percentiles;
+       3. the stretch itself, `(v − lo)/(hi − lo)` in double-float
+          arithmetic, so the shared leading symbols cancel exactly
+          before the division.
+
+       The accumulator already has room (it uses two of its four
+       floats); the probe would need four floats a cell.
+     - **Past 24 symbols** there is nothing to gain at these depths (the
+       26-symbol column), short of arbitrary-precision addresses, which
+       nobody draws.
+
+   **Not yet:** direct orbit traps (C10) need the palette inside the
+   loop.
 7. **Relief** (§5.3): the small ones (R1, R2, R4, R8, R9) first, then
    analytic relief (R5), offset orbits (R6) and Embossed (R7). Analytic
    relief at deep zoom waits for the derivative under perturbation (P11).
