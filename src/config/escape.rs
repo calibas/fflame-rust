@@ -378,6 +378,11 @@ pub enum ShadingField {
     /// analytic slopes): sharper, and free of stencil artefacts. Direct
     /// path only, on formulas with a derivative.
     Analytic,
+    /// The colouring's value at points a small, fixed step away, run as
+    /// orbits of their own (survey R6, Ultra Fractal's Slope): relief
+    /// that belongs to the fractal rather than the pixel grid, the same
+    /// at any output size. Three orbits a pixel; direct path only.
+    Offset,
 }
 
 impl ShadingField {
@@ -387,6 +392,7 @@ impl ShadingField {
             ShadingField::Banded => 1,
             ShadingField::Layer => 2,
             ShadingField::Analytic => 3,
+            ShadingField::Offset => 4,
         }
     }
 }
@@ -398,6 +404,7 @@ pub fn shading_field_to_str(m: ShadingField) -> &'static str {
         ShadingField::Banded => "banded",
         ShadingField::Layer => "layer",
         ShadingField::Analytic => "analytic",
+        ShadingField::Offset => "offset",
     }
 }
 
@@ -406,6 +413,7 @@ pub fn shading_field_from_str(s: &str) -> ShadingField {
         "banded" => ShadingField::Banded,
         "layer" => ShadingField::Layer,
         "analytic" => ShadingField::Analytic,
+        "offset" => ShadingField::Offset,
         _ => ShadingField::Smooth,
     }
 }
@@ -1146,7 +1154,22 @@ pub struct EscapeShading {
     /// Scale applied after it.
     #[serde(default = "default_one", skip_serializing_if = "is_one")]
     pub height_post: f32,
+    /// The step to the offset orbits (`ShadingField::Offset`), as a
+    /// fraction of the view's height: small enough to read the local
+    /// slope, large enough to step over f32 noise.
+    #[serde(default = "default_relief_offset", skip_serializing_if = "is_default_relief_offset")]
+    pub offset: f32,
 }
+
+fn default_relief_offset() -> f32 {
+    1.0 / 1024.0
+}
+fn is_default_relief_offset(v: &f32) -> bool {
+    *v == default_relief_offset()
+}
+
+/// The offset step's range, as a fraction of the view height.
+pub const RELIEF_OFFSET_RANGE: (f32, f32) = (1.0e-5, 0.05);
 
 fn default_relief_elevation() -> f32 {
     30.0
@@ -1228,6 +1251,7 @@ impl Default for EscapeShading {
             height_curve: HeightTransfer::default(),
             height_pre: 1.0,
             height_post: 1.0,
+            offset: default_relief_offset(),
         }
     }
 }
@@ -1239,6 +1263,15 @@ impl EscapeShading {
     /// Whether the relief needs the derivative orbit: analytic slopes.
     pub fn wants_derivative(&self) -> bool {
         self.enabled && self.field == ShadingField::Analytic
+    }
+    /// Whether the relief runs orbits beside each pixel's own.
+    pub fn wants_offset_orbits(&self) -> bool {
+        self.enabled && self.field == ShadingField::Offset
+    }
+    /// Whether the relief lights a slope the iterate pass stored rather
+    /// than differencing a height.
+    pub fn stored_slope(&self) -> bool {
+        matches!(self.field, ShadingField::Analytic | ShadingField::Offset)
     }
 }
 
@@ -1620,6 +1653,7 @@ mod shading_tests {
             height_curve: HeightTransfer::Cos,
             height_pre: 4.0,
             height_post: 0.25,
+            offset: 0.002,
         };
         let json = serde_json::to_string(&esc).unwrap();
         let back: EscapeConfig = serde_json::from_str(&json).unwrap();
@@ -1654,7 +1688,13 @@ mod shading_tests {
         for b in ShadingBlend::all() {
             assert_eq!(shading_blend_from_str(shading_blend_to_str(b)), b);
         }
-        for f in [ShadingField::Smooth, ShadingField::Banded, ShadingField::Layer, ShadingField::Analytic] {
+        for f in [
+            ShadingField::Smooth,
+            ShadingField::Banded,
+            ShadingField::Layer,
+            ShadingField::Analytic,
+            ShadingField::Offset,
+        ] {
             assert_eq!(shading_field_from_str(shading_field_to_str(f)), f);
         }
         // The GPU discriminants must be distinct, or two blend modes

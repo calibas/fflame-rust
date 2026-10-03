@@ -499,6 +499,7 @@ pub enum ConfigPath {
     EscapeShadingHeightCurve,
     EscapeShadingHeightPre,
     EscapeShadingHeightPost,
+    EscapeShadingOffset,
     /// Coloring registry name.
     EscapeColoring,
     /// One parameter of the ACTIVE formula, by name — keyed like
@@ -1106,6 +1107,7 @@ impl Display for ConfigPath {
             ConfigPath::EscapeShadingHeightCurve => write!(f, "Relief Height Curve"),
             ConfigPath::EscapeShadingHeightPre => write!(f, "Relief Height Pre-scale"),
             ConfigPath::EscapeShadingHeightPost => write!(f, "Relief Height Post-scale"),
+            ConfigPath::EscapeShadingOffset => write!(f, "Relief Offset"),
             ConfigPath::EscapeColoring => write!(f, "Escape Coloring"),
             ConfigPath::EscapeFormulaParam { param } => write!(f, "Formula → {param}"),
             ConfigPath::EscapeColoringParam { param } => write!(f, "Coloring → {param}"),
@@ -1458,6 +1460,7 @@ impl ConfigPath {
             ConfigPath::EscapeShadingHeightCurve => I18nKey::simple("history.param.escape_shading_height_curve"),
             ConfigPath::EscapeShadingHeightPre => I18nKey::simple("history.param.escape_shading_height_pre"),
             ConfigPath::EscapeShadingHeightPost => I18nKey::simple("history.param.escape_shading_height_post"),
+            ConfigPath::EscapeShadingOffset => I18nKey::simple("history.param.escape_shading_offset"),
             ConfigPath::EscapeColoring => I18nKey::simple("history.param.escape_coloring"),
             ConfigPath::EscapeFormulaParam { param } => I18nKey::with_params(
                 "history.param.escape_formula_param",
@@ -2837,6 +2840,7 @@ impl ConfigPath {
             | ConfigPath::EscapeShadingHeightCurve
             | ConfigPath::EscapeShadingHeightPre
             | ConfigPath::EscapeShadingHeightPost
+            | ConfigPath::EscapeShadingOffset
             | ConfigPath::EscapeColoring
             | ConfigPath::EscapeFormulaParam { .. }
             | ConfigPath::EscapeColoringParam { .. }
@@ -3256,6 +3260,7 @@ impl ConfigPath {
             ConfigPath::EscapeShadingHeightCurve => "Escape.Shading.HeightCurve".to_string(),
             ConfigPath::EscapeShadingHeightPre => "Escape.Shading.HeightPre".to_string(),
             ConfigPath::EscapeShadingHeightPost => "Escape.Shading.HeightPost".to_string(),
+            ConfigPath::EscapeShadingOffset => "Escape.Shading.Offset".to_string(),
             ConfigPath::EscapeColoring => "Escape.Coloring".to_string(),
             ConfigPath::EscapeFormulaParam { param } => format!("Escape.FormulaParam.{param}"),
             ConfigPath::EscapeColoringParam { param } => format!("Escape.ColoringParam.{param}"),
@@ -3491,6 +3496,7 @@ impl ConfigPath {
                 ["Shading", "HeightCurve"] => return Some(ConfigPath::EscapeShadingHeightCurve),
                 ["Shading", "HeightPre"] => return Some(ConfigPath::EscapeShadingHeightPre),
                 ["Shading", "HeightPost"] => return Some(ConfigPath::EscapeShadingHeightPost),
+                ["Shading", "Offset"] => return Some(ConfigPath::EscapeShadingOffset),
                 ["Coloring"] => return Some(ConfigPath::EscapeColoring),
                 ["FormulaParam", param] => {
                     return Some(ConfigPath::EscapeFormulaParam { param: param.to_string() })
@@ -4267,7 +4273,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeShadingElevation
         | ConfigPath::EscapeShadingAmbient
         | ConfigPath::EscapeShadingHeightPre
-        | ConfigPath::EscapeShadingHeightPost => {
+        | ConfigPath::EscapeShadingHeightPost
+        | ConfigPath::EscapeShadingOffset => {
             json.as_f64().map(|v| ConfigValue::Float(v as f32))
         }
         ConfigPath::EscapeShadingShadowColor | ConfigPath::EscapeShadingHighlightColor => {

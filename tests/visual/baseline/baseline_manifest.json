@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "9b9f9c35",
+  "git_hash": "43b6ffe4",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 35102,
@@ -281,6 +281,10 @@
     "escape-mandelbrot-relief-analytic.png": {
       "bytes": 15340,
       "sha256": "87650732495164307144425fb88586625e247c8abb53fdcb47be2e7d844c1493"
+    },
+    "escape-mandelbrot-relief-offset.png": {
+      "bytes": 15095,
+      "sha256": "2e8604dd51d4a72ab26fe034d39fe88d09e47b20656d9bc361d887cd2213f897"
     },
     "escape-mandelbrot-seahorse-zoom.png": {
       "bytes": 11055,

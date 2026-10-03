@@ -7990,6 +7990,107 @@ fn main() {
         assert!(d <= 1, "analytic relief without a derivative moved a pixel by {d}");
     }
 
+    /// Offset-orbit relief leans the way the numeric relief does, and
+    /// unlike it, does not change with the output size.
+    ///
+    /// Direction, as for analytic relief: lit from one side, the pixels
+    /// both move, they move the same way, on the smooth exterior. Size:
+    /// the offset is a fixed fraction of the view, so at twice the
+    /// resolution the share of pixels the relief moves holds, where the
+    /// numeric relief's per-pixel difference gets shallower (survey
+    /// 6.7) and its share falls.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn offset_relief_belongs_to_the_fractal_not_the_pixels() {
+        use crate::config::escape::ShadingField;
+        let (device, queue) = repro_device();
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.escape.center_re = "-0.6".to_string();
+        config.escape.center_im = "0.1".to_string();
+        config.escape.zoom_log2 = 0.4;
+        config.escape.max_iter = 300;
+        config.escape.bailout = 1.0e4;
+        config.escape.coloring_params.insert("scale".to_string(), 0.05);
+        config.escape.shading.enabled = true;
+        config.escape.shading.height = 40.0;
+        let render = |c: &crate::config::FractalConfig, w: u32, h: u32| {
+            let job = crate::renderer::RenderJob::new(c, w, h);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+        let moved = |shaded: &[u8], plain: &[u8]| -> Vec<i32> {
+            shaded
+                .chunks(4)
+                .zip(plain.chunks(4))
+                .map(|(s, p)| {
+                    let d: i32 = (0..3).map(|k| s[k] as i32 - p[k] as i32).sum();
+                    if d > 6 { 1 } else if d < -6 { -1 } else { 0 }
+                })
+                .collect()
+        };
+        let mut share = Vec::new();
+        for rotation in [0.0f32, 0.7] {
+            for (w, h) in [(160u32, 120u32), (320, 240)] {
+                let mut c = config.clone();
+                c.escape.rotation = rotation;
+                let mut off = c.clone();
+                off.escape.shading.enabled = false;
+                let plain = render(&off, w, h);
+                let numeric = moved(&render(&c, w, h), &plain);
+                c.escape.shading.field = ShadingField::Offset;
+                let offset = moved(&render(&c, w, h), &plain);
+                // Direction at a matched magnitude: the offset slope is
+                // per 1/1024 of the view, the numeric one per render
+                // pixel, so scale the height by the ratio of the two.
+                let mut matched = c.clone();
+                matched.escape.shading.height *= 1024.0 / h as f32;
+                let matched = moved(&render(&matched, w, h), &plain);
+                let both: Vec<(i32, i32)> = numeric.iter().zip(&matched).filter(|(a, b)| **a != 0 && **b != 0).map(|(a, b)| (*a, *b)).collect();
+                let agree = both.iter().filter(|(a, b)| a == b).count() as f64 / both.len().max(1) as f64;
+                let px = (w * h) as f64;
+                let s_num = numeric.iter().filter(|m| **m != 0).count() as f64 / px;
+                let s_off = offset.iter().filter(|m| **m != 0).count() as f64 / px;
+                println!("rotation {rotation} {w}x{h}: agree {agree:.3}; moved share numeric {s_num:.3}, offset {s_off:.3}");
+                assert!(both.len() > (w * h / 20) as usize, "too few pixels moved by both: {}", both.len());
+                assert!(agree > 0.9, "offset and numeric relief lean opposite ways: {agree:.3}");
+                if rotation == 0.0 {
+                    share.push((s_num, s_off));
+                }
+            }
+        }
+        let (num_small, off_small) = share[0];
+        let (num_big, off_big) = share[1];
+        let off_ratio = off_big / off_small;
+        let num_ratio = num_big / num_small;
+        println!("moved share at twice the size: offset x{off_ratio:.3}, numeric x{num_ratio:.3}");
+        assert!((off_ratio - 1.0).abs() < 0.05, "offset relief changed with the output size: x{off_ratio:.3}");
+        assert!((off_ratio - 1.0).abs() < (num_ratio - 1.0).abs(), "offset relief is no steadier than the numeric relief");
+
+        // Perturbation runs no offset orbits: flat, as the panel says.
+        let mut deep = config.clone();
+        deep.escape.zoom_log2 = 30.0;
+        deep.escape.center_re = "-0.7436438870371587".to_string();
+        deep.escape.center_im = "0.1318259042053119".to_string();
+        deep.escape.max_iter = 2000;
+        deep.escape.shading.field = ShadingField::Offset;
+        let mut deep_off = deep.clone();
+        deep_off.escape.shading.enabled = false;
+        let d = render(&deep, 160, 120)
+            .iter()
+            .zip(render(&deep_off, 160, 120).iter())
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap_or(0);
+        assert!(d <= 1, "offset relief under perturbation moved a pixel by {d}");
+    }
+
     /// A stepped palette draws every stop as a flat band: an escape
     /// render through it shows the stops' colours and next to nothing
     /// in between, where the blended palette shows a continuum.

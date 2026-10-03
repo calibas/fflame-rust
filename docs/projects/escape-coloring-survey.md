@@ -740,5 +740,27 @@ Read from the code, not reproduced by render, except where noted.
      boundary, where the smooth count is chaotic between pixels, the
      agreement drops to 79%, which is the noise analytic slopes avoid.
 
-   **Still to do:** offset-orbit relief (R6), Embossed (R7) and an image
-   texture (R10).
+   - **R6, offset-orbit relief**, a fifth relief source, **Offset
+     orbits**. The direct shader's loop moved into a function,
+     `esc_run(pixel)`, so it can run more than once a pixel. With offset
+     relief it runs twice more, at `c + δ` along the screen's x and y,
+     and the slope is the colouring's value there minus its value at
+     `c`. Without it, the loop is called once and the visual suite is
+     unchanged. δ is a fraction of the view's height (default 1/1024),
+     and the slope is measured per 1/1024 of the view, not per render
+     pixel, so the relief belongs to the fractal. At a 1024-pixel-tall
+     render the two units agree, so a relief height means about the
+     same in both fields there. That is R9 for this field: *measured*,
+     at twice the output size the share of pixels the relief moves holds
+     (×1.007), where the numeric relief's falls (×0.834). Direction:
+     with the height scaled so both read the same slope per pixel,
+     offset and numeric relief move 97% of the pixels both move the same
+     way, at rotation 0 and 0.7. It works on any colouring's value; a
+     neighbour orbit the colouring leaves undrawn (interior) counts as
+     flat. The cost is three orbits a pixel, and recolouring cannot come
+     from the cache while it is on, because the offset orbits need the
+     loop. Direct path only: the perturbed rungs do not run offset
+     orbits, so the relief is flat there, as the panel says and a test
+     checks. Softness, stencils and the height curve do not apply to it.
+
+   **Still to do:** Embossed (R7) and an image texture (R10).

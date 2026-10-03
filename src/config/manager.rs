@@ -2013,6 +2013,7 @@ impl ConfigManager {
             )),
             ConfigPath::EscapeShadingHeightPre => Ok(config.escape.shading.height_pre.into()),
             ConfigPath::EscapeShadingHeightPost => Ok(config.escape.shading.height_post.into()),
+            ConfigPath::EscapeShadingOffset => Ok(config.escape.shading.offset.into()),
             ConfigPath::EscapeShadingTextureScale => {
                 Ok(config.escape.shading.texture_scale.into())
             }
@@ -3400,6 +3401,11 @@ impl ConfigManager {
             ConfigPath::EscapeShadingHeightPost => {
                 let v: f32 = value.try_into()?;
                 self.current.escape.shading.height_post = v.clamp(1e-3, 1e3);
+            }
+            ConfigPath::EscapeShadingOffset => {
+                let v: f32 = value.try_into()?;
+                let (lo, hi) = crate::config::escape::RELIEF_OFFSET_RANGE;
+                self.current.escape.shading.offset = v.clamp(lo, hi);
             }
             ConfigPath::EscapeShadingHighlightBlend => {
                 let v: String = value.try_into()?;

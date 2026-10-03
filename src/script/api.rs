@@ -1935,6 +1935,18 @@ fn register_escape(engine: &mut Engine) {
         },
     );
 
+    engine.register_fn(
+        "shading_offset",
+        |e: &mut EscapeHandle, fraction: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let fraction = num(&fraction, "fraction")? as f32;
+            let (lo, hi) = crate::config::escape::RELIEF_OFFSET_RANGE;
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            cfg.escape.shading.offset = fraction.clamp(lo, hi);
+            Ok(())
+        },
+    );
+
     // ---- Palette mapping --------------------------------------------
     // Curve names are checked, unlike the shading selectors: a typo in
     // a curve renders a perfectly plausible Linear picture, and nobody

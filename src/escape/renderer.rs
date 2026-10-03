@@ -6379,7 +6379,7 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             height_curve: shading.height_curve.to_gpu(),
             height_pre: shading.height_pre,
             height_post: shading.height_post,
-            analytic: u32::from(shading.field == crate::config::escape::ShadingField::Analytic),
+            analytic: u32::from(shading.stored_slope()),
             _pad: 0,
         };
         queue.write_buffer(&self.shade_params_buffer, 0, bytemuck::bytes_of(&params));
@@ -7040,14 +7040,16 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let lens_src = super::lens::lens_source(escape, &registry);
         let layer = super::layer_of(escape);
         let analytic = escape.shading.wants_derivative();
+        let offset = escape.shading.wants_offset_orbits();
         let key = format!(
-            "{}|{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}",
             formula.name,
             coloring.name,
             layer.map_or("", |l| l.name),
             damped,
             interior,
             analytic,
+            offset,
             super::lens::lens_key(escape, &registry),
         );
         if !self.pipelines.contains_key(&key) {
@@ -7058,6 +7060,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 damped,
                 interior,
                 analytic,
+                offset,
                 lens_src.as_deref(),
             );
             let module = device.create_shader_module(ShaderModuleDescriptor {
@@ -7220,7 +7223,16 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             stride: self.stride(escape),
             degree,
             pmap_flags: escape.palette_map.gpu_flags() | (escape.layer.blend.to_gpu() << 16),
-            pmap: [escape.palette_map.gpu_pivot(), escape.layer.weight.clamp(0.0, 1.0), 0.0, 0.0],
+            pmap: [
+                escape.palette_map.gpu_pivot(),
+                escape.layer.weight.clamp(0.0, 1.0),
+                // The offset relief's step, a fraction of the view height.
+                escape.shading.offset.clamp(
+                    crate::config::escape::RELIEF_OFFSET_RANGE.0,
+                    crate::config::escape::RELIEF_OFFSET_RANGE.1,
+                ),
+                0.0,
+            ],
             fparams,
             cparams,
             lparams,
@@ -7292,7 +7304,12 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let solid = super::ifs::get_ifs(&escape.formula).is_some_and(|d| d.solid);
         let geom_active = if solid { self.ensure_ifs_geom(device, results_active) } else { false };
         if let Some(ik) = iterate_key.as_deref() {
-            if results_active && self.results_key.as_deref() == Some(ik) {
+            // Offset relief runs orbits beside each pixel's own, which a
+            // recolour of the stored records cannot: it iterates.
+            if results_active
+                && self.results_key.as_deref() == Some(ik)
+                && !escape.shading.wants_offset_orbits()
+            {
                 let t0 = web_time::Instant::now();
                 self.measure_contrast(device, queue, escape, ik);
                 if solid && geom_active {
