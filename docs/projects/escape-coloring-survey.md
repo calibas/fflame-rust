@@ -876,8 +876,48 @@ Read from the code, not reproduced by render, except where noted.
      level of the listings' rules. Changing the trap re-iterates and
      matches a fresh render. Two visual tests (crosses, stalks).
 
-   **Not yet:** direct orbit traps (C10) need the palette inside the
-   loop.
+   - **Direct orbit traps** (C10), from techmatt's engine
+     (`direct_trap.rs` and the `direct_trap_*` modes, read from source).
+     UF's Direct Orbit Traps are the same idea with more options. It
+     makes no value. Every iterate within `threshold` of the shape
+     samples the palette and composites into the pixel, in orbit order:
+     - the sample is `key = curve(d/threshold)`;
+     - its weight is `alpha = opacity·(1 − key)`;
+     - per channel, in linear light, it applies `blend(standing,
+       sample)` (Top down swaps the two) and mixes the result in by
+       alpha.
+
+     The running colour is the four-float accumulator, which keeps its
+     own records. The rest follows his source:
+     - start from black or white;
+     - the interior is painted;
+     - the trap is tested before the escape;
+     - eight shapes, six blends (Normal, Multiply, Screen, Overlay, Min,
+       Add) and four curves;
+     - a threshold of 0 takes the shape's own calibrated default;
+     - a Screen cross is held to opacity 0.15 and threshold 0.08, where
+       techmatt measured it blowing out to white;
+     - the palette is read clamped, not wrapped, on the same `i/(N−1)`
+       table positions;
+     - defaults are his `direct_trap_ring`, and the recommended bailout
+       is his 2¹⁶ radius.
+
+     **New for the cache:** the colour is fixed during iteration, so a
+     palette edit has to re-iterate. A `PaletteInLoop` colouring puts
+     the palette's generation and its mapping into the iteration's and
+     the chunked render's identity; every other colouring's keys are
+     unchanged.
+     *Measured:* nine cases against an f64 port of techmatt's `trace`
+     through a grey ramp: every shape, every blend, both orders and
+     starts, the curves, a default threshold, and the clamp. All 12,288
+     pixels agree within two levels, bar one at 2.5. A palette edit
+     re-iterates and matches a fresh render. It renders at perturbation
+     depths. Near the boundary there it is white, as techmatt warns:
+     the CPU confirms the centre orbit passes the ring 153 times in
+     3,000 iterations, reaching 0.993 in linear light. Two visual tests
+     (ring, multiply).
+
+   Item 6 is done.
 7. **Relief** (§5.3): the small ones (R1, R2, R4, R8, R9) first, then
    analytic relief (R5), offset orbits (R6) and Embossed (R7). Analytic
    relief at deep zoom waits for the derivative under perturbation (P11).

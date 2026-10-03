@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "96df753f",
+  "git_hash": "eddc26ba",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 35102,
@@ -261,6 +261,14 @@
     "escape-mandelbrot-de.png": {
       "bytes": 11140,
       "sha256": "c2f24d04a83beb589bbe901548eab25a0eb47022883eafa3b31f633cf33d978e"
+    },
+    "escape-mandelbrot-direct-traps-multiply.png": {
+      "bytes": 16592,
+      "sha256": "9ed4fdaa3095fbf5ccd0cf75ca076f96823bf1a5e5d5d5a497c57d2275a88637"
+    },
+    "escape-mandelbrot-direct-traps-ring.png": {
+      "bytes": 14829,
+      "sha256": "90cd33629062da4d49ba60b87891065d54214373111eaad303048d6d79176bef"
     },
     "escape-mandelbrot-escape-count.png": {
       "bytes": 4393,

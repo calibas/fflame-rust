@@ -159,6 +159,11 @@ pub enum ColoringFeature {
     /// (`esc_palette`, `esc_palette_srgb`); a texture layer, which blends
     /// palette positions, cannot go over or under it.
     DirectColor,
+    /// The colouring samples the palette INSIDE the loop (direct orbit
+    /// traps), so the colour is fixed during iteration: the palette is
+    /// part of the iteration's identity, and a palette edit re-iterates
+    /// instead of recolouring the stored records.
+    PaletteInLoop,
 }
 
 /// A parameter a formula or coloring exposes. Same shape as variation
@@ -609,6 +614,7 @@ pub static COLORINGS: &[&ColoringDef] = &[
     &colorings::INFINITE_WAVES,
     &colorings::ITINERARY,
     &colorings::VOC_TRAPS,
+    &colorings::DIRECT_TRAPS,
 ];
 
 /// Look up a formula by name. An unknown name renders the default

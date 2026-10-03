@@ -9095,6 +9095,208 @@ fn main() {
         }
     }
 
+    /// Direct orbit traps composite what techmatt's `Painter::trace`
+    /// composites: a port of it in f64, per pixel, through a grey ramp
+    /// (so a sample at `key` is `key` in sRGB), against the render through
+    /// the Linear tone map. Cases cover every shape, every blend, both
+    /// orders and starts, the curves, a shape's own default threshold, and
+    /// the screened cross's clamp. Orbits are short (40 iterations) so f32
+    /// and f64 stay together; a pixel within two levels counts as agreeing.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn direct_traps_composite_what_techmatts_trace_does() {
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        let stop = |position: f32, v: f32| crate::scene::palette::ColorStop { position, color: [v, v, v] };
+        config.palette.stops = vec![stop(0.0, 0.0), stop(1.0, 1.0)];
+        config.escape.center_re = "-0.6".to_string();
+        config.escape.center_im = "0.1".to_string();
+        config.escape.zoom_log2 = 0.4;
+        config.escape.max_iter = 40;
+        config.escape.bailout = 4_294_967_296.0;
+        config.escape.supersample = 1;
+        config.escape.coloring = "direct_traps".to_string();
+        let (cx, cy) = (-0.6f64, 0.1f64);
+        let span_y = 4.0 / (config.escape.zoom_log2).exp2();
+        let span_x = span_y * w as f64 / h as f64;
+
+        // shape, radius, threshold, opacity, blend, order, start, curve
+        type Case = (u32, f64, f64, f64, u32, u32, u32, u32);
+        let cases: [(&str, Case); 8] = [
+            ("ring, techmatt's direct_trap_ring", (1, 1.0, 0.0597, 0.45, 2, 0, 0, 0)),
+            ("cross, direct_trap_multiply", (2, 1.0, 0.1, 0.2, 1, 0, 1, 0)),
+            ("cross screened past its clamp", (2, 1.0, 0.3, 0.6, 2, 0, 0, 0)),
+            ("lines, overlay, top down, sqrt", (7, 1.0, 0.0807, 0.45, 3, 1, 0, 1)),
+            ("astroid, its own threshold, add, log", (6, 1.0, 0.0, 0.3, 5, 0, 0, 2)),
+            ("hypercross, min from white, s-curve", (3, 1.0, 0.0, 0.5, 4, 0, 1, 3)),
+            ("point, normal", (0, 1.0, 0.0, 0.4, 0, 0, 0, 0)),
+            ("box and diamond", (5, 1.0, 0.0, 0.35, 2, 1, 0, 0)),
+        ];
+        let blend = |b: u32, under: f64, over: f64| -> f64 {
+            match b {
+                0 => over,
+                1 => under * over,
+                3 => {
+                    if under < 0.5 {
+                        2.0 * under * over
+                    } else {
+                        1.0 - 2.0 * (1.0 - under) * (1.0 - over)
+                    }
+                }
+                4 => under.min(over),
+                5 => (under + over).min(1.0),
+                _ => 1.0 - (1.0 - under) * (1.0 - over),
+            }
+        };
+        let distance = |shape: u32, z: [f64; 2], r: f64| -> f64 {
+            let (re, im) = (z[0].abs(), z[1].abs());
+            match shape {
+                0 => z[0].hypot(z[1]),
+                1 => (z[0].hypot(z[1]) - r).abs(),
+                3 => re.min(im).min((z[0] - z[1]).abs().min((z[0] + z[1]).abs()) * std::f64::consts::FRAC_1_SQRT_2),
+                4 => re + im,
+                5 => re.max(im),
+                6 => (re.powf(2.0 / 3.0) + im.powf(2.0 / 3.0)).powf(1.5),
+                7 => im,
+                _ => re.min(im),
+            }
+        };
+        let default_threshold = |shape: u32| [0.60, 0.078, 0.10, 0.074, 0.80, 0.55, 1.06, 0.127][shape as usize];
+
+        for (name, (shape, radius, threshold, opacity, b, order, start, curve)) in cases {
+            for shape in if name == "box and diamond" { vec![5u32, 4] } else { vec![shape] } {
+                let mut c = config.clone();
+                c.escape.coloring_params = [
+                    ("shape", shape as f32),
+                    ("radius", radius as f32),
+                    ("threshold", threshold as f32),
+                    ("opacity", opacity as f32),
+                    ("blend", b as f32),
+                    ("order", order as f32),
+                    ("start", start as f32),
+                    ("transform", curve as f32),
+                ]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect();
+                let job = crate::renderer::RenderJob::new(&c, w, h);
+                let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                    .expect("render")
+                    .rgba_data;
+
+                let (mut thr, mut op) = (if threshold > 0.0 { threshold } else { default_threshold(shape) }, opacity);
+                if b == 2 && shape == 2 {
+                    op = op.min(0.15);
+                    thr = thr.min(0.08);
+                }
+                let (mut agree, mut painted, mut worst) = (0usize, 0usize, 0.0f64);
+                for (i, p) in out.chunks_exact(4).enumerate() {
+                    let (px, py) = ((i % w as usize) as f64, (i / w as usize) as f64);
+                    let pc = [((px + 0.5) / w as f64 - 0.5) * span_x + cx, -(((py + 0.5) / h as f64 - 0.5) * span_y) + cy];
+                    let mut z = [0.0f64, 0.0];
+                    let mut col = [if start == 1 { 1.0 } else { 0.0 }; 3];
+                    let mut hits = 0;
+                    for _ in 0..40 {
+                        z = [z[0] * z[0] - z[1] * z[1] + pc[0], 2.0 * z[0] * z[1] + pc[1]];
+                        let d = distance(shape, z, radius);
+                        if d < thr {
+                            hits += 1;
+                            let x = (d / thr).clamp(0.0, 1.0);
+                            let key = match curve {
+                                1 => x.sqrt(),
+                                2 => (1.0 + x).log2(),
+                                3 => x * x * (3.0 - 2.0 * x),
+                                _ => x,
+                            };
+                            let sample = key.powf(2.2);
+                            let alpha = op * (1.0 - key);
+                            for ch in col.iter_mut() {
+                                let blended = if order == 1 { blend(b, sample, *ch) } else { blend(b, *ch, sample) };
+                                *ch = blended * alpha + *ch * (1.0 - alpha);
+                            }
+                        }
+                        if z[0] * z[0] + z[1] * z[1] > 4_294_967_296.0 {
+                            break;
+                        }
+                    }
+                    painted += usize::from(hits > 0);
+                    let e = (0..3)
+                        .map(|k| (p[k] as f64 - col[k].clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0).abs())
+                        .fold(0.0, f64::max);
+                    worst = worst.max(e);
+                    agree += usize::from(e <= 2.0);
+                }
+                let n = (w * h) as usize;
+                println!("{name} [shape {shape}]: {agree}/{n} within two levels, {painted} pixels painted, worst {worst:.1}");
+                assert!(painted > n / 20, "{name}: only {painted} pixels painted");
+                assert!(agree * 100 >= n * 98, "{name}: only {agree} of {n} pixels agree with techmatt's trace");
+            }
+        }
+    }
+
+    /// Direct orbit traps sample the palette inside the loop, so a palette
+    /// edit must re-iterate: recolouring the records would keep the old
+    /// palette's colours. Changed, the render matches a fresh one.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_palette_edit_re_iterates_direct_traps() {
+        let _diag = diag_lock();
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let mut config = crate::config::FractalConfig::default();
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        renderer.update_background_color(&queue, [0.0, 0.0, 0.0]);
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.center_re = "-0.6".to_string();
+        esc.center_im = "0.1".to_string();
+        esc.zoom_log2 = 0.4;
+        esc.max_iter = 100;
+        esc.coloring = "direct_traps".to_string();
+        let settle = |escape: &mut crate::escape::EscapeRenderer, renderer: &mut crate::renderer::compute_kernel::FlameRenderer| {
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("palette edit") });
+                let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.escape_palette_view(false), renderer.palette_generation());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "render did not settle");
+            }
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("palette edit tonemap") });
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            pollster::block_on(renderer.read_fractal_pixels(&device, &queue, false, [0.0, 0.0, 0.0])).expect("readback").2
+        };
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        let before = settle(&mut escape, &mut renderer);
+
+        config.palette_reverse = true;
+        renderer.update_palette(&device, &queue, &config.palette, config.palette_rotation,
+            config.palette_squeeze, config.palette_squeeze_mode, config.palette_squeeze_falloff,
+            config.palette_log_strength, config.palette_reverse);
+        let after = settle(&mut escape, &mut renderer);
+        assert_ne!(escape.last_path, "recolor", "a palette edit recoloured the baked colours");
+        assert_ne!(before, after, "the palette edit changed nothing");
+        let mut fresh = crate::escape::EscapeRenderer::new(&device, w, h);
+        assert_eq!(after, settle(&mut fresh, &mut renderer), "the re-iterated picture differs from a fresh one");
+        fresh.destroy();
+        escape.destroy();
+    }
+
     /// A stepped palette draws every stop as a flat band: an escape
     /// render through it shows the stops' colours and next to nothing
     /// in between, where the blended palette shows a continuum.
