@@ -3588,6 +3588,16 @@ impl App {
             &self.gpu.queue,
         );
 
+        // Texture previews (the Texture panel): the same pattern -- one
+        // blocking generation a frame on desktop, spawned on the web.
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.egui_layer.textures_need_previews() {
+            self.egui_layer.generate_texture_preview(&self.gpu.device, &self.gpu.queue);
+            window.request_redraw();
+        }
+        #[cfg(target_arch = "wasm32")]
+        self.egui_layer.start_texture_previews(&self.gpu.device, &self.gpu.queue);
+
         // Handle PathMap mode: query path at clicked pixel or close overlay
         #[cfg(not(target_arch = "wasm32"))]
         {
