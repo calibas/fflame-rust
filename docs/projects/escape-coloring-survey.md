@@ -737,8 +737,23 @@ Read from the code, not reproduced by render, except where noted.
    The supersample factor now rides in the uniform's flag word, as F3
    divides its DE by its supersampling.
 
-   **Not yet:** itinerary (C8) needs rank equalisation (P7); direct
-   orbit traps (C10) need the palette inside the loop.
+   - **Rank equalisation** (P7), as a fourth Auto contrast mode,
+     **Equalize**. Each value becomes its midrank in the frame, the
+     share of the frame below it, with a plateau of equal values at its
+     middle, as techmatt ranks. It is measured from the same 96×72
+     probe as Auto range: the CPU sorts the samples into a 256-entry
+     quantile table, and the recolour pass inverts it by binary search
+     and linear interpolation. That is a piecewise-linear CDF, where F3
+     uses 4,096 bins over the full frame and techmatt sorts every
+     sample. Turns, strength and the transfer apply as for Auto range;
+     the clip does not, since a rank cannot be dragged by an outlier.
+     *Measured:* on the smooth count with a grey ramp, every tenth of
+     the palette covers 9.7–10.3% of the drawn pixels, where Auto range
+     puts 92% in the first tenth. On escape count's integer plateaus the
+     mean palette position is 0.499.
+
+   **Not yet:** itinerary (C8); direct orbit traps (C10) need the
+   palette inside the loop.
 7. **Relief** (§5.3): the small ones (R1, R2, R4, R8, R9) first, then
    analytic relief (R5), offset orbits (R6) and Embossed (R7). Analytic
    relief at deep zoom waits for the derivative under perturbation (P11).

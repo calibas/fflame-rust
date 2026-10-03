@@ -8624,6 +8624,82 @@ fn main() {
         escape.destroy();
     }
 
+    /// Equalize spends the palette evenly over the frame: with a grey
+    /// ramp and one turn, every tenth of the palette covers about a tenth
+    /// of the drawn pixels, where Auto range leaves the smooth count
+    /// bunched at one end. On a field of plateaus (escape count, whole
+    /// numbers) the midrank puts each plateau at its middle, so the mean
+    /// palette position is a half.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn equalize_spends_the_palette_evenly() {
+        use crate::config::escape::ContrastMode;
+        let (device, queue) = repro_device();
+        let (w, h) = (192u32, 144u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        let stop = |position: f32, v: f32| crate::scene::palette::ColorStop { position, color: [v, v, v] };
+        config.palette.stops = vec![stop(0.0, 0.0), stop(1.0, 1.0)];
+        config.escape.center_re = "-0.6".to_string();
+        config.escape.center_im = "0.1".to_string();
+        config.escape.zoom_log2 = 0.4;
+        config.escape.max_iter = 300;
+        config.escape.bailout = 1.0e4;
+        config.escape.supersample = 1;
+        config.escape.contrast.turns = 0.999;
+        let render = |c: &crate::config::FractalConfig| {
+            let job = crate::renderer::RenderJob::new(c, w, h);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+        // The share of drawn pixels in each tenth of the palette.
+        let deciles = |out: &[u8]| -> [f64; 10] {
+            let mut n = [0usize; 10];
+            let mut total = 0usize;
+            for p in out.chunks_exact(4) {
+                if p[0] == 0 && p[1] == 0 && p[2] == 0 {
+                    continue;
+                }
+                n[((p[0] as usize) * 10 / 256).min(9)] += 1;
+                total += 1;
+            }
+            n.map(|k| k as f64 / total.max(1) as f64)
+        };
+        let worst = |d: [f64; 10]| d.iter().map(|x| (x - 0.1).abs()).fold(0.0, f64::max);
+
+        let mut c = config.clone();
+        c.escape.coloring = "smooth".to_string();
+        c.escape.contrast.mode = ContrastMode::AutoRange;
+        let auto = deciles(&render(&c));
+        c.escape.contrast.mode = ContrastMode::Equalize;
+        let equal = deciles(&render(&c));
+        println!("smooth, share per tenth -- auto range {auto:.3?}");
+        println!("smooth, share per tenth -- equalize   {equal:.3?}");
+        assert!(worst(equal) < 0.025, "equalize left a tenth of the palette {:.3} off a tenth of the pixels", worst(equal));
+        assert!(worst(auto) > 2.0 * worst(equal), "auto range was already even: nothing measured");
+
+        let mut c = config.clone();
+        c.escape.coloring = "escape_count".to_string();
+        c.escape.max_iter = 64;
+        c.escape.contrast.mode = ContrastMode::Equalize;
+        let out = render(&c);
+        let drawn: Vec<f64> = out
+            .chunks_exact(4)
+            .filter(|p| p[0] > 0 || p[1] > 0 || p[2] > 0)
+            .map(|p| p[0] as f64)
+            .collect();
+        let mean = drawn.iter().sum::<f64>() / drawn.len() as f64;
+        println!("escape count, mean palette position {:.3}", mean / 255.0);
+        assert!((mean / 255.0 - 0.5).abs() < 0.03, "plateaus are not at their middles: mean {:.3}", mean / 255.0);
+    }
+
     /// A stepped palette draws every stop as a flat band: an escape
     /// render through it shows the stops' colours and next to nothing
     /// in between, where the blended palette shows a continuum.

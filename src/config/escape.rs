@@ -523,6 +523,11 @@ pub enum ContrastMode {
     /// a perfect plane it correctly shows almost nothing, because
     /// there is nothing left.
     Flatten,
+    /// Rank-equalise the field (survey P7): each value becomes the share
+    /// of the frame below it, so every part of the palette covers the
+    /// same area of the picture -- techmatt's rank transfer, F3's
+    /// histogram colouring. Measured from the same probe as the others.
+    Equalize,
 }
 
 impl ContrastMode {
@@ -531,6 +536,7 @@ impl ContrastMode {
             ContrastMode::Off => 0,
             ContrastMode::AutoRange => 1,
             ContrastMode::Flatten => 2,
+            ContrastMode::Equalize => 3,
         }
     }
     pub fn is_off(&self) -> bool {
@@ -544,6 +550,7 @@ pub fn contrast_mode_to_str(m: ContrastMode) -> &'static str {
         ContrastMode::Off => "off",
         ContrastMode::AutoRange => "auto_range",
         ContrastMode::Flatten => "flatten",
+        ContrastMode::Equalize => "equalize",
     }
 }
 
@@ -551,6 +558,7 @@ pub fn contrast_mode_from_str(s: &str) -> ContrastMode {
     match s {
         "auto_range" => ContrastMode::AutoRange,
         "flatten" => ContrastMode::Flatten,
+        "equalize" => ContrastMode::Equalize,
         _ => ContrastMode::Off,
     }
 }
@@ -1717,7 +1725,7 @@ mod shading_tests {
         off.contrast.strength = 0.0;
         assert!(!off.contrast.is_active());
         // Every mode's wire string must survive.
-        for m in [ContrastMode::Off, ContrastMode::AutoRange, ContrastMode::Flatten] {
+        for m in [ContrastMode::Off, ContrastMode::AutoRange, ContrastMode::Flatten, ContrastMode::Equalize] {
             assert_eq!(contrast_mode_from_str(contrast_mode_to_str(m)), m);
         }
     }

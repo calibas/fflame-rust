@@ -4860,7 +4860,9 @@ struct IterResult {
 // The measured contrast fit (see EscapeContrast). `enabled = 0` makes
 // this the identity, so a recolor with contrast off reproduces the
 // iterate pass byte for byte -- which the recolor cache's equivalence
-// test depends on.
+// test depends on. The mode and the quantile table come after the
+// fields the IFS templates read, which bind the same buffer with only
+// those.
 struct ContrastParams {
     plane: vec3<f32>,
     lo: f32,
@@ -4868,8 +4870,63 @@ struct ContrastParams {
     strength: f32,
     turns: f32,
     enabled: u32,
+    // ContrastMode::to_gpu; 3 is Equalize.
+    mode: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+    // Equalize: the probe's values at 256 evenly spaced ranks, from the
+    // smallest to the largest.
+    cdf: array<vec4<f32>, 64>,
 }
 @group(0) @binding(6) var<uniform> contrast: ContrastParams;
+
+fn esc_quantile(i: u32) -> f32 {
+    return contrast.cdf[i / 4u][i % 4u];
+}
+
+// The value's midrank in the frame (Equalize, survey P7): the share of
+// the probe's samples below it, read off the quantile table by linear
+// interpolation. A value on a plateau of equal samples lands at the
+// plateau's middle, as techmatt's midrank does -- which is what keeps
+// a field with a large flat region (an escape count, say) from putting
+// the whole region at one end of the palette.
+fn esc_rank(v: f32) -> f32 {
+    // The first entry not below v, then the first above it.
+    var lo = 0u;
+    var hi = 256u;
+    while (lo < hi) {
+        let mid = (lo + hi) / 2u;
+        if (esc_quantile(mid) < v) {
+            lo = mid + 1u;
+        } else {
+            hi = mid;
+        }
+    }
+    let first_ge = lo;
+    hi = 256u;
+    while (lo < hi) {
+        let mid = (lo + hi) / 2u;
+        if (esc_quantile(mid) <= v) {
+            lo = mid + 1u;
+        } else {
+            hi = mid;
+        }
+    }
+    let first_gt = lo;
+    if (first_gt > first_ge) {
+        return 0.5 * f32(first_ge + first_gt - 1u) / 255.0;
+    }
+    if (first_ge == 0u) {
+        return 0.0;
+    }
+    if (first_ge >= 256u) {
+        return 1.0;
+    }
+    let a = esc_quantile(first_ge - 1u);
+    let b = esc_quantile(first_ge);
+    return (f32(first_ge - 1u) + (v - a) / max(b - a, 1e-30)) / 255.0;
+}
 
 // Re-expose the coloring's value on the measured range, through the
 // value transfer. `p` is the pixel, normalized, because Flatten's fit
@@ -4881,9 +4938,15 @@ fn apply_contrast(raw: f32, p: vec2<f32>) -> f32 {
     if (contrast.enabled == 0u) {
         return esc_transfer(raw);
     }
-    let base = contrast.plane.x + contrast.plane.y * p.x + contrast.plane.z * p.y;
-    let span = max(contrast.hi - contrast.lo, 1e-30);
-    let mapped = esc_transfer(((raw - base) - contrast.lo) / span) * contrast.turns;
+    var u = 0.0;
+    if (contrast.mode == 3u) {
+        u = esc_rank(raw);
+    } else {
+        let base = contrast.plane.x + contrast.plane.y * p.x + contrast.plane.z * p.y;
+        let span = max(contrast.hi - contrast.lo, 1e-30);
+        u = ((raw - base) - contrast.lo) / span;
+    }
+    let mapped = esc_transfer(u) * contrast.turns;
     return mix(esc_transfer(raw), mapped, clamp(contrast.strength, 0.0, 1.0));
 }
 
