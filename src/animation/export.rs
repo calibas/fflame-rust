@@ -857,6 +857,10 @@ fn apply_config_value(
         (ConfigPath::EscapeShadingHeightPost, ConfigValue::Float(v)) => {
             config.escape.shading.height_post = v.clamp(1e-3, 1e3);
         }
+        (ConfigPath::EscapeShadingOffset, ConfigValue::Float(v)) => {
+            let (lo, hi) = crate::config::escape::RELIEF_OFFSET_RANGE;
+            config.escape.shading.offset = v.clamp(lo, hi);
+        }
         (ConfigPath::EscapeContrastClip, ConfigValue::Float(v)) => {
             config.escape.contrast.clip = v.clamp(0.0, 0.25);
         }
@@ -2266,6 +2270,7 @@ mod tests {
             (EditingTarget::Main, "Escape.Shading.Ambient".to_string(), json!(0.2)),
             (EditingTarget::Main, "Escape.Shading.HeightPre".to_string(), json!(3.0)),
             (EditingTarget::Main, "Escape.Shading.HeightPost".to_string(), json!(0.5)),
+            (EditingTarget::Main, "Escape.Shading.Offset".to_string(), json!(0.004)),
             (EditingTarget::Main, "Escape.Contrast.Clip".to_string(), json!(0.05)),
             (EditingTarget::Main, "Escape.Contrast.Strength".to_string(), json!(0.5)),
             (EditingTarget::Main, "Escape.Contrast.Turns".to_string(), json!(3.0)),
@@ -2298,6 +2303,7 @@ mod tests {
         assert_eq!(config.escape.shading.ambient, 0.2);
         assert_eq!(config.escape.shading.height_pre, 3.0);
         assert_eq!(config.escape.shading.height_post, 0.5);
+        assert_eq!(config.escape.shading.offset, 0.004);
         assert_eq!(config.escape.contrast.clip, 0.05);
         assert_eq!(config.escape.contrast.strength, 0.5);
         assert_eq!(config.escape.contrast.turns, 3.0);

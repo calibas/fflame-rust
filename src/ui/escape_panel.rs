@@ -986,6 +986,7 @@ pub fn render_escape_content(
                             ShadingField::Banded => t!("escape_panel.shading_field_banded"),
                             ShadingField::Layer => t!("escape_panel.shading_field_layer"),
                             ShadingField::Analytic => t!("escape_panel.shading_field_analytic"),
+                            ShadingField::Offset => t!("escape_panel.shading_field_offset"),
                         })
                         .show_ui(ui, |ui| {
                             for f in [
@@ -993,6 +994,7 @@ pub fn render_escape_content(
                                 ShadingField::Banded,
                                 ShadingField::Layer,
                                 ShadingField::Analytic,
+                                ShadingField::Offset,
                             ] {
                                 let label = match f {
                                     ShadingField::Smooth => {
@@ -1006,6 +1008,9 @@ pub fn render_escape_content(
                                     }
                                     ShadingField::Analytic => {
                                         t!("escape_panel.shading_field_analytic")
+                                    }
+                                    ShadingField::Offset => {
+                                        t!("escape_panel.shading_field_offset")
                                     }
                                 };
                                 if ui.selectable_label(f == cur, label).clicked() && f != cur {
@@ -1022,6 +1027,26 @@ pub fn render_escape_content(
                         .response
                         .on_hover_text(t!("escape_panel.tooltip_shading_field"));
                 });
+                if sh.field == ShadingField::Offset {
+                    ui.horizontal(|ui| {
+                        ui.label(t!("escape_panel.shading_offset"));
+                        let mut v = sh.offset;
+                        let (lo, hi) = crate::config::escape::RELIEF_OFFSET_RANGE;
+                        if ui
+                            .add(egui::Slider::new(&mut v, lo..=hi).logarithmic(true))
+                            .on_hover_text(t!("escape_panel.tooltip_shading_offset"))
+                            .changed()
+                        {
+                            let _ = config_manager.update_param(ConfigPath::EscapeShadingOffset, v.into());
+                        }
+                    });
+                    if crate::escape::EscapeRenderer::wants_perturbation(&esc) {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(220, 170, 90),
+                            t!("escape_panel.offset_relief_perturbed"),
+                        );
+                    }
+                }
                 // Analytic slopes need the derivative orbit: flat where
                 // there is none, and said so rather than left silent.
                 if sh.field == ShadingField::Analytic {

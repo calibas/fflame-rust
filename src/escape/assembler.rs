@@ -217,27 +217,20 @@ fn esc_cdiv(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
 
 //__COLORING_ACCUM__
 
-@compute @workgroup_size(8, 8, 1)
-fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    // Row band: this dispatch covers [tile_y0, tile_y0 + dispatched).
-    let py = gid.y + params.tile_y0;
-    if (gid.x >= params.width || py >= params.height) {
-        return;
-    }
+// One orbit's terminal state: everything the colouring reads.
+struct EscRun {
+    z: vec2<f32>,
+    dz: vec2<f32>,
+    accum_state: vec4<f32>,
+    n: u32,
+    escaped: bool,
+    converged: bool,
+    period: u32,
+}
 
-    // Pixel center -> complex plane: offset from view center, y flipped
-    // (texture y grows down, Im grows up), then view rotation.
-    let uv = (vec2<f32>(f32(gid.x), f32(py)) + vec2<f32>(0.5, 0.5))
-        / vec2<f32>(f32(params.width), f32(params.height));
-    var d = (uv - vec2<f32>(0.5, 0.5)) * params.span;
-    d.y = -d.y;
-    //__LENS_APPLY__
-    let rot = params.rot_cs;
-    let pixel = params.center + vec2<f32>(
-        d.x * rot.x - d.y * rot.y,
-        d.x * rot.y + d.y * rot.x,
-    );
-
+// The iteration for one point of the plane: the pixel's own orbit, and
+// with offset relief the two beside it.
+fn esc_run(pixel: vec2<f32>) -> EscRun {
     // Julia toggle: parameter plane iterates z from the formula's
     // critical-point seed with c = pixel; dynamical plane iterates z
     // from the pixel with c fixed. One flag, not a formula-list entry
@@ -274,6 +267,40 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (!escaped) {
         n = params.max_iter;
     }
+    return EscRun(z, dz, accum_state, n, escaped, converged, period);
+}
+
+//__OFFSET_RELIEF_FNS__
+
+@compute @workgroup_size(8, 8, 1)
+fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    // Row band: this dispatch covers [tile_y0, tile_y0 + dispatched).
+    let py = gid.y + params.tile_y0;
+    if (gid.x >= params.width || py >= params.height) {
+        return;
+    }
+
+    // Pixel center -> complex plane: offset from view center, y flipped
+    // (texture y grows down, Im grows up), then view rotation.
+    let uv = (vec2<f32>(f32(gid.x), f32(py)) + vec2<f32>(0.5, 0.5))
+        / vec2<f32>(f32(params.width), f32(params.height));
+    var d = (uv - vec2<f32>(0.5, 0.5)) * params.span;
+    d.y = -d.y;
+    //__LENS_APPLY__
+    let rot = params.rot_cs;
+    let pixel = params.center + vec2<f32>(
+        d.x * rot.x - d.y * rot.y,
+        d.x * rot.y + d.y * rot.x,
+    );
+
+    let run = esc_run(pixel);
+    let z = run.z;
+    let dz = run.dz;
+    let accum_state = run.accum_state;
+    let n = run.n;
+    let escaped = run.escaped;
+    let converged = run.converged;
+    let period = run.period;
 
     var rgb = vec3<f32>(0.0, 0.0, 0.0);
     // COVERAGE, not colour. A pixel that never escaped has no value
@@ -309,6 +336,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         height = raw;
         relief = esc_relief_source(raw, t, summary, accum_state);
         slope = esc_analytic_slope(summary);
+        //__OFFSET_RELIEF__
         rgb = esc_palette(esc_layer(t, summary, accum_state));
         coverage = 1.0;
     }
@@ -531,6 +559,43 @@ fn layer_wgsl(layer: Option<&ColoringDef>) -> String {
         ESC_LAYER_WGSL.trim()
     )
 }
+
+/// Offset-orbit relief (`ShadingField::Offset`): two more runs of the
+/// orbit beside the pixel's own. Spliced only into a pipeline built for
+/// it, since each `esc_run` call is a copy of the whole loop once the
+/// compiler inlines it.
+const OFFSET_RELIEF_FNS_WGSL: &str = r#"
+// The colouring's value at a point beside the pixel. Where that orbit
+// draws nothing (an interior point, for a colouring that leaves the
+// interior to the background), the slope there is taken as flat.
+fn esc_value_at(p: vec2<f32>, fallback: f32) -> f32 {
+    let r = esc_run(p);
+    if (!(r.escaped || COLORING_COLORS_INTERIOR)) {
+        return fallback;
+    }
+    return coloring_map(OrbitSummary(r.z, r.n, r.escaped, r.converged, r.period, r.dz), r.accum_state);
+}
+
+// Offset-orbit relief (ShadingField::Offset, survey R6, after Ultra
+// Fractal's Slope): the colouring's value at c and at c plus a small
+// step along the screen's x and y, run as orbits of their own. The step
+// is a fixed fraction of the view, not a pixel, so the relief belongs
+// to the fractal: it does not change with the output size. Returned as
+// -grad h in the screen's y-up frame, as the analytic slope is, and lit
+// the same way -- but per 1/1024 of the view's height rather than per
+// render pixel, which is what keeps it off the output size. (Per render
+// pixel, a render twice the size would read half the slope, exactly as
+// the numeric relief does.) At a 1024-pixel-tall render the two units
+// agree, so a relief height means the same in both fields there.
+fn esc_offset_slope(pixel: vec2<f32>, h: f32) -> vec2<f32> {
+    let delta = params.pmap.z * params.span.y;
+    let rot = params.rot_cs;
+    let hx = esc_value_at(pixel + vec2<f32>(rot.x, rot.y) * delta, h);
+    let hy = esc_value_at(pixel + vec2<f32>(-rot.y, rot.x) * delta, h);
+    let step = max(params.pmap.z * 1024.0, 1e-6);
+    return -vec2<f32>(hx - h, hy - h) / step;
+}
+"#;
 
 /// The analytic relief slope (`ShadingField::Analytic`), spliced into
 /// every mode-A template beside the layer code.
@@ -6711,7 +6776,7 @@ pub fn assemble_with_lens(
     interior_detect: bool,
     lens: Option<&str>,
 ) -> String {
-    assemble_layered(formula, coloring, None, damped, interior_detect, false, lens)
+    assemble_layered(formula, coloring, None, damped, interior_detect, false, false, lens)
 }
 
 /// [`assemble_with_lens`] with a texture layer (`ColoringLayer`): the
@@ -6727,6 +6792,9 @@ pub fn assemble_layered(
     // The relief's analytic slopes read the derivative orbit, so it is
     // compiled for them even when neither colouring needs it.
     analytic_relief: bool,
+    // Offset-orbit relief runs the orbit twice more per pixel; the
+    // calls are spliced only for it.
+    offset_relief: bool,
     lens: Option<&str>,
 ) -> String {
     let layer = layer.filter(|l| crate::escape::layer_fits(coloring, l));
@@ -6777,6 +6845,16 @@ pub fn assemble_layered(
     for line in template.lines() {
         match line.trim() {
             "//__PALETTE_MAP__" => out.push(PALETTE_MAP_WGSL.trim().to_string()),
+            "//__OFFSET_RELIEF_FNS__" => {
+                if offset_relief {
+                    out.push(OFFSET_RELIEF_FNS_WGSL.trim().to_string());
+                }
+            }
+            "//__OFFSET_RELIEF__" => {
+                if offset_relief {
+                    out.push("        slope = esc_offset_slope(pixel, raw);".to_string());
+                }
+            }
             // The lens: its variation functions and helper
             // libraries at top level, and the warp itself on the
             // screen offset. Both empty without one, so the shader is
@@ -7167,13 +7245,13 @@ mod tests {
             for layer in crate::escape::COLORINGS {
                 if !crate::escape::layer_fits(base, layer) {
                     refused += 1;
-                    let src = assemble_layered(mandelbrot, base, Some(layer), false, true, false, None);
+                    let src = assemble_layered(mandelbrot, base, Some(layer), false, true, false, false, None);
                     assert!(!src.contains("texture layer:"), "{} over {} was spliced", layer.name, base.name);
                     continue;
                 }
                 pairs += 1;
                 let what = format!("{} over {}", layer.name, base.name);
-                let direct = assemble_layered(mandelbrot, base, Some(layer), false, true, false, None);
+                let direct = assemble_layered(mandelbrot, base, Some(layer), false, true, false, false, None);
                 assert!(direct.contains("fn layer_coloring_map("), "{what}: the layer was not renamed");
                 validate(&direct, &format!("{what} (direct)"));
                 validate(
@@ -7184,6 +7262,34 @@ mod tests {
             }
         }
         assert!(pairs > 100 && refused > 0, "{pairs} pairs, {refused} refused");
+    }
+
+    /// The relief variants of the direct shader -- analytic slopes
+    /// (the derivative compiled in for the relief alone) and offset
+    /// orbits (two more runs of the loop) -- assemble and validate, and
+    /// the extra runs are spliced only where asked for.
+    #[test]
+    fn the_relief_variants_of_the_direct_shader_validate() {
+        let validate = |src: &str, what: &str| {
+            let module = naga::front::wgsl::parse_str(src)
+                .unwrap_or_else(|e| panic!("{what}: parse: {}", e.emit_to_string(src)));
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("{what}: validation: {e:?}"));
+        };
+        let smooth = crate::escape::get_coloring("smooth");
+        for f in crate::escape::FORMULAS {
+            for (analytic, offset) in [(true, false), (false, true), (true, true)] {
+                let src = assemble_layered(f, smooth, None, false, true, analytic, offset, None);
+                validate(&src, &format!("{} analytic={analytic} offset={offset}", f.name));
+                assert_eq!(src.contains("esc_offset_slope(pixel, raw)"), offset, "{}", f.name);
+            }
+        }
+        let plain = assemble_layered(crate::escape::get_formula("mandelbrot"), smooth, None, false, true, false, false, None);
+        assert_eq!(plain.matches("esc_run(").count(), 2, "one definition and one call without offset relief");
     }
 
     /// The layer's renaming touches whole identifiers only.
