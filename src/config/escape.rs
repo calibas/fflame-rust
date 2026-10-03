@@ -248,6 +248,45 @@ pub struct EscapeConfig {
     /// colouring is no layer, which is the default and is skipped.
     #[serde(default, skip_serializing_if = "ColoringLayer::is_default")]
     pub layer: ColoringLayer,
+    /// A simulation texture (`docs/projects/sim-textures.md`): its recipe,
+    /// in full, so the file is self-contained. None is no texture, the
+    /// default, and is skipped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub texture: Option<EscapeTexture>,
+}
+
+/// A simulation texture a config uses: its name, and its recipe -- a
+/// Simulation-mode config -- in full (`docs/projects/sim-textures.md`,
+/// decision 6), so the file that uses it needs nothing else.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EscapeTexture {
+    pub name: String,
+    /// Written and read the way a `.fflame` file is -- compact, with its
+    /// version, and migrated on load -- not as the derive would.
+    #[serde(with = "embedded_config")]
+    pub config: Box<super::FractalConfig>,
+}
+
+impl PartialEq for EscapeTexture {
+    fn eq(&self, other: &Self) -> bool {
+        // FractalConfig has no PartialEq; its file form is its identity.
+        self.name == other.name && self.config.to_json_value().ok() == other.config.to_json_value().ok()
+    }
+}
+
+/// A config inside a config, in its file form.
+mod embedded_config {
+    use super::super::FractalConfig;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(config: &FractalConfig, s: S) -> Result<S::Ok, S::Error> {
+        config.to_json_value().map_err(serde::ser::Error::custom)?.serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Box<FractalConfig>, D::Error> {
+        let value = serde_json::Value::deserialize(d)?;
+        FractalConfig::from_json_value(value).map(Box::new).map_err(serde::de::Error::custom)
+    }
 }
 
 /// Looking down at about 24°, which shows a solid's top and one
@@ -1610,6 +1649,7 @@ impl Default for EscapeConfig {
             contrast: EscapeContrast::default(),
             palette_map: PaletteMap::default(),
             layer: ColoringLayer::default(),
+            texture: None,
         }
     }
 }
