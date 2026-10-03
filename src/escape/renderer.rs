@@ -587,11 +587,14 @@ struct ShadeParamsGpu {
     height_curve: u32,
     height_pre: f32,
     height_post: f32,
+    /// 1: slope the analytic gradient the iterate pass stored, instead
+    /// of differencing the height (`ShadingField::Analytic`).
+    analytic: u32,
     /// std140 rounds the struct up to a multiple of its largest
     /// member alignment (vec3 → 16), so WGSL sees 112 bytes where Rust
-    /// would otherwise pack 104. Without these the bind group is
+    /// would otherwise pack 108. Without this the bind group is
     /// rejected outright.
-    _pad: [u32; 2],
+    _pad: u32,
 }
 
 /// Uniform for the perturbed pipeline — must match `PerturbParams`
@@ -1359,7 +1362,7 @@ impl EscapeRenderer {
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::StorageTexture {
                         access: StorageTextureAccess::WriteOnly,
-                        format: TextureFormat::Rg32Float,
+                        format: TextureFormat::Rgba32Float,
                         view_dimension: TextureViewDimension::D2,
                     },
                     count: None,
@@ -1434,7 +1437,7 @@ impl EscapeRenderer {
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::StorageTexture {
                         access: StorageTextureAccess::WriteOnly,
-                        format: TextureFormat::Rg32Float,
+                        format: TextureFormat::Rgba32Float,
                         view_dimension: TextureViewDimension::D2,
                     },
                     count: None,
@@ -1504,7 +1507,7 @@ impl EscapeRenderer {
                         visibility: ShaderStages::COMPUTE,
                         ty: BindingType::StorageTexture {
                             access: StorageTextureAccess::WriteOnly,
-                            format: TextureFormat::Rg32Float,
+                            format: TextureFormat::Rgba32Float,
                             view_dimension: TextureViewDimension::D2,
                         },
                         count: None,
@@ -3183,7 +3186,8 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             return false;
         }
         let formula = super::get_formula(&escape.formula);
-        Self::colourings_have(escape, super::ColoringFeature::NeedsDerivative)
+        (Self::colourings_have(escape, super::ColoringFeature::NeedsDerivative)
+            || escape.shading.wants_derivative())
             && !formula.wgsl_derivative.is_empty()
     }
 
@@ -5879,7 +5883,7 @@ fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             mip_level_count: 1,
             sample_count: 1,
             dimension: TextureDimension::D2,
-            format: TextureFormat::Rg32Float,
+            format: TextureFormat::Rgba32Float,
             // COPY_SRC so a test can read the height field back and
             // check the softening blur against a CPU one.
             usage: TextureUsages::STORAGE_BINDING
@@ -6082,9 +6086,9 @@ fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             &self.height_texture
         };
         let (w, h) = (tex.width(), tex.height());
-        // Two floats a texel (the raw value, then the relief's source),
-        // and 256-byte row alignment for the copy.
-        let row = (w * 8).div_ceil(256) * 256;
+        // Four floats a texel (the raw value, the relief's source, the
+        // analytic slope), and 256-byte row alignment for the copy.
+        let row = (w * 16).div_ceil(256) * 256;
         let staging = device.create_buffer(&BufferDescriptor {
             label: Some("Escape Height Readback"),
             size: (row * h) as u64,
@@ -6125,7 +6129,7 @@ fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 let base = (y * row) as usize;
                 for x in 0..w {
                     // Green: the relief's source, which the blur blurs.
-                    let i = base + (x * 8) as usize + 4;
+                    let i = base + (x * 16) as usize + 4;
                     out.push(f32::from_le_bytes(view[i..i + 4].try_into().ok()?));
                 }
             }
@@ -6199,7 +6203,7 @@ struct BlurParams {
 }
 
 @group(0) @binding(0) var src_tex: texture_2d<f32>;
-@group(0) @binding(1) var dst_tex: texture_storage_2d<rg32float, write>;
+@group(0) @binding(1) var dst_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var<uniform> blur: BlurParams;
 
 @compute @workgroup_size(8, 8, 1)
@@ -6247,7 +6251,7 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                         visibility: ShaderStages::COMPUTE,
                         ty: BindingType::StorageTexture {
                             access: StorageTextureAccess::WriteOnly,
-                            format: TextureFormat::Rg32Float,
+                            format: TextureFormat::Rgba32Float,
                             view_dimension: TextureViewDimension::D2,
                         },
                         count: None,
@@ -6375,13 +6379,16 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             height_curve: shading.height_curve.to_gpu(),
             height_pre: shading.height_pre,
             height_post: shading.height_post,
-            _pad: [0; 2],
+            analytic: u32::from(shading.field == crate::config::escape::ShadingField::Analytic),
+            _pad: 0,
         };
         queue.write_buffer(&self.shade_params_buffer, 0, bytemuck::bytes_of(&params));
 
         // Softening low-passes the height FIELD; the shade pass then
         // takes its plain +-1 difference of whatever came back.
-        let softened = if shade_on {
+        // Analytic slopes come from the derivative, not from a height
+        // field, so there is nothing for the blur to soften.
+        let softened = if shade_on && params.analytic == 0 {
             self.run_height_blur(device, queue, encoder, params.softness)
         } else {
             None
@@ -6417,6 +6424,7 @@ struct ShadeParams {{
     height_curve: u32,
     height_pre: f32,
     height_post: f32,
+    analytic: u32,
 }}
 
 @group(0) @binding(0) var src_tex: texture_2d<f32>;
@@ -6561,12 +6569,19 @@ fn shade_pixel(rgb: vec3<f32>, p: vec2<i32>) -> vec3<f32> {{
     // 3 equally sharp parts"). Softness now low-passes the height
     // field itself, in `run_height_blur`, and this reads whatever it
     // produced.
-    var dx = (height_at(p + vec2<i32>(1, 0), dims) - height_at(p - vec2<i32>(1, 0), dims)) * 0.5;
-    var dy = (height_at(p + vec2<i32>(0, 1), dims) - height_at(p - vec2<i32>(0, 1), dims)) * 0.5;
+    var dx = 0.0;
+    var dy = 0.0;
+    if (shade.analytic == 0u) {{
+        dx = (height_at(p + vec2<i32>(1, 0), dims) - height_at(p - vec2<i32>(1, 0), dims)) * 0.5;
+        dy = (height_at(p + vec2<i32>(0, 1), dims) - height_at(p - vec2<i32>(0, 1), dims)) * 0.5;
+    }}
     // The other stencils (SlopeStencil). Forward: half a pixel off
     // centre. Roberts: the two diagonals of the 2x2 block, turned back
     // onto the axes. Least squares: the plane fitted to the 3x3 block.
-    if (shade.stencil == 1u) {{
+    if (shade.analytic != 0u) {{
+        // The iterate pass stored -grad h itself (blue, alpha): no
+        // stencil, no height curve.
+    }} else if (shade.stencil == 1u) {{
         let h0 = height_at(p, dims);
         dx = height_at(p + vec2<i32>(1, 0), dims) - h0;
         dy = height_at(p + vec2<i32>(0, 1), dims) - h0;
@@ -6589,6 +6604,10 @@ fn shade_pixel(rgb: vec3<f32>, p: vec2<i32>) -> vec3<f32> {{
     // Exaggerated gradient. +y is DOWN in pixel space, so dy is
     // negated to put the light where the azimuth says it is.
     var g = vec2<f32>(-dx, dy) * shade.height;
+    if (shade.analytic != 0u) {{
+        let q = clamp(p, vec2<i32>(0, 0), dims - vec2<i32>(1, 1));
+        g = textureLoad(height_tex, q, 0).ba * shade.height;
+    }}
 
     // Surface texture: its own micro-relief, added to the TILT rather
     // than to the height. Added to the height it would be multiplied
@@ -7020,13 +7039,15 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let registry = crate::variations::global_registry();
         let lens_src = super::lens::lens_source(escape, &registry);
         let layer = super::layer_of(escape);
+        let analytic = escape.shading.wants_derivative();
         let key = format!(
-            "{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}",
             formula.name,
             coloring.name,
             layer.map_or("", |l| l.name),
             damped,
             interior,
+            analytic,
             super::lens::lens_key(escape, &registry),
         );
         if !self.pipelines.contains_key(&key) {
@@ -7036,6 +7057,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 layer,
                 damped,
                 interior,
+                analytic,
                 lens_src.as_deref(),
             );
             let module = device.create_shader_module(ShaderModuleDescriptor {

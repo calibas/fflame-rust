@@ -373,6 +373,11 @@ pub enum ShadingField {
     /// The texture layer's value: relief from one field, colour from
     /// another (survey R3). Without a layer, the colouring's own.
     Layer,
+    /// The distance estimate's own slope, from the derivative rather
+    /// than from neighbouring pixels (survey R5, Kalles Fraktaler's
+    /// analytic slopes): sharper, and free of stencil artefacts. Direct
+    /// path only, on formulas with a derivative.
+    Analytic,
 }
 
 impl ShadingField {
@@ -381,6 +386,7 @@ impl ShadingField {
             ShadingField::Smooth => 0,
             ShadingField::Banded => 1,
             ShadingField::Layer => 2,
+            ShadingField::Analytic => 3,
         }
     }
 }
@@ -391,6 +397,7 @@ pub fn shading_field_to_str(m: ShadingField) -> &'static str {
         ShadingField::Smooth => "smooth",
         ShadingField::Banded => "banded",
         ShadingField::Layer => "layer",
+        ShadingField::Analytic => "analytic",
     }
 }
 
@@ -398,6 +405,7 @@ pub fn shading_field_from_str(s: &str) -> ShadingField {
     match s {
         "banded" => ShadingField::Banded,
         "layer" => ShadingField::Layer,
+        "analytic" => ShadingField::Analytic,
         _ => ShadingField::Smooth,
     }
 }
@@ -1228,6 +1236,10 @@ impl EscapeShading {
     pub fn is_default(v: &EscapeShading) -> bool {
         *v == EscapeShading::default()
     }
+    /// Whether the relief needs the derivative orbit: analytic slopes.
+    pub fn wants_derivative(&self) -> bool {
+        self.enabled && self.field == ShadingField::Analytic
+    }
 }
 
 /// Biomorph classification axis (Pickover): which component escape is
@@ -1642,7 +1654,7 @@ mod shading_tests {
         for b in ShadingBlend::all() {
             assert_eq!(shading_blend_from_str(shading_blend_to_str(b)), b);
         }
-        for f in [ShadingField::Smooth, ShadingField::Banded, ShadingField::Layer] {
+        for f in [ShadingField::Smooth, ShadingField::Banded, ShadingField::Layer, ShadingField::Analytic] {
             assert_eq!(shading_field_from_str(shading_field_to_str(f)), f);
         }
         // The GPU discriminants must be distinct, or two blend modes
