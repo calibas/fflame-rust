@@ -9,8 +9,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::config::escape::EscapeTexture;
-use crate::config::{ConfigChange, ConfigManager, FractalConfig};
+use crate::config::escape::{EscapeTexture, TextureFit};
+use crate::config::{ConfigChange, ConfigManager, ConfigPath, ConfigValue, FractalConfig};
 use crate::textures::{TextureLibrary, TextureOrigin};
 
 /// Preview side, in points.
@@ -150,6 +150,9 @@ impl TexturesPanel {
                 }
             }
         });
+        if can_pick {
+            overlay_controls(ui, config_manager, current.is_some());
+        }
         ui.separator();
 
         let mut pick = None;
@@ -246,6 +249,91 @@ impl TexturesPanel {
             self.rename = None;
         }
     }
+}
+
+/// What the texture does in the picture: Kalles Fraktaler's overlay.
+fn overlay_controls(ui: &mut egui::Ui, config_manager: &mut ConfigManager, has_texture: bool) {
+    let ov = config_manager.config().escape.texture_overlay;
+    let mut enabled = ov.enabled;
+    if ui
+        .checkbox(&mut enabled, t!("textures_panel.overlay"))
+        .on_hover_text(t!("textures_panel.overlay_tip"))
+        .changed()
+    {
+        let _ = config_manager.update_param(ConfigPath::EscapeTextureOverlay, ConfigValue::Bool(enabled));
+    }
+    if !ov.enabled {
+        return;
+    }
+    if !has_texture {
+        ui.weak(t!("textures_panel.overlay_needs_texture"));
+    }
+    egui::Grid::new("texture_overlay").num_columns(2).show(ui, |ui| {
+        ui.label(t!("textures_panel.merge"));
+        let mut v = ov.merge;
+        if ui
+            .add(egui::Slider::new(&mut v, 0.0..=1.0))
+            .on_hover_text(t!("textures_panel.merge_tip"))
+            .changed()
+        {
+            let _ = config_manager.update_param(ConfigPath::EscapeTextureOverlayMerge, v.into());
+        }
+        ui.end_row();
+
+        ui.label(t!("textures_panel.power"));
+        let mut v = ov.power;
+        let (lo, hi) = crate::config::escape::OVERLAY_POWER_RANGE;
+        if ui
+            .add(egui::Slider::new(&mut v, lo..=hi).step_by(1.0).fixed_decimals(0))
+            .on_hover_text(t!("textures_panel.power_tip"))
+            .changed()
+        {
+            let _ = config_manager.update_param(ConfigPath::EscapeTextureOverlayPower, v.into());
+        }
+        ui.end_row();
+
+        ui.label(t!("textures_panel.ratio"));
+        let mut v = ov.ratio;
+        let (lo, hi) = crate::config::escape::OVERLAY_RATIO_RANGE;
+        if ui
+            .add(egui::Slider::new(&mut v, lo..=hi).suffix("%"))
+            .on_hover_text(t!("textures_panel.ratio_tip"))
+            .changed()
+        {
+            let _ = config_manager.update_param(ConfigPath::EscapeTextureOverlayRatio, v.into());
+        }
+        ui.end_row();
+
+        ui.label(t!("textures_panel.fit"));
+        ui.horizontal(|ui| {
+            for (fit, label, tip) in [
+                (TextureFit::Stretch, t!("textures_panel.fit_stretch"), t!("textures_panel.fit_stretch_tip")),
+                (TextureFit::Tile, t!("textures_panel.fit_tile"), t!("textures_panel.fit_tile_tip")),
+            ] {
+                if ui.selectable_label(ov.fit == fit, label).on_hover_text(tip).clicked() && ov.fit != fit {
+                    let _ = config_manager.update_param(
+                        ConfigPath::EscapeTextureOverlayFit,
+                        ConfigValue::String(fit.as_str().to_string()),
+                    );
+                }
+            }
+        });
+        ui.end_row();
+
+        if ov.fit == TextureFit::Tile {
+            ui.label(t!("textures_panel.tile_scale"));
+            let mut v = ov.tile_scale;
+            let (lo, hi) = crate::config::escape::OVERLAY_TILE_RANGE;
+            if ui
+                .add(egui::Slider::new(&mut v, lo..=hi).logarithmic(true))
+                .on_hover_text(t!("textures_panel.tile_scale_tip"))
+                .changed()
+            {
+                let _ = config_manager.update_param(ConfigPath::EscapeTextureOverlayTile, v.into());
+            }
+            ui.end_row();
+        }
+    });
 }
 
 /// Put a texture in the config (or take it out), as one undo step.

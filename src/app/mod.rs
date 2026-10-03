@@ -7,6 +7,7 @@ mod gpu_updates;
 mod animation_update;
 mod effect_fetch;
 mod variation_fetch;
+mod texture_sync;
 pub mod script_cloud;
 mod fly_camera;
 pub mod export;
@@ -423,6 +424,8 @@ pub struct App {
     /// the escape pass (escape params, palette, structural loads).
     /// Starts true so the first escape frame always renders.
     pub(super) escape_dirty: bool,
+    /// Keeps `escape_renderer` holding the texture the config names.
+    pub(super) escape_texture: texture_sync::TextureSync,
     /// When the user last EDITED something the escape pass renders.
     /// For the interaction window: within it a mode-D render is a
     /// quarter-resolution preview, after it a full one. See
@@ -824,6 +827,7 @@ impl App {
             flame_renderer: Some(flame_renderer),
             escape_renderer: None,
             escape_dirty: true,
+            escape_texture: Default::default(),
             escape_last_edit: None,
             #[cfg(feature = "engine-sim")]
             sim_renderer: None,
@@ -2860,6 +2864,16 @@ impl App {
                 if preview {
                     // Keep the loop turning until the window lapses,
                     // or the full render never gets asked for.
+                    self.window.request_redraw();
+                }
+                // The texture overlay's image: looked at when the frame
+                // re-renders anyway, or while the web generates one.
+                if (self.escape_dirty || self.escape_texture.busy())
+                    && self.escape_texture.update(escape, &self.gpu.device, &self.gpu.queue, &final_config.escape)
+                {
+                    self.escape_dirty = true;
+                }
+                if self.escape_texture.busy() {
                     self.window.request_redraw();
                 }
                 if self.escape_dirty {

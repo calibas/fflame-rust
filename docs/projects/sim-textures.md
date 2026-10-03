@@ -121,6 +121,51 @@ macOS divergence.
 
    It runs in the shade pass. Our height texture already holds the
    iteration value KF2 differences.
+
+   **As built (phase 2).** Settings: `TextureOverlay { enabled, merge,
+   power, ratio, fit, tile_scale }`. Merge 1, power 200 and ratio 100
+   are KF2's defaults, and Stretch is KF2's fit. Where it departs from
+   KF2:
+   - **The value it differences.** The iterate and recolour passes
+     store the smooth count in the height texture's blue channel (flags
+     bit 8, `esc_overlay_field`). Two cases fall back to the relief's
+     own source (green): field formulas and the IFS walk, which have no
+     count, and a lit stored-slope relief (analytic, offset, embossed),
+     which already has blue.
+   - **Display pixels.** Under supersampling it differences and pushes
+     whole output pixels, so antialiasing smooths the picture rather
+     than halving the warp (our convention since R9).
+   - **Mixing.** The mix is in display values, as KF2's is, through a
+     2.2 power, because the accumulator is linear. The interior takes
+     the texture with coverage `merge`, composited over the background
+     by the tone map. KF2 mixes the texture into its interior colour.
+   - **Tile** is ours: the texture repeated at `tile_scale` display
+     pixels per texel, so a periodic simulation tiles seamlessly.
+   - **Edges** follow KF2. A neighbour off the image is mirrored, as
+     `getN3x3` reflects. A Stretch lookup past the edge holds the edge,
+     as the CPU path clamps.
+
+   Off, it costs nothing: bit 8 clear writes the height texture exactly
+   as before, and the resolve binds a 1×1 stand-in. The config carries
+   the recipe. `render_with` obtains the image (cache, or generation)
+   before an escape render, so the CLI, thumbnails and video inherit
+   it. The app re-checks only on frames that re-render; desktop does
+   the check blocking, the web spawns it.
+
+   **Measured** (`the_texture_overlay_warps_as_kalles_fraktaler_does`):
+   - The test feeds a smooth synthetic texture through the whole render
+     and tone map, and compares against an f32 port of `KF_TextureWarp`
+     and a bilinear repeating sampler, with the count read back from the
+     GPU. In all three cases every one of the 12,288 pixels is within
+     one level: Tile at power 200 / ratio 100, Tile at 37 / 60 with
+     tile scale 2.5, and Stretch at 200 / 100. Every exterior lookup is
+     pushed more than two pixels.
+   - Merge 0 is byte-identical to the overlay off.
+   - 2× antialiasing differs from 1× by 1.99 levels on average, against
+     57.4 for a texture at the wrong scale.
+
+   Two visual tests: KF2's defaults, and a tiled half-merge under a lit
+   relief.
 2. **Relief bump.** A new `ShadingTexture` kind next to Grain and Paper:
    the texture's luminance as micro-relief, its gradient added to the
    tilt exactly as grain and paper are. Screen space, with a scale in
@@ -151,7 +196,8 @@ macOS divergence.
    - generation is deterministic (two runs, identical bytes);
    - the cache hits, and misses after a recipe edit;
    - a Periodic texture tiles (opposite edges continue).
-2. **Overlay (R10)**, against a CPU port of `KF_TextureWarp`.
+2. **Overlay (R10)**, against a CPU port of `KF_TextureWarp`. Done; see
+   the uses above.
 3. **Relief bump.**
 4. **Image orbit traps**, after reading the sources.
 

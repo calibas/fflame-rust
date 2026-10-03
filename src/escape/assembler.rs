@@ -349,6 +349,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         );
     }
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(rgb, coverage));
+    slope = esc_overlay_field(escaped, z, n, slope);
     textureStore(height_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(height, relief, slope));
 }
 "#;
@@ -614,6 +615,32 @@ fn colour_wgsl(coloring: &ColoringDef) -> &'static str {
          }"
     }
 }
+
+/// The texture overlay's warp field (`TextureOverlay`, sim-textures
+/// phase 2): Kalles Fraktaler warps by the smooth iteration count,
+/// whatever the colouring, so the iterate passes store it -- in the
+/// height texture's blue channel. Flags bit 8 is set when blue is free
+/// for it: the overlay is on, and no lit stored-slope relief (field
+/// codes 3 and up) has blue, in which case the resolve pass falls back
+/// to the relief's own source. Clear, the height texture is written
+/// exactly as before.
+const OVERLAY_FIELD_WGSL: &str = r#"
+fn esc_overlay_field(escaped: bool, z: vec2<f32>, n: u32, slope: vec2<f32>) -> vec2<f32> {
+    if ((params.flags & 256u) == 0u) {
+        return slope;
+    }
+    // Inside, every neighbour is at the limit too: no slope, no warp.
+    if (!escaped) {
+        return vec2<f32>(f32(params.max_iter), 0.0);
+    }
+    // The smooth count, as the smooth colouring has it; KF2's n + 1 - NF
+    // differs from it by a constant, which a difference cancels.
+    let r2 = max(dot(z, z), 1.0000001);
+    let ll = log2(0.5 * log2(r2));
+    let frac = select(ll / log2(params.degree), ll, params.degree == 2.0);
+    return vec2<f32>(f32(n) + 1.0 - frac, 0.0);
+}
+"#;
 
 /// Offset-orbit relief (`ShadingField::Offset`): two more runs of the
 /// orbit beside the pixel's own. Spliced only into a pipeline built for
@@ -1558,6 +1585,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // settled image is byte-identical.
     if (escaped || perturb.iter_end >= params.max_iter) {
         textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, coverage));
+        slope = esc_overlay_field(escaped, z, n, slope);
         textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, relief, slope));
     }
 }
@@ -2475,6 +2503,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // settled image is byte-identical.
     if (escaped || perturb.iter_end >= params.max_iter) {
         textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, coverage));
+        slope = esc_overlay_field(escaped, z, n, slope);
         textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, relief, slope));
     }
 }
@@ -4769,6 +4798,7 @@ pub fn assemble_perturbed_layered(
                 out.push(coloring.wgsl.to_string());
                 out.push(layer_wgsl(layer, false));
                 out.push(colour_wgsl(coloring).to_string());
+                out.push(OVERLAY_FIELD_WGSL.trim().to_string());
                 out.push(ANALYTIC_SLOPE_WGSL.trim().to_string());
             }
             "//__COLORING_ACCUM__" => {
@@ -5030,6 +5060,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         coverage = 1.0;
     }
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, coverage));
+    slope = esc_overlay_field(escaped, r.z, r.n, slope);
     textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, relief, slope));
 }
 "#;
@@ -5126,6 +5157,7 @@ pub fn assemble_recolor_layered(
                 out.push(coloring.wgsl.to_string());
                 out.push(layer_wgsl(layer, true));
                 out.push(colour_wgsl(coloring).to_string());
+                out.push(OVERLAY_FIELD_WGSL.trim().to_string());
                 out.push(ANALYTIC_SLOPE_WGSL.trim().to_string());
             }
             _ => out.push(line.to_string()),
@@ -7305,6 +7337,7 @@ pub fn assemble_layered(
                 out.push(coloring.wgsl.to_string());
                 out.push(layer_wgsl(layer, false));
                 out.push(colour_wgsl(coloring).to_string());
+                out.push(OVERLAY_FIELD_WGSL.trim().to_string());
                 out.push(ANALYTIC_SLOPE_WGSL.trim().to_string());
             }
             "//__COLORING_ACCUM__" => {

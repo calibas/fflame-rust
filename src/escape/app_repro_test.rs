@@ -9297,6 +9297,186 @@ fn main() {
         escape.destroy();
     }
 
+    /// The texture overlay is Kalles Fraktaler's: each pixel shows the
+    /// texture at itself plus `KF_TextureWarp`'s offset, driven by the
+    /// smooth count's difference to the pixel on its left and the row
+    /// below (y up, mirrored at the frame's edge), and at merge 1 the
+    /// texture alone. The texture here is synthetic and smooth, handed
+    /// to the renderer under the config's key so nothing is generated or
+    /// cached; the count is read back from the height texture, so what
+    /// is compared is the warp and the lookup, through the whole render
+    /// and tone map. Merge 0 must change nothing.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_texture_overlay_warps_as_kalles_fraktaler_does() {
+        use crate::config::escape::{EscapeTexture, TextureFit};
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        let (tw, th) = (48u32, 40u32);
+        let tex = image::RgbaImage::from_fn(tw, th, |x, y| {
+            let tau = std::f32::consts::TAU;
+            let (u, v) = (x as f32 / tw as f32, y as f32 / th as f32);
+            let c = |a: f32| (128.0 + 100.0 * (tau * a).sin()).round() as u8;
+            image::Rgba([c(u), c(v), c(u + v), 255])
+        });
+        let recipe = crate::textures::as_recipe(&crate::config::FractalConfig::default(), (64, 64));
+        let key = crate::textures::cache::key(&recipe);
+
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        config.escape.formula = "mandelbrot".to_string();
+        config.escape.coloring = "smooth".to_string();
+        config.escape.center_re = "-0.75".to_string();
+        config.escape.center_im = "0.1".to_string();
+        config.escape.zoom_log2 = 1.5;
+        config.escape.max_iter = 64;
+        config.escape.bailout = 1.0e4;
+        config.escape.supersample = 1;
+        config.escape.texture = Some(EscapeTexture { name: "synthetic".to_string(), config: Box::new(recipe) });
+
+        let mut engines = crate::renderer::RenderEngines::default();
+        let mut esc = crate::escape::EscapeRenderer::new(&device, w, h);
+        assert!(esc.set_texture(&device, &queue, &key, &tex));
+        engines.escape = Some(esc);
+        let render = |c: &crate::config::FractalConfig, engines: &mut crate::renderer::RenderEngines| -> Vec<u8> {
+            let job = crate::renderer::RenderJob::new(c, w, h).with_engines(engines);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+
+        let plain = render(&config, &mut engines);
+        let mut off = config.clone();
+        off.escape.texture_overlay.enabled = true;
+        off.escape.texture_overlay.merge = 0.0;
+        let unmerged = render(&off, &mut engines);
+        let worst = plain.iter().zip(&unmerged).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap();
+        println!("merge 0 against no overlay: worst {worst} levels");
+        assert!(worst <= 1, "merge 0 moved a channel by {worst} levels");
+
+        // KF_TextureWarp, one axis, in f32 as the shader runs it.
+        let axis = |d: f32, power: f32, ratio: f32| -> f32 {
+            let base = 1.0 + d;
+            let mag = (power * base.abs().max(1e-30).log2()).clamp(-126.0, 126.0).exp2();
+            let odd = (power as u32) & 1 == 1;
+            let mut x = if base < 0.0 && odd { -mag } else { mag };
+            let mut s = 1.0;
+            if x <= 1.0 {
+                x = 1.0 / x;
+                s = -1.0;
+            }
+            let q = std::f32::consts::FRAC_PI_4;
+            s * power * ((x.atan() - q) / q * ratio / 100.0)
+        };
+        // The texture as a filtering, repeating sampler reads it.
+        let sample = |u: f32, v: f32| -> [f32; 3] {
+            let fx = u * tw as f32 - 0.5;
+            let fy = v * th as f32 - 0.5;
+            let (x0, y0) = (fx.floor(), fy.floor());
+            let (ax, ay) = (fx - x0, fy - y0);
+            let at = |x: f32, y: f32| {
+                let xi = (x as i64).rem_euclid(tw as i64) as u32;
+                let yi = (y as i64).rem_euclid(th as i64) as u32;
+                tex.get_pixel(xi, yi).0
+            };
+            let mut out = [0.0f32; 3];
+            for (k, o) in out.iter_mut().enumerate() {
+                let p = |x, y| at(x, y)[k] as f32 / 255.0;
+                let top = p(x0, y0) * (1.0 - ax) + p(x0 + 1.0, y0) * ax;
+                let bot = p(x0, y0 + 1.0) * (1.0 - ax) + p(x0 + 1.0, y0 + 1.0) * ax;
+                *o = top * (1.0 - ay) + bot * ay;
+            }
+            out
+        };
+
+        for (fit, power, ratio, tile) in [
+            (TextureFit::Tile, 200.0f32, 100.0f32, 1.0f32),
+            (TextureFit::Tile, 37.0, 60.0, 2.5),
+            (TextureFit::Stretch, 200.0, 100.0, 1.0),
+        ] {
+            let mut c = config.clone();
+            let ov = &mut c.escape.texture_overlay;
+            ov.enabled = true;
+            ov.merge = 1.0;
+            ov.power = power;
+            ov.ratio = ratio;
+            ov.fit = fit;
+            ov.tile_scale = tile;
+            let gpu = render(&c, &mut engines);
+            let n = pollster::block_on(engines.escape.as_ref().unwrap().read_height_channel(&device, &queue, false, 2))
+                .expect("height");
+            let n_at = |x: i32, y: i32| n[(y.clamp(0, h as i32 - 1) as u32 * w + x.clamp(0, w as i32 - 1) as u32) as usize];
+            let interior = n.iter().filter(|&&v| v == config.escape.max_iter as f32).count();
+            assert!(interior > 0 && interior < (w * h) as usize, "the frame should hold both sides of the set");
+
+            let (mut close, mut worst, mut warped) = (0usize, 0i32, 0usize);
+            for py in 0..h as i32 {
+                for px in 0..w as i32 {
+                    let n0 = n_at(px, py);
+                    let dx = if px - 1 < 0 { -(n_at(px + 1, py) - n0) } else { n_at(px - 1, py) - n0 };
+                    let dy = if py + 1 >= h as i32 { -(n_at(px, py - 1) - n0) } else { n_at(px, py + 1) - n0 };
+                    let offs = power / 64.0;
+                    let wx = offs + axis(dx, power, ratio);
+                    let wy = offs - axis(dy, power, ratio);
+                    if n0 < config.escape.max_iter as f32 {
+                        warped += usize::from((wx - offs).abs().max((wy - offs).abs()) > 2.0);
+                    }
+                    let pos = (px as f32 + 0.5 + wx, py as f32 + 0.5 - wy);
+                    let (u, v) = match fit {
+                        TextureFit::Tile => (pos.0 / (tw as f32 * tile), pos.1 / (th as f32 * tile)),
+                        TextureFit::Stretch => (
+                            (pos.0 / w as f32).clamp(0.5 / tw as f32, 1.0 - 0.5 / tw as f32),
+                            (pos.1 / h as f32).clamp(0.5 / th as f32, 1.0 - 0.5 / th as f32),
+                        ),
+                    };
+                    let want = sample(u, v);
+                    let i = ((py as u32 * w + px as u32) * 4) as usize;
+                    let d = (0..3)
+                        .map(|k| (gpu[i + k] as i32 - (want[k] * 255.0).round() as i32).abs())
+                        .max()
+                        .unwrap();
+                    worst = worst.max(d);
+                    close += usize::from(d <= 2);
+                }
+            }
+            let share = close as f64 / (w * h) as f64;
+            let moved = warped as f64 / ((w * h) as usize - interior) as f64;
+            println!(
+                "{fit:?} power {power} ratio {ratio} tile {tile}: {share:.4} within two levels, worst {worst}; {moved:.3} of the outside's lookups pushed more than two pixels"
+            );
+            assert!(moved > 0.7, "the warp hardly moves anything ({moved:.3}): the comparison proves nothing");
+            assert!(share > 0.99, "{fit:?}: only {share:.4} of pixels show KF2's warped texture");
+        }
+
+        // Supersampled, the warp differences and pushes whole OUTPUT
+        // pixels, so the picture is the 1x one smoothed, not one pushed
+        // half as far.
+        let mut c = config.clone();
+        c.escape.texture_overlay.enabled = true;
+        c.escape.texture_overlay.fit = TextureFit::Tile;
+        let one = render(&c, &mut engines);
+        c.escape.supersample = 2;
+        let two = render(&c, &mut engines);
+        let mut half = c.clone();
+        half.escape.supersample = 1;
+        half.escape.texture_overlay.tile_scale = 0.5;
+        let mean = |a: &[u8], b: &[u8]| {
+            a.iter().zip(b).map(|(x, y)| (*x as f64 - *y as f64).abs()).sum::<f64>() / a.len() as f64
+        };
+        let halved = render(&half, &mut engines);
+        let (same, wrong) = (mean(&one, &two), mean(&one, &halved));
+        println!("2x against 1x: mean {same:.2} levels; a texture at half the size against 1x: {wrong:.2}");
+        // Measured 1.99 and 57.4.
+        assert!(wrong > 20.0, "a mis-scaled texture should not pass for the 1x picture ({wrong:.2})");
+        assert!(same < 6.0, "2x antialiasing changed the overlay by {same:.2} levels on average");
+    }
+
     /// A stepped palette draws every stop as a flat band: an escape
     /// render through it shows the stops' colours and next to nothing
     /// in between, where the blended palette shows a continuum.

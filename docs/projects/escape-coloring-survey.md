@@ -1061,3 +1061,9 @@ Read from the code, not reproduced by render, except where noted.
      the slope shading, which then lights the textured colour.
    - It covers the interior too: with a texture on, the interior colour
      is not applied.
+
+   **Done since, with a generated image rather than an imported one.**
+   The texture is a simulation run whose recipe is stored with the
+   picture (`docs/projects/sim-textures.md`), so nothing is loaded from
+   disk. The overlay is that plan's phase 2, measured there against a
+   CPU port of `KF_TextureWarp`.
