@@ -8700,6 +8700,85 @@ fn main() {
         assert!((mean / 255.0 - 0.5).abs() < 0.03, "plateaus are not at their middles: mean {:.3}", mean / 255.0);
     }
 
+    /// The contrast fit follows every edit that changes what it
+    /// measured or how it is applied, not only the ones that re-iterate.
+    /// A recolour (another colouring with the same loop, a colouring
+    /// parameter, the contrast mode or clip) has to re-measure, or it
+    /// draws the new picture through the old fit.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_contrast_fit_follows_a_recolour() {
+        use crate::config::escape::ContrastMode;
+        let _diag = diag_lock();
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let config = crate::config::FractalConfig::default();
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        renderer.update_background_color(&queue, [0.0, 0.0, 0.0]);
+        let mut settle = |escape: &mut crate::escape::EscapeRenderer, esc: &crate::config::escape::EscapeConfig| {
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("fit key") });
+                let settled = escape.render(
+                    &device,
+                    &queue,
+                    &mut enc,
+                    esc,
+                    renderer.escape_palette_view(esc.palette_map.stepped),
+                    renderer.palette_generation(),
+                );
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "render did not settle");
+            }
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("fit key tonemap") });
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(&device, &queue, false, [0.0, 0.0, 0.0]))
+                .expect("readback");
+            rgba
+        };
+        let mut base = crate::config::escape::EscapeConfig::default();
+        base.center_re = "-0.6".to_string();
+        base.center_im = "0.1".to_string();
+        base.zoom_log2 = 0.4;
+        base.max_iter = 300;
+        base.coloring = "smooth".to_string();
+        base.contrast.mode = ContrastMode::AutoRange;
+
+        let mut steps: Vec<(&str, crate::config::escape::EscapeConfig)> = Vec::new();
+        let mut e = base.clone();
+        e.contrast.mode = ContrastMode::Equalize;
+        steps.push(("auto range to equalize", e.clone()));
+        e.coloring = "escape_count".to_string();
+        steps.push(("another colouring, same loop", e.clone()));
+        e.coloring_params.insert("scale".to_string(), 0.3);
+        steps.push(("a colouring parameter", e.clone()));
+        e.contrast.mode = ContrastMode::AutoRange;
+        e.contrast.clip = 0.1;
+        steps.push(("auto range with another clip", e.clone()));
+
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        let _ = settle(&mut escape, &base);
+        for (what, esc) in steps {
+            let cached = settle(&mut escape, &esc);
+            let mut fresh = crate::escape::EscapeRenderer::new(&device, w, h);
+            let want = settle(&mut fresh, &esc);
+            fresh.destroy();
+            let differ = cached.iter().zip(&want).filter(|(a, b)| a.abs_diff(**b) > 1).count();
+            println!("{what}: path {}, {differ} bytes differ from a fresh render", escape.last_path);
+            assert_eq!(differ, 0, "{what}: drawn through a stale fit");
+        }
+        escape.destroy();
+    }
+
     /// A stepped palette draws every stop as a flat band: an escape
     /// render through it shows the stops' colours and next to nothing
     /// in between, where the blended palette shows a continuum.
