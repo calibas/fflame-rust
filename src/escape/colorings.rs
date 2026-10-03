@@ -1898,3 +1898,123 @@ const fn wave_channel(i: usize, default: f32) -> EscapeParamDef {
         choices: &["Hue", "Saturation", "Brightness"],
     }
 }
+
+/// Itinerary (survey C8), from techmatt's engine (`iterate.rs`
+/// `Address`, `mode.rs` `itinerary`, read from source): the orbit's
+/// angular address. Each iterate lands in one of `sectors` equal
+/// sectors, counted counter-clockwise from the negative real axis
+/// (`floor((atan2(y, x) + pi) / 2pi * k)`), and the sectors are the
+/// digits of one base-k fraction. Two pixels whose orbits take the same
+/// route through the sectors get nearly the same number however long
+/// they run, so the field follows the fractal's own self-similar
+/// lamination rather than its escape time.
+///
+/// Head (the default) is the first `depth` symbols; Tail rolls, keeping
+/// the last `depth` before the orbit stopped
+/// (`fract(v * k) + s * k^-depth`). Both open on z1. techmatt opens a
+/// head on z0 where z0 is a constant (the parameter plane), which
+/// prepends one constant digit: an affine change the frame stretch it
+/// always applies removes, so stretched the two are the same.
+///
+/// **In f32 the address holds 12 base-4 symbols exactly** (24 bits;
+/// techmatt keeps 26 in f64). techmatt's itinerary mode is this as a
+/// texture layer, Add at 0.5, over smooth with Equalize: Auto contrast
+/// stretches the layer to its own range in the frame, which is what
+/// keeps the texture as you zoom -- until the frame's addresses share
+/// so many leading symbols that 12 leave too few to tell apart.
+pub static ITINERARY: ColoringDef = ColoringDef {
+    name: "itinerary",
+    display_name: "Itinerary",
+    features: &[ColoringFeature::NeedsOrbitAccum, ColoringFeature::ColorsInterior],
+    parameters: &[
+        EscapeParamDef {
+            name: "scale",
+            display_name: "Scale",
+            default: 1.0,
+            min: 0.001,
+            max: 100.0,
+            tooltip: "Palette turns across the whole address range, 0 to 1.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "sectors",
+            display_name: "Sectors",
+            default: 4.0,
+            min: 2.0,
+            max: 16.0,
+            tooltip: "How many equal angular sectors the plane is cut into: \
+                      each step's sector is the next digit of the address, in \
+                      base sectors.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "depth",
+            display_name: "Symbols",
+            default: 12.0,
+            min: 1.0,
+            max: 24.0,
+            tooltip: "How many symbols the address holds. f32 holds 24 bits: \
+                      12 symbols at 4 sectors, 8 at 8. Past that the deepest \
+                      symbols round.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "window",
+            display_name: "Window",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Head: the first symbols the orbit spells. Tail: the last \
+                      ones before it stopped, which puts the structure where \
+                      the orbits are long.",
+            choices: &["Head", "Tail"],
+        },
+    ],
+    wgsl: r#"
+fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
+    return state.x * cparam(0u);
+}
+"#,
+    accum_init: "vec4<f32>(0.0, 0.0, 0.0, 0.0)",
+    wgsl_accum: r#"
+// state: x the address, y the symbols spelled so far, z the weight the
+// next head symbol carries, w the tail's bottom place k^-depth. The two
+// place values are built by division on the first step rather than by
+// pow, which GPUs approximate: at a power-of-two k they are then exact,
+// as the address is.
+fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32>) -> vec4<f32> {
+    let k = max(floor(cparam(1u)), 2.0);
+    let depth = max(floor(cparam(2u)), 1.0);
+    var st = state;
+    if (st.y == 0.0) {
+        st.z = 1.0 / k;
+        var bottom = 1.0;
+        for (var i = 0.0; i < depth; i = i + 1.0) {
+            bottom = bottom / k;
+        }
+        st.w = bottom;
+    }
+    // The sector, counter-clockwise from the negative real axis. The
+    // origin reads as angle 0 (techmatt's +0 seed) rather than reaching
+    // atan2 with a zero pair (CLAUDE.md, Metal).
+    var turns = 0.5;
+    if (max(abs(z.x), abs(z.y)) > 0.0) {
+        turns = (atan2(z.y, z.x) + 3.14159265) / 6.2831855;
+    }
+    let sector = clamp(floor(turns * k), 0.0, k - 1.0);
+    var out = st;
+    if (cparam(3u) > 0.5) {
+        // Tail: shift the window up a place, drop the oldest symbol,
+        // write this one at the bottom.
+        out.x = fract(st.x * k) + sector * st.w;
+    } else if (st.y < depth) {
+        out.x = st.x + sector * st.z;
+        out.z = st.z / k;
+    }
+    out.y = st.y + 1.0;
+    return out;
+}
+"#,
+    recommended_bailout: None,
+    pick_params: &[],
+};

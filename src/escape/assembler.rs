@@ -553,7 +553,24 @@ fn layer_source(src: &str) -> String {
 /// parameter reader, its renamed source and `esc_layer`, which blends
 /// it into the base's palette position. Without a layer `esc_layer` is
 /// the identity, so a render without one keeps its arithmetic.
-fn layer_wgsl(layer: Option<&ColoringDef>) -> String {
+/// The texture layer's position from its raw value: wrapped like any
+/// colouring's, or -- in the recolour pass, under Auto contrast --
+/// stretched to the frame's own range of it (`contrast.layer_*`, from
+/// the layer probe), which is how techmatt places the texture of a
+/// modulate (survey C8). The iterate passes never apply contrast.
+const LAYER_VALUE_WGSL: &str = "fn esc_layer_value(v: f32) -> f32 {\n\
+    \x20   return esc_wrap(v, LAYER_IS_BOUNDED);\n\
+    }";
+const LAYER_VALUE_STRETCHED_WGSL: &str = "fn esc_layer_value(v: f32) -> f32 {\n\
+    \x20   let w = esc_wrap(v, LAYER_IS_BOUNDED);\n\
+    \x20   if (contrast.enabled == 0u || contrast.layer_enabled == 0u) {\n\
+    \x20       return w;\n\
+    \x20   }\n\
+    \x20   let s = clamp((v - contrast.layer_lo) / max(contrast.layer_hi - contrast.layer_lo, 1e-30), 0.0, 1.0);\n\
+    \x20   return mix(w, s, clamp(contrast.strength, 0.0, 1.0));\n\
+    }";
+
+fn layer_wgsl(layer: Option<&ColoringDef>, stretched: bool) -> String {
     let Some(l) = layer else {
         return "// no texture layer\n\
                 fn esc_layer(t: f32, sum: OrbitSummary, state: vec4<f32>) -> f32 {\n\
@@ -572,9 +589,10 @@ fn layer_wgsl(layer: Option<&ColoringDef>) -> String {
         "fn lparam(i: u32) -> f32 {{\n    return params.lparams[i / 4u][i % 4u];\n}}\n\
          const LAYER_COLORS_INTERIOR: bool = {colors_interior};\n\
          const LAYER_IS_BOUNDED: bool = {bounded};\n\
-         // texture layer: {}\n{}\n{}",
+         // texture layer: {}\n{}\n{}\n{}",
         l.name,
         layer_source(l.wgsl).trim(),
+        if stretched { LAYER_VALUE_STRETCHED_WGSL } else { LAYER_VALUE_WGSL },
         ESC_LAYER_WGSL.trim()
     )
 }
@@ -930,7 +948,7 @@ fn esc_layer(t: f32, sum: OrbitSummary, state: vec4<f32>) -> f32 {
     if (!(sum.escaped || LAYER_COLORS_INTERIOR)) {
         return t;
     }
-    let b = esc_wrap(layer_coloring_map(sum, state), LAYER_IS_BOUNDED);
+    let b = esc_layer_value(layer_coloring_map(sum, state));
     let w = params.pmap.y;
     var blended = b;
     switch ((params.pmap_flags >> 16u) & 0xffu) {
@@ -4749,7 +4767,7 @@ pub fn assemble_perturbed_layered(
                 }
                 out.push(format!("// coloring: {}", coloring.name));
                 out.push(coloring.wgsl.to_string());
-                out.push(layer_wgsl(layer));
+                out.push(layer_wgsl(layer, false));
                 out.push(colour_wgsl(coloring).to_string());
                 out.push(ANALYTIC_SLOPE_WGSL.trim().to_string());
             }
@@ -4872,9 +4890,11 @@ struct ContrastParams {
     enabled: u32,
     // ContrastMode::to_gpu; 3 is Equalize.
     mode: u32,
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
+    // The texture layer's own range in the frame (its probe), which
+    // esc_layer_value stretches it to.
+    layer_enabled: u32,
+    layer_lo: f32,
+    layer_hi: f32,
     // Equalize: the probe's values at 256 evenly spaced ranks, from the
     // smallest to the largest.
     cdf: array<vec4<f32>, 64>,
@@ -5029,6 +5049,55 @@ pub fn assemble_recolor(coloring: &ColoringDef, has_derivative: bool) -> String 
 /// [`assemble_recolor`] with a texture layer. The records were written
 /// by an iterate pass assembled with the same pair, so the accumulator
 /// they carry is the owner's, at its width.
+/// The texture layer's value at the contrast probe's cells, from the
+/// recolour cache's records: what Auto contrast stretches the layer to.
+/// An entry point of its own appended to the recolour module, so the
+/// value it measures is the one that pass blends, by construction.
+const LAYER_PROBE_WGSL: &str = r#"
+struct LayerProbe {
+    dims: vec2<u32>,
+    grid: vec2<u32>,
+}
+@group(0) @binding(10) var<storage, read_write> layer_probe_out: array<vec2<f32>>;
+@group(0) @binding(11) var<uniform> layer_probe: LayerProbe;
+
+@compute @workgroup_size(8, 8, 1)
+fn layer_probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= layer_probe.grid.x || gid.y >= layer_probe.grid.y) {
+        return;
+    }
+    // The cell the base probe samples, so the two describe one frame.
+    let fx = (f32(gid.x) + 0.5) / f32(layer_probe.grid.x);
+    let fy = (f32(gid.y) + 0.5) / f32(layer_probe.grid.y);
+    let x = u32(clamp(i32(fx * f32(layer_probe.dims.x)), 0, i32(layer_probe.dims.x) - 1));
+    let y = u32(clamp(i32(fy * f32(layer_probe.dims.y)), 0, i32(layer_probe.dims.y) - 1));
+    let r = results[y * params.width + x];
+    let escaped = (r.tags & 1u) != 0u;
+    let converged = (r.tags & 2u) != 0u;
+    let period = r.tags >> 2u;
+    let summary = OrbitSummary(r.z, r.n, escaped, converged, period, r.dz);
+    let state = vec4<f32>(r.accum, /*R_ACCUM2*/);
+    var out = vec2<f32>(0.0, 0.0);
+    // Only where the picture shows the layer: the base drew the pixel
+    // and the layer has something to say there.
+    if ((escaped || COLORING_COLORS_INTERIOR) && (escaped || LAYER_COLORS_INTERIOR)) {
+        out = vec2<f32>(layer_coloring_map(summary, state), 1.0);
+    }
+    layer_probe_out[gid.y * layer_probe.grid.x + gid.x] = out;
+}
+"#;
+
+/// The recolour module with [`LAYER_PROBE_WGSL`]'s entry point
+/// (`layer_probe_main`) appended. `layer` must be a layer that fits.
+pub fn assemble_layer_probe(coloring: &ColoringDef, layer: &ColoringDef, has_derivative: bool) -> String {
+    let wide = accum_owner(coloring, Some(layer)).is_some_and(|(o, _)| crate::escape::accum_is_wide(o));
+    format!(
+        "{}\n{}",
+        assemble_recolor_layered(coloring, Some(layer), has_derivative),
+        with_accum_width(LAYER_PROBE_WGSL, wide)
+    )
+}
+
 pub fn assemble_recolor_layered(
     coloring: &ColoringDef,
     layer: Option<&ColoringDef>,
@@ -5055,7 +5124,7 @@ pub fn assemble_recolor_layered(
                 }
                 out.push(format!("// coloring: {}", coloring.name));
                 out.push(coloring.wgsl.to_string());
-                out.push(layer_wgsl(layer));
+                out.push(layer_wgsl(layer, true));
                 out.push(colour_wgsl(coloring).to_string());
                 out.push(ANALYTIC_SLOPE_WGSL.trim().to_string());
             }
@@ -7234,7 +7303,7 @@ pub fn assemble_layered(
                 }
                 out.push(format!("// coloring: {}", coloring.name));
                 out.push(coloring.wgsl.to_string());
-                out.push(layer_wgsl(layer));
+                out.push(layer_wgsl(layer, false));
                 out.push(colour_wgsl(coloring).to_string());
                 out.push(ANALYTIC_SLOPE_WGSL.trim().to_string());
             }
@@ -7578,6 +7647,7 @@ mod tests {
                     &format!("{what} (perturbed)"),
                 );
                 validate(&assemble_recolor_layered(base, Some(layer), true), &format!("{what} (recolour)"));
+                validate(&assemble_layer_probe(base, layer, true), &format!("{what} (layer probe)"));
             }
         }
         assert!(pairs > 100 && refused > 0, "{pairs} pairs, {refused} refused");
