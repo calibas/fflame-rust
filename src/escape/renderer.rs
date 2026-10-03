@@ -1409,6 +1409,18 @@ impl EscapeRenderer {
                     },
                     count: None,
                 },
+                // The config's texture (TextureInLoop), as in the direct
+                // layout.
+                BindGroupLayoutEntry {
+                    binding: 14,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -1474,6 +1486,19 @@ impl EscapeRenderer {
                         ty: BufferBindingType::Storage { read_only: false },
                         has_dynamic_offset: false,
                         min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // The config's texture, for a colouring that reads it
+                // inside the loop (TextureInLoop, which alone declares
+                // it): a sampled texture, so no storage-buffer slot.
+                BindGroupLayoutEntry {
+                    binding: 14,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
                     },
                     count: None,
                 },
@@ -3578,11 +3603,17 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// iteration's identity, and to a chunked render's. Empty otherwise,
     /// which keeps every other colouring's keys as they were.
     fn palette_in_loop_key(&self, escape: &EscapeConfig) -> String {
-        if Self::colourings_have(escape, super::ColoringFeature::PaletteInLoop) {
+        let mut key = if Self::colourings_have(escape, super::ColoringFeature::PaletteInLoop) {
             format!("|pal{}|{:?}", self.palette_generation, escape.palette_map)
         } else {
             String::new()
+        };
+        // Likewise the texture, for a colouring that reads it in the
+        // loop (TextureInLoop): which one the GPU holds, if any.
+        if Self::colourings_have(escape, super::ColoringFeature::TextureInLoop) {
+            key += &format!("|tex{}", self.texture_key().unwrap_or("none"));
         }
+        key
     }
 
     /// (Re)allocate the perturbed path's per-pixel resume state.
@@ -4958,6 +4989,10 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     binding: 12,
                     resource: self.results_binding(),
                 },
+                BindGroupEntry {
+                    binding: 14,
+                    resource: BindingResource::TextureView(self.loop_texture_view()),
+                },
             ],
         });
         let ts_qs = if measure {
@@ -6085,6 +6120,12 @@ fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             }
             None => false,
         }
+    }
+
+    /// What binding 14 holds: the texture, or the stand-in (transparent,
+    /// as WebGPU zero-fills a new texture) when there is none.
+    fn loop_texture_view(&self) -> &TextureView {
+        self.texture_image.as_ref().map_or(&self.texture_dummy.1, |(_, _, v)| v)
     }
 
     /// Whether the texture overlay draws this frame: switched on, with a
@@ -8210,6 +8251,10 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 BindGroupEntry {
                     binding: 5,
                     resource: self.results_binding(),
+                },
+                BindGroupEntry {
+                    binding: 14,
+                    resource: BindingResource::TextureView(self.loop_texture_view()),
                 },
             ],
         });

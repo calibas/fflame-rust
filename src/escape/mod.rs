@@ -164,6 +164,24 @@ pub enum ColoringFeature {
     /// part of the iteration's identity, and a palette edit re-iterates
     /// instead of recolouring the stored records.
     PaletteInLoop,
+    /// The colouring samples the config's texture (`EscapeConfig::
+    /// texture`) INSIDE the loop, through `esc_texture` (group 0,
+    /// binding 14, which only its accumulator declares): the texture is
+    /// part of the iteration's identity, as the palette is for
+    /// `PaletteInLoop`, and has to be on the GPU before it renders.
+    TextureInLoop,
+    /// The colouring's colour carries an alpha, which becomes the
+    /// pixel's coverage, so where it is transparent the background shows,
+    /// as a layer below does in Ultra Fractal. Its WGSL also defines
+    /// `fn coloring_alpha(sum: OrbitSummary, state: vec4<f32>) -> f32`.
+    /// Every other drawn pixel is opaque.
+    DirectAlpha,
+    /// The accumulator sees only the iterates that did not bail out:
+    /// it runs after the escape and convergence tests rather than before
+    /// them, as Ultra Fractal runs a colouring's loop section only while
+    /// the formula's bailout test holds (its execution sequence). The
+    /// others see the escaping iterate too.
+    SkipsEscapingIterate,
 }
 
 /// A parameter a formula or coloring exposes. Same shape as variation
@@ -615,6 +633,7 @@ pub static COLORINGS: &[&ColoringDef] = &[
     &colorings::ITINERARY,
     &colorings::VOC_TRAPS,
     &colorings::DIRECT_TRAPS,
+    &colorings::IMAGE_TRAP,
 ];
 
 /// Look up a formula by name. An unknown name renders the default

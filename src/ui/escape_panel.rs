@@ -2123,6 +2123,10 @@ fn show_coloring_section(
             ui.colored_label(egui::Color32::from_rgb(220, 170, 90), msg);
         }
     }
+    // The image trap without an image draws its base colour alone.
+    if coloring.has_feature(crate::escape::ColoringFeature::TextureInLoop) && esc.texture.is_none() {
+        ui.colored_label(egui::Color32::from_rgb(220, 170, 90), t!("escape_panel.texture_coloring_none"));
+    }
 
     // The scale/offset pair is the hardest control here to guess at;
     // offer a starting point rather than leaving the user to probe.

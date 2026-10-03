@@ -200,6 +200,69 @@ macOS divergence.
    then like direct traps the texture belongs to the iteration's
    identity (`PaletteInLoop`'s pattern).
 
+   **What the sources say (phase 4).**
+   - **Visions of Chaos has no bitmap traps.** Its revision history
+     lists only the shape traps, which C-VoC already ported from
+     Softology's listings. UF is the source.
+   - **UF's Image Trap** (common.ulb `ColorTrapImage`) returns
+     `image.getColor(z)` at each orbit point, after the trap position
+     (`TrapTransform`).
+   - **`Image.getColor`** maps the image over (−1,−1)..(1,1), with
+     (−1,−1) the bottom-left pixel, and is transparent outside. Lookups
+     are bicubic. Keep proportions (`ImageWrapper.NormalizePixel`)
+     shrinks one axis.
+   - **Direct Orbit Traps** (Standard.ulb `Standard_DirectOrbitTraps`)
+     merges each iterate's colour into a running colour with
+     `ColorMerge.FullMerge`: `compose(b, blend(t, mergeX(b, t),
+     alpha(b)), opacity)`. That is bottom-up; top-down swaps the
+     operands. The start is an opaque base colour. The defaults are
+     opacity 0.2, bottom-up, Normal, black.
+   - **UF's execution sequence** runs a colouring's loop section only
+     while the bailout test holds, so the escaping iterate is never
+     seen.
+   - **MT_SpriteTrap** (Mark Townsend) is the other image trap in UF's
+     library. It takes the first iterate whose image alpha passes a
+     threshold, with colour modes. It is not ported: with an opaque
+     texture its look is UF's top-down at opacity 1.
+
+   **As built.** The `image_trap` colouring:
+   - Features: `DirectColor`, `NeedsOrbitAccum` (rgba in the
+     accumulator) and `ColorsInterior`, plus three new ones:
+     - `TextureInLoop`: binding 14 in the direct and perturbed layouts,
+       declared only by this colouring's loop code. The texture's key
+       joins the iteration's identity.
+     - `DirectAlpha`: the running alpha becomes the pixel's coverage, so
+       top-down's transparency shows the background, as a layer below
+       shows in UF. The template's `coverage = 1.0` is substituted for
+       it, so no other shader's text changes.
+     - `SkipsEscapingIterate`: the accumulator runs after the escape
+       test.
+   - Merging happens in display values, as UF's colours are.
+   - Parameters: the trap's centre, scale, rotation, aspect and skew;
+     Keep proportions; opacity, order, merge mode (the eleven UF defines
+     exactly) and the base colour.
+   - Not ported, with reasons in the code:
+     - bicubic lookups (this uses the bilinear sampler);
+     - Overlay, the light modes and the HSL modes, whose formulas UF does
+       not give;
+     - the trap position's per-iteration steps.
+
+   **Measured** (`the_image_trap_draws_what_ultra_fractals_source_says`):
+   - The cases: an f32 CPU port of the above, through the whole render,
+     with a texture that has transparent parts. Six cases: UF's defaults;
+     a moved, turned, skewed, stretched trap; top-down at 0.5 (10,419
+     pixels partly transparent); Multiply on white; Difference; and the
+     Red channel top-down at 1.
+   - Each case has 12,285 or 12,286 of 12,288 pixels within two levels.
+     The two that are not, every time, are orbits f32 cannot follow
+     (against f64 they drift by 13 and by 14,000 before escaping).
+   - A palette edit recolours from the cache, colour and alpha
+     unchanged.
+   - Another texture re-iterates and matches a fresh renderer.
+   - Every formula draws with it on both paths.
+
+   One visual test.
+
 ## UI
 
 - **Texture panel** (escape mode, `visibility.rs`):
@@ -221,7 +284,8 @@ macOS divergence.
 2. **Overlay (R10)**, against a CPU port of `KF_TextureWarp`. Done; see
    the uses above.
 3. **Relief bump.** Done; see the uses above.
-4. **Image orbit traps**, after reading the sources.
+4. **Image orbit traps**, after reading the sources. Done; see the
+   uses above.
 
 Each phase gets the usual gates, its own tests and a visual test. The API
 sees new config fields, so the contract procedure in `docs/RELEASE.md`

@@ -353,10 +353,18 @@ impl TextureOverlay {
 
 impl EscapeConfig {
     /// Whether anything draws with the texture, so it has to be on the
-    /// GPU: the overlay, or the relief's bump.
+    /// GPU: the overlay, the relief's bump, or a colouring that reads it
+    /// (the image trap).
     pub fn uses_texture(&self) -> bool {
+        #[cfg(feature = "engine-escape")]
+        let coloring = crate::escape::COLORINGS
+            .iter()
+            .any(|c| c.name == self.coloring && c.has_feature(crate::escape::ColoringFeature::TextureInLoop));
+        #[cfg(not(feature = "engine-escape"))]
+        let coloring = false;
         self.texture.is_some()
             && (self.texture_overlay.enabled
+                || coloring
                 || (self.shading.enabled && self.shading.texture_kind == ShadingTexture::Simulation))
     }
 }

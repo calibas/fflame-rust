@@ -153,6 +153,10 @@ impl TexturesPanel {
         if can_pick {
             overlay_controls(ui, config_manager, current.is_some());
             bump_controls(ui, config_manager);
+            // The third use is a colouring, picked in the Escape panel.
+            let trapping = crate::escape::get_coloring(&config_manager.config().escape.coloring)
+                .has_feature(crate::escape::ColoringFeature::TextureInLoop);
+            ui.weak(if trapping { t!("textures_panel.trap_in_use") } else { t!("textures_panel.trap_hint") });
         }
         ui.separator();
 
