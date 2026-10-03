@@ -809,4 +809,19 @@ Read from the code, not reproduced by render, except where noted.
    cost three loops, an under-estimate in the direction that risks the
    driver's watchdog; both fields now count three.
 
-   **Still to do:** an image texture (R10).
+   **Held: an image texture (R10).** Image textures are planned for the
+   flames as well, so loading an image, storing it with a picture and
+   binding it to a pass should be designed once for both engines, not
+   escape-first (decision 1 notwithstanding). What KF2 does, read from
+   its source (`gl/kf.frag.glsl`: `KF_TextureWarp` and the texture
+   block after the palette lookup):
+   - The image is sampled in **screen space**, stretched to the frame
+     (`tc = (pixel + warp) / ImageSize`).
+   - The warp comes from the 3×3 neighbourhood of the iteration value:
+     each difference becomes `pow(1 + d, power)`, inverted and
+     sign-flipped below 1, then mapped through `(atan(x) − π/4)/(π/4)`
+     and scaled by `ratio/100`; the offset is `power/64 ± power·that`.
+   - It mixes into the colour, `mix(colour, image, merge)`, **before**
+     the slope shading, which then lights the textured colour.
+   - It covers the interior too: with a texture on, the interior colour
+     is not applied.
