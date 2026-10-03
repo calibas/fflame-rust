@@ -415,6 +415,20 @@ fn esc_palette(t: f32) -> vec3<f32> {
     let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(u, 0.5), 0.0).rgb;
     return pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
 }
+
+// The supersample factor (EscapeParams.flags bits 4-7). A "pixel" to a
+// colouring or the relief is an OUTPUT pixel, as Fraktaler 3 measures
+// its distance estimate: `params.height` counts render pixels, each
+// 1/supersample of one, and measuring in those would move the colours
+// when antialiasing is turned on.
+fn esc_supersample() -> f32 {
+    return f32(max((params.flags >> 4u) & 15u, 1u));
+}
+
+// Output pixels per unit of the plane.
+fn esc_px_per_unit() -> f32 {
+    return f32(params.height) / (esc_supersample() * params.span.y);
+}
 "#;
 
 /// How far through its last step the orbit had gone when it escaped,
@@ -594,7 +608,11 @@ fn esc_offset_slope(pixel: vec2<f32>, h: f32) -> vec2<f32> {
     let hx = esc_value_at(pixel + vec2<f32>(rot.x, rot.y) * delta, h);
     let hy = esc_value_at(pixel + vec2<f32>(-rot.y, rot.x) * delta, h);
     let step = max(params.pmap.z * 1024.0, 1e-6);
-    return -vec2<f32>(hx - h, hy - h) / step;
+    // The shade pass scales every stored slope by the supersample factor,
+    // which is right for the analytic slope (per render pixel) and wrong
+    // for this one (per 1/1024 of the view, whatever the grid): divided
+    // here, so that cancels.
+    return -vec2<f32>(hx - h, hy - h) / (step * esc_supersample());
 }
 "#;
 

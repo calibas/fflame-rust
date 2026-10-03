@@ -742,8 +742,9 @@ fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
     let deriv = max(length(sum.dz), 1e-30);
     var d = max(r * log(r) / deriv, 1e-30);
     if (cparam(2u) > 0.5) {
-        // In pixels: the view's height over its pixel count.
-        d = max(d * f32(params.height) / params.span.y, 1e-30);
+        // In OUTPUT pixels, as Fraktaler 3 measures it, so antialiasing
+        // does not move the colours.
+        d = max(d * esc_px_per_unit(), 1e-30);
     }
     let mapping = u32(clamp(cparam(1u), 0.0, 2.0));
     if (mapping == 1u) {

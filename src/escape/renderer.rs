@@ -7246,13 +7246,16 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             height: self.height,
             max_iter: escape.max_iter.max(1),
             flags: {
-                // bit 0 = Julia; bits 1-2 = biomorph classification axis.
+                // bit 0 = Julia; bits 1-2 = biomorph classification axis;
+                // (bit 3, the results store, is set per dispatch); bits
+                // 4-7 = the supersample factor, which turns render pixels
+                // into output pixels (`esc_supersample`).
                 let bio = match escape.biomorph {
                     crate::config::escape::BiomorphMode::Off => 0u32,
                     crate::config::escape::BiomorphMode::Re => 1,
                     crate::config::escape::BiomorphMode::Im => 2,
                 };
-                (if escape.julia { 1 } else { 0 }) | (bio << 1)
+                (if escape.julia { 1 } else { 0 }) | (bio << 1) | (self.supersample.clamp(1, 15) << 4)
             },
             bailout: escape.bailout.max(1e-6),
             tile_y0: 0,
