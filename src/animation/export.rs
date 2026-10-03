@@ -861,6 +861,17 @@ fn apply_config_value(
             let (lo, hi) = crate::config::escape::RELIEF_OFFSET_RANGE;
             config.escape.shading.offset = v.clamp(lo, hi);
         }
+        (ConfigPath::EscapeTextureOverlayMerge, ConfigValue::Float(v)) => {
+            config.escape.texture_overlay.merge = v.clamp(0.0, 1.0);
+        }
+        (ConfigPath::EscapeTextureOverlayRatio, ConfigValue::Float(v)) => {
+            let (lo, hi) = crate::config::escape::OVERLAY_RATIO_RANGE;
+            config.escape.texture_overlay.ratio = v.clamp(lo, hi);
+        }
+        (ConfigPath::EscapeTextureOverlayTile, ConfigValue::Float(v)) => {
+            let (lo, hi) = crate::config::escape::OVERLAY_TILE_RANGE;
+            config.escape.texture_overlay.tile_scale = v.clamp(lo, hi);
+        }
         (ConfigPath::EscapeContrastClip, ConfigValue::Float(v)) => {
             config.escape.contrast.clip = v.clamp(0.0, 0.25);
         }

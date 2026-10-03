@@ -253,6 +253,102 @@ pub struct EscapeConfig {
     /// default, and is skipped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub texture: Option<EscapeTexture>,
+    /// The texture as an overlay (sim-textures phase 2, survey R10):
+    /// Kalles Fraktaler's texture, warped by the iteration count's slope
+    /// and mixed into the colour before the relief. Off by default.
+    #[serde(default, skip_serializing_if = "TextureOverlay::is_default")]
+    pub texture_overlay: TextureOverlay,
+}
+
+/// How the texture covers the frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextureFit {
+    /// Stretched over the whole frame, as Kalles Fraktaler resizes its
+    /// image; a lookup past the edge holds the edge.
+    #[default]
+    Stretch,
+    /// Repeated at its own size (times the tile scale): a periodic
+    /// simulation texture tiles seamlessly.
+    Tile,
+}
+
+impl TextureFit {
+    pub fn to_gpu(self) -> u32 {
+        match self {
+            TextureFit::Stretch => 0,
+            TextureFit::Tile => 1,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TextureFit::Stretch => "stretch",
+            TextureFit::Tile => "tile",
+        }
+    }
+    pub fn from_name(s: &str) -> Self {
+        if s == "tile" { TextureFit::Tile } else { TextureFit::Stretch }
+    }
+}
+
+/// Kalles Fraktaler's texture overlay (`gl/kf.frag.glsl`
+/// `KF_TextureWarp` and the texture block after the palette lookup):
+/// the texture looked up at the pixel plus an offset driven by the
+/// iteration count's difference to its neighbours, then mixed in.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TextureOverlay {
+    #[serde(default)]
+    pub enabled: bool,
+    /// How much of the texture replaces the colour, 0..1. KF2's default
+    /// is 1: the texture alone, warped.
+    #[serde(default = "default_overlay_merge")]
+    pub merge: f32,
+    /// KF2's power: how hard the iteration count's slope warps the
+    /// lookup. A whole number, as KF2 keeps it. Default 200.
+    #[serde(default = "default_overlay_power")]
+    pub power: f32,
+    /// KF2's ratio, in percent: scales the warp. Default 100.
+    #[serde(default = "default_overlay_ratio")]
+    pub ratio: f32,
+    #[serde(default)]
+    pub fit: TextureFit,
+    /// Display pixels per texel when tiled.
+    #[serde(default = "default_one")]
+    pub tile_scale: f32,
+}
+
+fn default_overlay_merge() -> f32 {
+    1.0
+}
+fn default_overlay_power() -> f32 {
+    200.0
+}
+fn default_overlay_ratio() -> f32 {
+    100.0
+}
+
+/// Ranges of the overlay's controls.
+pub const OVERLAY_POWER_RANGE: (f32, f32) = (0.0, 1000.0);
+pub const OVERLAY_RATIO_RANGE: (f32, f32) = (0.0, 400.0);
+pub const OVERLAY_TILE_RANGE: (f32, f32) = (0.05, 20.0);
+
+impl Default for TextureOverlay {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            merge: default_overlay_merge(),
+            power: default_overlay_power(),
+            ratio: default_overlay_ratio(),
+            fit: TextureFit::default(),
+            tile_scale: 1.0,
+        }
+    }
+}
+
+impl TextureOverlay {
+    pub fn is_default(v: &TextureOverlay) -> bool {
+        *v == TextureOverlay::default()
+    }
 }
 
 /// A simulation texture a config uses: its name, and its recipe -- a
@@ -1650,6 +1746,7 @@ impl Default for EscapeConfig {
             palette_map: PaletteMap::default(),
             layer: ColoringLayer::default(),
             texture: None,
+            texture_overlay: TextureOverlay::default(),
         }
     }
 }

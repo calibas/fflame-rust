@@ -198,7 +198,9 @@ pub async fn generate(
 ) -> anyhow::Result<image::RgbaImage> {
     let (w, h) = texture_size(recipe);
     let job = crate::renderer::RenderJob::new(recipe, w, h);
-    let out = crate::renderer::render(device, queue, job, &mut crate::renderer::NoProgress).await?;
+    // Boxed: an escape render obtains its texture through here, so
+    // without the indirection `render`'s future would contain itself.
+    let out = Box::pin(crate::renderer::render(device, queue, job, &mut crate::renderer::NoProgress)).await?;
     image::RgbaImage::from_raw(out.width, out.height, out.rgba_data)
         .ok_or_else(|| anyhow::anyhow!("texture render returned the wrong number of bytes"))
 }
