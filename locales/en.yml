@@ -2154,6 +2154,8 @@ escape_panel:
   tooltip_layer_blend: "How the layer's palette position combines with the colouring's. Screen brightens where the texture is high, Multiply darkens where it is low, Overlay does both for contrast, Mix fades the texture in over the colouring, and Add shifts the palette by the texture so a cycling palette keeps cycling."
   tooltip_layer_weight: "How far the blend travels from the colouring alone: 0 is no layer, 1 the full blend."
   layer_needs_accumulator: "This colouring and the one above both average over the orbit, and they would need an accumulator each."
+  layer_direct_colour: "One of the two draws its own colours rather than a palette position, and the layer blends palette positions."
+  layer_refused_direct: "%{layer} cannot be layered over %{base}: one of them draws its own colours rather than a palette position. The colouring is drawn alone."
   layer_refused: "%{layer} cannot be layered over %{base}: both average over the orbit, and there is one accumulator. The colouring is drawn alone."
   transfer: "Value transfer"
   transfer_pivot: "Pivot"

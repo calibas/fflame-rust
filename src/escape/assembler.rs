@@ -338,7 +338,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         relief = esc_relief_source(raw, t, summary, accum_state);
         slope = esc_analytic_slope(summary);
         //__RELIEF_ORBITS__
-        rgb = esc_palette(esc_layer(t, summary, accum_state));
+        rgb = esc_colour(raw, t, summary, accum_state);
         coverage = 1.0;
     }
 
@@ -409,11 +409,15 @@ fn esc_palette_curve(t: f32) -> f32 {
     return r;
 }
 
+// The palette colour at cycle position `t`, as stored (display space).
+fn esc_palette_srgb(t: f32) -> vec3<f32> {
+    let u = esc_palette_curve(t);
+    return textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(u, 0.5), 0.0).rgb;
+}
+
 // The palette colour at cycle position `t`, decoded to linear light.
 fn esc_palette(t: f32) -> vec3<f32> {
-    let u = esc_palette_curve(t);
-    let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(u, 0.5), 0.0).rgb;
-    return pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
+    return pow(max(esc_palette_srgb(t), vec3<f32>(0.0)), vec3<f32>(2.2));
 }
 
 // The supersample factor (EscapeParams.flags bits 4-7). A "pixel" to a
@@ -573,6 +577,24 @@ fn layer_wgsl(layer: Option<&ColoringDef>) -> String {
         layer_source(l.wgsl).trim(),
         ESC_LAYER_WGSL.trim()
     )
+}
+
+/// A pixel's colour from its value (`esc_colour`): the palette at the
+/// wrapped position, through the texture layer -- or, for a colouring
+/// that draws its own colour (`ColoringFeature::DirectColor`), that
+/// colour, from the value after the transfer. Spliced after the
+/// colouring in every template that colours a pixel, so the iterate and
+/// recolour passes cannot disagree.
+fn colour_wgsl(coloring: &ColoringDef) -> &'static str {
+    if coloring.has_feature(ColoringFeature::DirectColor) {
+        "fn esc_colour(raw: f32, t: f32, sum: OrbitSummary, state: vec4<f32>) -> vec3<f32> {\n\
+         \x20   return coloring_color(sum, state, esc_transfer(raw));\n\
+         }"
+    } else {
+        "fn esc_colour(raw: f32, t: f32, sum: OrbitSummary, state: vec4<f32>) -> vec3<f32> {\n\
+         \x20   return esc_palette(esc_layer(t, sum, state));\n\
+         }"
+    }
 }
 
 /// Offset-orbit relief (`ShadingField::Offset`): two more runs of the
@@ -1498,7 +1520,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         height = raw;
         relief = esc_relief_source(raw, t, summary, accum_state);
         slope = esc_analytic_slope(summary);
-        rgb = esc_palette(esc_layer(t, summary, accum_state));
+        rgb = esc_colour(raw, t, summary, accum_state);
         coverage = 1.0;
     }
 
@@ -2415,7 +2437,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         height = raw;
         relief = esc_relief_source(raw, t, summary, accum_state);
         slope = esc_analytic_slope(summary);
-        rgb = esc_palette(esc_layer(t, summary, accum_state));
+        rgb = esc_colour(raw, t, summary, accum_state);
         coverage = 1.0;
     }
 
@@ -4728,6 +4750,7 @@ pub fn assemble_perturbed_layered(
                 out.push(format!("// coloring: {}", coloring.name));
                 out.push(coloring.wgsl.to_string());
                 out.push(layer_wgsl(layer));
+                out.push(colour_wgsl(coloring).to_string());
                 out.push(ANALYTIC_SLOPE_WGSL.trim().to_string());
             }
             "//__COLORING_ACCUM__" => {
@@ -4920,7 +4943,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let dims = vec2<f32>(f32(params.width), f32(params.height));
         let rawc = apply_contrast(raw, vec2<f32>(f32(gid.x), f32(gid.y)) / max(dims - 1.0, vec2<f32>(1.0)));
         let t = esc_wrap(rawc, COLORING_IS_BOUNDED);
-        rgb = esc_palette(esc_layer(t, summary, state));
+        rgb = esc_colour(raw, t, summary, state);
         coverage = 1.0;
     }
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, coverage));
@@ -4970,6 +4993,7 @@ pub fn assemble_recolor_layered(
                 out.push(format!("// coloring: {}", coloring.name));
                 out.push(coloring.wgsl.to_string());
                 out.push(layer_wgsl(layer));
+                out.push(colour_wgsl(coloring).to_string());
                 out.push(ANALYTIC_SLOPE_WGSL.trim().to_string());
             }
             _ => out.push(line.to_string()),
@@ -7148,6 +7172,7 @@ pub fn assemble_layered(
                 out.push(format!("// coloring: {}", coloring.name));
                 out.push(coloring.wgsl.to_string());
                 out.push(layer_wgsl(layer));
+                out.push(colour_wgsl(coloring).to_string());
                 out.push(ANALYTIC_SLOPE_WGSL.trim().to_string());
             }
             "//__COLORING_ACCUM__" => {

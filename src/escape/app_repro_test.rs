@@ -8367,6 +8367,263 @@ fn main() {
         assert!((two / one - 1.0).abs() < 0.1, "offset relief changed strength with supersampling: {one:.2} -> {two:.2}");
     }
 
+    /// The colourings that draw their own colours compute what their
+    /// sources say, pixel by pixel from the GPU's own records (so f32
+    /// orbit noise cannot blur the check):
+    /// - rainbow fringe, Fraktaler 3's example: `hsv(arg DE, 1/(1+4L),
+    ///   2L)` decoded and raised to 1/gamma, with F3's DE vector (the
+    ///   conjugate of the screen gradient of |z|^2), at two rotations;
+    /// - infinite waves, KF2's `KF_InfiniteWaves`: KF2's default three,
+    ///   then a stepped set with constant waves blended half and half
+    ///   with a grey-ramp palette.
+    /// The output is the Linear tone map at exposure and gamma 1, whose
+    /// encode is `pow(1/2.2)`. And the fringe is flat grey where no
+    /// derivative is iterated (perturbation).
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn direct_colourings_draw_what_their_sources_say() {
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        let stop = |position: f32, v: f32| crate::scene::palette::ColorStop { position, color: [v, v, v] };
+        config.palette.stops = vec![stop(0.0, 0.0), stop(1.0, 1.0)];
+        config.escape.center_re = "-0.6".to_string();
+        config.escape.center_im = "0.1".to_string();
+        config.escape.zoom_log2 = 0.4;
+        config.escape.max_iter = 200;
+        config.escape.bailout = 1.0e4;
+        config.escape.supersample = 1;
+        let span_y = 4.0 / (config.escape.zoom_log2).exp2();
+        let render = |c: &crate::config::FractalConfig| {
+            let job = crate::renderer::RenderJob::new(c, w, h);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+        let encode = |lin: f64| (lin.clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0);
+        let hsv = |c: [f64; 3]| -> [f64; 3] {
+            let k = [1.0, 2.0 / 3.0, 1.0 / 3.0];
+            let mut out = [0.0; 3];
+            for i in 0..3 {
+                let p = ((c[0] + k[i]).rem_euclid(1.0) * 6.0 - 3.0).abs();
+                out[i] = c[2] * (1.0 + ((p - 1.0).clamp(0.0, 1.0) - 1.0) * c[1]);
+            }
+            out
+        };
+        // Within two 8-bit levels on 99% of the drawn pixels.
+        let compare = |name: &str, out: &[u8], want: &dyn Fn(usize) -> Option<[f64; 3]>| {
+            let (mut checked, mut off, mut worst) = (0usize, 0usize, 0.0f64);
+            for (i, p) in out.chunks_exact(4).enumerate() {
+                let Some(rgb) = want(i) else { continue };
+                let e = (0..3).map(|k| (p[k] as f64 - rgb[k]).abs()).fold(0.0, f64::max);
+                worst = worst.max(e);
+                off += usize::from(e > 2.0);
+                checked += 1;
+            }
+            println!("{name}: {checked} pixels, {off} more than two levels off, worst {worst:.1}");
+            assert!(checked > 2000, "{name}: only {checked} pixels drawn");
+            assert!(off * 100 <= checked, "{name}: {off} of {checked} pixels off");
+        };
+
+        // ---- Rainbow fringe ---------------------------------------
+        for rotation in [0.0f32, 0.7] {
+            let mut c = config.clone();
+            c.escape.coloring = "rainbow_fringe".to_string();
+            c.escape.coloring_params = [("gamma".to_string(), 2.0)].into_iter().collect();
+            c.escape.rotation = rotation;
+            let records = records_via(&c.escape, w, h, false, false);
+            let out = render(&c);
+            let (rs, rc) = (rotation as f64).sin_cos();
+            let mut hues = [0usize; 8];
+            let want = |i: usize| -> Option<[f64; 3]> {
+                let r = &records[i];
+                if (r.tags & 1) == 0 {
+                    return None;
+                }
+                let z = [r.z[0] as f64, r.z[1] as f64];
+                let dz = [r.dz[0] as f64, r.dz[1] as f64];
+                let m = z[0].hypot(z[1]).max(1.0000001);
+                let l = m * m.ln() / dz[0].hypot(dz[1]).max(1e-30) * (h as f64 / span_y);
+                let g = [z[0] * dz[0] + z[1] * dz[1], z[1] * dz[0] - z[0] * dz[1]];
+                let s = [g[0] * rc + g[1] * rs, g[1] * rc - g[0] * rs];
+                let hue = ((-s[1]).atan2(s[0]) / std::f64::consts::TAU).rem_euclid(1.0);
+                let sat = (1.0 / (1.0 + 4.0 * l)).clamp(0.0, 1.0);
+                let val = (2.0 * l).clamp(0.0, 1.0);
+                let srgb = hsv([hue, sat, val]);
+                let lin = srgb.map(|x| if x <= 0.04045 { x / 12.92 } else { ((x + 0.055) / 1.055).powf(2.4) });
+                Some(lin.map(|x| encode(x.powf(0.5))))
+            };
+            for i in 0..records.len() {
+                if let (Some(_), r) = (want(i), &records[i]) {
+                    let z = [r.z[0] as f64, r.z[1] as f64];
+                    let dz = [r.dz[0] as f64, r.dz[1] as f64];
+                    let g = [z[0] * dz[0] + z[1] * dz[1], z[1] * dz[0] - z[0] * dz[1]];
+                    let a = g[1].atan2(g[0]).rem_euclid(std::f64::consts::TAU);
+                    hues[(a / std::f64::consts::TAU * 8.0) as usize % 8] += 1;
+                }
+            }
+            compare(&format!("rainbow fringe, rotation {rotation}"), &out, &want);
+            assert!(hues.iter().all(|n| *n > 0), "the fringe does not go all the way round: {hues:?}");
+        }
+
+        // Under perturbation there is no derivative: flat mid-grey.
+        let mut deep = config.clone();
+        deep.escape.coloring = "rainbow_fringe".to_string();
+        deep.escape.zoom_log2 = 30.0;
+        deep.escape.center_re = "-0.7436438870371587".to_string();
+        deep.escape.center_im = "0.1318259042053119".to_string();
+        deep.escape.max_iter = 2000;
+        let grey = encode(0.21404114);
+        let out = render(&deep);
+        let drawn: Vec<&[u8]> = out.chunks_exact(4).filter(|p| p[0] > 0 || p[1] > 0 || p[2] > 0).collect();
+        assert!(drawn.len() > 1000, "the deep view drew only {} pixels", drawn.len());
+        assert!(
+            drawn.iter().all(|p| (0..3).all(|k| (p[k] as f64 - grey).abs() <= 2.0)),
+            "the fringe is not flat grey without a derivative"
+        );
+
+        // ---- Infinite waves ---------------------------------------
+        let lr = (config.escape.bailout as f64).log2();
+        let iter_of = |r: &crate::escape::renderer::IterRecord| -> f64 {
+            let lz = (r.z[0] as f64 * r.z[0] as f64 + r.z[1] as f64 * r.z[1] as f64).max(1.0000001).log2();
+            let nf = (1.0 - (lz / lr).max(1e-6).log2()).clamp(0.0, 1.0);
+            r.n as f64 + 1.0 - nf
+        };
+        type Wave = (f64, usize);
+        let cases: [(&str, Vec<Wave>, bool, bool); 2] = [
+            ("defaults", vec![(100.0, 0), (111.0, 1), (123.0, 2)], true, false),
+            ("stepped, constants, blended", vec![(37.0, 0), (-50.0, 1), (-100.0, 2), (13.0, 2)], false, true),
+        ];
+        for (name, waves, smooth, blend) in cases {
+            let mut c = config.clone();
+            c.escape.coloring = "infinite_waves".to_string();
+            let mut params = std::collections::BTreeMap::new();
+            params.insert("smooth".to_string(), if smooth { 1.0 } else { 0.0 });
+            params.insert("blend".to_string(), if blend { 1.0 } else { 0.0 });
+            for k in 0..6 {
+                let (p, ch) = waves.get(k).copied().unwrap_or((0.0, 0));
+                params.insert(format!("wave{}", k + 1), p as f32);
+                params.insert(format!("wave{}_channel", k + 1), ch as f32);
+            }
+            c.escape.coloring_params = params;
+            let records = records_via(&c.escape, w, h, false, false);
+            let out = render(&c);
+            let want = |i: usize| -> Option<[f64; 3]> {
+                let r = &records[i];
+                if (r.tags & 1) == 0 {
+                    return None;
+                }
+                let v = iter_of(r);
+                let it = if smooth { v } else { v.floor() };
+                let (mut sums, mut counts) = ([0.0f64; 3], [0.0f64; 3]);
+                for (p, ch) in &waves {
+                    let g = if *p < 0.0 { -p / 100.0 } else { (std::f64::consts::PI * it / p).sin() / 2.0 + 0.5 };
+                    sums[*ch] += g;
+                    counts[*ch] += 1.0;
+                }
+                let mut rgb = hsv([0, 1, 2].map(|k| sums[k] / counts[k].max(1.0)));
+                if blend {
+                    let t = (v / 1024.0).rem_euclid(1.0);
+                    rgb = rgb.map(|x| (x + t) / 2.0);
+                }
+                Some(rgb.map(|x| x.clamp(0.0, 1.0) * 255.0))
+            };
+            compare(&format!("infinite waves, {name}"), &out, &want);
+        }
+    }
+
+    /// A colouring that draws its own colours recolours from the cache
+    /// like any other: picking one that runs nothing new in the loop,
+    /// retuning its waves, turning the palette blend on, or changing the
+    /// fringe's gamma is a recolour that matches a fresh render to the
+    /// byte. Picking the fringe re-iterates, since it needs the
+    /// derivative orbit.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn direct_colourings_recolour_from_the_cache() {
+        let _diag = diag_lock();
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let config = crate::config::FractalConfig::default();
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        renderer.update_background_color(&queue, [0.0, 0.0, 0.0]);
+        let mut settle = |escape: &mut crate::escape::EscapeRenderer, esc: &crate::config::escape::EscapeConfig| {
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("direct cache"),
+                });
+                let settled = escape.render(
+                    &device,
+                    &queue,
+                    &mut enc,
+                    esc,
+                    renderer.escape_palette_view(esc.palette_map.stepped),
+                    renderer.palette_generation(),
+                );
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "render did not settle");
+            }
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("direct cache tonemap"),
+            });
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+                &device, &queue, false, [0.0, 0.0, 0.0],
+            ))
+            .expect("readback");
+            rgba
+        };
+        let mut base = crate::config::escape::EscapeConfig::default();
+        base.center_re = "-0.6".to_string();
+        base.center_im = "0.1".to_string();
+        base.zoom_log2 = 0.4;
+        base.max_iter = 300;
+        base.coloring = "smooth".to_string();
+
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        let _ = settle(&mut escape, &base);
+        let mut esc = base.clone();
+        esc.coloring = "infinite_waves".to_string();
+        let mut steps: Vec<(&str, crate::config::escape::EscapeConfig, bool)> = Vec::new();
+        steps.push(("pick infinite waves", esc.clone(), true));
+        esc.coloring_params.insert("wave1".to_string(), 37.0);
+        esc.coloring_params.insert("wave4".to_string(), -60.0);
+        esc.coloring_params.insert("wave4_channel".to_string(), 1.0);
+        steps.push(("retune the waves", esc.clone(), true));
+        esc.coloring_params.insert("blend".to_string(), 1.0);
+        steps.push(("blend the palette", esc.clone(), true));
+        let mut fringe = base.clone();
+        fringe.coloring = "rainbow_fringe".to_string();
+        steps.push(("pick the fringe", fringe.clone(), false));
+        fringe.coloring_params.insert("gamma".to_string(), 1.3);
+        steps.push(("retune the fringe", fringe.clone(), true));
+        for (what, esc, recolours) in steps {
+            let cached = settle(&mut escape, &esc);
+            assert_eq!(escape.last_path == "recolor", recolours, "{what}: path {}", escape.last_path);
+            let mut fresh = crate::escape::EscapeRenderer::new(&device, w, h);
+            assert_eq!(cached, settle(&mut fresh, &esc), "{what}: cached differs from fresh");
+            fresh.destroy();
+        }
+        escape.destroy();
+    }
+
     /// A stepped palette draws every stop as a flat band: an escape
     /// render through it shows the stops' colours and next to nothing
     /// in between, where the blended palette shows a continuum.
