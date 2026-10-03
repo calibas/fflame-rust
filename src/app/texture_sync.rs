@@ -39,23 +39,31 @@ impl TextureSync {
         }
     }
 
+    fn drop_pending(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.pending = None;
+        }
+    }
+
     /// Bring the renderer's texture in line with the config. Returns
     /// whether it changed, which is a re-render.
     pub(crate) fn update(&mut self, escape: &mut EscapeRenderer, device: &Device, queue: &Queue, config: &EscapeConfig) -> bool {
+        // Every early return drops a generation in flight: nothing will
+        // read it, and `busy` would otherwise keep the loop turning.
         let Some(texture) = config.texture.as_ref() else {
-            #[cfg(target_arch = "wasm32")]
-            {
-                self.pending = None;
-            }
+            self.drop_pending();
             return escape.clear_texture();
         };
-        // Held while the overlay is off: switching it back on is then
-        // immediate. Nothing reads it meanwhile.
-        if !config.texture_overlay.enabled {
+        // Held while nothing draws with it: switching a use back on is
+        // then immediate. Nothing reads it meanwhile.
+        if !config.uses_texture() {
+            self.drop_pending();
             return false;
         }
         let key = crate::textures::cache::key(&texture.config);
         if escape.texture_key() == Some(key.as_str()) || self.failed.as_deref() == Some(key.as_str()) {
+            self.drop_pending();
             return false;
         }
 

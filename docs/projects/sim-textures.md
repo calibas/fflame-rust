@@ -170,6 +170,28 @@ macOS divergence.
    the texture's luminance as micro-relief, its gradient added to the
    tilt exactly as grain and paper are. Screen space, with a scale in
    display pixels per texel. This one is ours; no foreign program has it.
+
+   **As built (phase 3).** `ShadingTexture::Simulation` reuses the
+   surface texture's strength and scale. It samples the image the
+   overlay binds: luminance (Rec. 709, display values) − 0.5, repeating,
+   `texture_scale` display pixels per texel. Without a texture it is
+   none. The Texture panel offers it as "Relief bump", the same setting
+   as the Escape panel's surface texture. `EscapeConfig::uses_texture`
+   (the overlay, or the bump under a lit relief) decides whether the
+   image is obtained at all.
+
+   **Measured** (`the_relief_bump_is_the_textures_luminance`):
+   - Setup: a view wholly outside the set, a flat grey palette, relief
+     height 0, so the shading is the bump alone.
+   - The shading's departure from flat grey correlates 0.9991 with the
+     shader's response formula on the CPU-sampled texture. The same
+     formula with the light turned a quarter gives −0.97, and at the
+     wrong scale −0.01.
+   - 2× antialiasing gives 0.995 against the 1× formula.
+   - A flat texture, and a config without a texture, are byte-identical
+     to no bump.
+
+   One visual test.
 3. **Image orbit traps.** A colouring that samples the texture at orbit
    points mapped into texture space (position, scale, rotation in the
    plane). **Semantics to be read from source before implementing:**
@@ -198,7 +220,7 @@ macOS divergence.
    - a Periodic texture tiles (opposite edges continue).
 2. **Overlay (R10)**, against a CPU port of `KF_TextureWarp`. Done; see
    the uses above.
-3. **Relief bump.**
+3. **Relief bump.** Done; see the uses above.
 4. **Image orbit traps**, after reading the sources.
 
 Each phase gets the usual gates, its own tests and a visual test. The API

@@ -1010,10 +1010,10 @@ async fn render_escape(
             ),
         );
     }
-    // The texture overlay's image (docs/projects/sim-textures.md): the
+    // The texture's image (docs/projects/sim-textures.md): the
     // config carries the recipe, and the image comes from the cache or
     // is generated here, so a saved file renders the same anywhere.
-    if job.config.escape.texture_overlay.enabled {
+    if job.config.escape.uses_texture() {
         if let Some(texture) = &job.config.escape.texture {
             let key = crate::textures::cache::key(&texture.config);
             if escape_renderer.texture_key() != Some(key.as_str()) {

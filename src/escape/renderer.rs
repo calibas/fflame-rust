@@ -6611,7 +6611,14 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // height is scaled: a radius fixed in render pixels would
             // shrink as antialiasing raised the resolution.
             softness: shading.softness * factor as f32,
-            texture_kind: shading.texture_kind.to_gpu(),
+            // The bump reads the texture; without one there is none.
+            texture_kind: if shading.texture_kind == crate::config::escape::ShadingTexture::Simulation
+                && !(escape.texture.is_some() && self.texture_image.is_some())
+            {
+                0
+            } else {
+                shading.texture_kind.to_gpu()
+            },
             texture_strength: shading.texture_strength,
             // Feature size in DISPLAY pixels, like the softness radius
             // and for the same reason: antialiasing must not change
@@ -6889,6 +6896,12 @@ fn shade_value_noise(q: vec2<f32>) -> f32 {{
 }}
 
 fn shade_texture(q: vec2<f32>) -> f32 {{
+    // 3 = SIMULATION: the config's texture, its luminance in display
+    // values, repeated with `q` in texels.
+    if (shade.texture_kind == 3u) {{
+        let c = textureSampleLevel(tex_image, tex_sampler, q / vec2<f32>(textureDimensions(tex_image)), 0.0).rgb;
+        return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722)) - 0.5;
+    }}
     // 1 = GRAIN: one octave, isotropic -- film grain / fine tooth.
     if (shade.texture_kind == 1u) {{
         return shade_value_noise(q) - 0.5;

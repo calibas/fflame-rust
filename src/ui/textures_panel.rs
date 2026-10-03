@@ -9,7 +9,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::config::escape::{EscapeTexture, TextureFit};
+use crate::config::escape::{EscapeTexture, ShadingTexture, TextureFit};
 use crate::config::{ConfigChange, ConfigManager, ConfigPath, ConfigValue, FractalConfig};
 use crate::textures::{TextureLibrary, TextureOrigin};
 
@@ -152,6 +152,7 @@ impl TexturesPanel {
         });
         if can_pick {
             overlay_controls(ui, config_manager, current.is_some());
+            bump_controls(ui, config_manager);
         }
         ui.separator();
 
@@ -333,6 +334,52 @@ fn overlay_controls(ui: &mut egui::Ui, config_manager: &mut ConfigManager, has_t
             }
             ui.end_row();
         }
+    });
+}
+
+/// The relief's bump: the texture as the relief's surface texture. The
+/// same setting as the Escape panel's surface texture, offered here too.
+fn bump_controls(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
+    let sh = config_manager.config().escape.shading.clone();
+    let mut on = sh.texture_kind == ShadingTexture::Simulation;
+    if ui
+        .checkbox(&mut on, t!("textures_panel.bump"))
+        .on_hover_text(t!("textures_panel.bump_tip"))
+        .changed()
+    {
+        let kind = if on { ShadingTexture::Simulation } else { ShadingTexture::None };
+        let _ = config_manager.update_param(
+            ConfigPath::EscapeShadingTextureKind,
+            ConfigValue::String(kind.as_str().to_string()),
+        );
+    }
+    if !on {
+        return;
+    }
+    if !sh.enabled {
+        ui.weak(t!("textures_panel.bump_needs_relief"));
+    }
+    egui::Grid::new("texture_bump").num_columns(2).show(ui, |ui| {
+        ui.label(t!("escape_panel.texture_strength"));
+        let mut v = sh.texture_strength;
+        if ui
+            .add(egui::Slider::new(&mut v, 0.0..=4.0))
+            .on_hover_text(t!("escape_panel.tooltip_texture_strength"))
+            .changed()
+        {
+            let _ = config_manager.update_param(ConfigPath::EscapeShadingTextureStrength, v.into());
+        }
+        ui.end_row();
+        ui.label(t!("escape_panel.texture_scale"));
+        let mut v = sh.texture_scale;
+        if ui
+            .add(egui::Slider::new(&mut v, 0.25..=64.0).logarithmic(true))
+            .on_hover_text(t!("escape_panel.tooltip_texture_scale"))
+            .changed()
+        {
+            let _ = config_manager.update_param(ConfigPath::EscapeShadingTextureScale, v.into());
+        }
+        ui.end_row();
     });
 }
 
