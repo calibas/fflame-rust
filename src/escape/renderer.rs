@@ -8407,6 +8407,26 @@ mod chunk_batch_tests {
         // A zero cap is treated as one, not zero dispatches.
         assert_eq!(EscapeRenderer::batch_for(1000, 0.002, 10.0, 0), 1);
     }
+
+    /// Equalize's table holds the probe's values at evenly spaced ranks:
+    /// smallest first, largest last, never decreasing, and through the
+    /// middle of a run of equal values.
+    #[test]
+    fn the_equalize_table_is_the_samples_at_even_ranks() {
+        use super::{fit_contrast, CDF_LEN};
+        use crate::config::escape::ContrastMode;
+        // 100 samples: 0..=99, every cell live.
+        let samples: Vec<(f32, f32)> = (0..100).map(|i| (i as f32, 1.0)).collect();
+        let fit = fit_contrast(&samples, 10, 10, ContrastMode::Equalize, 0.005).expect("fit");
+        assert_eq!(fit.cdf[0], 0.0);
+        assert_eq!(fit.cdf[CDF_LEN - 1], 99.0);
+        assert!(fit.cdf.windows(2).all(|p| p[0] <= p[1]));
+        // Linear between order statistics: rank 0.5 is 49.5.
+        assert!((fit.cdf[CDF_LEN / 2] - 99.0 * (CDF_LEN / 2) as f32 / (CDF_LEN - 1) as f32).abs() < 1e-4);
+        // A constant field has no ranks to spend.
+        let flat: Vec<(f32, f32)> = (0..100).map(|_| (3.0, 1.0)).collect();
+        assert!(fit_contrast(&flat, 10, 10, ContrastMode::Equalize, 0.005).is_none());
+    }
 }
 
 /// Width and height of the contrast probe grid.
@@ -8430,7 +8450,16 @@ pub(crate) struct ContrastFit {
     pub plane: [f32; 3],
     pub lo: f32,
     pub hi: f32,
+    /// Equalize: the probe's values at `CDF_LEN` evenly spaced ranks,
+    /// smallest to largest (linear interpolation between order
+    /// statistics). Zero for the other modes.
+    pub cdf: [f32; CDF_LEN],
 }
+
+/// Entries in Equalize's quantile table: 256, a piecewise-linear CDF
+/// fine enough that its steps are below what 6912 samples can resolve
+/// anyway (F3 uses 4096 bins over a full frame).
+pub(crate) const CDF_LEN: usize = 256;
 
 /// The recolor pass's contrast uniform.
 #[repr(C)]
@@ -8444,6 +8473,10 @@ struct ContrastParamsGpu {
     /// 0 = identity (the recolor pass then reproduces the iterate pass
     /// exactly), 1 = apply.
     enabled: u32,
+    /// `ContrastMode::to_gpu`.
+    mode: u32,
+    _pad: [u32; 3],
+    cdf: [[f32; 4]; CDF_LEN / 4],
 }
 
 /// Write the uniform. A `None` fit is the identity, which is what
@@ -8463,6 +8496,9 @@ fn queue_contrast(
             strength: cfg.strength.clamp(0.0, 1.0),
             turns: cfg.turns.max(0.001),
             enabled: 1,
+            mode: cfg.mode.to_gpu(),
+            _pad: [0; 3],
+            cdf: bytemuck::cast(f.cdf),
         },
         _ => ContrastParamsGpu {
             plane: [0.0; 3],
@@ -8471,6 +8507,9 @@ fn queue_contrast(
             strength: 0.0,
             turns: 1.0,
             enabled: 0,
+            mode: 0,
+            _pad: [0; 3],
+            cdf: [[0.0; 4]; CDF_LEN / 4],
         },
     };
     queue.write_buffer(buf, 0, bytemuck::bytes_of(&p));
@@ -8508,6 +8547,26 @@ pub(crate) fn fit_contrast(
         .collect();
     if live.len() < 64 {
         return None;
+    }
+    if mode == ContrastMode::Equalize {
+        // Every live value, sorted; the table holds them at evenly
+        // spaced ranks. No clip: a rank is blind to how far out the
+        // extremes sit, which is what the clip exists to defend against.
+        let mut sorted: Vec<f32> = live.iter().map(|(v, _, _)| *v).collect();
+        sorted.sort_by(f32::total_cmp);
+        let (lo, hi) = (sorted[0], sorted[sorted.len() - 1]);
+        if !(hi > lo) {
+            return None;
+        }
+        let last = (sorted.len() - 1) as f64;
+        let mut cdf = [0.0f32; CDF_LEN];
+        for (j, slot) in cdf.iter_mut().enumerate() {
+            let at = j as f64 * last / (CDF_LEN - 1) as f64;
+            let (i, t) = (at.floor() as usize, at.fract());
+            let next = sorted[(i + 1).min(sorted.len() - 1)];
+            *slot = (sorted[i] as f64 + (next as f64 - sorted[i] as f64) * t) as f32;
+        }
+        return Some(ContrastFit { plane: [0.0; 3], lo, hi, cdf });
     }
     let n = live.len() as f64;
     let mut plane = [0.0f32; 3];
@@ -8562,7 +8621,7 @@ pub(crate) fn fit_contrast(
     if !(hi > lo) || !lo.is_finite() || !hi.is_finite() {
         return None;
     }
-    Some(ContrastFit { plane, lo, hi })
+    Some(ContrastFit { plane, lo, hi, cdf: [0.0; CDF_LEN] })
 }
 
 /// One terminal record (the shader's `IterResult`), read back for the

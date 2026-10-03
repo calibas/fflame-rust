@@ -779,12 +779,17 @@ pub fn render_escape_content(
                     ContrastMode::Off => t!("escape_panel.contrast_off"),
                     ContrastMode::AutoRange => t!("escape_panel.contrast_auto_range"),
                     ContrastMode::Flatten => t!("escape_panel.contrast_flatten"),
+                    ContrastMode::Equalize => t!("escape_panel.contrast_equalize"),
                 };
                 egui::ComboBox::from_id_salt("escape_contrast_mode")
                     .selected_text(name(cur))
                     .show_ui(ui, |ui| {
-                        for m in [ContrastMode::Off, ContrastMode::AutoRange, ContrastMode::Flatten]
-                        {
+                        for m in [
+                            ContrastMode::Off,
+                            ContrastMode::AutoRange,
+                            ContrastMode::Flatten,
+                            ContrastMode::Equalize,
+                        ] {
                             if ui.selectable_label(m == cur, name(m)).clicked() && m != cur {
                                 let _ = config_manager.update_param(
                                     ConfigPath::EscapeContrastMode,
