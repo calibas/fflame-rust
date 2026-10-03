@@ -383,6 +383,12 @@ pub enum ShadingField {
     /// that belongs to the fractal rather than the pixel grid, the same
     /// at any output size. Three orbits a pixel; direct path only.
     Offset,
+    /// Ultra Fractal's Embossed (survey R7): two orbits a small step
+    /// either side of the pixel along the light, each reduced to a
+    /// whole number ([`EmbossType`]); where they differ, the pixel is a
+    /// shadow or a highlight by which came out higher. Bevelled contour
+    /// lines, a fixed fraction of the view wide. Direct path only.
+    Embossed,
 }
 
 impl ShadingField {
@@ -393,9 +399,74 @@ impl ShadingField {
             ShadingField::Layer => 2,
             ShadingField::Analytic => 3,
             ShadingField::Offset => 4,
+            ShadingField::Embossed => 5,
         }
     }
 }
+
+/// What each of Embossed's two orbits is reduced to: Ultra Fractal's
+/// Emboss Type (`Standard_EmbossedHelper`, Standard.ulb). The contour
+/// lines fall where this whole number changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EmbossType {
+    /// The iteration the orbit escaped on (0 if it never did).
+    #[default]
+    Iteration,
+    /// How many iterates had a positive real part.
+    RealPositive,
+    /// How many iterates had a positive imaginary part.
+    ImagPositive,
+    /// The iteration at which |z|^2 was smallest -- the smallest of
+    /// EITHER orbit so far, which is how Ultra Fractal keeps it.
+    SmallestMagnitude,
+    /// `trunc(ln|z|)` at escape (0 if it never did).
+    Magnitude,
+    /// Which of `sections` equal sectors `arg z` fell in at escape.
+    Angle,
+}
+
+impl EmbossType {
+    pub const ALL: [EmbossType; 6] = [
+        EmbossType::Iteration,
+        EmbossType::RealPositive,
+        EmbossType::ImagPositive,
+        EmbossType::SmallestMagnitude,
+        EmbossType::Magnitude,
+        EmbossType::Angle,
+    ];
+    /// Ultra Fractal's own enum order, which the shader switches on.
+    pub fn to_gpu(self) -> u32 {
+        match self {
+            EmbossType::Iteration => 0,
+            EmbossType::RealPositive => 1,
+            EmbossType::ImagPositive => 2,
+            EmbossType::SmallestMagnitude => 3,
+            EmbossType::Magnitude => 4,
+            EmbossType::Angle => 5,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EmbossType::Iteration => "iteration",
+            EmbossType::RealPositive => "real_positive",
+            EmbossType::ImagPositive => "imag_positive",
+            EmbossType::SmallestMagnitude => "smallest_magnitude",
+            EmbossType::Magnitude => "magnitude",
+            EmbossType::Angle => "angle",
+        }
+    }
+    pub fn from_name(s: &str) -> Self {
+        Self::ALL.into_iter().find(|m| m.as_str() == s).unwrap_or_default()
+    }
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Embossed's Angle sectors. Ultra Fractal's minimum is 1; the top is
+/// what five bits of the shader's flag word hold.
+pub const EMBOSS_SECTIONS_RANGE: (u32, u32) = (1, 32);
 
 /// The wire strings ConfigValue carries for [`ShadingField`].
 pub fn shading_field_to_str(m: ShadingField) -> &'static str {
@@ -405,6 +476,7 @@ pub fn shading_field_to_str(m: ShadingField) -> &'static str {
         ShadingField::Layer => "layer",
         ShadingField::Analytic => "analytic",
         ShadingField::Offset => "offset",
+        ShadingField::Embossed => "embossed",
     }
 }
 
@@ -414,6 +486,7 @@ pub fn shading_field_from_str(s: &str) -> ShadingField {
         "layer" => ShadingField::Layer,
         "analytic" => ShadingField::Analytic,
         "offset" => ShadingField::Offset,
+        "embossed" => ShadingField::Embossed,
         _ => ShadingField::Smooth,
     }
 }
@@ -1156,9 +1229,24 @@ pub struct EscapeShading {
     pub height_post: f32,
     /// The step to the offset orbits (`ShadingField::Offset`), as a
     /// fraction of the view's height: small enough to read the local
-    /// slope, large enough to step over f32 noise.
+    /// slope, large enough to step over f32 noise. For Embossed it is
+    /// the step either side of the pixel, which sets how wide the
+    /// contour lines are (Ultra Fractal's Contour Size).
     #[serde(default = "default_relief_offset", skip_serializing_if = "is_default_relief_offset")]
     pub offset: f32,
+    /// What Embossed's orbits are reduced to.
+    #[serde(default, skip_serializing_if = "EmbossType::is_default")]
+    pub emboss: EmbossType,
+    /// Embossed's Angle sectors; Ultra Fractal's default is 2.
+    #[serde(default = "default_emboss_sections", skip_serializing_if = "is_default_emboss_sections")]
+    pub emboss_sections: u32,
+}
+
+fn default_emboss_sections() -> u32 {
+    2
+}
+fn is_default_emboss_sections(v: &u32) -> bool {
+    *v == default_emboss_sections()
 }
 
 fn default_relief_offset() -> f32 {
@@ -1252,6 +1340,8 @@ impl Default for EscapeShading {
             height_pre: 1.0,
             height_post: 1.0,
             offset: default_relief_offset(),
+            emboss: EmbossType::default(),
+            emboss_sections: default_emboss_sections(),
         }
     }
 }
@@ -1266,12 +1356,17 @@ impl EscapeShading {
     }
     /// Whether the relief runs orbits beside each pixel's own.
     pub fn wants_offset_orbits(&self) -> bool {
-        self.enabled && self.field == ShadingField::Offset
+        self.enabled && matches!(self.field, ShadingField::Offset | ShadingField::Embossed)
     }
-    /// Whether the relief lights a slope the iterate pass stored rather
-    /// than differencing a height.
-    pub fn stored_slope(&self) -> bool {
-        matches!(self.field, ShadingField::Analytic | ShadingField::Offset)
+    /// What the relief lights, as the shade pass reads it: 0 a height it
+    /// differences, 1 a slope the iterate pass stored (analytic, offset
+    /// orbits), 2 Embossed's stored response.
+    pub fn stored_relief(&self) -> u32 {
+        match self.field {
+            ShadingField::Analytic | ShadingField::Offset => 1,
+            ShadingField::Embossed => 2,
+            _ => 0,
+        }
     }
 }
 
@@ -1654,6 +1749,8 @@ mod shading_tests {
             height_pre: 4.0,
             height_post: 0.25,
             offset: 0.002,
+            emboss: EmbossType::SmallestMagnitude,
+            emboss_sections: 5,
         };
         let json = serde_json::to_string(&esc).unwrap();
         let back: EscapeConfig = serde_json::from_str(&json).unwrap();
@@ -1694,8 +1791,12 @@ mod shading_tests {
             ShadingField::Layer,
             ShadingField::Analytic,
             ShadingField::Offset,
+            ShadingField::Embossed,
         ] {
             assert_eq!(shading_field_from_str(shading_field_to_str(f)), f);
+        }
+        for t in EmbossType::ALL {
+            assert_eq!(EmbossType::from_name(t.as_str()), t);
         }
         // The GPU discriminants must be distinct, or two blend modes
         // would render identically.

@@ -587,9 +587,10 @@ struct ShadeParamsGpu {
     height_curve: u32,
     height_pre: f32,
     height_post: f32,
-    /// 1: slope the analytic gradient the iterate pass stored, instead
-    /// of differencing the height (`ShadingField::Analytic`).
-    analytic: u32,
+    /// What the relief lights (`EscapeShading::stored_relief`): 0 a
+    /// height it differences, 1 a slope the iterate pass stored
+    /// (analytic, offset orbits), 2 Embossed's stored response.
+    stored: u32,
     /// std140 rounds the struct up to a multiple of its largest
     /// member alignment (vec3 → 16), so WGSL sees 112 bytes where Rust
     /// would otherwise pack 108. Without this the bind group is
@@ -4562,7 +4563,10 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             );
         }
 
-        let per_row = (self.width as u64).saturating_mul(escape.max_iter.max(1) as u64);
+        // Offset relief and Embossed run two orbits beside the pixel's
+        // own, so a pixel can cost three loops, not one.
+        let orbits = if escape.shading.wants_offset_orbits() { 3 } else { 1 };
+        let per_row = (self.width as u64).saturating_mul(escape.max_iter.max(1) as u64) * orbits;
         let budget = DIRECT_DISPATCH_BUDGET >> shift;
         let rows = budget / per_row.max(1);
         (rows.max(1) as u32).min(self.height.max(1))
@@ -6080,6 +6084,21 @@ fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         queue: &Queue,
         blurred: bool,
     ) -> Option<Vec<f32>> {
+        // Green: the relief's source, which the blur blurs.
+        self.read_height_channel(device, queue, blurred, 1).await
+    }
+
+    /// One channel of the height texture: 0 the raw value, 1 the
+    /// relief's source, 2 and 3 a stored slope (2 alone for Embossed's
+    /// response).
+    #[cfg(test)]
+    pub(crate) async fn read_height_channel(
+        &self,
+        device: &Device,
+        queue: &Queue,
+        blurred: bool,
+        channel: u32,
+    ) -> Option<Vec<f32>> {
         let tex = if blurred {
             &self.height_blur.as_ref()?.2
         } else {
@@ -6128,8 +6147,7 @@ fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             for y in 0..h {
                 let base = (y * row) as usize;
                 for x in 0..w {
-                    // Green: the relief's source, which the blur blurs.
-                    let i = base + (x * 16) as usize + 4;
+                    let i = base + (x * 16 + channel * 4) as usize;
                     out.push(f32::from_le_bytes(view[i..i + 4].try_into().ok()?));
                 }
             }
@@ -6379,7 +6397,7 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             height_curve: shading.height_curve.to_gpu(),
             height_pre: shading.height_pre,
             height_post: shading.height_post,
-            analytic: u32::from(shading.stored_slope()),
+            stored: shading.stored_relief(),
             _pad: 0,
         };
         queue.write_buffer(&self.shade_params_buffer, 0, bytemuck::bytes_of(&params));
@@ -6388,7 +6406,7 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // takes its plain +-1 difference of whatever came back.
         // Analytic slopes come from the derivative, not from a height
         // field, so there is nothing for the blur to soften.
-        let softened = if shade_on && params.analytic == 0 {
+        let softened = if shade_on && params.stored == 0 {
             self.run_height_blur(device, queue, encoder, params.softness)
         } else {
             None
@@ -6424,7 +6442,7 @@ struct ShadeParams {{
     height_curve: u32,
     height_pre: f32,
     height_post: f32,
-    analytic: u32,
+    stored: u32,
 }}
 
 @group(0) @binding(0) var src_tex: texture_2d<f32>;
@@ -6571,16 +6589,16 @@ fn shade_pixel(rgb: vec3<f32>, p: vec2<i32>) -> vec3<f32> {{
     // produced.
     var dx = 0.0;
     var dy = 0.0;
-    if (shade.analytic == 0u) {{
+    if (shade.stored == 0u) {{
         dx = (height_at(p + vec2<i32>(1, 0), dims) - height_at(p - vec2<i32>(1, 0), dims)) * 0.5;
         dy = (height_at(p + vec2<i32>(0, 1), dims) - height_at(p - vec2<i32>(0, 1), dims)) * 0.5;
     }}
     // The other stencils (SlopeStencil). Forward: half a pixel off
     // centre. Roberts: the two diagonals of the 2x2 block, turned back
     // onto the axes. Least squares: the plane fitted to the 3x3 block.
-    if (shade.analytic != 0u) {{
-        // The iterate pass stored -grad h itself (blue, alpha): no
-        // stencil, no height curve.
+    if (shade.stored != 0u) {{
+        // The iterate pass stored -grad h itself (blue, alpha), or
+        // Embossed's response (blue): no stencil, no height curve.
     }} else if (shade.stencil == 1u) {{
         let h0 = height_at(p, dims);
         dx = height_at(p + vec2<i32>(1, 0), dims) - h0;
@@ -6604,9 +6622,14 @@ fn shade_pixel(rgb: vec3<f32>, p: vec2<i32>) -> vec3<f32> {{
     // Exaggerated gradient. +y is DOWN in pixel space, so dy is
     // negated to put the light where the azimuth says it is.
     var g = vec2<f32>(-dx, dy) * shade.height;
-    if (shade.analytic != 0u) {{
-        let q = clamp(p, vec2<i32>(0, 0), dims - vec2<i32>(1, 1));
-        g = textureLoad(height_tex, q, 0).ba * shade.height;
+    let stored_at = textureLoad(height_tex, clamp(p, vec2<i32>(0, 0), dims - vec2<i32>(1, 1)), 0);
+    if (shade.stored == 1u) {{
+        g = stored_at.ba * shade.height;
+    }}
+    // Embossed has no slope: its response is stored whole, below. Only
+    // the surface texture tilts it.
+    if (shade.stored == 2u) {{
+        g = vec2<f32>(0.0);
     }}
 
     // Surface texture: its own micro-relief, added to the TILT rather
@@ -6656,7 +6679,7 @@ fn shade_pixel(rgb: vec3<f32>, p: vec2<i32>) -> vec3<f32> {{
     // flat ground receives, sin(elevation), so flat ground still sits at
     // zero and the shadow and highlight scales keep their meaning: full
     // highlight facing the light square on, full shadow facing away.
-    if (shade.model == 1u) {{
+    if (shade.model == 1u && shade.stored != 2u) {{
         let ce = cos(shade.elevation);
         let se = sin(shade.elevation);
         let l = vec3<f32>(shade.light * ce, se);
@@ -6666,6 +6689,15 @@ fn shade_pixel(rgb: vec3<f32>, p: vec2<i32>) -> vec3<f32> {{
             (lambert - se) / max(1.0 - se, 1e-4),
             lambert >= se,
         );
+    }}
+    // EMBOSSED: -1, 0 or +1 by which of its two orbits came out higher
+    // (Ultra Fractal's Emboss greys 0.2, 0.5, 0.8). Its Hard Light merge
+    // is a black Multiply shadow and a white Screen highlight, both at
+    // strength 0.6: multiplying by black at 0.6 is Hard Light with 0.2,
+    // screening white at 0.6 is Hard Light with 0.8, and 0.5 is Hard
+    // Light's identity, as 0 is here.
+    if (shade.stored == 2u) {{
+        response = clamp(response + stored_at.b, -1.0, 1.0);
     }}
     let hi = clamp(response, 0.0, 1.0);
     // The ambient floor keeps that much of the base on the dark side.
@@ -7040,16 +7072,22 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let lens_src = super::lens::lens_source(escape, &registry);
         let layer = super::layer_of(escape);
         let analytic = escape.shading.wants_derivative();
-        let offset = escape.shading.wants_offset_orbits();
+        let orbits = if !escape.shading.wants_offset_orbits() {
+            assembler::ReliefOrbits::None
+        } else if escape.shading.field == crate::config::escape::ShadingField::Embossed {
+            assembler::ReliefOrbits::Embossed
+        } else {
+            assembler::ReliefOrbits::Offset
+        };
         let key = format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{:?}|{}",
             formula.name,
             coloring.name,
             layer.map_or("", |l| l.name),
             damped,
             interior,
             analytic,
-            offset,
+            orbits,
             super::lens::lens_key(escape, &registry),
         );
         if !self.pipelines.contains_key(&key) {
@@ -7060,7 +7098,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 damped,
                 interior,
                 analytic,
-                offset,
+                orbits,
                 lens_src.as_deref(),
             );
             let module = device.create_shader_module(ShaderModuleDescriptor {
@@ -7222,16 +7260,27 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             shade_flags: escape.shading.field.to_gpu(),
             stride: self.stride(escape),
             degree,
-            pmap_flags: escape.palette_map.gpu_flags() | (escape.layer.blend.to_gpu() << 16),
+            pmap_flags: escape.palette_map.gpu_flags()
+                | (escape.layer.blend.to_gpu() << 16)
+                // Embossed: its type in bits 24-26, Angle's sections less
+                // one in 27-31.
+                | (escape.shading.emboss.to_gpu() << 24)
+                | ((escape.shading.emboss_sections.clamp(
+                    crate::config::escape::EMBOSS_SECTIONS_RANGE.0,
+                    crate::config::escape::EMBOSS_SECTIONS_RANGE.1,
+                ) - 1)
+                    << 27),
             pmap: [
                 escape.palette_map.gpu_pivot(),
                 escape.layer.weight.clamp(0.0, 1.0),
-                // The offset relief's step, a fraction of the view height.
+                // The relief orbits' step (offset relief, Embossed), a
+                // fraction of the view height.
                 escape.shading.offset.clamp(
                     crate::config::escape::RELIEF_OFFSET_RANGE.0,
                     crate::config::escape::RELIEF_OFFSET_RANGE.1,
                 ),
-                0.0,
+                // The relief light's azimuth, which Embossed steps toward.
+                escape.shading.light_angle.to_radians(),
             ],
             fparams,
             cparams,

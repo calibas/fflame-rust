@@ -2014,6 +2014,12 @@ impl ConfigManager {
             ConfigPath::EscapeShadingHeightPre => Ok(config.escape.shading.height_pre.into()),
             ConfigPath::EscapeShadingHeightPost => Ok(config.escape.shading.height_post.into()),
             ConfigPath::EscapeShadingOffset => Ok(config.escape.shading.offset.into()),
+            ConfigPath::EscapeShadingEmboss => Ok(ConfigValue::String(
+                config.escape.shading.emboss.as_str().to_string(),
+            )),
+            ConfigPath::EscapeShadingEmbossSections => {
+                Ok(ConfigValue::UInt(config.escape.shading.emboss_sections))
+            }
             ConfigPath::EscapeShadingTextureScale => {
                 Ok(config.escape.shading.texture_scale.into())
             }
@@ -3406,6 +3412,15 @@ impl ConfigManager {
                 let v: f32 = value.try_into()?;
                 let (lo, hi) = crate::config::escape::RELIEF_OFFSET_RANGE;
                 self.current.escape.shading.offset = v.clamp(lo, hi);
+            }
+            ConfigPath::EscapeShadingEmboss => {
+                let v: String = value.try_into()?;
+                self.current.escape.shading.emboss = crate::config::escape::EmbossType::from_name(&v);
+            }
+            ConfigPath::EscapeShadingEmbossSections => {
+                let v: u32 = value.try_into()?;
+                let (lo, hi) = crate::config::escape::EMBOSS_SECTIONS_RANGE;
+                self.current.escape.shading.emboss_sections = v.clamp(lo, hi);
             }
             ConfigPath::EscapeShadingHighlightBlend => {
                 let v: String = value.try_into()?;

@@ -500,6 +500,8 @@ pub enum ConfigPath {
     EscapeShadingHeightPre,
     EscapeShadingHeightPost,
     EscapeShadingOffset,
+    EscapeShadingEmboss,
+    EscapeShadingEmbossSections,
     /// Coloring registry name.
     EscapeColoring,
     /// One parameter of the ACTIVE formula, by name — keyed like
@@ -1108,6 +1110,8 @@ impl Display for ConfigPath {
             ConfigPath::EscapeShadingHeightPre => write!(f, "Relief Height Pre-scale"),
             ConfigPath::EscapeShadingHeightPost => write!(f, "Relief Height Post-scale"),
             ConfigPath::EscapeShadingOffset => write!(f, "Relief Offset"),
+            ConfigPath::EscapeShadingEmboss => write!(f, "Relief Emboss Type"),
+            ConfigPath::EscapeShadingEmbossSections => write!(f, "Relief Emboss Sections"),
             ConfigPath::EscapeColoring => write!(f, "Escape Coloring"),
             ConfigPath::EscapeFormulaParam { param } => write!(f, "Formula → {param}"),
             ConfigPath::EscapeColoringParam { param } => write!(f, "Coloring → {param}"),
@@ -1461,6 +1465,10 @@ impl ConfigPath {
             ConfigPath::EscapeShadingHeightPre => I18nKey::simple("history.param.escape_shading_height_pre"),
             ConfigPath::EscapeShadingHeightPost => I18nKey::simple("history.param.escape_shading_height_post"),
             ConfigPath::EscapeShadingOffset => I18nKey::simple("history.param.escape_shading_offset"),
+            ConfigPath::EscapeShadingEmboss => I18nKey::simple("history.param.escape_shading_emboss"),
+            ConfigPath::EscapeShadingEmbossSections => {
+                I18nKey::simple("history.param.escape_shading_emboss_sections")
+            }
             ConfigPath::EscapeColoring => I18nKey::simple("history.param.escape_coloring"),
             ConfigPath::EscapeFormulaParam { param } => I18nKey::with_params(
                 "history.param.escape_formula_param",
@@ -2841,6 +2849,8 @@ impl ConfigPath {
             | ConfigPath::EscapeShadingHeightPre
             | ConfigPath::EscapeShadingHeightPost
             | ConfigPath::EscapeShadingOffset
+            | ConfigPath::EscapeShadingEmboss
+            | ConfigPath::EscapeShadingEmbossSections
             | ConfigPath::EscapeColoring
             | ConfigPath::EscapeFormulaParam { .. }
             | ConfigPath::EscapeColoringParam { .. }
@@ -3261,6 +3271,8 @@ impl ConfigPath {
             ConfigPath::EscapeShadingHeightPre => "Escape.Shading.HeightPre".to_string(),
             ConfigPath::EscapeShadingHeightPost => "Escape.Shading.HeightPost".to_string(),
             ConfigPath::EscapeShadingOffset => "Escape.Shading.Offset".to_string(),
+            ConfigPath::EscapeShadingEmboss => "Escape.Shading.Emboss".to_string(),
+            ConfigPath::EscapeShadingEmbossSections => "Escape.Shading.EmbossSections".to_string(),
             ConfigPath::EscapeColoring => "Escape.Coloring".to_string(),
             ConfigPath::EscapeFormulaParam { param } => format!("Escape.FormulaParam.{param}"),
             ConfigPath::EscapeColoringParam { param } => format!("Escape.ColoringParam.{param}"),
@@ -3497,6 +3509,8 @@ impl ConfigPath {
                 ["Shading", "HeightPre"] => return Some(ConfigPath::EscapeShadingHeightPre),
                 ["Shading", "HeightPost"] => return Some(ConfigPath::EscapeShadingHeightPost),
                 ["Shading", "Offset"] => return Some(ConfigPath::EscapeShadingOffset),
+                ["Shading", "Emboss"] => return Some(ConfigPath::EscapeShadingEmboss),
+                ["Shading", "EmbossSections"] => return Some(ConfigPath::EscapeShadingEmbossSections),
                 ["Coloring"] => return Some(ConfigPath::EscapeColoring),
                 ["FormulaParam", param] => {
                     return Some(ConfigPath::EscapeFormulaParam { param: param.to_string() })
@@ -4298,6 +4312,11 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapePaletteStepped
         | ConfigPath::EscapeShadingField
         | ConfigPath::EscapeShadingTextureKind
+        // Embossed's type picks a different integer field, and its
+        // sections count is a whole number of sectors: neither has a
+        // value part-way between two keyframes.
+        | ConfigPath::EscapeShadingEmboss
+        | ConfigPath::EscapeShadingEmbossSections
         | ConfigPath::EscapeDownsample
         | ConfigPath::EscapeShadingShadowBlend
         | ConfigPath::EscapeShadingHighlightBlend

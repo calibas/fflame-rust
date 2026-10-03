@@ -229,7 +229,8 @@ struct EscRun {
 }
 
 // The iteration for one point of the plane: the pixel's own orbit, and
-// with offset relief the two beside it.
+// with offset relief the two beside it. (Embossed runs its two in step,
+// so it has a loop of its own: esc_emboss.)
 fn esc_run(pixel: vec2<f32>) -> EscRun {
     // Julia toggle: parameter plane iterates z from the formula's
     // critical-point seed with c = pixel; dynamical plane iterates z
@@ -270,7 +271,7 @@ fn esc_run(pixel: vec2<f32>) -> EscRun {
     return EscRun(z, dz, accum_state, n, escaped, converged, period);
 }
 
-//__OFFSET_RELIEF_FNS__
+//__RELIEF_ORBITS_FNS__
 
 @compute @workgroup_size(8, 8, 1)
 fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -336,7 +337,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         height = raw;
         relief = esc_relief_source(raw, t, summary, accum_state);
         slope = esc_analytic_slope(summary);
-        //__OFFSET_RELIEF__
+        //__RELIEF_ORBITS__
         rgb = esc_palette(esc_layer(t, summary, accum_state));
         coverage = 1.0;
     }
@@ -597,6 +598,242 @@ fn esc_offset_slope(pixel: vec2<f32>, h: f32) -> vec2<f32> {
 }
 "#;
 
+/// Orbits the relief runs beside the pixel's own, spliced only into a
+/// pipeline built for them: each is another copy of the loop once the
+/// compiler inlines it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReliefOrbits {
+    None,
+    /// `ShadingField::Offset`: two more runs of `esc_run`.
+    Offset,
+    /// `ShadingField::Embossed`: a pair run in step, `esc_emboss`.
+    Embossed,
+}
+
+/// Embossed relief (`ShadingField::Embossed`, survey R7), after the
+/// formula-specific half [`emboss_wgsl`] generates.
+const EMBOSS_WGSL: &str = r#"
+// Embossed relief (ShadingField::Embossed, survey R7): Ultra Fractal's
+// Embossed formula and Emboss colouring, from their Standard.ulb source
+// (Standard_Embossed, Standard_EmbossedHelper, Standard_Emboss; written
+// by Kerry Mitchell). Two orbits, at c - dr and c + dr with dr pointing
+// at the light, run in step; each is reduced to a whole number
+// (EmbossType), and the pixel is a shadow, a highlight or flat by which
+// came out higher. As Ultra Fractal requires ("Periodicity checking
+// needs to be off"), neither orbit stops early: one that never escapes
+// runs to the iteration limit.
+
+// The reductions made on the iteration an orbit escapes (Iteration,
+// Magnitude, Angle). The others keep what they counted.
+fn esc_emboss_last(z: vec2<f32>, it: u32, kind: u32, sections: f32, r: f32) -> f32 {
+    switch kind {
+        case 0u: {
+            return f32(it);
+        }
+        case 4u: {
+            // trunc(ln|z|), without squaring a large |z| into overflow.
+            let m = max(abs(z.x), abs(z.y));
+            let q = min(abs(z.x), abs(z.y)) / max(m, 1e-30);
+            return trunc(log(max(m, 1e-30)) + 0.5 * log(1.0 + q * q));
+        }
+        case 5u: {
+            // Which of `sections` equal sectors arg z lies in, counted
+            // from the positive real axis. The origin (reachable only by
+            // a formula that converges there) reads as sector 0 rather
+            // than handing atan2 a zero pair (CLAUDE.md, Metal).
+            if (max(abs(z.x), abs(z.y)) < 1e-30) {
+                return 0.0;
+            }
+            var t = 0.5 * atan2(z.y, z.x) / 3.14159265;
+            if (t < 0.0) {
+                t = t + 1.0;
+            }
+            return trunc(t * sections);
+        }
+        default: {
+            return r;
+        }
+    }
+}
+
+// The reductions made at every iteration, the escaping one included.
+// Smallest Magnitude keeps ONE minimum for both orbits, as Ultra Fractal
+// does (its helpers share their owner's fRMin): an orbit takes the
+// iteration only when it beats the other's best so far as well.
+fn esc_emboss_each(z: vec2<f32>, it: u32, kind: u32, r: ptr<function, f32>, rmin: ptr<function, f32>) {
+    if (kind == 1u) {
+        if (z.x > 0.0) {
+            *r = *r + 1.0;
+        }
+    } else if (kind == 2u) {
+        if (z.y > 0.0) {
+            *r = *r + 1.0;
+        }
+    } else if (kind == 3u) {
+        let m = dot(z, z);
+        if (m < *rmin) {
+            *rmin = m;
+            *r = f32(it);
+        }
+    }
+}
+
+// Embossed's response at a pixel: -1 shadow, +1 highlight, 0 flat.
+fn esc_emboss(pixel: vec2<f32>) -> f32 {
+    let kind = (params.pmap_flags >> 24u) & 7u;
+    let sections = f32(((params.pmap_flags >> 27u) & 31u) + 1u);
+    // dr: a fraction of the view toward the light, the light's screen
+    // azimuth turned into the plane by the view rotation. Ultra
+    // Fractal's dr is fixed in the plane, so there the light turns with
+    // a rotated view; here it stays where the relief's light is.
+    let a = params.pmap.w;
+    let rot = params.rot_cs;
+    let toward = cos(a) * vec2<f32>(rot.x, rot.y) + sin(a) * vec2<f32>(-rot.y, rot.x);
+    let dr = params.pmap.z * params.span.y * toward;
+    let is_julia = (params.flags & 1u) != 0u;
+    let p0 = pixel - dr;
+    let p1 = pixel + dr;
+    var z0 = esc_emboss_seed(p0);
+    var z1 = esc_emboss_seed(p1);
+    var c0 = select(p0, params.julia_c, is_julia);
+    var c1 = select(p1, params.julia_c, is_julia);
+    var q0 = esc_emboss_prev(z0);
+    var q1 = esc_emboss_prev(z1);
+    var done0 = false;
+    var done1 = false;
+    var r0 = 0.0;
+    var r1 = 0.0;
+    var rmin = 1e20;
+    for (var i = 0u; i < params.max_iter; i = i + 1u) {
+        // Ultra Fractal's fIteration, counted before either orbit steps.
+        let it = i + 1u;
+        if (!done0) {
+            done0 = esc_emboss_step(&z0, &c0, &q0, i);
+            if (done0) {
+                r0 = esc_emboss_last(z0, it, kind, sections, r0);
+            }
+            esc_emboss_each(z0, it, kind, &r0, &rmin);
+        }
+        if (!done1) {
+            done1 = esc_emboss_step(&z1, &c1, &q1, i);
+            if (done1) {
+                r1 = esc_emboss_last(z1, it, kind, sections, r1);
+            }
+            esc_emboss_each(z1, it, kind, &r1, &rmin);
+        }
+        if (done0 && done1) {
+            break;
+        }
+    }
+    // Standard_Emboss: the gradient at 0.2 where the orbit away from the
+    // light came out lower, 0.8 where higher, 0.5 where they tie. As a
+    // response: ground rising toward the light faces away from it.
+    if (r0 < r1) {
+        return -1.0;
+    }
+    if (r1 < r0) {
+        return 1.0;
+    }
+    return 0.0;
+}
+"#;
+
+/// Embossed's formula-specific half: the seed, the history's seed, and
+/// one step with its bailout, as functions of their own so the pair can
+/// call them for either orbit. The step is [`step_lines`], the very
+/// text the pixel's own loop runs.
+fn emboss_wgsl(formula: &FormulaDef, damped: bool, param_seed: &str) -> String {
+    let non_escaping = formula.has_feature(FormulaFeature::NonEscaping);
+    let convergent = formula.has_feature(FormulaFeature::Convergent);
+    let prev_init = if formula.wgsl_prev_init.is_empty() {
+        "vec2<f32>(0.0, 0.0)"
+    } else {
+        formula.wgsl_prev_init
+    };
+    let mut out = vec![
+        "fn esc_emboss_seed(pixel: vec2<f32>) -> vec2<f32> {".to_string(),
+        "    let is_julia = (params.flags & 1u) != 0u;".to_string(),
+        format!("    return select({param_seed}, pixel, is_julia);"),
+        "}".to_string(),
+        String::new(),
+        "fn esc_emboss_prev(z: vec2<f32>) -> vec2<f32> {".to_string(),
+        format!("    return {prev_init};"),
+        "}".to_string(),
+        String::new(),
+        "// One step of one orbit; true once it has bailed out.".to_string(),
+        "fn esc_emboss_step(zp: ptr<function, vec2<f32>>, cp: ptr<function, vec2<f32>>, pp: ptr<function, vec2<f32>>, i: u32) -> bool {".to_string(),
+        "    var z = *zp;".to_string(),
+        "    var c = *cp;".to_string(),
+        "    var z_prev = *pp;".to_string(),
+    ];
+    out.extend(step_lines(formula, damped, convergent, false));
+    out.push("    *zp = z;".to_string());
+    out.push("    *cp = c;".to_string());
+    out.push("    *pp = z_prev;".to_string());
+    out.push("    var bailed = false;".to_string());
+    if !non_escaping {
+        out.push(escape_metric(formula.escape_metric));
+        out.push("        bailed = esc_metric > params.bailout;".to_string());
+    }
+    if convergent {
+        out.push("        let conv_dz = z - z_before;".to_string());
+        out.push("        bailed = bailed || dot(conv_dz, conv_dz) < 1e-12;".to_string());
+    }
+    out.push("    return bailed;".to_string());
+    out.push("}".to_string());
+    out.push(EMBOSS_WGSL.trim().to_string());
+    out.join("\n")
+}
+
+/// The formula step as the loop runs it, over the locals `z`, `c`,
+/// `z_prev`, `dz` and `i`. Shared by the pixel's own loop and
+/// Embossed's pair, so the two cannot step differently.
+fn step_lines(formula: &FormulaDef, damped: bool, z_before: bool, derivative: bool) -> Vec<String> {
+    let needs_prev = formula.has_feature(FormulaFeature::NeedsPrevZ);
+    let needs_index = formula.has_feature(FormulaFeature::NeedsIndex);
+    let mutates_c = formula.has_feature(FormulaFeature::MutatesC);
+    let mut out = Vec::new();
+    // Damped (Mann) wrap: z <- z + alpha*(f(z) - z), with
+    // COMPLEX alpha. Compiled in only when alpha != 1, so
+    // undamped pipelines stay byte-identical (a runtime
+    // mix() at alpha = 1 is not bit-exact).
+    let c_arg = if mutates_c { "&c" } else { "c" };
+    // `i` is the loop counter, in scope here. A formula
+    // whose RULE changes per step (Origami's fold line)
+    // takes it; everything else keeps the two-argument
+    // signature byte-for-byte.
+    let call = match (needs_prev, needs_index) {
+        (true, true) => format!("formula_step(z, {c_arg}, z_prev, i)"),
+        (true, false) => format!("formula_step(z, {c_arg}, z_prev)"),
+        (false, true) => format!("formula_step(z, {c_arg}, i)"),
+        (false, false) => format!("formula_step(z, {c_arg})"),
+    };
+    if z_before {
+        // The pre-step iterate: the convergence register,
+        // and the accumulator's z_prev argument. Kept
+        // independently of the formula's own history.
+        out.push("        let z_before = z;".to_string());
+    }
+    if derivative {
+        // Chain rule at the PRE-step iterate.
+        out.push("        dz = formula_derivative(z, c, dz, is_julia);".to_string());
+    }
+    if damped {
+        out.push(format!("        let z_raw = {call};"));
+        if needs_prev {
+            out.push("        z_prev = z;".to_string());
+        }
+        out.push("        z = z + esc_cmul(params.damping, z_raw - z);".to_string());
+    } else if needs_prev {
+        out.push(format!("        let z_next = {call};"));
+        out.push("        z_prev = z;".to_string());
+        out.push("        z = z_next;".to_string());
+    } else {
+        out.push(format!("        z = {call};"));
+    }
+    out
+}
+
 /// The analytic relief slope (`ShadingField::Analytic`), spliced into
 /// every mode-A template beside the layer code.
 const ANALYTIC_SLOPE_WGSL: &str = r#"
@@ -726,6 +963,20 @@ pub fn result_bytes(wide: bool) -> u64 {
 /// trig/Collatz. Biomorph (Pickover) still overrides either at
 /// runtime — a switch on every formula, not a formula (plan §3).
 fn escape_test(metric: crate::escape::EscapeMetric) -> String {
+    format!(
+        "{}\n\
+         \x20       if (esc_metric > params.bailout) {{\n\
+         \x20           escaped = true;\n\
+         \x20           n = i + 1u;\n\
+         \x20           break;\n\
+         \x20       }}",
+        escape_metric(metric)
+    )
+}
+
+/// `esc_metric`, the value the escape test compares with the bailout:
+/// the formula's metric, or the biomorph's single component.
+fn escape_metric(metric: crate::escape::EscapeMetric) -> String {
     let base = match metric {
         crate::escape::EscapeMetric::NormSq => "dot(z, z)",
         crate::escape::EscapeMetric::Re => "z.x",
@@ -735,12 +986,7 @@ fn escape_test(metric: crate::escape::EscapeMetric) -> String {
         "        let bio = (params.flags >> 1u) & 3u;\n\
          \x20       var esc_metric = {base};\n\
          \x20       if (bio == 1u) {{ esc_metric = z.x * z.x; }}\n\
-         \x20       if (bio == 2u) {{ esc_metric = z.y * z.y; }}\n\
-         \x20       if (esc_metric > params.bailout) {{\n\
-         \x20           escaped = true;\n\
-         \x20           n = i + 1u;\n\
-         \x20           break;\n\
-         \x20       }}"
+         \x20       if (bio == 2u) {{ esc_metric = z.y * z.y; }}"
     )
 }
 
@@ -6776,7 +7022,7 @@ pub fn assemble_with_lens(
     interior_detect: bool,
     lens: Option<&str>,
 ) -> String {
-    assemble_layered(formula, coloring, None, damped, interior_detect, false, false, lens)
+    assemble_layered(formula, coloring, None, damped, interior_detect, false, ReliefOrbits::None, lens)
 }
 
 /// [`assemble_with_lens`] with a texture layer (`ColoringLayer`): the
@@ -6792,9 +7038,9 @@ pub fn assemble_layered(
     // The relief's analytic slopes read the derivative orbit, so it is
     // compiled for them even when neither colouring needs it.
     analytic_relief: bool,
-    // Offset-orbit relief runs the orbit twice more per pixel; the
-    // calls are spliced only for it.
-    offset_relief: bool,
+    // Orbits the relief runs beside the pixel's own (offset relief,
+    // Embossed), spliced only for them.
+    relief_orbits: ReliefOrbits,
     lens: Option<&str>,
 ) -> String {
     let layer = layer.filter(|l| crate::escape::layer_fits(coloring, l));
@@ -6845,16 +7091,20 @@ pub fn assemble_layered(
     for line in template.lines() {
         match line.trim() {
             "//__PALETTE_MAP__" => out.push(PALETTE_MAP_WGSL.trim().to_string()),
-            "//__OFFSET_RELIEF_FNS__" => {
-                if offset_relief {
-                    out.push(OFFSET_RELIEF_FNS_WGSL.trim().to_string());
+            "//__RELIEF_ORBITS_FNS__" => match relief_orbits {
+                ReliefOrbits::None => {}
+                ReliefOrbits::Offset => out.push(OFFSET_RELIEF_FNS_WGSL.trim().to_string()),
+                ReliefOrbits::Embossed => out.push(emboss_wgsl(formula, damped, param_seed)),
+            },
+            "//__RELIEF_ORBITS__" => match relief_orbits {
+                ReliefOrbits::None => {}
+                ReliefOrbits::Offset => {
+                    out.push("        slope = esc_offset_slope(pixel, raw);".to_string())
                 }
-            }
-            "//__OFFSET_RELIEF__" => {
-                if offset_relief {
-                    out.push("        slope = esc_offset_slope(pixel, raw);".to_string());
+                ReliefOrbits::Embossed => {
+                    out.push("        slope = vec2<f32>(esc_emboss(pixel), 0.0);".to_string())
                 }
-            }
+            },
             // The lens: its variation functions and helper
             // libraries at top level, and the warp itself on the
             // screen offset. Both empty without one, so the shader is
@@ -7016,44 +7266,7 @@ pub fn assemble_layered(
                 }
             }
             "//__STEP__" => {
-                // Damped (Mann) wrap: z <- z + alpha*(f(z) - z), with
-                // COMPLEX alpha. Compiled in only when alpha != 1, so
-                // undamped pipelines stay byte-identical (a runtime
-                // mix() at alpha = 1 is not bit-exact).
-                let c_arg = if mutates_c { "&c" } else { "c" };
-                // `i` is the loop counter, in scope here. A formula
-                // whose RULE changes per step (Origami's fold line)
-                // takes it; everything else keeps the two-argument
-                // signature byte-for-byte.
-                let call = match (needs_prev, needs_index) {
-                    (true, true) => format!("formula_step(z, {c_arg}, z_prev, i)"),
-                    (true, false) => format!("formula_step(z, {c_arg}, z_prev)"),
-                    (false, true) => format!("formula_step(z, {c_arg}, i)"),
-                    (false, false) => format!("formula_step(z, {c_arg})"),
-                };
-                if convergent || needs_accum {
-                    // The pre-step iterate: the convergence register,
-                    // and the accumulator's z_prev argument. Kept
-                    // independently of the formula's own history.
-                    out.push("        let z_before = z;".to_string());
-                }
-                if needs_derivative {
-                    // Chain rule at the PRE-step iterate.
-                    out.push("        dz = formula_derivative(z, c, dz, is_julia);".to_string());
-                }
-                if damped {
-                    out.push(format!("        let z_raw = {call};"));
-                    if needs_prev {
-                        out.push("        z_prev = z;".to_string());
-                    }
-                    out.push("        z = z + esc_cmul(params.damping, z_raw - z);".to_string());
-                } else if needs_prev {
-                    out.push(format!("        let z_next = {call};"));
-                    out.push("        z_prev = z;".to_string());
-                    out.push("        z = z_next;".to_string());
-                } else {
-                    out.push(format!("        z = {call};"));
-                }
+                out.extend(step_lines(formula, damped, convergent || needs_accum, needs_derivative));
             }
             _ => out.push(
                 line.replace("PARAM_PLANE_SEED", param_seed)
@@ -7245,13 +7458,13 @@ mod tests {
             for layer in crate::escape::COLORINGS {
                 if !crate::escape::layer_fits(base, layer) {
                     refused += 1;
-                    let src = assemble_layered(mandelbrot, base, Some(layer), false, true, false, false, None);
+                    let src = assemble_layered(mandelbrot, base, Some(layer), false, true, false, ReliefOrbits::None, None);
                     assert!(!src.contains("texture layer:"), "{} over {} was spliced", layer.name, base.name);
                     continue;
                 }
                 pairs += 1;
                 let what = format!("{} over {}", layer.name, base.name);
-                let direct = assemble_layered(mandelbrot, base, Some(layer), false, true, false, false, None);
+                let direct = assemble_layered(mandelbrot, base, Some(layer), false, true, false, ReliefOrbits::None, None);
                 assert!(direct.contains("fn layer_coloring_map("), "{what}: the layer was not renamed");
                 validate(&direct, &format!("{what} (direct)"));
                 validate(
@@ -7265,9 +7478,10 @@ mod tests {
     }
 
     /// The relief variants of the direct shader -- analytic slopes
-    /// (the derivative compiled in for the relief alone) and offset
-    /// orbits (two more runs of the loop) -- assemble and validate, and
-    /// the extra runs are spliced only where asked for.
+    /// (the derivative compiled in for the relief alone), offset orbits
+    /// (two more runs of the loop) and Embossed (a pair run in step) --
+    /// assemble and validate for every formula, damped or not, and the
+    /// extra runs are spliced only where asked for.
     #[test]
     fn the_relief_variants_of_the_direct_shader_validate() {
         let validate = |src: &str, what: &str| {
@@ -7282,14 +7496,38 @@ mod tests {
         };
         let smooth = crate::escape::get_coloring("smooth");
         for f in crate::escape::FORMULAS {
-            for (analytic, offset) in [(true, false), (false, true), (true, true)] {
-                let src = assemble_layered(f, smooth, None, false, true, analytic, offset, None);
-                validate(&src, &format!("{} analytic={analytic} offset={offset}", f.name));
-                assert_eq!(src.contains("esc_offset_slope(pixel, raw)"), offset, "{}", f.name);
+            for damped in [false, true] {
+                for (analytic, orbits) in [
+                    (true, ReliefOrbits::None),
+                    (false, ReliefOrbits::Offset),
+                    (true, ReliefOrbits::Offset),
+                    (false, ReliefOrbits::Embossed),
+                ] {
+                    let src = assemble_layered(f, smooth, None, damped, true, analytic, orbits, None);
+                    validate(&src, &format!("{} damped={damped} analytic={analytic} {orbits:?}", f.name));
+                    assert!(!src.contains("//__"), "{} left a marker", f.name);
+                    assert_eq!(
+                        src.contains("esc_offset_slope(pixel, raw)"),
+                        orbits == ReliefOrbits::Offset,
+                        "{}",
+                        f.name
+                    );
+                    assert_eq!(src.contains("fn esc_emboss("), orbits == ReliefOrbits::Embossed, "{}", f.name);
+                }
             }
         }
-        let plain = assemble_layered(crate::escape::get_formula("mandelbrot"), smooth, None, false, true, false, false, None);
-        assert_eq!(plain.matches("esc_run(").count(), 2, "one definition and one call without offset relief");
+        let plain = assemble_layered(
+            crate::escape::get_formula("mandelbrot"),
+            smooth,
+            None,
+            false,
+            true,
+            false,
+            ReliefOrbits::None,
+            None,
+        );
+        assert_eq!(plain.matches("esc_run(").count(), 2, "one definition and one call without relief orbits");
+        assert!(!plain.contains("fn esc_emboss"), "Embossed spliced into a pipeline without it");
     }
 
     /// The layer's renaming touches whole identifiers only.
