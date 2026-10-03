@@ -129,6 +129,12 @@ impl TexturesPanel {
     pub fn render(&mut self, ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
         self.refresh();
         let current = config_manager.config().escape.texture.clone();
+        // Simulation mode shows the library to browse and manage what it
+        // saved; only an escape-time fractal takes a texture.
+        let can_pick = config_manager.config().render_mode == crate::scene::transforms::RenderMode::Escape;
+        if !can_pick {
+            ui.weak(t!("textures_panel.browse_only"));
+        }
 
         ui.horizontal(|ui| {
             ui.label(t!("textures_panel.current"));
@@ -224,7 +230,7 @@ impl TexturesPanel {
             }
         });
 
-        if let Some(entry) = pick {
+        if let Some(entry) = pick.filter(|_| can_pick) {
             let texture = EscapeTexture { name: entry.name, config: Box::new(entry.config) };
             set_texture(config_manager, Some(texture), "history.action.texture_pick");
         }

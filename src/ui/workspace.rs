@@ -564,7 +564,7 @@ impl Workspace {
         let [_fractal_node, _right_node] = state.main_surface_mut().split_right(
             egui_dock::NodeIndex::root(),
             0.72,
-            vec![PanelType::Colors, PanelType::History],
+            vec![PanelType::Colors, PanelType::Textures, PanelType::History],
         );
 
         if preserve_help {
@@ -689,6 +689,7 @@ mod layout_tests {
                     PanelType::FractalViewport,
                     PanelType::Simulation,
                     PanelType::Colors,
+                    PanelType::Textures,
                     PanelType::History,
                 ],
             ),
