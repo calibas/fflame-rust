@@ -8285,6 +8285,88 @@ fn main() {
         }
     }
 
+    /// What a colouring or the relief calls a pixel is an OUTPUT pixel,
+    /// so antialiasing does not change the picture beyond smoothing it.
+    ///
+    /// Two cases that did: the distance estimate in pixel units measured
+    /// render pixels, so 2x supersampling shifted every colour by a
+    /// doubling; and offset-orbit relief, whose slope is per fraction of
+    /// the view, was scaled by the supersample factor along with the
+    /// slopes that are per render pixel. Each is compared at 1x and 2x
+    /// against the same comparison for a field with no pixels in it.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn pixel_units_mean_output_pixels_under_supersampling() {
+        use crate::config::escape::ShadingField;
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let mut base = crate::config::FractalConfig::default();
+        base.render_mode = crate::scene::transforms::RenderMode::Escape;
+        base.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        base.exposure = 1.0;
+        base.gamma = 1.0;
+        base.levels_enabled = false;
+        base.use_curve = false;
+        base.escape.center_re = "-0.6".to_string();
+        base.escape.center_im = "0.1".to_string();
+        base.escape.zoom_log2 = 0.4;
+        base.escape.max_iter = 300;
+        base.escape.bailout = 1.0e4;
+        let render = |c: &crate::config::FractalConfig| {
+            let job = crate::renderer::RenderJob::new(c, w, h);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+        // Mean absolute difference per channel between 1x and 2x.
+        let ss_change = |c: &crate::config::FractalConfig| -> f64 {
+            let mut a = c.clone();
+            a.escape.supersample = 1;
+            let mut b = c.clone();
+            b.escape.supersample = 2;
+            let (x, y) = (render(&a), render(&b));
+            let n = x.chunks(4).count() as f64;
+            x.chunks(4)
+                .zip(y.chunks(4))
+                .map(|(p, q)| (0..3).map(|k| p[k].abs_diff(q[k]) as f64).sum::<f64>() / 3.0)
+                .sum::<f64>()
+                / n
+        };
+
+        let mut de = base.clone();
+        de.escape.coloring = "distance_estimate".to_string();
+        de.escape.coloring_params.insert("scale".to_string(), 0.2);
+        let plane = ss_change(&de);
+        de.escape.coloring_params.insert("units".to_string(), 1.0);
+        let pixels = ss_change(&de);
+        println!("distance estimate, 1x -> 2x: plane units {plane:.2}, pixel units {pixels:.2}");
+        assert!(pixels < plane * 1.5 + 1.0, "pixel units moved with supersampling: {pixels:.2} against {plane:.2}");
+
+        let mut relief = base.clone();
+        relief.escape.coloring_params.insert("scale".to_string(), 0.05);
+        relief.escape.shading.enabled = true;
+        relief.escape.shading.height = 40.0;
+        relief.escape.shading.field = ShadingField::Offset;
+        // The relief's own strength: how far it moves the picture from
+        // the same render unlit, at each factor.
+        let strength = |ss: u32| -> f64 {
+            let mut lit = relief.clone();
+            lit.escape.supersample = ss;
+            let mut flat = lit.clone();
+            flat.escape.shading.enabled = false;
+            let (x, y) = (render(&lit), render(&flat));
+            let n = x.chunks(4).count() as f64;
+            x.chunks(4)
+                .zip(y.chunks(4))
+                .map(|(p, q)| (0..3).map(|k| p[k].abs_diff(q[k]) as f64).sum::<f64>() / 3.0)
+                .sum::<f64>()
+                / n
+        };
+        let (one, two) = (strength(1), strength(2));
+        println!("offset relief strength: 1x {one:.2}, 2x {two:.2}");
+        assert!((two / one - 1.0).abs() < 0.1, "offset relief changed strength with supersampling: {one:.2} -> {two:.2}");
+    }
+
     /// A stepped palette draws every stop as a flat band: an escape
     /// render through it shows the stops' colours and next to nothing
     /// in between, where the blended palette shows a continuum.
