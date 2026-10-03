@@ -7905,6 +7905,91 @@ fn main() {
         assert!(wrong * 200 <= checked, "{wrong} of {checked} pixels disagree with the definition");
     }
 
+    /// Analytic relief leans the way the numeric relief does.
+    ///
+    /// Both slope a surface that rises toward the set -- the smooth
+    /// count numerically, `-ln d` analytically -- along the same
+    /// direction, the potential's gradient; only how steep each is
+    /// differs. So lit from one side, a pixel that one darkens the
+    /// other must not brighten. Measured as the share of pixels both
+    /// moved that they moved the same way: a wrong sign, a lost
+    /// conjugate or a view rotation applied backwards turns it into its
+    /// opposite, which is why it is measured at a rotation as well. And
+    /// where no derivative is iterated (the perturbed rungs) analytic
+    /// relief is flat.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn analytic_relief_leans_the_way_the_numeric_relief_does() {
+        use crate::config::escape::ShadingField;
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        // The whole set: an exterior where the smooth count is smooth,
+        // so its finite differences point where its gradient does. In
+        // the dust near the boundary they point anywhere, which is the
+        // stencil noise analytic slopes exist to avoid.
+        config.escape.center_re = "-0.6".to_string();
+        config.escape.center_im = "0.1".to_string();
+        config.escape.zoom_log2 = 0.4;
+        config.escape.max_iter = 300;
+        config.escape.bailout = 1.0e4;
+        config.escape.coloring_params.insert("scale".to_string(), 0.05);
+        config.escape.shading.enabled = true;
+        config.escape.shading.height = 40.0;
+        let render = |c: &crate::config::FractalConfig| {
+            let job = crate::renderer::RenderJob::new(c, w, h);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+        // -1 darker, +1 brighter, 0 not moved by more than noise.
+        let moved = |shaded: &[u8], plain: &[u8]| -> Vec<i32> {
+            shaded
+                .chunks(4)
+                .zip(plain.chunks(4))
+                .map(|(s, p)| {
+                    let d: i32 = (0..3).map(|k| s[k] as i32 - p[k] as i32).sum();
+                    if d > 6 { 1 } else if d < -6 { -1 } else { 0 }
+                })
+                .collect()
+        };
+        for rotation in [0.0f32, 0.7] {
+            let mut c = config.clone();
+            c.escape.rotation = rotation;
+            let mut off = c.clone();
+            off.escape.shading.enabled = false;
+            let plain = render(&off);
+            let numeric = moved(&render(&c), &plain);
+            c.escape.shading.field = ShadingField::Analytic;
+            let analytic = moved(&render(&c), &plain);
+            let both: Vec<(i32, i32)> = numeric.iter().zip(&analytic).filter(|(a, b)| **a != 0 && **b != 0).map(|(a, b)| (*a, *b)).collect();
+            let same = both.iter().filter(|(a, b)| a == b).count();
+            let agree = same as f64 / both.len().max(1) as f64;
+            println!("rotation {rotation}: {} pixels moved by both, {agree:.3} the same way", both.len());
+            assert!(both.len() > (w * h / 20) as usize, "too few pixels moved by both: {}", both.len());
+            // Measured 0.971 and 0.972.
+            assert!(agree > 0.9, "analytic and numeric relief lean opposite ways at rotation {rotation}: {agree:.3} agree");
+        }
+
+        // Past the perturbation threshold there is no derivative: flat.
+        let mut deep = config.clone();
+        deep.escape.zoom_log2 = 30.0;
+        deep.escape.center_re = "-0.7436438870371587".to_string();
+        deep.escape.center_im = "0.1318259042053119".to_string();
+        deep.escape.max_iter = 2000;
+        deep.escape.shading.field = ShadingField::Analytic;
+        let mut deep_off = deep.clone();
+        deep_off.escape.shading.enabled = false;
+        let d = render(&deep).iter().zip(render(&deep_off).iter()).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(0);
+        assert!(d <= 1, "analytic relief without a derivative moved a pixel by {d}");
+    }
+
     /// A stepped palette draws every stop as a flat band: an escape
     /// render through it shows the stops' colours and next to nothing
     /// in between, where the blended palette shows a continuum.

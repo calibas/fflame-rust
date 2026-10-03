@@ -78,7 +78,7 @@ struct EscapeParams {
 // every store but one falls out of bounds and WGSL discards it -- so
 // the cost of always writing is a single dead store per pixel, and
 // there is no second shader variant to keep in step.
-@group(0) @binding(4) var height_tex: texture_storage_2d<rg32float, write>;
+@group(0) @binding(4) var height_tex: texture_storage_2d<rgba32float, write>;
 
 // Terminal per-pixel iteration record (32 B/px), written on a pass
 // that completes the pixel's iteration when params.flags bit 3 is
@@ -294,6 +294,8 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // exactly on the set boundary.
     var height = 0.0;
     var relief = 0.0;
+    // Blue and alpha: the analytic slope, when the relief asks for it.
+    var slope = vec2<f32>(0.0);
     if (escaped || COLORING_COLORS_INTERIOR) {
         let summary = OrbitSummary(z, n, escaped, converged, period, dz);
         // `fract` so unbounded colorings cycle as they grow; a
@@ -306,6 +308,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // turns every palette band into a step (the engraved look).
         height = raw;
         relief = esc_relief_source(raw, t, summary, accum_state);
+        slope = esc_analytic_slope(summary);
         rgb = esc_palette(esc_layer(t, summary, accum_state));
         coverage = 1.0;
     }
@@ -317,7 +320,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         );
     }
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(rgb, coverage));
-    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(height, relief, 0.0, 0.0));
+    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(height, relief, slope));
 }
 "#;
 
@@ -528,6 +531,40 @@ fn layer_wgsl(layer: Option<&ColoringDef>) -> String {
         ESC_LAYER_WGSL.trim()
     )
 }
+
+/// The analytic relief slope (`ShadingField::Analytic`), spliced into
+/// every mode-A template beside the layer code.
+const ANALYTIC_SLOPE_WGSL: &str = r#"
+// Analytic relief (ShadingField::Analytic, survey R5): the slope of
+// h = -ln d, d the distance estimate in render pixels, taken from the
+// derivative rather than from neighbouring pixels -- Kalles
+// Fraktaler's analytic slopes (its 1/DE). The gradient is 1/d along
+// the potential's, conj(dz/z), which points away from the set; turned
+// from the plane into the screen's y-up frame, where the relief pass
+// lights it. Zero where no derivative is iterated: the perturbed rungs
+// and the formulas without one, which the panel says.
+fn esc_analytic_slope(sum: OrbitSummary) -> vec2<f32> {
+    if (!HAS_DERIVATIVE || params.shade_flags != 3u || !sum.escaped) {
+        return vec2<f32>(0.0);
+    }
+    let r = max(length(sum.z), 1.0000001);
+    let dzl = length(sum.dz);
+    // Negated comparisons: a NaN fails them, under fast-math too.
+    if (!(dzl > 1e-30)) {
+        return vec2<f32>(0.0);
+    }
+    let d_px = r * log(r) / dzl * f32(params.height) / params.span.y;
+    // conj(dz/z) as a direction is conj(dz) * z.
+    let g = vec2<f32>(sum.dz.x * sum.z.x + sum.dz.y * sum.z.y, sum.dz.x * sum.z.y - sum.dz.y * sum.z.x);
+    let gl = length(g);
+    if (!(gl > 1e-30)) {
+        return vec2<f32>(0.0);
+    }
+    let u = g / (gl * max(d_px, 1e-6));
+    let rot = params.rot_cs;
+    return vec2<f32>(u.x * rot.x + u.y * rot.y, -u.x * rot.y + u.y * rot.x);
+}
+"#;
 
 /// Blending the layer into the base (`LayerBlend`): `t` is the base's
 /// wrapped palette position, the result the position looked up. And
@@ -812,7 +849,7 @@ struct BlaBuf {
 @group(0) @binding(9) var<storage, read> ref_orbit_e: array<i32>;
 // See the direct template: the coloring's scalar value for the relief
 // pass, bound to a 1x1 dummy when shading is off.
-@group(0) @binding(10) var height_tex: texture_storage_2d<rg32float, write>;
+@group(0) @binding(10) var height_tex: texture_storage_2d<rgba32float, write>;
 // |Z|² per reference entry as a DF pair (hi, lo), CPU-computed in f64.
 // The escape margin needs (|Z|² - bailout) to better than f32 ulp --
 // see the margin comment at the escape test.
@@ -1117,6 +1154,8 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // exactly on the set boundary.
     var height = 0.0;
     var relief = 0.0;
+    // Blue and alpha: the analytic slope, when the relief asks for it.
+    var slope = vec2<f32>(0.0);
     if (escaped || COLORING_COLORS_INTERIOR) {
         let summary = OrbitSummary(z, n, escaped, converged, period, dz);
         // `fract` so unbounded colorings cycle as they grow; a
@@ -1129,6 +1168,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // turns every palette band into a step (the engraved look).
         height = raw;
         relief = esc_relief_source(raw, t, summary, accum_state);
+        slope = esc_analytic_slope(summary);
         rgb = esc_palette(esc_layer(t, summary, accum_state));
         coverage = 1.0;
     }
@@ -1149,7 +1189,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // settled image is byte-identical.
     if (escaped || perturb.iter_end >= params.max_iter) {
         textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, coverage));
-        textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, relief, 0.0, 0.0));
+        textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, relief, slope));
     }
 }
 "#;
@@ -1310,7 +1350,7 @@ struct BlaBuf {
 @group(0) @binding(9) var<storage, read> ref_orbit_e: array<i32>;
 // See the direct template: the coloring's scalar value for the relief
 // pass, bound to a 1x1 dummy when shading is off.
-@group(0) @binding(10) var height_tex: texture_storage_2d<rg32float, write>;
+@group(0) @binding(10) var height_tex: texture_storage_2d<rgba32float, write>;
 // |Z|² per reference entry as a DF pair (hi, lo), CPU-computed in f64.
 // The escape margin needs (|Z|² - bailout) to better than f32 ulp --
 // see the margin comment at the escape test.
@@ -2031,6 +2071,8 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // exactly on the set boundary.
     var height = 0.0;
     var relief = 0.0;
+    // Blue and alpha: the analytic slope, when the relief asks for it.
+    var slope = vec2<f32>(0.0);
     if (escaped || COLORING_COLORS_INTERIOR) {
         let summary = OrbitSummary(z, n, escaped, converged, period, dz);
         // `fract` so unbounded colorings cycle as they grow; a
@@ -2043,6 +2085,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // turns every palette band into a step (the engraved look).
         height = raw;
         relief = esc_relief_source(raw, t, summary, accum_state);
+        slope = esc_analytic_slope(summary);
         rgb = esc_palette(esc_layer(t, summary, accum_state));
         coverage = 1.0;
     }
@@ -2063,7 +2106,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // settled image is byte-identical.
     if (escaped || perturb.iter_end >= params.max_iter) {
         textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, coverage));
-        textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, relief, 0.0, 0.0));
+        textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, relief, slope));
     }
 }
 "#;
@@ -4356,6 +4399,7 @@ pub fn assemble_perturbed_layered(
                 out.push(format!("// coloring: {}", coloring.name));
                 out.push(coloring.wgsl.to_string());
                 out.push(layer_wgsl(layer));
+                out.push(ANALYTIC_SLOPE_WGSL.trim().to_string());
             }
             "//__COLORING_ACCUM__" => {
                 if let Some((_, accum)) = &owner {
@@ -4458,7 +4502,7 @@ struct IterResult {
 @group(0) @binding(2) var palette_texture: texture_2d<f32>;
 @group(0) @binding(3) var palette_sampler: sampler;
 //__PALETTE_MAP__
-@group(0) @binding(4) var height_tex: texture_storage_2d<rg32float, write>;
+@group(0) @binding(4) var height_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(5) var<storage, read> results: array<IterResult>;
 
 // The measured contrast fit (see EscapeContrast). `enabled = 0` makes
@@ -4529,6 +4573,8 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // the iterate templates.
     var height = 0.0;
     var relief = 0.0;
+    // Blue and alpha: the analytic slope, when the relief asks for it.
+    var slope = vec2<f32>(0.0);
     if (escaped || COLORING_COLORS_INTERIOR) {
         let summary = OrbitSummary(r.z, r.n, escaped, converged, period, r.dz);
         let state = vec4<f32>(r.accum, /*R_ACCUM2*/);
@@ -4541,6 +4587,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // iterate pass stores it.
         height = raw;
         relief = esc_relief_source(raw, esc_wrap(esc_transfer(raw), COLORING_IS_BOUNDED), summary, state);
+        slope = esc_analytic_slope(summary);
         let dims = vec2<f32>(f32(params.width), f32(params.height));
         let rawc = apply_contrast(raw, vec2<f32>(f32(gid.x), f32(gid.y)) / max(dims - 1.0, vec2<f32>(1.0)));
         let t = esc_wrap(rawc, COLORING_IS_BOUNDED);
@@ -4548,7 +4595,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         coverage = 1.0;
     }
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, coverage));
-    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, relief, 0.0, 0.0));
+    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, relief, slope));
 }
 "#;
 
@@ -4594,6 +4641,7 @@ pub fn assemble_recolor_layered(
                 out.push(format!("// coloring: {}", coloring.name));
                 out.push(coloring.wgsl.to_string());
                 out.push(layer_wgsl(layer));
+                out.push(ANALYTIC_SLOPE_WGSL.trim().to_string());
             }
             _ => out.push(line.to_string()),
         }
@@ -4650,7 +4698,7 @@ struct EscapeParams {
 // every store but one falls out of bounds and WGSL discards it -- so
 // the cost of always writing is a single dead store per pixel, and
 // there is no second shader variant to keep in step.
-@group(0) @binding(4) var height_tex: texture_storage_2d<rg32float, write>;
+@group(0) @binding(4) var height_tex: texture_storage_2d<rgba32float, write>;
 
 fn fparam(i: u32) -> f32 {
     return params.fparams[i / 4u][i % 4u];
@@ -4802,7 +4850,7 @@ struct EscapeParams {
 @group(0) @binding(2) var palette_texture: texture_2d<f32>;
 @group(0) @binding(3) var palette_sampler: sampler;
 //__PALETTE_MAP__
-@group(0) @binding(4) var height_tex: texture_storage_2d<rg32float, write>;
+@group(0) @binding(4) var height_tex: texture_storage_2d<rgba32float, write>;
 
 // One map of the IFS, as `escape::ifs::IfsMapGpu` packs it. Group 1 so
 // mode D is the only pipeline whose layout mentions it and no existing
@@ -5284,7 +5332,7 @@ struct IfsRecord {
 @group(0) @binding(2) var palette_texture: texture_2d<f32>;
 @group(0) @binding(3) var palette_sampler: sampler;
 //__PALETTE_MAP__
-@group(0) @binding(4) var height_tex: texture_storage_2d<rg32float, write>;
+@group(0) @binding(4) var height_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(5) var<storage, read> results: array<IfsRecord>;
 
 // Bound because the layout is shared with mode A's recolor pass. Mode
@@ -5455,7 +5503,7 @@ struct IfsRecord {
 @group(0) @binding(2) var palette_texture: texture_2d<f32>;
 @group(0) @binding(3) var palette_sampler: sampler;
 //__PALETTE_MAP__
-@group(0) @binding(4) var height_tex: texture_storage_2d<rg32float, write>;
+@group(0) @binding(4) var height_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(5) var<storage, read> results: array<IfsRecord>;
 
 struct ContrastParams {
@@ -5664,7 +5712,7 @@ struct EscapeParams {
 @group(0) @binding(2) var palette_texture: texture_2d<f32>;
 @group(0) @binding(3) var palette_sampler: sampler;
 //__PALETTE_MAP__
-@group(0) @binding(4) var height_tex: texture_storage_2d<rg32float, write>;
+@group(0) @binding(4) var height_tex: texture_storage_2d<rgba32float, write>;
 
 // Four vec4s and no vec3: a vec3<f32> aligns to sixteen bytes here
 // and to four in Rust, so a struct with one in it is a different size
@@ -6663,7 +6711,7 @@ pub fn assemble_with_lens(
     interior_detect: bool,
     lens: Option<&str>,
 ) -> String {
-    assemble_layered(formula, coloring, None, damped, interior_detect, lens)
+    assemble_layered(formula, coloring, None, damped, interior_detect, false, lens)
 }
 
 /// [`assemble_with_lens`] with a texture layer (`ColoringLayer`): the
@@ -6676,6 +6724,9 @@ pub fn assemble_layered(
     layer: Option<&ColoringDef>,
     damped: bool,
     interior_detect: bool,
+    // The relief's analytic slopes read the derivative orbit, so it is
+    // compiled for them even when neither colouring needs it.
+    analytic_relief: bool,
     lens: Option<&str>,
 ) -> String {
     let layer = layer.filter(|l| crate::escape::layer_fits(coloring, l));
@@ -6702,7 +6753,7 @@ pub fn assemble_layered(
         && !colors_interior
         && !needs_accum
         && !needs_period;
-    let needs_derivative = either(ColoringFeature::NeedsDerivative)
+    let needs_derivative = (either(ColoringFeature::NeedsDerivative) || analytic_relief)
         && !formula.wgsl_derivative.is_empty();
     let param_seed = if formula.wgsl_param_seed.is_empty() {
         "vec2<f32>(0.0, 0.0)"
@@ -6751,6 +6802,7 @@ pub fn assemble_layered(
                 out.push(format!("// coloring: {}", coloring.name));
                 out.push(coloring.wgsl.to_string());
                 out.push(layer_wgsl(layer));
+                out.push(ANALYTIC_SLOPE_WGSL.trim().to_string());
             }
             "//__COLORING_ACCUM__" => {
                 if let Some((_, accum)) = &owner {
@@ -7115,13 +7167,13 @@ mod tests {
             for layer in crate::escape::COLORINGS {
                 if !crate::escape::layer_fits(base, layer) {
                     refused += 1;
-                    let src = assemble_layered(mandelbrot, base, Some(layer), false, true, None);
+                    let src = assemble_layered(mandelbrot, base, Some(layer), false, true, false, None);
                     assert!(!src.contains("texture layer:"), "{} over {} was spliced", layer.name, base.name);
                     continue;
                 }
                 pairs += 1;
                 let what = format!("{} over {}", layer.name, base.name);
-                let direct = assemble_layered(mandelbrot, base, Some(layer), false, true, None);
+                let direct = assemble_layered(mandelbrot, base, Some(layer), false, true, false, None);
                 assert!(direct.contains("fn layer_coloring_map("), "{what}: the layer was not renamed");
                 validate(&direct, &format!("{what} (direct)"));
                 validate(

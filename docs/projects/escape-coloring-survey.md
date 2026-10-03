@@ -2,7 +2,9 @@
 
 Status: **survey done, decisions made; items 1–5 of the order of work
 done** (fixes, smooth count, palette mapping, accumulator and
-debanding, texture layer); new colourings next (2026-10-02).
+debanding, texture layer), **item 6 in large part** (ten new or extended
+colourings) and **item 7 in part** (R1–R4, R8); what remains is listed
+under those items in §7 (2026-10-02).
 This compares our escape-time colouring with four other programs and lists
 what we could add (§5). The decisions and the order of work are in §7.
 
@@ -721,6 +723,22 @@ Read from the code, not reproduced by render, except where noted.
      one field and the colour another. Without a layer it is the
      colouring's own value, byte for byte.
 
-   **Still to do:** analytic relief from the distance-estimate vector
-   (R5), offset-orbit relief (R6), Embossed (R7) and an image texture
-   (R10).
+   - **R5, analytic relief**, from KF2's source (`gl/kf.frag.glsl`
+     `KF_Slopes`, `fraktal_sft.h` `compute_de`): KF2 slopes at
+     `1/DE`, DE in pixels, which is the gradient of `−ln d`. For a
+     holomorphic map its direction is the potential's, `conj(dz/z)`.
+     The iterate pass stores that gradient, in screen pixels and turned
+     back by the view rotation, in the height texture's two remaining
+     channels (now `rgba32float`), and the relief lights it instead of
+     differencing. The derivative orbit compiles in for it. Direct
+     path only, since the perturbed rungs carry no derivative (P11); the
+     panel says so, and the relief is flat there, as tested. Softness,
+     stencils and the height curve do not apply to it.
+     *Measured:* lit from one side, analytic and numeric (smooth) relief
+     move 97% of the pixels both move the same way, at rotation 0 and
+     0.7; the rest is the numeric relief's stencil noise. Near the
+     boundary, where the smooth count is chaotic between pixels, the
+     agreement drops to 79%, which is the noise analytic slopes avoid.
+
+   **Still to do:** offset-orbit relief (R6), Embossed (R7) and an image
+   texture (R10).

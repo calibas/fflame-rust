@@ -985,9 +985,15 @@ pub fn render_escape_content(
                             ShadingField::Smooth => t!("escape_panel.shading_field_smooth"),
                             ShadingField::Banded => t!("escape_panel.shading_field_banded"),
                             ShadingField::Layer => t!("escape_panel.shading_field_layer"),
+                            ShadingField::Analytic => t!("escape_panel.shading_field_analytic"),
                         })
                         .show_ui(ui, |ui| {
-                            for f in [ShadingField::Smooth, ShadingField::Banded, ShadingField::Layer] {
+                            for f in [
+                                ShadingField::Smooth,
+                                ShadingField::Banded,
+                                ShadingField::Layer,
+                                ShadingField::Analytic,
+                            ] {
                                 let label = match f {
                                     ShadingField::Smooth => {
                                         t!("escape_panel.shading_field_smooth")
@@ -997,6 +1003,9 @@ pub fn render_escape_content(
                                     }
                                     ShadingField::Layer => {
                                         t!("escape_panel.shading_field_layer")
+                                    }
+                                    ShadingField::Analytic => {
+                                        t!("escape_panel.shading_field_analytic")
                                     }
                                 };
                                 if ui.selectable_label(f == cur, label).clicked() && f != cur {
@@ -1013,6 +1022,22 @@ pub fn render_escape_content(
                         .response
                         .on_hover_text(t!("escape_panel.tooltip_shading_field"));
                 });
+                // Analytic slopes need the derivative orbit: flat where
+                // there is none, and said so rather than left silent.
+                if sh.field == ShadingField::Analytic {
+                    if let Some(gap) = crate::escape::EscapeRenderer::derivative_gap(&esc) {
+                        let msg = match gap {
+                            crate::escape::DerivativeGap::Formula => t!(
+                                "escape_panel.analytic_relief_no_formula",
+                                formula = crate::escape::get_formula(&esc.formula).display_name
+                            ),
+                            crate::escape::DerivativeGap::Perturbed => {
+                                t!("escape_panel.analytic_relief_perturbed")
+                            }
+                        };
+                        ui.colored_label(egui::Color32::from_rgb(220, 170, 90), msg);
+                    }
+                }
 
                 ui.separator();
                 shading_side(
@@ -1983,7 +2008,7 @@ fn show_coloring_section(
     // missing one). Flat is honest but silent, so say why — otherwise
     // the only signal is a blank picture.
     if coloring.has_feature(crate::escape::ColoringFeature::NeedsDerivative) {
-        if let Some(gap) = crate::escape::EscapeRenderer::derivative_gap(esc) {
+        if let Some(gap) = crate::escape::EscapeRenderer::derivative_gap(&esc) {
             let msg = match gap {
                 crate::escape::DerivativeGap::Formula => t!(
                     "escape_panel.no_derivative_formula",
