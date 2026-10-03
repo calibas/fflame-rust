@@ -2059,6 +2059,8 @@ textures_panel:
   bump: "Relief bump"
   bump_tip: "The texture's brightness as a micro-relief, lit by the relief's light: the relief's surface texture, set to this texture. Repeated across the picture at the scale below."
   bump_needs_relief: "Turn on Relief in the Escape panel for the bump to show."
+  trap_hint: "The Image Trap colouring (Escape panel) traps the orbit in this texture too."
+  trap_in_use: "The Image Trap colouring is trapping the orbit in this texture."
   browse_only: "Textures are used by escape-time fractals: pick one there. Here you can see and manage the library."
 sim_panel:
   save_as_texture: "Save as texture"
@@ -2352,6 +2354,7 @@ escape_panel:
   texture_paper: "Paper"
   texture_simulation: "Simulation texture"
   texture_simulation_none: "No texture picked: choose one in the Texture panel."
+  texture_coloring_none: "This colouring traps the orbit in a texture, and none is picked: choose one in the Texture panel. Until then it draws its base colour."
   texture_strength: "Texture strength"
   tooltip_texture_strength: "How pronounced the surface texture is. Independent of relief height - the texture is added to the surface tilt, not to the height."
   texture_scale: "Texture scale"

@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "0e6af119",
+  "git_hash": "8a76c8b3",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 35102,
@@ -277,6 +277,10 @@
     "escape-mandelbrot-gaussian-integer.png": {
       "bytes": 22323,
       "sha256": "ea863ecf1240bcbcdff657f9c51b6c94f5f2e239796da72b760f55241966d202"
+    },
+    "escape-mandelbrot-image-trap.png": {
+      "bytes": 7956,
+      "sha256": "7e8ea5d38dc5bcfb2bc543961dbcd0384024350950630dd04406722b07e51e11"
     },
     "escape-mandelbrot-infinite-waves.png": {
       "bytes": 17702,
