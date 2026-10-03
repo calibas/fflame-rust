@@ -5709,8 +5709,27 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     fn contrast_pending(&self, escape: &EscapeConfig, iterate_key: Option<&str>) -> bool {
         escape.contrast.is_active()
             && self.results_key.is_some()
-            && iterate_key.is_some()
-            && self.contrast_fit_key.as_deref() != iterate_key
+            && iterate_key.is_some_and(|ik| self.contrast_fit_key.as_deref() != Some(Self::contrast_key(escape, ik).as_str()))
+    }
+
+    /// What a contrast fit was measured from and how: the view and its
+    /// iteration (the iterate key), the value field (the colouring, its
+    /// parameters, the layer and its), and the fit itself (mode, clip).
+    ///
+    /// Keyed by the iterate key alone, an edit that only recolours --
+    /// another colouring with the same loop, a colouring parameter, the
+    /// contrast mode or clip -- kept the old fit and drew the new
+    /// picture through it.
+    fn contrast_key(escape: &EscapeConfig, iterate_key: &str) -> String {
+        format!(
+            "{iterate_key}|{}|{:?}|{}|{:?}|{:?}|{}",
+            escape.coloring,
+            escape.coloring_params,
+            escape.layer.coloring,
+            escape.layer.params,
+            escape.contrast.mode,
+            escape.contrast.clip,
+        )
     }
 
     /// Measure the coloring's value field and store the fit.
@@ -7363,7 +7382,25 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 && !escape.shading.wants_offset_orbits()
             {
                 let t0 = web_time::Instant::now();
-                self.measure_contrast(device, queue, escape, ik);
+                let ckey = Self::contrast_key(escape, ik);
+                if escape.contrast.is_active() && self.contrast_fit_key.as_deref() != Some(ckey.as_str()) {
+                    // The height field the probe reads may still hold the
+                    // previous colouring's values -- a recolour edit does
+                    // not re-iterate -- so recolour once through the
+                    // identity, submitted ahead of the probe, and measure
+                    // that.
+                    self.contrast_fit = None;
+                    let mut pre = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("Escape Contrast Pre-recolor"),
+                    });
+                    if solid && geom_active {
+                        self.run_relight(device, queue, &mut pre, escape, palette_view);
+                    } else {
+                        self.run_recolor(device, queue, &mut pre, escape, palette_view);
+                    }
+                    queue.submit(std::iter::once(pre.finish()));
+                }
+                self.measure_contrast(device, queue, escape, &ckey);
                 if solid && geom_active {
                     // A solid's cache path IS the relight: the same
                     // pass every band of the walk ended with, with
