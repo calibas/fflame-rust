@@ -838,6 +838,44 @@ Read from the code, not reproduced by render, except where noted.
        26-symbol column), short of arbitrary-precision addresses, which
        nobody draws.
 
+   - **Visions of Chaos traps**, ported from Softology's own shader
+     listings (`softology.pro/Mandelbrot_{Circles,Crosses,Rings,Squares,
+     Stalks}_Orbit_Traps.txt`), read from source. The blog post
+     ("Orbit Traps", 2011) misdescribes two things:
+     - its prose gives `trapdist/trapsize`, but the code shades
+       `1 − dist/size`;
+     - its stalks listing reads as an accumulation, but the loop stops at
+       the first catch, so the sum holds one term.
+
+     All five traps share one rule: stop at the first iterate the trap
+     catches, never testing the escaping one. Colour:
+     - grey by closeness where caught;
+     - the CPM smooth palette where the pixel escaped uncaught, 256
+       entries indexed `mod 255`, so entry 255 is never used and 254
+       blends into 0;
+     - black inside.
+
+     That makes it a composite, so it is a direct-colour colouring. Our
+     Orbit Trap's First reduction gives the same catch for three of the
+     shapes, but it cannot draw grey traps over a palette exterior.
+
+     Shapes and constants are as coded, quirks included. Circles and
+     rings measure from (trap Y, trap X), because the listing swaps the
+     names, so they sit at (0.5, 0) while squares sit at (0, 0.5).
+     Crosses test x before y. Squares are a filled square shaded by half
+     the L1 distance. Stalks catch where |z| comes within 0.05 of |c|,
+     from z3 on.
+
+     Not kept: VoC stops iterating at the catch, while here the orbit
+     runs on with the catch frozen, which costs time but not colour. VoC
+     averages supersamples in display space, the renderer in linear
+     light.
+     *Measured* against an f64 port of the listings' loop, for every
+     shape: the catch the GPU froze agrees on 99.9%+ of the pixels away
+     from a trap edge, and every pixel's colour lands within 0.6 of a
+     level of the listings' rules. Changing the trap re-iterates and
+     matches a fresh render. Two visual tests (crosses, stalks).
+
    **Not yet:** direct orbit traps (C10) need the palette inside the
    loop.
 7. **Relief** (§5.3): the small ones (R1, R2, R4, R8, R9) first, then

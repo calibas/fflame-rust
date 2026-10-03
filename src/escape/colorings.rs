@@ -2018,3 +2018,246 @@ fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32
     recommended_bailout: None,
     pick_params: &[],
 };
+
+/// Visions of Chaos orbit traps, ported from Softology's own shader
+/// listings (softology.pro `Mandelbrot_{Circles,Crosses,Rings,Squares,
+/// Stalks}_Orbit_Traps.txt`, read from source; the blog post
+/// "Orbit Traps", 2011, describes them).
+///
+/// Every listing is the same loop: step, stop if the new iterate
+/// escapes (so the escaping iterate is never tested), take it, test the
+/// trap, and stop at the FIRST iterate the trap catches. A caught pixel
+/// is grey by how close that iterate came; one that escaped uncaught
+/// takes the CPM smooth colouring, `i + 1 - log2(ln|z|)` through a
+/// 256-entry palette indexed `mod 255` (entry 255 is never used, and
+/// 254 blends into 0); the interior is black.
+///
+/// The shapes, as coded:
+/// - Circles: `d < size` from the trap centre; grey `1 - d/size`.
+/// - Crosses: `|x| < size`, else `|y| < size` (x first), at the origin;
+///   grey `1 - d/size`.
+/// - Rings: `min < d < max` from the centre; grey a triangle, 1 midway.
+/// - Squares: inside the square of half-size `size` about the centre;
+///   `d = (|x - X| + |y - Y|) / 2`, grey `1 - d/size`.
+/// - Stalks: `||z| - |c|| <= radius`, from z3 on; grey
+///   `min(1, sqrt(1 - ||z| - |c||/radius))`. (The listing accumulates
+///   `ztot = sqrt(ztot) + ...`, but it stops at the first catch, so the
+///   sum only ever holds one term.)
+///
+/// Kept: circles and rings measure from (trap Y, trap X) -- the listing
+/// swaps the names -- so with its trap at X 0, Y 0.5 they sit at
+/// (0.5, 0), while squares sit at (0, 0.5) as named.
+///
+/// Not kept: VoC stops iterating at the catch; here the orbit runs on
+/// with the catch frozen, which costs time, not colour. VoC averages
+/// its supersamples in display space, the escape renderer in linear
+/// light. And the uncaught exterior follows this renderer's escape
+/// count `n`, VoC's loop index plus one.
+pub static VOC_TRAPS: ColoringDef = ColoringDef {
+    name: "voc_traps",
+    display_name: "Visions of Chaos Traps",
+    features: &[ColoringFeature::NeedsOrbitAccum, ColoringFeature::ColorsInterior, ColoringFeature::DirectColor],
+    parameters: &[
+        EscapeParamDef {
+            name: "shape",
+            display_name: "Trap",
+            default: 0.0,
+            min: 0.0,
+            max: 4.0,
+            tooltip: "Which of Visions of Chaos's orbit traps: circles, crosses, \
+                      rings, squares or stalks.",
+            choices: &["Circles", "Crosses", "Rings", "Squares", "Stalks"],
+        },
+        EscapeParamDef {
+            name: "trap_x",
+            display_name: "Trap X",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "The trap's centre, as Visions of Chaos names it. Circles \
+                      and rings read it with X and Y swapped, as the original \
+                      does, so the default puts them at (0.5, 0) and squares at \
+                      (0, 0.5). Crosses and stalks do not use it.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "trap_y",
+            display_name: "Trap Y",
+            default: 0.5,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "The trap's centre, as Visions of Chaos names it (see Trap X).",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "circle_size",
+            display_name: "Circle radius",
+            default: 0.5,
+            min: 0.001,
+            max: 4.0,
+            tooltip: "Circles: how far from the centre an iterate is caught.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "cross_size",
+            display_name: "Cross width",
+            default: 0.05,
+            min: 0.001,
+            max: 4.0,
+            tooltip: "Crosses: how near an axis an iterate is caught.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "ring_min",
+            display_name: "Ring inner radius",
+            default: 0.4,
+            min: 0.0,
+            max: 4.0,
+            tooltip: "Rings: the inner edge of the band that catches.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "ring_max",
+            display_name: "Ring outer radius",
+            default: 0.5,
+            min: 0.001,
+            max: 4.0,
+            tooltip: "Rings: the outer edge of the band that catches.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "square_size",
+            display_name: "Square half-size",
+            default: 0.4,
+            min: 0.001,
+            max: 4.0,
+            tooltip: "Squares: half the side of the square that catches.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "stalk_radius",
+            display_name: "Stalk width",
+            default: 0.05,
+            min: 0.001,
+            max: 4.0,
+            tooltip: "Stalks: how near |z| must come to |c| to be caught.",
+            choices: &[],
+        },
+    ],
+    wgsl: r#"
+// Caught: the grey. Escaped uncaught: Visions of Chaos's smooth palette
+// position, for the relief and auto contrast to read.
+fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
+    if (state.x > 0.5) {
+        return state.y;
+    }
+    let r = max(length(sum.z), 1.0000001);
+    let real = f32(sum.n) - log2(log(r));
+    return (real - 255.0 * floor(real / 255.0)) / 256.0;
+}
+
+fn coloring_color(sum: OrbitSummary, state: vec4<f32>, v: f32) -> vec3<f32> {
+    if (state.x > 0.5) {
+        let g = clamp(state.y, 0.0, 1.0);
+        return vec3<f32>(pow(g, 2.2));
+    }
+    if (!sum.escaped) {
+        return vec3<f32>(0.0);
+    }
+    // CPM smooth colours: i + 1 - log(log|z|)/log 2, i the loop index
+    // the escape broke on -- this renderer's n less one.
+    let r = max(length(sum.z), 1.0000001);
+    let real = f32(sum.n) - log2(log(r));
+    let m = real - 255.0 * floor(real / 255.0);
+    let colval = floor(m);
+    let colval2 = select(colval + 1.0, 0.0, colval + 1.0 >= 255.0);
+    let tween = real - trunc(real);
+    // Palette entries at their texel centres, blended by hand: entry 254
+    // blends into entry 0, which a single sample cannot do.
+    let a = esc_palette_srgb((colval + 0.5) / 256.0);
+    let b = esc_palette_srgb((colval2 + 0.5) / 256.0);
+    return pow(max(mix(a, b, tween), vec3<f32>(0.0)), vec3<f32>(2.2));
+}
+"#,
+    accum_init: "vec4<f32>(0.0, 0.0, 0.0, 0.0)",
+    wgsl_accum: r#"
+// state: x caught (1) or not, y the grey at the catch, z the loop index
+// of this step (0 for z1).
+fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32>) -> vec4<f32> {
+    var st = state;
+    let i = st.z;
+    st.z = st.z + 1.0;
+    // Caught already: frozen, as the original stops there. The escaping
+    // iterate is never tested: the original breaks before it.
+    if (state.x > 0.5 || dot(z, z) > params.bailout) {
+        return st;
+    }
+    let shape = u32(clamp(cparam(0u), 0.0, 4.0));
+    let tx = cparam(1u);
+    let ty = cparam(2u);
+    var caught = false;
+    var grey = 0.0;
+    switch shape {
+        case 0u: {
+            // Circles, from (ty, tx) as the listing has it.
+            let size = cparam(3u);
+            let d = sqrt((z.x - ty) * (z.x - ty) + (z.y - tx) * (z.y - tx));
+            if (d < size) {
+                caught = true;
+                grey = 1.0 - d / size;
+            }
+        }
+        case 1u: {
+            // Crosses: the real axis's band first.
+            let size = cparam(4u);
+            if (abs(z.x) < size) {
+                caught = true;
+                grey = 1.0 - abs(z.x) / size;
+            } else if (abs(z.y) < size) {
+                caught = true;
+                grey = 1.0 - abs(z.y) / size;
+            }
+        }
+        case 2u: {
+            // Rings, from (ty, tx); a triangle across the band.
+            let lo = cparam(5u);
+            let hi = cparam(6u);
+            let d = sqrt((z.x - ty) * (z.x - ty) + (z.y - tx) * (z.y - tx));
+            if (d < hi && d > lo) {
+                caught = true;
+                var p = (d - lo) / (hi - lo);
+                if (p > 0.5) {
+                    p = 0.5 - (p - 0.5);
+                }
+                grey = p * 2.0;
+            }
+        }
+        case 3u: {
+            // Squares, about (tx, ty) as named.
+            let size = cparam(7u);
+            if (z.x > tx - size && z.x < tx + size && z.y > ty - size && z.y < ty + size) {
+                caught = true;
+                grey = 1.0 - ((abs(z.x - tx) + abs(z.y - ty)) / 2.0) / size;
+            }
+        }
+        default: {
+            // Stalks: |z| within the radius of |c|, from z3 on.
+            let rad = cparam(8u);
+            let m = length(z);
+            let rc = length(c);
+            if (m <= rc + rad && m >= rc - rad && i > 1.0) {
+                caught = true;
+                grey = min(1.0, sqrt(1.0 - abs(m - rc) / rad));
+            }
+        }
+    }
+    if (caught) {
+        st.x = 1.0;
+        st.y = grey;
+    }
+    return st;
+}
+"#,
+    recommended_bailout: None,
+    pick_params: &[],
+};
