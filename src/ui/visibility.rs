@@ -187,10 +187,11 @@ pub fn panel(p: PanelType, m: RenderMode, solid: Solid) -> Vis {
 
         // Textures go into an escape-time fractal (sim-textures plan:
         // escape first). Simulation mode makes them, with Save as
-        // texture in its own panel.
+        // texture, so it shows the library too -- to browse and manage
+        // what it saved; picking does nothing there.
         P::Textures => match m {
-            M::Escape => Vis::Show,
-            M::TwoD | M::ThreeD | M::Simulation => Vis::Grey(ESCAPE_TEXTURES),
+            M::Escape | M::Simulation => Vis::Show,
+            M::TwoD | M::ThreeD => Vis::Grey(ESCAPE_TEXTURES),
         },
     }
 }
@@ -741,10 +742,9 @@ mod tests {
         want_escape.sort();
         assert_eq!(greyed(RenderMode::Escape), want_escape, "Escape");
 
-        // Textures are made here (Save as texture) but used by escape.
         let mut want_sim = vec![
             "View", "XaosEditor", "Subflames", "Paths", "SolidLighting",
-            "RandomGenerator", "Escape", "Textures",
+            "RandomGenerator", "Escape",
         ];
         want_sim.sort();
         assert_eq!(greyed(RenderMode::Simulation), want_sim, "Simulation");
