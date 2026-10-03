@@ -70,6 +70,9 @@ pub enum PanelType {
     Escape,
     /// Simulation editing surface (model, grid, transport, coloring)
     Simulation,
+    /// Simulation textures an escape-time fractal can use
+    /// (docs/projects/sim-textures.md)
+    Textures,
 }
 
 impl std::fmt::Display for PanelType {
@@ -104,6 +107,7 @@ impl std::fmt::Display for PanelType {
             PanelType::Scripts => t!("panels.scripts"),
             PanelType::Escape => t!("panels.escape"),
             PanelType::Simulation => t!("panels.simulation"),
+            PanelType::Textures => t!("panels.textures"),
         };
         write!(f, "{}", title)
     }
@@ -250,6 +254,7 @@ impl Workspace {
             // Taller than escape's: the transport row and the init
             // controls sit above the parameters.
             PanelType::Simulation => egui::vec2(350.0, 560.0),
+            PanelType::Textures => egui::vec2(300.0, 480.0),
         }
     }
 
@@ -535,7 +540,7 @@ impl Workspace {
         let [_fractal_node, _right_node] = state.main_surface_mut().split_right(
             egui_dock::NodeIndex::root(),
             0.72,
-            vec![PanelType::Colors, PanelType::History],
+            vec![PanelType::Colors, PanelType::Textures, PanelType::History],
         );
 
         if preserve_help {
@@ -674,6 +679,7 @@ mod layout_tests {
                     PanelType::FractalViewport,
                     PanelType::Escape,
                     PanelType::Colors,
+                    PanelType::Textures,
                     PanelType::History,
                 ],
             ),
