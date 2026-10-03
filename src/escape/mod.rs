@@ -608,6 +608,7 @@ pub static COLORINGS: &[&ColoringDef] = &[
     &colorings::RAINBOW_FRINGE,
     &colorings::INFINITE_WAVES,
     &colorings::ITINERARY,
+    &colorings::VOC_TRAPS,
 ];
 
 /// Look up a formula by name. An unknown name renders the default

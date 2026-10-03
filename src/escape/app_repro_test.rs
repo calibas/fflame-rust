@@ -8614,6 +8614,12 @@ fn main() {
         steps.push(("pick the fringe", fringe.clone(), false));
         fringe.coloring_params.insert("gamma".to_string(), 1.3);
         steps.push(("retune the fringe", fringe.clone(), true));
+        // Visions of Chaos traps catch in the loop: another trap re-iterates.
+        let mut voc = base.clone();
+        voc.coloring = "voc_traps".to_string();
+        steps.push(("pick Visions of Chaos traps", voc.clone(), false));
+        voc.coloring_params.insert("shape".to_string(), 4.0);
+        steps.push(("another trap", voc.clone(), false));
         for (what, esc, recolours) in steps {
             let cached = settle(&mut escape, &esc);
             assert_eq!(escape.last_path == "recolor", recolours, "{what}: path {}", escape.last_path);
@@ -8931,6 +8937,162 @@ fn main() {
         println!("layer value, 2nd..98th percentile: plain {plain:.3?}, stretched {stretched:.3?}");
         assert!(plain.1 - plain.0 < 0.35, "the layer was not narrow to begin with: {plain:?}");
         assert!(stretched.0 < 0.06 && stretched.1 > 0.94, "the layer was not stretched to the frame: {stretched:?}");
+    }
+
+    /// Visions of Chaos's orbit traps do what Softology's listings do
+    /// (softology.pro `Mandelbrot_*_Orbit_Traps.txt`), checked in two
+    /// halves for every trap shape:
+    /// - the catch the GPU froze (caught or not, and its grey) against a
+    ///   line-by-line port of the listing's loop in f64, skipping pixels
+    ///   with a tested iterate within 1e-4 of the trap's edge, where f32
+    ///   and f64 may honestly disagree on the catch;
+    /// - every pixel's colour against the listing's colour rules from
+    ///   the GPU's own record: grey when caught, the CPM smooth palette
+    ///   (`mod 255`) when it escaped uncaught, black inside. Through the
+    ///   Linear tone map at exposure and gamma 1, within two levels.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn voc_traps_do_what_softologys_listings_do() {
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        let stop = |position: f32, v: f32| crate::scene::palette::ColorStop { position, color: [v, v, v] };
+        config.palette.stops = vec![stop(0.0, 0.0), stop(1.0, 1.0)];
+        config.escape.center_re = "-0.6".to_string();
+        config.escape.center_im = "0.1".to_string();
+        config.escape.zoom_log2 = 0.4;
+        config.escape.max_iter = 200;
+        // The listing's bailout_squared, which this renderer's bailout is.
+        config.escape.bailout = 4.0;
+        config.escape.supersample = 1;
+        config.escape.coloring = "voc_traps".to_string();
+        let (cx, cy) = (-0.6f64, 0.1f64);
+        let span_y = 4.0 / (config.escape.zoom_log2).exp2();
+        let span_x = span_y * w as f64 / h as f64;
+        let render = |c: &crate::config::FractalConfig| {
+            let job = crate::renderer::RenderJob::new(c, w, h);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+
+        // The listings' loop, in f64: (caught, grey, nearest edge margin).
+        let listing = |shape: u32, c: [f64; 2]| -> (bool, f64, f64) {
+            let (tx, ty) = (0.0f64, 0.5f64);
+            let mut z = [0.0f64, 0.0];
+            let mut margin = f64::INFINITY;
+            for i in 0..200u32 {
+                let x = z[0] * z[0] - z[1] * z[1] + c[0];
+                let y = z[1] * z[0] + z[0] * z[1] + c[1];
+                if x * x + y * y > 4.0 {
+                    break;
+                }
+                z = [x, y];
+                let (caught, grey, edge) = match shape {
+                    0 => {
+                        let d = ((x - ty) * (x - ty) + (y - tx) * (y - tx)).sqrt();
+                        (d < 0.5, 1.0 - d / 0.5, (d - 0.5).abs())
+                    }
+                    1 => {
+                        let edge = (x.abs() - 0.05).abs().min((y.abs() - 0.05).abs());
+                        if x.abs() < 0.05 {
+                            (true, 1.0 - x.abs() / 0.05, edge)
+                        } else if y.abs() < 0.05 {
+                            (true, 1.0 - y.abs() / 0.05, edge)
+                        } else {
+                            (false, 0.0, edge)
+                        }
+                    }
+                    2 => {
+                        let d = ((x - ty) * (x - ty) + (y - tx) * (y - tx)).sqrt();
+                        let mut p = (d - 0.4) / 0.1;
+                        if p > 0.5 {
+                            p = 0.5 - (p - 0.5);
+                        }
+                        (d < 0.5 && d > 0.4, p * 2.0, (d - 0.5).abs().min((d - 0.4).abs()))
+                    }
+                    3 => {
+                        let inside = x > tx - 0.4 && x < tx + 0.4 && y > ty - 0.4 && y < ty + 0.4;
+                        let edge = [(x - (tx - 0.4)).abs(), (x - (tx + 0.4)).abs(), (y - (ty - 0.4)).abs(), (y - (ty + 0.4)).abs()]
+                            .into_iter()
+                            .fold(f64::INFINITY, f64::min);
+                        (inside, 1.0 - ((x - tx).abs() + (y - ty).abs()) / 2.0 / 0.4, edge)
+                    }
+                    _ => {
+                        let m = (x * x + y * y).sqrt();
+                        let rc = (c[0] * c[0] + c[1] * c[1]).sqrt();
+                        let caught = m <= rc + 0.05 && m >= rc - 0.05 && i > 1;
+                        (caught, (1.0 - (m - rc).abs() / 0.05).sqrt().min(1.0), ((m - rc).abs() - 0.05).abs())
+                    }
+                };
+                margin = margin.min(edge);
+                if caught {
+                    return (true, grey, margin);
+                }
+            }
+            (false, 0.0, margin)
+        };
+
+        for (shape, name) in ["circles", "crosses", "rings", "squares", "stalks"].into_iter().enumerate() {
+            let mut c = config.clone();
+            c.escape.coloring_params = [("shape".to_string(), shape as f32)].into_iter().collect();
+            let records = records_via(&c.escape, w, h, false, false);
+            let out = render(&c);
+
+            let (mut checked, mut agree, mut worst_grey, mut caught_n) = (0usize, 0usize, 0.0f64, 0usize);
+            for (i, r) in records.iter().enumerate() {
+                let (px, py) = ((i % w as usize) as f64, (i / w as usize) as f64);
+                let pc = [((px + 0.5) / w as f64 - 0.5) * span_x + cx, -(((py + 0.5) / h as f64 - 0.5) * span_y) + cy];
+                let (caught, grey, margin) = listing(shape as u32, pc);
+                if margin < 1e-4 {
+                    continue;
+                }
+                checked += 1;
+                let gpu_caught = r.accum[0] > 0.5;
+                if gpu_caught == caught && (!caught || (r.accum[1] as f64 - grey).abs() < 1e-3) {
+                    agree += 1;
+                }
+                if caught && gpu_caught {
+                    caught_n += 1;
+                    worst_grey = worst_grey.max((r.accum[1] as f64 - grey).abs());
+                }
+            }
+
+            let (mut drawn, mut off, mut worst) = (0usize, 0usize, 0.0f64);
+            for (r, p) in records.iter().zip(out.chunks_exact(4)) {
+                let escaped = (r.tags & 1) != 0;
+                let want = if r.accum[0] > 0.5 {
+                    (r.accum[1] as f64).clamp(0.0, 1.0)
+                } else if !escaped {
+                    0.0
+                } else {
+                    let m = (r.z[0] as f64).hypot(r.z[1] as f64).max(1.0000001);
+                    let real = r.n as f64 - m.ln().log2();
+                    let pos = real.rem_euclid(255.0);
+                    let (j, j2) = (pos.floor(), if pos.floor() + 1.0 >= 255.0 { 0.0 } else { pos.floor() + 1.0 });
+                    let t = real - real.trunc();
+                    // A grey ramp: entry j holds j/255.
+                    (j / 255.0) + ((j2 / 255.0) - (j / 255.0)) * t
+                };
+                let e = (p[0] as f64 - want * 255.0).abs();
+                worst = worst.max(e);
+                off += usize::from(e > 2.0);
+                drawn += 1;
+            }
+            println!(
+                "{name}: catch agrees on {agree}/{checked} ({caught_n} caught, worst grey {worst_grey:.1e}); colour off on {off}/{drawn}, worst {worst:.1}"
+            );
+            assert!(caught_n > 300, "{name}: only {caught_n} caught pixels to compare");
+            assert!(agree * 1000 >= checked * 995, "{name}: the catch disagrees with the listing on {} pixels", checked - agree);
+            assert!(off * 100 <= drawn, "{name}: {off} pixels off the listing's colours");
+        }
     }
 
     /// A stepped palette draws every stop as a flat band: an escape
