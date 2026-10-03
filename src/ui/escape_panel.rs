@@ -2192,12 +2192,17 @@ fn texture_layer_controls(
                     if !crate::escape::coloring_suits_formula(formula, c) {
                         continue;
                     }
-                    let fits = crate::escape::layer_fits(base, c);
+                    let refusal = crate::escape::layer_refusal(base, c);
                     let selected = current.is_some_and(|x| x.name == c.name);
                     let resp = ui
-                        .add_enabled_ui(fits, |ui| ui.selectable_label(selected, c.display_name))
+                        .add_enabled_ui(refusal.is_none(), |ui| ui.selectable_label(selected, c.display_name))
                         .inner
-                        .on_disabled_hover_text(t!("escape_panel.layer_needs_accumulator"));
+                        .on_disabled_hover_text(match refusal {
+                            Some(crate::escape::LayerRefusal::DirectColor) => {
+                                t!("escape_panel.layer_direct_colour")
+                            }
+                            _ => t!("escape_panel.layer_needs_accumulator"),
+                        });
                     if resp.clicked() && !selected {
                         pick_layer(config_manager, c);
                     }
@@ -2209,10 +2214,19 @@ fn texture_layer_controls(
     let Some(l) = current else {
         return;
     };
-    if !crate::escape::layer_fits(base, l) {
+    if let Some(refusal) = crate::escape::layer_refusal(base, l) {
         ui.colored_label(
             egui::Color32::from_rgb(220, 170, 90),
-            t!("escape_panel.layer_refused", layer = l.display_name, base = base.display_name),
+            match refusal {
+                crate::escape::LayerRefusal::DirectColor => t!(
+                    "escape_panel.layer_refused_direct",
+                    layer = l.display_name,
+                    base = base.display_name
+                ),
+                crate::escape::LayerRefusal::BothAccumulate => {
+                    t!("escape_panel.layer_refused", layer = l.display_name, base = base.display_name)
+                }
+            },
         );
         return;
     }

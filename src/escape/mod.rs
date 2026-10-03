@@ -150,6 +150,15 @@ pub enum ColoringFeature {
     /// traps and averages (and for NonEscaping formulas, where every
     /// pixel is "interior").
     ColorsInterior,
+    /// The coloring draws a COLOUR, not a palette position: its WGSL
+    /// also defines
+    /// `fn coloring_color(sum: OrbitSummary, state: vec4<f32>, v: f32) -> vec3<f32>`,
+    /// returning linear light, with `v` its value after the value
+    /// transfer. `coloring_map` still supplies the value the relief and
+    /// auto contrast read. The palette is the colouring's to use or not
+    /// (`esc_palette`, `esc_palette_srgb`); a texture layer, which blends
+    /// palette positions, cannot go over or under it.
+    DirectColor,
 }
 
 /// A parameter a formula or coloring exposes. Same shape as variation
@@ -494,8 +503,25 @@ pub fn accum_is_wide(coloring: &ColoringDef) -> bool {
 /// one accumulator, so two accumulating colourings cannot (survey,
 /// item 5). Anything else can.
 pub fn layer_fits(base: &ColoringDef, layer: &ColoringDef) -> bool {
-    !(base.has_feature(ColoringFeature::NeedsOrbitAccum)
-        && layer.has_feature(ColoringFeature::NeedsOrbitAccum))
+    layer_refusal(base, layer).is_none()
+}
+
+/// Why a texture layer cannot go over a base colouring, if it cannot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayerRefusal {
+    /// Both average over the orbit, and there is one accumulator.
+    BothAccumulate,
+    /// One of the two draws a colour, not a palette position, and the
+    /// layer blends palette positions.
+    DirectColor,
+}
+
+pub fn layer_refusal(base: &ColoringDef, layer: &ColoringDef) -> Option<LayerRefusal> {
+    if base.has_feature(ColoringFeature::DirectColor) || layer.has_feature(ColoringFeature::DirectColor) {
+        return Some(LayerRefusal::DirectColor);
+    }
+    (base.has_feature(ColoringFeature::NeedsOrbitAccum) && layer.has_feature(ColoringFeature::NeedsOrbitAccum))
+        .then_some(LayerRefusal::BothAccumulate)
 }
 
 /// The texture layer a config draws: its colouring, when it names a
@@ -579,6 +605,8 @@ pub static COLORINGS: &[&ColoringDef] = &[
     &colorings::BASIC,
     &colorings::GAUSSIAN_INTEGER,
     &colorings::EXTERNAL_RAYS,
+    &colorings::RAINBOW_FRINGE,
+    &colorings::INFINITE_WAVES,
 ];
 
 /// Look up a formula by name. An unknown name renders the default

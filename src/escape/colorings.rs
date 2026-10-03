@@ -1646,3 +1646,255 @@ fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
     recommended_bailout: Some(1.0e4),
     pick_params: &[],
 };
+
+/// Rainbow fringe (survey C12), from Fraktaler 3's own example
+/// (`examples/rainbow-fringe.f3.toml`, read from source): black on white
+/// with a rainbow at the boundary. The hue is the direction of the
+/// distance-estimate vector, the saturation and value come from its
+/// length `L` in output pixels:
+/// `hsv(arg(DE) / 2pi, 1 / (1 + 4L), 2L)`, decoded to linear light and
+/// raised to `1/gamma` (the example's gamma is 2).
+///
+/// Fraktaler 3's DE vector (`hybrid.cc`) is `|z|^2 ln|z| / (z J)`, J the
+/// Jacobian of z in pixel coordinates: its length is `|z| ln|z| / |dz|`
+/// in pixels (the Milnor estimate without its factor 2), and its
+/// direction the CONJUGATE of the screen gradient of |z|^2, since F3's
+/// image rows run up as it saves them. In the plane that gradient is
+/// `z conj(dz)`; the view rotation turns it onto the screen. So the hue
+/// circles the set the way Fraktaler 3's does.
+///
+/// It needs the derivative orbit, like the distance estimate, and draws
+/// flat mid-grey where there is none (the perturbed rungs).
+pub static RAINBOW_FRINGE: ColoringDef = ColoringDef {
+    name: "rainbow_fringe",
+    display_name: "Rainbow Fringe",
+    features: &[ColoringFeature::NeedsDerivative, ColoringFeature::DirectColor],
+    parameters: &[EscapeParamDef {
+        name: "gamma",
+        display_name: "Gamma",
+        default: 2.0,
+        min: 0.1,
+        max: 10.0,
+        tooltip: "The colour is raised to 1/gamma: higher lifts the fringe's \
+                  dark side toward the white. Fraktaler 3's example uses 2.",
+        choices: &[],
+    }],
+    wgsl: r#"
+// Fraktaler 3's distance estimate, in output pixels.
+fn rainbow_fringe_distance(sum: OrbitSummary) -> f32 {
+    let r = max(length(sum.z), 1.0000001);
+    return r * log(r) / max(length(sum.dz), 1e-30) * esc_px_per_unit();
+}
+
+fn rainbow_fringe_to_linear(c: f32) -> f32 {
+    let x = clamp(c, 0.0, 1.0);
+    if (x <= 0.04045) {
+        return x / 12.92;
+    }
+    return pow((x + 0.055) / 1.055, 2.4);
+}
+
+// The value the relief and auto contrast read: the distance's log, as
+// the distance estimate's Log mapping has it.
+fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
+    if (!HAS_DERIVATIVE) {
+        return 0.0;
+    }
+    return -log2(max(rainbow_fringe_distance(sum), 1e-30));
+}
+
+fn coloring_color(sum: OrbitSummary, state: vec4<f32>, v: f32) -> vec3<f32> {
+    // No derivative, no fringe: flat mid-grey, which reads as
+    // "unavailable" rather than as a picture.
+    if (!HAS_DERIVATIVE) {
+        return vec3<f32>(0.21404114);
+    }
+    let l = rainbow_fringe_distance(sum);
+    // The gradient of |z|^2 in the plane, z conj(dz), with dz scaled
+    // down first so a huge derivative keeps its direction instead of
+    // overflowing; then onto the screen, conj(rotation) times it.
+    let m = max(abs(sum.dz.x), abs(sum.dz.y));
+    let d = sum.dz / max(m, 1e-30);
+    let g = vec2<f32>(sum.z.x * d.x + sum.z.y * d.y, sum.z.y * d.x - sum.z.x * d.y);
+    let rot = params.rot_cs;
+    let s = vec2<f32>(g.x * rot.x + g.y * rot.y, g.y * rot.x - g.x * rot.y);
+    // Fraktaler 3's vector is its conjugate. A zero pair (never for an
+    // escaped orbit) reads as hue 0 rather than reaching atan2.
+    var hue = 0.0;
+    if (max(abs(s.x), abs(s.y)) > 0.0) {
+        hue = atan2(-s.y, s.x) / 6.2831855;
+        hue = hue - floor(hue);
+    }
+    let sat = clamp(1.0 / (1.0 + 4.0 * l), 0.0, 1.0);
+    let val = clamp(2.0 * l, 0.0, 1.0);
+    // hsv2sRGB (lolengine), as Fraktaler 3 has it, then its sRGB decode.
+    let k = vec4<f32>(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+    let p = abs(fract(vec3<f32>(hue) + k.xyz) * 6.0 - k.www);
+    let srgb = val * mix(k.xxx, clamp(p - k.xxx, vec3<f32>(0.0), vec3<f32>(1.0)), sat);
+    let lin = vec3<f32>(
+        rainbow_fringe_to_linear(srgb.x),
+        rainbow_fringe_to_linear(srgb.y),
+        rainbow_fringe_to_linear(srgb.z),
+    );
+    return pow(lin, vec3<f32>(1.0 / max(cparam(0u), 0.1)));
+}
+"#,
+    accum_init: "",
+    wgsl_accum: "",
+    recommended_bailout: Some(1.0e4),
+    pick_params: &[],
+};
+
+/// Infinite waves (survey C13), Kalles Fraktaler's multi-wave colouring
+/// (`gl/kf.frag.glsl` `KF_InfiniteWaves`, read from source): no palette,
+/// but sinusoids of the iteration value, each driving the hue, the
+/// saturation or the brightness. A wave of period `P` is
+/// `sin(pi iter / P) / 2 + 1/2`; a NEGATIVE period is the constant
+/// `-P / 100`; the waves on each channel are averaged, and a channel
+/// with none is 0 -- so with no saturation wave the picture is grey,
+/// as in KF2. The iteration value is KF2's `n + 1 - NF` (NF the escape
+/// fraction), times `scale` (KF2's 1/Iteration Division) plus `offset`
+/// (its Color Offset), after the value transfer (its Color Method).
+///
+/// Stepped takes the waves at whole iterations (KF2 without Smooth).
+/// Blend mixes half the palette back in, indexed as KF2 indexes its
+/// palette: a cycle per 1024 of the iteration value. KF2 offers up to
+/// 30 waves; six fit the parameter block. A period of 0 is an unused
+/// wave. The default three are the ones KF2's bundled
+/// `monochrome-de.kfr` carries: 100 on hue, 111 on saturation, 123 on
+/// brightness.
+pub static INFINITE_WAVES: ColoringDef = ColoringDef {
+    name: "infinite_waves",
+    display_name: "Infinite Waves",
+    features: &[ColoringFeature::DirectColor],
+    parameters: &[
+        EscapeParamDef {
+            name: "scale",
+            display_name: "Scale",
+            default: 1.0,
+            min: 0.0001,
+            max: 100.0,
+            tooltip: "Multiplies the iteration value before the waves read it \
+                      (Kalles Fraktaler's 1 / Iteration Division).",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "offset",
+            display_name: "Offset",
+            default: 0.0,
+            min: -10000.0,
+            max: 10000.0,
+            tooltip: "Added to the iteration value, which shifts every wave's \
+                      phase (Kalles Fraktaler's Color Offset).",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "smooth",
+            display_name: "Waves",
+            default: 1.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Smooth follows the continuous iteration value; Stepped \
+                      takes it at whole iterations, so every band is flat.",
+            choices: &["Stepped", "Smooth"],
+        },
+        EscapeParamDef {
+            name: "blend",
+            display_name: "Palette",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Off draws the waves alone. Half mixes the palette in \
+                      50/50, a cycle per 1024 of the iteration value, as \
+                      Kalles Fraktaler's Blend does.",
+            choices: &["Off", "Half"],
+        },
+        wave_period(0, 100.0),
+        wave_channel(0, 0.0),
+        wave_period(1, 111.0),
+        wave_channel(1, 1.0),
+        wave_period(2, 123.0),
+        wave_channel(2, 2.0),
+        wave_period(3, 0.0),
+        wave_channel(3, 0.0),
+        wave_period(4, 0.0),
+        wave_channel(4, 0.0),
+        wave_period(5, 0.0),
+        wave_channel(5, 0.0),
+    ],
+    wgsl: r#"
+// Kalles Fraktaler's iteration value.
+fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
+    return (f32(sum.n) + 1.0 - esc_escape_fraction(sum)) * cparam(0u) + cparam(1u);
+}
+
+// hsv2rgb (lolengine), as Kalles Fraktaler has it: display space.
+fn infinite_waves_hsv(c: vec3<f32>) -> vec3<f32> {
+    let k = vec4<f32>(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+    let p = abs(fract(c.xxx + k.xyz) * 6.0 - k.www);
+    return c.z * mix(k.xxx, clamp(p - k.xxx, vec3<f32>(0.0), vec3<f32>(1.0)), c.y);
+}
+
+fn coloring_color(sum: OrbitSummary, state: vec4<f32>, v: f32) -> vec3<f32> {
+    let iter = select(floor(v), v, cparam(2u) > 0.5);
+    var sums = vec3<f32>(0.0);
+    var counts = vec3<f32>(0.0);
+    for (var i = 0u; i < 6u; i = i + 1u) {
+        let period = cparam(4u + 2u * i);
+        if (period == 0.0) {
+            continue;
+        }
+        // sin(pi iter / period), with the argument reduced to a turn
+        // first so a large count keeps its phase in f32.
+        var g = sin(6.2831855 * fract(iter / (2.0 * period))) * 0.5 + 0.5;
+        if (period < 0.0) {
+            g = -period / 100.0;
+        }
+        let ch = u32(clamp(cparam(5u + 2u * i), 0.0, 2.0));
+        sums[ch] = sums[ch] + g;
+        counts[ch] = counts[ch] + 1.0;
+    }
+    var rgb = infinite_waves_hsv(sums / max(counts, vec3<f32>(1.0)));
+    if (cparam(3u) > 0.5) {
+        rgb = mix(rgb, esc_palette_srgb(fract(v / 1024.0)), 0.5);
+    }
+    // Display space, decoded as the palette is.
+    return pow(max(rgb, vec3<f32>(0.0)), vec3<f32>(2.2));
+}
+"#,
+    accum_init: "",
+    wgsl_accum: "",
+    recommended_bailout: None,
+    pick_params: &[],
+};
+
+const fn wave_period(i: usize, default: f32) -> EscapeParamDef {
+    const NAMES: [&str; 6] = ["wave1", "wave2", "wave3", "wave4", "wave5", "wave6"];
+    const LABELS: [&str; 6] = ["Wave 1", "Wave 2", "Wave 3", "Wave 4", "Wave 5", "Wave 6"];
+    EscapeParamDef {
+        name: NAMES[i],
+        display_name: LABELS[i],
+        default,
+        min: -100.0,
+        max: 100000.0,
+        tooltip: "The wave's period in iterations (a full cycle is twice \
+                  it). Negative is a constant, -period/100. 0 is no wave.",
+        choices: &[],
+    }
+}
+
+const fn wave_channel(i: usize, default: f32) -> EscapeParamDef {
+    const NAMES: [&str; 6] = ["wave1_channel", "wave2_channel", "wave3_channel", "wave4_channel", "wave5_channel", "wave6_channel"];
+    const LABELS: [&str; 6] = ["Wave 1 drives", "Wave 2 drives", "Wave 3 drives", "Wave 4 drives", "Wave 5 drives", "Wave 6 drives"];
+    EscapeParamDef {
+        name: NAMES[i],
+        display_name: LABELS[i],
+        default,
+        min: 0.0,
+        max: 2.0,
+        tooltip: "Which part of the colour the wave drives. The waves on \
+                  each are averaged; one with none is 0 (no saturation \
+                  wave is grey).",
+        choices: &["Hue", "Saturation", "Brightness"],
+    }
+}

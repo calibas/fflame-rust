@@ -679,9 +679,66 @@ Read from the code, not reproduced by render, except where noted.
      one. Checked against the definition on every escaped pixel of a
      view (none disagree); one visual test.
 
-   **Not yet:** itinerary (C8) needs rank equalisation (P7); rainbow fringe (C12)
-   and infinite waves (C13) want a colour per pixel rather than a
-   palette position; direct orbit traps (C10) need a new output path.
+   *Third batch: colourings that draw their own colours.*
+   - **The colour path.** A colouring flagged `DirectColor` defines
+     `coloring_color(sum, state, v) -> vec3` (linear light, `v` its
+     value after the transfer) beside `coloring_map`. The value
+     `coloring_map` returns still feeds the relief and Auto contrast.
+     Every template that colours a pixel calls one spliced
+     `esc_colour(raw, t, ..)`, which for every other colouring is the
+     palette lookup it always was. All 99 earlier escape pictures are
+     byte-identical.
+     - The recolour cache serves it like any other colouring.
+     - A texture layer, which blends palette positions, is refused over
+       or under one, and the panel says why.
+   - **Rainbow fringe** (C12), from Fraktaler 3's own example
+     (`examples/rainbow-fringe.f3.toml`) and its DE vector
+     (`hybrid.cc`), read from source.
+     - The colour is `hsv(arg DE / 2π, 1/(1 + 4L), 2L)`, decoded to
+       linear light and raised to 1/gamma (default 2).
+     - `L = |z| ln|z| / |dz|` in output pixels.
+     - F3's vector is the conjugate of the screen gradient of |z|²,
+       since its saved rows run upward. The view rotation turns it onto
+       our screen, so the hue circles the set as in F3.
+     - Flat grey where no derivative is iterated (perturbation).
+   - **Infinite waves** (C13), from KF2's `KF_InfiniteWaves`, read from
+     source.
+     - Up to six waves (KF2 allows 30), each `sin(π·iter/P)/2 + ½` on
+       hue, saturation or brightness. A negative period is the
+       constant `−P/100`. Each channel averages its waves, and a channel
+       with none is 0, as in KF2.
+     - `iter` is KF2's `n + 1 − NF`, times a scale (1/Iteration
+       Division), plus an offset (Color Offset), after the value
+       transfer (Color Method).
+     - Stepped takes it at whole iterations. Blend mixes half the
+       palette back in, a cycle per 1024, as KF2 indexes its palette.
+     - The defaults are the three waves KF2's bundled `monochrome-de`
+       carries (100 hue, 111 saturation, 123 brightness). None of KF2's
+       77 bundled files turns waves on.
+
+     *Measured:* against transcriptions of both sources, from the GPU's
+     own records, every drawn pixel lands within one 8-bit level:
+     - the fringe at two rotations;
+     - the waves with KF2's defaults, and with a stepped, blended set
+       holding constants.
+
+     Retuning either recolours from the cache and matches a fresh
+     render to the byte. Two visual tests.
+
+   **Found on the way, and fixed** (`5fe6d896`): two features of this
+   branch measured in render pixels, which are 1/supersample of an
+   output pixel, so antialiasing changed the picture.
+   - **Distance estimate in pixel units** (C11): at 2× it moved 77
+     levels on average, now 5.8 (plane units: 5.6).
+   - **Offset relief** (R6): the shade pass scaled its slope by the
+     supersample factor, which is right only for per-render-pixel
+     slopes. It was 38% stronger at 2×, and now changes by under 3%.
+
+   The supersample factor now rides in the uniform's flag word, as F3
+   divides its DE by its supersampling.
+
+   **Not yet:** itinerary (C8) needs rank equalisation (P7); direct
+   orbit traps (C10) need the palette inside the loop.
 7. **Relief** (§5.3): the small ones (R1, R2, R4, R8, R9) first, then
    analytic relief (R5), offset orbits (R6) and Embossed (R7). Analytic
    relief at deep zoom waits for the derivative under perturbation (P11).
