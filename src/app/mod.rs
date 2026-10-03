@@ -2866,7 +2866,7 @@ impl App {
                     // or the full render never gets asked for.
                     self.window.request_redraw();
                 }
-                // The texture overlay's image: looked at when the frame
+                // The texture's image: looked at when the frame
                 // re-renders anyway, or while the web generates one.
                 if (self.escape_dirty || self.escape_texture.busy())
                     && self.escape_texture.update(escape, &self.gpu.device, &self.gpu.queue, &final_config.escape)

@@ -928,17 +928,20 @@ pub fn render_escape_content(
                             ShadingTexture::None => t!("escape_panel.texture_none"),
                             ShadingTexture::Grain => t!("escape_panel.texture_grain"),
                             ShadingTexture::Paper => t!("escape_panel.texture_paper"),
+                            ShadingTexture::Simulation => t!("escape_panel.texture_simulation"),
                         })
                         .show_ui(ui, |ui| {
                             for k in [
                                 ShadingTexture::None,
                                 ShadingTexture::Grain,
                                 ShadingTexture::Paper,
+                                ShadingTexture::Simulation,
                             ] {
                                 let label = match k {
                                     ShadingTexture::None => t!("escape_panel.texture_none"),
                                     ShadingTexture::Grain => t!("escape_panel.texture_grain"),
                                     ShadingTexture::Paper => t!("escape_panel.texture_paper"),
+                                    ShadingTexture::Simulation => t!("escape_panel.texture_simulation"),
                                 };
                                 if ui.selectable_label(cur == k, label.as_ref()).clicked()
                                     && cur != k
@@ -953,6 +956,9 @@ pub fn render_escape_content(
                 })
                 .response
                 .on_hover_text(t!("escape_panel.tooltip_shading_texture"));
+                if sh.texture_kind == ShadingTexture::Simulation && esc.texture.is_none() {
+                    ui.weak(t!("escape_panel.texture_simulation_none"));
+                }
                 if sh.texture_kind != ShadingTexture::None {
                     ui.horizontal(|ui| {
                         ui.label(t!("escape_panel.texture_strength"));

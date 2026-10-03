@@ -9477,6 +9477,155 @@ fn main() {
         assert!(same < 6.0, "2x antialiasing changed the overlay by {same:.2} levels on average");
     }
 
+    /// The relief's bump (`ShadingTexture::Simulation`) tilts the surface
+    /// by the texture's luminance: in a view wholly outside the set, a
+    /// flat palette and no relief height of its own, the shading is the
+    /// bump alone, and it follows the response the shader's formula
+    /// gives the CPU-sampled texture -- `dot(g, light) / sqrt(1 + g.g)`
+    /// with `g` from central differences one render pixel apart, the
+    /// texture repeated at `texture_scale` display pixels per texel. A
+    /// light turned a quarter, or a texture at the wrong scale, does not
+    /// fit. A flat texture, or none, draws what no bump draws.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_relief_bump_is_the_textures_luminance() {
+        use crate::config::escape::{EscapeTexture, ShadingTexture};
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        let (tw, th) = (40u32, 32u32);
+        let wavy = image::RgbaImage::from_fn(tw, th, |x, y| {
+            let tau = std::f32::consts::TAU;
+            let (u, v) = (x as f32 / tw as f32, y as f32 / th as f32);
+            let c = |a: f32| (128.0 + 100.0 * (tau * a).sin()).round() as u8;
+            image::Rgba([c(u + 0.25 * v), c(2.0 * v), c(u - v), 255])
+        });
+        let flat = image::RgbaImage::from_pixel(8, 8, image::Rgba([90, 140, 200, 255]));
+        let recipe = crate::textures::as_recipe(&crate::config::FractalConfig::default(), (64, 64));
+        let key = crate::textures::cache::key(&recipe);
+
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        let stop = |position: f32| crate::scene::palette::ColorStop { position, color: [0.5, 0.5, 0.5] };
+        config.palette.stops = vec![stop(0.0), stop(1.0)];
+        // Every point escapes at once: no interior, no structure.
+        config.escape.formula = "mandelbrot".to_string();
+        config.escape.coloring = "smooth".to_string();
+        config.escape.center_re = "2.5".to_string();
+        config.escape.center_im = "2.5".to_string();
+        config.escape.zoom_log2 = 2.0;
+        config.escape.max_iter = 16;
+        config.escape.supersample = 1;
+        config.escape.shading.enabled = true;
+        config.escape.shading.height = 0.0;
+        config.escape.shading.light_angle = 135.0;
+        config.escape.shading.texture_strength = 0.5;
+        config.escape.shading.texture_scale = 2.0;
+        config.escape.texture = Some(EscapeTexture { name: "synthetic".to_string(), config: Box::new(recipe.clone()) });
+
+        let render_with = |c: &crate::config::FractalConfig, tex: Option<&image::RgbaImage>| -> Vec<u8> {
+            let mut engines = crate::renderer::RenderEngines::default();
+            let mut esc = crate::escape::EscapeRenderer::new(&device, w, h);
+            if let Some(t) = tex {
+                assert!(esc.set_texture(&device, &queue, &key, t));
+            }
+            engines.escape = Some(esc);
+            let job = crate::renderer::RenderJob::new(c, w, h).with_engines(&mut engines);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+
+        let mut none = config.clone();
+        none.escape.shading.texture_kind = ShadingTexture::None;
+        let plain = render_with(&none, Some(&wavy));
+        let mut bump = config.clone();
+        bump.escape.shading.texture_kind = ShadingTexture::Simulation;
+        assert!(bump.escape.uses_texture());
+        let flat_out = render_with(&bump, Some(&flat));
+        assert_eq!(flat_out, plain, "a flat texture tilted the surface");
+        let mut untextured = bump.clone();
+        untextured.escape.texture = None;
+        assert!(!untextured.escape.uses_texture());
+        assert_eq!(render_with(&untextured, None), plain, "the bump drew without a texture");
+
+        // The shader's response, from the CPU-sampled texture.
+        let lum = |q: (f32, f32)| -> f32 {
+            let fx = q.0 - 0.5;
+            let fy = q.1 - 0.5;
+            let (x0, y0) = (fx.floor(), fy.floor());
+            let (ax, ay) = (fx - x0, fy - y0);
+            let at = |x: f32, y: f32| {
+                let xi = (x as i64).rem_euclid(tw as i64) as u32;
+                let yi = (y as i64).rem_euclid(th as i64) as u32;
+                let p = wavy.get_pixel(xi, yi).0;
+                (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) / 255.0
+            };
+            let top = at(x0, y0) * (1.0 - ax) + at(x0 + 1.0, y0) * ax;
+            let bot = at(x0, y0 + 1.0) * (1.0 - ax) + at(x0 + 1.0, y0 + 1.0) * ax;
+            top * (1.0 - ay) + bot * ay - 0.5
+        };
+        let response = |light_deg: f32, scale: f32| -> Vec<f32> {
+            let (ls, lc) = light_deg.to_radians().sin_cos();
+            let k = config.escape.shading.texture_strength * 8.0;
+            let mut out = Vec::with_capacity((w * h) as usize);
+            for py in 0..h {
+                for px in 0..w {
+                    let q = (px as f32 / scale, py as f32 / scale);
+                    let e = 1.0 / scale;
+                    let nx = lum((q.0 + e, q.1)) - lum((q.0 - e, q.1));
+                    let ny = lum((q.0, q.1 + e)) - lum((q.0, q.1 - e));
+                    let g = (-nx * k, ny * k);
+                    let s = g.0 * lc + g.1 * ls;
+                    out.push(s / (1.0 + g.0 * g.0 + g.1 * g.1).sqrt());
+                }
+            }
+            out
+        };
+        let correlation = |a: &[f32], b: &[f32]| -> f64 {
+            let n = a.len() as f64;
+            let (ma, mb) = (
+                a.iter().map(|v| *v as f64).sum::<f64>() / n,
+                b.iter().map(|v| *v as f64).sum::<f64>() / n,
+            );
+            let (mut sab, mut saa, mut sbb) = (0.0, 0.0, 0.0);
+            for (x, y) in a.iter().zip(b) {
+                let (dx, dy) = (*x as f64 - ma, *y as f64 - mb);
+                sab += dx * dy;
+                saa += dx * dx;
+                sbb += dy * dy;
+            }
+            sab / (saa * sbb).sqrt().max(1e-12)
+        };
+
+        let gpu = render_with(&bump, Some(&wavy));
+        // The shading's effect: how far each pixel moved off the flat grey.
+        let lit: Vec<f32> = gpu.chunks(4).zip(plain.chunks(4)).map(|(a, b)| a[1] as f32 - b[1] as f32).collect();
+        let moved = lit.iter().filter(|d| d.abs() > 4.0).count() as f64 / lit.len() as f64;
+        let right = correlation(&lit, &response(135.0, 2.0));
+        let turned = correlation(&lit, &response(225.0, 2.0));
+        let rescaled = correlation(&lit, &response(135.0, 3.0));
+        println!(
+            "bump: {moved:.3} of pixels moved; against the formula {right:.4}, light turned a quarter {turned:.4}, scale 3 {rescaled:.4}"
+        );
+        assert!(moved > 0.5, "the bump hardly shows ({moved:.3})");
+        assert!(right > 0.97, "the bump does not follow the texture's slope ({right:.4})");
+        assert!(turned < 0.5 && rescaled < right - 0.1, "the comparison cannot tell direction or scale apart");
+
+        // Display pixels per texel: 2x antialiasing keeps the bump's size.
+        let mut two = bump.clone();
+        two.escape.supersample = 2;
+        let lit2: Vec<f32> =
+            render_with(&two, Some(&wavy)).chunks(4).zip(plain.chunks(4)).map(|(a, b)| a[1] as f32 - b[1] as f32).collect();
+        let at2 = correlation(&lit2, &response(135.0, 2.0));
+        println!("bump at 2x against the 1x formula: {at2:.4}");
+        assert!(at2 > 0.9, "antialiasing changed the bump ({at2:.4})");
+    }
+
     /// A stepped palette draws every stop as a flat band: an escape
     /// render through it shows the stops' colours and next to nothing
     /// in between, where the blended palette shows a continuum.

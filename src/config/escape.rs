@@ -351,6 +351,16 @@ impl TextureOverlay {
     }
 }
 
+impl EscapeConfig {
+    /// Whether anything draws with the texture, so it has to be on the
+    /// GPU: the overlay, or the relief's bump.
+    pub fn uses_texture(&self) -> bool {
+        self.texture.is_some()
+            && (self.texture_overlay.enabled
+                || (self.shading.enabled && self.shading.texture_kind == ShadingTexture::Simulation))
+    }
+}
+
 /// A simulation texture a config uses: its name, and its recipe -- a
 /// Simulation-mode config -- in full (`docs/projects/sim-textures.md`,
 /// decision 6), so the file that uses it needs nothing else.
@@ -1665,6 +1675,10 @@ pub enum ShadingTexture {
     /// Octaves stretched along different axes, so it reads as fibre
     /// laid in a felt rather than as isotropic speckle.
     Paper,
+    /// The config's simulation texture (`EscapeConfig::texture`), its
+    /// luminance as the micro-relief (docs/projects/sim-textures.md,
+    /// phase 3). Nothing without a texture.
+    Simulation,
 }
 
 impl ShadingTexture {
@@ -1673,6 +1687,7 @@ impl ShadingTexture {
             ShadingTexture::None => 0,
             ShadingTexture::Grain => 1,
             ShadingTexture::Paper => 2,
+            ShadingTexture::Simulation => 3,
         }
     }
     pub fn as_str(self) -> &'static str {
@@ -1680,12 +1695,14 @@ impl ShadingTexture {
             ShadingTexture::None => "none",
             ShadingTexture::Grain => "grain",
             ShadingTexture::Paper => "paper",
+            ShadingTexture::Simulation => "simulation",
         }
     }
     pub fn from_str_or_default(s: &str) -> Self {
         match s {
             "grain" => ShadingTexture::Grain,
             "paper" => ShadingTexture::Paper,
+            "simulation" => ShadingTexture::Simulation,
             _ => ShadingTexture::None,
         }
     }
