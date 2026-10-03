@@ -8091,6 +8091,200 @@ fn main() {
         assert!(d <= 1, "offset relief under perturbation moved a pixel by {d}");
     }
 
+    /// Embossed computes what Ultra Fractal's Standard.ulb says, pixel
+    /// for pixel: the stored response is checked against a CPU port of
+    /// `Standard_Embossed` / `Standard_EmbossedHelper` / `Standard_Emboss`
+    /// -- two Mandelbrot orbits at `c -+ dr`, dr toward the light, run in
+    /// step, each reduced per Emboss Type, compared -- for every type,
+    /// with the view rotated and not. Smallest Magnitude is ported with
+    /// the minimum SHARED between the orbits, as Ultra Fractal keeps it,
+    /// and measured against an unshared port as well, to show the quirk
+    /// is what the shader reproduces.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn embossed_draws_what_ultra_fractals_source_says() {
+        use crate::config::escape::{EmbossType, ShadingField};
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let config = crate::config::FractalConfig::default();
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+
+        // The CPU port, in f32 as the shader runs it.
+        #[derive(Clone, Copy)]
+        struct View {
+            cx: f32,
+            cy: f32,
+            span_y: f32,
+            rot: f32,
+            light: f32,
+            offset: f32,
+            bailout: f32,
+            max_iter: u32,
+        }
+        fn emboss_cpu(v: View, px: u32, py: u32, w: u32, h: u32, kind: u32, sections: f32, shared: bool) -> Option<i32> {
+            let span_x = v.span_y * w as f32 / h as f32;
+            let ux = (px as f32 + 0.5) / w as f32;
+            let uy = (py as f32 + 0.5) / h as f32;
+            let dx = (ux - 0.5) * span_x;
+            let dy = -((uy - 0.5) * v.span_y);
+            let (rs, rc) = v.rot.sin_cos();
+            let c = (v.cx + dx * rc - dy * rs, v.cy + dx * rs + dy * rc);
+            // The pixel's own orbit: the response is stored only where
+            // it escaped.
+            let mut z = (0.0f32, 0.0f32);
+            let mut escaped = false;
+            for _ in 0..v.max_iter {
+                z = (z.0 * z.0 - z.1 * z.1 + c.0, 2.0 * z.0 * z.1 + c.1);
+                if z.0 * z.0 + z.1 * z.1 > v.bailout {
+                    escaped = true;
+                    break;
+                }
+            }
+            if !escaped {
+                return None;
+            }
+            let (ls, lc) = v.light.sin_cos();
+            let toward = (lc * rc - ls * rs, lc * rs + ls * rc);
+            let d = v.offset * v.span_y;
+            let p = [(c.0 - d * toward.0, c.1 - d * toward.1), (c.0 + d * toward.0, c.1 + d * toward.1)];
+            let mut zs = [(0.0f32, 0.0f32); 2];
+            let mut done = [false; 2];
+            let mut r = [0.0f32; 2];
+            let mut rmin = [1e20f32; 2];
+            for i in 0..v.max_iter {
+                let it = i + 1;
+                for k in 0..2 {
+                    if done[k] {
+                        continue;
+                    }
+                    let (x, y) = zs[k];
+                    zs[k] = (x * x - y * y + p[k].0, 2.0 * x * y + p[k].1);
+                    let (x, y) = zs[k];
+                    if x * x + y * y > v.bailout {
+                        done[k] = true;
+                        match kind {
+                            0 => r[k] = it as f32,
+                            4 => r[k] = (0.5 * (x * x + y * y).ln()).trunc(),
+                            5 => {
+                                let mut t = 0.5 * y.atan2(x) / std::f32::consts::PI;
+                                if t < 0.0 {
+                                    t += 1.0;
+                                }
+                                r[k] = (t * sections).trunc();
+                            }
+                            _ => {}
+                        }
+                    }
+                    let slot = if shared { 0 } else { k };
+                    match kind {
+                        1 if x > 0.0 => r[k] += 1.0,
+                        2 if y > 0.0 => r[k] += 1.0,
+                        3 => {
+                            let m = x * x + y * y;
+                            if m < rmin[slot] {
+                                rmin[slot] = m;
+                                r[k] = it as f32;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if done[0] && done[1] {
+                    break;
+                }
+            }
+            Some(if r[0] < r[1] { -1 } else if r[1] < r[0] { 1 } else { 0 })
+        }
+
+        let run = |esc: &crate::config::escape::EscapeConfig| -> Vec<f32> {
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("emboss") });
+                let settled =
+                    escape.render(&device, &queue, &mut enc, esc, renderer.palette_view(), renderer.palette_generation());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "render did not settle");
+            }
+            pollster::block_on(escape.read_height_channel(&device, &queue, false, 2)).expect("height")
+        };
+
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "mandelbrot".to_string();
+        esc.coloring = "smooth".to_string();
+        esc.center_re = "-0.75".to_string();
+        esc.center_im = "0.1".to_string();
+        esc.zoom_log2 = 1.5;
+        esc.max_iter = 64;
+        esc.bailout = 4.0;
+        esc.supersample = 1;
+        esc.shading.enabled = true;
+        esc.shading.field = ShadingField::Embossed;
+        esc.shading.offset = 0.004;
+        for (rotation, light) in [(0.0f32, 135.0f32), (0.7, 30.0)] {
+            for kind in EmbossType::ALL {
+                let mut e = esc.clone();
+                e.rotation = rotation;
+                e.shading.light_angle = light;
+                e.shading.emboss = kind;
+                e.shading.emboss_sections = 3;
+                let gpu = run(&e);
+                let view = View {
+                    cx: -0.75,
+                    cy: 0.1,
+                    span_y: (4.0 / 1.5f64.exp2()) as f32,
+                    rot: rotation,
+                    light: light.to_radians(),
+                    offset: 0.004,
+                    bailout: 4.0,
+                    max_iter: 64,
+                };
+                let measure = |shared: bool| {
+                    let (mut lit, mut agree, mut signs) = (0usize, 0usize, [0usize; 2]);
+                    for py in 0..h {
+                        for px in 0..w {
+                            let Some(cpu) = emboss_cpu(view, px, py, w, h, kind.to_gpu(), 3.0, shared) else {
+                                continue;
+                            };
+                            let g = gpu[(py * w + px) as usize].round() as i32;
+                            if cpu != 0 || g != 0 {
+                                lit += 1;
+                                agree += usize::from(cpu == g);
+                            }
+                            if g < 0 {
+                                signs[0] += 1;
+                            } else if g > 0 {
+                                signs[1] += 1;
+                            }
+                        }
+                    }
+                    (lit, agree as f64 / lit.max(1) as f64, signs)
+                };
+                let (lit, agree, signs) = measure(true);
+                println!(
+                    "rotation {rotation} light {light} {kind:?}: {lit} drawn pixels, {agree:.4} agree; shadow {}, highlight {}",
+                    signs[0], signs[1]
+                );
+                assert!(lit > (w * h / 50) as usize, "{kind:?} drew only {lit} contour pixels");
+                assert!(signs[0] > 0 && signs[1] > 0, "{kind:?} drew only one side of its contours: {signs:?}");
+                assert!(agree > 0.97, "{kind:?} at rotation {rotation}: {agree:.4} of drawn pixels agree with Standard.ulb");
+                if kind == EmbossType::SmallestMagnitude {
+                    let (_, unshared, _) = measure(false);
+                    println!("  against an unshared minimum: {unshared:.4}");
+                    assert!(agree > unshared, "the shared minimum is not what the shader keeps");
+                }
+            }
+        }
+    }
+
     /// A stepped palette draws every stop as a flat band: an escape
     /// render through it shows the stops' colours and next to nothing
     /// in between, where the blended palette shows a continuum.

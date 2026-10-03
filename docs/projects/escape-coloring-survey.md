@@ -762,5 +762,51 @@ Read from the code, not reproduced by render, except where noted.
      loop. Direct path only: the perturbed rungs do not run offset
      orbits, so the relief is flat there, as the panel says and a test
      checks. Softness, stencils and the height curve do not apply to it.
+   - **R7, Embossed**, a sixth relief source, **Embossed contours**,
+     ported from Ultra Fractal's own source (Standard.ulb:
+     `Standard_Embossed`, `Standard_EmbossedHelper`, `Standard_Emboss`,
+     by Kerry Mitchell; read from the public formula reference). Two
+     orbits, at `c − dr` and `c + dr` with `dr` toward the light, run
+     in step. Each is reduced per Emboss Type: the iteration it
+     escaped on, the count of iterates with Re z > 0 or Im z > 0, the
+     iteration of the smallest |z|², `trunc(ln|z|)`, or the angle
+     sector (1–32 sections, default 2). The pixel is a shadow where the
+     orbit away from the light came out lower, a highlight where higher,
+     and flat where they tie; those are Emboss's greys 0.2, 0.8 and 0.5.
+     The quirks are kept:
+     - An orbit that never escapes reads 0 for Iteration, Magnitude and
+       Angle.
+     - Neither orbit stops early, since UF requires periodicity
+       checking to be off.
+     - Smallest Magnitude keeps **one** minimum for both orbits, as UF's
+       helpers share their owner's `fRMin`.
 
-   **Still to do:** Embossed (R7) and an image texture (R10).
+     The pair is its own loop, `esc_emboss`, built from the same
+     generated step text as the pixel's loop (`step_lines`). It
+     validates for every formula, damped or not. The step is the
+     R6 offset (UF's Contour Size). Ours is a fraction of the view's
+     height; UF's is `0.0065/#magn`, and how that compares depends on
+     UF's view at magnification 1, which was not read. Two divergences
+     are deliberate:
+     - `dr` turns with the view rotation, so the light stays where the
+       relief's light is. UF's `dr` is fixed in the plane.
+     - The emboss is drawn only where the pixel itself has a value. The
+       set's interior is the background, which the relief does not
+       light.
+
+     UF merges Emboss with Hard or Soft Light. Our black Multiply shadow
+     and white Screen highlight, both at 0.6, are exactly Hard Light at
+     0.2 and 0.8, with 0.5 its identity.
+     *Measured:* against a CPU port of the three classes, the stored
+     response agrees on 99.3–99.99% of the drawn pixels for every type,
+     at rotation 0 with the light at 135° and at rotation 0.7 with it at
+     30°. An unshared minimum agrees on only 11–15%, so the shared one
+     is what the shader keeps. One visual test.
+
+   **Found on the way, and fixed:** the direct path's row bands are
+   sized by `width × max_iter` per row against a dispatch budget, and
+   offset relief (R6) did not count its two extra orbits. A pixel can
+   cost three loops, an under-estimate in the direction that risks the
+   driver's watchdog; both fields now count three.
+
+   **Still to do:** an image texture (R10).

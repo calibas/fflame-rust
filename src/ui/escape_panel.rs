@@ -987,6 +987,7 @@ pub fn render_escape_content(
                             ShadingField::Layer => t!("escape_panel.shading_field_layer"),
                             ShadingField::Analytic => t!("escape_panel.shading_field_analytic"),
                             ShadingField::Offset => t!("escape_panel.shading_field_offset"),
+                            ShadingField::Embossed => t!("escape_panel.shading_field_embossed"),
                         })
                         .show_ui(ui, |ui| {
                             for f in [
@@ -995,6 +996,7 @@ pub fn render_escape_content(
                                 ShadingField::Layer,
                                 ShadingField::Analytic,
                                 ShadingField::Offset,
+                                ShadingField::Embossed,
                             ] {
                                 let label = match f {
                                     ShadingField::Smooth => {
@@ -1012,6 +1014,9 @@ pub fn render_escape_content(
                                     ShadingField::Offset => {
                                         t!("escape_panel.shading_field_offset")
                                     }
+                                    ShadingField::Embossed => {
+                                        t!("escape_panel.shading_field_embossed")
+                                    }
                                 };
                                 if ui.selectable_label(f == cur, label).clicked() && f != cur {
                                     let _ = config_manager.update_param(
@@ -1027,14 +1032,70 @@ pub fn render_escape_content(
                         .response
                         .on_hover_text(t!("escape_panel.tooltip_shading_field"));
                 });
-                if sh.field == ShadingField::Offset {
+                if matches!(sh.field, ShadingField::Offset | ShadingField::Embossed) {
+                    let embossed = sh.field == ShadingField::Embossed;
+                    if embossed {
+                        use crate::config::escape::EmbossType;
+                        ui.horizontal(|ui| {
+                            ui.label(t!("escape_panel.shading_emboss"));
+                            let name = |m: EmbossType| match m {
+                                EmbossType::Iteration => t!("escape_panel.emboss_iteration"),
+                                EmbossType::RealPositive => t!("escape_panel.emboss_real_positive"),
+                                EmbossType::ImagPositive => t!("escape_panel.emboss_imag_positive"),
+                                EmbossType::SmallestMagnitude => {
+                                    t!("escape_panel.emboss_smallest_magnitude")
+                                }
+                                EmbossType::Magnitude => t!("escape_panel.emboss_magnitude"),
+                                EmbossType::Angle => t!("escape_panel.emboss_angle"),
+                            };
+                            egui::ComboBox::from_id_salt("escape_shading_emboss")
+                                .selected_text(name(sh.emboss))
+                                .show_ui(ui, |ui| {
+                                    for m in EmbossType::ALL {
+                                        if ui.selectable_label(m == sh.emboss, name(m)).clicked() && m != sh.emboss {
+                                            let _ = config_manager.update_param(
+                                                ConfigPath::EscapeShadingEmboss,
+                                                ConfigValue::String(m.as_str().to_string()),
+                                            );
+                                        }
+                                    }
+                                })
+                                .response
+                                .on_hover_text(t!("escape_panel.tooltip_shading_emboss"));
+                        });
+                        if sh.emboss == EmbossType::Angle {
+                            ui.horizontal(|ui| {
+                                ui.label(t!("escape_panel.shading_emboss_sections"));
+                                let mut v = sh.emboss_sections;
+                                let (lo, hi) = crate::config::escape::EMBOSS_SECTIONS_RANGE;
+                                if ui
+                                    .add(egui::Slider::new(&mut v, lo..=hi))
+                                    .on_hover_text(t!("escape_panel.tooltip_shading_emboss_sections"))
+                                    .changed()
+                                {
+                                    let _ = config_manager.update_param(
+                                        ConfigPath::EscapeShadingEmbossSections,
+                                        ConfigValue::UInt(v),
+                                    );
+                                }
+                            });
+                        }
+                    }
                     ui.horizontal(|ui| {
-                        ui.label(t!("escape_panel.shading_offset"));
+                        ui.label(if embossed {
+                            t!("escape_panel.shading_contour_size")
+                        } else {
+                            t!("escape_panel.shading_offset")
+                        });
                         let mut v = sh.offset;
                         let (lo, hi) = crate::config::escape::RELIEF_OFFSET_RANGE;
                         if ui
                             .add(egui::Slider::new(&mut v, lo..=hi).logarithmic(true))
-                            .on_hover_text(t!("escape_panel.tooltip_shading_offset"))
+                            .on_hover_text(if embossed {
+                                t!("escape_panel.tooltip_shading_contour_size")
+                            } else {
+                                t!("escape_panel.tooltip_shading_offset")
+                            })
                             .changed()
                         {
                             let _ = config_manager.update_param(ConfigPath::EscapeShadingOffset, v.into());
@@ -1043,7 +1104,11 @@ pub fn render_escape_content(
                     if crate::escape::EscapeRenderer::wants_perturbation(&esc) {
                         ui.colored_label(
                             egui::Color32::from_rgb(220, 170, 90),
-                            t!("escape_panel.offset_relief_perturbed"),
+                            if embossed {
+                                t!("escape_panel.emboss_relief_perturbed")
+                            } else {
+                                t!("escape_panel.offset_relief_perturbed")
+                            },
                         );
                     }
                 }

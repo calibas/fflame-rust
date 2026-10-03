@@ -1947,6 +1947,26 @@ fn register_escape(engine: &mut Engine) {
         },
     );
 
+    fn set_emboss(e: &mut EscapeHandle, kind: &str, sections: Option<i64>) -> Result<(), Box<EvalAltResult>> {
+        use crate::config::escape::{EmbossType, EMBOSS_SECTIONS_RANGE};
+        let m = EmbossType::ALL.into_iter().find(|m| m.as_str() == kind).ok_or_else(|| {
+            let names: Vec<&str> = EmbossType::ALL.iter().map(|m| m.as_str()).collect();
+            err(format!("unknown emboss type '{kind}'; one of {}", names.join(", ")))
+        })?;
+        let mut cfg = e.cfg.borrow_mut();
+        enter(&mut cfg);
+        cfg.escape.shading.emboss = m;
+        if let Some(n) = sections {
+            let (lo, hi) = EMBOSS_SECTIONS_RANGE;
+            cfg.escape.shading.emboss_sections = n.clamp(lo as i64, hi as i64) as u32;
+        }
+        Ok(())
+    }
+    engine.register_fn("shading_emboss", |e: &mut EscapeHandle, kind: &str| set_emboss(e, kind, None));
+    engine.register_fn("shading_emboss", |e: &mut EscapeHandle, kind: &str, sections: i64| {
+        set_emboss(e, kind, Some(sections))
+    });
+
     // ---- Palette mapping --------------------------------------------
     // Curve names are checked, unlike the shading selectors: a typo in
     // a curve renders a perfectly plausible Linear picture, and nobody
