@@ -362,7 +362,14 @@ pub fn render_menu_bar(
             let available_width = ui.ctx().content_rect().width();
             if available_width >= 500.0 {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // Language selector menu (globe icon) — rightmost
+                // The progress bar for whatever is rendering -- rightmost,
+                // and always there, so nothing beside it moves when a
+                // render starts or ends (render_progress.rs).
+                let row = ui.spacing().interact_size.y;
+                super::render_progress::show(ui, &menu_state.progress, egui::vec2(96.0, row));
+                ui.separator();
+
+                // Language selector menu (globe icon)
                 ui.menu_button("🌐", |ui| {
                     rows_do_not_wrap(ui);
                     let locales = crate::i18n::supported_locales();

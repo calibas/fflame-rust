@@ -303,8 +303,8 @@ pub struct PanelContext<'a> {
     pub animation_export_requested: &'a mut Option<super::animation_panel::AnimationExportSettings>,
 
     // Whether ANY export is running. Disables export buttons; live progress is
-    // shown by the global overlay (`export_status::render_export_overlay`), not
-    // by the panels.
+    // shown by the menu bar's progress bar (`render_progress.rs`), not by the
+    // panels.
     pub export_active: bool,
 
     // Export Animation panel state (Phase 5)
@@ -1271,8 +1271,8 @@ impl<'a> PanelViewer<'a> {
             *self.context.animation_seek_drag_stopped = true;
         }
 
-        // Live export progress is shown by the global overlay
-        // (`export_status::render_export_overlay`), not inline here.
+        // Live export progress is shown by the menu bar's progress bar
+        // (`render_progress.rs`), not inline here.
 
         // File controls (after tracks section)
         ui.separator();

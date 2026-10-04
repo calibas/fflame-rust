@@ -18,6 +18,7 @@ mod menu_context;
 pub mod render_mode;
 pub mod visibility;
 mod palette_editor;
+pub mod render_progress;
 mod rhai_highlight;
 mod palette_library;
 mod panel_viewer;
@@ -60,6 +61,7 @@ mod xaos_editor;
 pub use export_status::{ExportKind, ExportStatus, UiReporter};
 pub use font_loader::ensure_font_for_locale;
 pub use menu_context::{MenuActions, MenuState};
+pub use render_progress::RenderProgress;
 pub use palette_editor::PaletteEditor;
 pub use response::UiResponse;
 pub use response::ApiSaveAction;
@@ -904,6 +906,8 @@ pub struct EguiLayer {
     deep_zoom: DeepZoom,
     /// The escape viewport's antialiasing, while in escape mode.
     escape_aa: Option<EscapeAa>,
+    /// What the menu bar's progress bar shows. Set by App each frame.
+    render_progress: RenderProgress,
 
     // Xaos editor state
     xaos_editor_state: xaos_editor::XaosEditorState,
@@ -1056,6 +1060,7 @@ impl EguiLayer {
             density_histogram: crate::renderer::DensityHistogram::default(),
             deep_zoom: DeepZoom::default(),
             escape_aa: None,
+            render_progress: RenderProgress::Idle,
             xaos_editor_state: xaos_editor::XaosEditorState::default(),
             signal_panel_state: signal_panel::SignalPanelState::new(),
             touch_tracker: panel_viewer::TouchTracker::default(),
@@ -1552,6 +1557,7 @@ impl EguiLayer {
             auth_email: read_auth_email(config_manager),
             api_connectivity: self.api_connectivity,
             fly_mode_active,
+            progress: self.render_progress.clone(),
         };
 
         // Log ConfigManager state at start of UI render
@@ -2061,14 +2067,12 @@ impl EguiLayer {
             // Note: quit_requested is now handled in app.rs event loop for graceful shutdown
         });
 
-        // API notification toast + export progress overlay (rendered outside
-        // ctx.run to avoid borrow conflicts with self). The overlay sits just
-        // above the toast so a terminal "Saved …" toast can show beneath the
-        // final bar without overlapping.
+        // API notification toast (rendered outside ctx.run to avoid borrow
+        // conflicts with self). Export progress is the menu bar's progress
+        // bar (render_progress.rs).
         {
             let ctx = self.ctx.clone();
             self.render_api_notification(&ctx);
-            export_status::render_export_overlay(&ctx, export_status);
         }
 
         // Open Save Online dialog from animation panel (if requested)
@@ -2624,6 +2628,11 @@ impl EguiLayer {
     /// escape mode).
     pub fn update_escape_aa(&mut self, aa: Option<EscapeAa>) {
         self.escape_aa = aa;
+    }
+
+    /// What is rendering, for the menu bar's progress bar.
+    pub fn update_render_progress(&mut self, progress: RenderProgress) {
+        self.render_progress = progress;
     }
 
     /// Update the density histogram from computed data

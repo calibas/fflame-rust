@@ -271,7 +271,7 @@ impl App {
     /// For normal GPU exports, runs synchronously (fast enough).
     #[cfg(not(target_arch = "wasm32"))]
     /// Renders above this iteration count background-render with a live
-    /// progress overlay instead of blocking the UI synchronously. Tracks render
+    /// progress bar instead of blocking the UI synchronously. Tracks render
     /// time (≈ iteration count), not resolution — per the export UX design. The
     /// default config is 1e9 iterations (multi-second), so typical exports show
     /// progress; only deliberately-reduced quick renders stay synchronous.
@@ -410,7 +410,7 @@ impl App {
         // OOMs, and sharing the app device across threads corrupts the surface.
         // So this fast path blocks briefly instead. Sizes above the binding
         // limit route to HighResExporter (own device, tiled) above. Only the
-        // completion/error toast is unified here — no live overlay, since the
+        // completion/error toast is unified here — no live progress, since the
         // frame is blocked through the render.
         let job = RenderJob::new(&config, render_width, render_height)
             .with_iterations_per_thread(self.config_manager.system_settings().iterations_per_thread)
@@ -487,7 +487,7 @@ impl App {
     }
 
     /// Background PNG export through HighResExporter on its own headless
-    /// device, with the unified progress overlay. Handles any size: one GPU
+    /// device, with the menu bar's progress bar. Handles any size: one GPU
     /// tile when the histogram fits a binding, row-tiled (or CPU histogram)
     /// when it doesn't. Used for both >binding sizes and long renders that want
     /// progress without freezing the UI.
