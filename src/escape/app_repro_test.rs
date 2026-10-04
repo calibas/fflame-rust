@@ -3721,6 +3721,7 @@ mod tests {
             crate::escape::assembler::PerturbTier::Ducks(0),
             false,
             crate::escape::accum_is_wide_named(&esc.coloring),
+            false,
         );
         let lim = device.limits();
         let cap = lim.max_buffer_size.min(lim.max_storage_buffer_binding_size as u64);
@@ -7980,7 +7981,8 @@ fn main() {
             assert!(agree > 0.9, "analytic and numeric relief lean opposite ways at rotation {rotation}: {agree:.3} agree");
         }
 
-        // Past the perturbation threshold there is no derivative: flat.
+        // Past the perturbation threshold the scaled rung carries the
+        // derivative (P11), so the relief lights the dive too.
         let mut deep = config.clone();
         deep.escape.zoom_log2 = 30.0;
         deep.escape.center_re = "-0.7436438870371587".to_string();
@@ -7989,7 +7991,18 @@ fn main() {
         deep.escape.shading.field = ShadingField::Analytic;
         let mut deep_off = deep.clone();
         deep_off.escape.shading.enabled = false;
-        let d = render(&deep).iter().zip(render(&deep_off).iter()).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(0);
+        let moved = render(&deep).iter().zip(render(&deep_off).iter()).filter(|(a, b)| a.abs_diff(**b) > 2).count();
+        println!("2^30: analytic relief moved {moved} channel values");
+        assert!(moved > (w * h / 20) as usize, "analytic relief does not reach the perturbed dive: {moved}");
+
+        // Where there is no derivative at all -- a formula without one --
+        // it is flat.
+        let mut ship = config.clone();
+        ship.escape.formula = "burning_ship".to_string();
+        ship.escape.shading.field = ShadingField::Analytic;
+        let mut ship_off = ship.clone();
+        ship_off.escape.shading.enabled = false;
+        let d = render(&ship).iter().zip(render(&ship_off).iter()).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(0);
         assert!(d <= 1, "analytic relief without a derivative moved a pixel by {d}");
     }
 
@@ -8477,7 +8490,8 @@ fn main() {
             assert!(hues.iter().all(|n| *n > 0), "the fringe does not go all the way round: {hues:?}");
         }
 
-        // Under perturbation there is no derivative: flat mid-grey.
+        // Under perturbation the scaled rung carries the derivative
+        // (P11): the dive is a fringe, not grey.
         let mut deep = config.clone();
         deep.escape.coloring = "rainbow_fringe".to_string();
         deep.escape.zoom_log2 = 30.0;
@@ -8488,6 +8502,16 @@ fn main() {
         let out = render(&deep);
         let drawn: Vec<&[u8]> = out.chunks_exact(4).filter(|p| p[0] > 0 || p[1] > 0 || p[2] > 0).collect();
         assert!(drawn.len() > 1000, "the deep view drew only {} pixels", drawn.len());
+        let coloured = drawn.iter().filter(|p| (0..3).any(|k| (p[k] as f64 - grey).abs() > 2.0)).count();
+        assert!(coloured * 2 > drawn.len(), "the dive's fringe is grey: {coloured} of {} coloured", drawn.len());
+
+        // A formula without a derivative is flat mid-grey.
+        let mut ship = config.clone();
+        ship.escape.coloring = "rainbow_fringe".to_string();
+        ship.escape.formula = "burning_ship".to_string();
+        let out = render(&ship);
+        let drawn: Vec<&[u8]> = out.chunks_exact(4).filter(|p| p[0] > 0 || p[1] > 0 || p[2] > 0).collect();
+        assert!(drawn.len() > 1000, "the ship drew only {} pixels", drawn.len());
         assert!(
             drawn.iter().all(|p| (0..3).all(|k| (p[k] as f64 - grey).abs() <= 2.0)),
             "the fringe is not flat grey without a derivative"
@@ -8710,6 +8734,160 @@ fn main() {
         assert!((mean / 255.0 - 0.5).abs() < 0.03, "plateaus are not at their middles: mean {:.3}", mean / 255.0);
     }
 
+    /// The derivative survives perturbation (P11): the scaled rung carries
+    /// dz/dc through its steps, its BLA skips and its chunks, and reports
+    /// it per render pixel as the direct path does.
+    ///
+    /// - Forced onto the scaled rung at a shallow view where the direct
+    ///   path is exact, the derivative colourings and analytic relief's
+    ///   slopes agree with it as well as smooth does (8x8 block means
+    ///   within 2% of the range; the boundary's chaotic pixels average
+    ///   out).
+    /// - Chunked, the derivative resumes exactly: byte-identical fields.
+    /// - BLA on and off agree.
+    /// - A real dive (2^30, the scaled rung's own territory) draws a
+    ///   distance estimate with range, where it used to be a constant.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_derivative_survives_perturbation() {
+        use crate::config::escape::{ContrastMode, ShadingField};
+        let (device, queue) = repro_device();
+        let (w, h) = (192u32, 144u32);
+        let config = crate::config::FractalConfig::default();
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        // (value field, slope x, slope y), and the path the render took.
+        let fields = |esc: &crate::config::escape::EscapeConfig,
+                      perturbed: bool,
+                      chunk: Option<u32>,
+                      bla_off: bool|
+         -> ([Vec<f32>; 3], String) {
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            escape.force_perturbed = perturbed;
+            escape.chunk_override = chunk;
+            escape.disable_bla = bla_off;
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("deriv") });
+                let settled =
+                    escape.render(&device, &queue, &mut enc, esc, renderer.palette_view(), renderer.palette_generation());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "render did not settle");
+            }
+            let read = |ch| pollster::block_on(escape.read_height_channel(&device, &queue, false, ch)).expect("height");
+            let out = [read(0), read(2), read(3)];
+            let path = escape.last_path.to_string();
+            escape.destroy();
+            (out, path)
+        };
+        let blocks = |a: &[f32], b: &[f32]| -> f64 {
+            let (lo, hi) = a.iter().filter(|x| x.is_finite()).fold((f32::MAX, f32::MIN), |(l, h), x| (l.min(*x), h.max(*x)));
+            let range = (hi - lo).max(1e-12) as f64;
+            let (bw, bh) = (w / 8, h / 8);
+            let mut close = 0usize;
+            for by in 0..bh {
+                for bx in 0..bw {
+                    let (mut sa, mut sb, mut n) = (0.0f64, 0.0f64, 0usize);
+                    for y in by * 8..by * 8 + 8 {
+                        for x in bx * 8..bx * 8 + 8 {
+                            let i = (y * w + x) as usize;
+                            if a[i].is_finite() && b[i].is_finite() {
+                                sa += a[i] as f64;
+                                sb += b[i] as f64;
+                                n += 1;
+                            }
+                        }
+                    }
+                    if n > 0 && ((sa - sb) / n as f64).abs() <= 0.02 * range {
+                        close += 1;
+                    }
+                }
+            }
+            close as f64 / (bw * bh) as f64
+        };
+
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "mandelbrot".to_string();
+        esc.center_re = "-0.7436".to_string();
+        esc.center_im = "0.1318".to_string();
+        esc.zoom_log2 = 10.0;
+        esc.max_iter = 500;
+        esc.supersample = 1;
+        // Allocates the height texture (its raw channel is pre-contrast).
+        esc.contrast.mode = ContrastMode::AutoRange;
+
+        let baseline = {
+            let mut e = esc.clone();
+            e.coloring = "smooth".to_string();
+            let (d, _) = fields(&e, false, None, false);
+            let (p, _) = fields(&e, true, None, false);
+            blocks(&d[0], &p[0])
+        };
+        println!("smooth, the baseline: {:.1}% of blocks", baseline * 100.0);
+        let mut cases: Vec<(&str, crate::config::escape::EscapeConfig, usize)> = Vec::new();
+        for c in ["distance_estimate", "rainbow_fringe", "normal_map"] {
+            let mut e = esc.clone();
+            e.coloring = c.to_string();
+            cases.push((c, e, 0));
+        }
+        let mut relief = esc.clone();
+        relief.coloring = "smooth".to_string();
+        relief.shading.enabled = true;
+        relief.shading.field = ShadingField::Analytic;
+        cases.push(("analytic relief, slope x", relief.clone(), 1));
+        cases.push(("analytic relief, slope y", relief, 2));
+        for (label, e, ch) in &cases {
+            let (d, _) = fields(e, false, None, false);
+            let (p, path) = fields(e, true, None, false);
+            assert!(path.starts_with("perturbed f32"), "{label}: took {path}");
+            let a = blocks(&d[*ch], &p[*ch]);
+            let (pc, _) = fields(e, true, Some(64), false);
+            let (pb, _) = fields(e, true, None, true);
+            let same_chunked = p[*ch] == pc[*ch];
+            let b = blocks(&p[*ch], &pb[*ch]);
+            println!(
+                "{label}: {:.1}% of blocks agree with direct; chunked identical: {same_chunked}; BLA on/off {:.1}%",
+                a * 100.0,
+                b * 100.0
+            );
+            assert!(a >= baseline - 0.1, "{label}: the perturbed derivative disagrees with the direct one");
+            assert!(same_chunked, "{label}: the derivative did not resume across chunks");
+            assert!(b >= 0.9, "{label}: BLA skips moved the derivative");
+        }
+
+        // A real dive: the scaled rung's own depth.
+        let mut deep = esc.clone();
+        deep.coloring = "distance_estimate".to_string();
+        deep.center_re = "-0.74364388703715870475481082977993857803".to_string();
+        deep.center_im = "0.13182590420531251981651559677435626549".to_string();
+        deep.zoom_log2 = 30.0;
+        deep.max_iter = 4000;
+        let (f, path) = fields(&deep, false, None, false);
+        let bla_used = crate::escape::diag::snapshot().bla_active;
+        assert!(path.starts_with("perturbed f32"), "the dive took {path}");
+        let mut live: Vec<f32> = f[0].iter().copied().filter(|v| v.is_finite()).collect();
+        live.sort_by(f32::total_cmp);
+        let (p5, p95) = (live[live.len() / 20], live[live.len() * 19 / 20]);
+        // The dive is where BLA skips: the derivative through them must
+        // agree with stepping every iteration.
+        let (stepped, _) = fields(&deep, false, None, true);
+        let b = blocks(&f[0], &stepped[0]);
+        println!(
+            "2^30 distance estimate: 5th-95th percentile {p5:.3}..{p95:.3}; BLA used: {bla_used}; {:.1}% of blocks agree with BLA off",
+            b * 100.0
+        );
+        assert!(bla_used, "BLA did not engage, so its derivative is untested");
+        assert!(p95 - p5 > 1.0, "the dive's distance estimate is flat: {p5}..{p95}");
+        assert!(b >= 0.9, "BLA skips moved the dive's derivative");
+    }
+
     /// Every colouring on the perturbed paths, against the direct path at
     /// a shallow view where the direct path is exact: the share of pixels
     /// whose VALUE (the height texture's raw channel, before any palette)
@@ -8802,7 +8980,20 @@ fn main() {
             let mut e = esc.clone();
             e.coloring = c.name.to_string();
             let direct = field(&e, false, false);
-            let (a, varies) = agree(&direct, &field(&e, true, false));
+            let scaled = field(&e, true, false);
+            if std::env::var("DUMP_FIELDS").is_ok_and(|v| v == c.name) {
+                let save = |f: &[f32], tag: &str| {
+                    let (lo, hi) = f.iter().filter(|x| x.is_finite()).fold((f32::MAX, f32::MIN), |(l, h), x| (l.min(*x), h.max(*x)));
+                    let img = image::GrayImage::from_fn(w, h, |x, y| {
+                        let v = f[(y * w + x) as usize];
+                        image::Luma([(((v - lo) / (hi - lo).max(1e-12)).clamp(0.0, 1.0) * 255.0) as u8])
+                    });
+                    let _ = img.save(format!("output/field-{}-{tag}.png", c.name));
+                };
+                save(&direct, "direct");
+                save(&scaled, "scaled");
+            }
+            let (a, varies) = agree(&direct, &scaled);
             let (b, _) = agree(&direct, &field(&e, true, true));
             e.bailout = 4.0;
             let direct = field(&e, false, false);
