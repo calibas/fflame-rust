@@ -727,7 +727,7 @@ shipped the same day.
 *Bridges 2010* proceedings `[read — text at output/mccabe.txt]`.
 Jason Rampe (Softology) "Multi-Scale Turing Patterns" blog posts
 `[verify — the radius ladders and colour blending in circulation are
-from implementations, not from the paper]`. Jonathan Reusser's
+from implementations, not from the paper]`. Ricky Reusser's
 implementation `[verify — the seed document's quotation of Reusser is
 not verbatim; his kernels are analytic in the frequency domain inside
 an FFT pipeline]`.

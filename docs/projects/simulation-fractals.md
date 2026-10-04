@@ -46,7 +46,7 @@ same instinct that gave the variation and formula registries.
 Points where planning changed or corrected the seed document:
 
 1. **The Reusser quotation is not verbatim.** The seed document
-   quotes Jonathan Reusser describing McCabe's algorithm; the text
+   quotes Ricky Reusser describing McCabe's algorithm; the text
    could not be matched to his page. What his implementation does that
    matters here: the multi-scale averages are computed with analytic
    kernels **in the frequency domain inside an FFT pipeline**. That is
