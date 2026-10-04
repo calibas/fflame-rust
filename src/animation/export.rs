@@ -820,6 +820,77 @@ fn apply_config_value(
         (ConfigPath::EscapeColoringParam { param }, ConfigValue::Float(v)) => {
             config.escape.coloring_params.insert(param.clone(), *v);
         }
+        // Relief, auto contrast and the palette map: the continuous
+        // controls animate, and without these arms they fell through
+        // to the per-flame catch-all -- an exported video kept the
+        // light still while the app swept it. Clamps as ConfigManager.
+        (ConfigPath::EscapeShadingLightAngle, ConfigValue::Float(v)) => {
+            config.escape.shading.light_angle = v.rem_euclid(360.0);
+        }
+        (ConfigPath::EscapeShadingHeight, ConfigValue::Float(v)) => {
+            config.escape.shading.height = v.clamp(0.0, 100_000.0);
+        }
+        (ConfigPath::EscapeShadingShadowStrength, ConfigValue::Float(v)) => {
+            config.escape.shading.shadow_strength = v.clamp(0.0, 4.0);
+        }
+        (ConfigPath::EscapeShadingHighlightStrength, ConfigValue::Float(v)) => {
+            config.escape.shading.highlight_strength = v.clamp(0.0, 4.0);
+        }
+        (ConfigPath::EscapeShadingSoftness, ConfigValue::Float(v)) => {
+            config.escape.shading.softness = v.clamp(0.0, 16.0);
+        }
+        (ConfigPath::EscapeShadingTextureStrength, ConfigValue::Float(v)) => {
+            config.escape.shading.texture_strength = v.clamp(0.0, 4.0);
+        }
+        (ConfigPath::EscapeShadingTextureScale, ConfigValue::Float(v)) => {
+            config.escape.shading.texture_scale = v.clamp(0.25, 64.0);
+        }
+        (ConfigPath::EscapeShadingElevation, ConfigValue::Float(v)) => {
+            config.escape.shading.elevation = v.clamp(0.0, 90.0);
+        }
+        (ConfigPath::EscapeShadingAmbient, ConfigValue::Float(v)) => {
+            config.escape.shading.ambient = v.clamp(0.0, 1.0);
+        }
+        (ConfigPath::EscapeShadingHeightPre, ConfigValue::Float(v)) => {
+            config.escape.shading.height_pre = v.clamp(1e-3, 1e3);
+        }
+        (ConfigPath::EscapeShadingHeightPost, ConfigValue::Float(v)) => {
+            config.escape.shading.height_post = v.clamp(1e-3, 1e3);
+        }
+        (ConfigPath::EscapeShadingOffset, ConfigValue::Float(v)) => {
+            let (lo, hi) = crate::config::escape::RELIEF_OFFSET_RANGE;
+            config.escape.shading.offset = v.clamp(lo, hi);
+        }
+        (ConfigPath::EscapeTextureOverlayMerge, ConfigValue::Float(v)) => {
+            config.escape.texture_overlay.merge = v.clamp(0.0, 1.0);
+        }
+        (ConfigPath::EscapeTextureOverlayRatio, ConfigValue::Float(v)) => {
+            let (lo, hi) = crate::config::escape::OVERLAY_RATIO_RANGE;
+            config.escape.texture_overlay.ratio = v.clamp(lo, hi);
+        }
+        (ConfigPath::EscapeTextureOverlayTile, ConfigValue::Float(v)) => {
+            let (lo, hi) = crate::config::escape::OVERLAY_TILE_RANGE;
+            config.escape.texture_overlay.tile_scale = v.clamp(lo, hi);
+        }
+        (ConfigPath::EscapeContrastClip, ConfigValue::Float(v)) => {
+            config.escape.contrast.clip = v.clamp(0.0, 0.25);
+        }
+        (ConfigPath::EscapeContrastStrength, ConfigValue::Float(v)) => {
+            config.escape.contrast.strength = v.clamp(0.0, 1.0);
+        }
+        (ConfigPath::EscapeContrastTurns, ConfigValue::Float(v)) => {
+            config.escape.contrast.turns = v.clamp(0.05, 64.0);
+        }
+        (ConfigPath::EscapeLayerParam { param }, ConfigValue::Float(v)) => {
+            config.escape.layer.params.insert(param.clone(), *v);
+        }
+        (ConfigPath::EscapeLayerWeight, ConfigValue::Float(v)) => {
+            config.escape.layer.weight = v.clamp(0.0, 1.0);
+        }
+        (ConfigPath::EscapeTransferPivot, ConfigValue::Float(v)) => {
+            let (lo, hi) = crate::config::escape::PIVOT_RANGE;
+            config.escape.palette_map.pivot = v.clamp(lo, hi);
+        }
 
         // Simulation. The clamps mirror ConfigManager's write arms so an
         // exported frame equals the in-app frame at the same time --
@@ -1620,7 +1691,10 @@ pub async fn export_animation(
             rh,
         ) {
             return Err(AnimationExportError::InvalidConfig(format!(
-                "this GPU cannot hold the deep-zoom state for a {rw}x{rh} frame.                  Export at a smaller size (or lower the antialiasing): past the                  perturbation threshold every pixel carries its own iteration                  state, and there is no way to render this size without it."
+                "this GPU cannot hold the deep-zoom state for a {rw}x{rh} frame. \
+                 Export at a smaller size (or lower the antialiasing): past the \
+                 perturbation threshold every pixel carries its own iteration \
+                 state, and there is no way to render this size without it."
             )));
         }
     }
@@ -2196,6 +2270,24 @@ mod tests {
             (EditingTarget::Main, "Escape.Supersample".to_string(), json!(2)),
             (EditingTarget::Main, "Escape.FormulaParam.variant".to_string(), json!(2.0)),
             (EditingTarget::Main, "Escape.ColoringParam.offset".to_string(), json!(1.86)),
+            (EditingTarget::Main, "Escape.Shading.LightAngle".to_string(), json!(400.0)),
+            (EditingTarget::Main, "Escape.Shading.Height".to_string(), json!(25.0)),
+            (EditingTarget::Main, "Escape.Shading.ShadowStrength".to_string(), json!(0.75)),
+            (EditingTarget::Main, "Escape.Shading.HighlightStrength".to_string(), json!(0.5)),
+            (EditingTarget::Main, "Escape.Shading.Softness".to_string(), json!(3.0)),
+            (EditingTarget::Main, "Escape.Shading.TextureStrength".to_string(), json!(0.25)),
+            (EditingTarget::Main, "Escape.Shading.TextureScale".to_string(), json!(8.0)),
+            (EditingTarget::Main, "Escape.Shading.Elevation".to_string(), json!(45.0)),
+            (EditingTarget::Main, "Escape.Shading.Ambient".to_string(), json!(0.2)),
+            (EditingTarget::Main, "Escape.Shading.HeightPre".to_string(), json!(3.0)),
+            (EditingTarget::Main, "Escape.Shading.HeightPost".to_string(), json!(0.5)),
+            (EditingTarget::Main, "Escape.Shading.Offset".to_string(), json!(0.004)),
+            (EditingTarget::Main, "Escape.Contrast.Clip".to_string(), json!(0.05)),
+            (EditingTarget::Main, "Escape.Contrast.Strength".to_string(), json!(0.5)),
+            (EditingTarget::Main, "Escape.Contrast.Turns".to_string(), json!(3.0)),
+            (EditingTarget::Main, "Escape.PaletteMap.Pivot".to_string(), json!(12.0)),
+            (EditingTarget::Main, "Escape.Layer.Weight".to_string(), json!(0.4)),
+            (EditingTarget::Main, "Escape.Layer.Param.density".to_string(), json!(6.0)),
         ];
         apply_animation_values(&mut config, &values);
 
@@ -2211,6 +2303,24 @@ mod tests {
         assert_eq!(config.escape.supersample, 2);
         assert_eq!(config.escape.formula_params.get("variant"), Some(&2.0));
         assert_eq!(config.escape.coloring_params.get("offset"), Some(&1.86));
+        assert_eq!(config.escape.shading.light_angle, 40.0, "the light wraps");
+        assert_eq!(config.escape.shading.height, 25.0);
+        assert_eq!(config.escape.shading.shadow_strength, 0.75);
+        assert_eq!(config.escape.shading.highlight_strength, 0.5);
+        assert_eq!(config.escape.shading.softness, 3.0);
+        assert_eq!(config.escape.shading.texture_strength, 0.25);
+        assert_eq!(config.escape.shading.texture_scale, 8.0);
+        assert_eq!(config.escape.shading.elevation, 45.0);
+        assert_eq!(config.escape.shading.ambient, 0.2);
+        assert_eq!(config.escape.shading.height_pre, 3.0);
+        assert_eq!(config.escape.shading.height_post, 0.5);
+        assert_eq!(config.escape.shading.offset, 0.004);
+        assert_eq!(config.escape.contrast.clip, 0.05);
+        assert_eq!(config.escape.contrast.strength, 0.5);
+        assert_eq!(config.escape.contrast.turns, 3.0);
+        assert_eq!(config.escape.palette_map.pivot, 12.0);
+        assert_eq!(config.escape.layer.weight, 0.4);
+        assert_eq!(config.escape.layer.params.get("density"), Some(&6.0));
 
         // Clamps mirror ConfigManager: a wild signal cannot poison
         // the view or ask for an unsupported supersample factor.

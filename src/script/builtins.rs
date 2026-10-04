@@ -706,7 +706,9 @@ impl StepBudget {
         self.used = self.used.saturating_add(n);
         if self.used > MAX_TURTLE_STEPS {
             return Err(format!(
-                "this L-system is too large to extract — it needs more than                  {MAX_TURTLE_STEPS} turtle steps. Shorten the rules, or use                  fewer recursion sites."
+                "this L-system is too large to extract — it needs more than \
+                 {MAX_TURTLE_STEPS} turtle steps. Shorten the rules, or use \
+                 fewer recursion sites."
             ));
         }
         Ok(())

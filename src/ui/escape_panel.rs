@@ -779,12 +779,17 @@ pub fn render_escape_content(
                     ContrastMode::Off => t!("escape_panel.contrast_off"),
                     ContrastMode::AutoRange => t!("escape_panel.contrast_auto_range"),
                     ContrastMode::Flatten => t!("escape_panel.contrast_flatten"),
+                    ContrastMode::Equalize => t!("escape_panel.contrast_equalize"),
                 };
                 egui::ComboBox::from_id_salt("escape_contrast_mode")
                     .selected_text(name(cur))
                     .show_ui(ui, |ui| {
-                        for m in [ContrastMode::Off, ContrastMode::AutoRange, ContrastMode::Flatten]
-                        {
+                        for m in [
+                            ContrastMode::Off,
+                            ContrastMode::AutoRange,
+                            ContrastMode::Flatten,
+                            ContrastMode::Equalize,
+                        ] {
                             if ui.selectable_label(m == cur, name(m)).clicked() && m != cur {
                                 let _ = config_manager.update_param(
                                     ConfigPath::EscapeContrastMode,
@@ -839,6 +844,13 @@ pub fn render_escape_content(
                 });
             });
         });
+
+    // ---- Palette mapping ----
+    // Below Auto contrast because the transfer applies after its fit:
+    // the order of the sections is the order of the pipeline.
+    egui::CollapsingHeader::new(t!("escape_panel.palette_map"))
+        .default_open(!esc.palette_map.is_default())
+        .show(ui, |ui| palette_map_controls(ui, config_manager, &esc.palette_map));
 
     // ---- Relief shading ----
     // A LAYER, not a coloring: it runs after the palette lookup, so it
@@ -906,6 +918,7 @@ pub fn render_escape_content(
                             .update_param(ConfigPath::EscapeShadingSoftness, sf.into());
                     }
                 });
+                relief_lighting_controls(ui, config_manager, &sh);
                 // ---- Surface texture ----
                 ui.horizontal(|ui| {
                     ui.label(t!("escape_panel.shading_texture"));
@@ -915,17 +928,20 @@ pub fn render_escape_content(
                             ShadingTexture::None => t!("escape_panel.texture_none"),
                             ShadingTexture::Grain => t!("escape_panel.texture_grain"),
                             ShadingTexture::Paper => t!("escape_panel.texture_paper"),
+                            ShadingTexture::Simulation => t!("escape_panel.texture_simulation"),
                         })
                         .show_ui(ui, |ui| {
                             for k in [
                                 ShadingTexture::None,
                                 ShadingTexture::Grain,
                                 ShadingTexture::Paper,
+                                ShadingTexture::Simulation,
                             ] {
                                 let label = match k {
                                     ShadingTexture::None => t!("escape_panel.texture_none"),
                                     ShadingTexture::Grain => t!("escape_panel.texture_grain"),
                                     ShadingTexture::Paper => t!("escape_panel.texture_paper"),
+                                    ShadingTexture::Simulation => t!("escape_panel.texture_simulation"),
                                 };
                                 if ui.selectable_label(cur == k, label.as_ref()).clicked()
                                     && cur != k
@@ -940,6 +956,9 @@ pub fn render_escape_content(
                 })
                 .response
                 .on_hover_text(t!("escape_panel.tooltip_shading_texture"));
+                if sh.texture_kind == ShadingTexture::Simulation && esc.texture.is_none() {
+                    ui.weak(t!("escape_panel.texture_simulation_none"));
+                }
                 if sh.texture_kind != ShadingTexture::None {
                     ui.horizontal(|ui| {
                         ui.label(t!("escape_panel.texture_strength"));
@@ -976,15 +995,38 @@ pub fn render_escape_content(
                         .selected_text(match cur {
                             ShadingField::Smooth => t!("escape_panel.shading_field_smooth"),
                             ShadingField::Banded => t!("escape_panel.shading_field_banded"),
+                            ShadingField::Layer => t!("escape_panel.shading_field_layer"),
+                            ShadingField::Analytic => t!("escape_panel.shading_field_analytic"),
+                            ShadingField::Offset => t!("escape_panel.shading_field_offset"),
+                            ShadingField::Embossed => t!("escape_panel.shading_field_embossed"),
                         })
                         .show_ui(ui, |ui| {
-                            for f in [ShadingField::Smooth, ShadingField::Banded] {
+                            for f in [
+                                ShadingField::Smooth,
+                                ShadingField::Banded,
+                                ShadingField::Layer,
+                                ShadingField::Analytic,
+                                ShadingField::Offset,
+                                ShadingField::Embossed,
+                            ] {
                                 let label = match f {
                                     ShadingField::Smooth => {
                                         t!("escape_panel.shading_field_smooth")
                                     }
                                     ShadingField::Banded => {
                                         t!("escape_panel.shading_field_banded")
+                                    }
+                                    ShadingField::Layer => {
+                                        t!("escape_panel.shading_field_layer")
+                                    }
+                                    ShadingField::Analytic => {
+                                        t!("escape_panel.shading_field_analytic")
+                                    }
+                                    ShadingField::Offset => {
+                                        t!("escape_panel.shading_field_offset")
+                                    }
+                                    ShadingField::Embossed => {
+                                        t!("escape_panel.shading_field_embossed")
                                     }
                                 };
                                 if ui.selectable_label(f == cur, label).clicked() && f != cur {
@@ -1001,6 +1043,102 @@ pub fn render_escape_content(
                         .response
                         .on_hover_text(t!("escape_panel.tooltip_shading_field"));
                 });
+                if matches!(sh.field, ShadingField::Offset | ShadingField::Embossed) {
+                    let embossed = sh.field == ShadingField::Embossed;
+                    if embossed {
+                        use crate::config::escape::EmbossType;
+                        ui.horizontal(|ui| {
+                            ui.label(t!("escape_panel.shading_emboss"));
+                            let name = |m: EmbossType| match m {
+                                EmbossType::Iteration => t!("escape_panel.emboss_iteration"),
+                                EmbossType::RealPositive => t!("escape_panel.emboss_real_positive"),
+                                EmbossType::ImagPositive => t!("escape_panel.emboss_imag_positive"),
+                                EmbossType::SmallestMagnitude => {
+                                    t!("escape_panel.emboss_smallest_magnitude")
+                                }
+                                EmbossType::Magnitude => t!("escape_panel.emboss_magnitude"),
+                                EmbossType::Angle => t!("escape_panel.emboss_angle"),
+                            };
+                            egui::ComboBox::from_id_salt("escape_shading_emboss")
+                                .selected_text(name(sh.emboss))
+                                .show_ui(ui, |ui| {
+                                    for m in EmbossType::ALL {
+                                        if ui.selectable_label(m == sh.emboss, name(m)).clicked() && m != sh.emboss {
+                                            let _ = config_manager.update_param(
+                                                ConfigPath::EscapeShadingEmboss,
+                                                ConfigValue::String(m.as_str().to_string()),
+                                            );
+                                        }
+                                    }
+                                })
+                                .response
+                                .on_hover_text(t!("escape_panel.tooltip_shading_emboss"));
+                        });
+                        if sh.emboss == EmbossType::Angle {
+                            ui.horizontal(|ui| {
+                                ui.label(t!("escape_panel.shading_emboss_sections"));
+                                let mut v = sh.emboss_sections;
+                                let (lo, hi) = crate::config::escape::EMBOSS_SECTIONS_RANGE;
+                                if ui
+                                    .add(egui::Slider::new(&mut v, lo..=hi))
+                                    .on_hover_text(t!("escape_panel.tooltip_shading_emboss_sections"))
+                                    .changed()
+                                {
+                                    let _ = config_manager.update_param(
+                                        ConfigPath::EscapeShadingEmbossSections,
+                                        ConfigValue::UInt(v),
+                                    );
+                                }
+                            });
+                        }
+                    }
+                    ui.horizontal(|ui| {
+                        ui.label(if embossed {
+                            t!("escape_panel.shading_contour_size")
+                        } else {
+                            t!("escape_panel.shading_offset")
+                        });
+                        let mut v = sh.offset;
+                        let (lo, hi) = crate::config::escape::RELIEF_OFFSET_RANGE;
+                        if ui
+                            .add(egui::Slider::new(&mut v, lo..=hi).logarithmic(true))
+                            .on_hover_text(if embossed {
+                                t!("escape_panel.tooltip_shading_contour_size")
+                            } else {
+                                t!("escape_panel.tooltip_shading_offset")
+                            })
+                            .changed()
+                        {
+                            let _ = config_manager.update_param(ConfigPath::EscapeShadingOffset, v.into());
+                        }
+                    });
+                    if crate::escape::EscapeRenderer::wants_perturbation(&esc) {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(220, 170, 90),
+                            if embossed {
+                                t!("escape_panel.emboss_relief_perturbed")
+                            } else {
+                                t!("escape_panel.offset_relief_perturbed")
+                            },
+                        );
+                    }
+                }
+                // Analytic slopes need the derivative orbit: flat where
+                // there is none, and said so rather than left silent.
+                if sh.field == ShadingField::Analytic {
+                    if let Some(gap) = crate::escape::EscapeRenderer::derivative_gap(&esc) {
+                        let msg = match gap {
+                            crate::escape::DerivativeGap::Formula => t!(
+                                "escape_panel.analytic_relief_no_formula",
+                                formula = crate::escape::get_formula(&esc.formula).display_name
+                            ),
+                            crate::escape::DerivativeGap::Perturbed => {
+                                t!("escape_panel.analytic_relief_perturbed")
+                            }
+                        };
+                        ui.colored_label(egui::Color32::from_rgb(220, 170, 90), msg);
+                    }
+                }
 
                 ui.separator();
                 shading_side(
@@ -1193,6 +1331,101 @@ fn param_control(
         return true;
     }
     false
+}
+
+/// Pick `coloring`, and with it the bailout it is best drawn at
+/// (`suggested_bailout`) -- one undo step. The smooth count bands at a
+/// small escape radius, so a smooth colouring brings a large one; the
+/// bailout stays editable after.
+fn pick_coloring(
+    config_manager: &mut ConfigManager,
+    formula: &crate::escape::FormulaDef,
+    esc: &crate::config::escape::EscapeConfig,
+    coloring: &crate::escape::ColoringDef,
+) {
+    let mut changes = vec![(ConfigPath::EscapeColoring, ConfigValue::String(coloring.name.to_string()))];
+    for (param, v) in coloring.pick_params {
+        changes.push((ConfigPath::EscapeColoringParam { param: param.to_string() }, (*v).into()));
+    }
+    let biomorph_off = esc.biomorph == crate::config::escape::BiomorphMode::Off;
+    let fparams = crate::escape::packed_formula_params(formula, &esc.formula_params);
+    if let Some(b) = crate::escape::suggested_bailout(formula, &fparams, coloring, biomorph_off) {
+        if b != esc.bailout {
+            changes.push((ConfigPath::EscapeBailout, b.into()));
+        }
+    }
+    let _ = config_manager.update_batch(changes, "history.param.escape_coloring".to_string());
+}
+
+/// The Palette mapping section: the value transfer and its pivot, the
+/// palette curve, and stepped bands (`PaletteMap`).
+fn palette_map_controls(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    pm: &crate::config::escape::PaletteMap,
+) {
+    use crate::config::escape::{PaletteCurve, TransferCurve};
+    let curve_name = |key: &str| t!(format!("escape_panel.curve_{key}"));
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.transfer"));
+        egui::ComboBox::from_id_salt("escape_transfer")
+            .selected_text(curve_name(pm.transfer.as_str()))
+            .show_ui(ui, |ui| {
+                for c in TransferCurve::ALL {
+                    if ui.selectable_label(c == pm.transfer, curve_name(c.as_str())).clicked()
+                        && c != pm.transfer
+                    {
+                        let _ = config_manager.update_param(
+                            ConfigPath::EscapeTransfer,
+                            ConfigValue::String(c.as_str().to_string()),
+                        );
+                    }
+                }
+            })
+            .response
+            .on_hover_text(t!("escape_panel.tooltip_transfer"));
+    });
+    ui.add_enabled_ui(pm.transfer != TransferCurve::Linear, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(t!("escape_panel.transfer_pivot"));
+            let mut v = pm.pivot;
+            let (lo, hi) = crate::config::escape::PIVOT_RANGE;
+            if ui
+                .add(egui::Slider::new(&mut v, lo..=hi).logarithmic(true))
+                .on_hover_text(t!("escape_panel.tooltip_transfer_pivot"))
+                .changed()
+            {
+                let _ = config_manager.update_param(ConfigPath::EscapeTransferPivot, v.into());
+            }
+        });
+    });
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.palette_curve"));
+        egui::ComboBox::from_id_salt("escape_palette_curve")
+            .selected_text(curve_name(pm.curve.as_str()))
+            .show_ui(ui, |ui| {
+                for c in PaletteCurve::ALL {
+                    if ui.selectable_label(c == pm.curve, curve_name(c.as_str())).clicked()
+                        && c != pm.curve
+                    {
+                        let _ = config_manager.update_param(
+                            ConfigPath::EscapePaletteCurve,
+                            ConfigValue::String(c.as_str().to_string()),
+                        );
+                    }
+                }
+            })
+            .response
+            .on_hover_text(t!("escape_panel.tooltip_palette_curve"));
+    });
+    let mut stepped = pm.stepped;
+    if ui
+        .checkbox(&mut stepped, t!("escape_panel.palette_stepped"))
+        .on_hover_text(t!("escape_panel.tooltip_palette_stepped"))
+        .changed()
+    {
+        let _ = config_manager.update_param(ConfigPath::EscapePaletteStepped, stepped.into());
+    }
 }
 
 fn suggested_coloring_scale(coloring: &str, max_iter: u32) -> f32 {
@@ -1840,10 +2073,7 @@ fn show_coloring_section(
                         .clicked()
                         && c.name != coloring.name
                     {
-                        let _ = config_manager.update_param(
-                            ConfigPath::EscapeColoring,
-                            ConfigValue::String(c.name.to_string()),
-                        );
+                        pick_coloring(config_manager, formula_def, esc, c);
                     }
                 }
             });
@@ -1869,10 +2099,7 @@ fn show_coloring_section(
                     .small_button(t!("escape_panel.coloring_use", name = fix.display_name))
                     .clicked()
                 {
-                    let _ = config_manager.update_param(
-                        ConfigPath::EscapeColoring,
-                        ConfigValue::String(fix.name.to_string()),
-                    );
+                    pick_coloring(config_manager, formula_def, esc, fix);
                 }
             }
         });
@@ -1882,7 +2109,7 @@ fn show_coloring_section(
     // missing one). Flat is honest but silent, so say why — otherwise
     // the only signal is a blank picture.
     if coloring.has_feature(crate::escape::ColoringFeature::NeedsDerivative) {
-        if let Some(gap) = crate::escape::EscapeRenderer::derivative_gap(esc) {
+        if let Some(gap) = crate::escape::EscapeRenderer::derivative_gap(&esc) {
             let msg = match gap {
                 crate::escape::DerivativeGap::Formula => t!(
                     "escape_panel.no_derivative_formula",
@@ -1895,6 +2122,10 @@ fn show_coloring_section(
             };
             ui.colored_label(egui::Color32::from_rgb(220, 170, 90), msg);
         }
+    }
+    // The image trap without an image draws its base colour alone.
+    if coloring.has_feature(crate::escape::ColoringFeature::TextureInLoop) && esc.texture.is_none() {
+        ui.colored_label(egui::Color32::from_rgb(220, 170, 90), t!("escape_panel.texture_coloring_none"));
     }
 
     // The scale/offset pair is the hardest control here to guess at;
@@ -1934,6 +2165,146 @@ fn show_coloring_section(
             );
         }
     }
+
+    // ---- Texture layer ----
+    // A second colouring blended into this one before the palette, so
+    // it sits with the colouring it modifies. Collapsed unless in use.
+    egui::CollapsingHeader::new(t!("escape_panel.layer"))
+        .default_open(esc.layer.is_on())
+        .show(ui, |ui| texture_layer_controls(ui, config_manager, esc, formula_def, coloring));
+}
+
+/// The Texture Layer section (`ColoringLayer`): which colouring, how it
+/// blends, how strongly, and its own parameters.
+fn texture_layer_controls(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    esc: &crate::config::escape::EscapeConfig,
+    formula: &crate::escape::FormulaDef,
+    base: &crate::escape::ColoringDef,
+) {
+    use crate::config::escape::LayerBlend;
+    let layer = &esc.layer;
+    let current = crate::escape::COLORINGS.iter().copied().find(|c| c.name == layer.coloring);
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.layer_coloring"));
+        let label = current.map_or_else(
+            || t!("escape_panel.layer_none").to_string(),
+            |c| c.display_name.to_string(),
+        );
+        egui::ComboBox::from_id_salt("escape_layer_coloring")
+            .selected_text(label)
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(current.is_none(), t!("escape_panel.layer_none")).clicked()
+                    && current.is_some()
+                {
+                    let _ = config_manager.update_param(
+                        ConfigPath::EscapeLayerColoring,
+                        ConfigValue::String(String::new()),
+                    );
+                }
+                for c in crate::escape::COLORINGS {
+                    if !crate::escape::coloring_suits_formula(formula, c) {
+                        continue;
+                    }
+                    let refusal = crate::escape::layer_refusal(base, c);
+                    let selected = current.is_some_and(|x| x.name == c.name);
+                    let resp = ui
+                        .add_enabled_ui(refusal.is_none(), |ui| ui.selectable_label(selected, c.display_name))
+                        .inner
+                        .on_disabled_hover_text(match refusal {
+                            Some(crate::escape::LayerRefusal::DirectColor) => {
+                                t!("escape_panel.layer_direct_colour")
+                            }
+                            _ => t!("escape_panel.layer_needs_accumulator"),
+                        });
+                    if resp.clicked() && !selected {
+                        pick_layer(config_manager, c);
+                    }
+                }
+            })
+            .response
+            .on_hover_text(t!("escape_panel.tooltip_layer"));
+    });
+    let Some(l) = current else {
+        return;
+    };
+    if let Some(refusal) = crate::escape::layer_refusal(base, l) {
+        ui.colored_label(
+            egui::Color32::from_rgb(220, 170, 90),
+            match refusal {
+                crate::escape::LayerRefusal::DirectColor => t!(
+                    "escape_panel.layer_refused_direct",
+                    layer = l.display_name,
+                    base = base.display_name
+                ),
+                crate::escape::LayerRefusal::BothAccumulate => {
+                    t!("escape_panel.layer_refused", layer = l.display_name, base = base.display_name)
+                }
+            },
+        );
+        return;
+    }
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.layer_blend"));
+        let name = |b: LayerBlend| match b {
+            LayerBlend::Screen => t!("escape_panel.blend_screen"),
+            LayerBlend::Multiply => t!("escape_panel.blend_multiply"),
+            LayerBlend::Add => t!("escape_panel.blend_add"),
+            LayerBlend::Overlay => t!("escape_panel.blend_overlay"),
+            LayerBlend::Mix => t!("escape_panel.blend_mix"),
+        };
+        egui::ComboBox::from_id_salt("escape_layer_blend")
+            .selected_text(name(layer.blend))
+            .show_ui(ui, |ui| {
+                for b in LayerBlend::ALL {
+                    if ui.selectable_label(b == layer.blend, name(b)).clicked() && b != layer.blend {
+                        let _ = config_manager.update_param(
+                            ConfigPath::EscapeLayerBlend,
+                            ConfigValue::String(b.as_str().to_string()),
+                        );
+                    }
+                }
+            })
+            .response
+            .on_hover_text(t!("escape_panel.tooltip_layer_blend"));
+    });
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.layer_weight"));
+        let mut w = layer.weight;
+        if ui
+            .add(egui::Slider::new(&mut w, 0.0..=1.0))
+            .on_hover_text(t!("escape_panel.tooltip_layer_weight"))
+            .changed()
+        {
+            let _ = config_manager.update_param(ConfigPath::EscapeLayerWeight, w.into());
+        }
+    });
+    for p in l.parameters {
+        let mut v = layer.params.get(p.name).copied().unwrap_or(p.default);
+        if param_control(ui, &mut v, p, "layer") {
+            let _ = config_manager.update_param(
+                ConfigPath::EscapeLayerParam { param: p.name.to_string() },
+                v.into(),
+            );
+        }
+    }
+}
+
+/// Pick a texture layer colouring as one undo step, with the values a
+/// fresh pick of it takes (`ColoringDef::pick_params`) -- the layer's
+/// parameters belong to the colouring, so they start over.
+fn pick_layer(config_manager: &mut ConfigManager, c: &crate::escape::ColoringDef) {
+    let mut changes = vec![(ConfigPath::EscapeLayerColoring, ConfigValue::String(c.name.to_string()))];
+    for p in c.parameters {
+        let v = c
+            .pick_params
+            .iter()
+            .find(|(k, _)| *k == p.name)
+            .map_or(p.default, |(_, v)| *v);
+        changes.push((ConfigPath::EscapeLayerParam { param: p.name.to_string() }, v.into()));
+    }
+    let _ = config_manager.update_batch(changes, "history.param.escape_layer_coloring".to_string());
 }
 
 /// Switch render mode, defaulting the tonemap to Linear on the way
@@ -1981,9 +2352,25 @@ pub fn apply_preset(
         changes.push((ConfigPath::EscapeJuliaRe, re.into()));
         changes.push((ConfigPath::EscapeJuliaIm, im.into()));
     }
-    if let Some(b) = preset.bailout {
-        changes.push((ConfigPath::EscapeBailout, b.into()));
-    }
+    // A preset that names no bailout takes its colouring's
+    // recommendation, as picking the colouring by hand would, and
+    // otherwise the bailout it was drawn at. Leaving the current one
+    // would carry a smooth colouring's 1e4 into a formula that grows
+    // linearly (Feather at power 3 never reaches it) or whose escape
+    // set moves with it (Magnet).
+    let biomorph_off =
+        config_manager.config().escape.biomorph == crate::config::escape::BiomorphMode::Off;
+    let preset_params: std::collections::BTreeMap<String, f32> = preset
+        .formula_params
+        .iter()
+        .map(|(k, v)| (k.to_string(), *v))
+        .collect();
+    let fparams = crate::escape::packed_formula_params(formula, &preset_params);
+    let bailout = preset
+        .bailout
+        .or_else(|| crate::escape::suggested_bailout(formula, &fparams, coloring, biomorph_off))
+        .unwrap_or(crate::config::escape::LEGACY_BAILOUT);
+    changes.push((ConfigPath::EscapeBailout, bailout.into()));
     for p in formula.parameters {
         let v = preset
             .formula_params
@@ -1997,12 +2384,19 @@ pub fn apply_preset(
         ));
     }
     for p in coloring.parameters {
+        // Not named: what a fresh pick of the colouring takes, which is
+        // the definition's default unless the colouring says otherwise.
+        let fresh = coloring
+            .pick_params
+            .iter()
+            .find(|(k, _)| *k == p.name)
+            .map_or(p.default, |(_, v)| *v);
         let v = preset
             .coloring_params
             .iter()
             .find(|(k, _)| *k == p.name)
             .map(|(_, v)| *v)
-            .unwrap_or(p.default);
+            .unwrap_or(fresh);
         changes.push((
             ConfigPath::EscapeColoringParam { param: p.name.to_string() },
             v.into(),
@@ -2445,12 +2839,149 @@ fn shading_side(
     });
 }
 
+/// The relief's lighting model, ambient floor, slope stencil and
+/// height curve (survey item 7: R1, R4, R8).
+fn relief_lighting_controls(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    sh: &crate::config::escape::EscapeShading,
+) {
+    use crate::config::escape::{HeightTransfer, ReliefModel, SlopeStencil};
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.shading_model"));
+        let name = |m: ReliefModel| match m {
+            ReliefModel::Tilt => t!("escape_panel.model_tilt"),
+            ReliefModel::Lambert => t!("escape_panel.model_lambert"),
+        };
+        egui::ComboBox::from_id_salt("escape_shading_model")
+            .selected_text(name(sh.model))
+            .show_ui(ui, |ui| {
+                for m in ReliefModel::ALL {
+                    if ui.selectable_label(m == sh.model, name(m)).clicked() && m != sh.model {
+                        let _ = config_manager.update_param(
+                            ConfigPath::EscapeShadingModel,
+                            ConfigValue::String(m.as_str().to_string()),
+                        );
+                    }
+                }
+            })
+            .response
+            .on_hover_text(t!("escape_panel.tooltip_shading_model"));
+    });
+    ui.add_enabled_ui(sh.model == ReliefModel::Lambert, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(t!("escape_panel.shading_elevation"));
+            let mut v = sh.elevation;
+            if ui
+                .add(egui::Slider::new(&mut v, 0.0..=90.0).suffix("°"))
+                .on_hover_text(t!("escape_panel.tooltip_shading_elevation"))
+                .changed()
+            {
+                let _ = config_manager.update_param(ConfigPath::EscapeShadingElevation, v.into());
+            }
+        });
+    });
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.shading_ambient"));
+        let mut v = sh.ambient;
+        if ui
+            .add(egui::Slider::new(&mut v, 0.0..=1.0))
+            .on_hover_text(t!("escape_panel.tooltip_shading_ambient"))
+            .changed()
+        {
+            let _ = config_manager.update_param(ConfigPath::EscapeShadingAmbient, v.into());
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.shading_stencil"));
+        let name = |m: SlopeStencil| match m {
+            SlopeStencil::Central => t!("escape_panel.stencil_central"),
+            SlopeStencil::Forward => t!("escape_panel.stencil_forward"),
+            SlopeStencil::Roberts => t!("escape_panel.stencil_roberts"),
+            SlopeStencil::LeastSquares => t!("escape_panel.stencil_least_squares"),
+        };
+        egui::ComboBox::from_id_salt("escape_shading_stencil")
+            .selected_text(name(sh.stencil))
+            .show_ui(ui, |ui| {
+                for m in SlopeStencil::ALL {
+                    if ui.selectable_label(m == sh.stencil, name(m)).clicked() && m != sh.stencil {
+                        let _ = config_manager.update_param(
+                            ConfigPath::EscapeShadingStencil,
+                            ConfigValue::String(m.as_str().to_string()),
+                        );
+                    }
+                }
+            })
+            .response
+            .on_hover_text(t!("escape_panel.tooltip_shading_stencil"));
+    });
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.shading_height_curve"));
+        let name = |m: HeightTransfer| match m {
+            HeightTransfer::Linear => t!("escape_panel.curve_linear"),
+            HeightTransfer::Log => t!("escape_panel.curve_log"),
+            HeightTransfer::SquareRoot => t!("escape_panel.curve_square_root"),
+            HeightTransfer::CubeRoot => t!("escape_panel.curve_cube_root"),
+            HeightTransfer::Square => t!("escape_panel.curve_square"),
+            HeightTransfer::Cube => t!("escape_panel.curve_cube"),
+            HeightTransfer::Sin => t!("escape_panel.curve_sin"),
+            HeightTransfer::Cos => t!("escape_panel.curve_cos"),
+        };
+        egui::ComboBox::from_id_salt("escape_shading_height_curve")
+            .selected_text(name(sh.height_curve))
+            .show_ui(ui, |ui| {
+                for m in HeightTransfer::ALL {
+                    if ui.selectable_label(m == sh.height_curve, name(m)).clicked()
+                        && m != sh.height_curve
+                    {
+                        let _ = config_manager.update_param(
+                            ConfigPath::EscapeShadingHeightCurve,
+                            ConfigValue::String(m.as_str().to_string()),
+                        );
+                    }
+                }
+            })
+            .response
+            .on_hover_text(t!("escape_panel.tooltip_shading_height_curve"));
+    });
+    ui.add_enabled_ui(sh.height_curve != HeightTransfer::Linear, |ui| {
+        for (label, tip, value, path) in [
+            (
+                t!("escape_panel.shading_height_pre"),
+                t!("escape_panel.tooltip_shading_height_pre"),
+                sh.height_pre,
+                ConfigPath::EscapeShadingHeightPre,
+            ),
+            (
+                t!("escape_panel.shading_height_post"),
+                t!("escape_panel.tooltip_shading_height_post"),
+                sh.height_post,
+                ConfigPath::EscapeShadingHeightPost,
+            ),
+        ] {
+            ui.horizontal(|ui| {
+                ui.label(label);
+                let mut v = value;
+                if ui
+                    .add(egui::Slider::new(&mut v, 1e-3..=1e3).logarithmic(true))
+                    .on_hover_text(tip)
+                    .changed()
+                {
+                    let _ = config_manager.update_param(path, v.into());
+                }
+            });
+        }
+    });
+}
+
 fn blend_label(b: ShadingBlend) -> String {
     match b {
         ShadingBlend::Multiply => t!("escape_panel.blend_multiply").to_string(),
         ShadingBlend::Screen => t!("escape_panel.blend_screen").to_string(),
         ShadingBlend::Overlay => t!("escape_panel.blend_overlay").to_string(),
         ShadingBlend::Mix => t!("escape_panel.blend_mix").to_string(),
+        ShadingBlend::SoftLight => t!("escape_panel.blend_soft_light").to_string(),
+        ShadingBlend::HardLight => t!("escape_panel.blend_hard_light").to_string(),
     }
 }
 
@@ -2550,8 +3081,7 @@ mod criterion_tests {
             .lines()
             .filter(|l| !l.trim_start().starts_with("//"))
             .collect::<Vec<_>>()
-            .join("
-");
+            .join("\n");
 
         assert!(
             !body.contains("ComboBox"),
@@ -2628,5 +3158,26 @@ mod criterion_tests {
         let packed = crate::escape::ifs::pack_for(def, &cfg, &registry).expect("packs");
         let (ifs3, rows) = packed.solid.as_ref().expect("a solid reading");
         assert_eq!((ifs3.maps.len(), rows.len()), (1, 1));
+    }
+}
+
+#[cfg(test)]
+mod palette_map_tests {
+    /// The curve menus build their label keys at runtime
+    /// (`escape_panel.curve_<name>`), so a curve added without a
+    /// locale entry would ship a label reading its own key, and no
+    /// literal-key scan would notice.
+    #[test]
+    fn every_curve_has_a_label() {
+        use crate::config::escape::{PaletteCurve, TransferCurve};
+        let names = TransferCurve::ALL
+            .iter()
+            .map(|c| c.as_str())
+            .chain(PaletteCurve::ALL.iter().map(|c| c.as_str()));
+        for name in names {
+            let key = format!("escape_panel.curve_{name}");
+            let got = rust_i18n::t!(&key, locale = "en");
+            assert_ne!(got, key, "no label for curve `{name}` in locales/en.yml");
+        }
     }
 }

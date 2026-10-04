@@ -1705,6 +1705,18 @@ impl FlameRenderer {
         &self.buffers.palette_view
     }
 
+    /// The palette an escape render binds: the stepped table when its
+    /// `PaletteMap::stepped` is on, otherwise [`Self::palette_view`].
+    /// Both are written by every [`Self::update_palette`], so this
+    /// shares its generation.
+    pub fn escape_palette_view(&self, stepped: bool) -> &TextureView {
+        if stepped {
+            &self.buffers.stepped_palette_view
+        } else {
+            &self.buffers.palette_view
+        }
+    }
+
     /// How many times the palette texture has been rewritten.
     ///
     /// The escape engine renders large views in ROW BANDS across

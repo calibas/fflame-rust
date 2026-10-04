@@ -4953,7 +4953,9 @@ delay past zoom 14".
 level.* Each iterate template (direct, perturbed f32, perturbed
 floatexp — so every formula and all perturbation tiers inherit it)
 writes a 32 B/px terminal record on its finishing pass: z, dz, n,
-escaped/converged/period, and the coloring accumulator. A standalone
+escaped/converged/period, and the coloring accumulator (40 B/px for an
+accumulating colouring, which stores all four of its floats -- see
+`escape-coloring-survey.md`, order of work item 4). A standalone
 recolor pass — assembled per COLORING, a transcription of the iterate
 templates' tail — re-runs `coloring_map` + palette lookup from the
 records. When a frame's *iterate identity* (formula + params + view +

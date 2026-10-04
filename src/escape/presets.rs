@@ -228,7 +228,7 @@ pub static LAMBDA_SINE: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("scale", 0.05)],
-        bailout: None,
+        bailout: Some(50.0),
     },
     EscapePreset {
         name: "Bouquet",
@@ -240,7 +240,7 @@ pub static LAMBDA_SINE: &[EscapePreset] = &[
         julia: Some((0.5, 0.0)),
         formula_params: &[],
         coloring_params: &[("scale", 0.05)],
-        bailout: None,
+        bailout: Some(50.0),
     },
 ];
 
@@ -459,7 +459,7 @@ pub static COLLATZ: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("scale", 0.1)],
-        bailout: None,
+        bailout: Some(10.0),
     },
 ];
 
@@ -636,7 +636,7 @@ pub static EXPONENTIAL: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("scale", 0.05)],
-        bailout: None,
+        bailout: Some(50.0),
     },
 ];
 
@@ -681,7 +681,7 @@ pub static TETRATION: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("scale", 0.05)],
-        bailout: None,
+        bailout: Some(50.0),
     },
     EscapePreset {
         name: "Period",
@@ -693,7 +693,7 @@ pub static TETRATION: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("escape_scale", 0.005), ("scale", 0.13)],
-        bailout: None,
+        bailout: Some(50.0),
     },
 ];
 
@@ -708,7 +708,7 @@ pub static TRIG: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("scale", 0.05)],
-        bailout: None,
+        bailout: Some(50.0),
     },
 ];
 

@@ -84,7 +84,7 @@ pub struct EscapeConfig {
     /// Escape radius squared for escaping formulas. Non-escaping and
     /// convergent formulas read their own thresholds from params.
     ///
-    /// A new config starts at `default_bailout` (10); a file without the
+    /// A new config starts at `default_bailout` (1e4); a file without the
     /// key means 4, the default it was written under, so it renders as
     /// it did. The app always writes the key.
     #[serde(default = "legacy_bailout")]
@@ -235,6 +235,172 @@ pub struct EscapeConfig {
     /// and skipped when off, so every existing file is byte-stable.
     #[serde(default, skip_serializing_if = "EscapeContrast::is_default")]
     pub contrast: EscapeContrast,
+
+    /// How the coloring's value becomes a palette colour: a transfer
+    /// curve on the value, a curve on each palette cycle, and stepped
+    /// bands. The default is the identity and is skipped, so every
+    /// existing file is byte-stable.
+    #[serde(default, skip_serializing_if = "PaletteMap::is_default")]
+    pub palette_map: PaletteMap,
+
+    /// A second colouring blended into the first before the palette
+    /// lookup (`docs/projects/escape-coloring-survey.md`, item 5). No
+    /// colouring is no layer, which is the default and is skipped.
+    #[serde(default, skip_serializing_if = "ColoringLayer::is_default")]
+    pub layer: ColoringLayer,
+    /// A simulation texture (`docs/projects/sim-textures.md`): its recipe,
+    /// in full, so the file is self-contained. None is no texture, the
+    /// default, and is skipped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub texture: Option<EscapeTexture>,
+    /// The texture as an overlay (sim-textures phase 2, survey R10):
+    /// Kalles Fraktaler's texture, warped by the iteration count's slope
+    /// and mixed into the colour before the relief. Off by default.
+    #[serde(default, skip_serializing_if = "TextureOverlay::is_default")]
+    pub texture_overlay: TextureOverlay,
+}
+
+/// How the texture covers the frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextureFit {
+    /// Stretched over the whole frame, as Kalles Fraktaler resizes its
+    /// image; a lookup past the edge holds the edge.
+    #[default]
+    Stretch,
+    /// Repeated at its own size (times the tile scale): a periodic
+    /// simulation texture tiles seamlessly.
+    Tile,
+}
+
+impl TextureFit {
+    pub fn to_gpu(self) -> u32 {
+        match self {
+            TextureFit::Stretch => 0,
+            TextureFit::Tile => 1,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TextureFit::Stretch => "stretch",
+            TextureFit::Tile => "tile",
+        }
+    }
+    pub fn from_name(s: &str) -> Self {
+        if s == "tile" { TextureFit::Tile } else { TextureFit::Stretch }
+    }
+}
+
+/// Kalles Fraktaler's texture overlay (`gl/kf.frag.glsl`
+/// `KF_TextureWarp` and the texture block after the palette lookup):
+/// the texture looked up at the pixel plus an offset driven by the
+/// iteration count's difference to its neighbours, then mixed in.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TextureOverlay {
+    #[serde(default)]
+    pub enabled: bool,
+    /// How much of the texture replaces the colour, 0..1. KF2's default
+    /// is 1: the texture alone, warped.
+    #[serde(default = "default_overlay_merge")]
+    pub merge: f32,
+    /// KF2's power: how hard the iteration count's slope warps the
+    /// lookup. A whole number, as KF2 keeps it. Default 200.
+    #[serde(default = "default_overlay_power")]
+    pub power: f32,
+    /// KF2's ratio, in percent: scales the warp. Default 100.
+    #[serde(default = "default_overlay_ratio")]
+    pub ratio: f32,
+    #[serde(default)]
+    pub fit: TextureFit,
+    /// Display pixels per texel when tiled.
+    #[serde(default = "default_one")]
+    pub tile_scale: f32,
+}
+
+fn default_overlay_merge() -> f32 {
+    1.0
+}
+fn default_overlay_power() -> f32 {
+    200.0
+}
+fn default_overlay_ratio() -> f32 {
+    100.0
+}
+
+/// Ranges of the overlay's controls.
+pub const OVERLAY_POWER_RANGE: (f32, f32) = (0.0, 1000.0);
+pub const OVERLAY_RATIO_RANGE: (f32, f32) = (0.0, 400.0);
+pub const OVERLAY_TILE_RANGE: (f32, f32) = (0.05, 20.0);
+
+impl Default for TextureOverlay {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            merge: default_overlay_merge(),
+            power: default_overlay_power(),
+            ratio: default_overlay_ratio(),
+            fit: TextureFit::default(),
+            tile_scale: 1.0,
+        }
+    }
+}
+
+impl TextureOverlay {
+    pub fn is_default(v: &TextureOverlay) -> bool {
+        *v == TextureOverlay::default()
+    }
+}
+
+impl EscapeConfig {
+    /// Whether anything draws with the texture, so it has to be on the
+    /// GPU: the overlay, the relief's bump, or a colouring that reads it
+    /// (the image trap).
+    pub fn uses_texture(&self) -> bool {
+        #[cfg(feature = "engine-escape")]
+        let coloring = crate::escape::COLORINGS
+            .iter()
+            .any(|c| c.name == self.coloring && c.has_feature(crate::escape::ColoringFeature::TextureInLoop));
+        #[cfg(not(feature = "engine-escape"))]
+        let coloring = false;
+        self.texture.is_some()
+            && (self.texture_overlay.enabled
+                || coloring
+                || (self.shading.enabled && self.shading.texture_kind == ShadingTexture::Simulation))
+    }
+}
+
+/// A simulation texture a config uses: its name, and its recipe -- a
+/// Simulation-mode config -- in full (`docs/projects/sim-textures.md`,
+/// decision 6), so the file that uses it needs nothing else.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EscapeTexture {
+    pub name: String,
+    /// Written and read the way a `.fflame` file is -- compact, with its
+    /// version, and migrated on load -- not as the derive would.
+    #[serde(with = "embedded_config")]
+    pub config: Box<super::FractalConfig>,
+}
+
+impl PartialEq for EscapeTexture {
+    fn eq(&self, other: &Self) -> bool {
+        // FractalConfig has no PartialEq; its file form is its identity.
+        self.name == other.name && self.config.to_json_value().ok() == other.config.to_json_value().ok()
+    }
+}
+
+/// A config inside a config, in its file form.
+mod embedded_config {
+    use super::super::FractalConfig;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(config: &FractalConfig, s: S) -> Result<S::Ok, S::Error> {
+        config.to_json_value().map_err(serde::ser::Error::custom)?.serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Box<FractalConfig>, D::Error> {
+        let value = serde_json::Value::deserialize(d)?;
+        FractalConfig::from_json_value(value).map(Box::new).map_err(serde::de::Error::custom)
+    }
 }
 
 /// Looking down at about 24°, which shows a solid's top and one
@@ -284,6 +450,13 @@ pub enum ShadingBlend {
     /// Straight linear interpolation toward the layer colour. Flattens,
     /// but it is the one that shows a coloured light honestly.
     Mix,
+    /// The W3C soft light: a gentle multiply below the middle, a gentle
+    /// screen above it. Ultra Fractal recommends it (and Hard Light) for
+    /// lighting layers, which land on mid-grey where the ground is flat.
+    SoftLight,
+    /// Overlay with the roles swapped: the light colour decides between
+    /// multiply and screen, so the light reads harder than the base.
+    HardLight,
 }
 
 impl ShadingBlend {
@@ -294,15 +467,19 @@ impl ShadingBlend {
             ShadingBlend::Screen => 1,
             ShadingBlend::Overlay => 2,
             ShadingBlend::Mix => 3,
+            ShadingBlend::SoftLight => 4,
+            ShadingBlend::HardLight => 5,
         }
     }
 
-    pub fn all() -> [ShadingBlend; 4] {
+    pub fn all() -> [ShadingBlend; 6] {
         [
             ShadingBlend::Multiply,
             ShadingBlend::Screen,
             ShadingBlend::Overlay,
             ShadingBlend::Mix,
+            ShadingBlend::SoftLight,
+            ShadingBlend::HardLight,
         ]
     }
 }
@@ -314,6 +491,8 @@ pub fn shading_blend_to_str(m: ShadingBlend) -> &'static str {
         ShadingBlend::Screen => "screen",
         ShadingBlend::Overlay => "overlay",
         ShadingBlend::Mix => "mix",
+        ShadingBlend::SoftLight => "soft_light",
+        ShadingBlend::HardLight => "hard_light",
     }
 }
 
@@ -322,6 +501,8 @@ pub fn shading_blend_from_str(s: &str) -> ShadingBlend {
         "screen" => ShadingBlend::Screen,
         "overlay" => ShadingBlend::Overlay,
         "mix" => ShadingBlend::Mix,
+        "soft_light" => ShadingBlend::SoftLight,
+        "hard_light" => ShadingBlend::HardLight,
         _ => ShadingBlend::Multiply,
     }
 }
@@ -342,6 +523,25 @@ pub enum ShadingField {
     /// The wrapped palette coordinate — every band becomes a step, for
     /// the engraved / contour-map look.
     Banded,
+    /// The texture layer's value: relief from one field, colour from
+    /// another (survey R3). Without a layer, the colouring's own.
+    Layer,
+    /// The distance estimate's own slope, from the derivative rather
+    /// than from neighbouring pixels (survey R5, Kalles Fraktaler's
+    /// analytic slopes): sharper, and free of stencil artefacts. Direct
+    /// path only, on formulas with a derivative.
+    Analytic,
+    /// The colouring's value at points a small, fixed step away, run as
+    /// orbits of their own (survey R6, Ultra Fractal's Slope): relief
+    /// that belongs to the fractal rather than the pixel grid, the same
+    /// at any output size. Three orbits a pixel; direct path only.
+    Offset,
+    /// Ultra Fractal's Embossed (survey R7): two orbits a small step
+    /// either side of the pixel along the light, each reduced to a
+    /// whole number ([`EmbossType`]); where they differ, the pixel is a
+    /// shadow or a highlight by which came out higher. Bevelled contour
+    /// lines, a fixed fraction of the view wide. Direct path only.
+    Embossed,
 }
 
 impl ShadingField {
@@ -349,21 +549,97 @@ impl ShadingField {
         match self {
             ShadingField::Smooth => 0,
             ShadingField::Banded => 1,
+            ShadingField::Layer => 2,
+            ShadingField::Analytic => 3,
+            ShadingField::Offset => 4,
+            ShadingField::Embossed => 5,
         }
     }
 }
+
+/// What each of Embossed's two orbits is reduced to: Ultra Fractal's
+/// Emboss Type (`Standard_EmbossedHelper`, Standard.ulb). The contour
+/// lines fall where this whole number changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EmbossType {
+    /// The iteration the orbit escaped on (0 if it never did).
+    #[default]
+    Iteration,
+    /// How many iterates had a positive real part.
+    RealPositive,
+    /// How many iterates had a positive imaginary part.
+    ImagPositive,
+    /// The iteration at which |z|^2 was smallest -- the smallest of
+    /// EITHER orbit so far, which is how Ultra Fractal keeps it.
+    SmallestMagnitude,
+    /// `trunc(ln|z|)` at escape (0 if it never did).
+    Magnitude,
+    /// Which of `sections` equal sectors `arg z` fell in at escape.
+    Angle,
+}
+
+impl EmbossType {
+    pub const ALL: [EmbossType; 6] = [
+        EmbossType::Iteration,
+        EmbossType::RealPositive,
+        EmbossType::ImagPositive,
+        EmbossType::SmallestMagnitude,
+        EmbossType::Magnitude,
+        EmbossType::Angle,
+    ];
+    /// Ultra Fractal's own enum order, which the shader switches on.
+    pub fn to_gpu(self) -> u32 {
+        match self {
+            EmbossType::Iteration => 0,
+            EmbossType::RealPositive => 1,
+            EmbossType::ImagPositive => 2,
+            EmbossType::SmallestMagnitude => 3,
+            EmbossType::Magnitude => 4,
+            EmbossType::Angle => 5,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EmbossType::Iteration => "iteration",
+            EmbossType::RealPositive => "real_positive",
+            EmbossType::ImagPositive => "imag_positive",
+            EmbossType::SmallestMagnitude => "smallest_magnitude",
+            EmbossType::Magnitude => "magnitude",
+            EmbossType::Angle => "angle",
+        }
+    }
+    pub fn from_name(s: &str) -> Self {
+        Self::ALL.into_iter().find(|m| m.as_str() == s).unwrap_or_default()
+    }
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Embossed's Angle sectors. Ultra Fractal's minimum is 1; the top is
+/// what five bits of the shader's flag word hold.
+pub const EMBOSS_SECTIONS_RANGE: (u32, u32) = (1, 32);
 
 /// The wire strings ConfigValue carries for [`ShadingField`].
 pub fn shading_field_to_str(m: ShadingField) -> &'static str {
     match m {
         ShadingField::Smooth => "smooth",
         ShadingField::Banded => "banded",
+        ShadingField::Layer => "layer",
+        ShadingField::Analytic => "analytic",
+        ShadingField::Offset => "offset",
+        ShadingField::Embossed => "embossed",
     }
 }
 
 pub fn shading_field_from_str(s: &str) -> ShadingField {
     match s {
         "banded" => ShadingField::Banded,
+        "layer" => ShadingField::Layer,
+        "analytic" => ShadingField::Analytic,
+        "offset" => ShadingField::Offset,
+        "embossed" => ShadingField::Embossed,
         _ => ShadingField::Smooth,
     }
 }
@@ -400,6 +676,11 @@ pub enum ContrastMode {
     /// a perfect plane it correctly shows almost nothing, because
     /// there is nothing left.
     Flatten,
+    /// Rank-equalise the field (survey P7): each value becomes the share
+    /// of the frame below it, so every part of the palette covers the
+    /// same area of the picture -- techmatt's rank transfer, F3's
+    /// histogram colouring. Measured from the same probe as the others.
+    Equalize,
 }
 
 impl ContrastMode {
@@ -408,6 +689,7 @@ impl ContrastMode {
             ContrastMode::Off => 0,
             ContrastMode::AutoRange => 1,
             ContrastMode::Flatten => 2,
+            ContrastMode::Equalize => 3,
         }
     }
     pub fn is_off(&self) -> bool {
@@ -421,6 +703,7 @@ pub fn contrast_mode_to_str(m: ContrastMode) -> &'static str {
         ContrastMode::Off => "off",
         ContrastMode::AutoRange => "auto_range",
         ContrastMode::Flatten => "flatten",
+        ContrastMode::Equalize => "equalize",
     }
 }
 
@@ -428,6 +711,7 @@ pub fn contrast_mode_from_str(s: &str) -> ContrastMode {
     match s {
         "auto_range" => ContrastMode::AutoRange,
         "flatten" => ContrastMode::Flatten,
+        "equalize" => ContrastMode::Equalize,
         _ => ContrastMode::Off,
     }
 }
@@ -494,6 +778,506 @@ impl EscapeContrast {
     }
 }
 
+/// A curve on the coloring's value, applied before the palette wraps
+/// it (`docs/projects/escape-coloring-survey.md` P1).
+///
+/// Every curve is `g(v) = k f(v/k)` with `f(1) = 1`, where `k` is
+/// [`PaletteMap::pivot`]: the value every curve leaves where Linear
+/// would. Below it the root and log curves stretch the value, above it
+/// they compress it, so palette cycles crowd or spread across the
+/// picture. Negative values are mirrored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransferCurve {
+    #[default]
+    Linear,
+    SquareRoot,
+    CubeRoot,
+    /// `log2(1 + u)`, techmatt's.
+    Log,
+    /// `ln(1 + ln(1 + u)) / ln(1 + ln 2)`, KF2's: flatter still.
+    LogLog,
+    Square,
+    /// `atan(u) / atan(1)`: bounded, so however far the value runs the
+    /// palette cycles at most twice the pivot.
+    ArcTan,
+}
+
+impl TransferCurve {
+    pub const ALL: [TransferCurve; 7] = [
+        TransferCurve::Linear,
+        TransferCurve::SquareRoot,
+        TransferCurve::CubeRoot,
+        TransferCurve::Log,
+        TransferCurve::LogLog,
+        TransferCurve::Square,
+        TransferCurve::ArcTan,
+    ];
+    /// The shader's code for it (`esc_transfer`).
+    pub fn to_gpu(self) -> u32 {
+        match self {
+            TransferCurve::Linear => 0,
+            TransferCurve::SquareRoot => 1,
+            TransferCurve::CubeRoot => 2,
+            TransferCurve::Log => 3,
+            TransferCurve::LogLog => 4,
+            TransferCurve::Square => 5,
+            TransferCurve::ArcTan => 6,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TransferCurve::Linear => "linear",
+            TransferCurve::SquareRoot => "square_root",
+            TransferCurve::CubeRoot => "cube_root",
+            TransferCurve::Log => "log",
+            TransferCurve::LogLog => "log_log",
+            TransferCurve::Square => "square",
+            TransferCurve::ArcTan => "arc_tan",
+        }
+    }
+    /// An unknown name is Linear, as an unknown contrast mode is Off.
+    pub fn from_name(s: &str) -> Self {
+        Self::ALL.into_iter().find(|c| c.as_str() == s).unwrap_or_default()
+    }
+    /// `f(u)` for `u >= 0`, the shape before the pivot scales it. The
+    /// shader's `esc_transfer` is the same arithmetic in f32.
+    pub fn shape(self, u: f32) -> f32 {
+        match self {
+            TransferCurve::Linear => u,
+            TransferCurve::SquareRoot => u.sqrt(),
+            TransferCurve::CubeRoot => u.cbrt(),
+            TransferCurve::Log => (1.0 + u).log2(),
+            TransferCurve::LogLog => {
+                (1.0 + (1.0 + u).ln()).ln() / (1.0 + std::f32::consts::LN_2).ln()
+            }
+            TransferCurve::Square => u * u,
+            TransferCurve::ArcTan => u.atan() / std::f32::consts::FRAC_PI_4,
+        }
+    }
+}
+
+/// A curve on the position within one palette cycle, applied after the
+/// wrap: it changes which colours a cycle dwells on, not how many
+/// cycles there are. The escape-side counterpart of the Colors panel's
+/// Log Redistribute, computed in the shader so the table keeps its
+/// resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PaletteCurve {
+    #[default]
+    Linear,
+    SquareRoot,
+    Square,
+    /// `log2(1 + t)`.
+    Log,
+    /// `2^t - 1`, Log's mirror.
+    Exp,
+    /// Smoothstep: lingers at both ends.
+    SCurve,
+    /// Smoothstep's inverse: lingers in the middle.
+    InverseS,
+}
+
+impl PaletteCurve {
+    pub const ALL: [PaletteCurve; 7] = [
+        PaletteCurve::Linear,
+        PaletteCurve::SquareRoot,
+        PaletteCurve::Square,
+        PaletteCurve::Log,
+        PaletteCurve::Exp,
+        PaletteCurve::SCurve,
+        PaletteCurve::InverseS,
+    ];
+    /// The shader's code for it (`esc_palette_curve`).
+    pub fn to_gpu(self) -> u32 {
+        match self {
+            PaletteCurve::Linear => 0,
+            PaletteCurve::SquareRoot => 1,
+            PaletteCurve::Square => 2,
+            PaletteCurve::Log => 3,
+            PaletteCurve::Exp => 4,
+            PaletteCurve::SCurve => 5,
+            PaletteCurve::InverseS => 6,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PaletteCurve::Linear => "linear",
+            PaletteCurve::SquareRoot => "square_root",
+            PaletteCurve::Square => "square",
+            PaletteCurve::Log => "log",
+            PaletteCurve::Exp => "exp",
+            PaletteCurve::SCurve => "s_curve",
+            PaletteCurve::InverseS => "inverse_s",
+        }
+    }
+    pub fn from_name(s: &str) -> Self {
+        Self::ALL.into_iter().find(|c| c.as_str() == s).unwrap_or_default()
+    }
+    /// The curve on `t` in 0..1; the shader's `esc_palette_curve`.
+    pub fn apply(self, t: f32) -> f32 {
+        match self {
+            PaletteCurve::Linear => t,
+            PaletteCurve::SquareRoot => t.sqrt(),
+            PaletteCurve::Square => t * t,
+            PaletteCurve::Log => (1.0 + t).log2(),
+            PaletteCurve::Exp => t.exp2() - 1.0,
+            PaletteCurve::SCurve => t * t * (3.0 - 2.0 * t),
+            PaletteCurve::InverseS => {
+                0.5 - ((1.0 - 2.0 * t).clamp(-1.0, 1.0).asin() / 3.0).sin()
+            }
+        }
+    }
+}
+
+/// How the coloring's value becomes a palette colour. See
+/// [`EscapeConfig::palette_map`] and the survey's section 7, item 3.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PaletteMap {
+    #[serde(default, skip_serializing_if = "is_linear_transfer")]
+    pub transfer: TransferCurve,
+    /// The value the transfer leaves unchanged (see [`TransferCurve`]).
+    #[serde(default = "default_pivot", skip_serializing_if = "is_one")]
+    pub pivot: f32,
+    #[serde(default, skip_serializing_if = "is_linear_curve")]
+    pub curve: PaletteCurve,
+    /// Each palette stop as a flat band from its position to the next
+    /// stop, instead of a blend between them.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub stepped: bool,
+}
+
+fn default_pivot() -> f32 {
+    1.0
+}
+fn is_linear_transfer(c: &TransferCurve) -> bool {
+    *c == TransferCurve::Linear
+}
+fn is_linear_curve(c: &PaletteCurve) -> bool {
+    *c == PaletteCurve::Linear
+}
+
+/// The pivot's range: wide enough for a raw smooth count (thousands)
+/// and a fitted 0..1 field alike.
+pub const PIVOT_RANGE: (f32, f32) = (1.0e-3, 1.0e4);
+
+impl Default for PaletteMap {
+    fn default() -> Self {
+        Self {
+            transfer: TransferCurve::Linear,
+            pivot: default_pivot(),
+            curve: PaletteCurve::Linear,
+            stepped: false,
+        }
+    }
+}
+
+impl PaletteMap {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+    /// The two curve codes in one word: transfer in bits 0-7, palette
+    /// curve in bits 8-15.
+    pub fn gpu_flags(&self) -> u32 {
+        self.transfer.to_gpu() | (self.curve.to_gpu() << 8)
+    }
+    /// The pivot as the shader reads it: clamped into range, so a
+    /// hand-edited 0 cannot divide by zero.
+    pub fn gpu_pivot(&self) -> f32 {
+        self.pivot.clamp(PIVOT_RANGE.0, PIVOT_RANGE.1)
+    }
+    /// `g(v)`: the transfer at this pivot, mirrored for negative values.
+    pub fn transfer_value(&self, v: f32) -> f32 {
+        if self.transfer == TransferCurve::Linear {
+            return v;
+        }
+        let k = self.gpu_pivot();
+        v.signum() * k * self.transfer.shape(v.abs() / k)
+    }
+}
+
+/// How a texture layer's palette position combines with the base's.
+/// Each works on the two wrapped positions, `a` the base's and `b` the
+/// layer's, and all but Add travel `weight` of the way from `a`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LayerBlend {
+    /// `1 - (1 - a)(1 - b)`: brightens where the texture is high.
+    /// techmatt's choice for stripes and curvature over smooth.
+    #[default]
+    Screen,
+    /// `ab`: darkens where the texture is low.
+    Multiply,
+    /// `fract(a + weight * b)`: shifts the palette by the texture, so
+    /// a cycling palette keeps cycling.
+    Add,
+    /// Multiply below the middle, Screen above: contrast.
+    Overlay,
+    /// `b`: the texture alone, faded in by the weight.
+    Mix,
+}
+
+impl LayerBlend {
+    pub const ALL: [LayerBlend; 5] = [
+        LayerBlend::Screen,
+        LayerBlend::Multiply,
+        LayerBlend::Add,
+        LayerBlend::Overlay,
+        LayerBlend::Mix,
+    ];
+    /// The shader's code for it (`esc_layer`).
+    pub fn to_gpu(self) -> u32 {
+        match self {
+            LayerBlend::Screen => 0,
+            LayerBlend::Multiply => 1,
+            LayerBlend::Add => 2,
+            LayerBlend::Overlay => 3,
+            LayerBlend::Mix => 4,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LayerBlend::Screen => "screen",
+            LayerBlend::Multiply => "multiply",
+            LayerBlend::Add => "add",
+            LayerBlend::Overlay => "overlay",
+            LayerBlend::Mix => "mix",
+        }
+    }
+    pub fn from_name(s: &str) -> Self {
+        Self::ALL.into_iter().find(|b| b.as_str() == s).unwrap_or_default()
+    }
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+    /// The blend of positions `a` (base) and `b` (layer) at `weight`;
+    /// the shader's `esc_layer` is the same arithmetic in f32.
+    pub fn apply(self, a: f32, b: f32, weight: f32) -> f32 {
+        let blended = match self {
+            LayerBlend::Screen => 1.0 - (1.0 - a) * (1.0 - b),
+            LayerBlend::Multiply => a * b,
+            LayerBlend::Add => return (a + weight * b).rem_euclid(1.0),
+            LayerBlend::Overlay => {
+                if a < 0.5 {
+                    2.0 * a * b
+                } else {
+                    1.0 - 2.0 * (1.0 - a) * (1.0 - b)
+                }
+            }
+            LayerBlend::Mix => b,
+        };
+        a + (blended - a) * weight
+    }
+}
+
+/// A texture layer: a second escape colouring and how it blends.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ColoringLayer {
+    /// A mode-A colouring, by registry name; empty is no layer.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub coloring: String,
+    /// The layer colouring's parameters, keyed as `coloring_params`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: BTreeMap<String, f32>,
+    #[serde(default, skip_serializing_if = "LayerBlend::is_default")]
+    pub blend: LayerBlend,
+    /// How far the blend travels from the base, 0..1.
+    #[serde(default = "default_layer_weight", skip_serializing_if = "is_default_layer_weight")]
+    pub weight: f32,
+}
+
+/// techmatt's weight for a Screen-blended texture over smooth.
+fn default_layer_weight() -> f32 {
+    0.85
+}
+fn is_default_layer_weight(v: &f32) -> bool {
+    *v == default_layer_weight()
+}
+
+impl Default for ColoringLayer {
+    fn default() -> Self {
+        Self {
+            coloring: String::new(),
+            params: BTreeMap::new(),
+            blend: LayerBlend::default(),
+            weight: default_layer_weight(),
+        }
+    }
+}
+
+impl ColoringLayer {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+    /// Whether a layer is named at all (it may still be refused: see
+    /// `escape::layer_of`).
+    pub fn is_on(&self) -> bool {
+        !self.coloring.is_empty()
+    }
+}
+
+/// How the relief turns a slope into light and shade.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReliefModel {
+    /// The signed tilt toward the light's azimuth: zero on flat
+    /// ground, symmetric, monotonic in the slope (see `shade_pixel`).
+    #[default]
+    Tilt,
+    /// Lambert's law with the light raised `elevation` above the
+    /// horizon, as Ultra Fractal lights: flat ground reads as the light
+    /// does there, and a slope facing away falls into shadow sooner the
+    /// lower the light.
+    Lambert,
+}
+
+impl ReliefModel {
+    pub const ALL: [ReliefModel; 2] = [ReliefModel::Tilt, ReliefModel::Lambert];
+    pub fn to_gpu(self) -> u32 {
+        match self {
+            ReliefModel::Tilt => 0,
+            ReliefModel::Lambert => 1,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReliefModel::Tilt => "tilt",
+            ReliefModel::Lambert => "lambert",
+        }
+    }
+    pub fn from_name(s: &str) -> Self {
+        Self::ALL.into_iter().find(|m| m.as_str() == s).unwrap_or_default()
+    }
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// How the relief estimates the slope from neighbouring heights
+/// (Kalles Fraktaler offers the same family).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SlopeStencil {
+    /// `(h(p+1) - h(p-1)) / 2`: the sharpest symmetric estimate.
+    #[default]
+    Central,
+    /// `h(p+1) - h(p)`: half a pixel off-centre, and crisper for it.
+    Forward,
+    /// The two diagonal differences of a 2x2 block, turned back onto
+    /// the axes: picks up diagonal detail the axes miss.
+    Roberts,
+    /// The plane fitted to the 3x3 neighbourhood by least squares: the
+    /// smoothest of the four, and the least sensitive to one bad pixel.
+    LeastSquares,
+}
+
+impl SlopeStencil {
+    pub const ALL: [SlopeStencil; 4] = [
+        SlopeStencil::Central,
+        SlopeStencil::Forward,
+        SlopeStencil::Roberts,
+        SlopeStencil::LeastSquares,
+    ];
+    pub fn to_gpu(self) -> u32 {
+        match self {
+            SlopeStencil::Central => 0,
+            SlopeStencil::Forward => 1,
+            SlopeStencil::Roberts => 2,
+            SlopeStencil::LeastSquares => 3,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SlopeStencil::Central => "central",
+            SlopeStencil::Forward => "forward",
+            SlopeStencil::Roberts => "roberts",
+            SlopeStencil::LeastSquares => "least_squares",
+        }
+    }
+    pub fn from_name(s: &str) -> Self {
+        Self::ALL.into_iter().find(|m| m.as_str() == s).unwrap_or_default()
+    }
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// A curve on the height before its slope is taken (Ultra Fractal's
+/// Slope height transfers): `post * f(pre * h)`, mirrored for negative
+/// heights where `f` is not odd already. Sine and cosine ripple the
+/// surface into terraces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HeightTransfer {
+    #[default]
+    Linear,
+    Log,
+    SquareRoot,
+    CubeRoot,
+    Square,
+    Cube,
+    Sin,
+    Cos,
+}
+
+impl HeightTransfer {
+    pub const ALL: [HeightTransfer; 8] = [
+        HeightTransfer::Linear,
+        HeightTransfer::Log,
+        HeightTransfer::SquareRoot,
+        HeightTransfer::CubeRoot,
+        HeightTransfer::Square,
+        HeightTransfer::Cube,
+        HeightTransfer::Sin,
+        HeightTransfer::Cos,
+    ];
+    pub fn to_gpu(self) -> u32 {
+        match self {
+            HeightTransfer::Linear => 0,
+            HeightTransfer::Log => 1,
+            HeightTransfer::SquareRoot => 2,
+            HeightTransfer::CubeRoot => 3,
+            HeightTransfer::Square => 4,
+            HeightTransfer::Cube => 5,
+            HeightTransfer::Sin => 6,
+            HeightTransfer::Cos => 7,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HeightTransfer::Linear => "linear",
+            HeightTransfer::Log => "log",
+            HeightTransfer::SquareRoot => "square_root",
+            HeightTransfer::CubeRoot => "cube_root",
+            HeightTransfer::Square => "square",
+            HeightTransfer::Cube => "cube",
+            HeightTransfer::Sin => "sin",
+            HeightTransfer::Cos => "cos",
+        }
+    }
+    pub fn from_name(s: &str) -> Self {
+        Self::ALL.into_iter().find(|m| m.as_str() == s).unwrap_or_default()
+    }
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+    /// `f(x)`; the relief shader's `relief_height_curve` is the same in
+    /// f32.
+    pub fn apply(self, x: f32) -> f32 {
+        match self {
+            HeightTransfer::Linear => x,
+            HeightTransfer::Log => x.signum() * x.abs().ln_1p(),
+            HeightTransfer::SquareRoot => x.signum() * x.abs().sqrt(),
+            HeightTransfer::CubeRoot => x.cbrt(),
+            HeightTransfer::Square => x.signum() * x * x,
+            HeightTransfer::Cube => x * x * x,
+            HeightTransfer::Sin => x.sin(),
+            HeightTransfer::Cos => x.cos(),
+        }
+    }
+}
+
 /// Relief shading: a lit-surface layer composited over the coloring.
 ///
 /// Deliberately NOT a `ColoringDef`. A coloring returns one scalar
@@ -507,7 +1291,7 @@ impl EscapeContrast {
 /// The surface comes from the SLOPE of the coloring's own value field,
 /// finite-differenced at render resolution. That is what makes it
 /// universal: it needs no derivative, so it works on the perturbed
-/// rungs and on the 13 of 25 formulas that define none.
+/// rungs and on the 14 of 26 formulas that define none.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EscapeShading {
     #[serde(default, skip_serializing_if = "is_false")]
@@ -579,6 +1363,71 @@ pub struct EscapeShading {
     /// Feature size in DISPLAY pixels — how coarse the grain is.
     #[serde(default = "default_texture_scale")]
     pub texture_scale: f32,
+
+    /// How a slope becomes light: the signed tilt (the default, and
+    /// every picture before this option) or Lambert's law.
+    #[serde(default, skip_serializing_if = "ReliefModel::is_default")]
+    pub model: ReliefModel,
+    /// The light's height above the horizon in degrees, for Lambert;
+    /// Ultra Fractal's default is 30.
+    #[serde(default = "default_relief_elevation", skip_serializing_if = "is_default_relief_elevation")]
+    pub elevation: f32,
+    /// A floor under the shadow, 0..1: how much of the base survives on
+    /// the side facing away from the light.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub ambient: f32,
+    /// How the slope is estimated from neighbouring heights.
+    #[serde(default, skip_serializing_if = "SlopeStencil::is_default")]
+    pub stencil: SlopeStencil,
+    /// A curve on the height before its slope is taken.
+    #[serde(default, skip_serializing_if = "HeightTransfer::is_default")]
+    pub height_curve: HeightTransfer,
+    /// Scale applied to the height before the curve.
+    #[serde(default = "default_one", skip_serializing_if = "is_one")]
+    pub height_pre: f32,
+    /// Scale applied after it.
+    #[serde(default = "default_one", skip_serializing_if = "is_one")]
+    pub height_post: f32,
+    /// The step to the offset orbits (`ShadingField::Offset`), as a
+    /// fraction of the view's height: small enough to read the local
+    /// slope, large enough to step over f32 noise. For Embossed it is
+    /// the step either side of the pixel, which sets how wide the
+    /// contour lines are (Ultra Fractal's Contour Size).
+    #[serde(default = "default_relief_offset", skip_serializing_if = "is_default_relief_offset")]
+    pub offset: f32,
+    /// What Embossed's orbits are reduced to.
+    #[serde(default, skip_serializing_if = "EmbossType::is_default")]
+    pub emboss: EmbossType,
+    /// Embossed's Angle sectors; Ultra Fractal's default is 2.
+    #[serde(default = "default_emboss_sections", skip_serializing_if = "is_default_emboss_sections")]
+    pub emboss_sections: u32,
+}
+
+fn default_emboss_sections() -> u32 {
+    2
+}
+fn is_default_emboss_sections(v: &u32) -> bool {
+    *v == default_emboss_sections()
+}
+
+fn default_relief_offset() -> f32 {
+    1.0 / 1024.0
+}
+fn is_default_relief_offset(v: &f32) -> bool {
+    *v == default_relief_offset()
+}
+
+/// The offset step's range, as a fraction of the view height.
+pub const RELIEF_OFFSET_RANGE: (f32, f32) = (1.0e-5, 0.05);
+
+fn default_relief_elevation() -> f32 {
+    30.0
+}
+fn is_default_relief_elevation(v: &f32) -> bool {
+    *v == default_relief_elevation()
+}
+fn default_one() -> f32 {
+    1.0
 }
 
 fn default_light_angle() -> f32 {
@@ -644,6 +1493,16 @@ impl Default for EscapeShading {
             texture_kind: ShadingTexture::None,
             texture_strength: 0.0,
             texture_scale: default_texture_scale(),
+            model: ReliefModel::default(),
+            elevation: default_relief_elevation(),
+            ambient: 0.0,
+            stencil: SlopeStencil::default(),
+            height_curve: HeightTransfer::default(),
+            height_pre: 1.0,
+            height_post: 1.0,
+            offset: default_relief_offset(),
+            emboss: EmbossType::default(),
+            emboss_sections: default_emboss_sections(),
         }
     }
 }
@@ -651,6 +1510,24 @@ impl Default for EscapeShading {
 impl EscapeShading {
     pub fn is_default(v: &EscapeShading) -> bool {
         *v == EscapeShading::default()
+    }
+    /// Whether the relief needs the derivative orbit: analytic slopes.
+    pub fn wants_derivative(&self) -> bool {
+        self.enabled && self.field == ShadingField::Analytic
+    }
+    /// Whether the relief runs orbits beside each pixel's own.
+    pub fn wants_offset_orbits(&self) -> bool {
+        self.enabled && matches!(self.field, ShadingField::Offset | ShadingField::Embossed)
+    }
+    /// What the relief lights, as the shade pass reads it: 0 a height it
+    /// differences, 1 a slope the iterate pass stored (analytic, offset
+    /// orbits), 2 Embossed's stored response.
+    pub fn stored_relief(&self) -> u32 {
+        match self.field {
+            ShadingField::Analytic | ShadingField::Offset => 1,
+            ShadingField::Embossed => 2,
+            _ => 0,
+        }
     }
 }
 
@@ -727,15 +1604,19 @@ fn default_center_im() -> String {
 fn default_max_iter() -> u32 {
     256
 }
-/// A new config's bailout: a radius of about 3.2 shows less banding in
-/// the smooth colourings than 4's radius of 2.
+/// A new config's bailout: the default colouring's recommendation
+/// (smooth, `ColoringDef::recommended_bailout`). The smooth count's
+/// error falls off with the escape radius -- worst pixel 0.75
+/// iterations at 4, 0.12 at 10, nothing measurable at 1e4 (radius 100).
 fn default_bailout() -> f32 {
-    10.0
+    1.0e4
 }
 /// The bailout of a file that does not name one: the default until
-/// 2026-10-02.
+/// 2026-10-02, and so the one every built-in preset that names none
+/// was drawn at.
+pub const LEGACY_BAILOUT: f32 = 4.0;
 fn legacy_bailout() -> f32 {
-    4.0
+    LEGACY_BAILOUT
 }
 fn default_damping_re() -> f32 {
     1.0
@@ -802,6 +1683,10 @@ pub enum ShadingTexture {
     /// Octaves stretched along different axes, so it reads as fibre
     /// laid in a felt rather than as isotropic speckle.
     Paper,
+    /// The config's simulation texture (`EscapeConfig::texture`), its
+    /// luminance as the micro-relief (docs/projects/sim-textures.md,
+    /// phase 3). Nothing without a texture.
+    Simulation,
 }
 
 impl ShadingTexture {
@@ -810,6 +1695,7 @@ impl ShadingTexture {
             ShadingTexture::None => 0,
             ShadingTexture::Grain => 1,
             ShadingTexture::Paper => 2,
+            ShadingTexture::Simulation => 3,
         }
     }
     pub fn as_str(self) -> &'static str {
@@ -817,12 +1703,14 @@ impl ShadingTexture {
             ShadingTexture::None => "none",
             ShadingTexture::Grain => "grain",
             ShadingTexture::Paper => "paper",
+            ShadingTexture::Simulation => "simulation",
         }
     }
     pub fn from_str_or_default(s: &str) -> Self {
         match s {
             "grain" => ShadingTexture::Grain,
             "paper" => ShadingTexture::Paper,
+            "simulation" => ShadingTexture::Simulation,
             _ => ShadingTexture::None,
         }
     }
@@ -880,6 +1768,10 @@ impl Default for EscapeConfig {
             reference_period: None,
             shading: EscapeShading::default(),
             contrast: EscapeContrast::default(),
+            palette_map: PaletteMap::default(),
+            layer: ColoringLayer::default(),
+            texture: None,
+            texture_overlay: TextureOverlay::default(),
         }
     }
 }
@@ -995,7 +1887,7 @@ mod shading_tests {
         off.contrast.strength = 0.0;
         assert!(!off.contrast.is_active());
         // Every mode's wire string must survive.
-        for m in [ContrastMode::Off, ContrastMode::AutoRange, ContrastMode::Flatten] {
+        for m in [ContrastMode::Off, ContrastMode::AutoRange, ContrastMode::Flatten, ContrastMode::Equalize] {
             assert_eq!(contrast_mode_from_str(contrast_mode_to_str(m)), m);
         }
     }
@@ -1019,10 +1911,38 @@ mod shading_tests {
             texture_kind: ShadingTexture::Paper,
             texture_strength: 0.6,
             texture_scale: 3.5,
+            model: ReliefModel::Lambert,
+            elevation: 55.0,
+            ambient: 0.3,
+            stencil: SlopeStencil::Roberts,
+            height_curve: HeightTransfer::Cos,
+            height_pre: 4.0,
+            height_post: 0.25,
+            offset: 0.002,
+            emboss: EmbossType::SmallestMagnitude,
+            emboss_sections: 5,
         };
         let json = serde_json::to_string(&esc).unwrap();
         let back: EscapeConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(back.shading, esc.shading);
+        // A shading block written before these options reads as the
+        // relief it drew: the tilt, no ambient, the central stencil, no
+        // curve.
+        let old: EscapeShading = serde_json::from_str(r#"{"enabled":true}"#).unwrap();
+        assert_eq!(
+            (old.model, old.ambient, old.stencil, old.height_curve, old.height_pre, old.height_post),
+            (ReliefModel::Tilt, 0.0, SlopeStencil::Central, HeightTransfer::Linear, 1.0, 1.0)
+        );
+        for m in ReliefModel::ALL {
+            assert_eq!(ReliefModel::from_name(m.as_str()), m);
+        }
+        for m in SlopeStencil::ALL {
+            assert_eq!(SlopeStencil::from_name(m.as_str()), m);
+        }
+        for m in HeightTransfer::ALL {
+            assert_eq!(HeightTransfer::from_name(m.as_str()), m);
+            assert!(m.apply(0.7).is_finite() && m.apply(-0.7).is_finite(), "{m:?}");
+        }
     }
 
     /// The wire strings are the config's public surface (scripting,
@@ -1035,8 +1955,18 @@ mod shading_tests {
         for b in ShadingBlend::all() {
             assert_eq!(shading_blend_from_str(shading_blend_to_str(b)), b);
         }
-        for f in [ShadingField::Smooth, ShadingField::Banded] {
+        for f in [
+            ShadingField::Smooth,
+            ShadingField::Banded,
+            ShadingField::Layer,
+            ShadingField::Analytic,
+            ShadingField::Offset,
+            ShadingField::Embossed,
+        ] {
             assert_eq!(shading_field_from_str(shading_field_to_str(f)), f);
+        }
+        for t in EmbossType::ALL {
+            assert_eq!(EmbossType::from_name(t.as_str()), t);
         }
         // The GPU discriminants must be distinct, or two blend modes
         // would render identically.
@@ -1065,16 +1995,16 @@ mod tests {
         );
     }
 
-    /// A new config starts at a bailout of 10, but a file that names none
+    /// A new config starts at a bailout of 1e4, but a file that names none
     /// keeps the 4 it was written under, and a saved config always names
     /// one -- so the default can move without moving a saved picture.
     #[test]
     fn a_file_without_a_bailout_keeps_the_old_default() {
-        assert_eq!(EscapeConfig::default().bailout, 10.0);
+        assert_eq!(EscapeConfig::default().bailout, 1.0e4);
         let old: EscapeConfig = serde_json::from_str(r#"{"formula":"mandelbrot"}"#).expect("an old escape block");
         assert_eq!(old.bailout, 4.0);
         let json = serde_json::to_string(&EscapeConfig { formula: "burning_ship".into(), ..EscapeConfig::default() }).unwrap();
-        assert!(json.contains("\"bailout\":10.0"), "the bailout must be written: {json}");
+        assert!(json.contains("\"bailout\":10000.0"), "the bailout must be written: {json}");
     }
 
     /// New relief is lit from the upper left (135 degrees counter-clockwise
@@ -1087,6 +2017,68 @@ mod tests {
         assert_eq!(old.light_angle, 315.0);
         let json = serde_json::to_string(&EscapeShading { enabled: true, ..EscapeShading::default() }).unwrap();
         assert!(json.contains("\"light_angle\":135.0"), "the light must be written: {json}");
+    }
+
+    /// The palette map is skipped while it is the identity, and a set
+    /// one comes back exactly.
+    #[test]
+    fn a_palette_map_is_written_only_when_set_and_round_trips() {
+        let json = serde_json::to_string(&EscapeConfig::default()).unwrap();
+        assert!(!json.contains("palette_map"), "{json}");
+        let esc = EscapeConfig {
+            palette_map: PaletteMap {
+                transfer: TransferCurve::LogLog,
+                pivot: 12.5,
+                curve: PaletteCurve::InverseS,
+                stepped: true,
+            },
+            ..EscapeConfig::default()
+        };
+        let json = serde_json::to_string(&esc).unwrap();
+        assert!(json.contains(r#""transfer":"log_log""#), "{json}");
+        assert!(json.contains(r#""curve":"inverse_s""#), "{json}");
+        let back: EscapeConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.palette_map, esc.palette_map);
+    }
+
+    /// Every transfer leaves the pivot where Linear would, rises
+    /// monotonically, and mirrors for negative values -- the three
+    /// promises the pivot control's tooltip makes.
+    #[test]
+    fn every_transfer_meets_linear_at_the_pivot() {
+        for transfer in TransferCurve::ALL {
+            assert!((transfer.shape(1.0) - 1.0).abs() < 1e-6, "{transfer:?}: f(1) = {}", transfer.shape(1.0));
+            assert_eq!(transfer.shape(0.0), 0.0, "{transfer:?}");
+            let mut prev = 0.0f32;
+            for i in 1..=400 {
+                let u = i as f32 * 0.05;
+                let f = transfer.shape(u);
+                assert!(f > prev, "{transfer:?} is not increasing at {u}");
+                prev = f;
+            }
+            let pm = PaletteMap { transfer, pivot: 7.0, ..PaletteMap::default() };
+            assert!((pm.transfer_value(7.0) - 7.0).abs() < 1e-4, "{transfer:?}");
+            assert_eq!(pm.transfer_value(-3.0), -pm.transfer_value(3.0), "{transfer:?}");
+            assert_eq!(TransferCurve::from_name(transfer.as_str()), transfer);
+        }
+        assert_eq!(TransferCurve::from_name("from_the_future"), TransferCurve::Linear);
+    }
+
+    /// A palette curve keeps both ends of the cycle where they were and
+    /// only moves what lies between.
+    #[test]
+    fn every_palette_curve_keeps_the_ends_of_a_cycle() {
+        for curve in PaletteCurve::ALL {
+            assert!(curve.apply(0.0).abs() < 1e-6, "{curve:?} at 0");
+            assert!((curve.apply(1.0) - 1.0).abs() < 1e-6, "{curve:?} at 1");
+            let mut prev = curve.apply(0.0);
+            for i in 1..=100 {
+                let t = curve.apply(i as f32 / 100.0);
+                assert!(t > prev, "{curve:?} is not increasing at {}", i as f32 / 100.0);
+                prev = t;
+            }
+            assert_eq!(PaletteCurve::from_name(curve.as_str()), curve);
+        }
     }
 
     #[test]

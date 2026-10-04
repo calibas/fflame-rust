@@ -7,6 +7,7 @@ mod gpu_updates;
 mod animation_update;
 mod effect_fetch;
 mod variation_fetch;
+mod texture_sync;
 pub mod script_cloud;
 mod fly_camera;
 pub mod export;
@@ -423,6 +424,8 @@ pub struct App {
     /// the escape pass (escape params, palette, structural loads).
     /// Starts true so the first escape frame always renders.
     pub(super) escape_dirty: bool,
+    /// Keeps `escape_renderer` holding the texture the config names.
+    pub(super) escape_texture: texture_sync::TextureSync,
     /// When the user last EDITED something the escape pass renders.
     /// For the interaction window: within it a mode-D render is a
     /// quarter-resolution preview, after it a full one. See
@@ -824,6 +827,7 @@ impl App {
             flame_renderer: Some(flame_renderer),
             escape_renderer: None,
             escape_dirty: true,
+            escape_texture: Default::default(),
             escape_last_edit: None,
             #[cfg(feature = "engine-sim")]
             sim_renderer: None,
@@ -1405,7 +1409,8 @@ impl App {
             let probe = 0u8;
             let sp = core::ptr::addr_of!(probe) as usize;
             log::info!(
-                "load #{load_gen}: wasm memory {mib:.1} MiB ({pages} pages),                  stack headroom {:.2} MiB, undo depth {}",
+                "load #{load_gen}: wasm memory {mib:.1} MiB ({pages} pages), \
+                 stack headroom {:.2} MiB, undo depth {}",
                 sp as f64 / (1024.0 * 1024.0),
                 self.config_manager.history_len()
             );
@@ -2314,7 +2319,7 @@ impl App {
                                 &self.gpu.queue,
                                 &mut esc_encoder,
                                 &export_config.escape,
-                                temp_renderer.palette_view(),
+                                temp_renderer.escape_palette_view(export_config.escape.palette_map.stepped),
                                 temp_renderer.palette_generation(),
                             );
                             self.gpu.queue.submit(std::iter::once(esc_encoder.finish()));
@@ -2861,13 +2866,23 @@ impl App {
                     // or the full render never gets asked for.
                     self.window.request_redraw();
                 }
+                // The texture's image: looked at when the frame
+                // re-renders anyway, or while the web generates one.
+                if (self.escape_dirty || self.escape_texture.busy())
+                    && self.escape_texture.update(escape, &self.gpu.device, &self.gpu.queue, &final_config.escape)
+                {
+                    self.escape_dirty = true;
+                }
+                if self.escape_texture.busy() {
+                    self.window.request_redraw();
+                }
                 if self.escape_dirty {
                     let settled = escape.render(
                         &self.gpu.device,
                         &self.gpu.queue,
                         &mut render_encoder,
                         &final_config.escape,
-                        renderer.palette_view(),
+                        renderer.escape_palette_view(final_config.escape.palette_map.stepped),
                         renderer.palette_generation(),
                     );
                     // Progressive deep zoom: an unsettled frame keeps
@@ -3586,6 +3601,16 @@ impl App {
             &self.gpu.device,
             &self.gpu.queue,
         );
+
+        // Texture previews (the Texture panel): the same pattern -- one
+        // blocking generation a frame on desktop, spawned on the web.
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.egui_layer.textures_need_previews() {
+            self.egui_layer.generate_texture_preview(&self.gpu.device, &self.gpu.queue);
+            window.request_redraw();
+        }
+        #[cfg(target_arch = "wasm32")]
+        self.egui_layer.start_texture_previews(&self.gpu.device, &self.gpu.queue);
 
         // Handle PathMap mode: query path at clicked pixel or close overlay
         #[cfg(not(target_arch = "wasm32"))]

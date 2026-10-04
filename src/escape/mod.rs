@@ -150,6 +150,38 @@ pub enum ColoringFeature {
     /// traps and averages (and for NonEscaping formulas, where every
     /// pixel is "interior").
     ColorsInterior,
+    /// The coloring draws a COLOUR, not a palette position: its WGSL
+    /// also defines
+    /// `fn coloring_color(sum: OrbitSummary, state: vec4<f32>, v: f32) -> vec3<f32>`,
+    /// returning linear light, with `v` its value after the value
+    /// transfer. `coloring_map` still supplies the value the relief and
+    /// auto contrast read. The palette is the colouring's to use or not
+    /// (`esc_palette`, `esc_palette_srgb`); a texture layer, which blends
+    /// palette positions, cannot go over or under it.
+    DirectColor,
+    /// The colouring samples the palette INSIDE the loop (direct orbit
+    /// traps), so the colour is fixed during iteration: the palette is
+    /// part of the iteration's identity, and a palette edit re-iterates
+    /// instead of recolouring the stored records.
+    PaletteInLoop,
+    /// The colouring samples the config's texture (`EscapeConfig::
+    /// texture`) INSIDE the loop, through `esc_texture` (group 0,
+    /// binding 14, which only its accumulator declares): the texture is
+    /// part of the iteration's identity, as the palette is for
+    /// `PaletteInLoop`, and has to be on the GPU before it renders.
+    TextureInLoop,
+    /// The colouring's colour carries an alpha, which becomes the
+    /// pixel's coverage, so where it is transparent the background shows,
+    /// as a layer below does in Ultra Fractal. Its WGSL also defines
+    /// `fn coloring_alpha(sum: OrbitSummary, state: vec4<f32>) -> f32`.
+    /// Every other drawn pixel is opaque.
+    DirectAlpha,
+    /// The accumulator sees only the iterates that did not bail out:
+    /// it runs after the escape and convergence tests rather than before
+    /// them, as Ultra Fractal runs a colouring's loop section only while
+    /// the formula's bailout test holds (its execution sequence). The
+    /// others see the escaping iterate too.
+    SkipsEscapingIterate,
 }
 
 /// A parameter a formula or coloring exposes. Same shape as variation
@@ -199,13 +231,20 @@ pub struct EscapePreset {
     pub formula_params: &'static [(&'static str, f32)],
     pub coloring_params: &'static [(&'static str, f32)],
     /// Escape radius, when the preset needs one other than the
-    /// config default. `None` leaves the current value alone.
+    /// config default. `None` takes the colouring's recommendation
+    /// ([`suggested_bailout`]) where it has one, and otherwise
+    /// `LEGACY_BAILOUT`, the 4 every such preset was drawn at.
     ///
     /// Root-finders are why this exists: Newton's iterates wander far
     /// outside the unit disc before settling, and a function whose
     /// ROOTS lie past the default bailout (z^8 + 15z^4 - 16 has four
     /// at |z| = 2) would have every one of them classified as an
     /// escape — the basins vanish and the view renders flat.
+    ///
+    /// The exponential and trig families name theirs for the opposite
+    /// reason: their test is a RAW `Re z` or `|Im z|`, and a bailout
+    /// carried over from a `|z|²` formula -- 1e4 under a smooth
+    /// colouring -- would overflow `exp` long before it tripped.
     pub bailout: Option<f32>,
 }
 
@@ -329,6 +368,21 @@ pub struct FormulaDef {
     pub wgsl_prev_init: &'static str,
     /// Which quantity the escape test compares (see [`EscapeMetric`]).
     pub escape_metric: EscapeMetric,
+    /// The formula's degree at infinity -- the `p` of `|z_{n+1}| ~
+    /// |z_n|^p` near escape -- from its resolved, slot-ordered params,
+    /// for a formula that is POLYNOMIAL there: past a large enough
+    /// radius every orbit escapes, so a larger bailout refines the
+    /// smooth count without changing which pixels escape.
+    ///
+    /// The smooth count divides by `log p`, so a degree other than 2
+    /// without it leaves a seam at every band; `None` counts in 2, as
+    /// everything did ([`escape_degree_of`]). Only a formula that
+    /// declares one is offered a colouring's recommended bailout
+    /// ([`suggested_bailout`]): Magnet also grows as `z^2` but its
+    /// orbits can pass radius 2 and come back to converge, so a larger
+    /// bailout redraws its escape set, and a degree of 1 (Feather at
+    /// power 3, Barnsley) may never reach radius 100 at all.
+    pub escape_degree: Option<fn(&[f32]) -> f32>,
     /// Computes per-render data on the CPU from the RESOLVED formula
     /// params (slot-ordered, defaults applied) and uploads it into the
     /// uniform's `fdata` array — read in WGSL via `fdata4(i)`. At most
@@ -361,10 +415,15 @@ impl FormulaDef {
 /// A coloring: maps the per-pixel orbit summary to a palette position.
 ///
 /// The WGSL must define
-/// `fn coloring_map(z: vec2<f32>, n: u32, escaped: bool, state: vec2<f32>) -> f32`
+/// `fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32`
 /// returning a palette coordinate (wrapped into [0,1) by the caller),
 /// reading parameters via `cparam(slot)`. `state` is the orbit
 /// accumulator (zero unless [`ColoringFeature::NeedsOrbitAccum`]).
+///
+/// The accumulator is four floats to every colouring, but only an
+/// accumulating colouring STORES four ([`accum_is_wide`]): records and
+/// resumed perturbed state carry `.xy` alone otherwise, so a colouring
+/// without one pays nothing for the width.
 pub struct ColoringDef {
     /// Registry name — the string `EscapeConfig::coloring` stores.
     pub name: &'static str,
@@ -373,21 +432,145 @@ pub struct ColoringDef {
     pub parameters: &'static [EscapeParamDef],
     pub wgsl: &'static str,
     /// WGSL expression initializing the accumulator (e.g.
-    /// `"vec2<f32>(1e30, 0.0)"` for a running min). Required with
-    /// `NeedsOrbitAccum`, ignored otherwise.
+    /// `"vec4<f32>(1e30, 0.0, 0.0, 0.0)"` for a running min). Required
+    /// with `NeedsOrbitAccum`, ignored otherwise.
     pub accum_init: &'static str,
     /// WGSL defining
-    /// `fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec2<f32>) -> vec2<f32>`
+    /// `fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32>) -> vec4<f32>`
     /// — the per-iteration accumulator update (`z_prev` is the
     /// pre-step iterate, `c` the current parameter). Required with
     /// `NeedsOrbitAccum`, ignored otherwise.
     pub wgsl_accum: &'static str,
+    /// The squared bailout this colouring is best drawn at, which the
+    /// panel applies when the colouring is picked
+    /// ([`suggested_bailout`]). `None` leaves the bailout alone. The
+    /// smooth count's error falls off with the escape radius: measured
+    /// on the Mandelbrot, the worst pixel is 0.75 iterations off at 4,
+    /// 0.12 at 10, 0.005 at 100 and nothing measurable at 1e4
+    /// (`dbg_smooth_count_error_against_bailout`). The stripe and
+    /// triangle-inequality averages ask for it too: their debanding is
+    /// first order in the escape fraction and only halves the step at 4
+    /// (`debanding_removes_the_step_at_an_iteration_boundary`).
+    pub recommended_bailout: Option<f32>,
+    /// Parameter values a FRESH pick of this colouring takes -- from
+    /// the panel, a preset that does not name them, or a script --
+    /// where they differ from the definition's default. The default is
+    /// what a saved file without the key means, so it keeps the old
+    /// behaviour; this is how a new picture gets the new one (debanded
+    /// averages) without moving an old one.
+    pub pick_params: &'static [(&'static str, f32)],
+}
+
+/// The degree of a formula that is polynomial at infinity, when it
+/// grows faster than linearly at these params (see
+/// [`FormulaDef::escape_degree`]); `None` otherwise.
+pub fn polynomial_degree(formula: &FormulaDef, fparams: &[f32]) -> Option<f32> {
+    let p = formula.escape_degree?(fparams);
+    (p > 1.0001 && p <= 1.0e6).then_some(p)
+}
+
+/// The degree the smooth count divides by: the formula's own, or 2.
+/// A degree of 1 or less (linear growth: Feather at power 3) has no
+/// log-log smooth count, so it keeps 2, as everything did.
+pub fn escape_degree_of(formula: &FormulaDef, fparams: &[f32]) -> f32 {
+    polynomial_degree(formula, fparams).unwrap_or(2.0)
+}
+
+/// A formula's params in slot order, defaults filled in.
+pub fn packed_formula_params(
+    formula: &FormulaDef,
+    values: &std::collections::BTreeMap<String, f32>,
+) -> Vec<f32> {
+    let mut out = vec![0.0; formula.parameters.len()];
+    pack_params(formula.parameters, values, &mut out);
+    out
+}
+
+/// **The bailout to set when `coloring` is picked for `formula`**, or
+/// `None` to leave it. Only for a formula that is polynomial at
+/// infinity ([`polynomial_degree`]), whose escape test is `|z|^2`
+/// with no biomorph: the exponential and trig families test a RAW
+/// `Re z` or `|Im z|` against it, where a smooth colouring's 1e4 would
+/// overflow `exp` long before it tripped.
+pub fn suggested_bailout(
+    formula: &FormulaDef,
+    fparams: &[f32],
+    coloring: &ColoringDef,
+    biomorph_off: bool,
+) -> Option<f32> {
+    if !biomorph_off
+        || formula.escape_metric != EscapeMetric::NormSq
+        || polynomial_degree(formula, fparams).is_none()
+    {
+        return None;
+    }
+    coloring.recommended_bailout
 }
 
 impl ColoringDef {
     pub fn has_feature(&self, f: ColoringFeature) -> bool {
         self.features.contains(&f)
     }
+}
+
+/// Whether a colouring stores the WIDE accumulator: all four floats in
+/// every terminal record and in every perturbed pixel's resume state,
+/// rather than `.xy`. Exactly the accumulating colourings, which are
+/// the only ones with anything in it -- so the others keep the narrow
+/// records (32 B) and state, and the deep-zoom pixel budget with them.
+pub fn accum_is_wide(coloring: &ColoringDef) -> bool {
+    coloring.has_feature(ColoringFeature::NeedsOrbitAccum)
+}
+
+/// Whether `layer` can be drawn over `base` in one shader: they share
+/// one accumulator, so two accumulating colourings cannot (survey,
+/// item 5). Anything else can.
+pub fn layer_fits(base: &ColoringDef, layer: &ColoringDef) -> bool {
+    layer_refusal(base, layer).is_none()
+}
+
+/// Why a texture layer cannot go over a base colouring, if it cannot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayerRefusal {
+    /// Both average over the orbit, and there is one accumulator.
+    BothAccumulate,
+    /// One of the two draws a colour, not a palette position, and the
+    /// layer blends palette positions.
+    DirectColor,
+}
+
+pub fn layer_refusal(base: &ColoringDef, layer: &ColoringDef) -> Option<LayerRefusal> {
+    if base.has_feature(ColoringFeature::DirectColor) || layer.has_feature(ColoringFeature::DirectColor) {
+        return Some(LayerRefusal::DirectColor);
+    }
+    (base.has_feature(ColoringFeature::NeedsOrbitAccum) && layer.has_feature(ColoringFeature::NeedsOrbitAccum))
+        .then_some(LayerRefusal::BothAccumulate)
+}
+
+/// The texture layer a config draws: its colouring, when it names a
+/// mode-A colouring that fits over the base ([`layer_fits`]). `None`
+/// draws the base alone -- no layer, an unknown name, or a refused
+/// pair -- and is what every renderer path asks.
+pub fn layer_of(escape: &crate::config::escape::EscapeConfig) -> Option<&'static ColoringDef> {
+    if !escape.layer.is_on() {
+        return None;
+    }
+    let layer = COLORINGS.iter().copied().find(|c| c.name == escape.layer.coloring)?;
+    let base = COLORINGS.iter().copied().find(|c| c.name == escape.coloring)?;
+    layer_fits(base, layer).then_some(layer)
+}
+
+/// Whether a config's records carry the wide accumulator: the base's,
+/// or a layer's that owns the accumulator.
+pub fn config_accum_is_wide(escape: &crate::config::escape::EscapeConfig) -> bool {
+    accum_is_wide_named(&escape.coloring) || layer_of(escape).is_some_and(accum_is_wide)
+}
+
+/// [`accum_is_wide`] for a config's colouring name. A name that is not
+/// a mode-A colouring (a field's, a mode-D walk's) is narrow, and is
+/// not warned about as `get_coloring` would.
+pub fn accum_is_wide_named(coloring: &str) -> bool {
+    COLORINGS.iter().any(|c| c.name == coloring && accum_is_wide(c))
 }
 
 /// Ordered formula registry. **Append-only** — UI ordering and any
@@ -437,6 +620,20 @@ pub static COLORINGS: &[&ColoringDef] = &[
     &colorings::POSITION_AVERAGE,
     &colorings::POSITION_MAP,
     &colorings::SPHERE_AVERAGE,
+    &colorings::CURVATURE_AVERAGE,
+    &colorings::VELOCITY,
+    &colorings::THREADS,
+    &colorings::EXPONENTIAL_SMOOTHING,
+    &colorings::DECOMPOSITION,
+    &colorings::BASIC,
+    &colorings::GAUSSIAN_INTEGER,
+    &colorings::EXTERNAL_RAYS,
+    &colorings::RAINBOW_FRINGE,
+    &colorings::INFINITE_WAVES,
+    &colorings::ITINERARY,
+    &colorings::VOC_TRAPS,
+    &colorings::DIRECT_TRAPS,
+    &colorings::IMAGE_TRAP,
 ];
 
 /// Look up a formula by name. An unknown name renders the default
@@ -574,6 +771,90 @@ mod tests {
             );
         }
         assert!(checked >= 15, "expected the known discrete params, found {checked}");
+    }
+
+    /// The smooth count's log base: the formula's degree at infinity,
+    /// and 2 wherever there is none to read -- including the degrees a
+    /// log-log count cannot use (linear growth, a negative power).
+    #[test]
+    fn the_escape_degree_is_the_formulas_own_or_two() {
+        assert_eq!(escape_degree_of(&formulas::MANDELBROT, &[]), 2.0);
+        assert_eq!(escape_degree_of(&formulas::MULTIBROT, &[3.0]), 3.0);
+        assert_eq!(escape_degree_of(&formulas::MULTIBROT, &[-2.0]), 2.0);
+        assert_eq!(escape_degree_of(&formulas::MULTIBROT, &[1.0]), 2.0);
+        assert_eq!(escape_degree_of(&formulas::CACTUS, &[]), 3.0);
+        assert_eq!(escape_degree_of(&formulas::FEATHER, &[5.0]), 3.0);
+        // Feather at its default power 3 grows linearly: no smooth base.
+        assert_eq!(escape_degree_of(&formulas::FEATHER, &[3.0]), 2.0);
+        assert_eq!(escape_degree_of(&formulas::BARNSLEY, &[]), 2.0);
+        // Only a formula that declares a degree is polynomial at
+        // infinity; Magnet's z^2 growth does not make it one.
+        assert_eq!(polynomial_degree(&formulas::MANDELBROT, &[]), Some(2.0));
+        assert_eq!(polynomial_degree(&formulas::MAGNET, &[0.0]), None);
+        assert_eq!(polynomial_degree(&formulas::BARNSLEY, &[0.0]), None);
+        assert_eq!(polynomial_degree(&formulas::FEATHER, &[3.0]), None);
+    }
+
+    /// Picking the smooth colouring raises a polynomial formula's
+    /// bailout, and leaves alone a formula that tests a raw coordinate
+    /// against it, one whose escape set the bailout moves (Magnet) or
+    /// that may never reach it (Feather at power 3), a biomorph, and a
+    /// colouring with no recommendation.
+    #[test]
+    fn a_recommended_bailout_applies_only_to_a_polynomial_norm_test() {
+        let smooth = &colorings::SMOOTH;
+        let s = |f: &FormulaDef, p: &[f32], biomorph_off: bool| suggested_bailout(f, p, smooth, biomorph_off);
+        assert_eq!(s(&formulas::MANDELBROT, &[], true), Some(1.0e4));
+        assert_eq!(s(&formulas::MULTIBROT, &[4.0], true), Some(1.0e4));
+        assert_eq!(s(&formulas::MANDELBROT, &[], false), None);
+        assert_eq!(s(&formulas::EXPONENTIAL, &[], true), None);
+        assert_eq!(s(&formulas::TRIG, &[0.0], true), None);
+        assert_eq!(s(&formulas::MAGNET, &[0.0], true), None);
+        assert_eq!(s(&formulas::FEATHER, &[3.0], true), None);
+        assert_eq!(s(&formulas::FEATHER, &[5.0], true), Some(1.0e4));
+        assert_eq!(
+            suggested_bailout(&formulas::MANDELBROT, &[], &colorings::ORBIT_TRAP, true),
+            None
+        );
+        // The default config already sits at the default colouring's
+        // recommendation, so a new picture needs no adjustment.
+        let esc = crate::config::escape::EscapeConfig::default();
+        let formula = get_formula(&esc.formula);
+        let fparams = packed_formula_params(formula, &esc.formula_params);
+        assert_eq!(
+            suggested_bailout(formula, &fparams, get_coloring(&esc.coloring), true),
+            Some(esc.bailout)
+        );
+    }
+
+    /// A fresh pick's values must land on parameters the colouring has,
+    /// inside their ranges -- a misspelt name would be carried in the
+    /// config and read by nothing.
+    #[test]
+    fn every_pick_param_is_a_parameter_in_range() {
+        for c in COLORINGS {
+            for (name, v) in c.pick_params {
+                let p = c
+                    .parameters
+                    .iter()
+                    .find(|p| p.name == *name)
+                    .unwrap_or_else(|| panic!("{}: pick_params names `{name}`, which it does not have", c.name));
+                assert!(
+                    *v >= p.min && *v <= p.max,
+                    "{}.{name}: pick value {v} outside {}..{}",
+                    c.name,
+                    p.min,
+                    p.max
+                );
+            }
+        }
+        // The averages that deband start debanded.
+        for name in ["stripe_average", "triangle_inequality", "orbit_average", "magnitude_average", "position_average"] {
+            assert!(
+                get_coloring(name).pick_params.contains(&("deband", 1.0)),
+                "{name} should start debanded"
+            );
+        }
     }
 
     #[test]
