@@ -1099,8 +1099,9 @@ fn is_true(v: &bool) -> bool {
     *v
 }
 
-/// The most layers a field may carry: one slice each, sixteen floats
-/// of parameters each in the model-parameter buffer.
+/// The most layers a field may carry: one slice each (plus any memory
+/// slices), and a block of `MODEL_PARAM_SLOTS` floats each in the
+/// model-parameter buffer.
 pub const MAX_LAYERS: usize = 16;
 
 impl SimConfig {

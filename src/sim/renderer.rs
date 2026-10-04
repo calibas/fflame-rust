@@ -66,10 +66,58 @@ struct SimCouplingGpu {
     pad: [u32; 3],
 }
 
-/// Floats in the model-parameter buffer. Sixteen was every model until
-/// the coupled Turing lattice, whose coupling matrix alone is sixteen;
-/// `every_model_fits_the_parameter_buffer` keeps this honest.
-pub const MODEL_PARAM_SLOTS: usize = 32;
+/// Floats in each layer's block of the model-parameter buffer. Sixteen
+/// was every model until the coupled Turing lattice, whose coupling
+/// matrix alone is sixteen; 64 since McCabe's per-scale table
+/// (mccabe-multiscale plan, section 3). `MODEL_PARAM_SLOTS` in the
+/// WGSL must agree, and `every_model_fits_the_parameter_buffer` keeps
+/// the models inside it.
+pub const MODEL_PARAM_SLOTS: usize = 64;
+
+/// The block's last slots are the renderer's, not the model's: the
+/// layer's memory slice count, then its first slice (mccabe-multiscale
+/// plan, section 2). Read by `sim_mem_count` / `sim_mem_base`.
+pub const RESERVED_PARAM_SLOTS: usize = 2;
+
+/// Where each layer's MEMORY lives (mccabe-multiscale plan, section 2):
+/// per user layer its (first slice, slice count), and the field's
+/// total slice count. Memory slices come after every user layer, so
+/// the indices couplings, the colour stack and `gather` use are the
+/// user's own whatever memory exists. A layer without memory is
+/// (0, 0).
+fn memory_layout(cfg: &SimConfig) -> (Vec<(u32, u32)>, u32) {
+    let n = cfg.layer_count() as u32;
+    let mut next = n;
+    let per_layer = (0..cfg.layer_count())
+        .map(|l| {
+            let count = model_or_default(cfg.layer_model_name(l)).memory_slices(cfg.layer_model_params(l));
+            let base = if count > 0 { next } else { 0 };
+            next += count;
+            (base, count)
+        })
+        .collect();
+    (per_layer, next)
+}
+
+/// What slice `s` of the field is: a user layer, or slice `k` of user
+/// layer `owner`'s memory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SliceRole {
+    Layer(usize),
+    Memory { owner: usize, k: u32 },
+}
+
+fn slice_role(layout: &[(u32, u32)], s: usize) -> SliceRole {
+    if s < layout.len() {
+        return SliceRole::Layer(s);
+    }
+    for (owner, &(base, count)) in layout.iter().enumerate() {
+        if count > 0 && (s as u32) >= base && (s as u32) < base + count {
+            return SliceRole::Memory { owner, k: s as u32 - base };
+        }
+    }
+    unreachable!("slice {s} is past the field")
+}
 use crate::sim::{assembler, coloring_or_default, model_or_default, pyramid_levels, ModelDef, ModelFeature, SimColoringDef, MAX_KERNEL_RADIUS, MAX_PYRAMID_LEVELS, MINMAX_RING, MAX_AGENTS};
 #[allow(unused_imports)]
 use crate::sim::ColoringFeature;
@@ -255,6 +303,11 @@ struct SeedIdentity {
     boundary: crate::config::sim::SimBoundary,
     init: crate::config::sim::SimInit,
     seed: u64,
+    /// Each layer's memory slice count. A memory switched on mid-run
+    /// would make the picture at step N depend on WHEN it was switched
+    /// on, so switching it is a new run (mccabe-multiscale plan,
+    /// section 2). Its rate is a parameter like any other.
+    memory: Vec<u32>,
 }
 
 impl SeedIdentity {
@@ -264,6 +317,7 @@ impl SeedIdentity {
             boundary: cfg.boundary,
             init: cfg.init,
             seed: cfg.seed,
+            memory: memory_layout(cfg).0.iter().map(|&(_, c)| c).collect(),
         }
     }
 }
@@ -288,6 +342,9 @@ struct Pipelines {
     agent_layer: Option<usize>,
     /// Per layer, its model's seed pipeline.
     layer_seeds: Vec<ComputePipeline>,
+    /// The seed of a memory slice: zeros. Built when a layer's model
+    /// keeps a memory.
+    mem_seed: Option<ComputePipeline>,
     /// The layer-map warp -- group 0 the step layout, group 1 the
     /// flame's buffers -- built when the config uses transforms and a
     /// map has been set.
@@ -472,7 +529,8 @@ pub struct SimRenderer {
 impl SimRenderer {
     pub fn new(device: &Device, cfg: &SimConfig, out_w: u32, out_h: u32) -> Self {
         let (grid_w, grid_h) = Self::allocatable_grid(cfg, out_w, out_h);
-        let layers = cfg.layer_count();
+        // Every slice: the user's layers and their memory.
+        let layers = memory_layout(cfg).1 as usize;
         let (field, field_view) = Self::create_field_pair(device, grid_w, grid_h, layers as u32);
         let (output_texture, output_view) = Self::create_output(device, out_w, out_h);
 
@@ -785,10 +843,11 @@ impl SimRenderer {
     /// Whether this frame builds a distance field: the matte's edge
     /// asked for one, or the colouring reads one. Either way the matte
     /// must be on -- it is what says which cells are the figure.
-    /// A config with a different number of layers needs field arrays
-    /// with that many slices; the state cannot survive, so it reseeds.
+    /// A config with a different number of slices -- layers, or
+    /// memory -- needs field arrays with that many; the state cannot
+    /// survive, so it reseeds.
     fn ensure_layers(&mut self, device: &Device, cfg: &SimConfig) {
-        let want = cfg.layer_count() as u32;
+        let want = memory_layout(cfg).1;
         if want == self.layers {
             return;
         }
@@ -1536,6 +1595,10 @@ impl SimRenderer {
                 seed_pipelines.iter().find(|(n, _)| *n == m.name).map(|(_, p)| p.clone()).expect("built above")
             }).collect(),
             layer_steps: models.iter().map(|m| lookup_steps(m.name)).collect(),
+            mem_seed: models
+                .iter()
+                .any(|m| m.has(ModelFeature::Memory))
+                .then(|| pipeline("Sim Memory Seed", &seed_layout, &make("Sim Memory Seed", &assembler::assemble_seed_zero()))),
             agent_layer,
             // Same layout as a step: it reads binding 4 and writes 3,
             // and ignores the rest.
@@ -1670,6 +1733,25 @@ impl SimRenderer {
         }
     }
 
+    /// The uniform of any slice. A memory slice is its owner's, moved
+    /// to its own slice: the same warp and the same layer-map rate, so
+    /// the memory travels with the pattern it remembers -- on every
+    /// channel when the owner's warp moves its state (`.x`), on none
+    /// when it does not -- and no kernel, which it never reads.
+    fn params_for_slice(&self, cfg: &SimConfig, step_index: u32, layout: &[(u32, u32)], s: usize) -> SimParamsGpu {
+        match slice_role(layout, s) {
+            SliceRole::Layer(l) => self.params_for_layer(cfg, step_index, l),
+            SliceRole::Memory { owner, .. } => {
+                let mut p = self.params_for_layer(cfg, step_index, owner);
+                p.layer = s as u32;
+                p.kernel_radius = 0;
+                p.kernel_offset = 0;
+                p.warp_mask = if p.warp_mask[0] > 0.0 { [1.0; 4] } else { [0.0; 4] };
+                p
+            }
+        }
+    }
+
     /// The layer map's rate for a layer: its transform's weight, when
     /// the config uses transforms and a map is set; 0 otherwise.
     fn layer_rate(&self, cfg: &SimConfig, layer: usize) -> f32 {
@@ -1783,11 +1865,13 @@ impl SimRenderer {
     /// in the batch the last step's index.
     fn write_params_ring(&self, queue: &Queue, cfg: &SimConfig, start: u32, count: u32) {
         let stride = self.params_stride as usize;
-        let layers = cfg.layer_count();
+        // One slot pair per SLICE: the user's layers, then memory.
+        let (layout, slices) = memory_layout(cfg);
+        let layers = slices as usize;
         let mut bytes = vec![0u8; stride * count as usize * layers * 2];
         for i in 0..count {
             for l in 0..layers {
-                let p = self.params_for_layer(cfg, start + i, l);
+                let p = self.params_for_slice(cfg, start + i, &layout, l);
                 let at = self.ring_slot(i, l, 0, layers) as usize * stride;
                 bytes[at..at + std::mem::size_of::<SimParamsGpu>()]
                     .copy_from_slice(bytemuck::bytes_of(&p));
@@ -1840,17 +1924,24 @@ impl SimRenderer {
         // buffer never needs resizing; the shader indexes its own
         // layer's block.
         let layers = cfg.layer_count();
+        let (memory, _) = memory_layout(cfg);
         let mut mp: Vec<f32> = Vec::with_capacity(MODEL_PARAM_SLOTS * MAX_LAYERS);
         for l in 0..layers {
             let m = model_or_default(cfg.layer_model_name(l));
             let mut block = m.pack_params_from(cfg.layer_model_params(l));
             assert!(
-                block.len() <= MODEL_PARAM_SLOTS,
-                "{} declares {} parameters; the buffer holds {MODEL_PARAM_SLOTS}",
+                block.len() <= MODEL_PARAM_SLOTS - RESERVED_PARAM_SLOTS,
+                "{} declares {} parameters; the block holds {}",
                 m.name,
-                block.len()
+                block.len(),
+                MODEL_PARAM_SLOTS - RESERVED_PARAM_SLOTS
             );
             block.resize(MODEL_PARAM_SLOTS, 0.0);
+            // The reserved end: the memory's slice count and first
+            // slice, exact in f32 at any count the field can have.
+            let (base, count) = memory[l];
+            block[MODEL_PARAM_SLOTS - 2] = count as f32;
+            block[MODEL_PARAM_SLOTS - 1] = base as f32;
             mp.extend_from_slice(&block);
         }
         mp.resize(MODEL_PARAM_SLOTS * MAX_LAYERS, 0.0);
@@ -2190,9 +2281,16 @@ impl SimRenderer {
                 timestamp_writes: None,
             });
             let (gx, gy) = Self::dispatch_size(self.grid_w, self.grid_h);
-            for l in 0..layers {
-                pass.set_pipeline(&p.layer_seeds[l]);
-                pass.set_bind_group(0, &bg, &[self.ring_slot(0, l, 0, layers) * stride]);
+            let (layout, slices) = memory_layout(cfg);
+            for s in 0..slices as usize {
+                match slice_role(&layout, s) {
+                    SliceRole::Layer(l) => pass.set_pipeline(&p.layer_seeds[l]),
+                    SliceRole::Memory { .. } => {
+                        pass.set_pipeline(p.mem_seed.as_ref().expect("a model with memory builds it"))
+                    }
+                }
+                // Slot (0, s, 0) is 2s whatever the slice count.
+                pass.set_bind_group(0, &bg, &[self.ring_slot(0, s, 0, slices as usize) * stride]);
                 pass.dispatch_workgroups(gx, gy, 1);
             }
         }
@@ -2315,6 +2413,10 @@ impl SimRenderer {
         let (gx, gy) = Self::dispatch_size(self.grid_w, self.grid_h);
         let stride = self.params_stride as u32;
         let layers = cfg.layer_count();
+        // Every slice of the field, memory included: each stage writes
+        // all of them, and the uniform ring holds a slot pair for each.
+        let (memory, slices) = memory_layout(cfg);
+        let slices = slices as usize;
         let models = layer_models(cfg);
         let wants_minmax = models.iter().any(|m| m.has(ModelFeature::NeedsMinMax));
         // Per layer, its passes in order with their repeats unrolled:
@@ -2375,11 +2477,11 @@ impl SimRenderer {
         let octaves = cfg.warp.mode == crate::config::sim::SimWarpMode::Octaves;
         if self.steps_per_submit == FIRST_SUBMIT {
             let dispatches: u32 =
-                (max_stages as u32 + u32::from(wants_minmax) + u32::from(warping)) * layers as u32;
+                (max_stages as u32 + u32::from(wants_minmax) + u32::from(warping)) * slices as u32;
             self.steps_per_submit = (FIRST_SUBMIT * 2 / dispatches.max(1)).clamp(1, FIRST_SUBMIT);
         }
         // The ring holds (step, layer, variant) slots.
-        let per_submit_cap = (MAX_STEPS_PER_SUBMIT / layers as u32).max(1);
+        let per_submit_cap = (MAX_STEPS_PER_SUBMIT / slices as u32).max(1);
         let mut done = 0;
         while done < count {
             let batch = self.steps_per_submit.clamp(1, per_submit_cap).min(count - done);
@@ -2409,7 +2511,7 @@ impl SimRenderer {
                     timestamp_writes: None,
                 });
                 for i in 0..batch {
-                    let slot = |l: usize, variant: u32| (i * layers as u32 + l as u32) * 2 + variant;
+                    let slot = |l: usize, variant: u32| (i * slices as u32 + l as u32) * 2 + variant;
                     // The warp goes first, before anything reads the
                     // field: it moves the FIELD, through the boundary
                     // rule, and nothing else -- an agent population's
@@ -2424,7 +2526,7 @@ impl SimRenderer {
                     };
                     if warp_now {
                         pass.set_pipeline(&p.warp);
-                        for l in 0..layers {
+                        for l in 0..slices {
                             pass.set_bind_group(0, &groups[self.current], &[slot(l, 0) * stride]);
                             pass.dispatch_workgroups(gx, gy, 1);
                         }
@@ -2434,8 +2536,12 @@ impl SimRenderer {
                     // transform at its rate; a layer at rate 0 is
                     // carried across. One stage, one flip.
                     if let (Some(lw), Some(fbg)) = (p.layer_warp.as_ref(), flame_bg) {
-                        for l in 0..layers {
-                            if self.layer_rate(cfg, l) > 0.0 {
+                        for l in 0..slices {
+                            // A memory slice moves at its owner's rate.
+                            let rate_of = match slice_role(&memory, l) {
+                                SliceRole::Layer(o) | SliceRole::Memory { owner: o, .. } => o,
+                            };
+                            if self.layer_rate(cfg, rate_of) > 0.0 {
                                 pass.set_pipeline(lw);
                                 pass.set_bind_group(0, &groups[self.current], &[slot(l, 0) * stride]);
                                 pass.set_bind_group(1, fbg, &[]);
@@ -2483,13 +2589,29 @@ impl SimRenderer {
                     // field[1 - src], so alternating the index IS the
                     // ping-pong. Every stage writes every layer.
                     for stage in 0..max_stages {
-                        for l in 0..layers {
-                            match layer_stages[l].get(stage) {
-                                Some(&n) if cfg.layer_enabled(l) => {
-                                    pass.set_pipeline(&p.layer_steps[l][n]);
-                                    pass.set_bind_group(0, &groups[self.current], &[slot(l, 0) * stride]);
+                        for l in 0..slices {
+                            match slice_role(&memory, l) {
+                                SliceRole::Layer(l) => match layer_stages[l].get(stage) {
+                                    Some(&n) if cfg.layer_enabled(l) => {
+                                        pass.set_pipeline(&p.layer_steps[l][n]);
+                                        pass.set_bind_group(0, &groups[self.current], &[slot(l, 0) * stride]);
+                                    }
+                                    _ => {
+                                        pass.set_pipeline(&p.warp);
+                                        pass.set_bind_group(0, &groups[self.current], &[slot(l, VARIANT_COPY) * stride]);
+                                    }
+                                },
+                                // The owner's LAST pass writes its memory
+                                // (`sim_mem_write`), so that stage gives the
+                                // slice no dispatch -- a copy-through would
+                                // overwrite the write. Every other stage
+                                // carries it, as for any slice without a pass.
+                                SliceRole::Memory { owner, .. }
+                                    if cfg.layer_enabled(owner) && stage + 1 == layer_stages[owner].len() =>
+                                {
+                                    continue;
                                 }
-                                _ => {
+                                SliceRole::Memory { .. } => {
                                     pass.set_pipeline(&p.warp);
                                     pass.set_bind_group(0, &groups[self.current], &[slot(l, VARIANT_COPY) * stride]);
                                 }

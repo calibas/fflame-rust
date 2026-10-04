@@ -849,6 +849,31 @@ the plan assumed.
   at `base_radius` 3, the nested contour texture is unmistakable, and
   the `coarse` and `rosette` presets use it.
 
+**Colour memory, 2026-10-04** (mccabe-multiscale plan, section 2).
+Softology and Reusser both colour with memory: a per-cell colour,
+lerped each step toward the winning scale's colour. That colour is
+linear in a one-hot of the winner, so the model keeps the same lerp on
+eight per-scale **weights** instead. They live on two internal slices
+of the field array. The `scale_memory` colouring applies the palette
+to them at display time, so a palette edit shows at once, even paused.
+- **On and off.** `memory` (0–1, the bump) turns it on. At 0 there are
+  no slices and every baseline is byte-identical.
+- **Measured.**
+  - Against a CPU mirror driven by the GPU's own winners: 6e-8 over
+    five steps.
+  - The field is bit-identical with memory on.
+  - Batch invariant.
+  - Moved exactly by an integer warp pan.
+  - 4.17 → 4.29 ms/step at 1080p (+3%), and ~133 MB more field.
+- **Seen.** Where `scale_mix` speckles inside a region, `scale_memory`
+  blends. Moving boundaries leave soft trails of the scale they
+  displaced. The `memory` preset is the coarse ladder at 0.05.
+- **Found on the way.** On a small grid the pyramid has few levels.
+  A coarse scale whose activator and inhibitor both clamp to the top
+  level has a variation near 0, so it **wins everywhere**. At 40² the
+  default fifth scale does. The per-scale table (plan section 3) warns
+  about it.
+
 ---
 
 ## 11. Hodgepodge machine (Belousov–Zhabotinsky CA)

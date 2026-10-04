@@ -94,9 +94,23 @@ fn sim_visible_halfextent() -> vec2<f32> {
 @group(0) @binding(2) var<storage, read> coloring_params: array<f32>;
 
 // Each layer's parameters sit in their own block of the buffer;
-// the block is `MODEL_PARAM_SLOTS` floats, mirrored in the renderer.
+// the block is `MODEL_PARAM_SLOTS` floats, mirrored in the renderer
+// (a test holds the two to each other). Its last two slots are the
+// renderer's: the layer's memory slice count and first slice.
+const MODEL_PARAM_SLOTS: u32 = 64u;
 fn mparam(i: u32) -> f32 {
-    return model_params[params.layer * 32u + i];
+    return model_params[params.layer * MODEL_PARAM_SLOTS + i];
+}
+
+// The layer's MEMORY (mccabe-multiscale plan, section 2): how many
+// internal slices it has (0 when off) and where they start in the
+// field array, read from the reserved end of the block of the layer
+// this dispatch reads as its own.
+fn sim_mem_count() -> i32 {
+    return i32(model_params[u32(sim_layer()) * MODEL_PARAM_SLOTS + MODEL_PARAM_SLOTS - 2u]);
+}
+fn sim_mem_base() -> i32 {
+    return i32(model_params[u32(sim_layer()) * MODEL_PARAM_SLOTS + MODEL_PARAM_SLOTS - 1u]);
 }
 
 // The slice of the field this dispatch owns.
@@ -560,6 +574,8 @@ const STEP_TEMPLATE: &str = r#"
 
 //__DEPOSIT__
 
+//__MEMORY__
+
 //__MODEL__
 
 @compute @workgroup_size(8, 8, 1)
@@ -821,6 +837,16 @@ const COLOR_TEMPLATE: &str = r#"
 
 //__BOUNDARY__
 
+// One memory slice of the layer being coloured, through the boundary
+// rule like the state; zeros past the edge or without a memory.
+fn sim_mem_sample(p: vec2<i32>, k: i32) -> vec4<f32> {
+    let g = sim_grid();
+    if (sim_outside(p, g) || k >= sim_mem_count()) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    return textureLoad(field_in, sim_wrap_sized(p, g), sim_mem_base() + k, 0);
+}
+
 fn sim_palette(t: f32) -> vec3<f32> {
     let w = i32(textureDimensions(palette_tex).x);
     // textureLoad, not textureSample: this runs in non-uniform control
@@ -916,6 +942,7 @@ struct SimSample {
     // Structure tensor of channel .x over a 3x3 binomial window:
     // (Jxx, Jxy, Jyy). NeedsStructure.
     tensor: vec3<f32>,
+//__SAMPLE_MEMORY_FIELDS__
 };
 
 // The gradient of one channel, from a sample.
@@ -932,6 +959,7 @@ fn sim_sample(p: vec2<i32>) -> SimSample {
 //__GRADIENT__
     x.dist = sim_sdf(p);
 //__TENSOR__
+//__SAMPLE_MEMORY_READ__
     return x;
 }
 
@@ -942,6 +970,7 @@ fn sim_sample_zero() -> SimSample {
     x.gy = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     x.dist = 0.0;
     x.tensor = vec3<f32>(0.0, 0.0, 0.0);
+//__SAMPLE_MEMORY_ZERO__
     return x;
 }
 
@@ -953,6 +982,7 @@ fn sim_sample_mad(acc: SimSample, x: SimSample, w: f32) -> SimSample {
     r.gy = r.gy + x.gy * w;
     r.dist = r.dist + x.dist * w;
     r.tensor = r.tensor + x.tensor * w;
+//__SAMPLE_MEMORY_MAD__
     return r;
 }
 
@@ -963,6 +993,7 @@ fn sim_sample_lerp(a: SimSample, b: SimSample, t: f32) -> SimSample {
     r.gy = mix(a.gy, b.gy, t);
     r.dist = mix(a.dist, b.dist, t);
     r.tensor = mix(a.tensor, b.tensor, t);
+//__SAMPLE_MEMORY_LERP__
     return r;
 }
 
@@ -1357,6 +1388,23 @@ pub fn assemble_seed(model: &ModelDef, init_kind: &str) -> String {
     )
 }
 
+/// The seed of a MEMORY slice: zeros, whatever the init. A memory
+/// starts empty -- Softology's colour starts black -- and it is not a
+/// model's to seed.
+pub fn assemble_seed_zero() -> String {
+    splice(
+        SEED_TEMPLATE,
+        SimBoundary::Clamp,
+        &[(
+            "//__MODEL_SEED__",
+            &format!(
+                "{}\nfn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {{\n    return vec4<f32>(0.0, 0.0, 0.0, 0.0);\n}}\n",
+                init_mask_body("center")
+            ),
+        )],
+    )
+}
+
 /// The step pass: one application of the model's rule to every cell.
 ///
 /// `pass` indexes the dispatches of one step ([`ModelDef::passes`],
@@ -1554,6 +1602,12 @@ fn sim_kernel_taps() -> u32 {
     } else {
         ""
     };
+    // The layer's memory, for the models that keep one.
+    let memory = if model.has(ModelFeature::Memory) {
+        MEMORY_STEP_ACCESSORS
+    } else {
+        ""
+    };
     // sim_step, sim_step2, sim_step3, ... -- the model writes as many
     // as it declares passes, and every module carries the model's
     // whole WGSL so a helper written once is visible to all of them.
@@ -1609,6 +1663,7 @@ fn sim_kernel_taps() -> u32 {
             ("//__PYRAMID__", pyramid),
             ("//__MINMAX__", minmax),
             ("//__DEPOSIT__", deposit),
+            ("//__MEMORY__", memory),
         ],
     )
 }
@@ -1628,6 +1683,29 @@ fn sim_take_deposit(p: vec2<i32>) -> f32 {
     let idx = u32(p.y * g.x + p.x);
     let v = atomicExchange(&deposit[idx], 0u);
     return f32(v) * (1.0 / 1024.0);
+}
+"#;
+
+/// Spliced into the step shader of a model that declares
+/// [`ModelFeature::Memory`]. The memory is read from the field the step
+/// reads and written to the one it writes, like the state; with the
+/// memory off the count is 0, reads give zeros and writes do nothing.
+/// Only a model's LAST pass may write it: the renderer gives the
+/// memory slices no dispatch of their own in that stage and a
+/// copy-through in every other, so a write from an earlier pass would
+/// be overwritten.
+const MEMORY_STEP_ACCESSORS: &str = r#"
+fn sim_mem_read(p: vec2<i32>, k: i32) -> vec4<f32> {
+    if (k >= sim_mem_count()) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    return textureLoad(field_in, p, sim_mem_base() + k, 0);
+}
+
+fn sim_mem_write(p: vec2<i32>, k: i32, v: vec4<f32>) {
+    if (k < sim_mem_count()) {
+        textureStore(field_out, p, sim_mem_base() + k, v);
+    }
 }
 "#;
 
@@ -1892,17 +1970,15 @@ pub fn assemble_color(
     // never reads `grad` gets a constant instead; the compiler then
     // has nothing to keep.
     let (gradient, tensor) = sample_splices(&[coloring]);
-    splice(
-        COLOR_TEMPLATE,
-        boundary,
-        &[
-            ("//__COLORING__", coloring.wgsl),
-            ("//__SHADE__", SINGLE_SHADE),
-            ("//__RESOLVE__", &resolve),
-            ("//__GRADIENT__", gradient),
-            ("//__TENSOR__", tensor),
-        ],
-    )
+    let mut reps: Vec<(&str, &str)> = vec![
+        ("//__COLORING__", coloring.wgsl),
+        ("//__SHADE__", SINGLE_SHADE),
+        ("//__RESOLVE__", &resolve),
+        ("//__GRADIENT__", gradient),
+        ("//__TENSOR__", tensor),
+    ];
+    reps.extend(memory_splices(&[coloring]));
+    splice(COLOR_TEMPLATE, boundary, &reps)
 }
 
 
@@ -1957,6 +2033,32 @@ fn sim_shade(p: vec2<i32>) -> vec4<f32> {
 
 /// The gradient and tensor splices for a set of colourings: computed
 /// when ANY of them declares the feature.
+/// The memory splices of `SimSample`: two vec4 fields read from the
+/// source layer's memory slices at the same cells as the state, and
+/// carried through the resolve's zero / mad / lerp like every other
+/// field -- interpolating the weights is interpolating the colours
+/// they stand for. Empty unless a colouring reads it, so every other
+/// colour shader is the one it was.
+fn memory_splices(colorings: &[&SimColoringDef]) -> [(&'static str, &'static str); 5] {
+    if colorings.iter().any(|c| c.has(ColoringFeature::ReadsMemory)) {
+        [
+            ("//__SAMPLE_MEMORY_FIELDS__", "    // The source layer's memory, eight weights. ReadsMemory.\n    m0: vec4<f32>,\n    m1: vec4<f32>,"),
+            ("//__SAMPLE_MEMORY_READ__", "    x.m0 = sim_mem_sample(p, 0);\n    x.m1 = sim_mem_sample(p, 1);"),
+            ("//__SAMPLE_MEMORY_ZERO__", "    x.m0 = vec4<f32>(0.0, 0.0, 0.0, 0.0);\n    x.m1 = vec4<f32>(0.0, 0.0, 0.0, 0.0);"),
+            ("//__SAMPLE_MEMORY_MAD__", "    r.m0 = r.m0 + x.m0 * w;\n    r.m1 = r.m1 + x.m1 * w;"),
+            ("//__SAMPLE_MEMORY_LERP__", "    r.m0 = mix(a.m0, b.m0, t);\n    r.m1 = mix(a.m1, b.m1, t);"),
+        ]
+    } else {
+        [
+            ("//__SAMPLE_MEMORY_FIELDS__", ""),
+            ("//__SAMPLE_MEMORY_READ__", ""),
+            ("//__SAMPLE_MEMORY_ZERO__", ""),
+            ("//__SAMPLE_MEMORY_MAD__", ""),
+            ("//__SAMPLE_MEMORY_LERP__", ""),
+        ]
+    }
+}
+
 fn sample_splices(colorings: &[&SimColoringDef]) -> (&'static str, &'static str) {
     let gradient = if colorings.iter().any(|c| c.has(ColoringFeature::NeedsGradient)) {
         GRADIENT_ON
@@ -2119,17 +2221,15 @@ fn sim_resolve_{k}(gf: vec2<f32>, g: vec2<i32>, fit: f32) -> vec4<f32> {{
 "
         ));
     }
-    let out = splice(
-        COLOR_TEMPLATE,
-        boundary,
-        &[
-            ("//__COLORING__", &defs),
-            ("//__SHADE__", ""),
-            ("//__RESOLVE__", &composite),
-            ("//__GRADIENT__", gradient),
-            ("//__TENSOR__", tensor),
-        ],
-    );
+    let mut reps: Vec<(&str, &str)> = vec![
+        ("//__COLORING__", &defs),
+        ("//__SHADE__", ""),
+        ("//__RESOLVE__", &composite),
+        ("//__GRADIENT__", gradient),
+        ("//__TENSOR__", tensor),
+    ];
+    reps.extend(memory_splices(colorings));
+    let out = splice(COLOR_TEMPLATE, boundary, &reps);
     // The stack's read gathers when the layer asks: the first channel
     // of four consecutive layers from the source, the last repeating.
     // Only the stack carries this; the single colouring's read is
@@ -2224,6 +2324,16 @@ mod tests {
         for b in [SimBoundary::Periodic, SimBoundary::Clamp, SimBoundary::Zero, SimBoundary::Mirror] {
             validate(&assemble_warp(b), &format!("warp {b:?}"));
         }
+    }
+
+    /// The parameter block's size is written twice -- the WGSL indexes
+    /// by it, the renderer packs by it -- and a disagreement would read
+    /// every layer past the first from the wrong block.
+    #[test]
+    fn the_parameter_block_size_agrees_with_the_renderer() {
+        let line = format!("const MODEL_PARAM_SLOTS: u32 = {}u;", crate::sim::renderer::MODEL_PARAM_SLOTS);
+        assert!(COMMON.contains(&line), "COMMON should declare `{line}`");
+        assert_eq!(crate::sim::renderer::RESERVED_PARAM_SLOTS, 2, "sim_mem_count / sim_mem_base read the last two slots");
     }
 
     /// Every model's step shaders validate with the coupling spliced
