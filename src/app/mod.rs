@@ -9,6 +9,7 @@ mod effect_fetch;
 mod variation_fetch;
 mod texture_sync;
 mod aa_governor;
+mod render_progress;
 pub mod script_cloud;
 mod fly_camera;
 pub mod export;
@@ -549,6 +550,8 @@ pub struct App {
     // *previous* frame's fractal_texture, so without an extra cycle
     // the final compute pass never makes it visible.
     pub(super) was_rendering_prev_frame: bool,
+    /// What the menu bar's progress bar was last handed.
+    pub(super) progress_drawn: crate::ui::RenderProgress,
     // Set true whenever the egui layout reports a fractal-viewport
     // size different from what the renderer is configured for. Cleared
     // when the renderer resize actually fires. Keeps the event loop
@@ -574,7 +577,7 @@ pub struct App {
     pub(super) png_export_supersample: bool,
 
     // Unified export status — shared with every background export thread (PNG
-    // direct / high-res / video). Drives the global progress overlay and the
+    // direct / high-res / video). Drives the menu bar's progress bar and the
     // terminal toast. Replaces the former per-path progress structs + the
     // window-title hack.
     pub(super) export_status: Arc<Mutex<ExportStatus>>,
@@ -875,6 +878,7 @@ impl App {
             ui_needs_repaint: false,
             last_input_time: None,
             was_rendering_prev_frame: false,
+            progress_drawn: crate::ui::RenderProgress::Idle,
             viewport_resize_pending: false,
             fractal_viewport_size: initial_viewport_size, // Initialize to window size
             #[cfg(target_arch = "wasm32")]
@@ -1258,10 +1262,19 @@ impl App {
                     use std::time::Duration;
                     use web_time::Instant;
 
-                    // Check if actively rendering (not paused and under max_iterations)
+                    // Check if any export is in progress, or has finished
+                    // with a toast the next frame has not shown yet.
+                    let (is_exporting, toast_pending) = app.export_status.lock()
+                        .map(|s| (s.active, s.toast.is_some()))
+                        .unwrap_or((false, false));
+
+                    // Check if actively rendering (not paused and under
+                    // max_iterations). An export pauses the viewport's
+                    // flame (`should_iterate`), so it is not rendering then.
                     let config = app.config_manager.active_config();
                     let max_iterations = Some(config.max_iterations);
                     let is_rendering = !app.paused
+                        && !is_exporting
                         && config.render_mode != crate::scene::transforms::RenderMode::Escape
                         && config.render_mode != crate::scene::transforms::RenderMode::Simulation
                         && app.flame_renderer.as_ref().map_or(false, |r| {
@@ -1274,11 +1287,6 @@ impl App {
                     // Check if audio is playing or capturing (needs UI updates for progress/signals)
                     let audio_playing = app.audio_player.state() == crate::audio::PlaybackState::Playing;
                     let audio_capturing = app.audio_capture.is_capturing();
-
-                    // Check if any export is in progress (needs UI updates for the progress overlay)
-                    let is_exporting = app.export_status.lock()
-                        .map(|s| s.active)
-                        .unwrap_or(false);
 
                     // Update present mode based on system settings
                     app.gpu.set_present_mode(app.config_manager.system_settings().vsync_enabled);
@@ -1339,8 +1347,17 @@ impl App {
                         && app.config_manager.active_config().render_mode
                             == crate::scene::transforms::RenderMode::Simulation;
 
-                    // During export, audio playback, or live capture, keep redrawing to update UI
-                    if is_rendering || animation_playing || audio_playing || audio_capturing || ui_active || is_exporting || app.viewport_resize_pending || just_finished_rendering || fly_active || sim_active {
+                    // The menu bar's progress bar is built before the frame's
+                    // render runs, so what it shows can be a frame behind:
+                    // an escape render that has just settled, a simulation
+                    // that has just paused. One more frame brings it up to
+                    // date, and then the loop can sleep. An export is left
+                    // to its own cadence, below.
+                    let progress_stale =
+                        !is_exporting && app.render_progress(None) != app.progress_drawn;
+
+                    // During audio playback or live capture, keep redrawing to update UI
+                    if is_rendering || animation_playing || audio_playing || audio_capturing || ui_active || app.viewport_resize_pending || just_finished_rendering || fly_active || sim_active || progress_stale {
                         // Actively rendering fractals OR UI is active (for tooltips, hover effects)
                         if app.config_manager.system_settings().vsync_enabled {
                             // VSync enabled: render continuously, let VSync cap frame rate
@@ -1360,6 +1377,19 @@ impl App {
                             } else {
                                 window.request_redraw();
                             }
+                        }
+                    } else if is_exporting || toast_pending {
+                        // An export runs on its own thread, usually on its
+                        // own device. The window redraws only to move the
+                        // progress bar, and ten frames a second is plenty
+                        // for that: at the display rate the redraws compete
+                        // with the export for the GPU.
+                        const EXPORT_PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
+                        match app.last_frame_time {
+                            Some(last) if last.elapsed() < EXPORT_PROGRESS_INTERVAL => {
+                                elwt.set_control_flow(ControlFlow::WaitUntil(last + EXPORT_PROGRESS_INTERVAL));
+                            }
+                            _ => window.request_redraw(),
                         }
                     } else {
                         // Truly idle: sleep until event wakes us
@@ -1558,11 +1588,11 @@ impl App {
         // ============================================================================
 
         // Video export runs on a background thread with its own GPU device.
-        // The main loop keeps drawing (egui + last fractal frame) so the global
-        // export overlay stays live; `should_iterate` (below) pauses the main
-        // fractal compute during any export to avoid GPU contention. (Previously
-        // the whole loop was frozen here and progress was written to the window
-        // title — replaced by the unified overlay.)
+        // The main loop keeps drawing (egui + last fractal frame), at ten
+        // frames a second, so the menu bar's progress bar stays live;
+        // `should_iterate` (below) pauses the main fractal compute during any
+        // export to avoid GPU contention. (Previously the whole loop was frozen
+        // here and progress was written to the window title.)
 
         // Normal rendering: acquire surface texture. wgpu 0.29's
         // `get_current_texture` returns a `CurrentSurfaceTexture`
@@ -1624,8 +1654,8 @@ impl App {
             );
         }
 
-        // Snapshot the unified export status for the overlay, and drain any
-        // terminal toast queued by a finished export thread into the
+        // Snapshot the unified export status for the progress bar, and drain
+        // any terminal toast queued by a finished export thread into the
         // notification system. ok() guards a poisoned mutex.
         let export_status = {
             let mut status = self.export_status.lock()
@@ -1641,6 +1671,12 @@ impl App {
             }
             status
         };
+
+        // The menu bar's progress bar, and what it was handed, so the loop
+        // can tell when it has fallen behind (`progress_stale`).
+        let progress = self.render_progress(Some(&export_status));
+        self.egui_layer.update_render_progress(progress.clone());
+        self.progress_drawn = progress;
 
         // Get signal names for track editor dropdown
         let signal_names: Vec<String> = self.signal_manager.signal_names();

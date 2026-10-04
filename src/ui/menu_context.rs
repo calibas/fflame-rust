@@ -118,4 +118,6 @@ pub struct MenuState {
     /// Fly Mode currently active — drives the menu-bar toggle's green
     /// highlight.
     pub fly_mode_active: bool,
+    /// What is rendering, for the progress bar at the menu's right end.
+    pub progress: super::RenderProgress,
 }
