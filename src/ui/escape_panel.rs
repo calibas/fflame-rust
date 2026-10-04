@@ -2720,13 +2720,9 @@ mod tests {
         }
     }
 
-    /// ...and the deep path: the scaled rung carries the derivative, the
-    /// floatexp rung not yet, and the hint must say which.
-    ///
-    /// A Mandelbrot dive is the case that matters: the formula defines
-    /// a derivative, so the hint must appear only on a rung that loses
-    /// it -- and it must name the deep path as the reason rather than
-    /// blaming the formula.
+    /// ...and the deep path: both rungs carry the derivative (P11), so a
+    /// Mandelbrot dive -- the case that matters -- gets no hint at any
+    /// depth, and a formula without one is blamed as the formula.
     #[test]
     fn the_derivative_hint_follows_the_deep_path() {
         use crate::escape::{DerivativeGap, EscapeRenderer};
@@ -2751,10 +2747,15 @@ mod tests {
         esc.zoom_log2 = 60.0;
         assert_eq!(
             EscapeRenderer::derivative_gap(&esc),
-            Some(DerivativeGap::Perturbed),
-            "the floatexp rung loses the derivative, and the hint must say so \
-             rather than blaming the formula"
+            None,
+            "the floatexp rung carries the derivative too"
         );
+
+        // A formula with no derivative is blamed as the formula, at any
+        // depth.
+        esc.formula = "burning_ship".to_string();
+        assert_eq!(EscapeRenderer::derivative_gap(&esc), Some(DerivativeGap::Formula));
+        esc.formula = "mandelbrot".to_string();
 
         // Damping takes the same view OFF the perturbed path, so the
         // derivative comes back. If the hint were keyed on zoom alone

@@ -1863,6 +1863,10 @@ if (reflection < 0.0) reflection = 0.0;
 comes from an angle in turns — so the Metal zero-pair hazard cannot
 arise at all.
 
+*(Superseded 2026-10-04: since P11 the perturbed rungs carry the
+derivative, docs/projects/derivative-under-perturbation.md. Only the
+formulas without one remain flat.)*
+
 **Where it does NOT work, said out loud.** The perturbed rungs never
 iterate a derivative (`dz` is a constant seed there), and 12 of the 23
 formulas define none. In both cases `z/dz` would be `z`, and the
@@ -2304,6 +2308,9 @@ do not escape are painted by the template rather than by the coloring,
 so returning the palette's bottom would blend the exterior into the
 interior and read as "everything is in the set" instead of "this
 coloring is unavailable".
+
+*(Superseded 2026-10-04: P11 carries the derivative through both
+perturbed rungs, so only the first case remains.)*
 
 **Two cases reach it**, and the second is the one that surprises: the
 13 of 25 formulas that define no derivative, and EVERY perturbed

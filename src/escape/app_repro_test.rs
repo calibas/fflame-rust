@@ -7918,9 +7918,9 @@ fn main() {
     /// other must not brighten. Measured as the share of pixels both
     /// moved that they moved the same way: a wrong sign, a lost
     /// conjugate or a view rotation applied backwards turns it into its
-    /// opposite, which is why it is measured at a rotation as well. And
-    /// where no derivative is iterated (the perturbed rungs) analytic
-    /// relief is flat.
+    /// opposite, which is why it is measured at a rotation as well. Past
+    /// the perturbation threshold it lights the dive too (P11), and where
+    /// no derivative is iterated -- a formula without one -- it is flat.
     #[test]
     #[ignore = "needs a GPU"]
     fn analytic_relief_leans_the_way_the_numeric_relief_does() {
@@ -8734,19 +8734,19 @@ fn main() {
         assert!((mean / 255.0 - 0.5).abs() < 0.03, "plateaus are not at their middles: mean {:.3}", mean / 255.0);
     }
 
-    /// The derivative survives perturbation (P11): the scaled rung carries
-    /// dz/dc through its steps, its BLA skips and its chunks, and reports
+    /// The derivative survives perturbation (P11): both rungs carry dz/dc
+    /// through their steps, their BLA skips and their chunks, and report
     /// it per render pixel as the direct path does.
     ///
-    /// - Forced onto the scaled rung at a shallow view where the direct
-    ///   path is exact, the derivative colourings and analytic relief's
-    ///   slopes agree with it as well as smooth does (8x8 block means
-    ///   within 2% of the range; the boundary's chaotic pixels average
-    ///   out).
+    /// - Forced onto each rung at a shallow view where the direct path is
+    ///   exact, the derivative colourings and analytic relief's slopes
+    ///   agree with it as well as smooth does (8x8 block means within 2%
+    ///   of the range; the boundary's chaotic pixels average out).
     /// - Chunked, the derivative resumes exactly: byte-identical fields.
     /// - BLA on and off agree.
-    /// - A real dive (2^30, the scaled rung's own territory) draws a
-    ///   distance estimate with range, where it used to be a constant.
+    /// - Real dives (2^30 on the scaled rung, 2^52 on the floatexp one)
+    ///   draw a distance estimate with range, where it used to be a
+    ///   constant; at 2^40 the two rungs agree with each other.
     #[test]
     #[ignore = "needs a GPU"]
     fn the_derivative_survives_perturbation() {
@@ -8759,13 +8759,15 @@ fn main() {
             &config.flame, config.palette_size,
         );
         // (value field, slope x, slope y), and the path the render took.
-        let fields = |esc: &crate::config::escape::EscapeConfig,
-                      perturbed: bool,
-                      chunk: Option<u32>,
-                      bla_off: bool|
+        let fields_on = |esc: &crate::config::escape::EscapeConfig,
+                         perturbed: bool,
+                         floatexp: bool,
+                         chunk: Option<u32>,
+                         bla_off: bool|
          -> ([Vec<f32>; 3], String) {
             let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
             escape.force_perturbed = perturbed;
+            escape.force_floatexp = floatexp;
             escape.chunk_override = chunk;
             escape.disable_bla = bla_off;
             let mut guard = 0u32;
@@ -8786,6 +8788,9 @@ fn main() {
             let path = escape.last_path.to_string();
             escape.destroy();
             (out, path)
+        };
+        let fields = |esc: &crate::config::escape::EscapeConfig, perturbed: bool, chunk: Option<u32>, bla_off: bool| {
+            fields_on(esc, perturbed, false, chunk, bla_off)
         };
         let blocks = |a: &[f32], b: &[f32]| -> f64 {
             let (lo, hi) = a.iter().filter(|x| x.is_finite()).fold((f32::MAX, f32::MIN), |(l, h), x| (l.min(*x), h.max(*x)));
@@ -8843,23 +8848,27 @@ fn main() {
         relief.shading.field = ShadingField::Analytic;
         cases.push(("analytic relief, slope x", relief.clone(), 1));
         cases.push(("analytic relief, slope y", relief, 2));
-        for (label, e, ch) in &cases {
-            let (d, _) = fields(e, false, None, false);
-            let (p, path) = fields(e, true, None, false);
-            assert!(path.starts_with("perturbed f32"), "{label}: took {path}");
-            let a = blocks(&d[*ch], &p[*ch]);
-            let (pc, _) = fields(e, true, Some(64), false);
-            let (pb, _) = fields(e, true, None, true);
-            let same_chunked = p[*ch] == pc[*ch];
-            let b = blocks(&p[*ch], &pb[*ch]);
-            println!(
-                "{label}: {:.1}% of blocks agree with direct; chunked identical: {same_chunked}; BLA on/off {:.1}%",
-                a * 100.0,
-                b * 100.0
-            );
-            assert!(a >= baseline - 0.1, "{label}: the perturbed derivative disagrees with the direct one");
-            assert!(same_chunked, "{label}: the derivative did not resume across chunks");
-            assert!(b >= 0.9, "{label}: BLA skips moved the derivative");
+        for floatexp in [false, true] {
+            let rung = if floatexp { "perturbed floatexp" } else { "perturbed f32" };
+            for (label, e, ch) in &cases {
+                let (d, _) = fields(e, false, None, false);
+                let (p, path) = fields_on(e, true, floatexp, None, false);
+                assert!(path.starts_with(rung), "{label}: took {path}");
+                let a = blocks(&d[*ch], &p[*ch]);
+                let (pc, _) = fields_on(e, true, floatexp, Some(64), false);
+                let (pb, _) = fields_on(e, true, floatexp, None, true);
+                let same_chunked = p[*ch] == pc[*ch];
+                let b = blocks(&p[*ch], &pb[*ch]);
+                println!(
+                    "{rung}, {label}: {:.1}% of blocks agree with direct; chunked identical: {same_chunked}; \
+                     BLA on/off {:.1}%",
+                    a * 100.0,
+                    b * 100.0
+                );
+                assert!(a >= baseline - 0.1, "{rung}, {label}: the perturbed derivative disagrees with the direct one");
+                assert!(same_chunked, "{rung}, {label}: the derivative did not resume across chunks");
+                assert!(b >= 0.9, "{rung}, {label}: BLA skips moved the derivative");
+            }
         }
 
         // A real dive: the scaled rung's own depth.
@@ -8886,6 +8895,39 @@ fn main() {
         assert!(bla_used, "BLA did not engage, so its derivative is untested");
         assert!(p95 - p5 > 1.0, "the dive's distance estimate is flat: {p5}..{p95}");
         assert!(b >= 0.9, "BLA skips moved the dive's derivative");
+
+        // At 2^40 both rungs are valid: they agree.
+        let mut both = deep.clone();
+        both.zoom_log2 = 40.0;
+        both.max_iter = 8000;
+        let (scaled, _) = fields_on(&both, false, false, None, false);
+        let (fe, path) = fields_on(&both, false, true, None, false);
+        assert!(path.starts_with("perturbed floatexp"), "the forced rung took {path}");
+        let r = blocks(&scaled[0], &fe[0]);
+        println!("2^40: the floatexp rung's distance estimate agrees with the scaled rung's on {:.1}% of blocks", r * 100.0);
+        assert!(r >= 0.9, "the rungs disagree on the derivative at 2^40");
+
+        // A floatexp dive, past where the scaled rung reaches.
+        let mut dive = deep.clone();
+        dive.center_re = "-0.743643887037158704752191506114774".to_string();
+        dive.center_im = "0.131825904205311970493132056385139".to_string();
+        dive.zoom_log2 = 52.0;
+        dive.max_iter = 30000;
+        let (f, path) = fields(&dive, false, None, false);
+        assert!(path.starts_with("perturbed floatexp"), "the 2^52 dive took {path}");
+        let bla_used = crate::escape::diag::snapshot().bla_active;
+        let mut live: Vec<f32> = f[0].iter().copied().filter(|v| v.is_finite() && *v != 0.0).collect();
+        live.sort_by(f32::total_cmp);
+        let (p5, p95) = (live[live.len() / 20], live[live.len() * 19 / 20]);
+        let (stepped, _) = fields(&dive, false, None, true);
+        let b = blocks(&f[0], &stepped[0]);
+        println!(
+            "2^52 distance estimate: 5th-95th percentile {p5:.3}..{p95:.3}; BLA used: {bla_used}; \
+             {:.1}% of blocks agree with BLA off",
+            b * 100.0
+        );
+        assert!(p95 - p5 > 1.0, "the floatexp dive's distance estimate is flat: {p5}..{p95}");
+        assert!(b >= 0.9, "BLA skips moved the floatexp dive's derivative");
     }
 
     /// Every colouring on the perturbed paths, against the direct path at

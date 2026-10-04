@@ -674,11 +674,10 @@ fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
 /// than a visibly missing one. So the coloring returns a flat value
 /// instead, exactly as [`NORMAL_MAP`] returns flat light.
 ///
-/// Two cases reach it: the 14 of 26 formulas that define no
-/// derivative, and EVERY perturbed render — the deep rungs do not
-/// iterate a derivative orbit at all, so a Mandelbrot dive past
-/// `PERTURB_MIN_ZOOM` loses it even though the formula has one. The
-/// escape panel says which case you are in.
+/// One case reaches it: the formulas that define no derivative. The
+/// perturbed rungs carry one since P11
+/// (docs/projects/derivative-under-perturbation.md), so a Mandelbrot dive
+/// keeps it at any depth. The escape panel says when you are in it.
 ///
 /// A finite-difference distance estimate would cover both (the
 /// relief-shading pass already differences the value field for the
@@ -842,8 +841,8 @@ fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
     // of arg(z): plausible relief that encodes nothing about the
     // surface. Return flat illumination instead — an obviously
     // unshaded image beats a convincing wrong one. This is the case on
-    // every perturbed render (the deep rungs do not iterate a
-    // derivative) and on the 14 formulas that define no derivative.
+    // the formulas that define no derivative (the perturbed rungs carry
+    // one since P11).
     if (!HAS_DERIVATIVE) {
         return cparam(2u);
     }

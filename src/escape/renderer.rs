@@ -78,8 +78,11 @@ pub fn render_progress() -> Option<(u32, u32)> {
 pub enum DerivativeGap {
     /// The formula defines no `wgsl_derivative` (14 of 26 do not).
     Formula,
-    /// The perturbed rungs do not iterate a derivative orbit, whatever
-    /// the formula defines.
+    /// The perturbed path carries no derivative for this formula's tier,
+    /// whatever the formula defines. Since P11 both rungs carry it for
+    /// every single-term tier, and the two-term ones (Phoenix, Manowar)
+    /// define none, so no formula lands here; kept for a tier that one
+    /// day cannot carry it.
     Perturbed,
 }
 
@@ -3254,8 +3257,10 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let formula = super::get_formula(&escape.formula);
         let tier = Self::perturb_tier(escape)?;
         let single = !matches!(tier, assembler::PerturbTier::Phoenix | assembler::PerturbTier::Manowar);
-        // The floatexp rung's derivative is the plan's phase 3.
-        (wanted && single && !floatexp && !formula.wgsl_derivative.is_empty()).then_some(formula)
+        // Both rungs carry it; the argument stays for the callers that
+        // size the state per rung.
+        let _ = floatexp;
+        (wanted && single && !formula.wgsl_derivative.is_empty()).then_some(formula)
     }
 
     /// Which rung a perturbed render of `escape` takes: floatexp past
@@ -3738,18 +3743,16 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if super::get_formula(&escape.formula).wgsl_derivative.is_empty() {
             return Some(DerivativeGap::Formula);
         }
-        // The perturbed rungs carry the derivative of a single-term
-        // formula (docs/projects/derivative-under-perturbation.md); the
-        // floatexp rung not yet.
+        // Both perturbed rungs carry the derivative of a single-term
+        // formula (docs/projects/derivative-under-perturbation.md). The
+        // two-term ones (Phoenix, Manowar) define none, so the formula
+        // test above has already answered for them.
         if Self::wants_perturbation(escape) {
-            let tier = Self::perturb_tier(escape);
-            let floatexp = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM
-                || matches!(tier, Some(assembler::PerturbTier::Manowar));
             let single = !matches!(
-                tier,
+                Self::perturb_tier(escape),
                 Some(assembler::PerturbTier::Phoenix | assembler::PerturbTier::Manowar) | None
             );
-            if floatexp || !single {
+            if !single {
                 return Some(DerivativeGap::Perturbed);
             }
         }
