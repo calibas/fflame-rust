@@ -762,6 +762,28 @@ use egui_wgpu::{Renderer as EguiRenderer, RendererOptions};
 use egui_winit::State as EguiWinitState;
 use winit::{event::WindowEvent, window::Window};
 
+/// The antialiasing the escape viewport is drawn at this frame, and why
+/// it is below the setting when it is (shown under the Escape panel's
+/// Antialiasing control).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EscapeAa {
+    /// The factor in use.
+    pub in_use: u32,
+    /// The config's factor.
+    pub requested: u32,
+    /// Why `in_use` is lower, if it is.
+    pub reason: Option<AaReason>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AaReason {
+    /// The frame governor, keeping playback up with the display.
+    Governor,
+    /// The viewport's size: the factor's render pixels would not fit the
+    /// device's budget.
+    Size,
+}
+
 /// What the deep-zoom machinery is doing, for the View panel to
 /// report (docs/projects/flame-deep-zoom.md).
 ///
@@ -880,6 +902,8 @@ pub struct EguiLayer {
     // (docs/projects/flame-deep-zoom.md). Set by App each frame; read
     // only to DESCRIBE what is happening, never to drive it.
     deep_zoom: DeepZoom,
+    /// The escape viewport's antialiasing, while in escape mode.
+    escape_aa: Option<EscapeAa>,
 
     // Xaos editor state
     xaos_editor_state: xaos_editor::XaosEditorState,
@@ -1031,6 +1055,7 @@ impl EguiLayer {
             api_connectivity: crate::api::ApiConnectivity::Unknown,
             density_histogram: crate::renderer::DensityHistogram::default(),
             deep_zoom: DeepZoom::default(),
+            escape_aa: None,
             xaos_editor_state: xaos_editor::XaosEditorState::default(),
             signal_panel_state: signal_panel::SignalPanelState::new(),
             touch_tracker: panel_viewer::TouchTracker::default(),
@@ -1817,6 +1842,7 @@ impl EguiLayer {
                         // Histogram for density visualization (levels now in ConfigManager)
                         density_histogram: &self.density_histogram,
                         deep_zoom: &self.deep_zoom,
+                        escape_aa: self.escape_aa,
 
                         // Xaos editor state
                         xaos_editor_state: &mut self.xaos_editor_state,
@@ -2592,6 +2618,12 @@ impl EguiLayer {
     /// Tell the UI what deep zoom is doing this frame.
     pub fn update_deep_zoom(&mut self, deep_zoom: DeepZoom) {
         self.deep_zoom = deep_zoom;
+    }
+
+    /// The escape viewport's antialiasing this frame (`None` outside
+    /// escape mode).
+    pub fn update_escape_aa(&mut self, aa: Option<EscapeAa>) {
+        self.escape_aa = aa;
     }
 
     /// Update the density histogram from computed data

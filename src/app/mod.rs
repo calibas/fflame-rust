@@ -8,6 +8,7 @@ mod animation_update;
 mod effect_fetch;
 mod variation_fetch;
 mod texture_sync;
+mod aa_governor;
 pub mod script_cloud;
 mod fly_camera;
 pub mod export;
@@ -426,6 +427,10 @@ pub struct App {
     pub(super) escape_dirty: bool,
     /// Keeps `escape_renderer` holding the texture the config names.
     pub(super) escape_texture: texture_sync::TextureSync,
+    /// The frame governor's antialiasing axis for escape playback
+    /// (aa_governor.rs), and when the last settled frame landed.
+    pub(super) escape_aa: aa_governor::AaGovernor,
+    pub(super) escape_aa_settled_at: Option<web_time::Instant>,
     /// When the user last EDITED something the escape pass renders.
     /// For the interaction window: within it a mode-D render is a
     /// quarter-resolution preview, after it a full one. See
@@ -828,6 +833,8 @@ impl App {
             escape_renderer: None,
             escape_dirty: true,
             escape_texture: Default::default(),
+            escape_aa: Default::default(),
+            escape_aa_settled_at: None,
             escape_last_edit: None,
             #[cfg(feature = "engine-sim")]
             sim_renderer: None,
@@ -2786,6 +2793,9 @@ impl App {
             // idles without re-indenting it.
             let is_escape = final_config.render_mode
                 == crate::scene::transforms::RenderMode::Escape;
+            if !is_escape {
+                self.egui_layer.update_escape_aa(None);
+            }
             if is_escape {
                 let escape = self.escape_renderer.get_or_insert_with(|| {
                     let mut esc = crate::escape::EscapeRenderer::new(
@@ -2802,14 +2812,38 @@ impl App {
                     }
                     esc
                 });
-                if escape.resize(
+                // The frame governor's antialiasing axis (aa_governor.rs):
+                // while an animation plays, with the governor on, the
+                // viewport's factor is governed to keep up with the
+                // display. Otherwise, and the moment playback stops, it is
+                // the config's.
+                let aa_ceiling = crate::escape::EscapeRenderer::affordable_supersample(
                     &self.gpu.device,
                     renderer.width,
                     renderer.height,
                     final_config.escape.supersample,
-                ) {
+                );
+                let aa_governed = self.animation_controller.is_playing()
+                    && self.config_manager.system_settings().frame_governor;
+                let aa_factor = if aa_governed {
+                    refresh_display_rate(&mut self.display_refresh_age, &mut self.display_refresh_mhz, window);
+                    self.escape_aa.factor(aa_ceiling)
+                } else {
+                    self.escape_aa.release();
+                    self.escape_aa_settled_at = None;
+                    final_config.escape.supersample
+                };
+                if escape.resize(&self.gpu.device, renderer.width, renderer.height, aa_factor) {
                     self.escape_dirty = true;
                 }
+                // The viewport's corner says what it is drawn at, and why
+                // that is below the setting when it is.
+                self.egui_layer.update_escape_aa(Some(aa_governor::readout(
+                    escape.effective_supersample(),
+                    final_config.escape.supersample,
+                    aa_governed,
+                    aa_ceiling,
+                )));
                 // Mode D renders the FLAME as a distance field, so a
                 // flame edit has to reach the escape image — and
                 // nothing else marks it dirty, because every other
@@ -2891,6 +2925,23 @@ impl App {
                     self.escape_dirty = !settled;
                     if !settled {
                         self.window.request_redraw();
+                    }
+                    // A settled playback frame: how long since the last one,
+                    // against the governor's budget.
+                    if settled && self.escape_aa.active() {
+                        let now = Instant::now();
+                        if let Some(prev) = self.escape_aa_settled_at.replace(now) {
+                            let settings = self.config_manager.system_settings();
+                            let budget = crate::app::frame_budget(
+                                settings.vsync_enabled,
+                                settings.target_fps,
+                                self.display_refresh_mhz,
+                            );
+                            let ratio = now.duration_since(prev).as_secs_f64() / budget;
+                            if self.escape_aa.observe(ratio, aa_ceiling) {
+                                self.window.request_redraw();
+                            }
+                        }
                     }
                 }
             }
@@ -3223,12 +3274,7 @@ impl App {
                     // Re-ask the platform every so often rather than every
                     // frame: the answer only changes when the window moves to
                     // a different display, and `current_monitor` is a syscall.
-                    if self.display_refresh_age == 0 {
-                        self.display_refresh_mhz = window
-                            .current_monitor()
-                            .and_then(|m| m.refresh_rate_millihertz());
-                    }
-                    self.display_refresh_age = (self.display_refresh_age + 1) % 120;
+                    refresh_display_rate(&mut self.display_refresh_age, &mut self.display_refresh_mhz, window);
 
                     let settings = self.config_manager.system_settings();
                     let target = crate::app::frame_budget(
@@ -3754,6 +3800,16 @@ impl App {
 /// or a platform that will not say) falls back to 60Hz rather than to
 /// `target_fps`, because under vsync the target is the thing we already
 /// know to be wrong.
+/// Re-ask the platform for the display's refresh rate every 120 calls
+/// rather than every frame: it only changes when the window moves to a
+/// different display, and `current_monitor` is a syscall.
+fn refresh_display_rate(age: &mut u32, mhz: &mut Option<u32>, window: &Window) {
+    if *age == 0 {
+        *mhz = window.current_monitor().and_then(|m| m.refresh_rate_millihertz());
+    }
+    *age = (*age + 1) % 120;
+}
+
 pub(crate) fn frame_budget(vsync: bool, target_fps: f32, refresh_mhz: Option<u32>) -> f64 {
     if vsync {
         match refresh_mhz {

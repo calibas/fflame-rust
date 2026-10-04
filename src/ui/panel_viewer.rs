@@ -346,6 +346,9 @@ pub struct PanelContext<'a> {
 
     // What deep zoom decided for this view (informational only).
     pub deep_zoom: &'a super::DeepZoom,
+    /// The escape viewport's antialiasing, while in escape mode (shown
+    /// under the Escape panel's Antialiasing control).
+    pub escape_aa: Option<super::EscapeAa>,
 
     // Xaos editor state
     pub xaos_editor_state: &'a mut super::xaos_editor::XaosEditorState,
@@ -1034,6 +1037,7 @@ impl<'a> PanelViewer<'a> {
                     ui,
                     self.context.config_manager,
                     self.context.workspace_layout_requested,
+                    self.context.escape_aa,
                 );
             }
             PanelType::Textures => {

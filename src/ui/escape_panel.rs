@@ -20,6 +20,7 @@ pub fn render_escape_content(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
     workspace_request: &mut Option<super::workspace::WorkspaceLayout>,
+    viewport_aa: Option<super::EscapeAa>,
 ) {
     let config = config_manager.active_config().clone();
     let esc = config.escape.clone();
@@ -731,6 +732,18 @@ pub fn render_escape_content(
             .response
             .on_hover_text(t!("escape_panel.tooltip_supersample"));
     });
+    // What the view is actually drawn at, when that is not the setting:
+    // the frame governor during playback, or the view's size.
+    if let Some(aa) = viewport_aa.filter(|aa| aa.in_use != aa.requested) {
+        let (text, tip) = match aa.reason {
+            Some(super::AaReason::Governor) => (
+                t!("escape_panel.aa_in_use_governor", used = aa.in_use),
+                t!("escape_panel.aa_in_use_governor_tip"),
+            ),
+            _ => (t!("escape_panel.aa_in_use_size", used = aa.in_use), t!("escape_panel.aa_in_use_size_tip")),
+        };
+        ui.label(egui::RichText::new(text).small().weak()).on_hover_text(tip);
+    }
     // How those samples are combined. Only meaningful when there is
     // more than one of them.
     if esc.supersample > 1 {
@@ -2557,7 +2570,7 @@ mod tests {
         for _ in 0..2 {
             let out = ctx.run(Default::default(), |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    render_escape_content(ui, &mut manager, &mut None);
+                    render_escape_content(ui, &mut manager, &mut None, None);
                 });
             });
             labels = out
