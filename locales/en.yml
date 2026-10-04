@@ -2428,3 +2428,21 @@ escape_panel:
   damping: "Damping α"
   tooltip_damping: "Mann iteration z <- (1-a)z + a*f(z). 1+0i is plain iteration; real a in (0,1) damps, complex a rotates the step."
   coloring: "Coloring"
+
+# The menu bar's progress bar (src/ui/render_progress.rs): one bar for
+# every rendering task. These are its hover texts.
+progress:
+  idle: "Nothing rendering"
+  flame: "Flame: %{percent}% of max iterations (%{done} / %{target})"
+  flame_paused: "Flame paused at %{percent}% of max iterations (%{done} / %{target})"
+  flame_done: "Flame complete: %{target} iterations"
+  escape_rendering: "Escape-time render refining"
+  escape_rendering_percent: "Escape-time render refining: %{percent}% of iterations"
+  escape_settled: "Escape-time render settled"
+  sim: "Simulation: step %{step} of %{cap}"
+  sim_paused: "Simulation paused at step %{step} of %{cap}"
+  sim_past_cap: "Simulation running past Max Steps (step %{step})"
+  sim_uncapped: "Simulation running (step %{step})"
+  sim_done: "Simulation reached Max Steps (step %{step})"
+  sim_stopped: "Simulation stopped at step %{step}"
+  animation: "Animation playing"

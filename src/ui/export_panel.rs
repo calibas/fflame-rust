@@ -76,8 +76,8 @@ fn clamp_to_budget(dim: &mut u32, other: u32, max_dim: u32, max_px: u64) {
     *dim = (*dim).clamp(MIN_EXPORT_DIM, ceil.max(MIN_EXPORT_DIM));
 }
 
-/// Render the Export panel content. Live progress is shown by the global
-/// export overlay (`export_status::render_export_overlay`); `export_active`
+/// Render the Export panel content. Live progress is shown by the menu
+/// bar's progress bar (`render_progress.rs`); `export_active`
 /// only gates the buttons so a second export can't be started mid-render.
 ///
 /// `max_export_dimension` is the GPU's `max_texture_dimension_2d` — the hard

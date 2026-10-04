@@ -1,17 +1,17 @@
 //! Unified export status — one shared state for ALL export paths (PNG direct /
-//! high-res / video), shown by a single global overlay and routed to the
-//! existing toast system ([`super::EguiLayer::show_api_notification`]) on
-//! completion.
+//! high-res / video), shown by the menu bar's progress bar
+//! ([`super::render_progress`]) and routed to the existing toast system
+//! ([`super::EguiLayer::show_api_notification`]) on completion.
 //!
 //! Replaces the former per-panel `PngExportProgress` + animation `ExportProgress`
 //! structs, the two progress-callback traits, and the window-title hack. An
 //! export thread writes [`ExportStatus`] (directly or via [`UiReporter`]); the
-//! main loop reads it each frame to draw the overlay and to drain the terminal
+//! main loop reads it each frame to fill the progress bar and to drain the terminal
 //! [`ExportStatus::toast`] into a notification.
 
 use std::sync::{Arc, Mutex};
 
-/// Which kind of export is running (for the overlay's headline + icon).
+/// Which kind of export is running (for the progress bar's headline).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ExportKind {
     Png,
@@ -30,9 +30,9 @@ impl ExportKind {
 /// Shared, cloneable export status. One `Arc<Mutex<ExportStatus>>` lives on the
 /// app and is handed to each export thread.
 ///
-/// - `active` gates the overlay and disables export buttons / pauses main-loop
+/// - `active` hands the progress bar to the export and disables export buttons / pauses main-loop
 ///   iteration while a render is running.
-/// - `fraction` + `label` + `detail` drive the overlay's bar and text.
+/// - `fraction` + `label` + `detail` drive the progress bar and its hover text.
 /// - `toast` is the terminal message, set once when the export ends and drained
 ///   by the main loop into the toast notification system.
 #[derive(Clone, Default)]
@@ -81,7 +81,7 @@ impl ExportStatus {
         self.toast = Some((message.into(), true));
     }
 
-    /// Headline for the overlay, e.g. `"⏳ Exporting PNG"`. Falls back to a
+    /// Headline for the progress bar's hover text, e.g. `"⏳ Exporting PNG"`. Falls back to a
     /// generic string if `kind`/`label` aren't set.
     pub fn headline(&self) -> String {
         if !self.label.is_empty() {
@@ -95,7 +95,7 @@ impl ExportStatus {
 }
 
 /// [`crate::export::ExportReporter`] that writes the shared [`ExportStatus`] so
-/// the in-app overlay updates live. The terminal toast is set by the spawning
+/// the menu bar's progress bar updates live. The terminal toast is set by the spawning
 /// code (which knows the output path / error), not here.
 pub struct UiReporter {
     status: Arc<Mutex<ExportStatus>>,
@@ -113,54 +113,4 @@ impl crate::export::ExportReporter for UiReporter {
             s.set(fraction, detail);
         }
     }
-}
-
-/// Render the global export-progress overlay (bottom-center, just above where
-/// the toast notification sits). Drawn every frame while an export is active,
-/// regardless of which panels are docked. Mirrors the toast's foreground-area
-/// styling for visual consistency.
-pub fn render_export_overlay(ctx: &egui::Context, status: &ExportStatus) {
-    if !status.active {
-        return;
-    }
-
-    let headline = status.headline();
-    let fraction = status.fraction;
-    let detail = status.detail.clone();
-
-    egui::Area::new(egui::Id::new("export_progress_overlay"))
-        .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -110.0))
-        .order(egui::Order::Foreground)
-        .interactable(false)
-        .show(ctx, |ui| {
-            egui::Frame::new()
-                .fill(egui::Color32::from_rgba_unmultiplied(30, 30, 40, 235))
-                .corner_radius(6.0)
-                .inner_margin(egui::Margin::symmetric(16, 10))
-                .show(ui, |ui| {
-                    ui.set_min_width(320.0);
-                    ui.vertical(|ui| {
-                        ui.label(
-                            egui::RichText::new(format!("⏳ {headline}"))
-                                .color(egui::Color32::WHITE)
-                                .size(14.0),
-                        );
-                        ui.add(
-                            egui::ProgressBar::new(fraction)
-                                .show_percentage()
-                                .desired_width(320.0),
-                        );
-                        if !detail.is_empty() {
-                            ui.label(
-                                egui::RichText::new(&detail)
-                                    .color(egui::Color32::from_gray(200))
-                                    .size(12.0),
-                            );
-                        }
-                    });
-                });
-        });
-
-    // Keep repainting so the bar animates even when the UI is otherwise idle.
-    ctx.request_repaint();
 }

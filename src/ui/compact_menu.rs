@@ -67,6 +67,14 @@ pub fn render_compact_menu(
                         ui.style_mut().override_font_id = Some(egui::FontId::proportional(16.0));
                         render_compact_menu_items(ui, ctx, workspace, menu_actions, menu_state, save_online_dialog_state);
                     });
+
+                // The desktop menu bar's progress bar, as a strip under
+                // the button -- only while something runs, so the button
+                // stays a button the rest of the time.
+                if menu_state.progress.is_active() {
+                    let size = egui::vec2(response.rect.width(), 4.0);
+                    super::render_progress::show(ui, &menu_state.progress, size);
+                }
             });
         });
 }
