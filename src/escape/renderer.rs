@@ -5790,6 +5790,54 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             && iterate_key.is_some_and(|ik| self.contrast_fit_key.as_deref() != Some(Self::contrast_key(escape, ik).as_str()))
     }
 
+    /// Auto contrast for the frame that just finished iterating, applied
+    /// BEFORE anything reads it.
+    ///
+    /// The fit is measured from the finished field, so it cannot be
+    /// applied by the pass that produced it. It used to be applied by the
+    /// NEXT frame: the uncorrected image was presented first, so a view
+    /// that changed every frame (a pan) never showed the correction, and
+    /// paced playback alternated corrected and uncorrected frames. Now
+    /// the frame's work so far is submitted, the fit measured from it,
+    /// and the records recoloured and resolved into the same frame.
+    ///
+    /// Returns whether the fit is current; false only when the
+    /// measurement could not be read, which the next frame retries.
+    #[allow(clippy::too_many_arguments)]
+    fn contrast_in_frame(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        encoder: &mut CommandEncoder,
+        escape: &EscapeConfig,
+        palette_view: &TextureView,
+        iterate_key: Option<&str>,
+        relight: bool,
+    ) -> bool {
+        let Some(ik) = iterate_key.filter(|_| self.contrast_pending(escape, iterate_key)) else {
+            return true;
+        };
+        let so_far = std::mem::replace(
+            encoder,
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Escape Frame (after auto contrast)"),
+            }),
+        );
+        queue.submit(std::iter::once(so_far.finish()));
+        let ckey = Self::contrast_key(escape, ik);
+        self.measure_contrast(device, queue, escape, &ckey);
+        if self.contrast_fit_key.as_deref() != Some(ckey.as_str()) {
+            return false;
+        }
+        if relight {
+            self.run_relight(device, queue, encoder, escape, palette_view);
+        } else {
+            self.run_recolor(device, queue, encoder, escape, palette_view);
+        }
+        self.run_resolve(device, queue, encoder, escape);
+        true
+    }
+
     /// What a contrast fit was measured from and how: the view and its
     /// iteration (the iterate key), the value field (the colouring, its
     /// parameters, the layer and its), and the fit itself (mode, clip).
@@ -7670,11 +7718,14 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     crate::config::escape::BiomorphMode::Im => 2,
                 };
                 // Bit 8: the iterate passes store the texture overlay's
-                // warp field in blue (`esc_overlay_field`).
+                // warp field in blue (`esc_overlay_field`). Bit 9: the
+                // relief's slopes come from orbits beside each pixel's
+                // own, so a recolour keeps the height texture.
                 (if escape.julia { 1 } else { 0 })
                     | (bio << 1)
                     | (self.supersample.clamp(1, 15) << 4)
                     | (u32::from(self.overlay_owns_blue(escape)) << 8)
+                    | (u32::from(escape.shading.wants_offset_orbits()) << 9)
             },
             bailout: escape.bailout.max(1e-6),
             tile_y0: 0,
@@ -8147,12 +8198,19 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     self.chunk_key = None;
                     self.reset_chunk_pacing();
                 }
-                // See `contrast_pending`: a settled frame that has not
-                // had its fit measured owes one more, which takes the
-                // recolor path and applies it.
+                // Auto contrast, measured from the finished field and
+                // applied before this frame is drawn.
                 return orbit_done
                     && iterations_done
-                    && !self.contrast_pending(escape, iterate_key.as_deref());
+                    && self.contrast_in_frame(
+                        device,
+                        queue,
+                        encoder,
+                        escape,
+                        palette_view,
+                        iterate_key.as_deref(),
+                        false,
+                    );
             }
             log::warn!("Deep zoom requested but the center failed to parse; rendering direct");
         }
@@ -8353,9 +8411,17 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             if results_active {
                 self.results_key = iterate_key.clone();
             }
-            if self.contrast_pending(escape, iterate_key.as_deref()) {
-                // See `contrast_pending`: one more frame, which takes
-                // the recolor path and applies the measured fit.
+            // Auto contrast, measured from the finished field and applied
+            // before this frame is drawn.
+            if !self.contrast_in_frame(
+                device,
+                queue,
+                encoder,
+                escape,
+                palette_view,
+                iterate_key.as_deref(),
+                solid_geom,
+            ) {
                 done = false;
             }
             // A repeat of the same render starts from the top.

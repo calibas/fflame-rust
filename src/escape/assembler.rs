@@ -5092,7 +5092,13 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, coverage));
     slope = esc_overlay_field(escaped, r.z, r.n, slope);
-    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, relief, slope));
+    // Flags bit 9: the relief's slopes came from orbits the iterate pass
+    // ran beside each pixel's own (offset relief, Embossed), which a
+    // recolour of the records cannot run. Keep the height texture as
+    // that pass left it, for the same records.
+    if ((params.flags & 512u) == 0u) {
+        textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, relief, slope));
+    }
 }
 "#;
 
