@@ -2921,7 +2921,7 @@ impl HighResExporter {
 
     /// Create a texture, turning a GPU out-of-memory failure into a recoverable
     /// `Err` instead of wgpu's default fatal panic. On the background export
-    /// thread that panic would leave the progress overlay stuck "exporting"
+    /// thread that panic would leave the progress bar stuck "exporting"
     /// forever; returning an error lets the caller report it and clean up. The
     /// OutOfMemory error scope captures the failure at the allocation, so we
     /// bail before the invalid texture triggers follow-on validation errors.

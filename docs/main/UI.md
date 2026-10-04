@@ -74,8 +74,42 @@ or an `Option`, and `src/ui/mod.rs` acts on it after the frame is drawn.
 | Window | Reset Workspace, Mobile View, the panel rows, Workspace Layout presets |
 | Help | Help panel, Keyboard Shortcuts, Report a Bug, About |
 
-Right-aligned, above 500 points of width: the language picker,
-connectivity and account status, and the Fly Mode button (3D only).
+Right-aligned, above 500 points of width: the progress bar
+(rightmost), the language picker, connectivity and account status, and
+the Fly Mode button (3D only).
+
+### The progress bar
+
+One bar for every rendering task
+([src/ui/render_progress.rs](../../src/ui/render_progress.rs)). The app
+picks the one task it reports each frame (`App::render_progress`), in
+this order:
+
+| Task | The bar |
+|---|---|
+| A PNG or video export | Fills to the export's fraction. Its headline and detail are the hover text. The export takes the bar over, as it pauses the viewport's render |
+| Animation playback | Sweeps: it runs without end in every mode |
+| Flame (2D / 3D) | Fills to `total_iterations / max_iterations`; grey when finished or paused |
+| Escape | Sweeps while the render refines (unsettled, preview window, texture in flight); full and grey once settled |
+| Simulation | Fills to `step / Max Steps` while short of the cap; sweeps when running past it (or with no cap); full and grey when paused at the cap |
+
+It replaced the export overlay, and it costs nothing it can avoid:
+- It reads counters the frame loop already keeps, with no readback.
+- It never requests a frame. Every state in which it sweeps is one in
+  which the app is already redrawing.
+- Its text is built only while the pointer is on it.
+
+Two event-loop rules exist for it:
+- **An export redraws at 10 Hz.** It used to redraw at the display
+  rate, competing with the export thread for the GPU.
+- **A stale bar gets one more frame.** The UI is built before the
+  frame's render runs, so the bar can show a frame-old state: an escape
+  render that has just settled, a simulation that has just paused. When
+  the state differs from what was drawn (`progress_drawn`), the loop
+  draws once more and then sleeps.
+
+The compact menu shows the same bar as a strip under its button, only
+while something runs.
 
 **The panel rows in both Window menus come from one table**,
 `visibility::WINDOW_MENU`. The compact menu keeps its own order —

@@ -27,8 +27,8 @@ use crate::animation::{Animation, AnimationController, LoopMode, PlaybackState};
 use crate::animation::export::{VideoCodec, HardwareAccel};
 
 // Video export progress is reported through the unified
-// `crate::ui::ExportStatus` and drawn by the global overlay
-// (`export_status::render_export_overlay`) — no panel-local progress struct.
+// `crate::ui::ExportStatus` and drawn by the menu bar's progress bar
+// (`render_progress.rs`) — no panel-local progress struct.
 
 /// Where a video export should land by default.
 ///
@@ -570,7 +570,7 @@ pub fn render_export_panel(
         .resizable(true)
         .min_width(400.0)
         .show(ctx, |ui| {
-            // Live progress is shown by the global export overlay, not here.
+            // Live progress is shown by the menu bar's progress bar, not here.
 
             #[cfg(not(target_arch = "wasm32"))]
             {
