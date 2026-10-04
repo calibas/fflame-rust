@@ -1,6 +1,7 @@
 # The derivative under perturbation (survey P11)
 
-Branch `derivative-under-perturbation`, started 2026-10-03.
+Branch `derivative-under-perturbation`, started 2026-10-03. **All four
+phases done 2026-10-04**; measurements at the end.
 
 ## Why
 
@@ -104,3 +105,45 @@ antialiasing changes.
    off.
 3. The floatexp rung, tested the same ways, plus depth renders at 2^60.
 4. The panel's derivative-gap notes, the survey's P11, and the docs.
+
+## As built, and measured
+
+The plan held. Two details it did not foresee:
+- **The floatexp rung's step.** It calls the formula's snippet twice, on
+  1 and on i, to get its real Jacobian. That covers Tricorn's
+  anti-holomorphic map as well as the holomorphic ones. The f_c term is
+  the snippet on zero, outside Julia mode.
+- **The first step's pre-step iterate.** The templates started `z` at 0,
+  so the derivative splice now also starts it at the pixel's z0 (the
+  reference's start, plus the delta on the scaled rung).
+
+`the_derivative_survives_perturbation` forces each rung at a shallow
+view where the direct path is exact, and compares 8x8 block means within
+2% of the range. Smooth, the baseline, agrees on 93.5% of blocks:
+
+| | scaled rung | floatexp rung |
+|---|---|---|
+| distance estimate | 94.7% | 95.8% |
+| rainbow fringe | 97.0% | 98.1% |
+| normal map | 86.6% | 88.7% |
+| analytic relief, slope x / y | 94.2% / 97.0% | 95.4% / 95.4% |
+
+The normal map's remainder is the boundary filigree, where the direction
+is chaotic on both paths: 90% of its pixels are within two levels.
+
+On both rungs:
+- **Chunks:** chunked renders are byte-identical.
+- **BLA:** BLA on and off agree on 100% of blocks at the shallow view.
+
+Real dives:
+- **2^30, scaled rung (BLA used):** the distance estimate's 5th-95th
+  percentile spans 1.6-2.6 pixels, where it was one constant. It agrees
+  with stepping every iteration on 99.8% of blocks.
+- **2^40, where both rungs are valid:** they agree on 99.1% of blocks.
+- **2^52, floatexp rung, the classic seahorse point:** the percentiles
+  span 2.9-4.1 pixels, and match BLA off on 100% of blocks.
+
+`every_colouring_on_the_perturbed_paths_against_direct` measured the gap
+before. The derivative colourings agreed on 3-43% of blocks; they now
+agree at or above smooth's 93% on both rungs, except the normal map at
+87-89%. Every other colouring is unchanged.

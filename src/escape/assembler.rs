@@ -1081,6 +1081,89 @@ fn esc_cpow(z: vec2<f32>, p: f32) -> vec2<f32> {
 }
 "#;
 
+/// The floatexp rung's derivative arithmetic: an f32 complex mantissa kept
+/// near magnitude 1, and an exponent. f32 precision is plenty for what the
+/// derivative feeds (a distance to three digits, a direction); the range
+/// is what the deep rung lacks.
+const DERIVATIVE_FE_WGSL: &str = r#"
+struct DzFe {
+    m: vec2<f32>,
+    e: i32,
+}
+
+// Renormalise: the larger component's magnitude into [0.5, 1). Zero, and
+// anything not finite, becomes zero (negated comparisons, so a NaN fails
+// them under fast-math too).
+fn dzfe_norm(d: DzFe) -> DzFe {
+    let a = max(abs(d.m.x), abs(d.m.y));
+    if (!(a > 0.0 && a <= 3.0e38)) {
+        return DzFe(vec2<f32>(0.0, 0.0), 0);
+    }
+    let k = frexp(a).exp;
+    return DzFe(ldexp(d.m, vec2<i32>(-k, -k)), d.e + k);
+}
+
+fn dzfe_is_zero(d: DzFe) -> bool {
+    return max(abs(d.m.x), abs(d.m.y)) == 0.0;
+}
+
+// a + b_m 2^b_e, exponents aligned; a term 60 octaves below the other is
+// nothing to f32.
+fn dzfe_add(a: DzFe, b_m: vec2<f32>, b_e: i32) -> DzFe {
+    let b = dzfe_norm(DzFe(b_m, b_e));
+    if (dzfe_is_zero(b)) {
+        return a;
+    }
+    if (dzfe_is_zero(a)) {
+        return b;
+    }
+    let de = a.e - b.e;
+    if (de > 60) {
+        return a;
+    }
+    if (de < -60) {
+        return b;
+    }
+    if (de >= 0) {
+        return dzfe_norm(DzFe(a.m + ldexp(b.m, vec2<i32>(-de, -de)), a.e));
+    }
+    return dzfe_norm(DzFe(ldexp(a.m, vec2<i32>(de, de)) + b.m, b.e));
+}
+
+// One step: f'(z) D, as the formula's own snippet maps a derivative --
+// real-linear, so its two columns are its action on 1 and on i, which
+// covers anti-holomorphic maps (Tricorn's conjugate) as well -- plus the
+// inhomogeneous f_c on the parameter plane.
+fn dzfe_step(z: vec2<f32>, c: vec2<f32>, d: DzFe, is_julia: bool) -> DzFe {
+    let j1 = formula_derivative(z, c, vec2<f32>(1.0, 0.0), true);
+    let j2 = formula_derivative(z, c, vec2<f32>(0.0, 1.0), true);
+    let out = dzfe_norm(DzFe(j1 * d.m.x + j2 * d.m.y, d.e));
+    if (is_julia) {
+        return out;
+    }
+    return dzfe_add(out, formula_derivative(z, c, vec2<f32>(0.0, 0.0), false), 0);
+}
+
+// A BLA skip: D' = A D + B, A and B as the table holds them (complex
+// mantissa, exponent). B drops on the Julia plane, as d0's term does.
+fn dzfe_bla(d: DzFe, a_m: vec2<f32>, a_e: i32, b_m: vec2<f32>, b_e: i32, is_julia: bool) -> DzFe {
+    let ad = dzfe_norm(DzFe(
+        vec2<f32>(a_m.x * d.m.x - a_m.y * d.m.y, a_m.x * d.m.y + a_m.y * d.m.x),
+        d.e + a_e,
+    ));
+    if (is_julia) {
+        return ad;
+    }
+    return dzfe_add(ad, b_m, b_e);
+}
+
+fn dzfe_to_f32(d: DzFe) -> vec2<f32> {
+    let n = dzfe_norm(d);
+    let e = clamp(n.e, -126, 127);
+    return ldexp(n.m, vec2<i32>(e, e));
+}
+"#;
+
 /// The derivative's splices into a perturbed template, per rung
 /// (docs/projects/derivative-under-perturbation.md). `None` without a
 /// derivative: the declaration keeps the constant seed and the rest
@@ -1097,7 +1180,25 @@ struct DerivSplices {
 
 fn deriv_splices(floatexp: bool) -> DerivSplices {
     if floatexp {
-        unimplemented!("the floatexp rung's derivative is phase 3")
+        return DerivSplices {
+            state: "    dz_m: vec2<f32>,    // the derivative dz/dc (P11): mantissa
+    dz_e: i32,          // ... and exponent
+    dz_pad: u32,        // keeps the struct 8-byte aligned",
+            decl: "    // The derivative dz/dc in extended range (DzFe): it grows like 1/S,
+    // past f32 on this rung. Stepped at the PRE-step iterate, so z starts
+    // at the pixel's z0, which at these depths is the reference's start
+    // to f32.
+    var dz_d = DzFe(select(DZ0_PARAM, vec2<f32>(1.0, 0.0), is_julia_perturb), 0);
+    z = ref_z(0u);",
+            resume: "        dz_d = DzFe(st.dz_m, st.dz_e);",
+            step: "            dz_d = dzfe_step(z, c_f32, dz_d, is_julia_perturb);",
+            bla: "                // The derivative through the skip: D' = A D + B.
+                dz_d = dzfe_bla(dz_d, pick_a, pick_ae, pick_b, pick_be, is_julia_perturb);",
+            save: "            dz_d.m, dz_d.e, 0u,",
+            fin: "    // Per render pixel, as every path reports it: D S, with S = s_m 2^s_e.
+    // Moderate at escape, so f32 holds it.
+    let dz = dzfe_to_f32(DzFe(dz_d.m * perturb.s_m, dz_d.e + perturb.s_e));",
+        };
     }
     DerivSplices {
         state: "    dz: vec2<f32>,      // the derivative dz/dc (P11), when compiled in",
@@ -4954,6 +5055,9 @@ pub fn assemble_perturbed_full(
                     out.push(format!("const DZ0_PARAM: vec2<f32> = {dz0};"));
                     out.push(DERIVATIVE_HELPERS_WGSL.trim().to_string());
                     out.push(f.wgsl_derivative.to_string());
+                    if floatexp {
+                        out.push(DERIVATIVE_FE_WGSL.trim().to_string());
+                    }
                 }
                 out.push(format!("const COLORING_IS_BOUNDED: bool = {bounded};"));
                 let helpers = tier_helpers(tier, floatexp);
@@ -8305,12 +8409,13 @@ mod tests {
         }
     }
 
-    /// The perturbed rungs never iterate a derivative, and a coloring
-    /// built on one has to know.
+    /// A perturbed shader built without the derivative says so, and one
+    /// built with it (P11) says that, on both rungs; a coloring built on
+    /// the derivative has to know which.
     ///
-    /// `dz` is a constant seed there, so `z/dz` is `z` and the shading
-    /// would be a smooth function of arg(z) — convincing relief that
-    /// encodes nothing. The flag lets the coloring return flat light
+    /// Without it `dz` is a constant seed, so `z/dz` is `z` and the
+    /// shading would be a smooth function of arg(z) — convincing relief
+    /// that encodes nothing. The flag lets the coloring return flat light
     /// instead, which is visibly unshaded rather than plausibly wrong.
     #[test]
     fn the_perturbed_rungs_declare_no_derivative() {
@@ -8319,7 +8424,19 @@ mod tests {
             let src = assemble_perturbed(&colorings::NORMAL_MAP, floatexp, PerturbTier::Power(2));
             assert!(
                 src.contains("const HAS_DERIVATIVE: bool = false;"),
-                "perturbed (fe={floatexp}) must declare no derivative"
+                "perturbed (fe={floatexp}) without the derivative must declare none"
+            );
+            let src = assemble_perturbed_full(
+                &colorings::NORMAL_MAP,
+                None,
+                floatexp,
+                PerturbTier::Power(2),
+                None,
+                Some(crate::escape::get_formula("mandelbrot")),
+            );
+            assert!(
+                src.contains("const HAS_DERIVATIVE: bool = true;"),
+                "perturbed (fe={floatexp}) with the derivative must declare it"
             );
         }
         // Direct + a formula that HAS one: true.
@@ -8398,7 +8515,7 @@ mod tests {
             // With the derivative carried: the state grows by its fields,
             // and stays under the budget's widest.
             let deriv_formula = crate::escape::get_formula("mandelbrot");
-            if !floatexp {
+            {
                 let src = assemble_perturbed_full(coloring, None, floatexp, tier, None, Some(deriv_formula));
                 let module = naga::front::wgsl::parse_str(&src)
                     .unwrap_or_else(|e| panic!("{tier:?} fe={floatexp} deriv parse: {e}"));
