@@ -8706,6 +8706,166 @@ fn main() {
         assert!((mean / 255.0 - 0.5).abs() < 0.03, "plateaus are not at their middles: mean {:.3}", mean / 255.0);
     }
 
+    /// Auto contrast is applied by the frame that finishes the render,
+    /// before anything reads it -- not by the next one. It used to be the
+    /// next one, so the uncorrected image was drawn first: a pan, a new
+    /// view every frame, never showed the correction, and paced playback
+    /// alternated corrected and uncorrected frames.
+    ///
+    /// - Panning: every frame finishes its view, and is already the
+    ///   corrected picture a fresh, fully settled render draws.
+    /// - It costs no frame: a fresh view settles in as many frames with
+    ///   auto contrast as without.
+    /// - Offset relief and Embossed, whose slopes the recolour cannot
+    ///   run, settle too, and keep the slopes their iterate pass stored.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn auto_contrast_is_applied_before_the_frame_is_drawn() {
+        use crate::config::escape::{ContrastMode, ShadingField};
+        let _diag = diag_lock();
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let config = crate::config::FractalConfig::default();
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        renderer.update_background_color(&queue, [0.0, 0.0, 0.0]);
+        // One frame as the app draws it: one render call, then the tone
+        // map of whatever the output holds.
+        let mut frame = |escape: &mut crate::escape::EscapeRenderer, esc: &crate::config::escape::EscapeConfig| {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
+            let settled = escape.render(
+                &device,
+                &queue,
+                &mut enc,
+                esc,
+                renderer.escape_palette_view(esc.palette_map.stepped),
+                renderer.palette_generation(),
+            );
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(&device, &queue, false, [0.0, 0.0, 0.0]))
+                .expect("readback");
+            (settled, rgba)
+        };
+        let settle = |frame: &mut dyn FnMut(&mut crate::escape::EscapeRenderer, &crate::config::escape::EscapeConfig) -> (bool, Vec<u8>),
+                      escape: &mut crate::escape::EscapeRenderer,
+                      esc: &crate::config::escape::EscapeConfig| {
+            for n in 1..=1000u32 {
+                let (settled, rgba) = frame(escape, esc);
+                if settled {
+                    return (n, rgba);
+                }
+            }
+            panic!("render did not settle");
+        };
+        let differ = |a: &[u8], b: &[u8]| a.iter().zip(b).filter(|(x, y)| x.abs_diff(**y) > 1).count();
+
+        let mut base = crate::config::escape::EscapeConfig::default();
+        base.center_re = "-0.6".to_string();
+        base.center_im = "0.1".to_string();
+        base.zoom_log2 = 0.4;
+        base.max_iter = 300;
+        base.coloring = "smooth".to_string();
+        base.contrast.mode = ContrastMode::AutoRange;
+
+        // Panning.
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        let _ = settle(&mut frame, &mut escape, &base);
+        for k in 1..=5 {
+            let mut e = base.clone();
+            e.center_re = format!("{}", -0.6 + 0.01 * k as f64);
+            let (settled, drawn) = frame(&mut escape, &e);
+            assert!(settled, "pan step {k}: the frame did not finish its view");
+            let mut fresh = crate::escape::EscapeRenderer::new(&device, w, h);
+            let (_, want) = settle(&mut frame, &mut fresh, &e);
+            fresh.destroy();
+            let mut off = e.clone();
+            off.contrast.mode = ContrastMode::Off;
+            let mut plain = crate::escape::EscapeRenderer::new(&device, w, h);
+            let (_, uncorrected) = settle(&mut frame, &mut plain, &off);
+            plain.destroy();
+            let (d, u) = (differ(&drawn, &want), differ(&drawn, &uncorrected));
+            println!("pan step {k}: {d} bytes from the settled render, {u} from the uncorrected one");
+            assert_eq!(d, 0, "pan step {k}: the drawn frame is not the corrected picture");
+            assert!(u > 1000, "pan step {k}: auto contrast changed nothing, so this proves nothing");
+        }
+        escape.destroy();
+
+        // No extra frame.
+        for (what, mode) in [("auto range", ContrastMode::AutoRange), ("equalize", ContrastMode::Equalize)] {
+            let mut on = base.clone();
+            on.contrast.mode = mode;
+            let mut off = base.clone();
+            off.contrast.mode = ContrastMode::Off;
+            let mut a = crate::escape::EscapeRenderer::new(&device, w, h);
+            let mut b = crate::escape::EscapeRenderer::new(&device, w, h);
+            let (n_on, _) = settle(&mut frame, &mut a, &on);
+            let (n_off, _) = settle(&mut frame, &mut b, &off);
+            println!("{what}: {n_on} frames to settle, {n_off} without auto contrast");
+            assert_eq!(n_on, n_off, "{what}: auto contrast cost a frame");
+            a.destroy();
+            b.destroy();
+        }
+
+        // The perturbed path finishes its frames the same way.
+        {
+            let mut off = base.clone();
+            off.contrast.mode = ContrastMode::Off;
+            let mut a = crate::escape::EscapeRenderer::new(&device, w, h);
+            let mut b = crate::escape::EscapeRenderer::new(&device, w, h);
+            let mut fresh = crate::escape::EscapeRenderer::new(&device, w, h);
+            for r in [&mut a, &mut b, &mut fresh] {
+                r.force_perturbed = true;
+            }
+            let (n_on, _) = settle(&mut frame, &mut a, &base);
+            let (n_off, _) = settle(&mut frame, &mut b, &off);
+            let mut e = base.clone();
+            e.center_re = "-0.59".to_string();
+            let (n_pan, panned) = settle(&mut frame, &mut a, &e);
+            let (_, want) = settle(&mut frame, &mut fresh, &e);
+            let _ = settle(&mut frame, &mut fresh, &e);
+            let (_, want_again) = frame(&mut fresh, &e);
+            println!(
+                "perturbed: {n_on} frames to settle, {n_off} without; a pan settled in {n_pan}, {} bytes from a fresh render",
+                differ(&panned, &want)
+            );
+            assert!(a.last_path.starts_with("perturbed"), "not the perturbed path: {}", a.last_path);
+            assert_eq!(n_on, n_off, "perturbed: auto contrast cost a frame");
+            assert_eq!(differ(&panned, &want), 0, "perturbed: the finishing frame is not the corrected picture");
+            assert_eq!(differ(&want, &want_again), 0);
+            a.destroy();
+            b.destroy();
+            fresh.destroy();
+        }
+
+        // Stored slopes.
+        for field in [ShadingField::Offset, ShadingField::Embossed] {
+            let mut e = base.clone();
+            e.shading.enabled = true;
+            e.shading.field = field;
+            let mut off = e.clone();
+            off.contrast.mode = ContrastMode::Off;
+            let mut a = crate::escape::EscapeRenderer::new(&device, w, h);
+            let mut b = crate::escape::EscapeRenderer::new(&device, w, h);
+            let (n, with) = settle(&mut frame, &mut a, &e);
+            let (_, without) = settle(&mut frame, &mut b, &off);
+            let mut kept = true;
+            for ch in [2u32, 3] {
+                let sa = pollster::block_on(a.read_height_channel(&device, &queue, false, ch)).expect("height");
+                let sb = pollster::block_on(b.read_height_channel(&device, &queue, false, ch)).expect("height");
+                kept &= sa == sb;
+            }
+            let u = differ(&with, &without);
+            println!("{field:?}: settled in {n} frames, stored slopes kept: {kept}, {u} bytes from the uncorrected render");
+            assert!(kept, "{field:?}: the recolour overwrote the stored slopes");
+            assert!(u > 1000, "{field:?}: auto contrast was not applied");
+            a.destroy();
+            b.destroy();
+        }
+    }
+
     /// The contrast fit follows every edit that changes what it
     /// measured or how it is applied, not only the ones that re-iterate.
     /// A recolour (another colouring with the same loop, a colouring

@@ -2903,13 +2903,25 @@ deep zoom leaves behind. Where the field really is a plane, Flatten
 correctly shows almost nothing, because there is nothing left.
 
 **The ordering trap.** The fit is measured FROM the finished field, so
-the pass that produces the field cannot apply it. A settled frame
-therefore reports "not settled" once (`contrast_pending`); that frame
-takes the recolor path, measures, applies, and settles for real.
-Without it the app stops at the uncorrected image, because it renders
-only while dirty. The height field also keeps the PRE-contrast value:
-the probe reads that texture, so remapping it there would feed the fit
-its own output and compound every frame.
+the pass that produces the field cannot apply it. The frame that
+finishes the render therefore submits its work so far, measures, and
+recolours and resolves into the same frame (`contrast_in_frame`),
+before the tone map reads anything.
+
+It used to report "not settled" once instead (`contrast_pending`), so
+the NEXT frame measured and recoloured. That presented the uncorrected
+image first. A pan, a new view every frame, never showed the
+correction, and paced playback alternated corrected and uncorrected
+frames. Offset relief and Embossed never settled at all: their views
+skip the recolour path, so the fit was never measured.
+
+The recolour keeps their stored slopes (flags bit 9 leaves the height
+texture as the iterate pass wrote it). The price is one CPU-GPU sync
+per frame whose view changed, while auto contrast is on.
+
+The height field also keeps the PRE-contrast value: the probe reads
+that texture, so remapping it there would feed the fit its own output
+and compound every frame.
 
 **Measured**, on the reported view at zoom 26.6 where the field's
 spread is 1.2e-8 -- tonemapped luminance spread across the image:
