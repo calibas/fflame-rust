@@ -2579,6 +2579,199 @@ fn scale_memory_colours_the_memory_of_its_source_layer() {
     assert_eq!(gray_scott, 0, "a layer without memory reads zeros");
 }
 
+/// McCabe in table mode with the table its own ladder fills.
+fn mccabe_table_from(ladder: &SimConfig) -> SimConfig {
+    let mut cfg = ladder.clone();
+    for (k, v) in crate::sim::models::mccabe_table_from_ladder(&ladder.model_params) {
+        cfg.model_params.insert(k, v);
+    }
+    cfg.model_params.insert("layout".into(), 1.0);
+    cfg
+}
+
+/// Switching to the table changes nothing you can see: the table the
+/// ladder fills picks the same scale at every cell and moves the field
+/// by the same step, to the last bit of the step -- on the default
+/// ladder and on the symmetric coarse one.
+///
+/// Not bit for bit, and that is measured rather than assumed: the
+/// ladder interpolates its steps with WGSL's `mix()`, which a driver
+/// may round differently from the CPU's `a(1 - t) + bt` in the last
+/// bit, and a run is chaotic, so a one-ulp step grows -- 786 of 4,096
+/// cells differed after 40 steps the first time this ran.
+#[test]
+fn a_table_filled_from_the_ladder_renders_the_ladder() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    let mut rosette = mccabe_config(N);
+    for (k, v) in [("base_radius", 3.0f32), ("symmetry", 5.0), ("scales", 4.0)] {
+        rosette.model_params.insert(k.into(), v);
+    }
+    for (name, ladder) in [("default", mccabe_config(N)), ("rosette", rosette)] {
+        let table = mccabe_table_from(&ladder);
+        let run = |cfg: &SimConfig, steps: u32| {
+            let mut r = SimRenderer::new(&device, cfg, N, N);
+            r.seed(&device, &queue, cfg);
+            r.run_steps(&device, &queue, cfg, steps);
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            read_rgba32f(&device, &queue, r.field_texture(), N, N)
+        };
+        // One step: the same winner everywhere, the field to rounding.
+        let (a, b) = (run(&ladder, 1), run(&table, 1));
+        let other_scale = a.iter().zip(&b).filter(|(x, y)| x[1] != y[1]).count();
+        let worst = a.iter().zip(&b).map(|(x, y)| (x[0] - y[0]).abs()).fold(0.0f32, f32::max);
+        // And how far 40 steps carry it, reported.
+        let (a40, b40) = (run(&ladder, 40), run(&table, 40));
+        let apart = a40.iter().zip(&b40).filter(|(x, y)| (x[0] - y[0]).abs() > 0.05).count();
+        println!(
+            "{name}: one step -- {other_scale} cells chose another scale, field worst {worst:.2e}; 40 steps -- {apart} of {} cells apart by more than 0.05",
+            N * N
+        );
+        assert_eq!(other_scale, 0, "{name}: the table chose another scale somewhere");
+        assert!(worst < 1e-6, "{name}: the table moved the field by {worst} in one step");
+    }
+}
+
+/// The CPU pyramid of a field and the shader's trilinear read of it,
+/// as `mccabe_matches_a_cpu_mirror` builds them: `sample(level, x, y)`
+/// at a position in base cells.
+fn cpu_mccabe_sampler(f0: &[f32], n: usize) -> impl Fn(f32, f32, f32) -> f32 {
+    let levels = crate::sim::pyramid_levels(n as u32, n as u32) as usize;
+    let mut pyr: Vec<(Vec<f32>, usize, usize)> = vec![(f0.to_vec(), n, n)];
+    for _ in 1..levels {
+        let (src, w, h) = pyr.last().unwrap();
+        let next = cpu_pyramid_level(src, *w, *h);
+        pyr.push(next);
+    }
+    move |level: f32, px: f32, py: f32| -> f32 {
+        let load = |l: usize, qx: i64, qy: i64| -> f32 {
+            let (ref d, w, h) = pyr[l];
+            d[(qy.rem_euclid(h as i64) as usize) * w + qx.rem_euclid(w as i64) as usize]
+        };
+        let level_avg = |l: usize, px: f32, py: f32| -> f32 {
+            let s = (1u32 << l) as f32;
+            let (fx, fy) = ((px - 0.5) / s, (py - 0.5) / s);
+            let (x0, y0) = (fx.floor(), fy.floor());
+            let (tx, ty) = (fx - x0, fy - y0);
+            let (ix, iy) = (x0 as i64, y0 as i64);
+            let a = load(l, ix, iy);
+            let b = load(l, ix + 1, iy);
+            let c = load(l, ix, iy + 1);
+            let d = load(l, ix + 1, iy + 1);
+            (a + (b - a) * tx) + ((c + (d - c) * tx) - (a + (b - a) * tx)) * ty
+        };
+        let top = (levels - 1) as f32;
+        let lf = level.clamp(0.0, top);
+        let l0 = lf.floor() as usize;
+        let l1 = (l0 + 1).min(levels - 1);
+        let t = lf - lf.floor();
+        let a = level_avg(l0, px, py);
+        let b = level_avg(l1, px, py);
+        a + (b - a) * t
+    }
+}
+
+/// The table rule against a CPU mirror, one step from the GPU's seed:
+/// free radii and ratios, a weight of 2 and one of -1, a NEGATIVE step,
+/// and symmetry on one scale only -- every column the ladder could not
+/// express. Classified as the ladder's mirror is: exact, a rounding
+/// tie that picked another scale, or wrong.
+#[test]
+fn mccabe_table_matches_a_cpu_mirror() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 64;
+    // (radius, ratio, step, weight, symmetry), finest first.
+    let rows: [(f32, f32, f32, f32, f32); 4] = [
+        (1.0, 2.0, 0.04, 1.0, 0.0),
+        (2.5, 1.6, -0.03, 2.0, 0.0),
+        (5.0, 2.5, 0.02, -1.0, 3.0),
+        (11.0, 2.0, 0.01, 1.0, 0.0),
+    ];
+    let mut cfg = mccabe_config(N as u32);
+    cfg.model_params.insert("layout".into(), 1.0);
+    cfg.model_params.insert("scales".into(), rows.len() as f32);
+    for (i, r) in rows.iter().enumerate() {
+        for (c, v) in ["radius", "ratio", "amount", "weight", "symmetry"].iter().zip([r.0, r.1, r.2, r.3, r.4]) {
+            cfg.model_params.insert(format!("s{i}_{c}"), v);
+        }
+    }
+    let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+    r.seed(&device, &queue, &cfg);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let f0: Vec<f32> = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32)
+        .iter()
+        .map(|px| px[0])
+        .collect();
+    r.run_steps(&device, &queue, &cfg, 1);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let got = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+
+    let sample = cpu_mccabe_sampler(&f0, N);
+    let level_for = |r: f32| (0.55f32 * r).max(1.0).log2();
+    // mc_avg: the mean over the n rotations about the grid centre,
+    // wrapped as floats.
+    let avg = |r: f32, px: f32, py: f32, sym: i32| -> f32 {
+        let level = level_for(r);
+        if sym < 2 {
+            return sample(level, px, py);
+        }
+        let g = N as f32;
+        let c = g * 0.5;
+        let mut acc = 0.0f32;
+        for k in 0..sym {
+            let a = 6.28318530718f32 * k as f32 / sym as f32;
+            let (dx, dy) = (px - c, py - c);
+            let mut qx = a.cos() * dx - a.sin() * dy + c;
+            let mut qy = a.sin() * dx + a.cos() * dy + c;
+            qx -= g * (qx / g).floor();
+            qy -= g * (qy / g).floor();
+            acc += sample(level, qx, qy);
+        }
+        acc / sym as f32
+    };
+    let lo = f0.iter().cloned().fold(f32::INFINITY, f32::min);
+    let hi = f0.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    let (mut exact, mut ties, mut other) = (0usize, 0usize, 0usize);
+    let mut worst_exact = 0.0f32;
+    for y in 0..N {
+        for x in 0..N {
+            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+            let (mut best_var, mut best_dir) = (f32::MAX, 0.0f32);
+            for &(ra, ratio, amt, w, sym) in &rows {
+                let act = w * avg(ra, px, py, sym.round() as i32);
+                let inh = w * avg(ra * ratio, px, py, sym.round() as i32);
+                let v = (act - inh).abs();
+                if v < best_var {
+                    best_var = v;
+                    best_dir = if act > inh { amt } else { -amt };
+                }
+            }
+            let f = (f0[y * N + x] - lo) / (hi - lo).max(1e-6) * 2.0 - 1.0;
+            let d = (f + best_dir - got[y * N + x][0]).abs();
+            if d < 1e-4 {
+                exact += 1;
+                worst_exact = worst_exact.max(d);
+            } else if d < 0.2 {
+                ties += 1;
+            } else {
+                other += 1;
+            }
+        }
+    }
+    println!(
+        "McCabe table vs CPU mirror: {exact} cells match (worst {worst_exact:.2e}), {ties} chose a \
+         different scale at a tie, {other} disagree outright"
+    );
+    assert_eq!(other, 0, "{other} cells disagree by more than any step difference");
+    assert!(ties * 200 < N * N, "{ties} of {} cells picked a different scale", N * N);
+}
+
 /// Phase 3's other gate: McCabe at 1080p inside the interactive budget.
 ///
 /// The pipeline doc expected "well under 2 ms" for a box pyramid and

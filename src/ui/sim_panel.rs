@@ -260,7 +260,7 @@ pub fn render_sim_content(
                 .default_open(true)
                 .show(ui, |ui| {
                 // ---- Model: one list whose entry 0 IS the model ----
-                render_model_section(ui, config_manager, &config, &sim, state.reseed);
+                render_model_section(ui, config_manager, &config, &sim, state.reseed, state.grid);
 
                 ui.separator();
             });
@@ -1153,6 +1153,115 @@ fn preset_changes(
     changes
 }
 
+/// A model's parameter table: the grid of cells in table mode, and in
+/// either mode a warning for any row whose inhibitor reaches past the
+/// pyramid at this grid -- its averages clamp to the top level, the
+/// variation goes to zero, and the scale wins everywhere. In the
+/// generated layout the rows are the ones the generator would fill.
+#[allow(clippy::too_many_arguments)]
+fn render_param_table(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    model: &'static crate::sim::ModelDef,
+    t: &'static crate::sim::ParamTable,
+    params: &std::collections::BTreeMap<String, f32>,
+    slot: LayerSlot,
+    grid: (u32, u32),
+    table_on: bool,
+) {
+    let def_of = |name: &str| model.parameters.iter().find(|p| p.name == name);
+    let rows_default = def_of(t.rows_param).map(|p| p.default).unwrap_or(1.0);
+    let rows = params
+        .get(t.rows_param)
+        .copied()
+        .filter(|v| v.is_finite())
+        .unwrap_or(rows_default)
+        .round()
+        .clamp(1.0, t.rows as f32) as usize;
+    let reach = crate::sim::pyramid_reach(grid.0, grid.1);
+    // The value of a cell: the config's in table mode, the generator's
+    // otherwise.
+    let generated: std::collections::BTreeMap<String, f32> = if table_on {
+        Default::default()
+    } else {
+        (t.fill)(params).into_iter().collect()
+    };
+    let value = |name: &str| -> Option<f32> {
+        let def = def_of(name)?;
+        let src = if table_on { params } else { &generated };
+        Some(src.get(name).copied().filter(|v| v.is_finite()).unwrap_or(def.default))
+    };
+    let past_reach = |r: usize| -> bool {
+        match (value(&t.cell(r, "radius")), value(&t.cell(r, "ratio"))) {
+            (Some(ra), Some(ratio)) => ra * ratio > reach,
+            _ => false,
+        }
+    };
+
+    if !table_on {
+        if let Some(r) = (0..rows).rev().find(|&r| past_reach(r)) {
+            ui.label(
+                egui::RichText::new(t!(
+                    "sim_panel.table_past_reach_ladder",
+                    n = (r + 1).to_string(),
+                    reach = format!("{reach:.0}")
+                ))
+                .small()
+                .color(ui.visuals().warn_fg_color),
+            );
+        }
+        return;
+    }
+
+    egui::Grid::new(format!("{}_param_table", slot.salt()))
+        .striped(true)
+        .spacing([6.0, 2.0])
+        .show(ui, |ui| {
+            ui.label("");
+            for c in t.columns {
+                ui.label(egui::RichText::new(column_label(c)).small());
+            }
+            ui.end_row();
+            for r in 0..rows {
+                ui.label((r + 1).to_string());
+                for c in t.columns {
+                    let name = t.cell(r, c);
+                    let (Some(def), Some(mut v)) = (def_of(&name), value(&name)) else {
+                        ui.label("");
+                        continue;
+                    };
+                    let integer = *c == "symmetry";
+                    let speed = if integer { 0.05 } else { ((def.max - def.min) as f64 / 1000.0).max(1e-4) };
+                    let mut dv = egui::DragValue::new(&mut v).range(def.min..=def.max).speed(speed);
+                    dv = if integer { dv.fixed_decimals(0) } else { dv.max_decimals(3) };
+                    if ui.add(dv).on_hover_text(def.tooltip).changed() {
+                        if integer {
+                            v = v.round();
+                        }
+                        let _ = config_manager.update_param(slot.param_path(&name), v.into());
+                    }
+                }
+                if past_reach(r) {
+                    ui.label(egui::RichText::new("⚠").color(ui.visuals().warn_fg_color))
+                        .on_hover_text(t!("sim_panel.table_past_reach", reach = format!("{reach:.0}")));
+                }
+                ui.end_row();
+            }
+        });
+}
+
+/// The header of a parameter-table column.
+fn column_label(c: &str) -> String {
+    match c {
+        "radius" => t!("sim_panel.table_radius").to_string(),
+        "ratio" => t!("sim_panel.table_ratio").to_string(),
+        "amount" => t!("sim_panel.table_amount").to_string(),
+        "weight" => t!("sim_panel.table_weight").to_string(),
+        "symmetry" => t!("sim_panel.table_symmetry").to_string(),
+        other => other.to_string(),
+    }
+}
+
 /// The Model section: one list whose entry 0 is the primary model.
 ///
 /// "Model" and "Layers" used to be separate sections that each did
@@ -1169,6 +1278,7 @@ fn render_model_section(
     config: &crate::config::FractalConfig,
     sim: &SimConfig,
     reseed: &mut bool,
+    grid: (u32, u32),
 ) {
     use crate::config::sim::{
         SimCoupling, SimCouplingForm, SimLayer, MAX_COUPLINGS, MAX_LAYERS,
@@ -1260,11 +1370,37 @@ fn render_model_section(
                 });
             }
             let params = sim.layer_model_params(i);
+            // A model with a parameter table (McCabe's per-scale table,
+            // mccabe-multiscale plan, section 3) draws its cells as a
+            // grid, and in table mode hides what only its generator reads.
+            let table = crate::sim::param_table(model.name);
+            let table_on = table.is_some_and(|t| params.get(t.mode_param).copied().unwrap_or(0.0) >= 0.5);
             for p in model.parameters.iter() {
+                if let Some(t) = table {
+                    if t.is_cell(p.name) || (table_on && t.generator_params.contains(&p.name)) {
+                        continue;
+                    }
+                }
                 let mut v = params.get(p.name).copied().unwrap_or(p.default);
                 if param_control(ui, &mut v, p, &slot.salt()) {
-                    let _ = config_manager.update_param(slot.param_path(p.name), v.into());
+                    match table {
+                        // Into the table: write the ladder into it in the
+                        // same undo step, so the switch changes nothing.
+                        Some(t) if p.name == t.mode_param && v >= 0.5 => {
+                            let mut changes = vec![(slot.param_path(p.name), v.into())];
+                            for (name, value) in (t.fill)(params) {
+                                changes.push((slot.param_path(&name), value.into()));
+                            }
+                            let _ = config_manager.update_batch(changes, "history.action.sim_table".to_string());
+                        }
+                        _ => {
+                            let _ = config_manager.update_param(slot.param_path(p.name), v.into());
+                        }
+                    }
                 }
+            }
+            if let Some(t) = table {
+                render_param_table(ui, config_manager, model, t, params, slot, grid, table_on);
             }
         };
         if count > 1 {

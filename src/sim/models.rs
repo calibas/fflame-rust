@@ -3312,6 +3312,44 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 ///
 /// Channels: `.x` = f, `.y` = the scale that fired (an integer),
 /// `.z` = the step at which the firing scale last changed, `.w` spare.
+/// McCabe's per-scale table (mccabe-multiscale plan, section 3).
+pub static MCCABE_TABLE: crate::sim::ParamTable = crate::sim::ParamTable {
+    model: "mccabe",
+    mode_param: "layout",
+    rows_param: "scales",
+    rows: 6,
+    columns: &["radius", "ratio", "amount", "weight", "symmetry"],
+    generator_params: &["base_radius", "ratio", "amount", "amount_min", "symmetry"],
+    fill: mccabe_table_from_ladder,
+};
+
+/// The table the ladder describes: radii doubling from the finest,
+/// one ratio, steps falling linearly from finest to coarsest, weight 1,
+/// one symmetry. Rows past `scales` continue the ladder at the coarsest
+/// step. Written in the shader's own arithmetic -- the radius a power
+/// of two times the base, the step `a(1 - t) + bt` -- so the table it
+/// fills renders what the ladder did.
+pub fn mccabe_table_from_ladder(params: &std::collections::BTreeMap<String, f32>) -> Vec<(String, f32)> {
+    let get = |name: &str| -> f32 {
+        let def = MCCABE.parameters.iter().find(|p| p.name == name).map(|p| p.default).unwrap_or(0.0);
+        params.get(name).copied().filter(|v| v.is_finite()).unwrap_or(def)
+    };
+    let n = get("scales").round().clamp(1.0, 6.0) as i32;
+    let (base, ratio) = (get("base_radius"), get("ratio"));
+    let (amount, amount_min) = (get("amount"), get("amount_min"));
+    let sym = get("symmetry").round();
+    let mut out = Vec::new();
+    for i in 0..MCCABE_TABLE.rows as i32 {
+        let t = if n > 1 { (i as f32 / (n - 1) as f32).min(1.0) } else { 0.0 };
+        out.push((format!("s{i}_radius"), base * (1u32 << i) as f32));
+        out.push((format!("s{i}_ratio"), ratio));
+        out.push((format!("s{i}_amount"), amount * (1.0 - t) + amount_min * t));
+        out.push((format!("s{i}_weight"), 1.0));
+        out.push((format!("s{i}_symmetry"), sym));
+    }
+    out
+}
+
 pub static MCCABE: ModelDef = ModelDef {
     name: "mccabe",
     display_name: "McCabe Multi-Scale",
@@ -3403,6 +3441,289 @@ pub static MCCABE: ModelDef = ModelDef {
                       1080p grid).",
             choices: &[],
         },
+        // The per-scale table (mccabe-multiscale plan, section 3).
+        SimParamDef {
+            name: "layout",
+            display_name: "Scales from",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Ladder builds every scale from the finest radius, doubling. Table sets \
+                      each scale's radius, ratio, step, weight and symmetry on its own, as \
+                      Softology and Reusser do; switching to it fills it from the ladder, so \
+                      nothing changes until you edit it.",
+            choices: &["Ladder", "Table"],
+        },
+        SimParamDef {
+            name: "s0_radius",
+            display_name: "Scale 1 activator radius",
+            default: 1.0,
+            min: 0.5,
+            max: 256.0,
+            tooltip: "Activator radius of this scale, in cells. The inhibitor's is this times the ratio. Past the pyramid's reach at the current grid (the panel warns) both averages clamp to its top level and the scale wins everywhere.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s0_ratio",
+            display_name: "Scale 1 inhibitor ratio",
+            default: 2.0,
+            min: 1.25,
+            max: 4.0,
+            tooltip: "Inhibitor radius over activator radius for this scale.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s0_amount",
+            display_name: "Scale 1 step",
+            default: 0.05,
+            min: -0.2,
+            max: 0.2,
+            tooltip: "How far this scale moves a cell when it wins. Negative inverts it: the cell moves away from the activator, as one of Reusser's default scales does.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s0_weight",
+            display_name: "Scale 1 weight",
+            default: 1.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Softology's weight: both averages are multiplied by it before they are compared. Larger makes the scale's variation larger, so it wins less often; negative also flips its direction; 0 makes it win everywhere.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s0_symmetry",
+            display_name: "Scale 1 symmetry",
+            default: 0.0,
+            min: 0.0,
+            max: 12.0,
+            tooltip: "n-fold rotational symmetry of this scale's averages about the centre; 0 or 1 is none. McCabe's fig. 14 puts 3-fold on the small scales and 9-fold on the large. Costs n times this scale's reads.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s1_radius",
+            display_name: "Scale 2 activator radius",
+            default: 2.0,
+            min: 0.5,
+            max: 256.0,
+            tooltip: "Activator radius of this scale, in cells. The inhibitor's is this times the ratio. Past the pyramid's reach at the current grid (the panel warns) both averages clamp to its top level and the scale wins everywhere.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s1_ratio",
+            display_name: "Scale 2 inhibitor ratio",
+            default: 2.0,
+            min: 1.25,
+            max: 4.0,
+            tooltip: "Inhibitor radius over activator radius for this scale.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s1_amount",
+            display_name: "Scale 2 step",
+            default: 0.04,
+            min: -0.2,
+            max: 0.2,
+            tooltip: "How far this scale moves a cell when it wins. Negative inverts it: the cell moves away from the activator, as one of Reusser's default scales does.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s1_weight",
+            display_name: "Scale 2 weight",
+            default: 1.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Softology's weight: both averages are multiplied by it before they are compared. Larger makes the scale's variation larger, so it wins less often; negative also flips its direction; 0 makes it win everywhere.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s1_symmetry",
+            display_name: "Scale 2 symmetry",
+            default: 0.0,
+            min: 0.0,
+            max: 12.0,
+            tooltip: "n-fold rotational symmetry of this scale's averages about the centre; 0 or 1 is none. McCabe's fig. 14 puts 3-fold on the small scales and 9-fold on the large. Costs n times this scale's reads.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s2_radius",
+            display_name: "Scale 3 activator radius",
+            default: 4.0,
+            min: 0.5,
+            max: 256.0,
+            tooltip: "Activator radius of this scale, in cells. The inhibitor's is this times the ratio. Past the pyramid's reach at the current grid (the panel warns) both averages clamp to its top level and the scale wins everywhere.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s2_ratio",
+            display_name: "Scale 3 inhibitor ratio",
+            default: 2.0,
+            min: 1.25,
+            max: 4.0,
+            tooltip: "Inhibitor radius over activator radius for this scale.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s2_amount",
+            display_name: "Scale 3 step",
+            default: 0.03,
+            min: -0.2,
+            max: 0.2,
+            tooltip: "How far this scale moves a cell when it wins. Negative inverts it: the cell moves away from the activator, as one of Reusser's default scales does.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s2_weight",
+            display_name: "Scale 3 weight",
+            default: 1.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Softology's weight: both averages are multiplied by it before they are compared. Larger makes the scale's variation larger, so it wins less often; negative also flips its direction; 0 makes it win everywhere.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s2_symmetry",
+            display_name: "Scale 3 symmetry",
+            default: 0.0,
+            min: 0.0,
+            max: 12.0,
+            tooltip: "n-fold rotational symmetry of this scale's averages about the centre; 0 or 1 is none. McCabe's fig. 14 puts 3-fold on the small scales and 9-fold on the large. Costs n times this scale's reads.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s3_radius",
+            display_name: "Scale 4 activator radius",
+            default: 8.0,
+            min: 0.5,
+            max: 256.0,
+            tooltip: "Activator radius of this scale, in cells. The inhibitor's is this times the ratio. Past the pyramid's reach at the current grid (the panel warns) both averages clamp to its top level and the scale wins everywhere.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s3_ratio",
+            display_name: "Scale 4 inhibitor ratio",
+            default: 2.0,
+            min: 1.25,
+            max: 4.0,
+            tooltip: "Inhibitor radius over activator radius for this scale.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s3_amount",
+            display_name: "Scale 4 step",
+            default: 0.02,
+            min: -0.2,
+            max: 0.2,
+            tooltip: "How far this scale moves a cell when it wins. Negative inverts it: the cell moves away from the activator, as one of Reusser's default scales does.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s3_weight",
+            display_name: "Scale 4 weight",
+            default: 1.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Softology's weight: both averages are multiplied by it before they are compared. Larger makes the scale's variation larger, so it wins less often; negative also flips its direction; 0 makes it win everywhere.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s3_symmetry",
+            display_name: "Scale 4 symmetry",
+            default: 0.0,
+            min: 0.0,
+            max: 12.0,
+            tooltip: "n-fold rotational symmetry of this scale's averages about the centre; 0 or 1 is none. McCabe's fig. 14 puts 3-fold on the small scales and 9-fold on the large. Costs n times this scale's reads.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s4_radius",
+            display_name: "Scale 5 activator radius",
+            default: 16.0,
+            min: 0.5,
+            max: 256.0,
+            tooltip: "Activator radius of this scale, in cells. The inhibitor's is this times the ratio. Past the pyramid's reach at the current grid (the panel warns) both averages clamp to its top level and the scale wins everywhere.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s4_ratio",
+            display_name: "Scale 5 inhibitor ratio",
+            default: 2.0,
+            min: 1.25,
+            max: 4.0,
+            tooltip: "Inhibitor radius over activator radius for this scale.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s4_amount",
+            display_name: "Scale 5 step",
+            default: 0.01,
+            min: -0.2,
+            max: 0.2,
+            tooltip: "How far this scale moves a cell when it wins. Negative inverts it: the cell moves away from the activator, as one of Reusser's default scales does.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s4_weight",
+            display_name: "Scale 5 weight",
+            default: 1.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Softology's weight: both averages are multiplied by it before they are compared. Larger makes the scale's variation larger, so it wins less often; negative also flips its direction; 0 makes it win everywhere.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s4_symmetry",
+            display_name: "Scale 5 symmetry",
+            default: 0.0,
+            min: 0.0,
+            max: 12.0,
+            tooltip: "n-fold rotational symmetry of this scale's averages about the centre; 0 or 1 is none. McCabe's fig. 14 puts 3-fold on the small scales and 9-fold on the large. Costs n times this scale's reads.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s5_radius",
+            display_name: "Scale 6 activator radius",
+            default: 32.0,
+            min: 0.5,
+            max: 256.0,
+            tooltip: "Activator radius of this scale, in cells. The inhibitor's is this times the ratio. Past the pyramid's reach at the current grid (the panel warns) both averages clamp to its top level and the scale wins everywhere.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s5_ratio",
+            display_name: "Scale 6 inhibitor ratio",
+            default: 2.0,
+            min: 1.25,
+            max: 4.0,
+            tooltip: "Inhibitor radius over activator radius for this scale.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s5_amount",
+            display_name: "Scale 6 step",
+            default: 0.01,
+            min: -0.2,
+            max: 0.2,
+            tooltip: "How far this scale moves a cell when it wins. Negative inverts it: the cell moves away from the activator, as one of Reusser's default scales does.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s5_weight",
+            display_name: "Scale 6 weight",
+            default: 1.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Softology's weight: both averages are multiplied by it before they are compared. Larger makes the scale's variation larger, so it wins less often; negative also flips its direction; 0 makes it win everywhere.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s5_symmetry",
+            display_name: "Scale 6 symmetry",
+            default: 0.0,
+            min: 0.0,
+            max: 12.0,
+            tooltip: "n-fold rotational symmetry of this scale's averages about the centre; 0 or 1 is none. McCabe's fig. 14 puts 3-fold on the small scales and 9-fold on the large. Costs n times this scale's reads.",
+            choices: &[],
+        },
     ],
     presets: &[
         SimPreset {
@@ -3415,6 +3736,8 @@ pub static MCCABE: ModelDef = ModelDef {
                 ("amount", 0.05),
                 ("amount_min", 0.01),
                 ("symmetry", 0.0),
+                ("layout", 0.0),
+                ("memory", 0.0),
             ],
             // Measured on the prototype: the nested texture is present
             // by step 20 and fully developed by 100; the field never
@@ -3440,6 +3763,8 @@ pub static MCCABE: ModelDef = ModelDef {
                 ("amount", 0.05),
                 ("amount_min", 0.01),
                 ("symmetry", 0.0),
+                ("layout", 0.0),
+                ("memory", 0.0),
             ],
             steps: 200,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
@@ -3465,6 +3790,7 @@ pub static MCCABE: ModelDef = ModelDef {
                 ("amount_min", 0.01),
                 ("symmetry", 0.0),
                 ("memory", 0.05),
+                ("layout", 0.0),
             ],
             steps: 200,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
@@ -3483,11 +3809,66 @@ pub static MCCABE: ModelDef = ModelDef {
                 ("amount", 0.05),
                 ("amount_min", 0.01),
                 ("symmetry", 5.0),
+                ("layout", 0.0),
+                ("memory", 0.0),
             ],
             steps: 200,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.5), ("wrap", 0.0)],
+            matte: None,
+            warp: None,
+        },
+        SimPreset {
+            name: "symmetry_mix",
+            display_name: "Mixed symmetry",
+            // McCabe's fig. 14: "3-fold symmetry imposed on the small
+            // scale Turing instabilities and 9-fold symmetry on the
+            // large". The coarse ladder as a table, the three finest
+            // scales 3-fold and the two coarsest 9-fold. Measured at
+            // 512^2 (mccabe-multiscale plan, section 3): a 9-fold
+            // rosette of 3-fold detail; isotropic by construction.
+            params: &[
+                ("layout", 1.0),
+                ("memory", 0.0),
+                ("scales", 5.0),
+                ("s0_radius", 3.0), ("s0_ratio", 2.0), ("s0_amount", 0.05), ("s0_weight", 1.0), ("s0_symmetry", 3.0),
+                ("s1_radius", 6.0), ("s1_ratio", 2.0), ("s1_amount", 0.04), ("s1_weight", 1.0), ("s1_symmetry", 3.0),
+                ("s2_radius", 12.0), ("s2_ratio", 2.0), ("s2_amount", 0.03), ("s2_weight", 1.0), ("s2_symmetry", 3.0),
+                ("s3_radius", 24.0), ("s3_ratio", 2.0), ("s3_amount", 0.02), ("s3_weight", 1.0), ("s3_symmetry", 9.0),
+                ("s4_radius", 48.0), ("s4_ratio", 2.0), ("s4_amount", 0.01), ("s4_weight", 1.0), ("s4_symmetry", 9.0),
+            ],
+            steps: 200,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.5), ("wrap", 0.0)],
+            matte: None,
+            warp: None,
+        },
+        SimPreset {
+            name: "uneven",
+            display_name: "Uneven scales",
+            // Not a doubling ladder: radii 1, 3, 10, 20, 45, after the
+            // uneven spacing of Reusser's 2018 defaults (which go on to
+            // 250, past what the pyramid can average). The steps fall
+            // from finest to coarsest: with Reusser's order -- coarse
+            // fastest -- the same radii measured an axis bias of 1.2-1.3
+            // in spectral energy (axes over diagonals, four seeds,
+            // 512^2), against 0.99 this way round. With colour memory.
+            params: &[
+                ("layout", 1.0),
+                ("memory", 0.05),
+                ("scales", 5.0),
+                ("s0_radius", 1.0), ("s0_ratio", 2.0), ("s0_amount", 0.05), ("s0_weight", 1.0), ("s0_symmetry", 0.0),
+                ("s1_radius", 3.0), ("s1_ratio", 2.0), ("s1_amount", 0.04), ("s1_weight", 1.0), ("s1_symmetry", 0.0),
+                ("s2_radius", 10.0), ("s2_ratio", 2.0), ("s2_amount", 0.03), ("s2_weight", 1.0), ("s2_symmetry", 0.0),
+                ("s3_radius", 20.0), ("s3_ratio", 2.0), ("s3_amount", 0.02), ("s3_weight", 1.0), ("s3_symmetry", 0.0),
+                ("s4_radius", 45.0), ("s4_ratio", 2.0), ("s4_amount", 0.01), ("s4_weight", 1.0), ("s4_symmetry", 0.0),
+            ],
+            steps: 200,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("scale_memory"),
+            coloring_params: &[("scales", 5.0), ("value_scale", 0.5)],
             matte: None,
             warp: None,
         },
@@ -3524,6 +3905,9 @@ fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
     let amount = mparam(3u);
     let amount_min = mparam(4u);
     let sym = i32(round(mparam(5u)));
+    // Ladder (0) or the per-scale table (1); the table's row i starts
+    // at slot 8 + 5i: radius, ratio, step, weight, symmetry.
+    let table = mparam(7u) >= 0.5;
     let pos = vec2<f32>(p) + vec2<f32>(0.5, 0.5);
     pyr_prepare();
 
@@ -3531,18 +3915,37 @@ fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
     var best_dir = 0.0;
     var best_scale = 0.0;
     for (var i = 0; i < n; i = i + 1) {
-        let ra = base * f32(1 << u32(i));
-        let rb = ra * ratio;
-        let act = mc_avg(ra, pos, sym);
-        let inh = mc_avg(rb, pos, sym);
-        let v = abs(act - inh);
-        // The amounts fall linearly from the finest scale to the
-        // coarsest; one scale gets the finest amount.
-        let t = select(0.0, f32(i) / f32(n - 1), n > 1);
-        let amt = mix(amount, amount_min, t);
+        var v: f32;
+        var up: bool;
+        var amt: f32;
+        if (table) {
+            let o = 8u + 5u * u32(i);
+            let ra = max(mparam(o), 0.5);
+            let rb = ra * mparam(o + 1u);
+            amt = mparam(o + 2u);
+            let w = mparam(o + 3u);
+            let sym_i = i32(round(mparam(o + 4u)));
+            // Softology's weight: both averages times w, then compared.
+            // At w = 1 this is exactly the ladder's arithmetic.
+            let act = w * mc_avg(ra, pos, sym_i);
+            let inh = w * mc_avg(rb, pos, sym_i);
+            v = abs(act - inh);
+            up = act > inh;
+        } else {
+            let ra = base * f32(1 << u32(i));
+            let rb = ra * ratio;
+            let act = mc_avg(ra, pos, sym);
+            let inh = mc_avg(rb, pos, sym);
+            v = abs(act - inh);
+            up = act > inh;
+            // The amounts fall linearly from the finest scale to the
+            // coarsest; one scale gets the finest amount.
+            let t = select(0.0, f32(i) / f32(n - 1), n > 1);
+            amt = mix(amount, amount_min, t);
+        }
         if (v < best_var) {
             best_var = v;
-            best_dir = select(-amt, amt, act > inh);
+            best_dir = select(-amt, amt, up);
             best_scale = f32(i);
         }
     }

@@ -1,7 +1,8 @@
 # McCabe multi-scale: colour memory, a per-scale table, variation radius
 
-Branch `mccabe-scales`, started 2026-10-04. **Phase 1 (colour memory)
-done 2026-10-04**; results at the end of section 2. The model is catalogue
+Branch `mccabe-scales`, started 2026-10-04. **Phases 1 (colour memory)
+and 2 (the per-scale table) done 2026-10-04**; results at the end of
+sections 2 and 3. The model is catalogue
 §10 (`mccabe` in [src/sim/models.rs](../../src/sim/models.rs)). This
 plan brings it up to what the paper and the two implementations
 everyone copies actually do. Decisions a reader should argue with are
@@ -174,6 +175,75 @@ and now uses three. Section 3's warning is for this.
 **Gates.** Ladder mode byte-identical; table-from-ladder
 byte-identical; the CPU mirror with weights, a negative amount and
 per-scale symmetry.
+
+**As built.** As planned, with these differences:
+- **The table is described, not hard-coded.** `ParamTable` in the
+  simulation registry names the mode parameter, the row count, the
+  columns, the generator's own parameters and a `fill` function. The
+  panel draws any model's table from it, and `PARAM_TABLES` lists the
+  one model that has one.
+- **Per-scale symmetry goes to 12**, not 8. Fig. 14 needs 9, and the
+  preset range test caught it.
+- **Every McCabe preset now names `layout` and `memory`.** A preset
+  sets only what it names, so a ladder preset applied in table mode
+  stayed in table mode. Applied from a default state, the old presets
+  are unchanged.
+- **Table-from-ladder is not bit-identical**, and the gate says so (see
+  the table below).
+
+| gate | result |
+|---|---|
+| baselines, ladder mode | 93/93 byte-identical |
+| table filled from the ladder, default and 5-fold coarse | one step: 0 cells choose another scale, field within 1.5e-8. 40 steps: 0 of 4,096 cells more than 0.05 apart |
+| CPU mirror: weights 2 and −1, a negative step, symmetry on one scale | 4,096 of 4,096 cells exact (1.2e-7), no ties |
+| `every_preset_draws_something` | passes with the two new presets |
+| new baseline | `sim-mccabe-table`: every column away from its default |
+
+**Why table-from-ladder is not bit-identical.** The ladder interpolates
+its steps with WGSL's `mix()`. A driver may round that differently from
+the CPU's `a(1 − t) + bt` in the last bit, and the run is chaotic, so
+one ulp of step grows: 786 of 4,096 cells differed in their last bits
+after 40 steps. None is visible: no cell is 0.05 apart. Matching the
+driver's `mix` on the CPU is not portable, and changing the ladder's
+arithmetic would move every existing McCabe picture.
+
+**Presets** (512², inspected):
+- **Mixed symmetry**: fig. 14's arrangement. The coarse ladder as a
+  table, 3-fold on the three finest scales and 9-fold on the two
+  coarsest. A 9-fold rosette of 3-fold detail.
+- **Uneven scales**: radii 1, 3, 10, 20, 45, steps falling from finest
+  to coarsest, with colour memory. A nested labyrinth.
+
+Reusser's own 2018 table was not shipped. Its 250/500 scale is past
+what the pyramid can average at any grid (8 levels reach about 233
+cells), and its step order measured an axis bias (next).
+
+**Found: tables whose coarse scales move fastest lean to the axes.**
+Measured as spectral energy within 10° of the axes over that within
+10° of the diagonals, mean of four seeds at 512² (1.0 is isotropic):
+
+| table | axes / diagonals |
+|---|---|
+| the shipped coarse ladder (3 … 48, fine fastest) | 1.01 |
+| the same ladder at base 2.5, 3.3, 3.6 | 1.00, 1.04, 1.10 |
+| radii 1, 3, 10, 20, 45, **coarse fastest** (Reusser's order) | 1.25 |
+| … with the negative step removed | 1.18 |
+| … with the radius-1 row removed | 1.26 |
+| … with the negative step on radius 10 instead | 1.18 |
+| radii 1, 3, 10, 20, 45, **fine fastest** (the preset) | 0.99 |
+| … adding a 100/200 scale | 1.12 |
+| the doubling radii 2.5 … 40, coarse fastest | 1.06 |
+| radii 1, 4, 16, 64 (wide gaps), fine fastest | 1.03 |
+
+So neither the level a radius lands between nor the negative step is
+the cause; the step order is. A likely reading, not proven: the coarse
+scales read the pyramid's coarsest levels (a handful of texels at
+512²). Bilinear reconstruction of so few texels is square, and when
+those scales dominate the picture their squareness shows. A radius
+near the pyramid's reach (the 100/200 row) does the same in a milder
+form. Exact disc averages (FFT, parked) would be the fix. Until then,
+the panel's reach warning catches the extreme case, and the presets
+keep coarse scales slow.
 
 ## 4. Phase 3: variation radius
 
