@@ -740,11 +740,16 @@ fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
     // Escaped only; |z| > 1 at escape so ln|z| > 0.
     let r = max(length(sum.z), 1.0000001);
     let deriv = max(length(sum.dz), 1e-30);
+    // dz is the derivative per render pixel, so this is the distance in
+    // render pixels.
     var d = max(r * log(r) / deriv, 1e-30);
     if (cparam(2u) > 0.5) {
         // In OUTPUT pixels, as Fraktaler 3 measures it, so antialiasing
         // does not move the colours.
-        d = max(d * esc_px_per_unit(), 1e-30);
+        d = max(d / esc_supersample(), 1e-30);
+    } else {
+        // In units of the plane.
+        d = max(d * esc_render_px(), 1e-30);
     }
     let mapping = u32(clamp(cparam(1u), 0.0, 2.0));
     if (mapping == 1u) {
@@ -1680,10 +1685,11 @@ pub static RAINBOW_FRINGE: ColoringDef = ColoringDef {
         choices: &[],
     }],
     wgsl: r#"
-// Fraktaler 3's distance estimate, in output pixels.
+// Fraktaler 3's distance estimate, in output pixels (dz is per render
+// pixel).
 fn rainbow_fringe_distance(sum: OrbitSummary) -> f32 {
     let r = max(length(sum.z), 1.0000001);
-    return r * log(r) / max(length(sum.dz), 1e-30) * esc_px_per_unit();
+    return r * log(r) / max(length(sum.dz), 1e-30) / esc_supersample();
 }
 
 fn rainbow_fringe_to_linear(c: f32) -> f32 {
