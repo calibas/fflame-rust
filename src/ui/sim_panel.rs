@@ -48,6 +48,46 @@ pub struct SimUiState<'a> {
     pub grid: (u32, u32),
 }
 
+/// "Save as texture" (`docs/projects/sim-textures.md`): this simulation,
+/// as it stands, into the texture library, where escape-time fractals
+/// can use it. What is saved is what is on screen: the step count is the
+/// live run's, not the cap (which may be 0, uncapped), and a
+/// viewport-scaled grid is fixed at the size it has now.
+fn save_as_texture_row(ui: &mut egui::Ui, config: &crate::config::FractalConfig, state: &SimUiState<'_>) {
+    let name_id = ui.id().with("sim_texture_name");
+    let status_id = ui.id().with("sim_texture_status");
+    let mut name: String = ui.data_mut(|d| d.get_temp(name_id)).unwrap_or_default();
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut name)
+                .desired_width(140.0)
+                .hint_text(t!("sim_panel.texture_name_hint").as_ref()),
+        );
+        if ui
+            .button(t!("sim_panel.save_as_texture").as_ref())
+            .on_hover_text(t!("sim_panel.save_as_texture_tip").as_ref())
+            .clicked()
+        {
+            let mut recipe = config.clone();
+            if state.step_index > 0 {
+                recipe.sim.steps = state.step_index;
+            }
+            if let crate::config::sim::SimGrid::Viewport { .. } = recipe.sim.grid {
+                recipe.sim.grid = crate::config::sim::SimGrid::Fixed { width: state.grid.0, height: state.grid.1 };
+            }
+            let status = match crate::textures::save_user(&name, &recipe, state.grid) {
+                Ok(stored) => t!("sim_panel.texture_saved", name = stored).to_string(),
+                Err(e) => t!("sim_panel.texture_save_failed", error = e.to_string()).to_string(),
+            };
+            ui.data_mut(|d| d.insert_temp(status_id, status));
+        }
+    });
+    ui.data_mut(|d| d.insert_temp(name_id, name));
+    if let Some(status) = ui.data(|d| d.get_temp::<String>(status_id)) {
+        ui.weak(status);
+    }
+}
+
 /// A registry parameter control: dropdown when it has `choices`,
 /// slider otherwise. Same shape as the escape panel's, over this
 /// engine's param type.
@@ -167,6 +207,8 @@ pub fn render_sim_content(
             ui.label("⏱").on_hover_text(t!("sim_panel.timeline_owns_steps").as_ref());
         }
     });
+    save_as_texture_row(ui, &config, &state);
+
     // Three readouts, because "step 340" alone cannot tell a run that
     // has arrived from one still walking toward a target from one that
     // is deliberately holding.

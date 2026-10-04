@@ -264,6 +264,7 @@ fn esc_run(pixel: vec2<f32>) -> EscRun {
         //__PERIOD_TEST__
         //__ESCAPE_TEST__
         //__INTERIOR_TEST__
+        //__ACCUM_UPDATE_LATE__
     }
     if (!escaped) {
         n = params.max_iter;
@@ -349,6 +350,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         );
     }
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(rgb, coverage));
+    slope = esc_overlay_field(escaped, z, n, slope);
     textureStore(height_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(height, relief, slope));
 }
 "#;
@@ -614,6 +616,32 @@ fn colour_wgsl(coloring: &ColoringDef) -> &'static str {
          }"
     }
 }
+
+/// The texture overlay's warp field (`TextureOverlay`, sim-textures
+/// phase 2): Kalles Fraktaler warps by the smooth iteration count,
+/// whatever the colouring, so the iterate passes store it -- in the
+/// height texture's blue channel. Flags bit 8 is set when blue is free
+/// for it: the overlay is on, and no lit stored-slope relief (field
+/// codes 3 and up) has blue, in which case the resolve pass falls back
+/// to the relief's own source. Clear, the height texture is written
+/// exactly as before.
+const OVERLAY_FIELD_WGSL: &str = r#"
+fn esc_overlay_field(escaped: bool, z: vec2<f32>, n: u32, slope: vec2<f32>) -> vec2<f32> {
+    if ((params.flags & 256u) == 0u) {
+        return slope;
+    }
+    // Inside, every neighbour is at the limit too: no slope, no warp.
+    if (!escaped) {
+        return vec2<f32>(f32(params.max_iter), 0.0);
+    }
+    // The smooth count, as the smooth colouring has it; KF2's n + 1 - NF
+    // differs from it by a constant, which a difference cancels.
+    let r2 = max(dot(z, z), 1.0000001);
+    let ll = log2(0.5 * log2(r2));
+    let frac = select(ll / log2(params.degree), ll, params.degree == 2.0);
+    return vec2<f32>(f32(n) + 1.0 - frac, 0.0);
+}
+"#;
 
 /// Offset-orbit relief (`ShadingField::Offset`): two more runs of the
 /// orbit beside the pixel's own. Spliced only into a pipeline built for
@@ -1000,6 +1028,20 @@ fn with_accum_width(template: &str, wide: bool) -> String {
         );
     }
     out.join("\n")
+}
+
+/// A colouring whose colour carries an alpha (`ColoringFeature::
+/// DirectAlpha`) hands it to the pixel's coverage; every other drawn
+/// pixel is opaque. Substituted into the template's text, so no other
+/// shader changes. `state` is the template's name for the accumulator.
+fn with_alpha(template: String, coloring: &ColoringDef, state: &str) -> String {
+    if !coloring.has_feature(ColoringFeature::DirectAlpha) {
+        return template;
+    }
+    template.replace(
+        "coverage = 1.0;",
+        &format!("coverage = clamp(coloring_alpha(summary, {state}), 0.0, 1.0);"),
+    )
 }
 
 /// Bytes of one terminal record (`IterResult`): z, dz, the
@@ -1481,6 +1523,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         //__CONVERGE_TEST__
 
         //__ESCAPE_MARGIN__
+        //__ACCUM_UPDATE_LATE__
 
         // Zhuoran rebase: restart the reference index when the new
         // delta AGAINST THE ORBIT'S START would be smaller than the
@@ -1558,6 +1601,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // settled image is byte-identical.
     if (escaped || perturb.iter_end >= params.max_iter) {
         textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, coverage));
+        slope = esc_overlay_field(escaped, z, n, slope);
         textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, relief, slope));
     }
 }
@@ -2406,6 +2450,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         //__CONVERGE_TEST__
 
         //__ESCAPE_MARGIN__
+        //__ACCUM_UPDATE_LATE__
 
         //__REBASE__
     }
@@ -2475,6 +2520,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // settled image is byte-identical.
     if (escaped || perturb.iter_end >= params.max_iter) {
         textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, coverage));
+        slope = esc_overlay_field(escaped, z, n, slope);
         textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, relief, slope));
     }
 }
@@ -4665,14 +4711,20 @@ pub fn assemble_perturbed_layered(
     // On this path the TIER is the map's identity -- there is no
     // FormulaDef in scope -- so convergence is a property of the tier.
     let convergent = tier.is_convergent();
-    let template = with_accum_width(
-        if floatexp {
-            PERTURBED_FE_TEMPLATE
-        } else {
-            PERTURBED_TEMPLATE
-        },
-        owner.as_ref().is_some_and(|(o, _)| crate::escape::accum_is_wide(o)),
+    let template = with_alpha(
+        with_accum_width(
+            if floatexp {
+                PERTURBED_FE_TEMPLATE
+            } else {
+                PERTURBED_TEMPLATE
+            },
+            owner.as_ref().is_some_and(|(o, _)| crate::escape::accum_is_wide(o)),
+        ),
+        coloring,
+        "accum_state",
     );
+    // UF's loop order (SkipsEscapingIterate): after the escape test.
+    let late = owner.as_ref().is_some_and(|(o, _)| o.has_feature(ColoringFeature::SkipsEscapingIterate));
 
     let mut out = Vec::new();
     lens_prelude(&mut out, lens);
@@ -4769,6 +4821,7 @@ pub fn assemble_perturbed_layered(
                 out.push(coloring.wgsl.to_string());
                 out.push(layer_wgsl(layer, false));
                 out.push(colour_wgsl(coloring).to_string());
+                out.push(OVERLAY_FIELD_WGSL.trim().to_string());
                 out.push(ANALYTIC_SLOPE_WGSL.trim().to_string());
             }
             "//__COLORING_ACCUM__" => {
@@ -4808,7 +4861,15 @@ pub fn assemble_perturbed_layered(
                 }
             }
             "//__ACCUM_UPDATE__" => {
-                if needs_accum {
+                if needs_accum && !late {
+                    out.push(
+                        "        accum_state = coloring_accum(z_full, z_before, c_f32, accum_state);"
+                            .to_string(),
+                    );
+                }
+            }
+            "//__ACCUM_UPDATE_LATE__" => {
+                if needs_accum && late {
                     out.push(
                         "        accum_state = coloring_accum(z_full, z_before, c_f32, accum_state);"
                             .to_string(),
@@ -5030,6 +5091,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         coverage = 1.0;
     }
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, coverage));
+    slope = esc_overlay_field(escaped, r.z, r.n, slope);
     textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, relief, slope));
 }
 "#;
@@ -5108,7 +5170,7 @@ pub fn assemble_recolor_layered(
     let bounded = coloring.has_feature(ColoringFeature::Bounded);
     let wide = accum_owner(coloring, layer).is_some_and(|(o, _)| crate::escape::accum_is_wide(o));
     let mut out = Vec::new();
-    let template = with_accum_width(RECOLOR_TEMPLATE, wide);
+    let template = with_alpha(with_accum_width(RECOLOR_TEMPLATE, wide), coloring, "state");
     for line in template.lines() {
         match line.trim() {
             "//__PALETTE_MAP__" => out.push(PALETTE_MAP_WGSL.trim().to_string()),
@@ -5126,6 +5188,7 @@ pub fn assemble_recolor_layered(
                 out.push(coloring.wgsl.to_string());
                 out.push(layer_wgsl(layer, true));
                 out.push(colour_wgsl(coloring).to_string());
+                out.push(OVERLAY_FIELD_WGSL.trim().to_string());
                 out.push(ANALYTIC_SLOPE_WGSL.trim().to_string());
             }
             _ => out.push(line.to_string()),
@@ -7258,10 +7321,13 @@ pub fn assemble_layered(
 
     let mut out = Vec::new();
     lens_prelude(&mut out, lens);
-    let template = with_accum_width(
-        TEMPLATE,
-        owner.as_ref().is_some_and(|(o, _)| crate::escape::accum_is_wide(o)),
+    let template = with_alpha(
+        with_accum_width(TEMPLATE, owner.as_ref().is_some_and(|(o, _)| crate::escape::accum_is_wide(o))),
+        coloring,
+        "accum_state",
     );
+    // UF's loop order (SkipsEscapingIterate): after the escape test.
+    let late = owner.as_ref().is_some_and(|(o, _)| o.has_feature(ColoringFeature::SkipsEscapingIterate));
     for line in template.lines() {
         match line.trim() {
             "//__PALETTE_MAP__" => out.push(PALETTE_MAP_WGSL.trim().to_string()),
@@ -7305,6 +7371,7 @@ pub fn assemble_layered(
                 out.push(coloring.wgsl.to_string());
                 out.push(layer_wgsl(layer, false));
                 out.push(colour_wgsl(coloring).to_string());
+                out.push(OVERLAY_FIELD_WGSL.trim().to_string());
                 out.push(ANALYTIC_SLOPE_WGSL.trim().to_string());
             }
             "//__COLORING_ACCUM__" => {
@@ -7325,7 +7392,12 @@ pub fn assemble_layered(
                 }
             }
             "//__ACCUM_UPDATE__" => {
-                if needs_accum {
+                if needs_accum && !late {
+                    out.push("        accum_state = coloring_accum(z, z_before, c, accum_state);".to_string());
+                }
+            }
+            "//__ACCUM_UPDATE_LATE__" => {
+                if needs_accum && late {
                     out.push("        accum_state = coloring_accum(z, z_before, c, accum_state);".to_string());
                 }
             }
@@ -7755,6 +7827,47 @@ mod tests {
             lift(FIELD_TEMPLATE),
             "esc_reduce has drifted between the direct and field templates"
         );
+    }
+
+    /// The image trap runs UF's loop order and hands out its alpha, in
+    /// every template that draws it; nothing else changes either.
+    #[test]
+    fn the_image_trap_accumulates_after_bailout_and_hands_out_its_alpha() {
+        let trap = crate::escape::get_coloring("image_trap");
+        let other = crate::escape::get_coloring("direct_traps");
+        let f = crate::escape::get_formula("mandelbrot");
+        let tier = crate::escape::EscapeRenderer::perturb_tier(&crate::config::escape::EscapeConfig::default())
+            .expect("the Mandelbrot perturbs");
+        let alpha = "coverage = clamp(coloring_alpha(summary, accum_state), 0.0, 1.0);";
+        let cases = [
+            ("direct", assemble(f, trap, false), assemble(f, other, false), "if (esc_metric > params.bailout)"),
+            (
+                "perturbed",
+                assemble_perturbed(trap, false, tier),
+                assemble_perturbed(other, false, tier),
+                "if (margin > 0.0)",
+            ),
+            (
+                "floatexp",
+                assemble_perturbed(trap, true, tier),
+                assemble_perturbed(other, true, tier),
+                "if (margin > 0.0)",
+            ),
+        ];
+        for (name, src, plain, escape) in cases {
+            let acc = src.find("accum_state = coloring_accum(").expect(name);
+            let esc = src.find(escape).expect(name);
+            assert!(esc < acc, "{name}: the image trap must not see the iterate that bails out");
+            assert!(src.contains(alpha) && !src.contains("coverage = 1.0;"), "{name}: alpha");
+            let acc = plain.find("accum_state = coloring_accum(").expect(name);
+            let esc = plain.find(escape).expect(name);
+            assert!(acc < esc, "{name}: the other colourings' order moved");
+            assert!(plain.contains("coverage = 1.0;") && !plain.contains("coloring_alpha"), "{name}");
+        }
+        let recolor = assemble_recolor(trap, false);
+        assert!(recolor.contains("coverage = clamp(coloring_alpha(summary, state), 0.0, 1.0);"));
+        assert!(!recolor.contains("esc_texture"), "the recolour pass must not declare the loop's texture");
+        assert!(assemble_recolor(other, false).contains("coverage = 1.0;"));
     }
 
     #[test]

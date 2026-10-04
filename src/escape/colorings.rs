@@ -2502,3 +2502,284 @@ fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32
     recommended_bailout: Some(4_294_967_296.0),
     pick_params: &[],
 };
+
+/// Ultra Fractal's Image Trap (common.ulb `ColorTrapImage`), drawn the
+/// way its Direct Orbit Traps colouring draws a colour trap
+/// (Standard.ulb `Standard_DirectOrbitTraps`), with common.ulb's
+/// `TrapTransform` for the trap's position. All read from source, as is
+/// UF's documentation of the built-ins they call.
+/// - Each iterate z, passed through the trap position
+///   (`(z - centre) * rotation / scale`, then aspect and skew), reads the
+///   image with `Image.getColor`. The image spans (-1,-1) to (1,1), with
+///   (-1,-1) its bottom-left corner. With Keep proportions
+///   (`ImageWrapper.NormalizePixel`), the shorter side is shrunk to keep
+///   the image's own proportions. Outside the image it is fully
+///   transparent.
+/// - That colour merges into the colour so far with `FullMerge`:
+///   `compose(bottom, blend(top, mergeX(bottom, top), alpha(bottom)),
+///   opacity)`. Bottom-up puts each new colour on top; top-down puts it
+///   underneath. It starts from the base colour, opaque.
+/// - The colour is UF's, in display values, with its alpha. Top-down
+///   can leave it partly transparent, and the background then shows
+///   through, as a layer below does in UF (`DirectAlpha`).
+/// - As UF's loop section, it sees only the iterates that did not bail
+///   out (`SkipsEscapingIterate`).
+///
+/// The image is the config's simulation texture
+/// (docs/projects/sim-textures.md). It is opaque, so the trap is its
+/// rectangle.
+///
+/// Not ported:
+/// - UF reads the image bicubically; this uses the bilinear sampler.
+/// - The merge modes UF documents without a formula: Overlay, Hard and
+///   Soft Light, and the HSL modes.
+/// - TrapTransform's per-iteration steps (drift, rotation step, skew
+///   step) and "follows initial z", which need the iteration's index or
+///   start.
+pub static IMAGE_TRAP: ColoringDef = ColoringDef {
+    name: "image_trap",
+    display_name: "Image Trap",
+    features: &[
+        ColoringFeature::NeedsOrbitAccum,
+        ColoringFeature::ColorsInterior,
+        ColoringFeature::DirectColor,
+        ColoringFeature::TextureInLoop,
+        ColoringFeature::DirectAlpha,
+        ColoringFeature::SkipsEscapingIterate,
+    ],
+    parameters: &[
+        EscapeParamDef {
+            name: "trap_re",
+            display_name: "Trap center (re)",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Where the image sits in the complex plane: its centre.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "trap_im",
+            display_name: "Trap center (im)",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Where the image sits in the complex plane: its centre.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "trap_scale",
+            display_name: "Trap scale",
+            default: 1.0,
+            min: 0.01,
+            max: 10.0,
+            tooltip: "The image's size. At 1 it spans -1 to 1; smaller shrinks it.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "trap_rotation",
+            display_name: "Rotation",
+            default: 0.0,
+            min: -180.0,
+            max: 180.0,
+            tooltip: "The image's angle, in degrees.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "trap_aspect",
+            display_name: "Aspect ratio",
+            default: 1.0,
+            min: 0.1,
+            max: 10.0,
+            tooltip: "Squeezes the image vertically above 1, stretches it below.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "trap_skew",
+            display_name: "Skew",
+            default: 0.0,
+            min: -80.0,
+            max: 80.0,
+            tooltip: "Slants the image's vertical axis, in degrees.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "proportions",
+            display_name: "Proportions",
+            default: 1.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Keep the image's own proportions, or stretch it to a square.",
+            choices: &["Stretch to square", "Keep proportions"],
+        },
+        EscapeParamDef {
+            name: "opacity",
+            display_name: "Trap merge opacity",
+            default: 0.2,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How strongly each iterate's colour merges. Low values stack \
+                      many translucent copies; 1 lets one copy cover the rest.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "order",
+            display_name: "Trap merge order",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Bottom-up merges each new iterate's colour on top of the \
+                      ones before; top-down merges it underneath, so the earliest \
+                      stays on top. Top-down leaves the colour partly transparent \
+                      where iterates miss the image, and the background shows.",
+            choices: &["Bottom-up", "Top-down"],
+        },
+        EscapeParamDef {
+            name: "merge",
+            display_name: "Trap color merge",
+            default: 0.0,
+            min: 0.0,
+            max: 10.0,
+            tooltip: "How an iterate's colour combines with the colour so far, as \
+                      Ultra Fractal's layer merge modes do.",
+            choices: &[
+                "Normal",
+                "Multiply",
+                "Screen",
+                "Darken",
+                "Lighten",
+                "Difference",
+                "Addition",
+                "Subtraction",
+                "Red",
+                "Green",
+                "Blue",
+            ],
+        },
+        EscapeParamDef {
+            name: "base_r",
+            display_name: "Base color red",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "The colour the iterates' colours merge onto.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "base_g",
+            display_name: "Base color green",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "The colour the iterates' colours merge onto.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "base_b",
+            display_name: "Base color blue",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "The colour the iterates' colours merge onto.",
+            choices: &[],
+        },
+    ],
+    wgsl: r#"
+// The value the relief and auto contrast read: the colour's luminance.
+fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
+    return dot(state.xyz, vec3<f32>(0.2126, 0.7152, 0.0722));
+}
+
+// UF's colour is in display values; the output is linear light.
+fn coloring_color(sum: OrbitSummary, state: vec4<f32>, v: f32) -> vec3<f32> {
+    return pow(clamp(state.xyz, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(2.2));
+}
+
+fn coloring_alpha(sum: OrbitSummary, state: vec4<f32>) -> f32 {
+    return state.w;
+}
+"#,
+    // The base colour, opaque: UF's `rgb()`.
+    accum_init: "vec4<f32>(cparam(10u), cparam(11u), cparam(12u), 1.0)",
+    wgsl_accum: r#"
+// The config's texture, declared here so only this colouring's iterate
+// passes bind it (the layouts carry the slot; see TextureInLoop).
+@group(0) @binding(14) var esc_texture: texture_2d<f32>;
+
+// common.ulb TrapTransform: (z - centre) * rotation * recip(scale), then
+// the aspect on the imaginary part, then the skew on the real part.
+fn image_trap_position(z: vec2<f32>) -> vec2<f32> {
+    let r = radians(cparam(3u));
+    let rot = vec2<f32>(cos(r), sin(r));
+    let d = z - vec2<f32>(cparam(0u), cparam(1u));
+    var p = vec2<f32>(d.x * rot.x - d.y * rot.y, d.x * rot.y + d.y * rot.x) / cparam(2u);
+    p.y = p.y * cparam(4u);
+    let k = radians(cparam(5u));
+    p.x = p.x * cos(k) - p.y * sin(k);
+    return p;
+}
+
+// Image.getColor: the image over (-1,-1)..(1,1), (-1,-1) its bottom-left
+// corner, transparent outside; ImageWrapper.NormalizePixel first, for
+// Keep proportions. The negated test lets a non-finite point miss.
+fn image_trap_color(zt: vec2<f32>) -> vec4<f32> {
+    let dims = vec2<f32>(textureDimensions(esc_texture));
+    var p = zt;
+    if (cparam(6u) > 0.5) {
+        if (dims.x > dims.y) {
+            p.y = p.y * dims.x / dims.y;
+        } else {
+            p.x = p.x * dims.y / dims.x;
+        }
+    }
+    if (!(abs(p.x) <= 1.0 && abs(p.y) <= 1.0)) {
+        return vec4<f32>(0.0);
+    }
+    let uv = vec2<f32>((p.x + 1.0) * 0.5, (1.0 - p.y) * 0.5);
+    return textureSampleLevel(esc_texture, palette_sampler, uv, 0.0);
+}
+
+// mergeX(bottom, top): UF's layer merge modes, the ones its help defines
+// exactly. The result's alpha is the top's.
+fn image_trap_mergex(mode: u32, b: vec3<f32>, t: vec3<f32>) -> vec3<f32> {
+    switch mode {
+        case 1u: { return b * t; }
+        case 2u: { return vec3<f32>(1.0) - (vec3<f32>(1.0) - b) * (vec3<f32>(1.0) - t); }
+        case 3u: { return min(b, t); }
+        case 4u: { return max(b, t); }
+        case 5u: { return abs(b - t); }
+        case 6u: { return min(b + t, vec3<f32>(1.0)); }
+        case 7u: { return max(b - t, vec3<f32>(0.0)); }
+        case 8u: { return vec3<f32>(t.x, b.y, b.z); }
+        case 9u: { return vec3<f32>(b.x, t.y, b.z); }
+        case 10u: { return vec3<f32>(b.x, b.y, t.z); }
+        default: { return t; }
+    }
+}
+
+// compose(b, t, o): t over b at t's alpha times o, alphas counted.
+fn image_trap_compose(b: vec4<f32>, t: vec4<f32>, o: f32) -> vec4<f32> {
+    let at = t.w * o;
+    let a = at + b.w * (1.0 - at);
+    let rgb = t.xyz * at + b.xyz * (b.w * (1.0 - at));
+    return vec4<f32>(select(vec3<f32>(0.0), rgb / max(a, 1e-30), a > 0.0), a);
+}
+
+// ColorMerge.FullMerge: compose(b, blend(t, mergeX(b, t), alpha(b)), o).
+fn image_trap_full_merge(b: vec4<f32>, t: vec4<f32>, o: f32) -> vec4<f32> {
+    let mode = u32(clamp(cparam(9u), 0.0, 10.0));
+    let merged = vec4<f32>(image_trap_mergex(mode, b.xyz, t.xyz), t.w);
+    return image_trap_compose(b, mix(t, merged, b.w), o);
+}
+
+fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32>) -> vec4<f32> {
+    let current = image_trap_color(image_trap_position(z));
+    let o = clamp(cparam(7u), 0.0, 1.0);
+    if (cparam(8u) > 0.5) {
+        return image_trap_full_merge(current, state, o);
+    }
+    return image_trap_full_merge(state, current, o);
+}
+"#,
+    recommended_bailout: None,
+    pick_params: &[],
+};

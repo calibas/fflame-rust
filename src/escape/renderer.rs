@@ -17,7 +17,7 @@ use egui_wgpu::wgpu::{
     BindGroupLayoutEntry, BindingResource, BindingType, Buffer, BufferBindingType,
     BufferDescriptor, BufferUsages, CommandEncoder, ComputePassDescriptor, ComputePipeline,
     ComputePipelineDescriptor, Device, Extent3d, PipelineLayoutDescriptor, Queue,
-    SamplerBindingType, SamplerDescriptor, ShaderModuleDescriptor, ShaderSource, ShaderStages,
+    Sampler, SamplerBindingType, SamplerDescriptor, ShaderModuleDescriptor, ShaderSource, ShaderStages,
     StorageTextureAccess, Texture, TextureDescriptor, TextureDimension, TextureFormat,
     TextureSampleType, TextureUsages, TextureView, TextureViewDescriptor, TextureViewDimension,
 };
@@ -591,11 +591,19 @@ struct ShadeParamsGpu {
     /// height it differences, 1 a slope the iterate pass stored
     /// (analytic, offset orbits), 2 Embossed's stored response.
     stored: u32,
-    /// std140 rounds the struct up to a multiple of its largest
-    /// member alignment (vec3 → 16), so WGSL sees 112 bytes where Rust
-    /// would otherwise pack 108. Without this the bind group is
-    /// rejected outright.
-    _pad: u32,
+    /// The texture overlay (`TextureOverlay`): on, its fit, and KF2's
+    /// merge, power and ratio; the tile scale; and whether the height
+    /// texture's blue channel holds its warp field.
+    overlay: u32,
+    overlay_fit: u32,
+    overlay_merge: f32,
+    overlay_power: f32,
+    overlay_ratio: f32,
+    overlay_tile: f32,
+    overlay_blue: u32,
+    /// std140 rounds the struct up to a multiple of its largest member
+    /// alignment (vec3 -> 16): WGSL sees 144 bytes.
+    _pad: [u32; 2],
 }
 
 /// Uniform for the perturbed pipeline — must match `PerturbParams`
@@ -1065,6 +1073,13 @@ pub struct EscapeRenderer {
     /// Whether `height_texture` is full-size (shading on) or the dummy.
     height_full: bool,
     shade_params_buffer: Buffer,
+    /// The simulation texture (`EscapeConfig::texture`) on the GPU, with
+    /// the cache key of the recipe it was generated from; a 1x1 stand-in
+    /// is bound when there is none. Rgba8Unorm, not sRGB: the overlay
+    /// mixes display values, as Kalles Fraktaler mixes its image's bytes.
+    texture_image: Option<(String, Texture, TextureView)>,
+    texture_dummy: (Texture, TextureView),
+    texture_sampler: Sampler,
     /// Uniform the RECOLOR pass reads the measured contrast fit from.
     contrast_params: Buffer,
     /// Destination of the probe pass: a PROBE_W x PROBE_H subsample of
@@ -1394,6 +1409,18 @@ impl EscapeRenderer {
                     },
                     count: None,
                 },
+                // The config's texture (TextureInLoop), as in the direct
+                // layout.
+                BindGroupLayoutEntry {
+                    binding: 14,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -1459,6 +1486,19 @@ impl EscapeRenderer {
                         ty: BufferBindingType::Storage { read_only: false },
                         has_dynamic_offset: false,
                         min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // The config's texture, for a colouring that reads it
+                // inside the loop (TextureInLoop, which alone declares
+                // it): a sampled texture, so no storage-buffer slot.
+                BindGroupLayoutEntry {
+                    binding: 14,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
                     },
                     count: None,
                 },
@@ -1766,6 +1806,16 @@ impl EscapeRenderer {
             height_view,
             height_full: false,
             shade_params_buffer,
+            texture_image: None,
+            texture_dummy: Self::create_texture_image(device, 1, 1),
+            texture_sampler: device.create_sampler(&SamplerDescriptor {
+                label: Some("Escape Texture Sampler"),
+                address_mode_u: wgpu::AddressMode::Repeat,
+                address_mode_v: wgpu::AddressMode::Repeat,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            }),
             contrast_params,
             contrast_probe: None,
             contrast_readback: None,
@@ -3553,11 +3603,17 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// iteration's identity, and to a chunked render's. Empty otherwise,
     /// which keeps every other colouring's keys as they were.
     fn palette_in_loop_key(&self, escape: &EscapeConfig) -> String {
-        if Self::colourings_have(escape, super::ColoringFeature::PaletteInLoop) {
+        let mut key = if Self::colourings_have(escape, super::ColoringFeature::PaletteInLoop) {
             format!("|pal{}|{:?}", self.palette_generation, escape.palette_map)
         } else {
             String::new()
+        };
+        // Likewise the texture, for a colouring that reads it in the
+        // loop (TextureInLoop): which one the GPU holds, if any.
+        if Self::colourings_have(escape, super::ColoringFeature::TextureInLoop) {
+            key += &format!("|tex{}", self.texture_key().unwrap_or("none"));
         }
+        key
     }
 
     /// (Re)allocate the perturbed path's per-pixel resume state.
@@ -4933,6 +4989,10 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     binding: 12,
                     resource: self.results_binding(),
                 },
+                BindGroupEntry {
+                    binding: 14,
+                    resource: BindingResource::TextureView(self.loop_texture_view()),
+                },
             ],
         });
         let ts_qs = if measure {
@@ -6005,6 +6065,86 @@ fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         fit_layer_stretch(&samples, escape.contrast.clip)
     }
 
+    fn create_texture_image(device: &Device, width: u32, height: u32) -> (Texture, TextureView) {
+        let texture = device.create_texture(&TextureDescriptor {
+            label: Some("Escape Texture Image"),
+            size: Extent3d { width: width.max(1), height: height.max(1), depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8Unorm,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&TextureViewDescriptor::default());
+        (texture, view)
+    }
+
+    /// The cache key of the texture on the GPU, if any.
+    pub fn texture_key(&self) -> Option<&str> {
+        self.texture_image.as_ref().map(|(k, _, _)| k.as_str())
+    }
+
+    /// Upload a generated texture (`textures::obtain`), filed under its
+    /// recipe's cache key. Returns whether anything changed.
+    pub fn set_texture(&mut self, device: &Device, queue: &Queue, key: &str, image: &image::RgbaImage) -> bool {
+        if self.texture_key() == Some(key) {
+            return false;
+        }
+        let (w, h) = (image.width().max(1), image.height().max(1));
+        let (texture, view) = Self::create_texture_image(device, w, h);
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            image.as_raw(),
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * w), rows_per_image: Some(h) },
+            Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        if let Some((_, old, _)) = self.texture_image.take() {
+            old.destroy();
+        }
+        self.texture_image = Some((key.to_string(), texture, view));
+        true
+    }
+
+    /// Drop the texture. Returns whether there was one.
+    pub fn clear_texture(&mut self) -> bool {
+        match self.texture_image.take() {
+            Some((_, t, _)) => {
+                t.destroy();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// What binding 14 holds: the texture, or the stand-in (transparent,
+    /// as WebGPU zero-fills a new texture) when there is none.
+    fn loop_texture_view(&self) -> &TextureView {
+        self.texture_image.as_ref().map_or(&self.texture_dummy.1, |(_, _, v)| v)
+    }
+
+    /// Whether the texture overlay draws this frame: switched on, with a
+    /// texture in the config and on the GPU.
+    fn overlay_on(&self, escape: &EscapeConfig) -> bool {
+        escape.texture_overlay.enabled && escape.texture.is_some() && self.texture_image.is_some()
+    }
+
+    /// Whether the overlay's warp field takes the height texture's blue
+    /// channel. It does for an iterated formula, unless a lit relief
+    /// stores its slope there (field codes 3 and up); field formulas and
+    /// the IFS walk have no iteration count to store. Otherwise the
+    /// overlay warps by the relief's own source (green).
+    fn overlay_owns_blue(&self, escape: &EscapeConfig) -> bool {
+        let iterated =
+            super::fields::get_field(&escape.formula).is_none() && super::ifs::get_ifs(&escape.formula).is_none();
+        self.overlay_on(escape) && iterated && !(escape.shading.enabled && escape.shading.field.to_gpu() >= 3)
+    }
+
     fn create_height(device: &Device, width: u32, height: u32) -> (Texture, TextureView) {
         let texture = device.create_texture(&TextureDescriptor {
             label: Some("Escape Height Field"),
@@ -6373,7 +6513,10 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         acc = acc + textureLoad(src_tex, q, 0).g * wt;
         wsum = wsum + wt;
     }
-    textureStore(dst_tex, p, vec4<f32>(acc / wsum, acc / wsum, 0.0, 0.0));
+    // Blue and alpha pass through: the texture overlay's warp field
+    // rides in blue, and is no business of the relief's softening.
+    let keep = textureLoad(src_tex, p, 0).ba;
+    textureStore(dst_tex, p, vec4<f32>(acc / wsum, acc / wsum, keep));
 }
 "#;
             let module = device.create_shader_module(ShaderModuleDescriptor {
@@ -6468,19 +6611,16 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         Some(vb)
     }
 
-    fn run_resolve(
-        &mut self,
-        device: &Device,
-        queue: &Queue,
-        encoder: &mut CommandEncoder,
-        shading: &crate::config::escape::EscapeShading,
-        mode: crate::config::escape::DownsampleMode,
-    ) {
+    fn run_resolve(&mut self, device: &Device, queue: &Queue, encoder: &mut CommandEncoder, escape: &EscapeConfig) {
+        let shading = &escape.shading;
+        let mode = escape.downsample;
         let factor = self.supersample;
         let shade_on = shading.enabled;
-        if factor <= 1 && !shade_on {
+        let overlay_on = self.overlay_on(escape);
+        if factor <= 1 && !shade_on && !overlay_on {
             return;
         }
+        let ov = &escape.texture_overlay;
         // Cloned rather than borrowed: the blur below needs `&mut
         // self`, and a view is a cheap refcounted handle.
         let Some(final_view) = self.final_view.clone() else {
@@ -6512,7 +6652,14 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // height is scaled: a radius fixed in render pixels would
             // shrink as antialiasing raised the resolution.
             softness: shading.softness * factor as f32,
-            texture_kind: shading.texture_kind.to_gpu(),
+            // The bump reads the texture; without one there is none.
+            texture_kind: if shading.texture_kind == crate::config::escape::ShadingTexture::Simulation
+                && !(escape.texture.is_some() && self.texture_image.is_some())
+            {
+                0
+            } else {
+                shading.texture_kind.to_gpu()
+            },
             texture_strength: shading.texture_strength,
             // Feature size in DISPLAY pixels, like the softness radius
             // and for the same reason: antialiasing must not change
@@ -6527,7 +6674,23 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             height_pre: shading.height_pre,
             height_post: shading.height_post,
             stored: shading.stored_relief(),
-            _pad: 0,
+            overlay: u32::from(overlay_on),
+            overlay_fit: ov.fit.to_gpu(),
+            overlay_merge: ov.merge.clamp(0.0, 1.0),
+            overlay_power: ov.power.round().clamp(
+                crate::config::escape::OVERLAY_POWER_RANGE.0,
+                crate::config::escape::OVERLAY_POWER_RANGE.1,
+            ),
+            overlay_ratio: ov.ratio.clamp(
+                crate::config::escape::OVERLAY_RATIO_RANGE.0,
+                crate::config::escape::OVERLAY_RATIO_RANGE.1,
+            ),
+            overlay_tile: ov.tile_scale.clamp(
+                crate::config::escape::OVERLAY_TILE_RANGE.0,
+                crate::config::escape::OVERLAY_TILE_RANGE.1,
+            ),
+            overlay_blue: u32::from(self.overlay_owns_blue(escape)),
+            _pad: [0; 2],
         };
         queue.write_buffer(&self.shade_params_buffer, 0, bytemuck::bytes_of(&params));
 
@@ -6572,12 +6735,98 @@ struct ShadeParams {{
     height_pre: f32,
     height_post: f32,
     stored: u32,
+    overlay: u32,
+    overlay_fit: u32,
+    overlay_merge: f32,
+    overlay_power: f32,
+    overlay_ratio: f32,
+    overlay_tile: f32,
+    overlay_blue: u32,
 }}
 
 @group(0) @binding(0) var src_tex: texture_2d<f32>;
 @group(0) @binding(1) var dst_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var height_tex: texture_2d<f32>;
 @group(0) @binding(3) var<uniform> shade: ShadeParams;
+@group(0) @binding(4) var tex_image: texture_2d<f32>;
+@group(0) @binding(5) var tex_sampler: sampler;
+
+// ---- The texture overlay (TextureOverlay; survey R10) ----
+// Kalles Fraktaler's KF_TextureWarp and the texture block after its
+// palette lookup (gl/kf.frag.glsl), read from source, in its y-up frame:
+// the texture is looked up at the pixel plus an offset driven by the
+// iteration count's difference to its left neighbour and the one below,
+// then mixed into the colour by `merge` before the relief lights it.
+
+// The iteration count at a render pixel: blue where the iterate pass
+// stored it, the relief's source (green) where a stored relief slope
+// took blue.
+fn overlay_n(p: vec2<i32>, dims: vec2<i32>) -> f32 {{
+    let t = textureLoad(height_tex, clamp(p, vec2<i32>(0, 0), dims - vec2<i32>(1, 1)), 0);
+    return select(t.g, t.b, shade.overlay_blue != 0u);
+}}
+
+// One axis of KF_TextureWarp: (1 + d)^power, folded to above 1 (with
+// the sign of the fold), atan-mapped to 0..1, scaled by ratio/100 and
+// by the power. The power is a whole number, as KF2 keeps it, so a
+// negative base keeps its sign for an odd power as C's pow does; the
+// exponent is taken in the log domain and clamped, so no infinity
+// reaches atan (Metal's fast-math does not keep IEEE's rules for one).
+fn overlay_axis(d: f32) -> f32 {{
+    let power = shade.overlay_power;
+    let base = 1.0 + d;
+    let mag = exp2(clamp(power * log2(max(abs(base), 1e-30)), -126.0, 126.0));
+    let odd = (u32(power) & 1u) == 1u;
+    var x = select(mag, -mag, base < 0.0 && odd);
+    var s = 1.0;
+    if (x <= 1.0) {{
+        x = 1.0 / x;
+        s = -1.0;
+    }}
+    let m = (atan(x) - 0.78539816) / 0.78539816 * shade.overlay_ratio / 100.0;
+    return s * power * m;
+}}
+
+fn overlay_texel(texel: vec4<f32>, p: vec2<i32>) -> vec4<f32> {{
+    let dims = vec2<i32>(textureDimensions(height_tex));
+    // KF2 differences whole display pixels; on the supersampled grid
+    // that is `factor` render pixels, and its offsets scale the same.
+    let f = i32({factor}u);
+    let n0 = overlay_n(p, dims);
+    // Left, and the row below (y up); mirrored where it is off the image,
+    // as KF2's getN3x3 reflects.
+    var dx = overlay_n(p - vec2<i32>(f, 0), dims) - n0;
+    if (p.x - f < 0) {{
+        dx = -(overlay_n(p + vec2<i32>(f, 0), dims) - n0);
+    }}
+    var dy = overlay_n(p + vec2<i32>(0, f), dims) - n0;
+    if (p.y + f >= dims.y) {{
+        dy = -(overlay_n(p - vec2<i32>(0, f), dims) - n0);
+    }}
+    let offs = shade.overlay_power / 64.0;
+    let wx = offs + overlay_axis(dx);
+    let wy = offs - overlay_axis(dy);
+    // Back to render pixels, y down.
+    let pos = vec2<f32>(f32(p.x), f32(p.y)) + vec2<f32>(0.5, 0.5) + vec2<f32>(wx, -wy) * f32(f);
+    let tsize = vec2<f32>(textureDimensions(tex_image));
+    var uv = pos / (tsize * max(shade.overlay_tile, 0.05) * f32(f));
+    if (shade.overlay_fit == 0u) {{
+        // Stretched over the frame, as KF2 resizes its image; a lookup
+        // past the edge holds the edge.
+        uv = clamp(pos / vec2<f32>(dims), 0.5 / tsize, vec2<f32>(1.0, 1.0) - 0.5 / tsize);
+    }}
+    let tex = textureSampleLevel(tex_image, tex_sampler, uv, 0.0).rgb;
+    let merge = clamp(shade.overlay_merge, 0.0, 1.0);
+    if (texel.a > 0.0) {{
+        // KF2 mixes display values: mix(colour, texture, merge).
+        let disp = pow(max(texel.rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
+        return vec4<f32>(pow(mix(disp, tex, merge), vec3<f32>(2.2)), texel.a);
+    }}
+    // The interior: KF2 mixes the texture into its interior colour; here
+    // into the background, through the tone map's coverage composite
+    // (in linear light, where KF2's is in display values).
+    return vec4<f32>(pow(tex, vec3<f32>(2.2)), merge);
+}}
 
 // The height curve (HeightTransfer): post * f(pre * h), mirrored for a
 // negative height where f is not odd already. Applied as the slope
@@ -6688,6 +6937,12 @@ fn shade_value_noise(q: vec2<f32>) -> f32 {{
 }}
 
 fn shade_texture(q: vec2<f32>) -> f32 {{
+    // 3 = SIMULATION: the config's texture, its luminance in display
+    // values, repeated with `q` in texels.
+    if (shade.texture_kind == 3u) {{
+        let c = textureSampleLevel(tex_image, tex_sampler, q / vec2<f32>(textureDimensions(tex_image)), 0.0).rgb;
+        return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722)) - 0.5;
+    }}
     // 1 = GRAIN: one octave, isotropic -- film grain / fine tooth.
     if (shade.texture_kind == 1u) {{
         return shade_value_noise(q) - 0.5;
@@ -6850,6 +7105,10 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         for (var dx = 0u; dx < {factor}u; dx = dx + 1u) {{
             let p = vec2<i32>(i32(gid.x * {factor}u + dx), i32(gid.y * {factor}u + dy));
             var texel = textureLoad(src_tex, p, 0);
+            // KF2's order: the texture, then the slopes light it.
+            if (shade.overlay != 0u) {{
+                texel = overlay_texel(texel, p);
+            }}
             if (shade.enabled == 1u) {{
                 texel = vec4<f32>(shade_pixel(texel.rgb, p), texel.a);
             }}
@@ -6965,6 +7224,22 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                         },
                         count: None,
                     },
+                    BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
                 ],
             });
             let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
@@ -7002,6 +7277,16 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 BindGroupEntry {
                     binding: 3,
                     resource: self.shade_params_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 4,
+                    resource: BindingResource::TextureView(
+                        self.texture_image.as_ref().map_or(&self.texture_dummy.1, |(_, _, v)| v),
+                    ),
+                },
+                BindGroupEntry {
+                    binding: 5,
+                    resource: BindingResource::Sampler(&self.texture_sampler),
                 },
             ],
         });
@@ -7384,7 +7669,12 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     crate::config::escape::BiomorphMode::Re => 1,
                     crate::config::escape::BiomorphMode::Im => 2,
                 };
-                (if escape.julia { 1 } else { 0 }) | (bio << 1) | (self.supersample.clamp(1, 15) << 4)
+                // Bit 8: the iterate passes store the texture overlay's
+                // warp field in blue (`esc_overlay_field`).
+                (if escape.julia { 1 } else { 0 })
+                    | (bio << 1)
+                    | (self.supersample.clamp(1, 15) << 4)
+                    | (u32::from(self.overlay_owns_blue(escape)) << 8)
             },
             bailout: escape.bailout.max(1e-6),
             tile_y0: 0,
@@ -7442,8 +7732,9 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // Relief needs its scalar field and a destination distinct
         // from the colour it reads; both are allocated on demand, so
         // an escape view with shading off carries neither.
-        self.ensure_height(device, escape.shading.enabled || escape.contrast.is_active());
-        self.ensure_resolve_target(device, escape.shading.enabled);
+        let overlay = self.overlay_on(escape);
+        self.ensure_height(device, escape.shading.enabled || escape.contrast.is_active() || overlay);
+        self.ensure_resolve_target(device, escape.shading.enabled || overlay);
         // Diagnostics: CPU time of this whole call, whatever path or
         // early return it takes (the drop guard writes on exit).
         let _diag_cpu = super::diag::CpuTimer::start();
@@ -7520,7 +7811,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 } else {
                     self.run_recolor(device, queue, encoder, escape, palette_view);
                 }
-                self.run_resolve(device, queue, encoder, &escape.shading, escape.downsample);
+                self.run_resolve(device, queue, encoder, escape);
                 DIRECT_RENDER_IN_FLIGHT.store(false, std::sync::atomic::Ordering::Relaxed);
                 PERTURB_RENDER_IN_FLIGHT.store(false, std::sync::atomic::Ordering::Relaxed);
                 self.diag_settle_start = None;
@@ -7804,7 +8095,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 let iterations_done = iter_end >= escape.max_iter;
                 // Every chunk refreshes the display image, so
                 // progressive refinement stays visible under AA.
-                self.run_resolve(device, queue, encoder, &escape.shading, escape.downsample);
+                self.run_resolve(device, queue, encoder, escape);
                 // Attribution window for the device-lost callback: open
                 // while this render still has chunks to submit.
                 PERTURB_RENDER_IN_FLIGHT.store(
@@ -7961,6 +8252,10 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     binding: 5,
                     resource: self.results_binding(),
                 },
+                BindGroupEntry {
+                    binding: 14,
+                    resource: BindingResource::TextureView(self.loop_texture_view()),
+                },
             ],
         });
 
@@ -8030,7 +8325,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             // lighting of now. The walk wrote no pixels.
             self.run_relight(device, queue, encoder, escape, palette_view);
         }
-        self.run_resolve(device, queue, encoder, &escape.shading, escape.downsample);
+        self.run_resolve(device, queue, encoder, escape);
         self.direct_tile_y = tile_y0.saturating_add(band);
         let mut done = self.direct_tile_y >= self.height;
         DIRECT_RENDER_IN_FLIGHT.store(

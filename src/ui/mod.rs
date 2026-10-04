@@ -51,6 +51,7 @@ mod variation_params;
 mod view;
 mod escape_panel;
 mod sim_panel;
+mod textures_panel;
 pub mod workspace;
 mod palette_generate;
 mod script_params;
@@ -844,6 +845,8 @@ pub struct EguiLayer {
 
     // Fractal browser panel state
     fractal_browser_panel: Option<fractal_browser::FractalBrowserPanel>,
+    /// The Texture panel's state, created when the panel is first shown.
+    textures_panel: Option<textures_panel::TexturesPanel>,
 
     // API: flame metadata loaded from Online tab (passed through to UiResponse)
     loaded_api_flame_id: Option<String>,
@@ -1014,6 +1017,7 @@ impl EguiLayer {
             script_generated: None,
             script_animation: None,
             fractal_browser_panel: None,
+            textures_panel: None,
             loaded_api_flame_id: None,
             loaded_api_flame_is_public: None,
             loaded_api_flame_user_id: None,
@@ -1808,6 +1812,7 @@ impl EguiLayer {
 
                         // Fractal browser panel state
                         fractal_browser_panel: &mut self.fractal_browser_panel,
+                        textures_panel: &mut self.textures_panel,
 
                         // Histogram for density visualization (levels now in ConfigManager)
                         density_histogram: &self.density_histogram,
@@ -2499,6 +2504,28 @@ impl EguiLayer {
             }
         } else {
             true // No panel, nothing to generate
+        }
+    }
+
+    /// Desktop: whether the Texture panel still owes a preview.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn textures_need_previews(&self) -> bool {
+        self.textures_panel.as_ref().is_some_and(|p| p.next_pending().is_some())
+    }
+
+    /// Desktop: generate one texture preview (call once per frame).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn generate_texture_preview(&mut self, device: &egui_wgpu::wgpu::Device, queue: &egui_wgpu::wgpu::Queue) {
+        if let Some(panel) = self.textures_panel.as_mut() {
+            panel.generate_one(&self.ctx, device, queue);
+        }
+    }
+
+    /// WASM: spawn the Texture panel's missing previews, take finished ones.
+    #[cfg(target_arch = "wasm32")]
+    pub fn start_texture_previews(&mut self, device: &egui_wgpu::wgpu::Device, queue: &egui_wgpu::wgpu::Queue) {
+        if let Some(panel) = self.textures_panel.as_mut() {
+            panel.start_async(&self.ctx, device, queue);
         }
     }
 

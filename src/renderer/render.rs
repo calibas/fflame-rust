@@ -1010,6 +1010,22 @@ async fn render_escape(
             ),
         );
     }
+    // The texture's image (docs/projects/sim-textures.md): the
+    // config carries the recipe, and the image comes from the cache or
+    // is generated here, so a saved file renders the same anywhere.
+    if job.config.escape.uses_texture() {
+        if let Some(texture) = &job.config.escape.texture {
+            let key = crate::textures::cache::key(&texture.config);
+            if escape_renderer.texture_key() != Some(key.as_str()) {
+                match crate::textures::obtain(device, queue, &texture.config).await {
+                    Ok(image) => {
+                        escape_renderer.set_texture(device, queue, &key, &image);
+                    }
+                    Err(e) => log::warn!("texture '{}' could not be generated: {e}", texture.name),
+                }
+            }
+        }
+    }
     // No UI to keep responsive here, and every chunk pays a downsample
     // pass over the supersampled image — so chunk for throughput.
     escape_renderer.set_chunk_time_target(200.0);

@@ -907,6 +907,15 @@ Read from the code, not reproduced by render, except where noted.
      the palette's generation and its mapping into the iteration's and
      the chunked render's identity; every other colouring's keys are
      unchanged.
+     *Open:* the combination sweep
+     (`every_formula_coloring_combination_dispatches`) fails for it.
+     At the probe's home view and 64 iterations, it lights only 146
+     pixels on McMullen and 150 on Collatz, of 12,288, against the 2%
+     every pairing must reach. It fails the same way at the commit that
+     added it. Whether that is the shape being sparse on those
+     formulas (techmatt's trap paints only near misses, on black) or a
+     fault has not been looked into.
+
      *Measured:* nine cases against an f64 port of techmatt's `trace`
      through a grey ramp: every shape, every blend, both orders and
      starts, the curves, a default threshold, and the clamp. All 12,288
@@ -1061,3 +1070,9 @@ Read from the code, not reproduced by render, except where noted.
      the slope shading, which then lights the textured colour.
    - It covers the interior too: with a texture on, the interior colour
      is not applied.
+
+   **Done since, with a generated image rather than an imported one.**
+   The texture is a simulation run whose recipe is stored with the
+   picture (`docs/projects/sim-textures.md`), so nothing is loaded from
+   disk. The overlay is that plan's phase 2, measured there against a
+   CPU port of `KF_TextureWarp`.
