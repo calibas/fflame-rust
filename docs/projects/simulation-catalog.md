@@ -874,6 +874,21 @@ to them at display time, so a palette edit shows at once, even paused.
   default fifth scale does. The per-scale table (plan section 3) warns
   about it.
 
+**The per-scale table, 2026-10-04** (mccabe-multiscale plan, section
+3). `layout` = Table frees every scale: its own radius, ratio, step
+(negative allowed), weight (Softology's: both averages × w) and
+symmetry (to 12). Switching to it fills it from the ladder.
+- **Measured.** CPU mirror exact on every cell. The table filled from
+  the ladder agrees to 1.5e-8 per step: not bit for bit, because of
+  `mix()` rounding.
+- **Presets.** `symmetry_mix` (fig. 14: 3-fold small scales, 9-fold
+  large) and `uneven` (radii 1, 3, 10, 20, 45 with colour memory).
+- **Found.** Tables whose coarse scales take the largest steps lean to
+  the axes: 1.25 axes/diagonals against 0.99 for the same radii the
+  other way round. The likely cause is the coarsest pyramid levels'
+  square reconstruction. Exact discs (FFT, parked) are the real fix;
+  the plan has the measurements.
+
 ---
 
 ## 11. Hodgepodge machine (Belousov–Zhabotinsky CA)

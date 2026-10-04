@@ -279,6 +279,60 @@ pub fn pyramid_levels(grid_w: u32, grid_h: u32) -> u32 {
 /// (`level = log2(0.55 r)`) covers an averaging radius of ~230 cells.
 pub const MAX_PYRAMID_LEVELS: u32 = 8;
 
+/// The largest averaging radius the pyramid can tell apart on this
+/// grid: the radius whose calibrated level is the top one. Past it a
+/// read clamps to the top level, so an activator and an inhibitor both
+/// beyond it measure the same thing -- a variation near 0, and in
+/// McCabe's argmin a scale that wins everywhere (found at 40^2 with
+/// five scales, mccabe-multiscale plan, section 2).
+pub fn pyramid_reach(grid_w: u32, grid_h: u32) -> f32 {
+    let top = pyramid_levels(grid_w, grid_h).saturating_sub(1);
+    (1u32 << top) as f32 / 0.55
+}
+
+/// A model's parameter TABLE: rows of the same columns, drawn by the
+/// panel as a grid rather than a slider each (mccabe-multiscale plan,
+/// section 3). Row `i`'s column `c` is the ordinary parameter
+/// `s{i}_{c}`, so presets, scripts and the config see plain names.
+pub struct ParamTable {
+    /// The model it belongs to.
+    pub model: &'static str,
+    /// The parameter choosing the generated layout (0) or the table (1).
+    pub mode_param: &'static str,
+    /// The parameter saying how many rows are live.
+    pub rows_param: &'static str,
+    /// Rows the table has.
+    pub rows: usize,
+    /// Column suffixes, in the order they are drawn.
+    pub columns: &'static [&'static str],
+    /// Parameters only the generated layout reads: hidden in table mode.
+    pub generator_params: &'static [&'static str],
+    /// The table the generator makes from these parameters. Switching
+    /// to the table writes it, so the switch changes nothing on screen.
+    pub fill: fn(&std::collections::BTreeMap<String, f32>) -> Vec<(String, f32)>,
+}
+
+impl ParamTable {
+    /// The parameter name of row `row`, column `col`.
+    pub fn cell(&self, row: usize, col: &str) -> String {
+        format!("s{row}_{col}")
+    }
+
+    /// Whether `name` is one of this table's cells.
+    pub fn is_cell(&self, name: &str) -> bool {
+        (0..self.rows).any(|r| self.columns.iter().any(|c| self.cell(r, c) == name))
+    }
+}
+
+/// Every model's table. Few models have one, so this is a list beside
+/// the registry rather than a field on every `ModelDef`.
+pub static PARAM_TABLES: &[&ParamTable] = &[&models::MCCABE_TABLE];
+
+/// The table of `model`, if it has one.
+pub fn param_table(model: &str) -> Option<&'static ParamTable> {
+    PARAM_TABLES.iter().copied().find(|t| t.model == model)
+}
+
 /// Slots in the min/max ring: one per step of the largest batch, plus
 /// one so the slot a step READS (the previous step's) is never among
 /// the slots the batch clears before running.
