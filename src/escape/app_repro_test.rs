@@ -7768,10 +7768,13 @@ fn main() {
                     return None;
                 }
                 let rz = (r.z[0] as f64).hypot(r.z[1] as f64).max(1.0000001);
+                // The records hold the derivative per render pixel, so
+                // this is the distance in render pixels (= output pixels
+                // at 1x); in the plane it is that times a pixel's size.
                 let dz = (r.dz[0] as f64).hypot(r.dz[1] as f64).max(1e-30);
                 let mut d = (rz * rz.ln() / dz).max(1e-30);
-                if units > 0.5 {
-                    d *= h as f64 / span_y;
+                if units < 0.5 {
+                    d *= span_y / h as f64;
                 }
                 Some(if mapping == 1.0 { d } else { d.sqrt() } * scale as f64)
             };
@@ -8450,7 +8453,8 @@ fn main() {
                 let z = [r.z[0] as f64, r.z[1] as f64];
                 let dz = [r.dz[0] as f64, r.dz[1] as f64];
                 let m = z[0].hypot(z[1]).max(1.0000001);
-                let l = m * m.ln() / dz[0].hypot(dz[1]).max(1e-30) * (h as f64 / span_y);
+                // Per render pixel already (the records' convention).
+                let l = m * m.ln() / dz[0].hypot(dz[1]).max(1e-30);
                 let g = [z[0] * dz[0] + z[1] * dz[1], z[1] * dz[0] - z[0] * dz[1]];
                 let s = [g[0] * rc + g[1] * rs, g[1] * rc - g[0] * rs];
                 let hue = ((-s[1]).atan2(s[0]) / std::f64::consts::TAU).rem_euclid(1.0);
@@ -8704,6 +8708,116 @@ fn main() {
         let mean = drawn.iter().sum::<f64>() / drawn.len() as f64;
         println!("escape count, mean palette position {:.3}", mean / 255.0);
         assert!((mean / 255.0 - 0.5).abs() < 0.03, "plateaus are not at their middles: mean {:.3}", mean / 255.0);
+    }
+
+    /// Every colouring on the perturbed paths, against the direct path at
+    /// a shallow view where the direct path is exact: the share of pixels
+    /// whose VALUE (the height texture's raw channel, before any palette)
+    /// agrees. A colouring that agrees here computes the same thing on
+    /// the perturbed paths; what it does at depth is then a matter of
+    /// precision and of the orbit, not of the path.
+    #[test]
+    #[ignore = "needs a GPU; prints a measurement"]
+    fn every_colouring_on_the_perturbed_paths_against_direct() {
+        let (device, queue) = repro_device();
+        let (w, h) = (192u32, 144u32);
+        let config = crate::config::FractalConfig::default();
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        let texture = image::RgbaImage::from_fn(32, 32, |x, y| image::Rgba([40 + 6 * x as u8, 40 + 6 * y as u8, 200, 255]));
+        let field = |esc: &crate::config::escape::EscapeConfig, perturbed: bool, floatexp: bool| -> Vec<f32> {
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            escape.force_perturbed = perturbed;
+            escape.force_floatexp = floatexp;
+            escape.set_texture(&device, &queue, "agree", &texture);
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("agree") });
+                let settled =
+                    escape.render(&device, &queue, &mut enc, esc, renderer.palette_view(), renderer.palette_generation());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "render did not settle");
+            }
+            let v = pollster::block_on(escape.read_height_channel(&device, &queue, false, 0)).expect("height");
+            assert_eq!(v.len(), (w * h) as usize, "the height texture is not the frame's");
+            escape.destroy();
+            v
+        };
+        // 8x8 block means, as the formula agreement test compares: the
+        // boundary's chaotic pixels legitimately differ one by one, and
+        // average out; a path that computes something else shifts whole
+        // blocks. Agreement is the share of blocks within 2% of the
+        // direct field's range.
+        let agree = |a: &[f32], b: &[f32]| -> (f64, bool) {
+            let (lo, hi) = a.iter().filter(|x| x.is_finite()).fold((f32::MAX, f32::MIN), |(l, h), x| (l.min(*x), h.max(*x)));
+            let range = (hi - lo).max(1e-12) as f64;
+            let (bw, bh) = (w / 8, h / 8);
+            let mut close = 0usize;
+            for by in 0..bh {
+                for bx in 0..bw {
+                    let (mut sa, mut sb, mut n) = (0.0f64, 0.0f64, 0usize);
+                    for y in by * 8..by * 8 + 8 {
+                        for x in bx * 8..bx * 8 + 8 {
+                            let i = (y * w + x) as usize;
+                            if a[i].is_finite() && b[i].is_finite() {
+                                sa += a[i] as f64;
+                                sb += b[i] as f64;
+                                n += 1;
+                            }
+                        }
+                    }
+                    if n > 0 && ((sa - sb) / n as f64).abs() <= 0.02 * range {
+                        close += 1;
+                    }
+                }
+            }
+            (close as f64 / (bw * bh) as f64, hi - lo > 1e-9)
+        };
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "mandelbrot".to_string();
+        esc.center_re = "-0.7436".to_string();
+        esc.center_im = "0.1318".to_string();
+        esc.zoom_log2 = 10.0;
+        esc.max_iter = 500;
+        esc.supersample = 1;
+        // Allocates the height texture, whose raw channel is the value
+        // BEFORE contrast.
+        esc.contrast.mode = crate::config::escape::ContrastMode::AutoRange;
+        esc.texture = Some(crate::config::escape::EscapeTexture {
+            name: "agree".to_string(),
+            config: Box::new(crate::textures::as_recipe(&crate::config::FractalConfig::default(), (64, 64))),
+        });
+        // At the default escape radius, and at 2: a colouring of the
+        // escaping iterate's position is near-random per pixel at a large
+        // radius on ANY path, and smooth at a small one.
+        println!("{:24} {:>9} {:>9}  {:>9} {:>9}  varies", "colouring", "f32", "floatexp", "f32 r2", "fe r2");
+        for c in crate::escape::COLORINGS {
+            let mut e = esc.clone();
+            e.coloring = c.name.to_string();
+            let direct = field(&e, false, false);
+            let (a, varies) = agree(&direct, &field(&e, true, false));
+            let (b, _) = agree(&direct, &field(&e, true, true));
+            e.bailout = 4.0;
+            let direct = field(&e, false, false);
+            let (a2, _) = agree(&direct, &field(&e, true, false));
+            let (b2, _) = agree(&direct, &field(&e, true, true));
+            println!(
+                "{:24} {:>8.1}% {:>8.1}%  {:>8.1}% {:>8.1}%  {}",
+                c.name,
+                a * 100.0,
+                b * 100.0,
+                a2 * 100.0,
+                b2 * 100.0,
+                varies
+            );
+        }
     }
 
     /// Auto contrast is applied by the frame that finishes the render,

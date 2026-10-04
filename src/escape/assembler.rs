@@ -117,7 +117,7 @@ struct OrbitSummary {
     escaped: bool,
     converged: bool,
     period: u32,       // detected cycle length, 0 = none
-    dz: vec2<f32>,     // derivative orbit (seed value if not compiled)
+    dz: vec2<f32>,     // derivative per render pixel (seed value if not compiled)
 }
 
 // Accurate argument reduction for trig.
@@ -269,7 +269,9 @@ fn esc_run(pixel: vec2<f32>) -> EscRun {
     if (!escaped) {
         n = params.max_iter;
     }
-    return EscRun(z, dz, accum_state, n, escaped, converged, period);
+    // The derivative per render pixel, as every path reports it: the
+    // pixel's own summary, its records and the offset orbits alike.
+    return EscRun(z, dz * esc_render_px(), accum_state, n, escaped, converged, period);
 }
 
 //__RELIEF_ORBITS_FNS__
@@ -434,6 +436,14 @@ fn esc_supersample() -> f32 {
 // Output pixels per unit of the plane.
 fn esc_px_per_unit() -> f32 {
     return f32(params.height) / (esc_supersample() * params.span.y);
+}
+
+// A render pixel's size in the plane. `OrbitSummary.dz` is the derivative
+// PER RENDER PIXEL (dz/dc times this), on every path: at escape that is
+// about |z| ln|z| / DE_px, a moderate number at any depth, where dz/dc
+// itself grows past f32's range (docs/projects/derivative-under-perturbation.md).
+fn esc_render_px() -> f32 {
+    return params.span.y / f32(params.height);
 }
 "#;
 
@@ -929,8 +939,8 @@ const ANALYTIC_SLOPE_WGSL: &str = r#"
 // Fraktaler's analytic slopes (its 1/DE). The gradient is 1/d along
 // the potential's, conj(dz/z), which points away from the set; turned
 // from the plane into the screen's y-up frame, where the relief pass
-// lights it. Zero where no derivative is iterated: the perturbed rungs
-// and the formulas without one, which the panel says.
+// lights it. Zero where no derivative is iterated: the formulas
+// without one, which the panel says.
 fn esc_analytic_slope(sum: OrbitSummary) -> vec2<f32> {
     if (!HAS_DERIVATIVE || params.shade_flags != 3u || !sum.escaped) {
         return vec2<f32>(0.0);
@@ -941,7 +951,8 @@ fn esc_analytic_slope(sum: OrbitSummary) -> vec2<f32> {
     if (!(dzl > 1e-30)) {
         return vec2<f32>(0.0);
     }
-    let d_px = r * log(r) / dzl * f32(params.height) / params.span.y;
+    // dz is per render pixel, so this is the distance in render pixels.
+    let d_px = r * log(r) / dzl;
     // conj(dz/z) as a direction is conj(dz) * z.
     let g = vec2<f32>(sum.dz.x * sum.z.x + sum.dz.y * sum.z.y, sum.dz.x * sum.z.y - sum.dz.y * sum.z.x);
     let gl = length(g);
