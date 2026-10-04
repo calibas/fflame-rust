@@ -674,11 +674,10 @@ fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
 /// than a visibly missing one. So the coloring returns a flat value
 /// instead, exactly as [`NORMAL_MAP`] returns flat light.
 ///
-/// Two cases reach it: the 14 of 26 formulas that define no
-/// derivative, and EVERY perturbed render — the deep rungs do not
-/// iterate a derivative orbit at all, so a Mandelbrot dive past
-/// `PERTURB_MIN_ZOOM` loses it even though the formula has one. The
-/// escape panel says which case you are in.
+/// One case reaches it: the formulas that define no derivative. The
+/// perturbed rungs carry one since P11
+/// (docs/projects/derivative-under-perturbation.md), so a Mandelbrot dive
+/// keeps it at any depth. The escape panel says when you are in it.
 ///
 /// A finite-difference distance estimate would cover both (the
 /// relief-shading pass already differences the value field for the
@@ -740,11 +739,16 @@ fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
     // Escaped only; |z| > 1 at escape so ln|z| > 0.
     let r = max(length(sum.z), 1.0000001);
     let deriv = max(length(sum.dz), 1e-30);
+    // dz is the derivative per render pixel, so this is the distance in
+    // render pixels.
     var d = max(r * log(r) / deriv, 1e-30);
     if (cparam(2u) > 0.5) {
         // In OUTPUT pixels, as Fraktaler 3 measures it, so antialiasing
         // does not move the colours.
-        d = max(d * esc_px_per_unit(), 1e-30);
+        d = max(d / esc_supersample(), 1e-30);
+    } else {
+        // In units of the plane.
+        d = max(d * esc_render_px(), 1e-30);
     }
     let mapping = u32(clamp(cparam(1u), 0.0, 2.0));
     if (mapping == 1u) {
@@ -837,8 +841,8 @@ fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
     // of arg(z): plausible relief that encodes nothing about the
     // surface. Return flat illumination instead — an obviously
     // unshaded image beats a convincing wrong one. This is the case on
-    // every perturbed render (the deep rungs do not iterate a
-    // derivative) and on the 14 formulas that define no derivative.
+    // the formulas that define no derivative (the perturbed rungs carry
+    // one since P11).
     if (!HAS_DERIVATIVE) {
         return cparam(2u);
     }
@@ -1680,10 +1684,11 @@ pub static RAINBOW_FRINGE: ColoringDef = ColoringDef {
         choices: &[],
     }],
     wgsl: r#"
-// Fraktaler 3's distance estimate, in output pixels.
+// Fraktaler 3's distance estimate, in output pixels (dz is per render
+// pixel).
 fn rainbow_fringe_distance(sum: OrbitSummary) -> f32 {
     let r = max(length(sum.z), 1.0000001);
-    return r * log(r) / max(length(sum.dz), 1e-30) * esc_px_per_unit();
+    return r * log(r) / max(length(sum.dz), 1e-30) / esc_supersample();
 }
 
 fn rainbow_fringe_to_linear(c: f32) -> f32 {

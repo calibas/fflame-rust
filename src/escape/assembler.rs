@@ -117,7 +117,7 @@ struct OrbitSummary {
     escaped: bool,
     converged: bool,
     period: u32,       // detected cycle length, 0 = none
-    dz: vec2<f32>,     // derivative orbit (seed value if not compiled)
+    dz: vec2<f32>,     // derivative per render pixel (seed value if not compiled)
 }
 
 // Accurate argument reduction for trig.
@@ -269,7 +269,9 @@ fn esc_run(pixel: vec2<f32>) -> EscRun {
     if (!escaped) {
         n = params.max_iter;
     }
-    return EscRun(z, dz, accum_state, n, escaped, converged, period);
+    // The derivative per render pixel, as every path reports it: the
+    // pixel's own summary, its records and the offset orbits alike.
+    return EscRun(z, dz * esc_render_px(), accum_state, n, escaped, converged, period);
 }
 
 //__RELIEF_ORBITS_FNS__
@@ -434,6 +436,14 @@ fn esc_supersample() -> f32 {
 // Output pixels per unit of the plane.
 fn esc_px_per_unit() -> f32 {
     return f32(params.height) / (esc_supersample() * params.span.y);
+}
+
+// A render pixel's size in the plane. `OrbitSummary.dz` is the derivative
+// PER RENDER PIXEL (dz/dc times this), on every path: at escape that is
+// about |z| ln|z| / DE_px, a moderate number at any depth, where dz/dc
+// itself grows past f32's range (docs/projects/derivative-under-perturbation.md).
+fn esc_render_px() -> f32 {
+    return params.span.y / f32(params.height);
 }
 "#;
 
@@ -929,8 +939,8 @@ const ANALYTIC_SLOPE_WGSL: &str = r#"
 // Fraktaler's analytic slopes (its 1/DE). The gradient is 1/d along
 // the potential's, conj(dz/z), which points away from the set; turned
 // from the plane into the screen's y-up frame, where the relief pass
-// lights it. Zero where no derivative is iterated: the perturbed rungs
-// and the formulas without one, which the panel says.
+// lights it. Zero where no derivative is iterated: the formulas
+// without one, which the panel says.
 fn esc_analytic_slope(sum: OrbitSummary) -> vec2<f32> {
     if (!HAS_DERIVATIVE || params.shade_flags != 3u || !sum.escaped) {
         return vec2<f32>(0.0);
@@ -941,7 +951,8 @@ fn esc_analytic_slope(sum: OrbitSummary) -> vec2<f32> {
     if (!(dzl > 1e-30)) {
         return vec2<f32>(0.0);
     }
-    let d_px = r * log(r) / dzl * f32(params.height) / params.span.y;
+    // dz is per render pixel, so this is the distance in render pixels.
+    let d_px = r * log(r) / dzl;
     // conj(dz/z) as a direction is conj(dz) * z.
     let g = vec2<f32>(sum.dz.x * sum.z.x + sum.dz.y * sum.z.y, sum.dz.x * sum.z.y - sum.dz.y * sum.z.x);
     let gl = length(g);
@@ -1042,6 +1053,173 @@ fn with_alpha(template: String, coloring: &ColoringDef, state: &str) -> String {
         "coverage = 1.0;",
         &format!("coverage = clamp(coloring_alpha(summary, {state}), 0.0, 1.0);"),
     )
+}
+
+/// What a formula's derivative snippet calls, for the perturbed templates,
+/// which do not carry the direct template's complex helpers. Copies of the
+/// direct template's functions, spliced only with the derivative.
+const DERIVATIVE_HELPERS_WGSL: &str = r#"
+fn fparam(i: u32) -> f32 {
+    return params.fparams[i / 4u][i % 4u];
+}
+
+// Complex multiply.
+fn esc_cmul(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
+}
+
+// Complex power via polar form; 0 at the origin, keeping atan2 from a
+// zero pair (CLAUDE.md, the Metal fast-math hazard).
+fn esc_cpow(z: vec2<f32>, p: f32) -> vec2<f32> {
+    let r2 = dot(z, z);
+    if (r2 < 1e-30) {
+        return vec2<f32>(0.0, 0.0);
+    }
+    let theta = atan2(z.y, z.x) * p;
+    let r = pow(r2, 0.5 * p);
+    return r * vec2<f32>(cos(theta), sin(theta));
+}
+"#;
+
+/// The floatexp rung's derivative arithmetic: an f32 complex mantissa kept
+/// near magnitude 1, and an exponent. f32 precision is plenty for what the
+/// derivative feeds (a distance to three digits, a direction); the range
+/// is what the deep rung lacks.
+const DERIVATIVE_FE_WGSL: &str = r#"
+struct DzFe {
+    m: vec2<f32>,
+    e: i32,
+}
+
+// Renormalise: the larger component's magnitude into [0.5, 1). Zero, and
+// anything not finite, becomes zero (negated comparisons, so a NaN fails
+// them under fast-math too).
+fn dzfe_norm(d: DzFe) -> DzFe {
+    let a = max(abs(d.m.x), abs(d.m.y));
+    if (!(a > 0.0 && a <= 3.0e38)) {
+        return DzFe(vec2<f32>(0.0, 0.0), 0);
+    }
+    let k = frexp(a).exp;
+    return DzFe(ldexp(d.m, vec2<i32>(-k, -k)), d.e + k);
+}
+
+fn dzfe_is_zero(d: DzFe) -> bool {
+    return max(abs(d.m.x), abs(d.m.y)) == 0.0;
+}
+
+// a + b_m 2^b_e, exponents aligned; a term 60 octaves below the other is
+// nothing to f32.
+fn dzfe_add(a: DzFe, b_m: vec2<f32>, b_e: i32) -> DzFe {
+    let b = dzfe_norm(DzFe(b_m, b_e));
+    if (dzfe_is_zero(b)) {
+        return a;
+    }
+    if (dzfe_is_zero(a)) {
+        return b;
+    }
+    let de = a.e - b.e;
+    if (de > 60) {
+        return a;
+    }
+    if (de < -60) {
+        return b;
+    }
+    if (de >= 0) {
+        return dzfe_norm(DzFe(a.m + ldexp(b.m, vec2<i32>(-de, -de)), a.e));
+    }
+    return dzfe_norm(DzFe(ldexp(a.m, vec2<i32>(de, de)) + b.m, b.e));
+}
+
+// One step: f'(z) D, as the formula's own snippet maps a derivative --
+// real-linear, so its two columns are its action on 1 and on i, which
+// covers anti-holomorphic maps (Tricorn's conjugate) as well -- plus the
+// inhomogeneous f_c on the parameter plane.
+fn dzfe_step(z: vec2<f32>, c: vec2<f32>, d: DzFe, is_julia: bool) -> DzFe {
+    let j1 = formula_derivative(z, c, vec2<f32>(1.0, 0.0), true);
+    let j2 = formula_derivative(z, c, vec2<f32>(0.0, 1.0), true);
+    let out = dzfe_norm(DzFe(j1 * d.m.x + j2 * d.m.y, d.e));
+    if (is_julia) {
+        return out;
+    }
+    return dzfe_add(out, formula_derivative(z, c, vec2<f32>(0.0, 0.0), false), 0);
+}
+
+// A BLA skip: D' = A D + B, A and B as the table holds them (complex
+// mantissa, exponent). B drops on the Julia plane, as d0's term does.
+fn dzfe_bla(d: DzFe, a_m: vec2<f32>, a_e: i32, b_m: vec2<f32>, b_e: i32, is_julia: bool) -> DzFe {
+    let ad = dzfe_norm(DzFe(
+        vec2<f32>(a_m.x * d.m.x - a_m.y * d.m.y, a_m.x * d.m.y + a_m.y * d.m.x),
+        d.e + a_e,
+    ));
+    if (is_julia) {
+        return ad;
+    }
+    return dzfe_add(ad, b_m, b_e);
+}
+
+fn dzfe_to_f32(d: DzFe) -> vec2<f32> {
+    let n = dzfe_norm(d);
+    let e = clamp(n.e, -126, 127);
+    return ldexp(n.m, vec2<i32>(e, e));
+}
+"#;
+
+/// The derivative's splices into a perturbed template, per rung
+/// (docs/projects/derivative-under-perturbation.md). `None` without a
+/// derivative: the declaration keeps the constant seed and the rest
+/// splice nothing, so those shaders are byte-identical.
+struct DerivSplices {
+    state: &'static str,
+    decl: &'static str,
+    resume: &'static str,
+    step: &'static str,
+    bla: &'static str,
+    save: &'static str,
+    fin: &'static str,
+}
+
+fn deriv_splices(floatexp: bool) -> DerivSplices {
+    if floatexp {
+        return DerivSplices {
+            state: "    dz_m: vec2<f32>,    // the derivative dz/dc (P11): mantissa
+    dz_e: i32,          // ... and exponent
+    dz_pad: u32,        // keeps the struct 8-byte aligned",
+            decl: "    // The derivative dz/dc in extended range (DzFe): it grows like 1/S,
+    // past f32 on this rung. Stepped at the PRE-step iterate, so z starts
+    // at the pixel's z0, which at these depths is the reference's start
+    // to f32.
+    var dz_d = DzFe(select(DZ0_PARAM, vec2<f32>(1.0, 0.0), is_julia_perturb), 0);
+    z = ref_z(0u);",
+            resume: "        dz_d = DzFe(st.dz_m, st.dz_e);",
+            step: "            dz_d = dzfe_step(z, c_f32, dz_d, is_julia_perturb);",
+            bla: "                // The derivative through the skip: D' = A D + B.
+                dz_d = dzfe_bla(dz_d, pick_a, pick_ae, pick_b, pick_be, is_julia_perturb);",
+            save: "            dz_d.m, dz_d.e, 0u,",
+            fin: "    // Per render pixel, as every path reports it: D S, with S = s_m 2^s_e.
+    // Moderate at escape, so f32 holds it.
+    let dz = dzfe_to_f32(DzFe(dz_d.m * perturb.s_m, dz_d.e + perturb.s_e));",
+        };
+    }
+    DerivSplices {
+        state: "    dz: vec2<f32>,      // the derivative dz/dc (P11), when compiled in",
+        decl: "    // The derivative dz/dc: dw/dd0 on this rung, where w and d0 share
+    // the scale S. Stepped at the PRE-step iterate, so z starts at the
+    // pixel's own z0 (the reference's start plus its delta).
+    var dz_abs = select(DZ0_PARAM, vec2<f32>(1.0, 0.0), is_julia_perturb);
+    z = ref_z(0u) + perturb.s * w;",
+        resume: "        dz_abs = st.dz;",
+        step: "            dz_abs = formula_derivative(z, c_f32, dz_abs, is_julia_perturb);",
+        bla: "                // The derivative through the skip: D' = A D + B, the same
+                // coefficients (B drops on the Julia plane, as d0's term does).
+                dz_abs = vec2<f32>(
+                    pick_a.x * dz_abs.x - pick_a.y * dz_abs.y,
+                    pick_a.x * dz_abs.y + pick_a.y * dz_abs.x,
+                ) * exp2(f32(clamp(pick_ae, -126, 126)))
+                    + select(pick_b * exp2(f32(clamp(pick_be, -126, 126))), vec2<f32>(0.0), is_julia_perturb);",
+        save: "            dz_abs,",
+        fin: "    // Per render pixel, as every path reports it.
+    let dz = dz_abs * perturb.s;",
+    }
 }
 
 /// Bytes of one terminal record (`IterResult`): z, dz, the
@@ -1216,6 +1394,7 @@ struct IterState {
     // iter_start. Without this the legal skip length would depend on
     // where chunk boundaries fell, and the rendered image with it.
     i_at: u32,
+    //__DZ_STATE__
 }
 const ITER_ESCAPED_BIT: u32 = 0x80000000u;
 @group(0) @binding(6) var<storage, read_write> iter_state: array<IterState>;
@@ -1405,7 +1584,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // straight back to a constant.
     var converged = false;
     let period = 0u;
-    let dz = vec2<f32>(1.0, 0.0);
+    //__DZ_DECL__
     // The f32 value of c for the accumulator colorings (trap geometry
     // lives at O(1) scale, where f32 c is exact enough): the pixel's own
     // c on the parameter plane and the constant in Julia mode, as the
@@ -1430,6 +1609,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         w_prev = st.w_lo;
         z = st.z;
         m = st.m;
+        //__DZ_RESUME__
         accum_state = vec4<f32>(st.accum, /*ST_ACCUM2*/);
         i = max(i, st.i_at);
         if ((st.n_done & ITER_ESCAPED_BIT) != 0u) {
@@ -1498,12 +1678,14 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     pick_b.x * d0_term.y + pick_b.y * d0_term.x,
                 ) * exp2(f32(clamp(pick_be, -126, 126)));
                 w = ta + tb;
+                //__DZ_BLA__
                 m = m + pick_span;
                 i = i + pick_span;
                 did_skip = true;
             }
         }
         if (!did_skip) {
+            //__DZ_STEP__
             let z_ref = ref_z(m);
             //__DELTA_STEP__
             w = w_new;
@@ -1541,8 +1723,10 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             w, z, accum_state.xy, /*ACCUM2_STORE*/ w_prev, 0, m,
             select(0u, n | ITER_ESCAPED_BIT, escaped),
             i,
+            //__DZ_SAVE__
         );
     }
+    //__DZ_FINAL__
     if (!escaped) {
         n = params.max_iter;
     }
@@ -1719,6 +1903,7 @@ struct IterState {
     // where chunk boundaries fell, and the rendered image with it.
     i_at: u32,
     //__ITER_STATE_TAIL__
+    //__DZ_STATE__
 }
 const ITER_ESCAPED_BIT: u32 = 0x80000000u;
 @group(0) @binding(6) var<storage, read_write> iter_state: array<IterState>;
@@ -2351,7 +2536,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // straight back to a constant.
     var converged = false;
     let period = 0u;
-    let dz = vec2<f32>(1.0, 0.0);
+    //__DZ_DECL__
     // c for the accumulator colorings: the constant in Julia mode; on
     // the parameter plane the view centre, which on this rung is the
     // pixel's c to f32 -- the pixel's offset is far below what an f32 c
@@ -2369,6 +2554,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         //__STATE_RESUME_TAIL__
         z = st.z;
         m = st.m;
+        //__DZ_RESUME__
         accum_state = vec4<f32>(st.accum, /*ST_ACCUM2*/);
         i = max(i, st.i_at);
         if ((st.n_done & ITER_ESCAPED_BIT) != 0u) {
@@ -2420,12 +2606,14 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let ta = cfe2_mul_cfe32(w, pick_a, pick_ae);
                 let tb = cfe2_mul_cfe32(d0, pick_b, pick_be);
                 w = cfe2_add(ta, tb);
+                //__DZ_BLA__
                 m = m + pick_span;
                 i = i + pick_span;
                 did_skip = true;
             }
         }
         if (!did_skip) {
+            //__DZ_STEP__
             // Two views of the same iterate: the plain value (Ship
             // and anything that needs an f32) and the raw mantissa
             // with its exponent (the exact multiplier, valid at any
@@ -2460,8 +2648,10 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             select(0u, n | ITER_ESCAPED_BIT, escaped),
             i,
             //__STATE_SAVE_TAIL__
+            //__DZ_SAVE__
         );
     }
+    //__DZ_FINAL__
     if (!escaped) {
         n = params.max_iter;
     }
@@ -3240,15 +3430,28 @@ pub const ITER_STATE_BYTES_WIDE_EXTRA: u64 = 8;
 /// will not bind.
 pub const ITER_STATE_BYTES_MAX: u64 = ITER_STATE_BYTES_PHOENIX + ITER_STATE_BYTES_WIDE_EXTRA;
 
-/// Per-pixel state a given tier needs, at an accumulator width.
-pub fn iter_state_bytes(tier: PerturbTier, floatexp: bool, wide: bool) -> u64 {
+/// What the derivative's resume fields add (`DerivSplices::state`): its
+/// f32 pair on the scaled rung; the deep rung's extended pair (mantissa,
+/// exponent, pad) is twice that.
+pub const ITER_STATE_BYTES_DERIV: u64 = 8;
+pub const ITER_STATE_BYTES_DERIV_FE: u64 = 16;
+
+/// Per-pixel state a given tier needs, at an accumulator width, with or
+/// without the derivative. The tiers that carry one are single-term, so
+/// even wide and with it they stay under [`ITER_STATE_BYTES_MAX`].
+pub fn iter_state_bytes(tier: PerturbTier, floatexp: bool, wide: bool, deriv: bool) -> u64 {
     let base = match (tier, floatexp) {
         // The scaled rung hides Phoenix's history in `w_lo`, which is
         // dead there, so only the deep rung actually grows.
         (PerturbTier::Phoenix, true) | (PerturbTier::Manowar, true) => ITER_STATE_BYTES_PHOENIX,
         _ => ITER_STATE_BYTES,
     };
-    base + if wide { ITER_STATE_BYTES_WIDE_EXTRA } else { 0 }
+    let d = match (deriv, floatexp) {
+        (false, _) => 0,
+        (true, false) => ITER_STATE_BYTES_DERIV,
+        (true, true) => ITER_STATE_BYTES_DERIV_FE,
+    };
+    base + if wide { ITER_STATE_BYTES_WIDE_EXTRA } else { 0 } + d
 }
 
 /// The struct tail, resume and save splices for a tier. They are
@@ -4703,6 +4906,23 @@ pub fn assemble_perturbed_layered(
     tier: PerturbTier,
     lens: Option<&str>,
 ) -> String {
+    assemble_perturbed_full(coloring, layer, floatexp, tier, lens, None)
+}
+
+/// [`assemble_perturbed_layered`] carrying the derivative of `derivative`
+/// (a formula that defines one): dz/dc stepped with its snippet at the
+/// full iterate, through BLA skips and chunk boundaries, reported per
+/// render pixel (docs/projects/derivative-under-perturbation.md).
+pub fn assemble_perturbed_full(
+    coloring: &ColoringDef,
+    layer: Option<&ColoringDef>,
+    floatexp: bool,
+    tier: PerturbTier,
+    lens: Option<&str>,
+    derivative: Option<&FormulaDef>,
+) -> String {
+    let derivative = derivative.filter(|f| !f.wgsl_derivative.is_empty());
+    let splices = derivative.map(|_| deriv_splices(floatexp));
     let layer = layer.filter(|l| crate::escape::layer_fits(coloring, l));
     let owner = accum_owner(coloring, layer);
     let needs_accum = owner.is_some();
@@ -4731,6 +4951,26 @@ pub fn assemble_perturbed_layered(
     for line in template.lines() {
         match line.trim() {
             "//__PALETTE_MAP__" => out.push(PALETTE_MAP_WGSL.trim().to_string()),
+            "//__DZ_DECL__" => out.push(match &splices {
+                Some(d) => d.decl.to_string(),
+                None => "    let dz = vec2<f32>(1.0, 0.0);".to_string(),
+            }),
+            "//__DZ_STATE__" | "//__DZ_RESUME__" | "//__DZ_STEP__" | "//__DZ_BLA__" | "//__DZ_SAVE__"
+            | "//__DZ_FINAL__" => {
+                if let Some(d) = &splices {
+                    out.push(
+                        match line.trim() {
+                            "//__DZ_STATE__" => d.state,
+                            "//__DZ_RESUME__" => d.resume,
+                            "//__DZ_STEP__" => d.step,
+                            "//__DZ_BLA__" => d.bla,
+                            "//__DZ_SAVE__" => d.save,
+                            _ => d.fin,
+                        }
+                        .to_string(),
+                    );
+                }
+            }
             "//__LENS_APPLY_PX__" => lens_apply_pixels(&mut out, lens),
             "//__DELTA_STEP__" => out.push(match tier {
                 PerturbTier::Power(p) => delta_step_scaled(p.clamp(2, 12)),
@@ -4803,11 +5043,22 @@ pub fn assemble_perturbed_layered(
                 out.push(format!(
                     "const COLORING_COLORS_INTERIOR: bool = {colors_interior};"
                 ));
-                // The perturbed rungs never iterate a derivative: `dz`
-                // is a constant seed there. A coloring built on dz has
-                // to KNOW that, or it renders something plausible from
-                // a derivative that is really the number 1.
-                out.push("const HAS_DERIVATIVE: bool = false;".to_string());
+                // Without the derivative `dz` is a constant seed. A
+                // coloring built on dz has to KNOW that, or it renders
+                // something plausible from a derivative that is really
+                // the number 1.
+                out.push(format!("const HAS_DERIVATIVE: bool = {};", derivative.is_some()));
+                if let Some(f) = derivative {
+                    // As the direct template seeds it: z0 = pixel means
+                    // z0 = c, hence dz0/dc = 1; any other seed is 0.
+                    let dz0 = if f.wgsl_param_seed == "pixel" { "vec2<f32>(1.0, 0.0)" } else { "vec2<f32>(0.0, 0.0)" };
+                    out.push(format!("const DZ0_PARAM: vec2<f32> = {dz0};"));
+                    out.push(DERIVATIVE_HELPERS_WGSL.trim().to_string());
+                    out.push(f.wgsl_derivative.to_string());
+                    if floatexp {
+                        out.push(DERIVATIVE_FE_WGSL.trim().to_string());
+                    }
+                }
                 out.push(format!("const COLORING_IS_BOUNDED: bool = {bounded};"));
                 let helpers = tier_helpers(tier, floatexp);
                 if !helpers.is_empty() {
@@ -8158,12 +8409,13 @@ mod tests {
         }
     }
 
-    /// The perturbed rungs never iterate a derivative, and a coloring
-    /// built on one has to know.
+    /// A perturbed shader built without the derivative says so, and one
+    /// built with it (P11) says that, on both rungs; a coloring built on
+    /// the derivative has to know which.
     ///
-    /// `dz` is a constant seed there, so `z/dz` is `z` and the shading
-    /// would be a smooth function of arg(z) — convincing relief that
-    /// encodes nothing. The flag lets the coloring return flat light
+    /// Without it `dz` is a constant seed, so `z/dz` is `z` and the
+    /// shading would be a smooth function of arg(z) — convincing relief
+    /// that encodes nothing. The flag lets the coloring return flat light
     /// instead, which is visibly unshaded rather than plausibly wrong.
     #[test]
     fn the_perturbed_rungs_declare_no_derivative() {
@@ -8172,7 +8424,19 @@ mod tests {
             let src = assemble_perturbed(&colorings::NORMAL_MAP, floatexp, PerturbTier::Power(2));
             assert!(
                 src.contains("const HAS_DERIVATIVE: bool = false;"),
-                "perturbed (fe={floatexp}) must declare no derivative"
+                "perturbed (fe={floatexp}) without the derivative must declare none"
+            );
+            let src = assemble_perturbed_full(
+                &colorings::NORMAL_MAP,
+                None,
+                floatexp,
+                PerturbTier::Power(2),
+                None,
+                Some(crate::escape::get_formula("mandelbrot")),
+            );
+            assert!(
+                src.contains("const HAS_DERIVATIVE: bool = true;"),
+                "perturbed (fe={floatexp}) with the derivative must declare it"
             );
         }
         // Direct + a formula that HAS one: true.
@@ -8243,11 +8507,35 @@ mod tests {
             let shader_bytes = size_of("IterState");
             assert_eq!(
                 shader_bytes,
-                iter_state_bytes(tier, floatexp, wide),
+                iter_state_bytes(tier, floatexp, wide, false),
                 "{tier:?} fe={floatexp} wide={wide}: the shader's IterState is {shader_bytes} B \
                  but the renderer allocates {} B per pixel",
-                iter_state_bytes(tier, floatexp, wide)
+                iter_state_bytes(tier, floatexp, wide, false)
             );
+            // With the derivative carried: the state grows by its fields,
+            // and stays under the budget's widest.
+            let deriv_formula = crate::escape::get_formula("mandelbrot");
+            {
+                let src = assemble_perturbed_full(coloring, None, floatexp, tier, None, Some(deriv_formula));
+                let module = naga::front::wgsl::parse_str(&src)
+                    .unwrap_or_else(|e| panic!("{tier:?} fe={floatexp} deriv parse: {e}"));
+                let mut layouter = naga::proc::Layouter::default();
+                layouter.update(module.to_ctx()).expect("layout");
+                let handle = module
+                    .types
+                    .iter()
+                    .find(|(_, t)| t.name.as_deref() == Some("IterState"))
+                    .map(|(h, _)| h)
+                    .expect("IterState");
+                assert_eq!(
+                    layouter[handle].size as u64,
+                    iter_state_bytes(tier, floatexp, wide, true),
+                    "{tier:?} fe={floatexp} wide={wide}: the derivative's state disagrees"
+                );
+                if !matches!(tier, PerturbTier::Phoenix | PerturbTier::Manowar) {
+                    assert!(iter_state_bytes(tier, floatexp, wide, true) <= ITER_STATE_BYTES_MAX);
+                }
+            }
             }
         }
     }
