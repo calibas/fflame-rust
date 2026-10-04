@@ -2905,7 +2905,12 @@ impl EscapeRenderer {
         let floatexp = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM
             || matches!(tier, assembler::PerturbTier::Manowar);
         let need = (width as u64) * (height as u64)
-            * assembler::iter_state_bytes(tier, floatexp, super::config_accum_is_wide(escape));
+            * assembler::iter_state_bytes(
+                tier,
+                floatexp,
+                super::config_accum_is_wide(escape),
+                Self::perturbed_derivative(escape, floatexp).is_some(),
+            );
         let lim = device.limits();
         need <= lim.max_buffer_size && need <= lim.max_storage_buffer_binding_size as u64
     }
@@ -2940,7 +2945,12 @@ impl EscapeRenderer {
             let floatexp = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM
                 || matches!(tier, assembler::PerturbTier::Manowar);
             let need = px
-                * assembler::iter_state_bytes(tier, floatexp, super::config_accum_is_wide(escape));
+                * assembler::iter_state_bytes(
+                    tier,
+                    floatexp,
+                    super::config_accum_is_wide(escape),
+                    Self::perturbed_derivative(escape, floatexp).is_some(),
+                );
             let cap = lim.max_storage_buffer_binding_size as u64;
             if need > cap {
                 return Some(format!(
@@ -3234,12 +3244,36 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    /// Whether the iterate pass compiles a real derivative orbit.
-    /// Direct path only: the perturbed rungs never iterate one (their
-    /// colorings see HAS_DERIVATIVE = false). Mirrors assemble_with.
+    /// The formula whose derivative the perturbed path carries on this
+    /// rung, when one is wanted (a colouring that reads it, or analytic
+    /// relief) and it can be: the formula defines one, and its tier is a
+    /// single-term recurrence (docs/projects/derivative-under-perturbation.md).
+    pub(crate) fn perturbed_derivative(escape: &EscapeConfig, floatexp: bool) -> Option<&'static super::FormulaDef> {
+        let wanted = Self::colourings_have(escape, super::ColoringFeature::NeedsDerivative)
+            || escape.shading.wants_derivative();
+        let formula = super::get_formula(&escape.formula);
+        let tier = Self::perturb_tier(escape)?;
+        let single = !matches!(tier, assembler::PerturbTier::Phoenix | assembler::PerturbTier::Manowar);
+        // The floatexp rung's derivative is the plan's phase 3.
+        (wanted && single && !floatexp && !formula.wgsl_derivative.is_empty()).then_some(formula)
+    }
+
+    /// Which rung a perturbed render of `escape` takes: floatexp past
+    /// [`PERTURB_FLOATEXP_ZOOM`], and always for Manowar.
+    fn floatexp_for(&self, escape: &EscapeConfig) -> bool {
+        #[cfg(test)]
+        let deep = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM || self.force_floatexp;
+        #[cfg(not(test))]
+        let deep = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM;
+        deep || matches!(Self::perturb_tier(escape), Some(assembler::PerturbTier::Manowar))
+    }
+
+    /// Whether the iterate pass compiles a real derivative orbit. On the
+    /// perturbed path, where `perturbed_derivative` says it can carry one.
+    /// Mirrors assemble_with and assemble_perturbed_full.
     fn derivative_active(&self, escape: &EscapeConfig) -> bool {
         if self.perturbed_path(escape) {
-            return false;
+            return Self::perturbed_derivative(escape, self.floatexp_for(escape)).is_some();
         }
         let formula = super::get_formula(&escape.formula);
         (Self::colourings_have(escape, super::ColoringFeature::NeedsDerivative)
@@ -3696,13 +3730,6 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// assembler's own `HAS_DERIVATIVE` decision by test, so the two
     /// cannot drift.
     pub fn derivative_gap(escape: &EscapeConfig) -> Option<DerivativeGap> {
-        // The deep rungs do not iterate a derivative orbit at all, so
-        // this outranks the formula: a Mandelbrot dive past
-        // PERTURB_MIN_ZOOM loses its derivative even though the
-        // formula defines one.
-        if Self::wants_perturbation(escape) {
-            return Some(DerivativeGap::Perturbed);
-        }
         if super::fields::get_field(&escape.formula).is_some()
             || super::ifs::get_ifs(&escape.formula).is_some()
         {
@@ -3710,6 +3737,21 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         if super::get_formula(&escape.formula).wgsl_derivative.is_empty() {
             return Some(DerivativeGap::Formula);
+        }
+        // The perturbed rungs carry the derivative of a single-term
+        // formula (docs/projects/derivative-under-perturbation.md); the
+        // floatexp rung not yet.
+        if Self::wants_perturbation(escape) {
+            let tier = Self::perturb_tier(escape);
+            let floatexp = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM
+                || matches!(tier, Some(assembler::PerturbTier::Manowar));
+            let single = !matches!(
+                tier,
+                Some(assembler::PerturbTier::Phoenix | assembler::PerturbTier::Manowar) | None
+            );
+            if floatexp || !single {
+                return Some(DerivativeGap::Perturbed);
+            }
         }
         None
     }
@@ -5039,20 +5081,23 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let lens_registry = crate::variations::global_registry();
         let lens_src = super::lens::lens_source(escape, &lens_registry);
         let lens_id = super::lens::lens_key(escape, &lens_registry);
+        let derivative = Self::perturbed_derivative(escape, floatexp);
         let key = format!(
-            "perturbed|{}|{}|{}|{:?}|{lens_id}",
+            "perturbed|{}|{}|{}|{:?}|{lens_id}|{}",
             coloring.name,
             layer.map_or("", |l| l.name),
             floatexp,
-            tier
+            tier,
+            derivative.map_or("", |f| f.name),
         );
         if !self.pipelines.contains_key(&key) {
-            let source = assembler::assemble_perturbed_layered(
+            let source = assembler::assemble_perturbed_full(
                 coloring,
                 layer,
                 floatexp,
                 tier,
                 lens_src.as_deref(),
+                derivative,
             );
             let module = device.create_shader_module(ShaderModuleDescriptor {
                 label: Some(&format!("Escape Shader {key}")),
@@ -8058,6 +8103,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                         tier,
                         floatexp,
                         super::config_accum_is_wide(escape),
+                        Self::perturbed_derivative(escape, floatexp).is_some(),
                     ),
                 ) {
                     // `perturb_state_fits` should have routed this to
