@@ -129,6 +129,8 @@ or run):
      forward-mode dual numbers through every transform. Both give a
      directional distance estimate in **pixel units** at any depth.
    - Their DE-based colouring, and KF2's analytic slopes, work at every zoom.
+   - *Since 2026-10-04 so do ours:* P11 carries the derivative through
+     both perturbed rungs (docs/projects/derivative-under-perturbation.md).
 
 7. **The quick fixes come first.** §6 lists four problems in our current
    colouring, none needing new features: boundary darkening with
@@ -315,7 +317,7 @@ needs an engine change first.
 | P8 | **Separate inside colouring** | Pick an interior colouring independently of the exterior one, like UF's Inside tab. | UF | M |
 | P9 | **Phase add** | Palette position += strength × `arg(z)/2π`. With P2 in place the smooth fraction and phase line up into KF2's "exterior grid". | KF2 | S |
 | P10 | **OKLab palette interpolation** | Plus a finer table (we resample our table nearest-index at every stage, so squeezing lowers its resolution). | techmatt | S |
-| P11 | **Derivative under perturbation** | Carry dz/dc through perturbation and BLA as KF2 does, or use dual numbers as F3 does. Gives distance estimate, normal map and analytic relief at every depth, in pixel units. | KF2, F3 | L |
+| P11 | **Derivative under perturbation** | Carry dz/dc through perturbation and BLA as KF2 does, or use dual numbers as F3 does. Gives distance estimate, normal map and analytic relief at every depth, in pixel units. *Done:* docs/projects/derivative-under-perturbation.md. | KF2, F3 | L |
 
 ### 5.2 New colourings
 
@@ -700,7 +702,8 @@ Read from the code, not reproduced by render, except where noted.
      - F3's vector is the conjugate of the screen gradient of |z|²,
        since its saved rows run upward. The view rotation turns it onto
        our screen, so the hue circles the set as in F3.
-     - Flat grey where no derivative is iterated (perturbation).
+     - Flat grey where no derivative is iterated (a formula without one;
+       the perturbed rungs carry one since P11).
    - **Infinite waves** (C13), from KF2's `KF_InfiniteWaves`, read from
      source.
      - Up to six waves (KF2 allows 30), each `sin(π·iter/P)/2 + ½` on
@@ -975,9 +978,9 @@ Read from the code, not reproduced by render, except where noted.
      The iterate pass stores that gradient, in screen pixels and turned
      back by the view rotation, in the height texture's two remaining
      channels (now `rgba32float`), and the relief lights it instead of
-     differencing. The derivative orbit compiles in for it. Direct
-     path only, since the perturbed rungs carry no derivative (P11); the
-     panel says so, and the relief is flat there, as tested. Softness,
+     differencing. The derivative orbit compiles in for it. It was
+     direct path only at first, since the perturbed rungs carried no
+     derivative; since P11 it lights a dive at any depth. Softness,
      stencils and the height curve do not apply to it.
      *Measured:* lit from one side, analytic and numeric (smooth) relief
      move 97% of the pixels both move the same way, at rotation 0 and

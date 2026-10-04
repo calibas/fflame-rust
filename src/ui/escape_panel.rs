@@ -2688,12 +2688,41 @@ mod tests {
         }
     }
 
-    /// ...and the perturbed rungs outrank the formula.
-    ///
-    /// A Mandelbrot dive is the case that matters: the formula defines
-    /// a derivative, so the hint must appear only once the view is
-    /// deep enough to leave the direct path — and it must name the
-    /// deep path as the reason rather than blaming the formula.
+    /// The hint must match the PERTURBED shader too: assemble it as the
+    /// renderer would for a dive, and read back the constant.
+    #[test]
+    fn the_derivative_hint_matches_the_perturbed_shader() {
+        use crate::escape::{assembler, colorings, EscapeRenderer};
+        for f in crate::escape::FORMULAS {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = f.name.to_string();
+            esc.coloring = "distance_estimate".to_string();
+            esc.zoom_log2 = 30.0;
+            if f.name == "mcmullen" {
+                esc.julia = true;
+            }
+            if !EscapeRenderer::wants_perturbation(&esc) {
+                continue;
+            }
+            let tier = EscapeRenderer::perturb_tier(&esc).expect("a perturbed view has a tier");
+            let floatexp = matches!(tier, assembler::PerturbTier::Manowar);
+            let src = assembler::assemble_perturbed_full(
+                &colorings::DISTANCE_ESTIMATE,
+                None,
+                floatexp,
+                tier,
+                None,
+                EscapeRenderer::perturbed_derivative(&esc, floatexp),
+            );
+            let shader_has = src.contains("const HAS_DERIVATIVE: bool = true;");
+            let panel_says = EscapeRenderer::derivative_gap(&esc).is_none();
+            assert_eq!(shader_has, panel_says, "{}: the perturbed shader and the hint disagree", f.name);
+        }
+    }
+
+    /// ...and the deep path: both rungs carry the derivative (P11), so a
+    /// Mandelbrot dive -- the case that matters -- gets no hint at any
+    /// depth, and a formula without one is blamed as the formula.
     #[test]
     fn the_derivative_hint_follows_the_deep_path() {
         use crate::escape::{DerivativeGap, EscapeRenderer};
@@ -2711,10 +2740,22 @@ mod tests {
         esc.zoom_log2 = 30.0;
         assert_eq!(
             EscapeRenderer::derivative_gap(&esc),
-            Some(DerivativeGap::Perturbed),
-            "a deep dive loses the derivative to the perturbed rungs, and the \
-             hint must say so rather than blaming the formula"
+            None,
+            "the scaled rung carries the derivative"
         );
+
+        esc.zoom_log2 = 60.0;
+        assert_eq!(
+            EscapeRenderer::derivative_gap(&esc),
+            None,
+            "the floatexp rung carries the derivative too"
+        );
+
+        // A formula with no derivative is blamed as the formula, at any
+        // depth.
+        esc.formula = "burning_ship".to_string();
+        assert_eq!(EscapeRenderer::derivative_gap(&esc), Some(DerivativeGap::Formula));
+        esc.formula = "mandelbrot".to_string();
 
         // Damping takes the same view OFF the perturbed path, so the
         // derivative comes back. If the hint were keyed on zoom alone
