@@ -4133,6 +4133,181 @@ fn escape_rejects_names_that_do_not_exist() {
     }
 }
 
+/// The palette map is reachable from a script, and a misspelt curve
+/// fails rather than quietly drawing Linear.
+#[cfg(feature = "engine-escape")]
+#[test]
+fn escape_palette_map_from_a_script() {
+    let out = run(
+        r#"
+        script("Mapped", "generator");
+        escape.formula("mandelbrot");
+        escape.transfer("log_log", 4);
+        escape.palette_curve("s_curve");
+        escape.stepped_palette(true);
+        "#,
+        1,
+    )
+    .expect("script ran");
+    let pm = &out.config.escape.palette_map;
+    assert_eq!(pm.transfer, crate::config::escape::TransferCurve::LogLog);
+    assert_eq!(pm.pivot, 4.0);
+    assert_eq!(pm.curve, crate::config::escape::PaletteCurve::SCurve);
+    assert!(pm.stepped);
+    for (src, expect) in [
+        (r#"escape.transfer("logg", 1.0);"#, "unknown transfer curve"),
+        (r#"escape.palette_curve("s");"#, "unknown palette curve"),
+    ] {
+        let text = format!("script(\"X\", \"generator\");\n{src}");
+        let e = run(&text, 1).expect_err("must fail");
+        let msg = format!("{e:?}");
+        assert!(msg.contains(expect), "expected `{expect}` in the error, got: {msg}");
+    }
+}
+
+/// A script's colouring pick matches the panel's: the averages start
+/// debanded, and a value the script sets afterwards still wins.
+#[cfg(feature = "engine-escape")]
+#[test]
+fn escape_coloring_takes_the_panels_pick_values() {
+    let out = run(
+        r#"
+        script("Bands", "generator");
+        escape.coloring("stripe_average");
+        "#,
+        1,
+    )
+    .expect("script ran");
+    assert_eq!(out.config.escape.coloring_params.get("deband"), Some(&1.0));
+    let out = run(
+        r#"
+        script("Bands", "generator");
+        escape.coloring("stripe_average");
+        escape.coloring_param("deband", 0.0);
+        "#,
+        1,
+    )
+    .expect("script ran");
+    assert_eq!(out.config.escape.coloring_params.get("deband"), Some(&0.0));
+}
+
+/// A texture layer from a script: named, blended, weighted, with its
+/// own parameters -- and a misspelt name or blend fails.
+#[cfg(feature = "engine-escape")]
+#[test]
+fn escape_texture_layer_from_a_script() {
+    let out = run(
+        r#"
+        script("Layered", "generator");
+        escape.coloring("smooth");
+        escape.layer("stripe_average", "overlay", 0.6);
+        escape.layer_param("density", 6.0);
+        "#,
+        1,
+    )
+    .expect("script ran");
+    let layer = &out.config.escape.layer;
+    assert_eq!(layer.coloring, "stripe_average");
+    assert_eq!(layer.blend, crate::config::escape::LayerBlend::Overlay);
+    assert_eq!(layer.weight, 0.6);
+    assert_eq!(layer.params.get("density"), Some(&6.0));
+    assert_eq!(layer.params.get("deband"), Some(&1.0), "a fresh pick's values");
+    let out = run(
+        r#"
+        script("Layered", "generator");
+        escape.layer("stripe_average", "screen", 0.5);
+        escape.no_layer();
+        "#,
+        1,
+    )
+    .expect("script ran");
+    assert!(!out.config.escape.layer.is_on());
+    for (src, expect) in [
+        (r#"escape.layer("stripes", "screen", 0.5);"#, "unknown escape coloring"),
+        (r#"escape.layer("smooth", "dodge", 0.5);"#, "unknown layer blend"),
+        (r#"escape.layer_param("density", 1.0);"#, "no texture layer"),
+    ] {
+        let text = format!("script(\"X\", \"generator\");\n{src}");
+        let e = run(&text, 1).expect_err("must fail");
+        let msg = format!("{e:?}");
+        assert!(msg.contains(expect), "expected `{expect}` in the error, got: {msg}");
+    }
+}
+
+/// The relief's lighting model, slope stencil and height curve from a
+/// script, with misspelt names failing.
+#[cfg(feature = "engine-escape")]
+#[test]
+fn escape_relief_lighting_from_a_script() {
+    let out = run(
+        r#"
+        script("Lit", "generator");
+        escape.shading(135, 10);
+        escape.shading_light("lambert", 40, 0.25);
+        escape.shading_slope("least_squares");
+        escape.shading_height_curve("sin", 2.0, 0.5);
+        escape.shading_shadow(0.0, 0.0, 0.0, 1.0, "soft_light");
+        "#,
+        1,
+    )
+    .expect("script ran");
+    let sh = &out.config.escape.shading;
+    assert_eq!(sh.model, crate::config::escape::ReliefModel::Lambert);
+    assert_eq!((sh.elevation, sh.ambient), (40.0, 0.25));
+    assert_eq!(sh.stencil, crate::config::escape::SlopeStencil::LeastSquares);
+    assert_eq!(sh.height_curve, crate::config::escape::HeightTransfer::Sin);
+    assert_eq!((sh.height_pre, sh.height_post), (2.0, 0.5));
+    assert_eq!(sh.shadow_blend, crate::config::escape::ShadingBlend::SoftLight);
+    for (src, expect) in [
+        (r#"escape.shading_light("phong", 30, 0);"#, "unknown relief model"),
+        (r#"escape.shading_slope("sobel");"#, "unknown slope stencil"),
+        (r#"escape.shading_height_curve("tan", 1, 1);"#, "unknown height curve"),
+    ] {
+        let text = format!("script(\"X\", \"generator\");\n{src}");
+        let e = run(&text, 1).expect_err("must fail");
+        let msg = format!("{e:?}");
+        assert!(msg.contains(expect), "expected `{expect}` in the error, got: {msg}");
+    }
+}
+
+/// Every escape number takes an int where it takes a float, as the
+/// reference promises: these used to fail with "function not found".
+#[cfg(feature = "engine-escape")]
+#[test]
+fn escape_numbers_accept_ints() {
+    let out = run(
+        r#"
+        script("Ints", "generator");
+        escape.formula("phoenix");
+        escape.coloring("smooth");
+        escape.zoom = 3;
+        escape.bailout = 16;
+        escape.rotation = 1;
+        escape.supersample = 8;
+        escape.param("p_re", 0);
+        escape.coloring_param("scale", 1);
+        escape.layer("stripe_average", "screen", 1);
+        escape.layer_param("density", 7);
+        escape.shading(135, 10);
+        escape.shading_shadow(0, 0, 0, 1, "multiply");
+        escape.shading_highlight(1, 1, 1, 1, "screen");
+        escape.shading_softness(2);
+        escape.julia(0, 1);
+        "#,
+        1,
+    )
+    .expect("script ran");
+    let esc = &out.config.escape;
+    assert_eq!((esc.zoom_log2, esc.bailout, esc.rotation), (3.0, 16.0, 1.0));
+    assert_eq!(esc.supersample, crate::config::escape::MAX_SUPERSAMPLE);
+    assert_eq!(esc.formula_params.get("p_re"), Some(&0.0));
+    assert_eq!(esc.coloring_params.get("scale"), Some(&1.0));
+    assert_eq!(esc.layer.params.get("density"), Some(&7.0));
+    assert_eq!((esc.shading.light_angle, esc.shading.height), (135.0, 10.0));
+    assert_eq!(esc.shading.softness, 2.0);
+    assert_eq!((esc.julia, esc.julia_re, esc.julia_im), (true, 0.0, 1.0));
+}
+
 /// Switching formula drops the previous formula's parameters.
 ///
 /// They are keyed by name and belong to the formula that declared

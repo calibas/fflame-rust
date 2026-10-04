@@ -17,7 +17,7 @@ use egui_wgpu::wgpu::{
     BindGroupLayoutEntry, BindingResource, BindingType, Buffer, BufferBindingType,
     BufferDescriptor, BufferUsages, CommandEncoder, ComputePassDescriptor, ComputePipeline,
     ComputePipelineDescriptor, Device, Extent3d, PipelineLayoutDescriptor, Queue,
-    SamplerBindingType, SamplerDescriptor, ShaderModuleDescriptor, ShaderSource, ShaderStages,
+    Sampler, SamplerBindingType, SamplerDescriptor, ShaderModuleDescriptor, ShaderSource, ShaderStages,
     StorageTextureAccess, Texture, TextureDescriptor, TextureDimension, TextureFormat,
     TextureSampleType, TextureUsages, TextureView, TextureViewDescriptor, TextureViewDimension,
 };
@@ -500,8 +500,8 @@ fn perturb_chunk_ceiling(seed: u32) -> u32 {
 const CHUNK_SEED_HEADROOM: u32 = 64;
 
 /// Uniform block — must match `EscapeParams` in the WGSL template
-/// (std140: vec2 pairs pack the head, the vec4 arrays start at a
-/// 16-byte boundary, total 192 bytes).
+/// (std140: vec2 pairs pack the head, the vec4s start at a 16-byte
+/// boundary, total 1312 bytes).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct EscapeParamsGpu {
@@ -529,9 +529,19 @@ struct EscapeParamsGpu {
     /// walk) fills the block from it. Occupies a padding word, so the
     /// layout is unchanged. See [`EscapeRenderer::set_preview`].
     stride: u32,
-    _pad_shade: [u32; 2],
+    /// The formula's degree at infinity, which the smooth count takes
+    /// its log in (`escape_degree_of`); 2 outside mode A. Occupies a
+    /// padding word, so the layout is unchanged.
+    degree: f32,
+    /// The value-to-palette map's two curves (`PaletteMap::gpu_flags`).
+    /// Occupies a padding word.
+    pmap_flags: u32,
+    /// x: the transfer's pivot (`PaletteMap::gpu_pivot`); yzw spare.
+    pmap: [f32; 4],
     fparams: [[f32; 4]; PARAM_VEC4S],
     cparams: [[f32; 4]; PARAM_VEC4S],
+    /// The texture layer's colouring parameters (`ColoringLayer`).
+    lparams: [[f32; 4]; PARAM_VEC4S],
     /// CPU-derived formula data (`FormulaDef::derived_data`),
     /// vec4-packed; zero for formulas without the hook.
     fdata: [[f32; 4]; FDATA_VEC4S],
@@ -565,11 +575,35 @@ struct ShadeParamsGpu {
     texture_scale: f32,
     /// Which combine the downsample uses (`DownsampleMode::to_gpu`).
     downsample: u32,
-    /// std140 rounds the struct up to a multiple of its largest
-    /// member alignment (vec3 → 16), so WGSL sees 80 bytes where Rust
-    /// would otherwise pack 76. Without this the bind group is
-    /// rejected outright.
-    _pad: u32,
+    /// `ReliefModel::to_gpu`: 0 the signed tilt, 1 Lambert.
+    model: u32,
+    /// The light's elevation in radians (Lambert only).
+    elevation: f32,
+    /// The shadow's floor, 0..1.
+    ambient: f32,
+    /// `SlopeStencil::to_gpu`.
+    stencil: u32,
+    /// `HeightTransfer::to_gpu`, and the scales either side of it.
+    height_curve: u32,
+    height_pre: f32,
+    height_post: f32,
+    /// What the relief lights (`EscapeShading::stored_relief`): 0 a
+    /// height it differences, 1 a slope the iterate pass stored
+    /// (analytic, offset orbits), 2 Embossed's stored response.
+    stored: u32,
+    /// The texture overlay (`TextureOverlay`): on, its fit, and KF2's
+    /// merge, power and ratio; the tile scale; and whether the height
+    /// texture's blue channel holds its warp field.
+    overlay: u32,
+    overlay_fit: u32,
+    overlay_merge: f32,
+    overlay_power: f32,
+    overlay_ratio: f32,
+    overlay_tile: f32,
+    overlay_blue: u32,
+    /// std140 rounds the struct up to a multiple of its largest member
+    /// alignment (vec3 -> 16): WGSL sees 144 bytes.
+    _pad: [u32; 2],
 }
 
 /// Uniform for the perturbed pipeline — must match `PerturbParams`
@@ -804,14 +838,18 @@ pub struct EscapeRenderer {
     /// extra bindings: the orbit buffer and the perturb uniform).
     orbit_cache: OrbitCache,
     /// Recolor cache: per-pixel terminal iteration records
-    /// (32 B/px), plus the identity of the settled iterate render
+    /// (32 B/px, 40 with a wide accumulator), plus the identity of the
+    /// settled iterate render
     /// that produced them. When a frame's iterate identity matches,
     /// the render is one cheap recolor dispatch -- no orbit, no BLA,
     /// no iteration. `None` key = records absent or stale.
     results_buffer: Option<Buffer>,
     results_px: u32,
+    /// Bytes per record in `results_buffer`: 32, or 40 for a colouring
+    /// with a wide accumulator (`assembler::result_bytes`).
+    results_stride: u64,
     results_key: Option<String>,
-    /// 32-byte stand-in bound when the pixel count exceeds the
+    /// One-record stand-in bound when the pixel count exceeds the
     /// storage-binding limit (giant exports): layouts need SOMETHING
     /// at the slot, and the shader's write is gated off.
     results_dummy: Option<Buffer>,
@@ -1035,6 +1073,13 @@ pub struct EscapeRenderer {
     /// Whether `height_texture` is full-size (shading on) or the dummy.
     height_full: bool,
     shade_params_buffer: Buffer,
+    /// The simulation texture (`EscapeConfig::texture`) on the GPU, with
+    /// the cache key of the recipe it was generated from; a 1x1 stand-in
+    /// is bound when there is none. Rgba8Unorm, not sRGB: the overlay
+    /// mixes display values, as Kalles Fraktaler mixes its image's bytes.
+    texture_image: Option<(String, Texture, TextureView)>,
+    texture_dummy: (Texture, TextureView),
+    texture_sampler: Sampler,
     /// Uniform the RECOLOR pass reads the measured contrast fit from.
     contrast_params: Buffer,
     /// Destination of the probe pass: a PROBE_W x PROBE_H subsample of
@@ -1047,6 +1092,10 @@ pub struct EscapeRenderer {
     contrast_fit: Option<ContrastFit>,
     /// Identity the current fit was measured under.
     contrast_fit_key: Option<String>,
+    /// The palette the current render is drawn with (`render`'s
+    /// `palette_generation`): part of the iteration's identity for a
+    /// colouring that samples it inside the loop (`PaletteInLoop`).
+    palette_generation: u64,
 }
 
 /// GPU-time pacing for the perturbed path (TDR-safety plan item C).
@@ -1333,7 +1382,7 @@ impl EscapeRenderer {
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::StorageTexture {
                         access: StorageTextureAccess::WriteOnly,
-                        format: TextureFormat::R32Float,
+                        format: TextureFormat::Rgba32Float,
                         view_dimension: TextureViewDimension::D2,
                     },
                     count: None,
@@ -1357,6 +1406,18 @@ impl EscapeRenderer {
                         ty: BufferBindingType::Storage { read_only: false },
                         has_dynamic_offset: false,
                         min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // The config's texture (TextureInLoop), as in the direct
+                // layout.
+                BindGroupLayoutEntry {
+                    binding: 14,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
                     },
                     count: None,
                 },
@@ -1408,7 +1469,7 @@ impl EscapeRenderer {
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::StorageTexture {
                         access: StorageTextureAccess::WriteOnly,
-                        format: TextureFormat::R32Float,
+                        format: TextureFormat::Rgba32Float,
                         view_dimension: TextureViewDimension::D2,
                     },
                     count: None,
@@ -1425,6 +1486,19 @@ impl EscapeRenderer {
                         ty: BufferBindingType::Storage { read_only: false },
                         has_dynamic_offset: false,
                         min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // The config's texture, for a colouring that reads it
+                // inside the loop (TextureInLoop, which alone declares
+                // it): a sampled texture, so no storage-buffer slot.
+                BindGroupLayoutEntry {
+                    binding: 14,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
                     },
                     count: None,
                 },
@@ -1478,7 +1552,7 @@ impl EscapeRenderer {
                         visibility: ShaderStages::COMPUTE,
                         ty: BindingType::StorageTexture {
                             access: StorageTextureAccess::WriteOnly,
-                            format: TextureFormat::R32Float,
+                            format: TextureFormat::Rgba32Float,
                             view_dimension: TextureViewDimension::D2,
                         },
                         count: None,
@@ -1699,6 +1773,7 @@ impl EscapeRenderer {
             orbit_cache: OrbitCache::default(),
             results_buffer: None,
             results_px: 0,
+            results_stride: assembler::RESULT_BYTES,
             results_key: None,
             results_dummy: None,
             recolor_bind_group_layout,
@@ -1731,11 +1806,22 @@ impl EscapeRenderer {
             height_view,
             height_full: false,
             shade_params_buffer,
+            texture_image: None,
+            texture_dummy: Self::create_texture_image(device, 1, 1),
+            texture_sampler: device.create_sampler(&SamplerDescriptor {
+                label: Some("Escape Texture Sampler"),
+                address_mode_u: wgpu::AddressMode::Repeat,
+                address_mode_v: wgpu::AddressMode::Repeat,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            }),
             contrast_params,
             contrast_probe: None,
             contrast_readback: None,
             contrast_fit: None,
             contrast_fit_key: None,
+            palette_generation: 0,
             current_ref_offset: [0.0, 0.0],
             iter_state_buffer: None,
             iter_state_px: 0,
@@ -1854,10 +1940,10 @@ impl EscapeRenderer {
             assembler::PerturbTier::Kaliset | assembler::PerturbTier::Ducks(_) => return false,
         };
         // Skipped iterations never run the accumulator/period updates,
-        // so those colorings keep the per-step path.
-        let coloring = super::get_coloring(&escape.coloring);
-        if coloring.has_feature(super::ColoringFeature::NeedsOrbitAccum)
-            || coloring.has_feature(super::ColoringFeature::NeedsPeriod)
+        // so those colorings -- base or texture layer -- keep the
+        // per-step path.
+        if Self::colourings_have(escape, super::ColoringFeature::NeedsOrbitAccum)
+            || Self::colourings_have(escape, super::ColoringFeature::NeedsPeriod)
         {
             return false;
         }
@@ -2645,7 +2731,7 @@ impl EscapeRenderer {
     /// resize clamp caps pixels against the WIDER iter-state stride);
     /// giant CLI exports may not, and simply render uncached.
     fn results_fit(&self, device: &Device) -> bool {
-        let bytes = (self.width as u64) * (self.height as u64) * 32;
+        let bytes = (self.width as u64) * (self.height as u64) * self.results_stride;
         bytes <= device.limits().max_storage_buffer_binding_size as u64
             && bytes <= device.limits().max_buffer_size
     }
@@ -2654,13 +2740,24 @@ impl EscapeRenderer {
     /// whether records are ACTIVE (fit the device). When they do not,
     /// the 32-byte dummy is kept for the layouts and the shader-side
     /// write is gated off via params.flags bit 3.
-    fn ensure_results(&mut self, device: &Device) -> bool {
+    fn ensure_results(&mut self, device: &Device, stride: u64) -> bool {
+        if stride != self.results_stride {
+            // A new record layout: the stored records cannot be read
+            // as it, so they are gone along with the buffer.
+            self.results_stride = stride;
+            if let Some(old) = self.results_buffer.take() {
+                old.destroy();
+            }
+            self.results_key = None;
+        }
         if !self.results_fit(device) {
             self.results_key = None;
             if self.results_dummy.is_none() {
                 self.results_dummy = Some(device.create_buffer(&BufferDescriptor {
                     label: Some("Escape Results Dummy"),
-                    size: 32,
+                    // One record of the widest layout: a binding must
+                    // hold at least one element of the shader's array.
+                    size: assembler::RESULT_BYTES_WIDE,
                     usage: BufferUsages::STORAGE,
                     mapped_at_creation: false,
                 }));
@@ -2674,7 +2771,7 @@ impl EscapeRenderer {
             }
             self.results_buffer = Some(device.create_buffer(&BufferDescriptor {
                 label: Some("Escape Iter Results"),
-                size: (px as u64) * 32,
+                size: (px as u64) * self.results_stride,
                 // COPY_SRC: read back by ground-truth comparison
                 // tests; free otherwise.
                 usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
@@ -2712,7 +2809,8 @@ impl EscapeRenderer {
     ) -> Option<Vec<IterRecord>> {
         let src = self.results_buffer.as_ref()?;
         let px = (self.width as u64) * (self.height as u64);
-        let size = px * 32;
+        let stride = self.results_stride as usize;
+        let size = px * self.results_stride;
         let staging = device.create_buffer(&BufferDescriptor {
             label: Some("results staging"),
             size,
@@ -2733,14 +2831,19 @@ impl EscapeRenderer {
         rx.recv().ok()?.ok()?;
         let data = slice.get_mapped_range();
         let f = |rec: &[u8], at: usize| f32::from_le_bytes(rec[at..at + 4].try_into().unwrap());
+        // A wide record puts `accum2` after `accum`, which moves n and
+        // the tags along by eight bytes.
+        let wide = stride == assembler::RESULT_BYTES_WIDE as usize;
+        let tail = if wide { 32 } else { 24 };
         let out = data
-            .chunks_exact(32)
+            .chunks_exact(stride)
             .map(|rec| IterRecord {
                 z: [f(rec, 0), f(rec, 4)],
                 dz: [f(rec, 8), f(rec, 12)],
                 accum: [f(rec, 16), f(rec, 20)],
-                n: u32::from_le_bytes(rec[24..28].try_into().unwrap()),
-                tags: u32::from_le_bytes(rec[28..32].try_into().unwrap()),
+                accum2: if wide { [f(rec, 24), f(rec, 28)] } else { [0.0, 0.0] },
+                n: u32::from_le_bytes(rec[tail..tail + 4].try_into().unwrap()),
+                tags: u32::from_le_bytes(rec[tail + 4..tail + 8].try_into().unwrap()),
             })
             .collect();
         drop(data);
@@ -2802,7 +2905,7 @@ impl EscapeRenderer {
         let floatexp = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM
             || matches!(tier, assembler::PerturbTier::Manowar);
         let need = (width as u64) * (height as u64)
-            * assembler::iter_state_bytes(tier, floatexp);
+            * assembler::iter_state_bytes(tier, floatexp, super::config_accum_is_wide(escape));
         let lim = device.limits();
         need <= lim.max_buffer_size && need <= lim.max_storage_buffer_binding_size as u64
     }
@@ -2836,7 +2939,8 @@ impl EscapeRenderer {
                 .unwrap_or(assembler::PerturbTier::Power(2));
             let floatexp = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM
                 || matches!(tier, assembler::PerturbTier::Manowar);
-            let need = px * assembler::iter_state_bytes(tier, floatexp);
+            let need = px
+                * assembler::iter_state_bytes(tier, floatexp, super::config_accum_is_wide(escape));
             let cap = lim.max_storage_buffer_binding_size as u64;
             if need > cap {
                 return Some(format!(
@@ -3138,9 +3242,16 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             return false;
         }
         let formula = super::get_formula(&escape.formula);
-        let coloring = super::get_coloring(&escape.coloring);
-        coloring.has_feature(super::ColoringFeature::NeedsDerivative)
+        (Self::colourings_have(escape, super::ColoringFeature::NeedsDerivative)
+            || escape.shading.wants_derivative())
             && !formula.wgsl_derivative.is_empty()
+    }
+
+    /// Whether the base colouring or the texture layer has a feature:
+    /// the assembler compiles the loop for the union of the two.
+    fn colourings_have(escape: &EscapeConfig, f: super::ColoringFeature) -> bool {
+        super::get_coloring(&escape.coloring).has_feature(f)
+            || super::layer_of(escape).is_some_and(|l| l.has_feature(f))
     }
 
     /// Identity of everything the ITERATION depends on -- the recolor
@@ -3203,8 +3314,8 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             );
         }
         let coloring = super::get_coloring(&escape.coloring);
-        let needs_accum = coloring.has_feature(super::ColoringFeature::NeedsOrbitAccum);
-        let needs_period = coloring.has_feature(super::ColoringFeature::NeedsPeriod);
+        let needs_accum = Self::colourings_have(escape, super::ColoringFeature::NeedsOrbitAccum);
+        let needs_period = Self::colourings_have(escape, super::ColoringFeature::NeedsPeriod);
         let colors_interior = coloring.has_feature(super::ColoringFeature::ColorsInterior);
         #[cfg(test)]
         let interior = !self.disable_interior;
@@ -3234,8 +3345,13 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let no_bla = self.disable_bla;
         #[cfg(not(test))]
         let no_bla = false;
+        // Both colourings, when either runs inside the loop: the layer
+        // may be the one that owns the accumulator.
         let coloring_fold = if needs_accum || needs_period {
-            format!("{}|{:?}", escape.coloring, escape.coloring_params)
+            let layer = super::layer_of(escape).map_or(String::new(), |l| {
+                format!("|{}|{:?}", l.name, escape.layer.params)
+            });
+            format!("{}|{:?}{layer}{}", escape.coloring, escape.coloring_params, self.palette_in_loop_key(escape))
         } else {
             String::new()
         };
@@ -3325,12 +3441,13 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             None
         };
         queue_contrast(queue, &self.contrast_params, &escape.contrast, fit);
+        let layer = super::layer_of(escape);
         let key = match ifs_key {
             Some(k) => k,
-            None => format!("recolor|{}|{}", coloring.name, deriv),
+            None => format!("recolor|{}|{}|{}", coloring.name, layer.map_or("", |l| l.name), deriv),
         };
         if !self.pipelines.contains_key(&key) {
-            let source = assembler::assemble_recolor(coloring, deriv);
+            let source = assembler::assemble_recolor_layered(coloring, layer, deriv);
             let module = device.create_shader_module(ShaderModuleDescriptor {
                 label: Some(&format!("Escape Shader {key}")),
                 source: ShaderSource::Wgsl(source.into()),
@@ -3477,7 +3594,26 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             self.height,
             orbit_tag,
             orbit_done,
-        )
+        ) + format!("|{:?}|{:?}{}", escape.palette_map, escape.layer, self.palette_in_loop_key(escape)).as_str()
+    }
+
+    /// The palette, for a colouring that samples it inside the loop
+    /// (`PaletteInLoop`, direct orbit traps): its colour is fixed during
+    /// iteration, so the palette and how it is mapped belong to the
+    /// iteration's identity, and to a chunked render's. Empty otherwise,
+    /// which keeps every other colouring's keys as they were.
+    fn palette_in_loop_key(&self, escape: &EscapeConfig) -> String {
+        let mut key = if Self::colourings_have(escape, super::ColoringFeature::PaletteInLoop) {
+            format!("|pal{}|{:?}", self.palette_generation, escape.palette_map)
+        } else {
+            String::new()
+        };
+        // Likewise the texture, for a colouring that reads it in the
+        // loop (TextureInLoop): which one the GPU holds, if any.
+        if Self::colourings_have(escape, super::ColoringFeature::TextureInLoop) {
+            key += &format!("|tex{}", self.texture_key().unwrap_or("none"));
+        }
+        key
     }
 
     /// (Re)allocate the perturbed path's per-pixel resume state.
@@ -3499,7 +3635,8 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let lim = device.limits();
         if need > lim.max_buffer_size || need > lim.max_storage_buffer_binding_size as u64 {
             log::error!(
-                "escape: a deep-zoom render of {}x{} needs a {} MB iteration-state buffer,                  past this GPU's {} MB limit -- rendering the direct path instead",
+                "escape: a deep-zoom render of {}x{} needs a {} MB iteration-state buffer, \
+                 past this GPU's {} MB limit -- rendering the direct path instead",
                 self.width,
                 self.height,
                 need / (1024 * 1024),
@@ -4500,7 +4637,10 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             );
         }
 
-        let per_row = (self.width as u64).saturating_mul(escape.max_iter.max(1) as u64);
+        // Offset relief and Embossed run two orbits beside the pixel's
+        // own, so a pixel can cost three loops, not one.
+        let orbits = if escape.shading.wants_offset_orbits() { 3 } else { 1 };
+        let per_row = (self.width as u64).saturating_mul(escape.max_iter.max(1) as u64) * orbits;
         let budget = DIRECT_DISPATCH_BUDGET >> shift;
         let rows = budget / per_row.max(1);
         (rows.max(1) as u32).min(self.height.max(1))
@@ -4849,6 +4989,10 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     binding: 12,
                     resource: self.results_binding(),
                 },
+                BindGroupEntry {
+                    binding: 14,
+                    resource: BindingResource::TextureView(self.loop_texture_view()),
+                },
             ],
         });
         let ts_qs = if measure {
@@ -4889,18 +5033,23 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         floatexp: bool,
     ) -> String {
         let coloring = super::get_coloring(&escape.coloring);
+        let layer = super::layer_of(escape);
         let tier = Self::perturb_tier(escape)
             .unwrap_or(assembler::PerturbTier::Power(2));
         let lens_registry = crate::variations::global_registry();
         let lens_src = super::lens::lens_source(escape, &lens_registry);
         let lens_id = super::lens::lens_key(escape, &lens_registry);
         let key = format!(
-            "perturbed|{}|{}|{:?}|{lens_id}",
-            coloring.name, floatexp, tier
+            "perturbed|{}|{}|{}|{:?}|{lens_id}",
+            coloring.name,
+            layer.map_or("", |l| l.name),
+            floatexp,
+            tier
         );
         if !self.pipelines.contains_key(&key) {
-            let source = assembler::assemble_perturbed_with_lens(
+            let source = assembler::assemble_perturbed_layered(
                 coloring,
+                layer,
                 floatexp,
                 tier,
                 lens_src.as_deref(),
@@ -5638,8 +5787,27 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     fn contrast_pending(&self, escape: &EscapeConfig, iterate_key: Option<&str>) -> bool {
         escape.contrast.is_active()
             && self.results_key.is_some()
-            && iterate_key.is_some()
-            && self.contrast_fit_key.as_deref() != iterate_key
+            && iterate_key.is_some_and(|ik| self.contrast_fit_key.as_deref() != Some(Self::contrast_key(escape, ik).as_str()))
+    }
+
+    /// What a contrast fit was measured from and how: the view and its
+    /// iteration (the iterate key), the value field (the colouring, its
+    /// parameters, the layer and its), and the fit itself (mode, clip).
+    ///
+    /// Keyed by the iterate key alone, an edit that only recolours --
+    /// another colouring with the same loop, a colouring parameter, the
+    /// contrast mode or clip -- kept the old fit and drew the new
+    /// picture through it.
+    fn contrast_key(escape: &EscapeConfig, iterate_key: &str) -> String {
+        format!(
+            "{iterate_key}|{}|{:?}|{}|{:?}|{:?}|{}",
+            escape.coloring,
+            escape.coloring_params,
+            escape.layer.coloring,
+            escape.layer.params,
+            escape.contrast.mode,
+            escape.contrast.clip,
+        )
     }
 
     /// Measure the coloring's value field and store the fit.
@@ -5802,7 +5970,179 @@ fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             escape.contrast.mode,
             escape.contrast.clip,
         );
+        if self.contrast_fit.is_some() {
+            let layer = self.measure_layer(device, queue, escape);
+            if let Some(fit) = self.contrast_fit.as_mut() {
+                fit.layer = layer;
+            }
+        }
         self.contrast_fit_key = Some(key.to_string());
+    }
+
+    /// The texture layer's stretch: its value at the probe's cells, read
+    /// from the recolour cache's records by the layer probe (an entry
+    /// point of the recolour module), clipped as the base is. `None`
+    /// without a layer, outside mode A, or without records.
+    fn measure_layer(&mut self, device: &Device, queue: &Queue, escape: &EscapeConfig) -> Option<(f32, f32)> {
+        if super::ifs::get_ifs(&escape.formula).is_some() || super::fields::get_field(&escape.formula).is_some() {
+            return None;
+        }
+        let layer = super::layer_of(escape)?;
+        let coloring = super::get_coloring(&escape.coloring);
+        let deriv = self.derivative_active(escape);
+        let results = self.results_buffer.as_ref()?;
+        let (probe, readback) = (self.contrast_probe.as_ref()?, self.contrast_readback.as_ref()?);
+        let key = format!("layer-probe|{}|{}|{}", coloring.name, layer.name, deriv);
+        if !self.pipelines.contains_key(&key) {
+            let source = assembler::assemble_layer_probe(coloring, layer, deriv);
+            let module = device.create_shader_module(ShaderModuleDescriptor {
+                label: Some(&format!("Escape Shader {key}")),
+                source: ShaderSource::Wgsl(source.into()),
+            });
+            let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+                label: Some(&format!("Escape Pipeline {key}")),
+                layout: None,
+                module: &module,
+                entry_point: Some("layer_probe_main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+            self.pipelines.insert(key.clone(), pipeline);
+        }
+        let pipeline = &self.pipelines[&key];
+        let grid = device.create_buffer(&BufferDescriptor {
+            label: Some("Escape Layer Probe Params"),
+            size: 16,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&grid, 0, bytemuck::cast_slice(&[self.width, self.height, PROBE_W, PROBE_H]));
+        let bg = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Escape Layer Probe Bind Group"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                BindGroupEntry { binding: 0, resource: self.params_buffer.as_entire_binding() },
+                BindGroupEntry { binding: 5, resource: results.as_entire_binding() },
+                BindGroupEntry { binding: 10, resource: probe.as_entire_binding() },
+                BindGroupEntry { binding: 11, resource: grid.as_entire_binding() },
+            ],
+        });
+        let bytes = (PROBE_W * PROBE_H) as u64 * 8;
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Escape Layer Probe"),
+        });
+        {
+            let mut pass = enc.begin_compute_pass(&ComputePassDescriptor {
+                label: Some("Escape Layer Probe Pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.dispatch_workgroups(PROBE_W.div_ceil(8), PROBE_H.div_ceil(8), 1);
+        }
+        enc.copy_buffer_to_buffer(probe, 0, readback, 0, bytes);
+        queue.submit(std::iter::once(enc.finish()));
+        let (tx, rx) = std::sync::mpsc::channel();
+        readback.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r.is_ok());
+        });
+        let polled = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).is_ok();
+        if !polled || !rx.recv().unwrap_or(false) {
+            return None;
+        }
+        let samples: Vec<(f32, f32)> = {
+            let data = readback.slice(..).get_mapped_range();
+            data.chunks_exact(8)
+                .map(|c| {
+                    (
+                        f32::from_le_bytes(c[0..4].try_into().unwrap()),
+                        f32::from_le_bytes(c[4..8].try_into().unwrap()),
+                    )
+                })
+                .collect()
+        };
+        readback.unmap();
+        fit_layer_stretch(&samples, escape.contrast.clip)
+    }
+
+    fn create_texture_image(device: &Device, width: u32, height: u32) -> (Texture, TextureView) {
+        let texture = device.create_texture(&TextureDescriptor {
+            label: Some("Escape Texture Image"),
+            size: Extent3d { width: width.max(1), height: height.max(1), depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8Unorm,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&TextureViewDescriptor::default());
+        (texture, view)
+    }
+
+    /// The cache key of the texture on the GPU, if any.
+    pub fn texture_key(&self) -> Option<&str> {
+        self.texture_image.as_ref().map(|(k, _, _)| k.as_str())
+    }
+
+    /// Upload a generated texture (`textures::obtain`), filed under its
+    /// recipe's cache key. Returns whether anything changed.
+    pub fn set_texture(&mut self, device: &Device, queue: &Queue, key: &str, image: &image::RgbaImage) -> bool {
+        if self.texture_key() == Some(key) {
+            return false;
+        }
+        let (w, h) = (image.width().max(1), image.height().max(1));
+        let (texture, view) = Self::create_texture_image(device, w, h);
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            image.as_raw(),
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * w), rows_per_image: Some(h) },
+            Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        if let Some((_, old, _)) = self.texture_image.take() {
+            old.destroy();
+        }
+        self.texture_image = Some((key.to_string(), texture, view));
+        true
+    }
+
+    /// Drop the texture. Returns whether there was one.
+    pub fn clear_texture(&mut self) -> bool {
+        match self.texture_image.take() {
+            Some((_, t, _)) => {
+                t.destroy();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// What binding 14 holds: the texture, or the stand-in (transparent,
+    /// as WebGPU zero-fills a new texture) when there is none.
+    fn loop_texture_view(&self) -> &TextureView {
+        self.texture_image.as_ref().map_or(&self.texture_dummy.1, |(_, _, v)| v)
+    }
+
+    /// Whether the texture overlay draws this frame: switched on, with a
+    /// texture in the config and on the GPU.
+    fn overlay_on(&self, escape: &EscapeConfig) -> bool {
+        escape.texture_overlay.enabled && escape.texture.is_some() && self.texture_image.is_some()
+    }
+
+    /// Whether the overlay's warp field takes the height texture's blue
+    /// channel. It does for an iterated formula, unless a lit relief
+    /// stores its slope there (field codes 3 and up); field formulas and
+    /// the IFS walk have no iteration count to store. Otherwise the
+    /// overlay warps by the relief's own source (green).
+    fn overlay_owns_blue(&self, escape: &EscapeConfig) -> bool {
+        let iterated =
+            super::fields::get_field(&escape.formula).is_none() && super::ifs::get_ifs(&escape.formula).is_none();
+        self.overlay_on(escape) && iterated && !(escape.shading.enabled && escape.shading.field.to_gpu() >= 3)
     }
 
     fn create_height(device: &Device, width: u32, height: u32) -> (Texture, TextureView) {
@@ -5816,7 +6156,7 @@ fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             mip_level_count: 1,
             sample_count: 1,
             dimension: TextureDimension::D2,
-            format: TextureFormat::R32Float,
+            format: TextureFormat::Rgba32Float,
             // COPY_SRC so a test can read the height field back and
             // check the softening blur against a CPU one.
             usage: TextureUsages::STORAGE_BINDING
@@ -5927,7 +6267,8 @@ fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         supersample: u32,
     ) -> u32 {
         let mut ss = supersample.clamp(1, MAX_SUPERSAMPLE);
-        const BYTES_PER_RENDER_PX: u64 = assembler::ITER_STATE_BYTES_MAX + 32 + 16 + 4 + 8;
+        const BYTES_PER_RENDER_PX: u64 =
+            assembler::ITER_STATE_BYTES_MAX + assembler::RESULT_BYTES_WIDE + 16 + 4 + 8;
         const RENDER_BUDGET_BYTES: u64 = 3 * 1024 * 1024 * 1024 / 2;
         const MAX_RENDER_PX: u64 = RENDER_BUDGET_BYTES / BYTES_PER_RENDER_PX;
         let device_px_cap = device.limits().max_storage_buffer_binding_size as u64
@@ -6012,14 +6353,30 @@ fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         queue: &Queue,
         blurred: bool,
     ) -> Option<Vec<f32>> {
+        // Green: the relief's source, which the blur blurs.
+        self.read_height_channel(device, queue, blurred, 1).await
+    }
+
+    /// One channel of the height texture: 0 the raw value, 1 the
+    /// relief's source, 2 and 3 a stored slope (2 alone for Embossed's
+    /// response).
+    #[cfg(test)]
+    pub(crate) async fn read_height_channel(
+        &self,
+        device: &Device,
+        queue: &Queue,
+        blurred: bool,
+        channel: u32,
+    ) -> Option<Vec<f32>> {
         let tex = if blurred {
             &self.height_blur.as_ref()?.2
         } else {
             &self.height_texture
         };
         let (w, h) = (tex.width(), tex.height());
-        // 256-byte row alignment for the copy.
-        let row = (w * 4).div_ceil(256) * 256;
+        // Four floats a texel (the raw value, the relief's source, the
+        // analytic slope), and 256-byte row alignment for the copy.
+        let row = (w * 16).div_ceil(256) * 256;
         let staging = device.create_buffer(&BufferDescriptor {
             label: Some("Escape Height Readback"),
             size: (row * h) as u64,
@@ -6059,7 +6416,7 @@ fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             for y in 0..h {
                 let base = (y * row) as usize;
                 for x in 0..w {
-                    let i = base + (x * 4) as usize;
+                    let i = base + (x * 16 + channel * 4) as usize;
                     out.push(f32::from_le_bytes(view[i..i + 4].try_into().ok()?));
                 }
             }
@@ -6133,7 +6490,7 @@ struct BlurParams {
 }
 
 @group(0) @binding(0) var src_tex: texture_2d<f32>;
-@group(0) @binding(1) var dst_tex: texture_storage_2d<r32float, write>;
+@group(0) @binding(1) var dst_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var<uniform> blur: BlurParams;
 
 @compute @workgroup_size(8, 8, 1)
@@ -6151,10 +6508,15 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let fi = f32(i);
         let wt = exp(-fi * fi * inv);
         let q = clamp(p + blur.dir * i, vec2<i32>(0, 0), dims - vec2<i32>(1, 1));
-        acc = acc + textureLoad(src_tex, q, 0).r * wt;
+        // Green: the relief's source (red is the raw value the
+        // contrast probe reads, and no business of the relief's).
+        acc = acc + textureLoad(src_tex, q, 0).g * wt;
         wsum = wsum + wt;
     }
-    textureStore(dst_tex, p, vec4<f32>(acc / wsum, 0.0, 0.0, 0.0));
+    // Blue and alpha pass through: the texture overlay's warp field
+    // rides in blue, and is no business of the relief's softening.
+    let keep = textureLoad(src_tex, p, 0).ba;
+    textureStore(dst_tex, p, vec4<f32>(acc / wsum, acc / wsum, keep));
 }
 "#;
             let module = device.create_shader_module(ShaderModuleDescriptor {
@@ -6179,7 +6541,7 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                         visibility: ShaderStages::COMPUTE,
                         ty: BindingType::StorageTexture {
                             access: StorageTextureAccess::WriteOnly,
-                            format: TextureFormat::R32Float,
+                            format: TextureFormat::Rgba32Float,
                             view_dimension: TextureViewDimension::D2,
                         },
                         count: None,
@@ -6249,19 +6611,16 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         Some(vb)
     }
 
-    fn run_resolve(
-        &mut self,
-        device: &Device,
-        queue: &Queue,
-        encoder: &mut CommandEncoder,
-        shading: &crate::config::escape::EscapeShading,
-        mode: crate::config::escape::DownsampleMode,
-    ) {
+    fn run_resolve(&mut self, device: &Device, queue: &Queue, encoder: &mut CommandEncoder, escape: &EscapeConfig) {
+        let shading = &escape.shading;
+        let mode = escape.downsample;
         let factor = self.supersample;
         let shade_on = shading.enabled;
-        if factor <= 1 && !shade_on {
+        let overlay_on = self.overlay_on(escape);
+        if factor <= 1 && !shade_on && !overlay_on {
             return;
         }
+        let ov = &escape.texture_overlay;
         // Cloned rather than borrowed: the blur below needs `&mut
         // self`, and a view is a cheap refcounted handle.
         let Some(final_view) = self.final_view.clone() else {
@@ -6293,20 +6652,53 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // height is scaled: a radius fixed in render pixels would
             // shrink as antialiasing raised the resolution.
             softness: shading.softness * factor as f32,
-            texture_kind: shading.texture_kind.to_gpu(),
+            // The bump reads the texture; without one there is none.
+            texture_kind: if shading.texture_kind == crate::config::escape::ShadingTexture::Simulation
+                && !(escape.texture.is_some() && self.texture_image.is_some())
+            {
+                0
+            } else {
+                shading.texture_kind.to_gpu()
+            },
             texture_strength: shading.texture_strength,
             // Feature size in DISPLAY pixels, like the softness radius
             // and for the same reason: antialiasing must not change
             // how coarse the grain looks.
             texture_scale: (shading.texture_scale * factor as f32).max(0.25),
             downsample: mode.to_gpu(),
-            _pad: 0,
+            model: shading.model.to_gpu(),
+            elevation: shading.elevation.clamp(0.0, 90.0).to_radians(),
+            ambient: shading.ambient.clamp(0.0, 1.0),
+            stencil: shading.stencil.to_gpu(),
+            height_curve: shading.height_curve.to_gpu(),
+            height_pre: shading.height_pre,
+            height_post: shading.height_post,
+            stored: shading.stored_relief(),
+            overlay: u32::from(overlay_on),
+            overlay_fit: ov.fit.to_gpu(),
+            overlay_merge: ov.merge.clamp(0.0, 1.0),
+            overlay_power: ov.power.round().clamp(
+                crate::config::escape::OVERLAY_POWER_RANGE.0,
+                crate::config::escape::OVERLAY_POWER_RANGE.1,
+            ),
+            overlay_ratio: ov.ratio.clamp(
+                crate::config::escape::OVERLAY_RATIO_RANGE.0,
+                crate::config::escape::OVERLAY_RATIO_RANGE.1,
+            ),
+            overlay_tile: ov.tile_scale.clamp(
+                crate::config::escape::OVERLAY_TILE_RANGE.0,
+                crate::config::escape::OVERLAY_TILE_RANGE.1,
+            ),
+            overlay_blue: u32::from(self.overlay_owns_blue(escape)),
+            _pad: [0; 2],
         };
         queue.write_buffer(&self.shade_params_buffer, 0, bytemuck::bytes_of(&params));
 
         // Softening low-passes the height FIELD; the shade pass then
         // takes its plain +-1 difference of whatever came back.
-        let softened = if shade_on {
+        // Analytic slopes come from the derivative, not from a height
+        // field, so there is nothing for the blur to soften.
+        let softened = if shade_on && params.stored == 0 {
             self.run_height_blur(device, queue, encoder, params.softness)
         } else {
             None
@@ -6335,16 +6727,132 @@ struct ShadeParams {{
     texture_strength: f32,
     texture_scale: f32,
     downsample: u32,
+    model: u32,
+    elevation: f32,
+    ambient: f32,
+    stencil: u32,
+    height_curve: u32,
+    height_pre: f32,
+    height_post: f32,
+    stored: u32,
+    overlay: u32,
+    overlay_fit: u32,
+    overlay_merge: f32,
+    overlay_power: f32,
+    overlay_ratio: f32,
+    overlay_tile: f32,
+    overlay_blue: u32,
 }}
 
 @group(0) @binding(0) var src_tex: texture_2d<f32>;
 @group(0) @binding(1) var dst_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var height_tex: texture_2d<f32>;
 @group(0) @binding(3) var<uniform> shade: ShadeParams;
+@group(0) @binding(4) var tex_image: texture_2d<f32>;
+@group(0) @binding(5) var tex_sampler: sampler;
+
+// ---- The texture overlay (TextureOverlay; survey R10) ----
+// Kalles Fraktaler's KF_TextureWarp and the texture block after its
+// palette lookup (gl/kf.frag.glsl), read from source, in its y-up frame:
+// the texture is looked up at the pixel plus an offset driven by the
+// iteration count's difference to its left neighbour and the one below,
+// then mixed into the colour by `merge` before the relief lights it.
+
+// The iteration count at a render pixel: blue where the iterate pass
+// stored it, the relief's source (green) where a stored relief slope
+// took blue.
+fn overlay_n(p: vec2<i32>, dims: vec2<i32>) -> f32 {{
+    let t = textureLoad(height_tex, clamp(p, vec2<i32>(0, 0), dims - vec2<i32>(1, 1)), 0);
+    return select(t.g, t.b, shade.overlay_blue != 0u);
+}}
+
+// One axis of KF_TextureWarp: (1 + d)^power, folded to above 1 (with
+// the sign of the fold), atan-mapped to 0..1, scaled by ratio/100 and
+// by the power. The power is a whole number, as KF2 keeps it, so a
+// negative base keeps its sign for an odd power as C's pow does; the
+// exponent is taken in the log domain and clamped, so no infinity
+// reaches atan (Metal's fast-math does not keep IEEE's rules for one).
+fn overlay_axis(d: f32) -> f32 {{
+    let power = shade.overlay_power;
+    let base = 1.0 + d;
+    let mag = exp2(clamp(power * log2(max(abs(base), 1e-30)), -126.0, 126.0));
+    let odd = (u32(power) & 1u) == 1u;
+    var x = select(mag, -mag, base < 0.0 && odd);
+    var s = 1.0;
+    if (x <= 1.0) {{
+        x = 1.0 / x;
+        s = -1.0;
+    }}
+    let m = (atan(x) - 0.78539816) / 0.78539816 * shade.overlay_ratio / 100.0;
+    return s * power * m;
+}}
+
+fn overlay_texel(texel: vec4<f32>, p: vec2<i32>) -> vec4<f32> {{
+    let dims = vec2<i32>(textureDimensions(height_tex));
+    // KF2 differences whole display pixels; on the supersampled grid
+    // that is `factor` render pixels, and its offsets scale the same.
+    let f = i32({factor}u);
+    let n0 = overlay_n(p, dims);
+    // Left, and the row below (y up); mirrored where it is off the image,
+    // as KF2's getN3x3 reflects.
+    var dx = overlay_n(p - vec2<i32>(f, 0), dims) - n0;
+    if (p.x - f < 0) {{
+        dx = -(overlay_n(p + vec2<i32>(f, 0), dims) - n0);
+    }}
+    var dy = overlay_n(p + vec2<i32>(0, f), dims) - n0;
+    if (p.y + f >= dims.y) {{
+        dy = -(overlay_n(p - vec2<i32>(0, f), dims) - n0);
+    }}
+    let offs = shade.overlay_power / 64.0;
+    let wx = offs + overlay_axis(dx);
+    let wy = offs - overlay_axis(dy);
+    // Back to render pixels, y down.
+    let pos = vec2<f32>(f32(p.x), f32(p.y)) + vec2<f32>(0.5, 0.5) + vec2<f32>(wx, -wy) * f32(f);
+    let tsize = vec2<f32>(textureDimensions(tex_image));
+    var uv = pos / (tsize * max(shade.overlay_tile, 0.05) * f32(f));
+    if (shade.overlay_fit == 0u) {{
+        // Stretched over the frame, as KF2 resizes its image; a lookup
+        // past the edge holds the edge.
+        uv = clamp(pos / vec2<f32>(dims), 0.5 / tsize, vec2<f32>(1.0, 1.0) - 0.5 / tsize);
+    }}
+    let tex = textureSampleLevel(tex_image, tex_sampler, uv, 0.0).rgb;
+    let merge = clamp(shade.overlay_merge, 0.0, 1.0);
+    if (texel.a > 0.0) {{
+        // KF2 mixes display values: mix(colour, texture, merge).
+        let disp = pow(max(texel.rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
+        return vec4<f32>(pow(mix(disp, tex, merge), vec3<f32>(2.2)), texel.a);
+    }}
+    // The interior: KF2 mixes the texture into its interior colour; here
+    // into the background, through the tone map's coverage composite
+    // (in linear light, where KF2's is in display values).
+    return vec4<f32>(pow(tex, vec3<f32>(2.2)), merge);
+}}
+
+// The height curve (HeightTransfer): post * f(pre * h), mirrored for a
+// negative height where f is not odd already. Applied as the slope
+// reads the field, after any softening, so the contrast probe -- which
+// reads the same texture -- still sees the colouring's raw value.
+fn relief_height_curve(h: f32) -> f32 {{
+    let x = shade.height_pre * h;
+    var f = x;
+    switch shade.height_curve {{
+        case 1u: {{ f = sign(x) * log(1.0 + abs(x)); }}
+        case 2u: {{ f = sign(x) * sqrt(abs(x)); }}
+        case 3u: {{ f = sign(x) * select(0.0, exp2(log2(abs(x)) / 3.0), abs(x) > 0.0); }}
+        case 4u: {{ f = sign(x) * x * x; }}
+        case 5u: {{ f = x * x * x; }}
+        case 6u: {{ f = sin(x); }}
+        case 7u: {{ f = cos(x); }}
+        default: {{}}
+    }}
+    return shade.height_post * f;
+}}
 
 fn height_at(p: vec2<i32>, dims: vec2<i32>) -> f32 {{
     let q = clamp(p, vec2<i32>(0, 0), dims - vec2<i32>(1, 1));
-    return textureLoad(height_tex, q, 0).r;
+    // Green: the relief's source. Red holds the raw value for the
+    // contrast probe.
+    return relief_height_curve(textureLoad(height_tex, q, 0).g);
 }}
 
 // 0 multiply, 1 screen, 2 overlay, 3 mix. `amt` is how far to travel
@@ -6383,6 +6891,21 @@ fn shade_blend(base: vec3<f32>, layer: vec3<f32>, mode: u32, amt: f32) -> vec3<f
             2.0 * bp * layer,
             bp < vec3<f32>(0.5),
         );
+    }} else if (mode == 4u) {{
+        // Soft light, the W3C compositing formula.
+        let d = select(sqrt(bp), ((16.0 * bp - 12.0) * bp + 4.0) * bp, bp <= vec3<f32>(0.25));
+        res = select(
+            bp + (2.0 * layer - 1.0) * (d - bp),
+            bp - (1.0 - 2.0 * layer) * bp * (1.0 - bp),
+            layer <= vec3<f32>(0.5),
+        );
+    }} else if (mode == 5u) {{
+        // Hard light: overlay with the layer deciding.
+        res = select(
+            1.0 - 2.0 * (1.0 - bp) * (1.0 - layer),
+            2.0 * bp * layer,
+            layer < vec3<f32>(0.5),
+        );
     }}
     // CLAMPED: the strengths now range past 1 so a shadow can be
     // driven to saturation on an image with little room below it, and
@@ -6414,6 +6937,12 @@ fn shade_value_noise(q: vec2<f32>) -> f32 {{
 }}
 
 fn shade_texture(q: vec2<f32>) -> f32 {{
+    // 3 = SIMULATION: the config's texture, its luminance in display
+    // values, repeated with `q` in texels.
+    if (shade.texture_kind == 3u) {{
+        let c = textureSampleLevel(tex_image, tex_sampler, q / vec2<f32>(textureDimensions(tex_image)), 0.0).rgb;
+        return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722)) - 0.5;
+    }}
     // 1 = GRAIN: one octave, isotropic -- film grain / fine tooth.
     if (shade.texture_kind == 1u) {{
         return shade_value_noise(q) - 0.5;
@@ -6442,12 +6971,50 @@ fn shade_pixel(rgb: vec3<f32>, p: vec2<i32>) -> vec3<f32> {{
     // 3 equally sharp parts"). Softness now low-passes the height
     // field itself, in `run_height_blur`, and this reads whatever it
     // produced.
-    let dx = (height_at(p + vec2<i32>(1, 0), dims) - height_at(p - vec2<i32>(1, 0), dims)) * 0.5;
-    let dy = (height_at(p + vec2<i32>(0, 1), dims) - height_at(p - vec2<i32>(0, 1), dims)) * 0.5;
+    var dx = 0.0;
+    var dy = 0.0;
+    if (shade.stored == 0u) {{
+        dx = (height_at(p + vec2<i32>(1, 0), dims) - height_at(p - vec2<i32>(1, 0), dims)) * 0.5;
+        dy = (height_at(p + vec2<i32>(0, 1), dims) - height_at(p - vec2<i32>(0, 1), dims)) * 0.5;
+    }}
+    // The other stencils (SlopeStencil). Forward: half a pixel off
+    // centre. Roberts: the two diagonals of the 2x2 block, turned back
+    // onto the axes. Least squares: the plane fitted to the 3x3 block.
+    if (shade.stored != 0u) {{
+        // The iterate pass stored -grad h itself (blue, alpha), or
+        // Embossed's response (blue): no stencil, no height curve.
+    }} else if (shade.stencil == 1u) {{
+        let h0 = height_at(p, dims);
+        dx = height_at(p + vec2<i32>(1, 0), dims) - h0;
+        dy = height_at(p + vec2<i32>(0, 1), dims) - h0;
+    }} else if (shade.stencil == 2u) {{
+        let d1 = height_at(p + vec2<i32>(1, 1), dims) - height_at(p, dims);
+        let d2 = height_at(p + vec2<i32>(1, 0), dims) - height_at(p + vec2<i32>(0, 1), dims);
+        dx = (d1 + d2) * 0.5;
+        dy = (d1 - d2) * 0.5;
+    }} else if (shade.stencil == 3u) {{
+        var sx = 0.0;
+        var sy = 0.0;
+        for (var j = -1; j <= 1; j = j + 1) {{
+            sx = sx + height_at(p + vec2<i32>(1, j), dims) - height_at(p + vec2<i32>(-1, j), dims);
+            sy = sy + height_at(p + vec2<i32>(j, 1), dims) - height_at(p + vec2<i32>(j, -1), dims);
+        }}
+        dx = sx / 6.0;
+        dy = sy / 6.0;
+    }}
 
     // Exaggerated gradient. +y is DOWN in pixel space, so dy is
     // negated to put the light where the azimuth says it is.
     var g = vec2<f32>(-dx, dy) * shade.height;
+    let stored_at = textureLoad(height_tex, clamp(p, vec2<i32>(0, 0), dims - vec2<i32>(1, 1)), 0);
+    if (shade.stored == 1u) {{
+        g = stored_at.ba * shade.height;
+    }}
+    // Embossed has no slope: its response is stored whole, below. Only
+    // the surface texture tilts it.
+    if (shade.stored == 2u) {{
+        g = vec2<f32>(0.0);
+    }}
 
     // Surface texture: its own micro-relief, added to the TILT rather
     // than to the height. Added to the height it would be multiplied
@@ -6490,9 +7057,35 @@ fn shade_pixel(rgb: vec3<f32>, p: vec2<i32>) -> vec3<f32> {{
     // what makes one log slider workable across colorings whose value
     // scales differ by orders of magnitude.
     let s = dot(g, shade.light);
-    let response = s * inverseSqrt(1.0 + dot(g, g));
+    var response = s * inverseSqrt(1.0 + dot(g, g));
+    // LAMBERT (ReliefModel::Lambert): the light raised `elevation` above
+    // the horizon, against the surface normal (g, 1). Measured from what
+    // flat ground receives, sin(elevation), so flat ground still sits at
+    // zero and the shadow and highlight scales keep their meaning: full
+    // highlight facing the light square on, full shadow facing away.
+    if (shade.model == 1u && shade.stored != 2u) {{
+        let ce = cos(shade.elevation);
+        let se = sin(shade.elevation);
+        let l = vec3<f32>(shade.light * ce, se);
+        let lambert = max(dot(vec3<f32>(g, 1.0), l) * inverseSqrt(1.0 + dot(g, g)), 0.0);
+        response = select(
+            (lambert - se) / max(se, 1e-4),
+            (lambert - se) / max(1.0 - se, 1e-4),
+            lambert >= se,
+        );
+    }}
+    // EMBOSSED: -1, 0 or +1 by which of its two orbits came out higher
+    // (Ultra Fractal's Emboss greys 0.2, 0.5, 0.8). Its Hard Light merge
+    // is a black Multiply shadow and a white Screen highlight, both at
+    // strength 0.6: multiplying by black at 0.6 is Hard Light with 0.2,
+    // screening white at 0.6 is Hard Light with 0.8, and 0.5 is Hard
+    // Light's identity, as 0 is here.
+    if (shade.stored == 2u) {{
+        response = clamp(response + stored_at.b, -1.0, 1.0);
+    }}
     let hi = clamp(response, 0.0, 1.0);
-    let lo = clamp(-response, 0.0, 1.0);
+    // The ambient floor keeps that much of the base on the dark side.
+    let lo = clamp(-response, 0.0, 1.0) * (1.0 - shade.ambient);
     var out = rgb;
     out = shade_blend(out, shade.shadow_color, shade.shadow_blend, lo * shade.shadow_strength);
     out = shade_blend(out, shade.highlight_color, shade.highlight_blend, hi * shade.highlight_strength);
@@ -6512,6 +7105,10 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         for (var dx = 0u; dx < {factor}u; dx = dx + 1u) {{
             let p = vec2<i32>(i32(gid.x * {factor}u + dx), i32(gid.y * {factor}u + dy));
             var texel = textureLoad(src_tex, p, 0);
+            // KF2's order: the texture, then the slopes light it.
+            if (shade.overlay != 0u) {{
+                texel = overlay_texel(texel, p);
+            }}
             if (shade.enabled == 1u) {{
                 texel = vec4<f32>(shade_pixel(texel.rgb, p), texel.a);
             }}
@@ -6627,6 +7224,22 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                         },
                         count: None,
                     },
+                    BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
                 ],
             });
             let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
@@ -6664,6 +7277,16 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 BindGroupEntry {
                     binding: 3,
                     resource: self.shade_params_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 4,
+                    resource: BindingResource::TextureView(
+                        self.texture_image.as_ref().map_or(&self.texture_dummy.1, |(_, _, v)| v),
+                    ),
+                },
+                BindGroupEntry {
+                    binding: 5,
+                    resource: BindingResource::Sampler(&self.texture_sampler),
                 },
             ],
         });
@@ -6861,20 +7484,35 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let interior = true;
         let registry = crate::variations::global_registry();
         let lens_src = super::lens::lens_source(escape, &registry);
+        let layer = super::layer_of(escape);
+        let analytic = escape.shading.wants_derivative();
+        let orbits = if !escape.shading.wants_offset_orbits() {
+            assembler::ReliefOrbits::None
+        } else if escape.shading.field == crate::config::escape::ShadingField::Embossed {
+            assembler::ReliefOrbits::Embossed
+        } else {
+            assembler::ReliefOrbits::Offset
+        };
         let key = format!(
-            "{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{:?}|{}",
             formula.name,
             coloring.name,
+            layer.map_or("", |l| l.name),
             damped,
             interior,
+            analytic,
+            orbits,
             super::lens::lens_key(escape, &registry),
         );
         if !self.pipelines.contains_key(&key) {
-            let source = assembler::assemble_with_lens(
+            let source = assembler::assemble_layered(
                 formula,
                 coloring,
+                layer,
                 damped,
                 interior,
+                analytic,
+                orbits,
                 lens_src.as_deref(),
             );
             let module = device.create_shader_module(ShaderModuleDescriptor {
@@ -6929,7 +7567,11 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
 
         let mut fparams = [[0.0f32; 4]; PARAM_VEC4S];
         let mut cparams = [[0.0f32; 4]; PARAM_VEC4S];
+        let mut lparams = [[0.0f32; 4]; PARAM_VEC4S];
         let mut fdata = [[0.0f32; 4]; FDATA_VEC4S];
+        // The smooth count's log base: the formula's degree in mode A, 2
+        // elsewhere.
+        let mut degree = 2.0f32;
         if let Some(def) = super::ifs::get_ifs(&escape.formula) {
             // Mode D: the def's params, its coloring's, and the
             // whole-IFS constants in the fdata block the other modes
@@ -6996,6 +7638,10 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             let coloring = super::get_coloring(&escape.coloring);
             super::pack_params(formula.parameters, &escape.formula_params, fparams.as_flattened_mut());
             super::pack_params(coloring.parameters, &escape.coloring_params, cparams.as_flattened_mut());
+            if let Some(layer) = super::layer_of(escape) {
+                super::pack_params(layer.parameters, &escape.layer.params, lparams.as_flattened_mut());
+            }
+            degree = super::escape_degree_of(formula, fparams.as_flattened());
 
             if let Some(derive) = formula.derived_data {
                 let flat = fdata.as_flattened_mut();
@@ -7014,22 +7660,53 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             height: self.height,
             max_iter: escape.max_iter.max(1),
             flags: {
-                // bit 0 = Julia; bits 1-2 = biomorph classification axis.
+                // bit 0 = Julia; bits 1-2 = biomorph classification axis;
+                // (bit 3, the results store, is set per dispatch); bits
+                // 4-7 = the supersample factor, which turns render pixels
+                // into output pixels (`esc_supersample`).
                 let bio = match escape.biomorph {
                     crate::config::escape::BiomorphMode::Off => 0u32,
                     crate::config::escape::BiomorphMode::Re => 1,
                     crate::config::escape::BiomorphMode::Im => 2,
                 };
-                (if escape.julia { 1 } else { 0 }) | (bio << 1)
+                // Bit 8: the iterate passes store the texture overlay's
+                // warp field in blue (`esc_overlay_field`).
+                (if escape.julia { 1 } else { 0 })
+                    | (bio << 1)
+                    | (self.supersample.clamp(1, 15) << 4)
+                    | (u32::from(self.overlay_owns_blue(escape)) << 8)
             },
             bailout: escape.bailout.max(1e-6),
             tile_y0: 0,
             damping: [escape.damping_re, escape.damping_im],
             shade_flags: escape.shading.field.to_gpu(),
             stride: self.stride(escape),
-            _pad_shade: [0; 2],
+            degree,
+            pmap_flags: escape.palette_map.gpu_flags()
+                | (escape.layer.blend.to_gpu() << 16)
+                // Embossed: its type in bits 24-26, Angle's sections less
+                // one in 27-31.
+                | (escape.shading.emboss.to_gpu() << 24)
+                | ((escape.shading.emboss_sections.clamp(
+                    crate::config::escape::EMBOSS_SECTIONS_RANGE.0,
+                    crate::config::escape::EMBOSS_SECTIONS_RANGE.1,
+                ) - 1)
+                    << 27),
+            pmap: [
+                escape.palette_map.gpu_pivot(),
+                escape.layer.weight.clamp(0.0, 1.0),
+                // The relief orbits' step (offset relief, Embossed), a
+                // fraction of the view height.
+                escape.shading.offset.clamp(
+                    crate::config::escape::RELIEF_OFFSET_RANGE.0,
+                    crate::config::escape::RELIEF_OFFSET_RANGE.1,
+                ),
+                // The relief light's azimuth, which Embossed steps toward.
+                escape.shading.light_angle.to_radians(),
+            ],
             fparams,
             cparams,
+            lparams,
             fdata,
         }
     }
@@ -7051,15 +7728,20 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         palette_view: &TextureView,
         palette_generation: u64,
     ) -> bool {
+        self.palette_generation = palette_generation;
         // Relief needs its scalar field and a destination distinct
         // from the colour it reads; both are allocated on demand, so
         // an escape view with shading off carries neither.
-        self.ensure_height(device, escape.shading.enabled || escape.contrast.is_active());
-        self.ensure_resolve_target(device, escape.shading.enabled);
+        let overlay = self.overlay_on(escape);
+        self.ensure_height(device, escape.shading.enabled || escape.contrast.is_active() || overlay);
+        self.ensure_resolve_target(device, escape.shading.enabled || overlay);
         // Diagnostics: CPU time of this whole call, whatever path or
         // early return it takes (the drop guard writes on exit).
         let _diag_cpu = super::diag::CpuTimer::start();
-        let results_active = self.ensure_results(device);
+        let results_active = self.ensure_results(
+            device,
+            assembler::result_bytes(super::config_accum_is_wide(escape)),
+        );
         // Once, at the top: every path below -- direct, field,
         // perturbed, mode D -- binds the same lens group, and a
         // pipeline compiled with one must find it bound.
@@ -7095,9 +7777,32 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let solid = super::ifs::get_ifs(&escape.formula).is_some_and(|d| d.solid);
         let geom_active = if solid { self.ensure_ifs_geom(device, results_active) } else { false };
         if let Some(ik) = iterate_key.as_deref() {
-            if results_active && self.results_key.as_deref() == Some(ik) {
+            // Offset relief runs orbits beside each pixel's own, which a
+            // recolour of the stored records cannot: it iterates.
+            if results_active
+                && self.results_key.as_deref() == Some(ik)
+                && !escape.shading.wants_offset_orbits()
+            {
                 let t0 = web_time::Instant::now();
-                self.measure_contrast(device, queue, escape, ik);
+                let ckey = Self::contrast_key(escape, ik);
+                if escape.contrast.is_active() && self.contrast_fit_key.as_deref() != Some(ckey.as_str()) {
+                    // The height field the probe reads may still hold the
+                    // previous colouring's values -- a recolour edit does
+                    // not re-iterate -- so recolour once through the
+                    // identity, submitted ahead of the probe, and measure
+                    // that.
+                    self.contrast_fit = None;
+                    let mut pre = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("Escape Contrast Pre-recolor"),
+                    });
+                    if solid && geom_active {
+                        self.run_relight(device, queue, &mut pre, escape, palette_view);
+                    } else {
+                        self.run_recolor(device, queue, &mut pre, escape, palette_view);
+                    }
+                    queue.submit(std::iter::once(pre.finish()));
+                }
+                self.measure_contrast(device, queue, escape, &ckey);
                 if solid && geom_active {
                     // A solid's cache path IS the relight: the same
                     // pass every band of the walk ended with, with
@@ -7106,7 +7811,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 } else {
                     self.run_recolor(device, queue, encoder, escape, palette_view);
                 }
-                self.run_resolve(device, queue, encoder, &escape.shading, escape.downsample);
+                self.run_resolve(device, queue, encoder, escape);
                 DIRECT_RENDER_IN_FLIGHT.store(false, std::sync::atomic::Ordering::Relaxed);
                 PERTURB_RENDER_IN_FLIGHT.store(false, std::sync::atomic::Ordering::Relaxed);
                 self.diag_settle_start = None;
@@ -7298,7 +8003,11 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 self.ensure_params_pool(device, batch);
                 if !self.ensure_iter_state(
                     device,
-                    assembler::iter_state_bytes(tier, floatexp),
+                    assembler::iter_state_bytes(
+                        tier,
+                        floatexp,
+                        super::config_accum_is_wide(escape),
+                    ),
                 ) {
                     // `perturb_state_fits` should have routed this to
                     // the direct path already; report settled rather
@@ -7386,7 +8095,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 let iterations_done = iter_end >= escape.max_iter;
                 // Every chunk refreshes the display image, so
                 // progressive refinement stays visible under AA.
-                self.run_resolve(device, queue, encoder, &escape.shading, escape.downsample);
+                self.run_resolve(device, queue, encoder, escape);
                 // Attribution window for the device-lost callback: open
                 // while this render still has chunks to submit.
                 PERTURB_RENDER_IN_FLIGHT.store(
@@ -7543,6 +8252,10 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     binding: 5,
                     resource: self.results_binding(),
                 },
+                BindGroupEntry {
+                    binding: 14,
+                    resource: BindingResource::TextureView(self.loop_texture_view()),
+                },
             ],
         });
 
@@ -7612,7 +8325,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             // lighting of now. The walk wrote no pixels.
             self.run_relight(device, queue, encoder, escape, palette_view);
         }
-        self.run_resolve(device, queue, encoder, &escape.shading, escape.downsample);
+        self.run_resolve(device, queue, encoder, escape);
         self.direct_tile_y = tile_y0.saturating_add(band);
         let mut done = self.direct_tile_y >= self.height;
         DIRECT_RENDER_IN_FLIGHT.store(
@@ -8096,15 +8809,19 @@ mod tests {
 
     #[test]
     fn params_struct_matches_wgsl_layout() {
-        // 4 vec2 (32) + 4 u32 (16) + f32 + 3 pad (16) + the shading
-        // flags + 3 pad (16) + 2 param arrays (128) + the derived-data
-        // table (1024) = 1232, and the arrays must start 16-byte
-        // aligned.
-        assert_eq!(std::mem::size_of::<EscapeParamsGpu>(), 1232);
+        // 4 vec2 (32) + 4 u32 (16) + bailout, tile row, damping (16) +
+        // shading flags, stride, degree, palette-map flags (16) + the
+        // palette map's vec4 (16) + 3 param arrays (192) + the
+        // derived-data table (1024) = 1312, and every vec4 must start
+        // 16-byte aligned.
+        assert_eq!(std::mem::size_of::<EscapeParamsGpu>(), 1312);
         assert_eq!(std::mem::offset_of!(EscapeParamsGpu, shade_flags), 64);
-        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, fparams), 80);
-        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, cparams), 144);
-        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, fdata), 208);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, pmap_flags), 76);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, pmap), 80);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, fparams), 96);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, cparams), 160);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, lparams), 224);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, fdata), 288);
     }
 }
 
@@ -8133,6 +8850,26 @@ mod chunk_batch_tests {
         // A zero cap is treated as one, not zero dispatches.
         assert_eq!(EscapeRenderer::batch_for(1000, 0.002, 10.0, 0), 1);
     }
+
+    /// Equalize's table holds the probe's values at evenly spaced ranks:
+    /// smallest first, largest last, never decreasing, and through the
+    /// middle of a run of equal values.
+    #[test]
+    fn the_equalize_table_is_the_samples_at_even_ranks() {
+        use super::{fit_contrast, CDF_LEN};
+        use crate::config::escape::ContrastMode;
+        // 100 samples: 0..=99, every cell live.
+        let samples: Vec<(f32, f32)> = (0..100).map(|i| (i as f32, 1.0)).collect();
+        let fit = fit_contrast(&samples, 10, 10, ContrastMode::Equalize, 0.005).expect("fit");
+        assert_eq!(fit.cdf[0], 0.0);
+        assert_eq!(fit.cdf[CDF_LEN - 1], 99.0);
+        assert!(fit.cdf.windows(2).all(|p| p[0] <= p[1]));
+        // Linear between order statistics: rank 0.5 is 49.5.
+        assert!((fit.cdf[CDF_LEN / 2] - 99.0 * (CDF_LEN / 2) as f32 / (CDF_LEN - 1) as f32).abs() < 1e-4);
+        // A constant field has no ranks to spend.
+        let flat: Vec<(f32, f32)> = (0..100).map(|_| (3.0, 1.0)).collect();
+        assert!(fit_contrast(&flat, 10, 10, ContrastMode::Equalize, 0.005).is_none());
+    }
 }
 
 /// Width and height of the contrast probe grid.
@@ -8156,7 +8893,20 @@ pub(crate) struct ContrastFit {
     pub plane: [f32; 3],
     pub lo: f32,
     pub hi: f32,
+    /// Equalize: the probe's values at `CDF_LEN` evenly spaced ranks,
+    /// smallest to largest (linear interpolation between order
+    /// statistics). Zero for the other modes.
+    pub cdf: [f32; CDF_LEN],
+    /// The texture layer's own range in the frame, clipped as the base
+    /// is, when there is a layer: what the recolour pass stretches its
+    /// value to (survey C8, techmatt's modulate).
+    pub layer: Option<(f32, f32)>,
 }
+
+/// Entries in Equalize's quantile table: 256, a piecewise-linear CDF
+/// fine enough that its steps are below what 6912 samples can resolve
+/// anyway (F3 uses 4096 bins over a full frame).
+pub(crate) const CDF_LEN: usize = 256;
 
 /// The recolor pass's contrast uniform.
 #[repr(C)]
@@ -8170,6 +8920,13 @@ struct ContrastParamsGpu {
     /// 0 = identity (the recolor pass then reproduces the iterate pass
     /// exactly), 1 = apply.
     enabled: u32,
+    /// `ContrastMode::to_gpu`.
+    mode: u32,
+    /// The texture layer's stretch (`ContrastFit::layer`): 1 to apply.
+    layer_enabled: u32,
+    layer_lo: f32,
+    layer_hi: f32,
+    cdf: [[f32; 4]; CDF_LEN / 4],
 }
 
 /// Write the uniform. A `None` fit is the identity, which is what
@@ -8189,6 +8946,11 @@ fn queue_contrast(
             strength: cfg.strength.clamp(0.0, 1.0),
             turns: cfg.turns.max(0.001),
             enabled: 1,
+            mode: cfg.mode.to_gpu(),
+            layer_enabled: u32::from(f.layer.is_some()),
+            layer_lo: f.layer.map_or(0.0, |l| l.0),
+            layer_hi: f.layer.map_or(1.0, |l| l.1),
+            cdf: bytemuck::cast(f.cdf),
         },
         _ => ContrastParamsGpu {
             plane: [0.0; 3],
@@ -8197,6 +8959,11 @@ fn queue_contrast(
             strength: 0.0,
             turns: 1.0,
             enabled: 0,
+            mode: 0,
+            layer_enabled: 0,
+            layer_lo: 0.0,
+            layer_hi: 1.0,
+            cdf: [[0.0; 4]; CDF_LEN / 4],
         },
     };
     queue.write_buffer(buf, 0, bytemuck::bytes_of(&p));
@@ -8234,6 +9001,26 @@ pub(crate) fn fit_contrast(
         .collect();
     if live.len() < 64 {
         return None;
+    }
+    if mode == ContrastMode::Equalize {
+        // Every live value, sorted; the table holds them at evenly
+        // spaced ranks. No clip: a rank is blind to how far out the
+        // extremes sit, which is what the clip exists to defend against.
+        let mut sorted: Vec<f32> = live.iter().map(|(v, _, _)| *v).collect();
+        sorted.sort_by(f32::total_cmp);
+        let (lo, hi) = (sorted[0], sorted[sorted.len() - 1]);
+        if !(hi > lo) {
+            return None;
+        }
+        let last = (sorted.len() - 1) as f64;
+        let mut cdf = [0.0f32; CDF_LEN];
+        for (j, slot) in cdf.iter_mut().enumerate() {
+            let at = j as f64 * last / (CDF_LEN - 1) as f64;
+            let (i, t) = (at.floor() as usize, at.fract());
+            let next = sorted[(i + 1).min(sorted.len() - 1)];
+            *slot = (sorted[i] as f64 + (next as f64 - sorted[i] as f64) * t) as f32;
+        }
+        return Some(ContrastFit { plane: [0.0; 3], lo, hi, cdf, layer: None });
     }
     let n = live.len() as f64;
     let mut plane = [0.0f32; 3];
@@ -8288,7 +9075,25 @@ pub(crate) fn fit_contrast(
     if !(hi > lo) || !lo.is_finite() || !hi.is_finite() {
         return None;
     }
-    Some(ContrastFit { plane, lo, hi })
+    Some(ContrastFit { plane, lo, hi, cdf: [0.0; CDF_LEN], layer: None })
+}
+
+/// The layer's stretch from its probe samples: the clipped range of the
+/// cells where it showed. `None` with too few of them, or none of range.
+pub(crate) fn fit_layer_stretch(samples: &[(f32, f32)], clip: f32) -> Option<(f32, f32)> {
+    let mut live: Vec<f32> = samples
+        .iter()
+        .filter(|(v, ok)| *ok > 0.5 && v.is_finite())
+        .map(|(v, _)| *v)
+        .collect();
+    if live.len() < 64 {
+        return None;
+    }
+    live.sort_by(f32::total_cmp);
+    let k = ((live.len() as f32) * clip.clamp(0.0, 0.25)) as usize;
+    let lo = live[k.min(live.len() - 1)];
+    let hi = live[(live.len() - 1).saturating_sub(k)];
+    (hi > lo).then_some((lo, hi))
 }
 
 /// One terminal record (the shader's `IterResult`), read back for the
@@ -8300,6 +9105,8 @@ pub(crate) struct IterRecord {
     pub z: [f32; 2],
     pub dz: [f32; 2],
     pub accum: [f32; 2],
+    /// The accumulator's `.zw`, for a wide colouring; zero otherwise.
+    pub accum2: [f32; 2],
     pub n: u32,
     pub tags: u32,
 }

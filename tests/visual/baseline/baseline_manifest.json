@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "8a03de2d",
+  "git_hash": "8a76c8b3",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 35102,
@@ -222,6 +222,14 @@
       "bytes": 30802,
       "sha256": "6ae83d6f086fa48eedbbc1d0aa874d02b0879c316490d8dbf8471c5705f5f151"
     },
+    "escape-layer-curvature-over-smooth.png": {
+      "bytes": 15816,
+      "sha256": "8a6e8c0f537fa9c1988b7e4c849a11703f144f9d5b85a322044a58e103dee236"
+    },
+    "escape-layer-rays-over-smooth.png": {
+      "bytes": 27159,
+      "sha256": "a220367f381dadf93ca615603f28d37b21284d89bc9c1864a445066191b8456e"
+    },
     "escape-littlewood.png": {
       "bytes": 14682,
       "sha256": "9cd25b898aba2cd36a5f6c250d15d20a8f979a63c58626e8649ae67275064124"
@@ -234,6 +242,10 @@
       "bytes": 21932,
       "sha256": "f5c50b840ef41c83fe74b53edbad7ba61823fec6890b1b31c2c0088b31b4fb17"
     },
+    "escape-mandelbrot-binary-decomposition.png": {
+      "bytes": 6919,
+      "sha256": "241aa8e27d2cfb5835187dc04200322545d3f14d3451b717b30019b7c6210819"
+    },
     "escape-mandelbrot-biomorph-re.png": {
       "bytes": 4211,
       "sha256": "2906d6118bfc4a575800968ef2ac4ec8ebc5fe6e0c0f5c7fdeefb0a1a4caa007"
@@ -242,17 +254,73 @@
       "bytes": 4148,
       "sha256": "a1343da3a4eb1cc4717bdcdfb92384eb5c0f1af0c2164d77992b86ab654d3b23"
     },
+    "escape-mandelbrot-de-pixels.png": {
+      "bytes": 16165,
+      "sha256": "0288e91935b3e179d2fddbb7ce4b4d1d624df2864943d0cb953e4f6b4fb40632"
+    },
     "escape-mandelbrot-de.png": {
       "bytes": 11140,
       "sha256": "c2f24d04a83beb589bbe901548eab25a0eb47022883eafa3b31f633cf33d978e"
+    },
+    "escape-mandelbrot-direct-traps-multiply.png": {
+      "bytes": 16592,
+      "sha256": "9ed4fdaa3095fbf5ccd0cf75ca076f96823bf1a5e5d5d5a497c57d2275a88637"
+    },
+    "escape-mandelbrot-direct-traps-ring.png": {
+      "bytes": 14829,
+      "sha256": "90cd33629062da4d49ba60b87891065d54214373111eaad303048d6d79176bef"
     },
     "escape-mandelbrot-escape-count.png": {
       "bytes": 4393,
       "sha256": "8c8d5d47ce6f555631806d140fff5970e74db6439fae24eacede45b0b17c3c2e"
     },
+    "escape-mandelbrot-gaussian-integer.png": {
+      "bytes": 22323,
+      "sha256": "ea863ecf1240bcbcdff657f9c51b6c94f5f2e239796da72b760f55241966d202"
+    },
+    "escape-mandelbrot-image-trap.png": {
+      "bytes": 7956,
+      "sha256": "7e8ea5d38dc5bcfb2bc543961dbcd0384024350950630dd04406722b07e51e11"
+    },
+    "escape-mandelbrot-infinite-waves.png": {
+      "bytes": 17702,
+      "sha256": "16fb6500e4acd94318697b1c41d6d84d1b687b3d0f39d3a8bdba1ef2854d6380"
+    },
+    "escape-mandelbrot-itinerary-modulate.png": {
+      "bytes": 11986,
+      "sha256": "bd7fa953fe9336b49b36aa79fe0f7496348372f8a0a66518946c963dffa4478b"
+    },
+    "escape-mandelbrot-itinerary-tail.png": {
+      "bytes": 24612,
+      "sha256": "dcf1652260e1d66acd0e811a59c206fb8c14682ce1987310e794f2f9659ae054"
+    },
     "escape-mandelbrot-orbit-trap.png": {
       "bytes": 20238,
       "sha256": "1c5f8884b25bec68a4425af666742854972ea781ba7d5d4a7b99b81234f500f1"
+    },
+    "escape-mandelbrot-palette-map-stepped.png": {
+      "bytes": 18889,
+      "sha256": "6189dd4948670a35c15e3695179998e63994c187041bc4f78cf7615c0a3ec058"
+    },
+    "escape-mandelbrot-rainbow-fringe.png": {
+      "bytes": 12503,
+      "sha256": "d7816d019d53bd288c2f4e1b972f155e6617336b1871d9d479549053c267a843"
+    },
+    "escape-mandelbrot-relief-analytic.png": {
+      "bytes": 15340,
+      "sha256": "87650732495164307144425fb88586625e247c8abb53fdcb47be2e7d844c1493"
+    },
+    "escape-mandelbrot-relief-bump.png": {
+      "bytes": 44965,
+      "sha256": "12acf82f5e753043290178ed758be74f99b75f1f2c6baefc58e520113c640d45"
+    },
+    "escape-mandelbrot-relief-embossed.png": {
+      "bytes": 17686,
+      "sha256": "b772afd8c57b2cc8ebee785472eea2f45ade68445632c9f1cdee9acbfecf73fc"
+    },
+    "escape-mandelbrot-relief-offset.png": {
+      "bytes": 15095,
+      "sha256": "2e8604dd51d4a72ab26fe034d39fe88d09e47b20656d9bc361d887cd2213f897"
     },
     "escape-mandelbrot-seahorse-zoom.png": {
       "bytes": 11055,
@@ -262,13 +330,37 @@
       "bytes": 3848,
       "sha256": "52a76b8a0e00a3493074b3738c295778edfe0ea5347aebbfce7c895afe156700"
     },
+    "escape-mandelbrot-stripe-debanded.png": {
+      "bytes": 27325,
+      "sha256": "7ee43a9b4b797e4a70668af213bdf3cc20785e74293ac9474790946e6afa9a72"
+    },
     "escape-mandelbrot-stripe.png": {
       "bytes": 24472,
       "sha256": "25e3377789cf7e6019c354c3545f58e07f5bfe6ed715d46a33dbc6d42f790f5f"
     },
+    "escape-mandelbrot-texture-overlay-relief.png": {
+      "bytes": 38950,
+      "sha256": "7b710eb753f5576c839d6c2406dda7a2a954551e17edd1b96c33a7757713464f"
+    },
+    "escape-mandelbrot-texture-overlay.png": {
+      "bytes": 32173,
+      "sha256": "e9b7c092359ccabfb2fd9cc6ac10a1385e084f5ed55eca72cbcfd0441bc22165"
+    },
     "escape-mandelbrot-tia.png": {
       "bytes": 14970,
       "sha256": "97b0034afd92ab60d08378bb97d283ed7b1632cc1c81b3f96bf04df847e95aab"
+    },
+    "escape-mandelbrot-trap-box-average.png": {
+      "bytes": 39023,
+      "sha256": "59b71d0b30570b10e23ee32a6e476b52543238aaedde2356486b5d0741a8b44e"
+    },
+    "escape-mandelbrot-voc-crosses.png": {
+      "bytes": 11286,
+      "sha256": "744f3c00fb919e52250e59f8023e6691821566571e1796f4ebf9d62ad09f5941"
+    },
+    "escape-mandelbrot-voc-stalks.png": {
+      "bytes": 10331,
+      "sha256": "ce79cb43dc7c4c0b058097144788aedb8452bb60eff163afd0daba4f73e91062"
     },
     "escape-manowar-deep.png": {
       "bytes": 36492,
@@ -295,8 +387,8 @@
       "sha256": "64590dd657725e31b972f142a39fc3136cd8cad53c07ed8471451c8fd2f9f610"
     },
     "escape-multibrot-dip-seam.png": {
-      "bytes": 46083,
-      "sha256": "3f58d551b0752f49b568f66916e15c46879cab93e86bb02393944f791fd3b5a4"
+      "bytes": 44441,
+      "sha256": "12f3cd180f288191165d94e8e6bf27ea4a70252db49aa401e8a667c5376750d2"
     },
     "escape-newton-3.png": {
       "bytes": 9063,
@@ -309,6 +401,10 @@
     "escape-newton-deep.png": {
       "bytes": 11546,
       "sha256": "ed2e73fccee69bc74859d5744cbf3914ffc05141ae998e6819488dbc806a8192"
+    },
+    "escape-newton-exponential-smoothing.png": {
+      "bytes": 11283,
+      "sha256": "4ac9d9efb417944e2d8062728cb42ef3922c2684de24aef481a9c31811404cc7"
     },
     "escape-newton-halley-cubic.png": {
       "bytes": 5613,

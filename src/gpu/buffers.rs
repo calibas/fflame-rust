@@ -1296,6 +1296,13 @@ pub struct FlameBuffers {
     // Palette texture (1D)
     pub palette_texture: Texture,
     pub palette_view: TextureView,
+    /// The same palette with every stop a flat band, through the same
+    /// rotation/squeeze pipeline: what an escape render binds when its
+    /// `PaletteMap::stepped` is on. Written alongside the smooth one by
+    /// every `update_palette`, so the two never disagree and toggling
+    /// stepped costs no upload.
+    pub stepped_palette_texture: Texture,
+    pub stepped_palette_view: TextureView,
 
     // Tone curve LUT texture (1D, 256 samples)
     pub curve_lut_texture: Texture,
@@ -1370,6 +1377,7 @@ impl FlameBuffers {
         self.blur_kernel_weights_buffer.destroy();
         self.blur_convolve_params_buffer.destroy();
         self.palette_texture.destroy();
+        self.stepped_palette_texture.destroy();
         self.curve_lut_texture.destroy();
     }
 
@@ -1744,6 +1752,14 @@ impl FlameBuffers {
         );
 
         let palette_view = palette_texture.create_view(&TextureViewDescriptor::default());
+        let stepped_palette_texture = create_palette_texture(device, palette_size, "Stepped Palette Texture");
+        write_palette_table(
+            queue,
+            &stepped_palette_texture,
+            palette_size,
+            &default_palette.generate_stepped_texture_data(palette_size as usize),
+        );
+        let stepped_palette_view = stepped_palette_texture.create_view(&TextureViewDescriptor::default());
 
         // Create curve LUT texture (1D, 256 samples) - start with linear curve
         let default_curve = crate::scene::tonemap::ToneCurve::linear();
@@ -1873,6 +1889,8 @@ impl FlameBuffers {
             // scale_buffer removed - using params.histogram_color_scale instead
             palette_texture,
             palette_view,
+            stepped_palette_texture,
+            stepped_palette_view,
             curve_lut_texture,
             curve_lut_view,
             sampler,
@@ -2410,32 +2428,9 @@ impl FlameBuffers {
             reverse: palette_reverse,
         };
         let rotated_data = render_palette_lookup(palette, &transform, size);
-
-        // Convert f32 [0.0, 1.0] to u8 [0, 255] for Rgba8Unorm
-        let palette_data_u8: Vec<u8> = rotated_data
-            .iter()
-            .map(|&v| (v.clamp(0.0, 1.0) * 255.0) as u8)
-            .collect();
-
-        queue.write_texture(
-            TexelCopyTextureInfo {
-                texture: &self.palette_texture,
-                mip_level: 0,
-                origin: Origin3d::ZERO,
-                aspect: TextureAspect::All,
-            },
-            &palette_data_u8,
-            TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(self.palette_size * 4), // N pixels * 4 components * 1 byte
-                rows_per_image: None,
-            },
-            Extent3d {
-                width: self.palette_size,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-        );
+        write_palette_table(queue, &self.palette_texture, self.palette_size, &rotated_data);
+        let stepped = crate::scene::palette::render_stepped_palette_lookup(palette, &transform, size);
+        write_palette_table(queue, &self.stepped_palette_texture, self.palette_size, &stepped);
     }
 
     /// Resize the palette texture to a new size.
@@ -2465,6 +2460,10 @@ impl FlameBuffers {
             view_formats: &[],
         });
         self.palette_view = self.palette_texture.create_view(&TextureViewDescriptor::default());
+        self.stepped_palette_texture =
+            create_palette_texture(device, new_size, "Stepped Palette Texture");
+        self.stepped_palette_view =
+            self.stepped_palette_texture.create_view(&TextureViewDescriptor::default());
 
         true
     }
@@ -3004,4 +3003,47 @@ mod tests {
         assert_eq!(rd_u32(&buf, 20), 1);
         assert_eq!(rd_u32(&buf, 36), 1, "final_count should reflect drop");
     }
+}
+
+/// A 1D palette table: `size` texels of Rgba8Unorm, sampled by the
+/// shaders and written by `write_palette_table`.
+fn create_palette_texture(device: &Device, size: u32, label: &str) -> Texture {
+    device.create_texture(&TextureDescriptor {
+        label: Some(label),
+        size: Extent3d {
+            width: size,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: TextureDimension::D2,
+        format: TextureFormat::Rgba8Unorm,
+        usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+        view_formats: &[],
+    })
+}
+
+/// Upload an RGBA f32 table (0..1) into a palette texture as 8-bit.
+fn write_palette_table(queue: &Queue, texture: &Texture, size: u32, data: &[f32]) {
+    let bytes: Vec<u8> = data.iter().map(|&v| (v.clamp(0.0, 1.0) * 255.0) as u8).collect();
+    queue.write_texture(
+        TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: Origin3d::ZERO,
+            aspect: TextureAspect::All,
+        },
+        &bytes,
+        TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(size * 4), // N pixels * 4 components * 1 byte
+            rows_per_image: None,
+        },
+        Extent3d {
+            width: size,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+    );
 }

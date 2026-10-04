@@ -1,6 +1,10 @@
 # Escape-time colouring: how other renderers do it, and what we could add
 
-Status: **survey done, decisions made, fixes done; feature work next** (2026-10-02).
+Status: **survey done, decisions made; items 1–5 of the order of work
+done** (fixes, smooth count, palette mapping, accumulator and
+debanding, texture layer), **item 6 in large part** (ten new or extended
+colourings) and **item 7 in part** (R1–R4, R8); what remains is listed
+under those items in §7 (2026-10-02).
 This compares our escape-time colouring with four other programs and lists
 what we could add (§5). The decisions and the order of work are in §7.
 
@@ -45,12 +49,18 @@ or run):
    - This is the cheapest broad improvement on the list: one step that every
      colouring passes through.
 
-2. **Our smooth count is the plain textbook form, and our bailout is small.**
-   - Ours is `n + 1 − log2(log2|z|)`, with no correction for the formula's
-     power and no normalisation by the bailout.
-   - All four others divide by `ln(power)`. techmatt, KF2, UF and F3 all
-     normalise by the escape radius, so the value does not jump when the
-     radius changes.
+2. **Our smooth count was the plain textbook form, and our bailout was
+   small.** (Both fixed since: §7, item 2.)
+   - Ours was `n + 1 − log2(log2|z|)`, with no correction for the formula's
+     power.
+   - All four others divide by `ln(power)`.
+   - They also normalise by the escape radius, `ln(ln|z| / ln R)`. An
+     earlier draft of this survey said that keeps the value from moving
+     when the radius changes. It does the opposite: it shifts every pixel
+     by `log_p(ln R)`, so a new bailout slides the palette. What it buys is
+     bands that line up with whole iterations. The unnormalised form is
+     the one that settles as the radius grows (measured, below), so we
+     keep it.
    - All four escape at a much larger radius:
 
      | Renderer | Escape radius |
@@ -60,12 +70,19 @@ or run):
      | F3 | 625 |
      | UF Smooth | radius ≈ 11 (its bailout 128 is squared) |
      | UF Triangle Inequality Average | squared bailout 1e20 |
-     | **Ours, new default** | ≈ 3.2 (squared bailout 10) |
+     | **Ours, new default** | 100 (squared bailout 1e4) |
 
    - The banding you saw at bailout 4 is the error of that formula at a small
-     radius: it assumes `|z_{n+1}| ≈ |z_n|²`, which ignores `+c`. The error
-     shrinks quickly as the radius grows, so 10 helps and 1e4 or more makes
-     it negligible.
+     radius: it assumes `|z_{n+1}| ≈ |z_n|^p`, which ignores `+c`. The error
+     shrinks quickly as the radius grows.
+   - *Measured* (`dbg_smooth_count_error_against_bailout`): the worst
+     pixel's error in iterations, against the same view escaped at a
+     squared bailout of 1e15.
+
+     | Squared bailout | 4 | 10 | 100 | 1e4 |
+     |---|---|---|---|---|
+     | Mandelbrot | 0.75 | 0.12 | 0.005 | 0.0000 |
+     | Multibrot, p = 3 | 0.067 | 0.011 | 0.0001 | 0.0000 |
    - UF's reason for keeping the bailout as a colouring parameter is a
      conflict between colourings. Smooth colouring wants a large bailout.
      Binary decomposition, decomposition and UF's Basic want a small one (UF
@@ -257,9 +274,9 @@ From `src/escape/colorings.rs`, `src/escape/assembler.rs`,
 | Capability | Ours | techmatt | KF2 | F3 | UF6 |
 |---|---|---|---|---|---|
 | Transfer curve on the value | — | 4 | 12 | in shader | 10 |
-| Smooth count corrected for power | — | yes | yes | yes | yes |
-| Smooth count normalised by bailout | — | yes | yes | yes | yes |
-| Default escape radius | ≈ 3.2 | 65,536 | 10,000 | 625 | ≈ 11 |
+| Smooth count corrected for power | yes (was —) | yes | yes | yes | yes |
+| Smooth count normalised by bailout | — (on purpose, §1.2) | yes | yes | yes | yes |
+| Default escape radius | 100 (was 2) | 65,536 | 10,000 | 625 | ≈ 11 |
 | Averages debanded by smooth fraction | — | yes | TIA | stripes | TIA |
 | Percentile stretch / auto range | AutoRange, Flatten | yes | "Stretched" | — | — |
 | Histogram equalisation | — | rank | — | yes | — |
@@ -289,7 +306,7 @@ needs an engine change first.
 | # | Candidate | What it is | From | Effort |
 |---|---|---|---|---|
 | P1 | **Transfer curve** | Applied to the value before the palette. Two sets to choose from: (a) techmatt's four, `x`, `√x`, `ln(1+x)/ln 2`, `x²(3−2x)`; (b) UF's ten, adding Sqr, Cube, CubeRoot, Exp, Sin, ArcTan; KF2 adds Log-Log `ln(1+ln(1+x))` and fourth root. Where it applies matters: techmatt curves a value already normalised to 0..1, while UF and KF2 curve the raw index and so need a density and offset around them. | all | S |
-| P2 | **Corrected smooth count** | `n + 1 − ln(ln|z| / ln R) / ln p`, with p the formula's power. It removes the dependence on the bailout and the banding on power ≠ 2 formulas. | all | S |
+| P2 | **Corrected smooth count** | `n + 1 − ln(ln|z|) / ln p`, with p the formula's power, which removes the banding on power ≠ 2 formulas. The others' `ln(ln|z| / ln R)` would move the value with the bailout (§1.2). | all | S |
 | P3 | **Larger default bailout for smooth colourings** | Or a bailout per colouring, as UF does, or a recommended value the panel suggests. Decomposition-style colourings keep a small one. | all | S |
 | P4 | **Debanded averages** | Keep the last term and blend `mean_all` against `mean_without_last` by the smooth fraction. Needs a bigger accumulator (P6). | all | M |
 | P5 | **A second colouring layer** | Base colouring + texture colouring, blended before the palette (techmatt: Screen / Multiply / Add / Overlay, weight), or two coloured layers merged after it (UF's modes). The first is cheaper and covers techmatt's composites. | techmatt, UF | M |
@@ -399,6 +416,25 @@ Read from the code, not reproduced by render, except where noted.
    - A linear correction by width, as KF2 does, would therefore overshoot
      about 3× here.
    - Left as it is. R9 is where a better-founded normalisation would go.
+8. **The tone curve crushes the darkest values, flames included**
+   (measured while testing item 3; not fixed, since it moves every
+   render's dark pixels).
+   - The curve is on by default (`use_curve`), and its 256-entry LUT
+     holds `f(i/255)` in texel `i`. `tonemap.wgsl` samples it at
+     `u = x` with linear filtering, which reads texel position
+     `256x − 0.5`, so even the identity curve returns
+     `x + (x − 0.5)/255`.
+   - Near black that subtracts about 0.002 in linear light. Through an
+     escape render: palette bytes below about 15 come out 0, 25 comes
+     out 21, 51 comes out 49. Mid-grey is exact.
+   - Fix: sample at `(255x + 0.5)/256`. The two item-3 GPU tests turn
+     the curve off until then.
+9. **Four IFS cache tests failed when run in parallel** and passed
+   alone: they read the global `escape::diag` snapshot, which any
+   other test's render rewrites between their render and their check.
+   Fixed: they read their own renderer's `last_path`. A fifth,
+   `a_preview_is_a_quarter_of_the_walks_and_leaves_no_trace`, times
+   the walk and can still lose under parallel load.
 
 ---
 
@@ -448,14 +484,595 @@ Read from the code, not reproduced by render, except where noted.
    - stale comments (`710225e4`);
    - relief strength against export resolution: measured, and left as it
      is (§6.7).
-2. **The smooth count** (P2): correct it for power and bailout, and give
-   each colouring a recommended bailout (decision 2).
+2. **The smooth count** (P2): correct it for power, and give each
+   colouring a recommended bailout (decision 2). *Done 2026-10-02*, on
+   branch `escape-coloring`:
+   - each formula reports its degree at infinity (`FormulaDef::escape_degree`:
+     the power for Multibrot, Tricorn and McMullen, 3 for Cactus, power − 2
+     for Feather). A degree of 1 or less, or none, keeps 2: linear growth
+     has no log-log count. The count divides by `log2(degree)` only when
+     it is not 2, so every degree-2 picture is unchanged;
+   - smooth, distance estimate and normal map recommend a squared bailout
+     of 1e4, which the panel sets when one of them is picked. Only for
+     formulas that test `|z|^2` with no biomorph: the exponential and trig
+     families test a raw `Re z` or `|Im z|`, and their presets now carry
+     50 (10 for Collatz);
+   - and only for a formula that is **polynomial at infinity** (it
+     declares its degree): past radius 2 its orbits really escape, so a
+     larger bailout refines the count without moving the escape set. Not
+     so elsewhere. Magnet grows as `z^2` too, but its orbits can pass
+     radius 2 and come back to converge, so a larger bailout redraws it.
+     Feather at power 3 grows linearly and never reached radius 100 in
+     600 iterations: a deep view rendered empty;
+   - a preset that names no bailout takes its colouring's recommendation,
+     or else 4, the bailout it was drawn at (it used to keep whatever the
+     last picture had);
+   - a new config starts at 1e4; a file without a bailout still reads as 4.
+   - The escape GPU tests turned up three tests (Feather, two Magnet)
+     that had failed since the default moved to 10 (`d4bfd323`): their
+     exact-orbit references escape at 4 but took the default. They now
+     name 4.
 3. **The value transfer** (P1) and the palette curve, plus stepped palettes
-   (decisions 3, 4 and 6).
+   (decisions 3, 4 and 6). The design:
+   - **Config:** `EscapeConfig::palette_map` (`PaletteMap`): `transfer`,
+     `pivot`, `curve`, `stepped`; written only when not the default. The
+     panel shows them in a *Palette mapping* section under Auto contrast.
+   - **Value transfer**, on the colouring's value before it wraps:
+     Linear, Square Root, Cube Root, Log, Log-Log, Square, ArcTan. Each
+     is `g(v) = k·f(v/k)` with `f(1) = 1`, so the **pivot** `k` is the
+     value every curve leaves unchanged: below it Square Root and Log
+     stretch, above it they compress. The colouring's own scale still
+     sets the density. Negative values are mirrored (`g(−v) = −g(v)`).
+     `f` is techmatt's for Log (`log2(1 + u)`); KF2's for Log-Log; UF's
+     for the rest. No Exp or Cube: past a few hundred they overflow f32
+     or leave `fract` nothing but rounding.
+   - **With Auto contrast** the transfer applies to the fitted value, in
+     its 0..1 range, before the palette turns: `mix(g(raw), turns ·
+     g(u), strength)`. At pivot 1 that is techmatt's normalised curve.
+   - **Palette curve**, on the wrapped position within one cycle:
+     Linear, Square Root, Square, Log (`log2(1 + t)`), Exp (`2^t − 1`),
+     S-curve (smoothstep), Inverse S. Computed in the shader, so it
+     does not lower the table's resolution as a table warp would.
+   - **Relief** keeps the raw value, and Banded relief the wrapped value
+     after the transfer (the band edges), not after the palette curve.
+   - **Stepped:** each stop is a flat band from its position to the
+     next stop (constant interpolation, as Blender's ColorRamp). A stop
+     at 1.0 therefore shows only at the very top. The flame renderer
+     keeps a second palette table built that way, through the same
+     rotation, squeeze, log and reverse pipeline; an escape render binds
+     it when stepped is on. The flame and simulation renders never see
+     it.
+   - **Shader:** one set of helpers (`esc_transfer`, `esc_wrap`,
+     `esc_palette`) spliced into every template that looks up the
+     palette, so the iterate and recolour passes cannot disagree. Two
+     uniform words carry the choices; Linear and Linear take the old
+     arithmetic exactly, so existing renders do not move.
+
+   *Done 2026-10-02*, on branch `escape-coloring`, as designed, with a
+   script API (`escape.transfer`, `escape.palette_curve`,
+   `escape.stepped_palette`). Measured:
+   - every curve, rendered through a grey ramp, lands within one 8-bit
+     level of `TransferCurve::shape` / `PaletteCurve::apply` (worst
+     0.004, Linear-on-Linear included);
+   - a palette-map change takes the recolour path and matches a fresh
+     render byte for byte: direct, perturbed, and under Auto contrast;
+   - a four-stop stepped palette puts 98.5% of lit pixels on a stop
+     colour (7% blended); the rest sit on band edges, which the
+     sampler's filtering softens;
+   - all 87 escape visual tests and the 2D flame tests pass unchanged.
 4. **A bigger accumulator** (P6), then **debanded averages** (P4).
+   *Done 2026-10-02*, on branch `escape-coloring`:
+   - **The accumulator is a `vec4` to every colouring**
+     (`coloring_map(sum, state: vec4)`, `coloring_accum(..) -> vec4`),
+     but only an accumulating colouring stores all four floats: its
+     records grow from 32 to 40 bytes a pixel and its perturbed resume
+     state by 8. Everything else keeps the narrow layouts, so the
+     deep-zoom pixel budget only shrinks while an averaging colouring
+     is in use. One pre-pass per colouring resolves the width
+     (`with_accum_width`); a test measures both layouts in the
+     assembled shader against the Rust strides.
+   - **Debanding**, on orbit, stripe, magnitude, position and
+     triangle-inequality averages: each keeps (sum, count, last term)
+     and blends the mean without the last term into the mean with it
+     by how far through its last step the orbit escaped,
+     `1 − log_p(ln|z| / ln R)`. That is Ultra Fractal's smoothing of its
+     Triangle Inequality Average. Sphere average is left out: its
+     stride counts calls, not terms.
+   - **Saved pictures do not move.** The `deband` parameter's default
+     is off, which is what a file without the key means. A fresh pick
+     of the colouring turns it on, from the panel, a preset that does
+     not name it, or a script (`ColoringDef::pick_params`, the same
+     pattern as the recommended bailout).
+   - **The bailout matters.** The blend is first order in the escape
+     fraction. Measured as the step across an iteration boundary
+     against the steps beside it (1 is continuous): stripes 1.22 →
+     1.03 and triangle inequality 2.44 → 1.04 at bailout 1e4, but only
+     3.37 → 1.62 and 16.5 → 4.9 at 4. So stripe and triangle inequality,
+     whose terms are bounded, recommend 1e4 as smooth does. The
+     averages of |z| and of positions do not, because a larger radius
+     changes what they average.
 5. **The texture layer** (P5): a second colouring blended before the
-   palette. This brings techmatt's composites (C2, C3, C4).
+   palette. This brings techmatt's composites (C2, C3, C4). The design:
+   - **Config:** `EscapeConfig::layer` (`ColoringLayer`): a colouring
+     name (empty is no layer), its own parameters, a blend mode and a
+     weight. Mode A only; the panel shows it under the colouring.
+   - **Blend**, on the two wrapped palette positions, before the
+     palette curve: Screen `1 − (1 − a)(1 − b)`, Multiply `ab`, Overlay,
+     Mix `b`, each as `mix(a, blend, weight)`; and Add, `fract(a + w·b)`,
+     which shifts the palette by the texture. The base's value
+     transfer, contrast and relief height are the base's alone.
+   - **Accumulator:** whichever of the two colourings accumulates owns
+     it, so smooth + stripes, curvature or threads (techmatt's
+     composites) all fit. Two accumulating colourings would need a
+     second one; v1 refuses that pair (the panel greys it out, the
+     renderer draws the base alone).
+   - **Shader:** the layer's WGSL is spliced after the base's, with
+     `coloring_map` renamed `layer_map`, `cparam` renamed `lparam` (a
+     second parameter block in the uniform), and any helper function
+     or constant prefixed. Period detection and the derivative orbit
+     compile in when either colouring needs them. `esc_layer(t, ..)`
+     is the identity without a layer, so existing renders do not move.
+   - **Caches:** the layer is part of the pipeline keys and the band
+     key, and of the recolour cache's identity when it accumulates or
+     reads periods, exactly as the base colouring is.
+   - **Script API:** `escape.layer(name, blend, weight)`,
+     `escape.layer_param(name, value)`, `escape.no_layer()`.
+
+   *Done 2026-10-02*, on branch `escape-coloring`, as designed. Measured:
+   - every blend mode, rendered through a grey ramp with escape count
+     as both colourings, lands within one 8-bit level of
+     `LayerBlend::apply` (worst 0.004); at weight 0 a layer is
+     byte-identical to none;
+   - a layer that runs nothing in the loop recolours from the cache and
+     matches a fresh render to the byte, including smooth over smooth.
+     One that accumulates or needs the derivative orbit (distance
+     estimate) re-iterates, as it must;
+   - every fitting pair of the 14 colourings assembles and validates
+     as base and layer, direct, perturbed and recolour; the 49 pairs of
+     two accumulating colourings are refused.
 6. **New colourings** (§5.2), in an order to be picked.
+   *First batch done 2026-10-02*, on branch `escape-coloring`: the
+   colourings that complete techmatt's composites now that layers
+   exist, then the cheap classics.
+   - **Curvature average** (C1), **velocity** (C15) and **threads**
+     (C4), debanded like the other averages. Curvature and threads,
+     whose terms are bounded, recommend a bailout of 1e4.
+   - **Exponential smoothing** (C5): diverging, converging or both,
+     the smooth colouring Newton and Nova lacked.
+   - **Decomposition** (C6): the escape angle, or that many flat
+     sectors of it; 2 is binary decomposition. Recommends the classic
+     bailout of 4, as UF does, since the angle at escape depends on it.
+   - **Basic** (C14): UF's real, imaginary and sum, `0.05 (4 + v)`,
+     also at bailout 4.
+   - **Gaussian integer** (C3): the distance to the nearest lattice
+     point, reduced to its smallest, mean, largest, or the angle at the
+     smallest. It colours the interior.
+
+   Each is checked against a transcription of its definition: the
+   accumulator by replaying the orbit on the CPU, the map through a grey
+   ramp. Both agree within one 8-bit level. One caveat measured on the
+   way: an escaping orbit's last iterates are so sensitive to c that at
+   bailout 1e4 the Gaussian-integer distance of the final step is f32
+   noise. f32 and f64 disagree on it, so that colouring's look at a
+   large radius depends on rounding; at 4 they agree.
+   Visual tests added for a curvature layer over smooth, debanded
+   stripes, binary decomposition, Gaussian integer, exponential
+   smoothing on Newton, and a log transfer with a stepped palette.
+
+   *Second batch done*, same branch:
+   - **Distance-estimate variants** (C11): log (as before), linear and
+     square-root mappings, in plane units (as before) or pixels. In
+     pixels the boundary is always about a pixel away, so the colours
+     hold still under zoom, as F3 and KF2 draw it. KF2's
+     "DE + Standard" is a texture layer now.
+   - **Richer orbit traps** (C9), appended so a saved trap draws as it
+     did: the trap's centre and rotation; a ring, box, line and
+     diamond with a radius; and the reduction: closest (as before),
+     farthest, mean, or first within a threshold.
+   Checked the same way, within one 8-bit level; two visual tests.
+
+   - **External rays** (C7), from F3's own example (`flying-fish.f3.toml`,
+     read from source): lines where `|fract(T + ½) − ½| < w · (1/p)^NF`,
+     `T` the escape angle in turns and `NF` the escape fraction, which
+     F3 computes exactly as the debanding here does. 1 on a ray, 0 off,
+     meant as a texture layer; a count of rays per turn generalises F3's
+     one. Checked against the definition on every escaped pixel of a
+     view (none disagree); one visual test.
+
+   *Third batch: colourings that draw their own colours.*
+   - **The colour path.** A colouring flagged `DirectColor` defines
+     `coloring_color(sum, state, v) -> vec3` (linear light, `v` its
+     value after the transfer) beside `coloring_map`. The value
+     `coloring_map` returns still feeds the relief and Auto contrast.
+     Every template that colours a pixel calls one spliced
+     `esc_colour(raw, t, ..)`, which for every other colouring is the
+     palette lookup it always was. All 99 earlier escape pictures are
+     byte-identical.
+     - The recolour cache serves it like any other colouring.
+     - A texture layer, which blends palette positions, is refused over
+       or under one, and the panel says why.
+   - **Rainbow fringe** (C12), from Fraktaler 3's own example
+     (`examples/rainbow-fringe.f3.toml`) and its DE vector
+     (`hybrid.cc`), read from source.
+     - The colour is `hsv(arg DE / 2π, 1/(1 + 4L), 2L)`, decoded to
+       linear light and raised to 1/gamma (default 2).
+     - `L = |z| ln|z| / |dz|` in output pixels.
+     - F3's vector is the conjugate of the screen gradient of |z|²,
+       since its saved rows run upward. The view rotation turns it onto
+       our screen, so the hue circles the set as in F3.
+     - Flat grey where no derivative is iterated (perturbation).
+   - **Infinite waves** (C13), from KF2's `KF_InfiniteWaves`, read from
+     source.
+     - Up to six waves (KF2 allows 30), each `sin(π·iter/P)/2 + ½` on
+       hue, saturation or brightness. A negative period is the
+       constant `−P/100`. Each channel averages its waves, and a channel
+       with none is 0, as in KF2.
+     - `iter` is KF2's `n + 1 − NF`, times a scale (1/Iteration
+       Division), plus an offset (Color Offset), after the value
+       transfer (Color Method).
+     - Stepped takes it at whole iterations. Blend mixes half the
+       palette back in, a cycle per 1024, as KF2 indexes its palette.
+     - The defaults are the three waves KF2's bundled `monochrome-de`
+       carries (100 hue, 111 saturation, 123 brightness). None of KF2's
+       77 bundled files turns waves on.
+
+     *Measured:* against transcriptions of both sources, from the GPU's
+     own records, every drawn pixel lands within one 8-bit level:
+     - the fringe at two rotations;
+     - the waves with KF2's defaults, and with a stepped, blended set
+       holding constants.
+
+     Retuning either recolours from the cache and matches a fresh
+     render to the byte. Two visual tests.
+
+   **Found on the way, and fixed** (`5fe6d896`): two features of this
+   branch measured in render pixels, which are 1/supersample of an
+   output pixel, so antialiasing changed the picture.
+   - **Distance estimate in pixel units** (C11): at 2× it moved 77
+     levels on average, now 5.8 (plane units: 5.6).
+   - **Offset relief** (R6): the shade pass scaled its slope by the
+     supersample factor, which is right only for per-render-pixel
+     slopes. It was 38% stronger at 2×, and now changes by under 3%.
+
+   The supersample factor now rides in the uniform's flag word, as F3
+   divides its DE by its supersampling.
+
+   - **Rank equalisation** (P7), as a fourth Auto contrast mode,
+     **Equalize**. Each value becomes its midrank in the frame, the
+     share of the frame below it, with a plateau of equal values at its
+     middle, as techmatt ranks. It is measured from the same 96×72
+     probe as Auto range: the CPU sorts the samples into a 256-entry
+     quantile table, and the recolour pass inverts it by binary search
+     and linear interpolation. That is a piecewise-linear CDF, where F3
+     uses 4,096 bins over the full frame and techmatt sorts every
+     sample. Turns, strength and the transfer apply as for Auto range;
+     the clip does not, since a rank cannot be dragged by an outlier.
+     *Measured:* on the smooth count with a grey ramp, every tenth of
+     the palette covers 9.7–10.3% of the drawn pixels, where Auto range
+     puts 92% in the first tenth. On escape count's integer plateaus the
+     mean palette position is 0.499.
+
+   - **Itinerary** (C8), from techmatt's engine (`iterate.rs`
+     `Address`, `mode.rs` `itinerary` / `tail_itinerary`), read from
+     source. It is the orbit's angular address. Each iterate lands in
+     one of k sectors, counted counter-clockwise from the negative real
+     axis, and the sectors are the digits of one base-k fraction.
+     - **Head** is the first `depth` symbols. **Tail** rolls,
+       `fract(v·k) + s·k^−depth`, and keeps the last ones.
+     - Both open on z1. techmatt opens a head on z0 where z0 is constant
+       (the parameter plane). That prepends a constant digit, an affine
+       change the frame stretch removes.
+     - Colours the interior, as techmatt's does.
+     - Place values are carried in the accumulator rather than computed
+       with `pow`, which GPUs approximate; at a power-of-two k the
+       address is then exact.
+
+     *Measured:* against a CPU port of `Address` on about 12,000 orbits
+     a case, head at k = 4 is exact. Tail is within one bottom place
+     (the escaping iterate's own sector, where f32 and f64 orbits part).
+     k = 3 is within rounding.
+   - **techmatt's itinerary mode is a combination, not a colouring:**
+     smooth with Equalize, and the itinerary as a texture layer, Add at
+     0.5, which is `fract(rank(smooth) + 0.5 · stretch(address))`. The
+     stretch is the new part. **Under Auto contrast the texture layer is
+     now stretched to its own clipped range in the frame**, as techmatt
+     places a modulate's texture.
+     - A second probe measures it: an entry point appended to the
+       recolour module reads the layer's value from the recolour
+       cache's records at the probe's cells, so it measures the value
+       the recolour pass blends, by construction.
+     - The iterate passes never change. Nothing runs without a layer
+       and contrast.
+     - *Measured:* a layer confined to 0.004–0.059 of the ramp spans
+       0.004–0.984 under a 2% clip. Retuning recolours and matches a
+       fresh render.
+     - Two visual tests: the mode at a shallow view, and the tail at
+       zoom 2⁷, where the head has collapsed.
+
+     **Found on the way, and fixed** (`465b5c52`, older than this
+     branch): the contrast fit was keyed by the iterate key alone. An
+     edit that only recolours (another colouring with the same loop, a
+     colouring parameter, the clip) drew through the old fit, about
+     30,000 bytes of 76,800 off a fresh render. The probe also read the
+     previous colouring's height field.
+
+   - **What a deeper itinerary would need** (for later). The head
+     address collapses as you zoom in: every pixel in the frame shares
+     its leading symbols, the stretch has nothing left to spread, and
+     the texture vanishes. Measured on the CPU, in a 96×54 frame at
+     k = 4, as distinct head addresses at 12 / 24 / 26 symbols:
+
+     | Zoom | seahorse | elephant | spiral | antenna |
+     |---|---|---|---|---|
+     | 2⁰ | 743 / 758 / 758 | 741 / 756 / 756 | 747 / 761 / 761 | 736 / 752 / 754 |
+     | 2⁴ | 23 / 444 / 500 | 315 / 663 / 671 | 22 / 565 / 640 | 1062 / 1407 / 1408 |
+     | 2⁶ | 1 / 57 / 183 | 32 / 825 / 881 | 1 / 248 / 468 | 358 / 2349 / 2369 |
+     | 2⁸ | 1 / 1 / 3 | 2 / 764 / 804 | 1 / 16 / 71 | 36 / 858 / 1086 |
+     | 2¹⁰ | 1 / 1 / 2 | 1 / 707 / 796 | 1 / 2 / 3 | 10 / 27 / 27 |
+     | 2¹² | 1 / 1 / 1 | 1 / 37 / 98 | 1 / 1 / 1 | 3 / 3 / 3 |
+
+     Twelve symbols (one f32, what ships) hold to about zoom 2⁴–2⁶.
+     Twenty-four hold about two to four doublings further. techmatt's
+     26 (f64) barely improve on 24, and by 2¹² everything has collapsed:
+     **the head itinerary is a shallow-zoom colouring in techmatt's
+     engine too.** The shared prefix depends heavily on the location (in
+     seahorse valley the orbits circle the parabolic point and spell the
+     same route for many steps), so there is no rule like "a symbol per
+     doubling".
+     - **The tail does not collapse.** It reads the end of the orbit,
+       and 12 symbols keep 270–870 distinct addresses down to 2¹⁶ in
+       the same frames (seahorse, spiral, elephant). f32 is enough
+       there, and it is the deep option that already works.
+     - **Two floats for a deeper head.** Hold the address as hi and lo,
+       12 symbols each. Then three things must carry both halves:
+       1. the record and the layer probe, both of which store one f32
+          for the value today;
+       2. the CPU's percentiles;
+       3. the stretch itself, `(v − lo)/(hi − lo)` in double-float
+          arithmetic, so the shared leading symbols cancel exactly
+          before the division.
+
+       The accumulator already has room (it uses two of its four
+       floats); the probe would need four floats a cell.
+     - **Past 24 symbols** there is nothing to gain at these depths (the
+       26-symbol column), short of arbitrary-precision addresses, which
+       nobody draws.
+
+   - **Visions of Chaos traps**, ported from Softology's own shader
+     listings (`softology.pro/Mandelbrot_{Circles,Crosses,Rings,Squares,
+     Stalks}_Orbit_Traps.txt`), read from source. The blog post
+     ("Orbit Traps", 2011) misdescribes two things:
+     - its prose gives `trapdist/trapsize`, but the code shades
+       `1 − dist/size`;
+     - its stalks listing reads as an accumulation, but the loop stops at
+       the first catch, so the sum holds one term.
+
+     All five traps share one rule: stop at the first iterate the trap
+     catches, never testing the escaping one. Colour:
+     - grey by closeness where caught;
+     - the CPM smooth palette where the pixel escaped uncaught, 256
+       entries indexed `mod 255`, so entry 255 is never used and 254
+       blends into 0;
+     - black inside.
+
+     That makes it a composite, so it is a direct-colour colouring. Our
+     Orbit Trap's First reduction gives the same catch for three of the
+     shapes, but it cannot draw grey traps over a palette exterior.
+
+     Shapes and constants are as coded, quirks included. Circles and
+     rings measure from (trap Y, trap X), because the listing swaps the
+     names, so they sit at (0.5, 0) while squares sit at (0, 0.5).
+     Crosses test x before y. Squares are a filled square shaded by half
+     the L1 distance. Stalks catch where |z| comes within 0.05 of |c|,
+     from z3 on.
+
+     Not kept: VoC stops iterating at the catch, while here the orbit
+     runs on with the catch frozen, which costs time but not colour. VoC
+     averages supersamples in display space, the renderer in linear
+     light.
+     *Measured* against an f64 port of the listings' loop, for every
+     shape: the catch the GPU froze agrees on 99.9%+ of the pixels away
+     from a trap edge, and every pixel's colour lands within 0.6 of a
+     level of the listings' rules. Changing the trap re-iterates and
+     matches a fresh render. Two visual tests (crosses, stalks).
+
+   - **Direct orbit traps** (C10), from techmatt's engine
+     (`direct_trap.rs` and the `direct_trap_*` modes, read from source).
+     UF's Direct Orbit Traps are the same idea with more options. It
+     makes no value. Every iterate within `threshold` of the shape
+     samples the palette and composites into the pixel, in orbit order:
+     - the sample is `key = curve(d/threshold)`;
+     - its weight is `alpha = opacity·(1 − key)`;
+     - per channel, in linear light, it applies `blend(standing,
+       sample)` (Top down swaps the two) and mixes the result in by
+       alpha.
+
+     The running colour is the four-float accumulator, which keeps its
+     own records. The rest follows his source:
+     - start from black or white;
+     - the interior is painted;
+     - the trap is tested before the escape;
+     - eight shapes, six blends (Normal, Multiply, Screen, Overlay, Min,
+       Add) and four curves;
+     - a threshold of 0 takes the shape's own calibrated default;
+     - a Screen cross is held to opacity 0.15 and threshold 0.08, where
+       techmatt measured it blowing out to white;
+     - the palette is read clamped, not wrapped, on the same `i/(N−1)`
+       table positions;
+     - defaults are his `direct_trap_ring`, and the recommended bailout
+       is his 2¹⁶ radius.
+
+     **New for the cache:** the colour is fixed during iteration, so a
+     palette edit has to re-iterate. A `PaletteInLoop` colouring puts
+     the palette's generation and its mapping into the iteration's and
+     the chunked render's identity; every other colouring's keys are
+     unchanged.
+     *Open:* the combination sweep
+     (`every_formula_coloring_combination_dispatches`) fails for it.
+     At the probe's home view and 64 iterations, it lights only 146
+     pixels on McMullen and 150 on Collatz, of 12,288, against the 2%
+     every pairing must reach. It fails the same way at the commit that
+     added it. Whether that is the shape being sparse on those
+     formulas (techmatt's trap paints only near misses, on black) or a
+     fault has not been looked into.
+
+     *Measured:* nine cases against an f64 port of techmatt's `trace`
+     through a grey ramp: every shape, every blend, both orders and
+     starts, the curves, a default threshold, and the clamp. All 12,288
+     pixels agree within two levels, bar one at 2.5. A palette edit
+     re-iterates and matches a fresh render. It renders at perturbation
+     depths. Near the boundary there it is white, as techmatt warns:
+     the CPU confirms the centre orbit passes the ring 153 times in
+     3,000 iterations, reaching 0.993 in linear light. Two visual tests
+     (ring, multiply).
+
+   Item 6 is done.
 7. **Relief** (§5.3): the small ones (R1, R2, R4, R8, R9) first, then
    analytic relief (R5), offset orbits (R6) and Embossed (R7). Analytic
    relief at deep zoom waits for the derivative under perturbation (P11).
+   *First part done 2026-10-02*, on branch `escape-coloring`:
+   - **R1:** a Lambert lighting model beside the signed tilt, with the
+     light's elevation (UF's default 30°), measured from what flat
+     ground receives so the shadow and highlight scales keep their
+     meaning; and an ambient floor under the shadow, for either model.
+   - **R2:** Soft Light (the W3C formula) and Hard Light among the
+     shadow and highlight blends.
+   - **R4:** a height curve, `post · f(pre · h)`: log, square root,
+     cube root, square, cube, sine, cosine. Applied as the relief reads
+     the height, after any softening, so the contrast probe, which
+     reads the same texture, still sees the raw value.
+   - **R8:** slope stencils: central (as before), forward, Roberts
+     cross, and the least-squares plane over 3×3. KF2's Laplacian is
+     left out: it is a curvature, not a slope, and how KF2 lights it is
+     not in what this survey read.
+   - **R9 is deliberately not done.** §6.7 measured relief at 4× the
+     output size moving the picture 0.79× as much, and a linear
+     correction like KF2's would overshoot about 3×. A normalisation
+     worth having needs a better-founded model than either.
+
+   Every default draws what it drew before (the relief visual tests are
+   unchanged). A GPU test checks the options as properties: ambient 1
+   with no highlight leaves the picture as it was; a Lambert shadow
+   only darkens; Soft and Hard Light with a mid-grey light change
+   nothing; every stencil and curve changes the picture.
+
+   **Found on the way, and fixed:** with Banded relief, or any field
+   left on Banded, auto contrast fitted the wrapped value, because the
+   probe and the relief shared one height texture. The height texture
+   is now `rg32float`: red the colouring's raw value, which the probe
+   reads, green the relief's own source, which the blur and the slope
+   read. Measured: with the relief at zero strength, Smooth and Banded
+   now draw byte-identical contrast-fitted pictures.
+   - **R3**, in the form that split made cheap: a third relief source,
+     **Layer**, slopes the texture layer's value, so the relief follows
+     one field and the colour another. Without a layer it is the
+     colouring's own value, byte for byte.
+
+   - **R5, analytic relief**, from KF2's source (`gl/kf.frag.glsl`
+     `KF_Slopes`, `fraktal_sft.h` `compute_de`): KF2 slopes at
+     `1/DE`, DE in pixels, which is the gradient of `−ln d`. For a
+     holomorphic map its direction is the potential's, `conj(dz/z)`.
+     The iterate pass stores that gradient, in screen pixels and turned
+     back by the view rotation, in the height texture's two remaining
+     channels (now `rgba32float`), and the relief lights it instead of
+     differencing. The derivative orbit compiles in for it. Direct
+     path only, since the perturbed rungs carry no derivative (P11); the
+     panel says so, and the relief is flat there, as tested. Softness,
+     stencils and the height curve do not apply to it.
+     *Measured:* lit from one side, analytic and numeric (smooth) relief
+     move 97% of the pixels both move the same way, at rotation 0 and
+     0.7; the rest is the numeric relief's stencil noise. Near the
+     boundary, where the smooth count is chaotic between pixels, the
+     agreement drops to 79%, which is the noise analytic slopes avoid.
+
+   - **R6, offset-orbit relief**, a fifth relief source, **Offset
+     orbits**. The direct shader's loop moved into a function,
+     `esc_run(pixel)`, so it can run more than once a pixel. With offset
+     relief it runs twice more, at `c + δ` along the screen's x and y,
+     and the slope is the colouring's value there minus its value at
+     `c`. Without it, the loop is called once and the visual suite is
+     unchanged. δ is a fraction of the view's height (default 1/1024),
+     and the slope is measured per 1/1024 of the view, not per render
+     pixel, so the relief belongs to the fractal. At a 1024-pixel-tall
+     render the two units agree, so a relief height means about the
+     same in both fields there. That is R9 for this field: *measured*,
+     at twice the output size the share of pixels the relief moves holds
+     (×1.007), where the numeric relief's falls (×0.834). Direction:
+     with the height scaled so both read the same slope per pixel,
+     offset and numeric relief move 97% of the pixels both move the same
+     way, at rotation 0 and 0.7. It works on any colouring's value; a
+     neighbour orbit the colouring leaves undrawn (interior) counts as
+     flat. The cost is three orbits a pixel, and recolouring cannot come
+     from the cache while it is on, because the offset orbits need the
+     loop. Direct path only: the perturbed rungs do not run offset
+     orbits, so the relief is flat there, as the panel says and a test
+     checks. Softness, stencils and the height curve do not apply to it.
+   - **R7, Embossed**, a sixth relief source, **Embossed contours**,
+     ported from Ultra Fractal's own source (Standard.ulb:
+     `Standard_Embossed`, `Standard_EmbossedHelper`, `Standard_Emboss`,
+     by Kerry Mitchell; read from the public formula reference). Two
+     orbits, at `c − dr` and `c + dr` with `dr` toward the light, run
+     in step. Each is reduced per Emboss Type: the iteration it
+     escaped on, the count of iterates with Re z > 0 or Im z > 0, the
+     iteration of the smallest |z|², `trunc(ln|z|)`, or the angle
+     sector (1–32 sections, default 2). The pixel is a shadow where the
+     orbit away from the light came out lower, a highlight where higher,
+     and flat where they tie; those are Emboss's greys 0.2, 0.8 and 0.5.
+     The quirks are kept:
+     - An orbit that never escapes reads 0 for Iteration, Magnitude and
+       Angle.
+     - Neither orbit stops early, since UF requires periodicity
+       checking to be off.
+     - Smallest Magnitude keeps **one** minimum for both orbits, as UF's
+       helpers share their owner's `fRMin`.
+
+     The pair is its own loop, `esc_emboss`, built from the same
+     generated step text as the pixel's loop (`step_lines`). It
+     validates for every formula, damped or not. The step is the
+     R6 offset (UF's Contour Size). Ours is a fraction of the view's
+     height; UF's is `0.0065/#magn`, and how that compares depends on
+     UF's view at magnification 1, which was not read. Two divergences
+     are deliberate:
+     - `dr` turns with the view rotation, so the light stays where the
+       relief's light is. UF's `dr` is fixed in the plane.
+     - The emboss is drawn only where the pixel itself has a value. The
+       set's interior is the background, which the relief does not
+       light.
+
+     UF merges Emboss with Hard or Soft Light. Our black Multiply shadow
+     and white Screen highlight, both at 0.6, are exactly Hard Light at
+     0.2 and 0.8, with 0.5 its identity.
+     *Measured:* against a CPU port of the three classes, the stored
+     response agrees on 99.3–99.99% of the drawn pixels for every type,
+     at rotation 0 with the light at 135° and at rotation 0.7 with it at
+     30°. An unshared minimum agrees on only 11–15%, so the shared one
+     is what the shader keeps. One visual test.
+
+   **Found on the way, and fixed:** the direct path's row bands are
+   sized by `width × max_iter` per row against a dispatch budget, and
+   offset relief (R6) did not count its two extra orbits. A pixel can
+   cost three loops, an under-estimate in the direction that risks the
+   driver's watchdog; both fields now count three.
+
+   **Held: an image texture (R10).** Image textures are planned for the
+   flames as well, so loading an image, storing it with a picture and
+   binding it to a pass should be designed once for both engines, not
+   escape-first (decision 1 notwithstanding). What KF2 does, read from
+   its source (`gl/kf.frag.glsl`: `KF_TextureWarp` and the texture
+   block after the palette lookup):
+   - The image is sampled in **screen space**, stretched to the frame
+     (`tc = (pixel + warp) / ImageSize`).
+   - The warp comes from the 3×3 neighbourhood of the iteration value:
+     each difference becomes `pow(1 + d, power)`, inverted and
+     sign-flipped below 1, then mapped through `(atan(x) − π/4)/(π/4)`
+     and scaled by `ratio/100`; the offset is `power/64 ± power·that`.
+   - It mixes into the colour, `mix(colour, image, merge)`, **before**
+     the slope shading, which then lights the textured colour.
+   - It covers the interior too: with a texture on, the interior colour
+     is not applied.
+
+   **Done since, with a generated image rather than an imported one.**
+   The texture is a simulation run whose recipe is stored with the
+   picture (`docs/projects/sim-textures.md`), so nothing is loaded from
+   disk. The overlay is that plan's phase 2, measured there against a
+   CPU port of `KF_TextureWarp`.

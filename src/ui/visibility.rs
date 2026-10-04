@@ -48,6 +48,8 @@ const FLAME_ONLY: &str = "visibility.flame_only";
 const THREE_D_ONLY: &str = "visibility.three_d_only";
 /// The other non-flame engine's editing surface.
 const OTHER_ENGINE: &str = "visibility.other_engine";
+/// The Texture panel: only an escape-time fractal uses a texture so far.
+const ESCAPE_TEXTURES: &str = "visibility.escape_textures";
 /// Produces a flame, so using it would leave this mode.
 const MAKES_A_FLAME: &str = "visibility.makes_a_flame";
 /// Only the logarithmic tone mapping reads it.
@@ -181,6 +183,15 @@ pub fn panel(p: PanelType, m: RenderMode, solid: Solid) -> Vis {
         P::Simulation => match m {
             M::TwoD | M::ThreeD | M::Simulation => Vis::Show,
             M::Escape => Vis::Grey(OTHER_ENGINE),
+        },
+
+        // Textures go into an escape-time fractal (sim-textures plan:
+        // escape first). Simulation mode makes them, with Save as
+        // texture, so it shows the library too -- to browse and manage
+        // what it saved; picking does nothing there.
+        P::Textures => match m {
+            M::Escape | M::Simulation => Vis::Show,
+            M::TwoD | M::ThreeD => Vis::Grey(ESCAPE_TEXTURES),
         },
     }
 }
@@ -389,6 +400,7 @@ pub static WINDOW_MENU: &[WindowMenuRow] = &[
     row(PanelType::View, "menu.window_view"),
     row(PanelType::Escape, "menu.window_escape"),
     row(PanelType::Simulation, "menu.window_simulation"),
+    row(PanelType::Textures, "menu.window_textures"),
     row(PanelType::SolidLighting, "menu.window_solid_lighting"),
     row(PanelType::Transforms, "menu.window_transforms"),
     row(PanelType::TriangleEditor, "menu.window_triangle_editor"),
@@ -431,6 +443,7 @@ pub static COMPACT_WINDOW_MENU: &[PanelType] = &[
     PanelType::Scripts,
     PanelType::Escape,
     PanelType::Simulation,
+    PanelType::Textures,
     PanelType::History,
     PanelType::Effects,
     PanelType::XaosEditor,
@@ -485,6 +498,7 @@ mod tests {
         PanelType::Subflames,
         PanelType::Escape,
         PanelType::Simulation,
+        PanelType::Textures,
     ];
 
     /// The list above is the whole enum. `PanelType` has no iterator,
@@ -532,7 +546,7 @@ mod tests {
         seen.sort();
         seen.dedup();
         assert_eq!(seen.len(), ALL_PANELS.len(), "duplicate entry in ALL_PANELS");
-        assert_eq!(ALL_PANELS.len(), 29, "a panel was added; decide what it means per mode");
+        assert_eq!(ALL_PANELS.len(), 30, "a panel was added; decide what it means per mode");
     }
 
     /// Every control this build knows about.
@@ -686,16 +700,19 @@ mod tests {
         );
     }
 
-    /// The flame modes offer everything except the two that are not
-    /// theirs: Solid & Lighting is 3D alone.
+    /// The flame modes offer everything except what is not theirs:
+    /// Solid & Lighting is 3D alone, and Textures go into an escape-time
+    /// fractal (sim-textures plan: escape first).
     #[test]
     fn the_flame_modes_offer_everything_but_solid_in_two_d() {
         for p in ALL_PANELS {
-            assert!(
+            let escape_only = *p == PanelType::Textures;
+            assert_eq!(
                 panel(*p, RenderMode::ThreeD, Solid::Yes).is_show(),
-                "{p:?} missing in 3D"
+                !escape_only,
+                "{p:?} in 3D"
             );
-            let want = *p != PanelType::SolidLighting;
+            let want = *p != PanelType::SolidLighting && !escape_only;
             assert_eq!(panel(*p, RenderMode::TwoD, Solid::No).is_show(), want, "{p:?} in 2D");
         }
     }

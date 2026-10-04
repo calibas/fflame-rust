@@ -62,6 +62,7 @@ fn main() {
         copy_assets_to_target();
         copy_shaders_to_target();
         generate_palette_manifest();
+        generate_texture_presets();
         return;
     }
 
@@ -156,6 +157,42 @@ fn main() {
 
     // Generate the palette pack manifest for WASM discovery
     generate_palette_manifest();
+
+    // Embed the shipped simulation textures
+    generate_texture_presets();
+}
+
+/// Generate `texture_presets.rs` in OUT_DIR: one `(name, contents)` pair
+/// per `assets/textures/*.fflame`, the contents embedded with
+/// `include_str!`. Embedded on every platform -- they are small JSON
+/// recipes, and the web build cannot list a folder -- so the folder is
+/// the catalog and nothing else lists them (`src/textures/mod.rs`).
+/// The name is the file stem.
+fn generate_texture_presets() {
+    let out_dir = env::var("OUT_DIR").unwrap();
+    let dir = Path::new("assets/textures");
+    let mut files: Vec<String> = fs::read_dir(dir)
+        .map(|it| {
+            it.flatten()
+                .filter_map(|e| e.file_name().to_str().map(String::from))
+                .filter(|n| n.ends_with(".fflame"))
+                .collect()
+        })
+        .unwrap_or_default();
+    files.sort();
+    let mut code = String::from("pub static TEXTURE_PRESETS: &[(&str, &str)] = &[
+");
+    for file in &files {
+        let abs = fs::canonicalize(dir.join(file)).unwrap_or_else(|e| panic!("{file}: {e}"));
+        let stem = file.trim_end_matches(".fflame");
+        code.push_str(&format!("    ({stem:?}, include_str!({:?})),
+", abs.display().to_string()));
+    }
+    code.push_str("];
+");
+    let out_path = Path::new(&out_dir).join("texture_presets.rs");
+    fs::write(&out_path, code).unwrap_or_else(|e| panic!("could not write {}: {e}", out_path.display()));
+    // copy_assets_to_target already watches the whole assets tree.
 }
 
 /// Generate `palette_manifest.json` in OUT_DIR from the packs folder.

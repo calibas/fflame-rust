@@ -274,7 +274,8 @@ impl VariationInfo {
                 match Feature::from_api_str(name) {
                     Some(f) => features.push(f),
                     None => log::warn!(
-                        "Variation '{}': ignoring unknown feature `{name}` —                          this client does not know it yet",
+                        "Variation '{}': ignoring unknown feature `{name}` — \
+                         this client does not know it yet",
                         dl.name
                     ),
                 }

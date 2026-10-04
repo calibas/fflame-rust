@@ -339,6 +339,7 @@ pub struct PanelContext<'a> {
 
     // Fractal browser panel state (unified presets/batch/files)
     pub fractal_browser_panel: &'a mut Option<super::fractal_browser::FractalBrowserPanel>,
+    pub textures_panel: &'a mut Option<super::textures_panel::TexturesPanel>,
 
     // Histogram for density visualization (levels now in ConfigManager)
     pub density_histogram: &'a crate::renderer::DensityHistogram,
@@ -1034,6 +1035,12 @@ impl<'a> PanelViewer<'a> {
                     self.context.config_manager,
                     self.context.workspace_layout_requested,
                 );
+            }
+            PanelType::Textures => {
+                self.context
+                    .textures_panel
+                    .get_or_insert_with(super::textures_panel::TexturesPanel::new)
+                    .render(ui, self.context.config_manager);
             }
             PanelType::Simulation => {
                 super::sim_panel::render_sim_content(

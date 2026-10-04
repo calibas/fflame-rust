@@ -2498,6 +2498,9 @@ mod tests {
         esc.zoom_log2 = 30.0;
         esc.max_iter = 600;
         esc.formula_params.insert("power".to_string(), P as f32);
+        // The exact orbit below escapes at 4; at power 3 Feather grows
+        // linearly and would not reach the default 1e4 in 600 steps.
+        esc.bailout = 4.0;
 
         let (w, h) = (96u32, 72u32);
         let mut config = crate::config::FractalConfig::default();
@@ -3717,6 +3720,7 @@ mod tests {
         let stride = crate::escape::assembler::iter_state_bytes(
             crate::escape::assembler::PerturbTier::Ducks(0),
             false,
+            crate::escape::accum_is_wide_named(&esc.coloring),
         );
         let lim = device.limits();
         let cap = lim.max_buffer_size.min(lim.max_storage_buffer_binding_size as u64);
@@ -5306,6 +5310,10 @@ fn main() {
         esc.zoom_log2 = 30.0;
         esc.max_iter = 400;
         esc.formula_params.insert("variant".to_string(), variant as f32);
+        // The exact orbit below escapes at 4. Magnet's orbits can pass
+        // radius 2 and come back to converge, so a larger bailout
+        // redraws the escape set rather than refining it.
+        esc.bailout = 4.0;
 
         let (w, h) = (96u32, 72u32);
         let mut config = crate::config::FractalConfig::default();
@@ -5523,6 +5531,8 @@ fn main() {
         esc.center_im = format!("{cy:.17}");
         esc.zoom_log2 = 30.0;
         esc.max_iter = MAX_ITER;
+        // The oracle below escapes at 4, as the exact-orbit test does.
+        esc.bailout = 4.0;
         esc.formula_params.insert("variant".to_string(), 0.0);
         // One palette turn across the whole iteration range, so a
         // count of 5 and a count of 400 cannot land on the same
@@ -6691,8 +6701,14 @@ fn main() {
                 let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("cache frame"),
                 });
-                let settled =
-                    escape.render(&device, &queue, &mut enc, esc, renderer.palette_view(), renderer.palette_generation());
+                let settled = escape.render(
+                    &device,
+                    &queue,
+                    &mut enc,
+                    esc,
+                    renderer.escape_palette_view(esc.palette_map.stepped),
+                    renderer.palette_generation(),
+                );
                 queue.submit(std::iter::once(enc.finish()));
                 let _ =
                     device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
@@ -6817,6 +6833,3130 @@ fn main() {
             );
             escape.destroy();
         }
+
+        // The palette map is applied where the colouring is, so a
+        // change to it is a recolour too -- and the iterate and
+        // recolour passes share its helpers, so the two must agree to
+        // the byte. Direct and perturbed, and with Auto contrast,
+        // where the transfer runs inside the fit.
+        for (zoom, contrast) in [(13.0, false), (15.0, false), (13.0, true)] {
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            let mut esc = mk("smooth", zoom);
+            if contrast {
+                esc.contrast.mode = crate::config::escape::ContrastMode::AutoRange;
+                esc.contrast.turns = 6.0;
+            }
+            let first = read(&mut escape, &esc, &mut renderer);
+            esc.palette_map = crate::config::escape::PaletteMap {
+                transfer: crate::config::escape::TransferCurve::Log,
+                pivot: if contrast { 0.25 } else { 3.0 },
+                curve: crate::config::escape::PaletteCurve::SCurve,
+                stepped: true,
+            };
+            let mapped = read(&mut escape, &esc, &mut renderer);
+            assert_eq!(
+                escape.last_path, "recolor",
+                "palette map @{zoom} contrast={contrast}: a palette-map change re-iterated"
+            );
+            assert_ne!(mapped, first, "palette map @{zoom} contrast={contrast}: changed nothing");
+            let truth = fresh(&esc, &mut renderer);
+            assert_eq!(
+                mapped, truth,
+                "palette map @{zoom} contrast={contrast}: cached recolor differs from a fresh render"
+            );
+            escape.destroy();
+        }
+    }
+
+    /// The shader's curves are the ones `TransferCurve::shape` and
+    /// `PaletteCurve::apply` define -- the panel's tooltips describe
+    /// those, and nothing else would catch a WGSL constant typed wrong.
+    ///
+    /// Through a black-to-white ramp, so a pixel's grey IS its palette
+    /// position: rendered against the position computed on the CPU
+    /// from the same pixel's terminal record (its smooth count, then
+    /// the transfer, the wrap and the palette curve). Pixels near a
+    /// wrap are skipped, where a hair of rounding is a whole cycle.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_palette_map_draws_what_its_curves_say() {
+        use crate::config::escape::{PaletteCurve, PaletteMap, TransferCurve};
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        // The tone curve's LUT is sampled half a texel off, which
+        // takes about 0.002 off every channel in linear light even
+        // when the curve is the identity: it floors the darkest
+        // palette entries to black. Off, so this measures the palette
+        // map alone.
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        let stop = |position: f32, v: f32| crate::scene::palette::ColorStop { position, color: [v, v, v] };
+        config.palette.stops = vec![stop(0.0, 0.0), stop(1.0, 1.0)];
+        config.escape.center_re = "-0.75".to_string();
+        config.escape.center_im = "0.1".to_string();
+        config.escape.zoom_log2 = 1.5;
+        config.escape.max_iter = 300;
+        config.escape.coloring_params.insert("scale".to_string(), 0.05);
+        let records = records_via(&config.escape, w, h, false, false);
+
+        for (transfer, pivot, curve) in [
+            (TransferCurve::Linear, 1.0, PaletteCurve::Linear),
+            (TransferCurve::SquareRoot, 2.0, PaletteCurve::Linear),
+            (TransferCurve::CubeRoot, 2.0, PaletteCurve::Linear),
+            (TransferCurve::Log, 2.0, PaletteCurve::Linear),
+            (TransferCurve::LogLog, 2.0, PaletteCurve::Linear),
+            (TransferCurve::Square, 0.5, PaletteCurve::Linear),
+            (TransferCurve::ArcTan, 3.0, PaletteCurve::Linear),
+            (TransferCurve::Linear, 1.0, PaletteCurve::SquareRoot),
+            (TransferCurve::Linear, 1.0, PaletteCurve::Square),
+            (TransferCurve::Linear, 1.0, PaletteCurve::Log),
+            (TransferCurve::Linear, 1.0, PaletteCurve::Exp),
+            (TransferCurve::Linear, 1.0, PaletteCurve::SCurve),
+            (TransferCurve::Linear, 1.0, PaletteCurve::InverseS),
+        ] {
+            let pm = PaletteMap { transfer, pivot, curve, stepped: false };
+            let mut c = config.clone();
+            c.escape.palette_map = pm.clone();
+            let job = crate::renderer::RenderJob::new(&c, w, h);
+            let out = pollster::block_on(crate::renderer::render(
+                &device,
+                &queue,
+                job,
+                &mut crate::renderer::NoProgress,
+            ))
+            .expect("render");
+            let (mut checked, mut worst, mut sum) = (0usize, 0.0f32, 0.0f32);
+            let mut worst_at = (0.0f32, 0.0f32, 0.0f32);
+            for (r, p) in records.iter().zip(out.rgba_data.chunks_exact(4)) {
+                if (r.tags & 1) == 0 {
+                    continue;
+                }
+                let r2 = (r.z[0] * r.z[0] + r.z[1] * r.z[1]).max(1.0000001);
+                let mu = r.n as f32 + 1.0 - (0.5 * r2.log2()).log2();
+                let wrapped = pm.transfer_value(mu * 0.05).rem_euclid(1.0);
+                if !(0.03..=0.97).contains(&wrapped) {
+                    continue;
+                }
+                let want = curve.apply(wrapped);
+                // The tone map encodes with a 2.2 power; the ramp's
+                // 8-bit table and the output's 8 bits both round.
+                let got = p[0] as f32 / 255.0;
+                let e = (got - want).abs();
+                if e > worst {
+                    worst = e;
+                    worst_at = (wrapped, want, got);
+                }
+                sum += e;
+                checked += 1;
+            }
+            println!(
+                "{transfer:?} pivot {pivot} / {curve:?}: {checked} pixels, mean {:.4}, worst {worst:.4} (wrapped {:.3}, want {:.3}, got {:.3})",
+                sum / checked.max(1) as f32,
+                worst_at.0,
+                worst_at.1,
+                worst_at.2
+            );
+            assert!(checked > 1000, "{transfer:?}/{curve:?}: only {checked} pixels to check");
+            // Every curve, Linear-on-Linear included, reads within one
+            // 8-bit level (worst 0.004).
+            assert!(worst < 0.01, "{transfer:?}/{curve:?}: a pixel is {worst:.4} off its curve");
+        }
+    }
+
+    /// Debanding removes the step an average takes at every iteration
+    /// boundary.
+    ///
+    /// A plain mean of per-iteration terms jumps where the escape count
+    /// does: one more term enters the sum. Across neighbouring pixels
+    /// whose counts differ by one that jump dwarfs the difference
+    /// between ordinary neighbours; debanded, the two should be alike.
+    /// Read through a grey ramp, each average's value in 0..1 being its
+    /// grey, with the escape counts from the terminal records.
+    ///
+    /// At the bailout these colourings recommend (1e4). The blend is
+    /// first order in the escape fraction, so at the classic 4 it only
+    /// halves the step -- measured 3.37 -> 1.62 for stripes and 16.5 ->
+    /// 4.9 for the triangle inequality -- which is why Ultra Fractal
+    /// runs its Triangle Inequality Average at a bailout of 1e20.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn debanding_removes_the_step_at_an_iteration_boundary() {
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        let stop = |position: f32, v: f32| crate::scene::palette::ColorStop { position, color: [v, v, v] };
+        config.palette.stops = vec![stop(0.0, 0.0), stop(1.0, 1.0)];
+        // The whole set: the exterior's escape counts are small, so one
+        // more term moves a mean a long way, and neighbours in the same
+        // band differ little.
+        config.escape.center_re = "-0.6".to_string();
+        config.escape.center_im = "0.0".to_string();
+        config.escape.zoom_log2 = 0.3;
+        config.escape.max_iter = 200;
+        for coloring in ["stripe_average", "triangle_inequality"] {
+            let ratio = |deband: f32| -> f64 {
+                let mut c = config.clone();
+                c.escape.coloring = coloring.to_string();
+                c.escape.coloring_params.insert("deband".to_string(), deband);
+                // Keep the value inside one palette turn: the averages
+                // run 0..1 at scale 1, and a wrap would read as a step.
+                c.escape.coloring_params.insert("scale".to_string(), 0.98);
+                c.escape.bailout = 1.0e4;
+                let records = records_via(&c.escape, w, h, false, false);
+                let job = crate::renderer::RenderJob::new(&c, w, h);
+                let out = pollster::block_on(crate::renderer::render(
+                    &device,
+                    &queue,
+                    job,
+                    &mut crate::renderer::NoProgress,
+                ))
+                .expect("render");
+                let grey = |i: usize| out.rgba_data[i * 4] as f64 / 255.0;
+                // Along each row, a boundary x|x+1 (counts differing by
+                // one) flanked by a step inside each band: x-1|x and
+                // x+1|x+2. A band step stands out against its flanks;
+                // a continuous value does not.
+                let (mut across, mut flanks, mut count) = (0.0f64, 0.0f64, 0usize);
+                for y in 0..h as usize {
+                    for x in 1..w as usize - 2 {
+                        let i = |dx: usize| y * w as usize + x - 1 + dx;
+                        let r: Vec<_> = (0..4).map(|k| &records[i(k)]).collect();
+                        if r.iter().any(|r| (r.tags & 1) == 0)
+                            || r[0].n != r[1].n
+                            || r[2].n != r[3].n
+                            || r[1].n.abs_diff(r[2].n) != 1
+                        {
+                            continue;
+                        }
+                        let g: Vec<f64> = (0..4).map(|k| grey(i(k))).collect();
+                        across += (g[2] - g[1]).abs();
+                        flanks += ((g[1] - g[0]).abs() + (g[3] - g[2]).abs()) / 2.0;
+                        count += 1;
+                    }
+                }
+                assert!(count > 200, "{coloring}: only {count} boundaries to measure");
+                let r = across / flanks.max(1e-12);
+                println!(
+                    "{coloring} deband {deband}: {count} boundaries, step {:.4} against flanks {:.4}, ratio {r:.2}",
+                    across / count as f64,
+                    flanks / count as f64
+                );
+                r
+            };
+            let banded = ratio(0.0);
+            let debanded = ratio(1.0);
+            // Measured: stripe 1.22 -> 1.03, triangle inequality 2.44
+            // -> 1.04.
+            let shows = if coloring == "stripe_average" { 1.15 } else { 2.0 };
+            assert!(banded > shows, "{coloring}: the plain mean barely steps ({banded:.2}) -- the fixture shows nothing");
+            assert!(debanded < 1.1, "{coloring}: debanded still steps at the boundary ({debanded:.2})");
+        }
+    }
+
+    /// A texture layer blends as `LayerBlend::apply` says, in every
+    /// mode -- and at weight 0 it is no layer at all, to the byte.
+    ///
+    /// Escape count as both colourings, at two scales, so each pixel's
+    /// two positions follow from its count alone; through a grey ramp,
+    /// so the rendered grey IS the blended position. Pixels whose
+    /// positions sit near a wrap are skipped, where a rounding is a
+    /// whole cycle.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_texture_layer_blends_as_its_mode_says() {
+        use crate::config::escape::{ColoringLayer, LayerBlend};
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        let stop = |position: f32, v: f32| crate::scene::palette::ColorStop { position, color: [v, v, v] };
+        config.palette.stops = vec![stop(0.0, 0.0), stop(1.0, 1.0)];
+        config.escape.center_re = "-0.6".to_string();
+        config.escape.center_im = "0.0".to_string();
+        config.escape.zoom_log2 = 0.5;
+        config.escape.max_iter = 200;
+        config.escape.coloring = "escape_count".to_string();
+        let (sa, sb) = (0.037f32, 0.091f32);
+        config.escape.coloring_params.insert("scale".to_string(), sa);
+        let records = records_via(&config.escape, w, h, false, false);
+        let render = |c: &crate::config::FractalConfig| {
+            let job = crate::renderer::RenderJob::new(c, w, h);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+        let plain = render(&config);
+        for blend in LayerBlend::ALL {
+            let mut c = config.clone();
+            c.escape.layer = ColoringLayer {
+                coloring: "escape_count".to_string(),
+                params: [("scale".to_string(), sb)].into_iter().collect(),
+                blend,
+                weight: 0.0,
+            };
+            if blend != LayerBlend::Add {
+                assert_eq!(render(&c), plain, "{blend:?} at weight 0 moved the picture");
+            }
+            let weight = 0.7;
+            c.escape.layer.weight = weight;
+            let out = render(&c);
+            let (mut checked, mut worst) = (0usize, 0.0f32);
+            for (r, p) in records.iter().zip(out.chunks_exact(4)) {
+                if (r.tags & 1) == 0 {
+                    continue;
+                }
+                let a = (r.n as f32 * sa).rem_euclid(1.0);
+                let b = (r.n as f32 * sb).rem_euclid(1.0);
+                let want = blend.apply(a, b, weight);
+                let near_wrap = |x: f32| !(0.01..=0.99).contains(&x);
+                if near_wrap(a) || near_wrap(b) || near_wrap(want) {
+                    continue;
+                }
+                worst = worst.max((p[0] as f32 / 255.0 - want).abs());
+                checked += 1;
+            }
+            println!("{blend:?}: {checked} pixels, worst {worst:.4}");
+            assert!(checked > 1000, "{blend:?}: only {checked} pixels to check");
+            assert!(worst < 0.01, "{blend:?}: a pixel is {worst:.4} off the blend");
+        }
+    }
+
+    /// A texture layer that runs nothing inside the loop is a recolour:
+    /// adding it, retuning it or changing its blend re-colours the
+    /// cached records and matches a fresh render to the byte. One that
+    /// owns the accumulator, or needs the derivative orbit, changes what
+    /// the loop runs, so adding it must iterate again. Smooth over
+    /// smooth is the same colouring twice in one shader.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_texture_layer_recolours_from_the_cache_unless_it_changes_the_loop() {
+        use crate::config::escape::{ColoringLayer, LayerBlend};
+        let _diag = diag_lock();
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let config = crate::config::FractalConfig::default();
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        renderer.update_background_color(&queue, [0.0, 0.0, 0.0]);
+        let mut settle = |escape: &mut crate::escape::EscapeRenderer, esc: &crate::config::escape::EscapeConfig| {
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("layer cache"),
+                });
+                let settled = escape.render(
+                    &device,
+                    &queue,
+                    &mut enc,
+                    esc,
+                    renderer.escape_palette_view(esc.palette_map.stepped),
+                    renderer.palette_generation(),
+                );
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "render did not settle");
+            }
+            // Through the tone map, as the visual suite reads it.
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("layer cache tonemap"),
+            });
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+                &device, &queue, false, [0.0, 0.0, 0.0],
+            ))
+            .expect("readback");
+            rgba
+        };
+        let mut base = crate::config::escape::EscapeConfig::default();
+        base.center_re = "-0.74364388703715870475".to_string();
+        base.center_im = "0.13182590420531197049".to_string();
+        base.zoom_log2 = 13.0;
+        base.max_iter = 600;
+
+        for (layer, blend, changes_the_loop) in [
+            ("escape_count", LayerBlend::Screen, false),
+            ("smooth", LayerBlend::Overlay, false),
+            ("distance_estimate", LayerBlend::Mix, true),
+            ("stripe_average", LayerBlend::Screen, true),
+        ] {
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            let _ = settle(&mut escape, &base);
+            let mut esc = base.clone();
+            esc.layer = ColoringLayer {
+                coloring: layer.to_string(),
+                params: Default::default(),
+                blend,
+                weight: 0.85,
+            };
+            let layered = settle(&mut escape, &esc);
+            assert_eq!(
+                escape.last_path == "recolor",
+                !changes_the_loop,
+                "adding {layer}: path {}",
+                escape.last_path
+            );
+            let mut fresh_renderer = crate::escape::EscapeRenderer::new(&device, w, h);
+            assert_eq!(layered, settle(&mut fresh_renderer, &esc), "{layer}: cached differs from fresh");
+            fresh_renderer.destroy();
+
+            // A retune of the layer is a recolour whatever it is, as
+            // long as nothing it changes runs in the loop.
+            esc.layer.blend = LayerBlend::Multiply;
+            esc.layer.weight = 0.5;
+            let retuned = settle(&mut escape, &esc);
+            assert_eq!(escape.last_path, "recolor", "{layer}: a blend change re-iterated");
+            let mut fresh_renderer = crate::escape::EscapeRenderer::new(&device, w, h);
+            assert_eq!(retuned, settle(&mut fresh_renderer, &esc), "{layer}: retuned differs from fresh");
+            fresh_renderer.destroy();
+            escape.destroy();
+        }
+    }
+
+    /// The colourings added with the texture layer compute what their
+    /// definitions say, accumulator and map alike.
+    ///
+    /// Accumulators: each pixel's orbit is replayed on the CPU in f64
+    /// and its accumulator rebuilt by a transcription of the WGSL, then
+    /// compared with the one in the GPU's terminal record. Only orbits
+    /// that escape within 30 steps, where f32 and f64 still agree.
+    /// Maps: the rendered grey, through a black-to-white ramp, against
+    /// the map applied on the CPU to that same record -- debanding and
+    /// the escape fraction included.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_new_colourings_compute_what_they_say() {
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        let stop = |position: f32, v: f32| crate::scene::palette::ColorStop { position, color: [v, v, v] };
+        config.palette.stops = vec![stop(0.0, 0.0), stop(1.0, 1.0)];
+        config.escape.center_re = "-0.6".to_string();
+        config.escape.center_im = "0.1".to_string();
+        config.escape.zoom_log2 = 0.4;
+        config.escape.max_iter = 200;
+        config.escape.bailout = 1.0e4;
+        let (cx, cy) = (-0.6f64, 0.1f64);
+        let span_y = 4.0 / (config.escape.zoom_log2).exp2();
+        let span_x = span_y * w as f64 / h as f64;
+        let bailout = config.escape.bailout as f64;
+
+        // The orbit of pixel i, as the template runs it: z0 = 0, then
+        // z <- z^2 + c, the accumulator after each step, the escape
+        // test last.
+        let orbit = |i: usize, bailout: f64| -> (Vec<[f64; 2]>, [f64; 2]) {
+            let (px, py) = ((i % w as usize) as f64, (i / w as usize) as f64);
+            let c = [
+                ((px + 0.5) / w as f64 - 0.5) * span_x + cx,
+                -(((py + 0.5) / h as f64 - 0.5) * span_y) + cy,
+            ];
+            let mut zs = vec![[0.0, 0.0]];
+            for _ in 0..config.escape.max_iter {
+                let z = *zs.last().unwrap();
+                let n = [z[0] * z[0] - z[1] * z[1] + c[0], 2.0 * z[0] * z[1] + c[1]];
+                zs.push(n);
+                if n[0] * n[0] + n[1] * n[1] > bailout {
+                    break;
+                }
+            }
+            (zs, c)
+        };
+        let len = |a: [f64; 2]| a[0].hypot(a[1]);
+        let sub = |a: [f64; 2], b: [f64; 2]| [a[0] - b[0], a[1] - b[1]];
+        let atan2 = |a: [f64; 2]| a[1].atan2(a[0]);
+        // The escape fraction and debanded mean, as ORBIT_HELPERS have them.
+        let fraction = move |z: [f64; 2], escaped: bool| -> f64 {
+            if !escaped {
+                return 1.0;
+            }
+            let lr = bailout.log2();
+            let lz = (z[0] * z[0] + z[1] * z[1]).max(1.0000001).log2();
+            (1.0 - (lz / lr).max(1e-6).log2() / 2f64.log2()).clamp(0.0, 1.0)
+        };
+        let debanded = move |s: [f64; 4], z: [f64; 2], escaped: bool| -> f64 {
+            let mean = s[0] / s[1].max(1.0);
+            if s[1] < 1.5 {
+                return mean;
+            }
+            let prev = (s[0] - s[2]) / (s[1] - 1.0);
+            prev + (mean - prev) * fraction(z, escaped)
+        };
+
+        type Accum = Box<dyn Fn(&[[f64; 2]], [f64; 2]) -> [f64; 4]>;
+        type Map = Box<dyn Fn([f64; 4], [f64; 2], u32, bool) -> f64>;
+        let cases: Vec<(&str, Vec<(&str, f32)>, Option<Accum>, Map)> = vec![
+            (
+                "curvature_average",
+                vec![("scale", 1.0), ("deband", 1.0)],
+                Some(Box::new(move |zs: &[[f64; 2]], _c| {
+                    let mut s = [0.0, 0.0, 1e30, 0.0];
+                    for k in 1..zs.len() {
+                        let (z, zp) = (zs[k], zs[k - 1]);
+                        let next = [s[0], s[1], zp[0], zp[1]];
+                        if s[2] > 1e29 {
+                            s = next;
+                            continue;
+                        }
+                        let a = sub(z, zp);
+                        let b = sub(zp, [s[2], s[3]]);
+                        if len(a).powi(2) < 1e-30 || len(b).powi(2) < 1e-30 {
+                            s = next;
+                            continue;
+                        }
+                        let q = [a[0] * b[0] + a[1] * b[1], a[1] * b[0] - a[0] * b[1]];
+                        let t = atan2(q).abs() / std::f64::consts::PI;
+                        s = [s[0] + t, t, zp[0], zp[1]];
+                    }
+                    s
+                })),
+                Box::new(move |s, z, n, escaped| {
+                    let count = (n as f64 - 1.0).max(1.0);
+                    let mean = s[0] / count;
+                    if count < 1.5 {
+                        return mean;
+                    }
+                    let prev = (s[0] - s[1]) / (count - 1.0);
+                    prev + (mean - prev) * fraction(z, escaped)
+                }),
+            ),
+            (
+                "velocity",
+                vec![("scale", 0.25), ("deband", 1.0)],
+                Some(Box::new(move |zs: &[[f64; 2]], _c| {
+                    let mut s = [0.0; 4];
+                    for k in 1..zs.len() {
+                        let t = len(sub(zs[k], zs[k - 1]));
+                        s = [s[0] + t, s[1] + 1.0, t, s[3]];
+                    }
+                    s
+                })),
+                Box::new(move |s, z, _n, escaped| 0.25 * debanded(s, z, escaped)),
+            ),
+            (
+                "threads",
+                vec![("width", 0.1), ("scale", 1.0), ("deband", 1.0)],
+                Some(Box::new(move |zs: &[[f64; 2]], _c| {
+                    let mut s = [0.0; 4];
+                    for z in &zs[1..] {
+                        let d = z[0].abs().min(z[1].abs());
+                        let t = (-(d * d) / 0.01).exp();
+                        s = [s[0] + t, s[1] + 1.0, t, s[3]];
+                    }
+                    s
+                })),
+                Box::new(move |s, z, _n, escaped| debanded(s, z, escaped)),
+            ),
+            (
+                "exponential_smoothing",
+                vec![("mode", 2.0), ("scale", 0.5)],
+                Some(Box::new(move |zs: &[[f64; 2]], _c| {
+                    let mut sum = 0.0;
+                    for k in 1..zs.len() {
+                        sum += (-len(zs[k])).exp() + (-1.0 / len(sub(zs[k], zs[k - 1])).max(1e-30)).exp();
+                    }
+                    [sum, 0.0, 0.0, 0.0]
+                })),
+                Box::new(move |s, _z, _n, _e| 0.5 * s[0]),
+            ),
+            (
+                "gaussian_integer",
+                vec![("reduction", 1.0), ("scale", 1.0)],
+                Some(Box::new(move |zs: &[[f64; 2]], _c| {
+                    let mut s = [1.0, 0.0, 0.0, 0.0];
+                    for z in &zs[1..] {
+                        let g = [z[0] - z[0].round_ties_even(), z[1] - z[1].round_ties_even()];
+                        let d = len(g) * std::f64::consts::SQRT_2;
+                        let mut st = [s[0], s[1] + d, s[2].max(d), s[3]];
+                        if d < s[0] {
+                            st[0] = d;
+                            st[3] = if d > 1e-6 { atan2(g) / std::f64::consts::TAU + 0.5 } else { 0.0 };
+                        }
+                        s = st;
+                    }
+                    s
+                })),
+                Box::new(move |s, _z, n, _e| s[1] / (n as f64).max(1.0)),
+            ),
+            (
+                "decomposition",
+                vec![("sectors", 4.0), ("scale", 1.0)],
+                None,
+                Box::new(move |_s, z, _n, _e| {
+                    let a = atan2(z) / std::f64::consts::TAU + 0.5;
+                    (a * 4.0).floor() / 4.0
+                }),
+            ),
+            (
+                "basic",
+                vec![("part", 2.0), ("scale", 1.0)],
+                None,
+                Box::new(move |_s, z, _n, _e| 0.05 * (4.0 + z[0] + z[1])),
+            ),
+        ];
+
+        for (name, params, accum, map) in cases {
+            let mut c = config.clone();
+            c.escape.coloring = name.to_string();
+            c.escape.coloring_params = params.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+            if name == "gaussian_integer" {
+                // An escaping orbit's last iterates are hypersensitive to
+                // c, and a lattice distance reads their absolute error:
+                // at radius 100 f32 and f64 put them at unrelated lattice
+                // offsets. At the classic radius they stay small enough
+                // to agree.
+                c.escape.bailout = 4.0;
+            }
+            let records = records_via(&c.escape, w, h, false, false);
+            if let Some(accum) = &accum {
+                let (mut checked, mut off) = (0usize, 0usize);
+                let mut worst = (0.0f64, [0.0f64; 4], [0.0f64; 4]);
+                for (i, r) in records.iter().enumerate() {
+                    if (r.tags & 1) == 0 || r.n > 30 {
+                        continue;
+                    }
+                    let (zs, cc) = orbit(i, c.escape.bailout as f64);
+                    if zs.len() - 1 != r.n as usize {
+                        continue;
+                    }
+                    let want = accum(&zs, cc);
+                    let got = [r.accum[0] as f64, r.accum[1] as f64, r.accum2[0] as f64, r.accum2[1] as f64];
+                    // Only the components a narrow record keeps, for a
+                    // colouring that stores two.
+                    let k = if crate::escape::accum_is_wide(crate::escape::get_coloring(name)) { 4 } else { 2 };
+                    let e = if name == "gaussian_integer" {
+                        // A lattice distance reads z's ABSOLUTE error,
+                        // which the last escaping steps make large in
+                        // f32 against f64: compare in absolute terms,
+                        // and the angle only where the minima agree and
+                        // it is not at its wrap.
+                        let n = r.n as f64;
+                        let mut e = (got[0] - want[0]).abs().max((got[1] - want[1]).abs() / n).max((got[2] - want[2]).abs()) / 20.0;
+                        // The angle names WHICH iterate came closest.
+                        // Near escape |z| is large and its f32 error
+                        // large in lattice terms, so an iterate there
+                        // can win on the GPU and lose in f64: compare
+                        // only where the winner is an early, small
+                        // iterate that clearly beats the runner-up.
+                        let ds: Vec<f64> = zs[1..]
+                            .iter()
+                            .map(|z| len([z[0] - z[0].round_ties_even(), z[1] - z[1].round_ties_even()]) * std::f64::consts::SQRT_2)
+                            .collect();
+                        let (k, d0) = ds
+                            .iter()
+                            .copied()
+                            .enumerate()
+                            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+                            .unwrap();
+                        let runner_up = ds
+                            .iter()
+                            .enumerate()
+                            .filter(|(j, _)| *j != k)
+                            .map(|(_, d)| *d)
+                            .fold(f64::INFINITY, f64::min);
+                        let clear = len(zs[k + 1]) < 4.0
+                            && runner_up - d0 > 1e-2
+                            && (got[0] - want[0]).abs() < 1e-4;
+                        if clear && (0.02..0.98).contains(&want[3]) {
+                            e = e.max((got[3] - want[3]).abs());
+                        }
+                        e
+                    } else {
+                        (0..k)
+                            .map(|j| (got[j] - want[j]).abs() / want[j].abs().max(1.0))
+                            .fold(0.0, f64::max)
+                    };
+                    if e > 1e-3 {
+                        off += 1;
+                        if e > worst.0 {
+                            worst = (e, got, want);
+                        }
+                    }
+                    checked += 1;
+                }
+                println!("{name}: accumulator on {checked} orbits, {off} off (worst {:.2e}: got {:?} want {:?})", worst.0, worst.1, worst.2);
+                assert!(checked > 500, "{name}: only {checked} orbits to replay");
+                // The angle at a smallest distance can flip between two
+                // near-equal candidates; everything else must agree.
+                assert!(off * 200 <= checked, "{name}: {off} of {checked} accumulators disagree");
+            }
+
+            let job = crate::renderer::RenderJob::new(&c, w, h);
+            let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data;
+            let (mut checked, mut worst) = (0usize, 0.0f64);
+            for (r, p) in records.iter().zip(out.chunks_exact(4)) {
+                let escaped = (r.tags & 1) != 0;
+                if !escaped {
+                    continue;
+                }
+                let s = [r.accum[0] as f64, r.accum[1] as f64, r.accum2[0] as f64, r.accum2[1] as f64];
+                let v = map(s, [r.z[0] as f64, r.z[1] as f64], r.n, escaped).rem_euclid(1.0);
+                if !(0.01..=0.99).contains(&v) {
+                    continue;
+                }
+                worst = worst.max((p[0] as f64 / 255.0 - v).abs());
+                checked += 1;
+            }
+            println!("{name}: map on {checked} pixels, worst {worst:.4}");
+            assert!(checked > 500, "{name}: only {checked} pixels to check");
+            assert!(worst < 0.01, "{name}: a pixel is {worst:.4} off its map");
+        }
+    }
+
+    /// The relief's lighting options keep the promises their controls
+    /// make, checked as properties of the output rather than against a
+    /// reference picture:
+    /// - an ambient floor of 1 with no highlight leaves the picture as
+    ///   it was (the shadow is all floor);
+    /// - Lambert with only a shadow can only darken;
+    /// - Soft Light and Hard Light with a mid-grey light change nothing
+    ///   (UF's reason for recommending them: flat ground is mid-grey);
+    /// - every slope stencil and height curve does change it.
+    /// "As it was" allows one 8-bit level: the shade pass blends in a
+    /// perceptual space and back.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_relief_lighting_options_keep_their_promises() {
+        use crate::config::escape::{HeightTransfer, ReliefModel, ShadingBlend, SlopeStencil};
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.escape.center_re = "-0.7453".to_string();
+        config.escape.center_im = "0.1127".to_string();
+        config.escape.zoom_log2 = 7.0;
+        config.escape.max_iter = 600;
+        config.escape.coloring_params.insert("scale".to_string(), 0.05);
+        let render = |c: &crate::config::FractalConfig| {
+            let job = crate::renderer::RenderJob::new(c, w, h);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+        let plain = render(&config);
+        let diff = |a: &[u8], b: &[u8]| a.iter().zip(b).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0);
+        let differing = |a: &[u8], b: &[u8]| a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count();
+        let mut lit = config.clone();
+        lit.escape.shading.enabled = true;
+        lit.escape.shading.height = 10.0;
+        let relief = render(&lit);
+        assert!(differing(&relief, &plain) > (w * h / 10) as usize, "the relief itself shows nothing");
+
+        // Ambient 1, highlight off: nothing left to change.
+        for model in ReliefModel::ALL {
+            let mut c = lit.clone();
+            c.escape.shading.model = model;
+            c.escape.shading.ambient = 1.0;
+            c.escape.shading.highlight_strength = 0.0;
+            let d = diff(&render(&c), &plain);
+            assert!(d <= 1, "{model:?}: an ambient floor of 1 still moved a pixel by {d}");
+        }
+
+        // Lambert with only a shadow only darkens.
+        let mut c = lit.clone();
+        c.escape.shading.model = ReliefModel::Lambert;
+        c.escape.shading.elevation = 30.0;
+        c.escape.shading.highlight_strength = 0.0;
+        let shadowed = render(&c);
+        // In u16: a saturated channel plus one would wrap in u8.
+        let up = |a: &[u8], b: &[u8]| (0..3).any(|k| a[k] as u16 > b[k] as u16 + 1);
+        let brighter = shadowed.chunks(4).zip(plain.chunks(4)).filter(|(s, p)| up(s, p)).count();
+        let darker = shadowed.chunks(4).zip(plain.chunks(4)).filter(|(s, p)| up(p, s)).count();
+        assert_eq!(brighter, 0, "a Lambert shadow brightened {brighter} pixels");
+        assert!(darker > (w * h / 20) as usize, "a Lambert shadow darkened only {darker} pixels");
+
+        // A mid-grey light under Soft Light or Hard Light is no light.
+        for blend in [ShadingBlend::SoftLight, ShadingBlend::HardLight] {
+            let mut c = lit.clone();
+            c.escape.shading.shadow_color = [0.5; 3];
+            c.escape.shading.highlight_color = [0.5; 3];
+            c.escape.shading.shadow_blend = blend;
+            c.escape.shading.highlight_blend = blend;
+            let d = diff(&render(&c), &plain);
+            assert!(d <= 1, "{blend:?} with a mid-grey light moved a pixel by {d}");
+        }
+
+        // Every stencil and every curve is a different picture.
+        for stencil in &SlopeStencil::ALL[1..] {
+            let mut c = lit.clone();
+            c.escape.shading.stencil = *stencil;
+            let n = differing(&render(&c), &relief);
+            assert!(n > (w * h / 100) as usize, "{stencil:?} changed only {n} pixels");
+        }
+        for curve in &HeightTransfer::ALL[1..] {
+            let mut c = lit.clone();
+            c.escape.shading.height_curve = *curve;
+            c.escape.shading.height_pre = 0.5;
+            let n = differing(&render(&c), &relief);
+            assert!(n > (w * h / 100) as usize, "{curve:?} changed only {n} pixels");
+        }
+    }
+
+    /// The relief's source cannot change what auto contrast fits.
+    ///
+    /// The probe and the relief once shared one height channel, so
+    /// Banded relief handed the probe the WRAPPED value and contrast
+    /// fitted a sawtooth: the same view drew differently depending on
+    /// a relief setting, even with the relief at zero strength. With
+    /// the raw value in red and the relief's source in green, those
+    /// pictures are identical. And the Layer source draws its own
+    /// relief with a layer, and the colouring's without one.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_relief_source_cannot_move_auto_contrast() {
+        use crate::config::escape::{ColoringLayer, ContrastMode, LayerBlend, ShadingField};
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.escape.center_re = "-0.7453".to_string();
+        config.escape.center_im = "0.1127".to_string();
+        config.escape.zoom_log2 = 7.0;
+        config.escape.max_iter = 600;
+        config.escape.contrast.mode = ContrastMode::AutoRange;
+        config.escape.contrast.turns = 3.0;
+        config.escape.shading.enabled = true;
+        config.escape.shading.shadow_strength = 0.0;
+        config.escape.shading.highlight_strength = 0.0;
+        let render = |c: &crate::config::FractalConfig| {
+            let job = crate::renderer::RenderJob::new(c, w, h);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+        let with_field = |f: ShadingField| {
+            let mut c = config.clone();
+            c.escape.shading.field = f;
+            render(&c)
+        };
+        let smooth = with_field(ShadingField::Smooth);
+        assert_eq!(with_field(ShadingField::Banded), smooth, "Banded relief moved the contrast fit");
+        assert_eq!(with_field(ShadingField::Layer), smooth, "Layer relief with no layer moved the contrast fit");
+
+        // Lit, the Layer source draws the layer's relief.
+        let mut lit = config.clone();
+        lit.escape.contrast.mode = ContrastMode::Off;
+        lit.escape.shading.shadow_strength = 1.0;
+        lit.escape.shading.highlight_strength = 0.5;
+        lit.escape.shading.height = 10.0;
+        let own = render(&lit);
+        lit.escape.shading.field = ShadingField::Layer;
+        assert_eq!(render(&lit), own, "Layer relief with no layer is not the colouring's");
+        lit.escape.layer = ColoringLayer {
+            coloring: "stripe_average".to_string(),
+            params: [("density".to_string(), 6.0)].into_iter().collect(),
+            blend: LayerBlend::Screen,
+            weight: 0.0,
+        };
+        let layered = render(&lit);
+        let differing = layered.chunks(4).zip(own.chunks(4)).filter(|(a, b)| a != b).count();
+        assert!(
+            differing > (w * h / 20) as usize,
+            "the layer's relief (at blend weight 0, so only the relief differs) changed only {differing} pixels"
+        );
+    }
+
+    /// The distance-estimate mappings and the richer orbit traps
+    /// compute what they say (survey C11, C9), checked as the first
+    /// batch of colourings is: maps through a grey ramp against the
+    /// same records on the CPU, the trap's accumulator against an
+    /// orbit replayed in f64 -- for orbits that escape within 30 steps,
+    /// at the classic bailout, where f32 and f64 still agree.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn distance_mappings_and_positioned_traps_compute_what_they_say() {
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        let stop = |position: f32, v: f32| crate::scene::palette::ColorStop { position, color: [v, v, v] };
+        config.palette.stops = vec![stop(0.0, 0.0), stop(1.0, 1.0)];
+        config.escape.center_re = "-0.6".to_string();
+        config.escape.center_im = "0.1".to_string();
+        config.escape.zoom_log2 = 0.4;
+        config.escape.max_iter = 200;
+        config.escape.bailout = 4.0;
+        let span_y = 4.0 / (config.escape.zoom_log2).exp2();
+        let span_x = span_y * w as f64 / h as f64;
+        let render = |c: &crate::config::FractalConfig| {
+            let job = crate::renderer::RenderJob::new(c, w, h);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+        let compare = |name: &str, out: &[u8], want: &dyn Fn(&crate::escape::renderer::IterRecord) -> Option<f64>, records: &[crate::escape::renderer::IterRecord]| {
+            let (mut checked, mut worst) = (0usize, 0.0f64);
+            for (r, p) in records.iter().zip(out.chunks_exact(4)) {
+                let Some(v) = want(r) else { continue };
+                let v = v.rem_euclid(1.0);
+                if !(0.01..=0.99).contains(&v) {
+                    continue;
+                }
+                worst = worst.max((p[0] as f64 / 255.0 - v).abs());
+                checked += 1;
+            }
+            println!("{name}: map on {checked} pixels, worst {worst:.4}");
+            assert!(checked > 500, "{name}: only {checked} pixels to check");
+            assert!(worst < 0.01, "{name}: a pixel is {worst:.4} off its map");
+        };
+
+        // Distance estimate: linear in pixels, and the square root in
+        // the plane.
+        for (mapping, units, scale) in [(1.0f32, 1.0f32, 0.02f32), (2.0, 0.0, 2.0)] {
+            let mut c = config.clone();
+            c.escape.coloring = "distance_estimate".to_string();
+            c.escape.coloring_params = [
+                ("scale".to_string(), scale),
+                ("mapping".to_string(), mapping),
+                ("units".to_string(), units),
+            ]
+            .into_iter()
+            .collect();
+            let records = records_via(&c.escape, w, h, false, false);
+            let out = render(&c);
+            let want = |r: &crate::escape::renderer::IterRecord| -> Option<f64> {
+                if (r.tags & 1) == 0 {
+                    return None;
+                }
+                let rz = (r.z[0] as f64).hypot(r.z[1] as f64).max(1.0000001);
+                let dz = (r.dz[0] as f64).hypot(r.dz[1] as f64).max(1e-30);
+                let mut d = (rz * rz.ln() / dz).max(1e-30);
+                if units > 0.5 {
+                    d *= h as f64 / span_y;
+                }
+                Some(if mapping == 1.0 { d } else { d.sqrt() } * scale as f64)
+            };
+            compare(&format!("distance_estimate {mapping}/{units}"), &out, &want, &records);
+        }
+
+        // A ring off the origin, turned 30 degrees, in all four
+        // reductions.
+        let (tc, rot, rad, thr) = ([0.3f64, -0.2f64], 30.0f64, 0.5f64, 0.2f64);
+        for mode in 0..4u32 {
+            let mut c = config.clone();
+            c.escape.coloring = "orbit_trap".to_string();
+            c.escape.coloring_params = [
+                ("shape".to_string(), 4.0),
+                ("scale".to_string(), 1.0),
+                ("center_re".to_string(), tc[0] as f32),
+                ("center_im".to_string(), tc[1] as f32),
+                ("rotation".to_string(), rot as f32),
+                ("mode".to_string(), mode as f32),
+                ("threshold".to_string(), thr as f32),
+                ("radius".to_string(), rad as f32),
+            ]
+            .into_iter()
+            .collect();
+            let records = records_via(&c.escape, w, h, false, false);
+            let mut checked = 0usize;
+            let mut off = 0usize;
+            for (i, r) in records.iter().enumerate() {
+                if (r.tags & 1) == 0 || r.n > 30 {
+                    continue;
+                }
+                let (px, py) = ((i % w as usize) as f64, (i / w as usize) as f64);
+                let cc = [
+                    ((px + 0.5) / w as f64 - 0.5) * span_x - 0.6,
+                    -(((py + 0.5) / h as f64 - 0.5) * span_y) + 0.1,
+                ];
+                let mut z = [0.0f64, 0.0f64];
+                let mut s = [1e30f64, 0.0, 0.0, -1.0];
+                let (sa, ca) = (-rot.to_radians()).sin_cos();
+                for _ in 0..r.n {
+                    z = [z[0] * z[0] - z[1] * z[1] + cc[0], 2.0 * z[0] * z[1] + cc[1]];
+                    let q = [z[0] - tc[0], z[1] - tc[1]];
+                    let t = [q[0] * ca - q[1] * sa, q[0] * sa + q[1] * ca];
+                    let d = (t[0].hypot(t[1]) - rad).abs();
+                    let first = if s[3] < 0.0 && d < thr { d } else { s[3] };
+                    s = [s[0].min(d), s[1].max(d), s[2] + d, first];
+                }
+                let got = [r.accum[0] as f64, r.accum[1] as f64, r.accum2[0] as f64, r.accum2[1] as f64];
+                // The last escaping step's distance can be large and so
+                // its f32 error: relative tolerance on max and sum.
+                let e = (got[0] - s[0])
+                    .abs()
+                    .max((got[1] - s[1]).abs() / s[1].abs().max(1.0))
+                    .max((got[2] - s[2]).abs() / s[2].abs().max(1.0))
+                    .max((got[3] - s[3]).abs());
+                if e > 1e-3 {
+                    off += 1;
+                }
+                checked += 1;
+            }
+            println!("orbit_trap ring, reduction {mode}: accumulator on {checked} orbits, {off} off");
+            assert!(checked > 500, "only {checked} orbits to replay");
+            assert!(off * 200 <= checked, "reduction {mode}: {off} of {checked} accumulators disagree");
+            let out = render(&c);
+            let want = |r: &crate::escape::renderer::IterRecord| -> Option<f64> {
+                if (r.tags & 1) == 0 {
+                    return None;
+                }
+                let s = [r.accum[0] as f64, r.accum[1] as f64, r.accum2[0] as f64, r.accum2[1] as f64];
+                Some(match mode {
+                    0 => s[0],
+                    1 => s[1],
+                    2 => s[2] / (r.n as f64).max(1.0),
+                    _ => if s[3] >= 0.0 { s[3] } else { s[0] },
+                })
+            };
+            compare(&format!("orbit_trap ring {mode}"), &out, &want, &records);
+        }
+    }
+
+    /// External rays mark what Fraktaler 3's `flying-fish` marks: the
+    /// pixels whose escape angle lies within `width * (1/2)^NF` turns of
+    /// a ray. Checked from each pixel's record against the rendered
+    /// mask; a pixel within a hair of the band's edge may land either
+    /// side, so a share rather than all.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn external_rays_mark_what_fraktaler_marks() {
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        let stop = |position: f32, v: f32| crate::scene::palette::ColorStop { position, color: [v, v, v] };
+        config.palette.stops = vec![stop(0.0, 0.0), stop(1.0, 1.0)];
+        config.escape.center_re = "-0.6".to_string();
+        config.escape.center_im = "0.1".to_string();
+        config.escape.zoom_log2 = 0.4;
+        config.escape.max_iter = 300;
+        config.escape.bailout = 1.0e4;
+        config.escape.coloring = "external_rays".to_string();
+        config.escape.coloring_params = [("width".to_string(), 0.05), ("count".to_string(), 2.0)].into_iter().collect();
+        let records = records_via(&config.escape, w, h, false, false);
+        let job = crate::renderer::RenderJob::new(&config, w, h);
+        let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+            .expect("render")
+            .rgba_data;
+        let (mut checked, mut on, mut wrong) = (0usize, 0usize, 0usize);
+        for (r, p) in records.iter().zip(out.chunks_exact(4)) {
+            if (r.tags & 1) == 0 {
+                continue;
+            }
+            let z = [r.z[0] as f64, r.z[1] as f64];
+            let t = z[1].atan2(z[0]) / std::f64::consts::TAU;
+            let off = ((2.0 * t + 0.5).rem_euclid(1.0) - 0.5).abs() / 2.0;
+            let lz = (z[0] * z[0] + z[1] * z[1]).log2();
+            let nf = (1.0 - (lz / 1.0e4f64.log2()).max(1e-6).log2()).clamp(0.0, 1.0);
+            let ray = off < 0.05 * 0.5f64.powf(nf);
+            let lit = p[0] > 127;
+            checked += 1;
+            on += ray as usize;
+            wrong += (ray != lit) as usize;
+        }
+        println!("external rays: {checked} escaped pixels, {on} on a ray, {wrong} disagree");
+        assert!(on > checked / 50 && on < checked / 2, "the fixture shows {on} ray pixels of {checked}");
+        assert!(wrong * 200 <= checked, "{wrong} of {checked} pixels disagree with the definition");
+    }
+
+    /// Analytic relief leans the way the numeric relief does.
+    ///
+    /// Both slope a surface that rises toward the set -- the smooth
+    /// count numerically, `-ln d` analytically -- along the same
+    /// direction, the potential's gradient; only how steep each is
+    /// differs. So lit from one side, a pixel that one darkens the
+    /// other must not brighten. Measured as the share of pixels both
+    /// moved that they moved the same way: a wrong sign, a lost
+    /// conjugate or a view rotation applied backwards turns it into its
+    /// opposite, which is why it is measured at a rotation as well. And
+    /// where no derivative is iterated (the perturbed rungs) analytic
+    /// relief is flat.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn analytic_relief_leans_the_way_the_numeric_relief_does() {
+        use crate::config::escape::ShadingField;
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        // The whole set: an exterior where the smooth count is smooth,
+        // so its finite differences point where its gradient does. In
+        // the dust near the boundary they point anywhere, which is the
+        // stencil noise analytic slopes exist to avoid.
+        config.escape.center_re = "-0.6".to_string();
+        config.escape.center_im = "0.1".to_string();
+        config.escape.zoom_log2 = 0.4;
+        config.escape.max_iter = 300;
+        config.escape.bailout = 1.0e4;
+        config.escape.coloring_params.insert("scale".to_string(), 0.05);
+        config.escape.shading.enabled = true;
+        config.escape.shading.height = 40.0;
+        let render = |c: &crate::config::FractalConfig| {
+            let job = crate::renderer::RenderJob::new(c, w, h);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+        // -1 darker, +1 brighter, 0 not moved by more than noise.
+        let moved = |shaded: &[u8], plain: &[u8]| -> Vec<i32> {
+            shaded
+                .chunks(4)
+                .zip(plain.chunks(4))
+                .map(|(s, p)| {
+                    let d: i32 = (0..3).map(|k| s[k] as i32 - p[k] as i32).sum();
+                    if d > 6 { 1 } else if d < -6 { -1 } else { 0 }
+                })
+                .collect()
+        };
+        for rotation in [0.0f32, 0.7] {
+            let mut c = config.clone();
+            c.escape.rotation = rotation;
+            let mut off = c.clone();
+            off.escape.shading.enabled = false;
+            let plain = render(&off);
+            let numeric = moved(&render(&c), &plain);
+            c.escape.shading.field = ShadingField::Analytic;
+            let analytic = moved(&render(&c), &plain);
+            let both: Vec<(i32, i32)> = numeric.iter().zip(&analytic).filter(|(a, b)| **a != 0 && **b != 0).map(|(a, b)| (*a, *b)).collect();
+            let same = both.iter().filter(|(a, b)| a == b).count();
+            let agree = same as f64 / both.len().max(1) as f64;
+            println!("rotation {rotation}: {} pixels moved by both, {agree:.3} the same way", both.len());
+            assert!(both.len() > (w * h / 20) as usize, "too few pixels moved by both: {}", both.len());
+            // Measured 0.971 and 0.972.
+            assert!(agree > 0.9, "analytic and numeric relief lean opposite ways at rotation {rotation}: {agree:.3} agree");
+        }
+
+        // Past the perturbation threshold there is no derivative: flat.
+        let mut deep = config.clone();
+        deep.escape.zoom_log2 = 30.0;
+        deep.escape.center_re = "-0.7436438870371587".to_string();
+        deep.escape.center_im = "0.1318259042053119".to_string();
+        deep.escape.max_iter = 2000;
+        deep.escape.shading.field = ShadingField::Analytic;
+        let mut deep_off = deep.clone();
+        deep_off.escape.shading.enabled = false;
+        let d = render(&deep).iter().zip(render(&deep_off).iter()).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(0);
+        assert!(d <= 1, "analytic relief without a derivative moved a pixel by {d}");
+    }
+
+    /// Offset-orbit relief leans the way the numeric relief does, and
+    /// unlike it, does not change with the output size.
+    ///
+    /// Direction, as for analytic relief: lit from one side, the pixels
+    /// both move, they move the same way, on the smooth exterior. Size:
+    /// the offset is a fixed fraction of the view, so at twice the
+    /// resolution the share of pixels the relief moves holds, where the
+    /// numeric relief's per-pixel difference gets shallower (survey
+    /// 6.7) and its share falls.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn offset_relief_belongs_to_the_fractal_not_the_pixels() {
+        use crate::config::escape::ShadingField;
+        let (device, queue) = repro_device();
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.escape.center_re = "-0.6".to_string();
+        config.escape.center_im = "0.1".to_string();
+        config.escape.zoom_log2 = 0.4;
+        config.escape.max_iter = 300;
+        config.escape.bailout = 1.0e4;
+        config.escape.coloring_params.insert("scale".to_string(), 0.05);
+        config.escape.shading.enabled = true;
+        config.escape.shading.height = 40.0;
+        let render = |c: &crate::config::FractalConfig, w: u32, h: u32| {
+            let job = crate::renderer::RenderJob::new(c, w, h);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+        let moved = |shaded: &[u8], plain: &[u8]| -> Vec<i32> {
+            shaded
+                .chunks(4)
+                .zip(plain.chunks(4))
+                .map(|(s, p)| {
+                    let d: i32 = (0..3).map(|k| s[k] as i32 - p[k] as i32).sum();
+                    if d > 6 { 1 } else if d < -6 { -1 } else { 0 }
+                })
+                .collect()
+        };
+        let mut share = Vec::new();
+        for rotation in [0.0f32, 0.7] {
+            for (w, h) in [(160u32, 120u32), (320, 240)] {
+                let mut c = config.clone();
+                c.escape.rotation = rotation;
+                let mut off = c.clone();
+                off.escape.shading.enabled = false;
+                let plain = render(&off, w, h);
+                let numeric = moved(&render(&c, w, h), &plain);
+                c.escape.shading.field = ShadingField::Offset;
+                let offset = moved(&render(&c, w, h), &plain);
+                // Direction at a matched magnitude: the offset slope is
+                // per 1/1024 of the view, the numeric one per render
+                // pixel, so scale the height by the ratio of the two.
+                let mut matched = c.clone();
+                matched.escape.shading.height *= 1024.0 / h as f32;
+                let matched = moved(&render(&matched, w, h), &plain);
+                let both: Vec<(i32, i32)> = numeric.iter().zip(&matched).filter(|(a, b)| **a != 0 && **b != 0).map(|(a, b)| (*a, *b)).collect();
+                let agree = both.iter().filter(|(a, b)| a == b).count() as f64 / both.len().max(1) as f64;
+                let px = (w * h) as f64;
+                let s_num = numeric.iter().filter(|m| **m != 0).count() as f64 / px;
+                let s_off = offset.iter().filter(|m| **m != 0).count() as f64 / px;
+                println!("rotation {rotation} {w}x{h}: agree {agree:.3}; moved share numeric {s_num:.3}, offset {s_off:.3}");
+                assert!(both.len() > (w * h / 20) as usize, "too few pixels moved by both: {}", both.len());
+                assert!(agree > 0.9, "offset and numeric relief lean opposite ways: {agree:.3}");
+                if rotation == 0.0 {
+                    share.push((s_num, s_off));
+                }
+            }
+        }
+        let (num_small, off_small) = share[0];
+        let (num_big, off_big) = share[1];
+        let off_ratio = off_big / off_small;
+        let num_ratio = num_big / num_small;
+        println!("moved share at twice the size: offset x{off_ratio:.3}, numeric x{num_ratio:.3}");
+        assert!((off_ratio - 1.0).abs() < 0.05, "offset relief changed with the output size: x{off_ratio:.3}");
+        assert!((off_ratio - 1.0).abs() < (num_ratio - 1.0).abs(), "offset relief is no steadier than the numeric relief");
+
+        // Perturbation runs no offset orbits: flat, as the panel says.
+        let mut deep = config.clone();
+        deep.escape.zoom_log2 = 30.0;
+        deep.escape.center_re = "-0.7436438870371587".to_string();
+        deep.escape.center_im = "0.1318259042053119".to_string();
+        deep.escape.max_iter = 2000;
+        deep.escape.shading.field = ShadingField::Offset;
+        let mut deep_off = deep.clone();
+        deep_off.escape.shading.enabled = false;
+        let d = render(&deep, 160, 120)
+            .iter()
+            .zip(render(&deep_off, 160, 120).iter())
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap_or(0);
+        assert!(d <= 1, "offset relief under perturbation moved a pixel by {d}");
+    }
+
+    /// Embossed computes what Ultra Fractal's Standard.ulb says, pixel
+    /// for pixel: the stored response is checked against a CPU port of
+    /// `Standard_Embossed` / `Standard_EmbossedHelper` / `Standard_Emboss`
+    /// -- two Mandelbrot orbits at `c -+ dr`, dr toward the light, run in
+    /// step, each reduced per Emboss Type, compared -- for every type,
+    /// with the view rotated and not. Smallest Magnitude is ported with
+    /// the minimum SHARED between the orbits, as Ultra Fractal keeps it,
+    /// and measured against an unshared port as well, to show the quirk
+    /// is what the shader reproduces.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn embossed_draws_what_ultra_fractals_source_says() {
+        use crate::config::escape::{EmbossType, ShadingField};
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let config = crate::config::FractalConfig::default();
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+
+        // The CPU port, in f32 as the shader runs it.
+        #[derive(Clone, Copy)]
+        struct View {
+            cx: f32,
+            cy: f32,
+            span_y: f32,
+            rot: f32,
+            light: f32,
+            offset: f32,
+            bailout: f32,
+            max_iter: u32,
+        }
+        fn emboss_cpu(v: View, px: u32, py: u32, w: u32, h: u32, kind: u32, sections: f32, shared: bool) -> Option<i32> {
+            let span_x = v.span_y * w as f32 / h as f32;
+            let ux = (px as f32 + 0.5) / w as f32;
+            let uy = (py as f32 + 0.5) / h as f32;
+            let dx = (ux - 0.5) * span_x;
+            let dy = -((uy - 0.5) * v.span_y);
+            let (rs, rc) = v.rot.sin_cos();
+            let c = (v.cx + dx * rc - dy * rs, v.cy + dx * rs + dy * rc);
+            // The pixel's own orbit: the response is stored only where
+            // it escaped.
+            let mut z = (0.0f32, 0.0f32);
+            let mut escaped = false;
+            for _ in 0..v.max_iter {
+                z = (z.0 * z.0 - z.1 * z.1 + c.0, 2.0 * z.0 * z.1 + c.1);
+                if z.0 * z.0 + z.1 * z.1 > v.bailout {
+                    escaped = true;
+                    break;
+                }
+            }
+            if !escaped {
+                return None;
+            }
+            let (ls, lc) = v.light.sin_cos();
+            let toward = (lc * rc - ls * rs, lc * rs + ls * rc);
+            let d = v.offset * v.span_y;
+            let p = [(c.0 - d * toward.0, c.1 - d * toward.1), (c.0 + d * toward.0, c.1 + d * toward.1)];
+            let mut zs = [(0.0f32, 0.0f32); 2];
+            let mut done = [false; 2];
+            let mut r = [0.0f32; 2];
+            let mut rmin = [1e20f32; 2];
+            for i in 0..v.max_iter {
+                let it = i + 1;
+                for k in 0..2 {
+                    if done[k] {
+                        continue;
+                    }
+                    let (x, y) = zs[k];
+                    zs[k] = (x * x - y * y + p[k].0, 2.0 * x * y + p[k].1);
+                    let (x, y) = zs[k];
+                    if x * x + y * y > v.bailout {
+                        done[k] = true;
+                        match kind {
+                            0 => r[k] = it as f32,
+                            4 => r[k] = (0.5 * (x * x + y * y).ln()).trunc(),
+                            5 => {
+                                let mut t = 0.5 * y.atan2(x) / std::f32::consts::PI;
+                                if t < 0.0 {
+                                    t += 1.0;
+                                }
+                                r[k] = (t * sections).trunc();
+                            }
+                            _ => {}
+                        }
+                    }
+                    let slot = if shared { 0 } else { k };
+                    match kind {
+                        1 if x > 0.0 => r[k] += 1.0,
+                        2 if y > 0.0 => r[k] += 1.0,
+                        3 => {
+                            let m = x * x + y * y;
+                            if m < rmin[slot] {
+                                rmin[slot] = m;
+                                r[k] = it as f32;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if done[0] && done[1] {
+                    break;
+                }
+            }
+            Some(if r[0] < r[1] { -1 } else if r[1] < r[0] { 1 } else { 0 })
+        }
+
+        let run = |esc: &crate::config::escape::EscapeConfig| -> Vec<f32> {
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("emboss") });
+                let settled =
+                    escape.render(&device, &queue, &mut enc, esc, renderer.palette_view(), renderer.palette_generation());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "render did not settle");
+            }
+            pollster::block_on(escape.read_height_channel(&device, &queue, false, 2)).expect("height")
+        };
+
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "mandelbrot".to_string();
+        esc.coloring = "smooth".to_string();
+        esc.center_re = "-0.75".to_string();
+        esc.center_im = "0.1".to_string();
+        esc.zoom_log2 = 1.5;
+        esc.max_iter = 64;
+        esc.bailout = 4.0;
+        esc.supersample = 1;
+        esc.shading.enabled = true;
+        esc.shading.field = ShadingField::Embossed;
+        esc.shading.offset = 0.004;
+        for (rotation, light) in [(0.0f32, 135.0f32), (0.7, 30.0)] {
+            for kind in EmbossType::ALL {
+                let mut e = esc.clone();
+                e.rotation = rotation;
+                e.shading.light_angle = light;
+                e.shading.emboss = kind;
+                e.shading.emboss_sections = 3;
+                let gpu = run(&e);
+                let view = View {
+                    cx: -0.75,
+                    cy: 0.1,
+                    span_y: (4.0 / 1.5f64.exp2()) as f32,
+                    rot: rotation,
+                    light: light.to_radians(),
+                    offset: 0.004,
+                    bailout: 4.0,
+                    max_iter: 64,
+                };
+                let measure = |shared: bool| {
+                    let (mut lit, mut agree, mut signs) = (0usize, 0usize, [0usize; 2]);
+                    for py in 0..h {
+                        for px in 0..w {
+                            let Some(cpu) = emboss_cpu(view, px, py, w, h, kind.to_gpu(), 3.0, shared) else {
+                                continue;
+                            };
+                            let g = gpu[(py * w + px) as usize].round() as i32;
+                            if cpu != 0 || g != 0 {
+                                lit += 1;
+                                agree += usize::from(cpu == g);
+                            }
+                            if g < 0 {
+                                signs[0] += 1;
+                            } else if g > 0 {
+                                signs[1] += 1;
+                            }
+                        }
+                    }
+                    (lit, agree as f64 / lit.max(1) as f64, signs)
+                };
+                let (lit, agree, signs) = measure(true);
+                println!(
+                    "rotation {rotation} light {light} {kind:?}: {lit} drawn pixels, {agree:.4} agree; shadow {}, highlight {}",
+                    signs[0], signs[1]
+                );
+                assert!(lit > (w * h / 50) as usize, "{kind:?} drew only {lit} contour pixels");
+                assert!(signs[0] > 0 && signs[1] > 0, "{kind:?} drew only one side of its contours: {signs:?}");
+                assert!(agree > 0.97, "{kind:?} at rotation {rotation}: {agree:.4} of drawn pixels agree with Standard.ulb");
+                if kind == EmbossType::SmallestMagnitude {
+                    let (_, unshared, _) = measure(false);
+                    println!("  against an unshared minimum: {unshared:.4}");
+                    assert!(agree > unshared, "the shared minimum is not what the shader keeps");
+                }
+            }
+        }
+    }
+
+    /// What a colouring or the relief calls a pixel is an OUTPUT pixel,
+    /// so antialiasing does not change the picture beyond smoothing it.
+    ///
+    /// Two cases that did: the distance estimate in pixel units measured
+    /// render pixels, so 2x supersampling shifted every colour by a
+    /// doubling; and offset-orbit relief, whose slope is per fraction of
+    /// the view, was scaled by the supersample factor along with the
+    /// slopes that are per render pixel. Each is compared at 1x and 2x
+    /// against the same comparison for a field with no pixels in it.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn pixel_units_mean_output_pixels_under_supersampling() {
+        use crate::config::escape::ShadingField;
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let mut base = crate::config::FractalConfig::default();
+        base.render_mode = crate::scene::transforms::RenderMode::Escape;
+        base.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        base.exposure = 1.0;
+        base.gamma = 1.0;
+        base.levels_enabled = false;
+        base.use_curve = false;
+        base.escape.center_re = "-0.6".to_string();
+        base.escape.center_im = "0.1".to_string();
+        base.escape.zoom_log2 = 0.4;
+        base.escape.max_iter = 300;
+        base.escape.bailout = 1.0e4;
+        let render = |c: &crate::config::FractalConfig| {
+            let job = crate::renderer::RenderJob::new(c, w, h);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+        // Mean absolute difference per channel between 1x and 2x.
+        let ss_change = |c: &crate::config::FractalConfig| -> f64 {
+            let mut a = c.clone();
+            a.escape.supersample = 1;
+            let mut b = c.clone();
+            b.escape.supersample = 2;
+            let (x, y) = (render(&a), render(&b));
+            let n = x.chunks(4).count() as f64;
+            x.chunks(4)
+                .zip(y.chunks(4))
+                .map(|(p, q)| (0..3).map(|k| p[k].abs_diff(q[k]) as f64).sum::<f64>() / 3.0)
+                .sum::<f64>()
+                / n
+        };
+
+        let mut de = base.clone();
+        de.escape.coloring = "distance_estimate".to_string();
+        de.escape.coloring_params.insert("scale".to_string(), 0.2);
+        let plane = ss_change(&de);
+        de.escape.coloring_params.insert("units".to_string(), 1.0);
+        let pixels = ss_change(&de);
+        println!("distance estimate, 1x -> 2x: plane units {plane:.2}, pixel units {pixels:.2}");
+        assert!(pixels < plane * 1.5 + 1.0, "pixel units moved with supersampling: {pixels:.2} against {plane:.2}");
+
+        let mut relief = base.clone();
+        relief.escape.coloring_params.insert("scale".to_string(), 0.05);
+        relief.escape.shading.enabled = true;
+        relief.escape.shading.height = 40.0;
+        relief.escape.shading.field = ShadingField::Offset;
+        // The relief's own strength: how far it moves the picture from
+        // the same render unlit, at each factor.
+        let strength = |ss: u32| -> f64 {
+            let mut lit = relief.clone();
+            lit.escape.supersample = ss;
+            let mut flat = lit.clone();
+            flat.escape.shading.enabled = false;
+            let (x, y) = (render(&lit), render(&flat));
+            let n = x.chunks(4).count() as f64;
+            x.chunks(4)
+                .zip(y.chunks(4))
+                .map(|(p, q)| (0..3).map(|k| p[k].abs_diff(q[k]) as f64).sum::<f64>() / 3.0)
+                .sum::<f64>()
+                / n
+        };
+        let (one, two) = (strength(1), strength(2));
+        println!("offset relief strength: 1x {one:.2}, 2x {two:.2}");
+        assert!((two / one - 1.0).abs() < 0.1, "offset relief changed strength with supersampling: {one:.2} -> {two:.2}");
+    }
+
+    /// The colourings that draw their own colours compute what their
+    /// sources say, pixel by pixel from the GPU's own records (so f32
+    /// orbit noise cannot blur the check):
+    /// - rainbow fringe, Fraktaler 3's example: `hsv(arg DE, 1/(1+4L),
+    ///   2L)` decoded and raised to 1/gamma, with F3's DE vector (the
+    ///   conjugate of the screen gradient of |z|^2), at two rotations;
+    /// - infinite waves, KF2's `KF_InfiniteWaves`: KF2's default three,
+    ///   then a stepped set with constant waves blended half and half
+    ///   with a grey-ramp palette.
+    /// The output is the Linear tone map at exposure and gamma 1, whose
+    /// encode is `pow(1/2.2)`. And the fringe is flat grey where no
+    /// derivative is iterated (perturbation).
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn direct_colourings_draw_what_their_sources_say() {
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        let stop = |position: f32, v: f32| crate::scene::palette::ColorStop { position, color: [v, v, v] };
+        config.palette.stops = vec![stop(0.0, 0.0), stop(1.0, 1.0)];
+        config.escape.center_re = "-0.6".to_string();
+        config.escape.center_im = "0.1".to_string();
+        config.escape.zoom_log2 = 0.4;
+        config.escape.max_iter = 200;
+        config.escape.bailout = 1.0e4;
+        config.escape.supersample = 1;
+        let span_y = 4.0 / (config.escape.zoom_log2).exp2();
+        let render = |c: &crate::config::FractalConfig| {
+            let job = crate::renderer::RenderJob::new(c, w, h);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+        let encode = |lin: f64| (lin.clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0);
+        let hsv = |c: [f64; 3]| -> [f64; 3] {
+            let k = [1.0, 2.0 / 3.0, 1.0 / 3.0];
+            let mut out = [0.0; 3];
+            for i in 0..3 {
+                let p = ((c[0] + k[i]).rem_euclid(1.0) * 6.0 - 3.0).abs();
+                out[i] = c[2] * (1.0 + ((p - 1.0).clamp(0.0, 1.0) - 1.0) * c[1]);
+            }
+            out
+        };
+        // Within two 8-bit levels on 99% of the drawn pixels.
+        let compare = |name: &str, out: &[u8], want: &dyn Fn(usize) -> Option<[f64; 3]>| {
+            let (mut checked, mut off, mut worst) = (0usize, 0usize, 0.0f64);
+            for (i, p) in out.chunks_exact(4).enumerate() {
+                let Some(rgb) = want(i) else { continue };
+                let e = (0..3).map(|k| (p[k] as f64 - rgb[k]).abs()).fold(0.0, f64::max);
+                worst = worst.max(e);
+                off += usize::from(e > 2.0);
+                checked += 1;
+            }
+            println!("{name}: {checked} pixels, {off} more than two levels off, worst {worst:.1}");
+            assert!(checked > 2000, "{name}: only {checked} pixels drawn");
+            assert!(off * 100 <= checked, "{name}: {off} of {checked} pixels off");
+        };
+
+        // ---- Rainbow fringe ---------------------------------------
+        for rotation in [0.0f32, 0.7] {
+            let mut c = config.clone();
+            c.escape.coloring = "rainbow_fringe".to_string();
+            c.escape.coloring_params = [("gamma".to_string(), 2.0)].into_iter().collect();
+            c.escape.rotation = rotation;
+            let records = records_via(&c.escape, w, h, false, false);
+            let out = render(&c);
+            let (rs, rc) = (rotation as f64).sin_cos();
+            let mut hues = [0usize; 8];
+            let want = |i: usize| -> Option<[f64; 3]> {
+                let r = &records[i];
+                if (r.tags & 1) == 0 {
+                    return None;
+                }
+                let z = [r.z[0] as f64, r.z[1] as f64];
+                let dz = [r.dz[0] as f64, r.dz[1] as f64];
+                let m = z[0].hypot(z[1]).max(1.0000001);
+                let l = m * m.ln() / dz[0].hypot(dz[1]).max(1e-30) * (h as f64 / span_y);
+                let g = [z[0] * dz[0] + z[1] * dz[1], z[1] * dz[0] - z[0] * dz[1]];
+                let s = [g[0] * rc + g[1] * rs, g[1] * rc - g[0] * rs];
+                let hue = ((-s[1]).atan2(s[0]) / std::f64::consts::TAU).rem_euclid(1.0);
+                let sat = (1.0 / (1.0 + 4.0 * l)).clamp(0.0, 1.0);
+                let val = (2.0 * l).clamp(0.0, 1.0);
+                let srgb = hsv([hue, sat, val]);
+                let lin = srgb.map(|x| if x <= 0.04045 { x / 12.92 } else { ((x + 0.055) / 1.055).powf(2.4) });
+                Some(lin.map(|x| encode(x.powf(0.5))))
+            };
+            for i in 0..records.len() {
+                if let (Some(_), r) = (want(i), &records[i]) {
+                    let z = [r.z[0] as f64, r.z[1] as f64];
+                    let dz = [r.dz[0] as f64, r.dz[1] as f64];
+                    let g = [z[0] * dz[0] + z[1] * dz[1], z[1] * dz[0] - z[0] * dz[1]];
+                    let a = g[1].atan2(g[0]).rem_euclid(std::f64::consts::TAU);
+                    hues[(a / std::f64::consts::TAU * 8.0) as usize % 8] += 1;
+                }
+            }
+            compare(&format!("rainbow fringe, rotation {rotation}"), &out, &want);
+            assert!(hues.iter().all(|n| *n > 0), "the fringe does not go all the way round: {hues:?}");
+        }
+
+        // Under perturbation there is no derivative: flat mid-grey.
+        let mut deep = config.clone();
+        deep.escape.coloring = "rainbow_fringe".to_string();
+        deep.escape.zoom_log2 = 30.0;
+        deep.escape.center_re = "-0.7436438870371587".to_string();
+        deep.escape.center_im = "0.1318259042053119".to_string();
+        deep.escape.max_iter = 2000;
+        let grey = encode(0.21404114);
+        let out = render(&deep);
+        let drawn: Vec<&[u8]> = out.chunks_exact(4).filter(|p| p[0] > 0 || p[1] > 0 || p[2] > 0).collect();
+        assert!(drawn.len() > 1000, "the deep view drew only {} pixels", drawn.len());
+        assert!(
+            drawn.iter().all(|p| (0..3).all(|k| (p[k] as f64 - grey).abs() <= 2.0)),
+            "the fringe is not flat grey without a derivative"
+        );
+
+        // ---- Infinite waves ---------------------------------------
+        let lr = (config.escape.bailout as f64).log2();
+        let iter_of = |r: &crate::escape::renderer::IterRecord| -> f64 {
+            let lz = (r.z[0] as f64 * r.z[0] as f64 + r.z[1] as f64 * r.z[1] as f64).max(1.0000001).log2();
+            let nf = (1.0 - (lz / lr).max(1e-6).log2()).clamp(0.0, 1.0);
+            r.n as f64 + 1.0 - nf
+        };
+        type Wave = (f64, usize);
+        let cases: [(&str, Vec<Wave>, bool, bool); 2] = [
+            ("defaults", vec![(100.0, 0), (111.0, 1), (123.0, 2)], true, false),
+            ("stepped, constants, blended", vec![(37.0, 0), (-50.0, 1), (-100.0, 2), (13.0, 2)], false, true),
+        ];
+        for (name, waves, smooth, blend) in cases {
+            let mut c = config.clone();
+            c.escape.coloring = "infinite_waves".to_string();
+            let mut params = std::collections::BTreeMap::new();
+            params.insert("smooth".to_string(), if smooth { 1.0 } else { 0.0 });
+            params.insert("blend".to_string(), if blend { 1.0 } else { 0.0 });
+            for k in 0..6 {
+                let (p, ch) = waves.get(k).copied().unwrap_or((0.0, 0));
+                params.insert(format!("wave{}", k + 1), p as f32);
+                params.insert(format!("wave{}_channel", k + 1), ch as f32);
+            }
+            c.escape.coloring_params = params;
+            let records = records_via(&c.escape, w, h, false, false);
+            let out = render(&c);
+            let want = |i: usize| -> Option<[f64; 3]> {
+                let r = &records[i];
+                if (r.tags & 1) == 0 {
+                    return None;
+                }
+                let v = iter_of(r);
+                let it = if smooth { v } else { v.floor() };
+                let (mut sums, mut counts) = ([0.0f64; 3], [0.0f64; 3]);
+                for (p, ch) in &waves {
+                    let g = if *p < 0.0 { -p / 100.0 } else { (std::f64::consts::PI * it / p).sin() / 2.0 + 0.5 };
+                    sums[*ch] += g;
+                    counts[*ch] += 1.0;
+                }
+                let mut rgb = hsv([0, 1, 2].map(|k| sums[k] / counts[k].max(1.0)));
+                if blend {
+                    let t = (v / 1024.0).rem_euclid(1.0);
+                    rgb = rgb.map(|x| (x + t) / 2.0);
+                }
+                Some(rgb.map(|x| x.clamp(0.0, 1.0) * 255.0))
+            };
+            compare(&format!("infinite waves, {name}"), &out, &want);
+        }
+    }
+
+    /// A colouring that draws its own colours recolours from the cache
+    /// like any other: picking one that runs nothing new in the loop,
+    /// retuning its waves, turning the palette blend on, or changing the
+    /// fringe's gamma is a recolour that matches a fresh render to the
+    /// byte. Picking the fringe re-iterates, since it needs the
+    /// derivative orbit.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn direct_colourings_recolour_from_the_cache() {
+        let _diag = diag_lock();
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let config = crate::config::FractalConfig::default();
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        renderer.update_background_color(&queue, [0.0, 0.0, 0.0]);
+        let mut settle = |escape: &mut crate::escape::EscapeRenderer, esc: &crate::config::escape::EscapeConfig| {
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("direct cache"),
+                });
+                let settled = escape.render(
+                    &device,
+                    &queue,
+                    &mut enc,
+                    esc,
+                    renderer.escape_palette_view(esc.palette_map.stepped),
+                    renderer.palette_generation(),
+                );
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "render did not settle");
+            }
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("direct cache tonemap"),
+            });
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+                &device, &queue, false, [0.0, 0.0, 0.0],
+            ))
+            .expect("readback");
+            rgba
+        };
+        let mut base = crate::config::escape::EscapeConfig::default();
+        base.center_re = "-0.6".to_string();
+        base.center_im = "0.1".to_string();
+        base.zoom_log2 = 0.4;
+        base.max_iter = 300;
+        base.coloring = "smooth".to_string();
+
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        let _ = settle(&mut escape, &base);
+        let mut esc = base.clone();
+        esc.coloring = "infinite_waves".to_string();
+        let mut steps: Vec<(&str, crate::config::escape::EscapeConfig, bool)> = Vec::new();
+        steps.push(("pick infinite waves", esc.clone(), true));
+        esc.coloring_params.insert("wave1".to_string(), 37.0);
+        esc.coloring_params.insert("wave4".to_string(), -60.0);
+        esc.coloring_params.insert("wave4_channel".to_string(), 1.0);
+        steps.push(("retune the waves", esc.clone(), true));
+        esc.coloring_params.insert("blend".to_string(), 1.0);
+        steps.push(("blend the palette", esc.clone(), true));
+        let mut fringe = base.clone();
+        fringe.coloring = "rainbow_fringe".to_string();
+        steps.push(("pick the fringe", fringe.clone(), false));
+        fringe.coloring_params.insert("gamma".to_string(), 1.3);
+        steps.push(("retune the fringe", fringe.clone(), true));
+        // Visions of Chaos traps catch in the loop: another trap re-iterates.
+        let mut voc = base.clone();
+        voc.coloring = "voc_traps".to_string();
+        steps.push(("pick Visions of Chaos traps", voc.clone(), false));
+        voc.coloring_params.insert("shape".to_string(), 4.0);
+        steps.push(("another trap", voc.clone(), false));
+        for (what, esc, recolours) in steps {
+            let cached = settle(&mut escape, &esc);
+            assert_eq!(escape.last_path == "recolor", recolours, "{what}: path {}", escape.last_path);
+            let mut fresh = crate::escape::EscapeRenderer::new(&device, w, h);
+            assert_eq!(cached, settle(&mut fresh, &esc), "{what}: cached differs from fresh");
+            fresh.destroy();
+        }
+        escape.destroy();
+    }
+
+    /// Equalize spends the palette evenly over the frame: with a grey
+    /// ramp and one turn, every tenth of the palette covers about a tenth
+    /// of the drawn pixels, where Auto range leaves the smooth count
+    /// bunched at one end. On a field of plateaus (escape count, whole
+    /// numbers) the midrank puts each plateau at its middle, so the mean
+    /// palette position is a half.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn equalize_spends_the_palette_evenly() {
+        use crate::config::escape::ContrastMode;
+        let (device, queue) = repro_device();
+        let (w, h) = (192u32, 144u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        let stop = |position: f32, v: f32| crate::scene::palette::ColorStop { position, color: [v, v, v] };
+        config.palette.stops = vec![stop(0.0, 0.0), stop(1.0, 1.0)];
+        config.escape.center_re = "-0.6".to_string();
+        config.escape.center_im = "0.1".to_string();
+        config.escape.zoom_log2 = 0.4;
+        config.escape.max_iter = 300;
+        config.escape.bailout = 1.0e4;
+        config.escape.supersample = 1;
+        config.escape.contrast.turns = 0.999;
+        let render = |c: &crate::config::FractalConfig| {
+            let job = crate::renderer::RenderJob::new(c, w, h);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+        // The share of drawn pixels in each tenth of the palette.
+        let deciles = |out: &[u8]| -> [f64; 10] {
+            let mut n = [0usize; 10];
+            let mut total = 0usize;
+            for p in out.chunks_exact(4) {
+                if p[0] == 0 && p[1] == 0 && p[2] == 0 {
+                    continue;
+                }
+                n[((p[0] as usize) * 10 / 256).min(9)] += 1;
+                total += 1;
+            }
+            n.map(|k| k as f64 / total.max(1) as f64)
+        };
+        let worst = |d: [f64; 10]| d.iter().map(|x| (x - 0.1).abs()).fold(0.0, f64::max);
+
+        let mut c = config.clone();
+        c.escape.coloring = "smooth".to_string();
+        c.escape.contrast.mode = ContrastMode::AutoRange;
+        let auto = deciles(&render(&c));
+        c.escape.contrast.mode = ContrastMode::Equalize;
+        let equal = deciles(&render(&c));
+        println!("smooth, share per tenth -- auto range {auto:.3?}");
+        println!("smooth, share per tenth -- equalize   {equal:.3?}");
+        assert!(worst(equal) < 0.025, "equalize left a tenth of the palette {:.3} off a tenth of the pixels", worst(equal));
+        assert!(worst(auto) > 2.0 * worst(equal), "auto range was already even: nothing measured");
+
+        let mut c = config.clone();
+        c.escape.coloring = "escape_count".to_string();
+        c.escape.max_iter = 64;
+        c.escape.contrast.mode = ContrastMode::Equalize;
+        let out = render(&c);
+        let drawn: Vec<f64> = out
+            .chunks_exact(4)
+            .filter(|p| p[0] > 0 || p[1] > 0 || p[2] > 0)
+            .map(|p| p[0] as f64)
+            .collect();
+        let mean = drawn.iter().sum::<f64>() / drawn.len() as f64;
+        println!("escape count, mean palette position {:.3}", mean / 255.0);
+        assert!((mean / 255.0 - 0.5).abs() < 0.03, "plateaus are not at their middles: mean {:.3}", mean / 255.0);
+    }
+
+    /// The contrast fit follows every edit that changes what it
+    /// measured or how it is applied, not only the ones that re-iterate.
+    /// A recolour (another colouring with the same loop, a colouring
+    /// parameter, the contrast mode or clip) has to re-measure, or it
+    /// draws the new picture through the old fit.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_contrast_fit_follows_a_recolour() {
+        use crate::config::escape::ContrastMode;
+        let _diag = diag_lock();
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let config = crate::config::FractalConfig::default();
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        renderer.update_background_color(&queue, [0.0, 0.0, 0.0]);
+        let mut settle = |escape: &mut crate::escape::EscapeRenderer, esc: &crate::config::escape::EscapeConfig| {
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("fit key") });
+                let settled = escape.render(
+                    &device,
+                    &queue,
+                    &mut enc,
+                    esc,
+                    renderer.escape_palette_view(esc.palette_map.stepped),
+                    renderer.palette_generation(),
+                );
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "render did not settle");
+            }
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("fit key tonemap") });
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(&device, &queue, false, [0.0, 0.0, 0.0]))
+                .expect("readback");
+            rgba
+        };
+        let mut base = crate::config::escape::EscapeConfig::default();
+        base.center_re = "-0.6".to_string();
+        base.center_im = "0.1".to_string();
+        base.zoom_log2 = 0.4;
+        base.max_iter = 300;
+        base.coloring = "smooth".to_string();
+        base.contrast.mode = ContrastMode::AutoRange;
+
+        let mut steps: Vec<(&str, crate::config::escape::EscapeConfig)> = Vec::new();
+        let mut e = base.clone();
+        e.contrast.mode = ContrastMode::Equalize;
+        steps.push(("auto range to equalize", e.clone()));
+        e.coloring = "escape_count".to_string();
+        steps.push(("another colouring, same loop", e.clone()));
+        e.coloring_params.insert("scale".to_string(), 0.3);
+        steps.push(("a colouring parameter", e.clone()));
+        e.contrast.mode = ContrastMode::AutoRange;
+        e.contrast.clip = 0.1;
+        steps.push(("auto range with another clip", e.clone()));
+        // The layer is stretched to its own range under contrast: adding
+        // one, and retuning it, must re-measure that too.
+        e.coloring = "smooth".to_string();
+        e.coloring_params.clear();
+        e.contrast.mode = ContrastMode::Equalize;
+        e.layer = crate::config::escape::ColoringLayer {
+            coloring: "itinerary".to_string(),
+            params: Default::default(),
+            blend: crate::config::escape::LayerBlend::Add,
+            weight: 0.5,
+        };
+        steps.push(("techmatt's itinerary mode", e.clone()));
+        e.layer.params.insert("scale".to_string(), 3.0);
+        steps.push(("a layer parameter", e.clone()));
+
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        let _ = settle(&mut escape, &base);
+        for (what, esc) in steps {
+            let cached = settle(&mut escape, &esc);
+            let mut fresh = crate::escape::EscapeRenderer::new(&device, w, h);
+            let want = settle(&mut fresh, &esc);
+            fresh.destroy();
+            let differ = cached.iter().zip(&want).filter(|(a, b)| a.abs_diff(**b) > 1).count();
+            println!("{what}: path {}, {differ} bytes differ from a fresh render", escape.last_path);
+            assert_eq!(differ, 0, "{what}: drawn through a stale fit");
+        }
+        escape.destroy();
+    }
+
+    /// The itinerary is techmatt's address (`iterate.rs` `Address`):
+    /// each iterate's sector, `floor((atan2 + pi)/2pi * k)`, as the next
+    /// base-k digit -- the first `depth` from z1 (Head), or the last
+    /// `depth` (Tail, `fract(v k) + s k^-depth`). Replayed on the CPU in
+    /// f64 from each pixel's orbit, against the accumulator the GPU
+    /// stored. Orbits with an iterate near a sector boundary are skipped:
+    /// there f32 and f64 may honestly disagree on the digit.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_itinerary_is_techmatts_address() {
+        let (w, h) = (128u32, 96u32);
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.center_re = "-0.6".to_string();
+        esc.center_im = "0.1".to_string();
+        esc.zoom_log2 = 0.4;
+        esc.max_iter = 64;
+        esc.bailout = 1.0e4;
+        esc.supersample = 1;
+        esc.coloring = "itinerary".to_string();
+        let (cx, cy) = (-0.6f64, 0.1f64);
+        let span_y = 4.0 / (esc.zoom_log2).exp2();
+        let span_x = span_y * w as f64 / h as f64;
+        for (k, depth, tail) in [(4u32, 12u32, false), (4, 12, true), (3, 8, false)] {
+            let mut e = esc.clone();
+            e.coloring_params = [
+                ("sectors".to_string(), k as f32),
+                ("depth".to_string(), depth as f32),
+                ("window".to_string(), if tail { 1.0 } else { 0.0 }),
+            ]
+            .into_iter()
+            .collect();
+            let records = records_via(&e, w, h, false, false);
+            let (mut checked, mut worst) = (0usize, 0.0f64);
+            for (i, r) in records.iter().enumerate() {
+                let (px, py) = ((i % w as usize) as f64, (i / w as usize) as f64);
+                let c = [
+                    ((px + 0.5) / w as f64 - 0.5) * span_x + cx,
+                    -(((py + 0.5) / h as f64 - 0.5) * span_y) + cy,
+                ];
+                let mut z = [0.0f64, 0.0];
+                let mut value = 0.0f64;
+                let mut count = 0u32;
+                let mut near_cut = false;
+                for _ in 0..e.max_iter {
+                    z = [z[0] * z[0] - z[1] * z[1] + c[0], 2.0 * z[0] * z[1] + c[1]];
+                    let turns = (z[1].atan2(z[0]) + std::f64::consts::PI) / std::f64::consts::TAU;
+                    let x = turns * k as f64;
+                    if (x - x.round()).abs() < 1e-3 && (tail || count < depth + 2) {
+                        near_cut = true;
+                    }
+                    let sector = x.floor().clamp(0.0, (k - 1) as f64);
+                    if tail {
+                        value = (value * k as f64).fract() + sector * (k as f64).powi(-(depth as i32));
+                    } else if count < depth {
+                        value += sector * (k as f64).powi(-(count as i32 + 1));
+                    }
+                    count += 1;
+                    if z[0] * z[0] + z[1] * z[1] > e.bailout as f64 {
+                        break;
+                    }
+                }
+                // The tail reads every symbol up to the escape, so a cut
+                // anywhere in the orbit can move it; the head only reads
+                // its first `depth`.
+                if near_cut || (r.accum[1] as u32) != count {
+                    continue;
+                }
+                worst = worst.max((r.accum[0] as f64 - value).abs());
+                checked += 1;
+            }
+            println!("itinerary k={k} depth={depth} tail={tail}: {checked} orbits, worst {worst:.2e}");
+            assert!(checked > 2000, "only {checked} orbits to check");
+            assert!(worst < 1e-6, "an address is {worst:.2e} off techmatt's");
+        }
+    }
+
+    /// Under Auto contrast the texture layer is stretched to its own
+    /// range in the frame, as techmatt places a modulate's texture: a
+    /// layer whose values sit in a narrow band spans the whole palette.
+    /// Escape count under a Mix layer of smooth scaled to 0.001 (so the
+    /// layer's value is the pixel's position): without contrast the
+    /// picture lives in a sliver of the ramp; with it, from the clip to
+    /// the clip. And the stretched recolour matches a fresh render.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn auto_contrast_stretches_the_texture_layer_to_the_frame() {
+        use crate::config::escape::{ColoringLayer, ContrastMode, LayerBlend};
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        let stop = |position: f32, v: f32| crate::scene::palette::ColorStop { position, color: [v, v, v] };
+        config.palette.stops = vec![stop(0.0, 0.0), stop(1.0, 1.0)];
+        config.escape.center_re = "-0.6".to_string();
+        config.escape.center_im = "0.1".to_string();
+        config.escape.zoom_log2 = 0.4;
+        config.escape.max_iter = 300;
+        config.escape.bailout = 1.0e4;
+        config.escape.supersample = 1;
+        config.escape.coloring = "escape_count".to_string();
+        config.escape.layer = ColoringLayer {
+            coloring: "smooth".to_string(),
+            params: [("scale".to_string(), 0.001)].into_iter().collect(),
+            blend: LayerBlend::Mix,
+            weight: 1.0,
+        };
+        let render = |c: &crate::config::FractalConfig| {
+            let job = crate::renderer::RenderJob::new(c, w, h);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+        let spread = |out: &[u8]| -> (f64, f64) {
+            let mut v: Vec<u8> = out
+                .chunks_exact(4)
+                .filter(|p| p[3] > 0 && (p[0] > 0 || p[1] > 0 || p[2] > 0))
+                .map(|p| p[0])
+                .collect();
+            v.sort_unstable();
+            let at = |q: f64| v[((v.len() - 1) as f64 * q) as usize] as f64 / 255.0;
+            (at(0.02), at(0.98))
+        };
+        let plain = spread(&render(&config));
+        // Clipped at 2% each end, so the stretch puts the frame's 2nd
+        // and 98th percentiles at the two ends of the ramp.
+        let mut c = config.clone();
+        c.escape.contrast.mode = ContrastMode::AutoRange;
+        c.escape.contrast.clip = 0.02;
+        let stretched = spread(&render(&c));
+        println!("layer value, 2nd..98th percentile: plain {plain:.3?}, stretched {stretched:.3?}");
+        assert!(plain.1 - plain.0 < 0.35, "the layer was not narrow to begin with: {plain:?}");
+        assert!(stretched.0 < 0.06 && stretched.1 > 0.94, "the layer was not stretched to the frame: {stretched:?}");
+    }
+
+    /// Visions of Chaos's orbit traps do what Softology's listings do
+    /// (softology.pro `Mandelbrot_*_Orbit_Traps.txt`), checked in two
+    /// halves for every trap shape:
+    /// - the catch the GPU froze (caught or not, and its grey) against a
+    ///   line-by-line port of the listing's loop in f64, skipping pixels
+    ///   with a tested iterate within 1e-4 of the trap's edge, where f32
+    ///   and f64 may honestly disagree on the catch;
+    /// - every pixel's colour against the listing's colour rules from
+    ///   the GPU's own record: grey when caught, the CPM smooth palette
+    ///   (`mod 255`) when it escaped uncaught, black inside. Through the
+    ///   Linear tone map at exposure and gamma 1, within two levels.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn voc_traps_do_what_softologys_listings_do() {
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        let stop = |position: f32, v: f32| crate::scene::palette::ColorStop { position, color: [v, v, v] };
+        config.palette.stops = vec![stop(0.0, 0.0), stop(1.0, 1.0)];
+        config.escape.center_re = "-0.6".to_string();
+        config.escape.center_im = "0.1".to_string();
+        config.escape.zoom_log2 = 0.4;
+        config.escape.max_iter = 200;
+        // The listing's bailout_squared, which this renderer's bailout is.
+        config.escape.bailout = 4.0;
+        config.escape.supersample = 1;
+        config.escape.coloring = "voc_traps".to_string();
+        let (cx, cy) = (-0.6f64, 0.1f64);
+        let span_y = 4.0 / (config.escape.zoom_log2).exp2();
+        let span_x = span_y * w as f64 / h as f64;
+        let render = |c: &crate::config::FractalConfig| {
+            let job = crate::renderer::RenderJob::new(c, w, h);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+
+        // The listings' loop, in f64: (caught, grey, nearest edge margin).
+        let listing = |shape: u32, c: [f64; 2]| -> (bool, f64, f64) {
+            let (tx, ty) = (0.0f64, 0.5f64);
+            let mut z = [0.0f64, 0.0];
+            let mut margin = f64::INFINITY;
+            for i in 0..200u32 {
+                let x = z[0] * z[0] - z[1] * z[1] + c[0];
+                let y = z[1] * z[0] + z[0] * z[1] + c[1];
+                if x * x + y * y > 4.0 {
+                    break;
+                }
+                z = [x, y];
+                let (caught, grey, edge) = match shape {
+                    0 => {
+                        let d = ((x - ty) * (x - ty) + (y - tx) * (y - tx)).sqrt();
+                        (d < 0.5, 1.0 - d / 0.5, (d - 0.5).abs())
+                    }
+                    1 => {
+                        let edge = (x.abs() - 0.05).abs().min((y.abs() - 0.05).abs());
+                        if x.abs() < 0.05 {
+                            (true, 1.0 - x.abs() / 0.05, edge)
+                        } else if y.abs() < 0.05 {
+                            (true, 1.0 - y.abs() / 0.05, edge)
+                        } else {
+                            (false, 0.0, edge)
+                        }
+                    }
+                    2 => {
+                        let d = ((x - ty) * (x - ty) + (y - tx) * (y - tx)).sqrt();
+                        let mut p = (d - 0.4) / 0.1;
+                        if p > 0.5 {
+                            p = 0.5 - (p - 0.5);
+                        }
+                        (d < 0.5 && d > 0.4, p * 2.0, (d - 0.5).abs().min((d - 0.4).abs()))
+                    }
+                    3 => {
+                        let inside = x > tx - 0.4 && x < tx + 0.4 && y > ty - 0.4 && y < ty + 0.4;
+                        let edge = [(x - (tx - 0.4)).abs(), (x - (tx + 0.4)).abs(), (y - (ty - 0.4)).abs(), (y - (ty + 0.4)).abs()]
+                            .into_iter()
+                            .fold(f64::INFINITY, f64::min);
+                        (inside, 1.0 - ((x - tx).abs() + (y - ty).abs()) / 2.0 / 0.4, edge)
+                    }
+                    _ => {
+                        let m = (x * x + y * y).sqrt();
+                        let rc = (c[0] * c[0] + c[1] * c[1]).sqrt();
+                        let caught = m <= rc + 0.05 && m >= rc - 0.05 && i > 1;
+                        (caught, (1.0 - (m - rc).abs() / 0.05).sqrt().min(1.0), ((m - rc).abs() - 0.05).abs())
+                    }
+                };
+                margin = margin.min(edge);
+                if caught {
+                    return (true, grey, margin);
+                }
+            }
+            (false, 0.0, margin)
+        };
+
+        for (shape, name) in ["circles", "crosses", "rings", "squares", "stalks"].into_iter().enumerate() {
+            let mut c = config.clone();
+            c.escape.coloring_params = [("shape".to_string(), shape as f32)].into_iter().collect();
+            let records = records_via(&c.escape, w, h, false, false);
+            let out = render(&c);
+
+            let (mut checked, mut agree, mut worst_grey, mut caught_n) = (0usize, 0usize, 0.0f64, 0usize);
+            for (i, r) in records.iter().enumerate() {
+                let (px, py) = ((i % w as usize) as f64, (i / w as usize) as f64);
+                let pc = [((px + 0.5) / w as f64 - 0.5) * span_x + cx, -(((py + 0.5) / h as f64 - 0.5) * span_y) + cy];
+                let (caught, grey, margin) = listing(shape as u32, pc);
+                if margin < 1e-4 {
+                    continue;
+                }
+                checked += 1;
+                let gpu_caught = r.accum[0] > 0.5;
+                if gpu_caught == caught && (!caught || (r.accum[1] as f64 - grey).abs() < 1e-3) {
+                    agree += 1;
+                }
+                if caught && gpu_caught {
+                    caught_n += 1;
+                    worst_grey = worst_grey.max((r.accum[1] as f64 - grey).abs());
+                }
+            }
+
+            let (mut drawn, mut off, mut worst) = (0usize, 0usize, 0.0f64);
+            for (r, p) in records.iter().zip(out.chunks_exact(4)) {
+                let escaped = (r.tags & 1) != 0;
+                let want = if r.accum[0] > 0.5 {
+                    (r.accum[1] as f64).clamp(0.0, 1.0)
+                } else if !escaped {
+                    0.0
+                } else {
+                    let m = (r.z[0] as f64).hypot(r.z[1] as f64).max(1.0000001);
+                    let real = r.n as f64 - m.ln().log2();
+                    let pos = real.rem_euclid(255.0);
+                    let (j, j2) = (pos.floor(), if pos.floor() + 1.0 >= 255.0 { 0.0 } else { pos.floor() + 1.0 });
+                    let t = real - real.trunc();
+                    // A grey ramp: entry j holds j/255.
+                    (j / 255.0) + ((j2 / 255.0) - (j / 255.0)) * t
+                };
+                let e = (p[0] as f64 - want * 255.0).abs();
+                worst = worst.max(e);
+                off += usize::from(e > 2.0);
+                drawn += 1;
+            }
+            println!(
+                "{name}: catch agrees on {agree}/{checked} ({caught_n} caught, worst grey {worst_grey:.1e}); colour off on {off}/{drawn}, worst {worst:.1}"
+            );
+            assert!(caught_n > 300, "{name}: only {caught_n} caught pixels to compare");
+            assert!(agree * 1000 >= checked * 995, "{name}: the catch disagrees with the listing on {} pixels", checked - agree);
+            assert!(off * 100 <= drawn, "{name}: {off} pixels off the listing's colours");
+        }
+    }
+
+    /// Direct orbit traps composite what techmatt's `Painter::trace`
+    /// composites: a port of it in f64, per pixel, through a grey ramp
+    /// (so a sample at `key` is `key` in sRGB), against the render through
+    /// the Linear tone map. Cases cover every shape, every blend, both
+    /// orders and starts, the curves, a shape's own default threshold, and
+    /// the screened cross's clamp. Orbits are short (40 iterations) so f32
+    /// and f64 stay together; a pixel within two levels counts as agreeing.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn direct_traps_composite_what_techmatts_trace_does() {
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        let stop = |position: f32, v: f32| crate::scene::palette::ColorStop { position, color: [v, v, v] };
+        config.palette.stops = vec![stop(0.0, 0.0), stop(1.0, 1.0)];
+        config.escape.center_re = "-0.6".to_string();
+        config.escape.center_im = "0.1".to_string();
+        config.escape.zoom_log2 = 0.4;
+        config.escape.max_iter = 40;
+        config.escape.bailout = 4_294_967_296.0;
+        config.escape.supersample = 1;
+        config.escape.coloring = "direct_traps".to_string();
+        let (cx, cy) = (-0.6f64, 0.1f64);
+        let span_y = 4.0 / (config.escape.zoom_log2).exp2();
+        let span_x = span_y * w as f64 / h as f64;
+
+        // shape, radius, threshold, opacity, blend, order, start, curve
+        type Case = (u32, f64, f64, f64, u32, u32, u32, u32);
+        let cases: [(&str, Case); 8] = [
+            ("ring, techmatt's direct_trap_ring", (1, 1.0, 0.0597, 0.45, 2, 0, 0, 0)),
+            ("cross, direct_trap_multiply", (2, 1.0, 0.1, 0.2, 1, 0, 1, 0)),
+            ("cross screened past its clamp", (2, 1.0, 0.3, 0.6, 2, 0, 0, 0)),
+            ("lines, overlay, top down, sqrt", (7, 1.0, 0.0807, 0.45, 3, 1, 0, 1)),
+            ("astroid, its own threshold, add, log", (6, 1.0, 0.0, 0.3, 5, 0, 0, 2)),
+            ("hypercross, min from white, s-curve", (3, 1.0, 0.0, 0.5, 4, 0, 1, 3)),
+            ("point, normal", (0, 1.0, 0.0, 0.4, 0, 0, 0, 0)),
+            ("box and diamond", (5, 1.0, 0.0, 0.35, 2, 1, 0, 0)),
+        ];
+        let blend = |b: u32, under: f64, over: f64| -> f64 {
+            match b {
+                0 => over,
+                1 => under * over,
+                3 => {
+                    if under < 0.5 {
+                        2.0 * under * over
+                    } else {
+                        1.0 - 2.0 * (1.0 - under) * (1.0 - over)
+                    }
+                }
+                4 => under.min(over),
+                5 => (under + over).min(1.0),
+                _ => 1.0 - (1.0 - under) * (1.0 - over),
+            }
+        };
+        let distance = |shape: u32, z: [f64; 2], r: f64| -> f64 {
+            let (re, im) = (z[0].abs(), z[1].abs());
+            match shape {
+                0 => z[0].hypot(z[1]),
+                1 => (z[0].hypot(z[1]) - r).abs(),
+                3 => re.min(im).min((z[0] - z[1]).abs().min((z[0] + z[1]).abs()) * std::f64::consts::FRAC_1_SQRT_2),
+                4 => re + im,
+                5 => re.max(im),
+                6 => (re.powf(2.0 / 3.0) + im.powf(2.0 / 3.0)).powf(1.5),
+                7 => im,
+                _ => re.min(im),
+            }
+        };
+        let default_threshold = |shape: u32| [0.60, 0.078, 0.10, 0.074, 0.80, 0.55, 1.06, 0.127][shape as usize];
+
+        for (name, (shape, radius, threshold, opacity, b, order, start, curve)) in cases {
+            for shape in if name == "box and diamond" { vec![5u32, 4] } else { vec![shape] } {
+                let mut c = config.clone();
+                c.escape.coloring_params = [
+                    ("shape", shape as f32),
+                    ("radius", radius as f32),
+                    ("threshold", threshold as f32),
+                    ("opacity", opacity as f32),
+                    ("blend", b as f32),
+                    ("order", order as f32),
+                    ("start", start as f32),
+                    ("transform", curve as f32),
+                ]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect();
+                let job = crate::renderer::RenderJob::new(&c, w, h);
+                let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                    .expect("render")
+                    .rgba_data;
+
+                let (mut thr, mut op) = (if threshold > 0.0 { threshold } else { default_threshold(shape) }, opacity);
+                if b == 2 && shape == 2 {
+                    op = op.min(0.15);
+                    thr = thr.min(0.08);
+                }
+                let (mut agree, mut painted, mut worst) = (0usize, 0usize, 0.0f64);
+                for (i, p) in out.chunks_exact(4).enumerate() {
+                    let (px, py) = ((i % w as usize) as f64, (i / w as usize) as f64);
+                    let pc = [((px + 0.5) / w as f64 - 0.5) * span_x + cx, -(((py + 0.5) / h as f64 - 0.5) * span_y) + cy];
+                    let mut z = [0.0f64, 0.0];
+                    let mut col = [if start == 1 { 1.0 } else { 0.0 }; 3];
+                    let mut hits = 0;
+                    for _ in 0..40 {
+                        z = [z[0] * z[0] - z[1] * z[1] + pc[0], 2.0 * z[0] * z[1] + pc[1]];
+                        let d = distance(shape, z, radius);
+                        if d < thr {
+                            hits += 1;
+                            let x = (d / thr).clamp(0.0, 1.0);
+                            let key = match curve {
+                                1 => x.sqrt(),
+                                2 => (1.0 + x).log2(),
+                                3 => x * x * (3.0 - 2.0 * x),
+                                _ => x,
+                            };
+                            let sample = key.powf(2.2);
+                            let alpha = op * (1.0 - key);
+                            for ch in col.iter_mut() {
+                                let blended = if order == 1 { blend(b, sample, *ch) } else { blend(b, *ch, sample) };
+                                *ch = blended * alpha + *ch * (1.0 - alpha);
+                            }
+                        }
+                        if z[0] * z[0] + z[1] * z[1] > 4_294_967_296.0 {
+                            break;
+                        }
+                    }
+                    painted += usize::from(hits > 0);
+                    let e = (0..3)
+                        .map(|k| (p[k] as f64 - col[k].clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0).abs())
+                        .fold(0.0, f64::max);
+                    worst = worst.max(e);
+                    agree += usize::from(e <= 2.0);
+                }
+                let n = (w * h) as usize;
+                println!("{name} [shape {shape}]: {agree}/{n} within two levels, {painted} pixels painted, worst {worst:.1}");
+                assert!(painted > n / 20, "{name}: only {painted} pixels painted");
+                assert!(agree * 100 >= n * 98, "{name}: only {agree} of {n} pixels agree with techmatt's trace");
+            }
+        }
+    }
+
+    /// Direct orbit traps sample the palette inside the loop, so a palette
+    /// edit must re-iterate: recolouring the records would keep the old
+    /// palette's colours. Changed, the render matches a fresh one.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_palette_edit_re_iterates_direct_traps() {
+        let _diag = diag_lock();
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let mut config = crate::config::FractalConfig::default();
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        renderer.update_background_color(&queue, [0.0, 0.0, 0.0]);
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.center_re = "-0.6".to_string();
+        esc.center_im = "0.1".to_string();
+        esc.zoom_log2 = 0.4;
+        esc.max_iter = 100;
+        esc.coloring = "direct_traps".to_string();
+        let settle = |escape: &mut crate::escape::EscapeRenderer, renderer: &mut crate::renderer::compute_kernel::FlameRenderer| {
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("palette edit") });
+                let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.escape_palette_view(false), renderer.palette_generation());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "render did not settle");
+            }
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("palette edit tonemap") });
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            pollster::block_on(renderer.read_fractal_pixels(&device, &queue, false, [0.0, 0.0, 0.0])).expect("readback").2
+        };
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        let before = settle(&mut escape, &mut renderer);
+
+        config.palette_reverse = true;
+        renderer.update_palette(&device, &queue, &config.palette, config.palette_rotation,
+            config.palette_squeeze, config.palette_squeeze_mode, config.palette_squeeze_falloff,
+            config.palette_log_strength, config.palette_reverse);
+        let after = settle(&mut escape, &mut renderer);
+        assert_ne!(escape.last_path, "recolor", "a palette edit recoloured the baked colours");
+        assert_ne!(before, after, "the palette edit changed nothing");
+        let mut fresh = crate::escape::EscapeRenderer::new(&device, w, h);
+        assert_eq!(after, settle(&mut fresh, &mut renderer), "the re-iterated picture differs from a fresh one");
+        fresh.destroy();
+        escape.destroy();
+    }
+
+    /// The texture overlay is Kalles Fraktaler's: each pixel shows the
+    /// texture at itself plus `KF_TextureWarp`'s offset, driven by the
+    /// smooth count's difference to the pixel on its left and the row
+    /// below (y up, mirrored at the frame's edge), and at merge 1 the
+    /// texture alone. The texture here is synthetic and smooth, handed
+    /// to the renderer under the config's key so nothing is generated or
+    /// cached; the count is read back from the height texture, so what
+    /// is compared is the warp and the lookup, through the whole render
+    /// and tone map. Merge 0 must change nothing.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_texture_overlay_warps_as_kalles_fraktaler_does() {
+        use crate::config::escape::{EscapeTexture, TextureFit};
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        let (tw, th) = (48u32, 40u32);
+        let tex = image::RgbaImage::from_fn(tw, th, |x, y| {
+            let tau = std::f32::consts::TAU;
+            let (u, v) = (x as f32 / tw as f32, y as f32 / th as f32);
+            let c = |a: f32| (128.0 + 100.0 * (tau * a).sin()).round() as u8;
+            image::Rgba([c(u), c(v), c(u + v), 255])
+        });
+        let recipe = crate::textures::as_recipe(&crate::config::FractalConfig::default(), (64, 64));
+        let key = crate::textures::cache::key(&recipe);
+
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        config.escape.formula = "mandelbrot".to_string();
+        config.escape.coloring = "smooth".to_string();
+        config.escape.center_re = "-0.75".to_string();
+        config.escape.center_im = "0.1".to_string();
+        config.escape.zoom_log2 = 1.5;
+        config.escape.max_iter = 64;
+        config.escape.bailout = 1.0e4;
+        config.escape.supersample = 1;
+        config.escape.texture = Some(EscapeTexture { name: "synthetic".to_string(), config: Box::new(recipe) });
+
+        let mut engines = crate::renderer::RenderEngines::default();
+        let mut esc = crate::escape::EscapeRenderer::new(&device, w, h);
+        assert!(esc.set_texture(&device, &queue, &key, &tex));
+        engines.escape = Some(esc);
+        let render = |c: &crate::config::FractalConfig, engines: &mut crate::renderer::RenderEngines| -> Vec<u8> {
+            let job = crate::renderer::RenderJob::new(c, w, h).with_engines(engines);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+
+        let plain = render(&config, &mut engines);
+        let mut off = config.clone();
+        off.escape.texture_overlay.enabled = true;
+        off.escape.texture_overlay.merge = 0.0;
+        let unmerged = render(&off, &mut engines);
+        let worst = plain.iter().zip(&unmerged).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap();
+        println!("merge 0 against no overlay: worst {worst} levels");
+        assert!(worst <= 1, "merge 0 moved a channel by {worst} levels");
+
+        // KF_TextureWarp, one axis, in f32 as the shader runs it.
+        let axis = |d: f32, power: f32, ratio: f32| -> f32 {
+            let base = 1.0 + d;
+            let mag = (power * base.abs().max(1e-30).log2()).clamp(-126.0, 126.0).exp2();
+            let odd = (power as u32) & 1 == 1;
+            let mut x = if base < 0.0 && odd { -mag } else { mag };
+            let mut s = 1.0;
+            if x <= 1.0 {
+                x = 1.0 / x;
+                s = -1.0;
+            }
+            let q = std::f32::consts::FRAC_PI_4;
+            s * power * ((x.atan() - q) / q * ratio / 100.0)
+        };
+        // The texture as a filtering, repeating sampler reads it.
+        let sample = |u: f32, v: f32| -> [f32; 3] {
+            let fx = u * tw as f32 - 0.5;
+            let fy = v * th as f32 - 0.5;
+            let (x0, y0) = (fx.floor(), fy.floor());
+            let (ax, ay) = (fx - x0, fy - y0);
+            let at = |x: f32, y: f32| {
+                let xi = (x as i64).rem_euclid(tw as i64) as u32;
+                let yi = (y as i64).rem_euclid(th as i64) as u32;
+                tex.get_pixel(xi, yi).0
+            };
+            let mut out = [0.0f32; 3];
+            for (k, o) in out.iter_mut().enumerate() {
+                let p = |x, y| at(x, y)[k] as f32 / 255.0;
+                let top = p(x0, y0) * (1.0 - ax) + p(x0 + 1.0, y0) * ax;
+                let bot = p(x0, y0 + 1.0) * (1.0 - ax) + p(x0 + 1.0, y0 + 1.0) * ax;
+                *o = top * (1.0 - ay) + bot * ay;
+            }
+            out
+        };
+
+        for (fit, power, ratio, tile) in [
+            (TextureFit::Tile, 200.0f32, 100.0f32, 1.0f32),
+            (TextureFit::Tile, 37.0, 60.0, 2.5),
+            (TextureFit::Stretch, 200.0, 100.0, 1.0),
+        ] {
+            let mut c = config.clone();
+            let ov = &mut c.escape.texture_overlay;
+            ov.enabled = true;
+            ov.merge = 1.0;
+            ov.power = power;
+            ov.ratio = ratio;
+            ov.fit = fit;
+            ov.tile_scale = tile;
+            let gpu = render(&c, &mut engines);
+            let n = pollster::block_on(engines.escape.as_ref().unwrap().read_height_channel(&device, &queue, false, 2))
+                .expect("height");
+            let n_at = |x: i32, y: i32| n[(y.clamp(0, h as i32 - 1) as u32 * w + x.clamp(0, w as i32 - 1) as u32) as usize];
+            let interior = n.iter().filter(|&&v| v == config.escape.max_iter as f32).count();
+            assert!(interior > 0 && interior < (w * h) as usize, "the frame should hold both sides of the set");
+
+            let (mut close, mut worst, mut warped) = (0usize, 0i32, 0usize);
+            for py in 0..h as i32 {
+                for px in 0..w as i32 {
+                    let n0 = n_at(px, py);
+                    let dx = if px - 1 < 0 { -(n_at(px + 1, py) - n0) } else { n_at(px - 1, py) - n0 };
+                    let dy = if py + 1 >= h as i32 { -(n_at(px, py - 1) - n0) } else { n_at(px, py + 1) - n0 };
+                    let offs = power / 64.0;
+                    let wx = offs + axis(dx, power, ratio);
+                    let wy = offs - axis(dy, power, ratio);
+                    if n0 < config.escape.max_iter as f32 {
+                        warped += usize::from((wx - offs).abs().max((wy - offs).abs()) > 2.0);
+                    }
+                    let pos = (px as f32 + 0.5 + wx, py as f32 + 0.5 - wy);
+                    let (u, v) = match fit {
+                        TextureFit::Tile => (pos.0 / (tw as f32 * tile), pos.1 / (th as f32 * tile)),
+                        TextureFit::Stretch => (
+                            (pos.0 / w as f32).clamp(0.5 / tw as f32, 1.0 - 0.5 / tw as f32),
+                            (pos.1 / h as f32).clamp(0.5 / th as f32, 1.0 - 0.5 / th as f32),
+                        ),
+                    };
+                    let want = sample(u, v);
+                    let i = ((py as u32 * w + px as u32) * 4) as usize;
+                    let d = (0..3)
+                        .map(|k| (gpu[i + k] as i32 - (want[k] * 255.0).round() as i32).abs())
+                        .max()
+                        .unwrap();
+                    worst = worst.max(d);
+                    close += usize::from(d <= 2);
+                }
+            }
+            let share = close as f64 / (w * h) as f64;
+            let moved = warped as f64 / ((w * h) as usize - interior) as f64;
+            println!(
+                "{fit:?} power {power} ratio {ratio} tile {tile}: {share:.4} within two levels, worst {worst}; {moved:.3} of the outside's lookups pushed more than two pixels"
+            );
+            assert!(moved > 0.7, "the warp hardly moves anything ({moved:.3}): the comparison proves nothing");
+            assert!(share > 0.99, "{fit:?}: only {share:.4} of pixels show KF2's warped texture");
+        }
+
+        // Supersampled, the warp differences and pushes whole OUTPUT
+        // pixels, so the picture is the 1x one smoothed, not one pushed
+        // half as far.
+        let mut c = config.clone();
+        c.escape.texture_overlay.enabled = true;
+        c.escape.texture_overlay.fit = TextureFit::Tile;
+        let one = render(&c, &mut engines);
+        c.escape.supersample = 2;
+        let two = render(&c, &mut engines);
+        let mut half = c.clone();
+        half.escape.supersample = 1;
+        half.escape.texture_overlay.tile_scale = 0.5;
+        let mean = |a: &[u8], b: &[u8]| {
+            a.iter().zip(b).map(|(x, y)| (*x as f64 - *y as f64).abs()).sum::<f64>() / a.len() as f64
+        };
+        let halved = render(&half, &mut engines);
+        let (same, wrong) = (mean(&one, &two), mean(&one, &halved));
+        println!("2x against 1x: mean {same:.2} levels; a texture at half the size against 1x: {wrong:.2}");
+        // Measured 1.99 and 57.4.
+        assert!(wrong > 20.0, "a mis-scaled texture should not pass for the 1x picture ({wrong:.2})");
+        assert!(same < 6.0, "2x antialiasing changed the overlay by {same:.2} levels on average");
+    }
+
+    /// The relief's bump (`ShadingTexture::Simulation`) tilts the surface
+    /// by the texture's luminance: in a view wholly outside the set, a
+    /// flat palette and no relief height of its own, the shading is the
+    /// bump alone, and it follows the response the shader's formula
+    /// gives the CPU-sampled texture -- `dot(g, light) / sqrt(1 + g.g)`
+    /// with `g` from central differences one render pixel apart, the
+    /// texture repeated at `texture_scale` display pixels per texel. A
+    /// light turned a quarter, or a texture at the wrong scale, does not
+    /// fit. A flat texture, or none, draws what no bump draws.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_relief_bump_is_the_textures_luminance() {
+        use crate::config::escape::{EscapeTexture, ShadingTexture};
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        let (tw, th) = (40u32, 32u32);
+        let wavy = image::RgbaImage::from_fn(tw, th, |x, y| {
+            let tau = std::f32::consts::TAU;
+            let (u, v) = (x as f32 / tw as f32, y as f32 / th as f32);
+            let c = |a: f32| (128.0 + 100.0 * (tau * a).sin()).round() as u8;
+            image::Rgba([c(u + 0.25 * v), c(2.0 * v), c(u - v), 255])
+        });
+        let flat = image::RgbaImage::from_pixel(8, 8, image::Rgba([90, 140, 200, 255]));
+        let recipe = crate::textures::as_recipe(&crate::config::FractalConfig::default(), (64, 64));
+        let key = crate::textures::cache::key(&recipe);
+
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        let stop = |position: f32| crate::scene::palette::ColorStop { position, color: [0.5, 0.5, 0.5] };
+        config.palette.stops = vec![stop(0.0), stop(1.0)];
+        // Every point escapes at once: no interior, no structure.
+        config.escape.formula = "mandelbrot".to_string();
+        config.escape.coloring = "smooth".to_string();
+        config.escape.center_re = "2.5".to_string();
+        config.escape.center_im = "2.5".to_string();
+        config.escape.zoom_log2 = 2.0;
+        config.escape.max_iter = 16;
+        config.escape.supersample = 1;
+        config.escape.shading.enabled = true;
+        config.escape.shading.height = 0.0;
+        config.escape.shading.light_angle = 135.0;
+        config.escape.shading.texture_strength = 0.5;
+        config.escape.shading.texture_scale = 2.0;
+        config.escape.texture = Some(EscapeTexture { name: "synthetic".to_string(), config: Box::new(recipe.clone()) });
+
+        let render_with = |c: &crate::config::FractalConfig, tex: Option<&image::RgbaImage>| -> Vec<u8> {
+            let mut engines = crate::renderer::RenderEngines::default();
+            let mut esc = crate::escape::EscapeRenderer::new(&device, w, h);
+            if let Some(t) = tex {
+                assert!(esc.set_texture(&device, &queue, &key, t));
+            }
+            engines.escape = Some(esc);
+            let job = crate::renderer::RenderJob::new(c, w, h).with_engines(&mut engines);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+
+        let mut none = config.clone();
+        none.escape.shading.texture_kind = ShadingTexture::None;
+        let plain = render_with(&none, Some(&wavy));
+        let mut bump = config.clone();
+        bump.escape.shading.texture_kind = ShadingTexture::Simulation;
+        assert!(bump.escape.uses_texture());
+        let flat_out = render_with(&bump, Some(&flat));
+        assert_eq!(flat_out, plain, "a flat texture tilted the surface");
+        let mut untextured = bump.clone();
+        untextured.escape.texture = None;
+        assert!(!untextured.escape.uses_texture());
+        assert_eq!(render_with(&untextured, None), plain, "the bump drew without a texture");
+
+        // The shader's response, from the CPU-sampled texture.
+        let lum = |q: (f32, f32)| -> f32 {
+            let fx = q.0 - 0.5;
+            let fy = q.1 - 0.5;
+            let (x0, y0) = (fx.floor(), fy.floor());
+            let (ax, ay) = (fx - x0, fy - y0);
+            let at = |x: f32, y: f32| {
+                let xi = (x as i64).rem_euclid(tw as i64) as u32;
+                let yi = (y as i64).rem_euclid(th as i64) as u32;
+                let p = wavy.get_pixel(xi, yi).0;
+                (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) / 255.0
+            };
+            let top = at(x0, y0) * (1.0 - ax) + at(x0 + 1.0, y0) * ax;
+            let bot = at(x0, y0 + 1.0) * (1.0 - ax) + at(x0 + 1.0, y0 + 1.0) * ax;
+            top * (1.0 - ay) + bot * ay - 0.5
+        };
+        let response = |light_deg: f32, scale: f32| -> Vec<f32> {
+            let (ls, lc) = light_deg.to_radians().sin_cos();
+            let k = config.escape.shading.texture_strength * 8.0;
+            let mut out = Vec::with_capacity((w * h) as usize);
+            for py in 0..h {
+                for px in 0..w {
+                    let q = (px as f32 / scale, py as f32 / scale);
+                    let e = 1.0 / scale;
+                    let nx = lum((q.0 + e, q.1)) - lum((q.0 - e, q.1));
+                    let ny = lum((q.0, q.1 + e)) - lum((q.0, q.1 - e));
+                    let g = (-nx * k, ny * k);
+                    let s = g.0 * lc + g.1 * ls;
+                    out.push(s / (1.0 + g.0 * g.0 + g.1 * g.1).sqrt());
+                }
+            }
+            out
+        };
+        let correlation = |a: &[f32], b: &[f32]| -> f64 {
+            let n = a.len() as f64;
+            let (ma, mb) = (
+                a.iter().map(|v| *v as f64).sum::<f64>() / n,
+                b.iter().map(|v| *v as f64).sum::<f64>() / n,
+            );
+            let (mut sab, mut saa, mut sbb) = (0.0, 0.0, 0.0);
+            for (x, y) in a.iter().zip(b) {
+                let (dx, dy) = (*x as f64 - ma, *y as f64 - mb);
+                sab += dx * dy;
+                saa += dx * dx;
+                sbb += dy * dy;
+            }
+            sab / (saa * sbb).sqrt().max(1e-12)
+        };
+
+        let gpu = render_with(&bump, Some(&wavy));
+        // The shading's effect: how far each pixel moved off the flat grey.
+        let lit: Vec<f32> = gpu.chunks(4).zip(plain.chunks(4)).map(|(a, b)| a[1] as f32 - b[1] as f32).collect();
+        let moved = lit.iter().filter(|d| d.abs() > 4.0).count() as f64 / lit.len() as f64;
+        let right = correlation(&lit, &response(135.0, 2.0));
+        let turned = correlation(&lit, &response(225.0, 2.0));
+        let rescaled = correlation(&lit, &response(135.0, 3.0));
+        println!(
+            "bump: {moved:.3} of pixels moved; against the formula {right:.4}, light turned a quarter {turned:.4}, scale 3 {rescaled:.4}"
+        );
+        assert!(moved > 0.5, "the bump hardly shows ({moved:.3})");
+        assert!(right > 0.97, "the bump does not follow the texture's slope ({right:.4})");
+        assert!(turned < 0.5 && rescaled < right - 0.1, "the comparison cannot tell direction or scale apart");
+
+        // Display pixels per texel: 2x antialiasing keeps the bump's size.
+        let mut two = bump.clone();
+        two.escape.supersample = 2;
+        let lit2: Vec<f32> =
+            render_with(&two, Some(&wavy)).chunks(4).zip(plain.chunks(4)).map(|(a, b)| a[1] as f32 - b[1] as f32).collect();
+        let at2 = correlation(&lit2, &response(135.0, 2.0));
+        println!("bump at 2x against the 1x formula: {at2:.4}");
+        assert!(at2 > 0.9, "antialiasing changed the bump ({at2:.4})");
+    }
+
+    /// The image trap draws what Ultra Fractal's Direct Orbit Traps draws
+    /// with its Image Trap, from their source: each iterate that has not
+    /// bailed out, moved by the trap position, reads the image over
+    /// (-1,-1)..(1,1) (transparent outside, proportions kept), and
+    /// merges into the colour so far with `FullMerge` -- compose over
+    /// blend over mergeX -- in display values, from an opaque base.
+    /// Ported to the CPU in f32 with a bilinear sampler, through the
+    /// whole render: bottom-up and top-down, several merge modes, a
+    /// moved and turned trap, and a texture with transparent parts, so
+    /// the alpha arithmetic and the coverage it becomes are both tested.
+    ///
+    /// Measured: 12,285 or 12,286 of 12,288 pixels within two levels in
+    /// every case. The two that are not, every time, are orbits f32
+    /// cannot follow -- against f64 they drift by 13 and by 14,000
+    /// before escaping -- so the GPU's rounding and the CPU's take them
+    /// to different places; the third, in some cases, is three levels
+    /// out after 48 merges.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_image_trap_draws_what_ultra_fractals_source_says() {
+        use crate::config::escape::EscapeTexture;
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        // Wider than tall, so Keep proportions has something to keep;
+        // transparent in a disc and towards one corner.
+        let (tw, th) = (48u32, 32u32);
+        let tex = image::RgbaImage::from_fn(tw, th, |x, y| {
+            let (u, v) = (x as f32 / (tw - 1) as f32, y as f32 / (th - 1) as f32);
+            let r = (u * 230.0 + 20.0) as u8;
+            let g = (v * 200.0 + 40.0) as u8;
+            let b = ((1.0 - u) * 120.0 + v * 100.0) as u8;
+            let (dx, dy) = (u - 0.35, v - 0.5);
+            let a = if dx * dx + dy * dy < 0.04 { 0 } else { ((1.0 - 0.6 * u * v) * 255.0) as u8 };
+            image::Rgba([r, g, b, a])
+        });
+        let recipe = crate::textures::as_recipe(&crate::config::FractalConfig::default(), (64, 64));
+        let key = crate::textures::cache::key(&recipe);
+
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        config.escape.formula = "mandelbrot".to_string();
+        config.escape.coloring = "image_trap".to_string();
+        config.escape.center_re = "-0.6".to_string();
+        config.escape.center_im = "0.1".to_string();
+        config.escape.zoom_log2 = 0.6;
+        config.escape.max_iter = 48;
+        config.escape.bailout = 4.0;
+        config.escape.supersample = 1;
+        config.escape.texture = Some(EscapeTexture { name: "synthetic".to_string(), config: Box::new(recipe) });
+        assert!(config.escape.uses_texture());
+        let span_y = (4.0 / config.escape.zoom_log2.exp2()) as f32;
+
+        let mut engines = crate::renderer::RenderEngines::default();
+        let mut esc = crate::escape::EscapeRenderer::new(&device, w, h);
+        assert!(esc.set_texture(&device, &queue, &key, &tex));
+        engines.escape = Some(esc);
+
+        // The texture as the sampler reads it: bilinear, clamped.
+        let sample = |u: f32, v: f32| -> [f32; 4] {
+            let fx = u * tw as f32 - 0.5;
+            let fy = v * th as f32 - 0.5;
+            let (x0, y0) = (fx.floor(), fy.floor());
+            let (ax, ay) = (fx - x0, fy - y0);
+            let at = |x: f32, y: f32| {
+                let xi = (x as i64).clamp(0, tw as i64 - 1) as u32;
+                let yi = (y as i64).clamp(0, th as i64 - 1) as u32;
+                tex.get_pixel(xi, yi).0
+            };
+            let mut out = [0.0f32; 4];
+            for (k, o) in out.iter_mut().enumerate() {
+                let p = |x, y| at(x, y)[k] as f32 / 255.0;
+                let top = p(x0, y0) * (1.0 - ax) + p(x0 + 1.0, y0) * ax;
+                let bot = p(x0, y0 + 1.0) * (1.0 - ax) + p(x0 + 1.0, y0 + 1.0) * ax;
+                *o = top * (1.0 - ay) + bot * ay;
+            }
+            out
+        };
+        // common.ulb TrapTransform, ImageWrapper.NormalizePixel and
+        // Image.getColor.
+        let trap_colour = |z: (f32, f32), p: &[f32; 13]| -> [f32; 4] {
+            let r = p[3].to_radians();
+            let d = (z.0 - p[0], z.1 - p[1]);
+            let mut q = ((d.0 * r.cos() - d.1 * r.sin()) / p[2], (d.0 * r.sin() + d.1 * r.cos()) / p[2]);
+            q.1 *= p[4];
+            let k = p[5].to_radians();
+            q.0 = q.0 * k.cos() - q.1 * k.sin();
+            if p[6] > 0.5 {
+                if tw > th {
+                    q.1 = q.1 * tw as f32 / th as f32;
+                } else {
+                    q.0 = q.0 * th as f32 / tw as f32;
+                }
+            }
+            if !(q.0.abs() <= 1.0 && q.1.abs() <= 1.0) {
+                return [0.0; 4];
+            }
+            sample((q.0 + 1.0) * 0.5, (1.0 - q.1) * 0.5)
+        };
+        let mergex = |mode: u32, b: [f32; 4], t: [f32; 4]| -> [f32; 4] {
+            let mut m = [0.0f32; 4];
+            for k in 0..3 {
+                m[k] = match mode {
+                    1 => b[k] * t[k],
+                    2 => 1.0 - (1.0 - b[k]) * (1.0 - t[k]),
+                    3 => b[k].min(t[k]),
+                    4 => b[k].max(t[k]),
+                    5 => (b[k] - t[k]).abs(),
+                    6 => (b[k] + t[k]).min(1.0),
+                    7 => (b[k] - t[k]).max(0.0),
+                    8 => if k == 0 { t[k] } else { b[k] },
+                    9 => if k == 1 { t[k] } else { b[k] },
+                    10 => if k == 2 { t[k] } else { b[k] },
+                    _ => t[k],
+                };
+            }
+            m[3] = t[3];
+            m
+        };
+        let compose = |b: [f32; 4], t: [f32; 4], o: f32| -> [f32; 4] {
+            let at = t[3] * o;
+            let a = at + b[3] * (1.0 - at);
+            let mut c = [0.0f32; 4];
+            for k in 0..3 {
+                let v = t[k] * at + b[k] * (b[3] * (1.0 - at));
+                c[k] = if a > 0.0 { v / a.max(1e-30) } else { 0.0 };
+            }
+            c[3] = a;
+            c
+        };
+        let full_merge = |mode: u32, b: [f32; 4], t: [f32; 4], o: f32| -> [f32; 4] {
+            let m = mergex(mode, b, t);
+            let mut bl = [0.0f32; 4];
+            for k in 0..4 {
+                bl[k] = t[k] + (m[k] - t[k]) * b[3];
+            }
+            compose(b, bl, o)
+        };
+        let expected = |p: &[f32; 13], px: u32, py: u32| -> [f32; 4] {
+            let span_x = span_y * w as f32 / h as f32;
+            let c = (
+                -0.6 + ((px as f32 + 0.5) / w as f32 - 0.5) * span_x,
+                0.1 - ((py as f32 + 0.5) / h as f32 - 0.5) * span_y,
+            );
+            let mut state = [p[10], p[11], p[12], 1.0];
+            let mut z = (0.0f32, 0.0f32);
+            for _ in 0..48 {
+                z = (z.0 * z.0 - z.1 * z.1 + c.0, 2.0 * z.0 * z.1 + c.1);
+                if z.0 * z.0 + z.1 * z.1 > 4.0 {
+                    break;
+                }
+                let current = trap_colour(z, p);
+                let o = p[7].clamp(0.0, 1.0);
+                state = if p[8] > 0.5 {
+                    full_merge(p[9] as u32, current, state, o)
+                } else {
+                    full_merge(p[9] as u32, state, current, o)
+                };
+            }
+            state
+        };
+
+        let names = [
+            "trap_re", "trap_im", "trap_scale", "trap_rotation", "trap_aspect", "trap_skew", "proportions", "opacity", "order",
+            "merge", "base_r", "base_g", "base_b",
+        ];
+        let defaults = [0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.2, 0.0, 0.0, 0.0, 0.0, 0.0f32];
+        let cases: [(&str, &[(usize, f32)]); 6] = [
+            ("UF's defaults", &[]),
+            ("moved, turned, skewed, stretched", &[(0, 0.3), (1, -0.2), (2, 0.7), (3, 30.0), (4, 1.4), (5, 15.0), (6, 0.0)]),
+            ("top-down at 0.5", &[(7, 0.5), (8, 1.0)]),
+            ("multiply on white", &[(9, 1.0), (10, 1.0), (11, 1.0), (12, 1.0), (7, 0.6)]),
+            ("difference", &[(9, 5.0), (7, 0.7), (11, 0.4)]),
+            ("red channel, top-down at 1", &[(9, 8.0), (7, 1.0), (8, 1.0)]),
+        ];
+        let encode = |lin: f32| (lin.clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0).round() as i32;
+        for (label, overrides) in cases {
+            let mut p = defaults;
+            for &(i, v) in overrides {
+                p[i] = v;
+            }
+            let mut c = config.clone();
+            for (name, v) in names.iter().zip(p) {
+                c.escape.coloring_params.insert(name.to_string(), v);
+            }
+            let job = crate::renderer::RenderJob::new(&c, w, h).with_engines(&mut engines);
+            let gpu = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data;
+            let (mut close, mut worst, mut partial) = (0usize, 0i32, 0usize);
+            for py in 0..h {
+                for px in 0..w {
+                    let s = expected(&p, px, py);
+                    let a = s[3].clamp(0.0, 1.0);
+                    partial += usize::from(a < 0.99);
+                    let i = ((py * w + px) * 4) as usize;
+                    let d = (0..3)
+                        .map(|k| (gpu[i + k] as i32 - encode(s[k].clamp(0.0, 1.0).powf(2.2) * a)).abs())
+                        .max()
+                        .unwrap();
+                    worst = worst.max(d);
+                    close += usize::from(d <= 2);
+                }
+            }
+            let share = close as f64 / (w * h) as f64;
+            println!("{label}: {share:.4} within two levels (worst {worst}); {partial} pixels partly transparent");
+            assert!(share > 0.99, "{label}: only {share:.4} of pixels draw UF's image trap");
+            if label.starts_with("top-down") {
+                assert!(partial > 100, "top-down should leave the colour partly transparent");
+            }
+        }
+
+        // The palette is not the image trap's: a palette edit recolours
+        // the stored records -- colour and alpha -- and changes nothing.
+        let mut c = config.clone();
+        for (name, v) in names.iter().zip([0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.5, 1.0, 0.0, 0.0, 0.0, 0.0f32]) {
+            c.escape.coloring_params.insert(name.to_string(), v);
+        }
+        let render_into = |c: &crate::config::FractalConfig, engines: &mut crate::renderer::RenderEngines| {
+            let job = crate::renderer::RenderJob::new(c, w, h).with_engines(engines);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+        let before = render_into(&c, &mut engines);
+        c.palette.stops.reverse();
+        assert_eq!(render_into(&c, &mut engines), before, "a palette edit moved the image trap");
+        assert_eq!(engines.escape.as_ref().unwrap().last_path, "recolor", "a palette edit should recolour");
+
+        // Another texture is another picture: it re-iterates, and draws
+        // what a fresh renderer draws with it.
+        let mut recipe2 = crate::textures::as_recipe(&crate::config::FractalConfig::default(), (64, 64));
+        recipe2.sim.seed = recipe2.sim.seed.wrapping_add(1);
+        let key2 = crate::textures::cache::key(&recipe2);
+        assert_ne!(key, key2);
+        let tex2 = image::RgbaImage::from_fn(tw, th, |x, y| {
+            let p = tex.get_pixel(x, y).0;
+            image::Rgba([p[2], p[0], p[1], 255])
+        });
+        c.escape.texture = Some(EscapeTexture { name: "other".to_string(), config: Box::new(recipe2) });
+        engines.escape.as_mut().unwrap().set_texture(&device, &queue, &key2, &tex2);
+        let swapped = render_into(&c, &mut engines);
+        assert_ne!(swapped, before, "the new texture changed nothing");
+        let mut fresh = crate::renderer::RenderEngines::default();
+        let mut esc = crate::escape::EscapeRenderer::new(&device, w, h);
+        esc.set_texture(&device, &queue, &key2, &tex2);
+        fresh.escape = Some(esc);
+        assert_eq!(swapped, render_into(&c, &mut fresh), "a texture swap kept the old texture's records");
+    }
+
+    /// A stepped palette draws every stop as a flat band: an escape
+    /// render through it shows the stops' colours and next to nothing
+    /// in between, where the blended palette shows a continuum.
+    ///
+    /// Through the unified render API, so the headless path's choice
+    /// of palette table is what is tested. The Linear tone map at
+    /// exposure and gamma 1 hands an 8-bit stop back within a few
+    /// levels (25 comes back 21); pixels within a texel of a band edge
+    /// are blended by the sampler's filtering, hence a share rather
+    /// than all of them. The last stop sits at 1.0, so the blended
+    /// palette has no flat run past it -- and the stepped one shows it
+    /// only at the very top.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_stepped_palette_draws_only_its_stops() {
+        let (device, queue) = repro_device();
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        // See `the_palette_map_draws_what_its_curves_say`.
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        let stops = [[0.9f32, 0.1, 0.1], [0.1, 0.8, 0.2], [0.1, 0.2, 0.9], [0.95, 0.9, 0.2]];
+        config.palette = crate::scene::palette::Palette {
+            name: "four".to_string(),
+            stops: stops
+                .iter()
+                .enumerate()
+                .map(|(i, c)| crate::scene::palette::ColorStop {
+                    position: i as f32 / (stops.len() - 1) as f32,
+                    color: *c,
+                })
+                .collect(),
+            locked: false,
+            built_in: false,
+        };
+        config.escape.center_re = "-0.7436438870371587".to_string();
+        config.escape.center_im = "0.1318259042053119".to_string();
+        config.escape.zoom_log2 = 9.0;
+        config.escape.max_iter = 800;
+        let bytes: Vec<[i32; 3]> =
+            stops.iter().map(|c| c.map(|v| (v * 255.0) as u8 as i32)).collect();
+
+        let share_on_stops = |stepped: bool| -> f64 {
+            let mut c = config.clone();
+            c.escape.palette_map.stepped = stepped;
+            let job = crate::renderer::RenderJob::new(&c, 160, 120);
+            let out = pollster::block_on(crate::renderer::render(
+                &device,
+                &queue,
+                job,
+                &mut crate::renderer::NoProgress,
+            ))
+            .expect("render");
+            let mut lit = 0usize;
+            let mut on_stop = 0usize;
+            for p in out.rgba_data.chunks_exact(4) {
+                if p[..3].iter().all(|v| *v <= 8) {
+                    continue;
+                }
+                lit += 1;
+                if bytes.iter().any(|b| (0..3).all(|k| (p[k] as i32 - b[k]).abs() <= 5)) {
+                    on_stop += 1;
+                }
+            }
+            assert!(lit > 160 * 120 / 4, "the view is mostly interior: {lit} lit");
+            on_stop as f64 / lit as f64
+        };
+        let stepped = share_on_stops(true);
+        let blended = share_on_stops(false);
+        println!("pixels on a stop colour: stepped {stepped:.3}, blended {blended:.3}");
+        assert!(stepped > 0.9, "a stepped palette left {stepped:.3} of pixels on its stops");
+        assert!(blended < 0.2, "the blended palette is already banded ({blended:.3})");
     }
 
     /// A pan must REUSE the reference orbit (relocation), and the
@@ -8054,6 +11194,68 @@ fn main() {
     /// accumulation, and requires them to agree closely: same sample
     /// positions, same average, so the difference is f32 ordering and
     /// the per-sample shading pass, not method.
+    /// MEASUREMENT: how far the smooth count is from exact, against the
+    /// bailout. The usual smooth count assumes |z_{n+1}| = |z_n|^p, which
+    /// ignores + c, and the error of that shrinks as the escape radius
+    /// grows. Per pixel, read the final z and n at each bailout, compute
+    /// the count `n + 1 - ln(ln|z|) / ln p` and compare it with the same
+    /// count at
+    /// bailout 1e15, as near exact as f32 orbits get. The worst and the
+    /// 99th-percentile error, in iterations, over pixels that escape
+    /// both times; Mandelbrot (p = 2) and Multibrot p = 3.
+    #[test]
+    #[ignore = "measurement: needs a GPU"]
+    fn dbg_smooth_count_error_against_bailout() {
+        // The continuous escape potential's count: no ln R in it, so it
+        // does not move with the bailout (subtracting log_p(ln R), as
+        // KF2 and techmatt do to line bands up with n, shifts it by
+        // exactly that).
+        let nu = |r: &crate::escape::renderer::IterRecord, _bailout: f64, p: f64| {
+            let z = ((r.z[0] as f64).powi(2) + (r.z[1] as f64).powi(2)).sqrt();
+            r.n as f64 + 1.0 - z.ln().ln() / p.ln()
+        };
+        for (what, formula, p) in [("mandelbrot", "mandelbrot", 2.0f64), ("multibrot p=3", "multibrot", 3.0)] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = formula.to_string();
+            if formula == "multibrot" {
+                esc.formula_params.insert("power".to_string(), p as f32);
+            }
+            esc.center_re = "-0.6".to_string();
+            esc.center_im = "0.3".to_string();
+            esc.zoom_log2 = 1.5;
+            esc.max_iter = 500;
+            let (w, h) = (96u32, 72u32);
+            let at = |bailout: f64| {
+                let mut e = esc.clone();
+                e.bailout = bailout as f32;
+                records_via(&e, w, h, false, false)
+            };
+            let truth_bail = 1e15;
+            let truth = at(truth_bail);
+            println!("  {what}:");
+            for bailout in [4.0f64, 10.0, 100.0, 1e4, 1e6, 1e8] {
+                let got = at(bailout);
+                let mut errs: Vec<f64> = got
+                    .iter()
+                    .zip(&truth)
+                    .filter(|(g, t)| g.n < esc.max_iter && t.n < esc.max_iter)
+                    .map(|(g, t)| (nu(g, bailout, p) - nu(t, truth_bail, p)).abs())
+                    .filter(|e| e.is_finite())
+                    .collect();
+                errs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                let n = errs.len().max(1);
+                println!(
+                    "    bailout {bailout:>8.0e} (radius {:>8.1}): mean {:.4}, p99 {:.4}, worst {:.4} iterations, over {} pixels",
+                    bailout.sqrt(),
+                    errs.iter().sum::<f64>() / n as f64,
+                    errs[(n * 99 / 100).min(n - 1)],
+                    errs[n - 1],
+                    errs.len()
+                );
+            }
+        }
+    }
+
     /// MEASUREMENT: does relief strength depend on the output size? The
     /// slope is taken per render pixel, so a field that spans the view
     /// rises less per pixel at a larger size. Renders one view with and
@@ -9958,6 +13160,10 @@ fn main() {
             config.levels_gamma,
         );
         let mut escape = crate::escape::EscapeRenderer::new(&device, 128, 96);
+        // A colouring that reads the texture (the image trap) draws only
+        // its base colour without one: give it an opaque gradient.
+        let texture = image::RgbaImage::from_fn(32, 32, |x, y| image::Rgba([40 + 6 * x as u8, 40 + 6 * y as u8, 200, 255]));
+        escape.set_texture(&device, &queue, "combo probe", &texture);
 
         for f in crate::escape::FORMULAS {
             for c in crate::escape::COLORINGS {

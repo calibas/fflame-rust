@@ -473,6 +473,13 @@ pub enum ConfigPath {
     EscapeContrastClip,
     EscapeContrastStrength,
     EscapeContrastTurns,
+    // The value-to-palette map (`PaletteMap`): a transfer curve on the
+    // coloring's value, its pivot, a curve on each palette cycle, and
+    // stepped bands.
+    EscapeTransfer,
+    EscapeTransferPivot,
+    EscapePaletteCurve,
+    EscapePaletteStepped,
     EscapeShadingShadowColor,
     EscapeShadingShadowStrength,
     EscapeShadingShadowBlend,
@@ -483,6 +490,25 @@ pub enum ConfigPath {
     EscapeShadingTextureKind,
     EscapeShadingTextureStrength,
     EscapeShadingTextureScale,
+    // Relief lighting (survey item 7): model, elevation, ambient, the
+    // slope stencil, and a curve on the height.
+    EscapeShadingModel,
+    EscapeShadingElevation,
+    EscapeShadingAmbient,
+    EscapeShadingStencil,
+    EscapeShadingHeightCurve,
+    EscapeShadingHeightPre,
+    EscapeShadingHeightPost,
+    EscapeShadingOffset,
+    EscapeShadingEmboss,
+    EscapeShadingEmbossSections,
+    /// The texture overlay (`TextureOverlay`, Kalles Fraktaler's).
+    EscapeTextureOverlay,
+    EscapeTextureOverlayMerge,
+    EscapeTextureOverlayPower,
+    EscapeTextureOverlayRatio,
+    EscapeTextureOverlayFit,
+    EscapeTextureOverlayTile,
     /// Coloring registry name.
     EscapeColoring,
     /// One parameter of the ACTIVE formula, by name — keyed like
@@ -490,6 +516,12 @@ pub enum ConfigPath {
     EscapeFormulaParam { param: String },
     /// One parameter of the active coloring, same shape.
     EscapeColoringParam { param: String },
+    /// The texture layer (`ColoringLayer`): its colouring by name
+    /// (empty is none), one of its parameters, its blend and weight.
+    EscapeLayerColoring,
+    EscapeLayerParam { param: String },
+    EscapeLayerBlend,
+    EscapeLayerWeight,
     /// The camera lens: a variation warping the screen offset, by
     /// name. Empty is no lens.
     EscapeLens,
@@ -1063,6 +1095,10 @@ impl Display for ConfigPath {
             ConfigPath::EscapeContrastClip => write!(f, "Contrast Clip"),
             ConfigPath::EscapeContrastStrength => write!(f, "Contrast Strength"),
             ConfigPath::EscapeContrastTurns => write!(f, "Contrast Turns"),
+            ConfigPath::EscapeTransfer => write!(f, "Value Transfer"),
+            ConfigPath::EscapeTransferPivot => write!(f, "Transfer Pivot"),
+            ConfigPath::EscapePaletteCurve => write!(f, "Palette Curve"),
+            ConfigPath::EscapePaletteStepped => write!(f, "Stepped Palette"),
             ConfigPath::EscapeShadingShadowColor => write!(f, "Relief Shadow Colour"),
             ConfigPath::EscapeShadingShadowStrength => write!(f, "Relief Shadow Strength"),
             ConfigPath::EscapeShadingShadowBlend => write!(f, "Relief Shadow Blend"),
@@ -1073,9 +1109,29 @@ impl Display for ConfigPath {
             ConfigPath::EscapeShadingTextureKind => write!(f, "Relief Texture"),
             ConfigPath::EscapeShadingTextureStrength => write!(f, "Relief Texture Strength"),
             ConfigPath::EscapeShadingTextureScale => write!(f, "Relief Texture Scale"),
+            ConfigPath::EscapeShadingModel => write!(f, "Relief Lighting Model"),
+            ConfigPath::EscapeShadingElevation => write!(f, "Relief Light Elevation"),
+            ConfigPath::EscapeShadingAmbient => write!(f, "Relief Ambient"),
+            ConfigPath::EscapeShadingStencil => write!(f, "Relief Slope Stencil"),
+            ConfigPath::EscapeShadingHeightCurve => write!(f, "Relief Height Curve"),
+            ConfigPath::EscapeShadingHeightPre => write!(f, "Relief Height Pre-scale"),
+            ConfigPath::EscapeShadingHeightPost => write!(f, "Relief Height Post-scale"),
+            ConfigPath::EscapeShadingOffset => write!(f, "Relief Offset"),
+            ConfigPath::EscapeShadingEmboss => write!(f, "Relief Emboss Type"),
+            ConfigPath::EscapeShadingEmbossSections => write!(f, "Relief Emboss Sections"),
+            ConfigPath::EscapeTextureOverlay => write!(f, "Texture Overlay"),
+            ConfigPath::EscapeTextureOverlayMerge => write!(f, "Texture Overlay Merge"),
+            ConfigPath::EscapeTextureOverlayPower => write!(f, "Texture Overlay Power"),
+            ConfigPath::EscapeTextureOverlayRatio => write!(f, "Texture Overlay Ratio"),
+            ConfigPath::EscapeTextureOverlayFit => write!(f, "Texture Overlay Fit"),
+            ConfigPath::EscapeTextureOverlayTile => write!(f, "Texture Overlay Tile Scale"),
             ConfigPath::EscapeColoring => write!(f, "Escape Coloring"),
             ConfigPath::EscapeFormulaParam { param } => write!(f, "Formula → {param}"),
             ConfigPath::EscapeColoringParam { param } => write!(f, "Coloring → {param}"),
+            ConfigPath::EscapeLayerColoring => write!(f, "Texture Layer"),
+            ConfigPath::EscapeLayerParam { param } => write!(f, "Texture Layer → {param}"),
+            ConfigPath::EscapeLayerBlend => write!(f, "Texture Layer Blend"),
+            ConfigPath::EscapeLayerWeight => write!(f, "Texture Layer Weight"),
             ConfigPath::EscapeLens => write!(f, "Lens"),
             ConfigPath::EscapeLensAmount => write!(f, "Lens Amount"),
             ConfigPath::EscapeLensParam { param } => write!(f, "Lens → {param}"),
@@ -1400,6 +1456,10 @@ impl ConfigPath {
                 I18nKey::simple("history.param.escape_contrast_strength")
             }
             ConfigPath::EscapeContrastTurns => I18nKey::simple("history.param.escape_contrast_turns"),
+            ConfigPath::EscapeTransfer => I18nKey::simple("history.param.escape_transfer"),
+            ConfigPath::EscapeTransferPivot => I18nKey::simple("history.param.escape_transfer_pivot"),
+            ConfigPath::EscapePaletteCurve => I18nKey::simple("history.param.escape_palette_curve"),
+            ConfigPath::EscapePaletteStepped => I18nKey::simple("history.param.escape_palette_stepped"),
             ConfigPath::EscapeShadingShadowColor => I18nKey::simple("history.param.escape_shading_shadow_color"),
             ConfigPath::EscapeShadingShadowStrength => I18nKey::simple("history.param.escape_shading_shadow_strength"),
             ConfigPath::EscapeShadingShadowBlend => I18nKey::simple("history.param.escape_shading_shadow_blend"),
@@ -1410,6 +1470,24 @@ impl ConfigPath {
             ConfigPath::EscapeShadingTextureKind => I18nKey::simple("history.param.escape_shading_texture_kind"),
             ConfigPath::EscapeShadingTextureStrength => I18nKey::simple("history.param.escape_shading_texture_strength"),
             ConfigPath::EscapeShadingTextureScale => I18nKey::simple("history.param.escape_shading_texture_scale"),
+            ConfigPath::EscapeShadingModel => I18nKey::simple("history.param.escape_shading_model"),
+            ConfigPath::EscapeShadingElevation => I18nKey::simple("history.param.escape_shading_elevation"),
+            ConfigPath::EscapeShadingAmbient => I18nKey::simple("history.param.escape_shading_ambient"),
+            ConfigPath::EscapeShadingStencil => I18nKey::simple("history.param.escape_shading_stencil"),
+            ConfigPath::EscapeShadingHeightCurve => I18nKey::simple("history.param.escape_shading_height_curve"),
+            ConfigPath::EscapeShadingHeightPre => I18nKey::simple("history.param.escape_shading_height_pre"),
+            ConfigPath::EscapeShadingHeightPost => I18nKey::simple("history.param.escape_shading_height_post"),
+            ConfigPath::EscapeShadingOffset => I18nKey::simple("history.param.escape_shading_offset"),
+            ConfigPath::EscapeShadingEmboss => I18nKey::simple("history.param.escape_shading_emboss"),
+            ConfigPath::EscapeShadingEmbossSections => {
+                I18nKey::simple("history.param.escape_shading_emboss_sections")
+            }
+            ConfigPath::EscapeTextureOverlay => I18nKey::simple("history.param.escape_texture_overlay"),
+            ConfigPath::EscapeTextureOverlayMerge => I18nKey::simple("history.param.escape_texture_overlay_merge"),
+            ConfigPath::EscapeTextureOverlayPower => I18nKey::simple("history.param.escape_texture_overlay_power"),
+            ConfigPath::EscapeTextureOverlayRatio => I18nKey::simple("history.param.escape_texture_overlay_ratio"),
+            ConfigPath::EscapeTextureOverlayFit => I18nKey::simple("history.param.escape_texture_overlay_fit"),
+            ConfigPath::EscapeTextureOverlayTile => I18nKey::simple("history.param.escape_texture_overlay_tile"),
             ConfigPath::EscapeColoring => I18nKey::simple("history.param.escape_coloring"),
             ConfigPath::EscapeFormulaParam { param } => I18nKey::with_params(
                 "history.param.escape_formula_param",
@@ -1419,6 +1497,13 @@ impl ConfigPath {
                 "history.param.escape_coloring_param",
                 vec![("param", param.clone())],
             ),
+            ConfigPath::EscapeLayerColoring => I18nKey::simple("history.param.escape_layer_coloring"),
+            ConfigPath::EscapeLayerParam { param } => I18nKey::with_params(
+                "history.param.escape_layer_param",
+                vec![("param", param.clone())],
+            ),
+            ConfigPath::EscapeLayerBlend => I18nKey::simple("history.param.escape_layer_blend"),
+            ConfigPath::EscapeLayerWeight => I18nKey::simple("history.param.escape_layer_weight"),
             ConfigPath::EscapeLens => I18nKey::simple("history.param.escape_lens"),
             ConfigPath::EscapeLensAmount => I18nKey::simple("history.param.escape_lens_amount"),
             ConfigPath::EscapeLensParam { param } => I18nKey::with_params(
@@ -2760,6 +2845,10 @@ impl ConfigPath {
             | ConfigPath::EscapeContrastClip
             | ConfigPath::EscapeContrastStrength
             | ConfigPath::EscapeContrastTurns
+            | ConfigPath::EscapeTransfer
+            | ConfigPath::EscapeTransferPivot
+            | ConfigPath::EscapePaletteCurve
+            | ConfigPath::EscapePaletteStepped
             | ConfigPath::EscapeShadingField
             | ConfigPath::EscapeShadingShadowColor
             | ConfigPath::EscapeShadingShadowStrength
@@ -2771,9 +2860,29 @@ impl ConfigPath {
             | ConfigPath::EscapeShadingTextureKind
             | ConfigPath::EscapeShadingTextureStrength
             | ConfigPath::EscapeShadingTextureScale
+            | ConfigPath::EscapeShadingModel
+            | ConfigPath::EscapeShadingElevation
+            | ConfigPath::EscapeShadingAmbient
+            | ConfigPath::EscapeShadingStencil
+            | ConfigPath::EscapeShadingHeightCurve
+            | ConfigPath::EscapeShadingHeightPre
+            | ConfigPath::EscapeShadingHeightPost
+            | ConfigPath::EscapeShadingOffset
+            | ConfigPath::EscapeShadingEmboss
+            | ConfigPath::EscapeShadingEmbossSections
+            | ConfigPath::EscapeTextureOverlay
+            | ConfigPath::EscapeTextureOverlayMerge
+            | ConfigPath::EscapeTextureOverlayPower
+            | ConfigPath::EscapeTextureOverlayRatio
+            | ConfigPath::EscapeTextureOverlayFit
+            | ConfigPath::EscapeTextureOverlayTile
             | ConfigPath::EscapeColoring
             | ConfigPath::EscapeFormulaParam { .. }
             | ConfigPath::EscapeColoringParam { .. }
+            | ConfigPath::EscapeLayerColoring
+            | ConfigPath::EscapeLayerParam { .. }
+            | ConfigPath::EscapeLayerBlend
+            | ConfigPath::EscapeLayerWeight
             | ConfigPath::EscapeLens
             | ConfigPath::EscapeLensAmount
             | ConfigPath::EscapeLensParam { .. } => UpdateType::EscapeRerender,
@@ -3165,6 +3274,10 @@ impl ConfigPath {
             ConfigPath::EscapeContrastClip => "Escape.Contrast.Clip".to_string(),
             ConfigPath::EscapeContrastStrength => "Escape.Contrast.Strength".to_string(),
             ConfigPath::EscapeContrastTurns => "Escape.Contrast.Turns".to_string(),
+            ConfigPath::EscapeTransfer => "Escape.PaletteMap.Transfer".to_string(),
+            ConfigPath::EscapeTransferPivot => "Escape.PaletteMap.Pivot".to_string(),
+            ConfigPath::EscapePaletteCurve => "Escape.PaletteMap.Curve".to_string(),
+            ConfigPath::EscapePaletteStepped => "Escape.PaletteMap.Stepped".to_string(),
             ConfigPath::EscapeShadingShadowColor => "Escape.Shading.ShadowColor".to_string(),
             ConfigPath::EscapeShadingShadowStrength => "Escape.Shading.ShadowStrength".to_string(),
             ConfigPath::EscapeShadingShadowBlend => "Escape.Shading.ShadowBlend".to_string(),
@@ -3175,9 +3288,29 @@ impl ConfigPath {
             ConfigPath::EscapeShadingTextureKind => "Escape.Shading.TextureKind".to_string(),
             ConfigPath::EscapeShadingTextureStrength => "Escape.Shading.TextureStrength".to_string(),
             ConfigPath::EscapeShadingTextureScale => "Escape.Shading.TextureScale".to_string(),
+            ConfigPath::EscapeShadingModel => "Escape.Shading.Model".to_string(),
+            ConfigPath::EscapeShadingElevation => "Escape.Shading.Elevation".to_string(),
+            ConfigPath::EscapeShadingAmbient => "Escape.Shading.Ambient".to_string(),
+            ConfigPath::EscapeShadingStencil => "Escape.Shading.Stencil".to_string(),
+            ConfigPath::EscapeShadingHeightCurve => "Escape.Shading.HeightCurve".to_string(),
+            ConfigPath::EscapeShadingHeightPre => "Escape.Shading.HeightPre".to_string(),
+            ConfigPath::EscapeShadingHeightPost => "Escape.Shading.HeightPost".to_string(),
+            ConfigPath::EscapeShadingOffset => "Escape.Shading.Offset".to_string(),
+            ConfigPath::EscapeShadingEmboss => "Escape.Shading.Emboss".to_string(),
+            ConfigPath::EscapeShadingEmbossSections => "Escape.Shading.EmbossSections".to_string(),
+            ConfigPath::EscapeTextureOverlay => "Escape.TextureOverlay.Enabled".to_string(),
+            ConfigPath::EscapeTextureOverlayMerge => "Escape.TextureOverlay.Merge".to_string(),
+            ConfigPath::EscapeTextureOverlayPower => "Escape.TextureOverlay.Power".to_string(),
+            ConfigPath::EscapeTextureOverlayRatio => "Escape.TextureOverlay.Ratio".to_string(),
+            ConfigPath::EscapeTextureOverlayFit => "Escape.TextureOverlay.Fit".to_string(),
+            ConfigPath::EscapeTextureOverlayTile => "Escape.TextureOverlay.TileScale".to_string(),
             ConfigPath::EscapeColoring => "Escape.Coloring".to_string(),
             ConfigPath::EscapeFormulaParam { param } => format!("Escape.FormulaParam.{param}"),
             ConfigPath::EscapeColoringParam { param } => format!("Escape.ColoringParam.{param}"),
+            ConfigPath::EscapeLayerColoring => "Escape.Layer.Coloring".to_string(),
+            ConfigPath::EscapeLayerParam { param } => format!("Escape.Layer.Param.{param}"),
+            ConfigPath::EscapeLayerBlend => "Escape.Layer.Blend".to_string(),
+            ConfigPath::EscapeLayerWeight => "Escape.Layer.Weight".to_string(),
             ConfigPath::EscapeLens => "Escape.Lens".to_string(),
             ConfigPath::EscapeLensAmount => "Escape.LensAmount".to_string(),
             ConfigPath::EscapeLensParam { param } => format!("Escape.LensParam.{param}"),
@@ -3384,6 +3517,10 @@ impl ConfigPath {
                 ["Contrast", "Clip"] => return Some(ConfigPath::EscapeContrastClip),
                 ["Contrast", "Strength"] => return Some(ConfigPath::EscapeContrastStrength),
                 ["Contrast", "Turns"] => return Some(ConfigPath::EscapeContrastTurns),
+                ["PaletteMap", "Transfer"] => return Some(ConfigPath::EscapeTransfer),
+                ["PaletteMap", "Pivot"] => return Some(ConfigPath::EscapeTransferPivot),
+                ["PaletteMap", "Curve"] => return Some(ConfigPath::EscapePaletteCurve),
+                ["PaletteMap", "Stepped"] => return Some(ConfigPath::EscapePaletteStepped),
                 ["Shading", "Field"] => return Some(ConfigPath::EscapeShadingField),
                 ["Shading", "ShadowColor"] => return Some(ConfigPath::EscapeShadingShadowColor),
                 ["Shading", "ShadowStrength"] => return Some(ConfigPath::EscapeShadingShadowStrength),
@@ -3395,6 +3532,22 @@ impl ConfigPath {
                 ["Shading", "TextureKind"] => return Some(ConfigPath::EscapeShadingTextureKind),
                 ["Shading", "TextureStrength"] => return Some(ConfigPath::EscapeShadingTextureStrength),
                 ["Shading", "TextureScale"] => return Some(ConfigPath::EscapeShadingTextureScale),
+                ["Shading", "Model"] => return Some(ConfigPath::EscapeShadingModel),
+                ["Shading", "Elevation"] => return Some(ConfigPath::EscapeShadingElevation),
+                ["Shading", "Ambient"] => return Some(ConfigPath::EscapeShadingAmbient),
+                ["Shading", "Stencil"] => return Some(ConfigPath::EscapeShadingStencil),
+                ["Shading", "HeightCurve"] => return Some(ConfigPath::EscapeShadingHeightCurve),
+                ["Shading", "HeightPre"] => return Some(ConfigPath::EscapeShadingHeightPre),
+                ["Shading", "HeightPost"] => return Some(ConfigPath::EscapeShadingHeightPost),
+                ["Shading", "Offset"] => return Some(ConfigPath::EscapeShadingOffset),
+                ["Shading", "Emboss"] => return Some(ConfigPath::EscapeShadingEmboss),
+                ["Shading", "EmbossSections"] => return Some(ConfigPath::EscapeShadingEmbossSections),
+                ["TextureOverlay", "Enabled"] => return Some(ConfigPath::EscapeTextureOverlay),
+                ["TextureOverlay", "Merge"] => return Some(ConfigPath::EscapeTextureOverlayMerge),
+                ["TextureOverlay", "Power"] => return Some(ConfigPath::EscapeTextureOverlayPower),
+                ["TextureOverlay", "Ratio"] => return Some(ConfigPath::EscapeTextureOverlayRatio),
+                ["TextureOverlay", "Fit"] => return Some(ConfigPath::EscapeTextureOverlayFit),
+                ["TextureOverlay", "TileScale"] => return Some(ConfigPath::EscapeTextureOverlayTile),
                 ["Coloring"] => return Some(ConfigPath::EscapeColoring),
                 ["FormulaParam", param] => {
                     return Some(ConfigPath::EscapeFormulaParam { param: param.to_string() })
@@ -3402,6 +3555,12 @@ impl ConfigPath {
                 ["ColoringParam", param] => {
                     return Some(ConfigPath::EscapeColoringParam { param: param.to_string() })
                 }
+                ["Layer", "Coloring"] => return Some(ConfigPath::EscapeLayerColoring),
+                ["Layer", "Param", param] => {
+                    return Some(ConfigPath::EscapeLayerParam { param: param.to_string() })
+                }
+                ["Layer", "Blend"] => return Some(ConfigPath::EscapeLayerBlend),
+                ["Layer", "Weight"] => return Some(ConfigPath::EscapeLayerWeight),
                 ["Lens"] => return Some(ConfigPath::EscapeLens),
                 ["LensAmount"] => return Some(ConfigPath::EscapeLensAmount),
                 ["LensParam", param] => {
@@ -4106,6 +4265,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeDampingIm
         | ConfigPath::EscapeFormulaParam { .. }
         | ConfigPath::EscapeColoringParam { .. }
+        | ConfigPath::EscapeLayerParam { .. }
+        | ConfigPath::EscapeLayerWeight
         | ConfigPath::EscapeLensAmount
         | ConfigPath::EscapeLensParam { .. } => {
             json.as_f64().map(|f| ConfigValue::Float(f as f32))
@@ -4154,11 +4315,23 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeContrastClip
         | ConfigPath::EscapeContrastStrength
         | ConfigPath::EscapeContrastTurns
+        | ConfigPath::EscapeTransferPivot
         | ConfigPath::EscapeShadingShadowStrength
         | ConfigPath::EscapeShadingHighlightStrength
         | ConfigPath::EscapeShadingSoftness
         | ConfigPath::EscapeShadingTextureStrength
-        | ConfigPath::EscapeShadingTextureScale => {
+        | ConfigPath::EscapeShadingTextureScale
+        | ConfigPath::EscapeShadingElevation
+        | ConfigPath::EscapeShadingAmbient
+        | ConfigPath::EscapeShadingHeightPre
+        | ConfigPath::EscapeShadingHeightPost
+        | ConfigPath::EscapeShadingOffset
+        // The overlay's mix, warp ratio and tile size are quantities;
+        // its power is a whole number whose parity flips the warp's
+        // sign rule, so it does not tween.
+        | ConfigPath::EscapeTextureOverlayMerge
+        | ConfigPath::EscapeTextureOverlayRatio
+        | ConfigPath::EscapeTextureOverlayTile => {
             json.as_f64().map(|v| ConfigValue::Float(v as f32))
         }
         ConfigPath::EscapeShadingShadowColor | ConfigPath::EscapeShadingHighlightColor => {
@@ -4173,9 +4346,23 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
             Some(ConfigValue::ColorRgb(rgb))
         }
         ConfigPath::EscapeShadingEnabled
+        | ConfigPath::EscapeShadingModel
+        | ConfigPath::EscapeShadingStencil
+        | ConfigPath::EscapeShadingHeightCurve
         | ConfigPath::EscapeContrastMode
+        | ConfigPath::EscapeTransfer
+        | ConfigPath::EscapePaletteCurve
+        | ConfigPath::EscapePaletteStepped
         | ConfigPath::EscapeShadingField
         | ConfigPath::EscapeShadingTextureKind
+        // Embossed's type picks a different integer field, and its
+        // sections count is a whole number of sectors: neither has a
+        // value part-way between two keyframes.
+        | ConfigPath::EscapeShadingEmboss
+        | ConfigPath::EscapeShadingEmbossSections
+        | ConfigPath::EscapeTextureOverlay
+        | ConfigPath::EscapeTextureOverlayPower
+        | ConfigPath::EscapeTextureOverlayFit
         | ConfigPath::EscapeDownsample
         | ConfigPath::EscapeShadingShadowBlend
         | ConfigPath::EscapeShadingHighlightBlend
@@ -4189,6 +4376,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         // open questions on center-path animation).
         ConfigPath::EscapeFormula
         | ConfigPath::EscapeColoring
+        | ConfigPath::EscapeLayerColoring
+        | ConfigPath::EscapeLayerBlend
         | ConfigPath::EscapeReferencePeriod
         | ConfigPath::EscapeBiomorph
         | ConfigPath::EscapeCenterRe

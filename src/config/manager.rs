@@ -1969,6 +1969,14 @@ impl ConfigManager {
             ConfigPath::EscapeContrastClip => Ok(config.escape.contrast.clip.into()),
             ConfigPath::EscapeContrastStrength => Ok(config.escape.contrast.strength.into()),
             ConfigPath::EscapeContrastTurns => Ok(config.escape.contrast.turns.into()),
+            ConfigPath::EscapeTransfer => Ok(ConfigValue::String(
+                config.escape.palette_map.transfer.as_str().to_string(),
+            )),
+            ConfigPath::EscapeTransferPivot => Ok(config.escape.palette_map.pivot.into()),
+            ConfigPath::EscapePaletteCurve => Ok(ConfigValue::String(
+                config.escape.palette_map.curve.as_str().to_string(),
+            )),
+            ConfigPath::EscapePaletteStepped => Ok(config.escape.palette_map.stepped.into()),
             ConfigPath::EscapeShadingShadowColor => {
                 Ok(ConfigValue::ColorRgb(config.escape.shading.shadow_color))
             }
@@ -1992,6 +2000,34 @@ impl ConfigManager {
             ConfigPath::EscapeShadingTextureStrength => {
                 Ok(config.escape.shading.texture_strength.into())
             }
+            ConfigPath::EscapeShadingModel => Ok(ConfigValue::String(
+                config.escape.shading.model.as_str().to_string(),
+            )),
+            ConfigPath::EscapeShadingElevation => Ok(config.escape.shading.elevation.into()),
+            ConfigPath::EscapeShadingAmbient => Ok(config.escape.shading.ambient.into()),
+            ConfigPath::EscapeShadingStencil => Ok(ConfigValue::String(
+                config.escape.shading.stencil.as_str().to_string(),
+            )),
+            ConfigPath::EscapeShadingHeightCurve => Ok(ConfigValue::String(
+                config.escape.shading.height_curve.as_str().to_string(),
+            )),
+            ConfigPath::EscapeShadingHeightPre => Ok(config.escape.shading.height_pre.into()),
+            ConfigPath::EscapeShadingHeightPost => Ok(config.escape.shading.height_post.into()),
+            ConfigPath::EscapeShadingOffset => Ok(config.escape.shading.offset.into()),
+            ConfigPath::EscapeShadingEmboss => Ok(ConfigValue::String(
+                config.escape.shading.emboss.as_str().to_string(),
+            )),
+            ConfigPath::EscapeShadingEmbossSections => {
+                Ok(ConfigValue::UInt(config.escape.shading.emboss_sections))
+            }
+            ConfigPath::EscapeTextureOverlay => Ok(ConfigValue::Bool(config.escape.texture_overlay.enabled)),
+            ConfigPath::EscapeTextureOverlayMerge => Ok(config.escape.texture_overlay.merge.into()),
+            ConfigPath::EscapeTextureOverlayPower => Ok(config.escape.texture_overlay.power.into()),
+            ConfigPath::EscapeTextureOverlayRatio => Ok(config.escape.texture_overlay.ratio.into()),
+            ConfigPath::EscapeTextureOverlayFit => Ok(ConfigValue::String(
+                config.escape.texture_overlay.fit.as_str().to_string(),
+            )),
+            ConfigPath::EscapeTextureOverlayTile => Ok(config.escape.texture_overlay.tile_scale.into()),
             ConfigPath::EscapeShadingTextureScale => {
                 Ok(config.escape.shading.texture_scale.into())
             }
@@ -2026,6 +2062,19 @@ impl ConfigManager {
                 .copied()
                 .unwrap_or(0.0)
                 .into()),
+            ConfigPath::EscapeLayerColoring => Ok(config.escape.layer.coloring.clone().into()),
+            ConfigPath::EscapeLayerParam { param } => Ok(config
+                .escape
+                .layer
+                .params
+                .get(param)
+                .copied()
+                .unwrap_or(0.0)
+                .into()),
+            ConfigPath::EscapeLayerBlend => Ok(ConfigValue::String(
+                config.escape.layer.blend.as_str().to_string(),
+            )),
+            ConfigPath::EscapeLayerWeight => Ok(config.escape.layer.weight.into()),
             ConfigPath::EscapeLens => Ok(config.escape.lens.clone().into()),
             ConfigPath::EscapeLensAmount => Ok(config.escape.lens_amount.into()),
             ConfigPath::EscapeLensParam { param } => Ok(config
@@ -3284,6 +3333,24 @@ impl ConfigManager {
                 let v: f32 = value.try_into()?;
                 self.current.escape.contrast.turns = v.clamp(0.05, 64.0);
             }
+            ConfigPath::EscapeTransfer => {
+                let v: String = value.try_into()?;
+                self.current.escape.palette_map.transfer =
+                    crate::config::escape::TransferCurve::from_name(&v);
+            }
+            ConfigPath::EscapeTransferPivot => {
+                let v: f32 = value.try_into()?;
+                let (lo, hi) = crate::config::escape::PIVOT_RANGE;
+                self.current.escape.palette_map.pivot = v.clamp(lo, hi);
+            }
+            ConfigPath::EscapePaletteCurve => {
+                let v: String = value.try_into()?;
+                self.current.escape.palette_map.curve =
+                    crate::config::escape::PaletteCurve::from_name(&v);
+            }
+            ConfigPath::EscapePaletteStepped => {
+                self.current.escape.palette_map.stepped = value.try_into()?;
+            }
             ConfigPath::EscapeShadingShadowColor => {
                 self.current.escape.shading.shadow_color = value.try_into()?;
             }
@@ -3320,6 +3387,75 @@ impl ConfigManager {
                 let v: f32 = value.try_into()?;
                 self.current.escape.shading.texture_scale = v.clamp(0.25, 64.0);
             }
+            ConfigPath::EscapeShadingModel => {
+                let v: String = value.try_into()?;
+                self.current.escape.shading.model = crate::config::escape::ReliefModel::from_name(&v);
+            }
+            ConfigPath::EscapeShadingElevation => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.shading.elevation = v.clamp(0.0, 90.0);
+            }
+            ConfigPath::EscapeShadingAmbient => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.shading.ambient = v.clamp(0.0, 1.0);
+            }
+            ConfigPath::EscapeShadingStencil => {
+                let v: String = value.try_into()?;
+                self.current.escape.shading.stencil = crate::config::escape::SlopeStencil::from_name(&v);
+            }
+            ConfigPath::EscapeShadingHeightCurve => {
+                let v: String = value.try_into()?;
+                self.current.escape.shading.height_curve =
+                    crate::config::escape::HeightTransfer::from_name(&v);
+            }
+            ConfigPath::EscapeShadingHeightPre => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.shading.height_pre = v.clamp(1e-3, 1e3);
+            }
+            ConfigPath::EscapeShadingHeightPost => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.shading.height_post = v.clamp(1e-3, 1e3);
+            }
+            ConfigPath::EscapeShadingOffset => {
+                let v: f32 = value.try_into()?;
+                let (lo, hi) = crate::config::escape::RELIEF_OFFSET_RANGE;
+                self.current.escape.shading.offset = v.clamp(lo, hi);
+            }
+            ConfigPath::EscapeShadingEmboss => {
+                let v: String = value.try_into()?;
+                self.current.escape.shading.emboss = crate::config::escape::EmbossType::from_name(&v);
+            }
+            ConfigPath::EscapeShadingEmbossSections => {
+                let v: u32 = value.try_into()?;
+                let (lo, hi) = crate::config::escape::EMBOSS_SECTIONS_RANGE;
+                self.current.escape.shading.emboss_sections = v.clamp(lo, hi);
+            }
+            ConfigPath::EscapeTextureOverlay => {
+                self.current.escape.texture_overlay.enabled = value.try_into()?;
+            }
+            ConfigPath::EscapeTextureOverlayMerge => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.texture_overlay.merge = v.clamp(0.0, 1.0);
+            }
+            ConfigPath::EscapeTextureOverlayPower => {
+                let v: f32 = value.try_into()?;
+                let (lo, hi) = crate::config::escape::OVERLAY_POWER_RANGE;
+                self.current.escape.texture_overlay.power = v.round().clamp(lo, hi);
+            }
+            ConfigPath::EscapeTextureOverlayRatio => {
+                let v: f32 = value.try_into()?;
+                let (lo, hi) = crate::config::escape::OVERLAY_RATIO_RANGE;
+                self.current.escape.texture_overlay.ratio = v.clamp(lo, hi);
+            }
+            ConfigPath::EscapeTextureOverlayFit => {
+                let v: String = value.try_into()?;
+                self.current.escape.texture_overlay.fit = crate::config::escape::TextureFit::from_name(&v);
+            }
+            ConfigPath::EscapeTextureOverlayTile => {
+                let v: f32 = value.try_into()?;
+                let (lo, hi) = crate::config::escape::OVERLAY_TILE_RANGE;
+                self.current.escape.texture_overlay.tile_scale = v.clamp(lo, hi);
+            }
             ConfigPath::EscapeShadingHighlightBlend => {
                 let v: String = value.try_into()?;
                 self.current.escape.shading.highlight_blend =
@@ -3353,6 +3489,21 @@ impl ConfigManager {
             ConfigPath::EscapeColoringParam { param } => {
                 let v: f32 = value.try_into()?;
                 self.current.escape.coloring_params.insert(param.clone(), v);
+            }
+            ConfigPath::EscapeLayerColoring => {
+                self.current.escape.layer.coloring = value.try_into()?;
+            }
+            ConfigPath::EscapeLayerParam { param } => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.layer.params.insert(param.clone(), v);
+            }
+            ConfigPath::EscapeLayerBlend => {
+                let v: String = value.try_into()?;
+                self.current.escape.layer.blend = crate::config::escape::LayerBlend::from_name(&v);
+            }
+            ConfigPath::EscapeLayerWeight => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.layer.weight = v.clamp(0.0, 1.0);
             }
             ConfigPath::EscapeLens => {
                 self.current.escape.lens = value.try_into()?;

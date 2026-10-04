@@ -53,10 +53,12 @@ struct EscapeParams {
     // differently (1248 vs 1232 -- caught as a bind-group validation
     // error the first time this ran).
     _pad_shade0: u32,
-    _pad_shade1: u32,
-    _pad_shade2: u32,
+    degree: f32,           // the formula's degree at infinity (the smooth count's log base)
+    pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
+    pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
     fparams: array<vec4<f32>, 4>,  // formula params, slot-ordered
     cparams: array<vec4<f32>, 4>,  // coloring params, slot-ordered
+    lparams: array<vec4<f32>, 4>,  // the texture layer's params, slot-ordered
     // CPU-derived formula data (FormulaDef::derived_data), vec4-packed.
     // Zero for formulas without the hook. Origami's fold-line table
     // lives here: identical for every pixel, so computing it per
@@ -70,12 +72,13 @@ struct EscapeParams {
 @group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var palette_texture: texture_2d<f32>;
 @group(0) @binding(3) var palette_sampler: sampler;
+//__PALETTE_MAP__
 // The coloring's scalar value, kept for the relief pass to
 // finite-difference. Bound to a 1x1 dummy when shading is off, where
 // every store but one falls out of bounds and WGSL discards it -- so
 // the cost of always writing is a single dead store per pixel, and
 // there is no second shader variant to keep in step.
-@group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
+@group(0) @binding(4) var height_tex: texture_storage_2d<rgba32float, write>;
 
 // Terminal per-pixel iteration record (32 B/px), written on a pass
 // that completes the pixel's iteration when params.flags bit 3 is
@@ -87,6 +90,7 @@ struct IterResult {
     z: vec2<f32>,
     dz: vec2<f32>,
     accum: vec2<f32>,
+    //__ACCUM_WIDE__
     n: u32,
     // bit 0 escaped, bit 1 converged, bits 2.. detected period.
     tags: u32,
@@ -213,27 +217,21 @@ fn esc_cdiv(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
 
 //__COLORING_ACCUM__
 
-@compute @workgroup_size(8, 8, 1)
-fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    // Row band: this dispatch covers [tile_y0, tile_y0 + dispatched).
-    let py = gid.y + params.tile_y0;
-    if (gid.x >= params.width || py >= params.height) {
-        return;
-    }
+// One orbit's terminal state: everything the colouring reads.
+struct EscRun {
+    z: vec2<f32>,
+    dz: vec2<f32>,
+    accum_state: vec4<f32>,
+    n: u32,
+    escaped: bool,
+    converged: bool,
+    period: u32,
+}
 
-    // Pixel center -> complex plane: offset from view center, y flipped
-    // (texture y grows down, Im grows up), then view rotation.
-    let uv = (vec2<f32>(f32(gid.x), f32(py)) + vec2<f32>(0.5, 0.5))
-        / vec2<f32>(f32(params.width), f32(params.height));
-    var d = (uv - vec2<f32>(0.5, 0.5)) * params.span;
-    d.y = -d.y;
-    //__LENS_APPLY__
-    let rot = params.rot_cs;
-    let pixel = params.center + vec2<f32>(
-        d.x * rot.x - d.y * rot.y,
-        d.x * rot.y + d.y * rot.x,
-    );
-
+// The iteration for one point of the plane: the pixel's own orbit, and
+// with offset relief the two beside it. (Embossed runs its two in step,
+// so it has a loop of its own: esc_emboss.)
+fn esc_run(pixel: vec2<f32>) -> EscRun {
     // Julia toggle: parameter plane iterates z from the formula's
     // critical-point seed with c = pixel; dynamical plane iterates z
     // from the pixel with c fixed. One flag, not a formula-list entry
@@ -266,10 +264,45 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         //__PERIOD_TEST__
         //__ESCAPE_TEST__
         //__INTERIOR_TEST__
+        //__ACCUM_UPDATE_LATE__
     }
     if (!escaped) {
         n = params.max_iter;
     }
+    return EscRun(z, dz, accum_state, n, escaped, converged, period);
+}
+
+//__RELIEF_ORBITS_FNS__
+
+@compute @workgroup_size(8, 8, 1)
+fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    // Row band: this dispatch covers [tile_y0, tile_y0 + dispatched).
+    let py = gid.y + params.tile_y0;
+    if (gid.x >= params.width || py >= params.height) {
+        return;
+    }
+
+    // Pixel center -> complex plane: offset from view center, y flipped
+    // (texture y grows down, Im grows up), then view rotation.
+    let uv = (vec2<f32>(f32(gid.x), f32(py)) + vec2<f32>(0.5, 0.5))
+        / vec2<f32>(f32(params.width), f32(params.height));
+    var d = (uv - vec2<f32>(0.5, 0.5)) * params.span;
+    d.y = -d.y;
+    //__LENS_APPLY__
+    let rot = params.rot_cs;
+    let pixel = params.center + vec2<f32>(
+        d.x * rot.x - d.y * rot.y,
+        d.x * rot.y + d.y * rot.x,
+    );
+
+    let run = esc_run(pixel);
+    let z = run.z;
+    let dz = run.dz;
+    let accum_state = run.accum_state;
+    let n = run.n;
+    let escaped = run.escaped;
+    let converged = run.converged;
+    let period = run.period;
 
     var rgb = vec3<f32>(0.0, 0.0, 0.0);
     // COVERAGE, not colour. A pixel that never escaped has no value
@@ -280,11 +313,18 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // downsample like everything else, so the boundary antialiases
     // against the background instead of against black.
     var coverage = 0.0;
-    // The relief pass slopes THIS, not the rendered colour: the value
-    // before the palette, so a cycling palette's band edges are not
-    // mistaken for cliffs. Interior pixels keep 0 -- flat, which puts
-    // the rim light exactly on the set boundary.
+    // Two heights. `height` (red) is the colouring's raw value, which
+    // the auto-contrast probe measures; `relief` (green) is what the
+    // relief slopes -- the raw value, the wrapped one (Banded) or the
+    // texture layer's (Layer). Kept apart so a relief source can never
+    // change what contrast fits. The relief slopes the value before the
+    // palette, so a cycling palette's band edges are not mistaken for
+    // cliffs; interior pixels keep 0 -- flat, which puts the rim light
+    // exactly on the set boundary.
     var height = 0.0;
+    var relief = 0.0;
+    // Blue and alpha: the analytic slope, when the relief asks for it.
+    var slope = vec2<f32>(0.0);
     if (escaped || COLORING_COLORS_INTERIOR) {
         let summary = OrbitSummary(z, n, escaped, converged, period, dz);
         // `fract` so unbounded colorings cycle as they grow; a
@@ -292,27 +332,730 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // the palette's bottom and the brightest points render
         // darkest. See ColoringFeature::Bounded.
         let raw = coloring_map(summary, accum_state);
-        let t = select(fract(raw), clamp(raw, 0.0, 1.0), COLORING_IS_BOUNDED);
+        let t = esc_wrap(esc_transfer(raw), COLORING_IS_BOUNDED);
         // SHADING_BANDED picks the wrapped coordinate instead, which
         // turns every palette band into a step (the engraved look).
-        height = select(raw, t, params.shade_flags == 1u);
-        // textureSampleLevel: explicit LOD, legal in non-uniform
-        // control flow (unlike textureSample) -- WASM-safe.
-        let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
-        rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
+        height = raw;
+        relief = esc_relief_source(raw, t, summary, accum_state);
+        slope = esc_analytic_slope(summary);
+        //__RELIEF_ORBITS__
+        rgb = esc_colour(raw, t, summary, accum_state);
         coverage = 1.0;
     }
 
     if ((params.flags & 8u) != 0u) {
         results[py * params.width + gid.x] = IterResult(
-            z, dz, accum_state, n,
+            z, dz, accum_state.xy, /*ACCUM2_STORE*/ n,
             select(0u, 1u, escaped) | select(0u, 2u, converged) | (period << 2u),
         );
     }
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(rgb, coverage));
-    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(height, 0.0, 0.0, 0.0));
+    slope = esc_overlay_field(escaped, z, n, slope);
+    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(height, relief, slope));
 }
 "#;
+
+/// The value-to-palette map (`PaletteMap`), spliced after the palette
+/// bindings of every template that looks the palette up, so the
+/// iterate, recolour and relight passes cannot disagree about it.
+///
+/// Linear transfer and Linear curve return their input untouched,
+/// so a render that uses neither keeps its old arithmetic exactly.
+/// `textureSampleLevel` (explicit LOD) because it is legal in
+/// non-uniform control flow, unlike `textureSample` -- WASM-safe.
+const PALETTE_MAP_WGSL: &str = r#"
+// The value transfer: k f(v/k), mirrored for negative v; f(1) = 1,
+// so the pivot k is where every curve agrees with Linear.
+fn esc_transfer(v: f32) -> f32 {
+    let curve = params.pmap_flags & 0xffu;
+    if (curve == 0u) {
+        return v;
+    }
+    let k = params.pmap.x;
+    let u = abs(v) / k;
+    var f = u;
+    switch curve {
+        case 1u: { f = sqrt(u); }
+        case 2u: { f = select(0.0, exp2(log2(u) / 3.0), u > 0.0); }
+        case 3u: { f = log2(1.0 + u); }
+        // ln(1 + ln(1 + u)) / ln(1 + ln 2)
+        case 4u: { f = log2(1.0 + log(1.0 + u)) * 1.3162963; }
+        // Capped so the square stays finite: fract has nothing left
+        // to show long before 1e30 anyway.
+        case 5u: { let w = min(u, 1e15); f = w * w; }
+        // atan(u) / atan(1)
+        case 6u: { f = atan(u) * 1.2732395; }
+        default: {}
+    }
+    return sign(v) * k * f;
+}
+
+// A value's place in the palette: wrapped so an unbounded colouring
+// cycles, clamped for a Bounded one (its 1.0 must not wrap to 0).
+fn esc_wrap(x: f32, bounded: bool) -> f32 {
+    return select(fract(x), clamp(x, 0.0, 1.0), bounded);
+}
+
+// The palette curve, on the position within one cycle.
+fn esc_palette_curve(t: f32) -> f32 {
+    var r = t;
+    switch ((params.pmap_flags >> 8u) & 0xffu) {
+        case 1u: { r = sqrt(t); }
+        case 2u: { r = t * t; }
+        case 3u: { r = log2(1.0 + t); }
+        case 4u: { r = exp2(t) - 1.0; }
+        case 5u: { r = t * t * (3.0 - 2.0 * t); }
+        case 6u: { r = 0.5 - sin(asin(clamp(1.0 - 2.0 * t, -1.0, 1.0)) / 3.0); }
+        default: {}
+    }
+    return r;
+}
+
+// The palette colour at cycle position `t`, as stored (display space).
+fn esc_palette_srgb(t: f32) -> vec3<f32> {
+    let u = esc_palette_curve(t);
+    return textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(u, 0.5), 0.0).rgb;
+}
+
+// The palette colour at cycle position `t`, decoded to linear light.
+fn esc_palette(t: f32) -> vec3<f32> {
+    return pow(max(esc_palette_srgb(t), vec3<f32>(0.0)), vec3<f32>(2.2));
+}
+
+// The supersample factor (EscapeParams.flags bits 4-7). A "pixel" to a
+// colouring or the relief is an OUTPUT pixel, as Fraktaler 3 measures
+// its distance estimate: `params.height` counts render pixels, each
+// 1/supersample of one, and measuring in those would move the colours
+// when antialiasing is turned on.
+fn esc_supersample() -> f32 {
+    return f32(max((params.flags >> 4u) & 15u, 1u));
+}
+
+// Output pixels per unit of the plane.
+fn esc_px_per_unit() -> f32 {
+    return f32(params.height) / (esc_supersample() * params.span.y);
+}
+"#;
+
+/// How far through its last step the orbit had gone when it escaped,
+/// for a colouring to call ([`orbit_helpers`]).
+const ESCAPE_FRACTION_WGSL: &str = r#"
+// How far through its last step the orbit had gone when it escaped:
+// 1 just past the escape radius R, 0 at R^p, where the step before had
+// only just stayed inside. The smooth count's fraction measured
+// against the bailout, as Ultra Fractal's Triangle Inequality Average
+// takes it; 1 for a pixel that never escaped, which has no last step.
+// Meaningful for a |z|^2 escape test: under the exponential and trig
+// families' raw tests it is only a clamped approximation.
+fn esc_escape_fraction(sum: OrbitSummary) -> f32 {
+    if (!sum.escaped) {
+        return 1.0;
+    }
+    let lr = log2(max(params.bailout, 1.0000001));
+    let lz = log2(max(dot(sum.z, sum.z), 1.0000001));
+    let f = 1.0 - log2(max(lz / lr, 1e-6)) / log2(max(params.degree, 1.0001));
+    return clamp(f, 0.0, 1.0);
+}
+"#;
+
+/// The same for a formula that never escapes: its pixels have no last
+/// step to be part-way through.
+const ESCAPE_FRACTION_NEVER_WGSL: &str = r#"
+// The formula never escapes, so no pixel has a last step to be
+// part-way through.
+fn esc_escape_fraction(sum: OrbitSummary) -> f32 {
+    return 1.0;
+}
+"#;
+
+const DEBANDED_MEAN_WGSL: &str = r#"
+// The mean of an accumulator kept as (sum, count, last term, -),
+// blended between the mean without its last term and with it by the
+// escape fraction -- so it moves continuously across an iteration
+// boundary instead of stepping there.
+fn esc_debanded_mean(sum: OrbitSummary, state: vec4<f32>) -> f32 {
+    let mean = state.x / max(state.y, 1.0);
+    if (state.y < 1.5) {
+        return mean;
+    }
+    let prev = (state.x - state.z) / (state.y - 1.0);
+    return mix(prev, mean, esc_escape_fraction(sum));
+}
+"#;
+
+/// The orbit helpers the colourings call, spliced just before them,
+/// and nothing when neither calls any. A formula that never escapes
+/// gets an escape fraction that reads no bailout: a shader that read
+/// it anyway would contradict the panel, which hides the control there
+/// (`iteration_controls_match_the_assembled_shader`).
+fn orbit_helpers(coloring: &ColoringDef, layer: Option<&ColoringDef>, escaping: bool) -> String {
+    let calls = |c: &ColoringDef| {
+        c.wgsl.contains("esc_escape_fraction") || c.wgsl.contains("esc_debanded_mean")
+    };
+    if !calls(coloring) && !layer.is_some_and(calls) {
+        return String::new();
+    }
+    let fraction = if escaping { ESCAPE_FRACTION_WGSL } else { ESCAPE_FRACTION_NEVER_WGSL };
+    format!("{}\n\n{}", fraction.trim(), DEBANDED_MEAN_WGSL.trim())
+}
+
+/// Replace the identifier `from` with `to` wherever it stands as a
+/// whole word -- not inside a longer name.
+fn rename_ident(src: &str, from: &str, to: &str) -> String {
+    let word = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut out = String::with_capacity(src.len());
+    let mut rest = src;
+    while let Some(at) = rest.find(from) {
+        let before = rest[..at].chars().next_back();
+        let after = rest[at + from.len()..].chars().next();
+        out.push_str(&rest[..at]);
+        if before.is_some_and(word) || after.is_some_and(word) {
+            out.push_str(from);
+        } else {
+            out.push_str(to);
+        }
+        rest = &rest[at + from.len()..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// A colouring's WGSL made safe to splice as the texture layer beside
+/// the base: every function and constant it declares gains a `layer_`
+/// prefix -- so `coloring_map` becomes `layer_coloring_map` and two
+/// colourings with a helper of the same name, or the same colouring
+/// twice, cannot collide -- and its parameters read the layer's block.
+/// `coloring_accum` keeps its name: the template calls it, and when
+/// the layer owns the accumulator the base has none.
+fn layer_source(src: &str) -> String {
+    let mut names: Vec<String> = Vec::new();
+    for marker in ["fn ", "const "] {
+        let mut rest = src;
+        while let Some(at) = rest.find(marker) {
+            let tail = &rest[at + marker.len()..];
+            let name: String = tail
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            let starts_word = rest[..at].chars().next_back().is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
+            if starts_word && !name.is_empty() && name != "coloring_accum" && !names.contains(&name) {
+                names.push(name);
+            }
+            rest = tail;
+        }
+    }
+    let mut out = src.to_string();
+    for name in &names {
+        out = rename_ident(&out, name, &format!("layer_{name}"));
+    }
+    rename_ident(&out, "cparam", "lparam")
+}
+
+/// The texture layer's WGSL, spliced after the base colouring: its
+/// parameter reader, its renamed source and `esc_layer`, which blends
+/// it into the base's palette position. Without a layer `esc_layer` is
+/// the identity, so a render without one keeps its arithmetic.
+/// The texture layer's position from its raw value: wrapped like any
+/// colouring's, or -- in the recolour pass, under Auto contrast --
+/// stretched to the frame's own range of it (`contrast.layer_*`, from
+/// the layer probe), which is how techmatt places the texture of a
+/// modulate (survey C8). The iterate passes never apply contrast.
+const LAYER_VALUE_WGSL: &str = "fn esc_layer_value(v: f32) -> f32 {\n\
+    \x20   return esc_wrap(v, LAYER_IS_BOUNDED);\n\
+    }";
+const LAYER_VALUE_STRETCHED_WGSL: &str = "fn esc_layer_value(v: f32) -> f32 {\n\
+    \x20   let w = esc_wrap(v, LAYER_IS_BOUNDED);\n\
+    \x20   if (contrast.enabled == 0u || contrast.layer_enabled == 0u) {\n\
+    \x20       return w;\n\
+    \x20   }\n\
+    \x20   let s = clamp((v - contrast.layer_lo) / max(contrast.layer_hi - contrast.layer_lo, 1e-30), 0.0, 1.0);\n\
+    \x20   return mix(w, s, clamp(contrast.strength, 0.0, 1.0));\n\
+    }";
+
+fn layer_wgsl(layer: Option<&ColoringDef>, stretched: bool) -> String {
+    let Some(l) = layer else {
+        return "// no texture layer\n\
+                fn esc_layer(t: f32, sum: OrbitSummary, state: vec4<f32>) -> f32 {\n\
+                \x20   return t;\n\
+                }\n\
+                // The relief's source (ShadingField): 1 is Banded; Layer,\n\
+                // with no layer, falls back to the raw value.\n\
+                fn esc_relief_source(raw: f32, t: f32, sum: OrbitSummary, state: vec4<f32>) -> f32 {\n\
+                \x20   return select(raw, t, params.shade_flags == 1u);\n\
+                }"
+            .to_string();
+    };
+    let colors_interior = l.has_feature(ColoringFeature::ColorsInterior);
+    let bounded = l.has_feature(ColoringFeature::Bounded);
+    format!(
+        "fn lparam(i: u32) -> f32 {{\n    return params.lparams[i / 4u][i % 4u];\n}}\n\
+         const LAYER_COLORS_INTERIOR: bool = {colors_interior};\n\
+         const LAYER_IS_BOUNDED: bool = {bounded};\n\
+         // texture layer: {}\n{}\n{}\n{}",
+        l.name,
+        layer_source(l.wgsl).trim(),
+        if stretched { LAYER_VALUE_STRETCHED_WGSL } else { LAYER_VALUE_WGSL },
+        ESC_LAYER_WGSL.trim()
+    )
+}
+
+/// A pixel's colour from its value (`esc_colour`): the palette at the
+/// wrapped position, through the texture layer -- or, for a colouring
+/// that draws its own colour (`ColoringFeature::DirectColor`), that
+/// colour, from the value after the transfer. Spliced after the
+/// colouring in every template that colours a pixel, so the iterate and
+/// recolour passes cannot disagree.
+fn colour_wgsl(coloring: &ColoringDef) -> &'static str {
+    if coloring.has_feature(ColoringFeature::DirectColor) {
+        "fn esc_colour(raw: f32, t: f32, sum: OrbitSummary, state: vec4<f32>) -> vec3<f32> {\n\
+         \x20   return coloring_color(sum, state, esc_transfer(raw));\n\
+         }"
+    } else {
+        "fn esc_colour(raw: f32, t: f32, sum: OrbitSummary, state: vec4<f32>) -> vec3<f32> {\n\
+         \x20   return esc_palette(esc_layer(t, sum, state));\n\
+         }"
+    }
+}
+
+/// The texture overlay's warp field (`TextureOverlay`, sim-textures
+/// phase 2): Kalles Fraktaler warps by the smooth iteration count,
+/// whatever the colouring, so the iterate passes store it -- in the
+/// height texture's blue channel. Flags bit 8 is set when blue is free
+/// for it: the overlay is on, and no lit stored-slope relief (field
+/// codes 3 and up) has blue, in which case the resolve pass falls back
+/// to the relief's own source. Clear, the height texture is written
+/// exactly as before.
+const OVERLAY_FIELD_WGSL: &str = r#"
+fn esc_overlay_field(escaped: bool, z: vec2<f32>, n: u32, slope: vec2<f32>) -> vec2<f32> {
+    if ((params.flags & 256u) == 0u) {
+        return slope;
+    }
+    // Inside, every neighbour is at the limit too: no slope, no warp.
+    if (!escaped) {
+        return vec2<f32>(f32(params.max_iter), 0.0);
+    }
+    // The smooth count, as the smooth colouring has it; KF2's n + 1 - NF
+    // differs from it by a constant, which a difference cancels.
+    let r2 = max(dot(z, z), 1.0000001);
+    let ll = log2(0.5 * log2(r2));
+    let frac = select(ll / log2(params.degree), ll, params.degree == 2.0);
+    return vec2<f32>(f32(n) + 1.0 - frac, 0.0);
+}
+"#;
+
+/// Offset-orbit relief (`ShadingField::Offset`): two more runs of the
+/// orbit beside the pixel's own. Spliced only into a pipeline built for
+/// it, since each `esc_run` call is a copy of the whole loop once the
+/// compiler inlines it.
+const OFFSET_RELIEF_FNS_WGSL: &str = r#"
+// The colouring's value at a point beside the pixel. Where that orbit
+// draws nothing (an interior point, for a colouring that leaves the
+// interior to the background), the slope there is taken as flat.
+fn esc_value_at(p: vec2<f32>, fallback: f32) -> f32 {
+    let r = esc_run(p);
+    if (!(r.escaped || COLORING_COLORS_INTERIOR)) {
+        return fallback;
+    }
+    return coloring_map(OrbitSummary(r.z, r.n, r.escaped, r.converged, r.period, r.dz), r.accum_state);
+}
+
+// Offset-orbit relief (ShadingField::Offset, survey R6, after Ultra
+// Fractal's Slope): the colouring's value at c and at c plus a small
+// step along the screen's x and y, run as orbits of their own. The step
+// is a fixed fraction of the view, not a pixel, so the relief belongs
+// to the fractal: it does not change with the output size. Returned as
+// -grad h in the screen's y-up frame, as the analytic slope is, and lit
+// the same way -- but per 1/1024 of the view's height rather than per
+// render pixel, which is what keeps it off the output size. (Per render
+// pixel, a render twice the size would read half the slope, exactly as
+// the numeric relief does.) At a 1024-pixel-tall render the two units
+// agree, so a relief height means the same in both fields there.
+fn esc_offset_slope(pixel: vec2<f32>, h: f32) -> vec2<f32> {
+    let delta = params.pmap.z * params.span.y;
+    let rot = params.rot_cs;
+    let hx = esc_value_at(pixel + vec2<f32>(rot.x, rot.y) * delta, h);
+    let hy = esc_value_at(pixel + vec2<f32>(-rot.y, rot.x) * delta, h);
+    let step = max(params.pmap.z * 1024.0, 1e-6);
+    // The shade pass scales every stored slope by the supersample factor,
+    // which is right for the analytic slope (per render pixel) and wrong
+    // for this one (per 1/1024 of the view, whatever the grid): divided
+    // here, so that cancels.
+    return -vec2<f32>(hx - h, hy - h) / (step * esc_supersample());
+}
+"#;
+
+/// Orbits the relief runs beside the pixel's own, spliced only into a
+/// pipeline built for them: each is another copy of the loop once the
+/// compiler inlines it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReliefOrbits {
+    None,
+    /// `ShadingField::Offset`: two more runs of `esc_run`.
+    Offset,
+    /// `ShadingField::Embossed`: a pair run in step, `esc_emboss`.
+    Embossed,
+}
+
+/// Embossed relief (`ShadingField::Embossed`, survey R7), after the
+/// formula-specific half [`emboss_wgsl`] generates.
+const EMBOSS_WGSL: &str = r#"
+// Embossed relief (ShadingField::Embossed, survey R7): Ultra Fractal's
+// Embossed formula and Emboss colouring, from their Standard.ulb source
+// (Standard_Embossed, Standard_EmbossedHelper, Standard_Emboss; written
+// by Kerry Mitchell). Two orbits, at c - dr and c + dr with dr pointing
+// at the light, run in step; each is reduced to a whole number
+// (EmbossType), and the pixel is a shadow, a highlight or flat by which
+// came out higher. As Ultra Fractal requires ("Periodicity checking
+// needs to be off"), neither orbit stops early: one that never escapes
+// runs to the iteration limit.
+
+// The reductions made on the iteration an orbit escapes (Iteration,
+// Magnitude, Angle). The others keep what they counted.
+fn esc_emboss_last(z: vec2<f32>, it: u32, kind: u32, sections: f32, r: f32) -> f32 {
+    switch kind {
+        case 0u: {
+            return f32(it);
+        }
+        case 4u: {
+            // trunc(ln|z|), without squaring a large |z| into overflow.
+            let m = max(abs(z.x), abs(z.y));
+            let q = min(abs(z.x), abs(z.y)) / max(m, 1e-30);
+            return trunc(log(max(m, 1e-30)) + 0.5 * log(1.0 + q * q));
+        }
+        case 5u: {
+            // Which of `sections` equal sectors arg z lies in, counted
+            // from the positive real axis. The origin (reachable only by
+            // a formula that converges there) reads as sector 0 rather
+            // than handing atan2 a zero pair (CLAUDE.md, Metal).
+            if (max(abs(z.x), abs(z.y)) < 1e-30) {
+                return 0.0;
+            }
+            var t = 0.5 * atan2(z.y, z.x) / 3.14159265;
+            if (t < 0.0) {
+                t = t + 1.0;
+            }
+            return trunc(t * sections);
+        }
+        default: {
+            return r;
+        }
+    }
+}
+
+// The reductions made at every iteration, the escaping one included.
+// Smallest Magnitude keeps ONE minimum for both orbits, as Ultra Fractal
+// does (its helpers share their owner's fRMin): an orbit takes the
+// iteration only when it beats the other's best so far as well.
+fn esc_emboss_each(z: vec2<f32>, it: u32, kind: u32, r: ptr<function, f32>, rmin: ptr<function, f32>) {
+    if (kind == 1u) {
+        if (z.x > 0.0) {
+            *r = *r + 1.0;
+        }
+    } else if (kind == 2u) {
+        if (z.y > 0.0) {
+            *r = *r + 1.0;
+        }
+    } else if (kind == 3u) {
+        let m = dot(z, z);
+        if (m < *rmin) {
+            *rmin = m;
+            *r = f32(it);
+        }
+    }
+}
+
+// Embossed's response at a pixel: -1 shadow, +1 highlight, 0 flat.
+fn esc_emboss(pixel: vec2<f32>) -> f32 {
+    let kind = (params.pmap_flags >> 24u) & 7u;
+    let sections = f32(((params.pmap_flags >> 27u) & 31u) + 1u);
+    // dr: a fraction of the view toward the light, the light's screen
+    // azimuth turned into the plane by the view rotation. Ultra
+    // Fractal's dr is fixed in the plane, so there the light turns with
+    // a rotated view; here it stays where the relief's light is.
+    let a = params.pmap.w;
+    let rot = params.rot_cs;
+    let toward = cos(a) * vec2<f32>(rot.x, rot.y) + sin(a) * vec2<f32>(-rot.y, rot.x);
+    let dr = params.pmap.z * params.span.y * toward;
+    let is_julia = (params.flags & 1u) != 0u;
+    let p0 = pixel - dr;
+    let p1 = pixel + dr;
+    var z0 = esc_emboss_seed(p0);
+    var z1 = esc_emboss_seed(p1);
+    var c0 = select(p0, params.julia_c, is_julia);
+    var c1 = select(p1, params.julia_c, is_julia);
+    var q0 = esc_emboss_prev(z0);
+    var q1 = esc_emboss_prev(z1);
+    var done0 = false;
+    var done1 = false;
+    var r0 = 0.0;
+    var r1 = 0.0;
+    var rmin = 1e20;
+    for (var i = 0u; i < params.max_iter; i = i + 1u) {
+        // Ultra Fractal's fIteration, counted before either orbit steps.
+        let it = i + 1u;
+        if (!done0) {
+            done0 = esc_emboss_step(&z0, &c0, &q0, i);
+            if (done0) {
+                r0 = esc_emboss_last(z0, it, kind, sections, r0);
+            }
+            esc_emboss_each(z0, it, kind, &r0, &rmin);
+        }
+        if (!done1) {
+            done1 = esc_emboss_step(&z1, &c1, &q1, i);
+            if (done1) {
+                r1 = esc_emboss_last(z1, it, kind, sections, r1);
+            }
+            esc_emboss_each(z1, it, kind, &r1, &rmin);
+        }
+        if (done0 && done1) {
+            break;
+        }
+    }
+    // Standard_Emboss: the gradient at 0.2 where the orbit away from the
+    // light came out lower, 0.8 where higher, 0.5 where they tie. As a
+    // response: ground rising toward the light faces away from it.
+    if (r0 < r1) {
+        return -1.0;
+    }
+    if (r1 < r0) {
+        return 1.0;
+    }
+    return 0.0;
+}
+"#;
+
+/// Embossed's formula-specific half: the seed, the history's seed, and
+/// one step with its bailout, as functions of their own so the pair can
+/// call them for either orbit. The step is [`step_lines`], the very
+/// text the pixel's own loop runs.
+fn emboss_wgsl(formula: &FormulaDef, damped: bool, param_seed: &str) -> String {
+    let non_escaping = formula.has_feature(FormulaFeature::NonEscaping);
+    let convergent = formula.has_feature(FormulaFeature::Convergent);
+    let prev_init = if formula.wgsl_prev_init.is_empty() {
+        "vec2<f32>(0.0, 0.0)"
+    } else {
+        formula.wgsl_prev_init
+    };
+    let mut out = vec![
+        "fn esc_emboss_seed(pixel: vec2<f32>) -> vec2<f32> {".to_string(),
+        "    let is_julia = (params.flags & 1u) != 0u;".to_string(),
+        format!("    return select({param_seed}, pixel, is_julia);"),
+        "}".to_string(),
+        String::new(),
+        "fn esc_emboss_prev(z: vec2<f32>) -> vec2<f32> {".to_string(),
+        format!("    return {prev_init};"),
+        "}".to_string(),
+        String::new(),
+        "// One step of one orbit; true once it has bailed out.".to_string(),
+        "fn esc_emboss_step(zp: ptr<function, vec2<f32>>, cp: ptr<function, vec2<f32>>, pp: ptr<function, vec2<f32>>, i: u32) -> bool {".to_string(),
+        "    var z = *zp;".to_string(),
+        "    var c = *cp;".to_string(),
+        "    var z_prev = *pp;".to_string(),
+    ];
+    out.extend(step_lines(formula, damped, convergent, false));
+    out.push("    *zp = z;".to_string());
+    out.push("    *cp = c;".to_string());
+    out.push("    *pp = z_prev;".to_string());
+    out.push("    var bailed = false;".to_string());
+    if !non_escaping {
+        out.push(escape_metric(formula.escape_metric));
+        out.push("        bailed = esc_metric > params.bailout;".to_string());
+    }
+    if convergent {
+        out.push("        let conv_dz = z - z_before;".to_string());
+        out.push("        bailed = bailed || dot(conv_dz, conv_dz) < 1e-12;".to_string());
+    }
+    out.push("    return bailed;".to_string());
+    out.push("}".to_string());
+    out.push(EMBOSS_WGSL.trim().to_string());
+    out.join("\n")
+}
+
+/// The formula step as the loop runs it, over the locals `z`, `c`,
+/// `z_prev`, `dz` and `i`. Shared by the pixel's own loop and
+/// Embossed's pair, so the two cannot step differently.
+fn step_lines(formula: &FormulaDef, damped: bool, z_before: bool, derivative: bool) -> Vec<String> {
+    let needs_prev = formula.has_feature(FormulaFeature::NeedsPrevZ);
+    let needs_index = formula.has_feature(FormulaFeature::NeedsIndex);
+    let mutates_c = formula.has_feature(FormulaFeature::MutatesC);
+    let mut out = Vec::new();
+    // Damped (Mann) wrap: z <- z + alpha*(f(z) - z), with
+    // COMPLEX alpha. Compiled in only when alpha != 1, so
+    // undamped pipelines stay byte-identical (a runtime
+    // mix() at alpha = 1 is not bit-exact).
+    let c_arg = if mutates_c { "&c" } else { "c" };
+    // `i` is the loop counter, in scope here. A formula
+    // whose RULE changes per step (Origami's fold line)
+    // takes it; everything else keeps the two-argument
+    // signature byte-for-byte.
+    let call = match (needs_prev, needs_index) {
+        (true, true) => format!("formula_step(z, {c_arg}, z_prev, i)"),
+        (true, false) => format!("formula_step(z, {c_arg}, z_prev)"),
+        (false, true) => format!("formula_step(z, {c_arg}, i)"),
+        (false, false) => format!("formula_step(z, {c_arg})"),
+    };
+    if z_before {
+        // The pre-step iterate: the convergence register,
+        // and the accumulator's z_prev argument. Kept
+        // independently of the formula's own history.
+        out.push("        let z_before = z;".to_string());
+    }
+    if derivative {
+        // Chain rule at the PRE-step iterate.
+        out.push("        dz = formula_derivative(z, c, dz, is_julia);".to_string());
+    }
+    if damped {
+        out.push(format!("        let z_raw = {call};"));
+        if needs_prev {
+            out.push("        z_prev = z;".to_string());
+        }
+        out.push("        z = z + esc_cmul(params.damping, z_raw - z);".to_string());
+    } else if needs_prev {
+        out.push(format!("        let z_next = {call};"));
+        out.push("        z_prev = z;".to_string());
+        out.push("        z = z_next;".to_string());
+    } else {
+        out.push(format!("        z = {call};"));
+    }
+    out
+}
+
+/// The analytic relief slope (`ShadingField::Analytic`), spliced into
+/// every mode-A template beside the layer code.
+const ANALYTIC_SLOPE_WGSL: &str = r#"
+// Analytic relief (ShadingField::Analytic, survey R5): the slope of
+// h = -ln d, d the distance estimate in render pixels, taken from the
+// derivative rather than from neighbouring pixels -- Kalles
+// Fraktaler's analytic slopes (its 1/DE). The gradient is 1/d along
+// the potential's, conj(dz/z), which points away from the set; turned
+// from the plane into the screen's y-up frame, where the relief pass
+// lights it. Zero where no derivative is iterated: the perturbed rungs
+// and the formulas without one, which the panel says.
+fn esc_analytic_slope(sum: OrbitSummary) -> vec2<f32> {
+    if (!HAS_DERIVATIVE || params.shade_flags != 3u || !sum.escaped) {
+        return vec2<f32>(0.0);
+    }
+    let r = max(length(sum.z), 1.0000001);
+    let dzl = length(sum.dz);
+    // Negated comparisons: a NaN fails them, under fast-math too.
+    if (!(dzl > 1e-30)) {
+        return vec2<f32>(0.0);
+    }
+    let d_px = r * log(r) / dzl * f32(params.height) / params.span.y;
+    // conj(dz/z) as a direction is conj(dz) * z.
+    let g = vec2<f32>(sum.dz.x * sum.z.x + sum.dz.y * sum.z.y, sum.dz.x * sum.z.y - sum.dz.y * sum.z.x);
+    let gl = length(g);
+    if (!(gl > 1e-30)) {
+        return vec2<f32>(0.0);
+    }
+    let u = g / (gl * max(d_px, 1e-6));
+    let rot = params.rot_cs;
+    return vec2<f32>(u.x * rot.x + u.y * rot.y, -u.x * rot.y + u.y * rot.x);
+}
+"#;
+
+/// Blending the layer into the base (`LayerBlend`): `t` is the base's
+/// wrapped palette position, the result the position looked up. And
+/// the relief's source, which can be the layer's own value.
+const ESC_LAYER_WGSL: &str = r#"
+// The relief's source (ShadingField): the raw value, the wrapped one
+// (1, Banded), or the texture layer's raw value (2, Layer) -- relief
+// from one field and colour from another, as UF's Slope lights a
+// different value than the one it colours (survey R3).
+fn esc_relief_source(raw: f32, t: f32, sum: OrbitSummary, state: vec4<f32>) -> f32 {
+    if (params.shade_flags == 2u && (sum.escaped || LAYER_COLORS_INTERIOR)) {
+        return layer_coloring_map(sum, state);
+    }
+    return select(raw, t, params.shade_flags == 1u);
+}
+
+// The texture layer blended into the base's palette position before
+// the palette (ColoringLayer). Where the layer has nothing to say -- an
+// interior pixel it does not colour -- the base stands alone.
+fn esc_layer(t: f32, sum: OrbitSummary, state: vec4<f32>) -> f32 {
+    if (!(sum.escaped || LAYER_COLORS_INTERIOR)) {
+        return t;
+    }
+    let b = esc_layer_value(layer_coloring_map(sum, state));
+    let w = params.pmap.y;
+    var blended = b;
+    switch ((params.pmap_flags >> 16u) & 0xffu) {
+        case 0u: { blended = 1.0 - (1.0 - t) * (1.0 - b); }
+        case 1u: { blended = t * b; }
+        case 2u: { return fract(t + w * b); }
+        case 3u: { blended = select(1.0 - 2.0 * (1.0 - t) * (1.0 - b), 2.0 * t * b, t < 0.5); }
+        default: {}
+    }
+    return t + (blended - t) * w;
+}
+"#;
+
+/// Which of the two colourings owns the accumulator, if either runs
+/// one ([`crate::escape::layer_fits`] guarantees at most one), and its
+/// update as the template should splice it.
+fn accum_owner<'a>(
+    coloring: &'a ColoringDef,
+    layer: Option<&'a ColoringDef>,
+) -> Option<(&'a ColoringDef, String)> {
+    if coloring.has_feature(ColoringFeature::NeedsOrbitAccum) {
+        return Some((coloring, coloring.wgsl_accum.to_string()));
+    }
+    let l = layer.filter(|l| l.has_feature(ColoringFeature::NeedsOrbitAccum))?;
+    Some((l, layer_source(l.wgsl_accum)))
+}
+
+/// Resolve a mode-A template's accumulator width ([`accum_is_wide`]).
+///
+/// A wide colouring stores all four accumulator floats: the records
+/// and the perturbed resume state gain `accum2` after `accum`, and the
+/// stores and loads carry `.zw` through it. A narrow one stores `.xy`
+/// and resumes with zeros, so its layouts are what they always were.
+///
+/// [`accum_is_wide`]: crate::escape::accum_is_wide
+fn with_accum_width(template: &str, wide: bool) -> String {
+    let mut out = Vec::new();
+    for line in template.lines() {
+        if line.trim() == "//__ACCUM_WIDE__" {
+            if wide {
+                out.push("    accum2: vec2<f32>,".to_string());
+            }
+            continue;
+        }
+        out.push(
+            line.replace("/*ACCUM2_STORE*/ ", if wide { "accum_state.zw, " } else { "" })
+                .replace("/*ST_ACCUM2*/", if wide { "st.accum2" } else { "vec2<f32>(0.0)" })
+                .replace("/*R_ACCUM2*/", if wide { "r.accum2" } else { "vec2<f32>(0.0)" }),
+        );
+    }
+    out.join("\n")
+}
+
+/// A colouring whose colour carries an alpha (`ColoringFeature::
+/// DirectAlpha`) hands it to the pixel's coverage; every other drawn
+/// pixel is opaque. Substituted into the template's text, so no other
+/// shader changes. `state` is the template's name for the accumulator.
+fn with_alpha(template: String, coloring: &ColoringDef, state: &str) -> String {
+    if !coloring.has_feature(ColoringFeature::DirectAlpha) {
+        return template;
+    }
+    template.replace(
+        "coverage = 1.0;",
+        &format!("coverage = clamp(coloring_alpha(summary, {state}), 0.0, 1.0);"),
+    )
+}
+
+/// Bytes of one terminal record (`IterResult`): z, dz, the
+/// accumulator's `.xy`, n and the tags -- and `.zw` for a wide one.
+pub const RESULT_BYTES: u64 = 32;
+pub const RESULT_BYTES_WIDE: u64 = 40;
+
+pub fn result_bytes(wide: bool) -> u64 {
+    if wide {
+        RESULT_BYTES_WIDE
+    } else {
+        RESULT_BYTES
+    }
+}
 
 /// The escape test spliced into the loop for escaping formulas.
 /// The base metric is per-formula (plan §5.9): squared norm for the
@@ -320,6 +1063,20 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 /// trig/Collatz. Biomorph (Pickover) still overrides either at
 /// runtime — a switch on every formula, not a formula (plan §3).
 fn escape_test(metric: crate::escape::EscapeMetric) -> String {
+    format!(
+        "{}\n\
+         \x20       if (esc_metric > params.bailout) {{\n\
+         \x20           escaped = true;\n\
+         \x20           n = i + 1u;\n\
+         \x20           break;\n\
+         \x20       }}",
+        escape_metric(metric)
+    )
+}
+
+/// `esc_metric`, the value the escape test compares with the bailout:
+/// the formula's metric, or the biomorph's single component.
+fn escape_metric(metric: crate::escape::EscapeMetric) -> String {
     let base = match metric {
         crate::escape::EscapeMetric::NormSq => "dot(z, z)",
         crate::escape::EscapeMetric::Re => "z.x",
@@ -329,12 +1086,7 @@ fn escape_test(metric: crate::escape::EscapeMetric) -> String {
         "        let bio = (params.flags >> 1u) & 3u;\n\
          \x20       var esc_metric = {base};\n\
          \x20       if (bio == 1u) {{ esc_metric = z.x * z.x; }}\n\
-         \x20       if (bio == 2u) {{ esc_metric = z.y * z.y; }}\n\
-         \x20       if (esc_metric > params.bailout) {{\n\
-         \x20           escaped = true;\n\
-         \x20           n = i + 1u;\n\
-         \x20           break;\n\
-         \x20       }}"
+         \x20       if (bio == 2u) {{ esc_metric = z.y * z.y; }}"
     )
 }
 
@@ -376,10 +1128,12 @@ struct EscapeParams {
     shade_flags: u32,
     // Mode D's interaction stride (1 or 2); the other engines read 1.
     stride: u32,
-    _pad_shade1: u32,
-    _pad_shade2: u32,
+    degree: f32,           // the formula's degree at infinity (the smooth count's log base)
+    pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
+    pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
+    lparams: array<vec4<f32>, 4>,
     // CPU-derived formula data — see the direct template's header.
     fdata: array<vec4<f32>, 64>,
 }
@@ -440,13 +1194,15 @@ struct PerturbParams {
 @group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var palette_texture: texture_2d<f32>;
 @group(0) @binding(3) var palette_sampler: sampler;
+//__PALETTE_MAP__
 @group(0) @binding(4) var<storage, read> ref_orbit: array<vec2<f32>>;
 @group(0) @binding(5) var<uniform> perturb: PerturbParams;
 // Per-pixel iteration state for chunked dispatches (48 bytes/px).
 struct IterState {
     w: vec2<f32>,       // scaled: w | floatexp: DF mantissa hi
     z: vec2<f32>,       // last full orbit value
-    accum: vec2<f32>,   // coloring accumulator
+    accum: vec2<f32>,   // coloring accumulator (.xy)
+    //__ACCUM_WIDE__
     w_lo: vec2<f32>,    // floatexp DF mantissa lo (zero on the scaled rung)
     w_e: i32,           // floatexp exponent (unused by the scaled rung)
     m: u32,             // reference index
@@ -504,7 +1260,7 @@ struct BlaBuf {
 @group(0) @binding(9) var<storage, read> ref_orbit_e: array<i32>;
 // See the direct template: the coloring's scalar value for the relief
 // pass, bound to a 1x1 dummy when shading is off.
-@group(0) @binding(10) var height_tex: texture_storage_2d<r32float, write>;
+@group(0) @binding(10) var height_tex: texture_storage_2d<rgba32float, write>;
 // |Z|² per reference entry as a DF pair (hi, lo), CPU-computed in f64.
 // The escape margin needs (|Z|² - bailout) to better than f32 ulp --
 // see the margin comment at the escape test.
@@ -520,6 +1276,7 @@ struct IterResult {
     z: vec2<f32>,
     dz: vec2<f32>,
     accum: vec2<f32>,
+    //__ACCUM_WIDE__
     n: u32,
     // bit 0 escaped, bit 1 converged, bits 2.. detected period.
     tags: u32,
@@ -673,7 +1430,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         w_prev = st.w_lo;
         z = st.z;
         m = st.m;
-        accum_state = st.accum;
+        accum_state = vec4<f32>(st.accum, /*ST_ACCUM2*/);
         i = max(i, st.i_at);
         if ((st.n_done & ITER_ESCAPED_BIT) != 0u) {
             escaped = true;
@@ -766,6 +1523,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         //__CONVERGE_TEST__
 
         //__ESCAPE_MARGIN__
+        //__ACCUM_UPDATE_LATE__
 
         // Zhuoran rebase: restart the reference index when the new
         // delta AGAINST THE ORBIT'S START would be smaller than the
@@ -780,7 +1538,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (perturb.iter_end < params.max_iter) {
         // More chunks follow: persist the registers.
         iter_state[px_index] = IterState(
-            w, z, accum_state, w_prev, 0, m,
+            w, z, accum_state.xy, /*ACCUM2_STORE*/ w_prev, 0, m,
             select(0u, n | ITER_ESCAPED_BIT, escaped),
             i,
         );
@@ -798,11 +1556,18 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // downsample like everything else, so the boundary antialiases
     // against the background instead of against black.
     var coverage = 0.0;
-    // The relief pass slopes THIS, not the rendered colour: the value
-    // before the palette, so a cycling palette's band edges are not
-    // mistaken for cliffs. Interior pixels keep 0 -- flat, which puts
-    // the rim light exactly on the set boundary.
+    // Two heights. `height` (red) is the colouring's raw value, which
+    // the auto-contrast probe measures; `relief` (green) is what the
+    // relief slopes -- the raw value, the wrapped one (Banded) or the
+    // texture layer's (Layer). Kept apart so a relief source can never
+    // change what contrast fits. The relief slopes the value before the
+    // palette, so a cycling palette's band edges are not mistaken for
+    // cliffs; interior pixels keep 0 -- flat, which puts the rim light
+    // exactly on the set boundary.
     var height = 0.0;
+    var relief = 0.0;
+    // Blue and alpha: the analytic slope, when the relief asks for it.
+    var slope = vec2<f32>(0.0);
     if (escaped || COLORING_COLORS_INTERIOR) {
         let summary = OrbitSummary(z, n, escaped, converged, period, dz);
         // `fract` so unbounded colorings cycle as they grow; a
@@ -810,18 +1575,19 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // the palette's bottom and the brightest points render
         // darkest. See ColoringFeature::Bounded.
         let raw = coloring_map(summary, accum_state);
-        let t = select(fract(raw), clamp(raw, 0.0, 1.0), COLORING_IS_BOUNDED);
+        let t = esc_wrap(esc_transfer(raw), COLORING_IS_BOUNDED);
         // SHADING_BANDED picks the wrapped coordinate instead, which
         // turns every palette band into a step (the engraved look).
-        height = select(raw, t, params.shade_flags == 1u);
-        let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
-        rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
+        height = raw;
+        relief = esc_relief_source(raw, t, summary, accum_state);
+        slope = esc_analytic_slope(summary);
+        rgb = esc_colour(raw, t, summary, accum_state);
         coverage = 1.0;
     }
 
     if ((params.flags & 8u) != 0u && perturb.iter_end >= params.max_iter) {
         results[px_index] = IterResult(
-            z, dz, accum_state, n,
+            z, dz, accum_state.xy, /*ACCUM2_STORE*/ n,
             select(0u, 1u, escaped) | select(0u, 2u, converged) | (period << 2u),
         );
     }
@@ -835,7 +1601,8 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // settled image is byte-identical.
     if (escaped || perturb.iter_end >= params.max_iter) {
         textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, coverage));
-        textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, 0.0, 0.0, 0.0));
+        slope = esc_overlay_field(escaped, z, n, slope);
+        textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, relief, slope));
     }
 }
 "#;
@@ -872,10 +1639,12 @@ struct EscapeParams {
     shade_flags: u32,
     // Mode D's interaction stride (1 or 2); the other engines read 1.
     stride: u32,
-    _pad_shade1: u32,
-    _pad_shade2: u32,
+    degree: f32,           // the formula's degree at infinity (the smooth count's log base)
+    pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
+    pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
+    lparams: array<vec4<f32>, 4>,
     // CPU-derived formula data — see the direct template's header.
     fdata: array<vec4<f32>, 64>,
 }
@@ -927,13 +1696,15 @@ struct PerturbParams {
 @group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var palette_texture: texture_2d<f32>;
 @group(0) @binding(3) var palette_sampler: sampler;
+//__PALETTE_MAP__
 @group(0) @binding(4) var<storage, read> ref_orbit: array<vec2<f32>>;
 @group(0) @binding(5) var<uniform> perturb: PerturbParams;
 // Per-pixel iteration state for chunked dispatches (48 bytes/px).
 struct IterState {
     w: vec2<f32>,       // scaled: w | floatexp: DF mantissa hi
     z: vec2<f32>,       // last full orbit value
-    accum: vec2<f32>,   // coloring accumulator
+    accum: vec2<f32>,   // coloring accumulator (.xy)
+    //__ACCUM_WIDE__
     w_lo: vec2<f32>,    // floatexp DF mantissa lo (zero on the scaled rung)
     w_e: i32,           // floatexp exponent (unused by the scaled rung)
     m: u32,             // reference index
@@ -992,7 +1763,7 @@ struct BlaBuf {
 @group(0) @binding(9) var<storage, read> ref_orbit_e: array<i32>;
 // See the direct template: the coloring's scalar value for the relief
 // pass, bound to a 1x1 dummy when shading is off.
-@group(0) @binding(10) var height_tex: texture_storage_2d<r32float, write>;
+@group(0) @binding(10) var height_tex: texture_storage_2d<rgba32float, write>;
 // |Z|² per reference entry as a DF pair (hi, lo), CPU-computed in f64.
 // The escape margin needs (|Z|² - bailout) to better than f32 ulp --
 // see the margin comment at the escape test.
@@ -1008,6 +1779,7 @@ struct IterResult {
     z: vec2<f32>,
     dz: vec2<f32>,
     accum: vec2<f32>,
+    //__ACCUM_WIDE__
     n: u32,
     // bit 0 escaped, bit 1 converged, bits 2.. detected period.
     tags: u32,
@@ -1597,7 +2369,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         //__STATE_RESUME_TAIL__
         z = st.z;
         m = st.m;
-        accum_state = st.accum;
+        accum_state = vec4<f32>(st.accum, /*ST_ACCUM2*/);
         i = max(i, st.i_at);
         if ((st.n_done & ITER_ESCAPED_BIT) != 0u) {
             escaped = true;
@@ -1678,12 +2450,13 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         //__CONVERGE_TEST__
 
         //__ESCAPE_MARGIN__
+        //__ACCUM_UPDATE_LATE__
 
         //__REBASE__
     }
     if (perturb.iter_end < params.max_iter) {
         iter_state[px_index] = IterState(
-            w.hi, z, accum_state, w.lo, w.e, m,
+            w.hi, z, accum_state.xy, /*ACCUM2_STORE*/ w.lo, w.e, m,
             select(0u, n | ITER_ESCAPED_BIT, escaped),
             i,
             //__STATE_SAVE_TAIL__
@@ -1702,11 +2475,18 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // downsample like everything else, so the boundary antialiases
     // against the background instead of against black.
     var coverage = 0.0;
-    // The relief pass slopes THIS, not the rendered colour: the value
-    // before the palette, so a cycling palette's band edges are not
-    // mistaken for cliffs. Interior pixels keep 0 -- flat, which puts
-    // the rim light exactly on the set boundary.
+    // Two heights. `height` (red) is the colouring's raw value, which
+    // the auto-contrast probe measures; `relief` (green) is what the
+    // relief slopes -- the raw value, the wrapped one (Banded) or the
+    // texture layer's (Layer). Kept apart so a relief source can never
+    // change what contrast fits. The relief slopes the value before the
+    // palette, so a cycling palette's band edges are not mistaken for
+    // cliffs; interior pixels keep 0 -- flat, which puts the rim light
+    // exactly on the set boundary.
     var height = 0.0;
+    var relief = 0.0;
+    // Blue and alpha: the analytic slope, when the relief asks for it.
+    var slope = vec2<f32>(0.0);
     if (escaped || COLORING_COLORS_INTERIOR) {
         let summary = OrbitSummary(z, n, escaped, converged, period, dz);
         // `fract` so unbounded colorings cycle as they grow; a
@@ -1714,18 +2494,19 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // the palette's bottom and the brightest points render
         // darkest. See ColoringFeature::Bounded.
         let raw = coloring_map(summary, accum_state);
-        let t = select(fract(raw), clamp(raw, 0.0, 1.0), COLORING_IS_BOUNDED);
+        let t = esc_wrap(esc_transfer(raw), COLORING_IS_BOUNDED);
         // SHADING_BANDED picks the wrapped coordinate instead, which
         // turns every palette band into a step (the engraved look).
-        height = select(raw, t, params.shade_flags == 1u);
-        let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
-        rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
+        height = raw;
+        relief = esc_relief_source(raw, t, summary, accum_state);
+        slope = esc_analytic_slope(summary);
+        rgb = esc_colour(raw, t, summary, accum_state);
         coverage = 1.0;
     }
 
     if ((params.flags & 8u) != 0u && perturb.iter_end >= params.max_iter) {
         results[px_index] = IterResult(
-            z, dz, accum_state, n,
+            z, dz, accum_state.xy, /*ACCUM2_STORE*/ n,
             select(0u, 1u, escaped) | select(0u, 2u, converged) | (period << 2u),
         );
     }
@@ -1739,7 +2520,8 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // settled image is byte-identical.
     if (escaped || perturb.iter_end >= params.max_iter) {
         textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, coverage));
-        textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, 0.0, 0.0, 0.0));
+        slope = esc_overlay_field(escaped, z, n, slope);
+        textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, relief, slope));
     }
 }
 "#;
@@ -2437,7 +3219,8 @@ fn rebase_default() -> String {
 }
 
 /// Bytes of per-pixel iteration state the assembled deep-rung shader
-/// declares, per tier.
+/// declares, per tier and accumulator width (a wide accumulator adds
+/// `accum2`, eight bytes).
 ///
 /// The renderer allocates `iter_state` from this, so it is the single
 /// place the Rust buffer and the WGSL struct agree -- and
@@ -2449,18 +3232,23 @@ pub const ITER_STATE_BYTES: u64 = 48;
 /// a pad word to keep the struct 8-byte aligned.
 pub const ITER_STATE_BYTES_PHOENIX: u64 = 72;
 
-/// The widest state any tier declares. The render-pixel cap uses this
-/// so a tier switch can never need a buffer the device will not bind.
-pub const ITER_STATE_BYTES_MAX: u64 = ITER_STATE_BYTES_PHOENIX;
+/// What a wide accumulator adds to the state: `accum2`.
+pub const ITER_STATE_BYTES_WIDE_EXTRA: u64 = 8;
 
-/// Per-pixel state a given tier needs.
-pub fn iter_state_bytes(tier: PerturbTier, floatexp: bool) -> u64 {
-    match (tier, floatexp) {
+/// The widest state any tier declares. The render-pixel cap uses this
+/// so a tier or colouring switch can never need a buffer the device
+/// will not bind.
+pub const ITER_STATE_BYTES_MAX: u64 = ITER_STATE_BYTES_PHOENIX + ITER_STATE_BYTES_WIDE_EXTRA;
+
+/// Per-pixel state a given tier needs, at an accumulator width.
+pub fn iter_state_bytes(tier: PerturbTier, floatexp: bool, wide: bool) -> u64 {
+    let base = match (tier, floatexp) {
         // The scaled rung hides Phoenix's history in `w_lo`, which is
         // dead there, so only the deep rung actually grows.
         (PerturbTier::Phoenix, true) | (PerturbTier::Manowar, true) => ITER_STATE_BYTES_PHOENIX,
         _ => ITER_STATE_BYTES,
-    }
+    };
+    base + if wide { ITER_STATE_BYTES_WIDE_EXTRA } else { 0 }
 }
 
 /// The struct tail, resume and save splices for a tier. They are
@@ -3903,22 +4691,46 @@ pub fn assemble_perturbed_with_lens(
     tier: PerturbTier,
     lens: Option<&str>,
 ) -> String {
-    let needs_accum = coloring.has_feature(ColoringFeature::NeedsOrbitAccum);
+    assemble_perturbed_layered(coloring, None, floatexp, tier, lens)
+}
+
+/// [`assemble_perturbed_with_lens`] with a texture layer, combined as
+/// [`assemble_layered`] combines it.
+pub fn assemble_perturbed_layered(
+    coloring: &ColoringDef,
+    layer: Option<&ColoringDef>,
+    floatexp: bool,
+    tier: PerturbTier,
+    lens: Option<&str>,
+) -> String {
+    let layer = layer.filter(|l| crate::escape::layer_fits(coloring, l));
+    let owner = accum_owner(coloring, layer);
+    let needs_accum = owner.is_some();
     let colors_interior = coloring.has_feature(ColoringFeature::ColorsInterior);
     let bounded = coloring.has_feature(ColoringFeature::Bounded);
     // On this path the TIER is the map's identity -- there is no
     // FormulaDef in scope -- so convergence is a property of the tier.
     let convergent = tier.is_convergent();
-    let template = if floatexp {
-        PERTURBED_FE_TEMPLATE
-    } else {
-        PERTURBED_TEMPLATE
-    };
+    let template = with_alpha(
+        with_accum_width(
+            if floatexp {
+                PERTURBED_FE_TEMPLATE
+            } else {
+                PERTURBED_TEMPLATE
+            },
+            owner.as_ref().is_some_and(|(o, _)| crate::escape::accum_is_wide(o)),
+        ),
+        coloring,
+        "accum_state",
+    );
+    // UF's loop order (SkipsEscapingIterate): after the escape test.
+    let late = owner.as_ref().is_some_and(|(o, _)| o.has_feature(ColoringFeature::SkipsEscapingIterate));
 
     let mut out = Vec::new();
     lens_prelude(&mut out, lens);
     for line in template.lines() {
         match line.trim() {
+            "//__PALETTE_MAP__" => out.push(PALETTE_MAP_WGSL.trim().to_string()),
             "//__LENS_APPLY_PX__" => lens_apply_pixels(&mut out, lens),
             "//__DELTA_STEP__" => out.push(match tier {
                 PerturbTier::Power(p) => delta_step_scaled(p.clamp(2, 12)),
@@ -4001,24 +4813,32 @@ pub fn assemble_perturbed_with_lens(
                 if !helpers.is_empty() {
                     out.push(helpers);
                 }
+                let helpers = orbit_helpers(coloring, layer, true);
+                if !helpers.is_empty() {
+                    out.push(helpers);
+                }
                 out.push(format!("// coloring: {}", coloring.name));
                 out.push(coloring.wgsl.to_string());
+                out.push(layer_wgsl(layer, false));
+                out.push(colour_wgsl(coloring).to_string());
+                out.push(OVERLAY_FIELD_WGSL.trim().to_string());
+                out.push(ANALYTIC_SLOPE_WGSL.trim().to_string());
             }
             "//__COLORING_ACCUM__" => {
-                if needs_accum {
-                    out.push(coloring.wgsl_accum.to_string());
+                if let Some((_, accum)) = &owner {
+                    out.push(accum.clone());
                 }
             }
             "//__ACCUM_DECL__" => {
-                if needs_accum {
+                if let Some((o, _)) = &owner {
                     out.push(format!(
-                        "    var accum_state: vec2<f32> = {};",
-                        coloring.accum_init
+                        "    var accum_state: vec4<f32> = {};",
+                        o.accum_init
                     ));
                 } else {
                     // `var`, not `let`: the perturbed templates' chunk
                     // resume assigns it even when no accumulator runs.
-                    out.push("    var accum_state = vec2<f32>(0.0, 0.0);".to_string());
+                    out.push("    var accum_state = vec4<f32>(0.0);".to_string());
                 }
             }
             "//__CONVERGE_TEST__" => {
@@ -4041,7 +4861,15 @@ pub fn assemble_perturbed_with_lens(
                 }
             }
             "//__ACCUM_UPDATE__" => {
-                if needs_accum {
+                if needs_accum && !late {
+                    out.push(
+                        "        accum_state = coloring_accum(z_full, z_before, c_f32, accum_state);"
+                            .to_string(),
+                    );
+                }
+            }
+            "//__ACCUM_UPDATE_LATE__" => {
+                if needs_accum && late {
                     out.push(
                         "        accum_state = coloring_accum(z_full, z_before, c_f32, accum_state);"
                             .to_string(),
@@ -4051,8 +4879,7 @@ pub fn assemble_perturbed_with_lens(
             _ => out.push(line.to_string()),
         }
     }
-    out.join("
-")
+    out.join("\n")
 }
 
 /// Recolor pass: re-run the coloring + palette lookup from the
@@ -4083,10 +4910,12 @@ struct EscapeParams {
     shade_flags: u32,
     // Mode D's interaction stride (1 or 2); the other engines read 1.
     stride: u32,
-    _pad_shade1: u32,
-    _pad_shade2: u32,
+    degree: f32,           // the formula's degree at infinity (the smooth count's log base)
+    pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
+    pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
+    lparams: array<vec4<f32>, 4>,
     fdata: array<vec4<f32>, 64>,
 }
 
@@ -4094,6 +4923,7 @@ struct IterResult {
     z: vec2<f32>,
     dz: vec2<f32>,
     accum: vec2<f32>,
+    //__ACCUM_WIDE__
     n: u32,
     tags: u32,
 }
@@ -4102,13 +4932,16 @@ struct IterResult {
 @group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var palette_texture: texture_2d<f32>;
 @group(0) @binding(3) var palette_sampler: sampler;
-@group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
+//__PALETTE_MAP__
+@group(0) @binding(4) var height_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(5) var<storage, read> results: array<IterResult>;
 
 // The measured contrast fit (see EscapeContrast). `enabled = 0` makes
 // this the identity, so a recolor with contrast off reproduces the
 // iterate pass byte for byte -- which the recolor cache's equivalence
-// test depends on.
+// test depends on. The mode and the quantile table come after the
+// fields the IFS templates read, which bind the same buffer with only
+// those.
 struct ContrastParams {
     plane: vec3<f32>,
     lo: f32,
@@ -4116,19 +4949,86 @@ struct ContrastParams {
     strength: f32,
     turns: f32,
     enabled: u32,
+    // ContrastMode::to_gpu; 3 is Equalize.
+    mode: u32,
+    // The texture layer's own range in the frame (its probe), which
+    // esc_layer_value stretches it to.
+    layer_enabled: u32,
+    layer_lo: f32,
+    layer_hi: f32,
+    // Equalize: the probe's values at 256 evenly spaced ranks, from the
+    // smallest to the largest.
+    cdf: array<vec4<f32>, 64>,
 }
 @group(0) @binding(6) var<uniform> contrast: ContrastParams;
 
-// Re-expose the coloring's value on the measured range. `p` is the
-// pixel, normalized, because Flatten's fit is a PLANE in screen space.
+fn esc_quantile(i: u32) -> f32 {
+    return contrast.cdf[i / 4u][i % 4u];
+}
+
+// The value's midrank in the frame (Equalize, survey P7): the share of
+// the probe's samples below it, read off the quantile table by linear
+// interpolation. A value on a plateau of equal samples lands at the
+// plateau's middle, as techmatt's midrank does -- which is what keeps
+// a field with a large flat region (an escape count, say) from putting
+// the whole region at one end of the palette.
+fn esc_rank(v: f32) -> f32 {
+    // The first entry not below v, then the first above it.
+    var lo = 0u;
+    var hi = 256u;
+    while (lo < hi) {
+        let mid = (lo + hi) / 2u;
+        if (esc_quantile(mid) < v) {
+            lo = mid + 1u;
+        } else {
+            hi = mid;
+        }
+    }
+    let first_ge = lo;
+    hi = 256u;
+    while (lo < hi) {
+        let mid = (lo + hi) / 2u;
+        if (esc_quantile(mid) <= v) {
+            lo = mid + 1u;
+        } else {
+            hi = mid;
+        }
+    }
+    let first_gt = lo;
+    if (first_gt > first_ge) {
+        return 0.5 * f32(first_ge + first_gt - 1u) / 255.0;
+    }
+    if (first_ge == 0u) {
+        return 0.0;
+    }
+    if (first_ge >= 256u) {
+        return 1.0;
+    }
+    let a = esc_quantile(first_ge - 1u);
+    let b = esc_quantile(first_ge);
+    return (f32(first_ge - 1u) + (v - a) / max(b - a, 1e-30)) / 255.0;
+}
+
+// Re-expose the coloring's value on the measured range, through the
+// value transfer. `p` is the pixel, normalized, because Flatten's fit
+// is a PLANE in screen space. The transfer applies to the FITTED value
+// in its 0..1 range, before the palette turns, so at pivot 1 it is a
+// curve over the field's whole range; off, it applies to the raw value
+// exactly as the iterate pass does.
 fn apply_contrast(raw: f32, p: vec2<f32>) -> f32 {
     if (contrast.enabled == 0u) {
-        return raw;
+        return esc_transfer(raw);
     }
-    let base = contrast.plane.x + contrast.plane.y * p.x + contrast.plane.z * p.y;
-    let span = max(contrast.hi - contrast.lo, 1e-30);
-    let mapped = ((raw - base) - contrast.lo) / span * contrast.turns;
-    return mix(raw, mapped, clamp(contrast.strength, 0.0, 1.0));
+    var u = 0.0;
+    if (contrast.mode == 3u) {
+        u = esc_rank(raw);
+    } else {
+        let base = contrast.plane.x + contrast.plane.y * p.x + contrast.plane.z * p.y;
+        let span = max(contrast.hi - contrast.lo, 1e-30);
+        u = ((raw - base) - contrast.lo) / span;
+    }
+    let mapped = esc_transfer(u) * contrast.turns;
+    return mix(esc_transfer(raw), mapped, clamp(contrast.strength, 0.0, 1.0));
 }
 
 fn cparam(i: u32) -> f32 {
@@ -4165,25 +5065,34 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // downsample like everything else, so the boundary antialiases
     // against the background instead of against black.
     var coverage = 0.0;
+    // Red the raw value for the probe, green the relief's source: see
+    // the iterate templates.
     var height = 0.0;
+    var relief = 0.0;
+    // Blue and alpha: the analytic slope, when the relief asks for it.
+    var slope = vec2<f32>(0.0);
     if (escaped || COLORING_COLORS_INTERIOR) {
         let summary = OrbitSummary(r.z, r.n, escaped, converged, period, r.dz);
-        let raw = coloring_map(summary, r.accum);
+        let state = vec4<f32>(r.accum, /*R_ACCUM2*/);
+        let raw = coloring_map(summary, state);
         // The height field keeps the PRE-contrast value: the probe
         // measures this texture, so remapping it here would feed the
         // fit its own output and compound every frame. Banded is the
-        // value as the palette shows it -- clamped for a Bounded
-        // colouring, wrapped otherwise -- as the iterate pass stores it.
-        height = select(raw, select(fract(raw), clamp(raw, 0.0, 1.0), COLORING_IS_BOUNDED), params.shade_flags == 1u);
+        // value as the palette wraps it -- transferred, then clamped
+        // for a Bounded colouring and wrapped otherwise -- as the
+        // iterate pass stores it.
+        height = raw;
+        relief = esc_relief_source(raw, esc_wrap(esc_transfer(raw), COLORING_IS_BOUNDED), summary, state);
+        slope = esc_analytic_slope(summary);
         let dims = vec2<f32>(f32(params.width), f32(params.height));
         let rawc = apply_contrast(raw, vec2<f32>(f32(gid.x), f32(gid.y)) / max(dims - 1.0, vec2<f32>(1.0)));
-        let t = select(fract(rawc), clamp(rawc, 0.0, 1.0), COLORING_IS_BOUNDED);
-        let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
-        rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
+        let t = esc_wrap(rawc, COLORING_IS_BOUNDED);
+        rgb = esc_colour(raw, t, summary, state);
         coverage = 1.0;
     }
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, coverage));
-    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, 0.0, 0.0, 0.0));
+    slope = esc_overlay_field(escaped, r.z, r.n, slope);
+    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, relief, slope));
 }
 "#;
 
@@ -4196,19 +5105,91 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 /// under each, and the renderer folds the flag into both the cache
 /// key and the pipeline key so the two always agree.
 pub fn assemble_recolor(coloring: &ColoringDef, has_derivative: bool) -> String {
+    assemble_recolor_layered(coloring, None, has_derivative)
+}
+
+/// [`assemble_recolor`] with a texture layer. The records were written
+/// by an iterate pass assembled with the same pair, so the accumulator
+/// they carry is the owner's, at its width.
+/// The texture layer's value at the contrast probe's cells, from the
+/// recolour cache's records: what Auto contrast stretches the layer to.
+/// An entry point of its own appended to the recolour module, so the
+/// value it measures is the one that pass blends, by construction.
+const LAYER_PROBE_WGSL: &str = r#"
+struct LayerProbe {
+    dims: vec2<u32>,
+    grid: vec2<u32>,
+}
+@group(0) @binding(10) var<storage, read_write> layer_probe_out: array<vec2<f32>>;
+@group(0) @binding(11) var<uniform> layer_probe: LayerProbe;
+
+@compute @workgroup_size(8, 8, 1)
+fn layer_probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= layer_probe.grid.x || gid.y >= layer_probe.grid.y) {
+        return;
+    }
+    // The cell the base probe samples, so the two describe one frame.
+    let fx = (f32(gid.x) + 0.5) / f32(layer_probe.grid.x);
+    let fy = (f32(gid.y) + 0.5) / f32(layer_probe.grid.y);
+    let x = u32(clamp(i32(fx * f32(layer_probe.dims.x)), 0, i32(layer_probe.dims.x) - 1));
+    let y = u32(clamp(i32(fy * f32(layer_probe.dims.y)), 0, i32(layer_probe.dims.y) - 1));
+    let r = results[y * params.width + x];
+    let escaped = (r.tags & 1u) != 0u;
+    let converged = (r.tags & 2u) != 0u;
+    let period = r.tags >> 2u;
+    let summary = OrbitSummary(r.z, r.n, escaped, converged, period, r.dz);
+    let state = vec4<f32>(r.accum, /*R_ACCUM2*/);
+    var out = vec2<f32>(0.0, 0.0);
+    // Only where the picture shows the layer: the base drew the pixel
+    // and the layer has something to say there.
+    if ((escaped || COLORING_COLORS_INTERIOR) && (escaped || LAYER_COLORS_INTERIOR)) {
+        out = vec2<f32>(layer_coloring_map(summary, state), 1.0);
+    }
+    layer_probe_out[gid.y * layer_probe.grid.x + gid.x] = out;
+}
+"#;
+
+/// The recolour module with [`LAYER_PROBE_WGSL`]'s entry point
+/// (`layer_probe_main`) appended. `layer` must be a layer that fits.
+pub fn assemble_layer_probe(coloring: &ColoringDef, layer: &ColoringDef, has_derivative: bool) -> String {
+    let wide = accum_owner(coloring, Some(layer)).is_some_and(|(o, _)| crate::escape::accum_is_wide(o));
+    format!(
+        "{}\n{}",
+        assemble_recolor_layered(coloring, Some(layer), has_derivative),
+        with_accum_width(LAYER_PROBE_WGSL, wide)
+    )
+}
+
+pub fn assemble_recolor_layered(
+    coloring: &ColoringDef,
+    layer: Option<&ColoringDef>,
+    has_derivative: bool,
+) -> String {
+    let layer = layer.filter(|l| crate::escape::layer_fits(coloring, l));
     let colors_interior = coloring.has_feature(ColoringFeature::ColorsInterior);
     let bounded = coloring.has_feature(ColoringFeature::Bounded);
+    let wide = accum_owner(coloring, layer).is_some_and(|(o, _)| crate::escape::accum_is_wide(o));
     let mut out = Vec::new();
-    for line in RECOLOR_TEMPLATE.lines() {
+    let template = with_alpha(with_accum_width(RECOLOR_TEMPLATE, wide), coloring, "state");
+    for line in template.lines() {
         match line.trim() {
+            "//__PALETTE_MAP__" => out.push(PALETTE_MAP_WGSL.trim().to_string()),
             "//__COLORING__" => {
                 out.push(format!(
                     "const COLORING_COLORS_INTERIOR: bool = {colors_interior};"
                 ));
                 out.push(format!("const HAS_DERIVATIVE: bool = {has_derivative};"));
                 out.push(format!("const COLORING_IS_BOUNDED: bool = {bounded};"));
+                let helpers = orbit_helpers(coloring, layer, true);
+                if !helpers.is_empty() {
+                    out.push(helpers);
+                }
                 out.push(format!("// coloring: {}", coloring.name));
                 out.push(coloring.wgsl.to_string());
+                out.push(layer_wgsl(layer, true));
+                out.push(colour_wgsl(coloring).to_string());
+                out.push(OVERLAY_FIELD_WGSL.trim().to_string());
+                out.push(ANALYTIC_SLOPE_WGSL.trim().to_string());
             }
             _ => out.push(line.to_string()),
         }
@@ -4245,10 +5226,12 @@ struct EscapeParams {
     shade_flags: u32,
     // Mode D's interaction stride (1 or 2); the other engines read 1.
     stride: u32,
-    _pad_shade1: u32,
-    _pad_shade2: u32,
+    degree: f32,           // the formula's degree at infinity (the smooth count's log base)
+    pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
+    pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
+    lparams: array<vec4<f32>, 4>,
     // CPU-derived formula data — see the direct template's header.
     fdata: array<vec4<f32>, 64>,
 }
@@ -4257,12 +5240,13 @@ struct EscapeParams {
 @group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var palette_texture: texture_2d<f32>;
 @group(0) @binding(3) var palette_sampler: sampler;
+//__PALETTE_MAP__
 // The coloring's scalar value, kept for the relief pass to
 // finite-difference. Bound to a 1x1 dummy when shading is off, where
 // every store but one falls out of bounds and WGSL discards it -- so
 // the cost of always writing is a single dead store per pixel, and
 // there is no second shader variant to keep in step.
-@group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
+@group(0) @binding(4) var height_tex: texture_storage_2d<rgba32float, write>;
 
 fn fparam(i: u32) -> f32 {
     return params.fparams[i / 4u][i % 4u];
@@ -4364,14 +5348,13 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     let shade = field_color(sum, grad, terms);
-    let t = fract(shade.t);
+    let t = esc_wrap(esc_transfer(shade.t), false);
     // Relief source, as in the escape templates.
     let height = select(shade.t, t, params.shade_flags == 1u);
-    let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
-    let rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2)) * clamp(shade.lum, 0.0, 4.0);
+    let rgb = esc_palette(t) * clamp(shade.lum, 0.0, 4.0);
 
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(rgb, 1.0));
-    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(height, 0.0, 0.0, 0.0));
+    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(shade.t, height, 0.0, 0.0));
 }
 "#;
 
@@ -4399,10 +5382,12 @@ struct EscapeParams {
     shade_flags: u32,
     // Mode D's interaction stride (1 or 2); the other engines read 1.
     stride: u32,
-    _pad_shade1: u32,
-    _pad_shade2: u32,
+    degree: f32,           // the formula's degree at infinity (the smooth count's log base)
+    pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
+    pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
+    lparams: array<vec4<f32>, 4>,
     // Mode D keeps the whole-IFS constants here: see
     // `escape::ifs::pack_globals` for the layout.
     fdata: array<vec4<f32>, 64>,
@@ -4412,7 +5397,8 @@ struct EscapeParams {
 @group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var palette_texture: texture_2d<f32>;
 @group(0) @binding(3) var palette_sampler: sampler;
-@group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
+//__PALETTE_MAP__
+@group(0) @binding(4) var height_tex: texture_storage_2d<rgba32float, write>;
 
 // One map of the IFS, as `escape::ifs::IfsMapGpu` packs it. Group 1 so
 // mode D is the only pipeline whose layout mentions it and no existing
@@ -4730,10 +5716,9 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     let shade = ifs_color(res);
-    let t = fract(shade.t);
+    let t = esc_wrap(esc_transfer(shade.t), false);
     let height = select(shade.t, t, params.shade_flags == 1u);
-    let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
-    let rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2)) * clamp(shade.lum, 0.0, 4.0);
+    let rgb = esc_palette(t) * clamp(shade.lum, 0.0, 4.0);
 
     // The whole block, from the one walk.
     for (var dy = 0u; dy < stride; dy = dy + 1u) {
@@ -4742,7 +5727,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let y = py + dy;
             if (x < params.width && y < params.height) {
                 textureStore(out_tex, vec2<i32>(i32(x), i32(y)), vec4<f32>(rgb, 1.0));
-                textureStore(height_tex, vec2<i32>(i32(x), i32(y)), vec4<f32>(height, 0.0, 0.0, 0.0));
+                textureStore(height_tex, vec2<i32>(i32(x), i32(y)), vec4<f32>(shade.t, height, 0.0, 0.0));
             }
         }
     }
@@ -4860,10 +5845,12 @@ struct EscapeParams {
     shade_flags: u32,
     // Mode D's interaction stride (1 or 2); the other engines read 1.
     stride: u32,
-    _pad_shade1: u32,
-    _pad_shade2: u32,
+    degree: f32,           // the formula's degree at infinity (the smooth count's log base)
+    pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
+    pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
+    lparams: array<vec4<f32>, 4>,
     fdata: array<vec4<f32>, 64>,
 }
 
@@ -4892,7 +5879,8 @@ struct IfsRecord {
 @group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var palette_texture: texture_2d<f32>;
 @group(0) @binding(3) var palette_sampler: sampler;
-@group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
+//__PALETTE_MAP__
+@group(0) @binding(4) var height_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(5) var<storage, read> results: array<IfsRecord>;
 
 // Bound because the layout is shared with mode A's recolor pass. Mode
@@ -4995,15 +5983,14 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     let shade = ifs_color(res);
-    let t = fract(shade.t);
+    let t = esc_wrap(esc_transfer(shade.t), false);
     let height = select(shade.t, t, params.shade_flags == 1u);
-    let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
-    let rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2))
+    let rgb = esc_palette(t)
         * clamp(shade.lum, 0.0, 4.0)
         * r.shade;
 
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, 1.0));
-    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, 0.0, 0.0, 0.0));
+    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(shade.t, height, 0.0, 0.0));
 }"#;
 
 const IFS_RELIGHT_TEMPLATE: &str = r#"
@@ -5040,10 +6027,12 @@ struct EscapeParams {
     shade_flags: u32,
     // Mode D's interaction stride (1 or 2); the other engines read 1.
     stride: u32,
-    _pad_shade1: u32,
-    _pad_shade2: u32,
+    degree: f32,           // the formula's degree at infinity (the smooth count's log base)
+    pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
+    pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
+    lparams: array<vec4<f32>, 4>,
     fdata: array<vec4<f32>, 64>,
 }
 
@@ -5061,7 +6050,8 @@ struct IfsRecord {
 @group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var palette_texture: texture_2d<f32>;
 @group(0) @binding(3) var palette_sampler: sampler;
-@group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
+//__PALETTE_MAP__
+@group(0) @binding(4) var height_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(5) var<storage, read> results: array<IfsRecord>;
 
 struct ContrastParams {
@@ -5215,10 +6205,9 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     res.depth = 0u;
 
     let shade = ifs_color(res);
-    let tt = fract(shade.t);
+    let tt = esc_wrap(esc_transfer(shade.t), false);
     let height = select(shade.t, tt, params.shade_flags == 1u);
-    let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(tt, 0.5), 0.0).rgb;
-    let albedo = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2)) * clamp(shade.lum, 0.0, 4.0);
+    let albedo = esc_palette(tt) * clamp(shade.lum, 0.0, 4.0);
 
     let nxy = unpack2x16float(g.x);
     let nz_ao = unpack2x16float(g.y);
@@ -5228,7 +6217,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let rgb = ifs_rig(albedo, n, nz_ao.y, sun, dir, t);
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, 1.0));
-    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, 0.0, 0.0, 0.0));
+    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(shade.t, height, 0.0, 0.0));
 }"#;
 
 const IFS_3D_TEMPLATE: &str = r#"
@@ -5257,10 +6246,12 @@ struct EscapeParams {
     shade_flags: u32,
     // Mode D's interaction stride (1 or 2); the other engines read 1.
     stride: u32,
-    _pad_shade1: u32,
-    _pad_shade2: u32,
+    degree: f32,           // the formula's degree at infinity (the smooth count's log base)
+    pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
+    pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
+    lparams: array<vec4<f32>, 4>,
     fdata: array<vec4<f32>, 64>,
 }
 
@@ -5268,7 +6259,8 @@ struct EscapeParams {
 @group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var palette_texture: texture_2d<f32>;
 @group(0) @binding(3) var palette_sampler: sampler;
-@group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
+//__PALETTE_MAP__
+@group(0) @binding(4) var height_tex: texture_storage_2d<rgba32float, write>;
 
 // Four vec4s and no vec3: a vec3<f32> aligns to sixteen bytes here
 // and to four in Rust, so a struct with one in it is a different size
@@ -5965,12 +6957,12 @@ pub fn assemble_ifs_recolor(coloring: &IfsColoringDef) -> String {
     let mut out = Vec::new();
     for line in IFS_RECOLOR_TEMPLATE.lines() {
         match line.trim() {
+            "//__PALETTE_MAP__" => out.push(PALETTE_MAP_WGSL.trim().to_string()),
             "//__IFS_COLORING__" => out.push(coloring.wgsl.trim().to_string()),
             _ => out.push(line.to_string()),
         }
     }
-    out.join("
-")
+    out.join("\n")
 }
 
 /// Assemble the SOLID relight pass: one colouring and the shared rig
@@ -5988,13 +6980,13 @@ pub fn assemble_ifs_relight_with_lens(
     let mut out = Vec::new();
     for line in IFS_RELIGHT_TEMPLATE.lines() {
         match line.trim() {
+            "//__PALETTE_MAP__" => out.push(PALETTE_MAP_WGSL.trim().to_string()),
             "//__IFS_COLORING__" => out.push(coloring.wgsl.trim().to_string()),
             "//__IFS_RIG__" => out.push(ifs_rig(lens)),
             _ => out.push(line.to_string()),
         }
     }
-    out.join("
-")
+    out.join("\n")
 }
 
 /// Assemble a mode-D distance shader: splice one distance function
@@ -6101,6 +7093,7 @@ pub fn assemble_ifs_with_lens(
     lens_prelude(&mut out, lens);
     for line in template.lines() {
         match line.trim() {
+            "//__PALETTE_MAP__" => out.push(PALETTE_MAP_WGSL.trim().to_string()),
             "//__LENS_APPLY_UV__" => lens_apply_uv(&mut out, lens, "uv"),
             "//__LENS_APPLY_RAY__" => lens_apply_uv(&mut out, lens, "uv"),
             "let res = ifs_evaluate(uv);" if delta && !measure => {
@@ -6176,6 +7169,7 @@ pub fn assemble_field_with_lens(
     lens_prelude(&mut out, lens);
     for line in FIELD_TEMPLATE.lines() {
         match line.trim() {
+            "//__PALETTE_MAP__" => out.push(PALETTE_MAP_WGSL.trim().to_string()),
             "//__LENS_APPLY__" => lens_apply_span(&mut out, lens),
             "//__FIELD__" => out.push(field.wgsl.trim().to_string()),
             "//__FIELD_COLORING__" => out.push(coloring.wgsl.trim().to_string()),
@@ -6265,7 +7259,31 @@ pub fn assemble_with_lens(
     interior_detect: bool,
     lens: Option<&str>,
 ) -> String {
-    let needs_accum = coloring.has_feature(ColoringFeature::NeedsOrbitAccum);
+    assemble_layered(formula, coloring, None, damped, interior_detect, false, ReliefOrbits::None, lens)
+}
+
+/// [`assemble_with_lens`] with a texture layer (`ColoringLayer`): the
+/// two colourings' needs combine -- an accumulator, period detection or
+/// a derivative orbit compiles in when either asks -- and the layer is
+/// spliced after the base. A layer that does not fit is ignored.
+pub fn assemble_layered(
+    formula: &FormulaDef,
+    coloring: &ColoringDef,
+    layer: Option<&ColoringDef>,
+    damped: bool,
+    interior_detect: bool,
+    // The relief's analytic slopes read the derivative orbit, so it is
+    // compiled for them even when neither colouring needs it.
+    analytic_relief: bool,
+    // Orbits the relief runs beside the pixel's own (offset relief,
+    // Embossed), spliced only for them.
+    relief_orbits: ReliefOrbits,
+    lens: Option<&str>,
+) -> String {
+    let layer = layer.filter(|l| crate::escape::layer_fits(coloring, l));
+    let either = |f: ColoringFeature| coloring.has_feature(f) || layer.is_some_and(|l| l.has_feature(f));
+    let owner = accum_owner(coloring, layer);
+    let needs_accum = owner.is_some();
     let colors_interior = coloring.has_feature(ColoringFeature::ColorsInterior);
     let bounded = coloring.has_feature(ColoringFeature::Bounded);
     let non_escaping = formula.has_feature(FormulaFeature::NonEscaping);
@@ -6273,7 +7291,7 @@ pub fn assemble_with_lens(
     let needs_index = formula.has_feature(FormulaFeature::NeedsIndex);
     let mutates_c = formula.has_feature(FormulaFeature::MutatesC);
     let convergent = formula.has_feature(FormulaFeature::Convergent);
-    let needs_period = coloring.has_feature(ColoringFeature::NeedsPeriod);
+    let needs_period = either(ColoringFeature::NeedsPeriod);
     // Interior detection may only stop an orbit where stopping is
     // INVISIBLE. A coloring that draws the interior reads the final z
     // (and its accumulator, and its derivative) for exactly those
@@ -6286,7 +7304,7 @@ pub fn assemble_with_lens(
         && !colors_interior
         && !needs_accum
         && !needs_period;
-    let needs_derivative = coloring.has_feature(ColoringFeature::NeedsDerivative)
+    let needs_derivative = (either(ColoringFeature::NeedsDerivative) || analytic_relief)
         && !formula.wgsl_derivative.is_empty();
     let param_seed = if formula.wgsl_param_seed.is_empty() {
         "vec2<f32>(0.0, 0.0)"
@@ -6303,8 +7321,30 @@ pub fn assemble_with_lens(
 
     let mut out = Vec::new();
     lens_prelude(&mut out, lens);
-    for line in TEMPLATE.lines() {
+    let template = with_alpha(
+        with_accum_width(TEMPLATE, owner.as_ref().is_some_and(|(o, _)| crate::escape::accum_is_wide(o))),
+        coloring,
+        "accum_state",
+    );
+    // UF's loop order (SkipsEscapingIterate): after the escape test.
+    let late = owner.as_ref().is_some_and(|(o, _)| o.has_feature(ColoringFeature::SkipsEscapingIterate));
+    for line in template.lines() {
         match line.trim() {
+            "//__PALETTE_MAP__" => out.push(PALETTE_MAP_WGSL.trim().to_string()),
+            "//__RELIEF_ORBITS_FNS__" => match relief_orbits {
+                ReliefOrbits::None => {}
+                ReliefOrbits::Offset => out.push(OFFSET_RELIEF_FNS_WGSL.trim().to_string()),
+                ReliefOrbits::Embossed => out.push(emboss_wgsl(formula, damped, param_seed)),
+            },
+            "//__RELIEF_ORBITS__" => match relief_orbits {
+                ReliefOrbits::None => {}
+                ReliefOrbits::Offset => {
+                    out.push("        slope = esc_offset_slope(pixel, raw);".to_string())
+                }
+                ReliefOrbits::Embossed => {
+                    out.push("        slope = vec2<f32>(esc_emboss(pixel), 0.0);".to_string())
+                }
+            },
             // The lens: its variation functions and helper
             // libraries at top level, and the warp itself on the
             // screen offset. Both empty without one, so the shader is
@@ -6323,28 +7363,41 @@ pub fn assemble_with_lens(
                 ));
                 out.push(format!("const HAS_DERIVATIVE: bool = {needs_derivative};"));
                 out.push(format!("const COLORING_IS_BOUNDED: bool = {bounded};"));
+                let helpers = orbit_helpers(coloring, layer, !non_escaping);
+                if !helpers.is_empty() {
+                    out.push(helpers);
+                }
                 out.push(format!("// coloring: {}", coloring.name));
                 out.push(coloring.wgsl.to_string());
+                out.push(layer_wgsl(layer, false));
+                out.push(colour_wgsl(coloring).to_string());
+                out.push(OVERLAY_FIELD_WGSL.trim().to_string());
+                out.push(ANALYTIC_SLOPE_WGSL.trim().to_string());
             }
             "//__COLORING_ACCUM__" => {
-                if needs_accum {
-                    out.push(coloring.wgsl_accum.to_string());
+                if let Some((_, accum)) = &owner {
+                    out.push(accum.clone());
                 }
             }
             "//__ACCUM_DECL__" => {
-                if needs_accum {
+                if let Some((o, _)) = &owner {
                     out.push(format!(
-                        "    var accum_state: vec2<f32> = {};",
-                        coloring.accum_init
+                        "    var accum_state: vec4<f32> = {};",
+                        o.accum_init
                     ));
                 } else {
                     // `var`, not `let`: the perturbed templates' chunk
                     // resume assigns it even when no accumulator runs.
-                    out.push("    var accum_state = vec2<f32>(0.0, 0.0);".to_string());
+                    out.push("    var accum_state = vec4<f32>(0.0);".to_string());
                 }
             }
             "//__ACCUM_UPDATE__" => {
-                if needs_accum {
+                if needs_accum && !late {
+                    out.push("        accum_state = coloring_accum(z, z_before, c, accum_state);".to_string());
+                }
+            }
+            "//__ACCUM_UPDATE_LATE__" => {
+                if needs_accum && late {
                     out.push("        accum_state = coloring_accum(z, z_before, c, accum_state);".to_string());
                 }
             }
@@ -6460,44 +7513,7 @@ pub fn assemble_with_lens(
                 }
             }
             "//__STEP__" => {
-                // Damped (Mann) wrap: z <- z + alpha*(f(z) - z), with
-                // COMPLEX alpha. Compiled in only when alpha != 1, so
-                // undamped pipelines stay byte-identical (a runtime
-                // mix() at alpha = 1 is not bit-exact).
-                let c_arg = if mutates_c { "&c" } else { "c" };
-                // `i` is the loop counter, in scope here. A formula
-                // whose RULE changes per step (Origami's fold line)
-                // takes it; everything else keeps the two-argument
-                // signature byte-for-byte.
-                let call = match (needs_prev, needs_index) {
-                    (true, true) => format!("formula_step(z, {c_arg}, z_prev, i)"),
-                    (true, false) => format!("formula_step(z, {c_arg}, z_prev)"),
-                    (false, true) => format!("formula_step(z, {c_arg}, i)"),
-                    (false, false) => format!("formula_step(z, {c_arg})"),
-                };
-                if convergent || needs_accum {
-                    // The pre-step iterate: the convergence register,
-                    // and the accumulator's z_prev argument. Kept
-                    // independently of the formula's own history.
-                    out.push("        let z_before = z;".to_string());
-                }
-                if needs_derivative {
-                    // Chain rule at the PRE-step iterate.
-                    out.push("        dz = formula_derivative(z, c, dz, is_julia);".to_string());
-                }
-                if damped {
-                    out.push(format!("        let z_raw = {call};"));
-                    if needs_prev {
-                        out.push("        z_prev = z;".to_string());
-                    }
-                    out.push("        z = z + esc_cmul(params.damping, z_raw - z);".to_string());
-                } else if needs_prev {
-                    out.push(format!("        let z_next = {call};"));
-                    out.push("        z_prev = z;".to_string());
-                    out.push("        z = z_next;".to_string());
-                } else {
-                    out.push(format!("        z = {call};"));
-                }
+                out.extend(step_lines(formula, damped, convergent || needs_accum, needs_derivative));
             }
             _ => out.push(
                 line.replace("PARAM_PLANE_SEED", param_seed)
@@ -6666,6 +7682,120 @@ mod tests {
         }
     }
 
+    /// Every pair of colourings that fits together assembles and
+    /// validates with the second as a texture layer -- direct,
+    /// perturbed and recolour -- and the pairs that do not fit are
+    /// refused rather than spliced (two accumulators).
+    #[test]
+    fn every_fitting_coloring_pair_validates_as_a_texture_layer() {
+        let validate = |src: &str, what: &str| {
+            assert!(!src.contains("//__"), "{what}: left a marker");
+            let module = naga::front::wgsl::parse_str(src)
+                .unwrap_or_else(|e| panic!("{what}: parse: {}", e.emit_to_string(src)));
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("{what}: validation: {e:?}"));
+        };
+        let mandelbrot = crate::escape::get_formula("mandelbrot");
+        let (mut pairs, mut refused) = (0, 0);
+        for base in crate::escape::COLORINGS {
+            for layer in crate::escape::COLORINGS {
+                if !crate::escape::layer_fits(base, layer) {
+                    refused += 1;
+                    let src = assemble_layered(mandelbrot, base, Some(layer), false, true, false, ReliefOrbits::None, None);
+                    assert!(!src.contains("texture layer:"), "{} over {} was spliced", layer.name, base.name);
+                    continue;
+                }
+                pairs += 1;
+                let what = format!("{} over {}", layer.name, base.name);
+                let direct = assemble_layered(mandelbrot, base, Some(layer), false, true, false, ReliefOrbits::None, None);
+                assert!(direct.contains("fn layer_coloring_map("), "{what}: the layer was not renamed");
+                validate(&direct, &format!("{what} (direct)"));
+                validate(
+                    &assemble_perturbed_layered(base, Some(layer), false, PerturbTier::Power(2), None),
+                    &format!("{what} (perturbed)"),
+                );
+                validate(&assemble_recolor_layered(base, Some(layer), true), &format!("{what} (recolour)"));
+                validate(&assemble_layer_probe(base, layer, true), &format!("{what} (layer probe)"));
+            }
+        }
+        assert!(pairs > 100 && refused > 0, "{pairs} pairs, {refused} refused");
+    }
+
+    /// The relief variants of the direct shader -- analytic slopes
+    /// (the derivative compiled in for the relief alone), offset orbits
+    /// (two more runs of the loop) and Embossed (a pair run in step) --
+    /// assemble and validate for every formula, damped or not, and the
+    /// extra runs are spliced only where asked for.
+    #[test]
+    fn the_relief_variants_of_the_direct_shader_validate() {
+        let validate = |src: &str, what: &str| {
+            let module = naga::front::wgsl::parse_str(src)
+                .unwrap_or_else(|e| panic!("{what}: parse: {}", e.emit_to_string(src)));
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("{what}: validation: {e:?}"));
+        };
+        let smooth = crate::escape::get_coloring("smooth");
+        for f in crate::escape::FORMULAS {
+            for damped in [false, true] {
+                for (analytic, orbits) in [
+                    (true, ReliefOrbits::None),
+                    (false, ReliefOrbits::Offset),
+                    (true, ReliefOrbits::Offset),
+                    (false, ReliefOrbits::Embossed),
+                ] {
+                    let src = assemble_layered(f, smooth, None, damped, true, analytic, orbits, None);
+                    validate(&src, &format!("{} damped={damped} analytic={analytic} {orbits:?}", f.name));
+                    assert!(!src.contains("//__"), "{} left a marker", f.name);
+                    assert_eq!(
+                        src.contains("esc_offset_slope(pixel, raw)"),
+                        orbits == ReliefOrbits::Offset,
+                        "{}",
+                        f.name
+                    );
+                    assert_eq!(src.contains("fn esc_emboss("), orbits == ReliefOrbits::Embossed, "{}", f.name);
+                }
+            }
+        }
+        let plain = assemble_layered(
+            crate::escape::get_formula("mandelbrot"),
+            smooth,
+            None,
+            false,
+            true,
+            false,
+            ReliefOrbits::None,
+            None,
+        );
+        assert_eq!(plain.matches("esc_run(").count(), 2, "one definition and one call without relief orbits");
+        assert!(!plain.contains("fn esc_emboss"), "Embossed spliced into a pipeline without it");
+    }
+
+    /// The layer's renaming touches whole identifiers only.
+    #[test]
+    fn a_layer_renames_whole_identifiers_only() {
+        let src = "fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {\n\
+                   \x20   let x = cparam(0u) + my_cparam(1u) + cparams;\n\
+                   \x20   return helper(x);\n\
+                   }\n\
+                   fn helper(x: f32) -> f32 { return x; }\n\
+                   const K: f32 = 2.0;\n\
+                   fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32>) -> vec4<f32> { return state * K; }";
+        let out = layer_source(src);
+        assert!(out.contains("fn layer_coloring_map("));
+        assert!(out.contains("lparam(0u) + my_cparam(1u) + cparams"), "{out}");
+        assert!(out.contains("return layer_helper(x)") && out.contains("fn layer_helper("));
+        assert!(out.contains("const layer_K") && out.contains("state * layer_K"));
+        assert!(out.contains("fn coloring_accum("), "the template calls the accumulator by name");
+    }
+
     /// The two copies of `esc_reduce` must not drift.
     ///
     /// It is duplicated because the field template has no access to
@@ -6697,6 +7827,47 @@ mod tests {
             lift(FIELD_TEMPLATE),
             "esc_reduce has drifted between the direct and field templates"
         );
+    }
+
+    /// The image trap runs UF's loop order and hands out its alpha, in
+    /// every template that draws it; nothing else changes either.
+    #[test]
+    fn the_image_trap_accumulates_after_bailout_and_hands_out_its_alpha() {
+        let trap = crate::escape::get_coloring("image_trap");
+        let other = crate::escape::get_coloring("direct_traps");
+        let f = crate::escape::get_formula("mandelbrot");
+        let tier = crate::escape::EscapeRenderer::perturb_tier(&crate::config::escape::EscapeConfig::default())
+            .expect("the Mandelbrot perturbs");
+        let alpha = "coverage = clamp(coloring_alpha(summary, accum_state), 0.0, 1.0);";
+        let cases = [
+            ("direct", assemble(f, trap, false), assemble(f, other, false), "if (esc_metric > params.bailout)"),
+            (
+                "perturbed",
+                assemble_perturbed(trap, false, tier),
+                assemble_perturbed(other, false, tier),
+                "if (margin > 0.0)",
+            ),
+            (
+                "floatexp",
+                assemble_perturbed(trap, true, tier),
+                assemble_perturbed(other, true, tier),
+                "if (margin > 0.0)",
+            ),
+        ];
+        for (name, src, plain, escape) in cases {
+            let acc = src.find("accum_state = coloring_accum(").expect(name);
+            let esc = src.find(escape).expect(name);
+            assert!(esc < acc, "{name}: the image trap must not see the iterate that bails out");
+            assert!(src.contains(alpha) && !src.contains("coverage = 1.0;"), "{name}: alpha");
+            let acc = plain.find("accum_state = coloring_accum(").expect(name);
+            let esc = plain.find(escape).expect(name);
+            assert!(acc < esc, "{name}: the other colourings' order moved");
+            assert!(plain.contains("coverage = 1.0;") && !plain.contains("coloring_alpha"), "{name}");
+        }
+        let recolor = assemble_recolor(trap, false);
+        assert!(recolor.contains("coverage = clamp(coloring_alpha(summary, state), 0.0, 1.0);"));
+        assert!(!recolor.contains("esc_texture"), "the recolour pass must not declare the loop's texture");
+        assert!(assemble_recolor(other, false).contains("coverage = 1.0;"));
     }
 
     #[test]
@@ -6971,9 +8142,11 @@ mod tests {
                 "{} (direct) did not declare bounded={expect_bounded}",
                 coloring.name
             );
-            // And the template must actually consult it.
+            // And the template must actually consult it, in the wrap
+            // the palette map's helpers provide.
             assert!(
-                direct.contains("clamp(raw, 0.0, 1.0), COLORING_IS_BOUNDED"),
+                direct.contains("esc_wrap(esc_transfer(raw), COLORING_IS_BOUNDED)")
+                    && direct.contains("select(fract(x), clamp(x, 0.0, 1.0), bounded)"),
                 "the palette lookup ignores the bounded flag"
             );
         }
@@ -7038,26 +8211,38 @@ mod tests {
             (PerturbTier::Magnet(1), false),
             (PerturbTier::Magnet(1), true),
         ] {
-            let src = assemble_perturbed(&colorings::SMOOTH, floatexp, tier);
+            for coloring in [&colorings::SMOOTH, &colorings::STRIPE_AVERAGE] {
+            let wide = crate::escape::accum_is_wide(coloring);
+            let src = assemble_perturbed(coloring, floatexp, tier);
             let module = naga::front::wgsl::parse_str(&src)
                 .unwrap_or_else(|e| panic!("{tier:?} fe={floatexp} parse: {e}"));
             let mut layouter = naga::proc::Layouter::default();
             layouter
                 .update(module.to_ctx())
                 .unwrap_or_else(|e| panic!("{tier:?} fe={floatexp} layout: {e}"));
-            let handle = module
-                .types
-                .iter()
-                .find(|(_, t)| t.name.as_deref() == Some("IterState"))
-                .map(|(h, _)| h)
-                .expect("IterState must exist");
-            let shader_bytes = layouter[handle].size as u64;
+            let size_of = |name: &str| {
+                let handle = module
+                    .types
+                    .iter()
+                    .find(|(_, t)| t.name.as_deref() == Some(name))
+                    .map(|(h, _)| h)
+                    .unwrap_or_else(|| panic!("{name} must exist"));
+                layouter[handle].size as u64
+            };
+            assert_eq!(
+                size_of("IterResult"),
+                result_bytes(wide),
+                "{tier:?} fe={floatexp} wide={wide}: the records' stride disagrees"
+            );
+            let shader_bytes = size_of("IterState");
             assert_eq!(
                 shader_bytes,
-                iter_state_bytes(tier, floatexp),
-                "{tier:?} fe={floatexp}: the shader's IterState is {shader_bytes} B but the                  renderer allocates {} B per pixel",
-                iter_state_bytes(tier, floatexp)
+                iter_state_bytes(tier, floatexp, wide),
+                "{tier:?} fe={floatexp} wide={wide}: the shader's IterState is {shader_bytes} B \
+                 but the renderer allocates {} B per pixel",
+                iter_state_bytes(tier, floatexp, wide)
             );
+            }
         }
     }
 

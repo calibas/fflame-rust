@@ -1706,6 +1706,12 @@ fn register_escape(engine: &mut Engine) {
             enter(&mut cfg);
             if cfg.escape.coloring != name {
                 cfg.escape.coloring_params.clear();
+                // What a fresh pick in the panel takes (debanded
+                // averages), so a script and a click agree.
+                let def = crate::escape::get_coloring(name);
+                for (param, v) in def.pick_params {
+                    cfg.escape.coloring_params.insert(param.to_string(), *v);
+                }
             }
             cfg.escape.coloring = name.to_string();
             Ok(())
@@ -1751,13 +1757,17 @@ fn register_escape(engine: &mut Engine) {
         e.cfg.borrow().escape.center_im.clone()
     });
 
-    engine.register_get_set(
+    // A getter and a Dynamic setter, not register_get_set, so an int
+    // works where the reference promises a float (see `num`).
+    engine.register_get("zoom", |e: &mut EscapeHandle| e.cfg.borrow().escape.zoom_log2);
+    engine.register_set(
         "zoom",
-        |e: &mut EscapeHandle| e.cfg.borrow().escape.zoom_log2,
-        |e: &mut EscapeHandle, v: f64| {
+        |e: &mut EscapeHandle, v: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let v = num(&v, "zoom")?;
             let mut cfg = e.cfg.borrow_mut();
             enter(&mut cfg);
             cfg.escape.zoom_log2 = v;
+            Ok(())
         },
     );
     engine.register_get_set(
@@ -1769,13 +1779,17 @@ fn register_escape(engine: &mut Engine) {
             cfg.escape.max_iter = v.clamp(1, 10_000_000) as u32;
         },
     );
-    engine.register_get_set(
+    // A getter and a Dynamic setter, not register_get_set, so an int
+    // works where the reference promises a float (see `num`).
+    engine.register_get("bailout", |e: &mut EscapeHandle| e.cfg.borrow().escape.bailout as f64);
+    engine.register_set(
         "bailout",
-        |e: &mut EscapeHandle| e.cfg.borrow().escape.bailout as f64,
-        |e: &mut EscapeHandle, v: f64| {
+        |e: &mut EscapeHandle, v: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let v = num(&v, "bailout")?;
             let mut cfg = e.cfg.borrow_mut();
             enter(&mut cfg);
             cfg.escape.bailout = v as f32;
+            Ok(())
         },
     );
     engine.register_get_set(
@@ -1784,16 +1798,20 @@ fn register_escape(engine: &mut Engine) {
         |e: &mut EscapeHandle, v: i64| {
             let mut cfg = e.cfg.borrow_mut();
             enter(&mut cfg);
-            cfg.escape.supersample = v.clamp(1, 3) as u32;
+            cfg.escape.supersample = v.clamp(1, crate::config::escape::MAX_SUPERSAMPLE as i64) as u32;
         },
     );
-    engine.register_get_set(
+    // A getter and a Dynamic setter, not register_get_set, so an int
+    // works where the reference promises a float (see `num`).
+    engine.register_get("rotation", |e: &mut EscapeHandle| e.cfg.borrow().escape.rotation as f64);
+    engine.register_set(
         "rotation",
-        |e: &mut EscapeHandle| e.cfg.borrow().escape.rotation as f64,
-        |e: &mut EscapeHandle, v: f64| {
+        |e: &mut EscapeHandle, v: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let v = num(&v, "rotation")?;
             let mut cfg = e.cfg.borrow_mut();
             enter(&mut cfg);
             cfg.escape.rotation = v as f32;
+            Ok(())
         },
     );
 
@@ -1804,12 +1822,15 @@ fn register_escape(engine: &mut Engine) {
     // could debug. `shading_off()` is the inverse.
     engine.register_fn(
         "shading",
-        |e: &mut EscapeHandle, light_angle: f64, height: f64| {
+        |e: &mut EscapeHandle, light_angle: Dynamic, height: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let light_angle = num(&light_angle, "light_angle")?;
+            let height = num(&height, "height")?;
             let mut cfg = e.cfg.borrow_mut();
             enter(&mut cfg);
             cfg.escape.shading.enabled = true;
             cfg.escape.shading.light_angle = (light_angle as f32).rem_euclid(360.0);
             cfg.escape.shading.height = (height as f32).clamp(0.0, 100_000.0);
+            Ok(())
         },
     );
     engine.register_fn("shading_off", |e: &mut EscapeHandle| {
@@ -1819,45 +1840,187 @@ fn register_escape(engine: &mut Engine) {
     });
     engine.register_fn(
         "shading_shadow",
-        |e: &mut EscapeHandle, r: f64, g: f64, b: f64, strength: f64, blend: &str| {
+        |e: &mut EscapeHandle, r: Dynamic, g: Dynamic, b: Dynamic, strength: Dynamic, blend: &str| -> Result<(), Box<EvalAltResult>> {
+            let rgb = [num(&r, "r")?, num(&g, "g")?, num(&b, "b")?];
+            let strength = num(&strength, "strength")?;
             let mut cfg = e.cfg.borrow_mut();
             enter(&mut cfg);
-            cfg.escape.shading.shadow_color =
-                [r as f32, g as f32, b as f32].map(|v| v.clamp(0.0, 1.0));
+            cfg.escape.shading.shadow_color = rgb.map(|v| (v as f32).clamp(0.0, 1.0));
             cfg.escape.shading.shadow_strength = (strength as f32).clamp(0.0, 4.0);
             cfg.escape.shading.shadow_blend =
                 crate::config::escape::shading_blend_from_str(blend);
+            Ok(())
         },
     );
     engine.register_fn(
         "shading_highlight",
-        |e: &mut EscapeHandle, r: f64, g: f64, b: f64, strength: f64, blend: &str| {
+        |e: &mut EscapeHandle, r: Dynamic, g: Dynamic, b: Dynamic, strength: Dynamic, blend: &str| -> Result<(), Box<EvalAltResult>> {
+            let rgb = [num(&r, "r")?, num(&g, "g")?, num(&b, "b")?];
+            let strength = num(&strength, "strength")?;
             let mut cfg = e.cfg.borrow_mut();
             enter(&mut cfg);
-            cfg.escape.shading.highlight_color =
-                [r as f32, g as f32, b as f32].map(|v| v.clamp(0.0, 1.0));
+            cfg.escape.shading.highlight_color = rgb.map(|v| (v as f32).clamp(0.0, 1.0));
             cfg.escape.shading.highlight_strength = (strength as f32).clamp(0.0, 4.0);
             cfg.escape.shading.highlight_blend =
                 crate::config::escape::shading_blend_from_str(blend);
+            Ok(())
         },
     );
-    engine.register_fn("shading_softness", |e: &mut EscapeHandle, r: f64| {
-        let mut cfg = e.cfg.borrow_mut();
-        enter(&mut cfg);
-        cfg.escape.shading.softness = (r as f32).clamp(0.0, 8.0);
-    });
+    engine.register_fn(
+        "shading_softness",
+        |e: &mut EscapeHandle, r: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let r = num(&r, "radius")?;
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            // The panel's range.
+            cfg.escape.shading.softness = (r as f32).clamp(0.0, 16.0);
+            Ok(())
+        },
+    );
     engine.register_fn("shading_field", |e: &mut EscapeHandle, field: &str| {
         let mut cfg = e.cfg.borrow_mut();
         enter(&mut cfg);
         cfg.escape.shading.field = crate::config::escape::shading_field_from_str(field);
     });
 
-    engine.register_fn("julia", |e: &mut EscapeHandle, re: f64, im: f64| {
+    // ---- Relief lighting, slope and height curve ----------------------
+    engine.register_fn(
+        "shading_light",
+        |e: &mut EscapeHandle, model: &str, elevation: Dynamic, ambient: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            use crate::config::escape::ReliefModel;
+            let m = ReliefModel::ALL.into_iter().find(|m| m.as_str() == model).ok_or_else(|| {
+                let names: Vec<&str> = ReliefModel::ALL.iter().map(|m| m.as_str()).collect();
+                err(format!("unknown relief model '{model}'; one of {}", names.join(", ")))
+            })?;
+            let elevation = num(&elevation, "elevation")? as f32;
+            let ambient = num(&ambient, "ambient")? as f32;
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            cfg.escape.shading.model = m;
+            cfg.escape.shading.elevation = elevation.clamp(0.0, 90.0);
+            cfg.escape.shading.ambient = ambient.clamp(0.0, 1.0);
+            Ok(())
+        },
+    );
+    engine.register_fn(
+        "shading_slope",
+        |e: &mut EscapeHandle, stencil: &str| -> Result<(), Box<EvalAltResult>> {
+            use crate::config::escape::SlopeStencil;
+            let m = SlopeStencil::ALL.into_iter().find(|m| m.as_str() == stencil).ok_or_else(|| {
+                let names: Vec<&str> = SlopeStencil::ALL.iter().map(|m| m.as_str()).collect();
+                err(format!("unknown slope stencil '{stencil}'; one of {}", names.join(", ")))
+            })?;
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            cfg.escape.shading.stencil = m;
+            Ok(())
+        },
+    );
+    engine.register_fn(
+        "shading_height_curve",
+        |e: &mut EscapeHandle, curve: &str, pre: Dynamic, post: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            use crate::config::escape::HeightTransfer;
+            let m = HeightTransfer::ALL.into_iter().find(|m| m.as_str() == curve).ok_or_else(|| {
+                let names: Vec<&str> = HeightTransfer::ALL.iter().map(|m| m.as_str()).collect();
+                err(format!("unknown height curve '{curve}'; one of {}", names.join(", ")))
+            })?;
+            let pre = num(&pre, "pre")? as f32;
+            let post = num(&post, "post")? as f32;
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            cfg.escape.shading.height_curve = m;
+            cfg.escape.shading.height_pre = pre.clamp(1e-3, 1e3);
+            cfg.escape.shading.height_post = post.clamp(1e-3, 1e3);
+            Ok(())
+        },
+    );
+
+    engine.register_fn(
+        "shading_offset",
+        |e: &mut EscapeHandle, fraction: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let fraction = num(&fraction, "fraction")? as f32;
+            let (lo, hi) = crate::config::escape::RELIEF_OFFSET_RANGE;
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            cfg.escape.shading.offset = fraction.clamp(lo, hi);
+            Ok(())
+        },
+    );
+
+    fn set_emboss(e: &mut EscapeHandle, kind: &str, sections: Option<i64>) -> Result<(), Box<EvalAltResult>> {
+        use crate::config::escape::{EmbossType, EMBOSS_SECTIONS_RANGE};
+        let m = EmbossType::ALL.into_iter().find(|m| m.as_str() == kind).ok_or_else(|| {
+            let names: Vec<&str> = EmbossType::ALL.iter().map(|m| m.as_str()).collect();
+            err(format!("unknown emboss type '{kind}'; one of {}", names.join(", ")))
+        })?;
+        let mut cfg = e.cfg.borrow_mut();
+        enter(&mut cfg);
+        cfg.escape.shading.emboss = m;
+        if let Some(n) = sections {
+            let (lo, hi) = EMBOSS_SECTIONS_RANGE;
+            cfg.escape.shading.emboss_sections = n.clamp(lo as i64, hi as i64) as u32;
+        }
+        Ok(())
+    }
+    engine.register_fn("shading_emboss", |e: &mut EscapeHandle, kind: &str| set_emboss(e, kind, None));
+    engine.register_fn("shading_emboss", |e: &mut EscapeHandle, kind: &str, sections: i64| {
+        set_emboss(e, kind, Some(sections))
+    });
+
+    // ---- Palette mapping --------------------------------------------
+    // Curve names are checked, unlike the shading selectors: a typo in
+    // a curve renders a perfectly plausible Linear picture, and nobody
+    // would know to look for it.
+    engine.register_fn(
+        "transfer",
+        |e: &mut EscapeHandle, name: &str, pivot: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            use crate::config::escape::{TransferCurve, PIVOT_RANGE};
+            let curve = TransferCurve::ALL
+                .into_iter()
+                .find(|c| c.as_str() == name)
+                .ok_or_else(|| {
+                    let names: Vec<&str> = TransferCurve::ALL.iter().map(|c| c.as_str()).collect();
+                    err(format!("unknown transfer curve '{name}'; one of {}", names.join(", ")))
+                })?;
+            let pivot = num(&pivot, "pivot")? as f32;
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            cfg.escape.palette_map.transfer = curve;
+            cfg.escape.palette_map.pivot = pivot.clamp(PIVOT_RANGE.0, PIVOT_RANGE.1);
+            Ok(())
+        },
+    );
+    engine.register_fn(
+        "palette_curve",
+        |e: &mut EscapeHandle, name: &str| -> Result<(), Box<EvalAltResult>> {
+            use crate::config::escape::PaletteCurve;
+            let curve = PaletteCurve::ALL
+                .into_iter()
+                .find(|c| c.as_str() == name)
+                .ok_or_else(|| {
+                    let names: Vec<&str> = PaletteCurve::ALL.iter().map(|c| c.as_str()).collect();
+                    err(format!("unknown palette curve '{name}'; one of {}", names.join(", ")))
+                })?;
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            cfg.escape.palette_map.curve = curve;
+            Ok(())
+        },
+    );
+    engine.register_fn("stepped_palette", |e: &mut EscapeHandle, on: bool| {
+        let mut cfg = e.cfg.borrow_mut();
+        enter(&mut cfg);
+        cfg.escape.palette_map.stepped = on;
+    });
+
+    engine.register_fn("julia", |e: &mut EscapeHandle, re: Dynamic, im: Dynamic| -> Result<(), Box<EvalAltResult>> {
+        let (re, im) = (num(&re, "re")?, num(&im, "im")?);
         let mut cfg = e.cfg.borrow_mut();
         enter(&mut cfg);
         cfg.escape.julia = true;
         cfg.escape.julia_re = re as f32;
         cfg.escape.julia_im = im as f32;
+        Ok(())
     });
     engine.register_fn("no_julia", |e: &mut EscapeHandle| {
         let mut cfg = e.cfg.borrow_mut();
@@ -1869,7 +2032,8 @@ fn register_escape(engine: &mut Engine) {
     // is a typo that would otherwise sit in the config doing nothing.
     engine.register_fn(
         "param",
-        |e: &mut EscapeHandle, name: &str, value: f64| -> Result<(), Box<EvalAltResult>> {
+        |e: &mut EscapeHandle, name: &str, value: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let value = num(&value, name)?;
             let mut cfg = e.cfg.borrow_mut();
             let def = crate::escape::FORMULAS
                 .iter()
@@ -1890,7 +2054,8 @@ fn register_escape(engine: &mut Engine) {
     );
     engine.register_fn(
         "coloring_param",
-        |e: &mut EscapeHandle, name: &str, value: f64| -> Result<(), Box<EvalAltResult>> {
+        |e: &mut EscapeHandle, name: &str, value: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let value = num(&value, name)?;
             let mut cfg = e.cfg.borrow_mut();
             let def = crate::escape::COLORINGS
                 .iter()
@@ -1909,6 +2074,66 @@ fn register_escape(engine: &mut Engine) {
             Ok(())
         },
     );
+    // ---- Texture layer ----------------------------------------------
+    engine.register_fn(
+        "layer",
+        |e: &mut EscapeHandle, name: &str, blend: &str, weight: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            use crate::config::escape::LayerBlend;
+            let def = crate::escape::COLORINGS
+                .iter()
+                .find(|c| c.name == name)
+                .ok_or_else(|| err(format!("unknown escape coloring `{name}` - see escape.colorings()")))?;
+            let blend = LayerBlend::ALL
+                .into_iter()
+                .find(|b| b.as_str() == blend)
+                .ok_or_else(|| {
+                    let names: Vec<&str> = LayerBlend::ALL.iter().map(|b| b.as_str()).collect();
+                    err(format!("unknown layer blend '{blend}'; one of {}", names.join(", ")))
+                })?;
+            let weight = num(&weight, "weight")? as f32;
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            if cfg.escape.layer.coloring != name {
+                // The parameters belong to the colouring: start over,
+                // with what a fresh pick in the panel takes.
+                cfg.escape.layer.params.clear();
+                for (param, v) in def.pick_params {
+                    cfg.escape.layer.params.insert(param.to_string(), *v);
+                }
+            }
+            cfg.escape.layer.coloring = name.to_string();
+            cfg.escape.layer.blend = blend;
+            cfg.escape.layer.weight = weight.clamp(0.0, 1.0);
+            Ok(())
+        },
+    );
+    engine.register_fn(
+        "layer_param",
+        |e: &mut EscapeHandle, name: &str, value: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let value = num(&value, name)?;
+            let mut cfg = e.cfg.borrow_mut();
+            let def = crate::escape::COLORINGS
+                .iter()
+                .find(|c| c.name == cfg.escape.layer.coloring)
+                .ok_or_else(|| err("no texture layer - call escape.layer(...) first"))?;
+            if !def.parameters.iter().any(|p| p.name == name) {
+                let known: Vec<&str> = def.parameters.iter().map(|p| p.name).collect();
+                return Err(err(format!(
+                    "layer coloring `{}` has no parameter `{name}` (it has: {})",
+                    def.name,
+                    if known.is_empty() { "none".to_string() } else { known.join(", ") }
+                )));
+            }
+            enter(&mut cfg);
+            cfg.escape.layer.params.insert(name.to_string(), value as f32);
+            Ok(())
+        },
+    );
+    engine.register_fn("no_layer", |e: &mut EscapeHandle| {
+        let mut cfg = e.cfg.borrow_mut();
+        enter(&mut cfg);
+        cfg.escape.layer = crate::config::escape::ColoringLayer::default();
+    });
     engine.register_fn("params", |e: &mut EscapeHandle| -> Array {
         let cfg = e.cfg.borrow();
         crate::escape::FORMULAS
