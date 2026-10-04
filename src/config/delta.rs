@@ -502,6 +502,13 @@ pub enum ConfigPath {
     EscapeShadingOffset,
     EscapeShadingEmboss,
     EscapeShadingEmbossSections,
+    /// The texture overlay (`TextureOverlay`, Kalles Fraktaler's).
+    EscapeTextureOverlay,
+    EscapeTextureOverlayMerge,
+    EscapeTextureOverlayPower,
+    EscapeTextureOverlayRatio,
+    EscapeTextureOverlayFit,
+    EscapeTextureOverlayTile,
     /// Coloring registry name.
     EscapeColoring,
     /// One parameter of the ACTIVE formula, by name — keyed like
@@ -1112,6 +1119,12 @@ impl Display for ConfigPath {
             ConfigPath::EscapeShadingOffset => write!(f, "Relief Offset"),
             ConfigPath::EscapeShadingEmboss => write!(f, "Relief Emboss Type"),
             ConfigPath::EscapeShadingEmbossSections => write!(f, "Relief Emboss Sections"),
+            ConfigPath::EscapeTextureOverlay => write!(f, "Texture Overlay"),
+            ConfigPath::EscapeTextureOverlayMerge => write!(f, "Texture Overlay Merge"),
+            ConfigPath::EscapeTextureOverlayPower => write!(f, "Texture Overlay Power"),
+            ConfigPath::EscapeTextureOverlayRatio => write!(f, "Texture Overlay Ratio"),
+            ConfigPath::EscapeTextureOverlayFit => write!(f, "Texture Overlay Fit"),
+            ConfigPath::EscapeTextureOverlayTile => write!(f, "Texture Overlay Tile Scale"),
             ConfigPath::EscapeColoring => write!(f, "Escape Coloring"),
             ConfigPath::EscapeFormulaParam { param } => write!(f, "Formula → {param}"),
             ConfigPath::EscapeColoringParam { param } => write!(f, "Coloring → {param}"),
@@ -1469,6 +1482,12 @@ impl ConfigPath {
             ConfigPath::EscapeShadingEmbossSections => {
                 I18nKey::simple("history.param.escape_shading_emboss_sections")
             }
+            ConfigPath::EscapeTextureOverlay => I18nKey::simple("history.param.escape_texture_overlay"),
+            ConfigPath::EscapeTextureOverlayMerge => I18nKey::simple("history.param.escape_texture_overlay_merge"),
+            ConfigPath::EscapeTextureOverlayPower => I18nKey::simple("history.param.escape_texture_overlay_power"),
+            ConfigPath::EscapeTextureOverlayRatio => I18nKey::simple("history.param.escape_texture_overlay_ratio"),
+            ConfigPath::EscapeTextureOverlayFit => I18nKey::simple("history.param.escape_texture_overlay_fit"),
+            ConfigPath::EscapeTextureOverlayTile => I18nKey::simple("history.param.escape_texture_overlay_tile"),
             ConfigPath::EscapeColoring => I18nKey::simple("history.param.escape_coloring"),
             ConfigPath::EscapeFormulaParam { param } => I18nKey::with_params(
                 "history.param.escape_formula_param",
@@ -2851,6 +2870,12 @@ impl ConfigPath {
             | ConfigPath::EscapeShadingOffset
             | ConfigPath::EscapeShadingEmboss
             | ConfigPath::EscapeShadingEmbossSections
+            | ConfigPath::EscapeTextureOverlay
+            | ConfigPath::EscapeTextureOverlayMerge
+            | ConfigPath::EscapeTextureOverlayPower
+            | ConfigPath::EscapeTextureOverlayRatio
+            | ConfigPath::EscapeTextureOverlayFit
+            | ConfigPath::EscapeTextureOverlayTile
             | ConfigPath::EscapeColoring
             | ConfigPath::EscapeFormulaParam { .. }
             | ConfigPath::EscapeColoringParam { .. }
@@ -3273,6 +3298,12 @@ impl ConfigPath {
             ConfigPath::EscapeShadingOffset => "Escape.Shading.Offset".to_string(),
             ConfigPath::EscapeShadingEmboss => "Escape.Shading.Emboss".to_string(),
             ConfigPath::EscapeShadingEmbossSections => "Escape.Shading.EmbossSections".to_string(),
+            ConfigPath::EscapeTextureOverlay => "Escape.TextureOverlay.Enabled".to_string(),
+            ConfigPath::EscapeTextureOverlayMerge => "Escape.TextureOverlay.Merge".to_string(),
+            ConfigPath::EscapeTextureOverlayPower => "Escape.TextureOverlay.Power".to_string(),
+            ConfigPath::EscapeTextureOverlayRatio => "Escape.TextureOverlay.Ratio".to_string(),
+            ConfigPath::EscapeTextureOverlayFit => "Escape.TextureOverlay.Fit".to_string(),
+            ConfigPath::EscapeTextureOverlayTile => "Escape.TextureOverlay.TileScale".to_string(),
             ConfigPath::EscapeColoring => "Escape.Coloring".to_string(),
             ConfigPath::EscapeFormulaParam { param } => format!("Escape.FormulaParam.{param}"),
             ConfigPath::EscapeColoringParam { param } => format!("Escape.ColoringParam.{param}"),
@@ -3511,6 +3542,12 @@ impl ConfigPath {
                 ["Shading", "Offset"] => return Some(ConfigPath::EscapeShadingOffset),
                 ["Shading", "Emboss"] => return Some(ConfigPath::EscapeShadingEmboss),
                 ["Shading", "EmbossSections"] => return Some(ConfigPath::EscapeShadingEmbossSections),
+                ["TextureOverlay", "Enabled"] => return Some(ConfigPath::EscapeTextureOverlay),
+                ["TextureOverlay", "Merge"] => return Some(ConfigPath::EscapeTextureOverlayMerge),
+                ["TextureOverlay", "Power"] => return Some(ConfigPath::EscapeTextureOverlayPower),
+                ["TextureOverlay", "Ratio"] => return Some(ConfigPath::EscapeTextureOverlayRatio),
+                ["TextureOverlay", "Fit"] => return Some(ConfigPath::EscapeTextureOverlayFit),
+                ["TextureOverlay", "TileScale"] => return Some(ConfigPath::EscapeTextureOverlayTile),
                 ["Coloring"] => return Some(ConfigPath::EscapeColoring),
                 ["FormulaParam", param] => {
                     return Some(ConfigPath::EscapeFormulaParam { param: param.to_string() })
@@ -4288,7 +4325,13 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeShadingAmbient
         | ConfigPath::EscapeShadingHeightPre
         | ConfigPath::EscapeShadingHeightPost
-        | ConfigPath::EscapeShadingOffset => {
+        | ConfigPath::EscapeShadingOffset
+        // The overlay's mix, warp ratio and tile size are quantities;
+        // its power is a whole number whose parity flips the warp's
+        // sign rule, so it does not tween.
+        | ConfigPath::EscapeTextureOverlayMerge
+        | ConfigPath::EscapeTextureOverlayRatio
+        | ConfigPath::EscapeTextureOverlayTile => {
             json.as_f64().map(|v| ConfigValue::Float(v as f32))
         }
         ConfigPath::EscapeShadingShadowColor | ConfigPath::EscapeShadingHighlightColor => {
@@ -4317,6 +4360,9 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         // value part-way between two keyframes.
         | ConfigPath::EscapeShadingEmboss
         | ConfigPath::EscapeShadingEmbossSections
+        | ConfigPath::EscapeTextureOverlay
+        | ConfigPath::EscapeTextureOverlayPower
+        | ConfigPath::EscapeTextureOverlayFit
         | ConfigPath::EscapeDownsample
         | ConfigPath::EscapeShadingShadowBlend
         | ConfigPath::EscapeShadingHighlightBlend

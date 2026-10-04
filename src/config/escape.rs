@@ -248,6 +248,159 @@ pub struct EscapeConfig {
     /// colouring is no layer, which is the default and is skipped.
     #[serde(default, skip_serializing_if = "ColoringLayer::is_default")]
     pub layer: ColoringLayer,
+    /// A simulation texture (`docs/projects/sim-textures.md`): its recipe,
+    /// in full, so the file is self-contained. None is no texture, the
+    /// default, and is skipped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub texture: Option<EscapeTexture>,
+    /// The texture as an overlay (sim-textures phase 2, survey R10):
+    /// Kalles Fraktaler's texture, warped by the iteration count's slope
+    /// and mixed into the colour before the relief. Off by default.
+    #[serde(default, skip_serializing_if = "TextureOverlay::is_default")]
+    pub texture_overlay: TextureOverlay,
+}
+
+/// How the texture covers the frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextureFit {
+    /// Stretched over the whole frame, as Kalles Fraktaler resizes its
+    /// image; a lookup past the edge holds the edge.
+    #[default]
+    Stretch,
+    /// Repeated at its own size (times the tile scale): a periodic
+    /// simulation texture tiles seamlessly.
+    Tile,
+}
+
+impl TextureFit {
+    pub fn to_gpu(self) -> u32 {
+        match self {
+            TextureFit::Stretch => 0,
+            TextureFit::Tile => 1,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TextureFit::Stretch => "stretch",
+            TextureFit::Tile => "tile",
+        }
+    }
+    pub fn from_name(s: &str) -> Self {
+        if s == "tile" { TextureFit::Tile } else { TextureFit::Stretch }
+    }
+}
+
+/// Kalles Fraktaler's texture overlay (`gl/kf.frag.glsl`
+/// `KF_TextureWarp` and the texture block after the palette lookup):
+/// the texture looked up at the pixel plus an offset driven by the
+/// iteration count's difference to its neighbours, then mixed in.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TextureOverlay {
+    #[serde(default)]
+    pub enabled: bool,
+    /// How much of the texture replaces the colour, 0..1. KF2's default
+    /// is 1: the texture alone, warped.
+    #[serde(default = "default_overlay_merge")]
+    pub merge: f32,
+    /// KF2's power: how hard the iteration count's slope warps the
+    /// lookup. A whole number, as KF2 keeps it. Default 200.
+    #[serde(default = "default_overlay_power")]
+    pub power: f32,
+    /// KF2's ratio, in percent: scales the warp. Default 100.
+    #[serde(default = "default_overlay_ratio")]
+    pub ratio: f32,
+    #[serde(default)]
+    pub fit: TextureFit,
+    /// Display pixels per texel when tiled.
+    #[serde(default = "default_one")]
+    pub tile_scale: f32,
+}
+
+fn default_overlay_merge() -> f32 {
+    1.0
+}
+fn default_overlay_power() -> f32 {
+    200.0
+}
+fn default_overlay_ratio() -> f32 {
+    100.0
+}
+
+/// Ranges of the overlay's controls.
+pub const OVERLAY_POWER_RANGE: (f32, f32) = (0.0, 1000.0);
+pub const OVERLAY_RATIO_RANGE: (f32, f32) = (0.0, 400.0);
+pub const OVERLAY_TILE_RANGE: (f32, f32) = (0.05, 20.0);
+
+impl Default for TextureOverlay {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            merge: default_overlay_merge(),
+            power: default_overlay_power(),
+            ratio: default_overlay_ratio(),
+            fit: TextureFit::default(),
+            tile_scale: 1.0,
+        }
+    }
+}
+
+impl TextureOverlay {
+    pub fn is_default(v: &TextureOverlay) -> bool {
+        *v == TextureOverlay::default()
+    }
+}
+
+impl EscapeConfig {
+    /// Whether anything draws with the texture, so it has to be on the
+    /// GPU: the overlay, the relief's bump, or a colouring that reads it
+    /// (the image trap).
+    pub fn uses_texture(&self) -> bool {
+        #[cfg(feature = "engine-escape")]
+        let coloring = crate::escape::COLORINGS
+            .iter()
+            .any(|c| c.name == self.coloring && c.has_feature(crate::escape::ColoringFeature::TextureInLoop));
+        #[cfg(not(feature = "engine-escape"))]
+        let coloring = false;
+        self.texture.is_some()
+            && (self.texture_overlay.enabled
+                || coloring
+                || (self.shading.enabled && self.shading.texture_kind == ShadingTexture::Simulation))
+    }
+}
+
+/// A simulation texture a config uses: its name, and its recipe -- a
+/// Simulation-mode config -- in full (`docs/projects/sim-textures.md`,
+/// decision 6), so the file that uses it needs nothing else.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EscapeTexture {
+    pub name: String,
+    /// Written and read the way a `.fflame` file is -- compact, with its
+    /// version, and migrated on load -- not as the derive would.
+    #[serde(with = "embedded_config")]
+    pub config: Box<super::FractalConfig>,
+}
+
+impl PartialEq for EscapeTexture {
+    fn eq(&self, other: &Self) -> bool {
+        // FractalConfig has no PartialEq; its file form is its identity.
+        self.name == other.name && self.config.to_json_value().ok() == other.config.to_json_value().ok()
+    }
+}
+
+/// A config inside a config, in its file form.
+mod embedded_config {
+    use super::super::FractalConfig;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(config: &FractalConfig, s: S) -> Result<S::Ok, S::Error> {
+        config.to_json_value().map_err(serde::ser::Error::custom)?.serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Box<FractalConfig>, D::Error> {
+        let value = serde_json::Value::deserialize(d)?;
+        FractalConfig::from_json_value(value).map(Box::new).map_err(serde::de::Error::custom)
+    }
 }
 
 /// Looking down at about 24°, which shows a solid's top and one
@@ -1530,6 +1683,10 @@ pub enum ShadingTexture {
     /// Octaves stretched along different axes, so it reads as fibre
     /// laid in a felt rather than as isotropic speckle.
     Paper,
+    /// The config's simulation texture (`EscapeConfig::texture`), its
+    /// luminance as the micro-relief (docs/projects/sim-textures.md,
+    /// phase 3). Nothing without a texture.
+    Simulation,
 }
 
 impl ShadingTexture {
@@ -1538,6 +1695,7 @@ impl ShadingTexture {
             ShadingTexture::None => 0,
             ShadingTexture::Grain => 1,
             ShadingTexture::Paper => 2,
+            ShadingTexture::Simulation => 3,
         }
     }
     pub fn as_str(self) -> &'static str {
@@ -1545,12 +1703,14 @@ impl ShadingTexture {
             ShadingTexture::None => "none",
             ShadingTexture::Grain => "grain",
             ShadingTexture::Paper => "paper",
+            ShadingTexture::Simulation => "simulation",
         }
     }
     pub fn from_str_or_default(s: &str) -> Self {
         match s {
             "grain" => ShadingTexture::Grain,
             "paper" => ShadingTexture::Paper,
+            "simulation" => ShadingTexture::Simulation,
             _ => ShadingTexture::None,
         }
     }
@@ -1610,6 +1770,8 @@ impl Default for EscapeConfig {
             contrast: EscapeContrast::default(),
             palette_map: PaletteMap::default(),
             layer: ColoringLayer::default(),
+            texture: None,
+            texture_overlay: TextureOverlay::default(),
         }
     }
 }

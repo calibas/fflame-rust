@@ -2020,6 +2020,14 @@ impl ConfigManager {
             ConfigPath::EscapeShadingEmbossSections => {
                 Ok(ConfigValue::UInt(config.escape.shading.emboss_sections))
             }
+            ConfigPath::EscapeTextureOverlay => Ok(ConfigValue::Bool(config.escape.texture_overlay.enabled)),
+            ConfigPath::EscapeTextureOverlayMerge => Ok(config.escape.texture_overlay.merge.into()),
+            ConfigPath::EscapeTextureOverlayPower => Ok(config.escape.texture_overlay.power.into()),
+            ConfigPath::EscapeTextureOverlayRatio => Ok(config.escape.texture_overlay.ratio.into()),
+            ConfigPath::EscapeTextureOverlayFit => Ok(ConfigValue::String(
+                config.escape.texture_overlay.fit.as_str().to_string(),
+            )),
+            ConfigPath::EscapeTextureOverlayTile => Ok(config.escape.texture_overlay.tile_scale.into()),
             ConfigPath::EscapeShadingTextureScale => {
                 Ok(config.escape.shading.texture_scale.into())
             }
@@ -3421,6 +3429,32 @@ impl ConfigManager {
                 let v: u32 = value.try_into()?;
                 let (lo, hi) = crate::config::escape::EMBOSS_SECTIONS_RANGE;
                 self.current.escape.shading.emboss_sections = v.clamp(lo, hi);
+            }
+            ConfigPath::EscapeTextureOverlay => {
+                self.current.escape.texture_overlay.enabled = value.try_into()?;
+            }
+            ConfigPath::EscapeTextureOverlayMerge => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.texture_overlay.merge = v.clamp(0.0, 1.0);
+            }
+            ConfigPath::EscapeTextureOverlayPower => {
+                let v: f32 = value.try_into()?;
+                let (lo, hi) = crate::config::escape::OVERLAY_POWER_RANGE;
+                self.current.escape.texture_overlay.power = v.round().clamp(lo, hi);
+            }
+            ConfigPath::EscapeTextureOverlayRatio => {
+                let v: f32 = value.try_into()?;
+                let (lo, hi) = crate::config::escape::OVERLAY_RATIO_RANGE;
+                self.current.escape.texture_overlay.ratio = v.clamp(lo, hi);
+            }
+            ConfigPath::EscapeTextureOverlayFit => {
+                let v: String = value.try_into()?;
+                self.current.escape.texture_overlay.fit = crate::config::escape::TextureFit::from_name(&v);
+            }
+            ConfigPath::EscapeTextureOverlayTile => {
+                let v: f32 = value.try_into()?;
+                let (lo, hi) = crate::config::escape::OVERLAY_TILE_RANGE;
+                self.current.escape.texture_overlay.tile_scale = v.clamp(lo, hi);
             }
             ConfigPath::EscapeShadingHighlightBlend => {
                 let v: String = value.try_into()?;

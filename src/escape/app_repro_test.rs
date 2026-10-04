@@ -9297,6 +9297,590 @@ fn main() {
         escape.destroy();
     }
 
+    /// The texture overlay is Kalles Fraktaler's: each pixel shows the
+    /// texture at itself plus `KF_TextureWarp`'s offset, driven by the
+    /// smooth count's difference to the pixel on its left and the row
+    /// below (y up, mirrored at the frame's edge), and at merge 1 the
+    /// texture alone. The texture here is synthetic and smooth, handed
+    /// to the renderer under the config's key so nothing is generated or
+    /// cached; the count is read back from the height texture, so what
+    /// is compared is the warp and the lookup, through the whole render
+    /// and tone map. Merge 0 must change nothing.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_texture_overlay_warps_as_kalles_fraktaler_does() {
+        use crate::config::escape::{EscapeTexture, TextureFit};
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        let (tw, th) = (48u32, 40u32);
+        let tex = image::RgbaImage::from_fn(tw, th, |x, y| {
+            let tau = std::f32::consts::TAU;
+            let (u, v) = (x as f32 / tw as f32, y as f32 / th as f32);
+            let c = |a: f32| (128.0 + 100.0 * (tau * a).sin()).round() as u8;
+            image::Rgba([c(u), c(v), c(u + v), 255])
+        });
+        let recipe = crate::textures::as_recipe(&crate::config::FractalConfig::default(), (64, 64));
+        let key = crate::textures::cache::key(&recipe);
+
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        config.escape.formula = "mandelbrot".to_string();
+        config.escape.coloring = "smooth".to_string();
+        config.escape.center_re = "-0.75".to_string();
+        config.escape.center_im = "0.1".to_string();
+        config.escape.zoom_log2 = 1.5;
+        config.escape.max_iter = 64;
+        config.escape.bailout = 1.0e4;
+        config.escape.supersample = 1;
+        config.escape.texture = Some(EscapeTexture { name: "synthetic".to_string(), config: Box::new(recipe) });
+
+        let mut engines = crate::renderer::RenderEngines::default();
+        let mut esc = crate::escape::EscapeRenderer::new(&device, w, h);
+        assert!(esc.set_texture(&device, &queue, &key, &tex));
+        engines.escape = Some(esc);
+        let render = |c: &crate::config::FractalConfig, engines: &mut crate::renderer::RenderEngines| -> Vec<u8> {
+            let job = crate::renderer::RenderJob::new(c, w, h).with_engines(engines);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+
+        let plain = render(&config, &mut engines);
+        let mut off = config.clone();
+        off.escape.texture_overlay.enabled = true;
+        off.escape.texture_overlay.merge = 0.0;
+        let unmerged = render(&off, &mut engines);
+        let worst = plain.iter().zip(&unmerged).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap();
+        println!("merge 0 against no overlay: worst {worst} levels");
+        assert!(worst <= 1, "merge 0 moved a channel by {worst} levels");
+
+        // KF_TextureWarp, one axis, in f32 as the shader runs it.
+        let axis = |d: f32, power: f32, ratio: f32| -> f32 {
+            let base = 1.0 + d;
+            let mag = (power * base.abs().max(1e-30).log2()).clamp(-126.0, 126.0).exp2();
+            let odd = (power as u32) & 1 == 1;
+            let mut x = if base < 0.0 && odd { -mag } else { mag };
+            let mut s = 1.0;
+            if x <= 1.0 {
+                x = 1.0 / x;
+                s = -1.0;
+            }
+            let q = std::f32::consts::FRAC_PI_4;
+            s * power * ((x.atan() - q) / q * ratio / 100.0)
+        };
+        // The texture as a filtering, repeating sampler reads it.
+        let sample = |u: f32, v: f32| -> [f32; 3] {
+            let fx = u * tw as f32 - 0.5;
+            let fy = v * th as f32 - 0.5;
+            let (x0, y0) = (fx.floor(), fy.floor());
+            let (ax, ay) = (fx - x0, fy - y0);
+            let at = |x: f32, y: f32| {
+                let xi = (x as i64).rem_euclid(tw as i64) as u32;
+                let yi = (y as i64).rem_euclid(th as i64) as u32;
+                tex.get_pixel(xi, yi).0
+            };
+            let mut out = [0.0f32; 3];
+            for (k, o) in out.iter_mut().enumerate() {
+                let p = |x, y| at(x, y)[k] as f32 / 255.0;
+                let top = p(x0, y0) * (1.0 - ax) + p(x0 + 1.0, y0) * ax;
+                let bot = p(x0, y0 + 1.0) * (1.0 - ax) + p(x0 + 1.0, y0 + 1.0) * ax;
+                *o = top * (1.0 - ay) + bot * ay;
+            }
+            out
+        };
+
+        for (fit, power, ratio, tile) in [
+            (TextureFit::Tile, 200.0f32, 100.0f32, 1.0f32),
+            (TextureFit::Tile, 37.0, 60.0, 2.5),
+            (TextureFit::Stretch, 200.0, 100.0, 1.0),
+        ] {
+            let mut c = config.clone();
+            let ov = &mut c.escape.texture_overlay;
+            ov.enabled = true;
+            ov.merge = 1.0;
+            ov.power = power;
+            ov.ratio = ratio;
+            ov.fit = fit;
+            ov.tile_scale = tile;
+            let gpu = render(&c, &mut engines);
+            let n = pollster::block_on(engines.escape.as_ref().unwrap().read_height_channel(&device, &queue, false, 2))
+                .expect("height");
+            let n_at = |x: i32, y: i32| n[(y.clamp(0, h as i32 - 1) as u32 * w + x.clamp(0, w as i32 - 1) as u32) as usize];
+            let interior = n.iter().filter(|&&v| v == config.escape.max_iter as f32).count();
+            assert!(interior > 0 && interior < (w * h) as usize, "the frame should hold both sides of the set");
+
+            let (mut close, mut worst, mut warped) = (0usize, 0i32, 0usize);
+            for py in 0..h as i32 {
+                for px in 0..w as i32 {
+                    let n0 = n_at(px, py);
+                    let dx = if px - 1 < 0 { -(n_at(px + 1, py) - n0) } else { n_at(px - 1, py) - n0 };
+                    let dy = if py + 1 >= h as i32 { -(n_at(px, py - 1) - n0) } else { n_at(px, py + 1) - n0 };
+                    let offs = power / 64.0;
+                    let wx = offs + axis(dx, power, ratio);
+                    let wy = offs - axis(dy, power, ratio);
+                    if n0 < config.escape.max_iter as f32 {
+                        warped += usize::from((wx - offs).abs().max((wy - offs).abs()) > 2.0);
+                    }
+                    let pos = (px as f32 + 0.5 + wx, py as f32 + 0.5 - wy);
+                    let (u, v) = match fit {
+                        TextureFit::Tile => (pos.0 / (tw as f32 * tile), pos.1 / (th as f32 * tile)),
+                        TextureFit::Stretch => (
+                            (pos.0 / w as f32).clamp(0.5 / tw as f32, 1.0 - 0.5 / tw as f32),
+                            (pos.1 / h as f32).clamp(0.5 / th as f32, 1.0 - 0.5 / th as f32),
+                        ),
+                    };
+                    let want = sample(u, v);
+                    let i = ((py as u32 * w + px as u32) * 4) as usize;
+                    let d = (0..3)
+                        .map(|k| (gpu[i + k] as i32 - (want[k] * 255.0).round() as i32).abs())
+                        .max()
+                        .unwrap();
+                    worst = worst.max(d);
+                    close += usize::from(d <= 2);
+                }
+            }
+            let share = close as f64 / (w * h) as f64;
+            let moved = warped as f64 / ((w * h) as usize - interior) as f64;
+            println!(
+                "{fit:?} power {power} ratio {ratio} tile {tile}: {share:.4} within two levels, worst {worst}; {moved:.3} of the outside's lookups pushed more than two pixels"
+            );
+            assert!(moved > 0.7, "the warp hardly moves anything ({moved:.3}): the comparison proves nothing");
+            assert!(share > 0.99, "{fit:?}: only {share:.4} of pixels show KF2's warped texture");
+        }
+
+        // Supersampled, the warp differences and pushes whole OUTPUT
+        // pixels, so the picture is the 1x one smoothed, not one pushed
+        // half as far.
+        let mut c = config.clone();
+        c.escape.texture_overlay.enabled = true;
+        c.escape.texture_overlay.fit = TextureFit::Tile;
+        let one = render(&c, &mut engines);
+        c.escape.supersample = 2;
+        let two = render(&c, &mut engines);
+        let mut half = c.clone();
+        half.escape.supersample = 1;
+        half.escape.texture_overlay.tile_scale = 0.5;
+        let mean = |a: &[u8], b: &[u8]| {
+            a.iter().zip(b).map(|(x, y)| (*x as f64 - *y as f64).abs()).sum::<f64>() / a.len() as f64
+        };
+        let halved = render(&half, &mut engines);
+        let (same, wrong) = (mean(&one, &two), mean(&one, &halved));
+        println!("2x against 1x: mean {same:.2} levels; a texture at half the size against 1x: {wrong:.2}");
+        // Measured 1.99 and 57.4.
+        assert!(wrong > 20.0, "a mis-scaled texture should not pass for the 1x picture ({wrong:.2})");
+        assert!(same < 6.0, "2x antialiasing changed the overlay by {same:.2} levels on average");
+    }
+
+    /// The relief's bump (`ShadingTexture::Simulation`) tilts the surface
+    /// by the texture's luminance: in a view wholly outside the set, a
+    /// flat palette and no relief height of its own, the shading is the
+    /// bump alone, and it follows the response the shader's formula
+    /// gives the CPU-sampled texture -- `dot(g, light) / sqrt(1 + g.g)`
+    /// with `g` from central differences one render pixel apart, the
+    /// texture repeated at `texture_scale` display pixels per texel. A
+    /// light turned a quarter, or a texture at the wrong scale, does not
+    /// fit. A flat texture, or none, draws what no bump draws.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_relief_bump_is_the_textures_luminance() {
+        use crate::config::escape::{EscapeTexture, ShadingTexture};
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        let (tw, th) = (40u32, 32u32);
+        let wavy = image::RgbaImage::from_fn(tw, th, |x, y| {
+            let tau = std::f32::consts::TAU;
+            let (u, v) = (x as f32 / tw as f32, y as f32 / th as f32);
+            let c = |a: f32| (128.0 + 100.0 * (tau * a).sin()).round() as u8;
+            image::Rgba([c(u + 0.25 * v), c(2.0 * v), c(u - v), 255])
+        });
+        let flat = image::RgbaImage::from_pixel(8, 8, image::Rgba([90, 140, 200, 255]));
+        let recipe = crate::textures::as_recipe(&crate::config::FractalConfig::default(), (64, 64));
+        let key = crate::textures::cache::key(&recipe);
+
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        let stop = |position: f32| crate::scene::palette::ColorStop { position, color: [0.5, 0.5, 0.5] };
+        config.palette.stops = vec![stop(0.0), stop(1.0)];
+        // Every point escapes at once: no interior, no structure.
+        config.escape.formula = "mandelbrot".to_string();
+        config.escape.coloring = "smooth".to_string();
+        config.escape.center_re = "2.5".to_string();
+        config.escape.center_im = "2.5".to_string();
+        config.escape.zoom_log2 = 2.0;
+        config.escape.max_iter = 16;
+        config.escape.supersample = 1;
+        config.escape.shading.enabled = true;
+        config.escape.shading.height = 0.0;
+        config.escape.shading.light_angle = 135.0;
+        config.escape.shading.texture_strength = 0.5;
+        config.escape.shading.texture_scale = 2.0;
+        config.escape.texture = Some(EscapeTexture { name: "synthetic".to_string(), config: Box::new(recipe.clone()) });
+
+        let render_with = |c: &crate::config::FractalConfig, tex: Option<&image::RgbaImage>| -> Vec<u8> {
+            let mut engines = crate::renderer::RenderEngines::default();
+            let mut esc = crate::escape::EscapeRenderer::new(&device, w, h);
+            if let Some(t) = tex {
+                assert!(esc.set_texture(&device, &queue, &key, t));
+            }
+            engines.escape = Some(esc);
+            let job = crate::renderer::RenderJob::new(c, w, h).with_engines(&mut engines);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+
+        let mut none = config.clone();
+        none.escape.shading.texture_kind = ShadingTexture::None;
+        let plain = render_with(&none, Some(&wavy));
+        let mut bump = config.clone();
+        bump.escape.shading.texture_kind = ShadingTexture::Simulation;
+        assert!(bump.escape.uses_texture());
+        let flat_out = render_with(&bump, Some(&flat));
+        assert_eq!(flat_out, plain, "a flat texture tilted the surface");
+        let mut untextured = bump.clone();
+        untextured.escape.texture = None;
+        assert!(!untextured.escape.uses_texture());
+        assert_eq!(render_with(&untextured, None), plain, "the bump drew without a texture");
+
+        // The shader's response, from the CPU-sampled texture.
+        let lum = |q: (f32, f32)| -> f32 {
+            let fx = q.0 - 0.5;
+            let fy = q.1 - 0.5;
+            let (x0, y0) = (fx.floor(), fy.floor());
+            let (ax, ay) = (fx - x0, fy - y0);
+            let at = |x: f32, y: f32| {
+                let xi = (x as i64).rem_euclid(tw as i64) as u32;
+                let yi = (y as i64).rem_euclid(th as i64) as u32;
+                let p = wavy.get_pixel(xi, yi).0;
+                (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) / 255.0
+            };
+            let top = at(x0, y0) * (1.0 - ax) + at(x0 + 1.0, y0) * ax;
+            let bot = at(x0, y0 + 1.0) * (1.0 - ax) + at(x0 + 1.0, y0 + 1.0) * ax;
+            top * (1.0 - ay) + bot * ay - 0.5
+        };
+        let response = |light_deg: f32, scale: f32| -> Vec<f32> {
+            let (ls, lc) = light_deg.to_radians().sin_cos();
+            let k = config.escape.shading.texture_strength * 8.0;
+            let mut out = Vec::with_capacity((w * h) as usize);
+            for py in 0..h {
+                for px in 0..w {
+                    let q = (px as f32 / scale, py as f32 / scale);
+                    let e = 1.0 / scale;
+                    let nx = lum((q.0 + e, q.1)) - lum((q.0 - e, q.1));
+                    let ny = lum((q.0, q.1 + e)) - lum((q.0, q.1 - e));
+                    let g = (-nx * k, ny * k);
+                    let s = g.0 * lc + g.1 * ls;
+                    out.push(s / (1.0 + g.0 * g.0 + g.1 * g.1).sqrt());
+                }
+            }
+            out
+        };
+        let correlation = |a: &[f32], b: &[f32]| -> f64 {
+            let n = a.len() as f64;
+            let (ma, mb) = (
+                a.iter().map(|v| *v as f64).sum::<f64>() / n,
+                b.iter().map(|v| *v as f64).sum::<f64>() / n,
+            );
+            let (mut sab, mut saa, mut sbb) = (0.0, 0.0, 0.0);
+            for (x, y) in a.iter().zip(b) {
+                let (dx, dy) = (*x as f64 - ma, *y as f64 - mb);
+                sab += dx * dy;
+                saa += dx * dx;
+                sbb += dy * dy;
+            }
+            sab / (saa * sbb).sqrt().max(1e-12)
+        };
+
+        let gpu = render_with(&bump, Some(&wavy));
+        // The shading's effect: how far each pixel moved off the flat grey.
+        let lit: Vec<f32> = gpu.chunks(4).zip(plain.chunks(4)).map(|(a, b)| a[1] as f32 - b[1] as f32).collect();
+        let moved = lit.iter().filter(|d| d.abs() > 4.0).count() as f64 / lit.len() as f64;
+        let right = correlation(&lit, &response(135.0, 2.0));
+        let turned = correlation(&lit, &response(225.0, 2.0));
+        let rescaled = correlation(&lit, &response(135.0, 3.0));
+        println!(
+            "bump: {moved:.3} of pixels moved; against the formula {right:.4}, light turned a quarter {turned:.4}, scale 3 {rescaled:.4}"
+        );
+        assert!(moved > 0.5, "the bump hardly shows ({moved:.3})");
+        assert!(right > 0.97, "the bump does not follow the texture's slope ({right:.4})");
+        assert!(turned < 0.5 && rescaled < right - 0.1, "the comparison cannot tell direction or scale apart");
+
+        // Display pixels per texel: 2x antialiasing keeps the bump's size.
+        let mut two = bump.clone();
+        two.escape.supersample = 2;
+        let lit2: Vec<f32> =
+            render_with(&two, Some(&wavy)).chunks(4).zip(plain.chunks(4)).map(|(a, b)| a[1] as f32 - b[1] as f32).collect();
+        let at2 = correlation(&lit2, &response(135.0, 2.0));
+        println!("bump at 2x against the 1x formula: {at2:.4}");
+        assert!(at2 > 0.9, "antialiasing changed the bump ({at2:.4})");
+    }
+
+    /// The image trap draws what Ultra Fractal's Direct Orbit Traps draws
+    /// with its Image Trap, from their source: each iterate that has not
+    /// bailed out, moved by the trap position, reads the image over
+    /// (-1,-1)..(1,1) (transparent outside, proportions kept), and
+    /// merges into the colour so far with `FullMerge` -- compose over
+    /// blend over mergeX -- in display values, from an opaque base.
+    /// Ported to the CPU in f32 with a bilinear sampler, through the
+    /// whole render: bottom-up and top-down, several merge modes, a
+    /// moved and turned trap, and a texture with transparent parts, so
+    /// the alpha arithmetic and the coverage it becomes are both tested.
+    ///
+    /// Measured: 12,285 or 12,286 of 12,288 pixels within two levels in
+    /// every case. The two that are not, every time, are orbits f32
+    /// cannot follow -- against f64 they drift by 13 and by 14,000
+    /// before escaping -- so the GPU's rounding and the CPU's take them
+    /// to different places; the third, in some cases, is three levels
+    /// out after 48 merges.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_image_trap_draws_what_ultra_fractals_source_says() {
+        use crate::config::escape::EscapeTexture;
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        // Wider than tall, so Keep proportions has something to keep;
+        // transparent in a disc and towards one corner.
+        let (tw, th) = (48u32, 32u32);
+        let tex = image::RgbaImage::from_fn(tw, th, |x, y| {
+            let (u, v) = (x as f32 / (tw - 1) as f32, y as f32 / (th - 1) as f32);
+            let r = (u * 230.0 + 20.0) as u8;
+            let g = (v * 200.0 + 40.0) as u8;
+            let b = ((1.0 - u) * 120.0 + v * 100.0) as u8;
+            let (dx, dy) = (u - 0.35, v - 0.5);
+            let a = if dx * dx + dy * dy < 0.04 { 0 } else { ((1.0 - 0.6 * u * v) * 255.0) as u8 };
+            image::Rgba([r, g, b, a])
+        });
+        let recipe = crate::textures::as_recipe(&crate::config::FractalConfig::default(), (64, 64));
+        let key = crate::textures::cache::key(&recipe);
+
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        config.escape.formula = "mandelbrot".to_string();
+        config.escape.coloring = "image_trap".to_string();
+        config.escape.center_re = "-0.6".to_string();
+        config.escape.center_im = "0.1".to_string();
+        config.escape.zoom_log2 = 0.6;
+        config.escape.max_iter = 48;
+        config.escape.bailout = 4.0;
+        config.escape.supersample = 1;
+        config.escape.texture = Some(EscapeTexture { name: "synthetic".to_string(), config: Box::new(recipe) });
+        assert!(config.escape.uses_texture());
+        let span_y = (4.0 / config.escape.zoom_log2.exp2()) as f32;
+
+        let mut engines = crate::renderer::RenderEngines::default();
+        let mut esc = crate::escape::EscapeRenderer::new(&device, w, h);
+        assert!(esc.set_texture(&device, &queue, &key, &tex));
+        engines.escape = Some(esc);
+
+        // The texture as the sampler reads it: bilinear, clamped.
+        let sample = |u: f32, v: f32| -> [f32; 4] {
+            let fx = u * tw as f32 - 0.5;
+            let fy = v * th as f32 - 0.5;
+            let (x0, y0) = (fx.floor(), fy.floor());
+            let (ax, ay) = (fx - x0, fy - y0);
+            let at = |x: f32, y: f32| {
+                let xi = (x as i64).clamp(0, tw as i64 - 1) as u32;
+                let yi = (y as i64).clamp(0, th as i64 - 1) as u32;
+                tex.get_pixel(xi, yi).0
+            };
+            let mut out = [0.0f32; 4];
+            for (k, o) in out.iter_mut().enumerate() {
+                let p = |x, y| at(x, y)[k] as f32 / 255.0;
+                let top = p(x0, y0) * (1.0 - ax) + p(x0 + 1.0, y0) * ax;
+                let bot = p(x0, y0 + 1.0) * (1.0 - ax) + p(x0 + 1.0, y0 + 1.0) * ax;
+                *o = top * (1.0 - ay) + bot * ay;
+            }
+            out
+        };
+        // common.ulb TrapTransform, ImageWrapper.NormalizePixel and
+        // Image.getColor.
+        let trap_colour = |z: (f32, f32), p: &[f32; 13]| -> [f32; 4] {
+            let r = p[3].to_radians();
+            let d = (z.0 - p[0], z.1 - p[1]);
+            let mut q = ((d.0 * r.cos() - d.1 * r.sin()) / p[2], (d.0 * r.sin() + d.1 * r.cos()) / p[2]);
+            q.1 *= p[4];
+            let k = p[5].to_radians();
+            q.0 = q.0 * k.cos() - q.1 * k.sin();
+            if p[6] > 0.5 {
+                if tw > th {
+                    q.1 = q.1 * tw as f32 / th as f32;
+                } else {
+                    q.0 = q.0 * th as f32 / tw as f32;
+                }
+            }
+            if !(q.0.abs() <= 1.0 && q.1.abs() <= 1.0) {
+                return [0.0; 4];
+            }
+            sample((q.0 + 1.0) * 0.5, (1.0 - q.1) * 0.5)
+        };
+        let mergex = |mode: u32, b: [f32; 4], t: [f32; 4]| -> [f32; 4] {
+            let mut m = [0.0f32; 4];
+            for k in 0..3 {
+                m[k] = match mode {
+                    1 => b[k] * t[k],
+                    2 => 1.0 - (1.0 - b[k]) * (1.0 - t[k]),
+                    3 => b[k].min(t[k]),
+                    4 => b[k].max(t[k]),
+                    5 => (b[k] - t[k]).abs(),
+                    6 => (b[k] + t[k]).min(1.0),
+                    7 => (b[k] - t[k]).max(0.0),
+                    8 => if k == 0 { t[k] } else { b[k] },
+                    9 => if k == 1 { t[k] } else { b[k] },
+                    10 => if k == 2 { t[k] } else { b[k] },
+                    _ => t[k],
+                };
+            }
+            m[3] = t[3];
+            m
+        };
+        let compose = |b: [f32; 4], t: [f32; 4], o: f32| -> [f32; 4] {
+            let at = t[3] * o;
+            let a = at + b[3] * (1.0 - at);
+            let mut c = [0.0f32; 4];
+            for k in 0..3 {
+                let v = t[k] * at + b[k] * (b[3] * (1.0 - at));
+                c[k] = if a > 0.0 { v / a.max(1e-30) } else { 0.0 };
+            }
+            c[3] = a;
+            c
+        };
+        let full_merge = |mode: u32, b: [f32; 4], t: [f32; 4], o: f32| -> [f32; 4] {
+            let m = mergex(mode, b, t);
+            let mut bl = [0.0f32; 4];
+            for k in 0..4 {
+                bl[k] = t[k] + (m[k] - t[k]) * b[3];
+            }
+            compose(b, bl, o)
+        };
+        let expected = |p: &[f32; 13], px: u32, py: u32| -> [f32; 4] {
+            let span_x = span_y * w as f32 / h as f32;
+            let c = (
+                -0.6 + ((px as f32 + 0.5) / w as f32 - 0.5) * span_x,
+                0.1 - ((py as f32 + 0.5) / h as f32 - 0.5) * span_y,
+            );
+            let mut state = [p[10], p[11], p[12], 1.0];
+            let mut z = (0.0f32, 0.0f32);
+            for _ in 0..48 {
+                z = (z.0 * z.0 - z.1 * z.1 + c.0, 2.0 * z.0 * z.1 + c.1);
+                if z.0 * z.0 + z.1 * z.1 > 4.0 {
+                    break;
+                }
+                let current = trap_colour(z, p);
+                let o = p[7].clamp(0.0, 1.0);
+                state = if p[8] > 0.5 {
+                    full_merge(p[9] as u32, current, state, o)
+                } else {
+                    full_merge(p[9] as u32, state, current, o)
+                };
+            }
+            state
+        };
+
+        let names = [
+            "trap_re", "trap_im", "trap_scale", "trap_rotation", "trap_aspect", "trap_skew", "proportions", "opacity", "order",
+            "merge", "base_r", "base_g", "base_b",
+        ];
+        let defaults = [0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.2, 0.0, 0.0, 0.0, 0.0, 0.0f32];
+        let cases: [(&str, &[(usize, f32)]); 6] = [
+            ("UF's defaults", &[]),
+            ("moved, turned, skewed, stretched", &[(0, 0.3), (1, -0.2), (2, 0.7), (3, 30.0), (4, 1.4), (5, 15.0), (6, 0.0)]),
+            ("top-down at 0.5", &[(7, 0.5), (8, 1.0)]),
+            ("multiply on white", &[(9, 1.0), (10, 1.0), (11, 1.0), (12, 1.0), (7, 0.6)]),
+            ("difference", &[(9, 5.0), (7, 0.7), (11, 0.4)]),
+            ("red channel, top-down at 1", &[(9, 8.0), (7, 1.0), (8, 1.0)]),
+        ];
+        let encode = |lin: f32| (lin.clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0).round() as i32;
+        for (label, overrides) in cases {
+            let mut p = defaults;
+            for &(i, v) in overrides {
+                p[i] = v;
+            }
+            let mut c = config.clone();
+            for (name, v) in names.iter().zip(p) {
+                c.escape.coloring_params.insert(name.to_string(), v);
+            }
+            let job = crate::renderer::RenderJob::new(&c, w, h).with_engines(&mut engines);
+            let gpu = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data;
+            let (mut close, mut worst, mut partial) = (0usize, 0i32, 0usize);
+            for py in 0..h {
+                for px in 0..w {
+                    let s = expected(&p, px, py);
+                    let a = s[3].clamp(0.0, 1.0);
+                    partial += usize::from(a < 0.99);
+                    let i = ((py * w + px) * 4) as usize;
+                    let d = (0..3)
+                        .map(|k| (gpu[i + k] as i32 - encode(s[k].clamp(0.0, 1.0).powf(2.2) * a)).abs())
+                        .max()
+                        .unwrap();
+                    worst = worst.max(d);
+                    close += usize::from(d <= 2);
+                }
+            }
+            let share = close as f64 / (w * h) as f64;
+            println!("{label}: {share:.4} within two levels (worst {worst}); {partial} pixels partly transparent");
+            assert!(share > 0.99, "{label}: only {share:.4} of pixels draw UF's image trap");
+            if label.starts_with("top-down") {
+                assert!(partial > 100, "top-down should leave the colour partly transparent");
+            }
+        }
+
+        // The palette is not the image trap's: a palette edit recolours
+        // the stored records -- colour and alpha -- and changes nothing.
+        let mut c = config.clone();
+        for (name, v) in names.iter().zip([0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.5, 1.0, 0.0, 0.0, 0.0, 0.0f32]) {
+            c.escape.coloring_params.insert(name.to_string(), v);
+        }
+        let render_into = |c: &crate::config::FractalConfig, engines: &mut crate::renderer::RenderEngines| {
+            let job = crate::renderer::RenderJob::new(c, w, h).with_engines(engines);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+        let before = render_into(&c, &mut engines);
+        c.palette.stops.reverse();
+        assert_eq!(render_into(&c, &mut engines), before, "a palette edit moved the image trap");
+        assert_eq!(engines.escape.as_ref().unwrap().last_path, "recolor", "a palette edit should recolour");
+
+        // Another texture is another picture: it re-iterates, and draws
+        // what a fresh renderer draws with it.
+        let mut recipe2 = crate::textures::as_recipe(&crate::config::FractalConfig::default(), (64, 64));
+        recipe2.sim.seed = recipe2.sim.seed.wrapping_add(1);
+        let key2 = crate::textures::cache::key(&recipe2);
+        assert_ne!(key, key2);
+        let tex2 = image::RgbaImage::from_fn(tw, th, |x, y| {
+            let p = tex.get_pixel(x, y).0;
+            image::Rgba([p[2], p[0], p[1], 255])
+        });
+        c.escape.texture = Some(EscapeTexture { name: "other".to_string(), config: Box::new(recipe2) });
+        engines.escape.as_mut().unwrap().set_texture(&device, &queue, &key2, &tex2);
+        let swapped = render_into(&c, &mut engines);
+        assert_ne!(swapped, before, "the new texture changed nothing");
+        let mut fresh = crate::renderer::RenderEngines::default();
+        let mut esc = crate::escape::EscapeRenderer::new(&device, w, h);
+        esc.set_texture(&device, &queue, &key2, &tex2);
+        fresh.escape = Some(esc);
+        assert_eq!(swapped, render_into(&c, &mut fresh), "a texture swap kept the old texture's records");
+    }
+
     /// A stepped palette draws every stop as a flat band: an escape
     /// render through it shows the stops' colours and next to nothing
     /// in between, where the blended palette shows a continuum.
@@ -12576,6 +13160,10 @@ fn main() {
             config.levels_gamma,
         );
         let mut escape = crate::escape::EscapeRenderer::new(&device, 128, 96);
+        // A colouring that reads the texture (the image trap) draws only
+        // its base colour without one: give it an opaque gradient.
+        let texture = image::RgbaImage::from_fn(32, 32, |x, y| image::Rgba([40 + 6 * x as u8, 40 + 6 * y as u8, 200, 255]));
+        escape.set_texture(&device, &queue, "combo probe", &texture);
 
         for f in crate::escape::FORMULAS {
             for c in crate::escape::COLORINGS {
