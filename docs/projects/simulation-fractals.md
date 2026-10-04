@@ -5,7 +5,7 @@
 that day. What is left is at the end of §5 and is three items, none of
 them engine work: translations (deferred as their own project), a
 display-time view (held), and the online browser's render-mode filter
-(a gap shared with escape). 31 models and 11 colourings are in the
+(a gap shared with escape). 31 models and 11 colourings were in the
 registry, on branch `simulation-mode`.
 
 **§5 is where the per-phase status lives**, and each wave records what

@@ -834,3 +834,58 @@ fn sim_color(x: SimSample, p: vec2<i32>) -> vec4<f32> {
 }
 "#,
 };
+
+/// McCabe's colour with memory: each scale a band of the palette, and
+/// each cell the mix of the bands its memory holds -- Softology's
+/// colour lerp, applied at display time from the weights the model
+/// keeps (mccabe-multiscale plan, section 2). Black where nothing has
+/// won yet, as the reference starts.
+pub static SCALE_MEMORY: SimColoringDef = SimColoringDef {
+    name: "scale_memory",
+    display_name: "Scale Memory",
+    description: "Each cell coloured by the scales that have been winning it, blended over \
+                  time: smooth colour regions where scale_mix speckles. Needs the model's \
+                  Colour memory on; without it the picture is black.",
+    features: &[ColoringFeature::ReadsMemory],
+    parameters: &[
+        SimParamDef {
+            name: "scales",
+            display_name: "Scales across palette",
+            default: 6.0,
+            min: 1.0,
+            max: 8.0,
+            tooltip: "How many scale indices the palette spans. Match the model's scale \
+                      count to use the whole palette once.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "value_scale",
+            display_name: "Brightness range",
+            default: 0.5,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How much the field darkens the colour. 0 shows the memory alone; 1 is \
+                      Softology's colour times (f + 1) / 2.",
+            choices: &[],
+        },
+    ],
+    wgsl: r#"
+fn sim_color(x: SimSample, p: vec2<i32>) -> vec4<f32> {
+    let n = max(cparam(0u), 1.0);
+    // Sum of weight times band colour, band i centred at (i + 1/2) / n
+    // as in scale_mix. Written out: a dynamic index into a value array
+    // is not portable WGSL.
+    var c = x.m0.x * sim_palette(0.5 / n);
+    c = c + x.m0.y * sim_palette(1.5 / n);
+    c = c + x.m0.z * sim_palette(2.5 / n);
+    c = c + x.m0.w * sim_palette(3.5 / n);
+    c = c + x.m1.x * sim_palette(4.5 / n);
+    c = c + x.m1.y * sim_palette(5.5 / n);
+    c = c + x.m1.z * sim_palette(6.5 / n);
+    c = c + x.m1.w * sim_palette(7.5 / n);
+    let v = clamp(x.s.x * 0.5 + 0.5, 0.0, 1.0);
+    let b = mix(1.0, v, cparam(1u));
+    return vec4<f32>(c * b, 1.0);
+}
+"#,
+};

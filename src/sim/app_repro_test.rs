@@ -2349,6 +2349,236 @@ fn mccabe_matches_a_cpu_mirror() {
     );
 }
 
+/// McCabe with its colour memory on at rate `b` (mccabe-multiscale
+/// plan, section 2).
+fn mccabe_memory_config(n: u32, b: f32) -> SimConfig {
+    let mut cfg = mccabe_config(n);
+    cfg.model_params.insert("memory".into(), b);
+    cfg
+}
+
+/// The eight memory weights of every cell: slices `base` and
+/// `base + 1`, four each.
+fn read_memory(device: &Device, queue: &Queue, r: &SimRenderer, n: u32, base: u32) -> Vec<[f32; 8]> {
+    let m0 = read_rgba32f_layer(device, queue, r.field_texture(), n, n, base);
+    let m1 = read_rgba32f_layer(device, queue, r.field_texture(), n, n, base + 1);
+    m0.iter()
+        .zip(&m1)
+        .map(|(a, b)| [a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3]])
+        .collect()
+}
+
+/// The memory against a CPU mirror of its rule, driven by the GPU's
+/// own winners: `m <- mix(m, onehot(winner), b)` from zero. And the
+/// memory must not touch the run: the field is bit-identical to the
+/// same run with memory off, step by step.
+#[test]
+fn mccabe_memory_matches_a_cpu_mirror_and_leaves_the_field_alone() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 48;
+    let b = 0.3f32;
+    let on = mccabe_memory_config(N, b);
+    let off = mccabe_config(N);
+    let mut r = SimRenderer::new(&device, &on, N, N);
+    let mut r_off = SimRenderer::new(&device, &off, N, N);
+    r.seed(&device, &queue, &on);
+    r_off.seed(&device, &queue, &off);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    // A fresh memory is empty.
+    let mut m = read_memory(&device, &queue, &r, N, 1);
+    assert!(m.iter().all(|w| w.iter().all(|v| *v == 0.0)), "memory should seed to zero");
+
+    let mut worst = 0.0f32;
+    for _ in 0..5 {
+        r.run_steps(&device, &queue, &on, 1);
+        r_off.run_steps(&device, &queue, &off, 1);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let field = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+        let field_off = read_rgba32f(&device, &queue, r_off.field_texture(), N, N);
+        let moved = field
+            .iter()
+            .zip(&field_off)
+            .filter(|(a, z)| a.iter().zip(z.iter()).any(|(x, y)| x.to_bits() != y.to_bits()))
+            .count();
+        assert_eq!(moved, 0, "memory changed {moved} cells of the field");
+        let got = read_memory(&device, &queue, &r, N, 1);
+        for (c, px) in field.iter().enumerate() {
+            let winner = px[1].round() as usize;
+            for k in 0..8 {
+                let e = if k == winner { 1.0 } else { 0.0 };
+                m[c][k] = m[c][k] * (1.0 - b) + e * b;
+                worst = worst.max((got[c][k] - m[c][k]).abs());
+            }
+        }
+    }
+    println!("memory against the CPU mirror, 5 steps: worst {worst:e}");
+    assert!(worst < 1e-5, "memory drifted from the mirror by {worst}");
+    // And it has learnt something: every cell's weights sum to
+    // 1 - (1 - b)^5.
+    let want = 1.0 - (1.0 - b).powi(5);
+    assert!(m.iter().all(|w| (w.iter().sum::<f32>() - want).abs() < 1e-4));
+}
+
+/// The memory slices are batched like every other slice: one batch of
+/// many steps and many batches of one give identical memory.
+#[test]
+fn mccabe_memory_is_batch_invariant() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 48;
+    let cfg = mccabe_memory_config(N, 0.05);
+    let n = 300;
+    let mut a = SimRenderer::new(&device, &cfg, N, N);
+    a.seed(&device, &queue, &cfg);
+    a.run_steps(&device, &queue, &cfg, n);
+    let mut b = SimRenderer::new(&device, &cfg, N, N);
+    b.seed(&device, &queue, &cfg);
+    for _ in 0..n {
+        b.run_steps(&device, &queue, &cfg, 1);
+    }
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    for slice in 0..3 {
+        let fa = read_rgba32f_layer(&device, &queue, a.field_texture(), N, N, slice);
+        let fb = read_rgba32f_layer(&device, &queue, b.field_texture(), N, N, slice);
+        let differing = fa
+            .iter()
+            .zip(&fb)
+            .filter(|(x, y)| x.iter().zip(y.iter()).any(|(p, q)| p.to_bits() != q.to_bits()))
+            .count();
+        assert_eq!(differing, 0, "slice {slice}: {differing} cells differ between batchings");
+    }
+}
+
+/// The warp moves the memory with the pattern it remembers. Under a
+/// one-cell pan with the Nearest filter, the warp is an exact shift,
+/// so with b = 1/2 the memory after a step is half the PREVIOUS
+/// memory shifted by the pan, plus half the winner: checked exactly,
+/// cell by cell, and checked to fail without the shift.
+#[test]
+fn mccabe_memory_moves_with_the_warp() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 40;
+    let b = 0.5f32;
+    let mut cfg = mccabe_memory_config(N, b);
+    // Three scales: at 40 cells the pyramid has four levels, and a
+    // fifth scale's activator and inhibitor would both clamp to the
+    // top one -- variation ~0, so that scale wins everywhere and the
+    // memory is uniform.
+    cfg.model_params.insert("scales".into(), 3.0);
+    cfg.warp.pan_x = 1.0;
+    cfg.warp.filter = crate::config::sim::SimWarpFilter::Nearest;
+    let mut r = SimRenderer::new(&device, &cfg, N, N);
+    r.seed(&device, &queue, &cfg);
+    // Long enough for different scales to win in different places:
+    // early on one scale wins nearly everywhere, the memory is
+    // uniform, and a shift of it is invisible.
+    r.run_steps(&device, &queue, &cfg, 60);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let mut prev = read_memory(&device, &queue, &r, N, 1);
+    let n = N as usize;
+    for _ in 0..3 {
+        r.run_steps(&device, &queue, &cfg, 1);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let field = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+        let winners: std::collections::BTreeSet<i32> = field.iter().map(|p| p[1].round() as i32).collect();
+        assert!(winners.len() > 1, "one scale won everywhere ({winners:?}); the test needs variety");
+        let got = read_memory(&device, &queue, &r, N, 1);
+        let (mut shifted_bad, mut unshifted_bad) = (0, 0);
+        for y in 0..n {
+            for x in 0..n {
+                let c = y * n + x;
+                // dst(p) = src(p - pan), periodic.
+                let from = y * n + (x + n - 1) % n;
+                let winner = field[c][1].round() as usize;
+                for k in 0..8 {
+                    let e = if k == winner { 1.0 } else { 0.0 };
+                    if (got[c][k] - (prev[from][k] * (1.0 - b) + e * b)).abs() > 1e-6 {
+                        shifted_bad += 1;
+                    }
+                    if (got[c][k] - (prev[c][k] * (1.0 - b) + e * b)).abs() > 1e-6 {
+                        unshifted_bad += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(shifted_bad, 0, "{shifted_bad} weights did not move with the warp");
+        assert!(unshifted_bad > 0, "the check cannot tell a moved memory from a still one");
+        prev = got;
+    }
+}
+
+/// Switching the memory on or off is a new run; changing its rate is a
+/// parameter edit and is not.
+#[test]
+fn switching_memory_reseeds_and_changing_its_rate_does_not() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 32;
+    let cfg = mccabe_memory_config(N, 0.2);
+    let mut r = SimRenderer::new(&device, &cfg, N, N);
+    r.seed(&device, &queue, &cfg);
+    r.run_steps(&device, &queue, &cfg, 2);
+    assert!(!r.will_reseed(&cfg));
+    assert!(!r.will_reseed(&mccabe_memory_config(N, 0.4)), "a new rate should not restart the run");
+    assert!(r.will_reseed(&mccabe_memory_config(N, 0.0)), "switching memory off should restart the run");
+}
+
+/// The colour pass reads the memory of the layer it colours. Two
+/// layers, a Gray-Scott without memory and a McCabe with it, so the
+/// McCabe's memory starts at slice 2: a Scale Memory colour layer on
+/// the McCabe is lit, and the same colour layer on the Gray-Scott --
+/// which has no memory -- is black.
+#[test]
+fn scale_memory_colours_the_memory_of_its_source_layer() {
+    use crate::config::sim::SimLayer;
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 48;
+    let mut cfg = mccabe_config(N);
+    cfg.layers = vec![
+        SimLayer { model: "gray_scott".into(), model_params: Default::default(), enabled: true },
+        SimLayer {
+            model: "mccabe".into(),
+            model_params: [("memory".to_string(), 0.2f32)].into_iter().collect(),
+            enabled: true,
+        },
+    ];
+    let palette = test_palette(&device, &queue);
+    let lit_with_source = |source: usize| -> usize {
+        let mut c = cfg.clone();
+        c.color_layers = vec![crate::config::sim::SimColorLayer {
+            source,
+            coloring: "scale_memory".into(),
+            coloring_params: [("value_scale".to_string(), 0.0f32)].into_iter().collect(),
+            ..Default::default()
+        }];
+        let mut r = SimRenderer::new(&device, &c, N, N);
+        r.seed(&device, &queue, &c);
+        r.run_steps(&device, &queue, &c, 20);
+        r.color(&device, &queue, &c, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let out = read_rgba32f(&device, &queue, r.output_texture(), N, N);
+        out.iter().filter(|p| p[0] + p[1] + p[2] > 0.01).count()
+    };
+    let mccabe = lit_with_source(1);
+    let gray_scott = lit_with_source(0);
+    println!("lit pixels: McCabe source {mccabe}, Gray-Scott source {gray_scott}");
+    assert_eq!(mccabe, (N * N) as usize, "every McCabe cell has remembered some winner");
+    assert_eq!(gray_scott, 0, "a layer without memory reads zeros");
+}
+
 /// Phase 3's other gate: McCabe at 1080p inside the interactive budget.
 ///
 /// The pipeline doc expected "well under 2 ms" for a box pyramid and
@@ -2362,28 +2592,36 @@ fn mccabe_meets_the_interactive_budget_at_1080p() {
         return;
     };
     let (w, h) = (1920u32, 1080u32);
-    let mut cfg = mccabe_config(256);
-    cfg.grid = crate::config::sim::SimGrid::Fixed { width: w, height: h };
-    let mut r = SimRenderer::new(&device, &cfg, w, h);
-    r.seed(&device, &queue, &cfg);
-    r.run_steps(&device, &queue, &cfg, 16);
-    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
-    // The best of five trials, not one mean: the suite runs its GPU
-    // tests in parallel, and a single batch measures whatever else was
-    // on the device -- 9.1 ms under load against 4.7 alone, measured
-    // the day the lattice tests joined the suite. The minimum is the
-    // machine; the mean is the load.
-    const STEPS: u32 = 20;
-    let mut best = f64::MAX;
-    for _ in 0..5 {
-        let t0 = std::time::Instant::now();
-        r.run_steps(&device, &queue, &cfg, STEPS);
+    let ms_per_step = |memory: f32| -> f64 {
+        let mut cfg = mccabe_memory_config(256, memory);
+        cfg.grid = crate::config::sim::SimGrid::Fixed { width: w, height: h };
+        let mut r = SimRenderer::new(&device, &cfg, w, h);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 16);
         let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
-        best = best.min(t0.elapsed().as_secs_f64() * 1e3 / STEPS as f64);
-    }
-    let ms = best;
+        // The best of five trials, not one mean: the suite runs its GPU
+        // tests in parallel, and a single batch measures whatever else was
+        // on the device -- 9.1 ms under load against 4.7 alone, measured
+        // the day the lattice tests joined the suite. The minimum is the
+        // machine; the mean is the load.
+        const STEPS: u32 = 20;
+        let mut best = f64::MAX;
+        for _ in 0..5 {
+            let t0 = std::time::Instant::now();
+            r.run_steps(&device, &queue, &cfg, STEPS);
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            best = best.min(t0.elapsed().as_secs_f64() * 1e3 / STEPS as f64);
+        }
+        best
+    };
+    let ms = ms_per_step(0.0);
     println!("McCabe 5 scales at 1080p: {ms:.3} ms/step ({:.1} steps/s), best of 5", 1e3 / ms);
     assert!(ms < 8.0, "McCabe at 1080p is {ms:.2} ms/step, past the 8 ms fallback threshold");
+    // With the colour memory on (mccabe-multiscale plan, section 2):
+    // two more reads and writes a cell, and the same gate.
+    let ms = ms_per_step(0.05);
+    println!("  with colour memory: {ms:.3} ms/step ({:.1} steps/s)", 1e3 / ms);
+    assert!(ms < 8.0, "McCabe with memory at 1080p is {ms:.2} ms/step, past the 8 ms threshold");
 }
 
 /// Review probe: what the per-frame kernel rebuild costs on the CPU.

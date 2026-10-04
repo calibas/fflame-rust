@@ -3323,6 +3323,7 @@ pub static MCCABE: ModelDef = ModelDef {
         ModelFeature::NoTimeStep,
         ModelFeature::NeedsPyramid,
         ModelFeature::NeedsMinMax,
+        ModelFeature::Memory,
     ],
     parameters: &[
         SimParamDef {
@@ -3387,6 +3388,21 @@ pub static MCCABE: ModelDef = ModelDef {
                       so the corners stay asymmetric.",
             choices: &[],
         },
+        // Appended, so the parameters above keep their slots.
+        SimParamDef {
+            name: "memory",
+            display_name: "Colour memory",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How far each cell's colour moves toward the winning scale's colour per \
+                      step — Softology's colour bump. Small values give smooth blends of the \
+                      scales that have been winning; 1 is the latest winner alone. Colour \
+                      with Scale Memory. 0 is off. Switching it on or off restarts the run, \
+                      and on it keeps two more slices of the field (about 130 MB at a \
+                      1080p grid).",
+            choices: &[],
+        },
     ],
     presets: &[
         SimPreset {
@@ -3429,6 +3445,31 @@ pub static MCCABE: ModelDef = ModelDef {
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.5), ("wrap", 0.0)],
+            matte: None,
+            warp: None,
+        },
+        SimPreset {
+            name: "memory",
+            display_name: "Colour memory",
+            // Measured on the GPU (mccabe-multiscale plan, section 2),
+            // 256 and 512 grids: the coarse ladder with each cell's
+            // colour remembering the scales that won it. Where
+            // scale_mix speckles inside a region, this blends; moving
+            // boundaries leave soft trails of the scale they displaced.
+            // 0.05 keeps about twenty steps of history.
+            params: &[
+                ("scales", 5.0),
+                ("base_radius", 3.0),
+                ("ratio", 2.0),
+                ("amount", 0.05),
+                ("amount_min", 0.01),
+                ("symmetry", 0.0),
+                ("memory", 0.05),
+            ],
+            steps: 200,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("scale_memory"),
+            coloring_params: &[("scales", 5.0), ("value_scale", 0.5)],
             matte: None,
             warp: None,
         },
@@ -3511,6 +3552,20 @@ fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
     let span = max(mm.y - mm.x, 1.0e-6);
     let f = (s.x - mm.x) / span * 2.0 - 1.0;
     let age = select(s.z, f32(sim_step_index()), best_scale != s.y);
+
+    // Colour memory (mccabe-multiscale plan, section 2). Softology lerps
+    // a cell's colour toward the winner's by a bump amount b; that
+    // colour is linear in a one-hot of the winner, so the same lerp on
+    // per-scale WEIGHTS gives a colour the palette can be applied to
+    // at display time. Off (no slices), the accessors do nothing.
+    if (sim_mem_count() > 0) {
+        let b = clamp(mparam(6u), 0.0, 1.0);
+        let i = i32(best_scale);
+        let e0 = vec4<f32>(f32(i == 0), f32(i == 1), f32(i == 2), f32(i == 3));
+        let e1 = vec4<f32>(f32(i == 4), f32(i == 5), f32(i == 6), f32(i == 7));
+        sim_mem_write(p, 0, mix(sim_mem_read(p, 0), e0, b));
+        sim_mem_write(p, 1, mix(sim_mem_read(p, 1), e1, b));
+    }
     return vec4<f32>(f + best_dir, best_scale, age, 0.0);
 }
 "#,

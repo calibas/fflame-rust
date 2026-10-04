@@ -185,7 +185,20 @@ pub enum ModelFeature {
     /// any layer's pass k + 1, so the channel a later pass reads is
     /// the signal of the same field the convolution would have seen.
     PublishesSignal,
+    /// The model keeps a per-cell MEMORY beside its field: eight
+    /// floats on [`MEMORY_SLICES`] internal slices of the field array,
+    /// appended after the user's layers (mccabe-multiscale plan,
+    /// section 2). The model's `memory` parameter turns it on; at 0
+    /// no slice exists and nothing changes. The step reads and writes
+    /// it through `sim_mem_read(p, k)` / `sim_mem_write(p, k, v)`, in
+    /// its LAST pass; the warp and the layer map move it with the
+    /// field, and a colouring that declares
+    /// [`ColoringFeature::ReadsMemory`] reads it.
+    Memory,
 }
+
+/// Internal slices a layer's memory takes when it is on: eight floats.
+pub const MEMORY_SLICES: u32 = 2;
 
 /// A model's agent stage.
 ///
@@ -392,6 +405,11 @@ pub enum ColoringFeature {
     /// the matte off there is no figure to be distant from and the
     /// value is 0.
     NeedsDistance,
+    /// The colouring reads `x.m0` / `x.m1`, the source layer's MEMORY
+    /// (see [`ModelFeature::Memory`]): eight weights read at the same
+    /// cells as the state and blended by the resolve the same way. A
+    /// source layer without memory reads zeros.
+    ReadsMemory,
     /// The colouring reads the cell coordinate `p` and the field
     /// around it directly -- a line integral convolution has to walk
     /// the field. Under an interpolating resolve `p` is the NEAREST
@@ -667,6 +685,19 @@ impl ModelDef {
 impl ModelDef {
     pub fn has(&self, f: ModelFeature) -> bool {
         self.features.contains(&f)
+    }
+
+    /// Internal slices this layer's memory takes at these parameters:
+    /// [`MEMORY_SLICES`] when the model keeps one and its `memory`
+    /// parameter is above zero, else none. Part of what a run IS, so
+    /// changing it reseeds (the renderer's `SeedIdentity`).
+    pub fn memory_slices(&self, params: &std::collections::BTreeMap<String, f32>) -> u32 {
+        if !self.has(ModelFeature::Memory) {
+            return 0;
+        }
+        let def = self.parameters.iter().find(|p| p.name == "memory").map(|p| p.default).unwrap_or(0.0);
+        let v = params.get("memory").copied().filter(|v| v.is_finite()).unwrap_or(def);
+        if v > 0.0 { MEMORY_SLICES } else { 0 }
     }
 
     /// Parameter values in declaration order, config overriding the
@@ -993,6 +1024,7 @@ pub static COLORINGS: &[&SimColoringDef] =
     &colorings::DISTANCE,
     &colorings::LIC,
     &colorings::SPECIES,
+    &colorings::SCALE_MEMORY,
 ];
 
 /// Look up a model by name, falling back to the first registered one.
@@ -1388,14 +1420,29 @@ mod tests {
     /// back in front of that question.
     #[test]
     fn every_model_fits_the_parameter_buffer() {
+        // The block's last slots are the renderer's own (the memory's
+        // count and base), so a model gets the rest.
+        let room = crate::sim::renderer::MODEL_PARAM_SLOTS - crate::sim::renderer::RESERVED_PARAM_SLOTS;
         for m in MODELS {
             assert!(
-                m.parameters.len() <= crate::sim::renderer::MODEL_PARAM_SLOTS,
-                "{}: {} parameters, buffer holds {}",
+                m.parameters.len() <= room,
+                "{}: {} parameters, the block has room for {room}",
                 m.name,
                 m.parameters.len(),
-                crate::sim::renderer::MODEL_PARAM_SLOTS
             );
+        }
+    }
+
+    /// A model that keeps a memory turns it on with a `memory`
+    /// parameter, defaulting to off: `memory_slices` reads that name,
+    /// and a default of on would give every existing config of the
+    /// model two more slices and a different run.
+    #[test]
+    fn memory_is_a_parameter_that_defaults_to_off() {
+        for m in MODELS.iter().filter(|m| m.has(ModelFeature::Memory)) {
+            let p = m.parameters.iter().find(|p| p.name == "memory");
+            assert!(p.is_some_and(|p| p.default == 0.0), "{}: needs a `memory` parameter defaulting to 0", m.name);
+            assert_eq!(m.memory_slices(&Default::default()), 0, "{}", m.name);
         }
     }
 

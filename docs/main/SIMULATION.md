@@ -22,7 +22,7 @@ a run at a step count*.
 - [src/sim/mod.rs](../../src/sim/mod.rs) — `ModelDef`, `SimColoringDef`,
   the `MODELS` and `COLORINGS` registries, the pure rules
 - [src/sim/models.rs](../../src/sim/models.rs) — 31 models, inline WGSL
-- [src/sim/colorings.rs](../../src/sim/colorings.rs) — 11 colourings
+- [src/sim/colorings.rs](../../src/sim/colorings.rs) — 12 colourings
 - [src/sim/assembler.rs](../../src/sim/assembler.rs) — WGSL assembly
 - [src/sim/renderer.rs](../../src/sim/renderer.rs) — `SimRenderer`
 - [src/config/sim.rs](../../src/config/sim.rs) — `SimConfig` and its paths
@@ -82,11 +82,11 @@ body, and:
 nothing pays for what it does not use:
 
 `NeedsRng`, `NeverStills`, `NoTimeStep`, `NeedsPyramid`, `NeedsAgents`,
-`NeedsMinMax`, `TakesDrive`, `PublishesSignal`.
+`NeedsMinMax`, `TakesDrive`, `PublishesSignal`, `Memory`.
 
 **`SimColoringDef`** is the same shape for the picture side, with
 `ColoringFeature`: `NeedsGradient`, `NeedsStructure`, `NeedsDistance`,
-`ReadsCell`. A colouring is `fn sim_color(x: SimSample, p: vec2<i32>) -> vec4<f32>`
+`ReadsCell`, `ReadsMemory`. A colouring is `fn sim_color(x: SimSample, p: vec2<i32>) -> vec4<f32>`
 where `rgb` is the colour and **`a` is coverage**. Coverage 0 lets the
 shared tonemap composite the background through, which is what makes a
 matte and a transparent PNG work; the matte multiplies into that same
@@ -127,6 +127,26 @@ inherit it.
 
 A `Rgba32Float` **texture array**, one slice per layer, ping-ponged
 between two allocations. A grid is capped at 8192 cells a side.
+
+**Memory slices.** A layer whose model keeps a memory
+(`ModelFeature::Memory`, McCabe's colour memory) has two more
+internal slices, appended after every user layer. User layer indices
+are unchanged, so couplings, the colour stack and `gather` do not see
+them. In the stage loop:
+- The owner's last pass writes them (`sim_mem_write`), and they get
+  no dispatch of their own in that stage.
+- Every other stage copies them through.
+- The warp and the layer map move them with their owner.
+- They seed to zero.
+
+Switching a memory on or off is part of `SeedIdentity`, so it
+restarts the run. A `ReadsMemory` colouring sees them as
+`x.m0`/`x.m1`, blended by the resolve like the state. See
+[mccabe-multiscale.md](../projects/mccabe-multiscale.md).
+
+**Parameters.** Each layer's block in the model-parameter buffer is
+64 floats. The last two are the renderer's: the memory's slice count
+and first slice.
 
 ### Shaders
 

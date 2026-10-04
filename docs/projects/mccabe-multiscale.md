@@ -1,6 +1,7 @@
 # McCabe multi-scale: colour memory, a per-scale table, variation radius
 
-Branch `mccabe-scales`, started 2026-10-04. The model is catalogue
+Branch `mccabe-scales`, started 2026-10-04. **Phase 1 (colour memory)
+done 2026-10-04**; results at the end of section 2. The model is catalogue
 §10 (`mccabe` in [src/sim/models.rs](../../src/sim/models.rs)). This
 plan brings it up to what the paper and the two implementations
 everyone copies actually do. Decisions a reader should argue with are
@@ -73,13 +74,15 @@ unchanged: couplings, the colour stack, `gather`, `minmax_back`.
 | pyramid, reduce | nothing (not built over it) |
 | the owner's memory-writing pass | written by the owner's dispatch; no dispatch of its own that stage |
 | every other stage | copy-through, as for any layer without a pass |
-| resize | resampled with the field |
+| resize | reseeded with the field (a bound grid's resize restarts the run) |
 
 - **The model side.** `ModelFeature::Memory`, and a slice count from
   the parameters: 2 when `memory` > 0, else 0. The step template
-  splices `sim_mem_read(k)` (from `field_in`) and `sim_mem_write(k, v)`
-  (to `field_out`) at `params.mem_base + k`. McCabe's step updates the
-  weights after choosing the winner.
+  splices `sim_mem_read(p, k)` (from `field_in`) and
+  `sim_mem_write(p, k, v)` (to `field_out`). The slices' count and
+  first index sit in the last two slots of the layer's parameter block,
+  which the colour pass reads too. McCabe's step updates the weights
+  after choosing the winner.
 - **The colouring side.** `ColoringFeature::ReadsMemory`. `SimSample`
   gains `m0`, `m1` (vec4), read from the source layer's memory slices,
   and lerped and summed in the resolve like the state. Interpolating
@@ -97,14 +100,42 @@ unchanged: couplings, the colour stack, `gather`, `minmax_back`.
   estimate given was 66 MB, for one slice; six scales need two.)
 
 **Gates.**
-- `memory` = 0: every baseline is byte-identical, and so is the
-  uncoupled step shader of every model.
+- `memory` = 0: every baseline is byte-identical.
 - The CPU mirror covers m across 3 steps, to the field's tolerance.
 - `steps_are_batch_invariant` passes with memory on.
 - A one-cell integer pan of the warp moves m exactly with the field.
 - A paused palette edit changes the picture.
 - Toggling memory reseeds; changing b does not.
 - A preset, run and inspected before it ships.
+
+**As built.** The plan held, with one change: no gate on the shader
+text. Every model's step shader gains the `MODEL_PARAM_SLOTS`
+constant, and McCabe's gains its memory code. Simulation shaders are
+not among the canonical dumps, so the baselines are the gate.
+
+| gate | result |
+|---|---|
+| baselines at `memory` = 0 | 92/92 byte-identical; the new `sim-mccabe-memory` makes 93 |
+| CPU mirror, 5 steps, the GPU's own winners | worst 6e-8 |
+| field with memory on | bit-identical to memory off, every step |
+| batch invariance, 300 steps | every slice bit-identical |
+| one-cell Nearest pan | every weight moved exactly; the unshifted check fails, so the test can tell |
+| toggling / changing b | reseeds / does not |
+| colour stack | `scale_memory` on the McCabe layer of a two-layer config lights every cell; on the Gray–Scott layer, black |
+| cost at 1080p | 4.17 → 4.29 ms/step, +3% |
+| `every_preset_draws_something` | passes with the new `memory` preset |
+
+The palette-edit gate is structural: the colouring reads the palette
+at display time and the weights do not depend on it.
+
+**Seen.** At 256² and 512², `scale_memory` blends where `scale_mix`
+speckles inside a region. Moving boundaries leave soft trails of the
+scale they displaced. Output in `output/mccabe_mem/`.
+
+**Found.** On small grids the coarsest scale can win everywhere: its
+activator and inhibitor both clamp to the pyramid's top level, and the
+variation goes to ~0. The warp test hit it at 40² with five scales,
+and now uses three. Section 3's warning is for this.
 
 ## 3. Phase 2: the per-scale table
 
