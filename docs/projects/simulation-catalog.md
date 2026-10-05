@@ -898,7 +898,21 @@ a hash of (seed, step).
 - **Look.** Crisper nested contours on the coarse ladder.
 
 Periodic boundary only; the default stays the fixed lattice so saved
-configs render as before, and every preset sets the shifted one.
+configs render as before.
+
+**Exact discs, 2026-10-04** (plan section 6c). `averaging` = "Exact
+discs" averages over true antialiased discs by FFT, the references' own
+method.
+- **How.** One forward and three inverse 2D FFTs a step for six scales,
+  each scale's activator-minus-inhibitor read straight from the result.
+- **Measured.** Exact on every cell against a CPU mirror, symmetry
+  included. Isotropic on the GPU (0.97 and 1.00 axes/diagonals on the
+  two test tables). 7.5 ms/step at 1080p against the pyramid's 4.4,
+  about 150 MB.
+- **Seen.** Distinct cells with nested detail, where the pyramid draws
+  contour bands.
+- **And it showed the shifted grid moves the lean rather than removing
+  it** (0.92 and 0.88), so the presets stay on the fixed pyramid.
 
 ---
 

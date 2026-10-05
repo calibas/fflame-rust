@@ -40,8 +40,10 @@ pub mod assembler;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod app_repro_test;
 pub mod colorings;
+pub mod fft;
 pub mod models;
 pub mod renderer;
+pub mod spectral;
 
 pub use renderer::SimRenderer;
 
@@ -327,6 +329,16 @@ impl ParamTable {
 /// Every model's table. Few models have one, so this is a list beside
 /// the registry rather than a field on every `ModelDef`.
 pub static PARAM_TABLES: &[&ParamTable] = &[&models::MCCABE_TABLE];
+
+/// The (activator, inhibitor) radii of `model`'s scales at these
+/// parameters, for the spectral stage, or `None` for a model it does not
+/// serve. McCabe is the only one.
+pub fn spectral_radii(model: &str, params: &std::collections::BTreeMap<String, f32>) -> Option<Vec<(f32, f32)>> {
+    match model {
+        "mccabe" => Some(models::mccabe_scale_radii(params)),
+        _ => None,
+    }
+}
 
 /// The table of `model`, if it has one.
 pub fn param_table(model: &str) -> Option<&'static ParamTable> {

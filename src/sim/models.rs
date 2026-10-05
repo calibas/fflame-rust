@@ -3350,6 +3350,31 @@ pub fn mccabe_table_from_ladder(params: &std::collections::BTreeMap<String, f32>
     out
 }
 
+/// Each live scale's (activator, inhibitor) radii, as the step uses
+/// them: what the spectral stage builds its discs from when the
+/// averaging is Exact discs (mccabe-multiscale plan, section 6b). The
+/// shader's own arithmetic -- the ladder's power of two times the base,
+/// the table's radius floored at a half cell.
+pub fn mccabe_scale_radii(params: &std::collections::BTreeMap<String, f32>) -> Vec<(f32, f32)> {
+    let get = |name: &str| -> f32 {
+        let def = MCCABE.parameters.iter().find(|p| p.name == name).map(|p| p.default).unwrap_or(0.0);
+        params.get(name).copied().filter(|v| v.is_finite()).unwrap_or(def)
+    };
+    let n = get("scales").round().clamp(1.0, 6.0) as u32;
+    let table = get("layout") >= 0.5;
+    (0..n)
+        .map(|i| {
+            if table {
+                let ra = get(&format!("s{i}_radius")).max(0.5);
+                (ra, ra * get(&format!("s{i}_ratio")))
+            } else {
+                let ra = get("base_radius") * (1u32 << i) as f32;
+                (ra, ra * get("ratio"))
+            }
+        })
+        .collect()
+}
+
 pub static MCCABE: ModelDef = ModelDef {
     name: "mccabe",
     display_name: "McCabe Multi-Scale",
@@ -3731,9 +3756,18 @@ pub static MCCABE: ModelDef = ModelDef {
             display_name: "Averaging",
             default: 0.0,
             min: 0.0,
-            max: 1.0,
-            tooltip: "How the averages are taken. Pyramid is the original: fast, but its                       fixed grid of texels leaves faint creases that patterns can lock onto,                       so a table whose coarse scales move fastest leans toward the grid                       axes. Shifted grid moves the pyramid's grid every step, which removes                       the lean at almost no cost, with slightly more motion from step to                       step. Wrap-around boundary only.",
-            choices: &["Pyramid", "Pyramid, shifted grid"],
+            max: 2.0,
+            tooltip: "How the averages are taken. Pyramid is the original: fast, but its \
+                      fixed grid of texels leaves faint creases that patterns can lock onto, \
+                      so a table whose coarse scales move fastest leans toward the grid \
+                      axes. Shifted grid moves the pyramid's grid every few steps, so \
+                      nothing locks onto it -- measured, that trades the axis lean for a \
+                      slight diagonal one. Exact discs averages over true discs by FFT, as \
+                      Reusser and Chau do: isotropic, and the references' own texture, \
+                      cells with nested detail, at 1.7x the step and ~150 MB at 1080p. \
+                      Shifted grid and Exact discs need the wrap-around boundary; a grid \
+                      whose size has a prime factor above 64 keeps the pyramid.",
+            choices: &["Pyramid", "Pyramid, shifted grid", "Exact discs"],
         },
     ],
     presets: &[
@@ -3748,7 +3782,6 @@ pub static MCCABE: ModelDef = ModelDef {
                 ("amount_min", 0.01),
                 ("symmetry", 0.0),
                 ("layout", 0.0),
-                ("averaging", 1.0),
                 ("memory", 0.0),
             ],
             // Measured on the prototype: the nested texture is present
@@ -3776,7 +3809,6 @@ pub static MCCABE: ModelDef = ModelDef {
                 ("amount_min", 0.01),
                 ("symmetry", 0.0),
                 ("layout", 0.0),
-                ("averaging", 1.0),
                 ("memory", 0.0),
             ],
             steps: 200,
@@ -3804,7 +3836,6 @@ pub static MCCABE: ModelDef = ModelDef {
                 ("symmetry", 0.0),
                 ("memory", 0.05),
                 ("layout", 0.0),
-                ("averaging", 1.0),
             ],
             steps: 200,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
@@ -3824,7 +3855,6 @@ pub static MCCABE: ModelDef = ModelDef {
                 ("amount_min", 0.01),
                 ("symmetry", 5.0),
                 ("layout", 0.0),
-                ("averaging", 1.0),
                 ("memory", 0.0),
             ],
             steps: 200,
@@ -3845,7 +3875,6 @@ pub static MCCABE: ModelDef = ModelDef {
             // rosette of 3-fold detail; isotropic by construction.
             params: &[
                 ("layout", 1.0),
-                ("averaging", 1.0),
                 ("memory", 0.0),
                 ("scales", 5.0),
                 ("s0_radius", 3.0), ("s0_ratio", 2.0), ("s0_amount", 0.05), ("s0_weight", 1.0), ("s0_symmetry", 3.0),
@@ -3875,7 +3904,6 @@ pub static MCCABE: ModelDef = ModelDef {
             // (mccabe-multiscale plan, section 6). With colour memory.
             params: &[
                 ("layout", 1.0),
-                ("averaging", 1.0),
                 ("memory", 0.05),
                 ("scales", 5.0),
                 ("s0_radius", 1.0), ("s0_ratio", 2.0), ("s0_amount", 0.05), ("s0_weight", 1.0), ("s0_symmetry", 0.0),
@@ -3894,6 +3922,26 @@ pub static MCCABE: ModelDef = ModelDef {
     ],
     wgsl: r#"
 const MC_TAU: f32 = 6.28318530718;
+
+// Exact discs: scale i's activator-minus-inhibitor at a position, from
+// the spectral stage, with the cyclic symmetry folded in as mc_avg folds
+// it. The rotation mean of a - b is the difference of the means.
+fn mc_diff(i: i32, pos: vec2<f32>, sym: i32) -> f32 {
+    if (sym < 2) {
+        return pyr_diff(i, pos);
+    }
+    let g = vec2<f32>(sim_grid());
+    let c = g * 0.5;
+    var acc = 0.0;
+    for (var k = 0; k < sym; k = k + 1) {
+        let a = MC_TAU * f32(k) / f32(sym);
+        let d = pos - c;
+        var q = vec2<f32>(cos(a) * d.x - sin(a) * d.y, sin(a) * d.x + cos(a) * d.y) + c;
+        q = q - g * floor(q / g);
+        acc = acc + pyr_diff(i, q);
+    }
+    return acc / f32(sym);
+}
 
 // An average of f over radius r at a base-cell position, with the
 // cyclic symmetry folded in: the mean over the n rotations of the
@@ -3933,11 +3981,30 @@ fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
     var best_var = 1.0e30;
     var best_dir = 0.0;
     var best_scale = 0.0;
+    let exact = pyr_exact();
     for (var i = 0; i < n; i = i + 1) {
         var v: f32;
         var up: bool;
         var amt: f32;
-        if (table) {
+        if (exact) {
+            // Exact discs (mccabe-multiscale plan, section 6b): a - b
+            // from the spectral stage, which built its discs from this
+            // scale's own radii -- no calibration, a radius is a radius.
+            var w = 1.0;
+            var sym_i = sym;
+            if (table) {
+                let o = 8u + 5u * u32(i);
+                amt = mparam(o + 2u);
+                w = mparam(o + 3u);
+                sym_i = i32(round(mparam(o + 4u)));
+            } else {
+                let t = select(0.0, f32(i) / f32(n - 1), n > 1);
+                amt = mix(amount, amount_min, t);
+            }
+            let d = w * mc_diff(i, pos, sym_i);
+            v = abs(d);
+            up = d > 0.0;
+        } else if (table) {
             let o = 8u + 5u * u32(i);
             let ra = max(mparam(o), 0.5);
             let rb = ra * mparam(o + 1u);

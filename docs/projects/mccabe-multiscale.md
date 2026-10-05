@@ -356,7 +356,8 @@ its features are 12–20% too small.
 - **Periodic only.** On any other boundary the period is 0.
 
 **Default stays Pyramid**, so saved configs and baselines render as
-before. Every McCabe preset now sets the shifted grid.
+before. *(Every preset was switched to the shifted grid here, then back:
+see section 6c.)*
 
 | gate | result |
 |---|---|
@@ -384,6 +385,125 @@ more steps a frame, so a moving lattice moves about once a frame.
 - The coarse ladder's nested contours are crisper shifted. The pinning
   was costing it structure as well as direction.
 - The coarse-fastest table's squarish blobs become a round labyrinth.
+
+## 6b. Plan: exact disc averages by FFT (2026-10-04)
+
+`averaging` = 2, "Exact discs". It is the references' own method:
+Reusser and Chau convolve by FFT. It fixes the disc-versus-Gaussian
+texture, and with no lattice it has no lean.
+
+**What is computed.** McCabe needs `a − b` per scale, never `a` and `b`
+apart: the variation is `|w(a − b)|`, the direction its sign. So scale
+`i` needs one field,
+
+```
+D_i = IFFT( FFT(f) · H_i ),   H_i = FFT(disc(r_a) − disc(r_b))
+```
+
+with antialiased discs (one-cell edge, as Reusser), each normalised to
+sum 1, centred on cell (0, 0) and wrapped. That kernel is symmetric, so
+`H_i` is real. Two scales' outputs are real, so they share one complex
+inverse: `IFFT(F·H_i + i·F·H_j) = D_i + i·D_j`. Six scales cost one
+forward and three inverse 2D FFTs a step. Symmetry reads `D_i` at the
+rotated positions, bilinearly. The pyramid is not built.
+
+**The FFT.**
+- **Algorithm.** Mixed-radix Stockham, out of place, one dispatch per
+  radix stage per axis, on `vec2<f32>` storage buffers.
+- **Radices.** 4, 2, 3, 5, and a general pass for any prime up to 64
+  (in-app grids follow the viewport, so 1920 × 1080 is normal).
+- **Fallback.** A grid with a larger prime factor falls back to the
+  pyramid, and the panel says so.
+- **Kernel spectra.** Made on the GPU with the same FFT, from the
+  spatial kernels, whenever the grid or a radius changes.
+- **Where the fields live.** The `D` fields go in an `Rgba32Float`
+  texture array, four scales a slice: a sampled texture adds nothing to
+  the step layout's storage-buffer count, which browsers limit.
+
+**Cost (estimated).**
+- Memory at 1080p: about 150 MB (spectrum, scratch, `H`, `D`).
+- Time: four 2D FFTs a step, about 50 dispatches. It is memory-bound;
+  the estimate is near the pyramid's 4 ms at 1080p, and it will be
+  measured.
+
+**Periodic only.** A circular convolution is exactly the periodic
+boundary. Any other boundary keeps the pyramid.
+
+**Order.**
+1. The FFT, against a CPU FFT (rustfft) at power-of-two, mixed and
+   prime sizes, both directions.
+2. The spectral stage, against direct disc sums on a small grid.
+3. McCabe reading it: a CPU mirror of a step with exact discs, batch
+   invariance, and the lean, look and cost measured against the shifted
+   pyramid.
+4. Presets and docs. The default stays Pyramid.
+
+### 6c. Built: exact discs, and what they showed about the shifted grid
+
+`averaging` = 2, "Exact discs", as planned in 6b.
+- **The FFT** is `src/sim/fft.rs`: Stockham, radices 2 to 5 written out
+  and any other prime up to 64 in a separate entry point (its array's
+  registers would otherwise be every stage's). Column passes give
+  neighbouring invocations neighbouring columns, so reads coalesce.
+- **The spectral stage** is `src/sim/spectral.rs`. The renderer owns
+  one `R32Float` array of difference fields, six slices per exact
+  layer, at step binding 18; `xform.w` carries a layer's first slice.
+- **Fallback.** A non-periodic boundary, or a grid with a prime factor
+  above 64, falls back to the pyramid, bit for bit.
+
+| gate | result |
+|---|---|
+| the FFT against rustfft, 8×8 to 1920×1080, prime and mixed sizes, both directions | worst 7.7e-7 of the largest output |
+| difference fields against a direct convolution, 40×36, a pair and a single | worst 4e-7 (relative ~1e-6) |
+| one exact step against a CPU mirror, plain and 3-fold symmetric | 2,304 of 2,304 cells exact, no ties |
+| batch invariance, 150 steps | bit-identical |
+| fallback on a 67×64 grid | bit-identical to the pyramid |
+| baselines at the default | 95/95 byte-identical; `sim-mccabe-exact` makes 96 |
+
+**One bug on the way.** The symmetric mirror first failed on 37 edge
+cells. The rotated reads near a seam used `((q % g) + g) % g`, which on
+this driver reads out of bounds at the top and left edges, exactly as
+`sim_wrap_sized`'s comment records from SmoothLife. It now goes
+through `sim_wrap_sized`.
+
+**Cost at 1080p**, five scales, best of five:
+- pyramid 4.40 ms/step;
+- shifted grid 4.47;
+- exact discs 7.53 (1.7×).
+
+Exact discs were 125 ms before the column passes coalesced and the
+general radix moved to its own entry point. Memory while on, at a 1080p
+grid: about 150 MB (spectra, difference fields, complex scratch).
+
+**The lean, all three on the GPU** (axes / diagonals, 1.0 isotropic):
+
+| table | seeds | pyramid | shifted grid | exact discs |
+|---|---|---|---|---|
+| coarse fastest | 32 | 1.08 ± 0.02 | 0.92 ± 0.02 | **0.97 ± 0.03** |
+| fine fastest | 16 | 0.95 ± 0.02 | 0.88 ± 0.01 | **1.00 ± 0.02** |
+
+**Exact discs are isotropic**, matching the CPU references (disc 0.99,
+Gaussian 0.96). **The shifted grid is not a fix.** It moves the lean
+rather than removing it:
+- on the coarse-fastest table, +0.11 from exact becomes −0.05;
+- on the fine-fastest table, −0.05 becomes −0.12.
+
+Every preset is a fine-fastest table, so the presets go back to the
+fixed pyramid they were tuned and inspected on.
+- **Shift plus a round kernel was tried too.** The 7-tap build kernel
+  of section 6, with the shift, gives 0.88 and 0.86, worse still. The
+  diagonal lean is not the kernel's.
+- **The likely reading, not proven.** Over random offsets, the bilinear
+  reads average into a square (separable) blur, which attenuates
+  diagonal wavelengths less.
+
+**Seen** (`output/mccabe_modes/`). Exact discs give a different
+character from any pyramid mode:
+- the coarse ladder at 2,000 steps is distinct cells with nested
+  detail, where the pyramid draws smooth contour bands;
+- fig. 14's mixed symmetry comes out as cleaner concentric rings.
+
+The cells are the look the paper's multi-scale figures describe.
 
 ## 7. Not in scope
 

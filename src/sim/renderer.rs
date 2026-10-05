@@ -467,6 +467,14 @@ pub struct SimRenderer {
     /// Steps between moves of a shifted pyramid lattice. See
     /// `LATTICE_SHIFT_EVERY`; settable for measurements.
     lattice_shift_every: u32,
+    /// Exact disc averages (mccabe-multiscale plan, section 6b): per user
+    /// layer, its spectral stage when its averaging is Exact discs and
+    /// the grid has a plan, and the first slice of its difference fields
+    /// in `diffs`, which every step bind group carries at binding 18.
+    spectral: Vec<Option<crate::sim::spectral::SpectralAverages>>,
+    exact_base: Vec<Option<u32>>,
+    diffs: (Texture, TextureView),
+    diffs_key: (u32, u32, u32),
     /// The coupling table (`SimCouplingGpu` x MAX_COUPLINGS).
     coupling_buffer: Buffer,
     /// The flame's transforms as layer maps, once `set_layer_transforms`
@@ -661,6 +669,10 @@ impl SimRenderer {
             kernel_lens: Vec::new(),
             layers: layers as u32,
             lattice_shift_every: LATTICE_SHIFT_EVERY,
+            spectral: Vec::new(),
+            exact_base: Vec::new(),
+            diffs: crate::sim::spectral::SpectralAverages::create_diffs(device, 1, 1, 1),
+            diffs_key: (1, 1, 1),
             coupling_buffer,
             layer_map: None,
             color_layers_buffer,
@@ -1465,6 +1477,11 @@ impl SimRenderer {
                 // The coupling table, declared only by a coupled
                 // config's step shaders.
                 storage_ro(17),
+                // Exact averages' difference fields (mccabe-multiscale
+                // plan, section 6b): a sampled array, so it adds nothing
+                // to the storage-buffer count browsers limit. A 1x1
+                // dummy where no layer has them.
+                sampled_field(18),
             ],
         });
         let agent_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -1755,8 +1772,15 @@ impl SimRenderer {
             },
             // y: set on the pyramid dispatch that builds level 1 from the
             // field. z: the lattice shift's period, 0 when fixed
-            // (mccabe-multiscale plan, section 6).
-            xform: [self.layer_rate(cfg, layer), 0.0, self.lattice_shift_period(cfg, layer) as f32, 0.0],
+            // (mccabe-multiscale plan, section 6). w: the first slice of
+            // the layer's exact difference fields plus one, 0 when it
+            // reads the pyramid (section 6b).
+            xform: [
+                self.layer_rate(cfg, layer),
+                0.0,
+                self.lattice_shift_period(cfg, layer) as f32,
+                self.exact_base.get(layer).copied().flatten().map_or(0.0, |b| (b + 1) as f32),
+            ],
         }
     }
 
@@ -1775,6 +1799,62 @@ impl SimRenderer {
                 p.kernel_offset = 0;
                 p.warp_mask = if p.warp_mask[0] > 0.0 { [1.0; 4] } else { [0.0; 4] };
                 p
+            }
+        }
+    }
+
+    /// Whether a layer asks for exact disc averages and can have them: a
+    /// model the spectral stage serves, `averaging` = 2, and the periodic
+    /// boundary a circular convolution is. The grid's own FFT plan is the
+    /// last condition, checked when the stage is made.
+    fn wants_exact(cfg: &SimConfig, layer: usize) -> bool {
+        let m = model_or_default(cfg.layer_model_name(layer));
+        let params = cfg.layer_model_params(layer);
+        m.has(ModelFeature::NeedsPyramid)
+            && params.get("averaging").is_some_and(|v| v.round() == 2.0)
+            && cfg.boundary == crate::config::sim::SimBoundary::Periodic
+            && crate::sim::spectral_radii(m.name, params).is_some()
+    }
+
+    /// Make or drop each layer's spectral stage, the difference array
+    /// they share, and the stages' disc spectra for the layers' current
+    /// radii. A layer whose grid has no FFT plan, or whose buffers would
+    /// pass the device's binding limit, keeps reading the pyramid.
+    fn ensure_spectral(&mut self, device: &Device, queue: &Queue, cfg: &SimConfig) {
+        use crate::sim::spectral::{SpectralAverages, MAX_SPECTRAL_SCALES};
+        let layers = cfg.layer_count();
+        let wanted: Vec<usize> = (0..layers).filter(|&l| Self::wants_exact(cfg, l)).collect();
+        let slices = (wanted.len() * MAX_SPECTRAL_SCALES) as u32;
+        let key = if slices > 0 { (self.grid_w, self.grid_h, slices) } else { (1, 1, 1) };
+        if key != self.diffs_key {
+            self.diffs = SpectralAverages::create_diffs(device, key.0, key.1, key.2);
+            self.diffs_key = key;
+            // Every step bind group carries the array.
+            self.step_bind_groups = None;
+            self.pyramid_bind_groups = None;
+        }
+        self.spectral.resize_with(layers, || None);
+        self.spectral.truncate(layers);
+        self.exact_base = vec![None; layers];
+        for l in 0..layers {
+            let Some(q) = wanted.iter().position(|&w| w == l) else {
+                self.spectral[l] = None;
+                continue;
+            };
+            let base = (q * MAX_SPECTRAL_SCALES) as u32;
+            let fits = self.spectral[l]
+                .as_ref()
+                .is_some_and(|s| s.width == self.grid_w && s.height == self.grid_h && s.serves(l as u32, base));
+            if !fits {
+                self.spectral[l] = SpectralAverages::new(device, self.grid_w, self.grid_h, l as u32, base);
+            }
+            let (fv, dv) = (&self.field_view, &self.diffs.1);
+            if let Some(s) = self.spectral[l].as_mut() {
+                s.bind(device, [&fv[0], &fv[1]], dv);
+                let m = model_or_default(cfg.layer_model_name(l));
+                let radii = crate::sim::spectral_radii(m.name, cfg.layer_model_params(l)).unwrap_or_default();
+                s.set_radii(device, queue, &radii);
+                self.exact_base[l] = Some(base);
             }
         }
     }
@@ -2275,6 +2355,7 @@ impl SimRenderer {
         entries.push(BindGroupEntry { binding: 14, resource: self.minmax_buffer.as_entire_binding() });
         entries.push(BindGroupEntry { binding: 13, resource: self.deposit_buffer.as_entire_binding() });
         entries.push(BindGroupEntry { binding: 17, resource: self.coupling_buffer.as_entire_binding() });
+        entries.push(BindGroupEntry { binding: 18, resource: BindingResource::TextureView(&self.diffs.1) });
         entries
     }
 
@@ -2464,6 +2545,8 @@ impl SimRenderer {
         self.write_param_arrays(queue, model, coloring, cfg);
 
         self.ensure_agents(device, cfg);
+        // Before the bind groups: a new difference array drops them.
+        self.ensure_spectral(device, queue, cfg);
         self.ensure_step_bind_groups(device);
         self.ensure_stage_bind_groups(device);
         self.ensure_flame_bind_group(device);
@@ -2535,7 +2618,8 @@ impl SimRenderer {
         let octaves = cfg.warp.mode == crate::config::sim::SimWarpMode::Octaves;
         if self.steps_per_submit == FIRST_SUBMIT {
             let dispatches: u32 =
-                (max_stages as u32 + u32::from(wants_minmax) + u32::from(warping)) * slices as u32;
+                (max_stages as u32 + u32::from(wants_minmax) + u32::from(warping)) * slices as u32
+                    + self.spectral.iter().flatten().map(|s| s.dispatches() as u32).sum::<u32>();
             self.steps_per_submit = (FIRST_SUBMIT * 2 / dispatches.max(1)).clamp(1, FIRST_SUBMIT);
         }
         // The ring holds (step, layer, variant) slots.
@@ -2633,7 +2717,9 @@ impl SimRenderer {
                             .expect("built by ensure_stage_bind_groups");
                         pass.set_pipeline(pyr);
                         for l in 0..layers {
-                            if !models[l].has(ModelFeature::NeedsPyramid) {
+                            // A layer with exact averages reads its
+                            // spectral stage instead.
+                            if !models[l].has(ModelFeature::NeedsPyramid) || self.exact_base[l].is_some() {
                                 continue;
                             }
                             for (lv, per_side) in pgroups.iter().enumerate() {
@@ -2642,6 +2728,15 @@ impl SimRenderer {
                                 let (lx, ly) = level_dispatch[lv];
                                 pass.dispatch_workgroups(lx, ly, 1);
                             }
+                        }
+                    }
+                    // A layer averaging over exact discs gets its
+                    // difference fields here instead, from the same field
+                    // the pyramid would have been built from
+                    // (mccabe-multiscale plan, section 6b).
+                    for (l, stage) in self.spectral.iter().enumerate() {
+                        if let (Some(s), Some(_)) = (stage, self.exact_base.get(l).copied().flatten()) {
+                            s.encode(&mut pass, self.current);
                         }
                     }
                     // groups[src] reads field[src] and writes
