@@ -75,9 +75,11 @@ struct SimCouplingGpu {
 pub const MODEL_PARAM_SLOTS: usize = 64;
 
 /// The block's last slots are the renderer's, not the model's: the
-/// layer's memory slice count, then its first slice (mccabe-multiscale
-/// plan, section 2). Read by `sim_mem_count` / `sim_mem_base`.
-pub const RESERVED_PARAM_SLOTS: usize = 2;
+/// layer's first scratch slice or 0 (plan section 9, read by
+/// `sim_scratch_base`), then its memory slice count and first slice
+/// (mccabe-multiscale plan, section 2, read by `sim_mem_count` /
+/// `sim_mem_base`).
+pub const RESERVED_PARAM_SLOTS: usize = 3;
 
 /// Steps between moves of a shifted pyramid lattice (mccabe-multiscale
 /// plan, section 6). Measured on the coarse-fastest table at 512^2, 32
@@ -93,44 +95,73 @@ pub const LATTICE_SHIFT_EVERY: u32 = 4;
 /// `MAX_STEPS_PER_SUBMIT`, and a pyramid has at most eight levels.
 const LEVEL_RING_SLOTS: u32 = MAX_STEPS_PER_SUBMIT * MAX_PYRAMID_LEVELS;
 
-/// Where each layer's MEMORY lives (mccabe-multiscale plan, section 2):
-/// per user layer its (first slice, slice count), and the field's
-/// total slice count. Memory slices come after every user layer, so
-/// the indices couplings, the colour stack and `gather` use are the
-/// user's own whatever memory exists. A layer without memory is
-/// (0, 0).
-fn memory_layout(cfg: &SimConfig) -> (Vec<(u32, u32)>, u32) {
-    let n = cfg.layer_count() as u32;
-    let mut next = n;
-    let per_layer = (0..cfg.layer_count())
-        .map(|l| {
-            let count = model_or_default(cfg.layer_model_name(l)).memory_slices(cfg.layer_model_params(l));
+/// Where each layer's internal slices live: per user layer its MEMORY
+/// (mccabe-multiscale plan, section 2) and its SCRATCH (section 9), each
+/// as (first slice, slice count), and the field's total slice count.
+/// Memory comes after every user layer, so the indices couplings, the
+/// colour stack and `gather` use are the user's own whatever memory
+/// exists; scratch comes after all memory, so turning a measure pass on
+/// or off moves no slice that persists. A layer without either has
+/// (0, 0) for it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SliceLayout {
+    memory: Vec<(u32, u32)>,
+    scratch: Vec<(u32, u32)>,
+    total: u32,
+}
+
+impl SliceLayout {
+    fn of(cfg: &SimConfig) -> Self {
+        let n = cfg.layer_count();
+        let mut next = n as u32;
+        let mut take = |count: u32| {
             let base = if count > 0 { next } else { 0 };
             next += count;
             (base, count)
-        })
-        .collect();
-    (per_layer, next)
+        };
+        let memory: Vec<(u32, u32)> = (0..n)
+            .map(|l| take(model_or_default(cfg.layer_model_name(l)).memory_slices(cfg.layer_model_params(l))))
+            .collect();
+        let scratch: Vec<(u32, u32)> = (0..n)
+            .map(|l| take(model_or_default(cfg.layer_model_name(l)).scratch_slices(cfg.layer_model_params(l))))
+            .collect();
+        SliceLayout { memory, scratch, total: next }
+    }
+
+    /// The slices whose contents carry from one step to the next: the
+    /// user's layers and their memory. Scratch is rewritten every step
+    /// before anything reads it.
+    fn persistent(&self) -> u32 {
+        self.memory.len() as u32 + self.memory.iter().map(|&(_, c)| c).sum::<u32>()
+    }
+
+    /// What slice `s` of the field is.
+    fn role(&self, s: usize) -> SliceRole {
+        if s < self.memory.len() {
+            return SliceRole::Layer(s);
+        }
+        let s32 = s as u32;
+        for (owner, &(base, count)) in self.memory.iter().enumerate() {
+            if count > 0 && s32 >= base && s32 < base + count {
+                return SliceRole::Memory { owner, k: s32 - base };
+            }
+        }
+        for (owner, &(base, count)) in self.scratch.iter().enumerate() {
+            if count > 0 && s32 >= base && s32 < base + count {
+                return SliceRole::Scratch { owner };
+            }
+        }
+        unreachable!("slice {s} is past the field")
+    }
 }
 
-/// What slice `s` of the field is: a user layer, or slice `k` of user
-/// layer `owner`'s memory.
+/// What a slice of the field is: a user layer, slice `k` of user layer
+/// `owner`'s memory, or one of its scratch slices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SliceRole {
     Layer(usize),
     Memory { owner: usize, k: u32 },
-}
-
-fn slice_role(layout: &[(u32, u32)], s: usize) -> SliceRole {
-    if s < layout.len() {
-        return SliceRole::Layer(s);
-    }
-    for (owner, &(base, count)) in layout.iter().enumerate() {
-        if count > 0 && (s as u32) >= base && (s as u32) < base + count {
-            return SliceRole::Memory { owner, k: s as u32 - base };
-        }
-    }
-    unreachable!("slice {s} is past the field")
+    Scratch { owner: usize },
 }
 use crate::sim::{assembler, coloring_or_default, model_or_default, pyramid_levels, ModelDef, ModelFeature, SimColoringDef, MAX_KERNEL_RADIUS, MAX_PYRAMID_LEVELS, MINMAX_RING, MAX_AGENTS};
 #[allow(unused_imports)]
@@ -331,7 +362,7 @@ impl SeedIdentity {
             boundary: cfg.boundary,
             init: cfg.init,
             seed: cfg.seed,
-            memory: memory_layout(cfg).0.iter().map(|&(_, c)| c).collect(),
+            memory: SliceLayout::of(cfg).memory.iter().map(|&(_, c)| c).collect(),
         }
     }
 }
@@ -464,6 +495,9 @@ pub struct SimRenderer {
     kernel_lens: Vec<u32>,
     /// How many slices the field arrays carry.
     layers: u32,
+    /// How many of them persist from step to step
+    /// ([`SliceLayout::persistent`]).
+    persistent: u32,
     /// Steps between moves of a shifted pyramid lattice. See
     /// `LATTICE_SHIFT_EVERY`; settable for measurements.
     lattice_shift_every: u32,
@@ -554,8 +588,9 @@ pub struct SimRenderer {
 impl SimRenderer {
     pub fn new(device: &Device, cfg: &SimConfig, out_w: u32, out_h: u32) -> Self {
         let (grid_w, grid_h) = Self::allocatable_grid(cfg, out_w, out_h);
-        // Every slice: the user's layers and their memory.
-        let layers = memory_layout(cfg).1 as usize;
+        // Every slice: the user's layers, their memory and their scratch.
+        let layout = SliceLayout::of(cfg);
+        let layers = layout.total as usize;
         let (field, field_view) = Self::create_field_pair(device, grid_w, grid_h, layers as u32);
         let (output_texture, output_view) = Self::create_output(device, out_w, out_h);
 
@@ -668,6 +703,7 @@ impl SimRenderer {
             kernel_offsets: Vec::new(),
             kernel_lens: Vec::new(),
             layers: layers as u32,
+            persistent: layout.persistent(),
             lattice_shift_every: LATTICE_SHIFT_EVERY,
             spectral: Vec::new(),
             exact_base: Vec::new(),
@@ -873,24 +909,50 @@ impl SimRenderer {
     /// Whether this frame builds a distance field: the matte's edge
     /// asked for one, or the colouring reads one. Either way the matte
     /// must be on -- it is what says which cells are the figure.
-    /// A config with a different number of slices -- layers, or
-    /// memory -- needs field arrays with that many; the state cannot
-    /// survive, so it reseeds.
-    fn ensure_layers(&mut self, device: &Device, cfg: &SimConfig) {
-        let want = memory_layout(cfg).1;
+    /// A config with a different number of slices -- layers, memory or
+    /// scratch -- needs field arrays with that many. When only the
+    /// scratch changed, the slices that persist are where they were, so
+    /// they are copied across and the run goes on (a measure pass turned
+    /// on mid-run starts measuring at the next step). Otherwise the state
+    /// cannot survive, so it reseeds.
+    fn ensure_layers(&mut self, device: &Device, queue: &Queue, cfg: &SimConfig) {
+        let layout = SliceLayout::of(cfg);
+        let want = layout.total;
         if want == self.layers {
             return;
         }
         let (f, fv) = Self::create_field_pair(device, self.grid_w, self.grid_h, want);
+        let keep = layout.persistent();
+        if keep == self.persistent && !self.needs_seed {
+            let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Sim Keep Field") });
+            enc.copy_texture_to_texture(
+                TexelCopyTextureInfo {
+                    texture: &self.field[self.current],
+                    mip_level: 0,
+                    origin: Origin3d::ZERO,
+                    aspect: TextureAspect::All,
+                },
+                TexelCopyTextureInfo {
+                    texture: &f[self.current],
+                    mip_level: 0,
+                    origin: Origin3d::ZERO,
+                    aspect: TextureAspect::All,
+                },
+                Extent3d { width: self.grid_w, height: self.grid_h, depth_or_array_layers: keep },
+            );
+            queue.submit(std::iter::once(enc.finish()));
+        } else {
+            self.current = 0;
+            self.needs_seed = true;
+        }
         self.field = f;
         self.field_view = fv;
         self.layers = want;
-        self.current = 0;
+        self.persistent = keep;
         self.step_bind_groups = None;
         self.pyramid_bind_groups = None;
         self.reduce_bind_groups = None;
         self.agent_bind_groups = None;
-        self.needs_seed = true;
     }
 
     fn wants_sdf(cfg: &SimConfig) -> bool {
@@ -1638,7 +1700,7 @@ impl SimRenderer {
             layer_steps: models.iter().map(|m| lookup_steps(m.name)).collect(),
             mem_seed: models
                 .iter()
-                .any(|m| m.has(ModelFeature::Memory))
+                .any(|m| m.has(ModelFeature::Memory) || m.measure.is_some())
                 .then(|| pipeline("Sim Memory Seed", &seed_layout, &make("Sim Memory Seed", &assembler::assemble_seed_zero()))),
             agent_layer,
             // Same layout as a step: it reads binding 4 and writes 3,
@@ -1789,10 +1851,11 @@ impl SimRenderer {
     /// the memory travels with the pattern it remembers -- on every
     /// channel when the owner's warp moves its state (`.x`), on none
     /// when it does not -- and no kernel, which it never reads.
-    fn params_for_slice(&self, cfg: &SimConfig, step_index: u32, layout: &[(u32, u32)], s: usize) -> SimParamsGpu {
-        match slice_role(layout, s) {
+    fn params_for_slice(&self, cfg: &SimConfig, step_index: u32, layout: &SliceLayout, s: usize) -> SimParamsGpu {
+        match layout.role(s) {
             SliceRole::Layer(l) => self.params_for_layer(cfg, step_index, l),
-            SliceRole::Memory { owner, .. } => {
+            // Scratch is never dispatched; its slot is filled alike.
+            SliceRole::Memory { owner, .. } | SliceRole::Scratch { owner } => {
                 let mut p = self.params_for_layer(cfg, step_index, owner);
                 p.layer = s as u32;
                 p.kernel_radius = 0;
@@ -1988,9 +2051,9 @@ impl SimRenderer {
     /// in the batch the last step's index.
     fn write_params_ring(&self, queue: &Queue, cfg: &SimConfig, start: u32, count: u32) {
         let stride = self.params_stride as usize;
-        // One slot pair per SLICE: the user's layers, then memory.
-        let (layout, slices) = memory_layout(cfg);
-        let layers = slices as usize;
+        // One slot pair per SLICE: the user's layers, memory, scratch.
+        let layout = SliceLayout::of(cfg);
+        let layers = layout.total as usize;
         let mut bytes = vec![0u8; stride * count as usize * layers * 2];
         for i in 0..count {
             for l in 0..layers {
@@ -2047,7 +2110,7 @@ impl SimRenderer {
         // buffer never needs resizing; the shader indexes its own
         // layer's block.
         let layers = cfg.layer_count();
-        let (memory, _) = memory_layout(cfg);
+        let layout = SliceLayout::of(cfg);
         let mut mp: Vec<f32> = Vec::with_capacity(MODEL_PARAM_SLOTS * MAX_LAYERS);
         for l in 0..layers {
             let m = model_or_default(cfg.layer_model_name(l));
@@ -2060,9 +2123,11 @@ impl SimRenderer {
                 MODEL_PARAM_SLOTS - RESERVED_PARAM_SLOTS
             );
             block.resize(MODEL_PARAM_SLOTS, 0.0);
-            // The reserved end: the memory's slice count and first
-            // slice, exact in f32 at any count the field can have.
-            let (base, count) = memory[l];
+            // The reserved end: the scratch's first slice (0 when there
+            // is none), then the memory's slice count and first slice,
+            // exact in f32 at any count the field can have.
+            let (base, count) = layout.memory[l];
+            block[MODEL_PARAM_SLOTS - 3] = layout.scratch[l].0 as f32;
             block[MODEL_PARAM_SLOTS - 2] = count as f32;
             block[MODEL_PARAM_SLOTS - 1] = base as f32;
             mp.extend_from_slice(&block);
@@ -2367,7 +2432,7 @@ impl SimRenderer {
     /// pair (seed, step_index) is the state's identity, and a reseed
     /// starts a new run.
     pub fn seed(&mut self, device: &Device, queue: &Queue, cfg: &SimConfig) {
-        self.ensure_layers(device, cfg);
+        self.ensure_layers(device, queue, cfg);
         self.ensure_pipelines(device, cfg);
         self.ensure_pyramid(device, cfg);
         // `ensure_agents` may set `needs_seed`; this IS the seed, so
@@ -2420,13 +2485,14 @@ impl SimRenderer {
                 timestamp_writes: None,
             });
             let (gx, gy) = Self::dispatch_size(self.grid_w, self.grid_h);
-            let (layout, slices) = memory_layout(cfg);
+            let layout = SliceLayout::of(cfg);
+            let slices = layout.total;
             for s in 0..slices as usize {
-                match slice_role(&layout, s) {
+                match layout.role(s) {
                     SliceRole::Layer(l) => pass.set_pipeline(&p.layer_seeds[l]),
-                    SliceRole::Memory { .. } => {
-                        pass.set_pipeline(p.mem_seed.as_ref().expect("a model with memory builds it"))
-                    }
+                    SliceRole::Memory { .. } | SliceRole::Scratch { .. } => pass.set_pipeline(
+                        p.mem_seed.as_ref().expect("a model with memory or a measure pass builds it"),
+                    ),
                 }
                 // Slot (0, s, 0) is 2s whatever the slice count.
                 pass.set_bind_group(0, &bg, &[self.ring_slot(0, s, 0, slices as usize) * stride]);
@@ -2539,7 +2605,7 @@ impl SimRenderer {
         }
         self.ensure_pipelines(device, cfg);
         self.ensure_pyramid(device, cfg);
-        self.ensure_layers(device, cfg);
+        self.ensure_layers(device, queue, cfg);
         let model = model_or_default(cfg.layer_model_name(0));
         let coloring = coloring_or_default(&cfg.coloring);
         self.write_param_arrays(queue, model, coloring, cfg);
@@ -2556,8 +2622,8 @@ impl SimRenderer {
         let layers = cfg.layer_count();
         // Every slice of the field, memory included: each stage writes
         // all of them, and the uniform ring holds a slot pair for each.
-        let (memory, slices) = memory_layout(cfg);
-        let slices = slices as usize;
+        let layout = SliceLayout::of(cfg);
+        let slices = layout.total as usize;
         let models = layer_models(cfg);
         let wants_minmax = models.iter().any(|m| m.has(ModelFeature::NeedsMinMax));
         // Per layer, its passes in order with their repeats unrolled:
@@ -2570,6 +2636,10 @@ impl SimRenderer {
                 let params = cfg.layer_model_params(l);
                 let mut v = Vec::new();
                 for n in 0..m.passes {
+                    // A measure pass that is off is not a stage at all.
+                    if !m.runs_pass(n, params) {
+                        continue;
+                    }
                     let rep = match m.repeat {
                         Some((idx, name)) if idx == n => m
                             .parameters
@@ -2670,6 +2740,10 @@ impl SimRenderer {
                     if warp_now {
                         pass.set_pipeline(&p.warp);
                         for l in 0..slices {
+                            // Scratch is rewritten before it is read.
+                            if matches!(layout.role(l), SliceRole::Scratch { .. }) {
+                                continue;
+                            }
                             pass.set_bind_group(0, &groups[self.current], &[slot(l, 0) * stride]);
                             pass.dispatch_workgroups(gx, gy, 1);
                         }
@@ -2680,9 +2754,11 @@ impl SimRenderer {
                     // carried across. One stage, one flip.
                     if let (Some(lw), Some(fbg)) = (p.layer_warp.as_ref(), flame_bg) {
                         for l in 0..slices {
-                            // A memory slice moves at its owner's rate.
-                            let rate_of = match slice_role(&memory, l) {
+                            // A memory slice moves at its owner's rate;
+                            // scratch is rewritten before it is read.
+                            let rate_of = match layout.role(l) {
                                 SliceRole::Layer(o) | SliceRole::Memory { owner: o, .. } => o,
+                                SliceRole::Scratch { .. } => continue,
                             };
                             if self.layer_rate(cfg, rate_of) > 0.0 {
                                 pass.set_pipeline(lw);
@@ -2744,7 +2820,7 @@ impl SimRenderer {
                     // ping-pong. Every stage writes every layer.
                     for stage in 0..max_stages {
                         for l in 0..slices {
-                            match slice_role(&memory, l) {
+                            match layout.role(l) {
                                 SliceRole::Layer(l) => match layer_stages[l].get(stage) {
                                     Some(&n) if cfg.layer_enabled(l) => {
                                         pass.set_pipeline(&p.layer_steps[l][n]);
@@ -2769,6 +2845,12 @@ impl SimRenderer {
                                     pass.set_pipeline(&p.warp);
                                     pass.set_bind_group(0, &groups[self.current], &[slot(l, VARIANT_COPY) * stride]);
                                 }
+                                // The measure pass writes the scratch and
+                                // the passes after it read it from the
+                                // side it was written to, so no stage
+                                // carries it: a copy-through in the
+                                // measure's own stage would overwrite it.
+                                SliceRole::Scratch { .. } => continue,
                             }
                             pass.dispatch_workgroups(gx, gy, 1);
                         }

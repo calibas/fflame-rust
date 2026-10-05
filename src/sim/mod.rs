@@ -202,6 +202,16 @@ pub enum ModelFeature {
 /// Internal slices a layer's memory takes when it is on: eight floats.
 pub const MEMORY_SLICES: u32 = 2;
 
+/// A model's measure pass: see [`ModelDef::measure`].
+#[derive(Clone, Copy, Debug)]
+pub struct MeasurePass {
+    /// The parameter that turns it on: the pass runs, and the scratch
+    /// exists, while it is above 0.
+    pub param: &'static str,
+    /// Scratch slices, four channels each.
+    pub slices: u32,
+}
+
 /// A model's agent stage.
 ///
 /// The agents are the state: they persist across steps, they move
@@ -620,6 +630,18 @@ pub struct ModelDef {
     /// not something a shader can be compiled for. Capped at
     /// [`MAX_INNER_ITERATIONS`].
     pub repeat: Option<(u32, &'static str)>,
+    /// A MEASURE pass, run only while it is wanted (mccabe-multiscale
+    /// plan, section 9). Pass 0 writes internal SCRATCH slices that the
+    /// passes after it read at any cell -- a cross-pass buffer wider than
+    /// a spare channel -- and runs only while the named parameter is
+    /// above 0. Off, the step is the passes after it alone and the
+    /// scratch is not allocated, so a model pays nothing for a measure
+    /// it is not using.
+    ///
+    /// McCabe's variation radius is the reason: it averages each scale's
+    /// variation over a disc, so the step needs every scale's variation
+    /// at its neighbours, which only a pass before it can have written.
+    pub measure: Option<MeasurePass>,
     /// Largest `dt` the explicit scheme is stable at, for the DEFAULT
     /// diffusion rates. Measured per model (see each model's note); the
     /// reaction terms usually bind before diffusion does.
@@ -770,6 +792,30 @@ impl ModelDef {
         let def = self.parameters.iter().find(|p| p.name == "memory").map(|p| p.default).unwrap_or(0.0);
         let v = params.get("memory").copied().filter(|v| v.is_finite()).unwrap_or(def);
         if v > 0.0 { MEMORY_SLICES } else { 0 }
+    }
+
+    /// Whether this model's measure pass runs at these parameters.
+    pub fn measuring(&self, params: &std::collections::BTreeMap<String, f32>) -> bool {
+        let Some(m) = self.measure else { return false };
+        let def = self.parameters.iter().find(|p| p.name == m.param).map(|p| p.default).unwrap_or(0.0);
+        params.get(m.param).copied().filter(|v| v.is_finite()).unwrap_or(def) > 0.0
+    }
+
+    /// Scratch slices this layer takes at these parameters: the measure
+    /// pass's while it runs, else none. Not part of what a run is: the
+    /// measure pass rewrites them every step before anything reads them,
+    /// so the renderer keeps the field when only they change.
+    pub fn scratch_slices(&self, params: &std::collections::BTreeMap<String, f32>) -> u32 {
+        match self.measure {
+            Some(m) if self.measuring(params) => m.slices,
+            _ => 0,
+        }
+    }
+
+    /// Whether pass `pass` runs at these parameters: all of them, but a
+    /// measure pass only while it is on.
+    pub fn runs_pass(&self, pass: u32, params: &std::collections::BTreeMap<String, f32>) -> bool {
+        pass != 0 || self.measure.is_none() || self.measuring(params)
     }
 
     /// Parameter values in declaration order, config overriding the

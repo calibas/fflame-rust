@@ -2281,6 +2281,33 @@ fn mccabe_matches_a_cpu_mirror() {
     };
     const N: usize = 64;
     let cfg = mccabe_config(N as u32);
+    pyramid_mirror_one_step(&device, &queue, &cfg);
+}
+
+/// The variation radius (plan section 9's P3) through the pyramid, one
+/// step against the CPU: the measure pass's variations from the CPU
+/// pyramid, summed over the disc, then the argmin. Plain, and with
+/// 3-fold symmetry, which the measure pass folds in before the disc.
+#[test]
+fn mccabe_variation_radius_matches_a_cpu_mirror() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 64;
+    for (rv, sym) in [(2.0f32, 0.0f32), (1.5, 3.0)] {
+        let mut cfg = mccabe_config(N as u32);
+        cfg.model_params.insert("variation".into(), rv);
+        cfg.model_params.insert("symmetry".into(), sym);
+        pyramid_mirror_one_step(&device, &queue, &cfg);
+    }
+}
+
+fn pyramid_mirror_one_step(device: &Device, queue: &Queue, cfg: &SimConfig) {
+    let (device, queue, cfg) = (device.clone(), queue.clone(), cfg.clone());
+    const N: usize = 64;
+    let rv = cfg.model_params.get("variation").copied().unwrap_or(0.0);
+    let sym = cfg.model_params.get("symmetry").copied().unwrap_or(0.0).round() as i32;
     let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
     r.seed(&device, &queue, &cfg);
     let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
@@ -2330,47 +2357,54 @@ fn mccabe_matches_a_cpu_mirror() {
     };
     let level_for = |r: f32| (0.55f32 * r).max(1.0).log2();
 
-    let lo = f0.iter().cloned().fold(f32::INFINITY, f32::min);
-    let hi = f0.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
     let (n_scales, base, ratio, amount, amount_min) = (5usize, 1.0f32, 2.0f32, 0.05f32, 0.01f32);
-    let (mut exact, mut ties, mut other) = (0usize, 0usize, 0usize);
-    let mut worst_exact = 0.0f32;
-    for y in 0..N {
-        for x in 0..N {
-            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
-            let mut best_var = f32::MAX;
-            let mut best_dir = 0.0f32;
-            for i in 0..n_scales {
-                let ra = base * (1u32 << i) as f32;
-                let rb = ra * ratio;
-                let act = sample(level_for(ra), px, py);
-                let inh = sample(level_for(rb), px, py);
-                let v = (act - inh).abs();
-                let t = i as f32 / (n_scales - 1) as f32;
-                let amt = amount + (amount_min - amount) * t;
-                if v < best_var {
-                    best_var = v;
-                    best_dir = if act > inh { amt } else { -amt };
-                }
-            }
-            let f = (f0[y * N + x] - lo) / (hi - lo).max(1e-6) * 2.0 - 1.0;
-            let want = f + best_dir;
-            let d = (want - got[y * N + x][0]).abs();
-            if d < 1e-4 {
-                exact += 1;
-                worst_exact = worst_exact.max(d);
-            } else if d < 0.2 {
-                // A different scale fired: the difference is the gap
-                // between two amounts.
-                ties += 1;
-            } else {
-                other += 1;
-            }
+    // An average with the symmetry folded in, as mc_avg folds it: the
+    // mean over the rotations of the position about the grid centre.
+    let avg = |r: f32, px: f32, py: f32| -> f32 {
+        if sym < 2 {
+            return sample(level_for(r), px, py);
         }
-    }
+        let g = N as f32;
+        let mut acc = 0.0;
+        for k in 0..sym {
+            let a = 6.28318530718f32 * k as f32 / sym as f32;
+            let (dx, dy) = (px - g * 0.5, py - g * 0.5);
+            let mut qx = a.cos() * dx - a.sin() * dy + g * 0.5;
+            let mut qy = a.sin() * dx + a.cos() * dy + g * 0.5;
+            qx -= g * (qx / g).floor();
+            qy -= g * (qy / g).floor();
+            acc += sample(level_for(r), qx, qy);
+        }
+        acc / sym as f32
+    };
+    // Each scale's signed variation, a - b, at every cell.
+    let s: Vec<Vec<f64>> = (0..n_scales)
+        .map(|i| {
+            let ra = base * (1u32 << i) as f32;
+            let rb = ra * ratio;
+            (0..N * N)
+                .map(|c| {
+                    let (px, py) = ((c % N) as f32 + 0.5, (c / N) as f32 + 0.5);
+                    (avg(ra, px, py) - avg(rb, px, py)) as f64
+                })
+                .collect()
+        })
+        .collect();
+    let amounts: Vec<f32> = (0..n_scales)
+        .map(|i| amount + (amount_min - amount) * (i as f32 / (n_scales - 1) as f32))
+        .collect();
+    let choice = mccabe_cpu_choice(&s, N, rv, &amounts);
+    let (exact, ties, other) = mccabe_agreement(&f0, &got, &choice);
+    // Not trivially: with the radius on, its choices are not the cell's.
+    let moved = if rv > 0.0 {
+        let alone = mccabe_cpu_choice(&s, N, 0.0, &amounts);
+        choice.iter().zip(&alone).filter(|(a, b)| a.0 != b.0).count()
+    } else {
+        0
+    };
     println!(
-        "McCabe vs CPU mirror: {exact} cells match (worst {worst_exact:.2e}), {ties} chose a \
-         different scale at a tie, {other} disagree outright"
+        "McCabe (variation {rv}, symmetry {sym}) vs CPU mirror: {exact} cells match, {ties} chose a \
+         different scale at a tie, {other} disagree outright; the radius changed the winner at {moved}"
     );
     assert_eq!(other, 0, "{other} cells disagree by more than any amount difference");
     assert!(
@@ -2378,6 +2412,70 @@ fn mccabe_matches_a_cpu_mirror() {
         "{ties} of {} cells picked a different scale -- far more than rounding ties",
         N * N
     );
+    if rv > 0.0 {
+        assert!(moved * 10 > N * N, "the radius changed only {moved} winners");
+    }
+}
+
+/// McCabe's argmin on the CPU, with the variation radius (plan section
+/// 9's P3): per cell, the scale whose |S| -- its signed variation
+/// w(a - b) -- summed over the antialiased disc of radius `rv` is least,
+/// stepping by its amount towards the sign of the cell's own S. Periodic.
+/// `rv` = 0 is the cell alone. `s[i]` is scale i's S on an `n` x `n`
+/// grid; returns each cell's (scale, signed step).
+fn mccabe_cpu_choice(s: &[Vec<f64>], n: usize, rv: f32, amounts: &[f32]) -> Vec<(usize, f32)> {
+    let reach = (rv + 0.5).floor() as i64;
+    let mut taps = Vec::new();
+    for dy in -reach..=reach {
+        for dx in -reach..=reach {
+            let w = (rv + 0.5 - ((dx * dx + dy * dy) as f32).sqrt()).clamp(0.0, 1.0);
+            if w > 0.0 {
+                taps.push((dx, dy, w as f64));
+            }
+        }
+    }
+    (0..n * n)
+        .map(|c| {
+            let (x, y) = ((c % n) as i64, (c / n) as i64);
+            let mut best = (f64::MAX, 0usize);
+            for (i, si) in s.iter().enumerate() {
+                let v: f64 = taps
+                    .iter()
+                    .map(|&(dx, dy, w)| {
+                        let q = ((y + dy).rem_euclid(n as i64) as usize) * n + (x + dx).rem_euclid(n as i64) as usize;
+                        w * si[q].abs()
+                    })
+                    .sum();
+                if v < best.0 {
+                    best = (v, i);
+                }
+            }
+            let i = best.1;
+            (i, if s[i][c] > 0.0 { amounts[i] } else { -amounts[i] })
+        })
+        .collect()
+}
+
+/// One step's agreement with a CPU choice: cells whose new value is the
+/// CPU's to 1e-4, cells where a different scale fired (the difference is
+/// between two amounts -- a rounding tie), and cells that disagree
+/// outright.
+fn mccabe_agreement(f0: &[f32], got: &[[f32; 4]], choice: &[(usize, f32)]) -> (usize, usize, usize) {
+    let lo = f0.iter().cloned().fold(f32::INFINITY, f32::min);
+    let hi = f0.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    let (mut exact, mut ties, mut other) = (0usize, 0usize, 0usize);
+    for (c, &(_, dir)) in choice.iter().enumerate() {
+        let f = (f0[c] - lo) / (hi - lo).max(1e-6) * 2.0 - 1.0;
+        let d = (f + dir - got[c][0]).abs();
+        if d < 1e-4 {
+            exact += 1;
+        } else if d < 0.2 {
+            ties += 1;
+        } else {
+            other += 1;
+        }
+    }
+    (exact, ties, other)
 }
 
 /// McCabe with its colour memory on at rate `b` (mccabe-multiscale
@@ -3236,16 +3334,31 @@ fn mccabe_exact_discs_match_a_cpu_mirror() {
     // whose scales lean (plan section 9), so the table's stretch and
     // angle reach the stage's discs.
     for (sym, lean) in [(0.0f32, false), (3.0, false), (0.0, true)] {
-        exact_mirror_one_step(&device, &queue, sym, lean);
+        exact_mirror_one_step(&device, &queue, sym, lean, 0.0);
     }
 }
 
-fn exact_mirror_one_step(device: &Device, queue: &Queue, sym: f32, lean: bool) {
+/// The variation radius (plan section 9's P3) over exact discs: the
+/// spectral stage's differences, symmetrised by the measure pass, summed
+/// over the disc. Plain and with 3-fold symmetry.
+#[test]
+fn mccabe_exact_variation_radius_matches_a_cpu_mirror() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    for (sym, rv) in [(0.0f32, 2.0f32), (3.0, 1.0)] {
+        exact_mirror_one_step(&device, &queue, sym, false, rv);
+    }
+}
+
+fn exact_mirror_one_step(device: &Device, queue: &Queue, sym: f32, lean: bool, rv: f32) {
     let (device, queue) = (device.clone(), queue.clone());
     const N: usize = 48;
     let mut cfg = mccabe_exact_config(N as u32);
     cfg.model_params.insert("scales".into(), 4.0);
     cfg.model_params.insert("symmetry".into(), sym);
+    cfg.model_params.insert("variation".into(), rv);
     if lean {
         // The ladder's table, so the steps below are the ladder's.
         cfg = mccabe_table_from(&cfg);
@@ -3341,6 +3454,24 @@ fn exact_mirror_one_step(device: &Device, queue: &Queue, sym: f32, lean: bool) {
         }
         acc / k_sym as f64
     };
+    // The variation radius: the measure pass's symmetrised differences,
+    // summed over the disc.
+    if rv > 0.0 {
+        let s: Vec<Vec<f64>> = diffs.iter().map(|d| (0..N * N).map(|c| read(d, c)).collect()).collect();
+        let amounts: Vec<f32> = (0..diffs.len()).map(|i| 0.05 + (0.01 - 0.05) * (i as f32 / 3.0)).collect();
+        let choice = mccabe_cpu_choice(&s, N, rv, &amounts);
+        let alone = mccabe_cpu_choice(&s, N, 0.0, &amounts);
+        let moved = choice.iter().zip(&alone).filter(|(a, b)| a.0 != b.0).count();
+        let (exact, ties, other) = mccabe_agreement(&f0, &got, &choice);
+        println!(
+            "McCabe exact discs, symmetry {sym}, variation {rv}, vs CPU mirror: {exact} match, {ties} chose another \
+             scale, {other} disagree; the radius changed the winner at {moved}"
+        );
+        assert_eq!(other, 0);
+        assert!(ties * 200 < N * N, "{ties} ties");
+        assert!(moved * 10 > N * N, "the radius changed only {moved} winners");
+        return;
+    }
     let lo = f0.iter().cloned().fold(f32::INFINITY, f32::min);
     let hi = f0.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
     let (mut exact, mut ties, mut other) = (0usize, 0usize, 0usize);
@@ -3412,6 +3543,106 @@ fn mccabe_exact_discs_are_batch_invariant() {
         .filter(|(x, y)| x.iter().zip(y.iter()).any(|(p, q)| p.to_bits() != q.to_bits()))
         .count();
     assert_eq!(differing, 0, "{differing} cells differ between batchings");
+}
+
+/// The variation radius is batch invariant too, alongside memory and a
+/// warp: the scratch the measure pass writes is read in the same step
+/// whatever the batching, and no stage that skips it can leave a stale
+/// one where a step reads.
+#[test]
+fn mccabe_variation_radius_is_batch_invariant() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 48;
+    let mut cfg = mccabe_memory_config(N, 0.1);
+    // Three scales: at 48^2 the default five reach past the pyramid,
+    // the coarsest wins every cell and the run freezes.
+    cfg.model_params.insert("scales".into(), 3.0);
+    cfg.model_params.insert("variation".into(), 2.0);
+    cfg.warp.rotation = 0.002;
+    let n = 60;
+    let mut a = SimRenderer::new(&device, &cfg, N, N);
+    a.seed(&device, &queue, &cfg);
+    a.run_steps(&device, &queue, &cfg, n);
+    let mut b = SimRenderer::new(&device, &cfg, N, N);
+    b.seed(&device, &queue, &cfg);
+    for _ in 0..n {
+        b.run_steps(&device, &queue, &cfg, 1);
+    }
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    // The state and both memory slices (1 and 2; scratch is 3 and 4).
+    for slice in 0..3 {
+        let fa = read_rgba32f_layer(&device, &queue, a.field_texture(), N, N, slice);
+        let fb = read_rgba32f_layer(&device, &queue, b.field_texture(), N, N, slice);
+        let differing = fa
+            .iter()
+            .zip(&fb)
+            .filter(|(x, y)| x.iter().zip(y.iter()).any(|(p, q)| p.to_bits() != q.to_bits()))
+            .count();
+        assert_eq!(differing, 0, "slice {slice}: {differing} cells differ between batchings");
+    }
+    // Not trivially: the run is alive -- more than one scale wins.
+    let fa = read_rgba32f(&device, &queue, a.field_texture(), N, N);
+    let wins: Vec<usize> = (0..3).map(|s| fa.iter().filter(|p| p[1] as usize == s).count()).collect();
+    println!("winners after {n} steps: {wins:?}");
+    assert!(wins.iter().filter(|&&w| w > 0).count() >= 2, "{wins:?}: a frozen run");
+}
+
+/// Turning the variation radius on mid-run goes on with the run: its
+/// scratch is rewritten every step, so the field is kept rather than
+/// reseeded, and the next step is one step from where the run was.
+#[test]
+fn turning_the_variation_radius_on_keeps_the_run() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 48;
+    let mut cfg = mccabe_memory_config(N, 0.1);
+    // Three scales: at 48^2 the default five reach past the pyramid,
+    // the coarsest wins every cell and the run freezes.
+    cfg.model_params.insert("scales".into(), 3.0);
+    let mut r = SimRenderer::new(&device, &cfg, N, N);
+    r.seed(&device, &queue, &cfg);
+    r.run_steps(&device, &queue, &cfg, 40);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let before = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+    let memory_before = read_rgba32f_layer(&device, &queue, r.field_texture(), N, N, 1);
+
+    cfg.model_params.insert("variation".into(), 2.0);
+    assert!(!r.will_reseed(&cfg), "the scratch alone is not a new run");
+    r.run_steps(&device, &queue, &cfg, 1);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    assert_eq!(r.step_index(), 41);
+    let after = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+    let memory_after = read_rgba32f_layer(&device, &queue, r.field_texture(), N, N, 1);
+    // One step: renormalised, then moved by at most the largest step.
+    let lo = before.iter().map(|p| p[0]).fold(f32::INFINITY, f32::min);
+    let hi = before.iter().map(|p| p[0]).fold(f32::NEG_INFINITY, f32::max);
+    let worst = before
+        .iter()
+        .zip(&after)
+        .map(|(b, a)| (a[0] - ((b[0] - lo) / (hi - lo) * 2.0 - 1.0)).abs())
+        .fold(0.0f32, f32::max);
+    // The memory moved by one lerp of rate 0.1 at most.
+    let worst_mem = memory_before
+        .iter()
+        .zip(&memory_after)
+        .map(|(b, a)| (0..4).map(|k| (a[k] - b[k]).abs()).fold(0.0f32, f32::max))
+        .fold(0.0f32, f32::max);
+    let moved = before.iter().zip(&after).filter(|(b, a)| b[0] != a[0]).count();
+    let remembered = memory_before.iter().zip(&memory_after).filter(|(b, a)| b != a).count();
+    println!(
+        "after turning the radius on: field moved at most {worst:.4} ({moved} cells), memory at most \
+         {worst_mem:.4} ({remembered} cells)"
+    );
+    assert!(worst <= 0.05 + 1e-4, "{worst}: not one step from the run");
+    assert!(worst_mem <= 0.1 + 1e-5, "{worst_mem}: the memory did not survive");
+    // Not trivially: the run is alive, and the step wrote its memory.
+    assert!(moved * 2 > (N * N) as usize, "only {moved} cells moved");
+    assert!(remembered * 2 > (N * N) as usize, "only {remembered} memory cells changed");
 }
 
 /// A grid the FFT has no plan for -- 67 is a prime past its largest
@@ -3557,9 +3788,10 @@ fn mccabe_meets_the_interactive_budget_at_1080p() {
         return;
     };
     let (w, h) = (1920u32, 1080u32);
-    let ms_per_step = |memory: f32, averaging: f32| -> f64 {
+    let ms_per_step_with = |memory: f32, averaging: f32, variation: f32| -> f64 {
         let mut cfg = mccabe_memory_config(256, memory);
         cfg.model_params.insert("averaging".into(), averaging);
+        cfg.model_params.insert("variation".into(), variation);
         cfg.grid = crate::config::sim::SimGrid::Fixed { width: w, height: h };
         let mut r = SimRenderer::new(&device, &cfg, w, h);
         r.seed(&device, &queue, &cfg);
@@ -3580,6 +3812,7 @@ fn mccabe_meets_the_interactive_budget_at_1080p() {
         }
         best
     };
+    let ms_per_step = |memory: f32, averaging: f32| ms_per_step_with(memory, averaging, 0.0);
     let ms = ms_per_step(0.0, 0.0);
     println!("McCabe 5 scales at 1080p: {ms:.3} ms/step ({:.1} steps/s), best of 5", 1e3 / ms);
     assert!(ms < 8.0, "McCabe at 1080p is {ms:.2} ms/step, past the 8 ms fallback threshold");
@@ -3595,6 +3828,14 @@ fn mccabe_meets_the_interactive_budget_at_1080p() {
     println!("  shifted grid: {ms:.3} ms/step ({:.1} steps/s)", 1e3 / ms);
     let ms = ms_per_step(0.0, 2.0);
     println!("  exact discs: {ms:.3} ms/step ({:.1} steps/s)", 1e3 / ms);
+    // The variation radius (plan section 9's P3): the measure pass and
+    // the disc gather. Reported, not gated, for the same reason.
+    for (averaging, name) in [(0.0, "pyramid"), (2.0, "exact discs")] {
+        for rv in [1.0, 2.0, 4.0] {
+            let ms = ms_per_step_with(0.0, averaging, rv);
+            println!("  {name}, variation radius {rv}: {ms:.3} ms/step ({:.1} steps/s)", 1e3 / ms);
+        }
+    }
 }
 
 /// Review probe: what the per-frame kernel rebuild costs on the CPU.
