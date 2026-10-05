@@ -78,6 +78,37 @@ fn test_palette(device: &Device, queue: &Queue) -> TextureView {
     tex.create_view(&TextureViewDescriptor::default())
 }
 
+/// A coloured ramp -- red, green, blue in turn -- for tests that need
+/// the palette's bands to differ in hue, not only in brightness.
+fn hue_palette(device: &Device, queue: &Queue) -> TextureView {
+    let tex = device.create_texture(&TextureDescriptor {
+        label: Some("sim test hue palette"),
+        size: Extent3d { width: 256, height: 1, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: TextureDimension::D2,
+        format: TextureFormat::Rgba8Unorm,
+        usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let mut data = vec![0u8; 256 * 4];
+    for (i, px) in data.chunks_exact_mut(4).enumerate() {
+        let h = i as f32 / 256.0 * 3.0;
+        let tri = |c: f32| ((1.0 - (h - c).abs().min((h - c + 3.0).abs()).min((h - c - 3.0).abs())).max(0.0) * 255.0) as u8;
+        px[0] = tri(0.0);
+        px[1] = tri(1.0);
+        px[2] = tri(2.0);
+        px[3] = 255;
+    }
+    queue.write_texture(
+        TexelCopyTextureInfo { texture: &tex, mip_level: 0, origin: Origin3d::ZERO, aspect: TextureAspect::All },
+        &data,
+        TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(256 * 4), rows_per_image: Some(1) },
+        Extent3d { width: 256, height: 1, depth_or_array_layers: 1 },
+    );
+    tex.create_view(&TextureViewDescriptor::default())
+}
+
 /// Read an `Rgba32Float` texture back as `[f32; 4]` per texel.
 fn read_rgba32f(device: &Device, queue: &Queue, tex: &Texture, w: u32, h: u32) -> Vec<[f32; 4]> {
     read_rgba32f_layer(device, queue, tex, w, h, 0)
@@ -3450,6 +3481,67 @@ fn scale_memory_stays_inside_its_palette_under_every_resolve() {
         assert!(hi - lo > 0.2, "{up:?}: the picture is nearly flat, so the test cannot see overshoot");
         assert_eq!(outside, 0, "{up:?}: {outside} pixels outside the palette's gamut");
     }
+}
+
+/// Scale Memory's Luminance mode is Chau's colour (mccabe-multiscale
+/// plan, section 9): the field as the colour's luminance, the memory's
+/// colour as its chroma. Checked cell by cell -- Nearest at the grid's
+/// own size -- against the same run's memory colour (Multiply at
+/// brightness range 0) and its field: Y replaced, U and V kept, which is
+/// the same shift on every channel, then clipped.
+#[test]
+fn scale_memory_luminance_mode_is_the_field_as_luminance() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    let palette = hue_palette(&device, &queue);
+    let mut cfg = mccabe_memory_config(N, 0.17);
+    cfg.model_params.insert("base_radius".into(), 2.0);
+    cfg.coloring = "scale_memory".into();
+    cfg.upscale = crate::config::sim::SimUpscale::Nearest;
+    let render = |mode: f32, range: f32| -> (Vec<[f32; 4]>, Vec<[f32; 4]>) {
+        let mut c = cfg.clone();
+        c.coloring_params.insert("brightness".into(), mode);
+        c.coloring_params.insert("value_scale".into(), range);
+        let mut r = SimRenderer::new(&device, &c, N, N);
+        r.seed(&device, &queue, &c);
+        r.run_steps(&device, &queue, &c, 60);
+        r.color(&device, &queue, &c, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        (
+            read_rgba32f(&device, &queue, r.output_texture(), N, N),
+            read_rgba32f(&device, &queue, r.field_texture(), N, N),
+        )
+    };
+    let (memory, field) = render(0.0, 0.0);
+    let (lum, _) = render(1.0, 1.0);
+    let (lum_off, _) = render(1.0, 0.0);
+    let luma = |p: &[f32; 4]| 0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2];
+    let (mut worst, mut worst_off, mut chromatic) = (0.0f32, 0.0f32, 0usize);
+    let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+    for c in 0..(N * N) as usize {
+        let v = (field[c][0] * 0.5 + 0.5).clamp(0.0, 1.0);
+        let shift = v - luma(&memory[c]);
+        for ch in 0..3 {
+            worst = worst.max(((memory[c][ch] + shift).clamp(0.0, 1.0) - lum[c][ch]).abs());
+            // At range 0 the luminance is the colour's own: unchanged.
+            worst_off = worst_off.max((memory[c][ch] - lum_off[c][ch]).abs());
+        }
+        let spread = memory[c][..3].iter().cloned().fold(f32::MIN, f32::max) - memory[c][..3].iter().cloned().fold(f32::MAX, f32::min);
+        if spread > 0.2 {
+            chromatic += 1;
+        }
+        lo = lo.min(v);
+        hi = hi.max(v);
+    }
+    println!("Luminance mode: worst {worst:.2e}, at range 0 {worst_off:.2e}; {chromatic} of {} cells chromatic; field luminance {lo:.2}..{hi:.2}", N * N);
+    assert!(worst < 1e-5, "{worst}");
+    assert!(worst_off < 1e-5, "{worst_off}");
+    // Not trivially: coloured cells, and a field that spans the range.
+    assert!(chromatic * 4 > (N * N) as usize, "{chromatic} chromatic cells");
+    assert!(lo < 0.2 && hi > 0.8, "{lo}..{hi}");
 }
 
 /// Phase 3's other gate: McCabe at 1080p inside the interactive budget.

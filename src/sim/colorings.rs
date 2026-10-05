@@ -840,6 +840,14 @@ fn sim_color(x: SimSample, p: vec2<i32>) -> vec4<f32> {
 /// colour lerp, applied at display time from the weights the model
 /// keeps (mccabe-multiscale plan, section 2). Black where nothing has
 /// won yet, as the reference starts.
+///
+/// The field sets the brightness one of two ways (plan section 9):
+/// Softology's, multiplying the colour by it, or Chau's, making it the
+/// colour's luminance -- "mapping the concentration value directly to
+/// the luminance component" in YUV, the memory's colour giving the
+/// chroma. Replacing Y while U and V stay is adding the same amount to
+/// all three channels (Y's weights sum to 1, and U and V depend only on
+/// B - Y and R - Y), so no colour-space round trip is written out.
 pub static SCALE_MEMORY: SimColoringDef = SimColoringDef {
     name: "scale_memory",
     display_name: "Scale Memory",
@@ -864,9 +872,23 @@ pub static SCALE_MEMORY: SimColoringDef = SimColoringDef {
             default: 0.5,
             min: 0.0,
             max: 1.0,
-            tooltip: "How much the field darkens the colour. 0 shows the memory alone; 1 is \
-                      Softology's colour times (f + 1) / 2.",
+            tooltip: "How much the field sets the brightness. 0 shows the memory alone. At \
+                      1, Multiply is Softology's colour times (f + 1) / 2, and Luminance makes \
+                      (f + 1) / 2 the colour's whole luminance.",
             choices: &[],
+        },
+        SimParamDef {
+            name: "brightness",
+            display_name: "Brightness from",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How the field sets the brightness. Multiply darkens the memory's colour \
+                      by it, as Softology's does: low regions go black. Luminance (YUV) keeps \
+                      the colour's hue and saturation and sets its luminance from the field, \
+                      as Chau's does: every scale's colour stays visible, light and dark, \
+                      and pale where the field is bright.",
+            choices: &["Multiply", "Luminance (YUV)"],
         },
     ],
     wgsl: r#"
@@ -902,6 +924,13 @@ fn sim_color(x: SimSample, p: vec2<i32>) -> vec4<f32> {
     c = c + m1.w * sim_palette(7.5 / n);
     c = c * k;
     let v = clamp(x.s.x * 0.5 + 0.5, 0.0, 1.0);
+    if (cparam(2u) >= 0.5) {
+        // Luminance: Y from the field, U and V from the memory, then
+        // clipped to the display's gamut.
+        let y = dot(c, vec3<f32>(0.299, 0.587, 0.114));
+        let target_y = mix(y, v, cparam(1u));
+        return vec4<f32>(clamp(c + vec3<f32>(target_y - y), vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+    }
     let b = mix(1.0, v, cparam(1u));
     return vec4<f32>(c * b, 1.0);
 }
