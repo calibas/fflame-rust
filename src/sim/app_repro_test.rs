@@ -3366,6 +3366,51 @@ fn exact_discs_fall_back_to_the_pyramid_on_a_grid_without_a_plan() {
     assert!(exact.iter().zip(&pyramid).all(|(a, b)| a == b), "the fallback is not the pyramid");
 }
 
+/// Scale Memory stays inside its palette under every resolve. Its colour
+/// is a mix of the palette's bands weighted by the memory, and the
+/// bicubic resolve interpolates those weights with Catmull-Rom, whose
+/// negative lobes overshoot across a sharp boundary: a weight below
+/// zero subtracts its band's colour from the others', which put red
+/// fringes on an all-blue palette (output/mccabe-red-glitch.fflame).
+/// On the greyscale test palette with four bands, at (i + 1/2) / 4, a
+/// mix of the bands whose weights sum to 1 (they have, after 80 steps at
+/// 0.17) is in [0.125, 0.875] on every channel, so anything outside is
+/// the overshoot.
+#[test]
+fn scale_memory_stays_inside_its_palette_under_every_resolve() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    const OUT: u32 = 256;
+    let palette = test_palette(&device, &queue);
+    for up in [crate::config::sim::SimUpscale::Bicubic, crate::config::sim::SimUpscale::Bilinear] {
+        let mut cfg = mccabe_memory_config(N, 0.17);
+        // Four scales from radius 1: within the pyramid's reach at 64
+        // cells, so different scales win in different places and the
+        // memory has boundaries to overshoot across.
+        cfg.model_params.insert("scales".into(), 4.0);
+        cfg.coloring = "scale_memory".into();
+        cfg.coloring_params.insert("scales".into(), 4.0);
+        cfg.coloring_params.insert("value_scale".into(), 0.0);
+        cfg.upscale = up;
+        let mut r = SimRenderer::new(&device, &cfg, OUT, OUT);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 80);
+        r.color(&device, &queue, &cfg, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let out = read_rgba32f(&device, &queue, r.output_texture(), OUT, OUT);
+        let (lo, hi) = out.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| {
+            (lo.min(p[0]).min(p[1]).min(p[2]), hi.max(p[0]).max(p[1]).max(p[2]))
+        });
+        let outside = out.iter().filter(|p| p[..3].iter().any(|v| *v < 0.125 - 1e-3 || *v > 0.875 + 1e-3)).count();
+        println!("{up:?}: channels in [{lo:.4}, {hi:.4}], {outside} of {} pixels outside the palette", OUT * OUT);
+        assert!(hi - lo > 0.2, "{up:?}: the picture is nearly flat, so the test cannot see overshoot");
+        assert_eq!(outside, 0, "{up:?}: {outside} pixels outside the palette's gamut");
+    }
+}
+
 /// Phase 3's other gate: McCabe at 1080p inside the interactive budget.
 ///
 /// The pipeline doc expected "well under 2 ms" for a box pyramid and
