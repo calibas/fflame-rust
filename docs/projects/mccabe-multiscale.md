@@ -630,3 +630,48 @@ The default is Multiply, so it is byte-identical.
 - **Memory.** One more six-slice array at 1080p, ~50 MB, while on.
 - **Gates.** `variation` = 0 byte-identical; a CPU mirror in both
   averaging modes, with symmetry; batch invariance.
+
+## 10. TODO, after P3 (2026-10-05)
+
+Agreed, not planned in detail yet. P3 comes first.
+
+**Per-scale warp.**
+- **The UI.** A select list in the Warp section, "Field / Scale 1–6":
+  the same zoom, rotation, pan and swirl controls, editing the chosen
+  target.
+- **The mechanism is not the field warp's.** The field warp resamples
+  the whole field each step. A scale's warp moves where that scale
+  reads its averages instead, so it compounds step by step like an
+  advection of that scale alone. Only the controls are reused.
+- **The cost.** Cheap in both averaging modes: a moved read. It needs
+  about 30 more numbers in the step. Either the model's parameter
+  block grows from 64 to 128, or the warp's own uniform carries them.
+- **What to expect** (section 8). Per-scale rotation and zoom were
+  subtle in stills; swirl was striking. Mostly a motion effect.
+
+**Relief, in the simulation system, not as an Effect.**
+- **Why not an Effect.** An effect sees only the finished image. Its
+  height would be luminance after the palette, which bends the field's
+  shape, and Scale Memory's hue edges would read as false ridges.
+- **The precedent.** Escape-time relief is a pass inside the escape
+  renderer that slopes the colouring's own scalar, not the image. Use
+  its conventions, light angle counter-clockwise from east.
+- **The shape.** A height stage turns a field channel, or age, into a
+  smoothed height texture on the grid (section 8: raw is harsh, radius
+  2 smoothing gave the paper's raised-and-recessed look). A shade step
+  then lights it under any colouring.
+- **Keep the height its own texture.** The long-term 3D height-field
+  mode below wants exactly that texture as its displacement.
+
+**Long term: a 3D height-field mode for escape-time and simulations.**
+- **The idea.** The user's plan, not designed yet. A 2D fractal (the
+  Mandelbrot set, a simulation) is a flat plane in 3D space. Its relief
+  and/or escape time (escape) or relief and/or age (simulations) give
+  the depth. It is not full 3D fractals.
+- **Reuse.** The 3D engine.
+- **Rendering.** Path tracing, for quality ("same way 3D escape-time
+  already works", in the user's words).
+- **What it asks of work now.** Heights should be explicit scalar
+  textures on the grid that a later renderer can sample, not values
+  folded straight into a colour.
+
