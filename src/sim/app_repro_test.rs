@@ -2303,6 +2303,26 @@ fn mccabe_variation_radius_matches_a_cpu_mirror() {
     }
 }
 
+/// Per-scale warps (mccabe-multiscale plan, section 10) through the
+/// pyramid, one step against the CPU: each scale measured at its own
+/// read position. Alone, and with the variation radius and 3-fold
+/// symmetry on top, which read the warped measure.
+#[test]
+fn mccabe_scale_warps_match_a_cpu_mirror() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 64;
+    for (rv, sym) in [(0.0f32, 0.0f32), (1.5, 3.0)] {
+        let mut cfg = mccabe_config(N as u32);
+        with_scale_warps(&mut cfg);
+        cfg.model_params.insert("variation".into(), rv);
+        cfg.model_params.insert("symmetry".into(), sym);
+        pyramid_mirror_one_step(&device, &queue, &cfg);
+    }
+}
+
 fn pyramid_mirror_one_step(device: &Device, queue: &Queue, cfg: &SimConfig) {
     let (device, queue, cfg) = (device.clone(), queue.clone(), cfg.clone());
     const N: usize = 64;
@@ -2385,7 +2405,8 @@ fn pyramid_mirror_one_step(device: &Device, queue: &Queue, cfg: &SimConfig) {
             (0..N * N)
                 .map(|c| {
                     let (px, py) = ((c % N) as f32 + 0.5, (c / N) as f32 + 0.5);
-                    (avg(ra, px, py) - avg(rb, px, py)) as f64
+                    let (qx, qy) = mccabe_scale_pos(&cfg.model_params, i, N, px, py);
+                    (avg(ra, qx, qy) - avg(rb, qx, qy)) as f64
                 })
                 .collect()
         })
@@ -2395,6 +2416,27 @@ fn pyramid_mirror_one_step(device: &Device, queue: &Queue, cfg: &SimConfig) {
         .collect();
     let choice = mccabe_cpu_choice(&s, N, rv, &amounts);
     let (exact, ties, other) = mccabe_agreement(&f0, &got, &choice);
+    // Not trivially: per-scale warps change winners, measured against the
+    // same scales read in place.
+    let warped = (0..n_scales).any(|i| mccabe_scale_pos(&cfg.model_params, i, N, 0.5, 0.5) != (0.5, 0.5));
+    if warped {
+        let still: Vec<Vec<f64>> = (0..n_scales)
+            .map(|i| {
+                let ra = base * (1u32 << i) as f32;
+                let rb = ra * ratio;
+                (0..N * N)
+                    .map(|c| {
+                        let (px, py) = ((c % N) as f32 + 0.5, (c / N) as f32 + 0.5);
+                        (avg(ra, px, py) - avg(rb, px, py)) as f64
+                    })
+                    .collect()
+            })
+            .collect();
+        let unwarped = mccabe_cpu_choice(&still, N, rv, &amounts);
+        let changed = choice.iter().zip(&unwarped).filter(|(a, b)| a != b).count();
+        println!("  the warps changed the step at {changed} of {} cells", N * N);
+        assert!(changed * 50 > N * N, "the warps changed only {changed} cells");
+    }
     // Not trivially: with the radius on, its choices are not the cell's.
     let moved = if rv > 0.0 {
         let alone = mccabe_cpu_choice(&s, N, 0.0, &amounts);
@@ -2414,6 +2456,40 @@ fn pyramid_mirror_one_step(device: &Device, queue: &Queue, cfg: &SimConfig) {
     );
     if rv > 0.0 {
         assert!(moved * 10 > N * N, "the radius changed only {moved} winners");
+    }
+}
+
+/// McCabe's per-scale read map (mccabe-multiscale plan, section 10), as
+/// `mc_scale_pos` computes it: the field warp's map of scale `i`'s
+/// zoom, rotation, pan and swirl, about the centre of an `n`-cell grid,
+/// applied to a cell-centre position. The identity returns it unchanged.
+fn mccabe_scale_pos(params: &std::collections::BTreeMap<String, f32>, i: usize, n: usize, px: f32, py: f32) -> (f32, f32) {
+    let get = |f: &str, d: f32| params.get(&format!("s{i}_warp_{f}")).copied().unwrap_or(d);
+    let (zoom, rot, pan_x, pan_y, flow) =
+        (get("zoom", 1.0).max(1e-4), get("rotation", 0.0), get("pan_x", 0.0), get("pan_y", 0.0), get("flow", 0.0));
+    if zoom == 1.0 && rot == 0.0 && flow == 0.0 && pan_x == 0.0 && pan_y == 0.0 {
+        return (px, py);
+    }
+    let g = n as f32;
+    let c = g * 0.5;
+    let (dx, dy) = (px - c, py - c);
+    let rim = (g * 0.5).max(1.0);
+    let theta = rot + flow * ((dx * dx + dy * dy).sqrt() / rim);
+    let (qx, qy) = ((dx - pan_x) / zoom, (dy - pan_y) / zoom);
+    let (cs, sn) = (theta.cos(), theta.sin());
+    (c + cs * qx + sn * qy, c - sn * qx + cs * qy)
+}
+
+/// Warps on McCabe's three coarsest of five scales: a zoom with a pan, a
+/// turn, and a swirl -- each kind once.
+fn with_scale_warps(cfg: &mut SimConfig) {
+    for (k, v) in [
+        ("s2_warp_zoom", 1.05f32),
+        ("s2_warp_pan_x", 1.5),
+        ("s3_warp_rotation", 0.1),
+        ("s4_warp_flow", 0.3),
+    ] {
+        cfg.model_params.insert(k.into(), v);
     }
 }
 
@@ -3353,12 +3429,37 @@ fn mccabe_exact_variation_radius_matches_a_cpu_mirror() {
 }
 
 fn exact_mirror_one_step(device: &Device, queue: &Queue, sym: f32, lean: bool, rv: f32) {
+    exact_mirror_one_step_warped(device, queue, sym, lean, rv, false);
+}
+
+/// Per-scale warps over exact discs: the spectral stage's differences
+/// read bilinearly at each scale's own position. Plain and with 3-fold
+/// symmetry.
+#[test]
+fn mccabe_exact_scale_warps_match_a_cpu_mirror() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    for sym in [0.0f32, 3.0] {
+        exact_mirror_one_step_warped(&device, &queue, sym, false, 0.0, true);
+    }
+}
+
+fn exact_mirror_one_step_warped(device: &Device, queue: &Queue, sym: f32, lean: bool, rv: f32, warps: bool) {
     let (device, queue) = (device.clone(), queue.clone());
     const N: usize = 48;
     let mut cfg = mccabe_exact_config(N as u32);
     cfg.model_params.insert("scales".into(), 4.0);
     cfg.model_params.insert("symmetry".into(), sym);
     cfg.model_params.insert("variation".into(), rv);
+    if warps {
+        // On the two coarsest of four: a turn and a swirl, and a zoom
+        // with a pan on the second.
+        for (k, v) in [("s1_warp_zoom", 1.05f32), ("s1_warp_pan_y", -1.0), ("s2_warp_rotation", 0.1), ("s3_warp_flow", 0.3)] {
+            cfg.model_params.insert(k.into(), v);
+        }
+    }
     if lean {
         // The ladder's table, so the steps below are the ladder's.
         cfg = mccabe_table_from(&cfg);
@@ -3454,22 +3555,62 @@ fn exact_mirror_one_step(device: &Device, queue: &Queue, sym: f32, lean: bool, r
         }
         acc / k_sym as f64
     };
-    // The variation radius: the measure pass's symmetrised differences,
-    // summed over the disc.
-    if rv > 0.0 {
-        let s: Vec<Vec<f64>> = diffs.iter().map(|d| (0..N * N).map(|c| read(d, c)).collect()).collect();
+    // The variation radius, or per-scale warps: the measure's symmetrised
+    // differences, each scale at its own read position, summed over the
+    // disc (a disc of nothing but the cell at radius 0).
+    let warped = (0..diffs.len()).any(|i| mccabe_scale_pos(&cfg.model_params, i, N, 0.5, 0.5) != (0.5, 0.5));
+    if rv > 0.0 || warped {
+        let g = N as f32;
+        let read_at = |d: &Vec<f64>, px: f32, py: f32| -> f64 {
+            if k_sym < 2 {
+                return at(d, px - g * (px / g).floor(), py - g * (py / g).floor());
+            }
+            let mut acc = 0.0;
+            for k in 0..k_sym {
+                let ang = 6.28318530718f32 * k as f32 / k_sym as f32;
+                let (dx, dy) = (px - g * 0.5, py - g * 0.5);
+                let mut qx = ang.cos() * dx - ang.sin() * dy + g * 0.5;
+                let mut qy = ang.sin() * dx + ang.cos() * dy + g * 0.5;
+                qx -= g * (qx / g).floor();
+                qy -= g * (qy / g).floor();
+                acc += at(d, qx, qy);
+            }
+            acc / k_sym as f64
+        };
+        let s: Vec<Vec<f64>> = diffs
+            .iter()
+            .enumerate()
+            .map(|(i, d)| {
+                (0..N * N)
+                    .map(|c| {
+                        let (px, py) = ((c % N) as f32 + 0.5, (c / N) as f32 + 0.5);
+                        let q = mccabe_scale_pos(&cfg.model_params, i, N, px, py);
+                        if q == (px, py) { read(d, c) } else { read_at(d, q.0, q.1) }
+                    })
+                    .collect()
+            })
+            .collect();
         let amounts: Vec<f32> = (0..diffs.len()).map(|i| 0.05 + (0.01 - 0.05) * (i as f32 / 3.0)).collect();
         let choice = mccabe_cpu_choice(&s, N, rv, &amounts);
+        if warped {
+            let still: Vec<Vec<f64>> = diffs.iter().map(|d| (0..N * N).map(|c| read(d, c)).collect()).collect();
+            let unwarped = mccabe_cpu_choice(&still, N, rv, &amounts);
+            let changed = choice.iter().zip(&unwarped).filter(|(a, b)| a != b).count();
+            println!("  the warps changed the step at {changed} of {} cells", N * N);
+            assert!(changed * 50 > N * N, "the warps changed only {changed} cells");
+        }
         let alone = mccabe_cpu_choice(&s, N, 0.0, &amounts);
         let moved = choice.iter().zip(&alone).filter(|(a, b)| a.0 != b.0).count();
         let (exact, ties, other) = mccabe_agreement(&f0, &got, &choice);
         println!(
-            "McCabe exact discs, symmetry {sym}, variation {rv}, vs CPU mirror: {exact} match, {ties} chose another \
-             scale, {other} disagree; the radius changed the winner at {moved}"
+            "McCabe exact discs, symmetry {sym}, variation {rv}, warped {warped}, vs CPU mirror: {exact} match, {ties} \
+             chose another scale, {other} disagree; the radius changed the winner at {moved}"
         );
         assert_eq!(other, 0);
         assert!(ties * 200 < N * N, "{ties} ties");
-        assert!(moved * 10 > N * N, "the radius changed only {moved} winners");
+        if rv > 0.0 {
+            assert!(moved * 10 > N * N, "the radius changed only {moved} winners");
+        }
         return;
     }
     let lo = f0.iter().cloned().fold(f32::INFINITY, f32::min);
@@ -3585,6 +3726,44 @@ fn mccabe_variation_radius_is_batch_invariant() {
     }
     // Not trivially: the run is alive -- more than one scale wins.
     let fa = read_rgba32f(&device, &queue, a.field_texture(), N, N);
+    let wins: Vec<usize> = (0..3).map(|s| fa.iter().filter(|p| p[1] as usize == s).count()).collect();
+    println!("winners after {n} steps: {wins:?}");
+    assert!(wins.iter().filter(|&&w| w > 0).count() >= 2, "{wins:?}: a frozen run");
+}
+
+/// Per-scale warps are batch invariant: a scale's map depends on its
+/// parameters and position alone, not on the step or the batch.
+#[test]
+fn mccabe_scale_warps_are_batch_invariant() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 48;
+    let mut cfg = mccabe_config(N);
+    // Three scales: at 48^2 the default five reach past the pyramid.
+    cfg.model_params.insert("scales".into(), 3.0);
+    cfg.model_params.insert("s1_warp_rotation".into(), 0.1);
+    cfg.model_params.insert("s2_warp_flow".into(), 0.3);
+    cfg.model_params.insert("s2_warp_zoom".into(), 1.03);
+    let n = 60;
+    let mut a = SimRenderer::new(&device, &cfg, N, N);
+    a.seed(&device, &queue, &cfg);
+    a.run_steps(&device, &queue, &cfg, n);
+    let mut b = SimRenderer::new(&device, &cfg, N, N);
+    b.seed(&device, &queue, &cfg);
+    for _ in 0..n {
+        b.run_steps(&device, &queue, &cfg, 1);
+    }
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let fa = read_rgba32f(&device, &queue, a.field_texture(), N, N);
+    let fb = read_rgba32f(&device, &queue, b.field_texture(), N, N);
+    let differing = fa
+        .iter()
+        .zip(&fb)
+        .filter(|(x, y)| x.iter().zip(y.iter()).any(|(p, q)| p.to_bits() != q.to_bits()))
+        .count();
+    assert_eq!(differing, 0, "{differing} cells differ between batchings");
     let wins: Vec<usize> = (0..3).map(|s| fa.iter().filter(|p| p[1] as usize == s).count()).collect();
     println!("winners after {n} steps: {wins:?}");
     assert!(wins.iter().filter(|&&w| w > 0).count() >= 2, "{wins:?}: a frozen run");

@@ -157,9 +157,24 @@ has its scratch after ALL memory (`SliceLayout`). They do not persist:
   slices into the new arrays and the run goes on; it does not reseed.
 
 **Parameters.** Each layer's block in the model-parameter buffer is
-64 floats. The last three are the renderer's: the scratch's first
-slice (0 when there is none), then the memory's slice count and first
-slice.
+128 floats. The last four are the renderer's:
+- whether any per-scale warp is on;
+- the scratch's first slice (0 when there is none);
+- the memory's slice count;
+- the memory's first slice.
+
+**Per-scale warps** (`ScaleWarps`, McCabe):
+- **Parameters.** Each scale has the field warp's five rates
+  (`s{i}_warp_{zoom,rotation,pan_x,pan_y,flow}`). The Warp section
+  draws them behind its Field / Scale *k* list, and the model's own
+  list hides them.
+- **What they do.** The field warp's map moves where that scale reads
+  its averages, so its structure drifts as the field would while the
+  other scales stay. A step costs no more for it.
+- **The reserved flag.** The renderer decides once whether any live
+  scale's warp is on and says so in a reserved slot. Off, the step is
+  the rule exactly as it was; a per-cell check across the scales cost
+  3–5% of every McCabe step.
 
 **The pyramid** (`NeedsPyramid`, McCabe):
 - **Build.** A Gaussian pyramid of the field, built before every step,

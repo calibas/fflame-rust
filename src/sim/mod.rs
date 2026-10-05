@@ -339,6 +339,61 @@ impl ParamTable {
     }
 }
 
+/// A model's per-scale WARPS (mccabe-multiscale plan, section 10): row
+/// `i`'s `s{i}_warp_{zoom,rotation,pan_x,pan_y,flow}` -- the field warp's
+/// five rates, applied to where scale `i` reads its averages. The Warp
+/// section draws them behind its target list; the model's own list hides
+/// them.
+pub struct ScaleWarps {
+    pub model: &'static str,
+    /// The parameter saying how many rows are live.
+    pub rows_param: &'static str,
+    /// Rows the model declares.
+    pub rows: usize,
+}
+
+/// The warp's fields, in the order the Warp section draws them.
+pub const SCALE_WARP_FIELDS: [&str; 5] = ["zoom", "rotation", "pan_x", "pan_y", "flow"];
+
+impl ScaleWarps {
+    /// Row `row`'s parameter for `field`.
+    pub fn param(&self, row: usize, field: &str) -> String {
+        format!("s{row}_warp_{field}")
+    }
+
+    /// Whether `name` is one of these parameters.
+    pub fn is_param(&self, name: &str) -> bool {
+        (0..self.rows).any(|r| SCALE_WARP_FIELDS.iter().any(|f| self.param(r, f) == name))
+    }
+
+    /// Whether any live row's warp is off the identity: what the
+    /// renderer tells the step, so a model without one pays nothing.
+    pub fn any_active(&self, def: &ModelDef, params: &std::collections::BTreeMap<String, f32>) -> bool {
+        (0..self.live_rows(def, params)).any(|r| {
+            SCALE_WARP_FIELDS.iter().any(|f| {
+                let name = self.param(r, f);
+                let d = def.parameters.iter().find(|p| p.name == name).map(|p| p.default).unwrap_or(0.0);
+                params.get(&name).copied().filter(|v| v.is_finite()).unwrap_or(d) != d
+            })
+        })
+    }
+
+    /// Rows live at these parameters.
+    pub fn live_rows(&self, def: &ModelDef, params: &std::collections::BTreeMap<String, f32>) -> usize {
+        let d = def.parameters.iter().find(|p| p.name == self.rows_param).map(|p| p.default).unwrap_or(1.0);
+        params.get(self.rows_param).copied().filter(|v| v.is_finite()).unwrap_or(d).round().clamp(1.0, self.rows as f32)
+            as usize
+    }
+}
+
+/// Every model's per-scale warps.
+pub static SCALE_WARPS: &[&ScaleWarps] = &[&models::MCCABE_WARPS];
+
+/// The per-scale warps of `model`, if it has them.
+pub fn scale_warps(model: &str) -> Option<&'static ScaleWarps> {
+    SCALE_WARPS.iter().copied().find(|w| w.model == model)
+}
+
 /// Every model's table. Few models have one, so this is a list beside
 /// the registry rather than a field on every `ModelDef`.
 pub static PARAM_TABLES: &[&ParamTable] = &[&models::MCCABE_TABLE];

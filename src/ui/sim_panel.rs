@@ -532,6 +532,11 @@ pub fn render_sim_content(
             // purpose: a step is a fraction of a frame, and a percent of zoom
             // a step is already a fast pull.
             ui.collapsing(t!("sim_panel.warp").as_ref(), |ui| {
+                // What the controls below move: the field, or one scale's
+                // reading (mccabe-multiscale plan, section 10).
+                if render_scale_warp_target(ui, config_manager, &sim) {
+                    return;
+                }
                 ui.label(egui::RichText::new(t!("sim_panel.warp_tip")).small().weak());
                 let w = sim.warp;
                 let mut zoom = w.zoom;
@@ -662,6 +667,97 @@ pub fn render_sim_content(
             });
 
     });
+}
+
+/// The Warp section's target list -- the field, or one scale of a model
+/// with per-scale warps (mccabe-multiscale plan, section 10) -- and, when
+/// a scale is chosen, that scale's five rates. Returns whether a scale is
+/// chosen, in which case the field's controls are not drawn.
+fn render_scale_warp_target(ui: &mut egui::Ui, config_manager: &mut ConfigManager, sim: &SimConfig) -> bool {
+    // (layer, row) of every scale that can be warped.
+    let mut targets: Vec<(usize, usize)> = Vec::new();
+    for l in 0..sim.layer_count() {
+        let model = crate::sim::model_or_default(sim.layer_model_name(l));
+        if let Some(sw) = crate::sim::scale_warps(model.name) {
+            for r in 0..sw.live_rows(model, sim.layer_model_params(l)) {
+                targets.push((l, r));
+            }
+        }
+    }
+    if targets.is_empty() {
+        return false;
+    }
+    let several_layers = sim.layer_count() > 1;
+    let label = |k: usize| -> String {
+        match k.checked_sub(1).and_then(|i| targets.get(i)) {
+            None => t!("sim_panel.warp_target_field").to_string(),
+            Some(&(l, r)) if several_layers => {
+                t!("sim_panel.warp_target_layer_scale", layer = l.to_string(), n = (r + 1).to_string()).to_string()
+            }
+            Some(&(_, r)) => t!("sim_panel.warp_target_scale", n = (r + 1).to_string()).to_string(),
+        }
+    };
+    // Which one is chosen is a view of the panel, not the picture.
+    let id = ui.make_persistent_id("sim_warp_target");
+    let mut chosen: usize = ui.data_mut(|d| d.get_persisted(id)).unwrap_or(0);
+    if chosen > targets.len() {
+        chosen = 0;
+    }
+    ui.horizontal(|ui| {
+        ui.label(t!("sim_panel.warp_target").as_ref());
+        egui::ComboBox::from_id_salt("sim_warp_target_pick")
+            .selected_text(label(chosen))
+            .show_ui(ui, |ui| {
+                for k in 0..=targets.len() {
+                    if ui.selectable_label(k == chosen, label(k)).clicked() {
+                        chosen = k;
+                    }
+                }
+            })
+            .response
+            .on_hover_text(t!("sim_panel.warp_target_tip"));
+    });
+    ui.data_mut(|d| d.insert_persisted(id, chosen));
+    let Some(&(l, r)) = chosen.checked_sub(1).and_then(|i| targets.get(i)) else {
+        return false;
+    };
+    let model = crate::sim::model_or_default(sim.layer_model_name(l));
+    let sw = crate::sim::scale_warps(model.name).expect("listed above");
+    let slot = if sim.layers.is_empty() { LayerSlot::Flat } else { LayerSlot::At(l) };
+    let params = sim.layer_model_params(l);
+    ui.label(egui::RichText::new(t!("sim_panel.warp_scale_tip")).small().weak());
+    let mut identity = true;
+    for field in crate::sim::SCALE_WARP_FIELDS {
+        let name = sw.param(r, field);
+        let Some(def) = model.parameters.iter().find(|p| p.name == name) else { continue };
+        let mut v = params.get(&name).copied().filter(|v| v.is_finite()).unwrap_or(def.default);
+        identity &= v == def.default;
+        let text = match field {
+            "zoom" => t!("sim_panel.warp_zoom"),
+            "rotation" => t!("sim_panel.warp_rotation"),
+            "pan_x" => t!("sim_panel.warp_pan_x"),
+            "pan_y" => t!("sim_panel.warp_pan_y"),
+            _ => t!("sim_panel.warp_flow"),
+        };
+        if ui
+            .add(egui::Slider::new(&mut v, def.min..=def.max).text(text.as_ref()).fixed_decimals(4))
+            .on_hover_text(def.tooltip)
+            .changed()
+        {
+            let _ = config_manager.update_param(slot.param_path(&name), v.into());
+        }
+    }
+    if !identity && ui.small_button(t!("sim_panel.warp_reset").as_ref()).clicked() {
+        let changes = crate::sim::SCALE_WARP_FIELDS
+            .iter()
+            .filter_map(|f| {
+                let name = sw.param(r, f);
+                model.parameters.iter().find(|p| p.name == name).map(|p| (slot.param_path(&name), p.default.into()))
+            })
+            .collect();
+        let _ = config_manager.update_batch(changes, "Reset scale warp".to_string());
+    }
+    true
 }
 
 /// Where a colouring's controls write: the flat `coloring` /
@@ -1408,11 +1504,16 @@ fn render_model_section(
             // grid, and in table mode hides what only its generator reads.
             let table = crate::sim::param_table(model.name);
             let table_on = table.is_some_and(|t| params.get(t.mode_param).copied().unwrap_or(0.0) >= 0.5);
+            let warps = crate::sim::scale_warps(model.name);
             for p in model.parameters.iter() {
                 if let Some(t) = table {
                     if t.is_cell(p.name) || (table_on && t.generator_params.contains(&p.name)) {
                         continue;
                     }
+                }
+                // Per-scale warps live in the Warp section.
+                if warps.is_some_and(|w| w.is_param(p.name)) {
+                    continue;
                 }
                 let mut v = params.get(p.name).copied().unwrap_or(p.default);
                 if param_control(ui, &mut v, p, &slot.salt()) {

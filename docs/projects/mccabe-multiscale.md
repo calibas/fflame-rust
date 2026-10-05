@@ -706,6 +706,51 @@ Agreed, not planned in detail yet. P3 comes first.
 - **What to expect** (section 8). Per-scale rotation and zoom were
   subtle in stills; swirl was striking. Mostly a motion effect.
 
+- **As built** (2026-10-05).
+  - **Parameters.**
+    - Each scale has the field warp's five rates as McCabe
+      parameters: `s{i}_warp_{zoom,rotation,pan_x,pan_y,flow}`, slots
+      52–81.
+    - So the parameter block grew from 64 floats to 128. A layer's
+      block is read at the same indices, so every picture is
+      unchanged.
+    - They are model parameters, not `SimWarp` fields. That way they
+      animate, preset and script like any McCabe parameter.
+  - **The map.**
+    - The field warp's own map (zoom, rotation, pan, swirl about the
+      centre, swirl measured at the rim) moves where the scale reads,
+      in both averaging modes and under symmetry.
+    - It also applies to what the variation radius measures.
+  - **UI.** A "Warp: Field / Scale *k*" list at the top of the Warp
+    section, as the user sketched; "Layer *l*, scale *k*" when several
+    layers can be warped. A scale shows the five rates and a reset;
+    the model's list hides them.
+  - **Wider ranges than the field's.** Zoom 0.9–1.1, rotation ±0.25,
+    pan ±4 and swirl ±0.5 a step. The pattern re-forms as it moves, so
+    rates the field warp would tear the picture with are useful here:
+    the prototype's swirl went to 0.4.
+  - **The step pays nothing when no warp is on.** The renderer
+    decides once and says so in a fourth reserved slot. A per-cell
+    check across the scales measured 3–5% of every McCabe step (4.6
+    against 4.4 ms at 1080p), so it was moved. With every warp off,
+    the step is the old loop verbatim: all 100 earlier sim baselines
+    are byte-identical.
+  - **Seen** (`output/mccabe-scale-warp/sheet.png`). Far stronger than
+    the prototype suggested:
+    - alternating ±3° rotations and a swirl rising with the scale make
+      concentric ringed structure;
+    - zoom on the coarse scales makes radial streaks;
+    - pan and a swirl on the coarse scales alone are subtle.
+  - **Tests.**
+    - The pyramid mirror with a zoom-and-pan, a turn and a swirl on
+      the three coarsest scales, alone and with the variation radius
+      and 3-fold symmetry. Every cell matches; the warps change the
+      step at 48–58% of cells.
+    - The exact mirror, the same with and without symmetry: every
+      cell, 70% changed.
+    - Batch invariance.
+    - The `sim-mccabe-scale-warp` baseline.
+
 **Relief, in the simulation system, not as an Effect.**
 - **Why not an Effect.** An effect sees only the finished image. Its
   height would be luminance after the palette, which bends the field's
