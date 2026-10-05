@@ -884,10 +884,11 @@ symmetry (to 12). Switching to it fills it from the ladder.
 - **Presets.** `symmetry_mix` (fig. 14: 3-fold small scales, 9-fold
   large) and `uneven` (radii 1, 3, 10, 20, 45 with colour memory).
 - **Found.** Tables whose coarse scales take the largest steps lean to
-  the axes: 1.25 axes/diagonals against 0.99 for the same radii the
-  other way round. The likely cause is the coarsest pyramid levels'
-  square reconstruction. Exact discs (FFT, parked) are the real fix;
-  the plan has the measurements.
+  the axes: 1.08 ± 0.02 axes/diagonals over 32 seeds on the GPU,
+  against 0.96–0.99 with exact averages. Investigated in the plan's
+  section 6: the cause is the pyramid's fixed lattice, not its kernel.
+  Moving the lattice every step removes the lean on the CPU replica.
+  Rounding the kernel does nothing.
 
 ---
 
