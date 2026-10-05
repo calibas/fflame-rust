@@ -2772,6 +2772,213 @@ fn mccabe_table_matches_a_cpu_mirror() {
     assert!(ties * 200 < N * N, "{ties} of {} cells picked a different scale", N * N);
 }
 
+/// The WGSL's `sim_pcg`, for mirrors.
+fn cpu_pcg(v: u32) -> u32 {
+    let state = v.wrapping_mul(747796405).wrapping_add(2891336453);
+    let word = ((state >> ((state >> 28) + 4)) ^ state).wrapping_mul(277803737);
+    (word >> 22) ^ word
+}
+
+/// The WGSL's `sim_lattice_shift` at a step, for a period and a seed.
+fn cpu_lattice_shift(step: u32, period: u32, seed: u64) -> (i64, i64) {
+    let h = cpu_pcg(cpu_pcg((step / period) ^ seed as u32) ^ (seed >> 32) as u32 ^ 0x1a77);
+    ((h & 127) as i64, ((h >> 7) & 127) as i64)
+}
+
+/// McCabe with its pyramid's lattice shifted every step
+/// (mccabe-multiscale plan, section 6).
+fn mccabe_shifted_config(n: u32) -> SimConfig {
+    let mut cfg = mccabe_config(n);
+    cfg.model_params.insert("averaging".into(), 1.0);
+    cfg
+}
+
+/// The shifted lattice against a CPU mirror, one step from the GPU's
+/// seed: the pyramid built from the field rolled by the step's offset,
+/// every level from 1 up read at the position plus it. And the check
+/// can tell: the same mirror with no offset disagrees.
+#[test]
+fn mccabe_shifted_lattice_matches_a_cpu_mirror() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 64;
+    let cfg = mccabe_shifted_config(N as u32);
+    let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+    r.seed(&device, &queue, &cfg);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let f0: Vec<f32> = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32)
+        .iter()
+        .map(|px| px[0])
+        .collect();
+    r.run_steps(&device, &queue, &cfg, 1);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let got = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+
+    let (sx, sy) = cpu_lattice_shift(0, crate::sim::renderer::LATTICE_SHIFT_EVERY, cfg.seed);
+    assert!(sx != 0 || sy != 0, "the first step's offset happens to be zero; pick another seed");
+    let lo = f0.iter().cloned().fold(f32::INFINITY, f32::min);
+    let hi = f0.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    let level_for = |r: f32| (0.55f32 * r).max(1.0).log2();
+    let count_mismatches = |shift: (i64, i64)| -> (usize, usize) {
+        // f'(x) = f(x - s), periodic.
+        let rolled: Vec<f32> = (0..N * N)
+            .map(|c| {
+                let (x, y) = ((c % N) as i64, (c / N) as i64);
+                let (ux, uy) = ((x - shift.0).rem_euclid(N as i64), (y - shift.1).rem_euclid(N as i64));
+                f0[uy as usize * N + ux as usize]
+            })
+            .collect();
+        let sample = cpu_mccabe_sampler(&rolled, N);
+        let (mut exact, mut other) = (0usize, 0usize);
+        for y in 0..N {
+            for x in 0..N {
+                let (px, py) = (x as f32 + 0.5 + shift.0 as f32, y as f32 + 0.5 + shift.1 as f32);
+                let (mut best_var, mut best_dir) = (f32::MAX, 0.0f32);
+                for i in 0..5 {
+                    let ra = (1u32 << i) as f32;
+                    let act = sample(level_for(ra), px, py);
+                    let inh = sample(level_for(ra * 2.0), px, py);
+                    let v = (act - inh).abs();
+                    let amt = 0.05 + (0.01 - 0.05) * (i as f32 / 4.0);
+                    if v < best_var {
+                        best_var = v;
+                        best_dir = if act > inh { amt } else { -amt };
+                    }
+                }
+                let f = (f0[y * N + x] - lo) / (hi - lo).max(1e-6) * 2.0 - 1.0;
+                if (f + best_dir - got[y * N + x][0]).abs() < 1e-4 {
+                    exact += 1;
+                } else {
+                    other += 1;
+                }
+            }
+        }
+        (exact, other)
+    };
+    let (exact, other) = count_mismatches((sx, sy));
+    let (_, unshifted_other) = count_mismatches((0, 0));
+    println!(
+        "shifted lattice ({sx}, {sy}) vs CPU mirror: {exact} cells match, {other} differ; \
+         the unshifted mirror differs on {unshifted_other}"
+    );
+    // A tie can pick another scale in rounding; the fixed-lattice mirror
+    // allows 1 in 200, and so does this.
+    assert!(other * 200 < N * N, "{other} cells differ from the shifted mirror");
+    assert!(unshifted_other > other * 4, "the check cannot tell a shifted lattice from a fixed one");
+}
+
+/// The shifted lattice is batch invariant: its offset is a function of
+/// the step index, and the pyramid's uniforms are written per step.
+#[test]
+fn mccabe_shifted_lattice_is_batch_invariant() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 48;
+    // Three scales: five at 48 cells put the coarsest past the
+    // pyramid's reach, it wins everywhere, and fixed and shifted runs
+    // collapse to the same trivial field.
+    let mut cfg = mccabe_shifted_config(N);
+    cfg.model_params.insert("scales".into(), 3.0);
+    let n = 300;
+    let mut a = SimRenderer::new(&device, &cfg, N, N);
+    a.seed(&device, &queue, &cfg);
+    a.run_steps(&device, &queue, &cfg, n);
+    let mut b = SimRenderer::new(&device, &cfg, N, N);
+    b.seed(&device, &queue, &cfg);
+    for _ in 0..n {
+        b.run_steps(&device, &queue, &cfg, 1);
+    }
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let fa = read_rgba32f(&device, &queue, a.field_texture(), N, N);
+    let fb = read_rgba32f(&device, &queue, b.field_texture(), N, N);
+    let differing = fa
+        .iter()
+        .zip(&fb)
+        .filter(|(x, y)| x.iter().zip(y.iter()).any(|(p, q)| p.to_bits() != q.to_bits()))
+        .count();
+    assert_eq!(differing, 0, "{differing} cells differ between batchings");
+    // And it is not the fixed lattice's run.
+    let mut fixed = mccabe_config(N);
+    fixed.model_params.insert("scales".into(), 3.0);
+    let mut c = SimRenderer::new(&device, &fixed, N, N);
+    c.seed(&device, &queue, &fixed);
+    c.run_steps(&device, &queue, &fixed, n);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let fc = read_rgba32f(&device, &queue, c.field_texture(), N, N);
+    assert!(fa.iter().zip(&fc).any(|(x, y)| x[0] != y[0]), "the shift changed nothing");
+}
+
+/// Measurement for the plan's section 6: the coarse-fastest table at
+/// 512^2 with the pyramid's lattice fixed and shifted every 1, 4 and 16
+/// steps, over seeds. Dumps each run's field after 200 steps to
+/// `output/sim_proto/isotropy/gpu_dump/` for the spectral metric
+/// (`proto_mccabe_isotropy.py`'s), and prints the motion over steps 200
+/// to 232 -- a whole number of every period -- the share of cells whose
+/// direction flips per step, and the mean change per step.
+#[test]
+#[ignore = "measurement"]
+fn mccabe_lattice_shift_probe() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 512;
+    let seeds: u64 = std::env::var("PROBE_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(32);
+    let dir = std::path::Path::new("output/sim_proto/isotropy/gpu_dump");
+    std::fs::create_dir_all(dir).unwrap();
+    let rows = [(1.0f32, 0.01f32), (3.0, 0.02), (10.0, 0.02), (20.0, 0.03), (45.0, 0.04)];
+    const MOTION_STEPS: u32 = 32;
+    for period in [0u32, 1, 4, 16] {
+        let (mut flips, mut change) = (0.0f64, 0.0f64);
+        for seed in 1..=seeds {
+            let mut cfg = mccabe_config(N);
+            cfg.seed = seed;
+            cfg.model_params.insert("layout".into(), 1.0);
+            cfg.model_params.insert("scales".into(), rows.len() as f32);
+            cfg.model_params.insert("averaging".into(), if period > 0 { 1.0 } else { 0.0 });
+            for (i, (ra, amt)) in rows.iter().enumerate() {
+                for (c, v) in [("radius", *ra), ("ratio", 2.0), ("amount", *amt), ("weight", 1.0), ("symmetry", 0.0)] {
+                    cfg.model_params.insert(format!("s{i}_{c}"), v);
+                }
+            }
+            let mut r = SimRenderer::new(&device, &cfg, N, N);
+            r.set_lattice_shift_every(period.max(1));
+            r.seed(&device, &queue, &cfg);
+            r.run_steps(&device, &queue, &cfg, 200);
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            let read = |r: &SimRenderer| -> Vec<f32> {
+                read_rgba32f(&device, &queue, r.field_texture(), N, N).iter().map(|p| p[0]).collect()
+            };
+            let f200 = read(&r);
+            let bytes: Vec<u8> = f200.iter().flat_map(|v| v.to_le_bytes()).collect();
+            std::fs::write(dir.join(format!("p{period}_s{seed}.f32")), bytes).unwrap();
+            let mut prev = f200;
+            let mut prev_dir: Option<Vec<bool>> = None;
+            for _ in 0..MOTION_STEPS {
+                r.run_steps(&device, &queue, &cfg, 1);
+                let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+                let next = read(&r);
+                let d: Vec<bool> = next.iter().zip(&prev).map(|(a, b)| a > b).collect();
+                change += next.iter().zip(&prev).map(|(a, b)| (a - b).abs() as f64).sum::<f64>() / (N * N) as f64;
+                if let Some(pd) = &prev_dir {
+                    flips += d.iter().zip(pd).filter(|(a, b)| a != b).count() as f64 / (N * N) as f64;
+                }
+                prev_dir = Some(d);
+                prev = next;
+            }
+        }
+        println!(
+            "period {period:2}: direction flips per step {:.3}, mean |df| per step {:.4}",
+            flips / ((MOTION_STEPS - 1) as u64 * seeds) as f64,
+            change / (MOTION_STEPS as u64 * seeds) as f64
+        );
+    }
+}
+
 /// Phase 3's other gate: McCabe at 1080p inside the interactive budget.
 ///
 /// The pipeline doc expected "well under 2 ms" for a box pyramid and

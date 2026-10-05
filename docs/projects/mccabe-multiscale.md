@@ -341,6 +341,50 @@ sampling-phase fix: at `CAL` 0.55 the pyramid's peak wavenumber is
 66 / 18 / 9 against the disc's 54 / 16 / 8 at radii 3 / 10 / 20, so
 its features are 12–20% too small.
 
+### 6a. Built: the shifted grid (2026-10-04)
+
+`averaging` = 1 ("Pyramid, shifted grid") moves the pyramid's lattice.
+- **The offset.** A hash of (seed, step / 4) in [0, 128) per axis
+  (`sim_lattice_shift`), carried to the shaders by the uniform's
+  `xform.z` (the period, 0 when fixed).
+- **The build.** Level 1 builds from the field at `2p + d − s`; the
+  levels above inherit the offset.
+- **The reads.** `pyr_level_avg` reads levels from 1 up at `pos + s`;
+  level 0 is the field and does not move.
+- **Per-step uniforms.** The pyramid's uniforms became a ring, one per
+  (step, layer, level), since they were written once per batch.
+- **Periodic only.** On any other boundary the period is 0.
+
+**Default stays Pyramid**, so saved configs and baselines render as
+before. Every McCabe preset now sets the shifted grid.
+
+| gate | result |
+|---|---|
+| baselines at the default | 94/94 byte-identical; `sim-mccabe-shifted` makes 95 |
+| CPU mirror, one step, offset (69, 49) | 4,096 of 4,096 cells exact; the unshifted mirror differs on 1,999 |
+| batch invariance, 300 steps | bit-identical, and different from the fixed lattice's run |
+| `every_preset_draws_something` | passes with every preset shifted |
+
+**The lean, on the GPU** (coarse-fastest table, 512², 32 seeds; motion
+over steps 200–232, 8 seeds):
+
+| lattice | axes / diagonals | paired gain | direction flips / step | mean change / step |
+|---|---|---|---|---|
+| fixed | 1.07 ± 0.02 | — | 0.32 | 0.0137 |
+| moved every step | 0.93 ± 0.02 | 0.14 ± 0.03 | 0.37 | 0.0165 |
+| **every 4 steps (shipped)** | **0.93 ± 0.02** | **0.14 ± 0.03** | **0.26** | **0.0157** |
+| every 16 steps | 0.97 ± 0.02 | 0.10 ± 0.03 | 0.30 | 0.0150 |
+
+Every 4 removes the lean as fully as every step, and its cells reverse
+direction less often than the fixed lattice's. A preset runs four or
+more steps a frame, so a moving lattice moves about once a frame.
+
+**Seen** (512², `output/mccabe_shift/sheet.png`):
+- The default ladder is unchanged to the eye.
+- The coarse ladder's nested contours are crisper shifted. The pinning
+  was costing it structure as well as direction.
+- The coarse-fastest table's squarish blobs become a round labyrinth.
+
 ## 7. Not in scope
 
 - **Exact disc kernels**, which would need FFT. That is parked with

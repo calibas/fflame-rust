@@ -171,6 +171,23 @@ fn sim_pcg(v: u32) -> u32 {
     return (word >> 22u) ^ word;
 }
 
+// The pyramid's lattice offset for this dispatch's step, in base cells
+// (mccabe-multiscale plan, section 6). The pyramid's texel lattice is
+// moved by it -- built from the field shifted by it, read at positions
+// shifted back -- so no pattern can lock onto the texel lines of its
+// coarse levels, which the bilinear reads crease along. A hash of
+// (seed, step / period), so a run stays reproducible and batch
+// invariant; `xform.z` carries the period, 0 when the lattice is fixed.
+// [0, 128) covers the coarsest texel's spacing at any grid.
+fn sim_lattice_shift() -> vec2<i32> {
+    let period = u32(params.xform.z);
+    if (period == 0u) {
+        return vec2<i32>(0, 0);
+    }
+    let h = sim_pcg(sim_pcg((params.step_index / period) ^ params.seed_lo) ^ params.seed_hi ^ 0x1a77u);
+    return vec2<i32>(i32(h & 127u), i32((h >> 7u) & 127u));
+}
+
 fn sim_rand(p: vec2<i32>, salt: u32) -> f32 {
     let g = sim_grid();
     let idx = u32(p.y * g.x + p.x);
@@ -758,7 +775,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (p.x >= dst.x || p.y >= dst.y) {
         return;
     }
-    let c = 2 * p;
+    // Level 1 is built from the field shifted by the lattice offset
+    // (`xform.y` marks the dispatch that reads the field); the levels
+    // above inherit it.
+    var c = 2 * p;
+    if (params.xform.y > 0.5) {
+        c = c - sim_lattice_shift();
+    }
     var acc = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     for (var dy = -2; dy <= 2; dy = dy + 1) {
         for (var dx = -2; dx <= 2; dx = dx + 1) {
@@ -1749,9 +1772,13 @@ fn pyr_size(l: i32) -> vec2<i32> {
 // A model calls `pyr_prepare()` at the top of its step.
 var<private> pyr_top_cached: i32 = 0;
 var<private> pyr_sizes: array<vec2<i32>, 8>;
+// The lattice offset the pyramid was built with this step: levels from
+// 1 up are read at the position plus it. Zero when the lattice is fixed.
+var<private> pyr_shift_cached: vec2<f32> = vec2<f32>(0.0, 0.0);
 
 fn pyr_prepare() {
     pyr_top_cached = pyr_levels() - 1;
+    pyr_shift_cached = vec2<f32>(sim_lattice_shift());
     var s = sim_grid();
     for (var i = 0; i < 8; i = i + 1) {
         pyr_sizes[i] = s;
@@ -1810,7 +1837,8 @@ fn pyr_load4_sized(l: i32, q: vec2<i32>, g: vec2<i32>) -> vec4<f32> {
 
 fn pyr_level_avg4(l: i32, pos: vec2<f32>) -> vec4<f32> {
     let s = f32(1 << u32(l));
-    let f = (pos - vec2<f32>(0.5, 0.5)) / s;
+    let q = select(pos, pos + pyr_shift_cached, l > 0);
+    let f = (q - vec2<f32>(0.5, 0.5)) / s;
     let f0 = floor(f);
     let t = f - f0;
     let i0 = vec2<i32>(f0);
@@ -1847,7 +1875,10 @@ fn pyr_sample4(level: f32, pos: vec2<f32>) -> vec4<f32> {
 // steps; `lattice4_ring_does_not_drift` pins it.
 fn pyr_level_avg(l: i32, pos: vec2<f32>) -> f32 {
     let s = f32(1 << u32(l));
-    let f = (pos - vec2<f32>(0.5, 0.5)) / s;
+    // Level 0 is the field itself; every level above was built from the
+    // field shifted by the lattice offset, so it is read shifted.
+    let q = select(pos, pos + pyr_shift_cached, l > 0);
+    let f = (q - vec2<f32>(0.5, 0.5)) / s;
     let f0 = floor(f);
     let t = f - f0;
     let i0 = vec2<i32>(f0);
