@@ -515,3 +515,45 @@ The cells are the look the paper's multi-scale figures describe.
   sampling-phase fix (catalogue §10). It would be measured and
   reported only: a changed constant moves every McCabe picture, and
   that is the user's call.
+
+## 8. Experiments: what else is worth building (2026-10-04)
+
+Asked: is P3 worth it, what does P4 do, what colourings (relief?), can
+the lean be made on purpose per scale, and can per-scale maps (warps,
+flame affines) make interesting patterns? **Only clear wins get built.**
+
+**The script.**
+[proto_mccabe_variants.py](../../scripts/sim_prototypes/proto_mccabe_variants.py)
+runs every idea on the CPU from the same seed:
+- exact-disc averages by FFT, 384², 300 steps;
+- the ladder radii 2–32, colour memory 0.17.
+
+The sheets are in `output/sim_proto/variants/`.
+
+| idea | seen | cost to build | verdict |
+|---|---|---|---|
+| **P3**, variation radius 1 and 3 | smoother, larger scale domains; less speckle in which scale wins | a second pass and scratch slices (pyramid), or five more inverse FFTs a step (exact) | **not worth it**: a modest change at a real cost |
+| **P4**, sum of each scale's signed step | white and black stripes with dots inside: the paper's figs. 4–6 | a rule switch in the step, either averaging | borderline |
+| P4, same with alternating negative steps | dense fingerprint stripes, bent by large-scale flow | as above | the best P4 picture; overlaps Swift–Hohenberg |
+| P4, sign of the weighted sum | coarse binary blobs; with ± weights a fine maze | as above | weaker |
+| **lean on purpose**, all scales 2:1 at 0° | horizontal grain, streaked | the spectral stage's disc fill gets an aspect and an angle per scale; no cost per step | **clear win** |
+| lean, 2:1 at 0/90° alternating | flowing fingerprint bands with fine detail inside | as above | **clear win** |
+| lean, 3:1 on the coarse scales only, at 0/60/120° | bold zebra or wood-grain stripes, still multi-scale inside | as above | **clear win** |
+| lean, 2:1, 36° apart | diagonal woven flow | as above | good |
+| drift, activator offset from inhibitor | no difference in a still; the pattern travels | asymmetric kernels have complex spectra | animation only; not now |
+| per-scale rotation ±3°, zoom on coarse scales | subtle | a map per scale in the step | **not worth it** |
+| per-scale swirl | a strong vortex | as above | striking, but a whole-field swirl warp already exists |
+| **relief**, the field as a height, raw | harsh: the finest scale's speckle dominates | — | — |
+| relief, height smoothed over radius 2 | embossed cells with nested texture: the paper's raised and recessed look | a colouring for any model, in the colour stack under Multiply | **clear win** |
+| Chau's YUV, luminance from the field, chroma from the memory | vivid, every scale's colour visible at full brightness | an option on Scale Memory | taste, not a clear win |
+
+**Why "lean on purpose" is exact-discs only.** An ellipse is centrally
+symmetric, so its spectrum stays real and the spectral stage's pairing
+holds: the only change is the fill. The pyramid's reads are round by
+construction. An elliptical read would cost a line of taps per average,
+and section 6 showed how sensitive the pyramid's shape is.
+
+**Relief** fits as a simulation colouring for any model: a channel as
+height, smoothed, lit, and blended over Scale Memory or anything else.
+No effect in the chain does it today (the sixteen effects include Sobel
+edges, not shading).
