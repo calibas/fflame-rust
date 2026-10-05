@@ -872,17 +872,35 @@ pub static SCALE_MEMORY: SimColoringDef = SimColoringDef {
     wgsl: r#"
 fn sim_color(x: SimSample, p: vec2<i32>) -> vec4<f32> {
     let n = max(cparam(0u), 1.0);
+    // The weights as the resolve left them, made a mix again. Every
+    // weight the step writes is in [0, 1] and they sum to at most 1, but
+    // the bicubic resolve interpolates them with Catmull-Rom, whose
+    // negative lobes overshoot across a sharp boundary: a weight below 0
+    // subtracts its band's colour and leaves the others', a colour
+    // outside the palette -- red fringes on an all-blue one. Clamped,
+    // then scaled back to the total the interpolation gave, the colour
+    // is a mix of the palette's bands at the brightness it would have
+    // had. Under Nearest and Bilinear this changes nothing.
+    let m0 = clamp(x.m0, vec4<f32>(0.0), vec4<f32>(1.0));
+    let m1 = clamp(x.m1, vec4<f32>(0.0), vec4<f32>(1.0));
+    let ones = vec4<f32>(1.0);
+    let total = clamp(dot(x.m0, ones) + dot(x.m1, ones), 0.0, 1.0);
+    let kept = dot(m0, ones) + dot(m1, ones);
+    // Exactly 1 where the clamp changed nothing, rather than a ratio of
+    // two equal sums -- which fast-math need not round to 1.
+    let k = select(total / max(kept, 1.0e-6), 1.0, kept == total);
     // Sum of weight times band colour, band i centred at (i + 1/2) / n
     // as in scale_mix. Written out: a dynamic index into a value array
     // is not portable WGSL.
-    var c = x.m0.x * sim_palette(0.5 / n);
-    c = c + x.m0.y * sim_palette(1.5 / n);
-    c = c + x.m0.z * sim_palette(2.5 / n);
-    c = c + x.m0.w * sim_palette(3.5 / n);
-    c = c + x.m1.x * sim_palette(4.5 / n);
-    c = c + x.m1.y * sim_palette(5.5 / n);
-    c = c + x.m1.z * sim_palette(6.5 / n);
-    c = c + x.m1.w * sim_palette(7.5 / n);
+    var c = m0.x * sim_palette(0.5 / n);
+    c = c + m0.y * sim_palette(1.5 / n);
+    c = c + m0.z * sim_palette(2.5 / n);
+    c = c + m0.w * sim_palette(3.5 / n);
+    c = c + m1.x * sim_palette(4.5 / n);
+    c = c + m1.y * sim_palette(5.5 / n);
+    c = c + m1.z * sim_palette(6.5 / n);
+    c = c + m1.w * sim_palette(7.5 / n);
+    c = c * k;
     let v = clamp(x.s.x * 0.5 + 0.5, 0.0, 1.0);
     let b = mix(1.0, v, cparam(1u));
     return vec4<f32>(c * b, 1.0);
