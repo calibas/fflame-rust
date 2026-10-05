@@ -944,11 +944,17 @@ pub enum SimBlend {
     Screen,
     Overlay,
     Add,
+    /// Overlay with the roles swapped: the TOP layer decides, multiplying
+    /// below mid-grey and screening above it. Over a grey layer centred
+    /// on mid-grey that is a shadow toward black and a highlight toward
+    /// white, each by its distance from mid-grey -- the escape relief's
+    /// own shading, which is why Relief uses it.
+    HardLight,
 }
 
 impl SimBlend {
     pub const NAMES: &'static [&'static str] =
-        &["normal", "lighten", "darken", "multiply", "screen", "overlay", "add"];
+        &["normal", "lighten", "darken", "multiply", "screen", "overlay", "add", "hard_light"];
 
     pub fn name(&self) -> &'static str {
         match self {
@@ -959,6 +965,7 @@ impl SimBlend {
             SimBlend::Screen => "screen",
             SimBlend::Overlay => "overlay",
             SimBlend::Add => "add",
+            SimBlend::HardLight => "hard_light",
         }
     }
 
@@ -971,6 +978,7 @@ impl SimBlend {
             "screen" => SimBlend::Screen,
             "overlay" => SimBlend::Overlay,
             "add" => SimBlend::Add,
+            "hard_light" => SimBlend::HardLight,
             _ => return None,
         })
     }
@@ -985,6 +993,7 @@ impl SimBlend {
             SimBlend::Screen => 4,
             SimBlend::Overlay => 5,
             SimBlend::Add => 6,
+            SimBlend::HardLight => 7,
         }
     }
 }

@@ -22,7 +22,7 @@ a run at a step count*.
 - [src/sim/mod.rs](../../src/sim/mod.rs) — `ModelDef`, `SimColoringDef`,
   the `MODELS` and `COLORINGS` registries, the pure rules
 - [src/sim/models.rs](../../src/sim/models.rs) — 31 models, inline WGSL
-- [src/sim/colorings.rs](../../src/sim/colorings.rs) — 12 colourings
+- [src/sim/colorings.rs](../../src/sim/colorings.rs) — 13 colourings
 - [src/sim/assembler.rs](../../src/sim/assembler.rs) — WGSL assembly
 - [src/sim/renderer.rs](../../src/sim/renderer.rs) — `SimRenderer`
 - [src/config/sim.rs](../../src/config/sim.rs) — `SimConfig` and its paths
@@ -87,7 +87,7 @@ nothing pays for what it does not use:
 
 **`SimColoringDef`** is the same shape for the picture side, with
 `ColoringFeature`: `NeedsGradient`, `NeedsStructure`, `NeedsDistance`,
-`ReadsCell`, `ReadsMemory`. A colouring is `fn sim_color(x: SimSample, p: vec2<i32>) -> vec4<f32>`
+`ReadsCell`, `ReadsMemory`, `NeedsRelief`. A colouring is `fn sim_color(x: SimSample, p: vec2<i32>) -> vec4<f32>`
 where `rgb` is the colour and **`a` is coverage**. Coverage 0 lets the
 shared tonemap composite the background through, which is what makes a
 matte and a transparent PNG work; the matte multiplies into that same
@@ -284,7 +284,33 @@ catalogue follows.
 **Colour layers** are a stack, bottom first, each with its own colouring
 and blend mode and opacity. With a stack, the flat `coloring` fields are
 ignored. A `gather` colour layer reads the first channel of four
-consecutive layers as one colouring's four channels.
+consecutive layers as one colouring's four channels. The blend modes are
+Normal, Lighten, Darken, Multiply, Screen, Overlay, Add and Hard light,
+the last being Overlay decided by the top layer.
+
+**Relief** is a colouring meant for the top of the stack under Hard
+light: one channel of its source layer as a height, smoothed and lit,
+as grey centred on mid-grey. Over mid-grey, Hard light is a shadow
+toward black and a highlight toward white by the distance from it,
+which is the escape relief's shading. The panel's **Add relief** adds
+one in a click. Its lighting follows the escape relief's
+(`EscapeShading`): Tilt or Lambert, and the light angle
+counter-clockwise from east, 135 by default.
+
+**The relief stage** builds what it reads (`NeedsRelief`, `x.relief`):
+- **Before the colour pass**, every frame a colouring needs it: two
+  separable passes at grid size, the Gaussian of the softness and its
+  derivative along x, then along y.
+- **Into an `Rgba32Float`** of (height, d/dx, d/dy), in cells, which the
+  resolve interpolates like the state, so the shading stays smooth at
+  any zoom.
+- **One height per frame**, from the first enabled colouring that asks
+  (its parameters 0 and 1: channel and softness), as there is one
+  distance field.
+- **The cost** on a 1080p grid: about 2 ms a frame at softness 2, 6 ms
+  at the maximum 8.
+- **The same texture** is the height a 3D height-field mode would
+  displace by (mccabe-multiscale plan, section 10).
 
 **`use_transforms`** makes the flame's transforms the layers' per-step
 maps: transform *i* warps layer *i*, by its affine **and its

@@ -3775,6 +3775,186 @@ fn scale_memory_luminance_mode_is_the_field_as_luminance() {
     assert!(lo < 0.2 && hi > 0.8, "{lo}..{hi}");
 }
 
+/// Overwrite a renderer's field with `f(x, y)`, all four channels.
+fn write_field(queue: &Queue, r: &SimRenderer, n: u32, f: impl Fn(u32, u32) -> [f32; 4]) {
+    let texels: Vec<[f32; 4]> = (0..n * n).map(|c| f(c % n, c / n)).collect();
+    queue.write_texture(
+        TexelCopyTextureInfo { texture: r.field_texture(), mip_level: 0, origin: Origin3d::ZERO, aspect: TextureAspect::All },
+        bytemuck::cast_slice(&texels),
+        TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(n * 16), rows_per_image: Some(n) },
+        Extent3d { width: n, height: n, depth_or_array_layers: 1 },
+    );
+}
+
+/// The relief stage (mccabe-multiscale plan, section 10) against a CPU
+/// mirror: the chosen channel's Gaussian at the softness, and its
+/// derivative along each axis, periodic. A noisy field in the third
+/// channel and other values in the rest, so the channel select is
+/// checked too.
+#[test]
+fn the_relief_stage_matches_a_cpu_gaussian_and_its_derivative() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 40;
+    let mut cfg = mccabe_config(N as u32);
+    cfg.coloring = "relief".into();
+    cfg.coloring_params.insert("channel".into(), 2.0);
+    let palette = test_palette(&device, &queue);
+    let mut seed = 0x2545_f491u32;
+    let mut rnd = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        seed as f32 / u32::MAX as f32 * 2.0 - 1.0
+    };
+    let z: Vec<f32> = (0..N * N).map(|_| rnd()).collect();
+    for sigma in [0.0f32, 1.7, 3.0] {
+        cfg.coloring_params.insert("softness".into(), sigma);
+        let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+        r.seed(&device, &queue, &cfg);
+        write_field(&queue, &r, N as u32, |x, y| [9.0, -3.0, z[y as usize * N + x as usize], 7.0]);
+        r.color(&device, &queue, &cfg, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let got = read_rgba32f(&device, &queue, r.relief_texture().expect("a relief colouring"), N as u32, N as u32);
+
+        // The kernel as the stage builds it.
+        let s = sigma.clamp(0.3, 8.0) as f64;
+        let reach = ((3.0 * s).ceil() as i64).clamp(1, 24);
+        let g: Vec<f64> = (-reach..=reach).map(|i| (-(i * i) as f64 / (2.0 * s * s)).exp()).collect();
+        let zsum: f64 = g.iter().sum();
+        let s2: f64 = (-reach..=reach).zip(&g).map(|(i, w)| (i * i) as f64 * w).sum();
+        let gw: Vec<f64> = g.iter().map(|w| w / zsum).collect();
+        let dw: Vec<f64> = (-reach..=reach).zip(&g).map(|(i, w)| i as f64 * w / s2).collect();
+        let at = |v: &Vec<f64>, x: i64, y: i64| v[(y.rem_euclid(N as i64) as usize) * N + x.rem_euclid(N as i64) as usize];
+        let along = |v: &Vec<f64>, k: &Vec<f64>, horizontal: bool| -> Vec<f64> {
+            (0..N * N)
+                .map(|c| {
+                    let (x, y) = ((c % N) as i64, (c / N) as i64);
+                    (-reach..=reach)
+                        .zip(k)
+                        .map(|(i, w)| w * if horizontal { at(v, x + i, y) } else { at(v, x, y + i) })
+                        .sum()
+                })
+                .collect()
+        };
+        let zf: Vec<f64> = z.iter().map(|&v| v as f64).collect();
+        let a = along(&zf, &gw, true);
+        let b = along(&zf, &dw, true);
+        let h = along(&a, &gw, false);
+        let hx = along(&b, &gw, false);
+        let hy = along(&a, &dw, false);
+        let mut worst = [0.0f64; 3];
+        for c in 0..N * N {
+            worst[0] = worst[0].max((got[c][0] as f64 - h[c]).abs());
+            worst[1] = worst[1].max((got[c][1] as f64 - hx[c]).abs());
+            worst[2] = worst[2].max((got[c][2] as f64 - hy[c]).abs());
+        }
+        println!("relief at softness {sigma}: worst height {:.1e}, d/dx {:.1e}, d/dy {:.1e}", worst[0], worst[1], worst[2]);
+        assert!(worst.iter().all(|w| *w < 1e-5), "{worst:?}");
+    }
+}
+
+/// What the relief stage costs a frame on a 1080p grid: the colour pass
+/// alone, then with a Relief layer over it at softness 2 and 8.
+#[test]
+#[ignore = "measurement"]
+fn relief_cost_at_1080p() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let (w, h) = (1920u32, 1080u32);
+    let palette = test_palette(&device, &queue);
+    let base = crate::config::sim::SimColorLayer {
+        coloring: "scale_memory".into(),
+        ..Default::default()
+    };
+    for softness in [None, Some(2.0f32), Some(8.0)] {
+        let mut cfg = mccabe_memory_config(256, 0.1);
+        cfg.grid = crate::config::sim::SimGrid::Fixed { width: w, height: h };
+        cfg.color_layers = vec![base.clone()];
+        if let Some(s) = softness {
+            cfg.color_layers.push(crate::config::sim::SimColorLayer {
+                coloring: "relief".into(),
+                coloring_params: [("softness".to_string(), s)].into_iter().collect(),
+                blend: crate::config::sim::SimBlend::HardLight,
+                ..Default::default()
+            });
+        }
+        let mut r = SimRenderer::new(&device, &cfg, w, h);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 4);
+        r.color(&device, &queue, &cfg, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let mut best = f64::MAX;
+        for _ in 0..5 {
+            let t0 = std::time::Instant::now();
+            for _ in 0..10 {
+                r.color(&device, &queue, &cfg, &palette);
+            }
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            best = best.min(t0.elapsed().as_secs_f64() * 1e3 / 10.0);
+        }
+        println!("colour pass at 1080p, relief softness {softness:?}: {best:.3} ms");
+    }
+}
+
+/// The Relief colouring lights a slope as the escape relief does: a
+/// rise facing the light brightens, the same rise facing away darkens
+/// by as much, and flat ground is mid-grey exactly. Ramps along x and
+/// along y with the light on either side, at Nearest on the grid; the
+/// interior only, away from the clamped edges.
+#[test]
+fn the_relief_colouring_lights_a_slope_toward_the_light() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 32;
+    let palette = test_palette(&device, &queue);
+    let mut cfg = mccabe_config(N);
+    cfg.boundary = SimBoundary::Clamp;
+    cfg.coloring = "relief".into();
+    cfg.upscale = crate::config::sim::SimUpscale::Nearest;
+    for (k, v) in [("softness", 0.0f32), ("height", 6.0), ("model", 0.0), ("shadow", 1.0), ("highlight", 1.0)] {
+        cfg.coloring_params.insert(k.into(), v);
+    }
+    // The tilt toward the light at slope 0.05 times height 6.
+    let t = 0.3f32 / (1.0f32 + 0.09).sqrt();
+    // (field, light angle, expected grey): a rise to the east lit from
+    // the west, then from the east; a rise toward the top of the grid
+    // (y runs down) lit from below, then from above; and flat ground.
+    let ramp_x = |x: u32, _y: u32| 0.05 * x as f32;
+    let ramp_up = |_x: u32, y: u32| 0.05 * (N - y) as f32;
+    let flat = |_x: u32, _y: u32| 0.25f32;
+    let cases: [(&dyn Fn(u32, u32) -> f32, f32, f32, &str); 5] = [
+        (&ramp_x, 180.0, 0.5 + 0.5 * t, "rise east, light west"),
+        (&ramp_x, 0.0, 0.5 - 0.5 * t, "rise east, light east"),
+        (&ramp_up, 270.0, 0.5 + 0.5 * t, "rise north, light south"),
+        (&ramp_up, 90.0, 0.5 - 0.5 * t, "rise north, light north"),
+        (&flat, 135.0, 0.5, "flat"),
+    ];
+    for (f, light, want, what) in cases {
+        cfg.coloring_params.insert("light".into(), light);
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        write_field(&queue, &r, N, |x, y| [f(x, y), 0.0, 0.0, 0.0]);
+        r.color(&device, &queue, &cfg, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let out = read_rgba32f(&device, &queue, r.output_texture(), N, N);
+        let mut worst = 0.0f32;
+        for y in 4..N - 4 {
+            for x in 4..N - 4 {
+                worst = worst.max((out[(y * N + x) as usize][0] - want).abs());
+            }
+        }
+        println!("{what}: want {want:.4}, worst error {worst:.1e}");
+        assert!(worst < 1e-4, "{what}: {worst}");
+    }
+}
+
 /// Phase 3's other gate: McCabe at 1080p inside the interactive budget.
 ///
 /// The pipeline doc expected "well under 2 ms" for a box pyramid and
@@ -7987,6 +8167,7 @@ fn blend_modes_match_a_cpu_evaluation() {
         crate::config::sim::SimBlend::Screen,
         crate::config::sim::SimBlend::Overlay,
         crate::config::sim::SimBlend::Add,
+        crate::config::sim::SimBlend::HardLight,
     ] {
         let mut stacked = cfg.clone();
         let mut t = colour(1);
@@ -8012,6 +8193,9 @@ fn blend_modes_match_a_cpu_evaluation() {
                             if bc < 0.5 { 2.0 * bc * tc } else { 1.0 - 2.0 * (1.0 - bc) * (1.0 - tc) }
                         }
                         crate::config::sim::SimBlend::Add => (bc + tc).min(1.0),
+                        crate::config::sim::SimBlend::HardLight => {
+                            if tc < 0.5 { 2.0 * bc * tc } else { 1.0 - 2.0 * (1.0 - bc) * (1.0 - tc) }
+                        }
                     }
                 };
                 let out_a = a + b[3] * (1.0 - a);

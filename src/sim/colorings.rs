@@ -936,3 +936,143 @@ fn sim_color(x: SimSample, p: vec2<i32>) -> vec4<f32> {
 }
 "#,
 };
+
+/// Relief (mccabe-multiscale plan, section 10): one channel of the
+/// source layer as a height, smoothed on the grid and lit -- the paper's
+/// raised and recessed look. A grey layer centred on mid-grey, meant for
+/// the colour stack under Hard light, where mid-grey changes nothing:
+/// below it multiplies toward black and above it screens toward white,
+/// each by the distance from mid-grey -- the escape relief's shadow and
+/// highlight exactly. Overlay works too, but on a light base its shadow
+/// barely lands.
+///
+/// The light is the escape relief's (`EscapeShading`): an angle
+/// counter-clockwise from east, 135 (upper left) by default; the signed
+/// tilt toward it, or Lambert's law with the light raised. The height
+/// comes from the renderer's relief stage, not from here: a Gaussian of
+/// the softness and its derivative, so the slope is the smoothed
+/// height's own. The same texture is the height a 3D height-field mode
+/// would displace by.
+pub static RELIEF: SimColoringDef = SimColoringDef {
+    name: "relief",
+    display_name: "Relief",
+    description: "One channel as a height, smoothed and lit: grey, centred on mid-grey, for the \
+                  colour stack under Hard light, where it shades whatever is beneath. Add it \
+                  with Add relief.",
+    features: &[ColoringFeature::NeedsRelief],
+    parameters: &[
+        // Slots 0 and 1 are read by the renderer's relief stage too.
+        SimParamDef {
+            name: "channel",
+            display_name: "Height from",
+            default: 0.0,
+            min: 0.0,
+            max: 3.0,
+            tooltip: "Which channel of the source layer is the height. McCabe: x is the \
+                      pattern, z the step its winning scale last changed (age).",
+            choices: &["x", "y", "z", "w"],
+        },
+        SimParamDef {
+            name: "softness",
+            display_name: "Softness",
+            default: 2.0,
+            min: 0.0,
+            max: 8.0,
+            tooltip: "Gaussian smoothing of the height, in cells, before its slope is taken. \
+                      Raw, the finest detail's speckle dominates; 2 gives raised cells with \
+                      their nested texture.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "height",
+            display_name: "Height",
+            default: 12.0,
+            min: 0.0,
+            max: 100.0,
+            tooltip: "Vertical exaggeration of the slope. Its useful range depends on the \
+                      model's values: McCabe's field runs -1 to 1.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "light",
+            display_name: "Light angle",
+            default: 135.0,
+            min: 0.0,
+            max: 360.0,
+            tooltip: "Where the light comes from, in degrees counter-clockwise from east: 135 \
+                      is the upper left, the cartographic convention. Lit from the other side, \
+                      raised detail reads as sunken.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "model",
+            display_name: "Lighting",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Tilt: the slope toward the light, symmetric in light and shade. Lambert: \
+                      the light raised by the elevation, so slopes facing away fall into shadow \
+                      sooner the lower it is.",
+            choices: &["Tilt", "Lambert"],
+        },
+        SimParamDef {
+            name: "elevation",
+            display_name: "Light elevation",
+            default: 30.0,
+            min: 1.0,
+            max: 89.0,
+            tooltip: "The light's height above the horizon in degrees, for Lambert.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "shadow",
+            display_name: "Shadow",
+            default: 0.8,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How dark the side facing away from the light goes.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "highlight",
+            display_name: "Highlight",
+            default: 0.6,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How light the side facing the light goes.",
+            choices: &[],
+        },
+    ],
+    wgsl: r#"
+fn sim_color(x: SimSample, p: vec2<i32>) -> vec4<f32> {
+    // The slope, exaggerated. The grid's y runs down the screen, so d/dy
+    // is negated to put the light where its angle says, as the escape
+    // relief does.
+    let g = vec2<f32>(-x.relief.y, x.relief.z) * cparam(2u);
+    let a = radians(cparam(3u));
+    let light = vec2<f32>(cos(a), sin(a));
+    let norm = inverseSqrt(1.0 + dot(g, g));
+    // The signed tilt toward the light: 0 on flat ground, monotonic and
+    // symmetric in the slope, saturating rather than blowing out.
+    var response = dot(g, light) * norm;
+    if (cparam(4u) >= 0.5) {
+        // Lambert with the light raised, measured from what flat ground
+        // receives, so flat still reads 0.
+        let e = radians(clamp(cparam(5u), 1.0, 89.0));
+        let se = sin(e);
+        let l = vec3<f32>(light * cos(e), se);
+        let lambert = max(dot(vec3<f32>(g, 1.0), l) * norm, 0.0);
+        response = select(
+            (lambert - se) / max(se, 1.0e-4),
+            (lambert - se) / max(1.0 - se, 1.0e-4),
+            lambert >= se,
+        );
+    }
+    let hi = clamp(response, 0.0, 1.0) * cparam(7u);
+    let lo = clamp(-response, 0.0, 1.0) * cparam(6u);
+    let v = 0.5 + 0.5 * (hi - lo);
+    return vec4<f32>(v, v, v, 1.0);
+}
+"#,
+};
+

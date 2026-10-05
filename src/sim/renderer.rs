@@ -413,6 +413,11 @@ struct Pipelines {
     jfa_step: ComputePipeline,
     jfa_final: ComputePipeline,
     jfa_layout: BindGroupLayout,
+    /// The relief stage's two passes (along x, then y), for a
+    /// `NeedsRelief` colouring. Always built, on the jump flood's layout:
+    /// the field in, one target out, the first pass's result in.
+    relief_h: ComputePipeline,
+    relief_v: ComputePipeline,
     /// The agent passes and their seeding, for `NeedsAgents`.
     agents: Vec<ComputePipeline>,
     agent_seed: Option<ComputePipeline>,
@@ -536,8 +541,15 @@ pub struct SimRenderer {
     jfa: Option<[(Texture, TextureView); 2]>,
     sdf: Option<(Texture, TextureView)>,
     /// Bound at the colour pass's distance slot when there is no
-    /// distance field; the shader never reads it then.
+    /// distance field; the shader never reads it then. And at its relief
+    /// slot when there is no relief.
     sdf_dummy: (Texture, TextureView),
+    /// The relief stage's two grid-sized textures: [0] the pass along x,
+    /// [1] the (height, d/dx, d/dy) the colour pass reads. Allocated
+    /// while a colouring reads relief, freed when none does.
+    relief: Option<[(Texture, TextureView); 2]>,
+    /// The relief stage's uniform: one `SimParamsGpu`.
+    relief_params_buffer: Buffer,
     /// One `SimParamsGpu` per jump-flood pass, its jump in the
     /// kernel-radius word. Sixteen slots covers a 32768-cell grid.
     jfa_params_buffer: Buffer,
@@ -635,6 +647,12 @@ impl SimRenderer {
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let relief_params_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Sim Relief Params"),
+            size: params_stride,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let level_params_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Sim Level Params"),
             size: params_stride * LEVEL_RING_SLOTS as u64,
@@ -689,6 +707,8 @@ impl SimRenderer {
             jfa: None,
             sdf: None,
             sdf_dummy,
+            relief: None,
+            relief_params_buffer,
             jfa_params_buffer,
             level_params_buffer,
             minmax_buffer,
@@ -1009,6 +1029,90 @@ impl SimRenderer {
         self.sdf.as_ref().map(|(t, _)| t)
     }
 
+    /// The colouring the relief stage builds its height for: the FIRST
+    /// enabled one that reads relief, as (its colour-parameter block, the
+    /// simulation layer it reads), or `None`. One height per frame, as
+    /// there is one distance field.
+    fn relief_source(cfg: &SimConfig) -> Option<(usize, usize)> {
+        let last = cfg.layer_count().saturating_sub(1);
+        if cfg.color_layers.is_empty() {
+            return coloring_or_default(&cfg.coloring).has(ColoringFeature::NeedsRelief).then_some((0, 0));
+        }
+        cfg.color_layers
+            .iter()
+            .take(crate::config::sim::MAX_COLOR_LAYERS)
+            .enumerate()
+            .find(|(_, l)| l.enabled && coloring_or_default(&l.coloring).has(ColoringFeature::NeedsRelief))
+            .map(|(k, l)| (k, l.source.min(last)))
+    }
+
+    /// Allocate the relief stage's textures while a colouring reads
+    /// relief, free them when none does.
+    fn ensure_relief(&mut self, device: &Device, wants: bool) {
+        if wants == self.relief.is_some() {
+            return;
+        }
+        self.relief = wants.then(|| {
+            let (w, h) = (self.grid_w, self.grid_h);
+            [Self::create_level(device, w, h, "Sim Relief A"), Self::create_level(device, w, h, "Sim Relief")]
+        });
+    }
+
+    /// The relief texture, for a test to read back.
+    #[cfg(test)]
+    pub(crate) fn relief_texture(&self) -> Option<&Texture> {
+        self.relief.as_ref().map(|r| &r[1].0)
+    }
+
+    /// The relief stage over the live field (mccabe-multiscale plan,
+    /// section 10): the Gaussian and its derivative along x into [0],
+    /// then along y into [1]. The uniform is the source layer's, its
+    /// kernel-offset word naming the colour-parameter block whose
+    /// channel and softness it reads.
+    fn encode_relief(&mut self, device: &Device, queue: &Queue, cfg: &SimConfig, enc: &mut CommandEncoder, block: usize, source: usize) {
+        let mut p = self.params_for_layer(cfg, self.step_index, source);
+        p.kernel_offset = block as u32;
+        queue.write_buffer(&self.relief_params_buffer, 0, bytemuck::bytes_of(&p));
+        let pipes = self.pipelines.as_ref().expect("pipelines built above");
+        let relief = self.relief.as_ref().expect("ensure_relief allocated it");
+        let group = |out: &TextureView, ping: &TextureView| {
+            device.create_bind_group(&BindGroupDescriptor {
+                label: Some("Sim Relief BG"),
+                layout: &pipes.jfa_layout,
+                entries: &[
+                    BindGroupEntry {
+                        binding: 0,
+                        resource: BindingResource::Buffer(BufferBinding {
+                            buffer: &self.relief_params_buffer,
+                            offset: 0,
+                            size: std::num::NonZeroU64::new(std::mem::size_of::<SimParamsGpu>() as u64),
+                        }),
+                    },
+                    BindGroupEntry { binding: 1, resource: self.model_params_buffer.as_entire_binding() },
+                    BindGroupEntry { binding: 2, resource: self.coloring_params_buffer.as_entire_binding() },
+                    BindGroupEntry { binding: 3, resource: BindingResource::TextureView(out) },
+                    BindGroupEntry {
+                        binding: 4,
+                        resource: BindingResource::TextureView(&self.field_view[self.current]),
+                    },
+                    BindGroupEntry { binding: 5, resource: BindingResource::TextureView(ping) },
+                ],
+            })
+        };
+        // Along x reads nothing at the ping slot: bind the other texture,
+        // never the one it writes.
+        let along_x = group(&relief[0].1, &relief[1].1);
+        let along_y = group(&relief[1].1, &relief[0].1);
+        let (gx, gy) = Self::dispatch_size(self.grid_w, self.grid_h);
+        let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: Some("Sim Relief"), timestamp_writes: None });
+        pass.set_pipeline(&pipes.relief_h);
+        pass.set_bind_group(0, &along_x, &[0]);
+        pass.dispatch_workgroups(gx, gy, 1);
+        pass.set_pipeline(&pipes.relief_v);
+        pass.set_bind_group(0, &along_y, &[0]);
+        pass.dispatch_workgroups(gx, gy, 1);
+    }
+
     /// The jump flood over the live field, into `self.sdf`: seed, then
     /// jumps of N/2 down to 1 and one more at 1, then seeds to
     /// distance. Each pass reads its own uniform slot, whose
@@ -1296,6 +1400,7 @@ impl SimRenderer {
             self.pyramid.clear();
             self.jfa = None;
             self.sdf = None;
+            self.relief = None;
             let (d, c) = Self::create_cell_buffers(device, gw, gh);
             self.deposit_buffer = d;
             self.claim_buffer = c;
@@ -1427,6 +1532,8 @@ impl SimRenderer {
         let color_mod = make("Sim Color", &color_src);
         let pyramid_mod = pyramid_src.as_ref().map(|src| make("Sim Pyramid", src));
         let reduce_mod = reduce_src.as_ref().map(|src| make("Sim Reduce", src));
+        let relief_h_mod = make("Sim Relief H", &assembler::assemble_relief_h(cfg.boundary));
+        let relief_v_mod = make("Sim Relief V", &assembler::assemble_relief_v(cfg.boundary));
         let jfa_init_mod = make("Sim JFA Init", &assembler::assemble_jfa_init());
         let jfa_step_mod = make("Sim JFA Step", &assembler::assemble_jfa_step());
         let jfa_final_mod = make("Sim JFA Final", &assembler::assemble_jfa_final());
@@ -1591,6 +1698,8 @@ impl SimRenderer {
                 sampled_tex(6, true),
                 // The colour stack's layer records.
                 storage_ro(7),
+                // The relief stage's height and slope, or its dummy.
+                sampled_tex(8, true),
             ],
         });
         // The jump flood: the shared uniform and param buffers (its
@@ -1710,6 +1819,8 @@ impl SimRenderer {
             jfa_init: pipeline("Sim JFA Init", &jfa_layout, &jfa_init_mod),
             jfa_step: pipeline("Sim JFA Step", &jfa_layout, &jfa_step_mod),
             jfa_final: pipeline("Sim JFA Final", &jfa_layout, &jfa_final_mod),
+            relief_h: pipeline("Sim Relief H", &jfa_layout, &relief_h_mod),
+            relief_v: pipeline("Sim Relief V", &jfa_layout, &relief_v_mod),
             jfa_layout,
             pyramid: pyramid_mod
                 .as_ref()
@@ -2932,8 +3043,14 @@ impl SimRenderer {
         if sdf {
             self.encode_jump_flood(device, queue, cfg, &mut enc);
         }
+        let relief = Self::relief_source(cfg);
+        self.ensure_relief(device, relief.is_some());
+        if let Some((block, source)) = relief {
+            self.encode_relief(device, queue, cfg, &mut enc, block, source);
+        }
         let p = self.pipelines.as_ref().expect("pipelines built above");
         let sdf_view = self.sdf.as_ref().map(|(_, v)| v).unwrap_or(&self.sdf_dummy.1);
+        let relief_view = self.relief.as_ref().map(|r| &r[1].1).unwrap_or(&self.sdf_dummy.1);
         let bg = device.create_bind_group(&BindGroupDescriptor {
             label: Some("Sim Color BG"),
             layout: &p.color_layout,
@@ -2961,6 +3078,7 @@ impl SimRenderer {
                 BindGroupEntry { binding: 5, resource: BindingResource::TextureView(palette_view) },
                 BindGroupEntry { binding: 6, resource: BindingResource::TextureView(sdf_view) },
                 BindGroupEntry { binding: 7, resource: self.color_layers_buffer.as_entire_binding() },
+                BindGroupEntry { binding: 8, resource: BindingResource::TextureView(relief_view) },
             ],
         });
         {

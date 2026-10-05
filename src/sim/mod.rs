@@ -500,6 +500,14 @@ pub enum ColoringFeature {
     /// is its nature. `no_colouring_reads_the_cell_coordinate` exempts
     /// colourings that declare this and no others.
     ReadsCell,
+    /// The colouring reads `x.relief`: (height, d/dx, d/dy) of one
+    /// channel of its source layer, Gaussian-smoothed on the grid
+    /// (mccabe-multiscale plan, section 10). The renderer builds that
+    /// texture before the colour pass from the FIRST colouring that
+    /// declares this -- its parameters 0 (channel) and 1 (softness) --
+    /// and the resolve interpolates it like the state. One height per
+    /// frame, as there is one distance field.
+    NeedsRelief,
 }
 
 /// The Sims 3×3 Laplacian's most negative eigenvalue (centre −1,
@@ -1143,6 +1151,7 @@ pub static COLORINGS: &[&SimColoringDef] =
     &colorings::LIC,
     &colorings::SPECIES,
     &colorings::SCALE_MEMORY,
+    &colorings::RELIEF,
 ];
 
 /// Look up a model by name, falling back to the first registered one.
