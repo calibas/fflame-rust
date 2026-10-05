@@ -69,17 +69,19 @@ struct SimCouplingGpu {
 /// Floats in each layer's block of the model-parameter buffer. Sixteen
 /// was every model until the coupled Turing lattice, whose coupling
 /// matrix alone is sixteen; 64 since McCabe's per-scale table
-/// (mccabe-multiscale plan, section 3). `MODEL_PARAM_SLOTS` in the
+/// (mccabe-multiscale plan, section 3); 128 since its per-scale warps
+/// (section 10). `MODEL_PARAM_SLOTS` in the
 /// WGSL must agree, and `every_model_fits_the_parameter_buffer` keeps
 /// the models inside it.
-pub const MODEL_PARAM_SLOTS: usize = 64;
+pub const MODEL_PARAM_SLOTS: usize = 128;
 
-/// The block's last slots are the renderer's, not the model's: the
-/// layer's first scratch slice or 0 (plan section 9, read by
-/// `sim_scratch_base`), then its memory slice count and first slice
-/// (mccabe-multiscale plan, section 2, read by `sim_mem_count` /
+/// The block's last slots are the renderer's, not the model's: whether
+/// any of the layer's per-scale warps is on (section 10, read by
+/// `sim_scale_warped`), its first scratch slice or 0 (plan section 9,
+/// read by `sim_scratch_base`), then its memory slice count and first
+/// slice (mccabe-multiscale plan, section 2, read by `sim_mem_count` /
 /// `sim_mem_base`).
-pub const RESERVED_PARAM_SLOTS: usize = 3;
+pub const RESERVED_PARAM_SLOTS: usize = 4;
 
 /// Steps between moves of a shifted pyramid lattice (mccabe-multiscale
 /// plan, section 6). Measured on the coarse-fastest table at 512^2, 32
@@ -2238,6 +2240,8 @@ impl SimRenderer {
             // is none), then the memory's slice count and first slice,
             // exact in f32 at any count the field can have.
             let (base, count) = layout.memory[l];
+            let warped = crate::sim::scale_warps(m.name).is_some_and(|w| w.any_active(m, cfg.layer_model_params(l)));
+            block[MODEL_PARAM_SLOTS - 4] = if warped { 1.0 } else { 0.0 };
             block[MODEL_PARAM_SLOTS - 3] = layout.scratch[l].0 as f32;
             block[MODEL_PARAM_SLOTS - 2] = count as f32;
             block[MODEL_PARAM_SLOTS - 1] = base as f32;

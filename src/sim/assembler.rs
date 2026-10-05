@@ -97,7 +97,7 @@ fn sim_visible_halfextent() -> vec2<f32> {
 // the block is `MODEL_PARAM_SLOTS` floats, mirrored in the renderer
 // (a test holds the two to each other). Its last two slots are the
 // renderer's: the layer's memory slice count and first slice.
-const MODEL_PARAM_SLOTS: u32 = 64u;
+const MODEL_PARAM_SLOTS: u32 = 128u;
 fn mparam(i: u32) -> f32 {
     return model_params[params.layer * MODEL_PARAM_SLOTS + i];
 }
@@ -111,6 +111,12 @@ fn sim_mem_count() -> i32 {
 }
 fn sim_mem_base() -> i32 {
     return i32(model_params[u32(sim_layer()) * MODEL_PARAM_SLOTS + MODEL_PARAM_SLOTS - 1u]);
+}
+// Whether any of the layer's per-scale warps is on (mccabe-multiscale
+// plan, section 10): the renderer decides, once, so the step does not
+// look through every scale's rates in every cell.
+fn sim_scale_warped() -> bool {
+    return model_params[u32(sim_layer()) * MODEL_PARAM_SLOTS + MODEL_PARAM_SLOTS - 4u] > 0.5;
 }
 
 // The slice of the field this dispatch owns.
@@ -2588,8 +2594,9 @@ mod tests {
         assert!(COMMON.contains(&line), "COMMON should declare `{line}`");
         assert_eq!(
             crate::sim::renderer::RESERVED_PARAM_SLOTS,
-            3,
-            "sim_mem_count / sim_mem_base read the last two slots, sim_scratch_base the one before"
+            4,
+            "sim_mem_count / sim_mem_base read the last two slots, sim_scratch_base the one before, \
+             sim_scale_warped the one before that"
         );
     }
 

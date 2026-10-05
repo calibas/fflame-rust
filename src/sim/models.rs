@@ -3332,6 +3332,13 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 /// Channels: `.x` = f, `.y` = the scale that fired (an integer),
 /// `.z` = the step at which the firing scale last changed, `.w` spare.
 /// McCabe's per-scale table (mccabe-multiscale plan, section 3).
+/// McCabe's per-scale warps (mccabe-multiscale plan, section 10).
+pub static MCCABE_WARPS: crate::sim::ScaleWarps = crate::sim::ScaleWarps {
+    model: "mccabe",
+    rows_param: "scales",
+    rows: 6,
+};
+
 pub static MCCABE_TABLE: crate::sim::ParamTable = crate::sim::ParamTable {
     model: "mccabe",
     mode_param: "layout",
@@ -3930,6 +3937,279 @@ pub static MCCABE: ModelDef = ModelDef {
             tooltip: "Averages each scale's variation over a disc of this radius, in cells, before the scales are compared: the paper's variation around the pixel, Softology's variation radius. The winner is then decided by its neighbourhood rather than the cell alone, so each scale holds larger, smoother regions with less speckle. 0 is off. While on it costs a pass a step and two more field slices (about 130 MB on a 1080p grid).",
             choices: &[],
         },
+        // Slots 52-81 (mccabe-multiscale plan, section 10): each scale's
+        // warp, the field warp's map applied to where that scale reads
+        // its averages. Drawn by the Warp section, not the model's list.
+        SimParamDef {
+            name: "s0_warp_zoom",
+            display_name: "Scale 1 warp zoom",
+            default: 1.0,
+            min: 0.9,
+            max: 1.1,
+            tooltip: "This scale reads its averages through a zoom about the centre each step, so its structure drifts outward (above 1) or inward, as the field warp's zoom would move the whole field. 1 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s0_warp_rotation",
+            display_name: "Scale 1 warp rotation",
+            default: 0.0,
+            min: -0.25,
+            max: 0.25,
+            tooltip: "Radians a step this scale's reading turns about the centre, so its structure turns while the other scales stay. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s0_warp_pan_x",
+            display_name: "Scale 1 warp pan x",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Cells a step this scale's reading moves sideways, so its structure drifts across the others. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s0_warp_pan_y",
+            display_name: "Scale 1 warp pan y",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Cells a step this scale's reading moves up or down. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s0_warp_flow",
+            display_name: "Scale 1 warp swirl",
+            default: 0.0,
+            min: -0.5,
+            max: 0.5,
+            tooltip: "A swirl of this scale's reading: extra radians a step at the rim, none at the centre. Strong values make a vortex of this scale alone. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s1_warp_zoom",
+            display_name: "Scale 2 warp zoom",
+            default: 1.0,
+            min: 0.9,
+            max: 1.1,
+            tooltip: "This scale reads its averages through a zoom about the centre each step, so its structure drifts outward (above 1) or inward, as the field warp's zoom would move the whole field. 1 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s1_warp_rotation",
+            display_name: "Scale 2 warp rotation",
+            default: 0.0,
+            min: -0.25,
+            max: 0.25,
+            tooltip: "Radians a step this scale's reading turns about the centre, so its structure turns while the other scales stay. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s1_warp_pan_x",
+            display_name: "Scale 2 warp pan x",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Cells a step this scale's reading moves sideways, so its structure drifts across the others. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s1_warp_pan_y",
+            display_name: "Scale 2 warp pan y",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Cells a step this scale's reading moves up or down. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s1_warp_flow",
+            display_name: "Scale 2 warp swirl",
+            default: 0.0,
+            min: -0.5,
+            max: 0.5,
+            tooltip: "A swirl of this scale's reading: extra radians a step at the rim, none at the centre. Strong values make a vortex of this scale alone. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s2_warp_zoom",
+            display_name: "Scale 3 warp zoom",
+            default: 1.0,
+            min: 0.9,
+            max: 1.1,
+            tooltip: "This scale reads its averages through a zoom about the centre each step, so its structure drifts outward (above 1) or inward, as the field warp's zoom would move the whole field. 1 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s2_warp_rotation",
+            display_name: "Scale 3 warp rotation",
+            default: 0.0,
+            min: -0.25,
+            max: 0.25,
+            tooltip: "Radians a step this scale's reading turns about the centre, so its structure turns while the other scales stay. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s2_warp_pan_x",
+            display_name: "Scale 3 warp pan x",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Cells a step this scale's reading moves sideways, so its structure drifts across the others. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s2_warp_pan_y",
+            display_name: "Scale 3 warp pan y",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Cells a step this scale's reading moves up or down. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s2_warp_flow",
+            display_name: "Scale 3 warp swirl",
+            default: 0.0,
+            min: -0.5,
+            max: 0.5,
+            tooltip: "A swirl of this scale's reading: extra radians a step at the rim, none at the centre. Strong values make a vortex of this scale alone. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s3_warp_zoom",
+            display_name: "Scale 4 warp zoom",
+            default: 1.0,
+            min: 0.9,
+            max: 1.1,
+            tooltip: "This scale reads its averages through a zoom about the centre each step, so its structure drifts outward (above 1) or inward, as the field warp's zoom would move the whole field. 1 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s3_warp_rotation",
+            display_name: "Scale 4 warp rotation",
+            default: 0.0,
+            min: -0.25,
+            max: 0.25,
+            tooltip: "Radians a step this scale's reading turns about the centre, so its structure turns while the other scales stay. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s3_warp_pan_x",
+            display_name: "Scale 4 warp pan x",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Cells a step this scale's reading moves sideways, so its structure drifts across the others. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s3_warp_pan_y",
+            display_name: "Scale 4 warp pan y",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Cells a step this scale's reading moves up or down. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s3_warp_flow",
+            display_name: "Scale 4 warp swirl",
+            default: 0.0,
+            min: -0.5,
+            max: 0.5,
+            tooltip: "A swirl of this scale's reading: extra radians a step at the rim, none at the centre. Strong values make a vortex of this scale alone. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s4_warp_zoom",
+            display_name: "Scale 5 warp zoom",
+            default: 1.0,
+            min: 0.9,
+            max: 1.1,
+            tooltip: "This scale reads its averages through a zoom about the centre each step, so its structure drifts outward (above 1) or inward, as the field warp's zoom would move the whole field. 1 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s4_warp_rotation",
+            display_name: "Scale 5 warp rotation",
+            default: 0.0,
+            min: -0.25,
+            max: 0.25,
+            tooltip: "Radians a step this scale's reading turns about the centre, so its structure turns while the other scales stay. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s4_warp_pan_x",
+            display_name: "Scale 5 warp pan x",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Cells a step this scale's reading moves sideways, so its structure drifts across the others. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s4_warp_pan_y",
+            display_name: "Scale 5 warp pan y",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Cells a step this scale's reading moves up or down. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s4_warp_flow",
+            display_name: "Scale 5 warp swirl",
+            default: 0.0,
+            min: -0.5,
+            max: 0.5,
+            tooltip: "A swirl of this scale's reading: extra radians a step at the rim, none at the centre. Strong values make a vortex of this scale alone. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s5_warp_zoom",
+            display_name: "Scale 6 warp zoom",
+            default: 1.0,
+            min: 0.9,
+            max: 1.1,
+            tooltip: "This scale reads its averages through a zoom about the centre each step, so its structure drifts outward (above 1) or inward, as the field warp's zoom would move the whole field. 1 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s5_warp_rotation",
+            display_name: "Scale 6 warp rotation",
+            default: 0.0,
+            min: -0.25,
+            max: 0.25,
+            tooltip: "Radians a step this scale's reading turns about the centre, so its structure turns while the other scales stay. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s5_warp_pan_x",
+            display_name: "Scale 6 warp pan x",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Cells a step this scale's reading moves sideways, so its structure drifts across the others. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s5_warp_pan_y",
+            display_name: "Scale 6 warp pan y",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Cells a step this scale's reading moves up or down. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s5_warp_flow",
+            display_name: "Scale 6 warp swirl",
+            default: 0.0,
+            min: -0.5,
+            max: 0.5,
+            tooltip: "A swirl of this scale's reading: extra radians a step at the rim, none at the centre. Strong values make a vortex of this scale alone. 0 is none.",
+            choices: &[],
+        },
     ],
     presets: &[
         SimPreset {
@@ -4175,6 +4455,38 @@ fn mc_measure(i: i32, pos: vec2<f32>) -> f32 {
     return mc_avg(ra, pos, sym) - mc_avg(rb, pos, sym);
 }
 
+// Scale i's per-step read map (mccabe-multiscale plan, section 10): the
+// field warp's map -- zoom, rotation, pan and swirl about the centre --
+// applied to where this scale reads its averages, so its structure moves
+// as the field warp would move the whole field while the other scales
+// stay. Slots 52 + 5i: zoom, rotation, pan x, pan y, swirl. The identity
+// reads at `pos` itself.
+fn mc_scale_pos(i: i32, pos: vec2<f32>) -> vec2<f32> {
+    if (!sim_scale_warped()) {
+        return pos;
+    }
+    let o = 52u + 5u * u32(i);
+    let zoom = max(mparam(o), 1.0e-4);
+    let rot = mparam(o + 1u);
+    let pan = vec2<f32>(mparam(o + 2u), mparam(o + 3u));
+    let flow = mparam(o + 4u);
+    if (zoom == 1.0 && rot == 0.0 && flow == 0.0 && pan.x == 0.0 && pan.y == 0.0) {
+        return pos;
+    }
+    // The field warp's map, in cell-centre positions: undo the pan and the
+    // zoom, then rotate back by the uniform rate plus the swirl, which is
+    // zero at the centre and `flow` at the rim.
+    let g = vec2<f32>(sim_grid());
+    let c = g * 0.5;
+    let d = pos - c;
+    let rim = max(min(g.x, g.y) * 0.5, 1.0);
+    let theta = rot + flow * (length(d) / rim);
+    let q = (d - pan) / zoom;
+    let cs = cos(theta);
+    let sn = sin(theta);
+    return c + vec2<f32>(cs * q.x + sn * q.y, -sn * q.x + cs * q.y);
+}
+
 // The measure pass (plan section 9's P3), run only while the variation
 // radius is on: every scale's signed variation at this cell into the
 // layer's scratch, scales 0-3 in the first slice and 4-5 in the second,
@@ -4187,7 +4499,7 @@ fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
     var m0 = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     var m1 = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     for (var i = 0; i < n; i = i + 1) {
-        let d = mc_measure(i, pos);
+        let d = mc_measure(i, mc_scale_pos(i, pos));
         if (i < 4) {
             m0[i] = d;
         } else {
@@ -4245,6 +4557,19 @@ fn sim_step2(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
                 v = acc1[i - 4];
                 d = own1[i - 4];
             }
+            if (v < best_var) {
+                best_var = v;
+                let amt = mc_amount(i, n);
+                best_dir = select(-amt, amt, d > 0.0);
+                best_scale = f32(i);
+            }
+        }
+    } else if (sim_scale_warped()) {
+        // Per-scale warps: each scale measured at its own read position.
+        pyr_prepare();
+        for (var i = 0; i < n; i = i + 1) {
+            let d = mc_measure(i, mc_scale_pos(i, pos));
+            let v = abs(d);
             if (v < best_var) {
                 best_var = v;
                 let amt = mc_amount(i, n);
