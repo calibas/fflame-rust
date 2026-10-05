@@ -194,6 +194,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // is enforced everywhere dt can be set, not left to the clamp.
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -372,6 +373,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // measuring the stability of a field doing nothing.
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -546,6 +548,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // without running the rung it names.
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -670,6 +673,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // 0.04 at 26, 0.05 at 17.
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -923,6 +927,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // and the panel hides the slider.
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -1083,6 +1088,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 300,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -1210,6 +1216,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 400,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -1341,6 +1348,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 1200,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -1464,6 +1472,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 250,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -1600,6 +1609,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 360,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -1722,6 +1732,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 256,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -1880,6 +1891,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 125,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -2022,6 +2034,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 400,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -2219,6 +2232,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 5000,
     passes: 2,
     repeat: None,
+    measure: None,
     // Explicit Euler on the 5-point Laplacian, whose symbol runs over
     // [-8, 0]: the quartic operator is largest at the checkerboard,
     // (8 - q0^2)^2, and the drive r offsets it. Measured at
@@ -2383,6 +2397,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 20000,
     passes: 2,
     repeat: None,
+    measure: None,
     // Linearised about |c| = 1, the symbol is
     //   D L (3c^2 - 1 - gamma L),  L in [-8, 0]
     // whose most negative value is at the checkerboard L = -8:
@@ -2574,6 +2589,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 15000,
     passes: 1,
     repeat: None,
+    measure: None,
     // The stiff term is the activator's threshold. Differentiating the
     // reaction, d/du[-f v (u-q)/(u+q)] = -2 f v q/(u+q)^2, which is
     // largest near u = q at -f v/(2q); with v of order 1 and the
@@ -2836,6 +2852,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 4000,
     passes: 2,
     repeat: None,
+    measure: None,
     // The temperature equation is plain diffusion with D = 1 on a mesh
     // of 0.03, so explicit Euler needs dt <= dx^2/4 = 2.25e-4. That is
     // the binding constraint: the phase equation's eps^2/tau = 0.333
@@ -2999,6 +3016,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 600,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: Some(|p| {
         // The exponential core, scaled to R and normalised to sum 1.
@@ -3218,6 +3236,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 400,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: Some(|p| {
         // Two blocks: the inner disc, then the annulus out to 3 r_i.
@@ -3901,6 +3920,16 @@ pub static MCCABE: ModelDef = ModelDef {
             tooltip: "The direction of this scale's stretch, in degrees counter-clockwise from horizontal, so 90 is vertical. Nothing at stretch 1. Exact discs averaging only.",
             choices: &[],
         },
+        // Slot 51 (mccabe-multiscale plan, section 9): P3.
+        SimParamDef {
+            name: "variation",
+            display_name: "Variation radius",
+            default: 0.0,
+            min: 0.0,
+            max: 4.0,
+            tooltip: "Averages each scale's variation over a disc of this radius, in cells, before the scales are compared: the paper's variation around the pixel, Softology's variation radius. The winner is then decided by its neighbourhood rather than the cell alone, so each scale holds larger, smoother regions with less speckle. 0 is off. While on it costs a pass a step and two more field slices (about 130 MB on a 1080p grid).",
+            choices: &[],
+        },
     ],
     presets: &[
         SimPreset {
@@ -4097,74 +4126,192 @@ fn mc_avg(r: f32, pos: vec2<f32>, sym: i32) -> f32 {
     return acc / f32(sym);
 }
 
-fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
-    let n = i32(clamp(round(mparam(0u)), 1.0, 6.0));
-    let base = mparam(1u);
-    let ratio = mparam(2u);
-    let amount = mparam(3u);
-    let amount_min = mparam(4u);
+// Scale i's step: the table's, or the ladder's, falling linearly from
+// the finest scale to the coarsest (one scale gets the finest).
+fn mc_amount(i: i32, n: i32) -> f32 {
+    if (mparam(7u) >= 0.5) {
+        return mparam(8u + 5u * u32(i) + 2u);
+    }
+    let t = select(0.0, f32(i) / f32(n - 1), n > 1);
+    return mix(mparam(3u), mparam(4u), t);
+}
+
+// Scale i's signed variation at a base-cell position for the measure
+// pass: w(a - b), the activator's average minus the inhibitor's. Its
+// magnitude is what the argmin compares and its sign the direction of
+// the step. The same arithmetic as the step's own loop below.
+fn mc_measure(i: i32, pos: vec2<f32>) -> f32 {
     let sym = i32(round(mparam(5u)));
     // Ladder (0) or the per-scale table (1); the table's row i starts
     // at slot 8 + 5i: radius, ratio, step, weight, symmetry.
     let table = mparam(7u) >= 0.5;
+    if (pyr_exact()) {
+        // Exact discs (mccabe-multiscale plan, section 6b): a - b
+        // from the spectral stage, which built its discs from this
+        // scale's own radii -- no calibration, a radius is a radius.
+        var w = 1.0;
+        var sym_i = sym;
+        if (table) {
+            let o = 8u + 5u * u32(i);
+            w = mparam(o + 3u);
+            sym_i = i32(round(mparam(o + 4u)));
+        }
+        return w * mc_diff(i, pos, sym_i);
+    }
+    if (table) {
+        let o = 8u + 5u * u32(i);
+        let ra = max(mparam(o), 0.5);
+        let rb = ra * mparam(o + 1u);
+        let w = mparam(o + 3u);
+        let sym_i = i32(round(mparam(o + 4u)));
+        // Softology's weight: both averages times w, then compared.
+        // At w = 1 this is exactly the ladder's arithmetic.
+        let act = w * mc_avg(ra, pos, sym_i);
+        let inh = w * mc_avg(rb, pos, sym_i);
+        return act - inh;
+    }
+    let ra = mparam(1u) * f32(1 << u32(i));
+    let rb = ra * mparam(2u);
+    return mc_avg(ra, pos, sym) - mc_avg(rb, pos, sym);
+}
+
+// The measure pass (plan section 9's P3), run only while the variation
+// radius is on: every scale's signed variation at this cell into the
+// layer's scratch, scales 0-3 in the first slice and 4-5 in the second,
+// for the step to gather at its neighbours. The state goes through
+// unchanged.
+fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    let n = i32(clamp(round(mparam(0u)), 1.0, 6.0));
     let pos = vec2<f32>(p) + vec2<f32>(0.5, 0.5);
     pyr_prepare();
+    var m0 = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    var m1 = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    for (var i = 0; i < n; i = i + 1) {
+        let d = mc_measure(i, pos);
+        if (i < 4) {
+            m0[i] = d;
+        } else {
+            m1[i - 4] = d;
+        }
+    }
+    sim_scratch_write(p, 0, m0);
+    sim_scratch_write(p, 1, m1);
+    return s;
+}
+
+// The step: the scale with the least variation wins and moves the cell
+// by its step, towards the activator.
+fn sim_step2(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    let n = i32(clamp(round(mparam(0u)), 1.0, 6.0));
+    let pos = vec2<f32>(p) + vec2<f32>(0.5, 0.5);
 
     var best_var = 1.0e30;
     var best_dir = 0.0;
     var best_scale = 0.0;
-    let exact = pyr_exact();
-    for (var i = 0; i < n; i = i + 1) {
-        var v: f32;
-        var up: bool;
-        var amt: f32;
-        if (exact) {
-            // Exact discs (mccabe-multiscale plan, section 6b): a - b
-            // from the spectral stage, which built its discs from this
-            // scale's own radii -- no calibration, a radius is a radius.
-            var w = 1.0;
-            var sym_i = sym;
-            if (table) {
-                let o = 8u + 5u * u32(i);
-                amt = mparam(o + 2u);
-                w = mparam(o + 3u);
-                sym_i = i32(round(mparam(o + 4u)));
+    if (sim_scratch_on()) {
+        // The variation radius: each scale's |variation| averaged over
+        // an antialiased disc around the cell (the paper's "variation
+        // around the pixel", Softology's variation radius), from what
+        // the measure pass wrote. The direction is still the cell's own.
+        // Every scale is weighted alike, so the disc's total weight
+        // cancels in the comparison and is never divided out; a cell past
+        // an edge the boundary does not wrap counts for nothing.
+        let rv = clamp(mparam(51u), 0.0, 4.0);
+        let reach = i32(floor(rv + 0.5));
+        let g = sim_grid();
+        var acc0 = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        var acc1 = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        for (var dy = -reach; dy <= reach; dy = dy + 1) {
+            for (var dx = -reach; dx <= reach; dx = dx + 1) {
+                let w = clamp(rv + 0.5 - length(vec2<f32>(f32(dx), f32(dy))), 0.0, 1.0);
+                let q = p + vec2<i32>(dx, dy);
+                if (w <= 0.0 || sim_outside(q, g)) {
+                    continue;
+                }
+                let qw = sim_wrap_sized(q, g);
+                acc0 = acc0 + w * abs(sim_scratch_read(qw, 0));
+                acc1 = acc1 + w * abs(sim_scratch_read(qw, 1));
+            }
+        }
+        let own0 = sim_scratch_read(p, 0);
+        let own1 = sim_scratch_read(p, 1);
+        for (var i = 0; i < n; i = i + 1) {
+            var v: f32;
+            var d: f32;
+            if (i < 4) {
+                v = acc0[i];
+                d = own0[i];
             } else {
+                v = acc1[i - 4];
+                d = own1[i - 4];
+            }
+            if (v < best_var) {
+                best_var = v;
+                let amt = mc_amount(i, n);
+                best_dir = select(-amt, amt, d > 0.0);
+                best_scale = f32(i);
+            }
+        }
+    } else {
+        // The rule as it was before the measure pass, written out rather
+        // than through `mc_measure`: the same arithmetic in a different
+        // shape let the driver contract a weighted table's w * a - inh
+        // into one multiply-add, and the last bit moved every saved
+        // table with a weight off 1 (sim-mccabe-table). Kept verbatim so
+        // a run without the variation radius is the run it always was.
+        let base = mparam(1u);
+        let ratio = mparam(2u);
+        let amount = mparam(3u);
+        let amount_min = mparam(4u);
+        let sym = i32(round(mparam(5u)));
+        let table = mparam(7u) >= 0.5;
+        pyr_prepare();
+        let exact = pyr_exact();
+        for (var i = 0; i < n; i = i + 1) {
+            var v: f32;
+            var up: bool;
+            var amt: f32;
+            if (exact) {
+                var w = 1.0;
+                var sym_i = sym;
+                if (table) {
+                    let o = 8u + 5u * u32(i);
+                    amt = mparam(o + 2u);
+                    w = mparam(o + 3u);
+                    sym_i = i32(round(mparam(o + 4u)));
+                } else {
+                    let t = select(0.0, f32(i) / f32(n - 1), n > 1);
+                    amt = mix(amount, amount_min, t);
+                }
+                let d = w * mc_diff(i, pos, sym_i);
+                v = abs(d);
+                up = d > 0.0;
+            } else if (table) {
+                let o = 8u + 5u * u32(i);
+                let ra = max(mparam(o), 0.5);
+                let rb = ra * mparam(o + 1u);
+                amt = mparam(o + 2u);
+                let w = mparam(o + 3u);
+                let sym_i = i32(round(mparam(o + 4u)));
+                let act = w * mc_avg(ra, pos, sym_i);
+                let inh = w * mc_avg(rb, pos, sym_i);
+                v = abs(act - inh);
+                up = act > inh;
+            } else {
+                let ra = base * f32(1 << u32(i));
+                let rb = ra * ratio;
+                let act = mc_avg(ra, pos, sym);
+                let inh = mc_avg(rb, pos, sym);
+                v = abs(act - inh);
+                up = act > inh;
                 let t = select(0.0, f32(i) / f32(n - 1), n > 1);
                 amt = mix(amount, amount_min, t);
             }
-            let d = w * mc_diff(i, pos, sym_i);
-            v = abs(d);
-            up = d > 0.0;
-        } else if (table) {
-            let o = 8u + 5u * u32(i);
-            let ra = max(mparam(o), 0.5);
-            let rb = ra * mparam(o + 1u);
-            amt = mparam(o + 2u);
-            let w = mparam(o + 3u);
-            let sym_i = i32(round(mparam(o + 4u)));
-            // Softology's weight: both averages times w, then compared.
-            // At w = 1 this is exactly the ladder's arithmetic.
-            let act = w * mc_avg(ra, pos, sym_i);
-            let inh = w * mc_avg(rb, pos, sym_i);
-            v = abs(act - inh);
-            up = act > inh;
-        } else {
-            let ra = base * f32(1 << u32(i));
-            let rb = ra * ratio;
-            let act = mc_avg(ra, pos, sym);
-            let inh = mc_avg(rb, pos, sym);
-            v = abs(act - inh);
-            up = act > inh;
-            // The amounts fall linearly from the finest scale to the
-            // coarsest; one scale gets the finest amount.
-            let t = select(0.0, f32(i) / f32(n - 1), n > 1);
-            amt = mix(amount, amount_min, t);
-        }
-        if (v < best_var) {
-            best_var = v;
-            best_dir = select(-amt, amt, up);
-            best_scale = f32(i);
+            if (v < best_var) {
+                best_var = v;
+                best_dir = select(-amt, amt, up);
+                best_scale = f32(i);
+            }
         }
     }
 
@@ -4200,8 +4347,11 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 }
 "#,
     default_steps: 200,
-    passes: 1,
+    // The measure pass, then the step; the measure only while the
+    // variation radius is on, so off the step is one pass as it was.
+    passes: 2,
     repeat: None,
+    measure: Some(crate::sim::MeasurePass { param: "variation", slices: 2 }),
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -4417,6 +4567,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 600,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: Some(crate::sim::AgentDef {
         count: |p, w, h| {
             // The paper's %p: a percentage of the image AREA, so the
@@ -4679,6 +4830,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 1200,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: Some(crate::sim::AgentDef {
         count: |p, w, h| {
             let pct = p.get("walkers").clamp(0.05, 40.0);
@@ -4936,6 +5088,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 12_837,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -5120,6 +5273,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 2_000,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -5571,6 +5725,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 6_000,
     passes: 2,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -5983,6 +6138,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     passes: 3,
     // The relaxation: pass 1 runs `relax` times per growth.
     repeat: Some((1, "relax")),
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -6244,6 +6400,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 800,
     passes: 2,
     repeat: Some((0, "relax")),
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -6763,6 +6920,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 2000,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: Some(|p| {
         // Two blocks: the activator disc, then the inhibitor disc, each
@@ -7082,6 +7240,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 200000,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     // The 5-point Laplacian's most negative eigenvalue is -8 (the
@@ -7344,6 +7503,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 2000000,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     // Diffusion in cells is D / spacing^2 -- 40 for the paper's D_w =
@@ -7610,6 +7770,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 2000,
     passes: 2,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: Some(difference_of_discs),
     dt_bound: None,

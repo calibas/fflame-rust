@@ -630,6 +630,63 @@ The default is Multiply, so it is byte-identical.
 - **Memory.** One more six-slice array at 1080p, ~50 MB, while on.
 - **Gates.** `variation` = 0 byte-identical; a CPU mirror in both
   averaging modes, with symmetry; batch invariance.
+- **As built** (2026-10-05). The design changed from the plan above in
+  where the measure goes and in how the step reads it.
+  - **A measure pass, not a new array.** McCabe has two passes now.
+    Pass 0, the measure, writes every scale's signed variation into two
+    SCRATCH slices of the field, four scales to a texel. A new
+    `ModelDef::measure` runs it only while `variation` > 0; off, the
+    step is pass 1 alone, as before. The pass and slice machinery (the
+    memory's) carries it, so no new bindings or layouts.
+  - **The disc gather reads both slices a tap,** so six scales cost two
+    `vec4` loads a tap rather than six.
+  - **Disc, not Gaussian.** A separable Gaussian of the disc's variance
+    would cost fewer taps at large radii.
+    [proto_mccabe_variation_kernel.py](../../scripts/sim_prototypes/proto_mccabe_variation_kernel.py)
+    ran both from one seed at radii 1, 2 and 4: the same look at each
+    radius (`output/sim_proto/variation_kernel/sheet.png`). The disc
+    was kept because it is the prototype's, needs no extra pass, and
+    costs no more at radius 1–2.
+  - **Memory.** Two `Rgba32Float` slices on both ping-pong sides,
+    ~130 MB on a 1080p grid, against the plan's 50 MB for a
+    single-buffered `R32Float` array. Turning it on or off keeps the
+    run: scratch sits after every slice that persists, so the field is
+    copied into the new arrays rather than reseeded.
+  - **Cost at 1080p, five scales.**
+
+    | variation | pyramid | exact discs |
+    |---|---|---|
+    | off | 4.36 ms | 7.42 ms |
+    | 1 | 5.68 ms | 8.50 ms |
+    | 2 | 7.18 ms | 9.99 ms |
+    | 4 | 12.9 ms | 15.7 ms |
+
+    Radius 4 is the disc's 69 taps. A separable Gaussian (an extra pass,
+    the variation's sign carried in the blurred value's sign bit) would
+    take it to roughly 9 ms. Not built.
+  - **Byte identity cost a duplicate.** The step's loop first went
+    through the measure pass's function. The arithmetic was the same,
+    but the different shape let the driver fuse a weighted table's
+    `w·a − w·b` into one multiply-add. The last bit moved, and
+    `sim-mccabe-table` (a weight of 1.5) diverged, mean error 6.
+    Returning the pair `(w·a, w·b)` was not enough either. So the
+    no-variation path keeps the old loop verbatim, and the measure has
+    its own copy of the arithmetic.
+  - **Tests.**
+    - Both CPU mirrors (pyramid at radius 2, and 1.5 with 3-fold
+      symmetry; exact at radius 2, and 1 with 3-fold) match on every
+      cell. The radius changes the winner at 25–30% of cells, so the
+      mirrors are not passing trivially.
+    - Batch invariance with memory and a warp.
+    - Turning the radius on mid-run continues the run: step 41, one
+      step's move, the memory written.
+    - A `sim-mccabe-variation` baseline.
+    - Two of the new tests first passed trivially: at 48² the default
+      five scales reach past the pyramid, so the coarsest wins every
+      cell and the run freezes. They run three scales and assert
+      that more than one scale wins.
+  - **Seen** (`output/mccabe-variation/sheet.png`). Larger, smoother
+    regions per scale as the radius grows, in both averaging modes.
 
 ## 10. TODO, after P3 (2026-10-05)
 

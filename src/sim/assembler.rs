@@ -1625,12 +1625,14 @@ fn sim_kernel_taps() -> u32 {
     } else {
         ""
     };
-    // The layer's memory, for the models that keep one.
-    let memory = if model.has(ModelFeature::Memory) {
-        MEMORY_STEP_ACCESSORS
-    } else {
-        ""
-    };
+    // The layer's memory, for the models that keep one, and its
+    // scratch, for the models with a measure pass.
+    let memory = format!(
+        "{}{}",
+        if model.has(ModelFeature::Memory) { MEMORY_STEP_ACCESSORS } else { "" },
+        if model.measure.is_some() { SCRATCH_STEP_ACCESSORS } else { "" },
+    );
+    let memory = memory.as_str();
     // sim_step, sim_step2, sim_step3, ... -- the model writes as many
     // as it declares passes, and every module carries the model's
     // whole WGSL so a helper written once is visible to all of them.
@@ -1728,6 +1730,32 @@ fn sim_mem_read(p: vec2<i32>, k: i32) -> vec4<f32> {
 fn sim_mem_write(p: vec2<i32>, k: i32, v: vec4<f32>) {
     if (k < sim_mem_count()) {
         textureStore(field_out, p, sim_mem_base() + k, v);
+    }
+}
+"#;
+
+/// Spliced into the step shader of a model with a measure pass
+/// ([`ModelDef::measure`]). The measure pass (pass 0) writes the layer's
+/// scratch; the passes after it read it at any cell. Its first slice is
+/// the layer's third-from-last reserved parameter, 0 when the measure is
+/// off -- a scratch slice is never slice 0, which is a user layer.
+const SCRATCH_STEP_ACCESSORS: &str = r#"
+fn sim_scratch_base() -> i32 {
+    return i32(model_params[u32(sim_layer()) * MODEL_PARAM_SLOTS + MODEL_PARAM_SLOTS - 3u]);
+}
+
+fn sim_scratch_on() -> bool {
+    return sim_scratch_base() > 0;
+}
+
+// Scratch slice k at cell q, which the caller has put on the grid.
+fn sim_scratch_read(q: vec2<i32>, k: i32) -> vec4<f32> {
+    return textureLoad(field_in, q, sim_scratch_base() + k, 0);
+}
+
+fn sim_scratch_write(p: vec2<i32>, k: i32, v: vec4<f32>) {
+    if (sim_scratch_on()) {
+        textureStore(field_out, p, sim_scratch_base() + k, v);
     }
 }
 "#;
@@ -2400,7 +2428,11 @@ mod tests {
     fn the_parameter_block_size_agrees_with_the_renderer() {
         let line = format!("const MODEL_PARAM_SLOTS: u32 = {}u;", crate::sim::renderer::MODEL_PARAM_SLOTS);
         assert!(COMMON.contains(&line), "COMMON should declare `{line}`");
-        assert_eq!(crate::sim::renderer::RESERVED_PARAM_SLOTS, 2, "sim_mem_count / sim_mem_base read the last two slots");
+        assert_eq!(
+            crate::sim::renderer::RESERVED_PARAM_SLOTS,
+            3,
+            "sim_mem_count / sim_mem_base read the last two slots, sim_scratch_base the one before"
+        );
     }
 
     /// Every model's step shaders validate with the coupling spliced

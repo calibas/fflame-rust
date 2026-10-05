@@ -73,6 +73,7 @@ body, and:
 | --- | --- |
 | `passes` | dispatches per step, 1–4. A fourth-order PDE needs two; the breakdown model needs three (grow, relax, weigh). |
 | `repeat` | `(pass index, parameter name)` — that pass runs a slider-controlled number of times. A relaxation sweep count cannot be compiled in. |
+| `measure` | a `MeasurePass { param, slices }`: pass 0 writes `slices` scratch slices for the later passes to read at any cell, and runs only while `param` is above 0. Off, the step is the passes after it, and costs what it did before (McCabe's variation radius). |
 | `max_dt` | stability bound for the explicit solver. Exceed it and the field diverges. |
 | `diffusion` | which parameters are diffusion rates, for the dt ceiling. |
 | `agents` | an `AgentDef` for the models with a moving population (physarum). |
@@ -144,9 +145,21 @@ restarts the run. A `ReadsMemory` colouring sees them as
 `x.m0`/`x.m1`, blended by the resolve like the state. See
 [mccabe-multiscale.md](../projects/mccabe-multiscale.md).
 
+**Scratch slices.** A layer whose model has a measure pass that is on
+has its scratch after ALL memory (`SliceLayout`). They do not persist:
+- The measure pass writes them (`sim_scratch_write`) and the passes
+  after it read them from the side it wrote (`sim_scratch_read`).
+- No other stage dispatches them, warp and layer map included. A
+  copy-through in the measure's stage would overwrite what it wrote,
+  and a stale scratch is never read.
+- Because they sit after every slice that persists, turning a measure
+  pass on or off moves nothing else. The renderer copies the persistent
+  slices into the new arrays and the run goes on; it does not reseed.
+
 **Parameters.** Each layer's block in the model-parameter buffer is
-64 floats. The last two are the renderer's: the memory's slice count
-and first slice.
+64 floats. The last three are the renderer's: the scratch's first
+slice (0 when there is none), then the memory's slice count and first
+slice.
 
 **The pyramid** (`NeedsPyramid`, McCabe):
 - **Build.** A Gaussian pyramid of the field, built before every step,
