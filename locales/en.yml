@@ -2069,6 +2069,8 @@ sim_panel:
   table_amount: "Step"
   table_weight: "Weight"
   table_symmetry: "Sym"
+  add_relief: "Add relief"
+  add_relief_tip: "Light the picture as a surface: a Relief colouring over the stack, under Hard light. Its height is one channel of the layer (the pattern by default), smoothed. Light, height and softness are its own parameters."
   table_stretch: "Stretch"
   table_angle: "Angle"
   table_past_reach: "This scale's inhibitor reaches past what the pyramid can average at this grid (about %{reach} cells). Its averages clamp to the top level, its variation goes to zero, and it wins everywhere. Shrink it, or use a larger grid."

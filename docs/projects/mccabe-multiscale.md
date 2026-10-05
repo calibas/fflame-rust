@@ -719,6 +719,51 @@ Agreed, not planned in detail yet. P3 comes first.
   then lights it under any colouring.
 - **Keep the height its own texture.** The long-term 3D height-field
   mode below wants exactly that texture as its displacement.
+- **As built** (2026-10-05). A **Relief colouring** for the top of the
+  colour stack, backed by a **relief stage** in the renderer.
+  - **A colouring, not a config section.** Its parameters are colouring
+    parameters: channel, softness, height, light angle, Tilt or Lambert,
+    elevation, shadow, highlight. So it needed no new config paths, it
+    animates like any colouring parameter, and stacks compose it with
+    anything. The panel's **Add relief** puts one over the stack in a
+    click.
+  - **The relief stage.** Two separable passes before the colour pass,
+    the Gaussian of the softness and its derivative, into a grid-sized
+    `Rgba32Float` of (height, d/dx, d/dy). The derivative is the
+    smoothed height's own: a derivative-of-Gaussian kernel, exact on a
+    ramp, so no third pass differences the result. The colour pass
+    reads it as `x.relief`, interpolated by the resolve like the state.
+  - **Hard light, a new stack blend.** The relief's grey went over the
+    stack under Overlay first. On a light palette Overlay's shadow
+    barely lands, because below mid-grey it multiplies the BASE's
+    darkness. Hard light multiplies by the top layer's instead. Over a
+    grey centred on mid-grey it is exactly the escape relief's shading:
+    a black multiply shadow and a white screen highlight, each by its
+    strength. It is appended to the blend modes, so no existing stack
+    changes.
+  - **Defaults: Tilt, height 12, softness 2, shadow 0.8, highlight
+    0.6.**
+    - At height 6 (the prototype's), Tilt was too gentle on McCabe at
+      softness 2.
+    - Lambert at elevation 30 embosses harder, and is one click away.
+    - Tilt is the escape relief's default, for its symmetric light and
+      shade.
+    - Sheets: `output/mccabe-relief/sheet.png` and
+      `output/mccabe-relief-tune/sheet.png`.
+  - **Cost at 1080p.** The colour pass is 0.6 ms alone, 2.4–2.8 with
+    relief at softness 2 and 6.4 at softness 8.
+    - The texture reads dominate.
+    - Making the kernel once per workgroup in shared memory was tried
+      and measured slower at softness 2 (3.3 ms): thread 0's serial
+      normalisation cost more than the per-cell `exp()` it saved. It
+      was reverted.
+  - **Tests.**
+    - The stage against a CPU Gaussian and its derivative at three
+      softnesses, periodic, reading the third channel: worst 2e-7.
+    - The colouring's light on ramps along x and y from each side, and
+      flat ground at exactly mid-grey.
+    - Hard light joins the blend-formula test.
+    - The `sim-mccabe-relief` baseline.
 
 **Long term: a 3D height-field mode for escape-time and simulations.**
 - **The idea.** The user's plan, not designed yet. A 2D fractal (the

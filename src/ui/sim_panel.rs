@@ -788,6 +788,7 @@ fn render_coloring_section(
                                 }
                                 ColorSlot::At(i) => {
                                     let name = c.name.to_string();
+                                    let relief = c.has(crate::sim::ColoringFeature::NeedsRelief);
                                     action = Some(Box::new(move |s: &mut SimConfig| {
                                         if let Some(l) = s.color_layers.get_mut(i) {
                                             l.coloring = name.clone();
@@ -798,6 +799,13 @@ fn render_coloring_section(
                                             // one colouring's numbers
                                             // to another.
                                             l.coloring_params.clear();
+                                            // Relief is a grey shade
+                                            // centred on mid-grey: under
+                                            // Normal it would hide what
+                                            // it is meant to light.
+                                            if relief && l.blend == SimBlend::Normal {
+                                                l.blend = SimBlend::HardLight;
+                                            }
                                         }
                                     }));
                                 }
@@ -1018,17 +1026,39 @@ fn render_coloring_section(
         }
     }
 
-    if count < MAX_COLOR_LAYERS
-        && ui
-            .button(t!("sim_panel.add_color_layer").as_ref())
-            .on_hover_text(t!("sim_panel.add_color_layer_first_tip"))
-            .clicked()
-    {
-        structural(config_manager, &|s: &mut SimConfig| {
-            // Make entry 0 explicit, then add one over it.
-            s.promote_coloring_to_layers();
-            s.color_layers.push(SimColorLayer::default());
+    if count < MAX_COLOR_LAYERS {
+        let mut add: Option<SimColorLayer> = None;
+        ui.horizontal(|ui| {
+            if ui
+                .button(t!("sim_panel.add_color_layer").as_ref())
+                .on_hover_text(t!("sim_panel.add_color_layer_first_tip"))
+                .clicked()
+            {
+                add = Some(SimColorLayer::default());
+            }
+            // Relief over whatever is there, in one click: the colouring,
+            // Hard light, and the bottom layer's source.
+            if ui
+                .button(t!("sim_panel.add_relief").as_ref())
+                .on_hover_text(t!("sim_panel.add_relief_tip"))
+                .clicked()
+            {
+                let source = sim.color_layers.first().map(|l| l.source).unwrap_or(0);
+                add = Some(SimColorLayer {
+                    source,
+                    coloring: "relief".to_string(),
+                    blend: SimBlend::HardLight,
+                    ..Default::default()
+                });
+            }
         });
+        if let Some(layer) = add {
+            structural(config_manager, &|s: &mut SimConfig| {
+                // Make entry 0 explicit, then add one over it.
+                s.promote_coloring_to_layers();
+                s.color_layers.push(layer.clone());
+            });
+        }
     }
     if layered
         && ui

@@ -857,6 +857,9 @@ const COLOR_TEMPLATE: &str = r#"
 // The signed distance field, when the matte's edge is Distance; a 1x1
 // dummy otherwise, which sim_sdf never reads.
 @group(0) @binding(6) var sdf_tex: texture_2d<f32>;
+// The relief stage's (height, d/dx, d/dy), when a colouring reads it; a
+// 1x1 dummy otherwise, which only a NeedsRelief colouring's sample reads.
+@group(0) @binding(8) var relief_tex: texture_2d<f32>;
 
 //__BOUNDARY__
 
@@ -965,6 +968,9 @@ struct SimSample {
     // Structure tensor of channel .x over a 3x3 binomial window:
     // (Jxx, Jxy, Jyy). NeedsStructure.
     tensor: vec3<f32>,
+    // The relief stage's smoothed height and its slope, (h, dh/dx,
+    // dh/dy) in cells. NeedsRelief.
+    relief: vec3<f32>,
 //__SAMPLE_MEMORY_FIELDS__
 };
 
@@ -982,6 +988,7 @@ fn sim_sample(p: vec2<i32>) -> SimSample {
 //__GRADIENT__
     x.dist = sim_sdf(p);
 //__TENSOR__
+//__RELIEF__
 //__SAMPLE_MEMORY_READ__
     return x;
 }
@@ -993,6 +1000,7 @@ fn sim_sample_zero() -> SimSample {
     x.gy = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     x.dist = 0.0;
     x.tensor = vec3<f32>(0.0, 0.0, 0.0);
+    x.relief = vec3<f32>(0.0, 0.0, 0.0);
 //__SAMPLE_MEMORY_ZERO__
     return x;
 }
@@ -1005,6 +1013,7 @@ fn sim_sample_mad(acc: SimSample, x: SimSample, w: f32) -> SimSample {
     r.gy = r.gy + x.gy * w;
     r.dist = r.dist + x.dist * w;
     r.tensor = r.tensor + x.tensor * w;
+    r.relief = r.relief + x.relief * w;
 //__SAMPLE_MEMORY_MAD__
     return r;
 }
@@ -1016,6 +1025,7 @@ fn sim_sample_lerp(a: SimSample, b: SimSample, t: f32) -> SimSample {
     r.gy = mix(a.gy, b.gy, t);
     r.dist = mix(a.dist, b.dist, t);
     r.tensor = mix(a.tensor, b.tensor, t);
+    r.relief = mix(a.relief, b.relief, t);
 //__SAMPLE_MEMORY_LERP__
     return r;
 }
@@ -1312,6 +1322,132 @@ fn splice(template: &str, boundary: SimBoundary, replacements: &[(&str, &str)]) 
         }
     }
     out.join("\n")
+}
+
+/// The relief stage (mccabe-multiscale plan, section 10): one channel of
+/// a layer as a height, Gaussian-smoothed, with its slope, at grid size
+/// -- what a `NeedsRelief` colouring reads as `x.relief`, and the height
+/// a 3D height-field mode would displace by. Two separable passes: the
+/// Gaussian G and its derivative D along x, then along y. D is the
+/// derivative of the smoothed height exactly (D convolved with a ramp is
+/// its slope), so no third pass differences the result.
+///
+/// The uniform is the source layer's, with `kernel_offset` naming the
+/// colour-parameter block of the colouring that asked: its parameter 0
+/// is the channel and 1 the softness, in cells.
+const RELIEF_COMMON: &str = r#"
+fn relief_param(i: u32) -> f32 {
+    return coloring_params[params.kernel_offset * 16u + i];
+}
+
+fn relief_channel(s: vec4<f32>) -> f32 {
+    let c = i32(round(clamp(relief_param(0u), 0.0, 3.0)));
+    if (c == 1) { return s.y; }
+    if (c == 2) { return s.z; }
+    if (c == 3) { return s.w; }
+    return s.x;
+}
+
+// The kernel at softness sigma: a Gaussian of weights G(i) / z and its
+// derivative D(i) = i G(i) / s2, which differentiates a ramp exactly.
+// Below 0.3 cells the Gaussian is a point and D the central difference.
+fn relief_sigma() -> f32 {
+    return clamp(relief_param(1u), 0.3, 8.0);
+}
+
+fn relief_reach() -> i32 {
+    return clamp(i32(ceil(3.0 * relief_sigma())), 1, 24);
+}
+
+fn relief_g(i: i32) -> f32 {
+    let s = relief_sigma();
+    return exp(-f32(i * i) / (2.0 * s * s));
+}
+
+// (z, s2): the sums that normalise G and D.
+fn relief_norms() -> vec2<f32> {
+    let r = relief_reach();
+    var z = 0.0;
+    var s2 = 0.0;
+    for (var i = -r; i <= r; i = i + 1) {
+        let g = relief_g(i);
+        z = z + g;
+        s2 = s2 + f32(i * i) * g;
+    }
+    return vec2<f32>(z, s2);
+}
+"#;
+
+/// Along x: (G v, D v) of the chosen channel, read through the boundary
+/// rule as the state is.
+const RELIEF_H_TEMPLATE: &str = r#"
+//__COMMON__
+@group(0) @binding(3) var relief_out: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(4) var field_in: texture_2d_array<f32>;
+//__BOUNDARY__
+//__RELIEF_COMMON__
+
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let g = sim_grid();
+    let p = vec2<i32>(gid.xy);
+    if (p.x >= g.x || p.y >= g.y) {
+        return;
+    }
+    let r = relief_reach();
+    let n = relief_norms();
+    var a = 0.0;
+    var b = 0.0;
+    for (var i = -r; i <= r; i = i + 1) {
+        let v = relief_channel(sim_read(p + vec2<i32>(i, 0)));
+        let w = relief_g(i);
+        a = a + w * v;
+        b = b + f32(i) * w * v;
+    }
+    textureStore(relief_out, p, vec4<f32>(a / n.x, b / n.y, 0.0, 0.0));
+}
+"#;
+
+/// Along y: the height G(G v), its x slope G(D v) and its y slope
+/// D(G v). Past an edge the boundary does not wrap, the nearest row.
+const RELIEF_V_TEMPLATE: &str = r#"
+//__COMMON__
+@group(0) @binding(3) var relief_out: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(4) var field_in: texture_2d_array<f32>;
+@group(0) @binding(5) var relief_in: texture_2d<f32>;
+//__BOUNDARY__
+//__RELIEF_COMMON__
+
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let g = sim_grid();
+    let p = vec2<i32>(gid.xy);
+    if (p.x >= g.x || p.y >= g.y) {
+        return;
+    }
+    let r = relief_reach();
+    let n = relief_norms();
+    var h = 0.0;
+    var hx = 0.0;
+    var hy = 0.0;
+    for (var j = -r; j <= r; j = j + 1) {
+        let q = clamp(sim_wrap_sized(p + vec2<i32>(0, j), g), vec2<i32>(0, 0), g - vec2<i32>(1, 1));
+        let t = textureLoad(relief_in, q, 0);
+        let w = relief_g(j);
+        h = h + w * t.x;
+        hx = hx + w * t.y;
+        hy = hy + f32(j) * w * t.x;
+    }
+    textureStore(relief_out, p, vec4<f32>(h / n.x, hx / n.x, hy / n.y, 0.0));
+}
+"#;
+
+/// The relief stage's two passes, through the simulation's boundary.
+pub fn assemble_relief_h(boundary: SimBoundary) -> String {
+    splice(RELIEF_H_TEMPLATE, boundary, &[("//__RELIEF_COMMON__", RELIEF_COMMON)])
+}
+pub fn assemble_relief_v(boundary: SimBoundary) -> String {
+    splice(RELIEF_V_TEMPLATE, boundary, &[("//__RELIEF_COMMON__", RELIEF_COMMON)])
 }
 
 /// The jump flood's three passes. They read the grid, not its
@@ -2071,6 +2207,7 @@ pub fn assemble_color(
         ("//__RESOLVE__", &resolve),
         ("//__GRADIENT__", gradient),
         ("//__TENSOR__", tensor),
+        ("//__RELIEF__", relief_splice(&[coloring])),
     ];
     reps.extend(memory_splices(&[coloring]));
     splice(COLOR_TEMPLATE, boundary, &reps)
@@ -2113,6 +2250,12 @@ const TENSOR_ON: &str = r#"    // Structure tensor of .x: the gradient's outer p
     }
     x.tensor = vec3<f32>(jxx, jxy, jyy);"#;
 const TENSOR_OFF: &str = "    x.tensor = vec3<f32>(0.0, 0.0, 0.0);";
+/// The relief splice: the relief stage's texel at the cell, through the
+/// boundary's wrap, or zero.
+const RELIEF_ON: &str = r#"    let rg = sim_grid();
+    let rq = clamp(sim_wrap_sized(p, rg), vec2<i32>(0, 0), rg - vec2<i32>(1, 1));
+    x.relief = textureLoad(relief_tex, rq, 0).xyz;"#;
+const RELIEF_OFF: &str = "    x.relief = vec3<f32>(0.0, 0.0, 0.0);";
 
 /// The single colouring's shade: colour, then the config's matte.
 const SINGLE_SHADE: &str = r#"fn sim_shade_from(x: SimSample, p: vec2<i32>) -> vec4<f32> {
@@ -2151,6 +2294,15 @@ fn memory_splices(colorings: &[&SimColoringDef]) -> [(&'static str, &'static str
             ("//__SAMPLE_MEMORY_MAD__", ""),
             ("//__SAMPLE_MEMORY_LERP__", ""),
         ]
+    }
+}
+
+/// The relief splice for a set of colourings.
+fn relief_splice(colorings: &[&SimColoringDef]) -> &'static str {
+    if colorings.iter().any(|c| c.has(ColoringFeature::NeedsRelief)) {
+        RELIEF_ON
+    } else {
+        RELIEF_OFF
     }
 }
 
@@ -2267,6 +2419,11 @@ fn sim_blend(base: vec4<f32>, top: vec4<f32>, mode: u32, opacity: f32) -> vec4<f
         f = select(hi, lo, base.rgb < vec3<f32>(0.5, 0.5, 0.5));
     } else if (mode == 6u) {
         f = min(base.rgb + top.rgb, vec3<f32>(1.0, 1.0, 1.0));
+    } else if (mode == 7u) {
+        // Hard light: overlay decided by the top layer.
+        let lo = 2.0 * base.rgb * top.rgb;
+        let hi = vec3<f32>(1.0, 1.0, 1.0) - 2.0 * (vec3<f32>(1.0, 1.0, 1.0) - base.rgb) * (vec3<f32>(1.0, 1.0, 1.0) - top.rgb);
+        f = select(hi, lo, top.rgb < vec3<f32>(0.5, 0.5, 0.5));
     }
     let blended = mix(top.rgb, f, base.a);
     let out_a = a + base.a * (1.0 - a);
@@ -2322,6 +2479,7 @@ fn sim_resolve_{k}(gf: vec2<f32>, g: vec2<i32>, fit: f32) -> vec4<f32> {{
         ("//__RESOLVE__", &composite),
         ("//__GRADIENT__", gradient),
         ("//__TENSOR__", tensor),
+        ("//__RELIEF__", relief_splice(colorings)),
     ];
     reps.extend(memory_splices(colorings));
     let out = splice(COLOR_TEMPLATE, boundary, &reps);
@@ -2502,6 +2660,15 @@ mod tests {
             &assemble_color_stack(&all, SimBoundary::Clamp, SimUpscale::Nearest, SimDownscale::Box, false),
             "stack of every colouring",
         );
+    }
+
+    /// The relief stage's two passes, under every boundary.
+    #[test]
+    fn the_relief_stage_validates() {
+        for b in [SimBoundary::Periodic, SimBoundary::Clamp, SimBoundary::Mirror, SimBoundary::Zero] {
+            validate(&assemble_relief_h(b), &format!("relief h {b:?}"));
+            validate(&assemble_relief_v(b), &format!("relief v {b:?}"));
+        }
     }
 
     #[test]
