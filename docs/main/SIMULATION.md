@@ -148,6 +148,19 @@ restarts the run. A `ReadsMemory` colouring sees them as
 64 floats. The last two are the renderer's: the memory's slice count
 and first slice.
 
+**The pyramid** (`NeedsPyramid`, McCabe):
+- **Build.** A Gaussian pyramid of the field, built before every step,
+  one dispatch per level, each level's uniform its own slot in a
+  per-step ring.
+- **Reads.** Bilinear within a level and linear between two, at
+  `level = log2(0.55 r)`.
+- **Its fixed texel lattice is a hazard.** Patterns can lock onto the
+  bilinear reads' creases along the coarse levels' texel lines. McCabe's
+  "shifted grid" averaging moves the lattice every four steps by a hash
+  of (seed, step), building level 1 from the field offset by it and
+  reading every level above at the position plus it. See
+  [mccabe-multiscale.md](../projects/mccabe-multiscale.md), section 6.
+
 ### Shaders
 
 One model and one colouring are **spliced into a template** by

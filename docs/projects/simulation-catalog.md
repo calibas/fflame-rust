@@ -890,6 +890,16 @@ symmetry (to 12). Switching to it fills it from the ladder.
   Moving the lattice every step removes the lean on the CPU replica.
   Rounding the kernel does nothing.
 
+**The shifted grid, 2026-10-04** (plan section 6a). `averaging` =
+"Pyramid, shifted grid" moves the pyramid's lattice every four steps by
+a hash of (seed, step).
+- **Lean.** On the GPU, over 32 seeds, it goes from 1.07 to 0.93.
+- **Motion.** Fewer direction flips per step than the fixed lattice.
+- **Look.** Crisper nested contours on the coarse ladder.
+
+Periodic boundary only; the default stays the fixed lattice so saved
+configs render as before, and every preset sets the shifted one.
+
 ---
 
 ## 11. Hodgepodge machine (Belousov–Zhabotinsky CA)

@@ -3724,6 +3724,17 @@ pub static MCCABE: ModelDef = ModelDef {
             tooltip: "n-fold rotational symmetry of this scale's averages about the centre; 0 or 1 is none. McCabe's fig. 14 puts 3-fold on the small scales and 9-fold on the large. Costs n times this scale's reads.",
             choices: &[],
         },
+        // Slot 38 (mccabe-multiscale plan, section 6). The renderer reads
+        // it, not the shader: it decides how the pyramid is built and read.
+        SimParamDef {
+            name: "averaging",
+            display_name: "Averaging",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How the averages are taken. Pyramid is the original: fast, but its                       fixed grid of texels leaves faint creases that patterns can lock onto,                       so a table whose coarse scales move fastest leans toward the grid                       axes. Shifted grid moves the pyramid's grid every step, which removes                       the lean at almost no cost, with slightly more motion from step to                       step. Wrap-around boundary only.",
+            choices: &["Pyramid", "Pyramid, shifted grid"],
+        },
     ],
     presets: &[
         SimPreset {
@@ -3737,6 +3748,7 @@ pub static MCCABE: ModelDef = ModelDef {
                 ("amount_min", 0.01),
                 ("symmetry", 0.0),
                 ("layout", 0.0),
+                ("averaging", 1.0),
                 ("memory", 0.0),
             ],
             // Measured on the prototype: the nested texture is present
@@ -3764,6 +3776,7 @@ pub static MCCABE: ModelDef = ModelDef {
                 ("amount_min", 0.01),
                 ("symmetry", 0.0),
                 ("layout", 0.0),
+                ("averaging", 1.0),
                 ("memory", 0.0),
             ],
             steps: 200,
@@ -3791,6 +3804,7 @@ pub static MCCABE: ModelDef = ModelDef {
                 ("symmetry", 0.0),
                 ("memory", 0.05),
                 ("layout", 0.0),
+                ("averaging", 1.0),
             ],
             steps: 200,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
@@ -3810,6 +3824,7 @@ pub static MCCABE: ModelDef = ModelDef {
                 ("amount_min", 0.01),
                 ("symmetry", 5.0),
                 ("layout", 0.0),
+                ("averaging", 1.0),
                 ("memory", 0.0),
             ],
             steps: 200,
@@ -3830,6 +3845,7 @@ pub static MCCABE: ModelDef = ModelDef {
             // rosette of 3-fold detail; isotropic by construction.
             params: &[
                 ("layout", 1.0),
+                ("averaging", 1.0),
                 ("memory", 0.0),
                 ("scales", 5.0),
                 ("s0_radius", 3.0), ("s0_ratio", 2.0), ("s0_amount", 0.05), ("s0_weight", 1.0), ("s0_symmetry", 3.0),
@@ -3859,6 +3875,7 @@ pub static MCCABE: ModelDef = ModelDef {
             // (mccabe-multiscale plan, section 6). With colour memory.
             params: &[
                 ("layout", 1.0),
+                ("averaging", 1.0),
                 ("memory", 0.05),
                 ("scales", 5.0),
                 ("s0_radius", 1.0), ("s0_ratio", 2.0), ("s0_amount", 0.05), ("s0_weight", 1.0), ("s0_symmetry", 0.0),

@@ -79,6 +79,20 @@ pub const MODEL_PARAM_SLOTS: usize = 64;
 /// plan, section 2). Read by `sim_mem_count` / `sim_mem_base`.
 pub const RESERVED_PARAM_SLOTS: usize = 2;
 
+/// Steps between moves of a shifted pyramid lattice (mccabe-multiscale
+/// plan, section 6). Measured on the coarse-fastest table at 512^2, 32
+/// seeds: every 1 and every 4 steps both take the axis lean from 1.07 to
+/// 0.93 (exact averages give 0.96-0.99), every 16 to 0.97. Every step
+/// adds motion -- direction flips 0.32 -> 0.37 per step -- where every
+/// 4 has fewer flips than the fixed lattice (0.26), and a preset's four
+/// or more steps a frame see one move a frame.
+pub const LATTICE_SHIFT_EVERY: u32 = 4;
+
+/// Uniform slots for the pyramid's levels: one per (step in a batch,
+/// layer, level). A batch's steps times its slices is at most
+/// `MAX_STEPS_PER_SUBMIT`, and a pyramid has at most eight levels.
+const LEVEL_RING_SLOTS: u32 = MAX_STEPS_PER_SUBMIT * MAX_PYRAMID_LEVELS;
+
 /// Where each layer's MEMORY lives (mccabe-multiscale plan, section 2):
 /// per user layer its (first slice, slice count), and the field's
 /// total slice count. Memory slices come after every user layer, so
@@ -450,6 +464,9 @@ pub struct SimRenderer {
     kernel_lens: Vec<u32>,
     /// How many slices the field arrays carry.
     layers: u32,
+    /// Steps between moves of a shifted pyramid lattice. See
+    /// `LATTICE_SHIFT_EVERY`; settable for measurements.
+    lattice_shift_every: u32,
     /// The coupling table (`SimCouplingGpu` x MAX_COUPLINGS).
     coupling_buffer: Buffer,
     /// The flame's transforms as layer maps, once `set_layer_transforms`
@@ -577,7 +594,7 @@ impl SimRenderer {
         });
         let level_params_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Sim Level Params"),
-            size: params_stride * MAX_PYRAMID_LEVELS as u64 * MAX_LAYERS as u64,
+            size: params_stride * LEVEL_RING_SLOTS as u64,
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -643,6 +660,7 @@ impl SimRenderer {
             kernel_offsets: Vec::new(),
             kernel_lens: Vec::new(),
             layers: layers as u32,
+            lattice_shift_every: LATTICE_SHIFT_EVERY,
             coupling_buffer,
             layer_map: None,
             color_layers_buffer,
@@ -1161,6 +1179,12 @@ impl SimRenderer {
 
     pub fn grid_size(&self) -> (u32, u32) {
         (self.grid_w, self.grid_h)
+    }
+
+    /// Move a shifted pyramid lattice every `steps` steps instead of
+    /// every one. For measurements; a run should keep one period.
+    pub fn set_lattice_shift_every(&mut self, steps: u32) {
+        self.lattice_shift_every = steps.max(1);
     }
 
     /// Mark the field stale so the next render reseeds it.
@@ -1729,7 +1753,10 @@ impl SimRenderer {
                 };
                 [0, 1, 2, 3].map(|b| if m & (1 << b) != 0 { 1.0 } else { 0.0 })
             },
-            xform: [self.layer_rate(cfg, layer), 0.0, 0.0, 0.0],
+            // y: set on the pyramid dispatch that builds level 1 from the
+            // field. z: the lattice shift's period, 0 when fixed
+            // (mccabe-multiscale plan, section 6).
+            xform: [self.layer_rate(cfg, layer), 0.0, self.lattice_shift_period(cfg, layer) as f32, 0.0],
         }
     }
 
@@ -1749,6 +1776,22 @@ impl SimRenderer {
                 p.warp_mask = if p.warp_mask[0] > 0.0 { [1.0; 4] } else { [0.0; 4] };
                 p
             }
+        }
+    }
+
+    /// How often a layer's pyramid lattice moves, in steps; 0 when it is
+    /// fixed. A model reading the pyramid asks for the shift with
+    /// `averaging` = 1, and it applies on a periodic boundary only:
+    /// elsewhere a moved lattice would leave one edge's cells outside
+    /// every texel.
+    fn lattice_shift_period(&self, cfg: &SimConfig, layer: usize) -> u32 {
+        let m = model_or_default(cfg.layer_model_name(layer));
+        let asks = m.has(ModelFeature::NeedsPyramid)
+            && cfg.layer_model_params(layer).get("averaging").is_some_and(|v| v.round() == 1.0);
+        if asks && cfg.boundary == crate::config::sim::SimBoundary::Periodic {
+            self.lattice_shift_every
+        } else {
+            0
         }
     }
 
@@ -2037,30 +2080,45 @@ impl SimRenderer {
             queue.write_buffer(&self.coupling_buffer, 0, bytemuck::cast_slice(&table));
         }
 
-        // One uniform per pyramid level, carrying the SOURCE level's
-        // size: the pyramid pass reads its input through the shared
-        // boundary wrap, which sizes itself from `grid`.
-        if layer_models(cfg).iter().any(|m| m.has(ModelFeature::NeedsPyramid)) {
-            let stride = self.params_stride as usize;
-            let levels = pyramid_levels(self.grid_w, self.grid_h) as usize;
-            // Slots (layer, level): level 0 reads the layer's own slice
-            // of the field, every level above reads a one-layer level
-            // texture, so its slot says layer 0.
-            let mut bytes = vec![0u8; stride * levels * layers];
-            for layer in 0..layers {
-            let (mut w, mut h) = (self.grid_w, self.grid_h);
-            for l in 0..levels {
-                let mut p = self.params_for_layer(cfg, self.step_index, if l == 0 { layer } else { 0 });
-                p.grid = [w, h];
-                let at = (layer * levels + l) * stride;
-                bytes[at..at + std::mem::size_of::<SimParamsGpu>()]
-                    .copy_from_slice(bytemuck::bytes_of(&p));
-                w = w.div_ceil(2);
-                h = h.div_ceil(2);
-            }
-            }
-            queue.write_buffer(&self.level_params_buffer, 0, &bytes);
+    }
+
+    /// The pyramid's uniforms for a batch: one per (step, layer, level),
+    /// each carrying the SOURCE level's size -- the pyramid pass reads
+    /// its input through the shared boundary wrap, which sizes itself
+    /// from `grid` -- and its step, which a shifted lattice moves with.
+    /// Level 0's dispatch reads the layer's own slice of the field and
+    /// is marked (`xform.y`) as the one that applies the shift; every
+    /// level above reads a one-layer level texture, so its slot says
+    /// layer 0.
+    fn write_level_params_ring(&self, queue: &Queue, cfg: &SimConfig, start: u32, count: u32) {
+        if !layer_models(cfg).iter().any(|m| m.has(ModelFeature::NeedsPyramid)) {
+            return;
         }
+        let stride = self.params_stride as usize;
+        let layers = cfg.layer_count();
+        let levels = pyramid_levels(self.grid_w, self.grid_h) as usize;
+        let mut bytes = vec![0u8; stride * count as usize * layers * levels];
+        for i in 0..count as usize {
+            for layer in 0..layers {
+                let (mut w, mut h) = (self.grid_w, self.grid_h);
+                for l in 0..levels {
+                    let mut p = self.params_for_layer(cfg, start + i as u32, if l == 0 { layer } else { 0 });
+                    p.grid = [w, h];
+                    if l == 0 {
+                        // The shift is the layer's own; the levels above
+                        // carry layer 0's uniform and must not apply one.
+                        p.xform[1] = 1.0;
+                        p.xform[2] = self.lattice_shift_period(cfg, layer) as f32;
+                    }
+                    let at = ((i * layers + layer) * levels + l) * stride;
+                    bytes[at..at + std::mem::size_of::<SimParamsGpu>()]
+                        .copy_from_slice(bytemuck::bytes_of(&p));
+                    w = w.div_ceil(2);
+                    h = h.div_ceil(2);
+                }
+            }
+        }
+        queue.write_buffer(&self.level_params_buffer, 0, &bytes);
     }
 
     /// Reset min/max ring slots `start..start + count` (mod the ring)
@@ -2489,6 +2547,7 @@ impl SimRenderer {
             // dispatches inside it are ordered against each other, and
             // each reads its own ring slot by dynamic offset.
             self.write_params_ring(queue, cfg, self.step_index, batch);
+            self.write_level_params_ring(queue, cfg, self.step_index, batch);
             if wants_minmax {
                 self.clear_minmax_slots(queue, self.step_index * layers as u32, batch * layers as u32);
             }
@@ -2579,7 +2638,7 @@ impl SimRenderer {
                             }
                             for (lv, per_side) in pgroups.iter().enumerate() {
                                 let bg = if lv == 0 { &per_side[self.current] } else { &per_side[0] };
-                                pass.set_bind_group(0, bg, &[((l * levels + lv) as u32) * stride]);
+                                pass.set_bind_group(0, bg, &[(((i as usize * layers + l) * levels + lv) as u32) * stride]);
                                 let (lx, ly) = level_dispatch[lv];
                                 pass.dispatch_workgroups(lx, ly, 1);
                             }
