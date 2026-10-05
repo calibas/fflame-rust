@@ -597,6 +597,23 @@ or Luminance (YUV):
 
 The default is Multiply, so it is byte-identical.
 
+- **As built.** `brightness` (Multiply, Luminance (YUV)) on
+  `scale_memory`.
+  - **No colour-space round trip.** Replacing Y while U and V stay is
+    one shift added to all three channels: Y's weights sum to 1, and U
+    and V depend only on B − Y and R − Y. The same holds for YCbCr, the
+    other space Chau names. The result is then clipped to [0, 1].
+  - **Y is the field itself.** At brightness range 1, Y is
+    `(f + 1) / 2`: Chau "maps the concentration value directly to the
+    luminance". His post has no code. The prototype's 0.05–0.95 range
+    was ours, so it was not carried over.
+  - **The test.** Cell by cell, at Nearest on the grid, against the same
+    run's memory colour and field, on a coloured palette: exact.
+    `sim-mccabe-yuv` is the baseline.
+  - **Seen.** Pale and luminous where Multiply is dark: every scale's
+    hue survives into the bright regions
+    (`output/mccabe-yuv/sheet.png`).
+
 **P3, the variation radius**, `variation` (0–4 cells, 0 = off).
 - **What it needs.** The argmin wants each scale's `|w(a − b)|`
   averaged over a disc around the cell, so it needs `a − b` at the
