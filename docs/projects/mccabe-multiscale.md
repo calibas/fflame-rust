@@ -219,6 +219,10 @@ what the pyramid can average at any grid (8 levels reach about 233
 cells), and its step order measured an axis bias (next).
 
 **Found: tables whose coarse scales move fastest lean to the axes.**
+*(Superseded by section 6: four seeds overstated it. Over 32 seeds the
+lean is 1.08 ± 0.02 against 0.96–0.99 for exact averages, and its cause
+is the pyramid's fixed lattice, not the read's shape.)*
+
 Measured as spectral energy within 10° of the axes over that within
 10° of the diagonals, mean of four seeds at 512² (1.0 is isotropic):
 
@@ -277,7 +281,67 @@ structure". Whichever reading does that ships as `rule` = Compound,
 with what was seen recorded in the catalogue. If neither does, nothing
 ships and the attempt is recorded.
 
-## 6. Not in scope
+## 6. The axis lean, investigated (2026-10-04)
+
+Section 3 found tables whose coarse scales move fastest leaning to the
+grid axes. That was measured on four seeds, and the effect turned out
+smaller than those suggested. It was then tested against exact
+references, with fixes, in
+[proto_mccabe_isotropy.py](../../scripts/sim_prototypes/proto_mccabe_isotropy.py),
+which holds every number.
+
+**It is real, and smaller than first reported.** On the coarse-fastest
+table (radii 1, 3, 10, 20, 45), axes/diagonals, mean ± standard error:
+- The shader, on the GPU, over 32 seeds: **1.08 ± 0.02**.
+- The same rule with exact averages by FFT: a Gaussian 0.96 ± 0.02, a
+  disc 0.99 ± 0.05.
+
+A single seed spreads ±0.15, which is how four seeds read 1.25.
+
+**It is the lattice, not the kernel.**
+- **The kernel.** Plane-wave probes show the pyramid's
+  activator-minus-inhibitor response is about 1% stronger along the axes
+  at every radius; exact kernels show 0.1% or less. Its 7-tap build
+  kernel `[1 6 31 52 31 6 1] / 128` matches a Gaussian's moments to
+  fourth order and cuts that to 0.1%, but the dynamics did not move
+  (GPU, 1.10 ± 0.02).
+- **The lattice.** Moving the pyramid's lattice by a random offset
+  every step, everything else unchanged, removes the lean entirely: 1.13
+  → 0.97 on the CPU replica, lower on all eight seeds.
+
+The bilinear reads crease along the coarse levels' texel lines, 32–64
+cells apart, and a rule that turns on where `a − b` crosses zero locks
+onto them. B-spline reads, smooth across texel lines, recover part of
+it (1.03 ± 0.02 on the GPU over 32 seeds, 1.02 ± 0.03 on the CPU
+replica over 8) at 4.1× the cost: 16.9 against 4.1 ms/step at 1080p.
+
+**What was not kept.** The B-spline and round-kernel options were built
+to measure on the GPU, then removed. The patch is
+`output/sim_proto/isotropy/averaging_options_experiment.patch`.
+
+**The fix this points to: per-step lattice jitter.**
+- **The offset.** It comes from (seed, step), so a run stays
+  reproducible and batch invariant.
+- **The build.** Level 1 builds from the field at `2p + d − s`, and
+  levels from 1 up are read at `pos + s`. Level 0 is the field and does
+  not move.
+- **The cost.** Almost nothing per read. The pyramid's parameters must
+  become per step, since they are written once per batch today.
+- **The price.** Somewhat more motion: direction flips per step 0.32 →
+  0.37, per-step change +20%. Moving the lattice every few steps
+  instead is the variant to measure.
+- **Periodic only.** On a clamped or zero boundary a moved lattice
+  would leave one edge's cells outside every texel.
+
+**Separately: the disc look.** The exact disc's texture is finer and
+sharper than any Gaussian method's, at the same calibrated feature
+size. That is the disc-versus-Gaussian question, which only exact discs
+(FFT, parked) answer. The calibration itself has also drifted since the
+sampling-phase fix: at `CAL` 0.55 the pyramid's peak wavenumber is
+66 / 18 / 9 against the disc's 54 / 16 / 8 at radii 3 / 10 / 20, so
+its features are 12–20% too small.
+
+## 7. Not in scope
 
 - **Exact disc kernels**, which would need FFT. That is parked with
   its trigger in simulation-fractals.md.

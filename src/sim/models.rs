@@ -3852,9 +3852,11 @@ pub static MCCABE: ModelDef = ModelDef {
             // uneven spacing of Reusser's 2018 defaults (which go on to
             // 250, past what the pyramid can average). The steps fall
             // from finest to coarsest: with Reusser's order -- coarse
-            // fastest -- the same radii measured an axis bias of 1.2-1.3
-            // in spectral energy (axes over diagonals, four seeds,
-            // 512^2), against 0.99 this way round. With colour memory.
+            // fastest -- the same radii lean to the grid axes, 1.08 +- 0.02
+            // in spectral energy (axes over diagonals, 32 seeds, 512^2)
+            // against 0.96-0.99 for exact averages; this way round there
+            // is no lean. The cause is the pyramid's fixed lattice
+            // (mccabe-multiscale plan, section 6). With colour memory.
             params: &[
                 ("layout", 1.0),
                 ("memory", 0.05),
