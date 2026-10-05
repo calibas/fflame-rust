@@ -2979,6 +2979,393 @@ fn mccabe_lattice_shift_probe() {
     }
 }
 
+/// The GPU FFT against rustfft, both directions, at power-of-two,
+/// mixed-radix and prime sizes, and two the app meets (mccabe-multiscale
+/// plan, section 6b). Random complex data; the error is reported
+/// relative to the largest output.
+#[test]
+fn the_gpu_fft_matches_rustfft() {
+    use rustfft::{num_complex::Complex, FftPlanner};
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let mut planner = FftPlanner::<f64>::new();
+    for (w, h) in [(8u32, 8u32), (16, 12), (30, 7), (53, 10), (61, 59), (256, 256), (360, 200), (1920, 1080)] {
+        let fft = crate::sim::fft::Fft2d::new(&device, w, h).expect("a plan");
+        let n = (w * h) as usize;
+        let mut seed = 0x1234_5678u32 ^ (w * 31 + h);
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            (seed as f64 / u32::MAX as f64) * 2.0 - 1.0
+        };
+        let input: Vec<Complex<f64>> = (0..n).map(|_| Complex::new(next(), next())).collect();
+        for inverse in [false, true] {
+            // CPU: rows, then columns.
+            let mut want = input.clone();
+            let row = if inverse { planner.plan_fft_inverse(w as usize) } else { planner.plan_fft_forward(w as usize) };
+            for r in 0..h as usize {
+                row.process(&mut want[r * w as usize..(r + 1) * w as usize]);
+            }
+            let col = if inverse { planner.plan_fft_inverse(h as usize) } else { planner.plan_fft_forward(h as usize) };
+            let mut column = vec![Complex::new(0.0, 0.0); h as usize];
+            for c in 0..w as usize {
+                for r in 0..h as usize {
+                    column[r] = want[r * w as usize + c];
+                }
+                col.process(&mut column);
+                for r in 0..h as usize {
+                    want[r * w as usize + c] = column[r];
+                }
+            }
+            // GPU.
+            let data: Vec<[f32; 2]> = input.iter().map(|c| [c.re as f32, c.im as f32]).collect();
+            queue.write_buffer(fft.buffer(0), 0, bytemuck::cast_slice(&data));
+            let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
+            let out = {
+                let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: None, timestamp_writes: None });
+                fft.encode(&mut pass, inverse, 0, 1)
+            };
+            let staging = device.create_buffer(&BufferDescriptor {
+                label: None,
+                size: (n * 8) as u64,
+                usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            enc.copy_buffer_to_buffer(fft.buffer(out), 0, &staging, 0, (n * 8) as u64);
+            queue.submit(std::iter::once(enc.finish()));
+            staging.slice(..).map_async(MapMode::Read, |_| {});
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            let got: Vec<[f32; 2]> = bytemuck::cast_slice(&staging.slice(..).get_mapped_range()).to_vec();
+            let scale = want.iter().map(|c| c.norm()).fold(0.0, f64::max);
+            let worst = got
+                .iter()
+                .zip(&want)
+                .map(|(g, c)| ((g[0] as f64 - c.re).powi(2) + (g[1] as f64 - c.im).powi(2)).sqrt())
+                .fold(0.0, f64::max)
+                / scale;
+            println!("{w}x{h} {}: worst error {worst:.2e} of the largest output", if inverse { "inverse" } else { "forward" });
+            assert!(worst < 2e-5, "{w}x{h}: error {worst}");
+        }
+    }
+}
+
+/// One `R32Float` slice of an array texture, read back.
+fn read_r32f_layer(device: &Device, queue: &Queue, tex: &Texture, w: u32, h: u32, layer: u32) -> Vec<f32> {
+    let unpadded = (w * 4) as usize;
+    let padded = unpadded.div_ceil(256) * 256;
+    let buf = device.create_buffer(&BufferDescriptor {
+        label: Some("r32f readback"),
+        size: (padded * h as usize) as u64,
+        usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
+    enc.copy_texture_to_buffer(
+        TexelCopyTextureInfo { texture: tex, mip_level: 0, origin: Origin3d { x: 0, y: 0, z: layer }, aspect: TextureAspect::All },
+        TexelCopyBufferInfo {
+            buffer: &buf,
+            layout: TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded as u32), rows_per_image: Some(h) },
+        },
+        Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+    );
+    queue.submit(std::iter::once(enc.finish()));
+    buf.slice(..).map_async(MapMode::Read, |_| {});
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let data = buf.slice(..).get_mapped_range();
+    let mut out = Vec::with_capacity((w * h) as usize);
+    for row in 0..h as usize {
+        let r = &data[row * padded..row * padded + unpadded];
+        out.extend(bytemuck::cast_slice::<u8, f32>(r).iter().copied());
+    }
+    out
+}
+
+/// The spectral stage against a direct convolution: a random field on a
+/// mixed-radix grid, three scales (one pair and one alone), each scale's
+/// difference field against `sum_x f(x) K(c - x)` with the same wrapped,
+/// antialiased, normalised discs (mccabe-multiscale plan, section 6b).
+#[test]
+fn spectral_differences_match_a_direct_convolution() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let (w, h) = (40u32, 36u32);
+    let n = (w * h) as usize;
+    let mut seed = 0x9e37_79b9u32;
+    let field: Vec<f32> = (0..n)
+        .map(|_| {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            (seed as f32 / u32::MAX as f32) * 2.0 - 1.0
+        })
+        .collect();
+    let tex = device.create_texture(&TextureDescriptor {
+        label: Some("spectral test field"),
+        size: Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: TextureDimension::D2,
+        format: TextureFormat::Rgba32Float,
+        usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let texels: Vec<[f32; 4]> = field.iter().map(|&v| [v, 0.0, 0.0, 0.0]).collect();
+    queue.write_texture(
+        TexelCopyTextureInfo { texture: &tex, mip_level: 0, origin: Origin3d::ZERO, aspect: TextureAspect::All },
+        bytemuck::cast_slice(&texels),
+        TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 16), rows_per_image: Some(h) },
+        Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+    );
+    let view = tex.create_view(&TextureViewDescriptor { dimension: Some(TextureViewDimension::D2Array), ..Default::default() });
+    let radii = [(2.0f32, 4.0f32), (3.5, 7.0), (6.0, 12.0)];
+    // Slices from 2, to check the stage writes where it is told.
+    let (diffs, diffs_view) = crate::sim::spectral::SpectralAverages::create_diffs(&device, w, h, 6);
+    let mut s = crate::sim::spectral::SpectralAverages::new(&device, w, h, 0, 2).expect("a plan");
+    s.bind(&device, [&view, &view], &diffs_view);
+    s.set_radii(&device, &queue, &radii);
+    let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
+    {
+        let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: None, timestamp_writes: None });
+        s.encode(&mut pass, 0);
+    }
+    queue.submit(std::iter::once(enc.finish()));
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+
+    // The kernel on the torus, as `fill` writes it.
+    let wrapped = |v: u32, size: u32| -> f32 { if v * 2 > size { v as f32 - size as f32 } else { v as f32 } };
+    let disc = |r: f32, x: u32, y: u32| -> f64 {
+        let d = (wrapped(x, w).powi(2) + wrapped(y, h).powi(2)).sqrt();
+        (r + 0.5 - d).clamp(0.0, 1.0) as f64
+    };
+    for (k, &(ra, rb)) in radii.iter().enumerate() {
+        let sa: f64 = (0..n).map(|c| disc(ra, (c as u32) % w, (c as u32) / w)).sum();
+        let sb: f64 = (0..n).map(|c| disc(rb, (c as u32) % w, (c as u32) / w)).sum();
+        let kern: Vec<f64> = (0..n)
+            .map(|c| disc(ra, (c as u32) % w, (c as u32) / w) / sa - disc(rb, (c as u32) % w, (c as u32) / w) / sb)
+            .collect();
+        let got = read_r32f_layer(&device, &queue, &diffs, w, h, 2 + k as u32);
+        let (mut worst, mut scale) = (0.0f64, 0.0f64);
+        for cy in 0..h {
+            for cx in 0..w {
+                let mut acc = 0.0f64;
+                for y in 0..h {
+                    for x in 0..w {
+                        let (dx, dy) = ((cx + w - x) % w, (cy + h - y) % h);
+                        acc += field[(y * w + x) as usize] as f64 * kern[(dy * w + dx) as usize];
+                    }
+                }
+                scale = scale.max(acc.abs());
+                worst = worst.max((acc - got[(cy * w + cx) as usize] as f64).abs());
+            }
+        }
+        println!("scale {k} ({ra}/{rb}): worst {worst:.2e} against a largest |D| of {scale:.3}");
+        assert!(worst < 1e-5 * scale.max(1e-3) + 1e-6, "scale {k}: {worst}");
+    }
+}
+
+/// McCabe averaging over exact discs (mccabe-multiscale plan, section 6b).
+fn mccabe_exact_config(n: u32) -> SimConfig {
+    let mut cfg = mccabe_config(n);
+    cfg.model_params.insert("averaging".into(), 2.0);
+    cfg
+}
+
+/// One exact step against a CPU mirror from the GPU's seed: each
+/// scale's activator-minus-inhibitor by direct convolution with the
+/// spectral stage's discs (antialiased over a cell, wrapped, each
+/// normalised by its sum), then McCabe's argmin and step.
+#[test]
+fn mccabe_exact_discs_match_a_cpu_mirror() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    // Plain, and with 3-fold symmetry, which reads the difference fields
+    // bilinearly at positions rotated about the centre.
+    for sym in [0.0f32, 3.0] {
+        exact_mirror_one_step(&device, &queue, sym);
+    }
+}
+
+fn exact_mirror_one_step(device: &Device, queue: &Queue, sym: f32) {
+    let (device, queue) = (device.clone(), queue.clone());
+    const N: usize = 48;
+    let mut cfg = mccabe_exact_config(N as u32);
+    cfg.model_params.insert("scales".into(), 4.0);
+    cfg.model_params.insert("symmetry".into(), sym);
+    let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+    r.seed(&device, &queue, &cfg);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let f0: Vec<f32> = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32)
+        .iter()
+        .map(|px| px[0])
+        .collect();
+    r.run_steps(&device, &queue, &cfg, 1);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let got = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+
+    let wrapped = |v: usize| -> f64 { if v * 2 > N { v as f64 - N as f64 } else { v as f64 } };
+    let kernel = |r: f32| -> Vec<f64> {
+        let k: Vec<f64> = (0..N * N)
+            .map(|c| (r as f64 + 0.5 - (wrapped(c % N).powi(2) + wrapped(c / N).powi(2)).sqrt()).clamp(0.0, 1.0))
+            .collect();
+        let s: f64 = k.iter().sum();
+        k.into_iter().map(|v| v / s).collect()
+    };
+    let radii = crate::sim::models::mccabe_scale_radii(&cfg.model_params);
+    assert_eq!(radii.len(), 4);
+    let diffs: Vec<Vec<f64>> = radii
+        .iter()
+        .map(|&(ra, rb)| {
+            let (ka, kb) = (kernel(ra), kernel(rb));
+            (0..N * N)
+                .map(|c| {
+                    let (cx, cy) = (c % N, c / N);
+                    let mut acc = 0.0;
+                    for y in 0..N {
+                        for x in 0..N {
+                            let o = ((cy + N - y) % N) * N + (cx + N - x) % N;
+                            acc += f0[y * N + x] as f64 * (ka[o] - kb[o]);
+                        }
+                    }
+                    acc
+                })
+                .collect()
+        })
+        .collect();
+    // mc_diff: at a cell centre the cell; with symmetry, the mean over
+    // the rotations about the grid centre, each read bilinearly with a
+    // periodic wrap, as `pyr_diff` reads.
+    let at = |d: &Vec<f64>, px: f32, py: f32| -> f64 {
+        let (fx, fy) = (px - 0.5, py - 0.5);
+        let (x0, y0) = (fx.floor(), fy.floor());
+        let (tx, ty) = ((fx - x0) as f64, (fy - y0) as f64);
+        let get = |x: i64, y: i64| d[(y.rem_euclid(N as i64) as usize) * N + x.rem_euclid(N as i64) as usize];
+        let (ix, iy) = (x0 as i64, y0 as i64);
+        let (a, b, c, e) = (get(ix, iy), get(ix + 1, iy), get(ix, iy + 1), get(ix + 1, iy + 1));
+        (a + (b - a) * tx) + ((c + (e - c) * tx) - (a + (b - a) * tx)) * ty
+    };
+    let k_sym = sym.round() as i32;
+    let read = |d: &Vec<f64>, c: usize| -> f64 {
+        let (px, py) = ((c % N) as f32 + 0.5, (c / N) as f32 + 0.5);
+        if k_sym < 2 {
+            return d[c];
+        }
+        let g = N as f32;
+        let mut acc = 0.0;
+        for k in 0..k_sym {
+            let ang = 6.28318530718f32 * k as f32 / k_sym as f32;
+            let (dx, dy) = (px - g * 0.5, py - g * 0.5);
+            let mut qx = ang.cos() * dx - ang.sin() * dy + g * 0.5;
+            let mut qy = ang.sin() * dx + ang.cos() * dy + g * 0.5;
+            qx -= g * (qx / g).floor();
+            qy -= g * (qy / g).floor();
+            acc += at(d, qx, qy);
+        }
+        acc / k_sym as f64
+    };
+    let lo = f0.iter().cloned().fold(f32::INFINITY, f32::min);
+    let hi = f0.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    let (mut exact, mut ties, mut other) = (0usize, 0usize, 0usize);
+    let mut worst_tie_gap = 0.0f64;
+    for c in 0..N * N {
+        let (mut best_var, mut best_dir) = (f64::MAX, 0.0f32);
+        for (i, d) in diffs.iter().enumerate() {
+            let dc = read(d, c);
+            let v = dc.abs();
+            let amt = 0.05 + (0.01 - 0.05) * (i as f32 / 3.0);
+            if v < best_var {
+                best_var = v;
+                best_dir = if dc > 0.0 { amt } else { -amt };
+            }
+        }
+        let f = (f0[c] - lo) / (hi - lo).max(1e-6) * 2.0 - 1.0;
+        let dd = (f + best_dir - got[c][0]).abs();
+        if dd < 1e-4 {
+            exact += 1;
+        } else if dd < 0.2 {
+            ties += 1;
+            // Which (scale, direction) the GPU took, from its step, and
+            // how far the CPU's variation for that scale is from its own
+            // best: a rounding tie is a small fraction of the variation.
+            let step = got[c][0] - f;
+            let mut gpu_gap = f64::MAX;
+            for (i, d) in diffs.iter().enumerate() {
+                let amt = 0.05 + (0.01 - 0.05) * (i as f32 / 3.0);
+                if (step.abs() - amt).abs() < 1e-4 {
+                    gpu_gap = gpu_gap.min((read(d, c).abs() - best_var) / best_var.max(1e-12));
+                }
+            }
+            worst_tie_gap = worst_tie_gap.max(gpu_gap);
+        } else {
+            other += 1;
+        }
+    }
+    println!("McCabe exact discs, symmetry {sym}, vs CPU mirror: {exact} match, {ties} chose another scale (worst relative gap {worst_tie_gap:.1e}), {other} disagree");
+    assert_eq!(other, 0);
+    assert!(ties * 200 < N * N, "{ties} ties");
+}
+
+/// Exact averaging is batch invariant: the spectral stage runs per step,
+/// on the field that step reads.
+#[test]
+fn mccabe_exact_discs_are_batch_invariant() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 48;
+    let mut cfg = mccabe_exact_config(N);
+    cfg.model_params.insert("scales".into(), 4.0);
+    let n = 150;
+    let mut a = SimRenderer::new(&device, &cfg, N, N);
+    a.seed(&device, &queue, &cfg);
+    a.run_steps(&device, &queue, &cfg, n);
+    let mut b = SimRenderer::new(&device, &cfg, N, N);
+    b.seed(&device, &queue, &cfg);
+    for _ in 0..n {
+        b.run_steps(&device, &queue, &cfg, 1);
+    }
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let fa = read_rgba32f(&device, &queue, a.field_texture(), N, N);
+    let fb = read_rgba32f(&device, &queue, b.field_texture(), N, N);
+    let differing = fa
+        .iter()
+        .zip(&fb)
+        .filter(|(x, y)| x.iter().zip(y.iter()).any(|(p, q)| p.to_bits() != q.to_bits()))
+        .count();
+    assert_eq!(differing, 0, "{differing} cells differ between batchings");
+}
+
+/// A grid the FFT has no plan for -- 67 is a prime past its largest
+/// radix -- keeps the pyramid: asking for exact discs there renders
+/// what the pyramid renders, bit for bit, rather than failing.
+#[test]
+fn exact_discs_fall_back_to_the_pyramid_on_a_grid_without_a_plan() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let run = |averaging: f32| {
+        let mut cfg = mccabe_config(64);
+        cfg.grid = SimGrid::Fixed { width: 67, height: 64 };
+        cfg.model_params.insert("scales".into(), 4.0);
+        cfg.model_params.insert("averaging".into(), averaging);
+        let mut r = SimRenderer::new(&device, &cfg, 67, 64);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 20);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        read_rgba32f(&device, &queue, r.field_texture(), 67, 64)
+    };
+    let (exact, pyramid) = (run(2.0), run(0.0));
+    assert!(exact.iter().zip(&pyramid).all(|(a, b)| a == b), "the fallback is not the pyramid");
+}
+
 /// Phase 3's other gate: McCabe at 1080p inside the interactive budget.
 ///
 /// The pipeline doc expected "well under 2 ms" for a box pyramid and
@@ -2992,8 +3379,9 @@ fn mccabe_meets_the_interactive_budget_at_1080p() {
         return;
     };
     let (w, h) = (1920u32, 1080u32);
-    let ms_per_step = |memory: f32| -> f64 {
+    let ms_per_step = |memory: f32, averaging: f32| -> f64 {
         let mut cfg = mccabe_memory_config(256, memory);
+        cfg.model_params.insert("averaging".into(), averaging);
         cfg.grid = crate::config::sim::SimGrid::Fixed { width: w, height: h };
         let mut r = SimRenderer::new(&device, &cfg, w, h);
         r.seed(&device, &queue, &cfg);
@@ -3014,14 +3402,21 @@ fn mccabe_meets_the_interactive_budget_at_1080p() {
         }
         best
     };
-    let ms = ms_per_step(0.0);
+    let ms = ms_per_step(0.0, 0.0);
     println!("McCabe 5 scales at 1080p: {ms:.3} ms/step ({:.1} steps/s), best of 5", 1e3 / ms);
     assert!(ms < 8.0, "McCabe at 1080p is {ms:.2} ms/step, past the 8 ms fallback threshold");
     // With the colour memory on (mccabe-multiscale plan, section 2):
     // two more reads and writes a cell, and the same gate.
-    let ms = ms_per_step(0.05);
+    let ms = ms_per_step(0.05, 0.0);
     println!("  with colour memory: {ms:.3} ms/step ({:.1} steps/s)", 1e3 / ms);
     assert!(ms < 8.0, "McCabe with memory at 1080p is {ms:.2} ms/step, past the 8 ms threshold");
+    // The shifted grid and exact discs (mccabe-multiscale plan, sections
+    // 6a and 6b). Reported, not gated: exact discs are an option, and
+    // its cost is the choice the user makes.
+    let ms = ms_per_step(0.0, 1.0);
+    println!("  shifted grid: {ms:.3} ms/step ({:.1} steps/s)", 1e3 / ms);
+    let ms = ms_per_step(0.0, 2.0);
+    println!("  exact discs: {ms:.3} ms/step ({:.1} steps/s)", 1e3 / ms);
 }
 
 /// Review probe: what the per-frame kernel rebuild costs on the CPU.

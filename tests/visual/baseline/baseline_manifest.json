@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "633d64ce",
+  "git_hash": "2cd518a5",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 35102,
@@ -781,6 +781,10 @@
     "sim-mccabe-coarse.png": {
       "bytes": 24491,
       "sha256": "5999a8e9d6918e9d61fc38be2c7fc56eb3753b09c204b929635e456bde8f6777"
+    },
+    "sim-mccabe-exact.png": {
+      "bytes": 23354,
+      "sha256": "4a5c3b862b61bdf9190e06cf34be29bd64da3dc4236dfd06373d3031b0c307a1"
     },
     "sim-mccabe-field.png": {
       "bytes": 23734,

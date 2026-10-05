@@ -155,11 +155,28 @@ and first slice.
 - **Reads.** Bilinear within a level and linear between two, at
   `level = log2(0.55 r)`.
 - **Its fixed texel lattice is a hazard.** Patterns can lock onto the
-  bilinear reads' creases along the coarse levels' texel lines. McCabe's
-  "shifted grid" averaging moves the lattice every four steps by a hash
-  of (seed, step), building level 1 from the field offset by it and
-  reading every level above at the position plus it. See
-  [mccabe-multiscale.md](../projects/mccabe-multiscale.md), section 6.
+  bilinear reads' creases along the coarse levels' texel lines.
+  McCabe's "shifted grid" averaging moves the lattice every four steps
+  by a hash of (seed, step), building level 1 from the field offset by
+  it and reading every level above at the position plus it. Measured,
+  this trades the axis lean for a diagonal one.
+
+**Exact averages.** McCabe's "Exact discs" averaging replaces the
+pyramid with a spectral stage:
+- **What it computes.** Per scale, the activator-minus-inhibitor field
+  as a circular convolution with antialiased discs, by FFT.
+- **The FFT** (`src/sim/fft.rs`): mixed-radix Stockham, one dispatch per
+  stage, any grid whose prime factors are at most 64.
+- **The stage** (`src/sim/spectral.rs`): one forward and three inverse
+  2D FFTs a step for six scales.
+- **Where the results go.** An `R32Float` array the renderer owns, at
+  step binding 18, which a sampled texture keeps off the browsers'
+  storage-buffer count.
+- **Limits.** Periodic boundary only; anything else falls back to the
+  pyramid. About 1.7× the pyramid's step and ~150 MB at 1080p.
+
+See [mccabe-multiscale.md](../projects/mccabe-multiscale.md), sections 6
+to 6c.
 
 ### Shaders
 

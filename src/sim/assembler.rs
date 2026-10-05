@@ -1735,6 +1735,42 @@ fn sim_mem_write(p: vec2<i32>, k: i32, v: vec4<f32>) {
 /// Spliced into the step shader of a model that declares
 /// [`ModelFeature::NeedsPyramid`].
 const PYRAMID_ACCESSORS: &str = r#"
+// Exact averages (mccabe-multiscale plan, section 6b): per scale, the
+// activator-minus-inhibitor field the spectral stage made this step,
+// when the renderer made one for this layer -- `xform.w` is its first
+// slice plus one, 0 when the pyramid is read instead.
+@group(0) @binding(18) var pyr_diffs: texture_2d_array<f32>;
+
+fn pyr_exact() -> bool {
+    return params.xform.w > 0.5;
+}
+
+fn pyr_diff_cell(i: i32, q: vec2<i32>) -> f32 {
+    // Through `sim_wrap_sized`, not `((q % g) + g) % g`: that obvious
+    // form reads out of bounds at the top and left edges on the device
+    // (see `sim_wrap_sized`), which a rotated read near a seam hits.
+    let w = sim_wrap_sized(q, sim_grid());
+    return textureLoad(pyr_diffs, w, i32(params.xform.w) - 1 + i, 0).x;
+}
+
+// Scale i's difference at a position in base cells (a cell centre is
+// p + 0.5): the cell's own value at a centre, bilinear between centres
+// (a rotated read). Periodic, as the spectral stage is.
+fn pyr_diff(i: i32, pos: vec2<f32>) -> f32 {
+    let f = pos - vec2<f32>(0.5, 0.5);
+    let f0 = floor(f);
+    let t = f - f0;
+    let i0 = vec2<i32>(f0);
+    let a = pyr_diff_cell(i, i0);
+    if (t.x == 0.0 && t.y == 0.0) {
+        return a;
+    }
+    let b = pyr_diff_cell(i, i0 + vec2<i32>(1, 0));
+    let c = pyr_diff_cell(i, i0 + vec2<i32>(0, 1));
+    let d = pyr_diff_cell(i, i0 + vec2<i32>(1, 1));
+    return mix(mix(a, b, t.x), mix(c, d, t.x), t.y);
+}
+
 @group(0) @binding(6) var pyr1: texture_2d<f32>;
 @group(0) @binding(7) var pyr2: texture_2d<f32>;
 @group(0) @binding(8) var pyr3: texture_2d<f32>;
