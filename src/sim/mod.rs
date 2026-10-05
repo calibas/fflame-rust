@@ -312,6 +312,9 @@ pub struct ParamTable {
     /// The table the generator makes from these parameters. Switching
     /// to the table writes it, so the switch changes nothing on screen.
     pub fill: fn(&std::collections::BTreeMap<String, f32>) -> Vec<(String, f32)>,
+    /// Whether the panel draws a column at these parameters: a column
+    /// that does nothing in some mode is hidden there.
+    pub shows_column: fn(&std::collections::BTreeMap<String, f32>, &str) -> bool,
 }
 
 impl ParamTable {
@@ -330,12 +333,15 @@ impl ParamTable {
 /// the registry rather than a field on every `ModelDef`.
 pub static PARAM_TABLES: &[&ParamTable] = &[&models::MCCABE_TABLE];
 
-/// The (activator, inhibitor) radii of `model`'s scales at these
-/// parameters, for the spectral stage, or `None` for a model it does not
-/// serve. McCabe is the only one.
-pub fn spectral_radii(model: &str, params: &std::collections::BTreeMap<String, f32>) -> Option<Vec<(f32, f32)>> {
+/// The discs of `model`'s scales at these parameters, for the spectral
+/// stage, or `None` for a model it does not serve. McCabe is the only
+/// one.
+pub fn spectral_scales(
+    model: &str,
+    params: &std::collections::BTreeMap<String, f32>,
+) -> Option<Vec<spectral::SpectralScale>> {
     match model {
-        "mccabe" => Some(models::mccabe_scale_radii(params)),
+        "mccabe" => Some(models::mccabe_scale_discs(params)),
         _ => None,
     }
 }

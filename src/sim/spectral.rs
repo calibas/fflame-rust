@@ -18,15 +18,47 @@
 //!
 //! A circular convolution is exactly the periodic boundary, which is the
 //! only one this serves.
+//!
+//! A scale's discs can be stretched into ellipses of the same area at an
+//! angle (section 9's "lean on purpose"). An ellipse is centrally
+//! symmetric too, so its spectrum stays real and nothing else changes.
 
 use super::fft::Fft2d;
-use wgpu::util::DeviceExt;
 use wgpu::*;
 
 /// The most scales a stage holds: McCabe's six. Its spectra and
 /// difference fields are sized for them: at 1080p 50 MB each, plus 50 MB
 /// of complex scratch.
 pub const MAX_SPECTRAL_SCALES: usize = 6;
+
+/// One scale's two discs: activator radius `ra`, inhibitor radius `rb`,
+/// both stretched into ellipses of the same area, `stretch` times longer
+/// than wide, the long axis at `angle` radians from the x axis. A stretch
+/// of 1 is the round disc.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpectralScale {
+    pub ra: f32,
+    pub rb: f32,
+    pub stretch: f32,
+    pub angle: f32,
+}
+
+impl SpectralScale {
+    /// Round discs.
+    pub fn round(ra: f32, rb: f32) -> Self {
+        SpectralScale { ra, rb, stretch: 1.0, angle: 0.0 }
+    }
+
+    /// The map taking a cell offset to the disc's frame: rotate by
+    /// `-angle`, then divide the long axis by `sqrt(stretch)` and
+    /// multiply the short one by it. Row-major. Exactly the identity
+    /// for a round disc, so its fill is the round one's to the bit.
+    fn metric(&self) -> [f32; 4] {
+        let (s, c) = self.angle.sin_cos();
+        let q = self.stretch.max(1.0).sqrt();
+        [c / q, s / q, -s * q, c * q]
+    }
+}
 
 /// One mini-pass's uniform. Mirrored by `SpecParams` in [`SPECTRAL_WGSL`].
 #[repr(C)]
@@ -46,6 +78,11 @@ struct SpecGpu {
     inv_n: f32,
     /// The first slice of the difference fields this stage writes.
     base: u32,
+    /// The fill's [`SpectralScale::metric`], row-major.
+    m00: f32,
+    m01: f32,
+    m10: f32,
+    m11: f32,
     pad: [u32; 2],
 }
 
@@ -61,6 +98,10 @@ struct SpecParams {
     rb: f32,
     inv_n: f32,
     base: u32,
+    m00: f32,
+    m01: f32,
+    m10: f32,
+    m11: f32,
     pad1: u32,
     pad2: u32,
 };
@@ -98,16 +139,18 @@ fn disc(r: f32, d: f32) -> f32 {
 
 // A scale's two discs, centred on cell (0, 0) and wrapped: one image,
 // so a disc wider than the grid is cut off at it (as Reusser's is).
-// Activator in the real part, inhibitor in the imaginary.
+// Activator in the real part, inhibitor in the imaginary. The distance
+// is measured in the disc's own frame, which makes a stretched disc an
+// ellipse; the identity for a round one.
 @compute @workgroup_size(8, 8, 1)
 fn fill(@builtin(global_invocation_id) gid: vec3<u32>) {
     let c = cell(gid);
     if (c < 0) {
         return;
     }
-    let x = select(i32(gid.x), i32(gid.x) - i32(sp.width), gid.x * 2u > sp.width);
-    let y = select(i32(gid.y), i32(gid.y) - i32(sp.height), gid.y * 2u > sp.height);
-    let d = length(vec2<f32>(f32(x), f32(y)));
+    let x = f32(select(i32(gid.x), i32(gid.x) - i32(sp.width), gid.x * 2u > sp.width));
+    let y = f32(select(i32(gid.y), i32(gid.y) - i32(sp.height), gid.y * 2u > sp.height));
+    let d = length(vec2<f32>(sp.m00 * x + sp.m01 * y, sp.m10 * x + sp.m11 * y));
     cout[c] = vec2<f32>(disc(sp.ra, d), disc(sp.rb, d));
 }
 
@@ -182,8 +225,8 @@ pub struct SpectralAverages {
     groups: Vec<Vec<Vec<Option<BindGroup>>>>,
     /// The field views and the difference array the groups were made for.
     bound: Option<[TextureView; 3]>,
-    /// The (activator, inhibitor) radii the spectra were made for.
-    radii: Vec<(f32, f32)>,
+    /// The scales the spectra were made for.
+    radii: Vec<SpectralScale>,
     layer: u32,
     base: u32,
 }
@@ -379,11 +422,11 @@ impl SpectralAverages {
         self.bound = Some(want);
     }
 
-    /// Make the scales' spectra for these (activator, inhibitor) radii,
-    /// if they are not the ones already made. Submits its own work; the
-    /// stage must be bound first.
-    pub fn set_radii(&mut self, device: &Device, queue: &Queue, radii: &[(f32, f32)]) {
-        let radii: Vec<(f32, f32)> = radii.iter().take(MAX_SPECTRAL_SCALES).copied().collect();
+    /// Make the scales' spectra for these discs, if they are not the
+    /// ones already made. Submits its own work; the stage must be bound
+    /// first.
+    pub fn set_radii(&mut self, device: &Device, queue: &Queue, radii: &[SpectralScale]) {
+        let radii: Vec<SpectralScale> = radii.iter().take(MAX_SPECTRAL_SCALES).copied().collect();
         if radii == self.radii {
             return;
         }
@@ -408,7 +451,7 @@ impl SpectralAverages {
         self.radii = radii;
     }
 
-    fn write_params(&self, queue: &Queue, radii: &[(f32, f32)]) {
+    fn write_params(&self, queue: &Queue, radii: &[SpectralScale]) {
         let base = SpecGpu {
             width: self.width,
             height: self.height,
@@ -420,6 +463,10 @@ impl SpectralAverages {
             rb: 0.0,
             inv_n: 1.0 / (self.width as f32 * self.height as f32),
             base: self.base,
+            m00: 1.0,
+            m01: 0.0,
+            m10: 0.0,
+            m11: 1.0,
             pad: [0; 2],
         };
         let mut bytes = vec![0u8; (self.stride * SLOTS) as usize];
@@ -428,8 +475,9 @@ impl SpectralAverages {
             bytes[at..at + std::mem::size_of::<SpecGpu>()].copy_from_slice(bytemuck::bytes_of(&v));
         };
         put(SLOT_PACK, base);
-        for (k, &(ra, rb)) in radii.iter().enumerate() {
-            put(slot_scale(k), SpecGpu { scale_i: k as u32, ra, rb, ..base });
+        for (k, s) in radii.iter().enumerate() {
+            let [m00, m01, m10, m11] = s.metric();
+            put(slot_scale(k), SpecGpu { scale_i: k as u32, ra: s.ra, rb: s.rb, m00, m01, m10, m11, ..base });
         }
         for q in 0..radii.len().div_ceil(2) {
             let (i, j) = (2 * q, 2 * q + 1);
@@ -492,5 +540,16 @@ mod tests {
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
             .validate(&module)
             .expect("validates");
+    }
+
+    #[test]
+    fn a_round_disc_s_metric_is_exactly_the_identity() {
+        assert_eq!(SpectralScale::round(3.0, 6.0).metric(), [1.0, 0.0, -0.0, 1.0]);
+    }
+
+    #[test]
+    fn the_uniform_matches_its_wgsl_mirror() {
+        // 16 four-byte fields, the WGSL struct's size.
+        assert_eq!(std::mem::size_of::<SpecGpu>(), 64);
     }
 }

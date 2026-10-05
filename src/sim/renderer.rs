@@ -1813,7 +1813,7 @@ impl SimRenderer {
         m.has(ModelFeature::NeedsPyramid)
             && params.get("averaging").is_some_and(|v| v.round() == 2.0)
             && cfg.boundary == crate::config::sim::SimBoundary::Periodic
-            && crate::sim::spectral_radii(m.name, params).is_some()
+            && crate::sim::spectral_scales(m.name, params).is_some()
     }
 
     /// Make or drop each layer's spectral stage, the difference array
@@ -1852,7 +1852,7 @@ impl SimRenderer {
             if let Some(s) = self.spectral[l].as_mut() {
                 s.bind(device, [&fv[0], &fv[1]], dv);
                 let m = model_or_default(cfg.layer_model_name(l));
-                let radii = crate::sim::spectral_radii(m.name, cfg.layer_model_params(l)).unwrap_or_default();
+                let radii = crate::sim::spectral_scales(m.name, cfg.layer_model_params(l)).unwrap_or_default();
                 s.set_radii(device, queue, &radii);
                 self.exact_base[l] = Some(base);
             }

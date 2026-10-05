@@ -3318,14 +3318,24 @@ pub static MCCABE_TABLE: crate::sim::ParamTable = crate::sim::ParamTable {
     mode_param: "layout",
     rows_param: "scales",
     rows: 6,
-    columns: &["radius", "ratio", "amount", "weight", "symmetry"],
+    columns: &["radius", "ratio", "amount", "weight", "symmetry", "stretch", "angle"],
     generator_params: &["base_radius", "ratio", "amount", "amount_min", "symmetry"],
     fill: mccabe_table_from_ladder,
+    shows_column: mccabe_shows_column,
 };
+
+/// The lean columns shape the spectral stage's discs, so they show only
+/// when the averaging is Exact discs.
+pub fn mccabe_shows_column(params: &std::collections::BTreeMap<String, f32>, column: &str) -> bool {
+    match column {
+        "stretch" | "angle" => params.get("averaging").is_some_and(|v| v.round() == 2.0),
+        _ => true,
+    }
+}
 
 /// The table the ladder describes: radii doubling from the finest,
 /// one ratio, steps falling linearly from finest to coarsest, weight 1,
-/// one symmetry. Rows past `scales` continue the ladder at the coarsest
+/// one symmetry, round discs. Rows past `scales` continue the ladder at the coarsest
 /// step. Written in the shader's own arithmetic -- the radius a power
 /// of two times the base, the step `a(1 - t) + bt` -- so the table it
 /// fills renders what the ladder did.
@@ -3346,16 +3356,20 @@ pub fn mccabe_table_from_ladder(params: &std::collections::BTreeMap<String, f32>
         out.push((format!("s{i}_amount"), amount * (1.0 - t) + amount_min * t));
         out.push((format!("s{i}_weight"), 1.0));
         out.push((format!("s{i}_symmetry"), sym));
+        out.push((format!("s{i}_stretch"), 1.0));
+        out.push((format!("s{i}_angle"), 0.0));
     }
     out
 }
 
-/// Each live scale's (activator, inhibitor) radii, as the step uses
-/// them: what the spectral stage builds its discs from when the
-/// averaging is Exact discs (mccabe-multiscale plan, section 6b). The
-/// shader's own arithmetic -- the ladder's power of two times the base,
-/// the table's radius floored at a half cell.
-pub fn mccabe_scale_radii(params: &std::collections::BTreeMap<String, f32>) -> Vec<(f32, f32)> {
+/// Each live scale's discs, as the step uses them: what the spectral
+/// stage builds its kernels from when the averaging is Exact discs
+/// (mccabe-multiscale plan, section 6b). The shader's own arithmetic --
+/// the ladder's power of two times the base, the table's radius floored
+/// at a half cell. The table's discs also lean (section 9); the
+/// ladder's are round.
+pub fn mccabe_scale_discs(params: &std::collections::BTreeMap<String, f32>) -> Vec<crate::sim::spectral::SpectralScale> {
+    use crate::sim::spectral::SpectralScale;
     let get = |name: &str| -> f32 {
         let def = MCCABE.parameters.iter().find(|p| p.name == name).map(|p| p.default).unwrap_or(0.0);
         params.get(name).copied().filter(|v| v.is_finite()).unwrap_or(def)
@@ -3366,10 +3380,17 @@ pub fn mccabe_scale_radii(params: &std::collections::BTreeMap<String, f32>) -> V
         .map(|i| {
             if table {
                 let ra = get(&format!("s{i}_radius")).max(0.5);
-                (ra, ra * get(&format!("s{i}_ratio")))
+                SpectralScale {
+                    ra,
+                    rb: ra * get(&format!("s{i}_ratio")),
+                    stretch: get(&format!("s{i}_stretch")).clamp(1.0, 4.0),
+                    // Counter-clockwise on screen, as the app's other
+                    // angles are; the grid's y runs down, so negated.
+                    angle: -get(&format!("s{i}_angle")).to_radians(),
+                }
             } else {
                 let ra = get("base_radius") * (1u32 << i) as f32;
-                (ra, ra * get("ratio"))
+                SpectralScale::round(ra, ra * get("ratio"))
             }
         })
         .collect()
@@ -3768,6 +3789,117 @@ pub static MCCABE: ModelDef = ModelDef {
                       Shifted grid and Exact discs need the wrap-around boundary; a grid \
                       whose size has a prime factor above 64 keeps the pyramid.",
             choices: &["Pyramid", "Pyramid, shifted grid", "Exact discs"],
+        },
+        // Slots 39-50 (mccabe-multiscale plan, section 9): each scale's
+        // lean. The renderer reads them, not the shader: they shape the
+        // spectral stage's discs, so they do nothing outside Exact discs.
+        SimParamDef {
+            name: "s0_stretch",
+            display_name: "Scale 1 stretch",
+            default: 1.0,
+            min: 1.0,
+            max: 4.0,
+            tooltip: "Stretches this scale's discs into ellipses of the same area, this many times longer than wide, so its pattern grains along the angle: the lean, on purpose. 1 is round. Exact discs averaging only; the pyramid's averages are round.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s1_stretch",
+            display_name: "Scale 2 stretch",
+            default: 1.0,
+            min: 1.0,
+            max: 4.0,
+            tooltip: "Stretches this scale's discs into ellipses of the same area, this many times longer than wide, so its pattern grains along the angle: the lean, on purpose. 1 is round. Exact discs averaging only; the pyramid's averages are round.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s2_stretch",
+            display_name: "Scale 3 stretch",
+            default: 1.0,
+            min: 1.0,
+            max: 4.0,
+            tooltip: "Stretches this scale's discs into ellipses of the same area, this many times longer than wide, so its pattern grains along the angle: the lean, on purpose. 1 is round. Exact discs averaging only; the pyramid's averages are round.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s3_stretch",
+            display_name: "Scale 4 stretch",
+            default: 1.0,
+            min: 1.0,
+            max: 4.0,
+            tooltip: "Stretches this scale's discs into ellipses of the same area, this many times longer than wide, so its pattern grains along the angle: the lean, on purpose. 1 is round. Exact discs averaging only; the pyramid's averages are round.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s4_stretch",
+            display_name: "Scale 5 stretch",
+            default: 1.0,
+            min: 1.0,
+            max: 4.0,
+            tooltip: "Stretches this scale's discs into ellipses of the same area, this many times longer than wide, so its pattern grains along the angle: the lean, on purpose. 1 is round. Exact discs averaging only; the pyramid's averages are round.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s5_stretch",
+            display_name: "Scale 6 stretch",
+            default: 1.0,
+            min: 1.0,
+            max: 4.0,
+            tooltip: "Stretches this scale's discs into ellipses of the same area, this many times longer than wide, so its pattern grains along the angle: the lean, on purpose. 1 is round. Exact discs averaging only; the pyramid's averages are round.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s0_angle",
+            display_name: "Scale 1 angle",
+            default: 0.0,
+            min: 0.0,
+            max: 180.0,
+            tooltip: "The direction of this scale's stretch, in degrees counter-clockwise from horizontal, so 90 is vertical. Nothing at stretch 1. Exact discs averaging only.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s1_angle",
+            display_name: "Scale 2 angle",
+            default: 0.0,
+            min: 0.0,
+            max: 180.0,
+            tooltip: "The direction of this scale's stretch, in degrees counter-clockwise from horizontal, so 90 is vertical. Nothing at stretch 1. Exact discs averaging only.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s2_angle",
+            display_name: "Scale 3 angle",
+            default: 0.0,
+            min: 0.0,
+            max: 180.0,
+            tooltip: "The direction of this scale's stretch, in degrees counter-clockwise from horizontal, so 90 is vertical. Nothing at stretch 1. Exact discs averaging only.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s3_angle",
+            display_name: "Scale 4 angle",
+            default: 0.0,
+            min: 0.0,
+            max: 180.0,
+            tooltip: "The direction of this scale's stretch, in degrees counter-clockwise from horizontal, so 90 is vertical. Nothing at stretch 1. Exact discs averaging only.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s4_angle",
+            display_name: "Scale 5 angle",
+            default: 0.0,
+            min: 0.0,
+            max: 180.0,
+            tooltip: "The direction of this scale's stretch, in degrees counter-clockwise from horizontal, so 90 is vertical. Nothing at stretch 1. Exact discs averaging only.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s5_angle",
+            display_name: "Scale 6 angle",
+            default: 0.0,
+            min: 0.0,
+            max: 180.0,
+            tooltip: "The direction of this scale's stretch, in degrees counter-clockwise from horizontal, so 90 is vertical. Nothing at stretch 1. Exact discs averaging only.",
+            choices: &[],
         },
     ],
     presets: &[
