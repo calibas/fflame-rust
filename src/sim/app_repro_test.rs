@@ -3122,9 +3122,18 @@ fn spectral_differences_match_a_direct_convolution() {
         Extent3d { width: w, height: h, depth_or_array_layers: 1 },
     );
     let view = tex.create_view(&TextureViewDescriptor { dimension: Some(TextureViewDimension::D2Array), ..Default::default() });
-    let radii = [(2.0f32, 4.0f32), (3.5, 7.0), (6.0, 12.0)];
+    use crate::sim::spectral::SpectralScale;
+    // Three round scales and two leaning ones (an odd count, so the last
+    // pair has one scale), one stretched past the grid's short side.
+    let radii = [
+        SpectralScale::round(2.0, 4.0),
+        SpectralScale::round(3.5, 7.0),
+        SpectralScale::round(6.0, 12.0),
+        SpectralScale { ra: 2.5, rb: 5.0, stretch: 2.5, angle: 30f32.to_radians() },
+        SpectralScale { ra: 4.0, rb: 8.0, stretch: 4.0, angle: 100f32.to_radians() },
+    ];
     // Slices from 2, to check the stage writes where it is told.
-    let (diffs, diffs_view) = crate::sim::spectral::SpectralAverages::create_diffs(&device, w, h, 6);
+    let (diffs, diffs_view) = crate::sim::spectral::SpectralAverages::create_diffs(&device, w, h, 8);
     let mut s = crate::sim::spectral::SpectralAverages::new(&device, w, h, 0, 2).expect("a plan");
     s.bind(&device, [&view, &view], &diffs_view);
     s.set_radii(&device, &queue, &radii);
@@ -3136,17 +3145,23 @@ fn spectral_differences_match_a_direct_convolution() {
     queue.submit(std::iter::once(enc.finish()));
     let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
 
-    // The kernel on the torus, as `fill` writes it.
-    let wrapped = |v: u32, size: u32| -> f32 { if v * 2 > size { v as f32 - size as f32 } else { v as f32 } };
-    let disc = |r: f32, x: u32, y: u32| -> f64 {
-        let d = (wrapped(x, w).powi(2) + wrapped(y, h).powi(2)).sqrt();
-        (r + 0.5 - d).clamp(0.0, 1.0) as f64
+    // The kernel on the torus, as `fill` writes it: an antialiased
+    // ellipse of the disc's area, its long axis at the angle.
+    let wrapped = |v: u32, size: u32| -> f64 { if v * 2 > size { v as f64 - size as f64 } else { v as f64 } };
+    let disc = |s: &SpectralScale, r: f32, x: u32, y: u32| -> f64 {
+        let (x, y) = (wrapped(x, w), wrapped(y, h));
+        let (sn, cs) = (s.angle as f64).sin_cos();
+        let q = (s.stretch as f64).sqrt();
+        let (u, v) = (cs * x + sn * y, -sn * x + cs * y);
+        let d = (u / q).hypot(v * q);
+        (r as f64 + 0.5 - d).clamp(0.0, 1.0)
     };
-    for (k, &(ra, rb)) in radii.iter().enumerate() {
-        let sa: f64 = (0..n).map(|c| disc(ra, (c as u32) % w, (c as u32) / w)).sum();
-        let sb: f64 = (0..n).map(|c| disc(rb, (c as u32) % w, (c as u32) / w)).sum();
+    for (k, s) in radii.iter().enumerate() {
+        let (ra, rb) = (s.ra, s.rb);
+        let sa: f64 = (0..n).map(|c| disc(s, ra, (c as u32) % w, (c as u32) / w)).sum();
+        let sb: f64 = (0..n).map(|c| disc(s, rb, (c as u32) % w, (c as u32) / w)).sum();
         let kern: Vec<f64> = (0..n)
-            .map(|c| disc(ra, (c as u32) % w, (c as u32) / w) / sa - disc(rb, (c as u32) % w, (c as u32) / w) / sb)
+            .map(|c| disc(s, ra, (c as u32) % w, (c as u32) / w) / sa - disc(s, rb, (c as u32) % w, (c as u32) / w) / sb)
             .collect();
         let got = read_r32f_layer(&device, &queue, &diffs, w, h, 2 + k as u32);
         let (mut worst, mut scale) = (0.0f64, 0.0f64);
@@ -3163,7 +3178,7 @@ fn spectral_differences_match_a_direct_convolution() {
                 worst = worst.max((acc - got[(cy * w + cx) as usize] as f64).abs());
             }
         }
-        println!("scale {k} ({ra}/{rb}): worst {worst:.2e} against a largest |D| of {scale:.3}");
+        println!("scale {k} ({ra}/{rb}, stretch {}): worst {worst:.2e} against a largest |D| of {scale:.3}", s.stretch);
         assert!(worst < 1e-5 * scale.max(1e-3) + 1e-6, "scale {k}: {worst}");
     }
 }
@@ -3186,18 +3201,28 @@ fn mccabe_exact_discs_match_a_cpu_mirror() {
         return;
     };
     // Plain, and with 3-fold symmetry, which reads the difference fields
-    // bilinearly at positions rotated about the centre.
-    for sym in [0.0f32, 3.0] {
-        exact_mirror_one_step(&device, &queue, sym);
+    // bilinearly at positions rotated about the centre; and a table
+    // whose scales lean (plan section 9), so the table's stretch and
+    // angle reach the stage's discs.
+    for (sym, lean) in [(0.0f32, false), (3.0, false), (0.0, true)] {
+        exact_mirror_one_step(&device, &queue, sym, lean);
     }
 }
 
-fn exact_mirror_one_step(device: &Device, queue: &Queue, sym: f32) {
+fn exact_mirror_one_step(device: &Device, queue: &Queue, sym: f32, lean: bool) {
     let (device, queue) = (device.clone(), queue.clone());
     const N: usize = 48;
     let mut cfg = mccabe_exact_config(N as u32);
     cfg.model_params.insert("scales".into(), 4.0);
     cfg.model_params.insert("symmetry".into(), sym);
+    if lean {
+        // The ladder's table, so the steps below are the ladder's.
+        cfg = mccabe_table_from(&cfg);
+        for (i, (stretch, angle)) in [(1.0f32, 0.0f32), (2.0, 0.0), (3.0, 60.0), (2.0, 135.0)].into_iter().enumerate() {
+            cfg.model_params.insert(format!("s{i}_stretch"), stretch);
+            cfg.model_params.insert(format!("s{i}_angle"), angle);
+        }
+    }
     let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
     r.seed(&device, &queue, &cfg);
     let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
@@ -3210,19 +3235,35 @@ fn exact_mirror_one_step(device: &Device, queue: &Queue, sym: f32) {
     let got = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
 
     let wrapped = |v: usize| -> f64 { if v * 2 > N { v as f64 - N as f64 } else { v as f64 } };
-    let kernel = |r: f32| -> Vec<f64> {
+    // An antialiased disc of radius r, stretched into an ellipse of its
+    // area along the angle: degrees counter-clockwise on screen, as the
+    // table holds it, where the grid's y runs down.
+    let kernel = |r: f32, stretch: f32, angle: f32| -> Vec<f64> {
+        let (sn, cs) = (-angle as f64).to_radians().sin_cos();
+        let q = (stretch as f64).sqrt();
         let k: Vec<f64> = (0..N * N)
-            .map(|c| (r as f64 + 0.5 - (wrapped(c % N).powi(2) + wrapped(c / N).powi(2)).sqrt()).clamp(0.0, 1.0))
+            .map(|c| {
+                let (x, y) = (wrapped(c % N), wrapped(c / N));
+                let (u, v) = (cs * x + sn * y, -sn * x + cs * y);
+                (r as f64 + 0.5 - (u / q).hypot(v * q)).clamp(0.0, 1.0)
+            })
             .collect();
         let s: f64 = k.iter().sum();
         k.into_iter().map(|v| v / s).collect()
     };
-    let radii = crate::sim::models::mccabe_scale_radii(&cfg.model_params);
-    assert_eq!(radii.len(), 4);
-    let diffs: Vec<Vec<f64>> = radii
+    // The radii as the step uses them; the lean straight from the table.
+    let discs = crate::sim::models::mccabe_scale_discs(&cfg.model_params);
+    assert_eq!(discs.len(), 4);
+    let p = |name: String, def: f32| cfg.model_params.get(&name).copied().unwrap_or(def);
+    let scales: Vec<(f32, f32, f32, f32)> = discs
         .iter()
-        .map(|&(ra, rb)| {
-            let (ka, kb) = (kernel(ra), kernel(rb));
+        .enumerate()
+        .map(|(i, d)| (d.ra, d.rb, p(format!("s{i}_stretch"), 1.0), p(format!("s{i}_angle"), 0.0)))
+        .collect();
+    let diffs: Vec<Vec<f64>> = scales
+        .iter()
+        .map(|&(ra, rb, stretch, angle)| {
+            let (ka, kb) = (kernel(ra, stretch, angle), kernel(rb, stretch, angle));
             (0..N * N)
                 .map(|c| {
                     let (cx, cy) = (c % N, c / N);
@@ -3306,7 +3347,7 @@ fn exact_mirror_one_step(device: &Device, queue: &Queue, sym: f32) {
             other += 1;
         }
     }
-    println!("McCabe exact discs, symmetry {sym}, vs CPU mirror: {exact} match, {ties} chose another scale (worst relative gap {worst_tie_gap:.1e}), {other} disagree");
+    println!("McCabe exact discs, symmetry {sym}, lean {lean}, vs CPU mirror: {exact} match, {ties} chose another scale (worst relative gap {worst_tie_gap:.1e}), {other} disagree");
     assert_eq!(other, 0);
     assert!(ties * 200 < N * N, "{ties} ties");
 }

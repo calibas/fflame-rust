@@ -1213,24 +1213,25 @@ fn render_param_table(
         return;
     }
 
+    let columns: Vec<&str> = t.columns.iter().copied().filter(|c| (t.shows_column)(params, c)).collect();
     egui::Grid::new(format!("{}_param_table", slot.salt()))
         .striped(true)
         .spacing([6.0, 2.0])
         .show(ui, |ui| {
             ui.label("");
-            for c in t.columns {
+            for c in &columns {
                 ui.label(egui::RichText::new(column_label(c)).small());
             }
             ui.end_row();
             for r in 0..rows {
                 ui.label((r + 1).to_string());
-                for c in t.columns {
+                for &c in &columns {
                     let name = t.cell(r, c);
                     let (Some(def), Some(mut v)) = (def_of(&name), value(&name)) else {
                         ui.label("");
                         continue;
                     };
-                    let integer = *c == "symmetry";
+                    let integer = c == "symmetry";
                     let speed = if integer { 0.05 } else { ((def.max - def.min) as f64 / 1000.0).max(1e-4) };
                     let mut dv = egui::DragValue::new(&mut v).range(def.min..=def.max).speed(speed);
                     dv = if integer { dv.fixed_decimals(0) } else { dv.max_decimals(3) };
@@ -1258,6 +1259,8 @@ fn column_label(c: &str) -> String {
         "amount" => t!("sim_panel.table_amount").to_string(),
         "weight" => t!("sim_panel.table_weight").to_string(),
         "symmetry" => t!("sim_panel.table_symmetry").to_string(),
+        "stretch" => t!("sim_panel.table_stretch").to_string(),
+        "angle" => t!("sim_panel.table_angle").to_string(),
         other => other.to_string(),
     }
 }

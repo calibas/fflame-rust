@@ -557,3 +557,59 @@ and section 6 showed how sensitive the pyramid's shape is.
 height, smoothed, lit, and blended over Scale Memory or anything else.
 No effect in the chain does it today (the sixteen effects include Sobel
 edges, not shading).
+
+## 9. Plan: P3, lean on purpose, Chau's colour (2026-10-04)
+
+Decided after section 8: build P3, the elliptical kernels and Chau's
+YUV. P4 waits. Per-scale warps and relief as an effect are open
+questions, answered alongside, not built yet.
+
+**Lean on purpose.**
+- **Parameters.** `s{i}_stretch` (1–4) and `s{i}_angle` (0–180°), two
+  more table columns, appended as parameters after `averaging` so no
+  existing slot moves.
+- **Exact discs only.** The spectral stage's fill draws each scale's two
+  discs as ellipses of the same area, along the angle; an ellipse is
+  centrally symmetric, so its spectrum is still real. The panel shows
+  the columns only when the averaging is Exact discs.
+- **Gates.** Defaults byte-identical; the spectral stage against a
+  direct convolution with an elliptical scale.
+- **As built.**
+  - The stage's uniform carries the fill's 2×2 metric, computed on the
+    CPU; a round disc's is exactly the identity, so the 97 sim baselines
+    are untouched.
+  - The angle runs counter-clockwise on screen, as the shading light's
+    does; the grid's y runs down, so it is negated on the way in.
+  - Tests: the spectral stage against a direct convolution with two
+    ellipses (worst 2e-7); the one-step CPU mirror with a leaning
+    table, which fails 1514 of 2304 cells if the stretch is ignored;
+    and a `sim-mccabe-lean` baseline.
+  - Demo: [make_mccabe_lean_demo.py](../../scripts/sim_prototypes/make_mccabe_lean_demo.py)
+    writes five leans into `output/mccabe-lean/`.
+
+**Chau's YUV.** Scale Memory gets a brightness mode, Multiply (today)
+or Luminance (YUV):
+- mix the bands as now;
+- convert to YUV;
+- set Y to a mix of the colour's own and the field's, by the existing
+  brightness slider;
+- convert back.
+
+The default is Multiply, so it is byte-identical.
+
+**P3, the variation radius**, `variation` (0–4 cells, 0 = off).
+- **What it needs.** The argmin wants each scale's `|w(a − b)|`
+  averaged over a disc around the cell, so it needs `a − b` at the
+  neighbours. Recomputing that from the pyramid per neighbour would be
+  about 9× the step.
+- **A measure pass instead.** It writes each scale's symmetrised `a − b`
+  into an `R32Float` array once a step:
+  - pyramid mode reads the pyramid, as the step does today;
+  - exact mode symmetrises the spectral stage's fields.
+- **The step then gathers** an antialiased disc of `|S_i|` per scale for
+  the variation, and takes the direction from the cell's own sign.
+- **The cost.** The same reads as today, moved to the measure pass,
+  plus `(2r+1)²` gathers per scale.
+- **Memory.** One more six-slice array at 1080p, ~50 MB, while on.
+- **Gates.** `variation` = 0 byte-identical; a CPU mirror in both
+  averaging modes, with symmetry; batch invariance.

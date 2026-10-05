@@ -174,9 +174,16 @@ pyramid with a spectral stage:
   storage-buffer count.
 - **Limits.** Periodic boundary only; anything else falls back to the
   pyramid. About 1.7× the pyramid's step and ~150 MB at 1080p.
+- **Leaning discs.** In table mode each scale's discs can be stretched
+  into ellipses of the same area at an angle (`s{i}_stretch`,
+  `s{i}_angle`), which grains that scale's pattern along the angle. An
+  ellipse is centrally symmetric, so its spectrum is still real and only
+  the stage's disc fill changes; a stretch of 1 fills to the bit what the
+  round disc did. Exact discs only: the panel hides the columns
+  otherwise.
 
 See [mccabe-multiscale.md](../projects/mccabe-multiscale.md), sections 6
-to 6c.
+to 6c and 9.
 
 ### Shaders
 

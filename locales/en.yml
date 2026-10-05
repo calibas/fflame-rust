@@ -2069,6 +2069,8 @@ sim_panel:
   table_amount: "Step"
   table_weight: "Weight"
   table_symmetry: "Sym"
+  table_stretch: "Stretch"
+  table_angle: "Angle"
   table_past_reach: "This scale's inhibitor reaches past what the pyramid can average at this grid (about %{reach} cells). Its averages clamp to the top level, its variation goes to zero, and it wins everywhere. Shrink it, or use a larger grid."
   table_past_reach_ladder: "⚠ Scale %{n} reaches past what the pyramid can average at this grid (about %{reach} cells), so it will win everywhere. Use fewer scales, a smaller finest radius, or a larger grid."
   save_as_texture: "Save as texture"
