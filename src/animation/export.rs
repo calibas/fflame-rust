@@ -855,6 +855,15 @@ fn apply_config_value(
             let v = *v;
             config.escape.terrain.shadow_sharpness = v.clamp(1.0, 128.0);
         }
+        (ConfigPath::EscapeTerrainDetail, ConfigValue::Float(v)) => {
+            config.escape.terrain.detail = v.clamp(0.1, 8.0);
+        }
+        (ConfigPath::EscapeTerrainFar, ConfigValue::Float(v)) => {
+            config.escape.terrain.far = v.clamp(0.5, 64.0);
+        }
+        (ConfigPath::EscapeTerrainHaze, ConfigValue::Float(v)) => {
+            config.escape.terrain.haze = v.clamp(0.0, 1.0);
+        }
         (ConfigPath::EscapeTerrainOcclusion, ConfigValue::Float(v)) => {
             let v = *v;
             config.escape.terrain.occlusion = v.clamp(0.0, 0.1);

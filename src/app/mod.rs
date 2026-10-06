@@ -2389,23 +2389,21 @@ impl App {
                             export_width,
                             export_height,
                         );
-                        t.choose_layout(&self.gpu.device, &export_config.escape, export_width, export_height, false);
                         t.footprint_renderer().set_fixed_chunk(true);
                         let mut guard = 0u32;
-                        loop {
-                            let done = t.step_footprint(
-                                &self.gpu.device,
-                                &self.gpu.queue,
-                                &export_config,
-                                temp_renderer.escape_palette_view(export_config.escape.palette_map.stepped),
-                                temp_renderer.palette_generation(),
-                            );
-                            if done {
-                                break;
-                            }
+                        while t.update(
+                            &self.gpu.device,
+                            &self.gpu.queue,
+                            &export_config,
+                            export_width,
+                            export_height,
+                            temp_renderer.escape_palette_view(export_config.escape.palette_map.stepped),
+                            temp_renderer.palette_generation(),
+                            1,
+                        ) {
                             guard += 1;
                             if guard > 4_000_000 {
-                                log::error!("WASM terrain footprint failed to settle; using what we have");
+                                log::error!("WASM terrain sections failed to settle; using what we have");
                                 break;
                             }
                         }
@@ -2957,10 +2955,6 @@ impl App {
                     t
                 });
                 terrain.resize(device, w, h);
-                // The footprint's size follows the viewport and the
-                // camera (plan section 11), with hysteresis so an orbit
-                // does not re-render it at every step.
-                terrain.choose_layout(device, &final_config.escape, w, h, true);
                 // A 2D IFS formula draws the flame; nothing in the
                 // escape config says when it changed.
                 if let Some(def) = crate::escape::ifs::get_ifs(&final_config.escape.formula) {
@@ -2977,31 +2971,21 @@ impl App {
                     terrain.invalidate_footprint();
                 }
                 let mut busy = self.escape_texture.busy();
-                if terrain.footprint_stale(&final_config) || terrain.footprint_in_progress() {
-                    // H11: the footprint follows a dolly or a pan live
-                    // where its renders are measured under 15 ms, and
-                    // on the gesture's release where they are not --
-                    // the old one drawn meanwhile, the camera moved
-                    // over it.
-                    let interacting = self
-                        .escape_last_edit
-                        .is_some_and(|t| t.elapsed() < ESCAPE_INTERACTION_WINDOW);
-                    if terrain.footprint_in_progress() || !interacting || terrain.live_footprints() {
-                        // A chunk of a tile a frame; the drawn terrain
-                        // stays until the whole footprint has landed.
-                        let done = terrain.step_footprint(
-                            device,
-                            queue,
-                            &final_config,
-                            renderer.escape_palette_view(final_config.escape.palette_map.stepped),
-                            renderer.palette_generation(),
-                        );
-                        if !done {
-                            busy = true;
-                        }
-                    } else {
-                        busy = true;
-                    }
+                // The sections the view wants (plan section 12): as many
+                // render steps a frame as fit about 8 ms, at the measured
+                // section time, so a pan or a dolly fills in as it goes.
+                let steps = terrain.section_ms().map_or(1, |ms| (8.0 / ms.max(0.5)).floor().clamp(1.0, 4.0) as u32);
+                if terrain.update(
+                    device,
+                    queue,
+                    &final_config,
+                    w,
+                    h,
+                    renderer.escape_palette_view(final_config.escape.palette_map.stepped),
+                    renderer.palette_generation(),
+                    steps,
+                ) {
+                    busy = true;
                 }
                 if terrain.render_viewport(device, queue, &final_config) {
                     busy = true;

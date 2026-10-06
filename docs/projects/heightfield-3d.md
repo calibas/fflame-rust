@@ -1218,3 +1218,195 @@ the screen (about the antialiasing factor's texels a pixel where the
 ground is nearest), rendered in tiles so 8192² fits, and mip-filtered
 colour. The clipmap comes later, with terrain toward the horizon (the
 far field, T5). Fly mode moves to the end of the plan.
+
+## 12. Ground to the horizon (decided and built as T2e, 2026-10-06)
+
+**The user's feedback after T2d:**
+- "Everything is presented on a square plate in front of the camera.
+  Zooming and panning are rather awkward because they control what's
+  on top of the plate."
+- "The end goal here is to make the plate cover the entire view."
+- "Maybe something like one big stretched footprint, then divide it up
+  into sections for progressive rendering? We could always use 2k x
+  2k (or whatever is fastest), and just make them smaller in the pixel
+  space to increase quality."
+- "Fog would be on by default, but set to just before the max render
+  distance."
+
+**The shape: sections.** The ground is a quadtree of square sections
+of the plane, out to a maximum distance from the eye.
+- **Every section is the same render.** One escape render of a fixed
+  side, a section's texels being its side over that.
+- **Section sizes double with distance.** So the texels per screen
+  pixel stay about the antialiasing factor everywhere (section 11's
+  rule).
+- **Built near first and coarse first**, a few a frame: a whole coarse
+  view lands quickly, then refines.
+- **Cached by their place in the plane.** A pan renders only the
+  sections it uncovers. A dolly brings finer sections in near the eye
+  and retires coarse ones, so a deep zoom refines rather than pops
+  (H11's handover).
+- **The far edge is hidden by fog:** on by default, reaching the
+  background colour just before the maximum distance.
+
+This is section 11's clipmap in the user's terms, at the point where
+it pays: section 11 measured that nested levels buy little over a
+plate spanning a 2x range of distances, and a lot over ground to the
+horizon.
+
+**Estimated** (a CPU model of the default framing at 1080p: rays to the
+ground; a section split while its texels are coarser than its nearest
+point wants; memory at the tile's 20 B a sample):
+
+| maximum distance | AA | ground on screen | 1024² sections | to fill, direct path | memory |
+|---|---|---|---|---|---|
+| 4 view widths | 1 | 87% | 24 | ~110 ms | ~0.5 GB |
+| 8 view widths | 1 | 98% | 34 | ~160 ms | ~0.7 GB |
+| 8 view widths | 2 | 98% | 80 | ~370 ms | ~1.6 GB |
+| 16 view widths | 1 | 100% | 38 | ~175 ms | ~0.8 GB |
+
+- **Section side: 1024².** Per pixel it costs what 2048² does (4.4 ns
+  measured; 512² costs 30% more). It fits the view more finely, so it
+  needs half the pixels and half the memory of 2048² sections.
+- **Memory** at AA 2 is the pressure. An 8-bit albedo (the chain
+  already filters it) and texels sized for the slant of distant ground
+  rather than its width would both cut it.
+
+**What changes:**
+- **The geometry.** The walk steps from section to section: each its
+  own maximum mipmap; the section under a ray found through a
+  quadtree index.
+- **The heights must agree across sections.** A distance's estimate is
+  stored in the plane's units, not a section's cells. A count's or a
+  relief's range is measured once over the coarse sections.
+- **Seams.** Neighbouring sections at different levels sample the
+  surface at different spacings, which leaves a step at their border;
+  a band where the finer section blends into the coarser closes it.
+- **The camera stays mode D's.** But a pan moves the target over a
+  landscape that stays put, and a dolly approaches it. The square
+  plate, `FRAME_DISTANCE`'s framing of it and the footprint's single
+  size all go.
+- **Deep zoom.** Sections are placed relative to an anchor held in
+  exact decimals and re-based as the camera travels, so the shader
+  still sees only eye-relative numbers.
+
+**Order: before T3** (the user's choice, 2026-10-06). The path
+tracer's rays -- shadows, bounces -- walk whatever the ground is, and
+should walk the sections from the start rather than be retrofitted,
+the same reason section 11 gave for the clipmap.
+
+### T2e as built (2026-10-06)
+
+[src/escape/footprint.rs](../../src/escape/footprint.rs) (the
+sections) and [src/escape/terrain.rs](../../src/escape/terrain.rs) (the
+walk over them). The plate is gone: so are its framing, T2d's single
+footprint size and tiles, and H11's live-or-release choice, since
+sections stream.
+
+- **A section** is one escape render of 1025² samples: 1024 cells,
+  with its edge samples on its grid points, so neighbours share them.
+  It is rendered at rotation 0, on a dyadic grid fixed in the plane.
+  - **Its place:** level `L`, a side of 2^L anchor widths, and its
+    index on that level's grid.
+  - **Storage:** texture arrays, a layer a section, about 21 MB each
+    (the raw samples, the albedo with its mip chain, the maximum
+    mipmap). The arrays are sized to what the view wants plus a
+    quarter, growing in eights to 64 (~1.3 GB).
+- **The anchor is the config's.** An eight-octave band of zoom, and the
+  centre truncated to a decimal lattice at least 2^12 view widths
+  apart. So the sections are a function of the config. Once all
+  wanted sections are in, the ground is exactly those, so the picture
+  is the config's and the picture size's, the viewport's and an
+  export's alike; while some are missing, other cached sections stand
+  in. A pan or zoom out of the band or the lattice cell starts the
+  sections over.
+  - Found by a test: with the anchor taken from the view's history, a
+    reused engine drew a different picture from a fresh render.
+- **The world** is the current view width, x along Re, y along Im,
+  with the origin at the eye's ground point. The shader sees small
+  numbers at any depth.
+  - **Heights are fractions of the view width**, applied in the walk.
+    So a dolly in flattens the far ground and raises the near detail:
+    the terrain looks like itself at every zoom.
+  - **The View's rotation turns the camera's heading**; the sections
+    themselves are rotation-free.
+- **Selection, each frame:**
+  - A root grid (at most 3x3) of sections at least `far` wide around
+    the eye.
+  - Each section is split while its texels are coarser than
+    `supersample × detail` a screen pixel at its nearest point, inside
+    the view widened by a fifth and within `far`, and no finer than
+    2^-14 view widths.
+  - Past 64 sections, the texels coarsen until the set fits.
+  - The default view at 1080p wants 9 roots and 42 leaves.
+- **Building:** roots first, then nearest first, each section an
+  escape render in chunks.
+  - The app runs up to four steps a frame, as many as fit ~8 ms at the
+    measured section time. `render_with` builds them all before a
+    sample is drawn.
+  - A section the view no longer wants is dropped mid-render; the
+    least recently wanted is evicted when the atlas is full.
+- **The walk** finds the finest ready section under a point through a
+  quadtree in a storage buffer, and goes region by region: the square
+  over which one section answers, traced in that section's cells.
+  - Shadows and occlusion use the same lookup.
+  - A ray entering a section below its surface hits its side: the
+    outer edge, or a step between levels; both are shaded as walls.
+  - There is no stitching between levels. No seam is visible, and the
+    gate below finds no ray falling through the ground.
+  - A ray entering the ground's box is looked up a hair inside it:
+    exactly on the edge a rounding put it outside. That cost 442 of
+    19,200 rays on the CPU-reference gate until fixed.
+- **Fog fades the ground's COVERAGE**, not its colour, so the tonemap
+  composites the actual background. A colour fog mixed in linear light
+  showed as a pale band against a background composited after the
+  tonemap's gamma.
+  - It reaches 99% at `far` (default 8 view widths), from a start
+    `haze` brings nearer (default 1: about a third of the way out).
+  - Past `far` there is no ground. With haze 0 the edge shows.
+- **Config:** `detail` (texels per pixel against the antialiasing
+  factor, default 1), `far` and `haze` replace `resolution`. The panel
+  gains Distance, Haze and Detail; its fog sliders went (the terrain's
+  fog is its own).
+- **Gates, all passing:**
+  - The camera's conventions, including rotation turning the heading;
+    the picture key ignoring the view.
+  - A section's samples on its grid points, and neighbours sharing
+    their edges, to 1e-9 of a side.
+  - Selection: the count against section 12's estimate, every leaf
+    within reach, nearer finer, within the atlas at 4x antialiasing.
+  - The canonical anchor: a nearby view keeps it, a new band moves it.
+  - **No ray falls through the ground:** 14,814 rays under the
+    horizon, all hits, over 15 sections of mixed levels.
+  - Sections reused: a light edit renders none, a small turn one, a
+    tenth-width pan none; a picture edit renders them all. A reused
+    engine's frame equals a fresh render's.
+  - The T1 CPU-reference gate on one section: 0 disagreements on all
+    four terrains, distances to 6.8e-4 cells. The filter, the shadow
+    bias and the relight-cache gates all still pass.
+  - 2^60 renders to the horizon; `escape-terrain-seahorse`
+    re-baselined; 112 escape baselines and `release.py check` pass.
+- **Measured** (GTX 1660 SUPER, 1080p, a fill from nothing):
+
+  | | sections | fill | a section |
+  |---|---|---|---|
+  | direct 2^3, far 4 | 48 | 174 ms | 3.6 ms |
+  | direct 2^3, far 8 | 61 | 192 ms | 3.1 ms |
+  | direct 2^3, far 8, AA 2 | 50 (coarsened to fit) | 186 ms | 3.7 ms |
+  | perturbed 2^60, far 4 | 46 | 14.6 s | 318 ms |
+  | perturbed 2^60, far 8 | 58 | 23.6 s | 406 ms |
+
+- **Open:**
+  - **Deep zoom is slow:** a deep section costs about 10x its share of
+    the single 2048² footprint's time. Sections far apart in their own
+    pixels do not share a reference orbit, the likely cause; a shared
+    reference with wider relocation is the lever.
+  - Shadows from off-screen ground come only from the coarse roots.
+  - A count's or a relief's range grows as sections arrive, so their
+    heights shift slightly while the view fills.
+  - The 2^60 render shows a hard horizontal colour line across the
+    far plain. Likely a colour band of the picture far outside the
+    original view; a step between section levels is not ruled out.
+  - **Seen** (`output/heightfield_t2e/`): the seahorse to the horizon,
+    the whole set, a low pitch, a turned view, the interior as a hole,
+    and 2^60.

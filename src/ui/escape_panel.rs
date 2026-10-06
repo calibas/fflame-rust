@@ -1690,35 +1690,9 @@ fn show_terrain_section(
                         }
                     });
             });
-            ui.horizontal(|ui| {
-                ui.label(t!("escape_panel.terrain_resolution"));
-                let label = |r: u32| {
-                    if r == 0 {
-                        t!("escape_panel.terrain_resolution_auto").to_string()
-                    } else {
-                        format!("{r} x {r}")
-                    }
-                };
-                egui::ComboBox::from_id_salt("terrain_resolution")
-                    .selected_text(label(t.resolution))
-                    .show_ui(ui, |ui| {
-                        for r in [0u32, 1024, 2048, 4096, 8192] {
-                            if ui.selectable_label(t.resolution == r, label(r)).clicked() && r != t.resolution {
-                                let _ = config_manager.update_param(ConfigPath::EscapeTerrainResolution, ConfigValue::UInt(r));
-                            }
-                        }
-                    })
-                    .response
-                    .on_hover_text(t!("escape_panel.terrain_resolution_tip"));
-            });
-
             // How it is lit: the Solid Lighting panel's lights, world-
             // fixed, with these.
             ui.separator();
-            let (fog, fog_start) = {
-                let c = config_manager.active_config();
-                (c.fog_strength, c.fog_start)
-            };
             let mut slider = |ui: &mut egui::Ui, label: String, path: ConfigPath, value: f32, range: std::ops::RangeInclusive<f32>, log: bool, tip: String| {
                 ui.horizontal(|ui| {
                     ui.label(label);
@@ -1759,23 +1733,34 @@ fn show_terrain_section(
                 false,
                 t!("escape_panel.terrain_occlusion_tip").to_string(),
             );
+            // How far it reaches, and how finely it is sampled.
+            ui.separator();
             slider(
                 ui,
-                t!("escape_panel.terrain_fog").to_string(),
-                ConfigPath::FogStrength,
-                fog,
-                0.0..=5.0,
-                false,
-                t!("escape_panel.terrain_fog_tip").to_string(),
+                t!("escape_panel.terrain_far").to_string(),
+                ConfigPath::EscapeTerrainFar,
+                t.far,
+                0.5..=64.0,
+                true,
+                t!("escape_panel.terrain_far_tip").to_string(),
             );
             slider(
                 ui,
-                t!("escape_panel.terrain_fog_start").to_string(),
-                ConfigPath::FogStart,
-                fog_start,
-                0.0..=3.0,
+                t!("escape_panel.terrain_haze").to_string(),
+                ConfigPath::EscapeTerrainHaze,
+                t.haze,
+                0.0..=1.0,
                 false,
-                t!("escape_panel.terrain_fog_start_tip").to_string(),
+                t!("escape_panel.terrain_haze_tip").to_string(),
+            );
+            slider(
+                ui,
+                t!("escape_panel.terrain_detail").to_string(),
+                ConfigPath::EscapeTerrainDetail,
+                t.detail,
+                0.1..=8.0,
+                true,
+                t!("escape_panel.terrain_detail_tip").to_string(),
             );
             show_solid_camera(ui, config_manager, esc, false);
         });

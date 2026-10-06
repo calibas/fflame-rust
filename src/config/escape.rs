@@ -1829,11 +1829,19 @@ pub struct TerrainConfig {
     /// Distance: the flanks' width `w`, as a fraction of the footprint.
     #[serde(default = "default_terrain_de_width", skip_serializing_if = "is_default_terrain_de_width")]
     pub de_width: f32,
-    /// The footprint's side, in pixels; 0 (the default) is the view's:
-    /// about `supersample` texels per screen pixel where the terrain is
-    /// nearest the eye (`escape::footprint::wanted_resolution`).
-    #[serde(default = "default_terrain_resolution", skip_serializing_if = "is_default_terrain_resolution")]
-    pub resolution: u32,
+    /// Texels per screen pixel, against the antialiasing factor: the
+    /// sections' fineness (plan section 12). 1 samples the fractal as a
+    /// 2D render at that antialiasing does.
+    #[serde(default = "default_terrain_detail", skip_serializing_if = "is_default_terrain_detail")]
+    pub detail: f32,
+    /// How far the ground reaches, in view widths from the eye; the fog
+    /// reaches the background just before.
+    #[serde(default = "default_terrain_far", skip_serializing_if = "is_default_terrain_far")]
+    pub far: f32,
+    /// How much of that distance the fog takes: 0 none (the ground's
+    /// edge shows), 1 from about a third of the way out.
+    #[serde(default = "default_terrain_haze", skip_serializing_if = "is_default_terrain_haze")]
+    pub haze: f32,
     #[serde(default, skip_serializing_if = "is_default_terrain_interior")]
     pub interior: TerrainInterior,
     /// How dark a shadowed surface goes; 0 traces no shadow rays. Mode
@@ -1862,11 +1870,23 @@ fn default_terrain_de_width() -> f32 {
 fn is_default_terrain_de_width(v: &f32) -> bool {
     *v == default_terrain_de_width()
 }
-fn default_terrain_resolution() -> u32 {
-    0
+fn default_terrain_detail() -> f32 {
+    1.0
 }
-fn is_default_terrain_resolution(v: &u32) -> bool {
-    *v == default_terrain_resolution()
+fn is_default_terrain_detail(v: &f32) -> bool {
+    *v == default_terrain_detail()
+}
+fn default_terrain_far() -> f32 {
+    8.0
+}
+fn is_default_terrain_far(v: &f32) -> bool {
+    *v == default_terrain_far()
+}
+fn default_terrain_haze() -> f32 {
+    1.0
+}
+fn is_default_terrain_haze(v: &f32) -> bool {
+    *v == default_terrain_haze()
 }
 fn default_terrain_shadow() -> f32 {
     0.7
@@ -1900,7 +1920,9 @@ impl Default for TerrainConfig {
             source: TerrainSource::default(),
             height: default_terrain_height(),
             de_width: default_terrain_de_width(),
-            resolution: default_terrain_resolution(),
+            detail: default_terrain_detail(),
+            far: default_terrain_far(),
+            haze: default_terrain_haze(),
             interior: TerrainInterior::default(),
             shadow: default_terrain_shadow(),
             shadow_sharpness: default_terrain_shadow_sharpness(),
