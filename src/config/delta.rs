@@ -487,6 +487,16 @@ pub enum ConfigPath {
     EscapeShadingHighlightStrength,
     EscapeShadingHighlightBlend,
     EscapeShadingSoftness,
+    // The 3D terrain view (docs/projects/heightfield-3d.md).
+    EscapeTerrainEnabled,
+    EscapeTerrainSource,
+    EscapeTerrainHeight,
+    EscapeTerrainDeWidth,
+    EscapeTerrainResolution,
+    EscapeTerrainInterior,
+    EscapeTerrainShadow,
+    EscapeTerrainShadowSharpness,
+    EscapeTerrainOcclusion,
     EscapeShadingTextureKind,
     EscapeShadingTextureStrength,
     EscapeShadingTextureScale,
@@ -1106,6 +1116,15 @@ impl Display for ConfigPath {
             ConfigPath::EscapeShadingHighlightStrength => write!(f, "Relief Highlight Strength"),
             ConfigPath::EscapeShadingHighlightBlend => write!(f, "Relief Highlight Blend"),
             ConfigPath::EscapeShadingSoftness => write!(f, "Relief Softness"),
+            ConfigPath::EscapeTerrainEnabled => write!(f, "3D Terrain"),
+            ConfigPath::EscapeTerrainSource => write!(f, "Terrain Height Source"),
+            ConfigPath::EscapeTerrainHeight => write!(f, "Terrain Height"),
+            ConfigPath::EscapeTerrainDeWidth => write!(f, "Terrain Flank Width"),
+            ConfigPath::EscapeTerrainResolution => write!(f, "Terrain Resolution"),
+            ConfigPath::EscapeTerrainInterior => write!(f, "Terrain Interior"),
+            ConfigPath::EscapeTerrainShadow => write!(f, "Terrain Shadows"),
+            ConfigPath::EscapeTerrainShadowSharpness => write!(f, "Terrain Shadow Sharpness"),
+            ConfigPath::EscapeTerrainOcclusion => write!(f, "Terrain Occlusion Reach"),
             ConfigPath::EscapeShadingTextureKind => write!(f, "Relief Texture"),
             ConfigPath::EscapeShadingTextureStrength => write!(f, "Relief Texture Strength"),
             ConfigPath::EscapeShadingTextureScale => write!(f, "Relief Texture Scale"),
@@ -1467,6 +1486,15 @@ impl ConfigPath {
             ConfigPath::EscapeShadingHighlightStrength => I18nKey::simple("history.param.escape_shading_highlight_strength"),
             ConfigPath::EscapeShadingHighlightBlend => I18nKey::simple("history.param.escape_shading_highlight_blend"),
             ConfigPath::EscapeShadingSoftness => I18nKey::simple("history.param.escape_shading_softness"),
+            ConfigPath::EscapeTerrainEnabled => I18nKey::simple("history.param.escape_terrain_enabled"),
+            ConfigPath::EscapeTerrainSource => I18nKey::simple("history.param.escape_terrain_source"),
+            ConfigPath::EscapeTerrainHeight => I18nKey::simple("history.param.escape_terrain_height"),
+            ConfigPath::EscapeTerrainDeWidth => I18nKey::simple("history.param.escape_terrain_de_width"),
+            ConfigPath::EscapeTerrainResolution => I18nKey::simple("history.param.escape_terrain_resolution"),
+            ConfigPath::EscapeTerrainInterior => I18nKey::simple("history.param.escape_terrain_interior"),
+            ConfigPath::EscapeTerrainShadow => I18nKey::simple("history.param.escape_terrain_shadow"),
+            ConfigPath::EscapeTerrainShadowSharpness => I18nKey::simple("history.param.escape_terrain_shadow_sharpness"),
+            ConfigPath::EscapeTerrainOcclusion => I18nKey::simple("history.param.escape_terrain_occlusion"),
             ConfigPath::EscapeShadingTextureKind => I18nKey::simple("history.param.escape_shading_texture_kind"),
             ConfigPath::EscapeShadingTextureStrength => I18nKey::simple("history.param.escape_shading_texture_strength"),
             ConfigPath::EscapeShadingTextureScale => I18nKey::simple("history.param.escape_shading_texture_scale"),
@@ -2857,6 +2885,15 @@ impl ConfigPath {
             | ConfigPath::EscapeShadingHighlightStrength
             | ConfigPath::EscapeShadingHighlightBlend
             | ConfigPath::EscapeShadingSoftness
+            | ConfigPath::EscapeTerrainEnabled
+            | ConfigPath::EscapeTerrainSource
+            | ConfigPath::EscapeTerrainHeight
+            | ConfigPath::EscapeTerrainDeWidth
+            | ConfigPath::EscapeTerrainResolution
+            | ConfigPath::EscapeTerrainInterior
+            | ConfigPath::EscapeTerrainShadow
+            | ConfigPath::EscapeTerrainShadowSharpness
+            | ConfigPath::EscapeTerrainOcclusion
             | ConfigPath::EscapeShadingTextureKind
             | ConfigPath::EscapeShadingTextureStrength
             | ConfigPath::EscapeShadingTextureScale
@@ -3285,6 +3322,15 @@ impl ConfigPath {
             ConfigPath::EscapeShadingHighlightStrength => "Escape.Shading.HighlightStrength".to_string(),
             ConfigPath::EscapeShadingHighlightBlend => "Escape.Shading.HighlightBlend".to_string(),
             ConfigPath::EscapeShadingSoftness => "Escape.Shading.Softness".to_string(),
+            ConfigPath::EscapeTerrainEnabled => "Escape.Terrain.Enabled".to_string(),
+            ConfigPath::EscapeTerrainSource => "Escape.Terrain.Source".to_string(),
+            ConfigPath::EscapeTerrainHeight => "Escape.Terrain.Height".to_string(),
+            ConfigPath::EscapeTerrainDeWidth => "Escape.Terrain.DeWidth".to_string(),
+            ConfigPath::EscapeTerrainResolution => "Escape.Terrain.Resolution".to_string(),
+            ConfigPath::EscapeTerrainInterior => "Escape.Terrain.Interior".to_string(),
+            ConfigPath::EscapeTerrainShadow => "Escape.Terrain.Shadow".to_string(),
+            ConfigPath::EscapeTerrainShadowSharpness => "Escape.Terrain.ShadowSharpness".to_string(),
+            ConfigPath::EscapeTerrainOcclusion => "Escape.Terrain.Occlusion".to_string(),
             ConfigPath::EscapeShadingTextureKind => "Escape.Shading.TextureKind".to_string(),
             ConfigPath::EscapeShadingTextureStrength => "Escape.Shading.TextureStrength".to_string(),
             ConfigPath::EscapeShadingTextureScale => "Escape.Shading.TextureScale".to_string(),
@@ -3529,6 +3575,15 @@ impl ConfigPath {
                 ["Shading", "HighlightStrength"] => return Some(ConfigPath::EscapeShadingHighlightStrength),
                 ["Shading", "HighlightBlend"] => return Some(ConfigPath::EscapeShadingHighlightBlend),
                 ["Shading", "Softness"] => return Some(ConfigPath::EscapeShadingSoftness),
+                ["Terrain", "Enabled"] => return Some(ConfigPath::EscapeTerrainEnabled),
+                ["Terrain", "Source"] => return Some(ConfigPath::EscapeTerrainSource),
+                ["Terrain", "Height"] => return Some(ConfigPath::EscapeTerrainHeight),
+                ["Terrain", "DeWidth"] => return Some(ConfigPath::EscapeTerrainDeWidth),
+                ["Terrain", "Resolution"] => return Some(ConfigPath::EscapeTerrainResolution),
+                ["Terrain", "Interior"] => return Some(ConfigPath::EscapeTerrainInterior),
+                ["Terrain", "Shadow"] => return Some(ConfigPath::EscapeTerrainShadow),
+                ["Terrain", "ShadowSharpness"] => return Some(ConfigPath::EscapeTerrainShadowSharpness),
+                ["Terrain", "Occlusion"] => return Some(ConfigPath::EscapeTerrainOcclusion),
                 ["Shading", "TextureKind"] => return Some(ConfigPath::EscapeShadingTextureKind),
                 ["Shading", "TextureStrength"] => return Some(ConfigPath::EscapeShadingTextureStrength),
                 ["Shading", "TextureScale"] => return Some(ConfigPath::EscapeShadingTextureScale),
@@ -4319,6 +4374,11 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeShadingShadowStrength
         | ConfigPath::EscapeShadingHighlightStrength
         | ConfigPath::EscapeShadingSoftness
+        | ConfigPath::EscapeTerrainHeight
+        | ConfigPath::EscapeTerrainDeWidth
+        | ConfigPath::EscapeTerrainShadow
+        | ConfigPath::EscapeTerrainShadowSharpness
+        | ConfigPath::EscapeTerrainOcclusion
         | ConfigPath::EscapeShadingTextureStrength
         | ConfigPath::EscapeShadingTextureScale
         | ConfigPath::EscapeShadingElevation
@@ -4346,6 +4406,10 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
             Some(ConfigValue::ColorRgb(rgb))
         }
         ConfigPath::EscapeShadingEnabled
+        | ConfigPath::EscapeTerrainEnabled
+        | ConfigPath::EscapeTerrainSource
+        | ConfigPath::EscapeTerrainResolution
+        | ConfigPath::EscapeTerrainInterior
         | ConfigPath::EscapeShadingModel
         | ConfigPath::EscapeShadingStencil
         | ConfigPath::EscapeShadingHeightCurve
@@ -4994,6 +5058,36 @@ mod tests {
             let parsed = ConfigPath::from_string_key(&key);
             assert_eq!(parsed, Some(path.clone()), "Failed roundtrip for key: {}", key);
         }
+    }
+
+    /// The terrain's paths: each names itself and parses back, the
+    /// manager writes and reads each, and only the quantities animate.
+    #[test]
+    fn terrain_paths_round_trip() {
+        use crate::config::ConfigManager;
+        let paths = [
+            (ConfigPath::EscapeTerrainEnabled, ConfigValue::Bool(true), false),
+            (ConfigPath::EscapeTerrainSource, ConfigValue::String("escape_count".into()), false),
+            (ConfigPath::EscapeTerrainHeight, ConfigValue::Float(0.125), true),
+            (ConfigPath::EscapeTerrainDeWidth, ConfigValue::Float(0.02), true),
+            (ConfigPath::EscapeTerrainResolution, ConfigValue::UInt(1024), false),
+            (ConfigPath::EscapeTerrainInterior, ConfigValue::String("hole".into()), false),
+            (ConfigPath::EscapeTerrainShadow, ConfigValue::Float(0.25), true),
+            (ConfigPath::EscapeTerrainShadowSharpness, ConfigValue::Float(20.0), true),
+            (ConfigPath::EscapeTerrainOcclusion, ConfigValue::Float(0.01), true),
+        ];
+        let mut m = ConfigManager::new(crate::config::FractalConfig::default());
+        for (path, value, animates) in paths {
+            let key = path.to_string_key();
+            assert!(key.starts_with("Escape.Terrain."), "{key}");
+            assert_eq!(ConfigPath::from_string_key(&key), Some(path.clone()), "{key}");
+            m.update_param(path.clone(), value.clone()).expect("set");
+            assert_eq!(m.get_value(&path).expect("get"), value, "{key}");
+            assert_eq!(json_to_config_value(&serde_json::json!(0.5), &path).is_some(), animates, "{key}");
+        }
+        let t = &m.config().escape.terrain;
+        assert!(t.enabled && t.interior == crate::config::escape::TerrainInterior::Hole);
+        assert_eq!(t.source, crate::config::escape::TerrainSource::EscapeCount);
     }
 
     #[test]

@@ -906,6 +906,75 @@ terrain.**
   - **Seen** (`output/heightfield_t2/`): the whole set, the seahorse
     valley by distance and by count (the count's spikes, as section 2
     found), the interior as a hole, and 2^60.
+- **T2c as built** (2026-10-05): the terrain in the app.
+  - **The frame loop** holds an `EscapeTerrain` instead of the 2D
+    `EscapeRenderer` while the config draws a terrain, and frees
+    whichever is not in use: the footprint is a full escape render of
+    its own. Each frame:
+    - the footprint renders a chunk when its picture changed
+      (progressive, reference orbits on the worker thread, as the 2D
+      view's), and is ingested when it settles;
+    - a height, flank or interior edit re-ingests the footprint it
+      has;
+    - the viewport renders one sample of the config's antialiasing
+      grid (the export's own `supersample²` jitters) into the
+      accumulation, which any change to the view or the tile restarts.
+      So a still viewport converges to the export's picture.
+  - **H11, as built.** A footprint's time is taken from its first chunk
+    to the GPU's completion of its ingest (`on_submitted_work_done`),
+    smoothed. During a gesture (the 250 ms interaction window) a stale
+    footprint re-renders only if that time is under 15 ms
+    (`LIVE_FOOTPRINT_MS`) or unmeasured; otherwise the old one is drawn
+    with the camera moved over it (`terrain_camera_over`: the target
+    offset by the pan since, the eye nearer by the zoom since, the
+    offset subtracted in fixed point so it holds at any depth), and the
+    new one renders when the gesture ends.
+  - **The 15 ms line, measured** (GTX 1660 SUPER; a dolly's steps of
+    zoom, each timed to the GPU's completion):
+
+    | footprint | direct, 2^3, 2,000 iterations | perturbed, 2^60, 30,000 iterations |
+    |---|---|---|
+    | 512² | 2.1 ms | 77 ms |
+    | 1024² | 6.1 ms | 278 ms |
+    | 2048² | 21.9 ms | 910 ms |
+
+    So on this GPU a shallow terrain follows the camera live up to
+    about 1024², and a deep one on release. The motion footprint
+    (half the side while moving) would put a shallow 2048² under the
+    line; it is not built.
+  - **The Escape panel** has a 3D Terrain section above the relief:
+    the switch (disabled, with the reason, for a solid formula), the
+    source (with a note where the formula has no derivative), height,
+    flank width, interior, footprint size, shadows, shadow sharpness,
+    occlusion reach, fog and fog start, and mode D's camera angles.
+    The target row is not shown: a terrain's target is the view's
+    centre.
+  - **`visibility.rs`**: `Solid::of` says yes for a terrain, so the
+    Solid Lighting panel is offered.
+  - **Gestures in the viewport**, the orbit viewers' convention: drag
+    (or Alt+drag) orbits, Shift+drag or a right-drag pans, the wheel
+    moves in. The pan moves the target across the ground -- along the
+    camera's right, and along its heading foreshortened by the pitch --
+    and hands it to the plane's own exact-decimal pan as a drag of the
+    footprint picture. The wheel is the plane's zoom without its
+    cursor anchor: the point under the cursor is on the ground, at a
+    depth the plane's anchor knows nothing of.
+  - **Nine ConfigPaths** (`Escape.Terrain.*`). Height, flank width,
+    shadows, sharpness and occlusion animate; the switch, the source,
+    the interior and the footprint size do not.
+  - **The in-browser export's hand-rolled path** gained the terrain:
+    the footprint settled in fixed chunks without waiting, as its 2D
+    export settles, then the tile and the antialiasing grid. The
+    in-app viewport-size and transparent exports read the terrain's
+    image where they read the 2D picture's.
+  - **Not yet:** fly mode (T2d); the motion footprint; a readout of the
+    measured footprint time in the panel.
+  - **Seen in the app** (the user, 2026-10-05): the picture's quality
+    is the footprint's. 2048² and 4096² look good; near the camera it
+    wants 8192² to 16384², and more antialiasing does not reach past
+    the footprint's texels. That is the uniform footprint's limit: a
+    perspective view wants texels small near the eye and large far
+    away. See section 11.
 
 **T3 — Path tracing, for terrains and IFS solids.**
 - **Built.**
@@ -982,3 +1051,64 @@ Two more, the same day:
    <15 ms rates on average hardware". Decided per device by measuring
    (H11).
 8. **The gallery modules skip terrains** (H2).
+
+## 11. The footprint's resolution, and the camera (proposed, 2026-10-05)
+
+The user's question, after T2c: "Any chance we can tie the Footprint to
+the camera frustum?" Not decided; this is the proposal.
+
+**The problem.** A footprint is uniform: every texel is the same size
+on the ground. A perspective view is not: a texel near the eye covers
+many screen pixels and one at the horizon a fraction of one. So the
+near ground and the cliff faces show the footprint's texels, and the
+far ground is sampled more finely than the screen can show.
+- Raising the footprint everywhere pays for the far ground too:
+  16384² is 64 times 2048²'s pixels, and at the measured 22 ms per
+  direct 2048² that is over a second per footprint.
+- Antialiasing cannot help near the eye: where a texel is larger than
+  a pixel, extra rays land on the same interpolated texels. It adds
+  real detail only where texels are about a pixel or smaller.
+
+**Three ways to tie it to the camera:**
+1. **Nested footprints, fitted to the frustum (a clipmap).** Several
+   footprints, each twice the span of the one inside it, all `n²`:
+   the finest where the ground is nearest, coarser ones outward to
+   the far edge of the view.
+   - **Where the frustum comes in.** The camera decides how many
+     levels there are and where each sits: level `k` covers the band
+     of ground at distances `[d_k, 2 d_k]` inside the view, so its
+     texels are about a screen pixel there.
+   - **What it costs.** Four levels at 2048² give the nearest ground
+     the density of a 16384² footprint, for a sixteenth of its
+     pixels.
+   - **Deep zoom stays the 2D renderer's.** Every level is a 2D render
+     at a power-of-two zoom of the same region, so one reference
+     orbit can serve them all.
+   - **What it subsumes.** T5's far field, and H11's handover: moving
+     in, the next finer level already exists, so nothing pops.
+   - **What the walk needs.** The ray steps through the levels from
+     the finest out, each with its own maximum mipmap. A band where
+     the levels blend, so the seam is not a step in the ground.
+2. **One footprint, warped to the view** (the perspective shadow
+   map's trick). Its texel grid is the screen's grid projected onto
+   the ground: dense near, sparse far, in one render.
+   - **The cheapest in pixels, and the most invasive.** The escape
+     renderer needs a projective pixel-to-plane map, which its lens
+     hook might host.
+   - **The walk** happens in warped coordinates, where a ray's height
+     is no longer linear across a cell. Both the bilinear-patch leaf
+     and the mipmap's bound get harder.
+3. **No footprint near the eye: each ray evaluates the fractal.**
+   March against the height computed where the ray is, mode D's way:
+   every step an escape iteration.
+   - Unlimited detail, at about a hundred 2D renders' cost per frame.
+   - A candidate for the last refinement of a path-traced still, not
+     for the interactive view.
+
+**Recommended: the first**, as its own phase before T3. The path
+tracer's rays (shadows, bounces) would then walk the levels from the
+start, rather than being retrofitted.
+- **Build first:** a fixed level count from the camera; every stale
+  level re-rendered whole; the blend band.
+- **Later:** incremental updates (render only the strip a level
+  moved by) and a per-level live/release choice under the 15 ms line.

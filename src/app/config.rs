@@ -395,6 +395,10 @@ impl App {
             if let Some(esc) = self.escape_renderer.take() {
                 esc.destroy();
             }
+            #[cfg(feature = "terrain")]
+            if let Some(t) = self.escape_terrain.take() {
+                t.destroy();
+            }
             self.escape_dirty = true;
         }
         // Deliberately NOT done for the simulation renderer, though it

@@ -135,14 +135,65 @@ pub fn terrain_camera(escape: &EscapeConfig, n: u32) -> SolidCamera {
     }
 }
 
+/// The camera when the tile holds the footprint `fp` rather than the
+/// view's own: a footprint lagging a dolly or a pan (plan H11). The
+/// eye is where the view's camera would be over the OLD terrain --
+/// nearer by the zoom since, its target moved by the pan since -- so
+/// the motion shows at once, on stretched texels, until the new
+/// footprint lands.
+pub fn terrain_camera_over(escape: &EscapeConfig, fp: &EscapeConfig, n: u32) -> SolidCamera {
+    let mut cam = terrain_camera(escape, n);
+    let zoomed = (escape.zoom_log2 - fp.zoom_log2).clamp(-60.0, 60.0).exp2();
+    let (dx, dy) = centre_offset_cells(escape, fp, n);
+    cam.target[0] += dx;
+    cam.target[1] += dy;
+    cam.distance /= zoomed;
+    cam.eye_rel = [-cam.forward[0] * cam.distance, -cam.forward[1] * cam.distance, -cam.forward[2] * cam.distance];
+    cam.eye = [cam.target[0] + cam.eye_rel[0], cam.target[1] + cam.eye_rel[1], cam.target[2] + cam.eye_rel[2]];
+    cam
+}
+
+/// The view's centre less the footprint's, in the footprint's cells
+/// (x east, y north in the footprint's own rotated frame). Subtracted
+/// in fixed point, so it holds at any depth: the difference is a few
+/// spans however many digits the two centres carry.
+fn centre_offset_cells(escape: &EscapeConfig, fp: &EscapeConfig, n: u32) -> (f64, f64) {
+    use super::fixedpoint::{limbs_for_view, FixedPoint};
+    let deep = escape.zoom_log2.max(fp.zoom_log2);
+    let limbs = limbs_for_view(&escape.center_re, &escape.center_im, deep)
+        .max(limbs_for_view(&fp.center_re, &fp.center_im, deep));
+    // (a - b) in units of the footprint's 2^-zoom.
+    let diff = |a: &str, b: &str| -> f64 {
+        match (FixedPoint::from_decimal(a, limbs), FixedPoint::from_decimal(b, limbs)) {
+            (Some(a), Some(b)) => {
+                let fe = a.sub(&b).to_floatexp();
+                fe.m * (fe.e as f64 + fp.zoom_log2).clamp(-1000.0, 1000.0).exp2()
+            }
+            _ => 0.0,
+        }
+    };
+    let (wx, wy) = (diff(&escape.center_re, &fp.center_re), diff(&escape.center_im, &fp.center_im));
+    // The footprint's pixel offset of a world delta: the inverse of
+    // `ifs::view_basis` for a square of side 4 * 2^-zoom, which is its
+    // own inverse up to the span. Screen y runs down, the tile's north.
+    let (s, c) = (fp.rotation as f64).sin_cos();
+    let k = n as f64 / 4.0;
+    let (u, v) = (c * wx + s * wy, s * wx - c * wy);
+    (u * k, -v * k)
+}
+
 /// How the terrain is seen and lit, in an `n`-wide footprint's cells:
 /// the camera, the Solid lighting, and fog with its distances measured
 /// in footprint widths, as mode D's are in the attractor's.
 pub fn terrain_view(config: &FractalConfig, n: u32, jitter: [f32; 2]) -> TerrainView {
+    terrain_view_with(config, terrain_camera(&config.escape, n), n, jitter)
+}
+
+fn terrain_view_with(config: &FractalConfig, camera: SolidCamera, n: u32, jitter: [f32; 2]) -> TerrainView {
     let t = &config.escape.terrain;
     let nf = n as f32;
     TerrainView {
-        camera: terrain_camera(&config.escape, n),
+        camera,
         shading: config.solid_shading.clone(),
         fog: (config.fog_strength / nf, config.fog_start * nf, config.background_color),
         shadow: t.shadow,
@@ -186,7 +237,23 @@ pub struct EscapeTerrain {
     ingested: Option<TerrainIngest>,
     /// Footprint renders run to settlement, for the cache's gate.
     pub footprint_renders: u32,
+    /// When the footprint in progress submitted its first chunk.
+    footprint_started: Option<web_time::Instant>,
+    /// A footprint's time from its first chunk to its GPU completion,
+    /// in ms, written by the queue's completion callback.
+    footprint_done: std::sync::Arc<std::sync::Mutex<Option<f32>>>,
+    /// The smoothed footprint time: what decides whether the footprint
+    /// follows the camera live (H11).
+    footprint_ms: Option<f32>,
+    /// What the viewport's accumulation is of, and how far it has got.
+    viewport_key: Option<String>,
+    viewport_samples: u32,
 }
+
+/// The footprint time under which a terrain re-renders its footprint
+/// DURING a dolly or a pan rather than on its release (H11, the user's
+/// 15 ms).
+pub const LIVE_FOOTPRINT_MS: f32 = 15.0;
 
 impl EscapeTerrain {
     pub fn new(device: &Device, out_w: u32, out_h: u32) -> Self {
@@ -199,6 +266,11 @@ impl EscapeTerrain {
             pending: None,
             ingested: None,
             footprint_renders: 0,
+            footprint_started: None,
+            footprint_done: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            footprint_ms: None,
+            viewport_key: None,
+            viewport_samples: 0,
         }
     }
 
@@ -212,6 +284,10 @@ impl EscapeTerrain {
 
     pub fn resize(&mut self, device: &Device, out_w: u32, out_h: u32) {
         self.terrain.resize(device, out_w, out_h);
+        // The accumulation went with the old size.
+        if self.terrain.accumulated_samples() == 0 {
+            self.viewport_key = None;
+        }
     }
 
     /// The footprint's renderer, for the caller to give it what any
@@ -253,6 +329,7 @@ impl EscapeTerrain {
         palette_generation: u64,
     ) -> bool {
         let key = (footprint_key(&config.escape), palette_key(config));
+        self.footprint_started.get_or_insert_with(web_time::Instant::now);
         let settled = self.footprint.render(
             device,
             queue,
@@ -263,6 +340,36 @@ impl EscapeTerrain {
         );
         self.pending = Some(key);
         settled
+    }
+
+    /// Forget the footprint: something it was drawn with that its key
+    /// does not see (a texture's image arriving) changed.
+    pub fn invalidate_footprint(&mut self) {
+        self.rendered = None;
+    }
+
+    /// Whether a footprint is part-way through its render.
+    pub fn footprint_in_progress(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    /// The smoothed footprint render time, in ms, once one has been
+    /// measured.
+    pub fn footprint_ms(&mut self) -> Option<f32> {
+        if let Some(ms) = self.footprint_done.lock().ok().and_then(|mut g| g.take()) {
+            self.footprint_ms = Some(match self.footprint_ms {
+                Some(avg) => avg + (ms - avg) * 0.3,
+                None => ms,
+            });
+        }
+        self.footprint_ms
+    }
+
+    /// Whether the footprint should follow the camera during a gesture
+    /// (H11): its renders measured under [`LIVE_FOOTPRINT_MS`], or not
+    /// measured yet.
+    pub fn live_footprints(&mut self) -> bool {
+        self.footprint_ms().is_none_or(|ms| ms < LIVE_FOOTPRINT_MS)
     }
 
     /// Make the tile from the settled footprint, if it or the ingest
@@ -278,10 +385,56 @@ impl EscapeTerrain {
         if let Some(key) = self.pending.take() {
             self.rendered = Some(key);
             self.footprint_renders += 1;
+            // Time it to the GPU's completion: the chunks before this
+            // are queued, not done.
+            if let Some(t0) = self.footprint_started.take() {
+                let slot = std::sync::Arc::clone(&self.footprint_done);
+                queue.on_submitted_work_done(move || {
+                    if let Ok(mut g) = slot.lock() {
+                        *g = Some(t0.elapsed().as_secs_f32() * 1000.0);
+                    }
+                });
+            }
         }
         self.terrain
             .set_tile_from_escape(device, queue, self.footprint.output_view(), self.footprint.height_view(), n, n, &ingest);
         self.ingested = Some(ingest);
+    }
+
+    /// The view the tile is seen through: the config's, over whichever
+    /// footprint the tile holds (`terrain_camera_over` while one lags).
+    fn current_view(&self, config: &FractalConfig, jitter: [f32; 2]) -> TerrainView {
+        let camera = match &self.rendered {
+            Some((fp, _)) => terrain_camera_over(&config.escape, fp, self.n),
+            None => terrain_camera(&config.escape, self.n),
+        };
+        terrain_view_with(config, camera, self.n, jitter)
+    }
+
+    /// One frame of the viewport: a sample of the config's
+    /// antialiasing grid (`supersample²` jittered renders, the export's
+    /// own), folded into the accumulation, which any change to the view
+    /// or the tile restarts. True while samples remain.
+    pub fn render_viewport(&mut self, device: &Device, queue: &Queue, config: &FractalConfig) -> bool {
+        if self.terrain.tile_version() == 0 {
+            return false;
+        }
+        let base = self.current_view(config, [0.0, 0.0]);
+        let key = format!("{base:?}|{}", self.terrain.tile_version());
+        if self.viewport_key.as_deref() != Some(key.as_str()) {
+            self.viewport_key = Some(key);
+            self.viewport_samples = 0;
+            self.terrain.reset_accumulation();
+        }
+        let grid = EscapeRenderer::sample_grid(config.escape.supersample.max(1));
+        let Some(&jitter) = grid.get(self.viewport_samples as usize) else {
+            return false;
+        };
+        let view = self.current_view(config, jitter);
+        self.terrain.render(device, queue, &view);
+        self.terrain.accumulate(device, queue);
+        self.viewport_samples += 1;
+        (self.viewport_samples as usize) < grid.len()
     }
 
     /// Draw the terrain once, its rays offset by `jitter` within their
@@ -372,6 +525,53 @@ mod tests {
         let (nx, _) = project(&cam, [cam.target[0], cam.target[1] + 100.0, cam.target[2]], aspect);
         let (_, ey) = project(&cam, [cam.target[0] + 100.0, cam.target[1], cam.target[2]], aspect);
         assert!(nx < 0.0 && ey < 0.0, "yawed: north left {nx}, east up {ey}");
+    }
+
+    /// A footprint that lags the view: the camera over it is the view's
+    /// camera moved by the pan and nearer by the zoom since. At the
+    /// footprint's own view it is the ordinary camera exactly, and the
+    /// pan's offset holds at 2^200, where the centres differ in their
+    /// sixtieth digit.
+    #[test]
+    fn the_camera_over_a_lagging_footprint_follows_the_view() {
+        let mut fp = EscapeConfig::default();
+        fp.terrain.enabled = true;
+        fp.center_re = "-0.75".into();
+        fp.center_im = "0.1".into();
+        fp.zoom_log2 = 3.0;
+        let n = 1000;
+        assert_eq!(terrain_camera_over(&fp, &fp, n), terrain_camera(&fp, n));
+        // A quarter span east and an eighth north, then a zoom of one.
+        let mut v = fp.clone();
+        v.center_re = "-0.625".into(); // + 0.125 = a quarter of the span 0.5
+        v.center_im = "0.1625".into(); // + 0.0625 = an eighth
+        v.zoom_log2 = 4.0;
+        let base = terrain_camera(&v, n);
+        let cam = terrain_camera_over(&v, &fp, n);
+        assert!((cam.target[0] - base.target[0] - 250.0).abs() < 1e-6, "{:?}", cam.target);
+        assert!((cam.target[1] - base.target[1] - 125.0).abs() < 1e-6, "{:?}", cam.target);
+        assert!((cam.distance * 2.0 - base.distance).abs() < 1e-9, "half as far after a zoom of one");
+        // Rotated a quarter turn, the footprint's east is the plane's
+        // north: the same pan lands on the other axes.
+        let mut fr = fp.clone();
+        fr.rotation = std::f32::consts::FRAC_PI_2;
+        let mut vr = v.clone();
+        vr.rotation = fr.rotation;
+        vr.zoom_log2 = fr.zoom_log2;
+        let r = terrain_camera_over(&vr, &fr, n);
+        let b = terrain_camera(&vr, n);
+        assert!((r.target[0] - b.target[0] - 125.0).abs() < 1e-3 && (r.target[1] - b.target[1] + 250.0).abs() < 1e-3,
+            "rotated offset {:?}", [r.target[0] - b.target[0], r.target[1] - b.target[1]]);
+        // Deep: centres 2^-200 apart are a quarter span at 2^198.
+        let mut deep = fp.clone();
+        deep.zoom_log2 = 198.0;
+        deep.center_re = "-0.75".into();
+        let mut dv = deep.clone();
+        // -0.75, less 6.22e-61: "75" is decimals 1-2, 58 zeros 3-60.
+        dv.center_re = format!("-0.75{}6223015277861141707144064053780124240590252168721167", "0".repeat(58));
+        let off = centre_offset_cells(&dv, &deep, n);
+        let want = 6.223015277861141707e-61 * 2f64.powf(198.0) * n as f64 / 4.0;
+        assert!(((off.0 + want) / want).abs() < 1e-9, "deep offset {off:?} want -{want}");
     }
 
     /// Only the 2D picture keys the footprint: the camera, the lights,
@@ -593,6 +793,93 @@ mod tests {
         println!("2^60: distance estimate in pixels, 5% {lo:.3e} median {mid:.3e} 95% {hi:.3e}");
         assert!(de.iter().all(|v| v.is_finite() && *v > 0.0), "every estimate is a finite positive distance");
         assert!(mid > 1e-3 && mid < 1e3, "pixel-sized distances: median {mid}");
+    }
+
+    /// The 15 ms line (plan H11), measured: footprint re-render times as
+    /// a dolly makes them -- each a step of zoom from the last, timed to
+    /// the GPU's completion -- at three sides, on the direct path
+    /// (Mandelbrot at 2^3, 2,000 iterations) and the perturbed one
+    /// (`fe-zoom-60-edge`, 2^60, 30,000 iterations).
+    #[test]
+    #[ignore = "measurement"]
+    fn footprint_render_times() {
+        let Some((device, queue)) = crate::escape::terrain::gpu_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let deep: FractalConfig = serde_json::from_str(
+            &std::fs::read_to_string("tests/visual/configs/escape/fe-zoom-60-edge.fflame").expect("config"),
+        )
+        .expect("parse");
+        let mut shallow = terrain_config();
+        shallow.escape.zoom_log2 = 3.0;
+        shallow.escape.center_im = "0.1".into();
+        shallow.escape.max_iter = 2000;
+        for (label, base) in [("direct 2^3", shallow), ("perturbed 2^60", deep)] {
+            for n in [512u32, 1024, 2048] {
+                let mut c = base.clone();
+                c.render_mode = crate::scene::transforms::RenderMode::Escape;
+                c.escape.terrain.enabled = true;
+                c.escape.terrain.resolution = n;
+                c.escape.shading.enabled = false;
+                let mut flame = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+                    &device,
+                    &queue,
+                    TextureFormat::Rgba8Unorm,
+                    64,
+                    64,
+                    &c.flame,
+                    c.palette_size,
+                );
+                flame.update_palette(
+                    &device,
+                    &queue,
+                    &c.palette,
+                    c.palette_rotation,
+                    c.palette_squeeze,
+                    c.palette_squeeze_mode,
+                    c.palette_squeeze_falloff,
+                    c.palette_log_strength,
+                    c.palette_reverse,
+                );
+                let mut t = EscapeTerrain::new(&device, 64, 64);
+                t.size_footprint(&device, &c.escape);
+                let mut times = Vec::new();
+                for k in 0..8 {
+                    c.escape.zoom_log2 = base.escape.zoom_log2 + 0.02 * k as f64;
+                    let t0 = std::time::Instant::now();
+                    loop {
+                        let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
+                        let done = t.render_footprint(
+                            &device,
+                            &queue,
+                            &mut enc,
+                            &c,
+                            flame.escape_palette_view(c.escape.palette_map.stepped),
+                            flame.palette_generation(),
+                        );
+                        queue.submit(std::iter::once(enc.finish()));
+                        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+                        if done {
+                            break;
+                        }
+                    }
+                    t.ingest(&device, &queue, &c);
+                    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+                    // The first pays the shader compile and the reference.
+                    if k >= 2 {
+                        times.push(t0.elapsed().as_secs_f64() * 1000.0);
+                    }
+                }
+                times.sort_by(f64::total_cmp);
+                println!(
+                    "{label}, {n}x{n}: median {:.1} ms, min {:.1}, max {:.1}",
+                    times[times.len() / 2],
+                    times[0],
+                    times[times.len() - 1]
+                );
+            }
+        }
     }
 
     /// As a video renders: ONE flame renderer across the frames, whose

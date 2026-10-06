@@ -1769,6 +1769,13 @@ impl TerrainSource {
     /// The iterate pass's height mode for it: the shaders' relief
     /// source codes, past the relief's own (0-5), for the two the
     /// terrain adds.
+    pub fn from_str_or_default(s: &str) -> Self {
+        match s {
+            "escape_count" => TerrainSource::EscapeCount,
+            "relief" => TerrainSource::Relief,
+            _ => TerrainSource::Distance,
+        }
+    }
     pub fn shade_flags(self, relief: ShadingField) -> u32 {
         match self {
             TerrainSource::Distance => 8,
@@ -1788,6 +1795,22 @@ pub enum TerrainInterior {
     Plateau,
     /// Transparent, sunk to the slab's floor: a hole through it.
     Hole,
+}
+
+impl TerrainInterior {
+    pub const ALL: [TerrainInterior; 2] = [TerrainInterior::Plateau, TerrainInterior::Hole];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TerrainInterior::Plateau => "plateau",
+            TerrainInterior::Hole => "hole",
+        }
+    }
+    pub fn from_str_or_default(s: &str) -> Self {
+        match s {
+            "hole" => TerrainInterior::Hole,
+            _ => TerrainInterior::Plateau,
+        }
+    }
 }
 
 /// The 3D terrain view (heightfield plan): the escape picture as a
