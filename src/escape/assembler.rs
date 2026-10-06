@@ -591,9 +591,13 @@ fn layer_wgsl(layer: Option<&ColoringDef>, stretched: bool) -> String {
                 // The relief's source (ShadingField): 1 is Banded; Layer,\n\
                 // with no layer, falls back to the raw value.\n\
                 fn esc_relief_source(raw: f32, t: f32, sum: OrbitSummary, state: vec4<f32>) -> f32 {\n\
+                \x20   if (params.shade_flags >= 8u) {\n\
+                \x20       return esc_terrain_source(sum);\n\
+                \x20   }\n\
                 \x20   return select(raw, t, params.shade_flags == 1u);\n\
-                }"
-            .to_string();
+                }\n"
+            .to_string()
+            + TERRAIN_SOURCE_WGSL;
     };
     let colors_interior = l.has_feature(ColoringFeature::ColorsInterior);
     let bounded = l.has_feature(ColoringFeature::Bounded);
@@ -601,13 +605,39 @@ fn layer_wgsl(layer: Option<&ColoringDef>, stretched: bool) -> String {
         "fn lparam(i: u32) -> f32 {{\n    return params.lparams[i / 4u][i % 4u];\n}}\n\
          const LAYER_COLORS_INTERIOR: bool = {colors_interior};\n\
          const LAYER_IS_BOUNDED: bool = {bounded};\n\
-         // texture layer: {}\n{}\n{}\n{}",
+         // texture layer: {}\n{}\n{}\n{}\n{}",
         l.name,
         layer_source(l.wgsl).trim(),
         if stretched { LAYER_VALUE_STRETCHED_WGSL } else { LAYER_VALUE_WGSL },
-        ESC_LAYER_WGSL.trim()
+        ESC_LAYER_WGSL.trim(),
+        TERRAIN_SOURCE_WGSL.trim()
     )
 }
+
+/// The terrain's height sources (docs/projects/heightfield-3d.md,
+/// section 5), the relief source codes past the relief's own: 8 the
+/// distance estimate, 9 the smooth escape count. Read by
+/// `esc_relief_source` into the height field's green channel while a
+/// terrain footprint renders; the relief's own codes never reach here.
+///
+/// A pixel that did not escape returns `-1e30`, so the ingest can tell
+/// the interior from a value even under a colouring that draws it.
+const TERRAIN_SOURCE_WGSL: &str = r#"
+// The terrain's height source: the distance estimate in render pixels
+// -- the terrain's own cells -- where the formula compiled a
+// derivative, else the smooth escape count.
+fn esc_terrain_source(sum: OrbitSummary) -> f32 {
+    if (!sum.escaped) {
+        return -1.0e30;
+    }
+    let r = max(length(sum.z), 1.0000001);
+    if (params.shade_flags == 8u && HAS_DERIVATIVE) {
+        let deriv = max(length(sum.dz), 1e-30);
+        return max(r * log(r) / deriv, 1e-30);
+    }
+    return f32(sum.n) + 1.0 - log(max(log(r), 1e-30)) / log(max(params.degree, 1.0001));
+}
+"#;
 
 /// A pixel's colour from its value (`esc_colour`): the palette at the
 /// wrapped position, through the texture layer -- or, for a colouring
@@ -974,6 +1004,9 @@ const ESC_LAYER_WGSL: &str = r#"
 // from one field and colour from another, as UF's Slope lights a
 // different value than the one it colours (survey R3).
 fn esc_relief_source(raw: f32, t: f32, sum: OrbitSummary, state: vec4<f32>) -> f32 {
+    if (params.shade_flags >= 8u) {
+        return esc_terrain_source(sum);
+    }
     if (params.shade_flags == 2u && (sum.escaped || LAYER_COLORS_INTERIOR)) {
         return layer_coloring_map(sum, state);
     }

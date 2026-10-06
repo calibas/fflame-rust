@@ -116,6 +116,132 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 "#;
 
+/// The ingest's uniform. Mirrored by `IngestParams`.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct IngestParamsGpu {
+    n: u32,
+    m: u32,
+    /// 8 distance, 9 escape count, anything else the relief's source.
+    source: u32,
+    /// 0 plateau, 1 hole.
+    interior: u32,
+    /// The terrain's height H, in cells.
+    height: f32,
+    /// Distance: the flanks' width w, in cells.
+    de_width: f32,
+    /// The slab's floor, in cells: where a hole sinks to.
+    floor: f32,
+    pad: f32,
+    /// The interior's colour on a plateau: the background's.
+    background: [f32; 4],
+}
+
+/// The ingest (heightfield plan, section 5): a footprint render's
+/// colour and height field into a tile. The range pass measures the
+/// height source over the escaped pixels; the ingest pass maps it to
+/// heights in [0, H] -- the distance through `H exp(-d / w)`, the escape
+/// count through a log curve, the relief's own source linearly -- and
+/// flips the rows, the picture's top being the terrain's north.
+const INGEST_WGSL: &str = r#"
+struct IngestParams {
+    n: u32,
+    m: u32,
+    source: u32,
+    interior: u32,
+    height: f32,
+    de_width: f32,
+    floor: f32,
+    pad: f32,
+    background: vec4<f32>,
+};
+@group(0) @binding(0) var<uniform> ip: IngestParams;
+@group(0) @binding(1) var colour: texture_2d<f32>;
+@group(0) @binding(2) var hsrc: texture_2d<f32>;
+@group(0) @binding(3) var<storage, read_write> range: array<atomic<u32>>;
+@group(0) @binding(4) var out_h: texture_storage_2d<r32float, write>;
+@group(0) @binding(5) var out_a: texture_storage_2d<rgba16float, write>;
+
+// A float's order as an integer, so atomics can take its min and max.
+fn ordered(f: f32) -> u32 {
+    let b = bitcast<u32>(f);
+    return select(b | 0x80000000u, ~b, (b & 0x80000000u) != 0u);
+}
+
+fn unordered(u: u32) -> f32 {
+    return bitcast<f32>(select(~u, u & 0x7fffffffu, (u & 0x80000000u) != 0u));
+}
+
+fn interior(c: vec4<f32>, g: f32) -> bool {
+    return !(c.a > 0.0) || g <= -1.0e29;
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn range_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= ip.n || gid.y >= ip.m) {
+        return;
+    }
+    let p = vec2<i32>(gid.xy);
+    let g = textureLoad(hsrc, p, 0).g;
+    if (interior(textureLoad(colour, p, 0), g)) {
+        return;
+    }
+    atomicMin(&range[0], ordered(g));
+    atomicMax(&range[1], ordered(g));
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn ingest_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= ip.n || gid.y >= ip.m) {
+        return;
+    }
+    // Tile row j is picture row m - 1 - j: the picture's top is north.
+    let src = vec2<i32>(i32(gid.x), i32(ip.m - 1u - gid.y));
+    let dst = vec2<i32>(gid.xy);
+    let c = textureLoad(colour, src, 0);
+    let g = textureLoad(hsrc, src, 0).g;
+    if (interior(c, g)) {
+        if (ip.interior == 1u) {
+            textureStore(out_h, dst, vec4<f32>(ip.floor, 0.0, 0.0, 0.0));
+            textureStore(out_a, dst, vec4<f32>(0.0, 0.0, 0.0, 0.0));
+        } else {
+            textureStore(out_h, dst, vec4<f32>(ip.height, 0.0, 0.0, 0.0));
+            textureStore(out_a, dst, vec4<f32>(ip.background.rgb, 1.0));
+        }
+        return;
+    }
+    let lo = unordered(atomicLoad(&range[0]));
+    let hi = unordered(atomicLoad(&range[1]));
+    var h = 0.0;
+    if (ip.source == 8u) {
+        h = ip.height * exp(-max(g, 0.0) / max(ip.de_width, 1.0e-6));
+    } else if (ip.source == 9u) {
+        h = ip.height * log(1.0 + max(g - lo, 0.0)) / max(log(1.0 + max(hi - lo, 0.0)), 1.0e-6);
+    } else {
+        h = ip.height * clamp((g - lo) / max(hi - lo, 1.0e-20), 0.0, 1.0);
+    }
+    textureStore(out_h, dst, vec4<f32>(h, 0.0, 0.0, 0.0));
+    textureStore(out_a, dst, vec4<f32>(c.rgb, 1.0));
+}
+"#;
+
+/// What a footprint's ingest needs to know: how its height source maps
+/// to heights, and what the interior becomes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TerrainIngest {
+    /// The height source the footprint wrote: 8 distance, 9 escape
+    /// count, anything else the relief's own.
+    pub source: u32,
+    /// The terrain's height H, in cells.
+    pub height: f32,
+    /// Distance: the flanks' width w, in cells.
+    pub de_width: f32,
+    /// The interior as a hole rather than a plateau.
+    pub hole: bool,
+    /// The interior's colour on a plateau, linear.
+    pub background: [f32; 3],
+}
+
 /// Shared by the walk and the relight: the uniform, the rig's
 /// accessors over it, and the rig itself.
 const WALK_COMMON: &str = r#"
@@ -679,6 +805,9 @@ pub struct TerrainRenderer {
     build_pipeline: ComputePipeline,
     walk_pipeline: ComputePipeline,
     relight_pipeline: ComputePipeline,
+    ingest_layout: BindGroupLayout,
+    range_pipeline: ComputePipeline,
+    ingest_pipeline: ComputePipeline,
     params: Buffer,
     stats: Buffer,
     geom: Buffer,
@@ -745,7 +874,18 @@ impl TerrainRenderer {
             label: Some("Terrain Relight"),
             entries: &[uniform(0), tex(1), storage(2, true), storage_tex(3, TextureFormat::Rgba32Float)],
         });
-        let pipeline = |label: &str, layout: &BindGroupLayout, src: String| {
+        let ingest_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Terrain Ingest"),
+            entries: &[
+                uniform(0),
+                tex(1),
+                tex(2),
+                storage(3, false),
+                storage_tex(4, TextureFormat::R32Float),
+                storage_tex(5, TextureFormat::Rgba16Float),
+            ],
+        });
+        let entry = |label: &str, layout: &BindGroupLayout, src: &str, entry: &str| {
             let module = device.create_shader_module(ShaderModuleDescriptor {
                 label: Some(label),
                 source: ShaderSource::Wgsl(src.into()),
@@ -759,14 +899,17 @@ impl TerrainRenderer {
                 label: Some(label),
                 layout: Some(&pl),
                 module: &module,
-                entry_point: Some("main"),
+                entry_point: Some(entry),
                 compilation_options: Default::default(),
                 cache: None,
             })
         };
+        let pipeline = |label: &str, layout: &BindGroupLayout, src: String| entry(label, layout, &src, "main");
         let build_pipeline = pipeline("Terrain Build", &build_layout, assemble_build());
         let walk_pipeline = pipeline("Terrain Walk", &walk_layout, assemble_walk());
         let relight_pipeline = pipeline("Terrain Relight", &relight_layout, assemble_relight());
+        let range_pipeline = entry("Terrain Range", &ingest_layout, INGEST_WGSL, "range_main");
+        let ingest_pipeline = entry("Terrain Ingest", &ingest_layout, INGEST_WGSL, "ingest_main");
         let params = device.create_buffer(&BufferDescriptor {
             label: Some("Terrain Params"),
             size: std::mem::size_of::<TerrainParamsGpu>() as u64,
@@ -788,6 +931,9 @@ impl TerrainRenderer {
             build_pipeline,
             walk_pipeline,
             relight_pipeline,
+            ingest_layout,
+            range_pipeline,
+            ingest_pipeline,
             params,
             stats,
             geom,
@@ -870,6 +1016,117 @@ impl TerrainRenderer {
         assert!(n >= 2 && m >= 2, "a tile needs at least 2x2 samples");
         assert_eq!(heights.len(), (n * m) as usize);
         assert_eq!(albedo.len(), (n * m) as usize);
+        let (height, albedo_tex) = Self::tile_textures(device, n, m);
+        queue.write_texture(
+            TexelCopyTextureInfo { texture: &height, mip_level: 0, origin: Origin3d::ZERO, aspect: TextureAspect::All },
+            bytemuck::cast_slice(heights),
+            TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(n * 4), rows_per_image: Some(m) },
+            Extent3d { width: n, height: m, depth_or_array_layers: 1 },
+        );
+        let halves: Vec<u16> = albedo.iter().flatten().map(|v| half::f16::from_f32(*v).to_bits()).collect();
+        queue.write_texture(
+            TexelCopyTextureInfo { texture: &albedo_tex, mip_level: 0, origin: Origin3d::ZERO, aspect: TextureAspect::All },
+            bytemuck::cast_slice(&halves),
+            TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(n * 8), rows_per_image: Some(m) },
+            Extent3d { width: n, height: m, depth_or_array_layers: 1 },
+        );
+        self.finish_tile(device, queue, n, m, height, albedo_tex, slab_floor(heights, n, m));
+    }
+
+    /// A tile from a footprint render (heightfield plan, section 5): its
+    /// colour and its height field, both `n x m` and `Rgba32Float`, on
+    /// the GPU throughout. Heights land in [0, H], so the slab's floor is
+    /// known without reading them back.
+    pub fn set_tile_from_escape(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        colour: &TextureView,
+        height_field: &TextureView,
+        n: u32,
+        m: u32,
+        ingest: &TerrainIngest,
+    ) {
+        assert!(n >= 2 && m >= 2, "a tile needs at least 2x2 samples");
+        let (height, albedo_tex) = Self::tile_textures(device, n, m);
+        let floor = -0.01 * n.max(m) as f32;
+        let p = IngestParamsGpu {
+            n,
+            m,
+            source: ingest.source,
+            interior: u32::from(ingest.hole),
+            height: ingest.height,
+            de_width: ingest.de_width,
+            floor,
+            pad: 0.0,
+            background: [ingest.background[0], ingest.background[1], ingest.background[2], 1.0],
+        };
+        let params = device.create_buffer(&BufferDescriptor {
+            label: Some("Terrain Ingest Params"),
+            size: std::mem::size_of::<IngestParamsGpu>() as u64,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&params, 0, bytemuck::bytes_of(&p));
+        let range = device.create_buffer(&BufferDescriptor {
+            label: Some("Terrain Ingest Range"),
+            size: 8,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        // Min starts high, max low (both in the ordered encoding).
+        queue.write_buffer(&range, 0, bytemuck::cast_slice(&[u32::MAX, 0u32]));
+        let hv = height.create_view(&TextureViewDescriptor::default());
+        let av = albedo_tex.create_view(&TextureViewDescriptor::default());
+        let bg = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Terrain Ingest"),
+            layout: &self.ingest_layout,
+            entries: &[
+                BindGroupEntry { binding: 0, resource: params.as_entire_binding() },
+                BindGroupEntry { binding: 1, resource: BindingResource::TextureView(colour) },
+                BindGroupEntry { binding: 2, resource: BindingResource::TextureView(height_field) },
+                BindGroupEntry { binding: 3, resource: range.as_entire_binding() },
+                BindGroupEntry { binding: 4, resource: BindingResource::TextureView(&hv) },
+                BindGroupEntry { binding: 5, resource: BindingResource::TextureView(&av) },
+            ],
+        });
+        let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Terrain Ingest") });
+        {
+            let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: Some("Terrain Ingest"), timestamp_writes: None });
+            pass.set_bind_group(0, &bg, &[]);
+            pass.set_pipeline(&self.range_pipeline);
+            pass.dispatch_workgroups(n.div_ceil(8), m.div_ceil(8), 1);
+            pass.set_pipeline(&self.ingest_pipeline);
+            pass.dispatch_workgroups(n.div_ceil(8), m.div_ceil(8), 1);
+        }
+        queue.submit(std::iter::once(enc.finish()));
+        self.finish_tile(device, queue, n, m, height, albedo_tex, floor);
+    }
+
+    /// The tile's height (`R32Float`) and albedo (`Rgba16Float`)
+    /// textures, unwritten.
+    fn tile_textures(device: &Device, n: u32, m: u32) -> (Texture, Texture) {
+        let make = |label: &str, format: TextureFormat| {
+            device.create_texture(&TextureDescriptor {
+                label: Some(label),
+                size: Extent3d { width: n, height: m, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format,
+                usage: TextureUsages::TEXTURE_BINDING
+                    | TextureUsages::STORAGE_BINDING
+                    | TextureUsages::COPY_DST
+                    | TextureUsages::COPY_SRC,
+                view_formats: &[],
+            })
+        };
+        (make("Terrain Height", TextureFormat::R32Float), make("Terrain Albedo", TextureFormat::Rgba16Float))
+    }
+
+    /// The tile's mipmap from its heights, and the tile itself.
+    #[allow(clippy::too_many_arguments)]
+    fn finish_tile(&mut self, device: &Device, queue: &Queue, n: u32, m: u32, height: Texture, albedo_tex: Texture, floor: f32) {
         let make = |label: &str, format: TextureFormat, mips: u32, w: u32, h: u32| {
             device.create_texture(&TextureDescriptor {
                 label: Some(label),
@@ -885,21 +1142,6 @@ impl TerrainRenderer {
                 view_formats: &[],
             })
         };
-        let height = make("Terrain Height", TextureFormat::R32Float, 1, n, m);
-        queue.write_texture(
-            TexelCopyTextureInfo { texture: &height, mip_level: 0, origin: Origin3d::ZERO, aspect: TextureAspect::All },
-            bytemuck::cast_slice(heights),
-            TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(n * 4), rows_per_image: Some(m) },
-            Extent3d { width: n, height: m, depth_or_array_layers: 1 },
-        );
-        let albedo_tex = make("Terrain Albedo", TextureFormat::Rgba16Float, 1, n, m);
-        let halves: Vec<u16> = albedo.iter().flatten().map(|v| half::f16::from_f32(*v).to_bits()).collect();
-        queue.write_texture(
-            TexelCopyTextureInfo { texture: &albedo_tex, mip_level: 0, origin: Origin3d::ZERO, aspect: TextureAspect::All },
-            bytemuck::cast_slice(&halves),
-            TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(n * 8), rows_per_image: Some(m) },
-            Extent3d { width: n, height: m, depth_or_array_layers: 1 },
-        );
         let levels = Self::levels_for(n, m);
         // Power-of-two sides: a texture's mips halve rounding DOWN, the
         // node grid halves rounding UP, and only at powers of two do the
@@ -920,7 +1162,7 @@ impl TerrainRenderer {
         self.tile = Some(Tile {
             n,
             m,
-            floor: slab_floor(heights, n, m),
+            floor,
             levels,
             height: (height, height_view),
             albedo: (albedo_tex, albedo_view),
@@ -1087,6 +1329,12 @@ impl TerrainRenderer {
     #[cfg(test)]
     pub(crate) fn stats_buffer(&self) -> &Buffer {
         &self.stats
+    }
+
+    /// The tile's height and albedo textures, for a test to read back.
+    #[cfg(test)]
+    pub(crate) fn tile_textures_for_test(&self) -> Option<(&Texture, &Texture)> {
+        self.tile.as_ref().map(|t| (&t.height.0, &t.albedo.0))
     }
 
     /// The tile's mipmap texture, for a test to read a level back.
@@ -1264,6 +1512,7 @@ mod tests {
 
     #[test]
     fn the_terrain_shaders_validate() {
+        validate(INGEST_WGSL, "ingest");
         validate(&assemble_build(), "build");
         validate(&assemble_walk(), "walk");
         validate(&assemble_relight(), "relight");
@@ -1797,6 +2046,192 @@ mod gpu_tests {
         std::fs::create_dir_all("output/heightfield_t1").unwrap();
         img.save("output/heightfield_t1/mandelbrot_de.png").unwrap();
         println!("wrote output/heightfield_t1/mandelbrot_de.png");
+    }
+
+    /// A Mandelbrot footprint, rendered by the escape renderer as a
+    /// terrain's footprint: the config, the palette's renderer, and the
+    /// render run to settlement. Returns (colour, height field) as rows
+    /// of `Rgba32Float` texels, and the renderer.
+    fn footprint(
+        device: &Device,
+        queue: &Queue,
+        n: u32,
+        source: crate::config::escape::TerrainSource,
+    ) -> (crate::config::escape::EscapeConfig, crate::escape::EscapeRenderer, crate::renderer::compute_kernel::FlameRenderer) {
+        let mut config = crate::config::FractalConfig::default();
+        config.escape.center_re = "-0.75".into();
+        config.escape.center_im = "0.1".into();
+        config.escape.zoom_log2 = 3.0;
+        config.escape.max_iter = 2000;
+        config.escape.terrain.enabled = true;
+        config.escape.terrain.source = source;
+        let mut flame = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            device,
+            queue,
+            TextureFormat::Rgba8Unorm,
+            n,
+            n,
+            &config.flame,
+            config.palette_size,
+        );
+        flame.update_palette(
+            device,
+            queue,
+            &config.palette,
+            config.palette_rotation,
+            config.palette_squeeze,
+            config.palette_squeeze_mode,
+            config.palette_squeeze_falloff,
+            config.palette_log_strength,
+            config.palette_reverse,
+        );
+        let mut escape = crate::escape::EscapeRenderer::new(device, n, n);
+        let mut guard = 0;
+        loop {
+            let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("footprint") });
+            let settled = escape.render(device, queue, &mut enc, &config.escape, flame.palette_view(), flame.palette_generation());
+            queue.submit(std::iter::once(enc.finish()));
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            if settled {
+                break;
+            }
+            guard += 1;
+            assert!(guard < 10_000, "the footprint did not settle");
+        }
+        (config.escape, escape, flame)
+    }
+
+    /// The f64 Mandelbrot at a footprint pixel, as the escape template
+    /// iterates it (z0 = 0, dz0 = 0, escape on |z|^2 > bailout): the
+    /// distance estimate in pixels and the smooth count, or None inside.
+    fn mandelbrot_px(esc: &crate::config::escape::EscapeConfig, n: u32, px: u32, py: u32) -> Option<(f64, f64)> {
+        let span = 4.0 / 2f64.powf(esc.zoom_log2);
+        let pix = span / n as f64;
+        let (cx, cy) = esc.center_f64();
+        let c = (cx + ((px as f64 + 0.5) / n as f64 - 0.5) * span, cy - ((py as f64 + 0.5) / n as f64 - 0.5) * span);
+        let (mut zx, mut zy, mut dx, mut dy) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+        for it in 0..esc.max_iter {
+            (dx, dy) = (2.0 * (zx * dx - zy * dy) + 1.0, 2.0 * (zx * dy + zy * dx));
+            (zx, zy) = (zx * zx - zy * zy + c.0, 2.0 * zx * zy + c.1);
+            if zx * zx + zy * zy > esc.bailout as f64 {
+                let r = (zx * zx + zy * zy).sqrt();
+                let de = r * r.ln() / ((dx * dx + dy * dy).sqrt() * pix);
+                let mu = (it + 1) as f64 + 1.0 - r.ln().ln() / 2f64.ln();
+                return Some((de, mu));
+            }
+        }
+        None
+    }
+
+    /// A terrain footprint writes its height source into the height
+    /// field's green channel: the distance estimate in pixels, the smooth
+    /// escape count, and the interior's sentinel -- against the f64
+    /// Mandelbrot at the same pixels.
+    #[test]
+    fn a_footprint_writes_the_terrain_height_source() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let n = 96u32;
+        use crate::config::escape::TerrainSource;
+        for source in [TerrainSource::Distance, TerrainSource::EscapeCount] {
+            let (esc, escape, _flame) = footprint(&device, &queue, n, source);
+            let hf: Vec<[f32; 4]> =
+                bytemuck::cast_slice(&read_texture(&device, &queue, escape.height_texture_for_test(), 0, n, n, 16)).to_vec();
+            let colour: Vec<[f32; 4]> =
+                bytemuck::cast_slice(&read_texture(&device, &queue, escape.output_texture_for_test(), 0, n, n, 16)).to_vec();
+            // Escaped or not by COVERAGE and the sentinel, as the ingest
+            // reads it: an interior pixel the colouring does not draw
+            // keeps a height of 0, not the sentinel.
+            let (mut escaped, mut worst, mut off, mut wrong_side, mut early) = (0usize, 0.0f64, 0usize, 0usize, 0usize);
+            for py in 0..n {
+                for px in 0..n {
+                    let k = (py * n + px) as usize;
+                    let g = hf[k][1] as f64;
+                    let gpu_interior = !(colour[k][3] > 0.0) || g <= -1e29;
+                    match (mandelbrot_px(&esc, n, px, py), gpu_interior) {
+                        (Some((de, mu)), false) => {
+                            escaped += 1;
+                            // The precision check where an f32 orbit is
+                            // still the f64 one: pixels that escape early
+                            // and lie at least a hundredth of a pixel out.
+                            // Closer, the two orbits part: |dz| runs past
+                            // 1e8 and f32's distance is off by percents
+                            // (2.9x at 1e-6 px), and the count by up to
+                            // two iterations -- where a distance height
+                            // has long since saturated to the plateau.
+                            if mu < 200.0 && de > 0.01 {
+                                early += 1;
+                                let want = if source == TerrainSource::Distance { de } else { mu };
+                                let rel = (g - want).abs() / want.abs().max(1e-6);
+                                worst = worst.max(rel);
+                                if rel > 1e-3 {
+                                    off += 1;
+                                }
+                            }
+                        }
+                        (None, true) => {}
+                        _ => wrong_side += 1,
+                    }
+                }
+            }
+            println!(
+                "{source:?}: {escaped} escaped pixels, {early} early and clear of the set, of which {off} more than 0.1% off \
+                 (worst {worst:.2e}), {wrong_side} on the other side of the set"
+            );
+            assert!(early > 1000, "{early}");
+            assert!(off * 100 < early, "{off} of {early} off");
+            assert!(wrong_side * 200 < (n * n) as usize, "{wrong_side} disagree on escaping");
+        }
+    }
+
+    /// The ingest turns a footprint into the tile: heights the transform
+    /// of the height source (H exp(-d / w) for distance), the interior a
+    /// plateau at H in the background colour, the albedo the picture's
+    /// colour -- every row flipped, the picture's top the tile's north.
+    #[test]
+    fn the_ingest_makes_the_tile_from_a_footprint() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let n = 96u32;
+        let (_esc, escape, _flame) = footprint(&device, &queue, n, crate::config::escape::TerrainSource::Distance);
+        let colour: Vec<[f32; 4]> =
+            bytemuck::cast_slice(&read_texture(&device, &queue, escape.output_texture_for_test(), 0, n, n, 16)).to_vec();
+        let hf: Vec<[f32; 4]> =
+            bytemuck::cast_slice(&read_texture(&device, &queue, escape.height_texture_for_test(), 0, n, n, 16)).to_vec();
+        let ingest = TerrainIngest { source: 8, height: 6.0, de_width: 0.7, hole: false, background: [0.1, 0.2, 0.3] };
+        let mut r = TerrainRenderer::new(&device, 8, 8);
+        r.set_tile_from_escape(&device, &queue, escape.output_view(), escape.height_view(), n, n, &ingest);
+        let (ht, at) = r.tile_textures_for_test().unwrap();
+        let heights: Vec<f32> = bytemuck::cast_slice(&read_texture(&device, &queue, ht, 0, n, n, 4)).to_vec();
+        let albedo_bits: Vec<u16> = bytemuck::cast_slice(&read_texture(&device, &queue, at, 0, n, n, 8)).to_vec();
+        let (mut worst_h, mut worst_a, mut plateau) = (0.0f32, 0.0f32, 0usize);
+        for j in 0..n {
+            for i in 0..n {
+                let src = ((n - 1 - j) * n + i) as usize;
+                let dst = (j * n + i) as usize;
+                let (c, g) = (colour[src], hf[src][1]);
+                let interior = !(c[3] > 0.0) || g <= -1e29;
+                let (want_h, want_a) = if interior {
+                    plateau += 1;
+                    (6.0, [0.1, 0.2, 0.3, 1.0])
+                } else {
+                    (6.0 * (-g.max(0.0) / 0.7).exp(), [c[0], c[1], c[2], 1.0])
+                };
+                worst_h = worst_h.max((heights[dst] - want_h).abs());
+                for k in 0..4 {
+                    let a = half::f16::from_bits(albedo_bits[dst * 4 + k]).to_f32();
+                    worst_a = worst_a.max((a - want_a[k]).abs() / want_a[k].abs().max(1.0));
+                }
+            }
+        }
+        println!("ingest: worst height error {worst_h:.2e}, worst albedo error {worst_a:.2e}, {plateau} plateau samples");
+        assert!(plateau > 0 && plateau < (n * n) as usize, "{plateau}");
+        assert!(worst_h < 1e-5, "{worst_h}");
+        assert!(worst_a < 1e-3, "{worst_a}");
     }
 
     /// The T1 measurement: steps per ray and time at 1080p, on the four

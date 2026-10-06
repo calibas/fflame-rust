@@ -746,6 +746,62 @@ terrain.**
   - The gallery modules build without the terrain path, and render a
     terrain config as its 2D picture.
   - An `escape-terrain-*` visual baseline.
+- **Built in four steps:** T2a the footprint into a tile, T2b the
+  orchestrator, camera mapping, `render_with` and export, T2c the app
+  and panel, T2d fly mode.
+- **T2a as built** (2026-10-05): the footprint writes the height
+  source, and the ingest makes the tile.
+  - **The config.** `EscapeConfig.terrain` (`TerrainConfig`,
+    skip-if-default): `enabled`, `source` (Distance, the default;
+    EscapeCount; Relief), `height` (0.06 of the footprint), `de_width`
+    (1/150), `resolution` (2048), `interior` (Plateau, the default;
+    Hole). `EscapeConfig::wants_derivative` is the relief's or the
+    terrain's, and it is what all three derivative decisions now read.
+  - **The height source is written into G, not B** as section 5
+    planned. G is already the relief's source channel, and
+    `esc_relief_source` already chooses what goes there, so the
+    terrain's sources became two more of its codes (8 distance, 9 the
+    smooth count). B stays the relief's stored slope. No new pass, no
+    new binding, and nothing changes while the terrain is off.
+    - **Distance** is `r·ln r / |dz|` with `dz` per render pixel: the
+      estimate comes out in pixels, which are the tile's cells, so
+      `w` is in cells too. A formula without a derivative falls back
+      to the count in the shader; T2b must also tell the ingest so
+      (`derivative_gap`), or it reads a count as a distance.
+    - **A pixel that did not escape** writes −1e30, but only where the
+      colouring draws the interior. Otherwise the interior is the
+      pixels with no coverage (alpha 0). The ingest and the gate read
+      it both ways.
+  - **While the terrain is on**, the renderer keeps the full height
+    field and does not run the 2D relief shade in the resolve: the
+    terrain is lit in 3D.
+  - **The ingest** (`TerrainRenderer::set_tile_from_escape`, two
+    passes): the source's range over the escaped pixels (atomic
+    min/max on an order-preserving float encoding), then heights in
+    [0, H] and the albedo.
+    - Distance: `H·exp(−d/w)`. Count: a log curve over the range.
+      Relief: linear over the range.
+    - The interior: a plateau at H in the background colour, or a hole
+      (the slab's floor, albedo alpha 0).
+    - Rows are flipped: the picture's top is the tile's north.
+  - **Not yet:** the lake interior. It needs a material, so it comes
+    with T3's GGX. The supersample of 1 is forced by T2b's
+    orchestrator, which owns the footprint's render, not by the
+    renderer.
+  - **Gates, all passing:**
+    - The height source against the f64 Mandelbrot at 96²: every pixel
+      that escapes within 200 iterations and lies at least 0.01 px
+      outside the set agrees to 0.1% (distance worst 5.2e-4, count
+      2.3e-5). 6 pixels of 9,216 escape on one side and not the
+      other.
+      - Closer to the set, the f32 orbit parts from the f64 one: the
+        distance is off by percents (2.9x at 1e-6 px) and the count by
+        up to two iterations. A distance height has saturated to the
+        plateau there, so it does not show.
+    - The ingest against the same footprint: heights to 9.5e-7,
+      albedo to 4.9e-4 (the f16), interior pixels a plateau.
+    - All 111 escape baselines byte-identical; the shader dumps and
+      `release.py check` unchanged.
 
 **T3 — Path tracing, for terrains and IFS solids.**
 - **Built.**
