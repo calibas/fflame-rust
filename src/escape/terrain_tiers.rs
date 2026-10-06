@@ -9,10 +9,33 @@ use super::terrain::{TerrainRenderer, TerrainView};
 use super::EscapeRenderer;
 use crate::config::escape::RenderTier;
 use std::sync::{Arc, Mutex};
-use wgpu::{Device, Queue, TextureView};
+use wgpu::{Device, Queue, Texture, TextureView};
 
 /// The time a viewport frame gives the path tracer, in ms.
 const PATH_FRAME_MS: f32 = 12.0;
+
+/// The largest still drawn whole, as the side of a square of its pixels.
+/// A larger one is drawn in tiles of about this side, each copied into
+/// the picture as it finishes (plan T5's output tiling), so what a
+/// still's buffers hold -- about 80 bytes a pixel -- is bounded whatever
+/// its size; a 6000x4000 still ran a 6 GB card out of memory whole.
+pub const STILL_TILE_SIDE: u32 = 2048;
+
+/// How a still of `w` by `h` is split into tiles of about `side`: its
+/// columns and rows.
+fn still_grid(w: u32, h: u32, side: u32) -> (u32, u32) {
+    if w as u64 * h as u64 <= side as u64 * side as u64 {
+        return (1, 1);
+    }
+    (w.div_ceil(side), h.div_ceil(side))
+}
+
+/// The terrain renderer's size for a still of `w` by `h`: the still's
+/// own, or its largest tile's.
+pub fn still_tile(w: u32, h: u32) -> (u32, u32) {
+    let (cols, rows) = still_grid(w, h, STILL_TILE_SIDE);
+    (w.div_ceil(cols), h.div_ceil(rows))
+}
 
 /// What a terrain is drawn as, this frame.
 pub struct TierInputs<'a> {
@@ -38,6 +61,10 @@ pub struct TerrainTiers {
     /// completion of a batch, and its average.
     path_done: Arc<Mutex<Option<f32>>>,
     path_ms: Option<f32>,
+    /// A still drawn in tiles, put together, and whether it is the
+    /// output.
+    picture: Option<(Texture, TextureView)>,
+    showing_picture: bool,
 }
 
 impl TerrainTiers {
@@ -55,6 +82,7 @@ impl TerrainTiers {
     /// the view, the ground or the settings restarts both. True while
     /// there is more to do.
     pub fn viewport(&mut self, terrain: &mut TerrainRenderer, device: &Device, queue: &Queue, i: &TierInputs) -> bool {
+        self.showing_picture = false;
         if terrain.tile_version() == 0 {
             return false;
         }
@@ -92,11 +120,94 @@ impl TerrainTiers {
         terrain.path_samples() < target
     }
 
-    /// The export's picture: path traced at `samples` unless the tier is
-    /// Lit, which draws the antialiasing grid. In dispatches of a few
-    /// samples each, `wait` called between them (a blocking poll on the
-    /// desktop). Submits its own work.
-    pub fn still(&mut self, terrain: &mut TerrainRenderer, device: &Device, queue: &Queue, i: &TierInputs, mut wait: impl FnMut()) {
+    /// The export's picture, `frame` in pixels: path traced at `samples`
+    /// unless the tier is Lit, which draws the antialiasing grid. In
+    /// dispatches of a few samples each, `wait` called between them (a
+    /// blocking poll on the desktop). Sizes the renderer itself: to the
+    /// frame, or past [`STILL_TILE_SIDE`]² pixels to each tile in turn,
+    /// the tiles copied into a picture of the frame's size -- the same
+    /// pixels, since a tile's rays and samples are the frame's own.
+    /// Submits its own work.
+    pub fn still(
+        &mut self,
+        terrain: &mut TerrainRenderer,
+        device: &Device,
+        queue: &Queue,
+        i: &TierInputs,
+        frame: (u32, u32),
+        wait: impl FnMut(),
+    ) {
+        self.still_in_tiles(terrain, device, queue, i, frame, STILL_TILE_SIDE, wait);
+    }
+
+    /// [`Self::still`], in tiles of about `side`.
+    pub(crate) fn still_in_tiles(
+        &mut self,
+        terrain: &mut TerrainRenderer,
+        device: &Device,
+        queue: &Queue,
+        i: &TierInputs,
+        frame: (u32, u32),
+        side: u32,
+        mut wait: impl FnMut(),
+    ) {
+        self.showing_picture = false;
+        let (cols, rows) = still_grid(frame.0, frame.1, side);
+        if (cols, rows) == (1, 1) {
+            terrain.resize(device, frame.0, frame.1);
+            self.still_whole(terrain, device, queue, i, &mut wait);
+            return;
+        }
+        let (tw, th) = (frame.0.div_ceil(cols), frame.1.div_ceil(rows));
+        if self.picture.as_ref().is_none_or(|(p, _)| (p.width(), p.height()) != frame) {
+            if let Some((p, _)) = self.picture.take() {
+                p.destroy();
+            }
+            let p = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("Terrain Still"),
+                size: wgpu::Extent3d { width: frame.0, height: frame.1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba32Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let v = p.create_view(&wgpu::TextureViewDescriptor::default());
+            self.picture = Some((p, v));
+        }
+        for row in 0..rows {
+            for col in 0..cols {
+                let (ox, oy) = (col * tw, row * th);
+                if ox >= frame.0 || oy >= frame.1 {
+                    continue;
+                }
+                let (w, h) = (tw.min(frame.0 - ox), th.min(frame.1 - oy));
+                terrain.resize(device, w, h);
+                terrain.set_frame(frame, (ox, oy));
+                self.still_whole(terrain, device, queue, i, &mut wait);
+                let src = if self.showing_path { Some(terrain.output_texture()) } else { terrain.accumulated_texture() };
+                let (Some(src), Some((picture, _))) = (src, self.picture.as_ref()) else { continue };
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Terrain Still Tile") });
+                enc.copy_texture_to_texture(
+                    src.as_image_copy(),
+                    wgpu::TexelCopyTextureInfo {
+                        texture: picture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d { x: ox, y: oy, z: 0 },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                );
+                queue.submit(std::iter::once(enc.finish()));
+                wait();
+            }
+        }
+        self.showing_picture = true;
+    }
+
+    /// A still of the renderer's own size.
+    fn still_whole(&mut self, terrain: &mut TerrainRenderer, device: &Device, queue: &Queue, i: &TierInputs, wait: &mut impl FnMut()) {
         if i.tier == RenderTier::Lit {
             terrain.reset_accumulation();
             for jitter in EscapeRenderer::sample_grid(i.supersample.max(1)) {
@@ -143,10 +254,13 @@ impl TerrainTiers {
         self.path_ms
     }
 
-    /// What the tail reads: the path tracer's resolve when it is shown,
-    /// else the lit tier's accumulation once there is one, else the last
-    /// render.
-    pub fn output_view<'a>(&self, terrain: &'a TerrainRenderer) -> &'a TextureView {
+    /// What the tail reads: a still drawn in tiles, put together; the
+    /// path tracer's resolve when it is shown, else the lit tier's
+    /// accumulation once there is one, else the last render.
+    pub fn output_view<'a>(&'a self, terrain: &'a TerrainRenderer) -> &'a TextureView {
+        if let (true, Some((_, v))) = (self.showing_picture, self.picture.as_ref()) {
+            return v;
+        }
         if self.showing_path {
             return terrain.output_view();
         }
@@ -156,5 +270,24 @@ impl TerrainTiers {
     /// Path-traced samples so far, and whether the picture is theirs.
     pub fn path_progress(&self, terrain: &TerrainRenderer) -> (u32, bool) {
         (terrain.path_samples(), self.showing_path)
+    }
+
+    /// The texture `output_view` is a view of, for a test to read back.
+    #[cfg(test)]
+    pub(crate) fn output_texture_for_test<'a>(&'a self, terrain: &'a TerrainRenderer) -> &'a Texture {
+        if let (true, Some((p, _))) = (self.showing_picture, self.picture.as_ref()) {
+            return p;
+        }
+        if self.showing_path {
+            return terrain.output_texture();
+        }
+        terrain.accumulated_texture().unwrap_or(terrain.output_texture())
+    }
+
+    /// Free the GPU memory now: dropping frees nothing on WebGPU.
+    pub fn destroy(&self) {
+        if let Some((p, _)) = &self.picture {
+            p.destroy();
+        }
     }
 }

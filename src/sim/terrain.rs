@@ -180,11 +180,11 @@ impl SimTerrain {
 
     /// The export's picture: path traced at `samples` unless the tier is
     /// Lit. `wait` between batches.
-    pub fn render_still(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, wait: impl FnMut()) {
+    pub fn render_still(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, frame: (u32, u32), wait: impl FnMut()) {
         let (gw, gh) = self.grid;
         let view = |jitter| sim_terrain_view(config, gw, gh, jitter);
         let inputs = self.inputs(config, &view);
-        self.tiers.still(&mut self.terrain, device, queue, &inputs, wait);
+        self.tiers.still(&mut self.terrain, device, queue, &inputs, frame, wait);
     }
 
     pub fn output_view(&self) -> &TextureView {
@@ -203,6 +203,7 @@ impl SimTerrain {
 
     pub fn destroy(&self) {
         self.terrain.destroy();
+        self.tiers.destroy();
     }
 }
 

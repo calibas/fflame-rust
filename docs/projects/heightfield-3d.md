@@ -1499,6 +1499,35 @@ terrain.**
 - volumetric sun shafts;
 - presets.
 
+**T5 as built.**
+- **Output tiling, first (2026-10-06): it was a crash.** A terrain still
+  of 6000x4000 panicked on this machine's 6 GB card: the renderer held
+  the whole frame -- the geometry record, the output, the lit tier's
+  pair and the path tracer's sum, about 80 bytes a pixel, 1.9 GB --
+  beside the tail's own, and an allocation failed inside the export's
+  out-of-memory scope, after which a view of the failed texture was a
+  validation error, which wgpu treats as fatal. 5000x3500 worked.
+  - **A still past 2048² pixels is drawn in tiles of about 2048 a side**
+    (`STILL_TILE_SIDE`), each copied into a picture of the frame's size
+    as it finishes, so what a still's buffers hold is bounded whatever
+    its size: a 6000x4000 still holds 4 MP of them plus the 384 MB
+    picture. The still sizes the renderer itself; the exports (the
+    desktop's, the browser's, a video's frames) make it at the tile's
+    size (`still_tile`), and the allocation check asks about the tile.
+  - **A tile is the frame's pixels.** The uniform carries the frame's
+    size, for the rays, and the tile -- its origin in the frame and its
+    size -- for the buffers (`set_frame`); the path tracer keys a pixel's
+    random numbers by its place in the frame (a `pt_tile` hook in the
+    shared core, the whole frame for a solid). So the tiles together are
+    the still drawn whole, bit for bit.
+  - **Gates:** `a_still_in_tiles_is_the_still_whole` -- lit and path
+    traced, with a lens, a frame split unevenly into 12 tiles, every
+    pixel identical. The seahorse at 3840x2160 exported in tiles is
+    identical to the untiled export of the build before. 6000x4000 now
+    exports (256 samples, path traced, 90 s); a simulation's terrain at
+    5000x3000 too. The baselines, `release.py check` and the wasm build
+    pass; the viewport is never tiled.
+
 ## 10. The user's answers (2026-10-05)
 
 1. **The camera.** The escape solid camera, not the flame camera. The

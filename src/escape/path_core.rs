@@ -15,7 +15,11 @@
 //! - `pt_sample(px, py)`: one sample of a pixel, as (radiance times
 //!   coverage, coverage) -- the camera ray and the first surface are the
 //!   geometry's, since what coverage and fog mean differs between them,
-//!   and the rest of the path is [`PT_CORE_WGSL`]'s `pt_path`.
+//!   and the rest of the path is [`PT_CORE_WGSL`]'s `pt_path`;
+//! - `pt_tile()`: the part of the frame the sum holds -- its origin in
+//!   the frame's pixels and its size -- which is the whole frame
+//!   (`params.width` by `params.height`) unless a still is drawn in
+//!   tiles.
 //!
 //! and the rig's accessors (`ifs_fov`, `ifs_forward`, ..., the lights),
 //! which both get from the same text (`assembler::IFS_RIG`'s family).
@@ -518,25 +522,30 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
 }
 
 // Each invocation adds its pixel's samples, in order, to the running
-// sum: the same bits however the samples are split into dispatches.
+// sum: the same bits however the samples are split into dispatches --
+// and, its random numbers keyed by its place in the whole frame, however
+// the frame is split into tiles.
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let tile = pt_tile();
     let y = gid.y + pt.band.x;
-    if (gid.x >= params.width || gid.y >= pt.band.y || y >= params.height) {
+    if (gid.x >= tile.z || gid.y >= pt.band.y || y >= tile.w) {
         return;
     }
-    let idx = y * params.width + gid.x;
+    let idx = y * tile.z + gid.x;
+    let fx = tile.x + gid.x;
+    let fy = tile.y + y;
     pt_scene_begin();
     var sum = pt_sum[idx];
     if (pt.sample_base == 0u) {
         sum = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
-    let pixel = pt_hash(idx * 0x9E3779B9u + pt.seed);
+    let pixel = pt_hash((fy * params.width + fx) * 0x9E3779B9u + pt.seed);
     for (var s = 0u; s < pt.samples; s = s + 1u) {
         pt_seed = pixel;
         pt_index = pt.sample_base + s;
         pt_dim = 0u;
-        sum = sum + pt_sample(gid.x, y);
+        sum = sum + pt_sample(fx, fy);
     }
     pt_sum[idx] = sum;
 }

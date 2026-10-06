@@ -830,9 +830,9 @@ impl EscapeTerrain {
     /// unless the tier is Lit, which draws the antialiasing grid. In
     /// dispatches of a few samples each, `wait` called between them (a
     /// blocking poll on the desktop). Submits its own work.
-    pub fn render_still(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, wait: impl FnMut()) {
+    pub fn render_still(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, frame: (u32, u32), wait: impl FnMut()) {
         let view = |jitter| terrain_view(config, jitter);
-        self.tiers.still(&mut self.terrain, device, queue, &tier_inputs(config, &view), wait);
+        self.tiers.still(&mut self.terrain, device, queue, &tier_inputs(config, &view), frame, wait);
     }
 
     /// Draw the terrain once, its rays offset by `jitter` within their
@@ -883,6 +883,7 @@ impl EscapeTerrain {
     pub fn destroy(&self) {
         self.footprint.destroy();
         self.terrain.destroy();
+        self.tiers.destroy();
     }
 }
 
