@@ -41,6 +41,9 @@ pub mod formulas;
 pub mod presets;
 pub mod diag;
 pub mod renderer;
+#[cfg(feature = "terrain")]
+pub mod footprint;
+#[cfg(feature = "terrain")]
 pub mod terrain;
 
 pub use renderer::{DerivativeGap, EscapeRenderer, UsableDepth};

@@ -7314,11 +7314,17 @@ fn ifs_rig(lens: Option<&str>) -> String {
         .replace("//__LENS_APPLY_RAY__", &apply.join("\n"))
 }
 
-/// The rig without a lens, for the terrain passes
-/// (`super::terrain`), which light with the same text so a terrain and
-/// an IFS solid cannot disagree about what a light does.
-pub(crate) fn ifs_rig_plain() -> String {
-    ifs_rig(None)
+/// The rig for the terrain passes (`super::terrain`), which light with
+/// the same text so a terrain and an IFS solid cannot disagree about
+/// what a light does. In place of a lens, the ray moves by the
+/// terrain's sub-pixel jitter: its antialiasing is accumulation, where
+/// mode D's is a supersampled grid.
+#[cfg(feature = "terrain")]
+pub(crate) fn ifs_rig_jittered() -> String {
+    IFS_RIG.trim().replace(
+        "//__LENS_APPLY_RAY__",
+        "uv = uv + params.jitter / vec2<f32>(f32(params.width), f32(params.height));",
+    )
 }
 
 pub fn assemble_ifs(def: &IfsDef, coloring: &IfsColoringDef, beam: u32) -> String {

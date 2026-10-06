@@ -1811,6 +1811,18 @@ pub struct TerrainConfig {
     pub resolution: u32,
     #[serde(default, skip_serializing_if = "is_default_terrain_interior")]
     pub interior: TerrainInterior,
+    /// How dark a shadowed surface goes; 0 traces no shadow rays. Mode
+    /// D's Shadows, which are its formula's parameter.
+    #[serde(default = "default_terrain_shadow", skip_serializing_if = "is_default_terrain_shadow")]
+    pub shadow: f32,
+    /// How sharply a shadow's edge falls off: the inverse of the
+    /// light's size, as mode D's Shadow Sharpness.
+    #[serde(default = "default_terrain_shadow_sharpness", skip_serializing_if = "is_default_terrain_shadow_sharpness")]
+    pub shadow_sharpness: f32,
+    /// How far occlusion looks for the slopes that enclose a point, as
+    /// a fraction of the footprint. About the distance flanks' width.
+    #[serde(default = "default_terrain_occlusion", skip_serializing_if = "is_default_terrain_occlusion")]
+    pub occlusion: f32,
 }
 
 fn default_terrain_height() -> f32 {
@@ -1831,6 +1843,24 @@ fn default_terrain_resolution() -> u32 {
 fn is_default_terrain_resolution(v: &u32) -> bool {
     *v == default_terrain_resolution()
 }
+fn default_terrain_shadow() -> f32 {
+    0.7
+}
+fn is_default_terrain_shadow(v: &f32) -> bool {
+    *v == default_terrain_shadow()
+}
+fn default_terrain_shadow_sharpness() -> f32 {
+    12.0
+}
+fn is_default_terrain_shadow_sharpness(v: &f32) -> bool {
+    *v == default_terrain_shadow_sharpness()
+}
+fn default_terrain_occlusion() -> f32 {
+    0.006
+}
+fn is_default_terrain_occlusion(v: &f32) -> bool {
+    *v == default_terrain_occlusion()
+}
 fn is_default_terrain_source(v: &TerrainSource) -> bool {
     *v == TerrainSource::default()
 }
@@ -1847,6 +1877,9 @@ impl Default for TerrainConfig {
             de_width: default_terrain_de_width(),
             resolution: default_terrain_resolution(),
             interior: TerrainInterior::default(),
+            shadow: default_terrain_shadow(),
+            shadow_sharpness: default_terrain_shadow_sharpness(),
+            occlusion: default_terrain_occlusion(),
         }
     }
 }
@@ -1855,18 +1888,29 @@ impl TerrainConfig {
     pub fn is_default(v: &TerrainConfig) -> bool {
         *v == TerrainConfig::default()
     }
-    /// Whether the footprint render needs the derivative: the
-    /// distance source.
-    pub fn wants_derivative(&self) -> bool {
-        self.enabled && self.source == TerrainSource::Distance
-    }
 }
 
 impl EscapeConfig {
     /// Whether the iterate pass needs the derivative orbit: the
     /// relief's analytic slopes, or the terrain's distance.
     pub fn wants_derivative(&self) -> bool {
-        self.shading.wants_derivative() || self.terrain.wants_derivative()
+        self.shading.wants_derivative() || (self.terrain_active() && self.terrain.source == TerrainSource::Distance)
+    }
+
+    /// Whether the 3D terrain is in force: switched on, for a formula
+    /// that draws a plane (a solid IFS is already 3D, mode D's own),
+    /// in a build that carries it. The gallery modules are built
+    /// without the `terrain` feature (plan H2) and render a terrain
+    /// config as its 2D picture, relief and all.
+    pub fn terrain_active(&self) -> bool {
+        #[cfg(feature = "terrain")]
+        {
+            self.terrain.enabled && crate::escape::ifs::get_ifs(&self.formula).is_none_or(|d| !d.solid)
+        }
+        #[cfg(not(feature = "terrain"))]
+        {
+            false
+        }
     }
 }
 
