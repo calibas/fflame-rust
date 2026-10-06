@@ -194,6 +194,10 @@ pub fn render_escape_content(
         }
         if d.solid {
             show_solid_camera(ui, config_manager, &esc, true);
+            // The path tracer (heightfield plan T3c): Lit by default, so
+            // a solid renders as it always has until asked otherwise.
+            ui.separator();
+            show_path_tracing(ui, config_manager, &esc, ConfigPath::EscapeSolidTier, esc.solid_tier, "solid_tier");
         }
     }
 
@@ -1475,6 +1479,82 @@ fn suggested_coloring_scale(coloring: &str, max_iter: u32) -> f32 {
 /// The solid camera's controls. `with_target` is mode D's: a terrain's
 /// target is the view's own centre (heightfield plan, T2b), so it has
 /// none to edit here.
+/// How a 3D view is rendered -- the lit tier, the path tracer, or both by
+/// turns -- and, when it path traces, the path tracer's settings: shared
+/// by a terrain and a solid (`escape.path`), each with its own tier.
+fn show_path_tracing(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    esc: &crate::config::escape::EscapeConfig,
+    tier_path: ConfigPath,
+    tier: crate::config::escape::RenderTier,
+    id: &str,
+) {
+    use crate::config::escape::RenderTier;
+    let pt = &esc.path;
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.terrain_tier"));
+        let label = |s: RenderTier| match s {
+            RenderTier::Auto => t!("escape_panel.terrain_tier_auto"),
+            RenderTier::Lit => t!("escape_panel.terrain_tier_lit"),
+            RenderTier::PathTraced => t!("escape_panel.terrain_tier_path"),
+        };
+        egui::ComboBox::from_id_salt(id)
+            .selected_text(label(tier))
+            .show_ui(ui, |ui| {
+                for s in RenderTier::ALL {
+                    if ui.selectable_label(tier == s, label(s)).clicked() && s != tier {
+                        let _ = config_manager.update_param(tier_path.clone(), ConfigValue::String(s.as_str().to_string()));
+                    }
+                }
+            })
+            .response
+            .on_hover_text(t!("escape_panel.terrain_tier_tip"));
+    });
+    if tier == RenderTier::Lit {
+        return;
+    }
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.terrain_samples"));
+        let mut v = pt.samples;
+        if ui
+            .add(egui::Slider::new(&mut v, 1..=4096).logarithmic(true))
+            .on_hover_text(t!("escape_panel.terrain_samples_tip"))
+            .changed()
+        {
+            let _ = config_manager.update_param(ConfigPath::EscapePathSamples, ConfigValue::UInt(v));
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.terrain_bounces"));
+        let mut v = pt.bounces;
+        if ui
+            .add(egui::Slider::new(&mut v, 0..=8))
+            .on_hover_text(t!("escape_panel.terrain_bounces_tip"))
+            .changed()
+        {
+            let _ = config_manager.update_param(ConfigPath::EscapePathBounces, ConfigValue::UInt(v));
+        }
+    });
+    // The sky, the material and the lens.
+    for (label, tip, path, value, range) in [
+        ("escape_panel.terrain_environment", "escape_panel.terrain_environment_tip", ConfigPath::EscapePathEnvironment, pt.environment, 0.0..=4.0),
+        ("escape_panel.terrain_gloss", "escape_panel.terrain_gloss_tip", ConfigPath::EscapePathGloss, pt.gloss, 0.0..=1.0),
+        ("escape_panel.terrain_roughness", "escape_panel.terrain_roughness_tip", ConfigPath::EscapePathRoughness, pt.roughness, 0.02..=1.0),
+        ("escape_panel.terrain_emission", "escape_panel.terrain_emission_tip", ConfigPath::EscapePathEmission, pt.emission, 0.0..=4.0),
+        ("escape_panel.terrain_aperture", "escape_panel.terrain_aperture_tip", ConfigPath::EscapePathAperture, pt.aperture, 0.0..=0.2),
+        ("escape_panel.terrain_focus", "escape_panel.terrain_focus_tip", ConfigPath::EscapePathFocus, pt.focus, 0.0..=8.0),
+    ] {
+        ui.horizontal(|ui| {
+            ui.label(t!(label));
+            let mut v = value;
+            if ui.add(egui::Slider::new(&mut v, range)).on_hover_text(t!(tip)).changed() {
+                let _ = config_manager.update_param(path, v.into());
+            }
+        });
+    }
+}
+
 fn show_solid_camera(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
@@ -1693,53 +1773,7 @@ fn show_terrain_section(
             // How it is rendered: the lit tier, the path tracer, or both
             // by turns (plan section 8).
             ui.separator();
-            ui.horizontal(|ui| {
-                use crate::config::escape::TerrainTier;
-                ui.label(t!("escape_panel.terrain_tier"));
-                let label = |s: TerrainTier| match s {
-                    TerrainTier::Auto => t!("escape_panel.terrain_tier_auto"),
-                    TerrainTier::Lit => t!("escape_panel.terrain_tier_lit"),
-                    TerrainTier::PathTraced => t!("escape_panel.terrain_tier_path"),
-                };
-                egui::ComboBox::from_id_salt("terrain_tier")
-                    .selected_text(label(t.tier))
-                    .show_ui(ui, |ui| {
-                        for s in TerrainTier::ALL {
-                            if ui.selectable_label(t.tier == s, label(s)).clicked() && s != t.tier {
-                                let _ = config_manager.update_param(
-                                    ConfigPath::EscapeTerrainTier,
-                                    ConfigValue::String(s.as_str().to_string()),
-                                );
-                            }
-                        }
-                    })
-                    .response
-                    .on_hover_text(t!("escape_panel.terrain_tier_tip"));
-            });
-            if t.tier != crate::config::escape::TerrainTier::Lit {
-                ui.horizontal(|ui| {
-                    ui.label(t!("escape_panel.terrain_samples"));
-                    let mut v = t.samples;
-                    if ui
-                        .add(egui::Slider::new(&mut v, 1..=4096).logarithmic(true))
-                        .on_hover_text(t!("escape_panel.terrain_samples_tip"))
-                        .changed()
-                    {
-                        let _ = config_manager.update_param(ConfigPath::EscapeTerrainSamples, ConfigValue::UInt(v));
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.label(t!("escape_panel.terrain_bounces"));
-                    let mut v = t.bounces;
-                    if ui
-                        .add(egui::Slider::new(&mut v, 0..=8))
-                        .on_hover_text(t!("escape_panel.terrain_bounces_tip"))
-                        .changed()
-                    {
-                        let _ = config_manager.update_param(ConfigPath::EscapeTerrainBounces, ConfigValue::UInt(v));
-                    }
-                });
-            }
+            show_path_tracing(ui, config_manager, esc, ConfigPath::EscapeTerrainTier, t.tier, "terrain_tier");
             // How it is lit: the Solid Lighting panel's lights, world-
             // fixed, with these.
             ui.separator();
@@ -1783,27 +1817,6 @@ fn show_terrain_section(
                 false,
                 t!("escape_panel.terrain_occlusion_tip").to_string(),
             );
-            if t.tier != crate::config::escape::TerrainTier::Lit {
-                slider(
-                    ui,
-                    t!("escape_panel.terrain_environment").to_string(),
-                    ConfigPath::EscapeTerrainEnvironment,
-                    t.environment,
-                    0.0..=4.0,
-                    false,
-                    t!("escape_panel.terrain_environment_tip").to_string(),
-                );
-                // The material and the lens, the path tracer's alone.
-                for (label, tip, path, value, range, log) in [
-                    ("escape_panel.terrain_gloss", "escape_panel.terrain_gloss_tip", ConfigPath::EscapeTerrainGloss, t.gloss, 0.0..=1.0, false),
-                    ("escape_panel.terrain_roughness", "escape_panel.terrain_roughness_tip", ConfigPath::EscapeTerrainRoughness, t.roughness, 0.02..=1.0, false),
-                    ("escape_panel.terrain_emission", "escape_panel.terrain_emission_tip", ConfigPath::EscapeTerrainEmission, t.emission, 0.0..=4.0, false),
-                    ("escape_panel.terrain_aperture", "escape_panel.terrain_aperture_tip", ConfigPath::EscapeTerrainAperture, t.aperture, 0.0..=0.2, false),
-                    ("escape_panel.terrain_focus", "escape_panel.terrain_focus_tip", ConfigPath::EscapeTerrainFocus, t.focus, 0.0..=8.0, false),
-                ] {
-                    slider(ui, t!(label).to_string(), path, value, range, log, t!(tip).to_string());
-                }
-            }
             // How far it reaches, and how finely it is sampled.
             ui.separator();
             slider(

@@ -1167,10 +1167,12 @@ terrain.**
     would expect of a horizon. A separate march would add noise and
     nothing else. A coloured fog, or sun shafts, would need the march
     (T5).
-  - **Config:** `gloss` (0.04, a dielectric's: stone, varnish),
-    `roughness` (0.5), `emission` (0), `aperture` (0), `focus` (0, the
-    target); the panel's Gloss, Roughness, Glow, Aperture and Focus,
-    shown when the tier path traces. All five animate.
+  - **Config:** `gloss` (0.04, a dielectric's: stone, varnish --
+    **reverted to 0 in T3c**, below), `roughness` (0.5), `emission` (0),
+    `aperture` (0), `focus` (0, the target); the panel's Gloss,
+    Roughness, Glow, Aperture and Focus, shown when the tier path traces.
+    All five animate. (T3c moved them to `escape.path` and put the lens
+    in the target's terms.)
   - **Gates, all passing:**
     - **Glow alone** (no light, no sky) is the albedo times the
       emission, worst error 0.
@@ -1189,6 +1191,116 @@ terrain.**
     the target sharp and the near and far ground soft; `glow.png`
     (emission 0.6, sky light 0.3), the filaments lit from within. Each
     about 6 s at 1080p and 256 samples: the coat costs little.
+- **T3c as built** (2026-10-06): mode D's solids path traced, on a core
+  the terrain now shares.
+  - **The core** ([src/escape/path_core.rs](../../src/escape/path_core.rs)):
+    the settings (`path_settings(config, target)`), the uniform (with a
+    row band), the WGSL -- the random stream, the lens, the coat, and
+    `pt_path`, the integrator from a path's first surface on -- and
+    `PathSum`, the per-pixel sum and its resolve. A geometry supplies
+    `pt_eye`, `pt_scene_begin`, `pt_scene_next` (the surface a ray
+    leaving a surface reaches, its normal on the side the ray sees),
+    `pt_scene_visible` and `pt_sample` (the camera ray, the first
+    surface, and what coverage and fog mean there). The terrain's
+    `PATH_WGSL` is now that and nothing else; its tests pass unchanged.
+  - **The solid's geometry** (`IFS_PATH_WGSL`, `assemble_ifs_path` in
+    the assembler): the walk's shader with its entry point replaced, so
+    the distance function, colouring, rig and a lens are the walk's own
+    text. The camera ray marches as the walk's does (ball entry to exit,
+    stopping within a pixel, the walk asked for a hundredth of one); a
+    ray leaving a surface leaves as the walk's shadow rays do (two pixels
+    off, from four out, a hit at a tenth of that or a ten-thousandth of
+    the ball). A surface is the walk's: `ifs_normal` at the pixel's
+    footprint, the albedo the relight's colouring, palette and
+    brightness. Fog is the rig's colour mix, after the clamp.
+  - **Normals stay outward.** The core used to turn every normal toward
+    the ray, which a height field's two-sided walls need. A solid's
+    grazing camera ray can stop within its tolerance BESIDE the
+    silhouette, where the gradient faces slightly away; turned round, it
+    sent the bounce into the solid. Measured on a cube in the furnace: 4%
+    of the energy lost, all at the silhouette. The turn now lives in the
+    terrain's surface, and the furnace is exact.
+  - **Banded** ([src/escape/renderer/solid_path.rs](../../src/escape/renderer/solid_path.rs)):
+    a sample is several walks, and a walk at 1080p is already hundreds of
+    milliseconds, so a sample is a pass of row bands under the walk's
+    watchdog budget, sized by the walk's own model with the path's
+    marches counted (`(1 + bounces) * (steps * (1 + lights) + 7)` per
+    pixel). The viewport's bands are a sixth of an export's. Where a
+    whole frame fits a dispatch, a dispatch takes several samples. The
+    resolve reads a part-done pass row by row (rows above the band have
+    one sample more), and a row no sample has reached is empty. It traces
+    display pixels: the jitter is the antialiasing, and a path-traced
+    export renders at supersample 1.
+  - **Tiers** (`escape.solid_tier`, `RenderTier`): **Lit by default**,
+    so every solid saved before this renders as it did. Auto walks while
+    anything moves and path traces once the walk settles, shown from 8
+    samples; Path Traced skips the walk and shows from the first band.
+    Any walk restarts the path tracer (whatever made it walk changed the
+    picture). `render_with` path traces at `samples` when the tier is
+    not Lit; so does the browser's export, which had never handed mode D
+    its flame (`set_ifs`, the coarse pass, the lights) and now does.
+  - **Config:** the path tracer's settings moved from the terrain to a
+    shared `escape.path` (`PathTraceConfig`): samples, bounces, sky
+    light, gloss, roughness, glow, aperture, focus -- ConfigPaths
+    `EscapePath*`, tracks `Escape.Path.*`. The terrain keeps its own
+    tier; the solid's is `EscapeSolidTier` (`Escape.SolidTier`). The
+    lens is in the TARGET's terms -- aperture a fraction of the distance
+    to it, focus a multiple of it -- so it keeps its look as the camera
+    dollies: a terrain's world is view widths with the target 1.3 away,
+    a solid's is the attractor's, the target the eye's offset away. The
+    panel's `show_path_tracing` block serves both sections.
+  - **Two decisions taken back, after the user's look in the app.** The
+    first solids were worse than the lit tier: grey, speckled dark faces.
+    - **The coat.** T3b's default 0.04 coat is physically fair, but most
+      of a fractal solid's visible surface is faces at a glance, where
+      Fresnel takes the coat to a mirror of the sky -- the background's
+      colour -- and its lobe, chosen at least a tenth of the time,
+      returns it weighted. Measured: the same render without the coat is
+      red where the coat's is grey. **Default gloss is 0**, Lambert
+      alone.
+    - **One light a surface.** Picking a light by power saved a fifth of
+      a sample, but a face only one of two lights reaches then reads all
+      of it or none, sample to sample: speckle over the lit faces. Back
+      to every light, with no shadow ray at shadow strength 0.
+    - And with no coat there is no draw to choose a lobe, so Lambert's
+      random stream is T3a's again: the T3a seahorse
+      (`output/heightfield_t3/seahorse-pt.png`, the user's reference for
+      "flawless") re-renders at 1080p and 256 samples to within ONE
+      level, mean 8e-7. Its baseline is back to that look.
+    - Coverage was suspected and ruled out: the path tracer's mean
+      coverage is the lit tier's (0.1007 against 0.1010 on the
+      tetrahedron), 99.9% inside patches the walk sees as solid, the
+      same at 96 and 384 march steps.
+  - **Gates, all passing:**
+    - **The furnace on a solid:** a cube (eight half-scale corner maps,
+      convex), albedo 1, sky L, no light: every pixel L exactly at 1 and
+      3 bounces.
+    - **Sun only:** the cube's face interiors equal the lit tier's
+      relight to 4e-5.
+    - **Bands:** three samples as whole frames and as one-row bands are
+      bit-identical sums, twice over.
+    - **Coverage:** the tetrahedron's, as above.
+    - Every solid formula and colouring assembles and validates, with
+      and without a lens.
+    - Baselines: `escape-ifs-solid-tetrahedron-path` (the preset, 16
+      samples, 800x600, about 8 s) new; `escape-terrain-seahorse` back to
+      Lambert. 114 escape baselines and `release.py check` pass.
+  - **Measured** (GTX 1660 SUPER, 1080p, two bounces, the presets' key
+    and fill): the tetrahedron about 1.3-1.6 s a sample against 0.34 s
+    for its lit render (0.4 s at no bounce), the Menger sponge about 4 s
+    against 0.7 s. The first bounce is the cost: diffuse rays wander into
+    the fractal's own structure, and a march near surfaces takes small
+    steps. 64 samples of the tetrahedron are clean, antialiased and
+    match the lit tier's colours.
+  - **Found on the way:** a config saved WITHOUT `version` loads as v0,
+    and the v2-to-v3 migration takes the render mode from the flame --
+    2D -- over a top-level one. The first visual config was written by
+    `serde_json` directly and loaded as a flame. Configs are saved
+    through `to_json` now; the loader is unchanged.
+  - **Open:** stratified samples (fewer for the same noise) would change
+    the noise of every path-traced picture, the seahorse's included --
+    the user's call. The loader could keep a top-level render mode it
+    finds.
 
 **T4 — Simulations.**
 - **Built.**

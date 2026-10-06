@@ -178,6 +178,10 @@
       "bytes": 11665,
       "sha256": "6fb96b097dcdadc224b0031d93ac98e8ba29b62a7898513815077dbf0aaa43d4"
     },
+    "escape-ifs-solid-tetrahedron-path.png": {
+      "bytes": 9047,
+      "sha256": "055f0286b93b7eb301bed17853c9a4b0b0746d43ce4920050076f8ec573b324b"
+    },
     "escape-julia-deep-perturbed.png": {
       "bytes": 8056,
       "sha256": "7884a689172148b78297dcd2fc46f83cc9c3be4137ae00ab925fa2f1cb78fc33"
@@ -515,8 +519,8 @@
       "sha256": "e0ac08e636ed97c01e0f8f805ea0ccbf4c34b59e1d9027127031d3fb6624ecff"
     },
     "escape-terrain-seahorse.png": {
-      "bytes": 17636,
-      "sha256": "c7874d16cfedf57502b42f80e4be9243c2ec9ec87573efe2a396640f75ec168f"
+      "bytes": 15521,
+      "sha256": "963cd66e86918868a37ab74654073b4b6741aa0f8a1d17120fa9faffc3910db8"
     },
     "escape-tetration-period.png": {
       "bytes": 11866,

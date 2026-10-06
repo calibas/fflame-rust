@@ -13389,6 +13389,55 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         }
     }
 
+    /// The shipped solids path traced (heightfield plan T3c), for
+    /// inspection and timing: each preset lit and path traced at 1080p,
+    /// written to `output/heightfield_t3c/`, with the config each was
+    /// rendered from.
+    #[test]
+    #[ignore = "needs a GPU; writes output/heightfield_t3c/"]
+    fn render_the_solids_path_traced_for_inspection() {
+        let dir = std::path::Path::new("output/heightfield_t3c");
+        std::fs::create_dir_all(dir).expect("output dir");
+        let (device, queue) = device();
+        let samples: u32 = std::env::var("T3C_SAMPLES").ok().and_then(|v| v.parse().ok()).unwrap_or(16);
+        let (w, h): (u32, u32) = (1920, 1080);
+        let only = std::env::var("T3C_ONLY").unwrap_or_default();
+        let bounces: Option<u32> = std::env::var("T3C_BOUNCES").ok().and_then(|v| v.parse().ok());
+        for preset in super::tests::solid_presets() {
+            let name = preset.flame.name.to_lowercase().replace(' ', "-");
+            if !name.contains(&only) {
+                continue;
+            }
+            for tier in [crate::config::escape::RenderTier::Lit, crate::config::escape::RenderTier::PathTraced] {
+                if tier == crate::config::escape::RenderTier::Lit && bounces.is_some() {
+                    continue;
+                }
+                let mut c = preset.clone();
+                c.escape.solid_tier = tier;
+                c.escape.path.samples = samples;
+                if let Some(b) = bounces {
+                    c.escape.path.bounces = b;
+                }
+                c.background_color = [0.55, 0.62, 0.72];
+                let t0 = std::time::Instant::now();
+                let job = crate::renderer::RenderJob::new(&c, w, h);
+                let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                    .expect("render");
+                let ms = t0.elapsed().as_secs_f64() * 1000.0;
+                let tag = tier.as_str();
+                let path = dir.join(format!("{name}-{tag}.png"));
+                image::save_buffer(&path, &out.rgba_data, w, h, image::ColorType::Rgba8).expect("write png");
+                // Through the saver, which writes the version: without
+                // one the loader reads a v0 file and its v3 migration
+                // takes the render mode from the flame -- 2D.
+                c.deterministic_rng = true;
+                std::fs::write(dir.join(format!("{name}-{tag}.fflame")), c.to_json().expect("json"))
+                    .expect("write config");
+                println!("{name} {tag}: {ms:.0} ms ({samples} samples when path traced) -> {}", path.display());
+            }
+        }
+    }
+
     /// The solid's camera angles, rendered for inspection: the shipped
     /// sponge preset as is, then banked, then rolled, then panned a
     /// third of the frame to the right. The roll must be a turn of

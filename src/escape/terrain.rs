@@ -1015,342 +1015,81 @@ const PATH_WGSL: &str = r#"
 @group(0) @binding(5) var<storage, read> hf_range: array<u32>;
 @group(0) @binding(6) var<storage, read> hf_sections: array<HfSection>;
 @group(0) @binding(7) var<storage, read> hf_nodes: array<HfNode>;
-@group(0) @binding(8) var<storage, read_write> pt_sum: array<vec4<f32>>;
-@group(0) @binding(9) var<uniform> pt: PtParams;
-
-struct PtParams {
-    // Samples already in the sum, and to add now.
-    sample_base: u32,
-    samples: u32,
-    // Bounces after the first surface; 0 is direct light only.
-    bounces: u32,
-    seed: u32,
-    // The environment's radiance.
-    env: vec4<f32>,
-    // x: a ray's share of a pixel per unit of distance (the albedo's
-    // filter), y: the firefly clamp, z: shadow strength, w: the cosine
-    // of a light's angular radius.
-    misc: vec4<f32>,
-    // x: the gloss coat's reflectance at normal incidence (0: Lambert
-    // alone), y: its roughness (GGX alpha is its square), z: emission,
-    // the albedo's own glow.
-    mat: vec4<f32>,
-    // x: the lens's radius (0: a pinhole), y: the focal plane's view
-    // depth.
-    lens: vec4<f32>,
-};
 
 //__HF_HELPERS__
 
 //__HF_ALBEDO__
 
-// The sample's random stream: a PCG step, seeded by hashing the pixel
-// and the sample.
-var<private> pt_state: u32;
-
-fn pt_hash(x: u32) -> u32 {
-    var v = x;
-    v = v ^ (v >> 16u);
-    v = v * 0x7feb352du;
-    v = v ^ (v >> 15u);
-    v = v * 0x846ca68bu;
-    v = v ^ (v >> 16u);
-    return v;
+// The height field's side of the path tracer (`path_core`). Rays start
+// at the eye, in the world's units.
+fn pt_eye() -> vec3<f32> {
+    return params.eye.xyz;
 }
 
-fn pt_rand() -> f32 {
-    pt_state = pt_state * 747796405u + 2891336453u;
-    var w = ((pt_state >> ((pt_state >> 28u) + 4u)) ^ pt_state) * 277803737u;
-    w = (w >> 22u) ^ w;
-    return f32(w >> 8u) * (1.0 / 16777216.0);
+fn pt_scene_begin() {
+    hf_load_range();
 }
 
-// An orthonormal frame about n (Duff et al. 2017), n its third column.
-fn pt_frame(n: vec3<f32>) -> mat3x3<f32> {
-    let s = select(-1.0, 1.0, n.z >= 0.0);
-    let a = -1.0 / (s + n.z);
-    let b = n.x * n.y * a;
-    return mat3x3<f32>(
-        vec3<f32>(1.0 + s * n.x * n.x * a, s * b, -s * n.x),
-        vec3<f32>(b, s + n.y * n.y * a, -n.y),
-        n,
-    );
-}
-
-// A direction about n, cosine-weighted: Lambert's importance.
-fn pt_cosine(n: vec3<f32>) -> vec3<f32> {
-    let r1 = pt_rand();
-    let r2 = pt_rand();
-    let phi = 6.283185307 * r1;
-    let r = sqrt(r2);
-    return pt_frame(n) * vec3<f32>(r * cos(phi), r * sin(phi), sqrt(max(1.0 - r2, 0.0)));
-}
-
-// A direction within the cone of `cos_max` about `axis`, uniformly.
-fn pt_cone(axis: vec3<f32>, cos_max: f32) -> vec3<f32> {
-    let c = 1.0 - pt_rand() * (1.0 - cos_max);
-    let s = sqrt(max(1.0 - c * c, 0.0));
-    let phi = 6.283185307 * pt_rand();
-    return pt_frame(axis) * vec3<f32>(s * cos(phi), s * sin(phi), c);
-}
-
-struct PtRay {
-    o: vec3<f32>,
-    d: vec3<f32>,
-};
-
-// The camera's ray through (px + 0.5 + jx, py + 0.5 + jy): `ifs_ray`
-// with the sample's own jitter -- and, with a lens, from a point of the
-// lens's disc toward where the pinhole's ray meets the focal plane, so
-// the focal plane is sharp and the rest blurs with its distance from it.
-fn pt_ray(px: u32, py: u32, jx: f32, jy: f32) -> PtRay {
-    let uv = (vec2<f32>(f32(px) + 0.5 + jx, f32(py) + 0.5 + jy)) / vec2<f32>(f32(params.width), f32(params.height))
-        - vec2<f32>(0.5, 0.5);
-    let aspect = f32(params.width) / f32(max(params.height, 1u));
-    let tan_half = tan(ifs_fov() * 0.5);
-    let d = normalize(ifs_forward() + ifs_right() * (uv.x * aspect * 2.0 * tan_half) - ifs_up() * (uv.y * 2.0 * tan_half));
-    var out: PtRay;
-    out.o = params.eye.xyz;
-    out.d = d;
-    if (pt.lens.x > 0.0) {
-        let focal = out.o + d * (pt.lens.y / max(dot(d, ifs_forward()), 1.0e-4));
-        let r = pt.lens.x * sqrt(pt_rand());
-        let phi = 6.283185307 * pt_rand();
-        out.o = out.o + ifs_right() * (r * cos(phi)) + ifs_up() * (r * sin(phi));
-        out.d = normalize(focal - out.o);
+// The surface a trace found: its shading normal (a wall's own on a
+// section's side), and its albedo filtered over the footprint of a ray
+// that has come `travelled + t` -- that times its share of a pixel.
+fn pt_surface(o: vec3<f32>, d: vec3<f32>, h: HfHit, travelled: f32) -> PtHit {
+    var out: PtHit;
+    out.hit = h.hit;
+    out.t = h.t;
+    if (!h.hit) {
+        return out;
     }
-    return out;
-}
-
-// The gloss coat: GGX's distribution, Smith's masking for one direction,
-// Schlick's Fresnel on a scalar reflectance.
-fn pt_ggx_d(nh: f32, a2: f32) -> f32 {
-    let k = nh * nh * (a2 - 1.0) + 1.0;
-    return a2 / (3.141592654 * k * k);
-}
-
-fn pt_g1(nx: f32, a2: f32) -> f32 {
-    return 2.0 * nx / (nx + sqrt(a2 + (1.0 - a2) * nx * nx));
-}
-
-fn pt_fresnel(f0: f32, c: f32) -> f32 {
-    let m = clamp(1.0 - c, 0.0, 1.0);
-    let m2 = m * m;
-    return f0 + (1.0 - f0) * m2 * m2 * m;
-}
-
-// A half-vector of the visible normals for view v, in the frame where
-// the normal is +z (Heitz 2018): sampling the reflection by the share of
-// it a viewer sees.
-fn pt_vndf(v: vec3<f32>, alpha: f32) -> vec3<f32> {
-    let vh = normalize(vec3<f32>(alpha * v.x, alpha * v.y, v.z));
-    let lensq = vh.x * vh.x + vh.y * vh.y;
-    var t1 = vec3<f32>(1.0, 0.0, 0.0);
-    if (lensq > 0.0) {
-        t1 = vec3<f32>(-vh.y, vh.x, 0.0) * inverseSqrt(lensq);
-    }
-    let t2 = cross(vh, t1);
-    let r = sqrt(pt_rand());
-    let phi = 6.283185307 * pt_rand();
-    let p1 = r * cos(phi);
-    let s = 0.5 * (1.0 + vh.z);
-    let p2 = (1.0 - s) * sqrt(max(1.0 - p1 * p1, 0.0)) + s * r * sin(phi);
-    let nh = p1 * t1 + p2 * t2 + sqrt(max(1.0 - p1 * p1 - p2 * p2, 0.0)) * vh;
-    return normalize(vec3<f32>(alpha * nh.x, alpha * nh.y, max(nh.z, 0.0)));
-}
-
-struct PtSurface {
-    n: vec3<f32>,
-    albedo: vec4<f32>,
-    // The world's units per cell at the hit: the shadow ray's bias.
-    texel: f32,
-};
-
-// The surface at a hit: its shading normal (a wall's own on a section's
-// side), and its albedo filtered over `foot` world units.
-fn pt_surface(p: vec3<f32>, sec: i32, foot_rate: f32, t: f32, d: vec3<f32>) -> PtSurface {
-    var out: PtSurface;
-    hf_sec = hf_sections[sec];
+    let p = o + d * h.t;
+    hf_sec = hf_sections[h.sec];
     let ps = vec3<f32>((p.xy - hf_sec.geo.xy) * hf_sec.geo.w, p.z * hf_sec.geo.w);
     var n = hf_normal(ps.x, ps.y);
-    hf_sec = hf_sections[sec];
+    hf_sec = hf_sections[h.sec];
     let edge = min(min(ps.x, f32(hf_sec.dims.x - 1u) - ps.x), min(ps.y, f32(hf_sec.dims.y - 1u) - ps.y));
     if (edge < 1.0e-2 && hf_height_at(ps.x, ps.y) - ps.z > 1.0e-3) {
         n = hf_wall_normal(ps);
     }
-    out.texel = hf_sec.geo.z;
+    // The side the ray sees: a height field is two-sided.
+    if (dot(n, d) > 0.0) {
+        n = -n;
+    }
     out.n = n;
-    let foot = t * foot_rate / sqrt(max(abs(dot(n, d)), 0.05));
+    let foot = (travelled + h.t) * pt.misc.x / sqrt(max(abs(dot(n, d)), 0.05));
     out.albedo = hf_albedo_at(p.xy, foot);
+    // Off the surface by a thousandth of its cell, and by what f32 can
+    // tell apart at its distance from the origin and the eye's.
+    out.bias = hf_sec.geo.z * 1.0e-3 + (length(p) + length(params.eye.xyz)) * 1.0e-6;
     return out;
 }
 
-// One sample of the pixel: (radiance times coverage, coverage).
+fn pt_scene_next(o: vec3<f32>, d: vec3<f32>, travelled: f32) -> PtHit {
+    return pt_surface(o, d, hf_trace(o, d, 1.0e30, 0.0), travelled);
+}
+
+fn pt_scene_visible(o: vec3<f32>, d: vec3<f32>, travelled: f32) -> bool {
+    return !hf_trace(o, d, 1.0e30, 0.0).hit;
+}
+
+// One sample of the pixel: (radiance times coverage, coverage). The
+// coverage is the first surface's albedo's -- a hole lets the
+// background through -- faded by the fog with depth, as the lit tier
+// fades it; the ground ends at the distance the view renders to.
 fn pt_sample(px: u32, py: u32) -> vec4<f32> {
     let jx = pt_rand() - 0.5;
     let jy = pt_rand() - 0.5;
     let ray = pt_ray(px, py, jx, jy);
-    let d0 = ray.d;
-    let o0 = ray.o;
-    let tmax = params.fdata[6].w / max(dot(d0, ifs_forward()), 1.0e-4);
-    var h = hf_trace(o0, d0, tmax, 0.0);
+    let tmax = params.fdata[6].w / max(dot(ray.d, ifs_forward()), 1.0e-4);
+    let h = pt_surface(ray.o, ray.d, hf_trace(ray.o, ray.d, tmax, 0.0), 0.0);
     if (!h.hit) {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
-    var o = o0;
-    var d = d0;
-    var radiance = vec3<f32>(0.0, 0.0, 0.0);
-    var through = vec3<f32>(1.0, 1.0, 1.0);
-    var travelled = 0.0;
-    var coverage = 0.0;
-    for (var bounce = 0u; bounce <= pt.bounces; bounce = bounce + 1u) {
-        let p = o + d * h.t;
-        travelled = travelled + h.t;
-        let surf = pt_surface(p, h.sec, pt.misc.x, travelled, d);
-        if (bounce == 0u) {
-            // The primary hit's coverage, faded by the fog with depth.
-            coverage = clamp(surf.albedo.a, 0.0, 1.0);
-            if (params.fdata[7].x > 0.0) {
-                let depth = h.t * dot(d, ifs_forward());
-                coverage = coverage * exp(-params.fdata[7].x * max(depth - params.fdata[7].y, 0.0));
-            }
-        }
-        if (!(surf.albedo.a > 0.0)) {
-            // A hole's floor: nothing there; past the first surface, the
-            // sky through it.
-            if (bounce > 0u) {
-                radiance = radiance + through * pt.env.rgb;
-            }
-            break;
-        }
-        var n = surf.n;
-        if (dot(n, d) > 0.0) {
-            n = -n;
-        }
-        let albedo = surf.albedo.rgb;
-        let bias = surf.texel * 1.0e-3 + (length(p) + length(params.eye.xyz)) * 1.0e-6;
-        let start = p + n * bias;
-        // Its glow.
-        radiance = radiance + through * albedo * pt.mat.z;
-        // The coat: Lambert under a gloss of reflectance f0 at normal
-        // incidence, the diffuse taking what the coat's Fresnel does not.
-        let f0 = pt.mat.x;
-        let a2 = max(pt.mat.y * pt.mat.y, 1.0e-4) * max(pt.mat.y * pt.mat.y, 1.0e-4);
-        let v = -d;
-        let nv = max(dot(n, v), 1.0e-4);
-        // The lights, sampled over their angular size. The diffuse in the
-        // rig's units (its I as pi times a radiance's), the gloss's
-        // physical BRDF times the same irradiance, pi I cos.
-        for (var li = 0u; li < ifs_light_count(); li = li + 1u) {
-            let ld = pt_cone(ifs_light_dir(li), pt.misc.w);
-            let ndl = dot(n, ld);
-            if (ndl <= 0.0) {
-                continue;
-            }
-            let s = hf_trace(start, ld, 1.0e30, 0.0);
-            let vis = mix(1.0, select(1.0, 0.0, s.hit), clamp(pt.misc.z, 0.0, 1.0));
-            var spec = 0.0;
-            var diff = 1.0;
-            if (f0 > 0.0) {
-                let h = normalize(ld + v);
-                let fr = pt_fresnel(f0, max(dot(v, h), 0.0));
-                spec = 3.141592654 * pt_ggx_d(max(dot(n, h), 0.0), a2) * pt_g1(ndl, a2) * pt_g1(nv, a2) * fr / (4.0 * ndl * nv);
-                diff = 1.0 - fr;
-            }
-            let light = ifs_light_color(li) * (ifs_light_power(li) * ndl * vis);
-            radiance = radiance + through * light * (albedo * (ifs_diffuse() * diff) + vec3<f32>(spec));
-        }
-        if (bounce >= pt.bounces) {
-            break;
-        }
-        // The bounce: the gloss's lobe by the visible normals, chosen by
-        // the coat's Fresnel at this view; else Lambert's, whose cosine
-        // sampling leaves the albedo times what the coat lets through.
-        var nd = vec3<f32>(0.0, 0.0, 1.0);
-        let p_spec = select(0.0, clamp(pt_fresnel(f0, nv), 0.1, 0.9), f0 > 0.0);
-        if (pt_rand() < p_spec) {
-            let frame = pt_frame(n);
-            let vl = transpose(frame) * v;
-            let hl = pt_vndf(vl, sqrt(a2));
-            let h = frame * hl;
-            nd = reflect(-v, h);
-            let nl = dot(n, nd);
-            if (nl <= 0.0) {
-                break;
-            }
-            through = through * (pt_fresnel(f0, max(dot(v, h), 0.0)) * pt_g1(nl, a2) / p_spec);
-        } else {
-            nd = pt_cosine(n);
-            // No coat at all at reflectance 0: Schlick's term alone would
-            // still take (1 - cos)^5 of a glance.
-            let coat = select(0.0, pt_fresnel(f0, nv), f0 > 0.0);
-            through = through * albedo * ((1.0 - coat) / (1.0 - p_spec));
-        }
-        if (bounce >= 1u) {
-            let q = clamp(max(through.r, max(through.g, through.b)), 0.05, 0.95);
-            if (pt_rand() > q) {
-                break;
-            }
-            through = through / q;
-        }
-        o = start;
-        d = nd;
-        h = hf_trace(o, d, 1.0e30, 0.0);
-        if (!h.hit) {
-            radiance = radiance + through * pt.env.rgb;
-            break;
-        }
+    var coverage = clamp(h.albedo.a, 0.0, 1.0);
+    if (params.fdata[7].x > 0.0) {
+        let depth = h.t * dot(ray.d, ifs_forward());
+        coverage = coverage * exp(-params.fdata[7].x * max(depth - params.fdata[7].y, 0.0));
     }
-    // The rig's emissive blend: strength 0 is the albedo, unlit.
-    let l = min(radiance, vec3<f32>(pt.misc.y));
+    let l = min(pt_path(ray.o, ray.d, h), vec3<f32>(pt.misc.y));
     return vec4<f32>(l * coverage, coverage);
-}
-
-@compute @workgroup_size(8, 8, 1)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if (gid.x >= params.width || gid.y >= params.height) {
-        return;
-    }
-    let idx = gid.y * params.width + gid.x;
-    hf_load_range();
-    var sum = pt_sum[idx];
-    if (pt.sample_base == 0u) {
-        sum = vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    }
-    let pixel = pt_hash(idx * 0x9E3779B9u + pt.seed);
-    for (var s = 0u; s < pt.samples; s = s + 1u) {
-        pt_state = pt_hash(pixel ^ pt_hash(pt.sample_base + s + 0x632BE5ABu));
-        sum = sum + pt_sample(gid.x, gid.y);
-    }
-    pt_sum[idx] = sum;
-}
-"#;
-
-/// The path tracer's sum into the terrain's output: colour the
-/// premultiplied mean over the coverage, alpha the mean coverage -- the
-/// accumulator contract.
-const PATH_RESOLVE_WGSL: &str = r#"
-struct ResolveParams {
-    width: u32,
-    height: u32,
-    count: u32,
-    pad: u32,
-};
-@group(0) @binding(0) var<uniform> rp: ResolveParams;
-@group(0) @binding(1) var<storage, read> pt_sum: array<vec4<f32>>;
-@group(0) @binding(2) var out_tex: texture_storage_2d<rgba32float, write>;
-
-@compute @workgroup_size(8, 8, 1)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if (gid.x >= rp.width || gid.y >= rp.height) {
-        return;
-    }
-    let s = pt_sum[gid.y * rp.width + gid.x];
-    var rgb = vec3<f32>(0.0, 0.0, 0.0);
-    if (s.a > 0.0) {
-        rgb = s.rgb / s.a;
-    }
-    textureStore(out_tex, vec2<i32>(gid.xy), vec4<f32>(rgb, s.a / f32(max(rp.count, 1u))));
 }
 "#;
 
@@ -1452,11 +1191,13 @@ pub fn assemble_relight() -> String {
 }
 
 /// The path tracer's WGSL, assembled: the rig's accessors and camera, the
-/// ground's functions, the albedo's lookup, and the integrator.
+/// shared core (`path_core`), the ground's functions, the albedo's
+/// lookup, and the height field's side of the integrator.
 pub fn assemble_path() -> String {
     format!(
-        "{}\n{}",
+        "{}\n{}\n{}",
         WALK_COMMON.replace("//__IFS_RIG__", &super::assembler::ifs_rig_jittered()),
+        super::path_core::PT_CORE_WGSL.replace("//__LENS_APPLY_RAY__", ""),
         PATH_WGSL
             .replace(
                 "//__HF_HELPERS__",
@@ -1506,60 +1247,8 @@ pub struct TerrainView {
     pub far: f32,
 }
 
-/// The path tracer's settings for a pass (plan section 4).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct PathSettings {
-    /// Bounces after the first surface: 0 is direct light only.
-    pub bounces: u32,
-    /// The environment's radiance, in the accumulator's units.
-    pub environment: [f32; 3],
-    /// A sample's radiance is clamped here: the fireflies a rare bright
-    /// path would otherwise scatter.
-    pub clamp: f32,
-    /// Seeds the samples' random streams.
-    pub seed: u32,
-    /// The gloss coat's reflectance at normal incidence (0: Lambert
-    /// alone) and its roughness.
-    pub gloss: f32,
-    pub roughness: f32,
-    /// The albedo's own glow.
-    pub emission: f32,
-    /// The lens's radius (0: a pinhole) and the focal plane's view
-    /// depth, in the world's units.
-    pub aperture: f32,
-    pub focus: f32,
-}
-
-impl Default for PathSettings {
-    /// Lambert alone through a pinhole: no gloss, no glow, no lens.
-    fn default() -> Self {
-        PathSettings {
-            bounces: 2,
-            environment: [0.0; 3],
-            clamp: 1.0e30,
-            seed: 1,
-            gloss: 0.0,
-            roughness: 0.5,
-            emission: 0.0,
-            aperture: 0.0,
-            focus: 1.0,
-        }
-    }
-}
-
-/// The path tracer's uniform. Mirrored by `PtParams`.
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct PathParamsGpu {
-    sample_base: u32,
-    samples: u32,
-    bounces: u32,
-    seed: u32,
-    env: [f32; 4],
-    misc: [f32; 4],
-    mat: [f32; 4],
-    lens: [f32; 4],
-}
+pub use super::path_core::PathSettings;
+use super::path_core::{PathParamsGpu, PathSum};
 
 /// The default sun when the lighting panel is untouched (plan H7): the
 /// 2D relief's own light, azimuth 135 (upper left) at elevation 30.
@@ -1725,11 +1414,8 @@ pub struct TerrainRenderer {
     albedo_mip_pipeline: ComputePipeline,
     path_layout: BindGroupLayout,
     path_pipeline: ComputePipeline,
-    resolve_layout: BindGroupLayout,
-    resolve_pipeline: ComputePipeline,
     /// The path tracer's per-pixel sum, and the samples in it.
-    path_sum: Buffer,
-    path_count: u32,
+    path: PathSum,
     sampler: Sampler,
     atlas: Option<Atlas>,
     ground: Option<GroundGpu>,
@@ -1865,10 +1551,6 @@ impl TerrainRenderer {
                 uniform(9),
             ],
         });
-        let resolve_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("Terrain Path Resolve"),
-            entries: &[uniform(0), storage(1, true), storage_tex(2, TextureFormat::Rgba32Float)],
-        });
         let ingest_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Terrain Ingest"),
             entries: &[
@@ -1912,7 +1594,6 @@ impl TerrainRenderer {
         let accum_pipeline = entry("Terrain Accumulate", &accum_layout, ACCUM_WGSL, "main");
         let albedo_mip_pipeline = entry("Terrain Albedo Mips", &albedo_mip_layout, ALBEDO_MIP_WGSL, "main");
         let path_pipeline = pipeline("Terrain Path", &path_layout, assemble_path());
-        let resolve_pipeline = entry("Terrain Path Resolve", &resolve_layout, PATH_RESOLVE_WGSL, "main");
         let sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("Terrain Albedo"),
             address_mode_u: AddressMode::ClampToEdge,
@@ -1936,7 +1617,7 @@ impl TerrainRenderer {
             mapped_at_creation: false,
         });
         let geom = Self::create_geom(device, out_w * out_h);
-        let path_sum = Self::create_geom(device, out_w * out_h);
+        let path = PathSum::new(device, out_w * out_h);
         let output = Self::create_output(device, out_w, out_h);
         let range = device.create_buffer(&BufferDescriptor {
             label: Some("Terrain Range"),
@@ -1960,10 +1641,7 @@ impl TerrainRenderer {
             albedo_mip_pipeline,
             path_layout,
             path_pipeline,
-            resolve_layout,
-            resolve_pipeline,
-            path_sum,
-            path_count: 0,
+            path,
             sampler,
             atlas: None,
             ground: None,
@@ -2020,10 +1698,9 @@ impl TerrainRenderer {
         self.accum_count = 0;
         if out_w * out_h > self.geom_px {
             self.geom = Self::create_geom(device, out_w * out_h);
-            self.path_sum = Self::create_geom(device, out_w * out_h);
             self.geom_px = out_w * out_h;
         }
-        self.path_count = 0;
+        self.path.ensure(device, out_w * out_h);
         self.out_w = out_w;
         self.out_h = out_h;
         self.walked = None;
@@ -2071,7 +1748,7 @@ impl TerrainRenderer {
         self.params.destroy();
         self.stats.destroy();
         self.geom.destroy();
-        self.path_sum.destroy();
+        self.path.destroy();
         self.output.0.destroy();
         if let Some(pair) = &self.accum {
             pair[0].0.destroy();
@@ -2689,12 +2366,12 @@ impl TerrainRenderer {
     /// Start the path tracer's sum over: the next `render_path` replaces
     /// it.
     pub fn reset_path(&mut self) {
-        self.path_count = 0;
+        self.path.reset();
     }
 
     /// Samples in the path tracer's sum.
     pub fn path_samples(&self) -> u32 {
-        self.path_count
+        self.path.count()
     }
 
     /// Add `samples` path-traced samples of the view to the sum -- in
@@ -2715,32 +2392,15 @@ impl TerrainRenderer {
         self.write_params(queue, view);
         let ground = self.ground.as_ref().expect("checked");
         let (gx, gy) = (self.out_w.div_ceil(8), self.out_h.div_ceil(8));
-        // A light's angular radius: half the inverse of the sharpness,
-        // the lit tier's penumbra in an area light's terms.
-        let radius = (0.5 / view.softness.max(1.0e-3)).min(0.5);
+        let radius = super::path_core::light_radius(view.softness);
         // A ray's share of a pixel per unit of distance: half a pixel,
         // since the jitter already spreads the samples over the whole.
         let per_ray = (view.camera.fov * 0.5).tan() / self.out_h.max(1) as f32;
         let mut done = 0;
         while done < samples {
             let n = per_dispatch.max(1).min(samples - done);
-            let p = PathParamsGpu {
-                sample_base: self.path_count,
-                samples: n,
-                bounces: settings.bounces,
-                seed: settings.seed,
-                env: [settings.environment[0], settings.environment[1], settings.environment[2], 0.0],
-                misc: [per_ray, settings.clamp, view.shadow, radius.cos()],
-                mat: [settings.gloss.clamp(0.0, 1.0), settings.roughness.clamp(0.02, 1.0), settings.emission.max(0.0), 0.0],
-                lens: [settings.aperture.max(0.0), settings.focus.max(1.0e-6), 0.0, 0.0],
-            };
-            let buf = device.create_buffer(&BufferDescriptor {
-                label: Some("Terrain Path Params"),
-                size: std::mem::size_of::<PathParamsGpu>() as u64,
-                usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            queue.write_buffer(&buf, 0, bytemuck::bytes_of(&p));
+            let buf = PathParamsGpu::new(settings, self.path.count(), n, per_ray, view.shadow, radius, (0, self.out_h))
+                .buffer(device, queue);
             let bg = device.create_bind_group(&BindGroupDescriptor {
                 label: Some("Terrain Path"),
                 layout: &self.path_layout,
@@ -2753,7 +2413,7 @@ impl TerrainRenderer {
                     BindGroupEntry { binding: 5, resource: self.range.as_entire_binding() },
                     BindGroupEntry { binding: 6, resource: ground.sections.as_entire_binding() },
                     BindGroupEntry { binding: 7, resource: ground.nodes.as_entire_binding() },
-                    BindGroupEntry { binding: 8, resource: self.path_sum.as_entire_binding() },
+                    BindGroupEntry { binding: 8, resource: self.path.buffer().as_entire_binding() },
                     BindGroupEntry { binding: 9, resource: buf.as_entire_binding() },
                 ],
             });
@@ -2765,34 +2425,11 @@ impl TerrainRenderer {
                 pass.dispatch_workgroups(gx, gy, 1);
             }
             queue.submit(std::iter::once(enc.finish()));
-            self.path_count += n;
+            self.path.add(n);
             done += n;
         }
         // The mean, into the output.
-        let buf = device.create_buffer(&BufferDescriptor {
-            label: Some("Terrain Path Resolve Params"),
-            size: 16,
-            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&buf, 0, bytemuck::cast_slice(&[self.out_w, self.out_h, self.path_count, 0u32]));
-        let bg = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("Terrain Path Resolve"),
-            layout: &self.resolve_layout,
-            entries: &[
-                BindGroupEntry { binding: 0, resource: buf.as_entire_binding() },
-                BindGroupEntry { binding: 1, resource: self.path_sum.as_entire_binding() },
-                BindGroupEntry { binding: 2, resource: BindingResource::TextureView(&self.output.1) },
-            ],
-        });
-        let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Terrain Path Resolve") });
-        {
-            let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: Some("Terrain Path Resolve"), timestamp_writes: None });
-            pass.set_pipeline(&self.resolve_pipeline);
-            pass.set_bind_group(0, &bg, &[]);
-            pass.dispatch_workgroups(gx, gy, 1);
-        }
-        queue.submit(std::iter::once(enc.finish()));
+        self.path.resolve(device, queue, &self.output.1, self.out_w, self.out_h, 0);
         // The output no longer holds a lit render.
         self.walked = None;
     }
@@ -2800,7 +2437,7 @@ impl TerrainRenderer {
     /// The path tracer's sum, for a test to read back.
     #[cfg(test)]
     pub(crate) fn path_sum_for_test(&self) -> &Buffer {
-        &self.path_sum
+        self.path.buffer()
     }
 
     /// The geometry buffer, for a test to read hits back.
@@ -3016,7 +2653,7 @@ mod tests {
         validate(&assemble_walk(), "walk");
         validate(&assemble_relight(), "relight");
         validate(&assemble_path(), "path");
-        validate(PATH_RESOLVE_WGSL, "path resolve");
+        validate(super::super::path_core::PATH_RESOLVE_WGSL, "path resolve");
     }
 
     #[test]

@@ -2002,14 +2002,15 @@ impl ConfigManager {
             ConfigPath::EscapeTerrainFar => Ok(config.escape.terrain.far.into()),
             ConfigPath::EscapeTerrainHaze => Ok(config.escape.terrain.haze.into()),
             ConfigPath::EscapeTerrainTier => Ok(ConfigValue::String(config.escape.terrain.tier.as_str().to_string())),
-            ConfigPath::EscapeTerrainSamples => Ok(ConfigValue::UInt(config.escape.terrain.samples)),
-            ConfigPath::EscapeTerrainBounces => Ok(ConfigValue::UInt(config.escape.terrain.bounces)),
-            ConfigPath::EscapeTerrainEnvironment => Ok(config.escape.terrain.environment.into()),
-            ConfigPath::EscapeTerrainGloss => Ok(config.escape.terrain.gloss.into()),
-            ConfigPath::EscapeTerrainRoughness => Ok(config.escape.terrain.roughness.into()),
-            ConfigPath::EscapeTerrainEmission => Ok(config.escape.terrain.emission.into()),
-            ConfigPath::EscapeTerrainAperture => Ok(config.escape.terrain.aperture.into()),
-            ConfigPath::EscapeTerrainFocus => Ok(config.escape.terrain.focus.into()),
+            ConfigPath::EscapeSolidTier => Ok(ConfigValue::String(config.escape.solid_tier.as_str().to_string())),
+            ConfigPath::EscapePathSamples => Ok(ConfigValue::UInt(config.escape.path.samples)),
+            ConfigPath::EscapePathBounces => Ok(ConfigValue::UInt(config.escape.path.bounces)),
+            ConfigPath::EscapePathEnvironment => Ok(config.escape.path.environment.into()),
+            ConfigPath::EscapePathGloss => Ok(config.escape.path.gloss.into()),
+            ConfigPath::EscapePathRoughness => Ok(config.escape.path.roughness.into()),
+            ConfigPath::EscapePathEmission => Ok(config.escape.path.emission.into()),
+            ConfigPath::EscapePathAperture => Ok(config.escape.path.aperture.into()),
+            ConfigPath::EscapePathFocus => Ok(config.escape.path.focus.into()),
             ConfigPath::EscapeTerrainInterior => Ok(ConfigValue::String(config.escape.terrain.interior.as_str().to_string())),
             ConfigPath::EscapeTerrainShadow => Ok(config.escape.terrain.shadow.into()),
             ConfigPath::EscapeTerrainShadowSharpness => Ok(config.escape.terrain.shadow_sharpness.into()),
@@ -3423,39 +3424,43 @@ impl ConfigManager {
             }
             ConfigPath::EscapeTerrainTier => {
                 let v: String = value.try_into()?;
-                self.current.escape.terrain.tier = crate::config::escape::TerrainTier::from_str_or_default(&v);
+                self.current.escape.terrain.tier = crate::config::escape::RenderTier::from_str_or_default(&v);
             }
-            ConfigPath::EscapeTerrainSamples => {
+            ConfigPath::EscapeSolidTier => {
+                let v: String = value.try_into()?;
+                self.current.escape.solid_tier = crate::config::escape::RenderTier::from_str_or_default(&v);
+            }
+            ConfigPath::EscapePathSamples => {
                 let v: u32 = value.try_into()?;
-                self.current.escape.terrain.samples = v.clamp(1, 65_536);
+                self.current.escape.path.samples = v.clamp(1, 65_536);
             }
-            ConfigPath::EscapeTerrainBounces => {
+            ConfigPath::EscapePathBounces => {
                 let v: u32 = value.try_into()?;
-                self.current.escape.terrain.bounces = v.min(16);
+                self.current.escape.path.bounces = v.min(16);
             }
-            ConfigPath::EscapeTerrainEnvironment => {
+            ConfigPath::EscapePathEnvironment => {
                 let v: f32 = value.try_into()?;
-                self.current.escape.terrain.environment = v.clamp(0.0, 16.0);
+                self.current.escape.path.environment = v.clamp(0.0, 16.0);
             }
-            ConfigPath::EscapeTerrainGloss => {
+            ConfigPath::EscapePathGloss => {
                 let v: f32 = value.try_into()?;
-                self.current.escape.terrain.gloss = v.clamp(0.0, 1.0);
+                self.current.escape.path.gloss = v.clamp(0.0, 1.0);
             }
-            ConfigPath::EscapeTerrainRoughness => {
+            ConfigPath::EscapePathRoughness => {
                 let v: f32 = value.try_into()?;
-                self.current.escape.terrain.roughness = v.clamp(0.02, 1.0);
+                self.current.escape.path.roughness = v.clamp(0.02, 1.0);
             }
-            ConfigPath::EscapeTerrainEmission => {
+            ConfigPath::EscapePathEmission => {
                 let v: f32 = value.try_into()?;
-                self.current.escape.terrain.emission = v.clamp(0.0, 16.0);
+                self.current.escape.path.emission = v.clamp(0.0, 16.0);
             }
-            ConfigPath::EscapeTerrainAperture => {
+            ConfigPath::EscapePathAperture => {
                 let v: f32 = value.try_into()?;
-                self.current.escape.terrain.aperture = v.clamp(0.0, 1.0);
+                self.current.escape.path.aperture = v.clamp(0.0, 1.0);
             }
-            ConfigPath::EscapeTerrainFocus => {
+            ConfigPath::EscapePathFocus => {
                 let v: f32 = value.try_into()?;
-                self.current.escape.terrain.focus = v.clamp(0.0, 64.0);
+                self.current.escape.path.focus = v.clamp(0.0, 64.0);
             }
             ConfigPath::EscapeTerrainInterior => {
                 let v: String = value.try_into()?;

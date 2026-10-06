@@ -2423,14 +2423,43 @@ impl App {
                             export_height,
                         );
                         esc.set_fixed_chunk(true);
+                        // A solid path traced renders display pixels; its
+                        // jitter is the antialiasing.
+                        let solid_path = crate::escape::ifs::formula_is_solid(&export_config.escape.formula)
+                            && export_config.escape.solid_tier != crate::config::escape::RenderTier::Lit;
                         esc.resize(
                             &self.gpu.device,
                             export_width,
                             export_height,
-                            export_config.escape.supersample,
+                            if solid_path { 1 } else { export_config.escape.supersample },
                         );
+                        // Mode D reads the flame as an IFS, lit by the
+                        // app's own lights: what `prepare_escape` hands the
+                        // desktop's export.
+                        if let Some(def) = crate::escape::ifs::get_ifs(&export_config.escape.formula) {
+                            let registry = crate::variations::global_registry();
+                            esc.set_ifs(crate::escape::ifs::pack_for(def, &export_config, &registry));
+                            esc.ensure_coarse(&self.gpu.device, &self.gpu.queue, &export_config.escape, &export_config.flame);
+                            esc.set_solid_lighting(
+                                &export_config.solid_shading,
+                                (export_config.fog_strength, export_config.fog_start, export_config.background_color),
+                            );
+                        }
                         let mut guard = 0u32;
                         loop {
+                            if solid_path {
+                                // No blocking wait in a browser: the queue
+                                // keeps the bands in order regardless.
+                                esc.render_solid_still(
+                                    &self.gpu.device,
+                                    &self.gpu.queue,
+                                    &export_config,
+                                    temp_renderer.escape_palette_view(export_config.escape.palette_map.stepped),
+                                    export_config.escape.path.samples,
+                                    || {},
+                                );
+                                break;
+                            }
                             let mut esc_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                                 label: Some("WASM Export Escape Chunk"),
                             });
@@ -3113,6 +3142,19 @@ impl App {
                 if self.escape_texture.busy() {
                     self.window.request_redraw();
                 }
+                // A solid's tier (heightfield plan T3c): the walk alone
+                // (Lit), the walk while anything moves and the path tracer
+                // once it settles (Auto), or the path tracer alone.
+                let solid_tier = if crate::escape::ifs::formula_is_solid(&final_config.escape.formula) {
+                    final_config.escape.solid_tier
+                } else {
+                    crate::config::escape::RenderTier::Lit
+                };
+                if self.escape_dirty && solid_tier == crate::config::escape::RenderTier::PathTraced {
+                    // No walk to wait for: the path tracer starts over.
+                    escape.reset_solid_path();
+                    self.escape_dirty = false;
+                }
                 if self.escape_dirty {
                     let settled = escape.render(
                         &self.gpu.device,
@@ -3146,6 +3188,17 @@ impl App {
                             }
                         }
                     }
+                }
+                if solid_tier != crate::config::escape::RenderTier::Lit
+                    && !self.escape_dirty
+                    && escape.trace_solid_viewport(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        &final_config,
+                        renderer.escape_palette_view(final_config.escape.palette_map.stepped),
+                    )
+                {
+                    self.window.request_redraw();
                 }
             }
 
