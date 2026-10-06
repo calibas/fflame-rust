@@ -1793,6 +1793,16 @@ fn show_terrain_section(
                     false,
                     t!("escape_panel.terrain_environment_tip").to_string(),
                 );
+                // The material and the lens, the path tracer's alone.
+                for (label, tip, path, value, range, log) in [
+                    ("escape_panel.terrain_gloss", "escape_panel.terrain_gloss_tip", ConfigPath::EscapeTerrainGloss, t.gloss, 0.0..=1.0, false),
+                    ("escape_panel.terrain_roughness", "escape_panel.terrain_roughness_tip", ConfigPath::EscapeTerrainRoughness, t.roughness, 0.02..=1.0, false),
+                    ("escape_panel.terrain_emission", "escape_panel.terrain_emission_tip", ConfigPath::EscapeTerrainEmission, t.emission, 0.0..=4.0, false),
+                    ("escape_panel.terrain_aperture", "escape_panel.terrain_aperture_tip", ConfigPath::EscapeTerrainAperture, t.aperture, 0.0..=0.2, false),
+                    ("escape_panel.terrain_focus", "escape_panel.terrain_focus_tip", ConfigPath::EscapeTerrainFocus, t.focus, 0.0..=8.0, false),
+                ] {
+                    slider(ui, t!(label).to_string(), path, value, range, log, t!(tip).to_string());
+                }
             }
             // How far it reaches, and how finely it is sampled.
             ui.separator();

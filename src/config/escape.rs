@@ -1888,6 +1888,23 @@ pub struct TerrainConfig {
     /// ground from the whole sky, times this.
     #[serde(default = "default_terrain_environment", skip_serializing_if = "is_default_terrain_environment")]
     pub environment: f32,
+    /// The path tracer's gloss coat over the albedo: its reflectance at
+    /// normal incidence (0 is Lambert alone; 0.04 a dielectric's) and its
+    /// roughness.
+    #[serde(default = "default_terrain_gloss", skip_serializing_if = "is_default_terrain_gloss")]
+    pub gloss: f32,
+    #[serde(default = "default_terrain_roughness", skip_serializing_if = "is_default_terrain_roughness")]
+    pub roughness: f32,
+    /// The albedo's own glow, in the path tracer.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub emission: f32,
+    /// The path tracer's lens: its radius in view widths (0, a pinhole,
+    /// is everything sharp) and the focal plane's distance (0 is the
+    /// target's).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub aperture: f32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub focus: f32,
     #[serde(default, skip_serializing_if = "is_default_terrain_interior")]
     pub interior: TerrainInterior,
     /// How dark a shadowed surface goes; 0 traces no shadow rays. Mode
@@ -1936,6 +1953,18 @@ fn default_terrain_environment() -> f32 {
 }
 fn is_default_terrain_environment(v: &f32) -> bool {
     *v == default_terrain_environment()
+}
+fn default_terrain_gloss() -> f32 {
+    0.04
+}
+fn is_default_terrain_gloss(v: &f32) -> bool {
+    *v == default_terrain_gloss()
+}
+fn default_terrain_roughness() -> f32 {
+    0.5
+}
+fn is_default_terrain_roughness(v: &f32) -> bool {
+    *v == default_terrain_roughness()
 }
 fn default_terrain_detail() -> f32 {
     1.0
@@ -1994,6 +2023,11 @@ impl Default for TerrainConfig {
             samples: default_terrain_samples(),
             bounces: default_terrain_bounces(),
             environment: default_terrain_environment(),
+            gloss: default_terrain_gloss(),
+            roughness: default_terrain_roughness(),
+            emission: 0.0,
+            aperture: 0.0,
+            focus: 0.0,
             interior: TerrainInterior::default(),
             shadow: default_terrain_shadow(),
             shadow_sharpness: default_terrain_shadow_sharpness(),

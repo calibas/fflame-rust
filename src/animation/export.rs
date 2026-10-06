@@ -861,6 +861,26 @@ fn apply_config_value(
         (ConfigPath::EscapeTerrainFar, ConfigValue::Float(v)) => {
             config.escape.terrain.far = v.clamp(0.5, 64.0);
         }
+        (ConfigPath::EscapeTerrainGloss, ConfigValue::Float(v)) => {
+            let v = *v;
+            config.escape.terrain.gloss = v.clamp(0.0, 1.0);
+        }
+        (ConfigPath::EscapeTerrainRoughness, ConfigValue::Float(v)) => {
+            let v = *v;
+            config.escape.terrain.roughness = v.clamp(0.02, 1.0);
+        }
+        (ConfigPath::EscapeTerrainEmission, ConfigValue::Float(v)) => {
+            let v = *v;
+            config.escape.terrain.emission = v.clamp(0.0, 16.0);
+        }
+        (ConfigPath::EscapeTerrainAperture, ConfigValue::Float(v)) => {
+            let v = *v;
+            config.escape.terrain.aperture = v.clamp(0.0, 1.0);
+        }
+        (ConfigPath::EscapeTerrainFocus, ConfigValue::Float(v)) => {
+            let v = *v;
+            config.escape.terrain.focus = v.clamp(0.0, 64.0);
+        }
         (ConfigPath::EscapeTerrainEnvironment, ConfigValue::Float(v)) => {
             config.escape.terrain.environment = v.clamp(0.0, 16.0);
         }

@@ -1136,6 +1136,59 @@ terrain.**
   - **Seen** (`output/heightfield_t3/`): the seahorse path traced and
     lit. The sky light fills the shadows and tints the faces that see
     the sky blue; 256 samples are clean.
+- **T3b as built** (2026-10-06): the material and the lens, in the same
+  `PATH_WGSL`.
+  - **The coat.** Lambert under a GGX gloss coat: reflectance `Gloss`
+    at normal incidence (Schlick's Fresnel on a scalar), roughness
+    `Roughness` (alpha its square), Smith's separable masking. The
+    diffuse takes what the coat's Fresnel does not. The lights' NEE adds
+    the coat's physical BRDF times the rig's irradiance. A bounce picks
+    the coat's lobe with the probability of its Fresnel at the view
+    (clamped to 0.1-0.9) and samples it by the visible normals (Heitz
+    2018); otherwise Lambert's cosine lobe, carrying the albedo times
+    what the coat lets through. A gloss of 0 is no coat at all, not
+    Schlick at 0 -- Schlick is nonzero at grazing angles even there, and
+    that broke the white furnace before it was gated out.
+  - **Emission.** `Glow` adds the albedo times itself at every surface
+    a path meets: the fractal lights itself and, by bounces, the ground
+    around it. The firefly clamp counts it as a light.
+  - **Depth of field.** A thin lens: each sample's ray starts from a
+    point of a disc of radius `Aperture` (view widths) and aims where
+    the pinhole's ray meets the focal plane, at view depth `Focus`. A
+    focus of 0 is the target's distance, so the default lens is sharp
+    where the camera looks. Aperture 0 is the pinhole, and the same bits
+    whatever the focus.
+  - **Fog stays the coverage fade.** Single scattering of a uniform
+    environment through a homogeneous medium is exactly `L(1 - T)` over
+    the surface's `T` -- the lit tier's fade toward the background,
+    which the tonemap's background blend already is. The sky being the
+    background colour, the two are the same picture at Sky light 1; at
+    other values the fog stays the background's colour, as a viewer
+    would expect of a horizon. A separate march would add noise and
+    nothing else. A coloured fog, or sun shafts, would need the march
+    (T5).
+  - **Config:** `gloss` (0.04, a dielectric's: stone, varnish),
+    `roughness` (0.5), `emission` (0), `aperture` (0), `focus` (0, the
+    target); the panel's Gloss, Roughness, Glow, Aperture and Focus,
+    shown when the tier path traces. All five animate.
+  - **Gates, all passing:**
+    - **Glow alone** (no light, no sky) is the albedo times the
+      emission, worst error 0.
+    - **The furnace with a coat:** an albedo-1 plane under a uniform
+      sky L. The 0.04/0.5 coat averages 0.995 L (the single-scattering
+      microfacet's known loss, held under 3%), a near-mirror (1, 0.05)
+      1.0007 L; neither exceeds L by more than 0.5%.
+    - **The lens:** a pinhole is bit-identical at two focus distances;
+      a lens 20 cells wide focused on a chequered plane matches the
+      pinhole to 0.001; focused 140 cells short, the chequer's contrast
+      falls from 0.302 to 0.022.
+    - `escape-terrain-seahorse` re-baselined (the default coat);
+      113 escape baselines and `release.py check` pass.
+  - **Seen** (`output/heightfield_t3/`): `coat.png`, the default, a
+    faint sheen on the faces toward the sun; `dof.png` (aperture 0.03),
+    the target sharp and the near and far ground soft; `glow.png`
+    (emission 0.6, sky light 0.3), the filaments lit from within. Each
+    about 6 s at 1080p and 256 samples: the coat costs little.
 
 **T4 — Simulations.**
 - **Built.**
