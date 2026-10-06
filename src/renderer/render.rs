@@ -1296,22 +1296,22 @@ async fn render_escape_terrain(
     };
     terrain.resize(device, job.width, job.height);
     let config = job.config;
-    let n = terrain.size_footprint(device, &config.escape);
+    // The footprint's size is the picture's (plan section 11): the
+    // export's own pixels decide it, exactly, every time.
+    terrain.choose_layout(device, &config.escape, job.width, job.height, false);
+    let layout = terrain.layout();
+    let n = layout.n;
     let palette = renderer.escape_palette_view(config.escape.palette_map.stepped);
     let generation = renderer.palette_generation();
     if terrain.footprint_stale(config) {
-        log::info!("Render: terrain footprint {n}x{n}");
+        log::info!("Render: terrain footprint {n}x{n} in {} tiles", layout.per_side * layout.per_side);
         prepare_escape(terrain.footprint_renderer(), device, queue, config).await;
         terrain.footprint_renderer().set_chunk_time_target(200.0);
         let mut guard = 0u32;
         loop {
-            let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-                label: Some("Terrain Footprint"),
-            });
-            let settled = terrain.render_footprint(device, queue, &mut encoder, config, palette, generation);
-            queue.submit(std::iter::once(encoder.finish()));
+            let done = terrain.step_footprint(device, queue, config, palette, generation);
             let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
-            if settled {
+            if done {
                 break;
             }
             guard += 1;
@@ -1321,7 +1321,6 @@ async fn render_escape_terrain(
             }
         }
     }
-    terrain.ingest(device, queue, config);
     let ss = config.escape.supersample.max(1);
     terrain.reset_accumulation();
     for jitter in crate::escape::EscapeRenderer::sample_grid(ss) {

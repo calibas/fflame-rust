@@ -2389,23 +2389,18 @@ impl App {
                             export_width,
                             export_height,
                         );
-                        t.size_footprint(&self.gpu.device, &export_config.escape);
+                        t.choose_layout(&self.gpu.device, &export_config.escape, export_width, export_height, false);
                         t.footprint_renderer().set_fixed_chunk(true);
                         let mut guard = 0u32;
                         loop {
-                            let mut t_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
-                                label: Some("WASM Export Terrain Footprint"),
-                            });
-                            let settled = t.render_footprint(
+                            let done = t.step_footprint(
                                 &self.gpu.device,
                                 &self.gpu.queue,
-                                &mut t_encoder,
                                 &export_config,
                                 temp_renderer.escape_palette_view(export_config.escape.palette_map.stepped),
                                 temp_renderer.palette_generation(),
                             );
-                            self.gpu.queue.submit(std::iter::once(t_encoder.finish()));
-                            if settled {
+                            if done {
                                 break;
                             }
                             guard += 1;
@@ -2414,7 +2409,6 @@ impl App {
                                 break;
                             }
                         }
-                        t.ingest(&self.gpu.device, &self.gpu.queue, &export_config);
                         t.reset_accumulation();
                         for jitter in crate::escape::EscapeRenderer::sample_grid(export_config.escape.supersample.max(1)) {
                             t.render(&self.gpu.device, &self.gpu.queue, &export_config, jitter);
@@ -2963,7 +2957,10 @@ impl App {
                     t
                 });
                 terrain.resize(device, w, h);
-                terrain.size_footprint(device, &final_config.escape);
+                // The footprint's size follows the viewport and the
+                // camera (plan section 11), with hysteresis so an orbit
+                // does not re-render it at every step.
+                terrain.choose_layout(device, &final_config.escape, w, h, true);
                 // A 2D IFS formula draws the flame; nothing in the
                 // escape config says when it changed.
                 if let Some(def) = crate::escape::ifs::get_ifs(&final_config.escape.formula) {
@@ -2990,30 +2987,21 @@ impl App {
                         .escape_last_edit
                         .is_some_and(|t| t.elapsed() < ESCAPE_INTERACTION_WINDOW);
                     if terrain.footprint_in_progress() || !interacting || terrain.live_footprints() {
-                        let mut enc = device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
-                            label: Some("Terrain Footprint"),
-                        });
-                        let settled = terrain.render_footprint(
+                        // A chunk of a tile a frame; the drawn terrain
+                        // stays until the whole footprint has landed.
+                        let done = terrain.step_footprint(
                             device,
                             queue,
-                            &mut enc,
                             &final_config,
                             renderer.escape_palette_view(final_config.escape.palette_map.stepped),
                             renderer.palette_generation(),
                         );
-                        queue.submit(std::iter::once(enc.finish()));
-                        if settled {
-                            terrain.ingest(device, queue, &final_config);
-                        } else {
+                        if !done {
                             busy = true;
                         }
                     } else {
                         busy = true;
                     }
-                } else {
-                    // A height, width or interior edit re-ingests the
-                    // footprint it already has.
-                    terrain.ingest(device, queue, &final_config);
                 }
                 if terrain.render_viewport(device, queue, &final_config) {
                     busy = true;

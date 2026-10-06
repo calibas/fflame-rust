@@ -3400,7 +3400,8 @@ impl ConfigManager {
             }
             ConfigPath::EscapeTerrainResolution => {
                 let v: u32 = value.try_into()?;
-                self.current.escape.terrain.resolution = v.clamp(16, 16_384);
+                // 0 is automatic: the view's own size.
+                self.current.escape.terrain.resolution = if v == 0 { 0 } else { v.clamp(256, 16_384) };
             }
             ConfigPath::EscapeTerrainInterior => {
                 let v: String = value.try_into()?;

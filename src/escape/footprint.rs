@@ -26,6 +26,14 @@
 //!   so a zoom is a new footprint seen from the same place;
 //! - the View's `rotation` turns the footprint, as it turns the 2D
 //!   picture, rather than rolling the screen as it does in mode D.
+//!
+//! **The footprint's size is the view's** (plan section 11, the user's
+//! choice): about the antialiasing factor's texels per screen pixel
+//! where the terrain is nearest the eye (`wanted_resolution`), so the
+//! fractal is sampled as finely as a 2D render at that antialiasing.
+//! Past one escape render's size it is rendered in tiles
+//! (`FootprintLayout`), each a render at its own centre, and the tile
+//! being built replaces the one drawn only when it is complete.
 
 use super::ifs::{solid_frame, SolidCamera};
 use super::terrain::{TerrainIngest, TerrainRenderer, TerrainView};
@@ -41,15 +49,125 @@ use wgpu::*;
 pub const FRAME_DISTANCE: f64 = 1.3;
 
 /// The smallest footprint side; below it a terrain is a few facets.
-pub const MIN_RESOLUTION: u32 = 16;
+pub const MIN_RESOLUTION: u32 = 256;
 
-/// The footprint's side for this config on this device: the config's,
-/// within the device's texture limit.
-pub fn footprint_side(device: &Device, escape: &EscapeConfig) -> u32 {
-    escape
-        .terrain
-        .resolution
-        .clamp(MIN_RESOLUTION, device.limits().max_texture_dimension_2d.max(MIN_RESOLUTION))
+/// The largest side an automatic footprint takes: 8192², about 1.4 GB
+/// of tile (twice that while a build replaces it). A fixed resolution
+/// may ask for more, within the device's texture side.
+pub const MAX_AUTO_RESOLUTION: u32 = 8192;
+
+/// The largest footprint tile: one escape render's side.
+pub const MAX_TILE: u32 = 2048;
+
+/// The footprint's side the view wants (plan section 11): the config's
+/// fixed resolution, or for `resolution = 0` about `supersample` texels
+/// per screen pixel where the terrain is nearest the eye, so the
+/// fractal is sampled as finely as a 2D render at that antialiasing.
+///
+/// Found by casting a grid of the camera's rays at the terrain's box
+/// -- the footprint, from the ground to its top -- in footprint widths:
+/// the nearest entry is where a texel is largest on the screen.
+pub fn wanted_resolution(escape: &EscapeConfig, out_w: u32, out_h: u32) -> u32 {
+    if escape.terrain.resolution != 0 {
+        return escape.terrain.resolution.max(MIN_RESOLUTION);
+    }
+    let unit = 10_000u32;
+    let cam = terrain_camera(escape, unit);
+    let scale = unit as f64;
+    let (lo, hi) = ([0.0, 0.0, 0.0], [scale - 1.0, scale - 1.0, escape.terrain.height as f64 * scale]);
+    let aspect = out_w.max(1) as f64 / out_h.max(1) as f64;
+    let th = (cam.fov as f64 * 0.5).tan();
+    let mut nearest = f64::INFINITY;
+    const RAYS: usize = 17;
+    for j in 0..RAYS {
+        for i in 0..RAYS {
+            let (u, v) = (i as f64 / (RAYS - 1) as f64 - 0.5, j as f64 / (RAYS - 1) as f64 - 0.5);
+            let d: [f64; 3] = std::array::from_fn(|k| {
+                cam.forward[k] + cam.right[k] * u * aspect * 2.0 * th - cam.up[k] * v * 2.0 * th
+            });
+            let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            // The slab test: the ray's interval inside the box.
+            let (mut t0, mut t1) = (0.0f64, f64::INFINITY);
+            for k in 0..3 {
+                let dk = d[k] / len;
+                if dk.abs() < 1e-12 {
+                    if cam.eye[k] < lo[k] || cam.eye[k] > hi[k] {
+                        t0 = f64::INFINITY;
+                    }
+                    continue;
+                }
+                let (a, b) = ((lo[k] - cam.eye[k]) / dk, (hi[k] - cam.eye[k]) / dk);
+                t0 = t0.max(a.min(b));
+                t1 = t1.min(a.max(b));
+            }
+            if t0 <= t1 {
+                nearest = nearest.min(t0);
+            }
+        }
+    }
+    if !nearest.is_finite() {
+        return MIN_RESOLUTION;
+    }
+    // Nothing nearer than a twentieth of the footprint: a camera inside
+    // the box would otherwise ask for no end of texels.
+    let nearest = (nearest / scale).max(0.05);
+    let rho = escape.supersample.max(1) as f64;
+    let per_pixel = nearest * 2.0 * th / out_h.max(1) as f64;
+    ((rho / per_pixel).ceil() as u32).clamp(MIN_RESOLUTION, MAX_AUTO_RESOLUTION)
+}
+
+/// How a footprint of `n` samples a side is rendered: `per_side²`
+/// escape renders of `tile²`, `n = per_side * tile`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FootprintLayout {
+    pub n: u32,
+    pub tile: u32,
+    pub per_side: u32,
+}
+
+impl FootprintLayout {
+    /// The layout for a wanted side: as few tiles as [`MAX_TILE`] allows,
+    /// each a multiple of 256, within the device's texture side.
+    pub fn for_side(wanted: u32, device_max: u32) -> FootprintLayout {
+        let wanted = wanted.clamp(MIN_RESOLUTION, device_max.max(MIN_RESOLUTION));
+        let per_side = wanted.div_ceil(MAX_TILE);
+        let mut tile = wanted.div_ceil(per_side).div_ceil(256) * 256;
+        while per_side * tile > device_max.max(MIN_RESOLUTION) && tile > 256 {
+            tile -= 256;
+        }
+        FootprintLayout { n: per_side * tile, tile, per_side }
+    }
+}
+
+/// Tile `(i, j)`'s escape config (`i` east, `j` down the picture): its
+/// pixels the footprint's own, so the tiles' pixels are the single
+/// render's. One tile is the footprint itself, untouched.
+pub fn tile_config(fp: &EscapeConfig, layout: &FootprintLayout, i: u32, j: u32) -> EscapeConfig {
+    if layout.per_side == 1 {
+        return fp.clone();
+    }
+    use super::fixedpoint::FixedPoint;
+    let mut c = fp.clone();
+    let (n, t) = (layout.n as f64, layout.tile as f64);
+    c.zoom_log2 = fp.zoom_log2 + (layout.per_side as f64).log2();
+    // The tile's centre from the footprint's, in its pixels (x right,
+    // y down), then to the plane: the pan's own rotation, and a pixel of
+    // 4 * 2^-zoom / n kept as a power of two and a mantissa, so the
+    // offset reaches any depth.
+    let (dx, dy) = (i as f64 * t + t / 2.0 - n / 2.0, j as f64 * t + t / 2.0 - n / 2.0);
+    let x = (4.0 / n).log2() - fp.zoom_log2;
+    let e = x.floor();
+    let m = (x - e).exp2();
+    let (s, co) = (fp.rotation as f64).sin_cos();
+    let (wx, wy) = (dx * co + dy * s, dx * s - dy * co);
+    if let (Some(re), Some(im)) = (
+        FixedPoint::decimal_add_floatexp(&fp.center_re, wx * m, e as i64, c.zoom_log2),
+        FixedPoint::decimal_add_floatexp(&fp.center_im, wy * m, e as i64, c.zoom_log2),
+    ) {
+        c.center_re = re;
+        c.center_im = im;
+    }
+    c
 }
 
 /// The footprint's render config: the escape config at the view, with
@@ -75,12 +193,14 @@ fn footprint_key(escape: &EscapeConfig) -> EscapeConfig {
     k.cam_yaw = d.cam_yaw;
     k.cam_bank = d.cam_bank;
     k.cam_fov = d.cam_fov;
-    // The source decides what the iterate pass writes; the rest is the
-    // ingest's and the lighting's.
-    let source = k.terrain.source;
+    // The source decides what the iterate pass writes and the interior
+    // how the tile encodes it; the heights, the lighting and the size
+    // are the walk's and the layout's.
+    let (source, interior) = (k.terrain.source, k.terrain.interior);
     k.terrain = d.terrain.clone();
     k.terrain.enabled = true;
     k.terrain.source = source;
+    k.terrain.interior = interior;
     k
 }
 
@@ -97,7 +217,8 @@ fn palette_key(config: &FractalConfig) -> String {
         String::new()
     };
     format!(
-        "{flame}|{:?}|{}|{}|{}|{:?}|{}|{}|{}",
+        "{flame}|{:?}|{:?}|{}|{}|{}|{:?}|{}|{}|{}",
+        config.background_color,
         config.palette,
         config.palette_rotation,
         config.palette_size,
@@ -200,6 +321,9 @@ fn terrain_view_with(config: &FractalConfig, camera: SolidCamera, n: u32, jitter
         softness: t.shadow_sharpness,
         occlusion_reach: t.occlusion * nf,
         jitter,
+        height: t.height * nf,
+        width: t.de_width * nf,
+        samples_per_axis: config.escape.supersample.max(1),
     }
 }
 
@@ -207,38 +331,43 @@ fn terrain_view_with(config: &FractalConfig, camera: SolidCamera, n: u32, jitter
 /// footprint's iterate pass compiled one: without it the distance
 /// source wrote the escape count (`esc_terrain_source`), and the
 /// ingest must read it as one.
-pub fn terrain_ingest(config: &FractalConfig, n: u32, derivative: bool) -> TerrainIngest {
+pub fn terrain_ingest(config: &FractalConfig, derivative: bool) -> TerrainIngest {
     let t = &config.escape.terrain;
     let source = match t.source {
         TerrainSource::Distance if derivative => 8,
         TerrainSource::Distance | TerrainSource::EscapeCount => 9,
         TerrainSource::Relief => config.escape.shading.field.to_gpu(),
     };
-    TerrainIngest {
-        source,
-        height: t.height * n as f32,
-        de_width: t.de_width * n as f32,
-        hole: t.interior == TerrainInterior::Hole,
-        background: config.background_color,
-    }
+    TerrainIngest { source, hole: t.interior == TerrainInterior::Hole, background: config.background_color }
 }
 
-/// The escape terrain: the footprint's renderer, the terrain renderer,
-/// and what the tile was made from, so only a change to the 2D picture
-/// re-renders the footprint.
+/// What a tile was made from: the footprint's picture, the palette's
+/// content, and the layout's side.
+type FootprintKey = (EscapeConfig, String, u32);
+
+/// A footprint under way: what it is of, and the next tile to render.
+struct FootprintBuild {
+    key: FootprintKey,
+    layout: FootprintLayout,
+    next: u32,
+    started: web_time::Instant,
+}
+
+/// The escape terrain: the footprint's renderer (one tile's size), the
+/// terrain renderer, and what the tile was made from, so only a change
+/// to the 2D picture or to the footprint's size re-renders it.
 pub struct EscapeTerrain {
     footprint: EscapeRenderer,
     terrain: TerrainRenderer,
-    n: u32,
-    /// The footprint's picture and palette keys, once it has settled.
-    rendered: Option<(EscapeConfig, String)>,
-    /// The footprint the last chunk rendered, while it settles.
-    pending: Option<(EscapeConfig, String)>,
-    ingested: Option<TerrainIngest>,
-    /// Footprint renders run to settlement, for the cache's gate.
+    /// The layout new footprints are rendered at.
+    layout: FootprintLayout,
+    /// The footprint renderer's side: one tile's.
+    footprint_tile: u32,
+    /// The drawn tile's key and its footprint's side.
+    rendered: Option<FootprintKey>,
+    build: Option<FootprintBuild>,
+    /// Footprints completed, for the cache's gates.
     pub footprint_renders: u32,
-    /// When the footprint in progress submitted its first chunk.
-    footprint_started: Option<web_time::Instant>,
     /// A footprint's time from its first chunk to its GPU completion,
     /// in ms, written by the queue's completion callback.
     footprint_done: std::sync::Arc<std::sync::Mutex<Option<f32>>>,
@@ -257,16 +386,15 @@ pub const LIVE_FOOTPRINT_MS: f32 = 15.0;
 
 impl EscapeTerrain {
     pub fn new(device: &Device, out_w: u32, out_h: u32) -> Self {
-        let n = MIN_RESOLUTION;
+        let layout = FootprintLayout::for_side(MIN_RESOLUTION, MIN_RESOLUTION);
         EscapeTerrain {
-            footprint: EscapeRenderer::new(device, n, n),
+            footprint: EscapeRenderer::new(device, layout.tile, layout.tile),
             terrain: TerrainRenderer::new(device, out_w, out_h),
-            n,
+            layout,
+            footprint_tile: layout.tile,
             rendered: None,
-            pending: None,
-            ingested: None,
+            build: None,
             footprint_renders: 0,
-            footprint_started: None,
             footprint_done: std::sync::Arc::new(std::sync::Mutex::new(None)),
             footprint_ms: None,
             viewport_key: None,
@@ -274,12 +402,21 @@ impl EscapeTerrain {
         }
     }
 
-    /// Why a terrain of this config cannot be held at `w x h`: the
-    /// footprint's escape render, or the terrain's own buffers.
+    /// Why a terrain of this config cannot be held at `w x h`: a tile's
+    /// escape render, the terrain's own buffers, or the tile itself --
+    /// twice over, since a build replaces it.
     pub fn allocation_error(device: &Device, escape: &EscapeConfig, w: u32, h: u32) -> Option<String> {
-        let n = footprint_side(device, escape);
-        EscapeRenderer::allocation_error(device, &footprint_config(escape), n, n, 1)
+        let lim = device.limits();
+        let layout = FootprintLayout::for_side(wanted_resolution(escape, w, h), lim.max_texture_dimension_2d);
+        let tile = tile_config(&footprint_config(escape), &layout, 0, 0);
+        EscapeRenderer::allocation_error(device, &tile, layout.tile, layout.tile, 1)
             .or_else(|| TerrainRenderer::allocation_error(device, w, h))
+            .or_else(|| {
+                let n = layout.n as u64;
+                (n * n * 16 > lim.max_buffer_size.max(1 << 31)).then(|| {
+                    format!("a {0}x{0} terrain footprint is past this device's memory", layout.n)
+                })
+            })
     }
 
     pub fn resize(&mut self, device: &Device, out_w: u32, out_h: u32) {
@@ -297,49 +434,54 @@ impl EscapeTerrain {
         &mut self.footprint
     }
 
-    /// The footprint's side, sized for this config: resizes the
-    /// footprint renderer when it changed.
-    pub fn size_footprint(&mut self, device: &Device, escape: &EscapeConfig) -> u32 {
-        let n = footprint_side(device, escape);
-        if n != self.n {
-            self.footprint.resize(device, n, n, 1);
-            self.n = n;
-            self.rendered = None;
-            self.pending = None;
+    /// The layout new footprints are rendered at: the view's wanted
+    /// side (`wanted_resolution`) for an `out_w x out_h` picture.
+    ///
+    /// `sticky` is the viewport's: the side follows the camera only
+    /// when it would grow by a fifth or shrink by half, so an orbit
+    /// does not re-render the footprint at every step.
+    pub fn choose_layout(&mut self, device: &Device, escape: &EscapeConfig, out_w: u32, out_h: u32, sticky: bool) {
+        let wanted = wanted_resolution(escape, out_w, out_h);
+        let device_max = device.limits().max_texture_dimension_2d;
+        let next = FootprintLayout::for_side(wanted, device_max);
+        let keep = sticky
+            && escape.terrain.resolution == 0
+            && self.rendered.is_some()
+            && next.n as f32 <= self.layout.n as f32 * 1.2
+            && next.n as f32 >= self.layout.n as f32 * 0.5;
+        if !keep && next != self.layout {
+            self.layout = next;
+            if next.tile != self.footprint_tile {
+                self.footprint.resize(device, next.tile, next.tile, 1);
+                self.footprint_tile = next.tile;
+            }
         }
-        n
     }
 
-    /// Whether the footprint must be rendered again for this config:
-    /// its 2D picture or the palette changed.
+    /// The layout new footprints are rendered at.
+    pub fn layout(&self) -> FootprintLayout {
+        self.layout
+    }
+
+    /// Render the next footprints at this layout, whatever the view
+    /// wants: a test's way to tile a footprint small enough to compare.
+    #[cfg(test)]
+    pub(crate) fn force_layout(&mut self, device: &Device, layout: FootprintLayout) {
+        self.layout = layout;
+        if layout.tile != self.footprint_tile {
+            self.footprint.resize(device, layout.tile, layout.tile, 1);
+            self.footprint_tile = layout.tile;
+        }
+    }
+
+    fn key(&self, config: &FractalConfig) -> FootprintKey {
+        (footprint_key(&config.escape), palette_key(config), self.layout.n)
+    }
+
+    /// Whether the footprint must be rendered again for this config: its
+    /// 2D picture, the palette, or its size changed.
     pub fn footprint_stale(&self, config: &FractalConfig) -> bool {
-        self.rendered.as_ref() != Some(&(footprint_key(&config.escape), palette_key(config)))
-    }
-
-    /// One chunk of the footprint's render, into `encoder`; true once
-    /// it has settled. The caller submits, and then calls [`ingest`]
-    /// (Self::ingest) once it has.
-    pub fn render_footprint(
-        &mut self,
-        device: &Device,
-        queue: &Queue,
-        encoder: &mut CommandEncoder,
-        config: &FractalConfig,
-        palette_view: &TextureView,
-        palette_generation: u64,
-    ) -> bool {
-        let key = (footprint_key(&config.escape), palette_key(config));
-        self.footprint_started.get_or_insert_with(web_time::Instant::now);
-        let settled = self.footprint.render(
-            device,
-            queue,
-            encoder,
-            &footprint_config(&config.escape),
-            palette_view,
-            palette_generation,
-        );
-        self.pending = Some(key);
-        settled
+        self.rendered.as_ref() != Some(&self.key(config))
     }
 
     /// Forget the footprint: something it was drawn with that its key
@@ -350,7 +492,78 @@ impl EscapeTerrain {
 
     /// Whether a footprint is part-way through its render.
     pub fn footprint_in_progress(&self) -> bool {
-        self.pending.is_some()
+        self.build.is_some()
+    }
+
+    /// One step of the footprint: a chunk of its current tile's escape
+    /// render, and when that tile settles, its region of the tile being
+    /// built; when the last has, the new tile replaces the drawn one.
+    /// Submits its own work; true once the footprint is complete (or
+    /// was already). A config that changes under a build restarts it.
+    pub fn step_footprint(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        config: &FractalConfig,
+        palette_view: &TextureView,
+        palette_generation: u64,
+    ) -> bool {
+        let key = self.key(config);
+        if self.rendered.as_ref() == Some(&key) && self.build.is_none() {
+            return true;
+        }
+        if self.build.as_ref().is_none_or(|b| b.key != key) {
+            let fp = footprint_config(&config.escape);
+            let derivative = self.footprint.derivative_active(&tile_config(&fp, &self.layout, 0, 0));
+            let ingest = terrain_ingest(config, derivative);
+            let n = self.layout.n;
+            self.terrain.begin_build(device, queue, n, n, &ingest);
+            self.build = Some(FootprintBuild {
+                key: key.clone(),
+                layout: self.layout,
+                next: 0,
+                started: web_time::Instant::now(),
+            });
+        }
+        let b = self.build.as_ref().expect("made above");
+        let layout = b.layout;
+        let (i, j) = (b.next % layout.per_side, b.next / layout.per_side);
+        let tile = tile_config(&footprint_config(&config.escape), &layout, i, j);
+        let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Terrain Footprint") });
+        let settled = self.footprint.render(device, queue, &mut enc, &tile, palette_view, palette_generation);
+        queue.submit(std::iter::once(enc.finish()));
+        if !settled {
+            return false;
+        }
+        self.terrain.ingest_region(
+            device,
+            queue,
+            self.footprint.output_view(),
+            self.footprint.height_view(),
+            i * layout.tile,
+            j * layout.tile,
+            layout.tile,
+            layout.tile,
+        );
+        let b = self.build.as_mut().expect("made above");
+        b.next += 1;
+        if b.next < layout.per_side * layout.per_side {
+            return false;
+        }
+        let b = self.build.take().expect("made above");
+        self.terrain.finish_build(device, queue);
+        self.rendered = Some(b.key);
+        self.footprint_renders += 1;
+        // Timed to the GPU's completion: the chunks before this are
+        // queued, not done.
+        let slot = std::sync::Arc::clone(&self.footprint_done);
+        let t0 = b.started;
+        queue.on_submitted_work_done(move || {
+            if let Ok(mut g) = slot.lock() {
+                *g = Some(t0.elapsed().as_secs_f32() * 1000.0);
+            }
+        });
+        true
     }
 
     /// The smoothed footprint render time, in ms, once one has been
@@ -372,43 +585,15 @@ impl EscapeTerrain {
         self.footprint_ms().is_none_or(|ms| ms < LIVE_FOOTPRINT_MS)
     }
 
-    /// Make the tile from the settled footprint, if it or the ingest
-    /// changed. Submits its own work, after the footprint's.
-    pub fn ingest(&mut self, device: &Device, queue: &Queue, config: &FractalConfig) {
-        let n = self.n;
-        let derivative = self.footprint.derivative_active(&footprint_config(&config.escape));
-        let ingest = terrain_ingest(config, n, derivative);
-        let fresh = self.pending.is_some();
-        if !fresh && self.ingested == Some(ingest) {
-            return;
-        }
-        if let Some(key) = self.pending.take() {
-            self.rendered = Some(key);
-            self.footprint_renders += 1;
-            // Time it to the GPU's completion: the chunks before this
-            // are queued, not done.
-            if let Some(t0) = self.footprint_started.take() {
-                let slot = std::sync::Arc::clone(&self.footprint_done);
-                queue.on_submitted_work_done(move || {
-                    if let Ok(mut g) = slot.lock() {
-                        *g = Some(t0.elapsed().as_secs_f32() * 1000.0);
-                    }
-                });
-            }
-        }
-        self.terrain
-            .set_tile_from_escape(device, queue, self.footprint.output_view(), self.footprint.height_view(), n, n, &ingest);
-        self.ingested = Some(ingest);
-    }
-
     /// The view the tile is seen through: the config's, over whichever
-    /// footprint the tile holds (`terrain_camera_over` while one lags).
+    /// footprint the tile holds (`terrain_camera_over` while one lags),
+    /// in that footprint's cells.
     fn current_view(&self, config: &FractalConfig, jitter: [f32; 2]) -> TerrainView {
-        let camera = match &self.rendered {
-            Some((fp, _)) => terrain_camera_over(&config.escape, fp, self.n),
-            None => terrain_camera(&config.escape, self.n),
+        let (camera, n) = match &self.rendered {
+            Some((fp, _, n)) => (terrain_camera_over(&config.escape, fp, *n), *n),
+            None => (terrain_camera(&config.escape, self.layout.n), self.layout.n),
         };
-        terrain_view_with(config, camera, self.n, jitter)
+        terrain_view_with(config, camera, n, jitter)
     }
 
     /// One frame of the viewport: a sample of the config's
@@ -440,7 +625,7 @@ impl EscapeTerrain {
     /// Draw the terrain once, its rays offset by `jitter` within their
     /// pixels. Submits its own work.
     pub fn render(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, jitter: [f32; 2]) {
-        let view = terrain_view(config, self.n, jitter);
+        let view = self.current_view(config, jitter);
         self.terrain.render(device, queue, &view);
     }
 
@@ -574,8 +759,8 @@ mod tests {
         assert!(((off.0 + want) / want).abs() < 1e-9, "deep offset {off:?} want -{want}");
     }
 
-    /// Only the 2D picture keys the footprint: the camera, the lights,
-    /// the heights and the interior do not, the height source does.
+    /// Only the 2D picture keys the footprint: the camera, the lights and
+    /// the heights do not; the height source and the interior do.
     #[test]
     fn the_footprint_key_ignores_what_only_the_3d_view_reads() {
         let mut a = EscapeConfig::default();
@@ -586,12 +771,15 @@ mod tests {
         b.cam_fov = 0.4;
         b.terrain.height = 0.2;
         b.terrain.de_width = 0.1;
-        b.terrain.interior = TerrainInterior::Hole;
         b.terrain.shadow = 0.0;
         b.terrain.occlusion = 0.1;
         assert_eq!(footprint_key(&a), footprint_key(&b));
         b.terrain.source = TerrainSource::EscapeCount;
         assert_ne!(footprint_key(&a), footprint_key(&b));
+        // The interior is how the tile encodes the set: a new tile.
+        let mut h = a.clone();
+        h.terrain.interior = TerrainInterior::Hole;
+        assert_ne!(footprint_key(&a), footprint_key(&h));
         let mut c = a.clone();
         c.zoom_log2 = 5.0;
         assert_ne!(footprint_key(&a), footprint_key(&c));
@@ -816,7 +1004,10 @@ mod tests {
         shallow.escape.center_im = "0.1".into();
         shallow.escape.max_iter = 2000;
         for (label, base) in [("direct 2^3", shallow), ("perturbed 2^60", deep)] {
-            for n in [512u32, 1024, 2048] {
+            for n in [512u32, 1024, 2048, 4096, 8192] {
+                if label.starts_with("perturbed") && n > 4096 {
+                    continue;
+                }
                 let mut c = base.clone();
                 c.render_mode = crate::scene::transforms::RenderMode::Escape;
                 c.escape.terrain.enabled = true;
@@ -843,29 +1034,24 @@ mod tests {
                     c.palette_reverse,
                 );
                 let mut t = EscapeTerrain::new(&device, 64, 64);
-                t.size_footprint(&device, &c.escape);
+                t.choose_layout(&device, &c.escape, 64, 64, false);
                 let mut times = Vec::new();
                 for k in 0..8 {
                     c.escape.zoom_log2 = base.escape.zoom_log2 + 0.02 * k as f64;
                     let t0 = std::time::Instant::now();
                     loop {
-                        let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
-                        let done = t.render_footprint(
+                        let done = t.step_footprint(
                             &device,
                             &queue,
-                            &mut enc,
                             &c,
                             flame.escape_palette_view(c.escape.palette_map.stepped),
                             flame.palette_generation(),
                         );
-                        queue.submit(std::iter::once(enc.finish()));
                         let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
                         if done {
                             break;
                         }
                     }
-                    t.ingest(&device, &queue, &c);
-                    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
                     // The first pays the shader compile and the reference.
                     if k >= 2 {
                         times.push(t0.elapsed().as_secs_f64() * 1000.0);
@@ -880,6 +1066,136 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The view's footprint (plan section 11): about `supersample` texels
+    /// per screen pixel where the terrain is nearest. Twice the
+    /// antialiasing or twice the picture's height is about twice the
+    /// side; the default framing at 1080p without antialiasing wants
+    /// about 1,600; a fixed resolution is itself.
+    #[test]
+    fn the_wanted_footprint_follows_the_view() {
+        let mut esc = EscapeConfig::default();
+        esc.terrain.enabled = true;
+        let base = wanted_resolution(&esc, 1920, 1080);
+        println!("1080p, no antialiasing: {base}");
+        assert!((1400..1900).contains(&base), "{base}");
+        esc.supersample = 2;
+        let ss2 = wanted_resolution(&esc, 1920, 1080);
+        assert!((ss2 as f64 / base as f64 - 2.0).abs() < 0.01, "{ss2} vs {base}");
+        esc.supersample = 1;
+        let tall = wanted_resolution(&esc, 3840, 2160);
+        assert!((tall as f64 / base as f64 - 2.0).abs() < 0.01, "{tall} vs {base}");
+        esc.supersample = 8;
+        assert_eq!(wanted_resolution(&esc, 3840, 2160), MAX_AUTO_RESOLUTION, "capped");
+        esc.terrain.resolution = 3000;
+        assert_eq!(wanted_resolution(&esc, 1920, 1080), 3000);
+        // Layouts: whole tiles of at most MAX_TILE, multiples of 256.
+        for (want, n, tile, per) in [(1633, 1792, 1792, 1), (3266, 3584, 1792, 2), (5000, 5376, 1792, 3), (8192, 8192, 2048, 4)] {
+            let l = FootprintLayout::for_side(want, 16384);
+            assert_eq!((l.n, l.tile, l.per_side), (n, tile, per), "{want}");
+        }
+    }
+
+    /// A footprint rendered in tiles is the footprint rendered whole, on
+    /// the direct path: the 2x2 tiles' pixels are the whole render's
+    /// pixels, computed from another centre. So not byte for byte --
+    /// a pixel's coordinate differs in its last bit, and where that
+    /// moves an escape count the colour changes (measured: 0.05% of the
+    /// raw samples, 0.5% of the colours, at 2^2 rotated) -- but nowhere
+    /// more on the tiles' seams than off them.
+    #[test]
+    fn a_tiled_footprint_is_the_whole_footprint() {
+        let Some((device, queue)) = crate::escape::terrain::gpu_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        use crate::escape::terrain::gpu_tests::read_texture;
+        let mut c = terrain_config();
+        c.escape.zoom_log2 = 2.0;
+        c.escape.rotation = 0.4;
+        let mut flame = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device,
+            &queue,
+            TextureFormat::Rgba8Unorm,
+            64,
+            64,
+            &c.flame,
+            c.palette_size,
+        );
+        flame.update_palette(
+            &device,
+            &queue,
+            &c.palette,
+            c.palette_rotation,
+            c.palette_squeeze,
+            c.palette_squeeze_mode,
+            c.palette_squeeze_falloff,
+            c.palette_log_strength,
+            c.palette_reverse,
+        );
+        let n = 512u32;
+        let build = |layout: FootprintLayout| {
+            let mut t = EscapeTerrain::new(&device, 64, 64);
+            t.force_layout(&device, layout);
+            while !t.step_footprint(&device, &queue, &c, flame.escape_palette_view(false), flame.palette_generation()) {
+                let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            }
+            let (raw, albedo) = t.terrain_for_test().tile_textures_for_test().unwrap();
+            let raw: Vec<f32> = bytemuck::cast_slice(&read_texture(&device, &queue, raw, 0, n, n, 4)).to_vec();
+            let albedo: Vec<u16> = bytemuck::cast_slice(&read_texture(&device, &queue, albedo, 0, n, n, 8)).to_vec();
+            (raw, albedo)
+        };
+        let (whole_raw, whole_albedo) = build(FootprintLayout { n, tile: n, per_side: 1 });
+        let (tiled_raw, tiled_albedo) = build(FootprintLayout { n, tile: n / 2, per_side: 2 });
+        let (mut off, mut worst_a) = (0usize, 0.0f32);
+        for k in 0..(n * n) as usize {
+            let (a, b) = (whole_raw[k], tiled_raw[k]);
+            // Sentinels must agree exactly; distances to f32's agreement,
+            // away from the set where a pixel's estimate is percents
+            // either way.
+            if a.abs() >= 1e29 || b.abs() >= 1e29 || a == 0.0 || b == 0.0 {
+                if a != b {
+                    off += 1;
+                }
+            } else if a > 0.05 && (a - b).abs() > 1e-3 * a {
+                off += 1;
+            }
+            for ch in 0..4 {
+                let (x, y) = (
+                    half::f16::from_bits(whole_albedo[k * 4 + ch]).to_f32(),
+                    half::f16::from_bits(tiled_albedo[k * 4 + ch]).to_f32(),
+                );
+                worst_a = worst_a.max((x - y).abs());
+            }
+        }
+        let (mut colour_off, mut total) = (0usize, 0usize);
+        for k in 0..(n * n) as usize {
+            total += 1;
+            if (0..3).any(|ch| {
+                (half::f16::from_bits(whole_albedo[k * 4 + ch]).to_f32() - half::f16::from_bits(tiled_albedo[k * 4 + ch]).to_f32()).abs() > 0.02
+            }) {
+                colour_off += 1;
+            }
+        }
+        // Where they are: on the tiles' seams, or scattered.
+        let mut near_seam = 0usize;
+        for k in 0..(n * n) as usize {
+            let (x, y) = ((k as u32) % n, (k as u32) / n);
+            let differs = (0..3).any(|ch| {
+                (half::f16::from_bits(whole_albedo[k * 4 + ch]).to_f32() - half::f16::from_bits(tiled_albedo[k * 4 + ch]).to_f32()).abs() > 0.02
+            });
+            if differs && ((x as i32 - (n / 2) as i32).abs() <= 2 || (y as i32 - (n / 2) as i32).abs() <= 2) {
+                near_seam += 1;
+            }
+        }
+        println!("tiled vs whole: {off} raw samples off, {colour_off} of {total} colours off by > 0.02 (worst {worst_a:.3}), {near_seam} of them within 2 px of a seam");
+        assert!(off * 1000 < (n * n) as usize, "{off} raw samples disagree");
+        assert!(colour_off * 100 < total, "{colour_off} colours disagree");
+        // The seams' 2-pixel bands are 5 rows and columns of n: their
+        // share of the differences, were they placed at random.
+        let chance = colour_off as f64 * (2.0 * 5.0 * n as f64) / total as f64;
+        assert!((near_seam as f64) < 2.0 * chance + 10.0, "{near_seam} on the seams, {chance:.0} by chance");
     }
 
     /// As a video renders: ONE flame renderer across the frames, whose

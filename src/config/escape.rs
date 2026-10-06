@@ -1829,7 +1829,9 @@ pub struct TerrainConfig {
     /// Distance: the flanks' width `w`, as a fraction of the footprint.
     #[serde(default = "default_terrain_de_width", skip_serializing_if = "is_default_terrain_de_width")]
     pub de_width: f32,
-    /// The footprint's side, in pixels.
+    /// The footprint's side, in pixels; 0 (the default) is the view's:
+    /// about `supersample` texels per screen pixel where the terrain is
+    /// nearest the eye (`escape::footprint::wanted_resolution`).
     #[serde(default = "default_terrain_resolution", skip_serializing_if = "is_default_terrain_resolution")]
     pub resolution: u32,
     #[serde(default, skip_serializing_if = "is_default_terrain_interior")]
@@ -1861,7 +1863,7 @@ fn is_default_terrain_de_width(v: &f32) -> bool {
     *v == default_terrain_de_width()
 }
 fn default_terrain_resolution() -> u32 {
-    2048
+    0
 }
 fn is_default_terrain_resolution(v: &u32) -> bool {
     *v == default_terrain_resolution()
