@@ -499,6 +499,11 @@ pub enum ConfigPath {
     EscapeTerrainSamples,
     EscapeTerrainBounces,
     EscapeTerrainEnvironment,
+    EscapeTerrainGloss,
+    EscapeTerrainRoughness,
+    EscapeTerrainEmission,
+    EscapeTerrainAperture,
+    EscapeTerrainFocus,
     EscapeTerrainInterior,
     EscapeTerrainShadow,
     EscapeTerrainShadowSharpness,
@@ -1133,6 +1138,11 @@ impl Display for ConfigPath {
             ConfigPath::EscapeTerrainSamples => write!(f, "Terrain Samples"),
             ConfigPath::EscapeTerrainBounces => write!(f, "Terrain Bounces"),
             ConfigPath::EscapeTerrainEnvironment => write!(f, "Terrain Environment"),
+            ConfigPath::EscapeTerrainGloss => write!(f, "Terrain Gloss"),
+            ConfigPath::EscapeTerrainRoughness => write!(f, "Terrain Roughness"),
+            ConfigPath::EscapeTerrainEmission => write!(f, "Terrain Glow"),
+            ConfigPath::EscapeTerrainAperture => write!(f, "Terrain Aperture"),
+            ConfigPath::EscapeTerrainFocus => write!(f, "Terrain Focus"),
             ConfigPath::EscapeTerrainInterior => write!(f, "Terrain Interior"),
             ConfigPath::EscapeTerrainShadow => write!(f, "Terrain Shadows"),
             ConfigPath::EscapeTerrainShadowSharpness => write!(f, "Terrain Shadow Sharpness"),
@@ -1509,6 +1519,11 @@ impl ConfigPath {
             ConfigPath::EscapeTerrainSamples => I18nKey::simple("history.param.escape_terrain_samples"),
             ConfigPath::EscapeTerrainBounces => I18nKey::simple("history.param.escape_terrain_bounces"),
             ConfigPath::EscapeTerrainEnvironment => I18nKey::simple("history.param.escape_terrain_environment"),
+            ConfigPath::EscapeTerrainGloss => I18nKey::simple("history.param.escape_terrain_gloss"),
+            ConfigPath::EscapeTerrainRoughness => I18nKey::simple("history.param.escape_terrain_roughness"),
+            ConfigPath::EscapeTerrainEmission => I18nKey::simple("history.param.escape_terrain_emission"),
+            ConfigPath::EscapeTerrainAperture => I18nKey::simple("history.param.escape_terrain_aperture"),
+            ConfigPath::EscapeTerrainFocus => I18nKey::simple("history.param.escape_terrain_focus"),
             ConfigPath::EscapeTerrainInterior => I18nKey::simple("history.param.escape_terrain_interior"),
             ConfigPath::EscapeTerrainShadow => I18nKey::simple("history.param.escape_terrain_shadow"),
             ConfigPath::EscapeTerrainShadowSharpness => I18nKey::simple("history.param.escape_terrain_shadow_sharpness"),
@@ -2914,6 +2929,11 @@ impl ConfigPath {
             | ConfigPath::EscapeTerrainSamples
             | ConfigPath::EscapeTerrainBounces
             | ConfigPath::EscapeTerrainEnvironment
+            | ConfigPath::EscapeTerrainGloss
+            | ConfigPath::EscapeTerrainRoughness
+            | ConfigPath::EscapeTerrainEmission
+            | ConfigPath::EscapeTerrainAperture
+            | ConfigPath::EscapeTerrainFocus
             | ConfigPath::EscapeTerrainInterior
             | ConfigPath::EscapeTerrainShadow
             | ConfigPath::EscapeTerrainShadowSharpness
@@ -3357,6 +3377,11 @@ impl ConfigPath {
             ConfigPath::EscapeTerrainSamples => "Escape.Terrain.Samples".to_string(),
             ConfigPath::EscapeTerrainBounces => "Escape.Terrain.Bounces".to_string(),
             ConfigPath::EscapeTerrainEnvironment => "Escape.Terrain.Environment".to_string(),
+            ConfigPath::EscapeTerrainGloss => "Escape.Terrain.Gloss".to_string(),
+            ConfigPath::EscapeTerrainRoughness => "Escape.Terrain.Roughness".to_string(),
+            ConfigPath::EscapeTerrainEmission => "Escape.Terrain.Emission".to_string(),
+            ConfigPath::EscapeTerrainAperture => "Escape.Terrain.Aperture".to_string(),
+            ConfigPath::EscapeTerrainFocus => "Escape.Terrain.Focus".to_string(),
             ConfigPath::EscapeTerrainInterior => "Escape.Terrain.Interior".to_string(),
             ConfigPath::EscapeTerrainShadow => "Escape.Terrain.Shadow".to_string(),
             ConfigPath::EscapeTerrainShadowSharpness => "Escape.Terrain.ShadowSharpness".to_string(),
@@ -3616,6 +3641,11 @@ impl ConfigPath {
                 ["Terrain", "Samples"] => return Some(ConfigPath::EscapeTerrainSamples),
                 ["Terrain", "Bounces"] => return Some(ConfigPath::EscapeTerrainBounces),
                 ["Terrain", "Environment"] => return Some(ConfigPath::EscapeTerrainEnvironment),
+                ["Terrain", "Gloss"] => return Some(ConfigPath::EscapeTerrainGloss),
+                ["Terrain", "Roughness"] => return Some(ConfigPath::EscapeTerrainRoughness),
+                ["Terrain", "Emission"] => return Some(ConfigPath::EscapeTerrainEmission),
+                ["Terrain", "Aperture"] => return Some(ConfigPath::EscapeTerrainAperture),
+                ["Terrain", "Focus"] => return Some(ConfigPath::EscapeTerrainFocus),
                 ["Terrain", "Interior"] => return Some(ConfigPath::EscapeTerrainInterior),
                 ["Terrain", "Shadow"] => return Some(ConfigPath::EscapeTerrainShadow),
                 ["Terrain", "ShadowSharpness"] => return Some(ConfigPath::EscapeTerrainShadowSharpness),
@@ -4419,6 +4449,11 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeTerrainFar
         | ConfigPath::EscapeTerrainHaze
         | ConfigPath::EscapeTerrainEnvironment
+        | ConfigPath::EscapeTerrainGloss
+        | ConfigPath::EscapeTerrainRoughness
+        | ConfigPath::EscapeTerrainEmission
+        | ConfigPath::EscapeTerrainAperture
+        | ConfigPath::EscapeTerrainFocus
         | ConfigPath::EscapeShadingTextureStrength
         | ConfigPath::EscapeShadingTextureScale
         | ConfigPath::EscapeShadingElevation
@@ -5119,6 +5154,11 @@ mod tests {
             (ConfigPath::EscapeTerrainSamples, ConfigValue::UInt(64), false),
             (ConfigPath::EscapeTerrainBounces, ConfigValue::UInt(4), false),
             (ConfigPath::EscapeTerrainEnvironment, ConfigValue::Float(0.5), true),
+            (ConfigPath::EscapeTerrainGloss, ConfigValue::Float(0.25), true),
+            (ConfigPath::EscapeTerrainRoughness, ConfigValue::Float(0.25), true),
+            (ConfigPath::EscapeTerrainEmission, ConfigValue::Float(0.25), true),
+            (ConfigPath::EscapeTerrainAperture, ConfigValue::Float(0.25), true),
+            (ConfigPath::EscapeTerrainFocus, ConfigValue::Float(0.25), true),
             (ConfigPath::EscapeTerrainInterior, ConfigValue::String("hole".into()), false),
             (ConfigPath::EscapeTerrainShadow, ConfigValue::Float(0.25), true),
             (ConfigPath::EscapeTerrainShadowSharpness, ConfigValue::Float(20.0), true),

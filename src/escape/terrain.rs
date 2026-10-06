@@ -1031,6 +1031,13 @@ struct PtParams {
     // filter), y: the firefly clamp, z: shadow strength, w: the cosine
     // of a light's angular radius.
     misc: vec4<f32>,
+    // x: the gloss coat's reflectance at normal incidence (0: Lambert
+    // alone), y: its roughness (GGX alpha is its square), z: emission,
+    // the albedo's own glow.
+    mat: vec4<f32>,
+    // x: the lens's radius (0: a pinhole), y: the focal plane's view
+    // depth.
+    lens: vec4<f32>,
 };
 
 //__HF_HELPERS__
@@ -1087,14 +1094,69 @@ fn pt_cone(axis: vec3<f32>, cos_max: f32) -> vec3<f32> {
     return pt_frame(axis) * vec3<f32>(s * cos(phi), s * sin(phi), c);
 }
 
+struct PtRay {
+    o: vec3<f32>,
+    d: vec3<f32>,
+};
+
 // The camera's ray through (px + 0.5 + jx, py + 0.5 + jy): `ifs_ray`
-// with the sample's own jitter.
-fn pt_ray(px: u32, py: u32, jx: f32, jy: f32) -> vec3<f32> {
+// with the sample's own jitter -- and, with a lens, from a point of the
+// lens's disc toward where the pinhole's ray meets the focal plane, so
+// the focal plane is sharp and the rest blurs with its distance from it.
+fn pt_ray(px: u32, py: u32, jx: f32, jy: f32) -> PtRay {
     let uv = (vec2<f32>(f32(px) + 0.5 + jx, f32(py) + 0.5 + jy)) / vec2<f32>(f32(params.width), f32(params.height))
         - vec2<f32>(0.5, 0.5);
     let aspect = f32(params.width) / f32(max(params.height, 1u));
     let tan_half = tan(ifs_fov() * 0.5);
-    return normalize(ifs_forward() + ifs_right() * (uv.x * aspect * 2.0 * tan_half) - ifs_up() * (uv.y * 2.0 * tan_half));
+    let d = normalize(ifs_forward() + ifs_right() * (uv.x * aspect * 2.0 * tan_half) - ifs_up() * (uv.y * 2.0 * tan_half));
+    var out: PtRay;
+    out.o = params.eye.xyz;
+    out.d = d;
+    if (pt.lens.x > 0.0) {
+        let focal = out.o + d * (pt.lens.y / max(dot(d, ifs_forward()), 1.0e-4));
+        let r = pt.lens.x * sqrt(pt_rand());
+        let phi = 6.283185307 * pt_rand();
+        out.o = out.o + ifs_right() * (r * cos(phi)) + ifs_up() * (r * sin(phi));
+        out.d = normalize(focal - out.o);
+    }
+    return out;
+}
+
+// The gloss coat: GGX's distribution, Smith's masking for one direction,
+// Schlick's Fresnel on a scalar reflectance.
+fn pt_ggx_d(nh: f32, a2: f32) -> f32 {
+    let k = nh * nh * (a2 - 1.0) + 1.0;
+    return a2 / (3.141592654 * k * k);
+}
+
+fn pt_g1(nx: f32, a2: f32) -> f32 {
+    return 2.0 * nx / (nx + sqrt(a2 + (1.0 - a2) * nx * nx));
+}
+
+fn pt_fresnel(f0: f32, c: f32) -> f32 {
+    let m = clamp(1.0 - c, 0.0, 1.0);
+    let m2 = m * m;
+    return f0 + (1.0 - f0) * m2 * m2 * m;
+}
+
+// A half-vector of the visible normals for view v, in the frame where
+// the normal is +z (Heitz 2018): sampling the reflection by the share of
+// it a viewer sees.
+fn pt_vndf(v: vec3<f32>, alpha: f32) -> vec3<f32> {
+    let vh = normalize(vec3<f32>(alpha * v.x, alpha * v.y, v.z));
+    let lensq = vh.x * vh.x + vh.y * vh.y;
+    var t1 = vec3<f32>(1.0, 0.0, 0.0);
+    if (lensq > 0.0) {
+        t1 = vec3<f32>(-vh.y, vh.x, 0.0) * inverseSqrt(lensq);
+    }
+    let t2 = cross(vh, t1);
+    let r = sqrt(pt_rand());
+    let phi = 6.283185307 * pt_rand();
+    let p1 = r * cos(phi);
+    let s = 0.5 * (1.0 + vh.z);
+    let p2 = (1.0 - s) * sqrt(max(1.0 - p1 * p1, 0.0)) + s * r * sin(phi);
+    let nh = p1 * t1 + p2 * t2 + sqrt(max(1.0 - p1 * p1 - p2 * p2, 0.0)) * vh;
+    return normalize(vec3<f32>(alpha * nh.x, alpha * nh.y, max(nh.z, 0.0)));
 }
 
 struct PtSurface {
@@ -1127,8 +1189,9 @@ fn pt_surface(p: vec3<f32>, sec: i32, foot_rate: f32, t: f32, d: vec3<f32>) -> P
 fn pt_sample(px: u32, py: u32) -> vec4<f32> {
     let jx = pt_rand() - 0.5;
     let jy = pt_rand() - 0.5;
-    let d0 = pt_ray(px, py, jx, jy);
-    let o0 = params.eye.xyz;
+    let ray = pt_ray(px, py, jx, jy);
+    let d0 = ray.d;
+    let o0 = ray.o;
     let tmax = params.fdata[6].w / max(dot(d0, ifs_forward()), 1.0e-4);
     var h = hf_trace(o0, d0, tmax, 0.0);
     if (!h.hit) {
@@ -1167,7 +1230,17 @@ fn pt_sample(px: u32, py: u32) -> vec4<f32> {
         let albedo = surf.albedo.rgb;
         let bias = surf.texel * 1.0e-3 + (length(p) + length(params.eye.xyz)) * 1.0e-6;
         let start = p + n * bias;
-        // The lights, sampled over their angular size.
+        // Its glow.
+        radiance = radiance + through * albedo * pt.mat.z;
+        // The coat: Lambert under a gloss of reflectance f0 at normal
+        // incidence, the diffuse taking what the coat's Fresnel does not.
+        let f0 = pt.mat.x;
+        let a2 = max(pt.mat.y * pt.mat.y, 1.0e-4) * max(pt.mat.y * pt.mat.y, 1.0e-4);
+        let v = -d;
+        let nv = max(dot(n, v), 1.0e-4);
+        // The lights, sampled over their angular size. The diffuse in the
+        // rig's units (its I as pi times a radiance's), the gloss's
+        // physical BRDF times the same irradiance, pi I cos.
         for (var li = 0u; li < ifs_light_count(); li = li + 1u) {
             let ld = pt_cone(ifs_light_dir(li), pt.misc.w);
             let ndl = dot(n, ld);
@@ -1176,15 +1249,43 @@ fn pt_sample(px: u32, py: u32) -> vec4<f32> {
             }
             let s = hf_trace(start, ld, 1.0e30, 0.0);
             let vis = mix(1.0, select(1.0, 0.0, s.hit), clamp(pt.misc.z, 0.0, 1.0));
-            radiance = radiance + through * albedo * ifs_light_color(li) * (ifs_light_power(li) * ifs_diffuse() * ndl * vis);
+            var spec = 0.0;
+            var diff = 1.0;
+            if (f0 > 0.0) {
+                let h = normalize(ld + v);
+                let fr = pt_fresnel(f0, max(dot(v, h), 0.0));
+                spec = 3.141592654 * pt_ggx_d(max(dot(n, h), 0.0), a2) * pt_g1(ndl, a2) * pt_g1(nv, a2) * fr / (4.0 * ndl * nv);
+                diff = 1.0 - fr;
+            }
+            let light = ifs_light_color(li) * (ifs_light_power(li) * ndl * vis);
+            radiance = radiance + through * light * (albedo * (ifs_diffuse() * diff) + vec3<f32>(spec));
         }
         if (bounce >= pt.bounces) {
             break;
         }
-        // Lambert's bounce: the cosine sampling cancels the BRDF's cosine
-        // over pi, leaving the albedo.
-        let nd = pt_cosine(n);
-        through = through * albedo;
+        // The bounce: the gloss's lobe by the visible normals, chosen by
+        // the coat's Fresnel at this view; else Lambert's, whose cosine
+        // sampling leaves the albedo times what the coat lets through.
+        var nd = vec3<f32>(0.0, 0.0, 1.0);
+        let p_spec = select(0.0, clamp(pt_fresnel(f0, nv), 0.1, 0.9), f0 > 0.0);
+        if (pt_rand() < p_spec) {
+            let frame = pt_frame(n);
+            let vl = transpose(frame) * v;
+            let hl = pt_vndf(vl, sqrt(a2));
+            let h = frame * hl;
+            nd = reflect(-v, h);
+            let nl = dot(n, nd);
+            if (nl <= 0.0) {
+                break;
+            }
+            through = through * (pt_fresnel(f0, max(dot(v, h), 0.0)) * pt_g1(nl, a2) / p_spec);
+        } else {
+            nd = pt_cosine(n);
+            // No coat at all at reflectance 0: Schlick's term alone would
+            // still take (1 - cos)^5 of a glance.
+            let coat = select(0.0, pt_fresnel(f0, nv), f0 > 0.0);
+            through = through * albedo * ((1.0 - coat) / (1.0 - p_spec));
+        }
         if (bounce >= 1u) {
             let q = clamp(max(through.r, max(through.g, through.b)), 0.05, 0.95);
             if (pt_rand() > q) {
@@ -1417,6 +1518,33 @@ pub struct PathSettings {
     pub clamp: f32,
     /// Seeds the samples' random streams.
     pub seed: u32,
+    /// The gloss coat's reflectance at normal incidence (0: Lambert
+    /// alone) and its roughness.
+    pub gloss: f32,
+    pub roughness: f32,
+    /// The albedo's own glow.
+    pub emission: f32,
+    /// The lens's radius (0: a pinhole) and the focal plane's view
+    /// depth, in the world's units.
+    pub aperture: f32,
+    pub focus: f32,
+}
+
+impl Default for PathSettings {
+    /// Lambert alone through a pinhole: no gloss, no glow, no lens.
+    fn default() -> Self {
+        PathSettings {
+            bounces: 2,
+            environment: [0.0; 3],
+            clamp: 1.0e30,
+            seed: 1,
+            gloss: 0.0,
+            roughness: 0.5,
+            emission: 0.0,
+            aperture: 0.0,
+            focus: 1.0,
+        }
+    }
 }
 
 /// The path tracer's uniform. Mirrored by `PtParams`.
@@ -1429,6 +1557,8 @@ struct PathParamsGpu {
     seed: u32,
     env: [f32; 4],
     misc: [f32; 4],
+    mat: [f32; 4],
+    lens: [f32; 4],
 }
 
 /// The default sun when the lighting panel is untouched (plan H7): the
@@ -2601,6 +2731,8 @@ impl TerrainRenderer {
                 seed: settings.seed,
                 env: [settings.environment[0], settings.environment[1], settings.environment[2], 0.0],
                 misc: [per_ray, settings.clamp, view.shadow, radius.cos()],
+                mat: [settings.gloss.clamp(0.0, 1.0), settings.roughness.clamp(0.02, 1.0), settings.emission.max(0.0), 0.0],
+                lens: [settings.aperture.max(0.0), settings.focus.max(1.0e-6), 0.0, 0.0],
             };
             let buf = device.create_buffer(&BufferDescriptor {
                 label: Some("Terrain Path Params"),
@@ -3428,7 +3560,7 @@ pub(crate) mod gpu_tests {
         let mut v = view(camera([64.0, 48.0, 0.0], 0.9, 0.3, 60.0, 0.6));
         v.shading = dark();
         for bounces in [1u32, 2, 4] {
-            let settings = PathSettings { bounces, environment: l, clamp: 1.0e30, seed: 7 };
+            let settings = PathSettings { bounces, environment: l, clamp: 1.0e30, seed: 7, ..PathSettings::default() };
             r.reset_path();
             r.render_path(&device, &queue, &v, &settings, 8, 8);
             let out = read_output(&device, &queue, &r, w, h);
@@ -3439,7 +3571,7 @@ pub(crate) mod gpu_tests {
         // The valleys: the image's mean against L, to 1%.
         let hs = terrain("sinusoid", n as usize, m as usize);
         r.set_tile(&device, &queue, n, m, &hs, &vec![[1.0; 4]; (n * m) as usize]);
-        let settings = PathSettings { bounces: 24, environment: l, clamp: 1.0e30, seed: 7 };
+        let settings = PathSettings { bounces: 24, environment: l, clamp: 1.0e30, seed: 7, ..PathSettings::default() };
         r.reset_path();
         r.render_path(&device, &queue, &v, &settings, 1024, 64);
         let out = read_output(&device, &queue, &r, w, h);
@@ -3479,11 +3611,110 @@ pub(crate) mod gpu_tests {
         r.render(&device, &queue, &v);
         let lit = read_output(&device, &queue, &r, w, h);
         r.reset_path();
-        r.render_path(&device, &queue, &v, &PathSettings { bounces: 2, environment: [0.0; 3], clamp: 1.0e30, seed: 1 }, 4, 4);
+        r.render_path(&device, &queue, &v, &PathSettings { bounces: 2, environment: [0.0; 3], clamp: 1.0e30, seed: 1, ..PathSettings::default() }, 4, 4);
         let path = read_output(&device, &queue, &r, w, h);
         let worst = lit.iter().zip(&path).flat_map(|(a, b)| (0..4).map(move |k| (a[k] - b[k]).abs())).fold(0.0f32, f32::max);
         println!("sunlit plane: path against lit, worst {worst:.2e}");
         assert!(worst < 1e-4, "{worst}");
+    }
+
+    /// The material (T3b). Glow alone -- no light, no sky -- is the
+    /// albedo times the emission, exactly. Under a uniform sky a
+    /// dielectric coat (0.04) keeps a flat albedo-1 plane within the
+    /// single-scattering microfacet's known loss of L; a near-mirror
+    /// (reflectance 1, roughness 0.05) reflects the sky, L again.
+    #[test]
+    fn the_coat_and_the_glow() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (32u32, 24u32);
+        let (n, m) = (65u32, 65u32);
+        let mut r = TerrainRenderer::new(&device, w, h);
+        let albedo = [0.5f32, 0.25, 0.75, 1.0];
+        r.set_tile(&device, &queue, n, m, &vec![0.0; (n * m) as usize], &vec![albedo; (n * m) as usize]);
+        let mut v = view(camera([32.0, 32.0, 0.0], 0.8, 0.3, 50.0, 0.6));
+        v.shading = dark();
+        let glow = PathSettings { bounces: 0, emission: 2.0, ..PathSettings::default() };
+        r.reset_path();
+        r.render_path(&device, &queue, &v, &glow, 4, 4);
+        let out = read_output(&device, &queue, &r, w, h);
+        let worst = out.iter().filter(|p| p[3] > 0.0).flat_map(|p| (0..3).map(move |k| (p[k] - 2.0 * albedo[k]).abs())).fold(0.0f32, f32::max);
+        println!("glow: worst {worst:.2e}");
+        assert!(worst < 1e-5, "{worst}");
+        r.set_tile(&device, &queue, n, m, &vec![0.0; (n * m) as usize], &vec![[1.0; 4]; (n * m) as usize]);
+        let l = [0.5f32, 0.25, 0.75];
+        for (gloss, roughness, tolerance) in [(0.04f32, 0.5f32, 0.03f64), (1.0, 0.05, 0.02)] {
+            let s = PathSettings { bounces: 2, environment: l, gloss, roughness, ..PathSettings::default() };
+            r.reset_path();
+            r.render_path(&device, &queue, &v, &s, 512, 64);
+            let out = read_output(&device, &queue, &r, w, h);
+            let hit: Vec<&[f32; 4]> = out.iter().filter(|p| p[3] > 0.0).collect();
+            for k in 0..3 {
+                let mean = hit.iter().map(|p| p[k] as f64).sum::<f64>() / hit.len() as f64;
+                println!("coat {gloss}/{roughness}, channel {k}: mean {mean:.4} against {}", l[k]);
+                assert!(mean <= l[k] as f64 * 1.005, "no energy from nowhere: {mean}");
+                assert!(mean >= l[k] as f64 * (1.0 - tolerance), "{gloss}/{roughness} channel {k}: {mean}");
+            }
+        }
+    }
+
+    /// The lens (T3b): a pinhole -- aperture 0 -- is the same bits
+    /// whatever the focus; an open lens keeps the focal plane: a plane at
+    /// the focus, seen face on, converges to the pinhole's picture.
+    #[test]
+    fn the_lens_keeps_its_focal_plane() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (32u32, 24u32);
+        let (n, m) = (257u32, 257u32);
+        let albedo: Vec<[f32; 4]> = (0..n * m)
+            .map(|k| if ((k % n) / 16 + (k / n) / 16) % 2 == 0 { [0.9, 0.9, 0.9, 1.0] } else { [0.1, 0.1, 0.1, 1.0] })
+            .collect();
+        let mut r = TerrainRenderer::new(&device, w, h);
+        r.set_tile(&device, &queue, n, m, &vec![0.0; (n * m) as usize], &albedo);
+        // Straight down from 200 cells: the plane is the focal plane.
+        let mut v = view(camera([128.0, 128.0, 0.0], 1.5707, -std::f64::consts::FRAC_PI_2, 200.0, 0.6));
+        v.shading = dark();
+        let env = [1.0f32, 1.0, 1.0];
+        let sum = |r: &mut TerrainRenderer, s: &PathSettings, samples: u32| {
+            r.reset_path();
+            r.render_path(&device, &queue, &v, s, samples, samples);
+            read_buffer(&device, &queue, r.path_sum_for_test(), (w * h * 16) as u64)
+        };
+        let pin_a = sum(&mut r, &PathSettings { bounces: 1, environment: env, focus: 50.0, ..PathSettings::default() }, 16);
+        let pin_b = sum(&mut r, &PathSettings { bounces: 1, environment: env, focus: 300.0, ..PathSettings::default() }, 16);
+        assert_eq!(pin_a, pin_b, "a pinhole ignores the focus");
+        let pinhole = {
+            r.reset_path();
+            r.render_path(&device, &queue, &v, &PathSettings { bounces: 1, environment: env, ..PathSettings::default() }, 256, 64);
+            read_output(&device, &queue, &r, w, h)
+        };
+        let lens = {
+            r.reset_path();
+            let s = PathSettings { bounces: 1, environment: env, aperture: 20.0, focus: 200.0, ..PathSettings::default() };
+            r.render_path(&device, &queue, &v, &s, 256, 64);
+            read_output(&device, &queue, &r, w, h)
+        };
+        let worst = pinhole.iter().zip(&lens).flat_map(|(a, b)| (0..3).map(move |k| (a[k] - b[k]).abs())).fold(0.0f32, f32::max);
+        println!("in focus: lens against pinhole, worst {worst:.3}");
+        assert!(worst < 0.03, "{worst}");
+        // Out of focus, the checks blur toward their mean.
+        let blurred = {
+            r.reset_path();
+            let s = PathSettings { bounces: 1, environment: env, aperture: 20.0, focus: 60.0, ..PathSettings::default() };
+            r.render_path(&device, &queue, &v, &s, 256, 64);
+            read_output(&device, &queue, &r, w, h)
+        };
+        let spread = |img: &[[f32; 4]]| {
+            let mean = img.iter().map(|p| p[0]).sum::<f32>() / img.len() as f32;
+            (img.iter().map(|p| (p[0] - mean).powi(2)).sum::<f32>() / img.len() as f32).sqrt()
+        };
+        println!("contrast: focused {:.3}, blurred {:.3}", spread(&lens), spread(&blurred));
+        assert!(spread(&blurred) < 0.7 * spread(&lens), "out of focus blurs");
     }
 
     /// The same samples in any number of dispatches are the same bits:
@@ -3502,7 +3733,7 @@ pub(crate) mod gpu_tests {
         let mut r = TerrainRenderer::new(&device, w, h);
         r.set_tile(&device, &queue, n, m, &hs, &albedo);
         let v = view(camera([64.0, 48.0, 8.0], 0.6, 0.4, 150.0, 0.9));
-        let settings = PathSettings { bounces: 3, environment: [0.3, 0.4, 0.6], clamp: 10.0, seed: 3 };
+        let settings = PathSettings { bounces: 3, environment: [0.3, 0.4, 0.6], clamp: 10.0, seed: 3, ..PathSettings::default() };
         let mut sums = Vec::new();
         for per in [1u32, 4, 12, 12] {
             r.reset_path();

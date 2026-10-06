@@ -2005,6 +2005,11 @@ impl ConfigManager {
             ConfigPath::EscapeTerrainSamples => Ok(ConfigValue::UInt(config.escape.terrain.samples)),
             ConfigPath::EscapeTerrainBounces => Ok(ConfigValue::UInt(config.escape.terrain.bounces)),
             ConfigPath::EscapeTerrainEnvironment => Ok(config.escape.terrain.environment.into()),
+            ConfigPath::EscapeTerrainGloss => Ok(config.escape.terrain.gloss.into()),
+            ConfigPath::EscapeTerrainRoughness => Ok(config.escape.terrain.roughness.into()),
+            ConfigPath::EscapeTerrainEmission => Ok(config.escape.terrain.emission.into()),
+            ConfigPath::EscapeTerrainAperture => Ok(config.escape.terrain.aperture.into()),
+            ConfigPath::EscapeTerrainFocus => Ok(config.escape.terrain.focus.into()),
             ConfigPath::EscapeTerrainInterior => Ok(ConfigValue::String(config.escape.terrain.interior.as_str().to_string())),
             ConfigPath::EscapeTerrainShadow => Ok(config.escape.terrain.shadow.into()),
             ConfigPath::EscapeTerrainShadowSharpness => Ok(config.escape.terrain.shadow_sharpness.into()),
@@ -3431,6 +3436,26 @@ impl ConfigManager {
             ConfigPath::EscapeTerrainEnvironment => {
                 let v: f32 = value.try_into()?;
                 self.current.escape.terrain.environment = v.clamp(0.0, 16.0);
+            }
+            ConfigPath::EscapeTerrainGloss => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.terrain.gloss = v.clamp(0.0, 1.0);
+            }
+            ConfigPath::EscapeTerrainRoughness => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.terrain.roughness = v.clamp(0.02, 1.0);
+            }
+            ConfigPath::EscapeTerrainEmission => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.terrain.emission = v.clamp(0.0, 16.0);
+            }
+            ConfigPath::EscapeTerrainAperture => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.terrain.aperture = v.clamp(0.0, 1.0);
+            }
+            ConfigPath::EscapeTerrainFocus => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.terrain.focus = v.clamp(0.0, 64.0);
             }
             ConfigPath::EscapeTerrainInterior => {
                 let v: String = value.try_into()?;

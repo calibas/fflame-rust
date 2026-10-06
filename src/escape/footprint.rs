@@ -208,7 +208,19 @@ pub fn path_settings(config: &FractalConfig) -> PathSettings {
     let env = config.background_color.map(|c| t.environment * c.max(0.0).powf(gamma) / exposure);
     let lights: f32 = config.solid_shading.lights.iter().filter(|l| l.enabled).map(|l| l.intensity.max(0.0)).sum();
     let brightest = lights.max(1.0).max(env.iter().cloned().fold(0.0, f32::max));
-    PathSettings { bounces: t.bounces.min(16), environment: env, clamp: 10.0 * brightest, seed: 1 }
+    PathSettings {
+        bounces: t.bounces.min(16),
+        environment: env,
+        clamp: 10.0 * brightest.max(t.emission),
+        seed: 1,
+        gloss: t.gloss,
+        roughness: t.roughness,
+        emission: t.emission,
+        aperture: t.aperture,
+        // The target is FRAME_DISTANCE along the view: in focus by
+        // default.
+        focus: if t.focus > 0.0 { t.focus } else { FRAME_DISTANCE as f32 },
+    }
 }
 
 /// How a section becomes atlas samples. `derivative` is whether its
