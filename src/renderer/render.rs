@@ -31,6 +31,11 @@ pub struct RenderEngines {
     /// reference orbit; each frame still renders to settlement.
     #[cfg(feature = "engine-escape")]
     pub escape: Option<crate::escape::EscapeRenderer>,
+    /// The escape terrain: its footprint is re-rendered only when the
+    /// 2D picture changes, so a camera move between frames is a 3D
+    /// render alone.
+    #[cfg(feature = "terrain")]
+    pub terrain: Option<crate::escape::footprint::EscapeTerrain>,
 }
 
 /// Configuration for a render job
@@ -242,8 +247,16 @@ pub async fn render(
     // built below whichever engine ends up rendering. The limits are
     // knowable up front; the alternative is a rejected allocation
     // that stops nothing and a black image.
+    #[cfg(feature = "terrain")]
+    if job.config.render_mode == crate::scene::transforms::RenderMode::Escape && job.config.escape.terrain_active() {
+        if let Some(why) =
+            crate::escape::footprint::EscapeTerrain::allocation_error(device, &job.config.escape, job.width, job.height)
+        {
+            return Err(RenderError::OutOfMemory(why));
+        }
+    }
     #[cfg(feature = "engine-escape")]
-    if job.config.render_mode == crate::scene::transforms::RenderMode::Escape {
+    if job.config.render_mode == crate::scene::transforms::RenderMode::Escape && !job.config.escape.terrain_active() {
         if let Some(why) = crate::escape::EscapeRenderer::allocation_error(
             device,
             &job.config.escape,
@@ -956,6 +969,13 @@ async fn render_escape(
         renderer.set_transparent_mode(queue, true, job.premultiplied, job.config, job.iterations_per_thread);
     }
 
+    // The 3D terrain view draws the same picture as a height field;
+    // only its generator differs, and the tail is this one.
+    #[cfg(feature = "terrain")]
+    if job.config.escape.terrain_active() {
+        return render_escape_terrain(renderer, device, queue, job, progress, start_time).await;
+    }
+
     // The generator. High-iteration deep renders run as bounded
     // chunked dispatches, each its own submission — the driver never
     // sees an unbounded pass (the TDR class of crash). The final
@@ -978,6 +998,7 @@ async fn render_escape(
     // WebGPU; running it on the CALLER's renderer would hand the next
     // frame a corpse.
     let caller_owned = job.engines.is_some();
+    let (config, width, height, transparent) = (job.config, job.width, job.height, job.transparent);
     let mut owned: Option<crate::escape::EscapeRenderer> = None;
     let make = || crate::escape::EscapeRenderer::new(device, job.width, job.height);
     let escape_renderer: &mut crate::escape::EscapeRenderer = match job.engines {
@@ -988,44 +1009,7 @@ async fn render_escape(
     // CLI, thumbnails): a saved file reproduces exactly.
     let want_ss = job.config.escape.supersample.max(1);
     escape_renderer.resize(device, job.width, job.height, want_ss);
-    // Mode D reads the flame as an IFS, so the analysis runs once per
-    // job here rather than per pixel in the shader. A flame that does
-    // not qualify hands the renderer `None` and draws nothing — the
-    // panel is where the reason is explained.
-    if let Some(def) = crate::escape::ifs::get_ifs(&job.config.escape.formula) {
-        let registry = crate::variations::global_registry();
-        escape_renderer.set_ifs(crate::escape::ifs::pack_for(def, &job.config, &registry));
-        // The MEASURE colouring reads a coarse pass over the ball;
-        // without one it renders black. Keyed on the flame, so this
-        // is once per flame and not once per view.
-        escape_renderer.ensure_coarse(device, queue, &job.config.escape, &job.config.flame);
-        // A SOLID walk lights itself, from the app's own lighting
-        // settings rather than a second vocabulary of its own.
-        escape_renderer.set_solid_lighting(
-            &job.config.solid_shading,
-            (
-                job.config.fog_strength,
-                job.config.fog_start,
-                job.config.background_color,
-            ),
-        );
-    }
-    // The texture's image (docs/projects/sim-textures.md): the
-    // config carries the recipe, and the image comes from the cache or
-    // is generated here, so a saved file renders the same anywhere.
-    if job.config.escape.uses_texture() {
-        if let Some(texture) = &job.config.escape.texture {
-            let key = crate::textures::cache::key(&texture.config);
-            if escape_renderer.texture_key() != Some(key.as_str()) {
-                match crate::textures::obtain(device, queue, &texture.config).await {
-                    Ok(image) => {
-                        escape_renderer.set_texture(device, queue, &key, &image);
-                    }
-                    Err(e) => log::warn!("texture '{}' could not be generated: {e}", texture.name),
-                }
-            }
-        }
-    }
+    prepare_escape(escape_renderer, device, queue, job.config).await;
     // No UI to keep responsive here, and every chunk pays a downsample
     // pass over the supersampled image — so chunk for throughput.
     escape_renderer.set_chunk_time_target(200.0);
@@ -1101,15 +1085,62 @@ async fn render_escape(
         queue.submit(std::iter::once(encoder.finish()));
         let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
     }
+    let escape_view = match escape_renderer.accumulated_view() {
+        Some(v) if extra > 1 => v,
+        _ => escape_renderer.output_view(),
+    };
+    let pixels = escape_tail(renderer, device, queue, config, (width, height, transparent), escape_view, oom_scope).await;
+    // Readback completion (or the memory error found before it) proves
+    // every submission finished -- the safe destroy point.
+    if !caller_owned {
+        escape_renderer.destroy();
+    }
+    let (width, height, rgba_data) = pixels?;
+
+    progress.on_progress(1, 1);
+    let render_time_ms = start_time.elapsed().as_secs_f64() * 1000.0;
+    log::info!(
+        "Render: escape complete - {}x{} in {:.1}ms",
+        width,
+        height,
+        render_time_ms
+    );
+
+    Ok(RenderOutput {
+        width,
+        height,
+        rgba_data,
+        // "Iterations" means something different here: report the
+        // per-pixel ceiling, not a chaos-game sample count.
+        total_iterations: job.config.escape.max_iter as u64,
+        render_time_ms,
+        frame_coverage: 1.0,
+    })
+}
+
+/// The escape engine's tail, shared by the 2D picture and the terrain:
+/// density effects -> tonemap -> colour effects -> read back. `input`
+/// is the generator's image in the accumulator's layout; the caller
+/// frees its own generator after this returns, either way.
+#[cfg(feature = "engine-escape")]
+async fn escape_tail(
+    renderer: &mut FlameRenderer,
+    device: &Device,
+    queue: &Queue,
+    config: &FractalConfig,
+    (width, height, transparent): (u32, u32, bool),
+    escape_view: &wgpu::TextureView,
+    oom_scope: wgpu::ErrorScopeGuard,
+) -> Result<(u32, u32, Vec<u8>), RenderError> {
     let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
         label: Some("Escape Tail"),
     });
 
     // Shared tail: density effects → tonemap → color effects → read.
-    let has_density_effects = EffectChainRunner::has_enabled_effects(&job.config.density_effects);
-    let has_color_effects = EffectChainRunner::has_enabled_effects(&job.config.color_effects);
+    let has_density_effects = EffectChainRunner::has_enabled_effects(&config.density_effects);
+    let has_color_effects = EffectChainRunner::has_enabled_effects(&config.color_effects);
     let mut effect_chain = if has_density_effects || has_color_effects {
-        Some(EffectChainRunner::new(device, job.width, job.height))
+        Some(EffectChainRunner::new(device, width, height))
     } else {
         None
     };
@@ -1117,10 +1148,6 @@ async fn render_escape(
         chain.reset_slots();
     }
 
-    let escape_view = match escape_renderer.accumulated_view() {
-        Some(v) if extra > 1 => v,
-        _ => escape_renderer.output_view(),
-    };
     if has_density_effects {
         let chain = effect_chain.as_mut().expect("built above: has_density_effects");
         let density_ran = chain.run_density_effects(
@@ -1128,7 +1155,7 @@ async fn render_escape(
             queue,
             &mut encoder,
             escape_view,
-            &job.config.density_effects,
+            &config.density_effects,
         );
         match (density_ran, chain.get_density_output()) {
             (true, Some(density_output)) => {
@@ -1151,7 +1178,7 @@ async fn render_escape(
             queue,
             &mut color_encoder,
             renderer.get_fractal_texture_view(),
-            &job.config.color_effects,
+            &config.color_effects,
         );
         queue.submit(std::iter::once(color_encoder.finish()));
         ran
@@ -1164,9 +1191,6 @@ async fn render_escape(
     // scope covers the whole render, the per-sample accumulation
     // passes included.
     if let Some(err) = oom_scope.pop().await {
-        if !caller_owned {
-            escape_renderer.destroy();
-        }
         if let Some(chain) = &effect_chain {
             chain.destroy();
         }
@@ -1182,7 +1206,7 @@ async fn render_escape(
             .map_err(RenderError::PixelReadFailed)
     } else {
         renderer
-            .read_fractal_pixels(device, queue, job.transparent, job.config.background_color)
+            .read_fractal_pixels(device, queue, transparent, config.background_color)
             .await
             .map_err(|e| RenderError::PixelReadFailed(e.to_string()))
     };
@@ -1192,27 +1216,140 @@ async fn render_escape(
     if let Some(chain) = &effect_chain {
         chain.destroy();
     }
+    pixels
+}
+
+/// What any escape render needs before its first chunk: a qualifying
+/// flame's IFS analysis (mode D, and the 2D IFS formulas) and a
+/// texture layer's image.
+#[cfg(feature = "engine-escape")]
+async fn prepare_escape(
+    escape_renderer: &mut crate::escape::EscapeRenderer,
+    device: &Device,
+    queue: &Queue,
+    config: &FractalConfig,
+) {
+    // Mode D reads the flame as an IFS, so the analysis runs once per
+    // job here rather than per pixel in the shader. A flame that does
+    // not qualify hands the renderer `None` and draws nothing — the
+    // panel is where the reason is explained.
+    if let Some(def) = crate::escape::ifs::get_ifs(&config.escape.formula) {
+        let registry = crate::variations::global_registry();
+        escape_renderer.set_ifs(crate::escape::ifs::pack_for(def, config, &registry));
+        // The MEASURE colouring reads a coarse pass over the ball;
+        // without one it renders black. Keyed on the flame, so this
+        // is once per flame and not once per view.
+        escape_renderer.ensure_coarse(device, queue, &config.escape, &config.flame);
+        // A SOLID walk lights itself, from the app's own lighting
+        // settings rather than a second vocabulary of its own.
+        escape_renderer.set_solid_lighting(
+            &config.solid_shading,
+            (
+                config.fog_strength,
+                config.fog_start,
+                config.background_color,
+            ),
+        );
+    }
+    // The texture's image (docs/projects/sim-textures.md): the
+    // config carries the recipe, and the image comes from the cache or
+    // is generated here, so a saved file renders the same anywhere.
+    if config.escape.uses_texture() {
+        if let Some(texture) = &config.escape.texture {
+            let key = crate::textures::cache::key(&texture.config);
+            if escape_renderer.texture_key() != Some(key.as_str()) {
+                match crate::textures::obtain(device, queue, &texture.config).await {
+                    Ok(image) => {
+                        escape_renderer.set_texture(device, queue, &key, &image);
+                    }
+                    Err(e) => log::warn!("texture '{}' could not be generated: {e}", texture.name),
+                }
+            }
+        }
+    }
+}
+
+/// The 3D terrain view of an escape picture (docs/projects/heightfield-3d.md,
+/// phase T2): the footprint -- the 2D picture at the view, square, at
+/// the terrain's resolution -- rendered to settlement and ingested as a
+/// tile, then the terrain drawn in the lit tier. Antialiasing is the
+/// config's supersample as accumulation: `supersample²` renders, each
+/// jittered within the pixel. Then the escape tail, unchanged.
+#[cfg(feature = "terrain")]
+async fn render_escape_terrain(
+    renderer: &mut FlameRenderer,
+    device: &Device,
+    queue: &Queue,
+    mut job: RenderJob<'_>,
+    progress: &mut dyn RenderProgress,
+    start_time: web_time::Instant,
+) -> Result<RenderOutput, RenderError> {
+    use crate::escape::footprint::EscapeTerrain;
+    let oom_scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let caller_owned = job.engines.is_some();
+    let (job_w, job_h, transparent) = (job.width, job.height, job.transparent);
+    let mut owned: Option<EscapeTerrain> = None;
+    let make = || EscapeTerrain::new(device, job.width, job.height);
+    let terrain: &mut EscapeTerrain = match job.engines {
+        Some(ref mut engines) => engines.terrain.get_or_insert_with(make),
+        None => owned.insert(make()),
+    };
+    terrain.resize(device, job.width, job.height);
+    let config = job.config;
+    let n = terrain.size_footprint(device, &config.escape);
+    let palette = renderer.escape_palette_view(config.escape.palette_map.stepped);
+    let generation = renderer.palette_generation();
+    if terrain.footprint_stale(config) {
+        log::info!("Render: terrain footprint {n}x{n}");
+        prepare_escape(terrain.footprint_renderer(), device, queue, config).await;
+        terrain.footprint_renderer().set_chunk_time_target(200.0);
+        let mut guard = 0u32;
+        loop {
+            let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("Terrain Footprint"),
+            });
+            let settled = terrain.render_footprint(device, queue, &mut encoder, config, palette, generation);
+            queue.submit(std::iter::once(encoder.finish()));
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            if settled {
+                break;
+            }
+            guard += 1;
+            if guard > 4_000_000 {
+                log::error!("terrain footprint failed to settle; using what we have");
+                break;
+            }
+        }
+    }
+    terrain.ingest(device, queue, config);
+    let ss = config.escape.supersample.max(1);
+    terrain.reset_accumulation();
+    for jitter in crate::escape::EscapeRenderer::sample_grid(ss) {
+        terrain.render(device, queue, config, jitter);
+        terrain.accumulate(device, queue);
+    }
+    let pixels = escape_tail(renderer, device, queue, config, (job_w, job_h, transparent), terrain.output_view(), oom_scope).await;
     if !caller_owned {
-        escape_renderer.destroy();
+        terrain.destroy();
     }
     let (width, height, rgba_data) = pixels?;
 
     progress.on_progress(1, 1);
     let render_time_ms = start_time.elapsed().as_secs_f64() * 1000.0;
     log::info!(
-        "Render: escape complete - {}x{} in {:.1}ms",
+        "Render: escape terrain complete - {}x{} ({}x{} footprint, {} samples) in {:.1}ms",
         width,
         height,
+        n,
+        n,
+        ss * ss,
         render_time_ms
     );
-
     Ok(RenderOutput {
         width,
         height,
         rgba_data,
-        // "Iterations" means something different here: report the
-        // per-pixel ceiling, not a chaos-game sample count.
-        total_iterations: job.config.escape.max_iter as u64,
+        total_iterations: config.escape.max_iter as u64,
         render_time_ms,
         frame_coverage: 1.0,
     })

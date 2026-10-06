@@ -802,6 +802,110 @@ terrain.**
       albedo to 4.9e-4 (the f16), interior pixels a plateau.
     - All 111 escape baselines byte-identical; the shader dumps and
       `release.py check` unchanged.
+- **T2b as built** (2026-10-05): the terrain through `render_with`, so
+  the CLI, thumbnails and video draw it.
+  [src/escape/footprint.rs](../../src/escape/footprint.rs):
+  `EscapeTerrain`, the footprint's `EscapeRenderer` and the
+  `TerrainRenderer`, and the mapping from the config to both.
+  - **The `terrain` cargo feature**, on by default. The gallery modules
+    are built without it (H2), so their downloads do not carry it.
+    `EscapeConfig::terrain_active` is the one question everything asks:
+    switched on, for a formula that draws a plane (a solid IFS is
+    already mode D's 3D), in a build with the feature. Without it a
+    terrain config renders as its 2D picture, relief and all.
+  - **The footprint is the view.** The config's own centre, zoom and
+    rotation, square, at `resolution` (clamped to the device's texture
+    side), with supersample forced to 1. The view's `rotation` turns
+    the footprint, as it turns the 2D picture, instead of rolling the
+    screen as it does in mode D.
+  - **What re-renders it.** The footprint is keyed on its picture
+    alone: the escape config with the camera and the 3D-only terrain
+    fields set to their defaults; the palette and every setting that
+    writes its texture, by CONTENT; and the flame, when the formula is a
+    2D IFS that draws it. The flame renderer's palette generation could
+    not serve: every config load bumps it, so each video frame would
+    have re-rendered an unchanged footprint.
+  - **The camera, decided while building** (all in the tile's cells,
+    where the footprint is `n` cells across at any zoom):
+    - **The target is the view's centre**, not mode D's
+      `cam_target_*`, which terrains leave unused. One centre for the
+      2D picture and the terrain: switching between them keeps the
+      place, and the footprint is centred on the target by
+      construction.
+    - **The target stands at the terrain's top, H.** With any pitch
+      above the horizon the eye is then above every point of the
+      terrain, including while a footprint lags a dolly (T2c).
+    - **`cam_yaw` 0 looks north**, up the 2D picture: the frame's yaw
+      is `cam_yaw − 90°`. So a straight-down view is the 2D picture
+      upright.
+    - **The distance is 1.3 footprint widths** (`FRAME_DISTANCE`): the
+      whole footprint in a 16:9 frame at the default field of view and
+      pitch, with a tenth to spare. A narrower frame crops the near
+      corners, as any fixed vertical field of view does.
+    - **The pitch is the shared default, 24°**, not section 8's 35°.
+      It is mode D's default and the same field. Section 8's 35° on
+      enabling is the panel's to set (T2c).
+  - **What mode D keeps as formula parameters**, Shadows, Shadow
+    Sharpness and Occlusion Reach, are `TerrainConfig` fields:
+    `shadow` 0.7 and `shadow_sharpness` 12 (mode D's defaults), and
+    `occlusion` 0.006 of the footprint, about the distance flanks'
+    width.
+  - **Fog is measured in footprint widths**, as mode D's is in the
+    attractor's units.
+  - **Antialiasing is the config's supersample, as accumulation:**
+    `supersample²` renders, each with its rays jittered within the
+    pixel (spliced into `ifs_ray` at its lens marker, so mode D's text
+    is unchanged), folded into a running mean. The mean is taken
+    premultiplied and stored straight, the accumulator contract, so a
+    silhouette's edge is the surface's colour at a fraction of its
+    coverage.
+  - **The plateau's colour** is the interior's own where the colouring
+    draws one, the background's where it does not (section 5; T2a had
+    only the background).
+  - **`render_with`** branches to `render_escape_terrain` after the
+    config load. The escape path's preparation (a 2D IFS's analysis, a
+    texture's image) and its tail (density effects, tonemap, colour
+    effects, readback) were moved into `prepare_escape` and
+    `escape_tail`, which both paths call. The 2D path's calls are
+    unchanged in order: all 111 baselines are byte-identical.
+  - **`RenderEngines.terrain`** keeps the `EscapeTerrain` across a
+    video's frames, so a camera move between frames is a 3D render
+    alone.
+  - **Memory** is checked before allocating: the footprint as an
+    escape render at `n²`, and the terrain's 64 B per output pixel (the
+    geometry record, the render and the accumulation's pair) against
+    the storage-binding and texture limits.
+  - **Gates, all passing:**
+    - The camera's conventions: the target at the screen's centre,
+      north up and east right at yaw 0, a quarter turn of yaw looking
+      east, the eye above the terrain, the footprint's eight corners
+      inside a 16:9 frame.
+    - The footprint's key ignores the camera, the heights, the
+      interior, the shadow and the occlusion, and not the source or the
+      zoom.
+    - Through `render`: sky across the top row, lit terrain at the
+      centre, the same bytes twice, and not the 2D picture.
+    - A caller-owned engine renders the footprint once over camera,
+      height and light edits, and again for a zoom; its frames equal
+      a fresh render's.
+    - Video's shape (one flame renderer across frames): four frames,
+      one footprint; a palette rotation, a second, and it shows.
+    - **Deep zoom** (`fe-zoom-60-edge`, 2^60, the perturbed floatexp
+      path): the footprint's colour equals the 2D render's exactly
+      (worst difference 0), and its distance estimates are in pixels,
+      median 11.9 px, 95% under 54: the sizes they have at any zoom.
+    - The `escape-terrain-seahorse` baseline (112 escape baselines
+      pass), and `release.py check`, including the gallery builds
+      without the feature.
+  - **Measured** on the GTX 1660 SUPER, CLI, including the 2048²
+    footprint:
+    - the seahorse valley (1,024 iterations) at 800×600 with 4 samples:
+      84 ms;
+    - 2^60 at 30,000 iterations, 1280×720: 1.4 s, nearly all of it the
+      footprint.
+  - **Seen** (`output/heightfield_t2/`): the whole set, the seahorse
+    valley by distance and by count (the count's spikes, as section 2
+    found), the interior as a hole, and 2^60.
 
 **T3 — Path tracing, for terrains and IFS solids.**
 - **Built.**

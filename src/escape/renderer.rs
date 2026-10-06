@@ -3276,7 +3276,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// Whether the iterate pass compiles a real derivative orbit. On the
     /// perturbed path, where `perturbed_derivative` says it can carry one.
     /// Mirrors assemble_with and assemble_perturbed_full.
-    fn derivative_active(&self, escape: &EscapeConfig) -> bool {
+    pub(crate) fn derivative_active(&self, escape: &EscapeConfig) -> bool {
         if self.perturbed_path(escape) {
             return Self::perturbed_derivative(escape, self.floatexp_for(escape)).is_some();
         }
@@ -3845,6 +3845,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// raw value in red, the relief's -- or a terrain footprint's --
     /// height source in green. Full size only while something asks for
     /// it (`ensure_height`).
+    #[cfg(feature = "terrain")]
     pub(crate) fn height_view(&self) -> &TextureView {
         &self.height_view
     }
@@ -6730,7 +6731,7 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let mode = escape.downsample;
         let factor = self.supersample;
         // A terrain's footprint is lit in 3D, not by the 2D relief.
-        let shade_on = shading.enabled && !escape.terrain.enabled;
+        let shade_on = shading.enabled && !escape.terrain_active();
         let overlay_on = self.overlay_on(escape);
         if factor <= 1 && !shade_on && !overlay_on {
             return;
@@ -7799,7 +7800,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             damping: [escape.damping_re, escape.damping_im],
             // A terrain's footprint writes the terrain's height source
             // into the relief channel instead.
-            shade_flags: if escape.terrain.enabled {
+            shade_flags: if escape.terrain_active() {
                 escape.terrain.source.shade_flags(escape.shading.field)
             } else {
                 escape.shading.field.to_gpu()
@@ -7861,9 +7862,9 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // terrain (heightfield plan, section 5).
         self.ensure_height(
             device,
-            escape.shading.enabled || escape.contrast.is_active() || overlay || escape.terrain.enabled,
+            escape.shading.enabled || escape.contrast.is_active() || overlay || escape.terrain_active(),
         );
-        self.ensure_resolve_target(device, (escape.shading.enabled && !escape.terrain.enabled) || overlay);
+        self.ensure_resolve_target(device, (escape.shading.enabled && !escape.terrain_active()) || overlay);
         // Diagnostics: CPU time of this whole call, whatever path or
         // early return it takes (the drop guard writes on exit).
         let _diag_cpu = super::diag::CpuTimer::start();

@@ -25,9 +25,13 @@
 //!
 //!   It writes mode D's sixteen-byte geometry record.
 //! - **The relight.** Mode D's rig, the same WGSL text
-//!   (`assembler::ifs_rig_plain`), over the record and the albedo, into
-//!   the escape and simulation accumulator contract: rgb linear, alpha
-//!   coverage.
+//!   (`assembler::ifs_rig_jittered`), over the record and the albedo,
+//!   into the escape and simulation accumulator contract: rgb linear,
+//!   alpha coverage.
+//!
+//! Antialiasing is accumulation: renders jittered within the pixel,
+//! folded into a running mean (`accumulate`), weighted by coverage so a
+//! silhouette's edge averages to a fraction of the background.
 //!
 //! So a lighting edit is a relight and not a walk, as it is for mode D.
 //! The lights are WORLD-fixed here (plan H7): azimuth counter-clockwise
@@ -55,8 +59,8 @@ struct TerrainParamsGpu {
     levels: u32,
     /// Bit 0: count traversal steps into the stats buffer.
     flags: u32,
-    pad0: u32,
-    pad1: u32,
+    /// The rays' offset within their pixel, in pixels.
+    jitter: [f32; 2],
     /// The eye, in cell units; w the slab's floor (see `slab_floor`).
     eye: [f32; 4],
     /// x: shadow strength (0 traces no shadow rays), y: penumbra
@@ -205,8 +209,10 @@ fn ingest_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             textureStore(out_h, dst, vec4<f32>(ip.floor, 0.0, 0.0, 0.0));
             textureStore(out_a, dst, vec4<f32>(0.0, 0.0, 0.0, 0.0));
         } else {
+            // The interior's own colour where the colouring draws one,
+            // the background's where it does not.
             textureStore(out_h, dst, vec4<f32>(ip.height, 0.0, 0.0, 0.0));
-            textureStore(out_a, dst, vec4<f32>(ip.background.rgb, 1.0));
+            textureStore(out_a, dst, vec4<f32>(select(ip.background.rgb, c.rgb, c.a > 0.0), 1.0));
         }
         return;
     }
@@ -225,6 +231,47 @@ fn ingest_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 "#;
 
+/// The accumulation: a jittered render folded into the running mean,
+/// read from one texture of a pair and written to the other. Averaged
+/// PREMULTIPLIED and stored straight, as the accumulator contract
+/// wants: a sample that misses (alpha 0) leaves the colour alone and
+/// lowers the coverage, so an edge pixel is the surface's colour at a
+/// fraction of its alpha rather than a darker colour at full alpha.
+const ACCUM_WGSL: &str = r#"
+struct AccumParams {
+    width: u32,
+    height: u32,
+    count: u32,
+    pad: u32,
+};
+@group(0) @binding(0) var<uniform> ap: AccumParams;
+@group(0) @binding(1) var sample_tex: texture_2d<f32>;
+@group(0) @binding(2) var prev: texture_2d<f32>;
+@group(0) @binding(3) var next: texture_storage_2d<rgba32float, write>;
+
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= ap.width || gid.y >= ap.height) {
+        return;
+    }
+    let p = vec2<i32>(gid.xy);
+    let s = textureLoad(sample_tex, p, 0);
+    if (ap.count == 0u) {
+        textureStore(next, p, s);
+        return;
+    }
+    let o = textureLoad(prev, p, 0);
+    let w = 1.0 / f32(ap.count + 1u);
+    let a = mix(o.a, s.a, w);
+    let pre = mix(o.rgb * o.a, s.rgb * s.a, w);
+    var rgb = vec3<f32>(0.0);
+    if (a > 0.0) {
+        rgb = pre / a;
+    }
+    textureStore(next, p, vec4<f32>(rgb, a));
+}
+"#;
+
 /// What a footprint's ingest needs to know: how its height source maps
 /// to heights, and what the interior becomes.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -238,7 +285,8 @@ pub struct TerrainIngest {
     pub de_width: f32,
     /// The interior as a hole rather than a plateau.
     pub hole: bool,
-    /// The interior's colour on a plateau, linear.
+    /// The plateau's colour where the colouring leaves the interior
+    /// undrawn: the background's.
     pub background: [f32; 3],
 }
 
@@ -252,8 +300,7 @@ struct TerrainParams {
     grid_m: u32,
     levels: u32,
     flags: u32,
-    pad0: u32,
-    pad1: u32,
+    jitter: vec2<f32>,
     eye: vec4<f32>,
     misc: vec4<f32>,
     fdata: array<vec4<f32>, 20>,
@@ -674,7 +721,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 pub fn assemble_walk() -> String {
     format!(
         "{}\n{}",
-        WALK_COMMON.replace("//__IFS_RIG__", &super::assembler::ifs_rig_plain()),
+        WALK_COMMON.replace("//__IFS_RIG__", &super::assembler::ifs_rig_jittered()),
         WALK_WGSL.replace("__HF_MAX_STEPS__", &HF_MAX_STEPS.to_string())
     )
 }
@@ -683,7 +730,7 @@ pub fn assemble_walk() -> String {
 pub fn assemble_relight() -> String {
     format!(
         "{}\n{}",
-        WALK_COMMON.replace("//__IFS_RIG__", &super::assembler::ifs_rig_plain()),
+        WALK_COMMON.replace("//__IFS_RIG__", &super::assembler::ifs_rig_jittered()),
         RELIGHT_WGSL
     )
 }
@@ -709,6 +756,9 @@ pub struct TerrainView {
     pub softness: f32,
     /// Occlusion reach, in cells.
     pub occlusion_reach: f32,
+    /// The rays' offset within their pixel, in pixels ([-0.5, 0.5]): one
+    /// sample of an accumulated render.
+    pub jitter: [f32; 2],
 }
 
 /// The default sun when the lighting panel is untouched (plan H7): the
@@ -771,8 +821,8 @@ fn pack_rig(cam: &SolidCamera, shading: &SolidShadingSettings, fog: (f32, f32, [
 fn walk_key(view: &TerrainView, w: u32, h: u32, tile: u64) -> String {
     let c = &view.camera;
     let mut k = format!(
-        "{w}x{h}|{tile}|{:?}|{:?}|{:?}|{:?}|{}|{}|{}|{}",
-        c.eye, c.forward, c.right, c.up, c.fov, view.shadow > 0.0, view.softness, view.occlusion_reach
+        "{w}x{h}|{tile}|{:?}|{:?}|{:?}|{:?}|{}|{}|{}|{}|{:?}",
+        c.eye, c.forward, c.right, c.up, c.fov, view.shadow > 0.0, view.softness, view.occlusion_reach, view.jitter
     );
     let any = !SolidShadingSettings::is_default(&view.shading);
     k.push_str(&format!("|{any}"));
@@ -808,6 +858,14 @@ pub struct TerrainRenderer {
     ingest_layout: BindGroupLayout,
     range_pipeline: ComputePipeline,
     ingest_pipeline: ComputePipeline,
+    accum_layout: BindGroupLayout,
+    accum_pipeline: ComputePipeline,
+    /// The accumulation's pair, allocated on the first `accumulate`;
+    /// `accum_front` is the one holding the mean.
+    accum: Option<[(Texture, TextureView); 2]>,
+    accum_front: usize,
+    /// Samples in the mean; 0 starts a new one.
+    accum_count: u32,
     params: Buffer,
     stats: Buffer,
     geom: Buffer,
@@ -885,6 +943,10 @@ impl TerrainRenderer {
                 storage_tex(5, TextureFormat::Rgba16Float),
             ],
         });
+        let accum_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Terrain Accumulate"),
+            entries: &[uniform(0), tex(1), tex(2), storage_tex(3, TextureFormat::Rgba32Float)],
+        });
         let entry = |label: &str, layout: &BindGroupLayout, src: &str, entry: &str| {
             let module = device.create_shader_module(ShaderModuleDescriptor {
                 label: Some(label),
@@ -910,6 +972,7 @@ impl TerrainRenderer {
         let relight_pipeline = pipeline("Terrain Relight", &relight_layout, assemble_relight());
         let range_pipeline = entry("Terrain Range", &ingest_layout, INGEST_WGSL, "range_main");
         let ingest_pipeline = entry("Terrain Ingest", &ingest_layout, INGEST_WGSL, "ingest_main");
+        let accum_pipeline = entry("Terrain Accumulate", &accum_layout, ACCUM_WGSL, "main");
         let params = device.create_buffer(&BufferDescriptor {
             label: Some("Terrain Params"),
             size: std::mem::size_of::<TerrainParamsGpu>() as u64,
@@ -934,6 +997,11 @@ impl TerrainRenderer {
             ingest_layout,
             range_pipeline,
             ingest_pipeline,
+            accum_layout,
+            accum_pipeline,
+            accum: None,
+            accum_front: 0,
+            accum_count: 0,
             params,
             stats,
             geom,
@@ -979,6 +1047,8 @@ impl TerrainRenderer {
             return;
         }
         self.output = Self::create_output(device, out_w, out_h);
+        self.accum = None;
+        self.accum_count = 0;
         if out_w * out_h > self.geom_px {
             self.geom = Self::create_geom(device, out_w * out_h);
             self.geom_px = out_w * out_h;
@@ -994,6 +1064,109 @@ impl TerrainRenderer {
 
     pub fn output_texture(&self) -> &Texture {
         &self.output.0
+    }
+
+    /// Bytes a pixel of the output costs: the geometry record, the
+    /// render and the accumulation's pair.
+    pub const BYTES_PER_PIXEL: u64 = 16 + 3 * 16;
+
+    /// Why a `w x h` terrain view cannot be held on this device: the
+    /// geometry record is one storage binding, and the textures have a
+    /// side limit.
+    pub fn allocation_error(device: &Device, w: u32, h: u32) -> Option<String> {
+        let lim = device.limits();
+        let side = lim.max_texture_dimension_2d;
+        if w > side || h > side {
+            return Some(format!("a terrain view of {w}x{h} is past this device's texture side of {side}"));
+        }
+        let geom = w as u64 * h as u64 * 16;
+        let cap = lim.max_buffer_size.min(lim.max_storage_buffer_binding_size as u64);
+        if geom > cap {
+            return Some(format!(
+                "a terrain view of {w}x{h} needs a {} MB geometry record, past this device's {} MB binding",
+                geom >> 20,
+                cap >> 20
+            ));
+        }
+        None
+    }
+
+    /// Free the GPU memory now: dropping frees nothing on WebGPU.
+    pub fn destroy(&self) {
+        self.params.destroy();
+        self.stats.destroy();
+        self.geom.destroy();
+        self.output.0.destroy();
+        if let Some(pair) = &self.accum {
+            pair[0].0.destroy();
+            pair[1].0.destroy();
+        }
+        if let Some(tile) = &self.tile {
+            tile.height.0.destroy();
+            tile.albedo.0.destroy();
+            tile.mips.destroy();
+        }
+    }
+
+    /// Start a new accumulation: the next `accumulate` replaces the mean.
+    pub fn reset_accumulation(&mut self) {
+        self.accum_count = 0;
+    }
+
+    /// Samples in the accumulation so far.
+    pub fn accumulated_samples(&self) -> u32 {
+        self.accum_count
+    }
+
+    /// Fold the last render into the accumulation. Submits its own work.
+    pub fn accumulate(&mut self, device: &Device, queue: &Queue) {
+        let (w, h) = (self.out_w, self.out_h);
+        let pair = self.accum.get_or_insert_with(|| [Self::create_output(device, w, h), Self::create_output(device, w, h)]);
+        let (prev, next) = (self.accum_front, 1 - self.accum_front);
+        let buf = device.create_buffer(&BufferDescriptor {
+            label: Some("Terrain Accumulate Params"),
+            size: 16,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&buf, 0, bytemuck::cast_slice(&[w, h, self.accum_count, 0u32]));
+        let bg = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Terrain Accumulate"),
+            layout: &self.accum_layout,
+            entries: &[
+                BindGroupEntry { binding: 0, resource: buf.as_entire_binding() },
+                BindGroupEntry { binding: 1, resource: BindingResource::TextureView(&self.output.1) },
+                BindGroupEntry { binding: 2, resource: BindingResource::TextureView(&pair[prev].1) },
+                BindGroupEntry { binding: 3, resource: BindingResource::TextureView(&pair[next].1) },
+            ],
+        });
+        let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Terrain Accumulate") });
+        {
+            let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: Some("Terrain Accumulate"), timestamp_writes: None });
+            pass.set_pipeline(&self.accum_pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.dispatch_workgroups(w.div_ceil(8), h.div_ceil(8), 1);
+        }
+        queue.submit(std::iter::once(enc.finish()));
+        self.accum_front = next;
+        self.accum_count += 1;
+    }
+
+    /// The accumulated mean, once anything has been folded in.
+    pub fn accumulated_view(&self) -> Option<&TextureView> {
+        match (&self.accum, self.accum_count) {
+            (Some(pair), 1..) => Some(&pair[self.accum_front].1),
+            _ => None,
+        }
+    }
+
+    /// The accumulated mean's texture, for a test to read back.
+    #[cfg(test)]
+    pub(crate) fn accumulated_texture_for_test(&self) -> Option<&Texture> {
+        match (&self.accum, self.accum_count) {
+            (Some(pair), 1..) => Some(&pair[self.accum_front].0),
+            _ => None,
+        }
     }
 
     /// Levels of the mipmap for an `n x m` tile: level 0 is its cells,
@@ -1255,8 +1428,7 @@ impl TerrainRenderer {
             grid_m: tile.m,
             levels: tile.levels,
             flags: u32::from(self.count_steps),
-            pad0: 0,
-            pad1: 0,
+            jitter: view.jitter,
             eye: [view.camera.eye[0] as f32, view.camera.eye[1] as f32, view.camera.eye[2] as f32, tile.floor],
             misc: [view.shadow, view.softness, view.occlusion_reach, 1.0e-3],
             fdata,
@@ -1624,11 +1796,11 @@ mod tests {
 
 /// The T1 gates (docs/projects/heightfield-3d.md, section 9), on the GPU.
 #[cfg(test)]
-mod gpu_tests {
+pub(crate) mod gpu_tests {
     use super::*;
     use wgpu::*;
 
-    fn device() -> Option<(Device, Queue)> {
+    pub(crate) fn device() -> Option<(Device, Queue)> {
         let instance = Instance::new(InstanceDescriptor {
             backends: Backends::all(),
             ..InstanceDescriptor::new_without_display_handle()
@@ -1641,7 +1813,9 @@ mod gpu_tests {
         .ok()?;
         let (device, queue) = pollster::block_on(adapter.request_device(&DeviceDescriptor {
             label: Some("terrain tests"),
-            required_features: Features::empty(),
+            // The flame renderer's config load clears textures; the
+            // footprint tests render through it.
+            required_features: adapter.features() & Features::CLEAR_TEXTURE,
             required_limits: adapter.limits(),
             memory_hints: MemoryHints::Performance,
             experimental_features: Default::default(),
@@ -1671,7 +1845,7 @@ mod gpu_tests {
     }
 
     /// Texels of one mip of a texture, 4 or 16 bytes each.
-    fn read_texture(device: &Device, queue: &Queue, tex: &Texture, level: u32, w: u32, h: u32, texel: u32) -> Vec<u8> {
+    pub(crate) fn read_texture(device: &Device, queue: &Queue, tex: &Texture, level: u32, w: u32, h: u32, texel: u32) -> Vec<u8> {
         let row = (w * texel).div_ceil(256) * 256;
         let staging = device.create_buffer(&BufferDescriptor {
             label: None,
@@ -1768,6 +1942,7 @@ mod gpu_tests {
             shadow: 1.0,
             softness: 8.0,
             occlusion_reach: 6.0,
+            jitter: [0.0, 0.0],
         }
     }
 
