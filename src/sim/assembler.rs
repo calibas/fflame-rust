@@ -94,9 +94,29 @@ fn sim_visible_halfextent() -> vec2<f32> {
 @group(0) @binding(2) var<storage, read> coloring_params: array<f32>;
 
 // Each layer's parameters sit in their own block of the buffer;
-// the block is `MODEL_PARAM_SLOTS` floats, mirrored in the renderer.
+// the block is `MODEL_PARAM_SLOTS` floats, mirrored in the renderer
+// (a test holds the two to each other). Its last two slots are the
+// renderer's: the layer's memory slice count and first slice.
+const MODEL_PARAM_SLOTS: u32 = 128u;
 fn mparam(i: u32) -> f32 {
-    return model_params[params.layer * 32u + i];
+    return model_params[params.layer * MODEL_PARAM_SLOTS + i];
+}
+
+// The layer's MEMORY (mccabe-multiscale plan, section 2): how many
+// internal slices it has (0 when off) and where they start in the
+// field array, read from the reserved end of the block of the layer
+// this dispatch reads as its own.
+fn sim_mem_count() -> i32 {
+    return i32(model_params[u32(sim_layer()) * MODEL_PARAM_SLOTS + MODEL_PARAM_SLOTS - 2u]);
+}
+fn sim_mem_base() -> i32 {
+    return i32(model_params[u32(sim_layer()) * MODEL_PARAM_SLOTS + MODEL_PARAM_SLOTS - 1u]);
+}
+// Whether any of the layer's per-scale warps is on (mccabe-multiscale
+// plan, section 10): the renderer decides, once, so the step does not
+// look through every scale's rates in every cell.
+fn sim_scale_warped() -> bool {
+    return model_params[u32(sim_layer()) * MODEL_PARAM_SLOTS + MODEL_PARAM_SLOTS - 4u] > 0.5;
 }
 
 // The slice of the field this dispatch owns.
@@ -155,6 +175,23 @@ fn sim_pcg(v: u32) -> u32 {
     let state = v * 747796405u + 2891336453u;
     let word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
     return (word >> 22u) ^ word;
+}
+
+// The pyramid's lattice offset for this dispatch's step, in base cells
+// (mccabe-multiscale plan, section 6). The pyramid's texel lattice is
+// moved by it -- built from the field shifted by it, read at positions
+// shifted back -- so no pattern can lock onto the texel lines of its
+// coarse levels, which the bilinear reads crease along. A hash of
+// (seed, step / period), so a run stays reproducible and batch
+// invariant; `xform.z` carries the period, 0 when the lattice is fixed.
+// [0, 128) covers the coarsest texel's spacing at any grid.
+fn sim_lattice_shift() -> vec2<i32> {
+    let period = u32(params.xform.z);
+    if (period == 0u) {
+        return vec2<i32>(0, 0);
+    }
+    let h = sim_pcg(sim_pcg((params.step_index / period) ^ params.seed_lo) ^ params.seed_hi ^ 0x1a77u);
+    return vec2<i32>(i32(h & 127u), i32((h >> 7u) & 127u));
 }
 
 fn sim_rand(p: vec2<i32>, salt: u32) -> f32 {
@@ -560,6 +597,8 @@ const STEP_TEMPLATE: &str = r#"
 
 //__DEPOSIT__
 
+//__MEMORY__
+
 //__MODEL__
 
 @compute @workgroup_size(8, 8, 1)
@@ -742,7 +781,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (p.x >= dst.x || p.y >= dst.y) {
         return;
     }
-    let c = 2 * p;
+    // Level 1 is built from the field shifted by the lattice offset
+    // (`xform.y` marks the dispatch that reads the field); the levels
+    // above inherit it.
+    var c = 2 * p;
+    if (params.xform.y > 0.5) {
+        c = c - sim_lattice_shift();
+    }
     var acc = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     for (var dy = -2; dy <= 2; dy = dy + 1) {
         for (var dx = -2; dx <= 2; dx = dx + 1) {
@@ -818,8 +863,21 @@ const COLOR_TEMPLATE: &str = r#"
 // The signed distance field, when the matte's edge is Distance; a 1x1
 // dummy otherwise, which sim_sdf never reads.
 @group(0) @binding(6) var sdf_tex: texture_2d<f32>;
+// The relief stage's (height, d/dx, d/dy), when a colouring reads it; a
+// 1x1 dummy otherwise, which only a NeedsRelief colouring's sample reads.
+@group(0) @binding(8) var relief_tex: texture_2d<f32>;
 
 //__BOUNDARY__
+
+// One memory slice of the layer being coloured, through the boundary
+// rule like the state; zeros past the edge or without a memory.
+fn sim_mem_sample(p: vec2<i32>, k: i32) -> vec4<f32> {
+    let g = sim_grid();
+    if (sim_outside(p, g) || k >= sim_mem_count()) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    return textureLoad(field_in, sim_wrap_sized(p, g), sim_mem_base() + k, 0);
+}
 
 fn sim_palette(t: f32) -> vec3<f32> {
     let w = i32(textureDimensions(palette_tex).x);
@@ -916,6 +974,10 @@ struct SimSample {
     // Structure tensor of channel .x over a 3x3 binomial window:
     // (Jxx, Jxy, Jyy). NeedsStructure.
     tensor: vec3<f32>,
+    // The relief stage's smoothed height and its slope, (h, dh/dx,
+    // dh/dy) in cells. NeedsRelief.
+    relief: vec3<f32>,
+//__SAMPLE_MEMORY_FIELDS__
 };
 
 // The gradient of one channel, from a sample.
@@ -932,6 +994,8 @@ fn sim_sample(p: vec2<i32>) -> SimSample {
 //__GRADIENT__
     x.dist = sim_sdf(p);
 //__TENSOR__
+//__RELIEF__
+//__SAMPLE_MEMORY_READ__
     return x;
 }
 
@@ -942,6 +1006,8 @@ fn sim_sample_zero() -> SimSample {
     x.gy = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     x.dist = 0.0;
     x.tensor = vec3<f32>(0.0, 0.0, 0.0);
+    x.relief = vec3<f32>(0.0, 0.0, 0.0);
+//__SAMPLE_MEMORY_ZERO__
     return x;
 }
 
@@ -953,6 +1019,8 @@ fn sim_sample_mad(acc: SimSample, x: SimSample, w: f32) -> SimSample {
     r.gy = r.gy + x.gy * w;
     r.dist = r.dist + x.dist * w;
     r.tensor = r.tensor + x.tensor * w;
+    r.relief = r.relief + x.relief * w;
+//__SAMPLE_MEMORY_MAD__
     return r;
 }
 
@@ -963,6 +1031,8 @@ fn sim_sample_lerp(a: SimSample, b: SimSample, t: f32) -> SimSample {
     r.gy = mix(a.gy, b.gy, t);
     r.dist = mix(a.dist, b.dist, t);
     r.tensor = mix(a.tensor, b.tensor, t);
+    r.relief = mix(a.relief, b.relief, t);
+//__SAMPLE_MEMORY_LERP__
     return r;
 }
 
@@ -1260,6 +1330,132 @@ fn splice(template: &str, boundary: SimBoundary, replacements: &[(&str, &str)]) 
     out.join("\n")
 }
 
+/// The relief stage (mccabe-multiscale plan, section 10): one channel of
+/// a layer as a height, Gaussian-smoothed, with its slope, at grid size
+/// -- what a `NeedsRelief` colouring reads as `x.relief`, and the height
+/// a 3D height-field mode would displace by. Two separable passes: the
+/// Gaussian G and its derivative D along x, then along y. D is the
+/// derivative of the smoothed height exactly (D convolved with a ramp is
+/// its slope), so no third pass differences the result.
+///
+/// The uniform is the source layer's, with `kernel_offset` naming the
+/// colour-parameter block of the colouring that asked: its parameter 0
+/// is the channel and 1 the softness, in cells.
+const RELIEF_COMMON: &str = r#"
+fn relief_param(i: u32) -> f32 {
+    return coloring_params[params.kernel_offset * 16u + i];
+}
+
+fn relief_channel(s: vec4<f32>) -> f32 {
+    let c = i32(round(clamp(relief_param(0u), 0.0, 3.0)));
+    if (c == 1) { return s.y; }
+    if (c == 2) { return s.z; }
+    if (c == 3) { return s.w; }
+    return s.x;
+}
+
+// The kernel at softness sigma: a Gaussian of weights G(i) / z and its
+// derivative D(i) = i G(i) / s2, which differentiates a ramp exactly.
+// Below 0.3 cells the Gaussian is a point and D the central difference.
+fn relief_sigma() -> f32 {
+    return clamp(relief_param(1u), 0.3, 8.0);
+}
+
+fn relief_reach() -> i32 {
+    return clamp(i32(ceil(3.0 * relief_sigma())), 1, 24);
+}
+
+fn relief_g(i: i32) -> f32 {
+    let s = relief_sigma();
+    return exp(-f32(i * i) / (2.0 * s * s));
+}
+
+// (z, s2): the sums that normalise G and D.
+fn relief_norms() -> vec2<f32> {
+    let r = relief_reach();
+    var z = 0.0;
+    var s2 = 0.0;
+    for (var i = -r; i <= r; i = i + 1) {
+        let g = relief_g(i);
+        z = z + g;
+        s2 = s2 + f32(i * i) * g;
+    }
+    return vec2<f32>(z, s2);
+}
+"#;
+
+/// Along x: (G v, D v) of the chosen channel, read through the boundary
+/// rule as the state is.
+const RELIEF_H_TEMPLATE: &str = r#"
+//__COMMON__
+@group(0) @binding(3) var relief_out: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(4) var field_in: texture_2d_array<f32>;
+//__BOUNDARY__
+//__RELIEF_COMMON__
+
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let g = sim_grid();
+    let p = vec2<i32>(gid.xy);
+    if (p.x >= g.x || p.y >= g.y) {
+        return;
+    }
+    let r = relief_reach();
+    let n = relief_norms();
+    var a = 0.0;
+    var b = 0.0;
+    for (var i = -r; i <= r; i = i + 1) {
+        let v = relief_channel(sim_read(p + vec2<i32>(i, 0)));
+        let w = relief_g(i);
+        a = a + w * v;
+        b = b + f32(i) * w * v;
+    }
+    textureStore(relief_out, p, vec4<f32>(a / n.x, b / n.y, 0.0, 0.0));
+}
+"#;
+
+/// Along y: the height G(G v), its x slope G(D v) and its y slope
+/// D(G v). Past an edge the boundary does not wrap, the nearest row.
+const RELIEF_V_TEMPLATE: &str = r#"
+//__COMMON__
+@group(0) @binding(3) var relief_out: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(4) var field_in: texture_2d_array<f32>;
+@group(0) @binding(5) var relief_in: texture_2d<f32>;
+//__BOUNDARY__
+//__RELIEF_COMMON__
+
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let g = sim_grid();
+    let p = vec2<i32>(gid.xy);
+    if (p.x >= g.x || p.y >= g.y) {
+        return;
+    }
+    let r = relief_reach();
+    let n = relief_norms();
+    var h = 0.0;
+    var hx = 0.0;
+    var hy = 0.0;
+    for (var j = -r; j <= r; j = j + 1) {
+        let q = clamp(sim_wrap_sized(p + vec2<i32>(0, j), g), vec2<i32>(0, 0), g - vec2<i32>(1, 1));
+        let t = textureLoad(relief_in, q, 0);
+        let w = relief_g(j);
+        h = h + w * t.x;
+        hx = hx + w * t.y;
+        hy = hy + f32(j) * w * t.x;
+    }
+    textureStore(relief_out, p, vec4<f32>(h / n.x, hx / n.x, hy / n.y, 0.0));
+}
+"#;
+
+/// The relief stage's two passes, through the simulation's boundary.
+pub fn assemble_relief_h(boundary: SimBoundary) -> String {
+    splice(RELIEF_H_TEMPLATE, boundary, &[("//__RELIEF_COMMON__", RELIEF_COMMON)])
+}
+pub fn assemble_relief_v(boundary: SimBoundary) -> String {
+    splice(RELIEF_V_TEMPLATE, boundary, &[("//__RELIEF_COMMON__", RELIEF_COMMON)])
+}
+
 /// The jump flood's three passes. They read the grid, not its
 /// boundary rule: a distance is measured within the grid, so at a
 /// periodic seam it is measured to the seam. Stated on the matte's
@@ -1353,6 +1549,23 @@ pub fn assemble_seed(model: &ModelDef, init_kind: &str) -> String {
         &[(
             "//__MODEL_SEED__",
             &format!("{}\n{}", init_mask_body(init_kind), model.wgsl_seed),
+        )],
+    )
+}
+
+/// The seed of a MEMORY slice: zeros, whatever the init. A memory
+/// starts empty -- Softology's colour starts black -- and it is not a
+/// model's to seed.
+pub fn assemble_seed_zero() -> String {
+    splice(
+        SEED_TEMPLATE,
+        SimBoundary::Clamp,
+        &[(
+            "//__MODEL_SEED__",
+            &format!(
+                "{}\nfn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {{\n    return vec4<f32>(0.0, 0.0, 0.0, 0.0);\n}}\n",
+                init_mask_body("center")
+            ),
         )],
     )
 }
@@ -1554,6 +1767,14 @@ fn sim_kernel_taps() -> u32 {
     } else {
         ""
     };
+    // The layer's memory, for the models that keep one, and its
+    // scratch, for the models with a measure pass.
+    let memory = format!(
+        "{}{}",
+        if model.has(ModelFeature::Memory) { MEMORY_STEP_ACCESSORS } else { "" },
+        if model.measure.is_some() { SCRATCH_STEP_ACCESSORS } else { "" },
+    );
+    let memory = memory.as_str();
     // sim_step, sim_step2, sim_step3, ... -- the model writes as many
     // as it declares passes, and every module carries the model's
     // whole WGSL so a helper written once is visible to all of them.
@@ -1609,6 +1830,7 @@ fn sim_kernel_taps() -> u32 {
             ("//__PYRAMID__", pyramid),
             ("//__MINMAX__", minmax),
             ("//__DEPOSIT__", deposit),
+            ("//__MEMORY__", memory),
         ],
     )
 }
@@ -1632,8 +1854,93 @@ fn sim_take_deposit(p: vec2<i32>) -> f32 {
 "#;
 
 /// Spliced into the step shader of a model that declares
+/// [`ModelFeature::Memory`]. The memory is read from the field the step
+/// reads and written to the one it writes, like the state; with the
+/// memory off the count is 0, reads give zeros and writes do nothing.
+/// Only a model's LAST pass may write it: the renderer gives the
+/// memory slices no dispatch of their own in that stage and a
+/// copy-through in every other, so a write from an earlier pass would
+/// be overwritten.
+const MEMORY_STEP_ACCESSORS: &str = r#"
+fn sim_mem_read(p: vec2<i32>, k: i32) -> vec4<f32> {
+    if (k >= sim_mem_count()) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    return textureLoad(field_in, p, sim_mem_base() + k, 0);
+}
+
+fn sim_mem_write(p: vec2<i32>, k: i32, v: vec4<f32>) {
+    if (k < sim_mem_count()) {
+        textureStore(field_out, p, sim_mem_base() + k, v);
+    }
+}
+"#;
+
+/// Spliced into the step shader of a model with a measure pass
+/// ([`ModelDef::measure`]). The measure pass (pass 0) writes the layer's
+/// scratch; the passes after it read it at any cell. Its first slice is
+/// the layer's third-from-last reserved parameter, 0 when the measure is
+/// off -- a scratch slice is never slice 0, which is a user layer.
+const SCRATCH_STEP_ACCESSORS: &str = r#"
+fn sim_scratch_base() -> i32 {
+    return i32(model_params[u32(sim_layer()) * MODEL_PARAM_SLOTS + MODEL_PARAM_SLOTS - 3u]);
+}
+
+fn sim_scratch_on() -> bool {
+    return sim_scratch_base() > 0;
+}
+
+// Scratch slice k at cell q, which the caller has put on the grid.
+fn sim_scratch_read(q: vec2<i32>, k: i32) -> vec4<f32> {
+    return textureLoad(field_in, q, sim_scratch_base() + k, 0);
+}
+
+fn sim_scratch_write(p: vec2<i32>, k: i32, v: vec4<f32>) {
+    if (sim_scratch_on()) {
+        textureStore(field_out, p, sim_scratch_base() + k, v);
+    }
+}
+"#;
+
+/// Spliced into the step shader of a model that declares
 /// [`ModelFeature::NeedsPyramid`].
 const PYRAMID_ACCESSORS: &str = r#"
+// Exact averages (mccabe-multiscale plan, section 6b): per scale, the
+// activator-minus-inhibitor field the spectral stage made this step,
+// when the renderer made one for this layer -- `xform.w` is its first
+// slice plus one, 0 when the pyramid is read instead.
+@group(0) @binding(18) var pyr_diffs: texture_2d_array<f32>;
+
+fn pyr_exact() -> bool {
+    return params.xform.w > 0.5;
+}
+
+fn pyr_diff_cell(i: i32, q: vec2<i32>) -> f32 {
+    // Through `sim_wrap_sized`, not `((q % g) + g) % g`: that obvious
+    // form reads out of bounds at the top and left edges on the device
+    // (see `sim_wrap_sized`), which a rotated read near a seam hits.
+    let w = sim_wrap_sized(q, sim_grid());
+    return textureLoad(pyr_diffs, w, i32(params.xform.w) - 1 + i, 0).x;
+}
+
+// Scale i's difference at a position in base cells (a cell centre is
+// p + 0.5): the cell's own value at a centre, bilinear between centres
+// (a rotated read). Periodic, as the spectral stage is.
+fn pyr_diff(i: i32, pos: vec2<f32>) -> f32 {
+    let f = pos - vec2<f32>(0.5, 0.5);
+    let f0 = floor(f);
+    let t = f - f0;
+    let i0 = vec2<i32>(f0);
+    let a = pyr_diff_cell(i, i0);
+    if (t.x == 0.0 && t.y == 0.0) {
+        return a;
+    }
+    let b = pyr_diff_cell(i, i0 + vec2<i32>(1, 0));
+    let c = pyr_diff_cell(i, i0 + vec2<i32>(0, 1));
+    let d = pyr_diff_cell(i, i0 + vec2<i32>(1, 1));
+    return mix(mix(a, b, t.x), mix(c, d, t.x), t.y);
+}
+
 @group(0) @binding(6) var pyr1: texture_2d<f32>;
 @group(0) @binding(7) var pyr2: texture_2d<f32>;
 @group(0) @binding(8) var pyr3: texture_2d<f32>;
@@ -1671,9 +1978,13 @@ fn pyr_size(l: i32) -> vec2<i32> {
 // A model calls `pyr_prepare()` at the top of its step.
 var<private> pyr_top_cached: i32 = 0;
 var<private> pyr_sizes: array<vec2<i32>, 8>;
+// The lattice offset the pyramid was built with this step: levels from
+// 1 up are read at the position plus it. Zero when the lattice is fixed.
+var<private> pyr_shift_cached: vec2<f32> = vec2<f32>(0.0, 0.0);
 
 fn pyr_prepare() {
     pyr_top_cached = pyr_levels() - 1;
+    pyr_shift_cached = vec2<f32>(sim_lattice_shift());
     var s = sim_grid();
     for (var i = 0; i < 8; i = i + 1) {
         pyr_sizes[i] = s;
@@ -1732,7 +2043,8 @@ fn pyr_load4_sized(l: i32, q: vec2<i32>, g: vec2<i32>) -> vec4<f32> {
 
 fn pyr_level_avg4(l: i32, pos: vec2<f32>) -> vec4<f32> {
     let s = f32(1 << u32(l));
-    let f = (pos - vec2<f32>(0.5, 0.5)) / s;
+    let q = select(pos, pos + pyr_shift_cached, l > 0);
+    let f = (q - vec2<f32>(0.5, 0.5)) / s;
     let f0 = floor(f);
     let t = f - f0;
     let i0 = vec2<i32>(f0);
@@ -1769,7 +2081,10 @@ fn pyr_sample4(level: f32, pos: vec2<f32>) -> vec4<f32> {
 // steps; `lattice4_ring_does_not_drift` pins it.
 fn pyr_level_avg(l: i32, pos: vec2<f32>) -> f32 {
     let s = f32(1 << u32(l));
-    let f = (pos - vec2<f32>(0.5, 0.5)) / s;
+    // Level 0 is the field itself; every level above was built from the
+    // field shifted by the lattice offset, so it is read shifted.
+    let q = select(pos, pos + pyr_shift_cached, l > 0);
+    let f = (q - vec2<f32>(0.5, 0.5)) / s;
     let f0 = floor(f);
     let t = f - f0;
     let i0 = vec2<i32>(f0);
@@ -1892,17 +2207,16 @@ pub fn assemble_color(
     // never reads `grad` gets a constant instead; the compiler then
     // has nothing to keep.
     let (gradient, tensor) = sample_splices(&[coloring]);
-    splice(
-        COLOR_TEMPLATE,
-        boundary,
-        &[
-            ("//__COLORING__", coloring.wgsl),
-            ("//__SHADE__", SINGLE_SHADE),
-            ("//__RESOLVE__", &resolve),
-            ("//__GRADIENT__", gradient),
-            ("//__TENSOR__", tensor),
-        ],
-    )
+    let mut reps: Vec<(&str, &str)> = vec![
+        ("//__COLORING__", coloring.wgsl),
+        ("//__SHADE__", SINGLE_SHADE),
+        ("//__RESOLVE__", &resolve),
+        ("//__GRADIENT__", gradient),
+        ("//__TENSOR__", tensor),
+        ("//__RELIEF__", relief_splice(&[coloring])),
+    ];
+    reps.extend(memory_splices(&[coloring]));
+    splice(COLOR_TEMPLATE, boundary, &reps)
 }
 
 
@@ -1942,6 +2256,12 @@ const TENSOR_ON: &str = r#"    // Structure tensor of .x: the gradient's outer p
     }
     x.tensor = vec3<f32>(jxx, jxy, jyy);"#;
 const TENSOR_OFF: &str = "    x.tensor = vec3<f32>(0.0, 0.0, 0.0);";
+/// The relief splice: the relief stage's texel at the cell, through the
+/// boundary's wrap, or zero.
+const RELIEF_ON: &str = r#"    let rg = sim_grid();
+    let rq = clamp(sim_wrap_sized(p, rg), vec2<i32>(0, 0), rg - vec2<i32>(1, 1));
+    x.relief = textureLoad(relief_tex, rq, 0).xyz;"#;
+const RELIEF_OFF: &str = "    x.relief = vec3<f32>(0.0, 0.0, 0.0);";
 
 /// The single colouring's shade: colour, then the config's matte.
 const SINGLE_SHADE: &str = r#"fn sim_shade_from(x: SimSample, p: vec2<i32>) -> vec4<f32> {
@@ -1957,6 +2277,41 @@ fn sim_shade(p: vec2<i32>) -> vec4<f32> {
 
 /// The gradient and tensor splices for a set of colourings: computed
 /// when ANY of them declares the feature.
+/// The memory splices of `SimSample`: two vec4 fields read from the
+/// source layer's memory slices at the same cells as the state, and
+/// carried through the resolve's zero / mad / lerp like every other
+/// field -- interpolating the weights is interpolating the colours
+/// they stand for. Empty unless a colouring reads it, so every other
+/// colour shader is the one it was.
+fn memory_splices(colorings: &[&SimColoringDef]) -> [(&'static str, &'static str); 5] {
+    if colorings.iter().any(|c| c.has(ColoringFeature::ReadsMemory)) {
+        [
+            ("//__SAMPLE_MEMORY_FIELDS__", "    // The source layer's memory, eight weights. ReadsMemory.\n    m0: vec4<f32>,\n    m1: vec4<f32>,"),
+            ("//__SAMPLE_MEMORY_READ__", "    x.m0 = sim_mem_sample(p, 0);\n    x.m1 = sim_mem_sample(p, 1);"),
+            ("//__SAMPLE_MEMORY_ZERO__", "    x.m0 = vec4<f32>(0.0, 0.0, 0.0, 0.0);\n    x.m1 = vec4<f32>(0.0, 0.0, 0.0, 0.0);"),
+            ("//__SAMPLE_MEMORY_MAD__", "    r.m0 = r.m0 + x.m0 * w;\n    r.m1 = r.m1 + x.m1 * w;"),
+            ("//__SAMPLE_MEMORY_LERP__", "    r.m0 = mix(a.m0, b.m0, t);\n    r.m1 = mix(a.m1, b.m1, t);"),
+        ]
+    } else {
+        [
+            ("//__SAMPLE_MEMORY_FIELDS__", ""),
+            ("//__SAMPLE_MEMORY_READ__", ""),
+            ("//__SAMPLE_MEMORY_ZERO__", ""),
+            ("//__SAMPLE_MEMORY_MAD__", ""),
+            ("//__SAMPLE_MEMORY_LERP__", ""),
+        ]
+    }
+}
+
+/// The relief splice for a set of colourings.
+fn relief_splice(colorings: &[&SimColoringDef]) -> &'static str {
+    if colorings.iter().any(|c| c.has(ColoringFeature::NeedsRelief)) {
+        RELIEF_ON
+    } else {
+        RELIEF_OFF
+    }
+}
+
 fn sample_splices(colorings: &[&SimColoringDef]) -> (&'static str, &'static str) {
     let gradient = if colorings.iter().any(|c| c.has(ColoringFeature::NeedsGradient)) {
         GRADIENT_ON
@@ -2070,6 +2425,11 @@ fn sim_blend(base: vec4<f32>, top: vec4<f32>, mode: u32, opacity: f32) -> vec4<f
         f = select(hi, lo, base.rgb < vec3<f32>(0.5, 0.5, 0.5));
     } else if (mode == 6u) {
         f = min(base.rgb + top.rgb, vec3<f32>(1.0, 1.0, 1.0));
+    } else if (mode == 7u) {
+        // Hard light: overlay decided by the top layer.
+        let lo = 2.0 * base.rgb * top.rgb;
+        let hi = vec3<f32>(1.0, 1.0, 1.0) - 2.0 * (vec3<f32>(1.0, 1.0, 1.0) - base.rgb) * (vec3<f32>(1.0, 1.0, 1.0) - top.rgb);
+        f = select(hi, lo, top.rgb < vec3<f32>(0.5, 0.5, 0.5));
     }
     let blended = mix(top.rgb, f, base.a);
     let out_a = a + base.a * (1.0 - a);
@@ -2119,17 +2479,16 @@ fn sim_resolve_{k}(gf: vec2<f32>, g: vec2<i32>, fit: f32) -> vec4<f32> {{
 "
         ));
     }
-    let out = splice(
-        COLOR_TEMPLATE,
-        boundary,
-        &[
-            ("//__COLORING__", &defs),
-            ("//__SHADE__", ""),
-            ("//__RESOLVE__", &composite),
-            ("//__GRADIENT__", gradient),
-            ("//__TENSOR__", tensor),
-        ],
-    );
+    let mut reps: Vec<(&str, &str)> = vec![
+        ("//__COLORING__", &defs),
+        ("//__SHADE__", ""),
+        ("//__RESOLVE__", &composite),
+        ("//__GRADIENT__", gradient),
+        ("//__TENSOR__", tensor),
+        ("//__RELIEF__", relief_splice(colorings)),
+    ];
+    reps.extend(memory_splices(colorings));
+    let out = splice(COLOR_TEMPLATE, boundary, &reps);
     // The stack's read gathers when the layer asks: the first channel
     // of four consecutive layers from the source, the last repeating.
     // Only the stack carries this; the single colouring's read is
@@ -2226,6 +2585,21 @@ mod tests {
         }
     }
 
+    /// The parameter block's size is written twice -- the WGSL indexes
+    /// by it, the renderer packs by it -- and a disagreement would read
+    /// every layer past the first from the wrong block.
+    #[test]
+    fn the_parameter_block_size_agrees_with_the_renderer() {
+        let line = format!("const MODEL_PARAM_SLOTS: u32 = {}u;", crate::sim::renderer::MODEL_PARAM_SLOTS);
+        assert!(COMMON.contains(&line), "COMMON should declare `{line}`");
+        assert_eq!(
+            crate::sim::renderer::RESERVED_PARAM_SLOTS,
+            4,
+            "sim_mem_count / sim_mem_base read the last two slots, sim_scratch_base the one before, \
+             sim_scale_warped the one before that"
+        );
+    }
+
     /// Every model's step shaders validate with the coupling spliced
     /// in (simulation-layers plan, section 3), and an uncoupled
     /// shader is byte-for-byte the shader it was.
@@ -2293,6 +2667,15 @@ mod tests {
             &assemble_color_stack(&all, SimBoundary::Clamp, SimUpscale::Nearest, SimDownscale::Box, false),
             "stack of every colouring",
         );
+    }
+
+    /// The relief stage's two passes, under every boundary.
+    #[test]
+    fn the_relief_stage_validates() {
+        for b in [SimBoundary::Periodic, SimBoundary::Clamp, SimBoundary::Mirror, SimBoundary::Zero] {
+            validate(&assemble_relief_h(b), &format!("relief h {b:?}"));
+            validate(&assemble_relief_v(b), &format!("relief v {b:?}"));
+        }
     }
 
     #[test]

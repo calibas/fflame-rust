@@ -194,6 +194,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // is enforced everywhere dt can be set, not left to the clamp.
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -372,6 +373,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // measuring the stability of a field doing nothing.
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -546,6 +548,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // without running the rung it names.
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -670,6 +673,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // 0.04 at 26, 0.05 at 17.
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -923,6 +927,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // and the panel hides the slider.
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -1083,6 +1088,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 300,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -1210,6 +1216,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 400,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -1341,6 +1348,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 1200,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -1464,6 +1472,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 250,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -1600,6 +1609,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 360,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -1722,6 +1732,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 256,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -1880,6 +1891,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 125,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -2022,6 +2034,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 400,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -2219,6 +2232,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 5000,
     passes: 2,
     repeat: None,
+    measure: None,
     // Explicit Euler on the 5-point Laplacian, whose symbol runs over
     // [-8, 0]: the quartic operator is largest at the checkerboard,
     // (8 - q0^2)^2, and the drive r offsets it. Measured at
@@ -2383,6 +2397,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 20000,
     passes: 2,
     repeat: None,
+    measure: None,
     // Linearised about |c| = 1, the symbol is
     //   D L (3c^2 - 1 - gamma L),  L in [-8, 0]
     // whose most negative value is at the checkerboard L = -8:
@@ -2574,6 +2589,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 15000,
     passes: 1,
     repeat: None,
+    measure: None,
     // The stiff term is the activator's threshold. Differentiating the
     // reaction, d/du[-f v (u-q)/(u+q)] = -2 f v q/(u+q)^2, which is
     // largest near u = q at -f v/(2q); with v of order 1 and the
@@ -2836,6 +2852,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 4000,
     passes: 2,
     repeat: None,
+    measure: None,
     // The temperature equation is plain diffusion with D = 1 on a mesh
     // of 0.03, so explicit Euler needs dt <= dx^2/4 = 2.25e-4. That is
     // the binding constraint: the phase equation's eps^2/tau = 0.333
@@ -2999,6 +3016,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 600,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: Some(|p| {
         // The exponential core, scaled to R and normalised to sum 1.
@@ -3218,6 +3236,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 400,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: Some(|p| {
         // Two blocks: the inner disc, then the annulus out to 3 r_i.
@@ -3312,6 +3331,97 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 ///
 /// Channels: `.x` = f, `.y` = the scale that fired (an integer),
 /// `.z` = the step at which the firing scale last changed, `.w` spare.
+/// McCabe's per-scale table (mccabe-multiscale plan, section 3).
+/// McCabe's per-scale warps (mccabe-multiscale plan, section 10).
+pub static MCCABE_WARPS: crate::sim::ScaleWarps = crate::sim::ScaleWarps {
+    model: "mccabe",
+    rows_param: "scales",
+    rows: 6,
+};
+
+pub static MCCABE_TABLE: crate::sim::ParamTable = crate::sim::ParamTable {
+    model: "mccabe",
+    mode_param: "layout",
+    rows_param: "scales",
+    rows: 6,
+    columns: &["radius", "ratio", "amount", "weight", "symmetry", "stretch", "angle"],
+    generator_params: &["base_radius", "ratio", "amount", "amount_min", "symmetry"],
+    fill: mccabe_table_from_ladder,
+    shows_column: mccabe_shows_column,
+};
+
+/// The lean columns shape the spectral stage's discs, so they show only
+/// when the averaging is Exact discs.
+pub fn mccabe_shows_column(params: &std::collections::BTreeMap<String, f32>, column: &str) -> bool {
+    match column {
+        "stretch" | "angle" => params.get("averaging").is_some_and(|v| v.round() == 2.0),
+        _ => true,
+    }
+}
+
+/// The table the ladder describes: radii doubling from the finest,
+/// one ratio, steps falling linearly from finest to coarsest, weight 1,
+/// one symmetry, round discs. Rows past `scales` continue the ladder at the coarsest
+/// step. Written in the shader's own arithmetic -- the radius a power
+/// of two times the base, the step `a(1 - t) + bt` -- so the table it
+/// fills renders what the ladder did.
+pub fn mccabe_table_from_ladder(params: &std::collections::BTreeMap<String, f32>) -> Vec<(String, f32)> {
+    let get = |name: &str| -> f32 {
+        let def = MCCABE.parameters.iter().find(|p| p.name == name).map(|p| p.default).unwrap_or(0.0);
+        params.get(name).copied().filter(|v| v.is_finite()).unwrap_or(def)
+    };
+    let n = get("scales").round().clamp(1.0, 6.0) as i32;
+    let (base, ratio) = (get("base_radius"), get("ratio"));
+    let (amount, amount_min) = (get("amount"), get("amount_min"));
+    let sym = get("symmetry").round();
+    let mut out = Vec::new();
+    for i in 0..MCCABE_TABLE.rows as i32 {
+        let t = if n > 1 { (i as f32 / (n - 1) as f32).min(1.0) } else { 0.0 };
+        out.push((format!("s{i}_radius"), base * (1u32 << i) as f32));
+        out.push((format!("s{i}_ratio"), ratio));
+        out.push((format!("s{i}_amount"), amount * (1.0 - t) + amount_min * t));
+        out.push((format!("s{i}_weight"), 1.0));
+        out.push((format!("s{i}_symmetry"), sym));
+        out.push((format!("s{i}_stretch"), 1.0));
+        out.push((format!("s{i}_angle"), 0.0));
+    }
+    out
+}
+
+/// Each live scale's discs, as the step uses them: what the spectral
+/// stage builds its kernels from when the averaging is Exact discs
+/// (mccabe-multiscale plan, section 6b). The shader's own arithmetic --
+/// the ladder's power of two times the base, the table's radius floored
+/// at a half cell. The table's discs also lean (section 9); the
+/// ladder's are round.
+pub fn mccabe_scale_discs(params: &std::collections::BTreeMap<String, f32>) -> Vec<crate::sim::spectral::SpectralScale> {
+    use crate::sim::spectral::SpectralScale;
+    let get = |name: &str| -> f32 {
+        let def = MCCABE.parameters.iter().find(|p| p.name == name).map(|p| p.default).unwrap_or(0.0);
+        params.get(name).copied().filter(|v| v.is_finite()).unwrap_or(def)
+    };
+    let n = get("scales").round().clamp(1.0, 6.0) as u32;
+    let table = get("layout") >= 0.5;
+    (0..n)
+        .map(|i| {
+            if table {
+                let ra = get(&format!("s{i}_radius")).max(0.5);
+                SpectralScale {
+                    ra,
+                    rb: ra * get(&format!("s{i}_ratio")),
+                    stretch: get(&format!("s{i}_stretch")).clamp(1.0, 4.0),
+                    // Counter-clockwise on screen, as the app's other
+                    // angles are; the grid's y runs down, so negated.
+                    angle: -get(&format!("s{i}_angle")).to_radians(),
+                }
+            } else {
+                let ra = get("base_radius") * (1u32 << i) as f32;
+                SpectralScale::round(ra, ra * get("ratio"))
+            }
+        })
+        .collect()
+}
+
 pub static MCCABE: ModelDef = ModelDef {
     name: "mccabe",
     display_name: "McCabe Multi-Scale",
@@ -3323,6 +3433,7 @@ pub static MCCABE: ModelDef = ModelDef {
         ModelFeature::NoTimeStep,
         ModelFeature::NeedsPyramid,
         ModelFeature::NeedsMinMax,
+        ModelFeature::Memory,
     ],
     parameters: &[
         SimParamDef {
@@ -3387,6 +3498,718 @@ pub static MCCABE: ModelDef = ModelDef {
                       so the corners stay asymmetric.",
             choices: &[],
         },
+        // Appended, so the parameters above keep their slots.
+        SimParamDef {
+            name: "memory",
+            display_name: "Colour memory",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How far each cell's colour moves toward the winning scale's colour per \
+                      step — Softology's colour bump. Small values give smooth blends of the \
+                      scales that have been winning; 1 is the latest winner alone. Colour \
+                      with Scale Memory. 0 is off. Switching it on or off restarts the run, \
+                      and on it keeps two more slices of the field (about 130 MB at a \
+                      1080p grid).",
+            choices: &[],
+        },
+        // The per-scale table (mccabe-multiscale plan, section 3).
+        SimParamDef {
+            name: "layout",
+            display_name: "Scales from",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Ladder builds every scale from the finest radius, doubling. Table sets \
+                      each scale's radius, ratio, step, weight and symmetry on its own, as \
+                      Softology and Reusser do; switching to it fills it from the ladder, so \
+                      nothing changes until you edit it.",
+            choices: &["Ladder", "Table"],
+        },
+        SimParamDef {
+            name: "s0_radius",
+            display_name: "Scale 1 activator radius",
+            default: 1.0,
+            min: 0.5,
+            max: 256.0,
+            tooltip: "Activator radius of this scale, in cells. The inhibitor's is this times the ratio. Past the pyramid's reach at the current grid (the panel warns) both averages clamp to its top level and the scale wins everywhere.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s0_ratio",
+            display_name: "Scale 1 inhibitor ratio",
+            default: 2.0,
+            min: 1.25,
+            max: 4.0,
+            tooltip: "Inhibitor radius over activator radius for this scale.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s0_amount",
+            display_name: "Scale 1 step",
+            default: 0.05,
+            min: -0.2,
+            max: 0.2,
+            tooltip: "How far this scale moves a cell when it wins. Negative inverts it: the cell moves away from the activator, as one of Reusser's default scales does.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s0_weight",
+            display_name: "Scale 1 weight",
+            default: 1.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Softology's weight: both averages are multiplied by it before they are compared. Larger makes the scale's variation larger, so it wins less often; negative also flips its direction; 0 makes it win everywhere.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s0_symmetry",
+            display_name: "Scale 1 symmetry",
+            default: 0.0,
+            min: 0.0,
+            max: 12.0,
+            tooltip: "n-fold rotational symmetry of this scale's averages about the centre; 0 or 1 is none. McCabe's fig. 14 puts 3-fold on the small scales and 9-fold on the large. Costs n times this scale's reads.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s1_radius",
+            display_name: "Scale 2 activator radius",
+            default: 2.0,
+            min: 0.5,
+            max: 256.0,
+            tooltip: "Activator radius of this scale, in cells. The inhibitor's is this times the ratio. Past the pyramid's reach at the current grid (the panel warns) both averages clamp to its top level and the scale wins everywhere.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s1_ratio",
+            display_name: "Scale 2 inhibitor ratio",
+            default: 2.0,
+            min: 1.25,
+            max: 4.0,
+            tooltip: "Inhibitor radius over activator radius for this scale.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s1_amount",
+            display_name: "Scale 2 step",
+            default: 0.04,
+            min: -0.2,
+            max: 0.2,
+            tooltip: "How far this scale moves a cell when it wins. Negative inverts it: the cell moves away from the activator, as one of Reusser's default scales does.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s1_weight",
+            display_name: "Scale 2 weight",
+            default: 1.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Softology's weight: both averages are multiplied by it before they are compared. Larger makes the scale's variation larger, so it wins less often; negative also flips its direction; 0 makes it win everywhere.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s1_symmetry",
+            display_name: "Scale 2 symmetry",
+            default: 0.0,
+            min: 0.0,
+            max: 12.0,
+            tooltip: "n-fold rotational symmetry of this scale's averages about the centre; 0 or 1 is none. McCabe's fig. 14 puts 3-fold on the small scales and 9-fold on the large. Costs n times this scale's reads.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s2_radius",
+            display_name: "Scale 3 activator radius",
+            default: 4.0,
+            min: 0.5,
+            max: 256.0,
+            tooltip: "Activator radius of this scale, in cells. The inhibitor's is this times the ratio. Past the pyramid's reach at the current grid (the panel warns) both averages clamp to its top level and the scale wins everywhere.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s2_ratio",
+            display_name: "Scale 3 inhibitor ratio",
+            default: 2.0,
+            min: 1.25,
+            max: 4.0,
+            tooltip: "Inhibitor radius over activator radius for this scale.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s2_amount",
+            display_name: "Scale 3 step",
+            default: 0.03,
+            min: -0.2,
+            max: 0.2,
+            tooltip: "How far this scale moves a cell when it wins. Negative inverts it: the cell moves away from the activator, as one of Reusser's default scales does.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s2_weight",
+            display_name: "Scale 3 weight",
+            default: 1.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Softology's weight: both averages are multiplied by it before they are compared. Larger makes the scale's variation larger, so it wins less often; negative also flips its direction; 0 makes it win everywhere.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s2_symmetry",
+            display_name: "Scale 3 symmetry",
+            default: 0.0,
+            min: 0.0,
+            max: 12.0,
+            tooltip: "n-fold rotational symmetry of this scale's averages about the centre; 0 or 1 is none. McCabe's fig. 14 puts 3-fold on the small scales and 9-fold on the large. Costs n times this scale's reads.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s3_radius",
+            display_name: "Scale 4 activator radius",
+            default: 8.0,
+            min: 0.5,
+            max: 256.0,
+            tooltip: "Activator radius of this scale, in cells. The inhibitor's is this times the ratio. Past the pyramid's reach at the current grid (the panel warns) both averages clamp to its top level and the scale wins everywhere.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s3_ratio",
+            display_name: "Scale 4 inhibitor ratio",
+            default: 2.0,
+            min: 1.25,
+            max: 4.0,
+            tooltip: "Inhibitor radius over activator radius for this scale.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s3_amount",
+            display_name: "Scale 4 step",
+            default: 0.02,
+            min: -0.2,
+            max: 0.2,
+            tooltip: "How far this scale moves a cell when it wins. Negative inverts it: the cell moves away from the activator, as one of Reusser's default scales does.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s3_weight",
+            display_name: "Scale 4 weight",
+            default: 1.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Softology's weight: both averages are multiplied by it before they are compared. Larger makes the scale's variation larger, so it wins less often; negative also flips its direction; 0 makes it win everywhere.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s3_symmetry",
+            display_name: "Scale 4 symmetry",
+            default: 0.0,
+            min: 0.0,
+            max: 12.0,
+            tooltip: "n-fold rotational symmetry of this scale's averages about the centre; 0 or 1 is none. McCabe's fig. 14 puts 3-fold on the small scales and 9-fold on the large. Costs n times this scale's reads.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s4_radius",
+            display_name: "Scale 5 activator radius",
+            default: 16.0,
+            min: 0.5,
+            max: 256.0,
+            tooltip: "Activator radius of this scale, in cells. The inhibitor's is this times the ratio. Past the pyramid's reach at the current grid (the panel warns) both averages clamp to its top level and the scale wins everywhere.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s4_ratio",
+            display_name: "Scale 5 inhibitor ratio",
+            default: 2.0,
+            min: 1.25,
+            max: 4.0,
+            tooltip: "Inhibitor radius over activator radius for this scale.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s4_amount",
+            display_name: "Scale 5 step",
+            default: 0.01,
+            min: -0.2,
+            max: 0.2,
+            tooltip: "How far this scale moves a cell when it wins. Negative inverts it: the cell moves away from the activator, as one of Reusser's default scales does.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s4_weight",
+            display_name: "Scale 5 weight",
+            default: 1.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Softology's weight: both averages are multiplied by it before they are compared. Larger makes the scale's variation larger, so it wins less often; negative also flips its direction; 0 makes it win everywhere.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s4_symmetry",
+            display_name: "Scale 5 symmetry",
+            default: 0.0,
+            min: 0.0,
+            max: 12.0,
+            tooltip: "n-fold rotational symmetry of this scale's averages about the centre; 0 or 1 is none. McCabe's fig. 14 puts 3-fold on the small scales and 9-fold on the large. Costs n times this scale's reads.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s5_radius",
+            display_name: "Scale 6 activator radius",
+            default: 32.0,
+            min: 0.5,
+            max: 256.0,
+            tooltip: "Activator radius of this scale, in cells. The inhibitor's is this times the ratio. Past the pyramid's reach at the current grid (the panel warns) both averages clamp to its top level and the scale wins everywhere.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s5_ratio",
+            display_name: "Scale 6 inhibitor ratio",
+            default: 2.0,
+            min: 1.25,
+            max: 4.0,
+            tooltip: "Inhibitor radius over activator radius for this scale.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s5_amount",
+            display_name: "Scale 6 step",
+            default: 0.01,
+            min: -0.2,
+            max: 0.2,
+            tooltip: "How far this scale moves a cell when it wins. Negative inverts it: the cell moves away from the activator, as one of Reusser's default scales does.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s5_weight",
+            display_name: "Scale 6 weight",
+            default: 1.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Softology's weight: both averages are multiplied by it before they are compared. Larger makes the scale's variation larger, so it wins less often; negative also flips its direction; 0 makes it win everywhere.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s5_symmetry",
+            display_name: "Scale 6 symmetry",
+            default: 0.0,
+            min: 0.0,
+            max: 12.0,
+            tooltip: "n-fold rotational symmetry of this scale's averages about the centre; 0 or 1 is none. McCabe's fig. 14 puts 3-fold on the small scales and 9-fold on the large. Costs n times this scale's reads.",
+            choices: &[],
+        },
+        // Slot 38 (mccabe-multiscale plan, section 6). The renderer reads
+        // it, not the shader: it decides how the pyramid is built and read.
+        SimParamDef {
+            name: "averaging",
+            display_name: "Averaging",
+            default: 0.0,
+            min: 0.0,
+            max: 2.0,
+            tooltip: "How the averages are taken. Pyramid is the original: fast, but its \
+                      fixed grid of texels leaves faint creases that patterns can lock onto, \
+                      so a table whose coarse scales move fastest leans toward the grid \
+                      axes. Shifted grid moves the pyramid's grid every few steps, so \
+                      nothing locks onto it -- measured, that trades the axis lean for a \
+                      slight diagonal one. Exact discs averages over true discs by FFT, as \
+                      Reusser and Chau do: isotropic, and the references' own texture, \
+                      cells with nested detail, at 1.7x the step and ~150 MB at 1080p. \
+                      Shifted grid and Exact discs need the wrap-around boundary; a grid \
+                      whose size has a prime factor above 64 keeps the pyramid.",
+            choices: &["Pyramid", "Pyramid, shifted grid", "Exact discs"],
+        },
+        // Slots 39-50 (mccabe-multiscale plan, section 9): each scale's
+        // lean. The renderer reads them, not the shader: they shape the
+        // spectral stage's discs, so they do nothing outside Exact discs.
+        SimParamDef {
+            name: "s0_stretch",
+            display_name: "Scale 1 stretch",
+            default: 1.0,
+            min: 1.0,
+            max: 4.0,
+            tooltip: "Stretches this scale's discs into ellipses of the same area, this many times longer than wide, so its pattern grains along the angle: the lean, on purpose. 1 is round. Exact discs averaging only; the pyramid's averages are round.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s1_stretch",
+            display_name: "Scale 2 stretch",
+            default: 1.0,
+            min: 1.0,
+            max: 4.0,
+            tooltip: "Stretches this scale's discs into ellipses of the same area, this many times longer than wide, so its pattern grains along the angle: the lean, on purpose. 1 is round. Exact discs averaging only; the pyramid's averages are round.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s2_stretch",
+            display_name: "Scale 3 stretch",
+            default: 1.0,
+            min: 1.0,
+            max: 4.0,
+            tooltip: "Stretches this scale's discs into ellipses of the same area, this many times longer than wide, so its pattern grains along the angle: the lean, on purpose. 1 is round. Exact discs averaging only; the pyramid's averages are round.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s3_stretch",
+            display_name: "Scale 4 stretch",
+            default: 1.0,
+            min: 1.0,
+            max: 4.0,
+            tooltip: "Stretches this scale's discs into ellipses of the same area, this many times longer than wide, so its pattern grains along the angle: the lean, on purpose. 1 is round. Exact discs averaging only; the pyramid's averages are round.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s4_stretch",
+            display_name: "Scale 5 stretch",
+            default: 1.0,
+            min: 1.0,
+            max: 4.0,
+            tooltip: "Stretches this scale's discs into ellipses of the same area, this many times longer than wide, so its pattern grains along the angle: the lean, on purpose. 1 is round. Exact discs averaging only; the pyramid's averages are round.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s5_stretch",
+            display_name: "Scale 6 stretch",
+            default: 1.0,
+            min: 1.0,
+            max: 4.0,
+            tooltip: "Stretches this scale's discs into ellipses of the same area, this many times longer than wide, so its pattern grains along the angle: the lean, on purpose. 1 is round. Exact discs averaging only; the pyramid's averages are round.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s0_angle",
+            display_name: "Scale 1 angle",
+            default: 0.0,
+            min: 0.0,
+            max: 180.0,
+            tooltip: "The direction of this scale's stretch, in degrees counter-clockwise from horizontal, so 90 is vertical. Nothing at stretch 1. Exact discs averaging only.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s1_angle",
+            display_name: "Scale 2 angle",
+            default: 0.0,
+            min: 0.0,
+            max: 180.0,
+            tooltip: "The direction of this scale's stretch, in degrees counter-clockwise from horizontal, so 90 is vertical. Nothing at stretch 1. Exact discs averaging only.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s2_angle",
+            display_name: "Scale 3 angle",
+            default: 0.0,
+            min: 0.0,
+            max: 180.0,
+            tooltip: "The direction of this scale's stretch, in degrees counter-clockwise from horizontal, so 90 is vertical. Nothing at stretch 1. Exact discs averaging only.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s3_angle",
+            display_name: "Scale 4 angle",
+            default: 0.0,
+            min: 0.0,
+            max: 180.0,
+            tooltip: "The direction of this scale's stretch, in degrees counter-clockwise from horizontal, so 90 is vertical. Nothing at stretch 1. Exact discs averaging only.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s4_angle",
+            display_name: "Scale 5 angle",
+            default: 0.0,
+            min: 0.0,
+            max: 180.0,
+            tooltip: "The direction of this scale's stretch, in degrees counter-clockwise from horizontal, so 90 is vertical. Nothing at stretch 1. Exact discs averaging only.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s5_angle",
+            display_name: "Scale 6 angle",
+            default: 0.0,
+            min: 0.0,
+            max: 180.0,
+            tooltip: "The direction of this scale's stretch, in degrees counter-clockwise from horizontal, so 90 is vertical. Nothing at stretch 1. Exact discs averaging only.",
+            choices: &[],
+        },
+        // Slot 51 (mccabe-multiscale plan, section 9): P3.
+        SimParamDef {
+            name: "variation",
+            display_name: "Variation radius",
+            default: 0.0,
+            min: 0.0,
+            max: 4.0,
+            tooltip: "Averages each scale's variation over a disc of this radius, in cells, before the scales are compared: the paper's variation around the pixel, Softology's variation radius. The winner is then decided by its neighbourhood rather than the cell alone, so each scale holds larger, smoother regions with less speckle. 0 is off. While on it costs a pass a step and two more field slices (about 130 MB on a 1080p grid).",
+            choices: &[],
+        },
+        // Slots 52-81 (mccabe-multiscale plan, section 10): each scale's
+        // warp, the field warp's map applied to where that scale reads
+        // its averages. Drawn by the Warp section, not the model's list.
+        SimParamDef {
+            name: "s0_warp_zoom",
+            display_name: "Scale 1 warp zoom",
+            default: 1.0,
+            min: 0.9,
+            max: 1.1,
+            tooltip: "This scale reads its averages through a zoom about the centre each step, so its structure drifts outward (above 1) or inward, as the field warp's zoom would move the whole field. 1 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s0_warp_rotation",
+            display_name: "Scale 1 warp rotation",
+            default: 0.0,
+            min: -0.25,
+            max: 0.25,
+            tooltip: "Radians a step this scale's reading turns about the centre, so its structure turns while the other scales stay. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s0_warp_pan_x",
+            display_name: "Scale 1 warp pan x",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Cells a step this scale's reading moves sideways, so its structure drifts across the others. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s0_warp_pan_y",
+            display_name: "Scale 1 warp pan y",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Cells a step this scale's reading moves up or down. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s0_warp_flow",
+            display_name: "Scale 1 warp swirl",
+            default: 0.0,
+            min: -0.5,
+            max: 0.5,
+            tooltip: "A swirl of this scale's reading: extra radians a step at the rim, none at the centre. Strong values make a vortex of this scale alone. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s1_warp_zoom",
+            display_name: "Scale 2 warp zoom",
+            default: 1.0,
+            min: 0.9,
+            max: 1.1,
+            tooltip: "This scale reads its averages through a zoom about the centre each step, so its structure drifts outward (above 1) or inward, as the field warp's zoom would move the whole field. 1 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s1_warp_rotation",
+            display_name: "Scale 2 warp rotation",
+            default: 0.0,
+            min: -0.25,
+            max: 0.25,
+            tooltip: "Radians a step this scale's reading turns about the centre, so its structure turns while the other scales stay. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s1_warp_pan_x",
+            display_name: "Scale 2 warp pan x",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Cells a step this scale's reading moves sideways, so its structure drifts across the others. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s1_warp_pan_y",
+            display_name: "Scale 2 warp pan y",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Cells a step this scale's reading moves up or down. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s1_warp_flow",
+            display_name: "Scale 2 warp swirl",
+            default: 0.0,
+            min: -0.5,
+            max: 0.5,
+            tooltip: "A swirl of this scale's reading: extra radians a step at the rim, none at the centre. Strong values make a vortex of this scale alone. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s2_warp_zoom",
+            display_name: "Scale 3 warp zoom",
+            default: 1.0,
+            min: 0.9,
+            max: 1.1,
+            tooltip: "This scale reads its averages through a zoom about the centre each step, so its structure drifts outward (above 1) or inward, as the field warp's zoom would move the whole field. 1 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s2_warp_rotation",
+            display_name: "Scale 3 warp rotation",
+            default: 0.0,
+            min: -0.25,
+            max: 0.25,
+            tooltip: "Radians a step this scale's reading turns about the centre, so its structure turns while the other scales stay. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s2_warp_pan_x",
+            display_name: "Scale 3 warp pan x",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Cells a step this scale's reading moves sideways, so its structure drifts across the others. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s2_warp_pan_y",
+            display_name: "Scale 3 warp pan y",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Cells a step this scale's reading moves up or down. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s2_warp_flow",
+            display_name: "Scale 3 warp swirl",
+            default: 0.0,
+            min: -0.5,
+            max: 0.5,
+            tooltip: "A swirl of this scale's reading: extra radians a step at the rim, none at the centre. Strong values make a vortex of this scale alone. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s3_warp_zoom",
+            display_name: "Scale 4 warp zoom",
+            default: 1.0,
+            min: 0.9,
+            max: 1.1,
+            tooltip: "This scale reads its averages through a zoom about the centre each step, so its structure drifts outward (above 1) or inward, as the field warp's zoom would move the whole field. 1 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s3_warp_rotation",
+            display_name: "Scale 4 warp rotation",
+            default: 0.0,
+            min: -0.25,
+            max: 0.25,
+            tooltip: "Radians a step this scale's reading turns about the centre, so its structure turns while the other scales stay. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s3_warp_pan_x",
+            display_name: "Scale 4 warp pan x",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Cells a step this scale's reading moves sideways, so its structure drifts across the others. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s3_warp_pan_y",
+            display_name: "Scale 4 warp pan y",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Cells a step this scale's reading moves up or down. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s3_warp_flow",
+            display_name: "Scale 4 warp swirl",
+            default: 0.0,
+            min: -0.5,
+            max: 0.5,
+            tooltip: "A swirl of this scale's reading: extra radians a step at the rim, none at the centre. Strong values make a vortex of this scale alone. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s4_warp_zoom",
+            display_name: "Scale 5 warp zoom",
+            default: 1.0,
+            min: 0.9,
+            max: 1.1,
+            tooltip: "This scale reads its averages through a zoom about the centre each step, so its structure drifts outward (above 1) or inward, as the field warp's zoom would move the whole field. 1 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s4_warp_rotation",
+            display_name: "Scale 5 warp rotation",
+            default: 0.0,
+            min: -0.25,
+            max: 0.25,
+            tooltip: "Radians a step this scale's reading turns about the centre, so its structure turns while the other scales stay. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s4_warp_pan_x",
+            display_name: "Scale 5 warp pan x",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Cells a step this scale's reading moves sideways, so its structure drifts across the others. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s4_warp_pan_y",
+            display_name: "Scale 5 warp pan y",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Cells a step this scale's reading moves up or down. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s4_warp_flow",
+            display_name: "Scale 5 warp swirl",
+            default: 0.0,
+            min: -0.5,
+            max: 0.5,
+            tooltip: "A swirl of this scale's reading: extra radians a step at the rim, none at the centre. Strong values make a vortex of this scale alone. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s5_warp_zoom",
+            display_name: "Scale 6 warp zoom",
+            default: 1.0,
+            min: 0.9,
+            max: 1.1,
+            tooltip: "This scale reads its averages through a zoom about the centre each step, so its structure drifts outward (above 1) or inward, as the field warp's zoom would move the whole field. 1 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s5_warp_rotation",
+            display_name: "Scale 6 warp rotation",
+            default: 0.0,
+            min: -0.25,
+            max: 0.25,
+            tooltip: "Radians a step this scale's reading turns about the centre, so its structure turns while the other scales stay. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s5_warp_pan_x",
+            display_name: "Scale 6 warp pan x",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Cells a step this scale's reading moves sideways, so its structure drifts across the others. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s5_warp_pan_y",
+            display_name: "Scale 6 warp pan y",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Cells a step this scale's reading moves up or down. 0 is none.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "s5_warp_flow",
+            display_name: "Scale 6 warp swirl",
+            default: 0.0,
+            min: -0.5,
+            max: 0.5,
+            tooltip: "A swirl of this scale's reading: extra radians a step at the rim, none at the centre. Strong values make a vortex of this scale alone. 0 is none.",
+            choices: &[],
+        },
     ],
     presets: &[
         SimPreset {
@@ -3399,6 +4222,8 @@ pub static MCCABE: ModelDef = ModelDef {
                 ("amount", 0.05),
                 ("amount_min", 0.01),
                 ("symmetry", 0.0),
+                ("layout", 0.0),
+                ("memory", 0.0),
             ],
             // Measured on the prototype: the nested texture is present
             // by step 20 and fully developed by 100; the field never
@@ -3424,11 +4249,39 @@ pub static MCCABE: ModelDef = ModelDef {
                 ("amount", 0.05),
                 ("amount_min", 0.01),
                 ("symmetry", 0.0),
+                ("layout", 0.0),
+                ("memory", 0.0),
             ],
             steps: 200,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.5), ("wrap", 0.0)],
+            matte: None,
+            warp: None,
+        },
+        SimPreset {
+            name: "memory",
+            display_name: "Colour memory",
+            // Measured on the GPU (mccabe-multiscale plan, section 2),
+            // 256 and 512 grids: the coarse ladder with each cell's
+            // colour remembering the scales that won it. Where
+            // scale_mix speckles inside a region, this blends; moving
+            // boundaries leave soft trails of the scale they displaced.
+            // 0.05 keeps about twenty steps of history.
+            params: &[
+                ("scales", 5.0),
+                ("base_radius", 3.0),
+                ("ratio", 2.0),
+                ("amount", 0.05),
+                ("amount_min", 0.01),
+                ("symmetry", 0.0),
+                ("memory", 0.05),
+                ("layout", 0.0),
+            ],
+            steps: 200,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("scale_memory"),
+            coloring_params: &[("scales", 5.0), ("value_scale", 0.5), ("brightness", 0.0)],
             matte: None,
             warp: None,
         },
@@ -3442,6 +4295,8 @@ pub static MCCABE: ModelDef = ModelDef {
                 ("amount", 0.05),
                 ("amount_min", 0.01),
                 ("symmetry", 5.0),
+                ("layout", 0.0),
+                ("memory", 0.0),
             ],
             steps: 200,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
@@ -3450,9 +4305,84 @@ pub static MCCABE: ModelDef = ModelDef {
             matte: None,
             warp: None,
         },
+        SimPreset {
+            name: "symmetry_mix",
+            display_name: "Mixed symmetry",
+            // McCabe's fig. 14: "3-fold symmetry imposed on the small
+            // scale Turing instabilities and 9-fold symmetry on the
+            // large". The coarse ladder as a table, the three finest
+            // scales 3-fold and the two coarsest 9-fold. Measured at
+            // 512^2 (mccabe-multiscale plan, section 3): a 9-fold
+            // rosette of 3-fold detail; isotropic by construction.
+            params: &[
+                ("layout", 1.0),
+                ("memory", 0.0),
+                ("scales", 5.0),
+                ("s0_radius", 3.0), ("s0_ratio", 2.0), ("s0_amount", 0.05), ("s0_weight", 1.0), ("s0_symmetry", 3.0),
+                ("s1_radius", 6.0), ("s1_ratio", 2.0), ("s1_amount", 0.04), ("s1_weight", 1.0), ("s1_symmetry", 3.0),
+                ("s2_radius", 12.0), ("s2_ratio", 2.0), ("s2_amount", 0.03), ("s2_weight", 1.0), ("s2_symmetry", 3.0),
+                ("s3_radius", 24.0), ("s3_ratio", 2.0), ("s3_amount", 0.02), ("s3_weight", 1.0), ("s3_symmetry", 9.0),
+                ("s4_radius", 48.0), ("s4_ratio", 2.0), ("s4_amount", 0.01), ("s4_weight", 1.0), ("s4_symmetry", 9.0),
+            ],
+            steps: 200,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.5), ("wrap", 0.0)],
+            matte: None,
+            warp: None,
+        },
+        SimPreset {
+            name: "uneven",
+            display_name: "Uneven scales",
+            // Not a doubling ladder: radii 1, 3, 10, 20, 45, after the
+            // uneven spacing of Reusser's 2018 defaults (which go on to
+            // 250, past what the pyramid can average). The steps fall
+            // from finest to coarsest: with Reusser's order -- coarse
+            // fastest -- the same radii lean to the grid axes, 1.08 +- 0.02
+            // in spectral energy (axes over diagonals, 32 seeds, 512^2)
+            // against 0.96-0.99 for exact averages; this way round there
+            // is no lean. The cause is the pyramid's fixed lattice
+            // (mccabe-multiscale plan, section 6). With colour memory.
+            params: &[
+                ("layout", 1.0),
+                ("memory", 0.05),
+                ("scales", 5.0),
+                ("s0_radius", 1.0), ("s0_ratio", 2.0), ("s0_amount", 0.05), ("s0_weight", 1.0), ("s0_symmetry", 0.0),
+                ("s1_radius", 3.0), ("s1_ratio", 2.0), ("s1_amount", 0.04), ("s1_weight", 1.0), ("s1_symmetry", 0.0),
+                ("s2_radius", 10.0), ("s2_ratio", 2.0), ("s2_amount", 0.03), ("s2_weight", 1.0), ("s2_symmetry", 0.0),
+                ("s3_radius", 20.0), ("s3_ratio", 2.0), ("s3_amount", 0.02), ("s3_weight", 1.0), ("s3_symmetry", 0.0),
+                ("s4_radius", 45.0), ("s4_ratio", 2.0), ("s4_amount", 0.01), ("s4_weight", 1.0), ("s4_symmetry", 0.0),
+            ],
+            steps: 200,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("scale_memory"),
+            coloring_params: &[("scales", 5.0), ("value_scale", 0.5), ("brightness", 0.0)],
+            matte: None,
+            warp: None,
+        },
     ],
     wgsl: r#"
 const MC_TAU: f32 = 6.28318530718;
+
+// Exact discs: scale i's activator-minus-inhibitor at a position, from
+// the spectral stage, with the cyclic symmetry folded in as mc_avg folds
+// it. The rotation mean of a - b is the difference of the means.
+fn mc_diff(i: i32, pos: vec2<f32>, sym: i32) -> f32 {
+    if (sym < 2) {
+        return pyr_diff(i, pos);
+    }
+    let g = vec2<f32>(sim_grid());
+    let c = g * 0.5;
+    var acc = 0.0;
+    for (var k = 0; k < sym; k = k + 1) {
+        let a = MC_TAU * f32(k) / f32(sym);
+        let d = pos - c;
+        var q = vec2<f32>(cos(a) * d.x - sin(a) * d.y, sin(a) * d.x + cos(a) * d.y) + c;
+        q = q - g * floor(q / g);
+        acc = acc + pyr_diff(i, q);
+    }
+    return acc / f32(sym);
+}
 
 // An average of f over radius r at a base-cell position, with the
 // cyclic symmetry folded in: the mean over the n rotations of the
@@ -3476,33 +4406,237 @@ fn mc_avg(r: f32, pos: vec2<f32>, sym: i32) -> f32 {
     return acc / f32(sym);
 }
 
+// Scale i's step: the table's, or the ladder's, falling linearly from
+// the finest scale to the coarsest (one scale gets the finest).
+fn mc_amount(i: i32, n: i32) -> f32 {
+    if (mparam(7u) >= 0.5) {
+        return mparam(8u + 5u * u32(i) + 2u);
+    }
+    let t = select(0.0, f32(i) / f32(n - 1), n > 1);
+    return mix(mparam(3u), mparam(4u), t);
+}
+
+// Scale i's signed variation at a base-cell position for the measure
+// pass: w(a - b), the activator's average minus the inhibitor's. Its
+// magnitude is what the argmin compares and its sign the direction of
+// the step. The same arithmetic as the step's own loop below.
+fn mc_measure(i: i32, pos: vec2<f32>) -> f32 {
+    let sym = i32(round(mparam(5u)));
+    // Ladder (0) or the per-scale table (1); the table's row i starts
+    // at slot 8 + 5i: radius, ratio, step, weight, symmetry.
+    let table = mparam(7u) >= 0.5;
+    if (pyr_exact()) {
+        // Exact discs (mccabe-multiscale plan, section 6b): a - b
+        // from the spectral stage, which built its discs from this
+        // scale's own radii -- no calibration, a radius is a radius.
+        var w = 1.0;
+        var sym_i = sym;
+        if (table) {
+            let o = 8u + 5u * u32(i);
+            w = mparam(o + 3u);
+            sym_i = i32(round(mparam(o + 4u)));
+        }
+        return w * mc_diff(i, pos, sym_i);
+    }
+    if (table) {
+        let o = 8u + 5u * u32(i);
+        let ra = max(mparam(o), 0.5);
+        let rb = ra * mparam(o + 1u);
+        let w = mparam(o + 3u);
+        let sym_i = i32(round(mparam(o + 4u)));
+        // Softology's weight: both averages times w, then compared.
+        // At w = 1 this is exactly the ladder's arithmetic.
+        let act = w * mc_avg(ra, pos, sym_i);
+        let inh = w * mc_avg(rb, pos, sym_i);
+        return act - inh;
+    }
+    let ra = mparam(1u) * f32(1 << u32(i));
+    let rb = ra * mparam(2u);
+    return mc_avg(ra, pos, sym) - mc_avg(rb, pos, sym);
+}
+
+// Scale i's per-step read map (mccabe-multiscale plan, section 10): the
+// field warp's map -- zoom, rotation, pan and swirl about the centre --
+// applied to where this scale reads its averages, so its structure moves
+// as the field warp would move the whole field while the other scales
+// stay. Slots 52 + 5i: zoom, rotation, pan x, pan y, swirl. The identity
+// reads at `pos` itself.
+fn mc_scale_pos(i: i32, pos: vec2<f32>) -> vec2<f32> {
+    if (!sim_scale_warped()) {
+        return pos;
+    }
+    let o = 52u + 5u * u32(i);
+    let zoom = max(mparam(o), 1.0e-4);
+    let rot = mparam(o + 1u);
+    let pan = vec2<f32>(mparam(o + 2u), mparam(o + 3u));
+    let flow = mparam(o + 4u);
+    if (zoom == 1.0 && rot == 0.0 && flow == 0.0 && pan.x == 0.0 && pan.y == 0.0) {
+        return pos;
+    }
+    // The field warp's map, in cell-centre positions: undo the pan and the
+    // zoom, then rotate back by the uniform rate plus the swirl, which is
+    // zero at the centre and `flow` at the rim.
+    let g = vec2<f32>(sim_grid());
+    let c = g * 0.5;
+    let d = pos - c;
+    let rim = max(min(g.x, g.y) * 0.5, 1.0);
+    let theta = rot + flow * (length(d) / rim);
+    let q = (d - pan) / zoom;
+    let cs = cos(theta);
+    let sn = sin(theta);
+    return c + vec2<f32>(cs * q.x + sn * q.y, -sn * q.x + cs * q.y);
+}
+
+// The measure pass (plan section 9's P3), run only while the variation
+// radius is on: every scale's signed variation at this cell into the
+// layer's scratch, scales 0-3 in the first slice and 4-5 in the second,
+// for the step to gather at its neighbours. The state goes through
+// unchanged.
 fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
     let n = i32(clamp(round(mparam(0u)), 1.0, 6.0));
-    let base = mparam(1u);
-    let ratio = mparam(2u);
-    let amount = mparam(3u);
-    let amount_min = mparam(4u);
-    let sym = i32(round(mparam(5u)));
     let pos = vec2<f32>(p) + vec2<f32>(0.5, 0.5);
     pyr_prepare();
+    var m0 = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    var m1 = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    for (var i = 0; i < n; i = i + 1) {
+        let d = mc_measure(i, mc_scale_pos(i, pos));
+        if (i < 4) {
+            m0[i] = d;
+        } else {
+            m1[i - 4] = d;
+        }
+    }
+    sim_scratch_write(p, 0, m0);
+    sim_scratch_write(p, 1, m1);
+    return s;
+}
+
+// The step: the scale with the least variation wins and moves the cell
+// by its step, towards the activator.
+fn sim_step2(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    let n = i32(clamp(round(mparam(0u)), 1.0, 6.0));
+    let pos = vec2<f32>(p) + vec2<f32>(0.5, 0.5);
 
     var best_var = 1.0e30;
     var best_dir = 0.0;
     var best_scale = 0.0;
-    for (var i = 0; i < n; i = i + 1) {
-        let ra = base * f32(1 << u32(i));
-        let rb = ra * ratio;
-        let act = mc_avg(ra, pos, sym);
-        let inh = mc_avg(rb, pos, sym);
-        let v = abs(act - inh);
-        // The amounts fall linearly from the finest scale to the
-        // coarsest; one scale gets the finest amount.
-        let t = select(0.0, f32(i) / f32(n - 1), n > 1);
-        let amt = mix(amount, amount_min, t);
-        if (v < best_var) {
-            best_var = v;
-            best_dir = select(-amt, amt, act > inh);
-            best_scale = f32(i);
+    if (sim_scratch_on()) {
+        // The variation radius: each scale's |variation| averaged over
+        // an antialiased disc around the cell (the paper's "variation
+        // around the pixel", Softology's variation radius), from what
+        // the measure pass wrote. The direction is still the cell's own.
+        // Every scale is weighted alike, so the disc's total weight
+        // cancels in the comparison and is never divided out; a cell past
+        // an edge the boundary does not wrap counts for nothing.
+        let rv = clamp(mparam(51u), 0.0, 4.0);
+        let reach = i32(floor(rv + 0.5));
+        let g = sim_grid();
+        var acc0 = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        var acc1 = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        for (var dy = -reach; dy <= reach; dy = dy + 1) {
+            for (var dx = -reach; dx <= reach; dx = dx + 1) {
+                let w = clamp(rv + 0.5 - length(vec2<f32>(f32(dx), f32(dy))), 0.0, 1.0);
+                let q = p + vec2<i32>(dx, dy);
+                if (w <= 0.0 || sim_outside(q, g)) {
+                    continue;
+                }
+                let qw = sim_wrap_sized(q, g);
+                acc0 = acc0 + w * abs(sim_scratch_read(qw, 0));
+                acc1 = acc1 + w * abs(sim_scratch_read(qw, 1));
+            }
+        }
+        let own0 = sim_scratch_read(p, 0);
+        let own1 = sim_scratch_read(p, 1);
+        for (var i = 0; i < n; i = i + 1) {
+            var v: f32;
+            var d: f32;
+            if (i < 4) {
+                v = acc0[i];
+                d = own0[i];
+            } else {
+                v = acc1[i - 4];
+                d = own1[i - 4];
+            }
+            if (v < best_var) {
+                best_var = v;
+                let amt = mc_amount(i, n);
+                best_dir = select(-amt, amt, d > 0.0);
+                best_scale = f32(i);
+            }
+        }
+    } else if (sim_scale_warped()) {
+        // Per-scale warps: each scale measured at its own read position.
+        pyr_prepare();
+        for (var i = 0; i < n; i = i + 1) {
+            let d = mc_measure(i, mc_scale_pos(i, pos));
+            let v = abs(d);
+            if (v < best_var) {
+                best_var = v;
+                let amt = mc_amount(i, n);
+                best_dir = select(-amt, amt, d > 0.0);
+                best_scale = f32(i);
+            }
+        }
+    } else {
+        // The rule as it was before the measure pass, written out rather
+        // than through `mc_measure`: the same arithmetic in a different
+        // shape let the driver contract a weighted table's w * a - inh
+        // into one multiply-add, and the last bit moved every saved
+        // table with a weight off 1 (sim-mccabe-table). Kept verbatim so
+        // a run without the variation radius is the run it always was.
+        let base = mparam(1u);
+        let ratio = mparam(2u);
+        let amount = mparam(3u);
+        let amount_min = mparam(4u);
+        let sym = i32(round(mparam(5u)));
+        let table = mparam(7u) >= 0.5;
+        pyr_prepare();
+        let exact = pyr_exact();
+        for (var i = 0; i < n; i = i + 1) {
+            var v: f32;
+            var up: bool;
+            var amt: f32;
+            if (exact) {
+                var w = 1.0;
+                var sym_i = sym;
+                if (table) {
+                    let o = 8u + 5u * u32(i);
+                    amt = mparam(o + 2u);
+                    w = mparam(o + 3u);
+                    sym_i = i32(round(mparam(o + 4u)));
+                } else {
+                    let t = select(0.0, f32(i) / f32(n - 1), n > 1);
+                    amt = mix(amount, amount_min, t);
+                }
+                let d = w * mc_diff(i, pos, sym_i);
+                v = abs(d);
+                up = d > 0.0;
+            } else if (table) {
+                let o = 8u + 5u * u32(i);
+                let ra = max(mparam(o), 0.5);
+                let rb = ra * mparam(o + 1u);
+                amt = mparam(o + 2u);
+                let w = mparam(o + 3u);
+                let sym_i = i32(round(mparam(o + 4u)));
+                let act = w * mc_avg(ra, pos, sym_i);
+                let inh = w * mc_avg(rb, pos, sym_i);
+                v = abs(act - inh);
+                up = act > inh;
+            } else {
+                let ra = base * f32(1 << u32(i));
+                let rb = ra * ratio;
+                let act = mc_avg(ra, pos, sym);
+                let inh = mc_avg(rb, pos, sym);
+                v = abs(act - inh);
+                up = act > inh;
+                let t = select(0.0, f32(i) / f32(n - 1), n > 1);
+                amt = mix(amount, amount_min, t);
+            }
+            if (v < best_var) {
+                best_var = v;
+                best_dir = select(-amt, amt, up);
+                best_scale = f32(i);
+            }
         }
     }
 
@@ -3511,6 +4645,20 @@ fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
     let span = max(mm.y - mm.x, 1.0e-6);
     let f = (s.x - mm.x) / span * 2.0 - 1.0;
     let age = select(s.z, f32(sim_step_index()), best_scale != s.y);
+
+    // Colour memory (mccabe-multiscale plan, section 2). Softology lerps
+    // a cell's colour toward the winner's by a bump amount b; that
+    // colour is linear in a one-hot of the winner, so the same lerp on
+    // per-scale WEIGHTS gives a colour the palette can be applied to
+    // at display time. Off (no slices), the accessors do nothing.
+    if (sim_mem_count() > 0) {
+        let b = clamp(mparam(6u), 0.0, 1.0);
+        let i = i32(best_scale);
+        let e0 = vec4<f32>(f32(i == 0), f32(i == 1), f32(i == 2), f32(i == 3));
+        let e1 = vec4<f32>(f32(i == 4), f32(i == 5), f32(i == 6), f32(i == 7));
+        sim_mem_write(p, 0, mix(sim_mem_read(p, 0), e0, b));
+        sim_mem_write(p, 1, mix(sim_mem_read(p, 1), e1, b));
+    }
     return vec4<f32>(f + best_dir, best_scale, age, 0.0);
 }
 "#,
@@ -3524,8 +4672,11 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 }
 "#,
     default_steps: 200,
-    passes: 1,
+    // The measure pass, then the step; the measure only while the
+    // variation radius is on, so off the step is one pass as it was.
+    passes: 2,
     repeat: None,
+    measure: Some(crate::sim::MeasurePass { param: "variation", slices: 2 }),
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -3741,6 +4892,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 600,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: Some(crate::sim::AgentDef {
         count: |p, w, h| {
             // The paper's %p: a percentage of the image AREA, so the
@@ -4003,6 +5155,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 1200,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: Some(crate::sim::AgentDef {
         count: |p, w, h| {
             let pct = p.get("walkers").clamp(0.05, 40.0);
@@ -4260,6 +5413,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 12_837,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -4444,6 +5598,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 2_000,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -4895,6 +6050,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 6_000,
     passes: 2,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -5307,6 +6463,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     passes: 3,
     // The relaxation: pass 1 runs `relax` times per growth.
     repeat: Some((1, "relax")),
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -5568,6 +6725,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 800,
     passes: 2,
     repeat: Some((0, "relax")),
+    measure: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -6087,6 +7245,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 2000,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: Some(|p| {
         // Two blocks: the activator disc, then the inhibitor disc, each
@@ -6406,6 +7565,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 200000,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     // The 5-point Laplacian's most negative eigenvalue is -8 (the
@@ -6668,6 +7828,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 2000000,
     passes: 1,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: None,
     // Diffusion in cells is D / spacing^2 -- 40 for the paper's D_w =
@@ -6934,6 +8095,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 2000,
     passes: 2,
     repeat: None,
+    measure: None,
     agents: None,
     kernel: Some(difference_of_discs),
     dt_bound: None,

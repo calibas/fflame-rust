@@ -727,7 +727,7 @@ shipped the same day.
 *Bridges 2010* proceedings `[read — text at output/mccabe.txt]`.
 Jason Rampe (Softology) "Multi-Scale Turing Patterns" blog posts
 `[verify — the radius ladders and colour blending in circulation are
-from implementations, not from the paper]`. Jonathan Reusser's
+from implementations, not from the paper]`. Ricky Reusser's
 implementation `[verify — the seed document's quotation of Reusser is
 not verbatim; his kernels are analytic in the frequency domain inside
 an FFT pipeline]`.
@@ -848,6 +848,71 @@ the plan assumed.
   coarser ladder in disguise. So a coarser ladder ships too: measured
   at `base_radius` 3, the nested contour texture is unmistakable, and
   the `coarse` and `rosette` presets use it.
+
+**Colour memory, 2026-10-04** (mccabe-multiscale plan, section 2).
+Softology and Reusser both colour with memory: a per-cell colour,
+lerped each step toward the winning scale's colour. That colour is
+linear in a one-hot of the winner, so the model keeps the same lerp on
+eight per-scale **weights** instead. They live on two internal slices
+of the field array. The `scale_memory` colouring applies the palette
+to them at display time, so a palette edit shows at once, even paused.
+- **On and off.** `memory` (0–1, the bump) turns it on. At 0 there are
+  no slices and every baseline is byte-identical.
+- **Measured.**
+  - Against a CPU mirror driven by the GPU's own winners: 6e-8 over
+    five steps.
+  - The field is bit-identical with memory on.
+  - Batch invariant.
+  - Moved exactly by an integer warp pan.
+  - 4.17 → 4.29 ms/step at 1080p (+3%), and ~133 MB more field.
+- **Seen.** Where `scale_mix` speckles inside a region, `scale_memory`
+  blends. Moving boundaries leave soft trails of the scale they
+  displaced. The `memory` preset is the coarse ladder at 0.05.
+- **Found on the way.** On a small grid the pyramid has few levels.
+  A coarse scale whose activator and inhibitor both clamp to the top
+  level has a variation near 0, so it **wins everywhere**. At 40² the
+  default fifth scale does. The per-scale table (plan section 3) warns
+  about it.
+
+**The per-scale table, 2026-10-04** (mccabe-multiscale plan, section
+3). `layout` = Table frees every scale: its own radius, ratio, step
+(negative allowed), weight (Softology's: both averages × w) and
+symmetry (to 12). Switching to it fills it from the ladder.
+- **Measured.** CPU mirror exact on every cell. The table filled from
+  the ladder agrees to 1.5e-8 per step: not bit for bit, because of
+  `mix()` rounding.
+- **Presets.** `symmetry_mix` (fig. 14: 3-fold small scales, 9-fold
+  large) and `uneven` (radii 1, 3, 10, 20, 45 with colour memory).
+- **Found.** Tables whose coarse scales take the largest steps lean to
+  the axes: 1.08 ± 0.02 axes/diagonals over 32 seeds on the GPU,
+  against 0.96–0.99 with exact averages. Investigated in the plan's
+  section 6: the cause is the pyramid's fixed lattice, not its kernel.
+  Moving the lattice every step removes the lean on the CPU replica.
+  Rounding the kernel does nothing.
+
+**The shifted grid, 2026-10-04** (plan section 6a). `averaging` =
+"Pyramid, shifted grid" moves the pyramid's lattice every four steps by
+a hash of (seed, step).
+- **Lean.** On the GPU, over 32 seeds, it goes from 1.07 to 0.93.
+- **Motion.** Fewer direction flips per step than the fixed lattice.
+- **Look.** Crisper nested contours on the coarse ladder.
+
+Periodic boundary only; the default stays the fixed lattice so saved
+configs render as before.
+
+**Exact discs, 2026-10-04** (plan section 6c). `averaging` = "Exact
+discs" averages over true antialiased discs by FFT, the references' own
+method.
+- **How.** One forward and three inverse 2D FFTs a step for six scales,
+  each scale's activator-minus-inhibitor read straight from the result.
+- **Measured.** Exact on every cell against a CPU mirror, symmetry
+  included. Isotropic on the GPU (0.97 and 1.00 axes/diagonals on the
+  two test tables). 7.5 ms/step at 1080p against the pyramid's 4.4,
+  about 150 MB.
+- **Seen.** Distinct cells with nested detail, where the pyramid draws
+  contour bands.
+- **And it showed the shifted grid moves the lean rather than removing
+  it** (0.92 and 0.88), so the presets stay on the fixed pyramid.
 
 ---
 

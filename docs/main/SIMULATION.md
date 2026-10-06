@@ -22,7 +22,7 @@ a run at a step count*.
 - [src/sim/mod.rs](../../src/sim/mod.rs) — `ModelDef`, `SimColoringDef`,
   the `MODELS` and `COLORINGS` registries, the pure rules
 - [src/sim/models.rs](../../src/sim/models.rs) — 31 models, inline WGSL
-- [src/sim/colorings.rs](../../src/sim/colorings.rs) — 11 colourings
+- [src/sim/colorings.rs](../../src/sim/colorings.rs) — 13 colourings
 - [src/sim/assembler.rs](../../src/sim/assembler.rs) — WGSL assembly
 - [src/sim/renderer.rs](../../src/sim/renderer.rs) — `SimRenderer`
 - [src/config/sim.rs](../../src/config/sim.rs) — `SimConfig` and its paths
@@ -73,6 +73,7 @@ body, and:
 | --- | --- |
 | `passes` | dispatches per step, 1–4. A fourth-order PDE needs two; the breakdown model needs three (grow, relax, weigh). |
 | `repeat` | `(pass index, parameter name)` — that pass runs a slider-controlled number of times. A relaxation sweep count cannot be compiled in. |
+| `measure` | a `MeasurePass { param, slices }`: pass 0 writes `slices` scratch slices for the later passes to read at any cell, and runs only while `param` is above 0. Off, the step is the passes after it, and costs what it did before (McCabe's variation radius). |
 | `max_dt` | stability bound for the explicit solver. Exceed it and the field diverges. |
 | `diffusion` | which parameters are diffusion rates, for the dt ceiling. |
 | `agents` | an `AgentDef` for the models with a moving population (physarum). |
@@ -82,11 +83,11 @@ body, and:
 nothing pays for what it does not use:
 
 `NeedsRng`, `NeverStills`, `NoTimeStep`, `NeedsPyramid`, `NeedsAgents`,
-`NeedsMinMax`, `TakesDrive`, `PublishesSignal`.
+`NeedsMinMax`, `TakesDrive`, `PublishesSignal`, `Memory`.
 
 **`SimColoringDef`** is the same shape for the picture side, with
 `ColoringFeature`: `NeedsGradient`, `NeedsStructure`, `NeedsDistance`,
-`ReadsCell`. A colouring is `fn sim_color(x: SimSample, p: vec2<i32>) -> vec4<f32>`
+`ReadsCell`, `ReadsMemory`, `NeedsRelief`. A colouring is `fn sim_color(x: SimSample, p: vec2<i32>) -> vec4<f32>`
 where `rgb` is the colour and **`a` is coverage**. Coverage 0 lets the
 shared tonemap composite the background through, which is what makes a
 matte and a transparent PNG work; the matte multiplies into that same
@@ -127,6 +128,90 @@ inherit it.
 
 A `Rgba32Float` **texture array**, one slice per layer, ping-ponged
 between two allocations. A grid is capped at 8192 cells a side.
+
+**Memory slices.** A layer whose model keeps a memory
+(`ModelFeature::Memory`, McCabe's colour memory) has two more
+internal slices, appended after every user layer. User layer indices
+are unchanged, so couplings, the colour stack and `gather` do not see
+them. In the stage loop:
+- The owner's last pass writes them (`sim_mem_write`), and they get
+  no dispatch of their own in that stage.
+- Every other stage copies them through.
+- The warp and the layer map move them with their owner.
+- They seed to zero.
+
+Switching a memory on or off is part of `SeedIdentity`, so it
+restarts the run. A `ReadsMemory` colouring sees them as
+`x.m0`/`x.m1`, blended by the resolve like the state. See
+[mccabe-multiscale.md](../projects/mccabe-multiscale.md).
+
+**Scratch slices.** A layer whose model has a measure pass that is on
+has its scratch after ALL memory (`SliceLayout`). They do not persist:
+- The measure pass writes them (`sim_scratch_write`) and the passes
+  after it read them from the side it wrote (`sim_scratch_read`).
+- No other stage dispatches them, warp and layer map included. A
+  copy-through in the measure's stage would overwrite what it wrote,
+  and a stale scratch is never read.
+- Because they sit after every slice that persists, turning a measure
+  pass on or off moves nothing else. The renderer copies the persistent
+  slices into the new arrays and the run goes on; it does not reseed.
+
+**Parameters.** Each layer's block in the model-parameter buffer is
+128 floats. The last four are the renderer's:
+- whether any per-scale warp is on;
+- the scratch's first slice (0 when there is none);
+- the memory's slice count;
+- the memory's first slice.
+
+**Per-scale warps** (`ScaleWarps`, McCabe):
+- **Parameters.** Each scale has the field warp's five rates
+  (`s{i}_warp_{zoom,rotation,pan_x,pan_y,flow}`). The Warp section
+  draws them behind its Field / Scale *k* list, and the model's own
+  list hides them.
+- **What they do.** The field warp's map moves where that scale reads
+  its averages, so its structure drifts as the field would while the
+  other scales stay. A step costs no more for it.
+- **The reserved flag.** The renderer decides once whether any live
+  scale's warp is on and says so in a reserved slot. Off, the step is
+  the rule exactly as it was; a per-cell check across the scales cost
+  3–5% of every McCabe step.
+
+**The pyramid** (`NeedsPyramid`, McCabe):
+- **Build.** A Gaussian pyramid of the field, built before every step,
+  one dispatch per level, each level's uniform its own slot in a
+  per-step ring.
+- **Reads.** Bilinear within a level and linear between two, at
+  `level = log2(0.55 r)`.
+- **Its fixed texel lattice is a hazard.** Patterns can lock onto the
+  bilinear reads' creases along the coarse levels' texel lines.
+  McCabe's "shifted grid" averaging moves the lattice every four steps
+  by a hash of (seed, step), building level 1 from the field offset by
+  it and reading every level above at the position plus it. Measured,
+  this trades the axis lean for a diagonal one.
+
+**Exact averages.** McCabe's "Exact discs" averaging replaces the
+pyramid with a spectral stage:
+- **What it computes.** Per scale, the activator-minus-inhibitor field
+  as a circular convolution with antialiased discs, by FFT.
+- **The FFT** (`src/sim/fft.rs`): mixed-radix Stockham, one dispatch per
+  stage, any grid whose prime factors are at most 64.
+- **The stage** (`src/sim/spectral.rs`): one forward and three inverse
+  2D FFTs a step for six scales.
+- **Where the results go.** An `R32Float` array the renderer owns, at
+  step binding 18, which a sampled texture keeps off the browsers'
+  storage-buffer count.
+- **Limits.** Periodic boundary only; anything else falls back to the
+  pyramid. About 1.7× the pyramid's step and ~150 MB at 1080p.
+- **Leaning discs.** In table mode each scale's discs can be stretched
+  into ellipses of the same area at an angle (`s{i}_stretch`,
+  `s{i}_angle`), which grains that scale's pattern along the angle. An
+  ellipse is centrally symmetric, so its spectrum is still real and only
+  the stage's disc fill changes; a stretch of 1 fills to the bit what the
+  round disc did. Exact discs only: the panel hides the columns
+  otherwise.
+
+See [mccabe-multiscale.md](../projects/mccabe-multiscale.md), sections 6
+to 6c and 9.
 
 ### Shaders
 
@@ -214,7 +299,33 @@ catalogue follows.
 **Colour layers** are a stack, bottom first, each with its own colouring
 and blend mode and opacity. With a stack, the flat `coloring` fields are
 ignored. A `gather` colour layer reads the first channel of four
-consecutive layers as one colouring's four channels.
+consecutive layers as one colouring's four channels. The blend modes are
+Normal, Lighten, Darken, Multiply, Screen, Overlay, Add and Hard light,
+the last being Overlay decided by the top layer.
+
+**Relief** is a colouring meant for the top of the stack under Hard
+light: one channel of its source layer as a height, smoothed and lit,
+as grey centred on mid-grey. Over mid-grey, Hard light is a shadow
+toward black and a highlight toward white by the distance from it,
+which is the escape relief's shading. The panel's **Add relief** adds
+one in a click. Its lighting follows the escape relief's
+(`EscapeShading`): Tilt or Lambert, and the light angle
+counter-clockwise from east, 135 by default.
+
+**The relief stage** builds what it reads (`NeedsRelief`, `x.relief`):
+- **Before the colour pass**, every frame a colouring needs it: two
+  separable passes at grid size, the Gaussian of the softness and its
+  derivative along x, then along y.
+- **Into an `Rgba32Float`** of (height, d/dx, d/dy), in cells, which the
+  resolve interpolates like the state, so the shading stays smooth at
+  any zoom.
+- **One height per frame**, from the first enabled colouring that asks
+  (its parameters 0 and 1: channel and softness), as there is one
+  distance field.
+- **The cost** on a 1080p grid: about 2 ms a frame at softness 2, 6 ms
+  at the maximum 8.
+- **The same texture** is the height a 3D height-field mode would
+  displace by (mccabe-multiscale plan, section 10).
 
 **`use_transforms`** makes the flame's transforms the layers' per-step
 maps: transform *i* warps layer *i*, by its affine **and its

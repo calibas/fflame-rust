@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "8a76c8b3",
+  "git_hash": "218a4eed",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 35102,
@@ -782,17 +782,53 @@
       "bytes": 24491,
       "sha256": "5999a8e9d6918e9d61fc38be2c7fc56eb3753b09c204b929635e456bde8f6777"
     },
+    "sim-mccabe-exact.png": {
+      "bytes": 23354,
+      "sha256": "4a5c3b862b61bdf9190e06cf34be29bd64da3dc4236dfd06373d3031b0c307a1"
+    },
     "sim-mccabe-field.png": {
       "bytes": 23734,
       "sha256": "02b0a5ef212b34f776e02e6c0b7136511765fe21228b19adebab4f9d784353e4"
+    },
+    "sim-mccabe-lean.png": {
+      "bytes": 38253,
+      "sha256": "2fee5d6d76641ff4ee08f75f1824c1fdf41ab5f358ce22c08a6861ae25c6479e"
+    },
+    "sim-mccabe-memory.png": {
+      "bytes": 36195,
+      "sha256": "3b1ed652b1d2c8d4c35c45996f583486be50e0801f74a72b6a9a5da354a9e404"
     },
     "sim-mccabe-multiscale.png": {
       "bytes": 26640,
       "sha256": "030366db46d77d0153b0db399b232a56c2e10821d7ac599b3d64c4edd20a859b"
     },
+    "sim-mccabe-relief.png": {
+      "bytes": 37704,
+      "sha256": "bd19b3cb180cf6ba8d61dc8cdd8b0e95b896b3bddc8b7c0068a097b7ba74a790"
+    },
     "sim-mccabe-rosette.png": {
       "bytes": 23354,
       "sha256": "17fa910854e736bed83f535ba668258631bf56c2c7c9274ddf52abf0d929ae32"
+    },
+    "sim-mccabe-scale-warp.png": {
+      "bytes": 36937,
+      "sha256": "3dff8513de7dc6bab777af38462c32b91a00d9dab745f27e9c5971d703bbdfdc"
+    },
+    "sim-mccabe-shifted.png": {
+      "bytes": 23800,
+      "sha256": "49e21970d11c061e48a9861722a60c2fc37ebe89549e7338d99d9e70398f4ae0"
+    },
+    "sim-mccabe-table.png": {
+      "bytes": 13984,
+      "sha256": "6758b615b9fa93c45f788656e30370357c830a81210193d3aab7b437bb70923e"
+    },
+    "sim-mccabe-variation.png": {
+      "bytes": 36025,
+      "sha256": "ad1b5cdc4175344b3851025756a0b62d4bd8690f6faf76412f853b3a5f28c9a1"
+    },
+    "sim-mccabe-yuv.png": {
+      "bytes": 39094,
+      "sha256": "9e0994d5376e98f06e78162ea790f4751f8b7abb476390eb0962bc53deea7243"
     },
     "sim-oregonator-wave-trains.png": {
       "bytes": 8515,

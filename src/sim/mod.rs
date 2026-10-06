@@ -40,8 +40,10 @@ pub mod assembler;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod app_repro_test;
 pub mod colorings;
+pub mod fft;
 pub mod models;
 pub mod renderer;
+pub mod spectral;
 
 pub use renderer::SimRenderer;
 
@@ -185,6 +187,29 @@ pub enum ModelFeature {
     /// any layer's pass k + 1, so the channel a later pass reads is
     /// the signal of the same field the convolution would have seen.
     PublishesSignal,
+    /// The model keeps a per-cell MEMORY beside its field: eight
+    /// floats on [`MEMORY_SLICES`] internal slices of the field array,
+    /// appended after the user's layers (mccabe-multiscale plan,
+    /// section 2). The model's `memory` parameter turns it on; at 0
+    /// no slice exists and nothing changes. The step reads and writes
+    /// it through `sim_mem_read(p, k)` / `sim_mem_write(p, k, v)`, in
+    /// its LAST pass; the warp and the layer map move it with the
+    /// field, and a colouring that declares
+    /// [`ColoringFeature::ReadsMemory`] reads it.
+    Memory,
+}
+
+/// Internal slices a layer's memory takes when it is on: eight floats.
+pub const MEMORY_SLICES: u32 = 2;
+
+/// A model's measure pass: see [`ModelDef::measure`].
+#[derive(Clone, Copy, Debug)]
+pub struct MeasurePass {
+    /// The parameter that turns it on: the pass runs, and the scratch
+    /// exists, while it is above 0.
+    pub param: &'static str,
+    /// Scratch slices, four channels each.
+    pub slices: u32,
 }
 
 /// A model's agent stage.
@@ -265,6 +290,131 @@ pub fn pyramid_levels(grid_w: u32, grid_h: u32) -> u32 {
 /// levels reach a 1/128 reduction, which at the calibrated mapping
 /// (`level = log2(0.55 r)`) covers an averaging radius of ~230 cells.
 pub const MAX_PYRAMID_LEVELS: u32 = 8;
+
+/// The largest averaging radius the pyramid can tell apart on this
+/// grid: the radius whose calibrated level is the top one. Past it a
+/// read clamps to the top level, so an activator and an inhibitor both
+/// beyond it measure the same thing -- a variation near 0, and in
+/// McCabe's argmin a scale that wins everywhere (found at 40^2 with
+/// five scales, mccabe-multiscale plan, section 2).
+pub fn pyramid_reach(grid_w: u32, grid_h: u32) -> f32 {
+    let top = pyramid_levels(grid_w, grid_h).saturating_sub(1);
+    (1u32 << top) as f32 / 0.55
+}
+
+/// A model's parameter TABLE: rows of the same columns, drawn by the
+/// panel as a grid rather than a slider each (mccabe-multiscale plan,
+/// section 3). Row `i`'s column `c` is the ordinary parameter
+/// `s{i}_{c}`, so presets, scripts and the config see plain names.
+pub struct ParamTable {
+    /// The model it belongs to.
+    pub model: &'static str,
+    /// The parameter choosing the generated layout (0) or the table (1).
+    pub mode_param: &'static str,
+    /// The parameter saying how many rows are live.
+    pub rows_param: &'static str,
+    /// Rows the table has.
+    pub rows: usize,
+    /// Column suffixes, in the order they are drawn.
+    pub columns: &'static [&'static str],
+    /// Parameters only the generated layout reads: hidden in table mode.
+    pub generator_params: &'static [&'static str],
+    /// The table the generator makes from these parameters. Switching
+    /// to the table writes it, so the switch changes nothing on screen.
+    pub fill: fn(&std::collections::BTreeMap<String, f32>) -> Vec<(String, f32)>,
+    /// Whether the panel draws a column at these parameters: a column
+    /// that does nothing in some mode is hidden there.
+    pub shows_column: fn(&std::collections::BTreeMap<String, f32>, &str) -> bool,
+}
+
+impl ParamTable {
+    /// The parameter name of row `row`, column `col`.
+    pub fn cell(&self, row: usize, col: &str) -> String {
+        format!("s{row}_{col}")
+    }
+
+    /// Whether `name` is one of this table's cells.
+    pub fn is_cell(&self, name: &str) -> bool {
+        (0..self.rows).any(|r| self.columns.iter().any(|c| self.cell(r, c) == name))
+    }
+}
+
+/// A model's per-scale WARPS (mccabe-multiscale plan, section 10): row
+/// `i`'s `s{i}_warp_{zoom,rotation,pan_x,pan_y,flow}` -- the field warp's
+/// five rates, applied to where scale `i` reads its averages. The Warp
+/// section draws them behind its target list; the model's own list hides
+/// them.
+pub struct ScaleWarps {
+    pub model: &'static str,
+    /// The parameter saying how many rows are live.
+    pub rows_param: &'static str,
+    /// Rows the model declares.
+    pub rows: usize,
+}
+
+/// The warp's fields, in the order the Warp section draws them.
+pub const SCALE_WARP_FIELDS: [&str; 5] = ["zoom", "rotation", "pan_x", "pan_y", "flow"];
+
+impl ScaleWarps {
+    /// Row `row`'s parameter for `field`.
+    pub fn param(&self, row: usize, field: &str) -> String {
+        format!("s{row}_warp_{field}")
+    }
+
+    /// Whether `name` is one of these parameters.
+    pub fn is_param(&self, name: &str) -> bool {
+        (0..self.rows).any(|r| SCALE_WARP_FIELDS.iter().any(|f| self.param(r, f) == name))
+    }
+
+    /// Whether any live row's warp is off the identity: what the
+    /// renderer tells the step, so a model without one pays nothing.
+    pub fn any_active(&self, def: &ModelDef, params: &std::collections::BTreeMap<String, f32>) -> bool {
+        (0..self.live_rows(def, params)).any(|r| {
+            SCALE_WARP_FIELDS.iter().any(|f| {
+                let name = self.param(r, f);
+                let d = def.parameters.iter().find(|p| p.name == name).map(|p| p.default).unwrap_or(0.0);
+                params.get(&name).copied().filter(|v| v.is_finite()).unwrap_or(d) != d
+            })
+        })
+    }
+
+    /// Rows live at these parameters.
+    pub fn live_rows(&self, def: &ModelDef, params: &std::collections::BTreeMap<String, f32>) -> usize {
+        let d = def.parameters.iter().find(|p| p.name == self.rows_param).map(|p| p.default).unwrap_or(1.0);
+        params.get(self.rows_param).copied().filter(|v| v.is_finite()).unwrap_or(d).round().clamp(1.0, self.rows as f32)
+            as usize
+    }
+}
+
+/// Every model's per-scale warps.
+pub static SCALE_WARPS: &[&ScaleWarps] = &[&models::MCCABE_WARPS];
+
+/// The per-scale warps of `model`, if it has them.
+pub fn scale_warps(model: &str) -> Option<&'static ScaleWarps> {
+    SCALE_WARPS.iter().copied().find(|w| w.model == model)
+}
+
+/// Every model's table. Few models have one, so this is a list beside
+/// the registry rather than a field on every `ModelDef`.
+pub static PARAM_TABLES: &[&ParamTable] = &[&models::MCCABE_TABLE];
+
+/// The discs of `model`'s scales at these parameters, for the spectral
+/// stage, or `None` for a model it does not serve. McCabe is the only
+/// one.
+pub fn spectral_scales(
+    model: &str,
+    params: &std::collections::BTreeMap<String, f32>,
+) -> Option<Vec<spectral::SpectralScale>> {
+    match model {
+        "mccabe" => Some(models::mccabe_scale_discs(params)),
+        _ => None,
+    }
+}
+
+/// The table of `model`, if it has one.
+pub fn param_table(model: &str) -> Option<&'static ParamTable> {
+    PARAM_TABLES.iter().copied().find(|t| t.model == model)
+}
 
 /// Slots in the min/max ring: one per step of the largest batch, plus
 /// one so the slot a step READS (the previous step's) is never among
@@ -392,6 +542,11 @@ pub enum ColoringFeature {
     /// the matte off there is no figure to be distant from and the
     /// value is 0.
     NeedsDistance,
+    /// The colouring reads `x.m0` / `x.m1`, the source layer's MEMORY
+    /// (see [`ModelFeature::Memory`]): eight weights read at the same
+    /// cells as the state and blended by the resolve the same way. A
+    /// source layer without memory reads zeros.
+    ReadsMemory,
     /// The colouring reads the cell coordinate `p` and the field
     /// around it directly -- a line integral convolution has to walk
     /// the field. Under an interpolating resolve `p` is the NEAREST
@@ -400,6 +555,14 @@ pub enum ColoringFeature {
     /// is its nature. `no_colouring_reads_the_cell_coordinate` exempts
     /// colourings that declare this and no others.
     ReadsCell,
+    /// The colouring reads `x.relief`: (height, d/dx, d/dy) of one
+    /// channel of its source layer, Gaussian-smoothed on the grid
+    /// (mccabe-multiscale plan, section 10). The renderer builds that
+    /// texture before the colour pass from the FIRST colouring that
+    /// declares this -- its parameters 0 (channel) and 1 (softness) --
+    /// and the resolve interpolates it like the state. One height per
+    /// frame, as there is one distance field.
+    NeedsRelief,
 }
 
 /// The Sims 3×3 Laplacian's most negative eigenvalue (centre −1,
@@ -530,6 +693,18 @@ pub struct ModelDef {
     /// not something a shader can be compiled for. Capped at
     /// [`MAX_INNER_ITERATIONS`].
     pub repeat: Option<(u32, &'static str)>,
+    /// A MEASURE pass, run only while it is wanted (mccabe-multiscale
+    /// plan, section 9). Pass 0 writes internal SCRATCH slices that the
+    /// passes after it read at any cell -- a cross-pass buffer wider than
+    /// a spare channel -- and runs only while the named parameter is
+    /// above 0. Off, the step is the passes after it alone and the
+    /// scratch is not allocated, so a model pays nothing for a measure
+    /// it is not using.
+    ///
+    /// McCabe's variation radius is the reason: it averages each scale's
+    /// variation over a disc, so the step needs every scale's variation
+    /// at its neighbours, which only a pass before it can have written.
+    pub measure: Option<MeasurePass>,
     /// Largest `dt` the explicit scheme is stable at, for the DEFAULT
     /// diffusion rates. Measured per model (see each model's note); the
     /// reaction terms usually bind before diffusion does.
@@ -667,6 +842,43 @@ impl ModelDef {
 impl ModelDef {
     pub fn has(&self, f: ModelFeature) -> bool {
         self.features.contains(&f)
+    }
+
+    /// Internal slices this layer's memory takes at these parameters:
+    /// [`MEMORY_SLICES`] when the model keeps one and its `memory`
+    /// parameter is above zero, else none. Part of what a run IS, so
+    /// changing it reseeds (the renderer's `SeedIdentity`).
+    pub fn memory_slices(&self, params: &std::collections::BTreeMap<String, f32>) -> u32 {
+        if !self.has(ModelFeature::Memory) {
+            return 0;
+        }
+        let def = self.parameters.iter().find(|p| p.name == "memory").map(|p| p.default).unwrap_or(0.0);
+        let v = params.get("memory").copied().filter(|v| v.is_finite()).unwrap_or(def);
+        if v > 0.0 { MEMORY_SLICES } else { 0 }
+    }
+
+    /// Whether this model's measure pass runs at these parameters.
+    pub fn measuring(&self, params: &std::collections::BTreeMap<String, f32>) -> bool {
+        let Some(m) = self.measure else { return false };
+        let def = self.parameters.iter().find(|p| p.name == m.param).map(|p| p.default).unwrap_or(0.0);
+        params.get(m.param).copied().filter(|v| v.is_finite()).unwrap_or(def) > 0.0
+    }
+
+    /// Scratch slices this layer takes at these parameters: the measure
+    /// pass's while it runs, else none. Not part of what a run is: the
+    /// measure pass rewrites them every step before anything reads them,
+    /// so the renderer keeps the field when only they change.
+    pub fn scratch_slices(&self, params: &std::collections::BTreeMap<String, f32>) -> u32 {
+        match self.measure {
+            Some(m) if self.measuring(params) => m.slices,
+            _ => 0,
+        }
+    }
+
+    /// Whether pass `pass` runs at these parameters: all of them, but a
+    /// measure pass only while it is on.
+    pub fn runs_pass(&self, pass: u32, params: &std::collections::BTreeMap<String, f32>) -> bool {
+        pass != 0 || self.measure.is_none() || self.measuring(params)
     }
 
     /// Parameter values in declaration order, config overriding the
@@ -993,6 +1205,8 @@ pub static COLORINGS: &[&SimColoringDef] =
     &colorings::DISTANCE,
     &colorings::LIC,
     &colorings::SPECIES,
+    &colorings::SCALE_MEMORY,
+    &colorings::RELIEF,
 ];
 
 /// Look up a model by name, falling back to the first registered one.
@@ -1388,14 +1602,29 @@ mod tests {
     /// back in front of that question.
     #[test]
     fn every_model_fits_the_parameter_buffer() {
+        // The block's last slots are the renderer's own (the memory's
+        // count and base), so a model gets the rest.
+        let room = crate::sim::renderer::MODEL_PARAM_SLOTS - crate::sim::renderer::RESERVED_PARAM_SLOTS;
         for m in MODELS {
             assert!(
-                m.parameters.len() <= crate::sim::renderer::MODEL_PARAM_SLOTS,
-                "{}: {} parameters, buffer holds {}",
+                m.parameters.len() <= room,
+                "{}: {} parameters, the block has room for {room}",
                 m.name,
                 m.parameters.len(),
-                crate::sim::renderer::MODEL_PARAM_SLOTS
             );
+        }
+    }
+
+    /// A model that keeps a memory turns it on with a `memory`
+    /// parameter, defaulting to off: `memory_slices` reads that name,
+    /// and a default of on would give every existing config of the
+    /// model two more slices and a different run.
+    #[test]
+    fn memory_is_a_parameter_that_defaults_to_off() {
+        for m in MODELS.iter().filter(|m| m.has(ModelFeature::Memory)) {
+            let p = m.parameters.iter().find(|p| p.name == "memory");
+            assert!(p.is_some_and(|p| p.default == 0.0), "{}: needs a `memory` parameter defaulting to 0", m.name);
+            assert_eq!(m.memory_slices(&Default::default()), 0, "{}", m.name);
         }
     }
 

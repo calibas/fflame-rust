@@ -260,7 +260,7 @@ pub fn render_sim_content(
                 .default_open(true)
                 .show(ui, |ui| {
                 // ---- Model: one list whose entry 0 IS the model ----
-                render_model_section(ui, config_manager, &config, &sim, state.reseed);
+                render_model_section(ui, config_manager, &config, &sim, state.reseed, state.grid);
 
                 ui.separator();
             });
@@ -532,6 +532,11 @@ pub fn render_sim_content(
             // purpose: a step is a fraction of a frame, and a percent of zoom
             // a step is already a fast pull.
             ui.collapsing(t!("sim_panel.warp").as_ref(), |ui| {
+                // What the controls below move: the field, or one scale's
+                // reading (mccabe-multiscale plan, section 10).
+                if render_scale_warp_target(ui, config_manager, &sim) {
+                    return;
+                }
                 ui.label(egui::RichText::new(t!("sim_panel.warp_tip")).small().weak());
                 let w = sim.warp;
                 let mut zoom = w.zoom;
@@ -664,6 +669,97 @@ pub fn render_sim_content(
     });
 }
 
+/// The Warp section's target list -- the field, or one scale of a model
+/// with per-scale warps (mccabe-multiscale plan, section 10) -- and, when
+/// a scale is chosen, that scale's five rates. Returns whether a scale is
+/// chosen, in which case the field's controls are not drawn.
+fn render_scale_warp_target(ui: &mut egui::Ui, config_manager: &mut ConfigManager, sim: &SimConfig) -> bool {
+    // (layer, row) of every scale that can be warped.
+    let mut targets: Vec<(usize, usize)> = Vec::new();
+    for l in 0..sim.layer_count() {
+        let model = crate::sim::model_or_default(sim.layer_model_name(l));
+        if let Some(sw) = crate::sim::scale_warps(model.name) {
+            for r in 0..sw.live_rows(model, sim.layer_model_params(l)) {
+                targets.push((l, r));
+            }
+        }
+    }
+    if targets.is_empty() {
+        return false;
+    }
+    let several_layers = sim.layer_count() > 1;
+    let label = |k: usize| -> String {
+        match k.checked_sub(1).and_then(|i| targets.get(i)) {
+            None => t!("sim_panel.warp_target_field").to_string(),
+            Some(&(l, r)) if several_layers => {
+                t!("sim_panel.warp_target_layer_scale", layer = l.to_string(), n = (r + 1).to_string()).to_string()
+            }
+            Some(&(_, r)) => t!("sim_panel.warp_target_scale", n = (r + 1).to_string()).to_string(),
+        }
+    };
+    // Which one is chosen is a view of the panel, not the picture.
+    let id = ui.make_persistent_id("sim_warp_target");
+    let mut chosen: usize = ui.data_mut(|d| d.get_persisted(id)).unwrap_or(0);
+    if chosen > targets.len() {
+        chosen = 0;
+    }
+    ui.horizontal(|ui| {
+        ui.label(t!("sim_panel.warp_target").as_ref());
+        egui::ComboBox::from_id_salt("sim_warp_target_pick")
+            .selected_text(label(chosen))
+            .show_ui(ui, |ui| {
+                for k in 0..=targets.len() {
+                    if ui.selectable_label(k == chosen, label(k)).clicked() {
+                        chosen = k;
+                    }
+                }
+            })
+            .response
+            .on_hover_text(t!("sim_panel.warp_target_tip"));
+    });
+    ui.data_mut(|d| d.insert_persisted(id, chosen));
+    let Some(&(l, r)) = chosen.checked_sub(1).and_then(|i| targets.get(i)) else {
+        return false;
+    };
+    let model = crate::sim::model_or_default(sim.layer_model_name(l));
+    let sw = crate::sim::scale_warps(model.name).expect("listed above");
+    let slot = if sim.layers.is_empty() { LayerSlot::Flat } else { LayerSlot::At(l) };
+    let params = sim.layer_model_params(l);
+    ui.label(egui::RichText::new(t!("sim_panel.warp_scale_tip")).small().weak());
+    let mut identity = true;
+    for field in crate::sim::SCALE_WARP_FIELDS {
+        let name = sw.param(r, field);
+        let Some(def) = model.parameters.iter().find(|p| p.name == name) else { continue };
+        let mut v = params.get(&name).copied().filter(|v| v.is_finite()).unwrap_or(def.default);
+        identity &= v == def.default;
+        let text = match field {
+            "zoom" => t!("sim_panel.warp_zoom"),
+            "rotation" => t!("sim_panel.warp_rotation"),
+            "pan_x" => t!("sim_panel.warp_pan_x"),
+            "pan_y" => t!("sim_panel.warp_pan_y"),
+            _ => t!("sim_panel.warp_flow"),
+        };
+        if ui
+            .add(egui::Slider::new(&mut v, def.min..=def.max).text(text.as_ref()).fixed_decimals(4))
+            .on_hover_text(def.tooltip)
+            .changed()
+        {
+            let _ = config_manager.update_param(slot.param_path(&name), v.into());
+        }
+    }
+    if !identity && ui.small_button(t!("sim_panel.warp_reset").as_ref()).clicked() {
+        let changes = crate::sim::SCALE_WARP_FIELDS
+            .iter()
+            .filter_map(|f| {
+                let name = sw.param(r, f);
+                model.parameters.iter().find(|p| p.name == name).map(|p| (slot.param_path(&name), p.default.into()))
+            })
+            .collect();
+        let _ = config_manager.update_batch(changes, "Reset scale warp".to_string());
+    }
+    true
+}
+
 /// Where a colouring's controls write: the flat `coloring` /
 /// `coloring_params` / `matte` fields, or `color_layers[k]`.
 ///
@@ -788,6 +884,7 @@ fn render_coloring_section(
                                 }
                                 ColorSlot::At(i) => {
                                     let name = c.name.to_string();
+                                    let relief = c.has(crate::sim::ColoringFeature::NeedsRelief);
                                     action = Some(Box::new(move |s: &mut SimConfig| {
                                         if let Some(l) = s.color_layers.get_mut(i) {
                                             l.coloring = name.clone();
@@ -798,6 +895,13 @@ fn render_coloring_section(
                                             // one colouring's numbers
                                             // to another.
                                             l.coloring_params.clear();
+                                            // Relief is a grey shade
+                                            // centred on mid-grey: under
+                                            // Normal it would hide what
+                                            // it is meant to light.
+                                            if relief && l.blend == SimBlend::Normal {
+                                                l.blend = SimBlend::HardLight;
+                                            }
                                         }
                                     }));
                                 }
@@ -1018,17 +1122,39 @@ fn render_coloring_section(
         }
     }
 
-    if count < MAX_COLOR_LAYERS
-        && ui
-            .button(t!("sim_panel.add_color_layer").as_ref())
-            .on_hover_text(t!("sim_panel.add_color_layer_first_tip"))
-            .clicked()
-    {
-        structural(config_manager, &|s: &mut SimConfig| {
-            // Make entry 0 explicit, then add one over it.
-            s.promote_coloring_to_layers();
-            s.color_layers.push(SimColorLayer::default());
+    if count < MAX_COLOR_LAYERS {
+        let mut add: Option<SimColorLayer> = None;
+        ui.horizontal(|ui| {
+            if ui
+                .button(t!("sim_panel.add_color_layer").as_ref())
+                .on_hover_text(t!("sim_panel.add_color_layer_first_tip"))
+                .clicked()
+            {
+                add = Some(SimColorLayer::default());
+            }
+            // Relief over whatever is there, in one click: the colouring,
+            // Hard light, and the bottom layer's source.
+            if ui
+                .button(t!("sim_panel.add_relief").as_ref())
+                .on_hover_text(t!("sim_panel.add_relief_tip"))
+                .clicked()
+            {
+                let source = sim.color_layers.first().map(|l| l.source).unwrap_or(0);
+                add = Some(SimColorLayer {
+                    source,
+                    coloring: "relief".to_string(),
+                    blend: SimBlend::HardLight,
+                    ..Default::default()
+                });
+            }
         });
+        if let Some(layer) = add {
+            structural(config_manager, &|s: &mut SimConfig| {
+                // Make entry 0 explicit, then add one over it.
+                s.promote_coloring_to_layers();
+                s.color_layers.push(layer.clone());
+            });
+        }
     }
     if layered
         && ui
@@ -1153,6 +1279,118 @@ fn preset_changes(
     changes
 }
 
+/// A model's parameter table: the grid of cells in table mode, and in
+/// either mode a warning for any row whose inhibitor reaches past the
+/// pyramid at this grid -- its averages clamp to the top level, the
+/// variation goes to zero, and the scale wins everywhere. In the
+/// generated layout the rows are the ones the generator would fill.
+#[allow(clippy::too_many_arguments)]
+fn render_param_table(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    model: &'static crate::sim::ModelDef,
+    t: &'static crate::sim::ParamTable,
+    params: &std::collections::BTreeMap<String, f32>,
+    slot: LayerSlot,
+    grid: (u32, u32),
+    table_on: bool,
+) {
+    let def_of = |name: &str| model.parameters.iter().find(|p| p.name == name);
+    let rows_default = def_of(t.rows_param).map(|p| p.default).unwrap_or(1.0);
+    let rows = params
+        .get(t.rows_param)
+        .copied()
+        .filter(|v| v.is_finite())
+        .unwrap_or(rows_default)
+        .round()
+        .clamp(1.0, t.rows as f32) as usize;
+    let reach = crate::sim::pyramid_reach(grid.0, grid.1);
+    // The value of a cell: the config's in table mode, the generator's
+    // otherwise.
+    let generated: std::collections::BTreeMap<String, f32> = if table_on {
+        Default::default()
+    } else {
+        (t.fill)(params).into_iter().collect()
+    };
+    let value = |name: &str| -> Option<f32> {
+        let def = def_of(name)?;
+        let src = if table_on { params } else { &generated };
+        Some(src.get(name).copied().filter(|v| v.is_finite()).unwrap_or(def.default))
+    };
+    let past_reach = |r: usize| -> bool {
+        match (value(&t.cell(r, "radius")), value(&t.cell(r, "ratio"))) {
+            (Some(ra), Some(ratio)) => ra * ratio > reach,
+            _ => false,
+        }
+    };
+
+    if !table_on {
+        if let Some(r) = (0..rows).rev().find(|&r| past_reach(r)) {
+            ui.label(
+                egui::RichText::new(t!(
+                    "sim_panel.table_past_reach_ladder",
+                    n = (r + 1).to_string(),
+                    reach = format!("{reach:.0}")
+                ))
+                .small()
+                .color(ui.visuals().warn_fg_color),
+            );
+        }
+        return;
+    }
+
+    let columns: Vec<&str> = t.columns.iter().copied().filter(|c| (t.shows_column)(params, c)).collect();
+    egui::Grid::new(format!("{}_param_table", slot.salt()))
+        .striped(true)
+        .spacing([6.0, 2.0])
+        .show(ui, |ui| {
+            ui.label("");
+            for c in &columns {
+                ui.label(egui::RichText::new(column_label(c)).small());
+            }
+            ui.end_row();
+            for r in 0..rows {
+                ui.label((r + 1).to_string());
+                for &c in &columns {
+                    let name = t.cell(r, c);
+                    let (Some(def), Some(mut v)) = (def_of(&name), value(&name)) else {
+                        ui.label("");
+                        continue;
+                    };
+                    let integer = c == "symmetry";
+                    let speed = if integer { 0.05 } else { ((def.max - def.min) as f64 / 1000.0).max(1e-4) };
+                    let mut dv = egui::DragValue::new(&mut v).range(def.min..=def.max).speed(speed);
+                    dv = if integer { dv.fixed_decimals(0) } else { dv.max_decimals(3) };
+                    if ui.add(dv).on_hover_text(def.tooltip).changed() {
+                        if integer {
+                            v = v.round();
+                        }
+                        let _ = config_manager.update_param(slot.param_path(&name), v.into());
+                    }
+                }
+                if past_reach(r) {
+                    ui.label(egui::RichText::new("⚠").color(ui.visuals().warn_fg_color))
+                        .on_hover_text(t!("sim_panel.table_past_reach", reach = format!("{reach:.0}")));
+                }
+                ui.end_row();
+            }
+        });
+}
+
+/// The header of a parameter-table column.
+fn column_label(c: &str) -> String {
+    match c {
+        "radius" => t!("sim_panel.table_radius").to_string(),
+        "ratio" => t!("sim_panel.table_ratio").to_string(),
+        "amount" => t!("sim_panel.table_amount").to_string(),
+        "weight" => t!("sim_panel.table_weight").to_string(),
+        "symmetry" => t!("sim_panel.table_symmetry").to_string(),
+        "stretch" => t!("sim_panel.table_stretch").to_string(),
+        "angle" => t!("sim_panel.table_angle").to_string(),
+        other => other.to_string(),
+    }
+}
+
 /// The Model section: one list whose entry 0 is the primary model.
 ///
 /// "Model" and "Layers" used to be separate sections that each did
@@ -1169,6 +1407,7 @@ fn render_model_section(
     config: &crate::config::FractalConfig,
     sim: &SimConfig,
     reseed: &mut bool,
+    grid: (u32, u32),
 ) {
     use crate::config::sim::{
         SimCoupling, SimCouplingForm, SimLayer, MAX_COUPLINGS, MAX_LAYERS,
@@ -1260,11 +1499,42 @@ fn render_model_section(
                 });
             }
             let params = sim.layer_model_params(i);
+            // A model with a parameter table (McCabe's per-scale table,
+            // mccabe-multiscale plan, section 3) draws its cells as a
+            // grid, and in table mode hides what only its generator reads.
+            let table = crate::sim::param_table(model.name);
+            let table_on = table.is_some_and(|t| params.get(t.mode_param).copied().unwrap_or(0.0) >= 0.5);
+            let warps = crate::sim::scale_warps(model.name);
             for p in model.parameters.iter() {
+                if let Some(t) = table {
+                    if t.is_cell(p.name) || (table_on && t.generator_params.contains(&p.name)) {
+                        continue;
+                    }
+                }
+                // Per-scale warps live in the Warp section.
+                if warps.is_some_and(|w| w.is_param(p.name)) {
+                    continue;
+                }
                 let mut v = params.get(p.name).copied().unwrap_or(p.default);
                 if param_control(ui, &mut v, p, &slot.salt()) {
-                    let _ = config_manager.update_param(slot.param_path(p.name), v.into());
+                    match table {
+                        // Into the table: write the ladder into it in the
+                        // same undo step, so the switch changes nothing.
+                        Some(t) if p.name == t.mode_param && v >= 0.5 => {
+                            let mut changes = vec![(slot.param_path(p.name), v.into())];
+                            for (name, value) in (t.fill)(params) {
+                                changes.push((slot.param_path(&name), value.into()));
+                            }
+                            let _ = config_manager.update_batch(changes, "history.action.sim_table".to_string());
+                        }
+                        _ => {
+                            let _ = config_manager.update_param(slot.param_path(p.name), v.into());
+                        }
+                    }
                 }
+            }
+            if let Some(t) = table {
+                render_param_table(ui, config_manager, model, t, params, slot, grid, table_on);
             }
         };
         if count > 1 {

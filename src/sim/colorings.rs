@@ -834,3 +834,245 @@ fn sim_color(x: SimSample, p: vec2<i32>) -> vec4<f32> {
 }
 "#,
 };
+
+/// McCabe's colour with memory: each scale a band of the palette, and
+/// each cell the mix of the bands its memory holds -- Softology's
+/// colour lerp, applied at display time from the weights the model
+/// keeps (mccabe-multiscale plan, section 2). Black where nothing has
+/// won yet, as the reference starts.
+///
+/// The field sets the brightness one of two ways (plan section 9):
+/// Softology's, multiplying the colour by it, or Chau's, making it the
+/// colour's luminance -- "mapping the concentration value directly to
+/// the luminance component" in YUV, the memory's colour giving the
+/// chroma. Replacing Y while U and V stay is adding the same amount to
+/// all three channels (Y's weights sum to 1, and U and V depend only on
+/// B - Y and R - Y), so no colour-space round trip is written out.
+pub static SCALE_MEMORY: SimColoringDef = SimColoringDef {
+    name: "scale_memory",
+    display_name: "Scale Memory",
+    description: "Each cell coloured by the scales that have been winning it, blended over \
+                  time: smooth colour regions where scale_mix speckles. Needs the model's \
+                  Colour memory on; without it the picture is black.",
+    features: &[ColoringFeature::ReadsMemory],
+    parameters: &[
+        SimParamDef {
+            name: "scales",
+            display_name: "Scales across palette",
+            default: 6.0,
+            min: 1.0,
+            max: 8.0,
+            tooltip: "How many scale indices the palette spans. Match the model's scale \
+                      count to use the whole palette once.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "value_scale",
+            display_name: "Brightness range",
+            default: 0.5,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How much the field sets the brightness. 0 shows the memory alone. At \
+                      1, Multiply is Softology's colour times (f + 1) / 2, and Luminance makes \
+                      (f + 1) / 2 the colour's whole luminance.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "brightness",
+            display_name: "Brightness from",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How the field sets the brightness. Multiply darkens the memory's colour \
+                      by it, as Softology's does: low regions go black. Luminance (YUV) keeps \
+                      the colour's hue and saturation and sets its luminance from the field, \
+                      as Chau's does: every scale's colour stays visible, light and dark, \
+                      and pale where the field is bright.",
+            choices: &["Multiply", "Luminance (YUV)"],
+        },
+    ],
+    wgsl: r#"
+fn sim_color(x: SimSample, p: vec2<i32>) -> vec4<f32> {
+    let n = max(cparam(0u), 1.0);
+    // The weights as the resolve left them, made a mix again. Every
+    // weight the step writes is in [0, 1] and they sum to at most 1, but
+    // the bicubic resolve interpolates them with Catmull-Rom, whose
+    // negative lobes overshoot across a sharp boundary: a weight below 0
+    // subtracts its band's colour and leaves the others', a colour
+    // outside the palette -- red fringes on an all-blue one. Clamped,
+    // then scaled back to the total the interpolation gave, the colour
+    // is a mix of the palette's bands at the brightness it would have
+    // had. Under Nearest and Bilinear this changes nothing.
+    let m0 = clamp(x.m0, vec4<f32>(0.0), vec4<f32>(1.0));
+    let m1 = clamp(x.m1, vec4<f32>(0.0), vec4<f32>(1.0));
+    let ones = vec4<f32>(1.0);
+    let total = clamp(dot(x.m0, ones) + dot(x.m1, ones), 0.0, 1.0);
+    let kept = dot(m0, ones) + dot(m1, ones);
+    // Exactly 1 where the clamp changed nothing, rather than a ratio of
+    // two equal sums -- which fast-math need not round to 1.
+    let k = select(total / max(kept, 1.0e-6), 1.0, kept == total);
+    // Sum of weight times band colour, band i centred at (i + 1/2) / n
+    // as in scale_mix. Written out: a dynamic index into a value array
+    // is not portable WGSL.
+    var c = m0.x * sim_palette(0.5 / n);
+    c = c + m0.y * sim_palette(1.5 / n);
+    c = c + m0.z * sim_palette(2.5 / n);
+    c = c + m0.w * sim_palette(3.5 / n);
+    c = c + m1.x * sim_palette(4.5 / n);
+    c = c + m1.y * sim_palette(5.5 / n);
+    c = c + m1.z * sim_palette(6.5 / n);
+    c = c + m1.w * sim_palette(7.5 / n);
+    c = c * k;
+    let v = clamp(x.s.x * 0.5 + 0.5, 0.0, 1.0);
+    if (cparam(2u) >= 0.5) {
+        // Luminance: Y from the field, U and V from the memory, then
+        // clipped to the display's gamut.
+        let y = dot(c, vec3<f32>(0.299, 0.587, 0.114));
+        let target_y = mix(y, v, cparam(1u));
+        return vec4<f32>(clamp(c + vec3<f32>(target_y - y), vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+    }
+    let b = mix(1.0, v, cparam(1u));
+    return vec4<f32>(c * b, 1.0);
+}
+"#,
+};
+
+/// Relief (mccabe-multiscale plan, section 10): one channel of the
+/// source layer as a height, smoothed on the grid and lit -- the paper's
+/// raised and recessed look. A grey layer centred on mid-grey, meant for
+/// the colour stack under Hard light, where mid-grey changes nothing:
+/// below it multiplies toward black and above it screens toward white,
+/// each by the distance from mid-grey -- the escape relief's shadow and
+/// highlight exactly. Overlay works too, but on a light base its shadow
+/// barely lands.
+///
+/// The light is the escape relief's (`EscapeShading`): an angle
+/// counter-clockwise from east, 135 (upper left) by default; the signed
+/// tilt toward it, or Lambert's law with the light raised. The height
+/// comes from the renderer's relief stage, not from here: a Gaussian of
+/// the softness and its derivative, so the slope is the smoothed
+/// height's own. The same texture is the height a 3D height-field mode
+/// would displace by.
+pub static RELIEF: SimColoringDef = SimColoringDef {
+    name: "relief",
+    display_name: "Relief",
+    description: "One channel as a height, smoothed and lit: grey, centred on mid-grey, for the \
+                  colour stack under Hard light, where it shades whatever is beneath. Add it \
+                  with Add relief.",
+    features: &[ColoringFeature::NeedsRelief],
+    parameters: &[
+        // Slots 0 and 1 are read by the renderer's relief stage too.
+        SimParamDef {
+            name: "channel",
+            display_name: "Height from",
+            default: 0.0,
+            min: 0.0,
+            max: 3.0,
+            tooltip: "Which channel of the source layer is the height. McCabe: x is the \
+                      pattern, z the step its winning scale last changed (age).",
+            choices: &["x", "y", "z", "w"],
+        },
+        SimParamDef {
+            name: "softness",
+            display_name: "Softness",
+            default: 2.0,
+            min: 0.0,
+            max: 8.0,
+            tooltip: "Gaussian smoothing of the height, in cells, before its slope is taken. \
+                      Raw, the finest detail's speckle dominates; 2 gives raised cells with \
+                      their nested texture.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "height",
+            display_name: "Height",
+            default: 12.0,
+            min: 0.0,
+            max: 100.0,
+            tooltip: "Vertical exaggeration of the slope. Its useful range depends on the \
+                      model's values: McCabe's field runs -1 to 1.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "light",
+            display_name: "Light angle",
+            default: 135.0,
+            min: 0.0,
+            max: 360.0,
+            tooltip: "Where the light comes from, in degrees counter-clockwise from east: 135 \
+                      is the upper left, the cartographic convention. Lit from the other side, \
+                      raised detail reads as sunken.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "model",
+            display_name: "Lighting",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Tilt: the slope toward the light, symmetric in light and shade. Lambert: \
+                      the light raised by the elevation, so slopes facing away fall into shadow \
+                      sooner the lower it is.",
+            choices: &["Tilt", "Lambert"],
+        },
+        SimParamDef {
+            name: "elevation",
+            display_name: "Light elevation",
+            default: 30.0,
+            min: 1.0,
+            max: 89.0,
+            tooltip: "The light's height above the horizon in degrees, for Lambert.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "shadow",
+            display_name: "Shadow",
+            default: 0.8,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How dark the side facing away from the light goes.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "highlight",
+            display_name: "Highlight",
+            default: 0.6,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How light the side facing the light goes.",
+            choices: &[],
+        },
+    ],
+    wgsl: r#"
+fn sim_color(x: SimSample, p: vec2<i32>) -> vec4<f32> {
+    // The slope, exaggerated. The grid's y runs down the screen, so d/dy
+    // is negated to put the light where its angle says, as the escape
+    // relief does.
+    let g = vec2<f32>(-x.relief.y, x.relief.z) * cparam(2u);
+    let a = radians(cparam(3u));
+    let light = vec2<f32>(cos(a), sin(a));
+    let norm = inverseSqrt(1.0 + dot(g, g));
+    // The signed tilt toward the light: 0 on flat ground, monotonic and
+    // symmetric in the slope, saturating rather than blowing out.
+    var response = dot(g, light) * norm;
+    if (cparam(4u) >= 0.5) {
+        // Lambert with the light raised, measured from what flat ground
+        // receives, so flat still reads 0.
+        let e = radians(clamp(cparam(5u), 1.0, 89.0));
+        let se = sin(e);
+        let l = vec3<f32>(light * cos(e), se);
+        let lambert = max(dot(vec3<f32>(g, 1.0), l) * norm, 0.0);
+        response = select(
+            (lambert - se) / max(se, 1.0e-4),
+            (lambert - se) / max(1.0 - se, 1.0e-4),
+            lambert >= se,
+        );
+    }
+    let hi = clamp(response, 0.0, 1.0) * cparam(7u);
+    let lo = clamp(-response, 0.0, 1.0) * cparam(6u);
+    let v = 0.5 + 0.5 * (hi - lo);
+    return vec4<f32>(v, v, v, 1.0);
+}
+"#,
+};
+
