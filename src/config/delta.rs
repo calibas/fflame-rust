@@ -492,7 +492,9 @@ pub enum ConfigPath {
     EscapeTerrainSource,
     EscapeTerrainHeight,
     EscapeTerrainDeWidth,
-    EscapeTerrainResolution,
+    EscapeTerrainDetail,
+    EscapeTerrainFar,
+    EscapeTerrainHaze,
     EscapeTerrainInterior,
     EscapeTerrainShadow,
     EscapeTerrainShadowSharpness,
@@ -1120,7 +1122,9 @@ impl Display for ConfigPath {
             ConfigPath::EscapeTerrainSource => write!(f, "Terrain Height Source"),
             ConfigPath::EscapeTerrainHeight => write!(f, "Terrain Height"),
             ConfigPath::EscapeTerrainDeWidth => write!(f, "Terrain Flank Width"),
-            ConfigPath::EscapeTerrainResolution => write!(f, "Terrain Resolution"),
+            ConfigPath::EscapeTerrainDetail => write!(f, "Terrain Detail"),
+            ConfigPath::EscapeTerrainFar => write!(f, "Terrain Distance"),
+            ConfigPath::EscapeTerrainHaze => write!(f, "Terrain Haze"),
             ConfigPath::EscapeTerrainInterior => write!(f, "Terrain Interior"),
             ConfigPath::EscapeTerrainShadow => write!(f, "Terrain Shadows"),
             ConfigPath::EscapeTerrainShadowSharpness => write!(f, "Terrain Shadow Sharpness"),
@@ -1490,7 +1494,9 @@ impl ConfigPath {
             ConfigPath::EscapeTerrainSource => I18nKey::simple("history.param.escape_terrain_source"),
             ConfigPath::EscapeTerrainHeight => I18nKey::simple("history.param.escape_terrain_height"),
             ConfigPath::EscapeTerrainDeWidth => I18nKey::simple("history.param.escape_terrain_de_width"),
-            ConfigPath::EscapeTerrainResolution => I18nKey::simple("history.param.escape_terrain_resolution"),
+            ConfigPath::EscapeTerrainDetail => I18nKey::simple("history.param.escape_terrain_detail"),
+            ConfigPath::EscapeTerrainFar => I18nKey::simple("history.param.escape_terrain_far"),
+            ConfigPath::EscapeTerrainHaze => I18nKey::simple("history.param.escape_terrain_haze"),
             ConfigPath::EscapeTerrainInterior => I18nKey::simple("history.param.escape_terrain_interior"),
             ConfigPath::EscapeTerrainShadow => I18nKey::simple("history.param.escape_terrain_shadow"),
             ConfigPath::EscapeTerrainShadowSharpness => I18nKey::simple("history.param.escape_terrain_shadow_sharpness"),
@@ -2889,7 +2895,9 @@ impl ConfigPath {
             | ConfigPath::EscapeTerrainSource
             | ConfigPath::EscapeTerrainHeight
             | ConfigPath::EscapeTerrainDeWidth
-            | ConfigPath::EscapeTerrainResolution
+            | ConfigPath::EscapeTerrainDetail
+            | ConfigPath::EscapeTerrainFar
+            | ConfigPath::EscapeTerrainHaze
             | ConfigPath::EscapeTerrainInterior
             | ConfigPath::EscapeTerrainShadow
             | ConfigPath::EscapeTerrainShadowSharpness
@@ -3326,7 +3334,9 @@ impl ConfigPath {
             ConfigPath::EscapeTerrainSource => "Escape.Terrain.Source".to_string(),
             ConfigPath::EscapeTerrainHeight => "Escape.Terrain.Height".to_string(),
             ConfigPath::EscapeTerrainDeWidth => "Escape.Terrain.DeWidth".to_string(),
-            ConfigPath::EscapeTerrainResolution => "Escape.Terrain.Resolution".to_string(),
+            ConfigPath::EscapeTerrainDetail => "Escape.Terrain.Detail".to_string(),
+            ConfigPath::EscapeTerrainFar => "Escape.Terrain.Far".to_string(),
+            ConfigPath::EscapeTerrainHaze => "Escape.Terrain.Haze".to_string(),
             ConfigPath::EscapeTerrainInterior => "Escape.Terrain.Interior".to_string(),
             ConfigPath::EscapeTerrainShadow => "Escape.Terrain.Shadow".to_string(),
             ConfigPath::EscapeTerrainShadowSharpness => "Escape.Terrain.ShadowSharpness".to_string(),
@@ -3579,7 +3589,9 @@ impl ConfigPath {
                 ["Terrain", "Source"] => return Some(ConfigPath::EscapeTerrainSource),
                 ["Terrain", "Height"] => return Some(ConfigPath::EscapeTerrainHeight),
                 ["Terrain", "DeWidth"] => return Some(ConfigPath::EscapeTerrainDeWidth),
-                ["Terrain", "Resolution"] => return Some(ConfigPath::EscapeTerrainResolution),
+                ["Terrain", "Detail"] => return Some(ConfigPath::EscapeTerrainDetail),
+                ["Terrain", "Far"] => return Some(ConfigPath::EscapeTerrainFar),
+                ["Terrain", "Haze"] => return Some(ConfigPath::EscapeTerrainHaze),
                 ["Terrain", "Interior"] => return Some(ConfigPath::EscapeTerrainInterior),
                 ["Terrain", "Shadow"] => return Some(ConfigPath::EscapeTerrainShadow),
                 ["Terrain", "ShadowSharpness"] => return Some(ConfigPath::EscapeTerrainShadowSharpness),
@@ -4379,6 +4391,9 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeTerrainShadow
         | ConfigPath::EscapeTerrainShadowSharpness
         | ConfigPath::EscapeTerrainOcclusion
+        | ConfigPath::EscapeTerrainDetail
+        | ConfigPath::EscapeTerrainFar
+        | ConfigPath::EscapeTerrainHaze
         | ConfigPath::EscapeShadingTextureStrength
         | ConfigPath::EscapeShadingTextureScale
         | ConfigPath::EscapeShadingElevation
@@ -4408,7 +4423,6 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         ConfigPath::EscapeShadingEnabled
         | ConfigPath::EscapeTerrainEnabled
         | ConfigPath::EscapeTerrainSource
-        | ConfigPath::EscapeTerrainResolution
         | ConfigPath::EscapeTerrainInterior
         | ConfigPath::EscapeShadingModel
         | ConfigPath::EscapeShadingStencil
@@ -5070,7 +5084,9 @@ mod tests {
             (ConfigPath::EscapeTerrainSource, ConfigValue::String("escape_count".into()), false),
             (ConfigPath::EscapeTerrainHeight, ConfigValue::Float(0.125), true),
             (ConfigPath::EscapeTerrainDeWidth, ConfigValue::Float(0.02), true),
-            (ConfigPath::EscapeTerrainResolution, ConfigValue::UInt(1024), false),
+            (ConfigPath::EscapeTerrainDetail, ConfigValue::Float(2.0), true),
+            (ConfigPath::EscapeTerrainFar, ConfigValue::Float(12.0), true),
+            (ConfigPath::EscapeTerrainHaze, ConfigValue::Float(0.5), true),
             (ConfigPath::EscapeTerrainInterior, ConfigValue::String("hole".into()), false),
             (ConfigPath::EscapeTerrainShadow, ConfigValue::Float(0.25), true),
             (ConfigPath::EscapeTerrainShadowSharpness, ConfigValue::Float(20.0), true),

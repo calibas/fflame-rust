@@ -1296,31 +1296,23 @@ async fn render_escape_terrain(
     };
     terrain.resize(device, job.width, job.height);
     let config = job.config;
-    // The footprint's size is the picture's (plan section 11): the
-    // export's own pixels decide it, exactly, every time.
-    terrain.choose_layout(device, &config.escape, job.width, job.height, false);
-    let layout = terrain.layout();
-    let n = layout.n;
+    // Every section the export's own view wants (plan section 12),
+    // rendered before a sample is drawn.
     let palette = renderer.escape_palette_view(config.escape.palette_map.stepped);
     let generation = renderer.palette_generation();
-    if terrain.footprint_stale(config) {
-        log::info!("Render: terrain footprint {n}x{n} in {} tiles", layout.per_side * layout.per_side);
-        prepare_escape(terrain.footprint_renderer(), device, queue, config).await;
-        terrain.footprint_renderer().set_chunk_time_target(200.0);
-        let mut guard = 0u32;
-        loop {
-            let done = terrain.step_footprint(device, queue, config, palette, generation);
-            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
-            if done {
-                break;
-            }
-            guard += 1;
-            if guard > 4_000_000 {
-                log::error!("terrain footprint failed to settle; using what we have");
-                break;
-            }
+    prepare_escape(terrain.footprint_renderer(), device, queue, config).await;
+    terrain.footprint_renderer().set_chunk_time_target(200.0);
+    let before = terrain.footprint_renders;
+    let mut guard = 0u32;
+    while terrain.update(device, queue, config, job.width, job.height, palette, generation, 1) {
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        guard += 1;
+        if guard > 4_000_000 {
+            log::error!("terrain sections failed to settle; using what we have");
+            break;
         }
     }
+    let n = terrain.footprint_renders - before;
     let ss = config.escape.supersample.max(1);
     terrain.reset_accumulation();
     for jitter in crate::escape::EscapeRenderer::sample_grid(ss) {
@@ -1336,10 +1328,9 @@ async fn render_escape_terrain(
     progress.on_progress(1, 1);
     let render_time_ms = start_time.elapsed().as_secs_f64() * 1000.0;
     log::info!(
-        "Render: escape terrain complete - {}x{} ({}x{} footprint, {} samples) in {:.1}ms",
+        "Render: escape terrain complete - {}x{} ({} sections rendered, {} samples) in {:.1}ms",
         width,
         height,
-        n,
         n,
         ss * ss,
         render_time_ms

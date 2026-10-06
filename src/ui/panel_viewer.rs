@@ -776,20 +776,20 @@ fn escape_pan_plane(
 
 /// Pan a terrain: the ground under the cursor follows it. A drag is a
 /// displacement of the target across the ground -- along the camera's
-/// right, and along its heading foreshortened by the pitch -- in the
-/// footprint's cells, which the plane's pan then applies to the centre
-/// as a drag of the footprint picture: exact decimals at any depth.
+/// right, and along its heading foreshortened by the pitch -- in view
+/// widths, in the plane's own axes (the terrain's world), added to the
+/// centre in fixed point: exact decimals at any depth.
 #[cfg(feature = "terrain")]
 fn terrain_pan(
     config_manager: &mut crate::config::ConfigManager,
     drag_delta: egui::Vec2,
     panel_size: egui::Vec2,
 ) {
+    use crate::escape::fixedpoint::FixedPoint;
     let esc = config_manager.active_config().escape.clone();
-    let n = esc.terrain.resolution.max(crate::escape::footprint::MIN_RESOLUTION);
-    let cam = crate::escape::footprint::terrain_camera(&esc, n);
-    // Cells per screen pixel at the target's depth, as `ifs_ray` spreads
-    // the rays.
+    let cam = crate::escape::footprint::terrain_camera(&esc);
+    // View widths per screen pixel at the target's depth, as `ifs_ray`
+    // spreads the rays.
     let s = 2.0 * (f64::from(cam.fov) * 0.5).tan() * cam.distance / f64::from(panel_size.y.max(1.0));
     let flat = |v: [f64; 3]| {
         let l = (v[0] * v[0] + v[1] * v[1]).sqrt();
@@ -802,14 +802,26 @@ fn terrain_pan(
     // capped near the horizon, where it runs away.
     let along = s / (-cam.forward[2]).clamp(0.2, 1.0);
     let (dx, dy) = (f64::from(drag_delta.x), f64::from(drag_delta.y));
-    let cells = [
+    let widths = [
         -dx * s * right[0] + dy * along * ahead[0],
         -dx * s * right[1] + dy * along * ahead[1],
     ];
-    // A drag of the footprint picture by (-east, +north) pixels moves
-    // its centre east and north by that much.
-    let drag = egui::vec2(-cells[0] as f32, cells[1] as f32);
-    escape_pan_plane(config_manager, &esc, drag, egui::vec2(n as f32, n as f32));
+    // A view width is 4 * 2^-zoom: kept as a power of two and a mantissa.
+    let x = 2.0 - esc.zoom_log2;
+    let e = x.floor();
+    let m = (x - e).exp2();
+    if let (Some(re), Some(im)) = (
+        FixedPoint::decimal_add_floatexp(&esc.center_re, widths[0] * m, e as i64, esc.zoom_log2),
+        FixedPoint::decimal_add_floatexp(&esc.center_im, widths[1] * m, e as i64, esc.zoom_log2),
+    ) {
+        let _ = config_manager.update_batch(
+            vec![
+                (crate::config::ConfigPath::EscapeCenterRe, crate::config::ConfigValue::String(re)),
+                (crate::config::ConfigPath::EscapeCenterIm, crate::config::ConfigValue::String(im)),
+            ],
+            "history.param.escape_center_re".to_string(),
+        );
+    }
 }
 
 /// Orbit a terrain's camera about its target: a horizontal drag turns

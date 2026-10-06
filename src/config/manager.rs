@@ -1998,7 +1998,9 @@ impl ConfigManager {
             ConfigPath::EscapeTerrainSource => Ok(ConfigValue::String(config.escape.terrain.source.as_str().to_string())),
             ConfigPath::EscapeTerrainHeight => Ok(config.escape.terrain.height.into()),
             ConfigPath::EscapeTerrainDeWidth => Ok(config.escape.terrain.de_width.into()),
-            ConfigPath::EscapeTerrainResolution => Ok(ConfigValue::UInt(config.escape.terrain.resolution)),
+            ConfigPath::EscapeTerrainDetail => Ok(config.escape.terrain.detail.into()),
+            ConfigPath::EscapeTerrainFar => Ok(config.escape.terrain.far.into()),
+            ConfigPath::EscapeTerrainHaze => Ok(config.escape.terrain.haze.into()),
             ConfigPath::EscapeTerrainInterior => Ok(ConfigValue::String(config.escape.terrain.interior.as_str().to_string())),
             ConfigPath::EscapeTerrainShadow => Ok(config.escape.terrain.shadow.into()),
             ConfigPath::EscapeTerrainShadowSharpness => Ok(config.escape.terrain.shadow_sharpness.into()),
@@ -3398,10 +3400,17 @@ impl ConfigManager {
                 let v: f32 = value.try_into()?;
                 self.current.escape.terrain.de_width = v.clamp(1.0e-4, 0.5);
             }
-            ConfigPath::EscapeTerrainResolution => {
-                let v: u32 = value.try_into()?;
-                // 0 is automatic: the view's own size.
-                self.current.escape.terrain.resolution = if v == 0 { 0 } else { v.clamp(256, 16_384) };
+            ConfigPath::EscapeTerrainDetail => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.terrain.detail = v.clamp(0.1, 8.0);
+            }
+            ConfigPath::EscapeTerrainFar => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.terrain.far = v.clamp(0.5, 64.0);
+            }
+            ConfigPath::EscapeTerrainHaze => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.terrain.haze = v.clamp(0.0, 1.0);
             }
             ConfigPath::EscapeTerrainInterior => {
                 let v: String = value.try_into()?;

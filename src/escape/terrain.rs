@@ -370,13 +370,17 @@ fn ifs_light_color(i: u32) -> vec3<f32> { return params.fdata[12u + i * 2u].xyz;
 "#;
 
 const WALK_WGSL: &str = r#"
-@group(0) @binding(1) var hf_height: texture_2d<f32>;
-@group(0) @binding(2) var hf_mips: texture_2d<f32>;
+@group(0) @binding(1) var hf_raw_tex: texture_2d_array<f32>;
+@group(0) @binding(2) var hf_mips: texture_2d_array<f32>;
 @group(0) @binding(3) var<storage, read_write> ifs_geom: array<vec4<u32>>;
 @group(0) @binding(4) var<storage, read_write> hf_stats: array<atomic<u32>>;
 @group(0) @binding(5) var<storage, read> hf_range: array<u32>;
+@group(0) @binding(6) var<storage, read> hf_sections: array<HfSection>;
+@group(0) @binding(7) var<storage, read> hf_nodes: array<HfNode>;
 
 const HF_MAX_STEPS: u32 = __HF_MAX_STEPS__u;
+
+//__HF_GROUND__
 
 // The count's or the relief's range, read once per invocation.
 var<private> hf_lo: f32;
@@ -399,12 +403,19 @@ fn hf_load_range() {
     }
 }
 
-// A raw sample's height: the identity (a tile set from heights), the
-// distance's H exp(-d / w), the count's log curve, or the relief's
-// linear one, each with the interior's sentinels -- monotone, so the
-// mipmap's raw extreme maps to its highest point.
+// A raw sample of the current section, its grid's edge held beyond it.
+fn hf_raw(i: i32, j: i32) -> f32 {
+    let q = clamp(vec2<i32>(i, j), vec2<i32>(0, 0), vec2<i32>(hf_sec.dims.xy) - vec2<i32>(1, 1));
+    return textureLoad(hf_raw_tex, q, i32(hf_sec.dims.z), 0).r;
+}
+
+// A raw value's height in the WORLD's units: the identity (a tile set
+// from heights), the distance's H exp(-d / w) -- d the raw estimate in
+// the section's pixels times its texel -- the count's log curve, or the
+// relief's linear one, each with the interior's sentinels. Monotone,
+// so a section's mipmap of raw extremes bounds its highest point.
 fn hf_f(raw: f32) -> f32 {
-    let mode = u32(params.fdata[6].w);
+    let mode = u32(params.fdata[1].w);
     let top = params.fdata[6].x;
     if (mode == 0u) {
         return raw;
@@ -413,7 +424,7 @@ fn hf_f(raw: f32) -> f32 {
         if (raw >= 1.0e29) {
             return params.eye.w;
         }
-        return top * exp(-max(raw, 0.0) / max(params.fdata[6].y, 1.0e-6));
+        return top * exp(-max(raw, 0.0) * hf_sec.geo.z / max(params.fdata[6].y, 1.0e-30));
     }
     if (raw >= 1.0e29) {
         return top;
@@ -427,18 +438,20 @@ fn hf_f(raw: f32) -> f32 {
     return top * clamp((raw - hf_lo) / max(hf_span, 1.0e-20), 0.0, 1.0);
 }
 
-// A height sample, the grid's edge held beyond it.
+// A sample's height in the current section's cells.
 fn hf_h(i: i32, j: i32) -> f32 {
-    let q = clamp(vec2<i32>(i, j), vec2<i32>(0, 0), vec2<i32>(i32(params.grid_n) - 1, i32(params.grid_m) - 1));
-    return hf_f(textureLoad(hf_height, q, 0).r);
+    return hf_f(hf_raw(i, j)) * hf_sec.geo.w;
 }
 
-// The surface's height at (x, y): the bilinear patch of its cell.
+// The surface's height at (x, y) in the current section's cells: the
+// bilinear patch of its cell.
 fn hf_height_at(x: f32, y: f32) -> f32 {
-    let cx = clamp(x, 0.0, f32(params.grid_n - 1u));
-    let cy = clamp(y, 0.0, f32(params.grid_m - 1u));
-    let a = min(i32(floor(cx)), i32(params.grid_n) - 2);
-    let b = min(i32(floor(cy)), i32(params.grid_m) - 2);
+    let n = i32(hf_sec.dims.x);
+    let m = i32(hf_sec.dims.y);
+    let cx = clamp(x, 0.0, f32(n - 1));
+    let cy = clamp(y, 0.0, f32(m - 1));
+    let a = min(i32(floor(cx)), n - 2);
+    let b = min(i32(floor(cy)), m - 2);
     let u = cx - f32(a);
     let v = cy - f32(b);
     let h0 = mix(hf_h(a, b), hf_h(a + 1, b), u);
@@ -506,45 +519,50 @@ struct HfHit {
     // the softness: a penumbra, as mode D's shadow rays measure one.
     soft: f32,
     steps: u32,
+    // The section the hit is in.
+    sec: i32,
 }
 
-// The maximum-mipmap traversal. `tmax` bounds the ray; `soft_k` > 0
-// also measures the penumbra at the leaves the ray passed over.
-fn hf_trace(o: vec3<f32>, d: vec3<f32>, tmax: f32, soft_k: f32) -> HfHit {
+// The maximum-mipmap traversal of the current section over [ta, tb], in
+// its cells (`o`, `d` already scaled into them; t is the world's ray
+// parameter either way). `soft_k` > 0 also measures the penumbra at the
+// leaves the ray passed over, in the world's units.
+fn hf_trace_section(o: vec3<f32>, d: vec3<f32>, ta: f32, tb: f32, soft_k: f32) -> HfHit {
     var out: HfHit;
     out.t = -1.0;
     out.hit = false;
     out.soft = 1.0;
     out.steps = 0u;
-    let cn = f32(params.grid_n - 1u);
-    let cm = f32(params.grid_m - 1u);
-    let top_level = i32(params.levels) - 1;
-    let top = hf_f(textureLoad(hf_mips, vec2<i32>(0, 0), top_level).r);
+    out.sec = -1;
+    let cn = f32(hf_sec.dims.x - 1u);
+    let cm = f32(hf_sec.dims.y - 1u);
+    let top_level = i32(hf_sec.dims.w) - 1;
+    let top = hf_f(textureLoad(hf_mips, vec2<i32>(0, 0), i32(hf_sec.dims.z), top_level).r) * hf_sec.geo.w;
 
-    // Clip to the tile's box: x in [0, cn], y in [0, cm], z between the
-    // slab's floor and the highest point.
-    let floor_z = params.eye.w;
-    var t0 = 0.0;
-    var t1 = tmax;
+    // Clip to the section's box: x in [0, cn], y in [0, cm], z between
+    // the floor and its highest point.
+    let floor_z = params.eye.w * hf_sec.geo.w;
+    var t0 = ta;
+    var t1 = tb;
     if (abs(d.x) < 1.0e-12) {
         if (o.x < 0.0 || o.x > cn) {
             return out;
         }
     } else {
-        let ta = -o.x / d.x;
-        let tb = (cn - o.x) / d.x;
-        t0 = max(t0, min(ta, tb));
-        t1 = min(t1, max(ta, tb));
+        let ta2 = -o.x / d.x;
+        let tb2 = (cn - o.x) / d.x;
+        t0 = max(t0, min(ta2, tb2));
+        t1 = min(t1, max(ta2, tb2));
     }
     if (abs(d.y) < 1.0e-12) {
         if (o.y < 0.0 || o.y > cm) {
             return out;
         }
     } else {
-        let ta = -o.y / d.y;
-        let tb = (cm - o.y) / d.y;
-        t0 = max(t0, min(ta, tb));
-        t1 = min(t1, max(ta, tb));
+        let ta2 = -o.y / d.y;
+        let tb2 = (cm - o.y) / d.y;
+        t0 = max(t0, min(ta2, tb2));
+        t1 = min(t1, max(ta2, tb2));
     }
     if (d.z < 0.0) {
         let tz = (top - o.z) / d.z;
@@ -575,8 +593,10 @@ fn hf_trace(o: vec3<f32>, d: vec3<f32>, tmax: f32, soft_k: f32) -> HfHit {
     // The step past a node's edge: larger than a position's rounding at
     // these coordinates, so a point just over the edge is not rounded
     // back into the node it left (whose exit would then lie behind t).
+    // In t, whose scale is the world's: a cell is a texel of it.
     let span = max(max(abs(o.x), abs(o.y)), max(cn, cm));
-    let eps_base = 1.0e-4 + span * 4.0e-7;
+    let texel = hf_sec.geo.z;
+    let eps_base = (1.0e-4 + span * 4.0e-7) * texel;
     loop {
         if (out.steps >= HF_MAX_STEPS) {
             break;
@@ -585,8 +605,8 @@ fn hf_trace(o: vec3<f32>, d: vec3<f32>, tmax: f32, soft_k: f32) -> HfHit {
         let p = o + d * t;
         let size = f32(1 << u32(level));
         let dims = vec2<i32>(
-            (i32(params.grid_n) - 1 + (1 << u32(level)) - 1) >> u32(level),
-            (i32(params.grid_m) - 1 + (1 << u32(level)) - 1) >> u32(level),
+            (i32(hf_sec.dims.x) - 1 + (1 << u32(level)) - 1) >> u32(level),
+            (i32(hf_sec.dims.y) - 1 + (1 << u32(level)) - 1) >> u32(level),
         );
         let a = clamp(i32(floor(p.x / size)), 0, dims.x - 1);
         let b = clamp(i32(floor(p.y / size)), 0, dims.y - 1);
@@ -605,7 +625,7 @@ fn hf_trace(o: vec3<f32>, d: vec3<f32>, tmax: f32, soft_k: f32) -> HfHit {
             ty = (lo.y - o.y) / d.y;
         }
         let t_far = min(min(tx, ty), t1);
-        let zmax = hf_f(textureLoad(hf_mips, vec2<i32>(a, b), level).r);
+        let zmax = hf_f(textureLoad(hf_mips, vec2<i32>(a, b), i32(hf_sec.dims.z), level).r) * hf_sec.geo.w;
         let z_lo = min(o.z + d.z * t, o.z + d.z * t_far);
         // Past the node, never backward: a far ray still advances.
         let eps = eps_base + abs(t_far) * 2.0e-7;
@@ -629,10 +649,11 @@ fn hf_trace(o: vec3<f32>, d: vec3<f32>, tmax: f32, soft_k: f32) -> HfHit {
             return out;
         }
         if (soft_k > 0.0 && t > 0.0) {
-            // How close the ray passed this cell's surface, at its ends.
+            // How close the ray passed this cell's surface, at its ends,
+            // in the world's units over the world's distance.
             let p1 = o + d * t_far;
-            let gap = min(p.z - hf_height_at(p.x, p.y), p1.z - hf_height_at(p1.x, p1.y));
-            out.soft = min(out.soft, clamp(soft_k * gap / max(t, 1.0e-3), 0.0, 1.0));
+            let gap = min(p.z - hf_height_at(p.x, p.y), p1.z - hf_height_at(p1.x, p1.y)) * texel;
+            out.soft = min(out.soft, clamp(soft_k * gap / max(t, 1.0e-3 * texel), 0.0, 1.0));
         }
         t = max(t_far, t) + eps;
         level = min(level + 1, top_level);
@@ -643,21 +664,138 @@ fn hf_trace(o: vec3<f32>, d: vec3<f32>, tmax: f32, soft_k: f32) -> HfHit {
     return out;
 }
 
+// The ground's traversal in the world: the ray clipped to the ground's
+// slab and its root grid, then region by region -- each the square over
+// which one section, the finest ready there, answers (`hf_lookup`) --
+// each traced in its section's cells.
+fn hf_trace(o: vec3<f32>, d: vec3<f32>, tmax: f32, soft_k: f32) -> HfHit {
+    var out: HfHit;
+    out.t = -1.0;
+    out.hit = false;
+    out.soft = 1.0;
+    out.steps = 0u;
+    out.sec = -1;
+    let top = params.fdata[0].w;
+    let floor_z = params.eye.w;
+    let ro = params.fdata[0].xy;
+    let ext = vec2<f32>(params.fdata[1].x, params.fdata[1].y) * params.fdata[0].z;
+    var t0 = 0.0;
+    var t1 = tmax;
+    if (abs(d.x) < 1.0e-12) {
+        if (o.x < ro.x || o.x > ro.x + ext.x) {
+            return out;
+        }
+    } else {
+        let ta = (ro.x - o.x) / d.x;
+        let tb = (ro.x + ext.x - o.x) / d.x;
+        t0 = max(t0, min(ta, tb));
+        t1 = min(t1, max(ta, tb));
+    }
+    if (abs(d.y) < 1.0e-12) {
+        if (o.y < ro.y || o.y > ro.y + ext.y) {
+            return out;
+        }
+    } else {
+        let ta = (ro.y - o.y) / d.y;
+        let tb = (ro.y + ext.y - o.y) / d.y;
+        t0 = max(t0, min(ta, tb));
+        t1 = min(t1, max(ta, tb));
+    }
+    if (d.z < 0.0) {
+        if (o.z > top) {
+            t0 = max(t0, (top - o.z) / d.z);
+        }
+        t1 = min(t1, (floor_z - o.z) / d.z);
+    } else {
+        if (o.z > top) {
+            return out;
+        }
+        if (d.z > 0.0) {
+            t1 = min(t1, (top - o.z) / d.z);
+        }
+    }
+    if (!(t0 <= t1)) {
+        return out;
+    }
+    var t = t0;
+    // Look a hair ahead: a ray entering the ground's box sits exactly on
+    // its edge, where a rounding would put it outside.
+    let ahead = params.fdata[0].z * 1.0e-6;
+    loop {
+        if (out.steps >= HF_MAX_STEPS) {
+            break;
+        }
+        let p = o + d * (t + ahead);
+        let look = hf_lookup(p.xy);
+        if (!(look.size > 0.0)) {
+            break;
+        }
+        let lo = look.lo;
+        let hi = lo + vec2<f32>(look.size, look.size);
+        var tx = 1.0e30;
+        if (d.x > 0.0) {
+            tx = (hi.x - o.x) / d.x;
+        } else if (d.x < 0.0) {
+            tx = (lo.x - o.x) / d.x;
+        }
+        var ty = 1.0e30;
+        if (d.y > 0.0) {
+            ty = (hi.y - o.y) / d.y;
+        } else if (d.y < 0.0) {
+            ty = (lo.y - o.y) / d.y;
+        }
+        let te = min(min(tx, ty), t1);
+        if (look.sec >= 0) {
+            hf_sec = hf_sections[look.sec];
+            let inv = hf_sec.geo.w;
+            let os = vec3<f32>((o.xy - hf_sec.geo.xy) * inv, o.z * inv);
+            let h = hf_trace_section(os, d * inv, t, te, soft_k);
+            out.steps = out.steps + h.steps;
+            out.soft = min(out.soft, h.soft);
+            if (h.hit) {
+                out.t = h.t;
+                out.hit = true;
+                out.sec = look.sec;
+                return out;
+            }
+        }
+        out.steps = out.steps + 1u;
+        let eps = look.size * 1.0e-5 + abs(te) * 2.0e-7;
+        t = max(te, t) + eps;
+        if (t >= t1) {
+            break;
+        }
+    }
+    return out;
+}
+
+// The ground's height at q in the world (the floor where there is
+// none): the finest ready section's bilinear patch there.
+fn hf_ground(q: vec2<f32>) -> f32 {
+    let look = hf_lookup(q);
+    if (look.sec < 0) {
+        return params.eye.w;
+    }
+    hf_sec = hf_sections[look.sec];
+    let s = (q - hf_sec.geo.xy) * hf_sec.geo.w;
+    return hf_height_at(s.x, s.y) * hf_sec.geo.z;
+}
+
 // A sample's own normal, from its neighbours (one-sided at the edge).
 fn hf_corner_normal(i: i32, j: i32) -> vec3<f32> {
     let i0 = max(i - 1, 0);
-    let i1 = min(i + 1, i32(params.grid_n) - 1);
+    let i1 = min(i + 1, i32(hf_sec.dims.x) - 1);
     let j0 = max(j - 1, 0);
-    let j1 = min(j + 1, i32(params.grid_m) - 1);
+    let j1 = min(j + 1, i32(hf_sec.dims.y) - 1);
     let dx = (hf_h(i1, j) - hf_h(i0, j)) / f32(max(i1 - i0, 1));
     let dy = (hf_h(i, j1) - hf_h(i, j0)) / f32(max(j1 - j0, 1));
     return vec3<f32>(-dx, -dy, 1.0);
 }
 
-// The outward normal of the tile's side face nearest p.
+// The outward normal of the section's side face nearest p (cells).
 fn hf_wall_normal(p: vec3<f32>) -> vec3<f32> {
-    let cn = f32(params.grid_n - 1u);
-    let cm = f32(params.grid_m - 1u);
+    let cn = f32(hf_sec.dims.x - 1u);
+    let cm = f32(hf_sec.dims.y - 1u);
     let dist = vec4<f32>(p.x, cn - p.x, p.y, cm - p.y);
     let m = min(min(dist.x, dist.y), min(dist.z, dist.w));
     if (dist.x <= m) {
@@ -672,13 +810,16 @@ fn hf_wall_normal(p: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(0.0, 1.0, 0.0);
 }
 
-// The shading normal at (x, y): the corners' normals, bilinearly, so the
-// light is smooth across a cell even where the patch is faceted.
+// The shading normal at (x, y) in the current section's cells: the
+// corners' normals, bilinearly, so the light is smooth across a cell
+// even where the patch is faceted. A section's slopes are the world's.
 fn hf_normal(x: f32, y: f32) -> vec3<f32> {
-    let cx = clamp(x, 0.0, f32(params.grid_n - 1u));
-    let cy = clamp(y, 0.0, f32(params.grid_m - 1u));
-    let a = min(i32(floor(cx)), i32(params.grid_n) - 2);
-    let b = min(i32(floor(cy)), i32(params.grid_m) - 2);
+    let n = i32(hf_sec.dims.x);
+    let m = i32(hf_sec.dims.y);
+    let cx = clamp(x, 0.0, f32(n - 1));
+    let cy = clamp(y, 0.0, f32(m - 1));
+    let a = min(i32(floor(cx)), n - 2);
+    let b = min(i32(floor(cy)), m - 2);
     let u = cx - f32(a);
     let v = cy - f32(b);
     let n0 = mix(hf_corner_normal(a, b), hf_corner_normal(a + 1, b), u);
@@ -686,10 +827,10 @@ fn hf_normal(x: f32, y: f32) -> vec3<f32> {
     return normalize(mix(n0, n1, v));
 }
 
-// Occlusion from the horizon: in eight directions, the steepest rise
-// within the reach, as the sine of its elevation; one minus their mean.
-// A height field's own occlusion, and deterministic -- no noise to
-// accumulate away.
+// Occlusion from the horizon, in the world: in eight directions, the
+// steepest rise within the reach, as the sine of its elevation; one
+// minus their mean. A height field's own occlusion, and deterministic
+// -- no noise to accumulate away.
 fn hf_occlusion(p: vec3<f32>, reach: f32) -> f32 {
     if (!(reach > 0.0)) {
         return 1.0;
@@ -702,7 +843,7 @@ fn hf_occlusion(p: vec3<f32>, reach: f32) -> f32 {
         for (var r = 1; r <= 3; r = r + 1) {
             let dist = reach * f32(r) / 3.0;
             let q = p.xy + dir * dist;
-            let rise = hf_height_at(q.x, q.y) - p.z;
+            let rise = hf_ground(q) - p.z;
             best = max(best, rise * inverseSqrt(rise * rise + dist * dist));
         }
         occ = occ + best;
@@ -719,27 +860,36 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     hf_load_range();
     let o = params.eye.xyz;
     let d = ifs_ray(gid.x, gid.y);
-    let h = hf_trace(o, d, 1.0e30, 0.0);
+    // The ground ends at the view depth `far` (fdata[6].w), where the
+    // fog has reached the background.
+    let tmax = params.fdata[6].w / max(dot(d, ifs_forward()), 1.0e-4);
+    let h = hf_trace(o, d, tmax, 0.0);
     var steps = h.steps;
     if (!h.hit) {
         ifs_geom[idx] = vec4<u32>(0u, 0u, 0u, 0u);
     } else {
         let p = o + d * h.t;
-        var n = hf_normal(p.x, p.y);
+        hf_sec = hf_sections[h.sec];
+        let ps = vec3<f32>((p.xy - hf_sec.geo.xy) * hf_sec.geo.w, p.z * hf_sec.geo.w);
+        var n = hf_normal(ps.x, ps.y);
         var ao = hf_occlusion(p, params.misc.z);
-        // A ray that entered through the tile's side under the surface
-        // hit a WALL: the slab's edge, lit by its own outward normal, and
-        // open to the sky (the occlusion below the surface is the
-        // surface's, not the wall's). Only ON the boundary: elsewhere a
-        // point a rounding under a steep flank is the flank.
-        let edge = min(min(p.x, f32(params.grid_n - 1u) - p.x), min(p.y, f32(params.grid_m - 1u) - p.y));
-        if (edge < 1.0e-2 && hf_height_at(p.x, p.y) - p.z > 1.0e-3) {
-            n = hf_wall_normal(p);
+        // A ray that entered a section through its side under the
+        // surface hit a WALL -- the ground's edge, or a step between
+        // sections of different detail -- lit by its own outward normal,
+        // and open to the sky. Only ON the boundary: elsewhere a point a
+        // rounding under a steep flank is the flank.
+        hf_sec = hf_sections[h.sec];
+        let edge = min(min(ps.x, f32(hf_sec.dims.x - 1u) - ps.x), min(ps.y, f32(hf_sec.dims.y - 1u) - ps.y));
+        if (edge < 1.0e-2 && hf_height_at(ps.x, ps.y) - ps.z > 1.0e-3) {
+            n = hf_wall_normal(ps);
             ao = 1.0;
         }
         var sun = vec4<f32>(1.0, 1.0, 1.0, 1.0);
         if (ifs_shadow_strength() > 0.0) {
-            let start = p + n * params.misc.w;
+            // Past a position's rounding at these coordinates, or a
+            // surface shadows itself in speckles.
+            let bias = hf_sec.geo.z * 1.0e-3 + (length(p) + length(o)) * 1.0e-6;
+            let start = p + n * bias;
             for (var li = 0u; li < ifs_light_count(); li = li + 1u) {
                 let ld = ifs_light_dir(li);
                 if (dot(n, ld) <= 0.0) {
@@ -762,20 +912,31 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 "#;
 
 const RELIGHT_WGSL: &str = r#"
-@group(0) @binding(1) var hf_albedo: texture_2d<f32>;
+@group(0) @binding(1) var hf_albedo: texture_2d_array<f32>;
 @group(0) @binding(2) var<storage, read> ifs_geom: array<vec4<u32>>;
 @group(0) @binding(3) var out_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(4) var hf_sampler: sampler;
+@group(0) @binding(6) var<storage, read> hf_sections: array<HfSection>;
+@group(0) @binding(7) var<storage, read> hf_nodes: array<HfNode>;
 
-// The albedo at (x, y), filtered over `foot` cells: bilinear between
-// the samples where a ray's share of a pixel is smaller than a cell,
-// the mip chain's averages where it covers several -- so distant ground
-// is the average of its texels rather than whichever one a ray struck.
-fn hf_albedo_at(x: f32, y: f32, foot: f32) -> vec4<f32> {
+//__HF_GROUND__
+
+// The albedo at the world point q, filtered over `foot` world units:
+// bilinear between the samples where a ray's share of a pixel is
+// smaller than a texel, the mip chain's averages where it covers
+// several -- so distant ground is the average of its texels rather than
+// whichever one a ray struck.
+fn hf_albedo_at(q: vec2<f32>, foot: f32) -> vec4<f32> {
+    let look = hf_lookup(q);
+    if (look.sec < 0) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    hf_sec = hf_sections[look.sec];
+    let s = (q - hf_sec.geo.xy) * hf_sec.geo.w;
     let dims = vec2<f32>(textureDimensions(hf_albedo));
-    let uv = (vec2<f32>(x, y) + vec2<f32>(0.5, 0.5)) / dims;
-    let lod = clamp(log2(max(foot, 1.0e-6)), 0.0, f32(textureNumLevels(hf_albedo) - 1u));
-    return textureSampleLevel(hf_albedo, hf_sampler, uv, lod);
+    let uv = (s + vec2<f32>(0.5, 0.5)) / dims;
+    let lod = clamp(log2(max(foot * hf_sec.geo.w, 1.0e-6)), 0.0, f32(textureNumLevels(hf_albedo) - 1u));
+    return textureSampleLevel(hf_albedo, hf_sampler, uv, i32(hf_sec.dims.z), lod);
 }
 
 @compute @workgroup_size(8, 8, 1)
@@ -797,13 +958,95 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let nxy = unpack2x16float(g.x);
     let nz_ao = unpack2x16float(g.y);
     let n = vec3<f32>(nxy, nz_ao.x);
-    // A ray's share of a pixel at the hit, in cells, widened where the
-    // surface is seen at a slant.
+    // A ray's share of a pixel at the hit, in the world's units, widened
+    // where the surface is seen at a slant.
     let foot = t * params.fdata[6].z / sqrt(max(abs(dot(n, dir)), 0.05));
-    let albedo = hf_albedo_at(p.x, p.y, foot);
+    let albedo = hf_albedo_at(p.xy, foot);
     let sun = unpack4x8unorm(g.z);
     let rgb = ifs_rig(albedo.rgb, n, nz_ao.y, sun, dir, t);
-    textureStore(out_tex, px, vec4<f32>(rgb, clamp(albedo.a, 0.0, 1.0)));
+    // The fog: the ground's coverage fading with view depth past its
+    // start (fdata[7].x its density, .y its start), so it melts into
+    // the background exactly.
+    var alpha = clamp(albedo.a, 0.0, 1.0);
+    if (params.fdata[7].x > 0.0) {
+        let depth = t * dot(dir, ifs_forward());
+        alpha = alpha * exp(-params.fdata[7].x * max(depth - params.fdata[7].y, 0.0));
+    }
+    textureStore(out_tex, px, vec4<f32>(rgb, alpha));
+}
+"#;
+
+/// The ground's index, shared by the walk and the relight: its sections
+/// and the quadtree over them (`set_ground`).
+const GROUND_WGSL: &str = r#"
+// A section: its sample (0, 0) in the world, the world's units per cell
+// and their inverse; its samples, layer and mip levels.
+struct HfSection {
+    geo: vec4<f32>,
+    dims: vec4<u32>,
+};
+
+// A quadtree node: its children (south-west, south-east, north-west,
+// north-east; -1 none) and the section that covers its square (-1 none
+// ready).
+struct HfNode {
+    child: vec4<i32>,
+    sec: vec4<i32>,
+};
+
+// The section the helpers read.
+var<private> hf_sec: HfSection;
+
+struct HfLook {
+    sec: i32,
+    lo: vec2<f32>,
+    size: f32,
+};
+
+// The finest ready section under q, and the square over which that
+// answer holds: down the quadtree from the root grid (fdata[0]: its
+// corner and side; fdata[1].xy: its cells), keeping the deepest ready
+// section passed; the square is the empty quadrant the descent stopped
+// at, or the last node's own where it has no children. Size 0: off the
+// ground.
+fn hf_lookup(q: vec2<f32>) -> HfLook {
+    var out: HfLook;
+    out.sec = -1;
+    out.size = 0.0;
+    let ro = params.fdata[0].xy;
+    let rs = params.fdata[0].z;
+    let nx = i32(params.fdata[1].x);
+    let ny = i32(params.fdata[1].y);
+    let g = vec2<i32>(floor((q - ro) / rs));
+    if (g.x < 0 || g.y < 0 || g.x >= nx || g.y >= ny) {
+        return out;
+    }
+    var node = g.y * nx + g.x;
+    var lo = ro + vec2<f32>(g) * rs;
+    var size = rs;
+    for (var depth = 0; depth < 48; depth = depth + 1) {
+        let nd = hf_nodes[node];
+        if (nd.sec.x >= 0) {
+            out.sec = nd.sec.x;
+        }
+        let half = size * 0.5;
+        let qx = select(0, 1, q.x >= lo.x + half);
+        let qy = select(0, 1, q.y >= lo.y + half);
+        let child = nd.child[qy * 2 + qx];
+        if (child < 0) {
+            if (max(max(nd.child.x, nd.child.y), max(nd.child.z, nd.child.w)) >= 0) {
+                lo = lo + vec2<f32>(f32(qx), f32(qy)) * half;
+                size = half;
+            }
+            break;
+        }
+        node = child;
+        lo = lo + vec2<f32>(f32(qx), f32(qy)) * half;
+        size = half;
+    }
+    out.lo = lo;
+    out.size = size;
+    return out;
 }
 "#;
 
@@ -812,7 +1055,9 @@ pub fn assemble_walk() -> String {
     format!(
         "{}\n{}",
         WALK_COMMON.replace("//__IFS_RIG__", &super::assembler::ifs_rig_jittered()),
-        WALK_WGSL.replace("__HF_MAX_STEPS__", &HF_MAX_STEPS.to_string())
+        WALK_WGSL
+            .replace("__HF_MAX_STEPS__", &HF_MAX_STEPS.to_string())
+            .replace("//__HF_GROUND__", GROUND_WGSL)
     )
 }
 
@@ -821,7 +1066,7 @@ pub fn assemble_relight() -> String {
     format!(
         "{}\n{}",
         WALK_COMMON.replace("//__IFS_RIG__", &super::assembler::ifs_rig_jittered()),
-        RELIGHT_WGSL
+        RELIGHT_WGSL.replace("//__HF_GROUND__", GROUND_WGSL)
     )
 }
 
@@ -836,8 +1081,9 @@ pub fn assemble_build() -> String {
 pub struct TerrainView {
     pub camera: SolidCamera,
     pub shading: SolidShadingSettings,
-    /// Fog (strength per cell, start in cells, colour), as the rig
-    /// applies it.
+    /// Fog (density per unit of view depth, its start, and a colour the
+    /// rig no longer uses): the relight fades the ground's coverage, so
+    /// the tonemap's own background shows through.
     pub fog: (f32, f32, [f32; 3]),
     /// Shadow strength: 0 traces no shadow rays.
     pub shadow: f32,
@@ -857,6 +1103,9 @@ pub struct TerrainView {
     /// Rays per pixel along each axis, the accumulation's grid: a ray's
     /// share of a pixel, which the albedo's filter covers.
     pub samples_per_axis: u32,
+    /// The view depth past which there is no ground, in the world's
+    /// units (the fog has reached the background there).
+    pub far: f32,
 }
 
 /// The default sun when the lighting panel is untouched (plan H7): the
@@ -932,6 +1181,7 @@ fn walk_key(view: &TerrainView, w: u32, h: u32, tile: u64) -> String {
         view.height,
         view.width
     );
+    k.push_str(&format!("|{}", view.far));
     let any = !SolidShadingSettings::is_default(&view.shading);
     k.push_str(&format!("|{any}"));
     for l in &view.shading.lights {
@@ -940,42 +1190,72 @@ fn walk_key(view: &TerrainView, w: u32, h: u32, tile: u64) -> String {
     k
 }
 
-struct Tile {
-    n: u32,
-    m: u32,
-    /// The slab's floor, in cells (`slab_floor`).
-    floor: f32,
+/// The sections' storage: texture arrays of one layer a section -- the
+/// raw samples, the albedo with its mip chain, the maximum mipmap at
+/// power-of-two sides.
+struct Atlas {
+    /// A layer's samples.
+    w: u32,
+    h: u32,
+    capacity: u32,
+    /// The maximum mipmap's levels.
     levels: u32,
-    /// The walk's map from the raw samples to heights (`hf_f`): 0 the
-    /// identity, 1 distance, 2 count, 3 relief.
-    mode: u32,
-    /// The raw samples (`R32Float`).
-    height: (Texture, TextureView),
-    /// The albedo with its mip chain (`Rgba16Float`).
-    albedo: (Texture, TextureView),
+    raw: Texture,
+    albedo: Texture,
     mips: Texture,
+    raw_all: TextureView,
+    albedo_all: TextureView,
     mips_all: TextureView,
-    /// A count's or a relief's range over the escaped samples, in the
-    /// ordered encoding (`hf_range`).
-    range: Buffer,
+}
+
+/// A section of the ground: an atlas layer of `n x m` samples whose
+/// sample (0, 0) sits at `origin` in the world, `texel` apart.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GroundSection {
+    pub layer: u32,
+    pub origin: [f64; 2],
+    pub texel: f64,
+    pub n: u32,
+    pub m: u32,
+}
+
+/// A quadtree node of the ground's index: its children (south-west,
+/// south-east, north-west, north-east; -1 none) and the section that
+/// covers its square (-1: none ready).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GroundNode {
+    pub children: [i32; 4],
+    pub section: i32,
+}
+
+/// The ground: its sections and the quadtree that finds the finest
+/// ready one under a point. The roots are a grid of `root_dims` squares
+/// of `root_side` from `root_origin`, nodes `0..nx*ny` row by row.
+/// Heights run from `floor` to `top` in the world; `mode` is the walk's
+/// map from the sections' raw samples (`hf_f`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Ground {
+    pub root_origin: [f64; 2],
+    pub root_side: f64,
+    pub root_dims: [u32; 2],
+    pub nodes: Vec<GroundNode>,
+    pub sections: Vec<GroundSection>,
+    pub top: f64,
+    pub floor: f64,
+    pub mode: u32,
+}
+
+/// The ground on the GPU, and its version: a new one for every set.
+struct GroundGpu {
+    ground: Ground,
+    sections: Buffer,
+    nodes: Buffer,
     version: u64,
 }
 
-/// A tile being made from footprint regions, while the last one is
-/// still drawn.
-struct Build {
-    n: u32,
-    m: u32,
-    mode: u32,
-    params: IngestParamsGpu,
-    height: Texture,
-    albedo: Texture,
-    range: Buffer,
-}
-
-/// The terrain renderer: a tile, its mipmap, and the walk and relight
-/// over it. Part of the escape engine, beside mode D, whose camera and
-/// rig it shares.
+/// The terrain renderer: the ground's sections in an atlas, their
+/// mipmaps, and the walk and relight over them. Part of the escape
+/// engine, beside mode D, whose camera and rig it shares.
 pub struct TerrainRenderer {
     build_layout: BindGroupLayout,
     walk_layout: BindGroupLayout,
@@ -991,7 +1271,13 @@ pub struct TerrainRenderer {
     albedo_mip_layout: BindGroupLayout,
     albedo_mip_pipeline: ComputePipeline,
     sampler: Sampler,
-    build: Option<Build>,
+    atlas: Option<Atlas>,
+    ground: Option<GroundGpu>,
+    /// The layer being made from footprint regions, and its ingest.
+    building: Option<(u32, IngestParamsGpu)>,
+    /// A count's or a relief's range over every section ingested since
+    /// the last `reset_range`, in the ordered encoding (`hf_range`).
+    range: Buffer,
     /// The accumulation's pair, allocated on the first `accumulate`;
     /// `accum_front` is the one holding the mean.
     accum: Option<[(Texture, TextureView); 2]>,
@@ -1005,7 +1291,6 @@ pub struct TerrainRenderer {
     output: (Texture, TextureView),
     out_w: u32,
     out_h: u32,
-    tile: Option<Tile>,
     next_version: u64,
     walked: Option<String>,
     /// Walks run so far, for the relight-cache gate.
@@ -1056,25 +1341,34 @@ impl TerrainRenderer {
             label: Some("Terrain Build"),
             entries: &[uniform(0), tex(1), storage_tex(2, TextureFormat::R32Float)],
         });
-        let walk_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("Terrain Walk"),
-            entries: &[uniform(0), tex(1), tex(2), storage(3, false), storage(4, false), storage(5, true)],
-        });
-        let filterable = |binding: u32| BindGroupLayoutEntry {
+        let tex_array = |binding: u32, filterable: bool| BindGroupLayoutEntry {
             binding,
             visibility: ShaderStages::COMPUTE,
             ty: BindingType::Texture {
-                sample_type: TextureSampleType::Float { filterable: true },
-                view_dimension: TextureViewDimension::D2,
+                sample_type: TextureSampleType::Float { filterable },
+                view_dimension: TextureViewDimension::D2Array,
                 multisampled: false,
             },
             count: None,
         };
+        let walk_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Terrain Walk"),
+            entries: &[
+                uniform(0),
+                tex_array(1, false),
+                tex_array(2, false),
+                storage(3, false),
+                storage(4, false),
+                storage(5, true),
+                storage(6, true),
+                storage(7, true),
+            ],
+        });
         let relight_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Terrain Relight"),
             entries: &[
                 uniform(0),
-                filterable(1),
+                tex_array(1, true),
                 storage(2, true),
                 storage_tex(3, TextureFormat::Rgba32Float),
                 BindGroupLayoutEntry {
@@ -1083,6 +1377,8 @@ impl TerrainRenderer {
                     ty: BindingType::Sampler(SamplerBindingType::Filtering),
                     count: None,
                 },
+                storage(6, true),
+                storage(7, true),
             ],
         });
         let albedo_mip_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -1155,6 +1451,12 @@ impl TerrainRenderer {
         });
         let geom = Self::create_geom(device, out_w * out_h);
         let output = Self::create_output(device, out_w, out_h);
+        let range = device.create_buffer(&BufferDescriptor {
+            label: Some("Terrain Range"),
+            size: 8,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         TerrainRenderer {
             build_layout,
             walk_layout,
@@ -1170,7 +1472,10 @@ impl TerrainRenderer {
             albedo_mip_layout,
             albedo_mip_pipeline,
             sampler,
-            build: None,
+            atlas: None,
+            ground: None,
+            building: None,
+            range,
             accum: None,
             accum_front: 0,
             accum_count: 0,
@@ -1181,7 +1486,6 @@ impl TerrainRenderer {
             output,
             out_w,
             out_h,
-            tile: None,
             next_version: 1,
             walked: None,
             walks: 0,
@@ -1242,9 +1546,8 @@ impl TerrainRenderer {
     /// render and the accumulation's pair.
     pub const BYTES_PER_PIXEL: u64 = 16 + 3 * 16;
 
-    /// Bytes a tile sample costs, about: the raw sample, the albedo and
-    /// its mips, the mipmap at power-of-two sides. Twice that while a
-    /// build replaces a tile.
+    /// Bytes a section's sample costs, about: the raw sample, the albedo
+    /// and its mips, the mipmap at power-of-two sides.
     pub const BYTES_PER_SAMPLE: u64 = 4 + 11 + 6;
 
     /// Why a `w x h` terrain view cannot be held on this device: the
@@ -1278,16 +1581,15 @@ impl TerrainRenderer {
             pair[0].0.destroy();
             pair[1].0.destroy();
         }
-        if let Some(tile) = &self.tile {
-            tile.height.0.destroy();
-            tile.albedo.0.destroy();
-            tile.mips.destroy();
-            tile.range.destroy();
+        self.range.destroy();
+        if let Some(a) = &self.atlas {
+            a.raw.destroy();
+            a.albedo.destroy();
+            a.mips.destroy();
         }
-        if let Some(b) = &self.build {
-            b.height.destroy();
-            b.albedo.destroy();
-            b.range.destroy();
+        if let Some(g) = &self.ground {
+            g.sections.destroy();
+            g.nodes.destroy();
         }
     }
 
@@ -1296,9 +1598,10 @@ impl TerrainRenderer {
         self.accum_count = 0;
     }
 
-    /// The tile's version: a new one for every tile set.
+    /// The ground's version: a new one for every ground set, and 0
+    /// before any.
     pub fn tile_version(&self) -> u64 {
-        self.tile.as_ref().map_or(0, |t| t.version)
+        self.ground.as_ref().map_or(0, |g| g.version)
     }
 
     /// Samples in the accumulation so far.
@@ -1377,27 +1680,46 @@ impl TerrainRenderer {
         assert!(n >= 2 && m >= 2, "a tile needs at least 2x2 samples");
         assert_eq!(heights.len(), (n * m) as usize);
         assert_eq!(albedo.len(), (n * m) as usize);
-        let (height, albedo_tex) = Self::tile_textures(device, n, m);
+        self.ensure_atlas(device, n, m, 1);
+        let atlas = self.atlas.as_ref().expect("made above");
+        let at = Origin3d { x: 0, y: 0, z: 0 };
         queue.write_texture(
-            TexelCopyTextureInfo { texture: &height, mip_level: 0, origin: Origin3d::ZERO, aspect: TextureAspect::All },
+            TexelCopyTextureInfo { texture: &atlas.raw, mip_level: 0, origin: at, aspect: TextureAspect::All },
             bytemuck::cast_slice(heights),
             TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(n * 4), rows_per_image: Some(m) },
             Extent3d { width: n, height: m, depth_or_array_layers: 1 },
         );
         let halves: Vec<u16> = albedo.iter().flatten().map(|v| half::f16::from_f32(*v).to_bits()).collect();
         queue.write_texture(
-            TexelCopyTextureInfo { texture: &albedo_tex, mip_level: 0, origin: Origin3d::ZERO, aspect: TextureAspect::All },
+            TexelCopyTextureInfo { texture: &atlas.albedo, mip_level: 0, origin: at, aspect: TextureAspect::All },
             bytemuck::cast_slice(&halves),
             TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(n * 8), rows_per_image: Some(m) },
             Extent3d { width: n, height: m, depth_or_array_layers: 1 },
         );
-        let range = Self::range_buffer(device, queue);
-        self.finish_tile(device, queue, n, m, 0, height, albedo_tex, range, slab_floor(heights, n, m));
+        self.build_layer(device, queue, 0, 0);
+        let top = heights.iter().cloned().fold(f32::NEG_INFINITY, f32::max) as f64;
+        self.set_ground(device, queue, Self::one_section_ground(n, m, 0, top, slab_floor(heights, n, m) as f64));
     }
 
-    /// A tile from one footprint render (heightfield plan, section 5):
-    /// its colour and its height field, both `n x m` and `Rgba32Float`,
-    /// on the GPU throughout. The build of one region.
+    /// A ground of one section of `n x m` cells from the origin, its own
+    /// root.
+    fn one_section_ground(n: u32, m: u32, mode: u32, top: f64, floor: f64) -> Ground {
+        Ground {
+            root_origin: [0.0, 0.0],
+            root_side: (n.max(m) - 1) as f64,
+            root_dims: [1, 1],
+            nodes: vec![GroundNode { children: [-1; 4], section: 0 }],
+            sections: vec![GroundSection { layer: 0, origin: [0.0, 0.0], texel: 1.0, n, m }],
+            top,
+            floor,
+            mode,
+        }
+    }
+
+    /// A one-section ground from one footprint render (heightfield plan,
+    /// section 5): its colour and its height field, both `n x m` and
+    /// `Rgba32Float`, on the GPU throughout. Cells are its pixels; the
+    /// floor a hundredth of its side below zero, the top `top`.
     #[allow(clippy::too_many_arguments)]
     pub fn set_tile_from_escape(
         &mut self,
@@ -1408,24 +1730,91 @@ impl TerrainRenderer {
         n: u32,
         m: u32,
         ingest: &TerrainIngest,
+        top: f64,
     ) {
-        self.begin_build(device, queue, n, m, ingest);
+        self.ensure_atlas(device, n, m, 1);
+        self.reset_range(queue);
+        self.begin_section(0, n, m, ingest);
         self.ingest_region(device, queue, colour, height_field, 0, 0, n, m);
-        self.finish_build(device, queue);
+        self.finish_section(device, queue);
+        let floor = -0.01 * n.max(m) as f64;
+        self.set_ground(device, queue, Self::one_section_ground(n, m, ingest.mode(), top, floor));
     }
 
-    /// Start a tile of `n x m` samples from footprint regions. The last
-    /// tile is drawn until [`finish_build`](Self::finish_build) replaces
-    /// it; a build already under way is dropped.
-    pub fn begin_build(&mut self, device: &Device, queue: &Queue, n: u32, m: u32, ingest: &TerrainIngest) {
-        assert!(n >= 2 && m >= 2, "a tile needs at least 2x2 samples");
-        if let Some(b) = self.build.take() {
-            b.height.destroy();
-            b.albedo.destroy();
-            b.range.destroy();
+    /// The atlas for `capacity` layers of `w x h` samples; true when it
+    /// was (re)made, and every layer is empty.
+    pub fn ensure_atlas(&mut self, device: &Device, w: u32, h: u32, capacity: u32) -> bool {
+        if self.atlas.as_ref().is_some_and(|a| a.w == w && a.h == h && a.capacity == capacity) {
+            return false;
         }
-        let (height, albedo) = Self::tile_textures(device, n, m);
-        let range = Self::range_buffer(device, queue);
+        if let Some(a) = self.atlas.take() {
+            a.raw.destroy();
+            a.albedo.destroy();
+            a.mips.destroy();
+        }
+        let make = |label: &str, format: TextureFormat, mips: u32, tw: u32, th: u32| {
+            device.create_texture(&TextureDescriptor {
+                label: Some(label),
+                size: Extent3d { width: tw, height: th, depth_or_array_layers: capacity },
+                mip_level_count: mips,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format,
+                usage: TextureUsages::TEXTURE_BINDING
+                    | TextureUsages::STORAGE_BINDING
+                    | TextureUsages::COPY_DST
+                    | TextureUsages::COPY_SRC,
+                view_formats: &[],
+            })
+        };
+        let levels = Self::levels_for(w, h);
+        let raw = make("Terrain Raw", TextureFormat::R32Float, 1, w, h);
+        let albedo = make("Terrain Albedo", TextureFormat::Rgba16Float, 32 - w.max(h).leading_zeros(), w, h);
+        // Power-of-two sides: a texture's mips halve rounding DOWN, the
+        // node grid halves rounding UP, and only at powers of two do the
+        // two agree -- otherwise the top levels' last nodes fall outside
+        // their mip, the build's writes are dropped and the walk reads
+        // them as zero. The texels past the cells are never read.
+        let mips = make(
+            "Terrain Max Mipmap",
+            TextureFormat::R32Float,
+            levels,
+            (w - 1).next_power_of_two(),
+            (h - 1).next_power_of_two(),
+        );
+        let array = |t: &Texture| t.create_view(&TextureViewDescriptor { dimension: Some(TextureViewDimension::D2Array), ..Default::default() });
+        self.atlas = Some(Atlas {
+            w,
+            h,
+            capacity,
+            levels,
+            raw_all: array(&raw),
+            albedo_all: array(&albedo),
+            mips_all: array(&mips),
+            raw,
+            albedo,
+            mips,
+        });
+        self.ground = None;
+        self.walked = None;
+        true
+    }
+
+    /// The atlas's layer side and capacity, once made.
+    pub fn atlas_shape(&self) -> Option<(u32, u32, u32)> {
+        self.atlas.as_ref().map(|a| (a.w, a.h, a.capacity))
+    }
+
+    /// Empty the count's and the relief's range: a new picture.
+    pub fn reset_range(&mut self, queue: &Queue) {
+        queue.write_buffer(&self.range, 0, bytemuck::cast_slice(&[u32::MAX, 0u32]));
+    }
+
+    /// Start making atlas layer `layer` -- `n x m` samples -- from
+    /// footprint regions.
+    pub fn begin_section(&mut self, layer: u32, n: u32, m: u32, ingest: &TerrainIngest) {
+        let atlas = self.atlas.as_ref().expect("ensure_atlas first");
+        assert!(layer < atlas.capacity && n <= atlas.w && m <= atlas.h, "a section inside the atlas");
         let params = IngestParamsGpu {
             n,
             m,
@@ -1437,12 +1826,12 @@ impl TerrainRenderer {
             rh: 0,
             background: [ingest.background[0], ingest.background[1], ingest.background[2], 1.0],
         };
-        self.build = Some(Build { n, m, mode: ingest.mode(), params, height, albedo, range });
+        self.building = Some((layer, params));
     }
 
-    /// One region of the footprint into the tile being built: its colour
-    /// and height field, `rw x rh`, whose top-left is pixel `(ox, oy)` of
-    /// the footprint picture. Submits its own work.
+    /// One region of the footprint into the section being made: its
+    /// colour and height field, `rw x rh`, whose top-left is pixel
+    /// `(ox, oy)` of the section's picture. Submits its own work.
     #[allow(clippy::too_many_arguments)]
     pub fn ingest_region(
         &mut self,
@@ -1455,9 +1844,10 @@ impl TerrainRenderer {
         rw: u32,
         rh: u32,
     ) {
-        let b = self.build.as_ref().expect("begin_build first");
-        assert!(ox + rw <= b.n && oy + rh <= b.m, "a region inside the tile");
-        let p = IngestParamsGpu { ox, oy, rw, rh, ..b.params };
+        let (layer, base) = self.building.expect("begin_section first");
+        assert!(ox + rw <= base.n && oy + rh <= base.m, "a region inside the section");
+        let atlas = self.atlas.as_ref().expect("ensure_atlas first");
+        let p = IngestParamsGpu { ox, oy, rw, rh, ..base };
         let params = device.create_buffer(&BufferDescriptor {
             label: Some("Terrain Ingest Params"),
             size: std::mem::size_of::<IngestParamsGpu>() as u64,
@@ -1465,8 +1855,17 @@ impl TerrainRenderer {
             mapped_at_creation: false,
         });
         queue.write_buffer(&params, 0, bytemuck::bytes_of(&p));
-        let hv = b.height.create_view(&TextureViewDescriptor::default());
-        let av = b.albedo.create_view(&TextureViewDescriptor { base_mip_level: 0, mip_level_count: Some(1), ..Default::default() });
+        let one = |t: &Texture| {
+            t.create_view(&TextureViewDescriptor {
+                dimension: Some(TextureViewDimension::D2),
+                base_array_layer: layer,
+                array_layer_count: Some(1),
+                base_mip_level: 0,
+                mip_level_count: Some(1),
+                ..Default::default()
+            })
+        };
+        let (hv, av) = (one(&atlas.raw), one(&atlas.albedo));
         let bg = device.create_bind_group(&BindGroupDescriptor {
             label: Some("Terrain Ingest"),
             layout: &self.ingest_layout,
@@ -1474,7 +1873,7 @@ impl TerrainRenderer {
                 BindGroupEntry { binding: 0, resource: params.as_entire_binding() },
                 BindGroupEntry { binding: 1, resource: BindingResource::TextureView(colour) },
                 BindGroupEntry { binding: 2, resource: BindingResource::TextureView(height_field) },
-                BindGroupEntry { binding: 3, resource: b.range.as_entire_binding() },
+                BindGroupEntry { binding: 3, resource: self.range.as_entire_binding() },
                 BindGroupEntry { binding: 4, resource: BindingResource::TextureView(&hv) },
                 BindGroupEntry { binding: 5, resource: BindingResource::TextureView(&av) },
             ],
@@ -1491,132 +1890,105 @@ impl TerrainRenderer {
         queue.submit(std::iter::once(enc.finish()));
     }
 
-    /// Finish the tile being built -- its mipmap and the albedo's -- and
-    /// draw it from now on. The slab's floor is a hundredth of the
-    /// tile's side below zero: the raw maps land in [0, H].
-    pub fn finish_build(&mut self, device: &Device, queue: &Queue) {
-        let b = self.build.take().expect("begin_build first");
-        let floor = -0.01 * b.n.max(b.m) as f32;
-        self.finish_tile(device, queue, b.n, b.m, b.mode, b.height, b.albedo, b.range, floor);
+    /// Finish the section being made: its maximum mipmap and its albedo's
+    /// mip chain. It is drawn once a ground names its layer.
+    pub fn finish_section(&mut self, device: &Device, queue: &Queue) {
+        let (layer, base) = self.building.take().expect("begin_section first");
+        let mode = TerrainIngest { source: base.source, hole: base.interior == 1, background: [0.0; 3] }.mode();
+        self.build_layer(device, queue, layer, u32::from(mode == 1));
     }
 
-    /// Whether a build is under way.
+    /// Whether a section is being made.
     pub fn building(&self) -> bool {
-        self.build.is_some()
+        self.building.is_some()
     }
 
-    /// The range's buffer, emptied: min high, max low, in the ordered
-    /// encoding.
-    fn range_buffer(device: &Device, queue: &Queue) -> Buffer {
-        let range = device.create_buffer(&BufferDescriptor {
-            label: Some("Terrain Range"),
-            size: 8,
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
+    /// A layer's maximum mipmap (the raw maximum, or for `min_mode` the
+    /// minimum) and its albedo's mip chain.
+    fn build_layer(&mut self, device: &Device, queue: &Queue, layer: u32, min_mode: u32) {
+        let atlas = self.atlas.as_ref().expect("ensure_atlas first");
+        let raw = atlas.raw.create_view(&TextureViewDescriptor {
+            dimension: Some(TextureViewDimension::D2),
+            base_array_layer: layer,
+            array_layer_count: Some(1),
+            ..Default::default()
         });
-        queue.write_buffer(&range, 0, bytemuck::cast_slice(&[u32::MAX, 0u32]));
-        range
+        self.build_mips(device, queue, &raw, &atlas.mips, layer, atlas.w, atlas.h, atlas.levels, min_mode);
+        self.build_albedo_mips(device, queue, &atlas.albedo, layer);
+        self.walked = None;
     }
 
-    /// The tile's raw (`R32Float`) and albedo (`Rgba16Float`, with its
-    /// mip chain) textures, unwritten.
-    fn tile_textures(device: &Device, n: u32, m: u32) -> (Texture, Texture) {
-        let make = |label: &str, format: TextureFormat, mips: u32| {
-            device.create_texture(&TextureDescriptor {
-                label: Some(label),
-                size: Extent3d { width: n, height: m, depth_or_array_layers: 1 },
-                mip_level_count: mips,
-                sample_count: 1,
-                dimension: TextureDimension::D2,
-                format,
-                usage: TextureUsages::TEXTURE_BINDING
-                    | TextureUsages::STORAGE_BINDING
-                    | TextureUsages::COPY_DST
-                    | TextureUsages::COPY_SRC,
-                view_formats: &[],
+    /// Draw this ground from now on: its sections (atlas layers already
+    /// made) and its index.
+    pub fn set_ground(&mut self, device: &Device, queue: &Queue, ground: Ground) {
+        let atlas = self.atlas.as_ref().expect("ensure_atlas first");
+        let mut sections: Vec<[u32; 8]> = ground
+            .sections
+            .iter()
+            .map(|s| {
+                let geo = [s.origin[0] as f32, s.origin[1] as f32, s.texel as f32, (1.0 / s.texel) as f32];
+                [
+                    geo[0].to_bits(),
+                    geo[1].to_bits(),
+                    geo[2].to_bits(),
+                    geo[3].to_bits(),
+                    s.n,
+                    s.m,
+                    s.layer,
+                    atlas.levels,
+                ]
             })
-        };
-        let albedo_levels = 32 - n.max(m).leading_zeros();
-        (make("Terrain Height", TextureFormat::R32Float, 1), make("Terrain Albedo", TextureFormat::Rgba16Float, albedo_levels))
-    }
-
-    /// The tile's mipmap from its samples, the albedo's mip chain, and
-    /// the tile itself.
-    #[allow(clippy::too_many_arguments)]
-    fn finish_tile(
-        &mut self,
-        device: &Device,
-        queue: &Queue,
-        n: u32,
-        m: u32,
-        mode: u32,
-        height: Texture,
-        albedo_tex: Texture,
-        range: Buffer,
-        floor: f32,
-    ) {
-        let make = |label: &str, format: TextureFormat, mips: u32, w: u32, h: u32| {
-            device.create_texture(&TextureDescriptor {
-                label: Some(label),
-                size: Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-                mip_level_count: mips,
-                sample_count: 1,
-                dimension: TextureDimension::D2,
-                format,
-                usage: TextureUsages::TEXTURE_BINDING
-                    | TextureUsages::STORAGE_BINDING
-                    | TextureUsages::COPY_DST
-                    | TextureUsages::COPY_SRC,
-                view_formats: &[],
-            })
-        };
-        let levels = Self::levels_for(n, m);
-        // Power-of-two sides: a texture's mips halve rounding DOWN, the
-        // node grid halves rounding UP, and only at powers of two do the
-        // two agree -- otherwise the top levels' last nodes fall outside
-        // their mip, the build's writes are dropped and the walk reads
-        // them as zero. The texels past the cells are never read.
-        let mips = make(
-            "Terrain Max Mipmap",
-            TextureFormat::R32Float,
-            levels,
-            (n - 1).next_power_of_two(),
-            (m - 1).next_power_of_two(),
-        );
-        let mips_all = mips.create_view(&TextureViewDescriptor::default());
-        let height_view = height.create_view(&TextureViewDescriptor::default());
-        let albedo_view = albedo_tex.create_view(&TextureViewDescriptor::default());
-        self.build_mips(device, queue, &height_view, &mips, n, m, levels, u32::from(mode == 1));
-        self.build_albedo_mips(device, queue, &albedo_tex);
-        if let Some(old) = self.tile.take() {
-            old.height.0.destroy();
-            old.albedo.0.destroy();
-            old.mips.destroy();
-            old.range.destroy();
+            .collect();
+        if sections.is_empty() {
+            sections.push([0; 8]);
         }
-        self.tile = Some(Tile {
-            n,
-            m,
-            floor,
-            levels,
-            mode,
-            height: (height, height_view),
-            albedo: (albedo_tex, albedo_view),
-            mips,
-            mips_all,
-            range,
-            version: self.next_version,
-        });
+        let mut nodes: Vec<[i32; 8]> = ground
+            .nodes
+            .iter()
+            .map(|n| [n.children[0], n.children[1], n.children[2], n.children[3], n.section, 0, 0, 0])
+            .collect();
+        if nodes.is_empty() {
+            nodes.push([-1, -1, -1, -1, -1, 0, 0, 0]);
+        }
+        let upload = |label: &str, bytes: &[u8], old: Option<&Buffer>| -> Buffer {
+            match old {
+                Some(b) if b.size() >= bytes.len() as u64 => {
+                    queue.write_buffer(b, 0, bytes);
+                    b.clone()
+                }
+                _ => {
+                    let b = device.create_buffer(&BufferDescriptor {
+                        label: Some(label),
+                        size: (bytes.len() as u64).next_power_of_two().max(64),
+                        usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    });
+                    queue.write_buffer(&b, 0, bytes);
+                    b
+                }
+            }
+        };
+        let old = self.ground.take();
+        let sections_buf = upload("Terrain Sections", bytemuck::cast_slice(&sections), old.as_ref().map(|g| &g.sections));
+        let nodes_buf = upload("Terrain Nodes", bytemuck::cast_slice(&nodes), old.as_ref().map(|g| &g.nodes));
+        self.ground = Some(GroundGpu { ground, sections: sections_buf, nodes: nodes_buf, version: self.next_version });
         self.next_version += 1;
         self.walked = None;
     }
 
-    /// The albedo's mip chain: each level the box average of the one
+    /// A layer's albedo mip chain: each level the box average of the one
     /// below.
-    fn build_albedo_mips(&self, device: &Device, queue: &Queue, albedo: &Texture) {
+    fn build_albedo_mips(&self, device: &Device, queue: &Queue, albedo: &Texture, layer: u32) {
         let levels = albedo.mip_level_count();
         let level_view = |l: u32| {
-            albedo.create_view(&TextureViewDescriptor { base_mip_level: l, mip_level_count: Some(1), ..Default::default() })
+            albedo.create_view(&TextureViewDescriptor {
+                dimension: Some(TextureViewDimension::D2),
+                base_mip_level: l,
+                mip_level_count: Some(1),
+                base_array_layer: layer,
+                array_layer_count: Some(1),
+                ..Default::default()
+            })
         };
         let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Terrain Albedo Mips") });
         {
@@ -1645,7 +2017,18 @@ impl TerrainRenderer {
     /// Each dispatch reads one mip as a sampled view and writes the next
     /// as a storage view: distinct subresources of one texture.
     #[allow(clippy::too_many_arguments)]
-    fn build_mips(&self, device: &Device, queue: &Queue, height: &TextureView, mips: &Texture, n: u32, m: u32, levels: u32, mode: u32) {
+    fn build_mips(
+        &self,
+        device: &Device,
+        queue: &Queue,
+        height: &TextureView,
+        mips: &Texture,
+        layer: u32,
+        n: u32,
+        m: u32,
+        levels: u32,
+        mode: u32,
+    ) {
         let align = device.limits().min_uniform_buffer_offset_alignment as u64;
         let stride = (std::mem::size_of::<BuildParamsGpu>() as u64).div_ceil(align) * align;
         let mut sizes = vec![(n - 1, m - 1)];
@@ -1677,8 +2060,11 @@ impl TerrainRenderer {
         queue.write_buffer(&buf, 0, &bytes);
         let level_view = |l: u32| {
             mips.create_view(&TextureViewDescriptor {
+                dimension: Some(TextureViewDimension::D2),
                 base_mip_level: l,
                 mip_level_count: Some(1),
+                base_array_layer: layer,
+                array_layer_count: Some(1),
                 ..Default::default()
             })
         };
@@ -1714,30 +2100,33 @@ impl TerrainRenderer {
     }
 
     fn write_params(&self, queue: &Queue, view: &TerrainView) {
-        let tile = self.tile.as_ref().expect("a tile");
+        let g = &self.ground.as_ref().expect("a ground").ground;
         let mut fdata = [[0.0f32; 4]; 20];
-        pack_rig(&view.camera, &view.shading, view.fog, &mut fdata);
-        // The map from raw samples to heights, and a ray's share of a
-        // pixel per unit of distance: the albedo's filter.
+        // The terrain's fog fades its COVERAGE (the relight), so the
+        // tonemap composites the background itself: a colour fog mixed
+        // in linear light could never match a background composited
+        // after the tonemap's gamma. The rig gets none.
+        pack_rig(&view.camera, &view.shading, (0.0, 0.0, view.fog.2), &mut fdata);
+        fdata[7][0] = view.fog.0;
+        fdata[7][1] = view.fog.1;
+        // The ground's index, its top, and its map.
+        fdata[0] = [g.root_origin[0] as f32, g.root_origin[1] as f32, g.root_side as f32, g.top as f32];
+        fdata[1] = [g.root_dims[0] as f32, g.root_dims[1] as f32, g.sections.len() as f32, g.mode as f32];
+        // The map's height and width, a ray's share of a pixel per unit
+        // of distance (the albedo's filter), and the view depth past
+        // which there is no ground.
         let per_ray = 2.0 * (view.camera.fov * 0.5).tan() / self.out_h.max(1) as f32 / view.samples_per_axis.max(1) as f32;
-        fdata[6] = [view.height, view.width, per_ray, tile.mode as f32];
-        // The shadow ray's start above the surface: past a position's
-        // rounding at these coordinates, or a surface shadows itself in
-        // speckles (seen at 8192 cells, where a cell's thousandth is
-        // the rounding).
-        let e = view.camera.eye;
-        let span = (tile.n.max(tile.m) as f64).max(e[0].abs()).max(e[1].abs()).max(e[2].abs()) as f32;
-        let bias = 1.0e-3 + span * 1.0e-6;
+        fdata[6] = [view.height, view.width, per_ray, view.far];
         let p = TerrainParamsGpu {
             width: self.out_w,
             height: self.out_h,
-            grid_n: tile.n,
-            grid_m: tile.m,
-            levels: tile.levels,
+            grid_n: 0,
+            grid_m: 0,
+            levels: 0,
             flags: u32::from(self.count_steps),
             jitter: view.jitter,
-            eye: [view.camera.eye[0] as f32, view.camera.eye[1] as f32, view.camera.eye[2] as f32, tile.floor],
-            misc: [view.shadow, view.softness, view.occlusion_reach, bias],
+            eye: [view.camera.eye[0] as f32, view.camera.eye[1] as f32, view.camera.eye[2] as f32, g.floor as f32],
+            misc: [view.shadow, view.softness, view.occlusion_reach, 0.0],
             fdata,
         };
         queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&p));
@@ -1746,11 +2135,10 @@ impl TerrainRenderer {
     /// Render the view: walk if anything the walk reads changed, then
     /// relight. Submits its own work.
     pub fn render(&mut self, device: &Device, queue: &Queue, view: &TerrainView) {
-        let Some(tile) = self.tile.as_ref() else { return };
-        let key = walk_key(view, self.out_w, self.out_h, tile.version);
+        let (Some(ground), Some(atlas)) = (self.ground.as_ref(), self.atlas.as_ref()) else { return };
+        let key = walk_key(view, self.out_w, self.out_h, ground.version);
         let walk = self.walked.as_deref() != Some(key.as_str()) || self.count_steps;
         self.write_params(queue, view);
-        let tile = self.tile.as_ref().expect("checked");
         let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Terrain") });
         let (gx, gy) = (self.out_w.div_ceil(8), self.out_h.div_ceil(8));
         if walk {
@@ -1762,11 +2150,13 @@ impl TerrainRenderer {
                 layout: &self.walk_layout,
                 entries: &[
                     BindGroupEntry { binding: 0, resource: self.params.as_entire_binding() },
-                    BindGroupEntry { binding: 1, resource: BindingResource::TextureView(&tile.height.1) },
-                    BindGroupEntry { binding: 2, resource: BindingResource::TextureView(&tile.mips_all) },
+                    BindGroupEntry { binding: 1, resource: BindingResource::TextureView(&atlas.raw_all) },
+                    BindGroupEntry { binding: 2, resource: BindingResource::TextureView(&atlas.mips_all) },
                     BindGroupEntry { binding: 3, resource: self.geom.as_entire_binding() },
                     BindGroupEntry { binding: 4, resource: self.stats.as_entire_binding() },
-                    BindGroupEntry { binding: 5, resource: tile.range.as_entire_binding() },
+                    BindGroupEntry { binding: 5, resource: self.range.as_entire_binding() },
+                    BindGroupEntry { binding: 6, resource: ground.sections.as_entire_binding() },
+                    BindGroupEntry { binding: 7, resource: ground.nodes.as_entire_binding() },
                 ],
             });
             let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: Some("Terrain Walk"), timestamp_writes: None });
@@ -1780,10 +2170,12 @@ impl TerrainRenderer {
                 layout: &self.relight_layout,
                 entries: &[
                     BindGroupEntry { binding: 0, resource: self.params.as_entire_binding() },
-                    BindGroupEntry { binding: 1, resource: BindingResource::TextureView(&tile.albedo.1) },
+                    BindGroupEntry { binding: 1, resource: BindingResource::TextureView(&atlas.albedo_all) },
                     BindGroupEntry { binding: 2, resource: self.geom.as_entire_binding() },
                     BindGroupEntry { binding: 3, resource: BindingResource::TextureView(&self.output.1) },
                     BindGroupEntry { binding: 4, resource: BindingResource::Sampler(&self.sampler) },
+                    BindGroupEntry { binding: 6, resource: ground.sections.as_entire_binding() },
+                    BindGroupEntry { binding: 7, resource: ground.nodes.as_entire_binding() },
                 ],
             });
             let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: Some("Terrain Relight"), timestamp_writes: None });
@@ -1812,22 +2204,29 @@ impl TerrainRenderer {
         &self.stats
     }
 
-    /// The tile's raw and albedo textures, for a test to read back.
+    /// The atlas's raw and albedo textures (layer 0 first), for a test to
+    /// read back.
     #[cfg(test)]
     pub(crate) fn tile_textures_for_test(&self) -> Option<(&Texture, &Texture)> {
-        self.tile.as_ref().map(|t| (&t.height.0, &t.albedo.0))
+        self.atlas.as_ref().map(|a| (&a.raw, &a.albedo))
     }
 
-    /// The tile's side and its map, for a test.
+    /// The first section's side and the ground's map, for a test.
     #[cfg(test)]
     pub(crate) fn tile_shape_for_test(&self) -> Option<(u32, u32, u32)> {
-        self.tile.as_ref().map(|t| (t.n, t.m, t.mode))
+        self.ground.as_ref().and_then(|g| g.ground.sections.first().map(|s| (s.n, s.m, g.ground.mode)))
     }
 
-    /// The tile's mipmap texture, for a test to read a level back.
+    /// The atlas's mipmap texture, for a test to read a level back.
     #[cfg(test)]
     pub(crate) fn mips_texture(&self) -> Option<&Texture> {
-        self.tile.as_ref().map(|t| &t.mips)
+        self.atlas.as_ref().map(|a| &a.mips)
+    }
+
+    /// The ground being drawn, for a test.
+    #[cfg(test)]
+    pub(crate) fn ground_for_test(&self) -> Option<&Ground> {
+        self.ground.as_ref().map(|g| &g.ground)
     }
 }
 
@@ -2141,7 +2540,7 @@ pub(crate) mod gpu_tests {
         Some((device, queue))
     }
 
-    fn read_buffer(device: &Device, queue: &Queue, src: &Buffer, size: u64) -> Vec<u8> {
+    pub(crate) fn read_buffer(device: &Device, queue: &Queue, src: &Buffer, size: u64) -> Vec<u8> {
         let staging = device.create_buffer(&BufferDescriptor {
             label: None,
             size,
@@ -2261,6 +2660,7 @@ pub(crate) mod gpu_tests {
             height: 0.0,
             width: 0.0,
             samples_per_axis: 1,
+            far: 1.0e30,
         }
     }
 
@@ -2794,7 +3194,7 @@ pub(crate) mod gpu_tests {
         for hole in [false, true] {
             let ingest = TerrainIngest { source: 8, hole, background: [0.1, 0.2, 0.3] };
             let mut r = TerrainRenderer::new(&device, 8, 8);
-            r.set_tile_from_escape(&device, &queue, escape.output_view(), escape.height_view(), n, n, &ingest);
+            r.set_tile_from_escape(&device, &queue, escape.output_view(), escape.height_view(), n, n, &ingest, 1.0);
             assert_eq!(r.tile_shape_for_test(), Some((n, n, 1)), "a distance tile maps by the distance");
             let (ht, at) = r.tile_textures_for_test().unwrap();
             let raw: Vec<f32> = bytemuck::cast_slice(&read_texture(&device, &queue, ht, 0, n, n, 4)).to_vec();
