@@ -46,6 +46,8 @@ pub mod renderer;
 pub mod footprint;
 #[cfg(feature = "terrain")]
 pub mod terrain;
+#[cfg(feature = "terrain")]
+pub mod terrain_tiers;
 
 pub use renderer::{DerivativeGap, EscapeRenderer, UsableDepth};
 

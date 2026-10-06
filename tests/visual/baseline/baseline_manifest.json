@@ -910,6 +910,10 @@
       "bytes": 36744,
       "sha256": "08ccfcb72f9f407f2957a3601f826ee40fc40cb18a2cc96013411caf762e0a95"
     },
+    "sim-sim-terrain-coral.png": {
+      "bytes": 21486,
+      "sha256": "afebe9121e5bfb1c821fa25ce6def3299fdf2fedf11b7b870bcc4acf3aadd007"
+    },
     "sim-smoothlife-glider.png": {
       "bytes": 17688,
       "sha256": "095fa92cc2129f539cfbc08ba8d56c43a2fec83b25ceda2cb10783f75e2411b5"

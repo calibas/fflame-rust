@@ -36,6 +36,9 @@ pub struct RenderEngines {
     /// render alone.
     #[cfg(feature = "terrain")]
     pub terrain: Option<crate::escape::footprint::EscapeTerrain>,
+    /// A simulation's terrain, beside the simulation it is made from.
+    #[cfg(all(feature = "terrain", feature = "engine-sim"))]
+    pub sim_terrain: Option<crate::sim::terrain::SimTerrain>,
 }
 
 /// Configuration for a render job
@@ -779,8 +782,21 @@ async fn render_sim(
     // (`simulation-fractals.md` D5).
     let mut owned: Option<crate::sim::SimRenderer> = None;
     let make = || crate::sim::SimRenderer::new(device, &job.config.sim, job.width, job.height);
+    // A simulation's terrain (heightfield plan T4) lives beside it, so a
+    // video's frames keep its renderer as they keep the run.
+    #[cfg(feature = "terrain")]
+    let mut terrain_owned: Option<crate::sim::terrain::SimTerrain> = None;
+    #[cfg(feature = "terrain")]
+    let mut terrain_slot: Option<&mut Option<crate::sim::terrain::SimTerrain>> = None;
     let sim: &mut crate::sim::SimRenderer = match job.engines {
-        Some(ref mut engines) => engines.sim.get_or_insert_with(make),
+        Some(ref mut engines) => {
+            let engines = &mut **engines;
+            #[cfg(feature = "terrain")]
+            {
+                terrain_slot = Some(&mut engines.sim_terrain);
+            }
+            engines.sim.get_or_insert_with(make)
+        }
         None => owned.insert(make()),
     };
     // A persistent renderer may have been built for another size; a
@@ -812,6 +828,25 @@ async fn render_sim(
     }
     sim.color(device, queue, &job.config.sim, renderer.palette_view());
 
+    // The terrain: its ground made from the field as it now is, then the
+    // still -- path traced at its samples unless its tier is Lit.
+    #[cfg(feature = "terrain")]
+    let terrain: Option<&mut crate::sim::terrain::SimTerrain> = if job.config.sim.terrain_active() {
+        let make = || crate::sim::terrain::SimTerrain::new(device, job.width, job.height);
+        let t = match terrain_slot {
+            Some(slot) => slot.get_or_insert_with(make),
+            None => terrain_owned.insert(make()),
+        };
+        t.resize(device, job.width, job.height);
+        t.update(device, queue, sim, job.config, renderer.palette_view(), renderer.palette_generation());
+        t.render_still(device, queue, job.config, || {
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        });
+        Some(t)
+    } else {
+        None
+    };
+
     let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
         label: Some("Sim Tail"),
     });
@@ -828,6 +863,12 @@ async fn render_sim(
         chain.reset_slots();
     }
 
+    #[cfg(feature = "terrain")]
+    let sim_view = match terrain.as_ref() {
+        Some(t) => t.output_view(),
+        None => sim.output_view(),
+    };
+    #[cfg(not(feature = "terrain"))]
     let sim_view = sim.output_view();
     if has_density_effects {
         let chain = effect_chain.as_mut().expect("built above: has_density_effects");
@@ -890,6 +931,10 @@ async fn render_sim(
 
     if let Some(chain) = &effect_chain {
         chain.destroy();
+    }
+    #[cfg(feature = "terrain")]
+    if let Some(t) = terrain_owned.as_ref() {
+        t.destroy();
     }
     let (width, height, rgba_data) = pixels?;
 

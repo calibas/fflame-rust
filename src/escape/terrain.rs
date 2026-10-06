@@ -272,6 +272,66 @@ fn ingest_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 "#;
 
+/// A simulation's grid as a section (heightfield plan T4). Mirrored by
+/// `GridParams`.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct GridParamsGpu {
+    w: u32,
+    h: u32,
+    n: u32,
+    m: u32,
+    scale: f32,
+    pad: [f32; 3],
+}
+
+/// A simulation's grid as a section (heightfield plan T4): sample (i, j)
+/// is cell (i, m - 1 - j) -- rows flipped, the picture's top north -- its
+/// height the relief's (`x`) times the scale, in cells, and its albedo
+/// the colour stack's at the cell, coverage and all. A repeated grid has
+/// a sample more each way, its first again, so copies meet without a
+/// seam. On the ingest's layout; the range is not read.
+const GRID_WGSL: &str = r#"
+struct GridParams {
+    w: u32,
+    h: u32,
+    n: u32,
+    m: u32,
+    scale: f32,
+    pad0: f32,
+    pad1: f32,
+    pad2: f32,
+};
+@group(0) @binding(0) var<uniform> gp: GridParams;
+@group(0) @binding(1) var relief: texture_2d<f32>;
+@group(0) @binding(2) var albedo: texture_2d<f32>;
+@group(0) @binding(3) var<storage, read_write> range: array<atomic<u32>>;
+@group(0) @binding(4) var out_raw: texture_storage_2d<r32float, write>;
+@group(0) @binding(5) var out_a: texture_storage_2d<rgba16float, write>;
+
+fn ordered(f: f32) -> u32 {
+    let b = bitcast<u32>(f);
+    return select(b | 0x80000000u, ~b, (b & 0x80000000u) != 0u);
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn grid_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= gp.n || gid.y >= gp.m) {
+        return;
+    }
+    let cell = vec2<i32>(i32(gid.x % gp.w), i32((gp.m - 1u - gid.y) % gp.h));
+    let at = vec2<i32>(gid.xy);
+    let h = textureLoad(relief, cell, 0).x * gp.scale;
+    textureStore(out_raw, at, vec4<f32>(h, 0.0, 0.0, 0.0));
+    textureStore(out_a, at, textureLoad(albedo, cell, 0));
+    // The heights' range: the slab the trace clips to (map mode 4).
+    if (abs(h) < 1.0e30) {
+        atomicMin(&range[0], ordered(h));
+        atomicMax(&range[1], ordered(h));
+    }
+}
+"#;
+
 /// The accumulation: a jittered render folded into the running mean,
 /// read from one texture of a pair and written to the other. Averaged
 /// PREMULTIPLIED and stored straight, as the accumulator contract
@@ -394,6 +454,9 @@ const HF_MAX_STEPS: u32 = __HF_MAX_STEPS__u;
 // The count's or the relief's range, read once per invocation.
 var<private> hf_lo: f32;
 var<private> hf_span: f32;
+// The slab the trace clips to (`hf_load_range`).
+var<private> hf_slab_top: f32;
+var<private> hf_slab_floor: f32;
 
 fn hf_unordered(u: u32) -> f32 {
     return bitcast<f32>(select(~u, u & 0x7fffffffu, (u & 0x80000000u) != 0u));
@@ -409,6 +472,15 @@ fn hf_load_range() {
     } else {
         hf_lo = lo;
         hf_span = hi - lo;
+    }
+    // The slab the trace clips to: the ground's, or -- heights given as
+    // they are (mode 4, a simulation's) -- their measured range, with a
+    // floor a hundredth of the ground's side below it.
+    hf_slab_top = params.fdata[0].w;
+    hf_slab_floor = params.eye.w;
+    if (u32(params.fdata[1].w) == 4u && lo <= hi) {
+        hf_slab_top = hi + (hi - lo) * 1.0e-3 + 1.0e-6;
+        hf_slab_floor = lo - params.fdata[0].z * 0.01;
     }
 }
 
@@ -430,7 +502,7 @@ fn hf_f(raw: f32) -> f32 {
     }
     let mode = u32(params.fdata[1].w);
     let top = params.fdata[6].x;
-    if (mode == 0u) {
+    if (mode == 0u || mode == 4u) {
         return raw;
     }
     if (mode == 1u) {
@@ -688,8 +760,8 @@ fn hf_trace(o: vec3<f32>, d: vec3<f32>, tmax: f32, soft_k: f32) -> HfHit {
     out.soft = 1.0;
     out.steps = 0u;
     out.sec = -1;
-    let top = params.fdata[0].w;
-    let floor_z = params.eye.w;
+    let top = hf_slab_top;
+    let floor_z = hf_slab_floor;
     let ro = params.fdata[0].xy;
     let ext = vec2<f32>(params.fdata[1].x, params.fdata[1].y) * params.fdata[0].z;
     var t0 = 0.0;
@@ -946,7 +1018,12 @@ const HF_ALBEDO_WGSL: &str = r#"
 // several -- so distant ground is the average of its texels rather than
 // whichever one a ray struck.
 fn hf_albedo_at(q: vec2<f32>, foot: f32) -> vec4<f32> {
-    let look = hf_lookup(q);
+    // Held inside the ground: a wall's hit lies on its edge, where a
+    // rounding puts half of them outside -- off the ground, transparent --
+    // and a wall in a simulation's view read as speckled with the sky.
+    let ro = params.fdata[0].xy;
+    let ext = vec2<f32>(params.fdata[1].x, params.fdata[1].y) * params.fdata[0].z;
+    let look = hf_lookup(clamp(q, ro, ro + ext * (1.0 - 1.0e-6)));
     if (look.sec < 0) {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
@@ -1443,6 +1520,7 @@ pub struct TerrainRenderer {
     ingest_layout: BindGroupLayout,
     range_pipeline: ComputePipeline,
     ingest_pipeline: ComputePipeline,
+    grid_pipeline: ComputePipeline,
     accum_layout: BindGroupLayout,
     accum_pipeline: ComputePipeline,
     albedo_mip_layout: BindGroupLayout,
@@ -1626,6 +1704,7 @@ impl TerrainRenderer {
         let relight_pipeline = pipeline("Terrain Relight", &relight_layout, assemble_relight());
         let range_pipeline = entry("Terrain Range", &ingest_layout, INGEST_WGSL, "range_main");
         let ingest_pipeline = entry("Terrain Ingest", &ingest_layout, INGEST_WGSL, "ingest_main");
+        let grid_pipeline = entry("Terrain Grid", &ingest_layout, GRID_WGSL, "grid_main");
         let accum_pipeline = entry("Terrain Accumulate", &accum_layout, ACCUM_WGSL, "main");
         let albedo_mip_pipeline = entry("Terrain Albedo Mips", &albedo_mip_layout, ALBEDO_MIP_WGSL, "main");
         let path_pipeline = pipeline("Terrain Path", &path_layout, assemble_path());
@@ -1670,6 +1749,7 @@ impl TerrainRenderer {
             ingest_layout,
             range_pipeline,
             ingest_pipeline,
+            grid_pipeline,
             accum_layout,
             accum_pipeline,
             albedo_mip_layout,
@@ -1927,6 +2007,73 @@ impl TerrainRenderer {
             floor,
             mode,
         }
+    }
+
+    /// A simulation's grid as the ground (heightfield plan T4): from its
+    /// relief (`x` the height, in field units) and its colour once a cell,
+    /// both `w x h` and `Rgba32Float`, one section with the world in
+    /// cells -- `scale` cells a field unit -- and rows flipped so the
+    /// picture's top is north (+y). With `repeat`, a sample more each way
+    /// for a seamless copy. The slab is the heights' own range, measured as
+    /// they are made (map mode 4); `bound` stands in until it is read.
+    /// Submits its own work.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_grid(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        relief: &TextureView,
+        albedo: &TextureView,
+        w: u32,
+        h: u32,
+        scale: f32,
+        bound: f32,
+        repeat: bool,
+    ) {
+        let (n, m) = if repeat { (w + 1, h + 1) } else { (w, h) };
+        self.ensure_atlas(device, n, m, 1);
+        let atlas = self.atlas.as_ref().expect("made above");
+        let params = device.create_buffer(&BufferDescriptor {
+            label: Some("Terrain Grid Params"),
+            size: std::mem::size_of::<GridParamsGpu>() as u64,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&params, 0, bytemuck::bytes_of(&GridParamsGpu { w, h, n, m, scale, pad: [0.0; 3] }));
+        let one = |t: &Texture| {
+            t.create_view(&TextureViewDescriptor {
+                dimension: Some(TextureViewDimension::D2),
+                base_array_layer: 0,
+                array_layer_count: Some(1),
+                base_mip_level: 0,
+                mip_level_count: Some(1),
+                ..Default::default()
+            })
+        };
+        let (hv, av) = (one(&atlas.raw), one(&atlas.albedo));
+        self.reset_range(queue);
+        let bg = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Terrain Grid"),
+            layout: &self.ingest_layout,
+            entries: &[
+                BindGroupEntry { binding: 0, resource: params.as_entire_binding() },
+                BindGroupEntry { binding: 1, resource: BindingResource::TextureView(relief) },
+                BindGroupEntry { binding: 2, resource: BindingResource::TextureView(albedo) },
+                BindGroupEntry { binding: 3, resource: self.range.as_entire_binding() },
+                BindGroupEntry { binding: 4, resource: BindingResource::TextureView(&hv) },
+                BindGroupEntry { binding: 5, resource: BindingResource::TextureView(&av) },
+            ],
+        });
+        let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Terrain Grid") });
+        {
+            let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: Some("Terrain Grid"), timestamp_writes: None });
+            pass.set_pipeline(&self.grid_pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.dispatch_workgroups(n.div_ceil(8), m.div_ceil(8), 1);
+        }
+        queue.submit(std::iter::once(enc.finish()));
+        self.build_layer(device, queue, 0, 0);
+        self.set_ground(device, queue, Self::one_section_ground(n, m, 4, bound as f64, -(bound as f64)));
     }
 
     /// A one-section ground from one footprint render (heightfield plan,
@@ -3377,6 +3524,96 @@ pub(crate) mod gpu_tests {
         assert!((near - 0.02).abs() < 0.005, "water reflects 2% head on: {near}");
         assert!(far > near * 1.2, "the mirror strengthens toward the horizon: {near} {far}");
         assert!(brightest <= 1.01, "no brighter than the sky: {brightest}");
+    }
+
+    /// A ground's wall is drawn whole (T4): its hits lie on the ground's
+    /// outer edge, where a rounding put half of them off the ground and
+    /// their albedo -- coverage and all -- read as transparent: a
+    /// simulation's grid edge looked speckled with the sky. A plateau along
+    /// the south, low ground behind it, seen at its wall from three views:
+    /// every hit the walk makes is fully covered.
+    #[test]
+    fn a_wall_is_drawn_whole() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (64u32, 48u32);
+        let (n, m) = (65u32, 65u32);
+        let mut r = TerrainRenderer::new(&device, w, h);
+        let heights: Vec<f32> = (0..n * m).map(|k| if k / n < 20 { 10.0 } else { 0.0 }).collect();
+        r.set_tile(&device, &queue, n, m, &heights, &vec![[0.5, 0.5, 0.5, 1.0]; (n * m) as usize]);
+        for (pitch, dist) in [(0.3f64, 120.0f64), (0.6, 120.0), (0.6, 60.0)] {
+            // Looking north at the south wall.
+            let v = view(camera([32.0, 0.0, 5.0], pitch, -std::f64::consts::FRAC_PI_2, dist, 0.6));
+            r.render(&device, &queue, &v);
+            let out = read_output(&device, &queue, &r, w, h);
+            let raw = read_buffer(&device, &queue, r.geometry_buffer(), (w * h) as u64 * 16);
+            let geom: &[[u32; 4]] = bytemuck::cast_slice(&raw);
+            let hits = (0..(w * h) as usize).filter(|&k| f32::from_bits(geom[k][3]) > 0.0).count();
+            let holes = (0..(w * h) as usize).filter(|&k| f32::from_bits(geom[k][3]) > 0.0 && out[k][3] < 0.999).count();
+            println!("pitch {pitch} at {dist}: {hits} hits, {holes} shaded transparent");
+            assert!(hits > 200, "the wall is in view: {hits}");
+            assert_eq!(holes, 0, "pitch {pitch} at {dist}");
+        }
+    }
+
+    /// A simulation's grid as the ground (T4): sample (i, j) is cell
+    /// (i, h - 1 - j) -- rows flipped -- at the relief's height times the
+    /// scale, in the colour stack's colour; repeated, a sample more each
+    /// way, its first again.
+    #[test]
+    fn a_grid_becomes_the_ground() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (7u32, 5u32);
+        let texture = |texels: &[[f32; 4]]| {
+            let t = device.create_texture(&TextureDescriptor {
+                label: None,
+                size: Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format: TextureFormat::Rgba32Float,
+                usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            queue.write_texture(
+                t.as_image_copy(),
+                bytemuck::cast_slice(texels),
+                TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 16), rows_per_image: Some(h) },
+                Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            );
+            let v = t.create_view(&TextureViewDescriptor::default());
+            (t, v)
+        };
+        let cells = (w * h) as usize;
+        let relief: Vec<[f32; 4]> = (0..cells).map(|k| [k as f32 * 0.25 - 1.0, 0.0, 0.0, 0.0]).collect();
+        let albedo: Vec<[f32; 4]> = (0..cells).map(|k| [k as f32 / 64.0, 0.5, 0.25, if k % 3 == 0 { 0.0 } else { 1.0 }]).collect();
+        let (_rt, rv) = texture(&relief);
+        let (_at, av) = texture(&albedo);
+        for repeat in [false, true] {
+            let mut r = TerrainRenderer::new(&device, 8, 8);
+            r.set_grid(&device, &queue, &rv, &av, w, h, 3.0, 100.0, repeat);
+            let (n, m) = if repeat { (w + 1, h + 1) } else { (w, h) };
+            let (ht, at) = r.tile_textures_for_test().unwrap();
+            let raw: Vec<f32> = bytemuck::cast_slice(&read_texture(&device, &queue, ht, 0, n, m, 4)).to_vec();
+            let bits: Vec<u16> = bytemuck::cast_slice(&read_texture(&device, &queue, at, 0, n, m, 8)).to_vec();
+            for j in 0..m {
+                for i in 0..n {
+                    let cell = ((m - 1 - j) % h * w + i % w) as usize;
+                    let k = (j * n + i) as usize;
+                    assert_eq!(raw[k], relief[cell][0] * 3.0, "repeat {repeat} ({i}, {j})");
+                    for c in 0..4 {
+                        let a = half::f16::from_bits(bits[k * 4 + c]).to_f32();
+                        assert!((a - albedo[cell][c]).abs() < 1e-3, "repeat {repeat} ({i}, {j}) channel {c}: {a}");
+                    }
+                }
+            }
+            assert!(r.tile_version() > 0, "a ground was set");
+        }
     }
 
     /// The lens (T3b): a pinhole -- aperture 0 -- is the same bits

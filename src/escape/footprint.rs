@@ -43,6 +43,8 @@
 
 use super::ifs::{solid_frame, SolidCamera};
 use super::terrain::{Ground, GroundNode, GroundSection, PathSettings, TerrainIngest, TerrainRenderer, TerrainView};
+use super::terrain_tiers::{TerrainTiers, TierInputs};
+#[cfg(test)]
 use crate::config::escape::RenderTier;
 use super::EscapeRenderer;
 use crate::config::escape::{EscapeConfig, TerrainInterior, TerrainSource};
@@ -194,6 +196,17 @@ pub fn terrain_view(config: &FractalConfig, jitter: [f32; 2]) -> TerrainView {
         width: t.de_width,
         samples_per_axis: config.escape.supersample.max(1),
         far: t.far,
+    }
+}
+
+/// What the tiers draw an escape terrain as.
+fn tier_inputs<'a>(config: &FractalConfig, view: &'a dyn Fn([f32; 2]) -> TerrainView) -> TierInputs<'a> {
+    TierInputs {
+        view,
+        settings: path_settings(config),
+        tier: config.escape.terrain.tier,
+        samples: config.escape.path.samples,
+        supersample: config.escape.supersample,
     }
 }
 
@@ -491,21 +504,12 @@ pub struct EscapeTerrain {
     /// ms, written by the queue's completion callback, and its average.
     section_done: std::sync::Arc<std::sync::Mutex<Option<f32>>>,
     section_ms: Option<f32>,
-    /// What the viewport's accumulation is of, and how far it has got.
-    viewport_key: Option<String>,
-    viewport_samples: u32,
-    /// Whether the output is the path tracer's, not the lit tier's.
-    showing_path: bool,
-    /// A path-traced sample's time, in ms, measured to the GPU's
-    /// completion of a batch, and its average.
-    path_done: std::sync::Arc<std::sync::Mutex<Option<f32>>>,
-    path_ms: Option<f32>,
+    /// The tiers: the lit tier's grid and the path tracer.
+    tiers: TerrainTiers,
 }
 
 pub use super::path_core::PATH_SHOW_SAMPLES;
 
-/// The time a viewport frame gives the path tracer, in ms.
-const PATH_FRAME_MS: f32 = 12.0;
 
 impl EscapeTerrain {
     pub fn new(device: &Device, out_w: u32, out_h: u32) -> Self {
@@ -524,11 +528,7 @@ impl EscapeTerrain {
             footprint_renders: 0,
             section_done: std::sync::Arc::new(std::sync::Mutex::new(None)),
             section_ms: None,
-            viewport_key: None,
-            viewport_samples: 0,
-            showing_path: false,
-            path_done: std::sync::Arc::new(std::sync::Mutex::new(None)),
-            path_ms: None,
+            tiers: TerrainTiers::default(),
         }
     }
 
@@ -553,7 +553,7 @@ impl EscapeTerrain {
         // the LIT accumulation was empty instead restarted the Path Traced
         // tier -- which never fills it -- every frame, on its first sample.
         if self.terrain.resize(device, out_w, out_h) {
-            self.viewport_key = None;
+            self.tiers.invalidate();
         }
     }
 
@@ -816,97 +816,22 @@ impl EscapeTerrain {
     /// showing it from [`PATH_SHOW_SAMPLES`]. Any change to the view or
     /// the ground restarts both. True while there is more to do.
     pub fn render_viewport(&mut self, device: &Device, queue: &Queue, config: &FractalConfig) -> bool {
-        if self.terrain.tile_version() == 0 {
-            return false;
-        }
-        let t = &config.escape.terrain;
-        let base = terrain_view(config, [0.0, 0.0]);
-        let key = format!("{base:?}|{}|{:?}", self.terrain.tile_version(), path_settings(config));
-        let moved = self.viewport_key.as_deref() != Some(key.as_str());
-        if moved {
-            self.viewport_key = Some(key);
-            self.viewport_samples = 0;
-            self.terrain.reset_accumulation();
-            self.terrain.reset_path();
-            self.showing_path = false;
-        }
-        if t.tier != RenderTier::PathTraced {
-            let grid = EscapeRenderer::sample_grid(config.escape.supersample.max(1));
-            if let Some(&jitter) = grid.get(self.viewport_samples as usize) {
-                self.terrain.render(device, queue, &terrain_view(config, jitter));
-                self.terrain.accumulate(device, queue);
-                self.viewport_samples += 1;
-                self.showing_path = false;
-                return true;
-            }
-            if t.tier == RenderTier::Lit {
-                return false;
-            }
-        }
-        let target = config.escape.path.samples.max(1);
-        let have = self.terrain.path_samples();
-        if have >= target {
-            return false;
-        }
-        // As many samples as fit the frame at the measured cost.
-        let per_frame = self.path_ms().map_or(1, |ms| (PATH_FRAME_MS / ms.max(0.05)).floor().clamp(1.0, 64.0) as u32);
-        let n = per_frame.min(target - have);
-        self.trace(device, queue, config, n, n);
-        self.showing_path = t.tier == RenderTier::PathTraced || self.terrain.path_samples() >= PATH_SHOW_SAMPLES;
-        self.terrain.path_samples() < target
-    }
-
-    /// Add `samples` path-traced samples of the config's view, in
-    /// dispatches of at most `per_dispatch`, timing them. Submits its
-    /// own work.
-    fn trace(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, samples: u32, per_dispatch: u32) {
-        let t0 = web_time::Instant::now();
-        self.terrain.render_path(device, queue, &terrain_view(config, [0.0, 0.0]), &path_settings(config), samples, per_dispatch);
-        let slot = std::sync::Arc::clone(&self.path_done);
-        queue.on_submitted_work_done(move || {
-            if let Ok(mut g) = slot.lock() {
-                *g = Some(t0.elapsed().as_secs_f32() * 1000.0 / samples.max(1) as f32);
-            }
-        });
+        let view = |jitter| terrain_view(config, jitter);
+        self.tiers.viewport(&mut self.terrain, device, queue, &tier_inputs(config, &view))
     }
 
     /// A path-traced sample's average time, in ms, once measured.
     pub fn path_ms(&mut self) -> Option<f32> {
-        if let Some(ms) = self.path_done.lock().ok().and_then(|mut g| g.take()) {
-            self.path_ms = Some(match self.path_ms {
-                Some(avg) => avg + (ms - avg) * 0.3,
-                None => ms,
-            });
-        }
-        self.path_ms
+        self.tiers.path_ms()
     }
 
     /// The export's picture (plan section 8): path traced at `samples`
     /// unless the tier is Lit, which draws the antialiasing grid. In
     /// dispatches of a few samples each, `wait` called between them (a
     /// blocking poll on the desktop). Submits its own work.
-    pub fn render_still(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, mut wait: impl FnMut()) {
-        let t = &config.escape.terrain;
-        if t.tier == RenderTier::Lit {
-            self.terrain.reset_accumulation();
-            for jitter in EscapeRenderer::sample_grid(config.escape.supersample.max(1)) {
-                self.terrain.render(device, queue, &terrain_view(config, jitter));
-                self.terrain.accumulate(device, queue);
-            }
-            self.showing_path = false;
-            return;
-        }
-        self.terrain.reset_path();
-        let target = config.escape.path.samples.max(1);
-        // A batch the watchdog never notices: about a quarter second at
-        // the measured cost, from a cautious start.
-        while self.terrain.path_samples() < target {
-            let per = self.path_ms().map_or(2, |ms| (250.0 / ms.max(0.05)).floor().clamp(1.0, 64.0) as u32);
-            let n = per.min(target - self.terrain.path_samples());
-            self.trace(device, queue, config, n, n);
-            wait();
-        }
-        self.showing_path = true;
+    pub fn render_still(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, wait: impl FnMut()) {
+        let view = |jitter| terrain_view(config, jitter);
+        self.tiers.still(&mut self.terrain, device, queue, &tier_inputs(config, &view), wait);
     }
 
     /// Draw the terrain once, its rays offset by `jitter` within their
@@ -931,15 +856,12 @@ impl EscapeTerrain {
     /// else the lit tier's accumulation once there is one, else the last
     /// render.
     pub fn output_view(&self) -> &TextureView {
-        if self.showing_path {
-            return self.terrain.output_view();
-        }
-        self.terrain.accumulated_view().unwrap_or(self.terrain.output_view())
+        self.tiers.output_view(&self.terrain)
     }
 
     /// Path-traced samples so far, and whether the picture is theirs.
     pub fn path_progress(&self) -> (u32, bool) {
-        (self.terrain.path_samples(), self.showing_path)
+        self.tiers.path_progress(&self.terrain)
     }
 
     /// The terrain renderer, for a test to look inside.

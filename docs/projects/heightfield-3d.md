@@ -1383,6 +1383,94 @@ terrain.**
     budget.
   - Terrain-off configs are byte-identical.
   - A `sim-terrain-*` visual baseline.
+- **Before T4, two bugs from the user's look at T3d in the app:**
+  - **The Path Traced terrain stalled on its first sample.**
+    `EscapeTerrain::resize`, which the app calls every frame, cleared
+    the viewport's key whenever the LIT tier's accumulation was empty --
+    in that tier, always -- so every frame restarted the path tracer.
+    Found by loading the user's config at startup through File > Open's
+    path with a log of each restart (an empty old key every frame); it
+    now restarts only when the size changes, and
+    `the_path_traced_viewport_progresses` drives `resize`, `update` and
+    `render_viewport` as the app does. The headless pace test had called
+    `resize` once, which is why it passed.
+  - **A lake's tint waited for a pan:** the tint is its sections' albedo
+    and was not in their key.
+  - **And a solid's bands** were sized by the walk's model alone, which
+    on this machine's tuning file (the walk's budget halved four times)
+    was two-row bands: 540 frames to a sample. They are now sized by
+    measured time under the model's calibrated band as a hard cap --
+    rows times samples -- with a slow call halving it. Measurement alone
+    lost the device once: completion callbacks arrive together, so the
+    later bands of a call measured nothing and a whole frame went out at
+    64 samples. `no_dispatch_outgrows_the_model` holds the cap. A sample
+    of the tetrahedron at 1080p: 9.4 s of frames before, 2.6 s after.
+- **T4 as built** (2026-10-06): a simulation's grid as a terrain.
+  - **Config** (`sim.terrain`, `SimTerrainConfig`): the layer and channel
+    that are the height and its softness in cells (the relief stage's,
+    decision H9 -- the terrain names its own, whatever the colour stack
+    holds), the height (a field unit as a fraction of the grid's width,
+    0.1), the tier, shadows and occlusion, the camera -- pitch, yaw,
+    bank, field of view, distance in grid widths, the target as
+    fractions of the grid -- and its own path-tracing block. 27
+    ConfigPaths (`SimTerrain*`, `SimPath*`; tracks `Sim.Terrain.*`,
+    `Sim.Path.*`; floats animate). The sim panel's "3D terrain" section;
+    the viewport's drag orbits, right-drag pans the target, the wheel
+    dollies. The path-tracing block's panel is shared
+    (`show_path_tracing` over a `PathPaths`).
+  - **The inputs** (`SimRenderer::terrain_inputs`): the relief stage over
+    the terrain's layer at its channel and softness, into a pair of its
+    own (a Relief colouring keeps its), and the colour pass at a scale of
+    one -- its output the grid -- so every resolve reads one cell: the
+    colour stack once a cell, coverage and all (a matte is a hole).
+  - **The ground** (`TerrainRenderer::set_grid`): one section, the world
+    in cells, rows flipped so the picture's top is north, heights the
+    relief's times the scale. Its slab is the heights' own range,
+    measured with atomics as they are made (map mode 4): a field's range
+    is not known ahead and moves as it runs, and a fixed bound made a
+    wall tens of cells deep at the grid's edge.
+  - **The tiers are shared:** `TerrainTiers` holds the lit grid, the
+    path tracer's pacing and what the output is, for a `TierInputs` (a
+    view, settings, tier, samples); the escape terrain now delegates to
+    it unchanged.
+  - **Live** (`SimTerrain`): the ground is made again whenever the run's
+    step, its drawing or the palette changes, so a running simulation
+    restarts the tiers every step and shows the lit tier; resting, the
+    path tracer gathers (Auto shows it from 8 samples). The app makes it
+    after each frame's colour; exports (`render_sim`, the browser's) make
+    it from the field they ran to and draw its still. The menu bar's
+    progress shows the path tracer's samples once the run rests.
+  - **Found on the way: walls were speckled.** A ground's wall -- its
+    side below the surface, which a simulation's grid edge shows in full
+    -- had its hits on the ground's outer edge, where rounding put about
+    half of them off the ground: the albedo's lookup returned nothing,
+    and with it coverage 0, so the wall read as the sky through it. The
+    walk's hits matched the CPU reference throughout; it was the colour.
+    The lookup is now held inside the ground. The escape terrain's edge
+    is under its fog, which is why it never showed.
+  - **Gates, all passing:**
+    - `a_grid_becomes_the_ground`: every sample of a 7x5 grid, plain and
+      repeated, is its cell's height times the scale and its colour.
+    - `a_sim_terrain_renders`: through `render_with`, lit and path
+      traced, the ground in the frame's middle and the background above.
+    - `a_resting_run_path_traces`: a running simulation makes a new
+      ground each step and is not path traced; at rest the path tracer
+      reaches its target.
+    - `a_wall_is_drawn_whole`: every hit on a plateau's wall, seen from
+      three views, fully covered (110-314 transparent before).
+    - The interactive budget, measured: a running Gray-Scott at a
+      1920x1080 grid, 1.7 ms of steps and 4.3 ms for the ground and the
+      lit frame.
+    - Terrain-off configs unchanged: the 101 sim baselines pass. New
+      baseline `sim-sim-terrain-coral` (the coral Gray-Scott, path
+      traced, 64 samples). 115 escape baselines, `release.py check` and
+      the wasm build pass.
+  - **Not yet: Repeat tiling.** The config has it (`tiling`, offered on
+    the periodic boundary), the ingest makes the seamless extra sample,
+    and the traversal does not repeat yet: its root grid is square cells
+    and a simulation's grid is rarely square, so the copies need an
+    offset carried through the lookups and hits rather than more
+    sections. Next.
 
 **T5 — Reach and polish**, each its own decision when it comes up:
 - a denoiser: à-trous guided by albedo and normal, which

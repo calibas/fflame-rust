@@ -844,6 +844,70 @@ fn terrain_orbit(config_manager: &mut crate::config::ConfigManager, drag_delta: 
     );
 }
 
+/// Whether the viewport shows a simulation's 3D terrain (heightfield plan
+/// T4), whose camera the viewport's gestures steer.
+#[cfg(feature = "terrain")]
+fn sim_terrain_shown(config: &crate::config::FractalConfig) -> bool {
+    config.render_mode == crate::scene::transforms::RenderMode::Simulation && config.sim.terrain_active()
+}
+
+/// Orbit a simulation terrain's camera about its target, as an escape
+/// terrain's: a horizontal drag turns the yaw, a vertical one the pitch.
+#[cfg(feature = "terrain")]
+fn sim_terrain_orbit(config_manager: &mut crate::config::ConfigManager, drag_delta: egui::Vec2) {
+    const RAD_PER_PX: f32 = 0.005;
+    let t = &config_manager.active_config().sim.terrain;
+    let mut yaw = t.cam_yaw - drag_delta.x * RAD_PER_PX;
+    yaw = (yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+    let pitch = (t.cam_pitch + drag_delta.y * RAD_PER_PX).clamp(0.02, std::f32::consts::FRAC_PI_2 - 0.001);
+    let _ = config_manager.update_batch(
+        vec![
+            (crate::config::ConfigPath::SimTerrainCamYaw, yaw.into()),
+            (crate::config::ConfigPath::SimTerrainCamPitch, pitch.into()),
+        ],
+        "history.param.sim_terrain_cam_yaw".to_string(),
+    );
+}
+
+/// Slide a simulation terrain's target across the grid so the ground under
+/// the cursor follows it -- in grid fractions, at the pixel's step at the
+/// target's depth.
+#[cfg(feature = "terrain")]
+fn sim_terrain_pan(config_manager: &mut crate::config::ConfigManager, drag_delta: egui::Vec2, panel_size: egui::Vec2) {
+    let config = config_manager.active_config();
+    let (gw, gh) = crate::sim::SimRenderer::grid_for(&config.sim, panel_size.x.max(1.0) as u32, panel_size.y.max(1.0) as u32);
+    let cam = crate::sim::terrain::sim_terrain_camera(config, gw, gh);
+    let s = 2.0 * (f64::from(cam.fov) * 0.5).tan() * cam.distance / f64::from(panel_size.y.max(1.0));
+    let flat = |v: [f64; 3]| {
+        let l = (v[0] * v[0] + v[1] * v[1]).sqrt();
+        (l > 1e-6).then(|| [v[0] / l, v[1] / l])
+    };
+    let right = flat(cam.right).unwrap_or([1.0, 0.0]);
+    let ahead = flat(cam.forward).or_else(|| flat(cam.up)).unwrap_or([0.0, 1.0]);
+    let along = s / (-cam.forward[2]).clamp(0.2, 1.0);
+    let (dx, dy) = (f64::from(drag_delta.x), f64::from(drag_delta.y));
+    let cells = [-dx * s * right[0] + dy * along * ahead[0], -dx * s * right[1] + dy * along * ahead[1]];
+    let t = &config.sim.terrain;
+    let x = (t.target_x as f64 + cells[0] / (gw.max(2) - 1) as f64) as f32;
+    let y = (t.target_y as f64 + cells[1] / (gh.max(2) - 1) as f64) as f32;
+    let _ = config_manager.update_batch(
+        vec![
+            (crate::config::ConfigPath::SimTerrainTargetX, x.into()),
+            (crate::config::ConfigPath::SimTerrainTargetY, y.into()),
+        ],
+        "history.param.sim_terrain_target_x".to_string(),
+    );
+}
+
+/// Move a simulation terrain's camera toward its target or away: a wheel
+/// notch is about an eighth of the distance.
+#[cfg(feature = "terrain")]
+fn sim_terrain_dolly(config_manager: &mut crate::config::ConfigManager, scroll: f32) {
+    let d = config_manager.active_config().sim.terrain.cam_distance;
+    let next = (d * (-scroll * 0.0025).exp()).clamp(0.01, 100.0);
+    let _ = config_manager.update_param(crate::config::ConfigPath::SimTerrainCamDistance, next.into());
+}
+
 /// The solid a config renders, if it renders one: the analysis and
 /// the camera it is looked at through. `None` for the plane, and for
 /// a solid formula over a flame that does not qualify, which renders
@@ -1713,7 +1777,18 @@ impl<'a> PanelViewer<'a> {
                     && self.context.config_manager.active_config().escape.terrain_active();
                 #[cfg(not(feature = "terrain"))]
                 let terrain = false;
-                if terrain && !self.context.fly_mode_active {
+                #[cfg(feature = "terrain")]
+                let sim_terrain = sim_terrain_shown(self.context.config_manager.active_config());
+                #[cfg(not(feature = "terrain"))]
+                let sim_terrain = false;
+                if sim_terrain {
+                    #[cfg(feature = "terrain")]
+                    if shift {
+                        sim_terrain_pan(self.context.config_manager, drag_delta, available_size);
+                    } else {
+                        sim_terrain_orbit(self.context.config_manager, drag_delta);
+                    }
+                } else if terrain && !self.context.fly_mode_active {
                     #[cfg(feature = "terrain")]
                     if shift {
                         pan_fractal_view(self.context.config_manager, drag_delta, available_size);
@@ -1735,12 +1810,28 @@ impl<'a> PanelViewer<'a> {
             {
                 pan_fractal_view(self.context.config_manager, response.drag_delta(), available_size);
             }
+            #[cfg(feature = "terrain")]
+            if !touch_active
+                && response.dragged_by(egui::PointerButton::Secondary)
+                && sim_terrain_shown(self.context.config_manager.active_config())
+            {
+                sim_terrain_pan(self.context.config_manager, response.drag_delta(), available_size);
+            }
 
             // Handle mouse wheel for zooming
             if response.hovered() {
                 let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
                 if scroll_delta.abs() > 0.1 {
-                    self.handle_fractal_scroll(scroll_delta, response.hover_pos(), response.rect, available_size);
+                    #[cfg(feature = "terrain")]
+                    let dolly = sim_terrain_shown(self.context.config_manager.active_config());
+                    #[cfg(not(feature = "terrain"))]
+                    let dolly = false;
+                    if dolly {
+                        #[cfg(feature = "terrain")]
+                        sim_terrain_dolly(self.context.config_manager, scroll_delta);
+                    } else {
+                        self.handle_fractal_scroll(scroll_delta, response.hover_pos(), response.rect, available_size);
+                    }
                 }
             }
 
