@@ -40,6 +40,7 @@ pub mod lens;
 pub mod formulas;
 pub mod presets;
 pub mod diag;
+pub mod path_core;
 pub mod renderer;
 #[cfg(feature = "terrain")]
 pub mod footprint;

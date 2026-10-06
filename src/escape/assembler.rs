@@ -7455,6 +7455,166 @@ pub fn assemble_ifs_with_lens(
     out.join("\n")
 }
 
+/// The distance field's side of the path tracer (`super::path_core`),
+/// for mode D's solids (heightfield plan T3c). Spliced after the solid
+/// template's distance function, colouring and helpers, in place of the
+/// walk's entry point.
+const IFS_PATH_WGSL: &str = r#"
+// Positions are offsets from the target, as in the walk: the eye is the
+// camera's offset from it.
+fn pt_eye() -> vec3<f32> {
+    return params.fdata[2].xyz;
+}
+
+fn pt_scene_begin() {
+}
+
+// The hit tolerance a ray asks for when it has come `dist`: its pixel's
+// width there, the walk's own.
+fn pt_ifs_eps(dist: f32) -> f32 {
+    return max(pt.misc.x * dist, 1.0e-30);
+}
+
+// The bounding ball along a ray: (entry, exit), the exit below the entry
+// when the ray misses it. Past it every point is provably outside the
+// set.
+fn pt_ifs_ball(o: vec3<f32>, d: vec3<f32>) -> vec2<f32> {
+    let oc = o + ifs_target_offset();
+    let b = dot(oc, d);
+    let disc = b * b - (dot(oc, oc) - ifs_radius() * ifs_radius());
+    if (!(disc > 0.0)) {
+        return vec2<f32>(1.0, -1.0);
+    }
+    let root = sqrt(disc);
+    return vec2<f32>(max(-b - root, 0.0), -b + root);
+}
+
+// The surface where a march stopped at p, `dist` along the path: the
+// normal from the distance's gradient and the albedo the colouring and
+// the palette give it -- the walk's and the relight's own -- and a ray
+// leaving it starts two pixels off it.
+fn pt_ifs_surface(p: vec3<f32>, t: f32, dist: f32) -> PtHit {
+    var out: PtHit;
+    out.hit = true;
+    out.t = t;
+    let eps = pt_ifs_eps(dist);
+    out.n = ifs_normal(p, eps);
+    let shade = ifs_color(ifs_evaluate3(p));
+    let tt = esc_wrap(esc_transfer(shade.t), false);
+    out.albedo = vec4<f32>(esc_palette(tt) * clamp(shade.lum, 0.0, 4.0), 1.0);
+    out.bias = eps * 2.0;
+    return out;
+}
+
+// A ray leaving a surface `travelled` along the path, as the walk's
+// shadow rays leave one (`ifs_shadow`): from four of its pixels out,
+// and calling a hit at a tenth of that (or a ten-thousandth of the
+// ball), so it clears the surface it left. The distance to the hit,
+// or -1.
+fn pt_ifs_leave(o: vec3<f32>, d: vec3<f32>, travelled: f32) -> f32 {
+    let span = pt_ifs_ball(o, d);
+    if (span.y < span.x) {
+        return -1.0;
+    }
+    let e0 = pt_ifs_eps(travelled);
+    let eps = max(min(ifs_radius() * 1.0e-4, e0 * 0.4), 1.0e-30);
+    var t = max(e0 * 4.0, span.x);
+    let max_steps = u32(clamp(fparam(2u), 4.0, 512.0));
+    for (var i = 0u; i < max_steps; i = i + 1u) {
+        if (t > span.y) {
+            break;
+        }
+        let dist = ifs_distance_at(o + d * t, eps);
+        if (dist < eps) {
+            return t;
+        }
+        t = t + dist;
+    }
+    return -1.0;
+}
+
+fn pt_scene_next(o: vec3<f32>, d: vec3<f32>, travelled: f32) -> PtHit {
+    let t = pt_ifs_leave(o, d, travelled);
+    if (t < 0.0) {
+        var out: PtHit;
+        out.hit = false;
+        return out;
+    }
+    return pt_ifs_surface(o + d * t, t, travelled + t);
+}
+
+fn pt_scene_visible(o: vec3<f32>, d: vec3<f32>, travelled: f32) -> bool {
+    return pt_ifs_leave(o, d, travelled) < 0.0;
+}
+
+// One sample of the pixel: the camera's ray sphere-traced as the walk
+// traces it, from the ball's entry to its exit, stopping within a pixel
+// of the surface; then the path. A miss is coverage 0, the background
+// through it. The rig's fog after the light, toward its colour.
+fn pt_sample(px: u32, py: u32) -> vec4<f32> {
+    let jx = pt_rand() - 0.5;
+    let jy = pt_rand() - 0.5;
+    let ray = pt_ray(px, py, jx, jy);
+    if (ifs_count() == 0u) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    let span = pt_ifs_ball(ray.o, ray.d);
+    var t = span.x;
+    let max_steps = u32(clamp(fparam(2u), 4.0, 512.0));
+    var hit = false;
+    for (var i = 0u; i < max_steps; i = i + 1u) {
+        if (t > span.y) {
+            break;
+        }
+        let eps = pt_ifs_eps(t);
+        let dist = ifs_distance_at(ray.o + ray.d * t, eps * 0.01);
+        if (dist < eps) {
+            hit = true;
+            break;
+        }
+        t = t + dist;
+    }
+    if (!hit) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    let h = pt_ifs_surface(ray.o + ray.d * t, t, t);
+    var l = min(pt_path(ray.o, ray.d, h), vec3<f32>(pt.misc.y));
+    if (ifs_fog_strength() > 0.0) {
+        let depth = t * dot(ray.d, ifs_forward());
+        let f = 1.0 - exp(-ifs_fog_strength() * max(depth - ifs_fog_start(), 0.0));
+        l = mix(l, ifs_fog_color(), f);
+    }
+    return vec4<f32>(l, 1.0);
+}
+"#;
+
+/// Assemble mode D's PATH TRACER for one solid formula and colouring
+/// (heightfield plan T3c): the walk's shader -- its distance function,
+/// colouring, rig accessors and helpers -- with the walk's entry point
+/// replaced by the shared core (`super::path_core`) and the distance
+/// field's side of it. A lens reaches the camera ray as it reaches the
+/// walk's.
+pub fn assemble_ifs_path(
+    def: &IfsDef,
+    coloring: &IfsColoringDef,
+    beam: u32,
+    lens: Option<&str>,
+    sums: bool,
+) -> String {
+    let walk = assemble_ifs_with_lens(def, coloring, beam, lens, false, sums);
+    let cut = walk
+        .find("@compute @workgroup_size(8, 8, 1)\nfn escape_main")
+        .expect("the solid template ends in the walk's entry point");
+    let mut ray = Vec::new();
+    lens_apply_uv(&mut ray, lens, "uv");
+    format!(
+        "{}\n{}\n{}",
+        &walk[..cut],
+        super::path_core::PT_CORE_WGSL.replace("//__LENS_APPLY_RAY__", &ray.join("\n")),
+        IFS_PATH_WGSL
+    )
+}
+
 /// Assemble a mode-B field shader: splice one field def and one field
 /// coloring into [`FIELD_TEMPLATE`]. Same marker discipline as
 /// [`assemble`].
@@ -8914,6 +9074,33 @@ mod lens_tests {
             );
             validate_lens(&lensed, &what);
         }
+    }
+
+    /// Mode D's path tracer (heightfield plan T3c) assembles and
+    /// validates for every solid formula and colouring, with and without
+    /// a lens; the walk's entry point is gone from it, and a lens reaches
+    /// its camera ray.
+    #[test]
+    fn every_solid_path_tracer_validates() {
+        let src = lens_for("eyefish");
+        let mut n = 0;
+        for def in crate::escape::ifs::IFS_DEFS.iter().filter(|d| d.solid) {
+            for col in crate::escape::ifs::IFS_COLORINGS {
+                if crate::escape::ifs::get_ifs_coloring(col.name, def).name != col.name {
+                    continue;
+                }
+                let plain = assemble_ifs_path(def, col, 4, None, false);
+                let lensed = assemble_ifs_path(def, col, 4, Some(&src), false);
+                let what = format!("path {} / {}", def.name, col.name);
+                assert!(!plain.contains("fn escape_main"), "{what}: the walk's entry point survived");
+                assert!(!plain.contains("esc_lens("), "{what}: lens glue without a lens");
+                assert!(lensed.contains("esc_lens("), "{what}: the lens is not applied");
+                validate_lens(&plain, &what);
+                validate_lens(&lensed, &what);
+                n += 1;
+            }
+        }
+        assert!(n > 0, "no solid formula");
     }
 
     /// Every mode-D combination still validates with the SUM rung

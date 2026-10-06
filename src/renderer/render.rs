@@ -1005,11 +1005,28 @@ async fn render_escape(
         Some(ref mut engines) => engines.escape.get_or_insert_with(make),
         None => owned.insert(make()),
     };
+    // A solid path traced (heightfield plan T3c) renders display
+    // pixels: its jitter is the antialiasing, and `samples` its count.
+    let solid_path = crate::escape::ifs::formula_is_solid(&job.config.escape.formula)
+        && job.config.escape.solid_tier != crate::config::escape::RenderTier::Lit;
     // Config-declared supersampling applies on every path (viewport,
     // CLI, thumbnails): a saved file reproduces exactly.
-    let want_ss = job.config.escape.supersample.max(1);
+    let want_ss = if solid_path { 1 } else { job.config.escape.supersample.max(1) };
     escape_renderer.resize(device, job.width, job.height, want_ss);
     prepare_escape(escape_renderer, device, queue, job.config).await;
+    if solid_path {
+        escape_renderer.render_solid_still(
+            device,
+            queue,
+            job.config,
+            renderer.escape_palette_view(job.config.escape.palette_map.stepped),
+            job.config.escape.path.samples,
+            || {
+                let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            },
+        );
+        log::info!("Render: escape solid path traced at {} samples", job.config.escape.path.samples);
+    }
     // No UI to keep responsive here, and every chunk pays a downsample
     // pass over the supersampled image — so chunk for throughput.
     escape_renderer.set_chunk_time_target(200.0);
@@ -1034,12 +1051,14 @@ async fn render_escape(
             extra * extra
         );
     }
-    let offsets = if extra > 1 {
+    let offsets = if solid_path {
+        Vec::new()
+    } else if extra > 1 {
         crate::escape::EscapeRenderer::sample_grid(extra)
     } else {
         vec![[0.0f32, 0.0]]
     };
-    if extra > 1 {
+    if extra > 1 && !solid_path {
         escape_renderer.begin_accumulation(device, queue, extra);
     }
     for off in &offsets {
@@ -1086,7 +1105,7 @@ async fn render_escape(
         let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
     }
     let escape_view = match escape_renderer.accumulated_view() {
-        Some(v) if extra > 1 => v,
+        Some(v) if extra > 1 && !solid_path => v,
         _ => escape_renderer.output_view(),
     };
     let pixels = escape_tail(renderer, device, queue, config, (width, height, transparent), escape_view, oom_scope).await;
@@ -1331,8 +1350,8 @@ async fn render_escape_terrain(
         width,
         height,
         n,
-        if config.escape.terrain.tier == crate::config::escape::TerrainTier::Lit { ss * ss } else { config.escape.terrain.samples },
-        if config.escape.terrain.tier == crate::config::escape::TerrainTier::Lit { "lit" } else { "path traced" },
+        if config.escape.terrain.tier == crate::config::escape::RenderTier::Lit { ss * ss } else { config.escape.path.samples },
+        if config.escape.terrain.tier == crate::config::escape::RenderTier::Lit { "lit" } else { "path traced" },
         render_time_ms
     );
     Ok(RenderOutput {

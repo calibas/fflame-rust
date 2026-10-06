@@ -27,6 +27,9 @@ use crate::config::escape::EscapeConfig;
 use super::assembler::{self, PARAM_VEC4S};
 use super::reference::OrbitCache;
 
+mod solid_path;
+pub use solid_path::VIEWPORT_BAND_DIVISOR;
+
 /// Above this zoom the direct path's f32 pixel mapping visibly
 /// pixelates: the center's f32 ulp (~6e-8 near |c| = 1) stops
 /// resolving pixel spacing a couple of octaves before it equals it —
@@ -800,6 +803,8 @@ pub struct EscapeRenderer {
     /// Compiled pipelines keyed `"formula|coloring"` — tiny shaders,
     /// but a live panel flips combinations and recompiles add up.
     pipelines: HashMap<String, ComputePipeline>,
+    /// Mode D's path tracer (heightfield plan T3c), made on first use.
+    solid_path: Option<solid_path::SolidPath>,
     /// Test-only: force the perturbed path regardless of zoom so the
     /// direct/perturbed agreement test can render the SAME shallow
     /// view both ways.
@@ -1832,6 +1837,7 @@ impl EscapeRenderer {
             chunk_next: 0,
             chunk_key: None,
             timestamps: None,
+            solid_path: None,
             gpu_ms_per_iter: None,
             gpu_ms_per_iter_cold: None,
             gpu_regime: None,
@@ -6361,6 +6367,10 @@ fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     /// tail expects — display-sized (the downsampled target when
     /// supersampling is on).
     pub fn output_view(&self) -> &TextureView {
+        // A solid's path-traced picture, while it is the one shown.
+        if let Some(v) = self.solid_path.as_ref().and_then(|p| p.view()) {
+            return v;
+        }
         self.final_view.as_ref().unwrap_or(&self.output_view)
     }
 
@@ -7854,6 +7864,9 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         palette_generation: u64,
     ) -> bool {
         self.palette_generation = palette_generation;
+        // Whatever made this frame render changed the solid's picture:
+        // its path-traced samples are of something else now.
+        self.reset_solid_path();
         // Relief needs its scalar field and a destination distinct
         // from the colour it reads; both are allocated on demand, so
         // an escape view with shading off carries neither.
@@ -8609,6 +8622,9 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         if let Some(ts) = &self.timestamps {
             ts.resolve.destroy();
             ts.staging.destroy();
+        }
+        if let Some(p) = &self.solid_path {
+            p.destroy();
         }
     }
 }

@@ -43,7 +43,7 @@
 
 use super::ifs::{solid_frame, SolidCamera};
 use super::terrain::{Ground, GroundNode, GroundSection, PathSettings, TerrainIngest, TerrainRenderer, TerrainView};
-use crate::config::escape::TerrainTier;
+use crate::config::escape::RenderTier;
 use super::EscapeRenderer;
 use crate::config::escape::{EscapeConfig, TerrainInterior, TerrainSource};
 use crate::config::FractalConfig;
@@ -195,32 +195,11 @@ pub fn terrain_view(config: &FractalConfig, jitter: [f32; 2]) -> TerrainView {
     }
 }
 
-/// The path tracer's settings from the config (plan section 4): the
-/// environment is the background colour brought into the accumulator's
-/// units -- through the inverse of the Linear tonemap's exposure and
-/// gamma -- so the sky and an albedo-1 surface it lights read as the
-/// background does; a sample's radiance is clamped at ten times the
-/// brightest light.
+/// The path tracer's settings for a terrain: the shared ones, with the
+/// lens in the world's units -- view widths, the target
+/// [`FRAME_DISTANCE`] away.
 pub fn path_settings(config: &FractalConfig) -> PathSettings {
-    let t = &config.escape.terrain;
-    let gamma = if config.gamma > 0.0 { config.gamma } else { 1.0 };
-    let exposure = config.exposure.max(1.0e-6);
-    let env = config.background_color.map(|c| t.environment * c.max(0.0).powf(gamma) / exposure);
-    let lights: f32 = config.solid_shading.lights.iter().filter(|l| l.enabled).map(|l| l.intensity.max(0.0)).sum();
-    let brightest = lights.max(1.0).max(env.iter().cloned().fold(0.0, f32::max));
-    PathSettings {
-        bounces: t.bounces.min(16),
-        environment: env,
-        clamp: 10.0 * brightest.max(t.emission),
-        seed: 1,
-        gloss: t.gloss,
-        roughness: t.roughness,
-        emission: t.emission,
-        aperture: t.aperture,
-        // The target is FRAME_DISTANCE along the view: in focus by
-        // default.
-        focus: if t.focus > 0.0 { t.focus } else { FRAME_DISTANCE as f32 },
-    }
+    super::path_core::path_settings(config, FRAME_DISTANCE as f32)
 }
 
 /// How a section becomes atlas samples. `derivative` is whether its
@@ -516,9 +495,7 @@ pub struct EscapeTerrain {
     path_ms: Option<f32>,
 }
 
-/// Path-traced samples the Auto tier gathers before its picture replaces
-/// the lit tier's: below this the noise reads worse than the lit picture.
-pub const PATH_SHOW_SAMPLES: u32 = 8;
+pub use super::path_core::PATH_SHOW_SAMPLES;
 
 /// The time a viewport frame gives the path tracer, in ms.
 const PATH_FRAME_MS: f32 = 12.0;
@@ -844,7 +821,7 @@ impl EscapeTerrain {
             self.terrain.reset_path();
             self.showing_path = false;
         }
-        if t.tier != TerrainTier::PathTraced {
+        if t.tier != RenderTier::PathTraced {
             let grid = EscapeRenderer::sample_grid(config.escape.supersample.max(1));
             if let Some(&jitter) = grid.get(self.viewport_samples as usize) {
                 self.terrain.render(device, queue, &terrain_view(config, jitter));
@@ -853,11 +830,11 @@ impl EscapeTerrain {
                 self.showing_path = false;
                 return true;
             }
-            if t.tier == TerrainTier::Lit {
+            if t.tier == RenderTier::Lit {
                 return false;
             }
         }
-        let target = t.samples.max(1);
+        let target = config.escape.path.samples.max(1);
         let have = self.terrain.path_samples();
         if have >= target {
             return false;
@@ -866,7 +843,7 @@ impl EscapeTerrain {
         let per_frame = self.path_ms().map_or(1, |ms| (PATH_FRAME_MS / ms.max(0.05)).floor().clamp(1.0, 64.0) as u32);
         let n = per_frame.min(target - have);
         self.trace(device, queue, config, n, n);
-        self.showing_path = t.tier == TerrainTier::PathTraced || self.terrain.path_samples() >= PATH_SHOW_SAMPLES;
+        self.showing_path = t.tier == RenderTier::PathTraced || self.terrain.path_samples() >= PATH_SHOW_SAMPLES;
         self.terrain.path_samples() < target
     }
 
@@ -901,7 +878,7 @@ impl EscapeTerrain {
     /// blocking poll on the desktop). Submits its own work.
     pub fn render_still(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, mut wait: impl FnMut()) {
         let t = &config.escape.terrain;
-        if t.tier == TerrainTier::Lit {
+        if t.tier == RenderTier::Lit {
             self.terrain.reset_accumulation();
             for jitter in EscapeRenderer::sample_grid(config.escape.supersample.max(1)) {
                 self.terrain.render(device, queue, &terrain_view(config, jitter));
@@ -911,7 +888,7 @@ impl EscapeTerrain {
             return;
         }
         self.terrain.reset_path();
-        let target = t.samples.max(1);
+        let target = config.escape.path.samples.max(1);
         // A batch the watchdog never notices: about a quarter second at
         // the measured cost, from a cautious start.
         while self.terrain.path_samples() < target {
@@ -1230,7 +1207,7 @@ mod tests {
         c.escape.center_im = "0.1127".into();
         // The lit tier: its walk is what fills the geometry record read
         // here (the path tracer's rays walk the same ground).
-        c.escape.terrain.tier = TerrainTier::Lit;
+        c.escape.terrain.tier = RenderTier::Lit;
         let mut engines = crate::renderer::render::RenderEngines::default();
         let _ = pollster::block_on(crate::renderer::render(
             &device,

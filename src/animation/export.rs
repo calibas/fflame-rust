@@ -861,28 +861,28 @@ fn apply_config_value(
         (ConfigPath::EscapeTerrainFar, ConfigValue::Float(v)) => {
             config.escape.terrain.far = v.clamp(0.5, 64.0);
         }
-        (ConfigPath::EscapeTerrainGloss, ConfigValue::Float(v)) => {
+        (ConfigPath::EscapePathGloss, ConfigValue::Float(v)) => {
             let v = *v;
-            config.escape.terrain.gloss = v.clamp(0.0, 1.0);
+            config.escape.path.gloss = v.clamp(0.0, 1.0);
         }
-        (ConfigPath::EscapeTerrainRoughness, ConfigValue::Float(v)) => {
+        (ConfigPath::EscapePathRoughness, ConfigValue::Float(v)) => {
             let v = *v;
-            config.escape.terrain.roughness = v.clamp(0.02, 1.0);
+            config.escape.path.roughness = v.clamp(0.02, 1.0);
         }
-        (ConfigPath::EscapeTerrainEmission, ConfigValue::Float(v)) => {
+        (ConfigPath::EscapePathEmission, ConfigValue::Float(v)) => {
             let v = *v;
-            config.escape.terrain.emission = v.clamp(0.0, 16.0);
+            config.escape.path.emission = v.clamp(0.0, 16.0);
         }
-        (ConfigPath::EscapeTerrainAperture, ConfigValue::Float(v)) => {
+        (ConfigPath::EscapePathAperture, ConfigValue::Float(v)) => {
             let v = *v;
-            config.escape.terrain.aperture = v.clamp(0.0, 1.0);
+            config.escape.path.aperture = v.clamp(0.0, 1.0);
         }
-        (ConfigPath::EscapeTerrainFocus, ConfigValue::Float(v)) => {
+        (ConfigPath::EscapePathFocus, ConfigValue::Float(v)) => {
             let v = *v;
-            config.escape.terrain.focus = v.clamp(0.0, 64.0);
+            config.escape.path.focus = v.clamp(0.0, 64.0);
         }
-        (ConfigPath::EscapeTerrainEnvironment, ConfigValue::Float(v)) => {
-            config.escape.terrain.environment = v.clamp(0.0, 16.0);
+        (ConfigPath::EscapePathEnvironment, ConfigValue::Float(v)) => {
+            config.escape.path.environment = v.clamp(0.0, 16.0);
         }
         (ConfigPath::EscapeTerrainHaze, ConfigValue::Float(v)) => {
             config.escape.terrain.haze = v.clamp(0.0, 1.0);
