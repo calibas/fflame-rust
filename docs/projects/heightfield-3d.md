@@ -182,8 +182,12 @@ What it settled:
     knows nothing of iterations or steps.
   - **Simulations reach it** by handing their textures to the escape
     engine's terrain path. So a simulation terrain needs
-    `engine-escape`. The single-engine `wasm/sim` gallery module,
-    built without it, does not offer the terrain; the app does.
+    `engine-escape`.
+  - **The gallery modules skip terrains** (the user's answer,
+    2026-10-05). `wasm/render`, `wasm/escape` and `wasm/sim` are built
+    without the terrain path, behind a feature as the engines are.
+    Their downloads do not carry it, and a terrain config renders
+    there as its 2D picture, with the terrain switch ignored.
   - **Why.** The camera, the rig and the progressive machinery are
     built and tested in mode D. The path tracer (T3) then extends that
     rig, so mode D's IFS solids are path traced too.
@@ -448,11 +452,34 @@ deep zoom into it.
   - its texels at the target grow past about 1.5 screen pixels;
   - the target nears the footprint's edge.
 
-  The re-render is on the drag's release, with hysteresis, and the old
-  footprint draws until the new one lands.
-- **The cost.** A re-render is one 2D escape render at N²: tens of
-  milliseconds on the direct path, more perturbed. It is what lets a
-  terrain be flown into at any depth.
+  The old footprint draws until the new one lands, with hysteresis so
+  a dolly back and forth does not thrash.
+- **Re-render during the zoom wherever it is fast enough** (the user's
+  answer, 2026-10-05: "if we can re-render at <15 ms rates on average
+  hardware, then I'd rather do that during a deep zoom").
+  - The renderer measures its own footprint renders, a smoothed
+    average as the simulation measures `ms_per_step`.
+  - While that average is under 15 ms, the footprint re-renders during
+    the dolly, as often as the conditions above call for.
+  - Above it, the footprint re-renders on the drag's release, and the
+    stretched texels show until then.
+  - Decided per device by measurement, so a fast GPU gets the live
+    zoom and a slow one stays smooth.
+- **The levers that bring it under 15 ms**, measured at T2 before any
+  is built:
+  - **A motion footprint.** Half the side (a quarter of the pixels)
+    while the dolly is moving, the full size on release.
+  - **The recolour cache.** Mode D and the 2D escape path already skip
+    the walk when only colouring changed; a dolly changes the walk, so
+    this helps only the release frame.
+  - **Reusing the reference orbit across re-renders** (the perturbed
+    path's pan reuse, `MAX_RELOCATE_PX`), since successive footprints
+    share a centre region.
+- **The cost.** A re-render is one 2D escape render at N². The
+  survey's figure is 2.3 ms direct and 14.2 ms perturbed at 960×720
+  (Mandelbrot, 2000 iterations). That puts a 1024² motion footprint
+  near the line on the perturbed path and well under it on the direct
+  one. It is what lets a terrain be flown into at any depth.
 - **The heights are scale-invariant.** H and w are fractions of the
   span, so each footprint's terrain looks like the last one's at its
   own scale. The handover pops slightly where the DE flanks were cut
@@ -541,8 +568,8 @@ Shared with the rest of the config:
   (footprint or grid), then call `TerrainRenderer` for `samples`
   samples, chunked under the 250 ms watchdog budget. The shared tail
   follows unchanged.
-- **Who gets it.** CLI, thumbnails, the gallery and video inherit it,
-  as they did escape and simulations.
+- **Who gets it.** CLI, thumbnails and video inherit it, as they did
+  escape and simulations. The gallery modules do not (H2).
 - **One exception.** The in-browser PNG export's hand-rolled path
   (`app/mod.rs`, about lines 2197–2480) needs the same call added. The
   survey found it does not go through `render_with`.
@@ -624,7 +651,8 @@ terrain.**
     writing DE.
   - Interior plateau, lake or hole.
   - Re-rendering on `escape_dirty`, and the footprint following the
-    camera (H11).
+    camera (H11): during the zoom under a measured 15 ms, on release
+    above it.
   - Fly mode driving the solid camera, for IFS solids as well.
   - `render_with`, export, video.
 - **Gates.**
@@ -633,7 +661,13 @@ terrain.**
     perturbed).
   - A deep-zoom terrain at zoom 2^60 renders the same structure as the
     2D view (its footprint IS the 2D view).
+  - **The 15 ms line, measured.** Footprint re-render times at the
+    motion and full sizes, direct and perturbed, on this machine (its
+    GPU named in the record). That says which paths zoom live on it,
+    and what "average hardware" can expect.
   - Terrain-off configs are byte-identical.
+  - The gallery modules build without the terrain path, and render a
+    terrain config as its 2D picture.
   - An `escape-terrain-*` visual baseline.
 
 **T3 — Path tracing, for terrains and IFS solids.**
@@ -706,9 +740,8 @@ terrain.**
    solids as well.
 6. **Lights:** fixed in the world (H7).
 
-Still open, to settle at their phases:
-- **T2.** Whether the footprint following the camera (H11) re-renders
-  on release only, or also during a slow dolly.
-- **T4.** Whether a simulation terrain should also show while
-  `engine-escape` is absent: the `wasm/sim` gallery module. The plan
-  says no.
+Two more, the same day:
+7. **Re-rendering during a deep zoom:** yes, "if we can re-render at
+   <15 ms rates on average hardware". Decided per device by measuring
+   (H11).
+8. **The gallery modules skip terrains** (H2).
