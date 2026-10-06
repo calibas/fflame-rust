@@ -3,8 +3,12 @@
 Plan, 2026-10-05. Not started. Asked for by the user as "one of the
 larger goals", to be planned before anything is built.
 
-Decisions a reader should argue with are marked **decision**. The open
-questions are in section 10.
+**Revised the same day with the user's answers (section 10).** The
+camera is the escape solid camera, not the flame camera. The terrain
+is built on mode D's 3D pipeline in the escape engine. So escape comes
+first, and the phases are reordered.
+
+Decisions a reader should argue with are marked **decision**.
 
 ## 0. What is being asked for
 
@@ -82,9 +86,15 @@ renderer needs besides the intersection:
   watchdog, with temporal smoothing.
 
 It is not a path tracer: there are no bounces, no sky and no
-environment anywhere in the repo.
+environment anywhere in the repo. Mode D is a ray tracer with direct
+light. Sphere tracing finds the surface, and real rays find the shadows
+and the occlusion. Its antialiasing is analytic at edges (from the
+sub-pixel distance), plus the escape engine's supersampling, plus
+jittered accumulation at export. Path tracing adds bounces, sky light
+and sampled materials to that.
 
-**The flame 3D engine** contributes something different.
+**The flame 3D engine.** The first draft borrowed its camera fields;
+the revision does not (H4). For the record:
 - **What it has.** Its camera fields (`camera_rotation_x/y`,
   `camera_bank`, `rotation`, `camera_x/y/z` in `FractalConfig`), the
   View panel that edits them, fly mode, and animation tracks for every
@@ -152,17 +162,31 @@ What it settled:
   - **What a fifth mode would cost.** A config version, a wire form, an
     API enum and about 55 call sites, for a picture that is still the
     escape or simulation picture. Online sync stores it as what it is.
-- **decision H2 — One renderer, two producers.**
-  - **The renderer.** A new module, `src/terrain/`, with
-    `TerrainRenderer`. It takes a height texture and an albedo texture
-    covering a rectangle of the plane, plus a camera, lights and a
-    material. It returns an `Rgba32Float` in the accumulator contract,
-    which the shared tail tonemaps.
+- **decision H2 — Built on mode D's pipeline: one renderer, two
+  producers.**
+  - **The renderer.** A second geometry source in the escape engine's
+    solid pipeline, beside mode D's distance march. It takes a height
+    texture and an albedo texture covering a rectangle of the plane.
+  - **What it shares with mode D:**
+    - ray generation (`SolidCamera`, `ifs_ray`, `eye_rel`);
+    - the lighting rig;
+    - the geometry cache and relight pass;
+    - the bands and chunks under the watchdog;
+    - supersampling and jittered accumulation;
+    - the accumulator contract into the shared tail.
+
+    Only the intersection differs: a height-field traversal instead
+    of the distance march.
   - **The producers.** Escape and simulations each turn their own
-    picture into those textures (sections 5 and 6). The terrain
-    renderer knows nothing of iterations or steps.
-  - **Why.** The path tracer, the acceleration structure and the camera
-    are the bulk of the work, and none of it differs between the two.
+    picture into the textures (sections 5 and 6). The terrain path
+    knows nothing of iterations or steps.
+  - **Simulations reach it** by handing their textures to the escape
+    engine's terrain path. So a simulation terrain needs
+    `engine-escape`. The single-engine `wasm/sim` gallery module,
+    built without it, does not offer the terrain; the app does.
+  - **Why.** The camera, the rig and the progressive machinery are
+    built and tested in mode D. The path tracer (T3) then extends that
+    rig, so mode D's IFS solids are path traced too.
 - **decision H3 — Terrain-local coordinates, so no extended
   precision.**
   - **The space.** The terrain is a unit square (scaled to the tile's
@@ -170,31 +194,51 @@ What it settled:
   - **Deep zoom stays where it already works.** It is entirely the 2D
     renderer's problem: the escape footprint is an ordinary 2D render
     at the current view, perturbation and all.
-  - **What that undoes.** Mode D needed exact-decimal camera positions
-    because it marches the fractal itself; a terrain marches a
-    texture. This is what makes H4 possible.
-- **decision H4 — The flame camera fields drive the terrain camera,
-  with a pinhole projection and a FOV.**
-  - **Which fields.** `camera_rotation_x/y`, `camera_bank`, `rotation`
-    and `camera_x/y/z` are unused in escape and simulation modes. The
-    View panel already edits them, fly mode already flies them, and
-    the animation track picker already offers them there.
-  - **What is added.** One field, `terrain_fov`. The projection is a
-    true pinhole: ray directions from `effective_camera_rows`
-    (`src/renderer/shade_pass.rs`, the exact Rust mirror of the WGSL
-    matrix).
-  - **The alternative** is mode D's escape camera. It has the
-    better-shaped UI (target, orbit, pan), but simulations have no
-    camera at all, and its decimal target buys nothing here (H3).
-  - **The orbit and pan interactions** mode D built are ported to the
-    flame fields, about a pivot at the terrain point under the screen
-    centre.
-- **decision H5 — Two tiers on one intersection.**
+  - **The camera keeps its exact target (H4).** The terrain path
+    subtracts the footprint's centre from it in decimals, and the
+    shader sees small local numbers. That is what lets the footprint
+    follow the camera into the set (section 5) without the shader ever
+    needing extended precision.
+- **decision H4 — The escape solid camera, shared with simulations.**
+  (The user's call, 2026-10-05.)
+  - **Mode D's camera.** On the escape config:
+    - an exact-decimal target (`cam_target_x/y/z`);
+    - pitch, yaw and bank about the target;
+    - a vertical FOV (`cam_fov`);
+    - distance from `zoom_log2`;
+    - the screen roll is `rotation`.
+
+    It is a true pinhole, with ray generation in `SolidCamera` /
+    `ifs_ray`. It has a camera panel (`show_solid_camera`), viewport
+    orbit and pan (`panel_viewer.rs`) and animation targets
+    (`EscapeCam*`).
+  - **Escape terrain uses it as it is.** The target is a point of the
+    plane at its height, and a dolly is a zoom.
+  - **Simulations get the same camera.**
+    - The fields move into one struct, flattened into `EscapeConfig`
+      so escape files keep their keys, and added to `SimConfig`.
+    - Simulations get ConfigPaths for it.
+    - The camera panel and viewport gestures take the struct, not the
+      escape config.
+    - A simulation's target is in grid units with no deep zoom, so
+      its decimal strings are ordinary numbers.
+  - **Fly mode** does not drive this camera yet. Mode D's record says
+    so ("not done, and known"). A phase adds it (T2), and IFS solids
+    gain it too.
+  - **Why this and not the flame camera fields** (the first draft's
+    recommendation):
+    - It is already a pinhole with a FOV, a target and orbit.
+    - Its renderer already antialiases and lights.
+    - Deep zoom needs the exact target as soon as the terrain follows
+      the camera into the set.
+    - The flame fields would have brought the View panel and fly mode
+      for free. That is now a phase of work, and the cost of the
+      choice.- **decision H5 — Two tiers on one intersection.**
   - **Lit.** Primary rays; the Solid Lighting lights with traced soft
     shadows and traced AO; a geometry cache so a lighting edit is a
     relight. Mode D's rig on a height field. This is the interactive
     view, and the one a running simulation can afford every step.
-  - **Path traced.** Progressive Monte Carlo: sun and sky, bounces,
+  - **Path traced.** Progressive Monte Carlo: sun and environment, bounces,
     soft materials, depth of field, fog, accumulating until a sample
     target. Used for stills and video, and in the viewport whenever
     nothing is changing.
@@ -234,12 +278,15 @@ What it settled:
   heights: a quadratic in t along the ray within the cell. The
   prototype's bisected march is the CPU reference it is tested against.
 
-**decision H6 — Ray generation from the camera above, at f32**, with:
-- jitter inside the pixel for antialiasing (accumulation is the AA);
-- a thin lens for depth of field, from `dof_focus_distance` (focus, in
-  terrain units) and `dof_blur_strength` (aperture);
-- rays missing the tile: in Single, they see the sky; in Repeat, they
-  wrap.
+**decision H6 — Ray generation is mode D's** (`ifs_ray`, `eye_rel`):
+- f32 directions from the exact target;
+- jitter inside the pixel for antialiasing. Supersampling and
+  accumulation are both available, as in mode D;
+- a thin lens for depth of field. Two new fields on the solid camera,
+  focus distance and aperture, which IFS solids gain as well;
+- rays missing the tile: in Single, they see **the background colour**
+  (coverage 0, so the tonemap composites the background and a PNG can
+  be transparent: the user's answer). In Repeat, they wrap.
 
 **Shading normals.**
 - **From the source's own gradient where there is one.** The sim relief
@@ -280,12 +327,13 @@ What it settled:
 - **Light transport.**
   - Next-event estimation to each enabled light, sampled over its
     angular size, with a shadow ray.
-  - The sky by cosine-weighted bounce rays; multiple importance
-    sampling between sun and sky once the BRDF is more than Lambert.
+  - The environment by cosine-weighted bounce rays; multiple
+    importance sampling between sun and environment once the BRDF is
+    more than Lambert.
   - Bounces 0 to 4 (default 2), Russian roulette from the second.
-- **The sky.** An analytic gradient (zenith, horizon, ground colours,
-  an intensity) plus a sun disc. An HDRI environment later (section 9,
-  T5).
+- **The environment light** is the background colour times an
+  intensity: uniform, so what a ray sees on missing the tile is what
+  lights the terrain. A gradient sky and an HDRI are later (T5).
 - **Materials.**
   - Lambert on the albedo, plus a GGX gloss layer (roughness,
     specular).
@@ -293,13 +341,13 @@ What it settled:
   - The lake: a dielectric mirror with Fresnel and a tint, for the
     escape interior or a chosen mask.
 - **Fog.** The config's exponential fog as a homogeneous medium in
-  single scattering, lit by the sky colour: the cheap atmosphere.
-  Volumetric sun shafts are later.
+  single scattering, lit by the environment colour: the cheap
+  atmosphere. Volumetric sun shafts are later.
 - **Output.**
   - rgb is radiance.
-  - Alpha is 1 where a ray reached the terrain or the sky.
-  - "Transparent sky" sets alpha 0 for rays that see only the sky, so
-    a PNG can be composited.
+  - Alpha is the terrain's coverage. A ray that misses has alpha 0, so
+    the background shows there and a PNG export is transparent there,
+    as escape and simulations already are.
 - **Fireflies** are clamped per sample at a user-visible maximum
   (default 10× the sun-lit white).
 - **The tonemap** is the shared Linear tonemap with exposure; a filmic
@@ -348,7 +396,7 @@ What it settled:
 - **Escape count.** The smooth count with a curve (log by default).
   Spiky near the set (section 2), offered because it was asked for.
 - **Distance** (**decision H8**, the default where the formula has a
-  derivative): `H·exp(−DE / w)`.
+  derivative; the user's answer): `H·exp(−DE / w)`.
   - w is a width as a fraction of the footprint (default 1/150, the
     prototype's).
   - The set is the plateau, and every filament carries smooth flanks.
@@ -360,9 +408,12 @@ What it settled:
     today; the footprint render owns it while it runs.
   - Formulas without a derivative fall back to the escape count, and
     the panel says so.
-- **The interior:** a lake (a flat plane at the top, or at a level, in
-  the lake material), a hole (albedo alpha 0; rays pass through to the
-  ground plane or the sky), or a plateau at the maximum height.
+- **The interior:** a plateau at the maximum height (**the default**,
+  the user's answer), a lake (a flat plane in the lake material), or a
+  hole (albedo alpha 0, so rays pass through to the background).
+  - **The plateau's colour** is the escape interior's own: the
+    colouring's interior colour where it draws one, otherwise the
+    background colour.
 
 **The colour** is the 2D picture's linear rgb, written to the albedo
 at the footprint's resolution. So every colouring, palette, texture
@@ -388,6 +439,26 @@ The one constraint is its side. At extents above 1 the farthest pixels
 sit `extent·√2/2` spans from the reference: inside the 8192 px
 relocation cap and the BLA bound at the default sizes, and checked by
 `allocation_error` at others.
+
+**The footprint follows the camera** (**decision H11**). With mode D's
+camera a dolly is a zoom, so approaching a point of the terrain is a
+deep zoom into it.
+- **When it re-renders.** The footprint is re-rendered around the
+  target when either is true:
+  - its texels at the target grow past about 1.5 screen pixels;
+  - the target nears the footprint's edge.
+
+  The re-render is on the drag's release, with hysteresis, and the old
+  footprint draws until the new one lands.
+- **The cost.** A re-render is one 2D escape render at N²: tens of
+  milliseconds on the direct path, more perturbed. It is what lets a
+  terrain be flown into at any depth.
+- **The heights are scale-invariant.** H and w are fractions of the
+  span, so each footprint's terrain looks like the last one's at its
+  own scale. The handover pops slightly where the DE flanks were cut
+  at the old footprint's resolution.
+- **A smooth handover** (keeping the coarser footprint as a far field
+  and blending) is T5, with the far field.
 
 ## 6. The simulation producer
 
@@ -418,6 +489,8 @@ relocation cap and the BLA bound at the default sizes, and checked by
     tier accumulates when it pauses or reaches its step cap. A still or
     a video frame is the path-traced render of the state at its step,
     which is what a simulation still already means.
+- **The camera** is the shared solid camera (H4), with its target in
+  grid units.
 - **Tiling** (**decision H10**): a periodic simulation's terrain can
   repeat to the horizon. The traversal wraps its texel coordinates,
   and the maximum mipmap wraps with it. Single is the default; Repeat
@@ -435,33 +508,33 @@ skip-if-default:
 - `tier`: Lit / Path traced / Auto
 - `samples`: viewport target, export samples
 - `bounces`
-- `sky`: zenith, horizon and ground colour; intensity; sun disc on/off;
-  transparent
+- `environment`: intensity (its colour is the background's, for now)
 - `material`: roughness, specular, emission
 - `lake`: tint, roughness
 
 Shared with the rest of the config:
-- the camera (H4: the flame camera fields plus `terrain_fov`);
+- the camera: the solid camera struct (H4), in `escape` and in `sim`,
+  plus focus and aperture;
 - the lights and shading (`SolidShadingSettings`, world-fixed per H7);
-- fog and DoF (the flame fields).
+- fog and the background colour.
 
 **UI.**
 - **The switch.** A "3D terrain" checkbox at the top of the Escape and
   Simulation panels.
 - **A Terrain section** under it for `TerrainConfig`.
-- **On, `visibility.rs` shows:**
-  - the View panel's camera section, plus the FOV;
-  - fly mode;
+- **On, `visibility.rs` shows** (the `Solid` precedent: `Solid::of`
+  learns the terrain switch):
+  - the solid camera panel (`show_solid_camera`, generalized over the
+    owner);
   - the Solid Lighting panel;
-  - the View panel's depth effects (DoF, fog).
-- **The View panel's camera code** checks `matches!(render_mode,
-  ThreeD)` inline today (`src/ui/view.rs`). Those checks become
-  visibility controls, which CLAUDE.md asks for anyway.
-- **The viewport.**
-  - Drag orbits about the pivot.
-  - Shift-drag pans and the wheel dollies (mode D's gestures).
-  - F2 flies.
-- **2D navigation is off.** It would re-render the footprint.
+  - fly mode once it drives the solid camera (T2);
+  - fog.
+- **The viewport** has mode D's gestures:
+  - drag orbits the target;
+  - pan slides it;
+  - the wheel dollies, which is a zoom, and the footprint follows
+    (H11);
+  - F2 flies once T2 lands.
 
 **`render_with`.**
 - **Order.** `render_escape` / `render_sim` produce the 2D textures
@@ -482,8 +555,8 @@ Shared with the rest of the config:
 - **Antialiasing is the samples:** no supersample.
 
 **Animation.**
-- **The camera tracks already exist:** the View category, now
-  meaningful.
+- **The camera tracks already exist for escape** (`EscapeCam*`);
+  simulations gain their twins with the shared struct.
 - **Terrain parameters** get `ConfigPath` arms like the relief's.
 - **Video** renders `samples` per frame. A camera path (a tour) is the
   hyperbolic roadmap's "pathing and navigation in the animation
@@ -498,13 +571,16 @@ Shared with the rest of the config:
   - Path traced, accumulating, when nothing does.
   - Export and video are always path traced at `samples` (default
     256).
-- **The sun:** azimuth 135°, elevation 30°, 3.0 × white; sky
+- **The sun:** azimuth 135°, elevation 30°, 3.0 × white; environment
   intensity 1. The ratio is the prototype's, which reads as a clear
   day.
 - **Bounces:** 2.
-- **The camera.** On enabling: above the tile's south edge, looking
-  north-down at 35°, the whole tile in view at FOV 45. The prototype's
-  framing.
+- **The camera.** On enabling:
+  - the target at the footprint's centre, at its height;
+  - pitch 35° above the horizon, looking north (yaw 0);
+  - the whole tile in view at mode D's default FOV.
+
+  The prototype's framing.
 - **Height scale:** 10% of the tile width (simulation), 6% (escape,
   distance).
 
@@ -519,92 +595,120 @@ Each phase ships with:
 - the browser storage-buffer limit test
   (`a_flame_renders_within_a_browsers_storage_limit`'s pattern).
 
-**T1 — The terrain renderer, on synthetic terrain.**
+**T1 — The terrain geometry in mode D's pipeline, on synthetic
+terrain.**
 - **Built.**
-  - `src/terrain/`: the maximum mipmap build, the traversal with the
-    bilinear-patch leaf, pinhole ray generation from the flame camera
-    fields, primary hits, one sun with a shadow ray, Lambert.
+  - The height-field geometry source: the maximum mipmap build, the
+    traversal with the bilinear-patch leaf, inside the escape solid
+    pipeline.
+  - Rays from the solid camera; primary hits.
+  - The rig's lights with traced shadows, world-fixed (H7); AO.
+  - The geometry cache and relight.
   - A Rust CPU reference intersector, the prototype's bisected march.
 - **Gates.**
   - Hit distance and normal against the CPU reference on analytic
     terrains (a sinusoid, a cone, a step, a spike field like the escape
     count's) to 1e-4 of the tile.
   - A flat plane under a sun matches `albedo · E · cos θ`.
-  - Traversal steps per ray are recorded at 1080p on all four.
-- **Measured.** The cost estimate of section 4, replaced by numbers.
-
-**T2 — Simulations, lit tier.**
-- **Built.**
-  - `sim.terrain` and its panel section.
-  - The grid-resolution colour pass.
-  - The relief stage run for the terrain.
-  - The camera on the flame fields with `terrain_fov`; the visibility
-    cases; fly mode.
-  - The lit tier with the geometry cache and relight.
-  - `render_with`, export, video.
-- **Gates.**
-  - A running simulation in 3D at 1080p stays inside the interactive
-    budget.
   - A lighting edit is a relight: it hits the cache, as mode D's gate
     asserts.
-  - Terrain-off configs are byte-identical.
-  - A `sim-terrain-*` visual baseline.
+  - Mode D's IFS baselines byte-identical.
+  - Traversal steps per ray recorded at 1080p on all four terrains.
+- **Measured.** The cost estimate of section 4, replaced by numbers.
 
-**T3 — The path-traced tier.**
-- **Built.** Progressive accumulation; the sky; NEE with soft shadows;
-  bounces with Russian roulette; Lambert plus GGX; emission; the lake;
-  fog as single scattering; DoF; Auto; samples in the progress bar.
+**T2 — Escape terrain, lit.**
+- **Built.**
+  - `escape.terrain` and its panel section.
+  - The footprint render, tiled.
+  - The three sources, with distance the default and the iterate pass
+    writing DE.
+  - Interior plateau, lake or hole.
+  - Re-rendering on `escape_dirty`, and the footprint following the
+    camera (H11).
+  - Fly mode driving the solid camera, for IFS solids as well.
+  - `render_with`, export, video.
+- **Gates.**
+  - The tiled footprint equals the single render where both fit
+    (byte-identical on the direct path, by tolerance on the
+    perturbed).
+  - A deep-zoom terrain at zoom 2^60 renders the same structure as the
+    2D view (its footprint IS the 2D view).
+  - Terrain-off configs are byte-identical.
+  - An `escape-terrain-*` visual baseline.
+
+**T3 — Path tracing, for terrains and IFS solids.**
+- **Built.**
+  - Progressive accumulation.
+  - The environment light (the background colour).
+  - NEE with soft shadows; bounces with Russian roulette.
+  - Lambert plus GGX; emission; the lake.
+  - Fog as single scattering; DoF.
+  - The Auto tier; samples in the progress bar.
+
+  On the shared rig, so mode D's IFS solids are path traced too.
 - **Gates.**
   - **The white furnace:** albedo 1, a flat infinite terrain (Repeat),
-    a uniform sky L, no sun. Every bounce count converges to L, to 1%
-    at 4096 samples.
+    a uniform environment L, no sun. Every bounce count converges to L,
+    to 1% at 4096 samples.
   - Sun-only Lambert matches the T1 analytic case.
   - Batch invariance: the same samples in any number of dispatches,
     bit for bit.
   - Determinism: same config, same image.
-  - A path-traced visual baseline at a fixed sample count, compared by
-    tolerance, since a Monte Carlo image at 64 samples is not
-    bit-stable across drivers.
+  - Path-traced visual baselines (a terrain and an IFS solid) at a
+    fixed sample count, compared by tolerance, since a Monte Carlo
+    image at 64 samples is not bit-stable across drivers.
 
-**T4 — Escape-time.**
+**T4 — Simulations.**
 - **Built.**
-  - `escape.terrain`: the footprint render, tiled.
-  - The three sources, with the distance source writing DE.
-  - The interior options; re-rendering on `escape_dirty` only.
+  - `sim.terrain`.
+  - The shared solid camera on `SimConfig`, with its ConfigPaths and
+    the generalized panel.
+  - The grid-resolution colour pass; the relief stage run for the
+    terrain.
+  - The live lit tier: the maximum mipmap rebuilt each step.
+  - Repeat tiling on the periodic boundary.
 - **Gates.**
-  - The tiled footprint equals the single render where both fit
-    (byte-identical on the direct path, by tolerance on the perturbed).
-  - A deep-zoom terrain at zoom 2^60 renders the same structure as the
-    2D view (its footprint IS the 2D view).
-  - A `escape-terrain-*` baseline.
+  - A running simulation in 3D at 1080p stays inside the interactive
+    budget.
+  - Terrain-off configs are byte-identical.
+  - A `sim-terrain-*` visual baseline.
 
 **T5 — Reach and polish**, each its own decision when it comes up:
-- an HDRI environment;
 - a denoiser: à-trous guided by albedo and normal, which
   `shaders/atrous.wgsl` already implements for flame normals;
 - a far field: a second, coarser footprint around the first, for
-  horizon views of escape;
+  horizon views of escape and a smooth handover as the footprint
+  follows the camera (H11);
+- a gradient sky and an HDRI environment;
 - output tiling for very large stills;
 - a filmic tonemap curve;
 - volumetric sun shafts;
 - presets.
 
-## 10. Open questions for the user
+## 10. The user's answers (2026-10-05)
 
-1. **The camera (H4).**
-   - **Recommended:** the flame camera fields (View panel, fly mode and
-     tracks all work) plus a FOV.
-   - **The alternative:** mode D's escape camera, which has a target
-     and orbit built in but no simulation counterpart.
-2. **What lies beyond the tile.** The sky (Single), the tile repeated
-   (periodic simulations only), or a ground plane at the lowest height?
-3. **The escape default height:** distance (smooth plateaus and cliffs,
-   recommended) or the escape count (spiky, closer to the words "the
-   escape time itself")?
-4. **The interior.** Lake (mirror), hole, or plateau as the default?
-5. **Scope of the first usable version.** T1–T2 gives a lit, live 3D
-   simulation; T1–T3 adds path tracing. Should escape (T4) come before
-   path tracing?
-6. **The lights (H7).** World-fixed in terrain views, matching the 2D
-   relief's light angle (recommended). Or camera-relative, as mode D
-   and 3D flames have them?
+1. **The camera.** The escape solid camera, not the flame camera. The
+   user's reasons:
+   - it is the better renderer: higher quality, and at least as fast;
+   - "the quality of voxels or splatting leaves much to be desired".
+
+   No option ever splatted. The first draft borrowed only the flame
+   camera's FIELDS for rays. But the choice stands on its own merits:
+   H2, H4, and the reordered phases.
+2. **Beyond the tile:** just the background colour, for now (H6). The
+   environment light is the same colour (section 4).
+3. **The escape height:** distance by default (H8).
+4. **The interior:** plateau by default (section 5).
+5. **Order:** "might be moot depending on the camera choice". With
+   mode D's camera and pipeline, escape comes first (T2) and
+   simulations follow (T4), since the escape engine hosts the
+   pipeline. Path tracing (T3) sits between them and lands on IFS
+   solids as well.
+6. **Lights:** fixed in the world (H7).
+
+Still open, to settle at their phases:
+- **T2.** Whether the footprint following the camera (H11) re-renders
+  on release only, or also during a slow dolly.
+- **T4.** Whether a simulation terrain should also show while
+  `engine-escape` is absent: the `wasm/sim` gallery module. The plan
+  says no.
