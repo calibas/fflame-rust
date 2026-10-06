@@ -7469,6 +7469,11 @@ fn pt_eye() -> vec3<f32> {
 fn pt_scene_begin() {
 }
 
+// The whole frame: a solid is not drawn in tiles.
+fn pt_tile() -> vec4<u32> {
+    return vec4<u32>(0u, 0u, params.width, params.height);
+}
+
 // The hit tolerance a ray asks for when it has come `dist`: its pixel's
 // width there, the walk's own.
 fn pt_ifs_eps(dist: f32) -> f32 {

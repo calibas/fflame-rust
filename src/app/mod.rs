@@ -2426,11 +2426,9 @@ impl App {
                     // -- what `render_with` does on the desktop.
                     #[cfg(feature = "terrain")]
                     let terrain_export = if is_escape_export && export_config.escape.terrain_active() {
-                        let mut t = crate::escape::footprint::EscapeTerrain::new(
-                            &self.gpu.device,
-                            export_width,
-                            export_height,
-                        );
+                        // Sized to the still's tiles: it sizes itself.
+                        let (tile_w, tile_h) = crate::escape::terrain_tiers::still_tile(export_width, export_height);
+                        let mut t = crate::escape::footprint::EscapeTerrain::new(&self.gpu.device, tile_w, tile_h);
                         t.footprint_renderer().set_fixed_chunk(true);
                         let mut guard = 0u32;
                         while t.update(
@@ -2451,7 +2449,7 @@ impl App {
                         }
                         // No blocking wait in a browser: the queue keeps
                         // the batches in order regardless.
-                        t.render_still(&self.gpu.device, &self.gpu.queue, &export_config, || {});
+                        t.render_still(&self.gpu.device, &self.gpu.queue, &export_config, (export_width, export_height), || {});
                         Some(t)
                     } else {
                         None
@@ -2570,7 +2568,8 @@ impl App {
                     #[cfg(all(feature = "engine-sim", feature = "terrain"))]
                     let sim_terrain_export = match sim_export.as_mut() {
                         Some(sim) if export_config.sim.terrain_active() => {
-                            let mut t = crate::sim::terrain::SimTerrain::new(&self.gpu.device, export_width, export_height);
+                            let (tile_w, tile_h) = crate::escape::terrain_tiers::still_tile(export_width, export_height);
+                            let mut t = crate::sim::terrain::SimTerrain::new(&self.gpu.device, tile_w, tile_h);
                             t.update(
                                 &self.gpu.device,
                                 &self.gpu.queue,
@@ -2579,7 +2578,7 @@ impl App {
                                 temp_renderer.palette_view(),
                                 temp_renderer.palette_generation(),
                             );
-                            t.render_still(&self.gpu.device, &self.gpu.queue, &export_config, || {});
+                            t.render_still(&self.gpu.device, &self.gpu.queue, &export_config, (export_width, export_height), || {});
                             Some(t)
                         }
                         _ => None,

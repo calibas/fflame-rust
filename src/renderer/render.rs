@@ -832,14 +832,16 @@ async fn render_sim(
     // still -- path traced at its samples unless its tier is Lit.
     #[cfg(feature = "terrain")]
     let terrain: Option<&mut crate::sim::terrain::SimTerrain> = if job.config.sim.terrain_active() {
-        let make = || crate::sim::terrain::SimTerrain::new(device, job.width, job.height);
+        // The still sizes the renderer itself: to the frame, or to its
+        // tiles.
+        let (tile_w, tile_h) = crate::escape::terrain_tiers::still_tile(job.width, job.height);
+        let make = || crate::sim::terrain::SimTerrain::new(device, tile_w, tile_h);
         let t = match terrain_slot {
             Some(slot) => slot.get_or_insert_with(make),
             None => terrain_owned.insert(make()),
         };
-        t.resize(device, job.width, job.height);
         t.update(device, queue, sim, job.config, renderer.palette_view(), renderer.palette_generation());
-        t.render_still(device, queue, job.config, || {
+        t.render_still(device, queue, job.config, (job.width, job.height), || {
             let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
         });
         Some(t)
@@ -1353,12 +1355,13 @@ async fn render_escape_terrain(
     let caller_owned = job.engines.is_some();
     let (job_w, job_h, transparent) = (job.width, job.height, job.transparent);
     let mut owned: Option<EscapeTerrain> = None;
-    let make = || EscapeTerrain::new(device, job.width, job.height);
+    // The still sizes the renderer itself: to the frame, or to its tiles.
+    let (tile_w, tile_h) = crate::escape::terrain_tiers::still_tile(job.width, job.height);
+    let make = || EscapeTerrain::new(device, tile_w, tile_h);
     let terrain: &mut EscapeTerrain = match job.engines {
         Some(ref mut engines) => engines.terrain.get_or_insert_with(make),
         None => owned.insert(make()),
     };
-    terrain.resize(device, job.width, job.height);
     let config = job.config;
     // Every section the export's own view wants (plan section 12),
     // rendered before a sample is drawn.
@@ -1379,7 +1382,7 @@ async fn render_escape_terrain(
     let n = terrain.footprint_renders - before;
     // The picture: path traced at `samples`, or the lit tier's grid.
     let ss = config.escape.supersample.max(1);
-    terrain.render_still(device, queue, config, || {
+    terrain.render_still(device, queue, config, (job_w, job_h), || {
         let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
     });
     let pixels = escape_tail(renderer, device, queue, config, (job_w, job_h, transparent), terrain.output_view(), oom_scope).await;

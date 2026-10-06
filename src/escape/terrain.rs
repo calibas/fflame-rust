@@ -75,6 +75,10 @@ struct TerrainParamsGpu {
     /// x: shadow strength (0 traces no shadow rays), y: penumbra
     /// softness k, z: occlusion reach in cells, w: shadow-ray bias.
     misc: [f32; 4],
+    /// The part of the frame (`width` by `height`) the buffers hold: its
+    /// origin in the frame's pixels and its size. The whole frame, unless
+    /// a still is drawn in tiles.
+    tile: [u32; 4],
     /// Mode D's rig slots: [2].w the FOV, [3] forward, [4] right, [5]
     /// up, [7].z the light count, [8]-[10] the material and fog, [11..]
     /// two per light (direction and power, colour).
@@ -417,6 +421,7 @@ struct TerrainParams {
     jitter: vec2<f32>,
     eye: vec4<f32>,
     misc: vec4<f32>,
+    tile: vec4<u32>,
     fdata: array<vec4<f32>, 20>,
 };
 @group(0) @binding(0) var<uniform> params: TerrainParams;
@@ -958,13 +963,14 @@ const WALK_WGSL: &str = r#"
 
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if (gid.x >= params.width || gid.y >= params.height) {
+    // The buffers hold the tile; the rays are the frame's.
+    if (gid.x >= params.tile.z || gid.y >= params.tile.w) {
         return;
     }
-    let idx = gid.y * params.width + gid.x;
+    let idx = gid.y * params.tile.z + gid.x;
     hf_load_range();
     let o = params.eye.xyz;
-    let d = ifs_ray(gid.x, gid.y);
+    let d = ifs_ray(params.tile.x + gid.x, params.tile.y + gid.y);
     // The ground ends at the view depth `far` (fdata[6].w), where the
     // fog has reached the background.
     let tmax = params.fdata[6].w / max(dot(d, ifs_forward()), 1.0e-4);
@@ -1059,10 +1065,10 @@ const RELIGHT_WGSL: &str = r#"
 
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if (gid.x >= params.width || gid.y >= params.height) {
+    if (gid.x >= params.tile.z || gid.y >= params.tile.w) {
         return;
     }
-    let idx = gid.y * params.width + gid.x;
+    let idx = gid.y * params.tile.z + gid.x;
     let g = ifs_geom[idx];
     let t = bitcast<f32>(g.w);
     let px = vec2<i32>(i32(gid.x), i32(gid.y));
@@ -1071,7 +1077,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         textureStore(out_tex, px, vec4<f32>(0.0, 0.0, 0.0, 0.0));
         return;
     }
-    let dir = ifs_ray(gid.x, gid.y);
+    let dir = ifs_ray(params.tile.x + gid.x, params.tile.y + gid.y);
     let p = params.eye.xyz + dir * t;
     let nxy = unpack2x16float(g.x);
     let nz_ao = unpack2x16float(g.y);
@@ -1129,6 +1135,10 @@ fn pt_eye() -> vec3<f32> {
 
 fn pt_scene_begin() {
     hf_load_range();
+}
+
+fn pt_tile() -> vec4<u32> {
+    return params.tile;
 }
 
 // The surface a trace found: its shading normal (a wall's own on a
@@ -1590,6 +1600,11 @@ pub struct TerrainRenderer {
     output: (Texture, TextureView),
     out_w: u32,
     out_h: u32,
+    /// The frame the output is part of, and where in it: the output's own
+    /// size at the origin, unless a still is drawn in tiles
+    /// (`set_frame`).
+    frame: (u32, u32),
+    origin: (u32, u32),
     next_version: u64,
     walked: Option<String>,
     /// Walks run so far, for the relight-cache gate.
@@ -1812,6 +1827,8 @@ impl TerrainRenderer {
             output,
             out_w,
             out_h,
+            frame: (out_w, out_h),
+            origin: (0, 0),
             next_version: 1,
             walked: None,
             walks: 0,
@@ -1860,8 +1877,25 @@ impl TerrainRenderer {
         self.path.ensure(device, out_w * out_h);
         self.out_w = out_w;
         self.out_h = out_h;
+        self.frame = (out_w, out_h);
+        self.origin = (0, 0);
         self.walked = None;
         true
+    }
+
+    /// Draw the output as the part of a `frame` at `origin` (both in the
+    /// frame's pixels): a tile of a still too large to draw whole. Its
+    /// pixels are the frame's own -- the same rays, the same samples --
+    /// so the tiles together are the frame drawn whole. Kept until the
+    /// next `resize` or `set_frame`.
+    pub fn set_frame(&mut self, frame: (u32, u32), origin: (u32, u32)) {
+        if (frame, origin) != (self.frame, self.origin) {
+            self.frame = frame;
+            self.origin = origin;
+            self.walked = None;
+            self.path.reset();
+            self.accum_count = 0;
+        }
     }
 
     pub fn output_view(&self) -> &TextureView {
@@ -1889,7 +1923,9 @@ impl TerrainRenderer {
         if w > side || h > side {
             return Some(format!("a terrain view of {w}x{h} is past this device's texture side of {side}"));
         }
-        let geom = w as u64 * h as u64 * 16;
+        // A still that large is drawn in tiles: the buffers hold a tile.
+        let (tw, th) = super::terrain_tiers::still_tile(w, h);
+        let geom = tw as u64 * th as u64 * 16;
         let cap = lim.max_buffer_size.min(lim.max_storage_buffer_binding_size as u64);
         if geom > cap {
             return Some(format!(
@@ -1978,6 +2014,14 @@ impl TerrainRenderer {
     pub fn accumulated_view(&self) -> Option<&TextureView> {
         match (&self.accum, self.accum_count) {
             (Some(pair), 1..) => Some(&pair[self.accum_front].1),
+            _ => None,
+        }
+    }
+
+    /// The accumulated mean's texture, once anything has been folded in.
+    pub fn accumulated_texture(&self) -> Option<&Texture> {
+        match (&self.accum, self.accum_count) {
+            (Some(pair), 1..) => Some(&pair[self.accum_front].0),
             _ => None,
         }
     }
@@ -2517,15 +2561,15 @@ impl TerrainRenderer {
         // The map's height and width, a ray's share of a pixel per unit
         // of distance (the albedo's filter), and the view depth past
         // which there is no ground.
-        let per_ray = 2.0 * (view.camera.fov * 0.5).tan() / self.out_h.max(1) as f32 / view.samples_per_axis.max(1) as f32;
+        let per_ray = 2.0 * (view.camera.fov * 0.5).tan() / self.frame.1.max(1) as f32 / view.samples_per_axis.max(1) as f32;
         fdata[6] = [view.height, view.width, per_ray, view.far];
         // A repeated ground's period: its one section's extent.
         if let (true, Some(s)) = (g.repeat, g.sections.first()) {
             fdata[19] = [((s.n - 1) as f64 * s.texel) as f32, ((s.m - 1) as f64 * s.texel) as f32, 1.0, 0.0];
         }
         let p = TerrainParamsGpu {
-            width: self.out_w,
-            height: self.out_h,
+            width: self.frame.0,
+            height: self.frame.1,
             grid_n: 0,
             grid_m: 0,
             levels: 0,
@@ -2533,6 +2577,7 @@ impl TerrainRenderer {
             jitter: view.jitter,
             eye: [view.camera.eye[0] as f32, view.camera.eye[1] as f32, view.camera.eye[2] as f32, g.floor as f32],
             misc: [view.shadow, view.softness, view.occlusion_reach, 0.0],
+            tile: [self.origin.0, self.origin.1, self.out_w, self.out_h],
             fdata,
         };
         queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&p));
@@ -2542,7 +2587,7 @@ impl TerrainRenderer {
     /// relight. Submits its own work.
     pub fn render(&mut self, device: &Device, queue: &Queue, view: &TerrainView) {
         let (Some(ground), Some(atlas)) = (self.ground.as_ref(), self.atlas.as_ref()) else { return };
-        let key = walk_key(view, self.out_w, self.out_h, ground.version);
+        let key = format!("{}|{:?}{:?}", walk_key(view, self.out_w, self.out_h, ground.version), self.frame, self.origin);
         let walk = self.walked.as_deref() != Some(key.as_str()) || self.count_steps;
         self.write_params(queue, view);
         let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Terrain") });
@@ -2628,7 +2673,7 @@ impl TerrainRenderer {
         let radius = super::path_core::light_radius(view.softness);
         // A ray's share of a pixel per unit of distance: half a pixel,
         // since the jitter already spreads the samples over the whole.
-        let per_ray = (view.camera.fov * 0.5).tan() / self.out_h.max(1) as f32;
+        let per_ray = (view.camera.fov * 0.5).tan() / self.frame.1.max(1) as f32;
         let mut done = 0;
         while done < samples {
             let n = per_dispatch.max(1).min(samples - done);
@@ -2891,8 +2936,8 @@ mod tests {
 
     #[test]
     fn the_uniform_matches_its_wgsl_mirror() {
-        // 8 words, two vec4s, twenty vec4s.
-        assert_eq!(std::mem::size_of::<TerrainParamsGpu>(), 32 + 32 + 320);
+        // 8 words, three vec4s (the tile's), twenty vec4s.
+        assert_eq!(std::mem::size_of::<TerrainParamsGpu>(), 32 + 48 + 320);
     }
 
     #[test]
@@ -3820,6 +3865,59 @@ pub(crate) mod gpu_tests {
         assert!(sums.windows(2).all(|p| p[0] == p[1]), "the sums differ across batchings");
         let f: &[f32] = bytemuck::cast_slice(&sums[0]);
         assert!(f.iter().any(|v| *v > 0.0), "something was traced");
+    }
+
+    /// A still drawn in tiles (T5's output tiling) is the still drawn
+    /// whole, bit for bit, lit and path traced: a tile's rays and samples
+    /// are the frame's own. The frame splits unevenly (a narrower last
+    /// column, a shorter last row) and the path tracer runs with a lens.
+    #[test]
+    fn a_still_in_tiles_is_the_still_whole() {
+        use super::super::terrain_tiers::{TerrainTiers, TierInputs};
+        use crate::config::escape::RenderTier;
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (fw, fh) = (150u32, 97u32);
+        let (n, m) = (129u32, 97u32);
+        let hs = terrain("sinusoid", n as usize, m as usize);
+        let albedo: Vec<[f32; 4]> = (0..n * m).map(|k| [0.3 + 0.5 * ((k % 7) as f32 / 7.0), 0.6, 0.4, 1.0]).collect();
+        let mut lit = SolidShadingSettings::default();
+        lit.shading_strength = 1.0;
+        lit.ambient = 0.2;
+        lit.diffuse = 0.8;
+        lit.lights[0].enabled = true;
+        lit.lights[0].azimuth = 135.0;
+        lit.lights[0].elevation = 25.0;
+        let base = {
+            let mut v = view(camera([64.0, 48.0, 8.0], 0.6, 0.4, 150.0, 0.9));
+            v.shading = lit;
+            v.samples_per_axis = 2;
+            v
+        };
+        let settings = PathSettings { bounces: 2, environment: [0.3, 0.4, 0.6], seed: 5, aperture: 4.0, focus: 150.0, ..PathSettings::default() };
+        for tier in [RenderTier::Lit, RenderTier::PathTraced] {
+            let still = |side: u32| {
+                let mut r = TerrainRenderer::new(&device, 8, 8);
+                r.set_tile(&device, &queue, n, m, &hs, &albedo);
+                let mut tiers = TerrainTiers::default();
+                let view = |jitter: [f32; 2]| TerrainView { jitter, ..base.clone() };
+                let inputs = TierInputs { view: &view, settings: settings.clone(), tier, samples: 6, supersample: 2 };
+                tiers.still_in_tiles(&mut r, &device, &queue, &inputs, (fw, fh), side, || {
+                    let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                });
+                read_texture(&device, &queue, tiers.output_texture_for_test(&r), 0, fw, fh, 16)
+            };
+            let whole = still(1024);
+            let tiled = still(40);
+            let px: &[[f32; 4]] = bytemuck::cast_slice(&whole);
+            let lit_px = px.iter().filter(|p| p[3] > 0.0).count();
+            println!("{tier:?}: {lit_px} of {} pixels on the ground", fw * fh);
+            assert!(lit_px > (fw * fh / 4) as usize, "{tier:?}: the ground fills the frame");
+            let differ = whole.chunks(16).zip(tiled.chunks(16)).filter(|(a, b)| a != b).count();
+            assert_eq!(differ, 0, "{tier:?}: {differ} pixels differ between the tiled and the whole still");
+        }
     }
 
     /// A light's colour or power is a relight: no walk, and the picture a
