@@ -510,9 +510,13 @@
       "bytes": 38330,
       "sha256": "d906dc7cdd7505ba163b29c02d7b9084ee51fb58d1556e52d8d616f660c4a6ea"
     },
-    "escape-terrain-seahorse.png": {
+    "escape-terrain-seahorse-lit.png": {
       "bytes": 14799,
       "sha256": "e0ac08e636ed97c01e0f8f805ea0ccbf4c34b59e1d9027127031d3fb6624ecff"
+    },
+    "escape-terrain-seahorse.png": {
+      "bytes": 15521,
+      "sha256": "963cd66e86918868a37ab74654073b4b6741aa0f8a1d17120fa9faffc3910db8"
     },
     "escape-tetration-period.png": {
       "bytes": 11866,

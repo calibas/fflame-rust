@@ -1075,6 +1075,68 @@ terrain.**
     fixed sample count, compared by tolerance, since a Monte Carlo
     image at 64 samples is not bit-stable across drivers.
 
+- **Built in steps:** T3a the terrain path tracer's core; T3b GGX,
+  emission, fog as single scattering, depth of field, the firefly
+  clamp's tuning; T3c mode D's IFS solids on the same core; T3d the
+  lake, the progress bar, the panel's polish.
+- **T3a as built** (2026-10-06):
+  [src/escape/terrain.rs](../../src/escape/terrain.rs) (`PATH_WGSL`,
+  `render_path`) and [src/escape/footprint.rs](../../src/escape/footprint.rs)
+  (`path_settings`, the tiers).
+  - **The integrator.** A sample: a ray jittered within its pixel; at
+    each surface the lights sampled over their angular size with a
+    shadow ray, then a cosine-weighted bounce whose escape sees the
+    environment, with Russian roulette from the second bounce. Lambert
+    on the filtered albedo; a hole's floor is the sky through it.
+    Coverage is the primary hit's, faded by the fog as the lit tier
+    fades it.
+  - **The lights are the rig's.** The rig's convention (`albedo × I ×
+    diffuse × cos θ`, shadow strength mixing the visibility), so a
+    sunlit surface reads alike in both tiers. A light's angular radius
+    is half the inverse of the Shadow Sharpness, the lit tier's penumbra
+    in an area light's terms.
+  - **The environment** is the background colour brought into the
+    accumulator's units (through the inverse of the Linear tonemap's
+    exposure and gamma) times Sky light: the sky and an albedo-1 surface
+    it lights read as the background does.
+  - **Fireflies** are clamped at ten times the brightest light.
+  - **Batch invariance.** Each invocation adds its pixel's samples, in
+    order, to a running SUM (a storage buffer, premultiplied), and a
+    resolve writes the mean into the output. A sample's random numbers
+    are keyed by (pixel, sample index, seed). So the sum is the same
+    bits however the samples are split into dispatches, and a seed fixed
+    at 1 makes a video's noise steady from frame to frame.
+  - **The tiers** (`TerrainConfig.tier`, plan section 8):
+    - **Auto**, the default: the lit tier's antialiasing grid while
+      anything moves; path-traced samples while nothing does, as many a
+      frame as fit 12 ms at the measured cost, up to `samples` (256).
+      The path tracer's picture replaces the lit one from 8 samples.
+    - **Lit** and **Path traced**: one tier always.
+    - Exports path trace at `samples` unless the tier is Lit, in
+      batches of about a quarter second.
+  - **Config:** `tier`, `samples` (256), `bounces` (2), `environment`
+    (1); the panel's Rendering, Samples, Bounces and Sky light.
+  - **Gates, all passing:**
+    - **The white furnace:** albedo 1, a uniform environment L, no
+      light. A flat plane is exactly L at 1, 2 and 4 bounces (worst
+      error 0). A sinusoid's valleys at 24 bounces and 1,024 samples
+      average L to four digits in every channel.
+    - **Sun only:** with no environment and a near-point sun, the path
+      tracer's plane equals the lit tier's `albedo E cos θ`, to 3e-8.
+    - **Batch invariance:** twelve samples as 12, 3 and 1 dispatches
+      (sun, sky, three bounces, a sinusoid) are bit-identical sums, and
+      again on a second pass: determinism.
+    - Baselines: `escape-terrain-seahorse` path traced (256 samples,
+      re-baselined) and `escape-terrain-seahorse-lit`, the lit tier.
+      113 escape baselines and `release.py check` pass.
+  - **Measured:** the seahorse at 1080p, 256 samples, 2 bounces: 6.4 s
+    with its sections, about 23 ms a sample on the GTX 1660 SUPER. The
+    viewport gathers a sample a frame there and shows the path tracer
+    from about 0.2 s after the camera stops.
+  - **Seen** (`output/heightfield_t3/`): the seahorse path traced and
+    lit. The sky light fills the shadows and tints the faces that see
+    the sky blue; 256 samples are clean.
+
 **T4 — Simulations.**
 - **Built.**
   - `sim.terrain`.

@@ -1690,6 +1690,56 @@ fn show_terrain_section(
                         }
                     });
             });
+            // How it is rendered: the lit tier, the path tracer, or both
+            // by turns (plan section 8).
+            ui.separator();
+            ui.horizontal(|ui| {
+                use crate::config::escape::TerrainTier;
+                ui.label(t!("escape_panel.terrain_tier"));
+                let label = |s: TerrainTier| match s {
+                    TerrainTier::Auto => t!("escape_panel.terrain_tier_auto"),
+                    TerrainTier::Lit => t!("escape_panel.terrain_tier_lit"),
+                    TerrainTier::PathTraced => t!("escape_panel.terrain_tier_path"),
+                };
+                egui::ComboBox::from_id_salt("terrain_tier")
+                    .selected_text(label(t.tier))
+                    .show_ui(ui, |ui| {
+                        for s in TerrainTier::ALL {
+                            if ui.selectable_label(t.tier == s, label(s)).clicked() && s != t.tier {
+                                let _ = config_manager.update_param(
+                                    ConfigPath::EscapeTerrainTier,
+                                    ConfigValue::String(s.as_str().to_string()),
+                                );
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text(t!("escape_panel.terrain_tier_tip"));
+            });
+            if t.tier != crate::config::escape::TerrainTier::Lit {
+                ui.horizontal(|ui| {
+                    ui.label(t!("escape_panel.terrain_samples"));
+                    let mut v = t.samples;
+                    if ui
+                        .add(egui::Slider::new(&mut v, 1..=4096).logarithmic(true))
+                        .on_hover_text(t!("escape_panel.terrain_samples_tip"))
+                        .changed()
+                    {
+                        let _ = config_manager.update_param(ConfigPath::EscapeTerrainSamples, ConfigValue::UInt(v));
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label(t!("escape_panel.terrain_bounces"));
+                    let mut v = t.bounces;
+                    if ui
+                        .add(egui::Slider::new(&mut v, 0..=8))
+                        .on_hover_text(t!("escape_panel.terrain_bounces_tip"))
+                        .changed()
+                    {
+                        let _ = config_manager.update_param(ConfigPath::EscapeTerrainBounces, ConfigValue::UInt(v));
+                    }
+                });
+            }
             // How it is lit: the Solid Lighting panel's lights, world-
             // fixed, with these.
             ui.separator();
@@ -1733,6 +1783,17 @@ fn show_terrain_section(
                 false,
                 t!("escape_panel.terrain_occlusion_tip").to_string(),
             );
+            if t.tier != crate::config::escape::TerrainTier::Lit {
+                slider(
+                    ui,
+                    t!("escape_panel.terrain_environment").to_string(),
+                    ConfigPath::EscapeTerrainEnvironment,
+                    t.environment,
+                    0.0..=4.0,
+                    false,
+                    t!("escape_panel.terrain_environment_tip").to_string(),
+                );
+            }
             // How far it reaches, and how finely it is sampled.
             ui.separator();
             slider(

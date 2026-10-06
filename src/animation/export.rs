@@ -861,6 +861,9 @@ fn apply_config_value(
         (ConfigPath::EscapeTerrainFar, ConfigValue::Float(v)) => {
             config.escape.terrain.far = v.clamp(0.5, 64.0);
         }
+        (ConfigPath::EscapeTerrainEnvironment, ConfigValue::Float(v)) => {
+            config.escape.terrain.environment = v.clamp(0.0, 16.0);
+        }
         (ConfigPath::EscapeTerrainHaze, ConfigValue::Float(v)) => {
             config.escape.terrain.haze = v.clamp(0.0, 1.0);
         }
