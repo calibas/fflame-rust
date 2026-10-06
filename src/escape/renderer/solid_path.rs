@@ -138,6 +138,14 @@ impl EscapeRenderer {
         self.solid_path.as_ref().map_or(0, |p| p.sum.count())
     }
 
+    /// Samples so far with a part-done pass counted as its share of the
+    /// rows.
+    pub fn solid_path_progress(&self) -> f32 {
+        self.solid_path
+            .as_ref()
+            .map_or(0.0, |p| p.sum.count() as f32 + p.row as f32 / p.height.max(1) as f32)
+    }
+
     /// Whether the output is the path tracer's picture.
     pub fn solid_path_shown(&self) -> bool {
         self.solid_path.as_ref().is_some_and(|p| p.shown)

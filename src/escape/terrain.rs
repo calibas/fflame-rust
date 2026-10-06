@@ -166,7 +166,7 @@ struct IngestParamsGpu {
     m: u32,
     /// 8 distance, 9 escape count, anything else the relief's source.
     source: u32,
-    /// 0 plateau, 1 hole.
+    /// 0 plateau, 1 hole, 2 lake.
     interior: u32,
     /// The region's origin in the footprint picture's pixels (x right,
     /// y down), and its size.
@@ -177,6 +177,8 @@ struct IngestParamsGpu {
     /// The interior's colour on a plateau, where the colouring leaves
     /// it undrawn: the background's.
     background: [f32; 4],
+    /// A lake's tint.
+    tint: [f32; 4],
 }
 
 /// The ingest (heightfield plan, section 5): a REGION of a footprint
@@ -189,6 +191,10 @@ struct IngestParamsGpu {
 /// the top (a plateau) or to the floor (a hole): for a distance, 0 and
 /// +1e30; for a count or a relief, +1e30 and -1e30 -- the order each
 /// map keeps, so the mipmap's extreme still bounds the highest point.
+/// A lake's sentinel (3e30 in size) maps to height 0, the plain's, and
+/// sorts last in that order (+ for a distance, whose mipmap keeps the
+/// minimum; - for the others, which keep the maximum), so the land round
+/// a lake still bounds its block.
 /// The range pass measures a count's or a relief's range over every
 /// region (the distance needs none).
 const INGEST_WGSL: &str = r#"
@@ -202,6 +208,7 @@ struct IngestParams {
     rw: u32,
     rh: u32,
     background: vec4<f32>,
+    tint: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> ip: IngestParams;
 @group(0) @binding(1) var colour: texture_2d<f32>;
@@ -249,6 +256,9 @@ fn ingest_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if (ip.interior == 1u) {
             textureStore(out_raw, dst, vec4<f32>(select(-1.0e30, 1.0e30, distance), 0.0, 0.0, 0.0));
             textureStore(out_a, dst, vec4<f32>(0.0, 0.0, 0.0, 0.0));
+        } else if (ip.interior == 2u) {
+            textureStore(out_raw, dst, vec4<f32>(select(-3.0e30, 3.0e30, distance), 0.0, 0.0, 0.0));
+            textureStore(out_a, dst, vec4<f32>(ip.tint.rgb, 1.0));
         } else {
             // The interior's own colour where the colouring draws one,
             // the background's where it does not.
@@ -311,11 +321,13 @@ pub struct TerrainIngest {
     /// The height source the footprint wrote: 8 distance, 9 escape
     /// count, anything else the relief's own.
     pub source: u32,
-    /// The interior as a hole rather than a plateau.
-    pub hole: bool,
+    /// The interior: 0 a plateau, 1 a hole, 2 a lake.
+    pub interior: u32,
     /// The plateau's colour where the colouring leaves the interior
     /// undrawn: the background's.
     pub background: [f32; 3],
+    /// A lake's colour under its surface.
+    pub tint: [f32; 3],
 }
 
 impl TerrainIngest {
@@ -412,6 +424,10 @@ fn hf_raw(i: i32, j: i32) -> f32 {
 // relief's linear one, each with the interior's sentinels. Monotone,
 // so a section's mipmap of raw extremes bounds its highest point.
 fn hf_f(raw: f32) -> f32 {
+    // A lake: flat at the plain's level.
+    if (abs(raw) >= 2.0e30) {
+        return 0.0;
+    }
     let mode = u32(params.fdata[1].w);
     let top = params.fdata[6].x;
     if (mode == 0u) {
@@ -1049,6 +1065,16 @@ fn pt_surface(o: vec3<f32>, d: vec3<f32>, h: HfHit, travelled: f32) -> PtHit {
     if (edge < 1.0e-2 && hf_height_at(ps.x, ps.y) - ps.z > 1.0e-3) {
         n = hf_wall_normal(ps);
     }
+    // The coat: the config's gloss -- or, on a cell whose four corners
+    // are all the lake's, water: flat, reflecting 0.02 head on, at the
+    // lake's roughness, over the tint.
+    out.f0 = pt.mat.x;
+    out.rough = pt.mat.y;
+    if (hf_lake_cell(ps.x, ps.y)) {
+        n = vec3<f32>(0.0, 0.0, 1.0);
+        out.f0 = 0.02;
+        out.rough = pt.mat.w;
+    }
     // The side the ray sees: a height field is two-sided.
     if (dot(n, d) > 0.0) {
         n = -n;
@@ -1060,6 +1086,16 @@ fn pt_surface(o: vec3<f32>, d: vec3<f32>, h: HfHit, travelled: f32) -> PtHit {
     // tell apart at its distance from the origin and the eye's.
     out.bias = hf_sec.geo.z * 1.0e-3 + (length(p) + length(params.eye.xyz)) * 1.0e-6;
     return out;
+}
+
+// Whether the current section's cell under (x, y) is all lake.
+fn hf_lake_cell(x: f32, y: f32) -> bool {
+    let n = i32(hf_sec.dims.x);
+    let m = i32(hf_sec.dims.y);
+    let a = min(i32(floor(clamp(x, 0.0, f32(n - 1)))), n - 2);
+    let b = min(i32(floor(clamp(y, 0.0, f32(m - 1)))), m - 2);
+    return abs(hf_raw(a, b)) >= 2.0e30 && abs(hf_raw(a + 1, b)) >= 2.0e30
+        && abs(hf_raw(a, b + 1)) >= 2.0e30 && abs(hf_raw(a + 1, b + 1)) >= 2.0e30;
 }
 
 fn pt_scene_next(o: vec3<f32>, d: vec3<f32>, travelled: f32) -> PtHit {
@@ -1075,9 +1111,8 @@ fn pt_scene_visible(o: vec3<f32>, d: vec3<f32>, travelled: f32) -> bool {
 // background through -- faded by the fog with depth, as the lit tier
 // fades it; the ground ends at the distance the view renders to.
 fn pt_sample(px: u32, py: u32) -> vec4<f32> {
-    let jx = pt_rand() - 0.5;
-    let jy = pt_rand() - 0.5;
-    let ray = pt_ray(px, py, jx, jy);
+    let j = pt_rand2() - vec2<f32>(0.5, 0.5);
+    let ray = pt_ray(px, py, j.x, j.y);
     let tmax = params.fdata[6].w / max(dot(ray.d, ifs_forward()), 1.0e-4);
     let h = pt_surface(ray.o, ray.d, hf_trace(ray.o, ray.d, tmax, 0.0), 0.0);
     if (!h.hit) {
@@ -1870,8 +1905,10 @@ impl TerrainRenderer {
             Extent3d { width: n, height: m, depth_or_array_layers: 1 },
         );
         self.build_layer(device, queue, 0, 0);
+        // A lake's sentinel stands at the plain's level, 0.
+        let heights: Vec<f32> = heights.iter().map(|&h| if h.abs() >= 2.0e30 { 0.0 } else { h }).collect();
         let top = heights.iter().cloned().fold(f32::NEG_INFINITY, f32::max) as f64;
-        self.set_ground(device, queue, Self::one_section_ground(n, m, 0, top, slab_floor(heights, n, m) as f64));
+        self.set_ground(device, queue, Self::one_section_ground(n, m, 0, top, slab_floor(&heights, n, m) as f64));
     }
 
     /// A ground of one section of `n x m` cells from the origin, its own
@@ -1992,12 +2029,13 @@ impl TerrainRenderer {
             n,
             m,
             source: ingest.source,
-            interior: u32::from(ingest.hole),
+            interior: ingest.interior,
             ox: 0,
             oy: 0,
             rw: 0,
             rh: 0,
             background: [ingest.background[0], ingest.background[1], ingest.background[2], 1.0],
+            tint: [ingest.tint[0], ingest.tint[1], ingest.tint[2], 1.0],
         };
         self.building = Some((layer, params));
     }
@@ -2067,7 +2105,7 @@ impl TerrainRenderer {
     /// mip chain. It is drawn once a ground names its layer.
     pub fn finish_section(&mut self, device: &Device, queue: &Queue) {
         let (layer, base) = self.building.take().expect("begin_section first");
-        let mode = TerrainIngest { source: base.source, hole: base.interior == 1, background: [0.0; 3] }.mode();
+        let mode = TerrainIngest { source: base.source, interior: base.interior, background: [0.0; 3], tint: [0.0; 3] }.mode();
         self.build_layer(device, queue, layer, u32::from(mode == 1));
     }
 
@@ -3297,6 +3335,47 @@ pub(crate) mod gpu_tests {
         }
     }
 
+    /// The lake (T3d): a tile all lake, black under the surface, under a
+    /// uniform sky L, seen from 46 degrees above. Water's Fresnel mirrors
+    /// the sky more as the view grazes it: about 0.02 L near head on (the
+    /// frame's near rows), rising toward the horizon, never past the sky.
+    /// A black plateau reflects nothing.
+    #[test]
+    fn the_lake_is_water() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (48u32, 32u32);
+        let (n, m) = (129u32, 129u32);
+        let l = [0.5f32, 0.6, 0.7];
+        let mut v = view(camera([64.0, 64.0, 0.0], 0.8, 0.25, 40.0, 0.6));
+        v.shading = dark();
+        let mut r = TerrainRenderer::new(&device, w, h);
+        let shot = |r: &mut TerrainRenderer, lake: bool| {
+            let heights = vec![if lake { -3.0e30 } else { 0.0 }; (n * m) as usize];
+            r.set_tile(&device, &queue, n, m, &heights, &vec![[0.0, 0.0, 0.0, 1.0]; (n * m) as usize]);
+            let s = PathSettings { bounces: 2, environment: l, lake_roughness: 0.02, ..PathSettings::default() };
+            r.reset_path();
+            r.render_path(&device, &queue, &v, &s, 256, 64);
+            read_output(&device, &queue, r, w, h)
+        };
+        let plateau = shot(&mut r, false);
+        let worst = plateau.iter().filter(|p| p[3] > 0.0).map(|p| p[0].max(p[1]).max(p[2])).fold(0.0f32, f32::max);
+        assert!(worst < 1e-6, "a black plateau reflects nothing: {worst}");
+        let lake = shot(&mut r, true);
+        let rows = |y0: u32, y1: u32| {
+            let px: Vec<&[f32; 4]> = (y0..y1).flat_map(|y| (0..w).map(move |x| (x, y))).map(|(x, y)| &lake[(y * w + x) as usize]).filter(|p| p[3] > 0.0).collect();
+            px.iter().map(|p| p[0] as f64 / l[0] as f64).sum::<f64>() / px.len().max(1) as f64
+        };
+        let (far, near) = (rows(0, h / 3), rows(2 * h / 3, h));
+        let brightest = lake.iter().filter(|p| p[3] > 0.0).map(|p| p[2] / l[2]).fold(0.0f32, f32::max);
+        println!("lake: far rows {far:.3} L, near rows {near:.3} L, brightest {brightest:.3} L");
+        assert!((near - 0.02).abs() < 0.005, "water reflects 2% head on: {near}");
+        assert!(far > near * 1.2, "the mirror strengthens toward the horizon: {near} {far}");
+        assert!(brightest <= 1.01, "no brighter than the sky: {brightest}");
+    }
+
     /// The lens (T3b): a pinhole -- aperture 0 -- is the same bits
     /// whatever the focus; an open lens keeps the focal plane: a plane at
     /// the focus, seen face on, converges to the pinhole's picture.
@@ -3663,8 +3742,9 @@ pub(crate) mod gpu_tests {
             bytemuck::cast_slice(&read_texture(&device, &queue, escape.output_texture_for_test(), 0, n, n, 16)).to_vec();
         let hf: Vec<[f32; 4]> =
             bytemuck::cast_slice(&read_texture(&device, &queue, escape.height_texture_for_test(), 0, n, n, 16)).to_vec();
-        for hole in [false, true] {
-            let ingest = TerrainIngest { source: 8, hole, background: [0.1, 0.2, 0.3] };
+        for interior in [0u32, 1, 2] {
+            let hole = interior == 1;
+            let ingest = TerrainIngest { source: 8, interior, background: [0.1, 0.2, 0.3], tint: [0.4, 0.5, 0.6] };
             let mut r = TerrainRenderer::new(&device, 8, 8);
             r.set_tile_from_escape(&device, &queue, escape.output_view(), escape.height_view(), n, n, &ingest, 1.0);
             assert_eq!(r.tile_shape_for_test(), Some((n, n, 1)), "a distance tile maps by the distance");
@@ -3678,12 +3758,16 @@ pub(crate) mod gpu_tests {
                     let dst = (j * n + i) as usize;
                     let (c, g) = (colour[src], hf[src][1]);
                     let interior = !(c[3] > 0.0) || g <= -1e29;
-                    let (want_raw, want_a) = match (interior, hole) {
-                        (true, false) => {
+                    let (want_raw, want_a) = match (interior, ingest.interior) {
+                        (true, 0) => {
                             plateau += 1;
                             (0.0, [0.1, 0.2, 0.3, 1.0])
                         }
-                        (true, true) => (1.0e30, [0.0; 4]),
+                        (true, 1) => (1.0e30, [0.0; 4]),
+                        (true, _) => {
+                            plateau += 1;
+                            (3.0e30, [0.4, 0.5, 0.6, 1.0])
+                        }
                         _ => (g.max(0.0), [c[0], c[1], c[2], 1.0]),
                     };
                     worst_h = worst_h.max((raw[dst] - want_raw).abs() / want_raw.abs().max(1.0));
@@ -3693,7 +3777,7 @@ pub(crate) mod gpu_tests {
                     }
                 }
             }
-            println!("ingest (hole {hole}): worst raw error {worst_h:.2e}, worst albedo error {worst_a:.2e}, {plateau} plateau samples");
+            println!("ingest (interior {interior}): worst raw error {worst_h:.2e}, worst albedo error {worst_a:.2e}, {plateau} interior samples");
             assert!(hole || (plateau > 0 && plateau < (n * n) as usize), "{plateau}");
             assert!(worst_h < 1e-6, "{worst_h}");
             assert!(worst_a < 1e-3, "{worst_a}");

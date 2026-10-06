@@ -1837,19 +1837,25 @@ pub enum TerrainInterior {
     Plateau,
     /// Transparent, sunk to the slab's floor: a hole through it.
     Hole,
+    /// Water, flat at the plain's level -- the height the ground falls
+    /// to far from the set -- so the set's rim rises round it: a lake the
+    /// path tracer renders as a dielectric mirror over the tint.
+    Lake,
 }
 
 impl TerrainInterior {
-    pub const ALL: [TerrainInterior; 2] = [TerrainInterior::Plateau, TerrainInterior::Hole];
+    pub const ALL: [TerrainInterior; 3] = [TerrainInterior::Plateau, TerrainInterior::Hole, TerrainInterior::Lake];
     pub fn as_str(self) -> &'static str {
         match self {
             TerrainInterior::Plateau => "plateau",
             TerrainInterior::Hole => "hole",
+            TerrainInterior::Lake => "lake",
         }
     }
     pub fn from_str_or_default(s: &str) -> Self {
         match s {
             "hole" => TerrainInterior::Hole,
+            "lake" => TerrainInterior::Lake,
             _ => TerrainInterior::Plateau,
         }
     }
@@ -1979,6 +1985,12 @@ pub struct TerrainConfig {
     pub tier: RenderTier,
     #[serde(default, skip_serializing_if = "is_default_terrain_interior")]
     pub interior: TerrainInterior,
+    /// A lake's colour under its surface (linear), and how blurred its
+    /// reflections are: 0.02 is a still mirror.
+    #[serde(default = "default_terrain_lake_tint", skip_serializing_if = "is_default_terrain_lake_tint")]
+    pub lake_tint: [f32; 3],
+    #[serde(default = "default_terrain_lake_roughness", skip_serializing_if = "is_default_terrain_lake_roughness")]
+    pub lake_roughness: f32,
     /// How dark a shadowed surface goes; 0 traces no shadow rays. Mode
     /// D's Shadows, which are its formula's parameter.
     #[serde(default = "default_terrain_shadow", skip_serializing_if = "is_default_terrain_shadow")]
@@ -2053,6 +2065,18 @@ fn is_default_terrain_occlusion(v: &f32) -> bool {
 fn is_default_terrain_source(v: &TerrainSource) -> bool {
     *v == TerrainSource::default()
 }
+fn default_terrain_lake_tint() -> [f32; 3] {
+    [0.02, 0.05, 0.07]
+}
+fn is_default_terrain_lake_tint(v: &[f32; 3]) -> bool {
+    *v == default_terrain_lake_tint()
+}
+fn default_terrain_lake_roughness() -> f32 {
+    0.05
+}
+fn is_default_terrain_lake_roughness(v: &f32) -> bool {
+    *v == default_terrain_lake_roughness()
+}
 fn is_default_terrain_interior(v: &TerrainInterior) -> bool {
     *v == TerrainInterior::default()
 }
@@ -2069,6 +2093,8 @@ impl Default for TerrainConfig {
             haze: default_terrain_haze(),
             tier: RenderTier::default(),
             interior: TerrainInterior::default(),
+            lake_tint: default_terrain_lake_tint(),
+            lake_roughness: default_terrain_lake_roughness(),
             shadow: default_terrain_shadow(),
             shadow_sharpness: default_terrain_shadow_sharpness(),
             occlusion: default_terrain_occlusion(),

@@ -7503,6 +7503,8 @@ fn pt_ifs_surface(p: vec3<f32>, t: f32, dist: f32) -> PtHit {
     let tt = esc_wrap(esc_transfer(shade.t), false);
     out.albedo = vec4<f32>(esc_palette(tt) * clamp(shade.lum, 0.0, 4.0), 1.0);
     out.bias = eps * 2.0;
+    out.f0 = pt.mat.x;
+    out.rough = pt.mat.y;
     return out;
 }
 
@@ -7552,9 +7554,8 @@ fn pt_scene_visible(o: vec3<f32>, d: vec3<f32>, travelled: f32) -> bool {
 // of the surface; then the path. A miss is coverage 0, the background
 // through it. The rig's fog after the light, toward its colour.
 fn pt_sample(px: u32, py: u32) -> vec4<f32> {
-    let jx = pt_rand() - 0.5;
-    let jy = pt_rand() - 0.5;
-    let ray = pt_ray(px, py, jx, jy);
+    let j = pt_rand2() - vec2<f32>(0.5, 0.5);
+    let ray = pt_ray(px, py, j.x, j.y);
     if (ifs_count() == 0u) {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }

@@ -508,6 +508,8 @@ pub enum ConfigPath {
     EscapeTerrainInterior,
     EscapeTerrainShadow,
     EscapeTerrainShadowSharpness,
+    EscapeTerrainLakeTint,
+    EscapeTerrainLakeRoughness,
     EscapeTerrainOcclusion,
     EscapeShadingTextureKind,
     EscapeShadingTextureStrength,
@@ -1148,6 +1150,8 @@ impl Display for ConfigPath {
             ConfigPath::EscapeTerrainInterior => write!(f, "Terrain Interior"),
             ConfigPath::EscapeTerrainShadow => write!(f, "Terrain Shadows"),
             ConfigPath::EscapeTerrainShadowSharpness => write!(f, "Terrain Shadow Sharpness"),
+            ConfigPath::EscapeTerrainLakeTint => write!(f, "Lake Tint"),
+            ConfigPath::EscapeTerrainLakeRoughness => write!(f, "Lake Roughness"),
             ConfigPath::EscapeTerrainOcclusion => write!(f, "Terrain Occlusion Reach"),
             ConfigPath::EscapeShadingTextureKind => write!(f, "Relief Texture"),
             ConfigPath::EscapeShadingTextureStrength => write!(f, "Relief Texture Strength"),
@@ -1530,6 +1534,8 @@ impl ConfigPath {
             ConfigPath::EscapeTerrainInterior => I18nKey::simple("history.param.escape_terrain_interior"),
             ConfigPath::EscapeTerrainShadow => I18nKey::simple("history.param.escape_terrain_shadow"),
             ConfigPath::EscapeTerrainShadowSharpness => I18nKey::simple("history.param.escape_terrain_shadow_sharpness"),
+            ConfigPath::EscapeTerrainLakeTint => I18nKey::simple("history.param.escape_terrain_lake_tint"),
+            ConfigPath::EscapeTerrainLakeRoughness => I18nKey::simple("history.param.escape_terrain_lake_roughness"),
             ConfigPath::EscapeTerrainOcclusion => I18nKey::simple("history.param.escape_terrain_occlusion"),
             ConfigPath::EscapeShadingTextureKind => I18nKey::simple("history.param.escape_shading_texture_kind"),
             ConfigPath::EscapeShadingTextureStrength => I18nKey::simple("history.param.escape_shading_texture_strength"),
@@ -2941,6 +2947,8 @@ impl ConfigPath {
             | ConfigPath::EscapeTerrainInterior
             | ConfigPath::EscapeTerrainShadow
             | ConfigPath::EscapeTerrainShadowSharpness
+            | ConfigPath::EscapeTerrainLakeTint
+            | ConfigPath::EscapeTerrainLakeRoughness
             | ConfigPath::EscapeTerrainOcclusion
             | ConfigPath::EscapeShadingTextureKind
             | ConfigPath::EscapeShadingTextureStrength
@@ -3390,6 +3398,8 @@ impl ConfigPath {
             ConfigPath::EscapeTerrainInterior => "Escape.Terrain.Interior".to_string(),
             ConfigPath::EscapeTerrainShadow => "Escape.Terrain.Shadow".to_string(),
             ConfigPath::EscapeTerrainShadowSharpness => "Escape.Terrain.ShadowSharpness".to_string(),
+            ConfigPath::EscapeTerrainLakeTint => "Escape.Terrain.LakeTint".to_string(),
+            ConfigPath::EscapeTerrainLakeRoughness => "Escape.Terrain.LakeRoughness".to_string(),
             ConfigPath::EscapeTerrainOcclusion => "Escape.Terrain.Occlusion".to_string(),
             ConfigPath::EscapeShadingTextureKind => "Escape.Shading.TextureKind".to_string(),
             ConfigPath::EscapeShadingTextureStrength => "Escape.Shading.TextureStrength".to_string(),
@@ -3655,6 +3665,8 @@ impl ConfigPath {
                 ["Terrain", "Interior"] => return Some(ConfigPath::EscapeTerrainInterior),
                 ["Terrain", "Shadow"] => return Some(ConfigPath::EscapeTerrainShadow),
                 ["Terrain", "ShadowSharpness"] => return Some(ConfigPath::EscapeTerrainShadowSharpness),
+                ["Terrain", "LakeTint"] => return Some(ConfigPath::EscapeTerrainLakeTint),
+                ["Terrain", "LakeRoughness"] => return Some(ConfigPath::EscapeTerrainLakeRoughness),
                 ["Terrain", "Occlusion"] => return Some(ConfigPath::EscapeTerrainOcclusion),
                 ["Shading", "TextureKind"] => return Some(ConfigPath::EscapeShadingTextureKind),
                 ["Shading", "TextureStrength"] => return Some(ConfigPath::EscapeShadingTextureStrength),
@@ -4450,6 +4462,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeTerrainDeWidth
         | ConfigPath::EscapeTerrainShadow
         | ConfigPath::EscapeTerrainShadowSharpness
+        | ConfigPath::EscapeTerrainLakeRoughness
         | ConfigPath::EscapeTerrainOcclusion
         | ConfigPath::EscapeTerrainDetail
         | ConfigPath::EscapeTerrainFar
@@ -4475,7 +4488,9 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeTextureOverlayTile => {
             json.as_f64().map(|v| ConfigValue::Float(v as f32))
         }
-        ConfigPath::EscapeShadingShadowColor | ConfigPath::EscapeShadingHighlightColor => {
+        ConfigPath::EscapeShadingShadowColor
+        | ConfigPath::EscapeShadingHighlightColor
+        | ConfigPath::EscapeTerrainLakeTint => {
             let a = json.as_array()?;
             if a.len() != 3 {
                 return None;
@@ -5170,6 +5185,8 @@ mod tests {
             (ConfigPath::EscapeTerrainInterior, ConfigValue::String("hole".into()), false),
             (ConfigPath::EscapeTerrainShadow, ConfigValue::Float(0.25), true),
             (ConfigPath::EscapeTerrainShadowSharpness, ConfigValue::Float(20.0), true),
+            (ConfigPath::EscapeTerrainLakeTint, ConfigValue::ColorRgb([0.1, 0.2, 0.3]), false),
+            (ConfigPath::EscapeTerrainLakeRoughness, ConfigValue::Float(0.25), true),
             (ConfigPath::EscapeTerrainOcclusion, ConfigValue::Float(0.01), true),
         ];
         let mut m = ConfigManager::new(crate::config::FractalConfig::default());

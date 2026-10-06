@@ -851,6 +851,10 @@ fn apply_config_value(
             let v = *v;
             config.escape.terrain.shadow = v.clamp(0.0, 1.0);
         }
+        (ConfigPath::EscapeTerrainLakeRoughness, ConfigValue::Float(v)) => {
+            let v = *v;
+            config.escape.terrain.lake_roughness = v.clamp(0.02, 1.0);
+        }
         (ConfigPath::EscapeTerrainShadowSharpness, ConfigValue::Float(v)) => {
             let v = *v;
             config.escape.terrain.shadow_sharpness = v.clamp(1.0, 128.0);

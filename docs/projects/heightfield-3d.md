@@ -1297,10 +1297,77 @@ terrain.**
     2D -- over a top-level one. The first visual config was written by
     `serde_json` directly and loaded as a flame. Configs are saved
     through `to_json` now; the loader is unchanged.
-  - **Open:** stratified samples (fewer for the same noise) would change
-    the noise of every path-traced picture, the seahorse's included --
-    the user's call. The loader could keep a top-level render mode it
-    finds.
+  - **Open, then done in T3d:** stratified samples, which the user took
+    on the condition that they cost no quality; and the loader, which now
+    reads an unversioned file naming an escape or simulation mode as at
+    least v3 (both modes postdate it), the user's rule.
+- **T3d as built** (2026-10-06): stratified samples, the lake, the
+  progress bar, the panel.
+  - **Stratified samples** (`path_core`). Each draw is a point of its own
+    shuffled, Owen-scrambled Sobol (0,2)-sequence -- Burley 2020,
+    "Practical Hash-based Owen Scrambling": the pixel and the draw's place
+    in the sample seed a nested-uniform shuffle of the sample's index and
+    a scramble of each coordinate. Every 2D decision -- the jitter, the
+    lens, a light's cone, a bounce's direction -- takes a pair
+    (`pt_rand2`); a 1D one (the lobe's choice, Russian roulette) takes
+    the first coordinate of a pair of its own. Every point is uniform, so
+    nothing is biased, and a sample's numbers depend on (pixel, sample,
+    draw) alone, so dispatches and bands still sum to the same bits.
+    - **Measured** against a high-sample independent (PCG) reference, RMS
+      error in the final 8-bit image at equal samples:
+
+      | | samples | independent | stratified |
+      |---|---|---|---|
+      | seahorse terrain, 1080p | 16 / 64 / 256 | 3.13 / 1.54 / 0.79 | 2.16 / 1.04 / 0.56 |
+      | tetrahedron solid, 640x360 | 16 / 64 / 256 | 1.91 / 0.94 / 0.47 | 1.25 / 0.62 / 0.32 |
+
+      A third less error at every count -- with the reference's own noise
+      taken out, the quality of 2 to 2.5 times the samples -- for 0 to 9%
+      more time a sample. Crops at 16 samples show finer grain and no
+      structure. So the user's seahorse at 256 samples is now nearer
+      converged than the T3a render was (0.56 against 0.79); its baseline,
+      and the tetrahedron's, still pass within tolerance.
+    - Every furnace and convergence gate passes as before, and the
+      mirror coat and the valley furnace now land on L to four digits.
+  - **The lake** (`TerrainInterior::Lake`). The interior as water, flat at
+    the plain's level -- 0, where the ground falls far from the set -- so
+    the set's rim stands round it. At the plateau's top nothing would rise
+    above it and it could mirror only the sky.
+    - **The tile:** a sentinel of size 3e30 the walk maps to 0, signed to
+      sort last in each mipmap's order (+ for a distance, whose mipmap
+      keeps the minimum; - for a count or a relief, which keep the
+      maximum), so the land round a lake still bounds its block. The
+      ingest writes the tint as its albedo.
+    - **The material:** a hit on a cell whose four corners are all lake is
+      water -- a flat normal and a coat of reflectance 0.02 head on (n =
+      1.33) at the lake's roughness, over the tint. A surface now carries
+      its own coat (`PtHit.f0`, `.rough`); everything else wears the
+      config's. The lit tier draws the tint, lit by the rig: it has no
+      reflections to give.
+    - **Config:** `lake_tint` (0.02, 0.05, 0.07), `lake_roughness` (0.05);
+      ConfigPaths `EscapeTerrainLakeTint`, `EscapeTerrainLakeRoughness`;
+      the panel shows both under the interior when it is a lake.
+    - **Not a parameter: the water's level.** A level between the plain
+      and the top would need the sentinel to sort among the land's raw
+      values, which differ per section; 0 needs nothing.
+  - **The progress bar** (`RenderProgress::PathTrace`): samples of the
+    target, with a part-done pass of bands counted as its share of the
+    rows; quiet at the target. "Path tracing: 37 of 256 samples". A
+    terrain reports from its first sample, a solid once its walk settles
+    (at once in the Path Traced tier); before that the escape render's
+    own progress shows.
+  - **The panel:** under the tier, samples, bounces and Sky light show; the
+    material and the lens fold into "Material and lens", closed (the
+    defaults -- matte, everything sharp -- suit most pictures).
+    Occlusion, the lit tier's stand-in for the traced sky, hides in the
+    Path Traced tier.
+  - **Gates, all passing:** the ingest writes the lake's sentinel and tint
+    exactly; a black lake under a uniform sky reflects 2% near head on and
+    more toward its horizon, never past the sky, where a black plateau
+    reflects nothing; the bar fills by samples and quiets at its target;
+    every earlier gate. Baseline `escape-terrain-seahorse-lake` new (the
+    seahorse with a lake, path traced); 115 escape baselines,
+    `release.py check` and the wasm build pass.
 
 **T4 — Simulations.**
 - **Built.**
