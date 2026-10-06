@@ -369,15 +369,12 @@ fn ifs_light_color(i: u32) -> vec3<f32> { return params.fdata[12u + i * 2u].xyz;
 //__IFS_RIG__
 "#;
 
-const WALK_WGSL: &str = r#"
-@group(0) @binding(1) var hf_raw_tex: texture_2d_array<f32>;
-@group(0) @binding(2) var hf_mips: texture_2d_array<f32>;
-@group(0) @binding(3) var<storage, read_write> ifs_geom: array<vec4<u32>>;
-@group(0) @binding(4) var<storage, read_write> hf_stats: array<atomic<u32>>;
-@group(0) @binding(5) var<storage, read> hf_range: array<u32>;
-@group(0) @binding(6) var<storage, read> hf_sections: array<HfSection>;
-@group(0) @binding(7) var<storage, read> hf_nodes: array<HfNode>;
-
+/// The ground's functions, shared by the walk and the path tracer: the
+/// raw samples' map to heights, the section traversal and the ground's,
+/// heights, normals and occlusion. Each includer declares the bindings
+/// they read (`hf_raw_tex`, `hf_mips`, `hf_range`, `hf_sections`,
+/// `hf_nodes`).
+const HF_HELPERS_WGSL: &str = r#"
 const HF_MAX_STEPS: u32 = __HF_MAX_STEPS__u;
 
 //__HF_GROUND__
@@ -851,6 +848,19 @@ fn hf_occlusion(p: vec3<f32>, reach: f32) -> f32 {
     return clamp(1.0 - occ / 8.0, 0.0, 1.0);
 }
 
+"#;
+
+const WALK_WGSL: &str = r#"
+@group(0) @binding(1) var hf_raw_tex: texture_2d_array<f32>;
+@group(0) @binding(2) var hf_mips: texture_2d_array<f32>;
+@group(0) @binding(3) var<storage, read_write> ifs_geom: array<vec4<u32>>;
+@group(0) @binding(4) var<storage, read_write> hf_stats: array<atomic<u32>>;
+@group(0) @binding(5) var<storage, read> hf_range: array<u32>;
+@group(0) @binding(6) var<storage, read> hf_sections: array<HfSection>;
+@group(0) @binding(7) var<storage, read> hf_nodes: array<HfNode>;
+
+//__HF_HELPERS__
+
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x >= params.width || gid.y >= params.height) {
@@ -911,16 +921,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 "#;
 
-const RELIGHT_WGSL: &str = r#"
-@group(0) @binding(1) var hf_albedo: texture_2d_array<f32>;
-@group(0) @binding(2) var<storage, read> ifs_geom: array<vec4<u32>>;
-@group(0) @binding(3) var out_tex: texture_storage_2d<rgba32float, write>;
-@group(0) @binding(4) var hf_sampler: sampler;
-@group(0) @binding(6) var<storage, read> hf_sections: array<HfSection>;
-@group(0) @binding(7) var<storage, read> hf_nodes: array<HfNode>;
-
-//__HF_GROUND__
-
+/// The albedo's filtered lookup, shared by the relight and the path
+/// tracer (each declares `hf_albedo` and `hf_sampler`).
+const HF_ALBEDO_WGSL: &str = r#"
 // The albedo at the world point q, filtered over `foot` world units:
 // bilinear between the samples where a ray's share of a pixel is
 // smaller than a texel, the mip chain's averages where it covers
@@ -938,6 +941,20 @@ fn hf_albedo_at(q: vec2<f32>, foot: f32) -> vec4<f32> {
     let lod = clamp(log2(max(foot * hf_sec.geo.w, 1.0e-6)), 0.0, f32(textureNumLevels(hf_albedo) - 1u));
     return textureSampleLevel(hf_albedo, hf_sampler, uv, i32(hf_sec.dims.z), lod);
 }
+
+"#;
+
+const RELIGHT_WGSL: &str = r#"
+@group(0) @binding(1) var hf_albedo: texture_2d_array<f32>;
+@group(0) @binding(2) var<storage, read> ifs_geom: array<vec4<u32>>;
+@group(0) @binding(3) var out_tex: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(4) var hf_sampler: sampler;
+@group(0) @binding(6) var<storage, read> hf_sections: array<HfSection>;
+@group(0) @binding(7) var<storage, read> hf_nodes: array<HfNode>;
+
+//__HF_GROUND__
+
+//__HF_ALBEDO__
 
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -973,6 +990,266 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         alpha = alpha * exp(-params.fdata[7].x * max(depth - params.fdata[7].y, 0.0));
     }
     textureStore(out_tex, px, vec4<f32>(rgb, alpha));
+}
+"#;
+
+/// The path tracer (heightfield plan, section 4's path-traced tier;
+/// phase T3): each invocation adds `samples` samples of its pixel to a
+/// running SUM, in sample order, so the sum is the same bits however
+/// the samples are split into dispatches. A sample's random numbers are
+/// keyed by (pixel, sample index, seed): reproducible, and independent
+/// of the batch.
+///
+/// A sample: a ray jittered within the pixel; at each surface the
+/// lights sampled directly over their angular size with a shadow ray
+/// (next-event estimation), then a cosine-weighted bounce whose escape
+/// sees the environment -- the background's colour, uniform -- with
+/// Russian roulette from the second bounce. Lambert on the albedo; the
+/// lights in the rig's units, so a lit surface reads as it does in the
+/// lit tier. Coverage is the primary hit's, faded by the fog.
+const PATH_WGSL: &str = r#"
+@group(0) @binding(1) var hf_raw_tex: texture_2d_array<f32>;
+@group(0) @binding(2) var hf_mips: texture_2d_array<f32>;
+@group(0) @binding(3) var hf_albedo: texture_2d_array<f32>;
+@group(0) @binding(4) var hf_sampler: sampler;
+@group(0) @binding(5) var<storage, read> hf_range: array<u32>;
+@group(0) @binding(6) var<storage, read> hf_sections: array<HfSection>;
+@group(0) @binding(7) var<storage, read> hf_nodes: array<HfNode>;
+@group(0) @binding(8) var<storage, read_write> pt_sum: array<vec4<f32>>;
+@group(0) @binding(9) var<uniform> pt: PtParams;
+
+struct PtParams {
+    // Samples already in the sum, and to add now.
+    sample_base: u32,
+    samples: u32,
+    // Bounces after the first surface; 0 is direct light only.
+    bounces: u32,
+    seed: u32,
+    // The environment's radiance.
+    env: vec4<f32>,
+    // x: a ray's share of a pixel per unit of distance (the albedo's
+    // filter), y: the firefly clamp, z: shadow strength, w: the cosine
+    // of a light's angular radius.
+    misc: vec4<f32>,
+};
+
+//__HF_HELPERS__
+
+//__HF_ALBEDO__
+
+// The sample's random stream: a PCG step, seeded by hashing the pixel
+// and the sample.
+var<private> pt_state: u32;
+
+fn pt_hash(x: u32) -> u32 {
+    var v = x;
+    v = v ^ (v >> 16u);
+    v = v * 0x7feb352du;
+    v = v ^ (v >> 15u);
+    v = v * 0x846ca68bu;
+    v = v ^ (v >> 16u);
+    return v;
+}
+
+fn pt_rand() -> f32 {
+    pt_state = pt_state * 747796405u + 2891336453u;
+    var w = ((pt_state >> ((pt_state >> 28u) + 4u)) ^ pt_state) * 277803737u;
+    w = (w >> 22u) ^ w;
+    return f32(w >> 8u) * (1.0 / 16777216.0);
+}
+
+// An orthonormal frame about n (Duff et al. 2017), n its third column.
+fn pt_frame(n: vec3<f32>) -> mat3x3<f32> {
+    let s = select(-1.0, 1.0, n.z >= 0.0);
+    let a = -1.0 / (s + n.z);
+    let b = n.x * n.y * a;
+    return mat3x3<f32>(
+        vec3<f32>(1.0 + s * n.x * n.x * a, s * b, -s * n.x),
+        vec3<f32>(b, s + n.y * n.y * a, -n.y),
+        n,
+    );
+}
+
+// A direction about n, cosine-weighted: Lambert's importance.
+fn pt_cosine(n: vec3<f32>) -> vec3<f32> {
+    let r1 = pt_rand();
+    let r2 = pt_rand();
+    let phi = 6.283185307 * r1;
+    let r = sqrt(r2);
+    return pt_frame(n) * vec3<f32>(r * cos(phi), r * sin(phi), sqrt(max(1.0 - r2, 0.0)));
+}
+
+// A direction within the cone of `cos_max` about `axis`, uniformly.
+fn pt_cone(axis: vec3<f32>, cos_max: f32) -> vec3<f32> {
+    let c = 1.0 - pt_rand() * (1.0 - cos_max);
+    let s = sqrt(max(1.0 - c * c, 0.0));
+    let phi = 6.283185307 * pt_rand();
+    return pt_frame(axis) * vec3<f32>(s * cos(phi), s * sin(phi), c);
+}
+
+// The camera's ray through (px + 0.5 + jx, py + 0.5 + jy): `ifs_ray`
+// with the sample's own jitter.
+fn pt_ray(px: u32, py: u32, jx: f32, jy: f32) -> vec3<f32> {
+    let uv = (vec2<f32>(f32(px) + 0.5 + jx, f32(py) + 0.5 + jy)) / vec2<f32>(f32(params.width), f32(params.height))
+        - vec2<f32>(0.5, 0.5);
+    let aspect = f32(params.width) / f32(max(params.height, 1u));
+    let tan_half = tan(ifs_fov() * 0.5);
+    return normalize(ifs_forward() + ifs_right() * (uv.x * aspect * 2.0 * tan_half) - ifs_up() * (uv.y * 2.0 * tan_half));
+}
+
+struct PtSurface {
+    n: vec3<f32>,
+    albedo: vec4<f32>,
+    // The world's units per cell at the hit: the shadow ray's bias.
+    texel: f32,
+};
+
+// The surface at a hit: its shading normal (a wall's own on a section's
+// side), and its albedo filtered over `foot` world units.
+fn pt_surface(p: vec3<f32>, sec: i32, foot_rate: f32, t: f32, d: vec3<f32>) -> PtSurface {
+    var out: PtSurface;
+    hf_sec = hf_sections[sec];
+    let ps = vec3<f32>((p.xy - hf_sec.geo.xy) * hf_sec.geo.w, p.z * hf_sec.geo.w);
+    var n = hf_normal(ps.x, ps.y);
+    hf_sec = hf_sections[sec];
+    let edge = min(min(ps.x, f32(hf_sec.dims.x - 1u) - ps.x), min(ps.y, f32(hf_sec.dims.y - 1u) - ps.y));
+    if (edge < 1.0e-2 && hf_height_at(ps.x, ps.y) - ps.z > 1.0e-3) {
+        n = hf_wall_normal(ps);
+    }
+    out.texel = hf_sec.geo.z;
+    out.n = n;
+    let foot = t * foot_rate / sqrt(max(abs(dot(n, d)), 0.05));
+    out.albedo = hf_albedo_at(p.xy, foot);
+    return out;
+}
+
+// One sample of the pixel: (radiance times coverage, coverage).
+fn pt_sample(px: u32, py: u32) -> vec4<f32> {
+    let jx = pt_rand() - 0.5;
+    let jy = pt_rand() - 0.5;
+    let d0 = pt_ray(px, py, jx, jy);
+    let o0 = params.eye.xyz;
+    let tmax = params.fdata[6].w / max(dot(d0, ifs_forward()), 1.0e-4);
+    var h = hf_trace(o0, d0, tmax, 0.0);
+    if (!h.hit) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    var o = o0;
+    var d = d0;
+    var radiance = vec3<f32>(0.0, 0.0, 0.0);
+    var through = vec3<f32>(1.0, 1.0, 1.0);
+    var travelled = 0.0;
+    var coverage = 0.0;
+    for (var bounce = 0u; bounce <= pt.bounces; bounce = bounce + 1u) {
+        let p = o + d * h.t;
+        travelled = travelled + h.t;
+        let surf = pt_surface(p, h.sec, pt.misc.x, travelled, d);
+        if (bounce == 0u) {
+            // The primary hit's coverage, faded by the fog with depth.
+            coverage = clamp(surf.albedo.a, 0.0, 1.0);
+            if (params.fdata[7].x > 0.0) {
+                let depth = h.t * dot(d, ifs_forward());
+                coverage = coverage * exp(-params.fdata[7].x * max(depth - params.fdata[7].y, 0.0));
+            }
+        }
+        if (!(surf.albedo.a > 0.0)) {
+            // A hole's floor: nothing there; past the first surface, the
+            // sky through it.
+            if (bounce > 0u) {
+                radiance = radiance + through * pt.env.rgb;
+            }
+            break;
+        }
+        var n = surf.n;
+        if (dot(n, d) > 0.0) {
+            n = -n;
+        }
+        let albedo = surf.albedo.rgb;
+        let bias = surf.texel * 1.0e-3 + (length(p) + length(params.eye.xyz)) * 1.0e-6;
+        let start = p + n * bias;
+        // The lights, sampled over their angular size.
+        for (var li = 0u; li < ifs_light_count(); li = li + 1u) {
+            let ld = pt_cone(ifs_light_dir(li), pt.misc.w);
+            let ndl = dot(n, ld);
+            if (ndl <= 0.0) {
+                continue;
+            }
+            let s = hf_trace(start, ld, 1.0e30, 0.0);
+            let vis = mix(1.0, select(1.0, 0.0, s.hit), clamp(pt.misc.z, 0.0, 1.0));
+            radiance = radiance + through * albedo * ifs_light_color(li) * (ifs_light_power(li) * ifs_diffuse() * ndl * vis);
+        }
+        if (bounce >= pt.bounces) {
+            break;
+        }
+        // Lambert's bounce: the cosine sampling cancels the BRDF's cosine
+        // over pi, leaving the albedo.
+        let nd = pt_cosine(n);
+        through = through * albedo;
+        if (bounce >= 1u) {
+            let q = clamp(max(through.r, max(through.g, through.b)), 0.05, 0.95);
+            if (pt_rand() > q) {
+                break;
+            }
+            through = through / q;
+        }
+        o = start;
+        d = nd;
+        h = hf_trace(o, d, 1.0e30, 0.0);
+        if (!h.hit) {
+            radiance = radiance + through * pt.env.rgb;
+            break;
+        }
+    }
+    // The rig's emissive blend: strength 0 is the albedo, unlit.
+    let l = min(radiance, vec3<f32>(pt.misc.y));
+    return vec4<f32>(l * coverage, coverage);
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= params.width || gid.y >= params.height) {
+        return;
+    }
+    let idx = gid.y * params.width + gid.x;
+    hf_load_range();
+    var sum = pt_sum[idx];
+    if (pt.sample_base == 0u) {
+        sum = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    let pixel = pt_hash(idx * 0x9E3779B9u + pt.seed);
+    for (var s = 0u; s < pt.samples; s = s + 1u) {
+        pt_state = pt_hash(pixel ^ pt_hash(pt.sample_base + s + 0x632BE5ABu));
+        sum = sum + pt_sample(gid.x, gid.y);
+    }
+    pt_sum[idx] = sum;
+}
+"#;
+
+/// The path tracer's sum into the terrain's output: colour the
+/// premultiplied mean over the coverage, alpha the mean coverage -- the
+/// accumulator contract.
+const PATH_RESOLVE_WGSL: &str = r#"
+struct ResolveParams {
+    width: u32,
+    height: u32,
+    count: u32,
+    pad: u32,
+};
+@group(0) @binding(0) var<uniform> rp: ResolveParams;
+@group(0) @binding(1) var<storage, read> pt_sum: array<vec4<f32>>;
+@group(0) @binding(2) var out_tex: texture_storage_2d<rgba32float, write>;
+
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= rp.width || gid.y >= rp.height) {
+        return;
+    }
+    let s = pt_sum[gid.y * rp.width + gid.x];
+    var rgb = vec3<f32>(0.0, 0.0, 0.0);
+    if (s.a > 0.0) {
+        rgb = s.rgb / s.a;
+    }
+    textureStore(out_tex, vec2<i32>(gid.xy), vec4<f32>(rgb, s.a / f32(max(rp.count, 1u))));
 }
 "#;
 
@@ -1055,9 +1332,12 @@ pub fn assemble_walk() -> String {
     format!(
         "{}\n{}",
         WALK_COMMON.replace("//__IFS_RIG__", &super::assembler::ifs_rig_jittered()),
-        WALK_WGSL
-            .replace("__HF_MAX_STEPS__", &HF_MAX_STEPS.to_string())
-            .replace("//__HF_GROUND__", GROUND_WGSL)
+        WALK_WGSL.replace(
+            "//__HF_HELPERS__",
+            &HF_HELPERS_WGSL
+                .replace("__HF_MAX_STEPS__", &HF_MAX_STEPS.to_string())
+                .replace("//__HF_GROUND__", GROUND_WGSL)
+        )
     )
 }
 
@@ -1066,7 +1346,24 @@ pub fn assemble_relight() -> String {
     format!(
         "{}\n{}",
         WALK_COMMON.replace("//__IFS_RIG__", &super::assembler::ifs_rig_jittered()),
-        RELIGHT_WGSL.replace("//__HF_GROUND__", GROUND_WGSL)
+        RELIGHT_WGSL.replace("//__HF_GROUND__", GROUND_WGSL).replace("//__HF_ALBEDO__", HF_ALBEDO_WGSL)
+    )
+}
+
+/// The path tracer's WGSL, assembled: the rig's accessors and camera, the
+/// ground's functions, the albedo's lookup, and the integrator.
+pub fn assemble_path() -> String {
+    format!(
+        "{}\n{}",
+        WALK_COMMON.replace("//__IFS_RIG__", &super::assembler::ifs_rig_jittered()),
+        PATH_WGSL
+            .replace(
+                "//__HF_HELPERS__",
+                &HF_HELPERS_WGSL
+                    .replace("__HF_MAX_STEPS__", &HF_MAX_STEPS.to_string())
+                    .replace("//__HF_GROUND__", GROUND_WGSL)
+            )
+            .replace("//__HF_ALBEDO__", HF_ALBEDO_WGSL)
     )
 }
 
@@ -1106,6 +1403,32 @@ pub struct TerrainView {
     /// The view depth past which there is no ground, in the world's
     /// units (the fog has reached the background there).
     pub far: f32,
+}
+
+/// The path tracer's settings for a pass (plan section 4).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PathSettings {
+    /// Bounces after the first surface: 0 is direct light only.
+    pub bounces: u32,
+    /// The environment's radiance, in the accumulator's units.
+    pub environment: [f32; 3],
+    /// A sample's radiance is clamped here: the fireflies a rare bright
+    /// path would otherwise scatter.
+    pub clamp: f32,
+    /// Seeds the samples' random streams.
+    pub seed: u32,
+}
+
+/// The path tracer's uniform. Mirrored by `PtParams`.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct PathParamsGpu {
+    sample_base: u32,
+    samples: u32,
+    bounces: u32,
+    seed: u32,
+    env: [f32; 4],
+    misc: [f32; 4],
 }
 
 /// The default sun when the lighting panel is untouched (plan H7): the
@@ -1270,6 +1593,13 @@ pub struct TerrainRenderer {
     accum_pipeline: ComputePipeline,
     albedo_mip_layout: BindGroupLayout,
     albedo_mip_pipeline: ComputePipeline,
+    path_layout: BindGroupLayout,
+    path_pipeline: ComputePipeline,
+    resolve_layout: BindGroupLayout,
+    resolve_pipeline: ComputePipeline,
+    /// The path tracer's per-pixel sum, and the samples in it.
+    path_sum: Buffer,
+    path_count: u32,
     sampler: Sampler,
     atlas: Option<Atlas>,
     ground: Option<GroundGpu>,
@@ -1385,6 +1715,30 @@ impl TerrainRenderer {
             label: Some("Terrain Albedo Mips"),
             entries: &[tex(0), storage_tex(1, TextureFormat::Rgba16Float)],
         });
+        let path_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Terrain Path"),
+            entries: &[
+                uniform(0),
+                tex_array(1, false),
+                tex_array(2, false),
+                tex_array(3, true),
+                BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    count: None,
+                },
+                storage(5, true),
+                storage(6, true),
+                storage(7, true),
+                storage(8, false),
+                uniform(9),
+            ],
+        });
+        let resolve_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Terrain Path Resolve"),
+            entries: &[uniform(0), storage(1, true), storage_tex(2, TextureFormat::Rgba32Float)],
+        });
         let ingest_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Terrain Ingest"),
             entries: &[
@@ -1427,6 +1781,8 @@ impl TerrainRenderer {
         let ingest_pipeline = entry("Terrain Ingest", &ingest_layout, INGEST_WGSL, "ingest_main");
         let accum_pipeline = entry("Terrain Accumulate", &accum_layout, ACCUM_WGSL, "main");
         let albedo_mip_pipeline = entry("Terrain Albedo Mips", &albedo_mip_layout, ALBEDO_MIP_WGSL, "main");
+        let path_pipeline = pipeline("Terrain Path", &path_layout, assemble_path());
+        let resolve_pipeline = entry("Terrain Path Resolve", &resolve_layout, PATH_RESOLVE_WGSL, "main");
         let sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("Terrain Albedo"),
             address_mode_u: AddressMode::ClampToEdge,
@@ -1450,6 +1806,7 @@ impl TerrainRenderer {
             mapped_at_creation: false,
         });
         let geom = Self::create_geom(device, out_w * out_h);
+        let path_sum = Self::create_geom(device, out_w * out_h);
         let output = Self::create_output(device, out_w, out_h);
         let range = device.create_buffer(&BufferDescriptor {
             label: Some("Terrain Range"),
@@ -1471,6 +1828,12 @@ impl TerrainRenderer {
             accum_pipeline,
             albedo_mip_layout,
             albedo_mip_pipeline,
+            path_layout,
+            path_pipeline,
+            resolve_layout,
+            resolve_pipeline,
+            path_sum,
+            path_count: 0,
             sampler,
             atlas: None,
             ground: None,
@@ -1527,8 +1890,10 @@ impl TerrainRenderer {
         self.accum_count = 0;
         if out_w * out_h > self.geom_px {
             self.geom = Self::create_geom(device, out_w * out_h);
+            self.path_sum = Self::create_geom(device, out_w * out_h);
             self.geom_px = out_w * out_h;
         }
+        self.path_count = 0;
         self.out_w = out_w;
         self.out_h = out_h;
         self.walked = None;
@@ -1576,6 +1941,7 @@ impl TerrainRenderer {
         self.params.destroy();
         self.stats.destroy();
         self.geom.destroy();
+        self.path_sum.destroy();
         self.output.0.destroy();
         if let Some(pair) = &self.accum {
             pair[0].0.destroy();
@@ -2190,6 +2556,121 @@ impl TerrainRenderer {
         }
     }
 
+    /// Start the path tracer's sum over: the next `render_path` replaces
+    /// it.
+    pub fn reset_path(&mut self) {
+        self.path_count = 0;
+    }
+
+    /// Samples in the path tracer's sum.
+    pub fn path_samples(&self) -> u32 {
+        self.path_count
+    }
+
+    /// Add `samples` path-traced samples of the view to the sum -- in
+    /// dispatches of at most `per_dispatch` -- and resolve the mean into
+    /// the output. Submits its own work. The samples are the next ones
+    /// in order, so the sum is the same bits however they are split.
+    pub fn render_path(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        view: &TerrainView,
+        settings: &PathSettings,
+        samples: u32,
+        per_dispatch: u32,
+    ) {
+        let (Some(ground), Some(atlas)) = (self.ground.as_ref(), self.atlas.as_ref()) else { return };
+        let _ = ground;
+        self.write_params(queue, view);
+        let ground = self.ground.as_ref().expect("checked");
+        let (gx, gy) = (self.out_w.div_ceil(8), self.out_h.div_ceil(8));
+        // A light's angular radius: half the inverse of the sharpness,
+        // the lit tier's penumbra in an area light's terms.
+        let radius = (0.5 / view.softness.max(1.0e-3)).min(0.5);
+        // A ray's share of a pixel per unit of distance: half a pixel,
+        // since the jitter already spreads the samples over the whole.
+        let per_ray = (view.camera.fov * 0.5).tan() / self.out_h.max(1) as f32;
+        let mut done = 0;
+        while done < samples {
+            let n = per_dispatch.max(1).min(samples - done);
+            let p = PathParamsGpu {
+                sample_base: self.path_count,
+                samples: n,
+                bounces: settings.bounces,
+                seed: settings.seed,
+                env: [settings.environment[0], settings.environment[1], settings.environment[2], 0.0],
+                misc: [per_ray, settings.clamp, view.shadow, radius.cos()],
+            };
+            let buf = device.create_buffer(&BufferDescriptor {
+                label: Some("Terrain Path Params"),
+                size: std::mem::size_of::<PathParamsGpu>() as u64,
+                usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            queue.write_buffer(&buf, 0, bytemuck::bytes_of(&p));
+            let bg = device.create_bind_group(&BindGroupDescriptor {
+                label: Some("Terrain Path"),
+                layout: &self.path_layout,
+                entries: &[
+                    BindGroupEntry { binding: 0, resource: self.params.as_entire_binding() },
+                    BindGroupEntry { binding: 1, resource: BindingResource::TextureView(&atlas.raw_all) },
+                    BindGroupEntry { binding: 2, resource: BindingResource::TextureView(&atlas.mips_all) },
+                    BindGroupEntry { binding: 3, resource: BindingResource::TextureView(&atlas.albedo_all) },
+                    BindGroupEntry { binding: 4, resource: BindingResource::Sampler(&self.sampler) },
+                    BindGroupEntry { binding: 5, resource: self.range.as_entire_binding() },
+                    BindGroupEntry { binding: 6, resource: ground.sections.as_entire_binding() },
+                    BindGroupEntry { binding: 7, resource: ground.nodes.as_entire_binding() },
+                    BindGroupEntry { binding: 8, resource: self.path_sum.as_entire_binding() },
+                    BindGroupEntry { binding: 9, resource: buf.as_entire_binding() },
+                ],
+            });
+            let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Terrain Path") });
+            {
+                let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: Some("Terrain Path"), timestamp_writes: None });
+                pass.set_pipeline(&self.path_pipeline);
+                pass.set_bind_group(0, &bg, &[]);
+                pass.dispatch_workgroups(gx, gy, 1);
+            }
+            queue.submit(std::iter::once(enc.finish()));
+            self.path_count += n;
+            done += n;
+        }
+        // The mean, into the output.
+        let buf = device.create_buffer(&BufferDescriptor {
+            label: Some("Terrain Path Resolve Params"),
+            size: 16,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&buf, 0, bytemuck::cast_slice(&[self.out_w, self.out_h, self.path_count, 0u32]));
+        let bg = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Terrain Path Resolve"),
+            layout: &self.resolve_layout,
+            entries: &[
+                BindGroupEntry { binding: 0, resource: buf.as_entire_binding() },
+                BindGroupEntry { binding: 1, resource: self.path_sum.as_entire_binding() },
+                BindGroupEntry { binding: 2, resource: BindingResource::TextureView(&self.output.1) },
+            ],
+        });
+        let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Terrain Path Resolve") });
+        {
+            let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: Some("Terrain Path Resolve"), timestamp_writes: None });
+            pass.set_pipeline(&self.resolve_pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.dispatch_workgroups(gx, gy, 1);
+        }
+        queue.submit(std::iter::once(enc.finish()));
+        // The output no longer holds a lit render.
+        self.walked = None;
+    }
+
+    /// The path tracer's sum, for a test to read back.
+    #[cfg(test)]
+    pub(crate) fn path_sum_for_test(&self) -> &Buffer {
+        &self.path_sum
+    }
+
     /// The geometry buffer, for a test to read hits back.
     #[cfg(test)]
     pub(crate) fn geometry_buffer(&self) -> &Buffer {
@@ -2402,6 +2883,8 @@ mod tests {
         validate(&assemble_build(), "build");
         validate(&assemble_walk(), "walk");
         validate(&assemble_relight(), "relight");
+        validate(&assemble_path(), "path");
+        validate(PATH_RESOLVE_WGSL, "path resolve");
     }
 
     #[test]
@@ -2908,6 +3391,127 @@ pub(crate) mod gpu_tests {
         println!("far gentle ground: {hits} hits, {shadowed} shadowed");
         assert!(hits > 128 * 96 / 2, "{hits}");
         assert_eq!(shadowed, 0, "the plane shadows itself");
+    }
+
+    /// Reads the path tracer's resolved output.
+    fn read_output(device: &Device, queue: &Queue, r: &TerrainRenderer, w: u32, h: u32) -> Vec<[f32; 4]> {
+        bytemuck::cast_slice(&read_texture(device, queue, r.output_texture(), 0, w, h, 16)).to_vec()
+    }
+
+    /// Lighting with no light at all: every light switched off.
+    fn dark() -> SolidShadingSettings {
+        let mut s = SolidShadingSettings::default();
+        s.shading_strength = 1.0;
+        s.diffuse = 1.0;
+        for l in s.lights.iter_mut() {
+            l.enabled = false;
+        }
+        s
+    }
+
+    /// The white furnace (plan T3): albedo 1 under a uniform environment
+    /// L and no light. On a flat plane every path escapes after one
+    /// bounce, so every sample IS L, at any bounce count from one; in a
+    /// sinusoid's valleys paths bounce between slopes, and Russian
+    /// roulette keeps them unbiased: the mean converges to L.
+    #[test]
+    fn the_white_furnace() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (48u32, 32u32);
+        let l = [0.5f32, 0.25, 0.75];
+        let mut r = TerrainRenderer::new(&device, w, h);
+        let (n, m) = (129u32, 97u32);
+        r.set_tile(&device, &queue, n, m, &vec![0.0; (n * m) as usize], &vec![[1.0; 4]; (n * m) as usize]);
+        let mut v = view(camera([64.0, 48.0, 0.0], 0.9, 0.3, 60.0, 0.6));
+        v.shading = dark();
+        for bounces in [1u32, 2, 4] {
+            let settings = PathSettings { bounces, environment: l, clamp: 1.0e30, seed: 7 };
+            r.reset_path();
+            r.render_path(&device, &queue, &v, &settings, 8, 8);
+            let out = read_output(&device, &queue, &r, w, h);
+            let worst = out.iter().filter(|p| p[3] > 0.0).flat_map(|p| (0..3).map(move |k| (p[k] - l[k]).abs())).fold(0.0f32, f32::max);
+            println!("flat furnace, {bounces} bounces: worst {worst:.2e}");
+            assert!(worst < 1e-5, "{bounces}: {worst}");
+        }
+        // The valleys: the image's mean against L, to 1%.
+        let hs = terrain("sinusoid", n as usize, m as usize);
+        r.set_tile(&device, &queue, n, m, &hs, &vec![[1.0; 4]; (n * m) as usize]);
+        let settings = PathSettings { bounces: 24, environment: l, clamp: 1.0e30, seed: 7 };
+        r.reset_path();
+        r.render_path(&device, &queue, &v, &settings, 1024, 64);
+        let out = read_output(&device, &queue, &r, w, h);
+        let hit: Vec<&[f32; 4]> = out.iter().filter(|p| p[3] > 0.0).collect();
+        for k in 0..3 {
+            let mean = hit.iter().map(|p| p[k] as f64).sum::<f64>() / hit.len() as f64;
+            println!("valley furnace, channel {k}: mean {mean:.4} against {}", l[k]);
+            assert!((mean / l[k] as f64 - 1.0).abs() < 0.01, "channel {k}: {mean}");
+        }
+    }
+
+    /// Sun only: with no environment and a near-point sun, the path
+    /// tracer's flat plane is the lit tier's, `albedo E cos theta`.
+    #[test]
+    fn a_sunlit_plane_is_the_lit_tiers() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (32u32, 32u32);
+        let (n, m) = (64u32, 64u32);
+        let albedo = [0.5f32, 0.25, 1.0, 1.0];
+        let mut r = TerrainRenderer::new(&device, w, h);
+        r.set_tile(&device, &queue, n, m, &vec![0.0; (n * m) as usize], &vec![albedo; (n * m) as usize]);
+        let mut shading = dark();
+        shading.ambient = 0.0;
+        shading.specular = 0.0;
+        shading.ssao_strength = 0.0;
+        shading.lights[0].enabled = true;
+        shading.lights[0].azimuth = 30.0;
+        shading.lights[0].elevation = 50.0;
+        shading.lights[0].intensity = 2.0;
+        shading.lights[0].color = [1.0, 0.5, 0.25];
+        let mut v = view(camera([32.0, 32.0, 0.0], 1.0, 0.3, 40.0, 0.5));
+        v.shading = shading;
+        v.softness = 1.0e6;
+        r.render(&device, &queue, &v);
+        let lit = read_output(&device, &queue, &r, w, h);
+        r.reset_path();
+        r.render_path(&device, &queue, &v, &PathSettings { bounces: 2, environment: [0.0; 3], clamp: 1.0e30, seed: 1 }, 4, 4);
+        let path = read_output(&device, &queue, &r, w, h);
+        let worst = lit.iter().zip(&path).flat_map(|(a, b)| (0..4).map(move |k| (a[k] - b[k]).abs())).fold(0.0f32, f32::max);
+        println!("sunlit plane: path against lit, worst {worst:.2e}");
+        assert!(worst < 1e-4, "{worst}");
+    }
+
+    /// The same samples in any number of dispatches are the same bits:
+    /// twelve samples as twelve, three or one dispatch -- over a sinusoid
+    /// with a sun, an environment and three bounces -- and again.
+    #[test]
+    fn path_samples_are_batch_invariant() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (40u32, 30u32);
+        let (n, m) = (129u32, 97u32);
+        let hs = terrain("sinusoid", n as usize, m as usize);
+        let albedo: Vec<[f32; 4]> = (0..n * m).map(|k| [0.3 + 0.5 * ((k % 7) as f32 / 7.0), 0.6, 0.4, 1.0]).collect();
+        let mut r = TerrainRenderer::new(&device, w, h);
+        r.set_tile(&device, &queue, n, m, &hs, &albedo);
+        let v = view(camera([64.0, 48.0, 8.0], 0.6, 0.4, 150.0, 0.9));
+        let settings = PathSettings { bounces: 3, environment: [0.3, 0.4, 0.6], clamp: 10.0, seed: 3 };
+        let mut sums = Vec::new();
+        for per in [1u32, 4, 12, 12] {
+            r.reset_path();
+            r.render_path(&device, &queue, &v, &settings, 12, per);
+            sums.push(read_buffer(&device, &queue, r.path_sum_for_test(), (w * h * 16) as u64));
+        }
+        assert!(sums.windows(2).all(|p| p[0] == p[1]), "the sums differ across batchings");
+        let f: &[f32] = bytemuck::cast_slice(&sums[0]);
+        assert!(f.iter().any(|v| *v > 0.0), "something was traced");
     }
 
     /// A light's colour or power is a relight: no walk, and the picture a

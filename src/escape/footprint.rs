@@ -42,7 +42,8 @@
 //! detail -- the terrain at every zoom looks like itself.
 
 use super::ifs::{solid_frame, SolidCamera};
-use super::terrain::{Ground, GroundNode, GroundSection, TerrainIngest, TerrainRenderer, TerrainView};
+use super::terrain::{Ground, GroundNode, GroundSection, PathSettings, TerrainIngest, TerrainRenderer, TerrainView};
+use crate::config::escape::TerrainTier;
 use super::EscapeRenderer;
 use crate::config::escape::{EscapeConfig, TerrainInterior, TerrainSource};
 use crate::config::FractalConfig;
@@ -192,6 +193,22 @@ pub fn terrain_view(config: &FractalConfig, jitter: [f32; 2]) -> TerrainView {
         samples_per_axis: config.escape.supersample.max(1),
         far: t.far,
     }
+}
+
+/// The path tracer's settings from the config (plan section 4): the
+/// environment is the background colour brought into the accumulator's
+/// units -- through the inverse of the Linear tonemap's exposure and
+/// gamma -- so the sky and an albedo-1 surface it lights read as the
+/// background does; a sample's radiance is clamped at ten times the
+/// brightest light.
+pub fn path_settings(config: &FractalConfig) -> PathSettings {
+    let t = &config.escape.terrain;
+    let gamma = if config.gamma > 0.0 { config.gamma } else { 1.0 };
+    let exposure = config.exposure.max(1.0e-6);
+    let env = config.background_color.map(|c| t.environment * c.max(0.0).powf(gamma) / exposure);
+    let lights: f32 = config.solid_shading.lights.iter().filter(|l| l.enabled).map(|l| l.intensity.max(0.0)).sum();
+    let brightest = lights.max(1.0).max(env.iter().cloned().fold(0.0, f32::max));
+    PathSettings { bounces: t.bounces.min(16), environment: env, clamp: 10.0 * brightest, seed: 1 }
 }
 
 /// How a section becomes atlas samples. `derivative` is whether its
@@ -479,7 +496,20 @@ pub struct EscapeTerrain {
     /// What the viewport's accumulation is of, and how far it has got.
     viewport_key: Option<String>,
     viewport_samples: u32,
+    /// Whether the output is the path tracer's, not the lit tier's.
+    showing_path: bool,
+    /// A path-traced sample's time, in ms, measured to the GPU's
+    /// completion of a batch, and its average.
+    path_done: std::sync::Arc<std::sync::Mutex<Option<f32>>>,
+    path_ms: Option<f32>,
 }
+
+/// Path-traced samples the Auto tier gathers before its picture replaces
+/// the lit tier's: below this the noise reads worse than the lit picture.
+pub const PATH_SHOW_SAMPLES: u32 = 8;
+
+/// The time a viewport frame gives the path tracer, in ms.
+const PATH_FRAME_MS: f32 = 12.0;
 
 impl EscapeTerrain {
     pub fn new(device: &Device, out_w: u32, out_h: u32) -> Self {
@@ -500,6 +530,9 @@ impl EscapeTerrain {
             section_ms: None,
             viewport_key: None,
             viewport_samples: 0,
+            showing_path: false,
+            path_done: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            path_ms: None,
         }
     }
 
@@ -776,29 +809,106 @@ impl EscapeTerrain {
         self.terrain.set_ground(device, queue, ground);
     }
 
-    /// One frame of the viewport: a sample of the config's
-    /// antialiasing grid (`supersample²` jittered renders, the export's
-    /// own), folded into the accumulation, which any change to the view
-    /// or the ground restarts. True while samples remain.
+    /// One frame of the viewport (plan section 8's tiers). The lit tier:
+    /// a sample of the config's antialiasing grid (`supersample²`
+    /// jittered renders, the export's own) folded into its
+    /// accumulation. Path traced: as many samples as fit the frame,
+    /// added to the path tracer's sum, up to `samples`. Auto draws the
+    /// lit tier while anything moves and path traces while nothing does,
+    /// showing it from [`PATH_SHOW_SAMPLES`]. Any change to the view or
+    /// the ground restarts both. True while there is more to do.
     pub fn render_viewport(&mut self, device: &Device, queue: &Queue, config: &FractalConfig) -> bool {
         if self.terrain.tile_version() == 0 {
             return false;
         }
+        let t = &config.escape.terrain;
         let base = terrain_view(config, [0.0, 0.0]);
-        let key = format!("{base:?}|{}", self.terrain.tile_version());
-        if self.viewport_key.as_deref() != Some(key.as_str()) {
+        let key = format!("{base:?}|{}|{:?}", self.terrain.tile_version(), path_settings(config));
+        let moved = self.viewport_key.as_deref() != Some(key.as_str());
+        if moved {
             self.viewport_key = Some(key);
             self.viewport_samples = 0;
             self.terrain.reset_accumulation();
+            self.terrain.reset_path();
+            self.showing_path = false;
         }
-        let grid = EscapeRenderer::sample_grid(config.escape.supersample.max(1));
-        let Some(&jitter) = grid.get(self.viewport_samples as usize) else {
+        if t.tier != TerrainTier::PathTraced {
+            let grid = EscapeRenderer::sample_grid(config.escape.supersample.max(1));
+            if let Some(&jitter) = grid.get(self.viewport_samples as usize) {
+                self.terrain.render(device, queue, &terrain_view(config, jitter));
+                self.terrain.accumulate(device, queue);
+                self.viewport_samples += 1;
+                self.showing_path = false;
+                return true;
+            }
+            if t.tier == TerrainTier::Lit {
+                return false;
+            }
+        }
+        let target = t.samples.max(1);
+        let have = self.terrain.path_samples();
+        if have >= target {
             return false;
-        };
-        self.terrain.render(device, queue, &terrain_view(config, jitter));
-        self.terrain.accumulate(device, queue);
-        self.viewport_samples += 1;
-        (self.viewport_samples as usize) < grid.len()
+        }
+        // As many samples as fit the frame at the measured cost.
+        let per_frame = self.path_ms().map_or(1, |ms| (PATH_FRAME_MS / ms.max(0.05)).floor().clamp(1.0, 64.0) as u32);
+        let n = per_frame.min(target - have);
+        self.trace(device, queue, config, n, n);
+        self.showing_path = t.tier == TerrainTier::PathTraced || self.terrain.path_samples() >= PATH_SHOW_SAMPLES;
+        self.terrain.path_samples() < target
+    }
+
+    /// Add `samples` path-traced samples of the config's view, in
+    /// dispatches of at most `per_dispatch`, timing them. Submits its
+    /// own work.
+    fn trace(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, samples: u32, per_dispatch: u32) {
+        let t0 = web_time::Instant::now();
+        self.terrain.render_path(device, queue, &terrain_view(config, [0.0, 0.0]), &path_settings(config), samples, per_dispatch);
+        let slot = std::sync::Arc::clone(&self.path_done);
+        queue.on_submitted_work_done(move || {
+            if let Ok(mut g) = slot.lock() {
+                *g = Some(t0.elapsed().as_secs_f32() * 1000.0 / samples.max(1) as f32);
+            }
+        });
+    }
+
+    /// A path-traced sample's average time, in ms, once measured.
+    pub fn path_ms(&mut self) -> Option<f32> {
+        if let Some(ms) = self.path_done.lock().ok().and_then(|mut g| g.take()) {
+            self.path_ms = Some(match self.path_ms {
+                Some(avg) => avg + (ms - avg) * 0.3,
+                None => ms,
+            });
+        }
+        self.path_ms
+    }
+
+    /// The export's picture (plan section 8): path traced at `samples`
+    /// unless the tier is Lit, which draws the antialiasing grid. In
+    /// dispatches of a few samples each, `wait` called between them (a
+    /// blocking poll on the desktop). Submits its own work.
+    pub fn render_still(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, mut wait: impl FnMut()) {
+        let t = &config.escape.terrain;
+        if t.tier == TerrainTier::Lit {
+            self.terrain.reset_accumulation();
+            for jitter in EscapeRenderer::sample_grid(config.escape.supersample.max(1)) {
+                self.terrain.render(device, queue, &terrain_view(config, jitter));
+                self.terrain.accumulate(device, queue);
+            }
+            self.showing_path = false;
+            return;
+        }
+        self.terrain.reset_path();
+        let target = t.samples.max(1);
+        // A batch the watchdog never notices: about a quarter second at
+        // the measured cost, from a cautious start.
+        while self.terrain.path_samples() < target {
+            let per = self.path_ms().map_or(2, |ms| (250.0 / ms.max(0.05)).floor().clamp(1.0, 64.0) as u32);
+            let n = per.min(target - self.terrain.path_samples());
+            self.trace(device, queue, config, n, n);
+            wait();
+        }
+        self.showing_path = true;
     }
 
     /// Draw the terrain once, its rays offset by `jitter` within their
@@ -819,10 +929,19 @@ impl EscapeTerrain {
         self.terrain.accumulated_samples()
     }
 
-    /// What the tail reads: the accumulation once there is one, else
-    /// the last render.
+    /// What the tail reads: the path tracer's resolve when it is shown,
+    /// else the lit tier's accumulation once there is one, else the last
+    /// render.
     pub fn output_view(&self) -> &TextureView {
+        if self.showing_path {
+            return self.terrain.output_view();
+        }
         self.terrain.accumulated_view().unwrap_or(self.terrain.output_view())
+    }
+
+    /// Path-traced samples so far, and whether the picture is theirs.
+    pub fn path_progress(&self) -> (u32, bool) {
+        (self.terrain.path_samples(), self.showing_path)
     }
 
     /// The terrain renderer, for a test to look inside.
@@ -1097,6 +1216,9 @@ mod tests {
         c.escape.zoom_log2 = 6.0;
         c.escape.center_re = "-0.7453".into();
         c.escape.center_im = "0.1127".into();
+        // The lit tier: its walk is what fills the geometry record read
+        // here (the path tracer's rays walk the same ground).
+        c.escape.terrain.tier = TerrainTier::Lit;
         let mut engines = crate::renderer::render::RenderEngines::default();
         let _ = pollster::block_on(crate::renderer::render(
             &device,

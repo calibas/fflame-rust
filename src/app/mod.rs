@@ -2407,11 +2407,9 @@ impl App {
                                 break;
                             }
                         }
-                        t.reset_accumulation();
-                        for jitter in crate::escape::EscapeRenderer::sample_grid(export_config.escape.supersample.max(1)) {
-                            t.render(&self.gpu.device, &self.gpu.queue, &export_config, jitter);
-                            t.accumulate(&self.gpu.device, &self.gpu.queue);
-                        }
+                        // No blocking wait in a browser: the queue keeps
+                        // the batches in order regardless.
+                        t.render_still(&self.gpu.device, &self.gpu.queue, &export_config, || {});
                         Some(t)
                     } else {
                         None

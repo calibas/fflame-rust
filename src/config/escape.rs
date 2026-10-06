@@ -1785,6 +1785,38 @@ impl TerrainSource {
     }
 }
 
+/// How a terrain is rendered (plan section 4's two tiers).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerrainTier {
+    /// The lit tier while anything moves, path traced while nothing does;
+    /// exports path traced.
+    #[default]
+    Auto,
+    /// The lit tier only: direct light, traced shadows, horizon occlusion.
+    Lit,
+    /// Path traced always: noisy while moving.
+    PathTraced,
+}
+
+impl TerrainTier {
+    pub const ALL: [TerrainTier; 3] = [TerrainTier::Auto, TerrainTier::Lit, TerrainTier::PathTraced];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TerrainTier::Auto => "auto",
+            TerrainTier::Lit => "lit",
+            TerrainTier::PathTraced => "path_traced",
+        }
+    }
+    pub fn from_str_or_default(s: &str) -> Self {
+        match s {
+            "lit" => TerrainTier::Lit,
+            "path_traced" => TerrainTier::PathTraced,
+            _ => TerrainTier::Auto,
+        }
+    }
+}
+
 /// What a terrain does where the set's interior is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1842,6 +1874,20 @@ pub struct TerrainConfig {
     /// edge shows), 1 from about a third of the way out.
     #[serde(default = "default_terrain_haze", skip_serializing_if = "is_default_terrain_haze")]
     pub haze: f32,
+    /// How it is rendered: lit, path traced, or both by turns.
+    #[serde(default, skip_serializing_if = "is_default_terrain_tier")]
+    pub tier: TerrainTier,
+    /// Path-traced samples a pixel: the viewport's target, and an
+    /// export's count.
+    #[serde(default = "default_terrain_samples", skip_serializing_if = "is_default_terrain_samples")]
+    pub samples: u32,
+    /// Bounces after the first surface: 0 is direct light only.
+    #[serde(default = "default_terrain_bounces", skip_serializing_if = "is_default_terrain_bounces")]
+    pub bounces: u32,
+    /// The environment's brightness: the background colour lighting the
+    /// ground from the whole sky, times this.
+    #[serde(default = "default_terrain_environment", skip_serializing_if = "is_default_terrain_environment")]
+    pub environment: f32,
     #[serde(default, skip_serializing_if = "is_default_terrain_interior")]
     pub interior: TerrainInterior,
     /// How dark a shadowed surface goes; 0 traces no shadow rays. Mode
@@ -1869,6 +1915,27 @@ fn default_terrain_de_width() -> f32 {
 }
 fn is_default_terrain_de_width(v: &f32) -> bool {
     *v == default_terrain_de_width()
+}
+fn is_default_terrain_tier(v: &TerrainTier) -> bool {
+    *v == TerrainTier::default()
+}
+fn default_terrain_samples() -> u32 {
+    256
+}
+fn is_default_terrain_samples(v: &u32) -> bool {
+    *v == default_terrain_samples()
+}
+fn default_terrain_bounces() -> u32 {
+    2
+}
+fn is_default_terrain_bounces(v: &u32) -> bool {
+    *v == default_terrain_bounces()
+}
+fn default_terrain_environment() -> f32 {
+    1.0
+}
+fn is_default_terrain_environment(v: &f32) -> bool {
+    *v == default_terrain_environment()
 }
 fn default_terrain_detail() -> f32 {
     1.0
@@ -1923,6 +1990,10 @@ impl Default for TerrainConfig {
             detail: default_terrain_detail(),
             far: default_terrain_far(),
             haze: default_terrain_haze(),
+            tier: TerrainTier::default(),
+            samples: default_terrain_samples(),
+            bounces: default_terrain_bounces(),
+            environment: default_terrain_environment(),
             interior: TerrainInterior::default(),
             shadow: default_terrain_shadow(),
             shadow_sharpness: default_terrain_shadow_sharpness(),

@@ -1313,12 +1313,11 @@ async fn render_escape_terrain(
         }
     }
     let n = terrain.footprint_renders - before;
+    // The picture: path traced at `samples`, or the lit tier's grid.
     let ss = config.escape.supersample.max(1);
-    terrain.reset_accumulation();
-    for jitter in crate::escape::EscapeRenderer::sample_grid(ss) {
-        terrain.render(device, queue, config, jitter);
-        terrain.accumulate(device, queue);
-    }
+    terrain.render_still(device, queue, config, || {
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    });
     let pixels = escape_tail(renderer, device, queue, config, (job_w, job_h, transparent), terrain.output_view(), oom_scope).await;
     if !caller_owned {
         terrain.destroy();
@@ -1328,11 +1327,12 @@ async fn render_escape_terrain(
     progress.on_progress(1, 1);
     let render_time_ms = start_time.elapsed().as_secs_f64() * 1000.0;
     log::info!(
-        "Render: escape terrain complete - {}x{} ({} sections rendered, {} samples) in {:.1}ms",
+        "Render: escape terrain complete - {}x{} ({} sections rendered, {} samples, {}) in {:.1}ms",
         width,
         height,
         n,
-        ss * ss,
+        if config.escape.terrain.tier == crate::config::escape::TerrainTier::Lit { ss * ss } else { config.escape.terrain.samples },
+        if config.escape.terrain.tier == crate::config::escape::TerrainTier::Lit { "lit" } else { "path traced" },
         render_time_ms
     );
     Ok(RenderOutput {
