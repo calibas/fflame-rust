@@ -420,6 +420,24 @@ fn escape_view<'a>(
     escape.as_ref().map(|e| e.output_view())
 }
 
+/// The simulation's image for the tail: its terrain's while the config
+/// draws one, the grid's picture otherwise.
+#[cfg(feature = "engine-sim")]
+fn sim_view<'a>(
+    sim: &'a Option<crate::sim::SimRenderer>,
+    #[cfg(feature = "terrain")] terrain: &'a Option<crate::sim::terrain::SimTerrain>,
+    config: &crate::config::FractalConfig,
+) -> Option<&'a egui_wgpu::wgpu::TextureView> {
+    #[cfg(feature = "terrain")]
+    if config.sim.terrain_active() {
+        if let Some(t) = terrain.as_ref() {
+            return Some(t.output_view());
+        }
+    }
+    let _ = config;
+    sim.as_ref().map(|s| s.output_view())
+}
+
 const ESCAPE_INTERACTION_WINDOW: std::time::Duration = std::time::Duration::from_millis(250);
 
 pub struct App {
@@ -464,6 +482,10 @@ pub struct App {
     /// use so a flame session never allocates it.
     #[cfg(feature = "engine-sim")]
     pub(super) sim_renderer: Option<crate::sim::SimRenderer>,
+    /// The simulation's 3D terrain (heightfield plan T4), while the config
+    /// draws one.
+    #[cfg(all(feature = "terrain", feature = "engine-sim"))]
+    pub(super) sim_terrain: Option<crate::sim::terrain::SimTerrain>,
     /// Whether the Run button is engaged. Deliberately NOT in the
     /// config: it is a view state like the playhead, not part of the
     /// picture, and saving it would make a file that starts moving as
@@ -865,6 +887,8 @@ impl App {
             escape_last_edit: None,
             #[cfg(feature = "engine-sim")]
             sim_renderer: None,
+            #[cfg(all(feature = "terrain", feature = "engine-sim"))]
+            sim_terrain: None,
             // Runs on entry: a simulation that sits still looks broken,
             // and the first thing anyone does is press Run anyway.
             sim_running: true,
@@ -980,6 +1004,7 @@ impl App {
 
         // Initialize GPU state with initial config (ensures shaders are compiled with correct variations)
         app.import_config(initial_config, true);
+
         // Detect compact (mobile) mode from logical window size
         {
             let compact_mode = match app.config_manager.system_settings().compact_mode {
@@ -1187,6 +1212,10 @@ impl App {
                                 #[cfg(feature = "engine-sim")]
                                 {
                                     app.sim_renderer = None;
+                                    #[cfg(feature = "terrain")]
+                                    {
+                                        app.sim_terrain = None;
+                                    }
                                 }
                                 app.sim_reseed = true;
 
@@ -1530,6 +1559,10 @@ impl App {
         }
         #[cfg(feature = "engine-sim")]
         if !crate::ui::render_mode::keeps_sim_engine(mode) {
+            #[cfg(feature = "terrain")]
+            if let Some(t) = self.sim_terrain.take() {
+                t.destroy();
+            }
             if self.sim_renderer.take().is_some() {
                 log::info!("Left simulation mode: freed the simulation grid");
                 // The grid was the state; coming back starts from the
@@ -2087,7 +2120,12 @@ impl App {
                             ),
                             #[cfg(feature = "engine-sim")]
                             crate::scene::transforms::RenderMode::Simulation => {
-                                self.sim_renderer.as_ref().map(|r| r.output_view())
+                                sim_view(
+                                    &self.sim_renderer,
+                                    #[cfg(feature = "terrain")]
+                                    &self.sim_terrain,
+                                    &export_config,
+                                )
                             }
                             _ => None,
                         };
@@ -2200,7 +2238,12 @@ impl App {
                             ),
                             #[cfg(feature = "engine-sim")]
                             crate::scene::transforms::RenderMode::Simulation => {
-                                self.sim_renderer.as_ref().map(|r| r.output_view())
+                                sim_view(
+                                    &self.sim_renderer,
+                                    #[cfg(feature = "terrain")]
+                                    &self.sim_terrain,
+                                    &export_config,
+                                )
                             }
                             _ => None,
                         };
@@ -2494,7 +2537,8 @@ impl App {
                     // it would advance or restart what is on screen as
                     // a side effect of exporting.
                     #[cfg(feature = "engine-sim")]
-                    let sim_export = if export_config.render_mode
+                    #[allow(unused_mut)]
+                    let mut sim_export = if export_config.render_mode
                         == crate::scene::transforms::RenderMode::Simulation
                     {
                         let mut sim = crate::sim::SimRenderer::new(
@@ -2520,6 +2564,26 @@ impl App {
                     } else {
                         None
                     };
+                    // The simulation's terrain, made from the field it ran
+                    // to, and its still -- what `render_sim` does on the
+                    // desktop. No blocking wait in a browser.
+                    #[cfg(all(feature = "engine-sim", feature = "terrain"))]
+                    let sim_terrain_export = match sim_export.as_mut() {
+                        Some(sim) if export_config.sim.terrain_active() => {
+                            let mut t = crate::sim::terrain::SimTerrain::new(&self.gpu.device, export_width, export_height);
+                            t.update(
+                                &self.gpu.device,
+                                &self.gpu.queue,
+                                sim,
+                                &export_config,
+                                temp_renderer.palette_view(),
+                                temp_renderer.palette_generation(),
+                            );
+                            t.render_still(&self.gpu.device, &self.gpu.queue, &export_config, || {});
+                            Some(t)
+                        }
+                        _ => None,
+                    };
                     #[cfg(not(feature = "engine-sim"))]
                     let sim_export: Option<()> = None;
 
@@ -2528,7 +2592,12 @@ impl App {
                     let mut final_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                         label: Some("WASM Export Final Tonemap"),
                     });
-                    #[cfg(feature = "engine-sim")]
+                    #[cfg(all(feature = "engine-sim", feature = "terrain"))]
+                    let sim_view = sim_terrain_export
+                        .as_ref()
+                        .map(|t| t.output_view())
+                        .or(sim_export.as_ref().map(|s| s.output_view()));
+                    #[cfg(all(feature = "engine-sim", not(feature = "terrain")))]
                     let sim_view = sim_export.as_ref().map(|s| s.output_view());
                     #[cfg(not(feature = "engine-sim"))]
                     let sim_view: Option<&egui_wgpu::wgpu::TextureView> = None;
@@ -2690,7 +2759,12 @@ impl App {
                             ),
                             #[cfg(feature = "engine-sim")]
                             crate::scene::transforms::RenderMode::Simulation => {
-                                self.sim_renderer.as_ref().map(|r| r.output_view())
+                                sim_view(
+                                    &self.sim_renderer,
+                                    #[cfg(feature = "terrain")]
+                                    &self.sim_terrain,
+                                    &export_config,
+                                )
                             }
                             _ => None,
                         };
@@ -3326,6 +3400,25 @@ impl App {
                         self.window.request_redraw();
                     }
                 }
+                // The 3D terrain (heightfield plan T4): its ground made
+                // from the field as this frame left it -- every step of a
+                // run, so a run shows the lit tier -- then a frame of its
+                // tiers, which path trace once the run rests.
+                #[cfg(feature = "terrain")]
+                if final_config.sim.terrain_active() {
+                    let device = &self.gpu.device;
+                    let queue = &self.gpu.queue;
+                    let terrain = self
+                        .sim_terrain
+                        .get_or_insert_with(|| crate::sim::terrain::SimTerrain::new(device, w, h));
+                    terrain.resize(device, w, h);
+                    terrain.update(device, queue, sim, &final_config, renderer.palette_view(), renderer.palette_generation());
+                    if terrain.render_viewport(device, queue, &final_config) {
+                        self.window.request_redraw();
+                    }
+                } else if let Some(t) = self.sim_terrain.take() {
+                    t.destroy();
+                }
             }
 
             // Everything below that asks "is this a chaos game?" must
@@ -3699,10 +3792,13 @@ impl App {
             #[cfg(feature = "engine-sim")]
             let sim_view = if is_sim {
                 Some(
-                    self.sim_renderer
-                        .as_ref()
-                        .expect("sim branch above created it")
-                        .output_view(),
+                    sim_view(
+                        &self.sim_renderer,
+                        #[cfg(feature = "terrain")]
+                        &self.sim_terrain,
+                        final_config,
+                    )
+                    .expect("sim branch above created it"),
                 )
             } else {
                 None

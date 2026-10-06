@@ -960,6 +960,86 @@ fn apply_config_value(
         (ConfigPath::SimSteps, ConfigValue::UInt(v)) => {
             config.sim.steps = (*v).min(10_000_000);
         }
+        (ConfigPath::SimTerrainSoftness, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.softness = v.clamp(0.0, 8.0);
+        }
+        (ConfigPath::SimTerrainHeight, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.height = v.clamp(-1.0, 1.0);
+        }
+        (ConfigPath::SimTerrainShadow, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.shadow = v.clamp(0.0, 1.0);
+        }
+        (ConfigPath::SimTerrainShadowSharpness, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.shadow_sharpness = v.clamp(1.0, 128.0);
+        }
+        (ConfigPath::SimTerrainOcclusion, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.occlusion = v.clamp(0.0, 0.2);
+        }
+        (ConfigPath::SimTerrainFar, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.far = v.clamp(0.5, 64.0);
+        }
+        (ConfigPath::SimTerrainHaze, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.haze = v.clamp(0.0, 1.0);
+        }
+        (ConfigPath::SimTerrainCamPitch, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.cam_pitch = v.clamp(-1.5607964, 1.5607964);
+        }
+        (ConfigPath::SimTerrainCamYaw, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.cam_yaw = v;
+        }
+        (ConfigPath::SimTerrainCamBank, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.cam_bank = v;
+        }
+        (ConfigPath::SimTerrainCamFov, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.cam_fov = v.clamp(0.05, 3.0);
+        }
+        (ConfigPath::SimTerrainCamDistance, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.cam_distance = v.clamp(0.01, 100.0);
+        }
+        (ConfigPath::SimTerrainTargetX, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.target_x = v;
+        }
+        (ConfigPath::SimTerrainTargetY, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.target_y = v;
+        }
+        (ConfigPath::SimPathEnvironment, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.path.environment = v.clamp(0.0, 16.0);
+        }
+        (ConfigPath::SimPathGloss, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.path.gloss = v.clamp(0.0, 1.0);
+        }
+        (ConfigPath::SimPathRoughness, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.path.roughness = v.clamp(0.02, 1.0);
+        }
+        (ConfigPath::SimPathEmission, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.path.emission = v.clamp(0.0, 16.0);
+        }
+        (ConfigPath::SimPathAperture, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.path.aperture = v.clamp(0.0, 1.0);
+        }
+        (ConfigPath::SimPathFocus, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.path.focus = v.clamp(0.0, 64.0);
+        }
         (ConfigPath::SimStepsPerFrame, ConfigValue::UInt(v)) => {
             config.sim.steps_per_frame = (*v).clamp(1, 4096);
         }

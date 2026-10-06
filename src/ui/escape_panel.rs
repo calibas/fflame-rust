@@ -197,7 +197,7 @@ pub fn render_escape_content(
             // The path tracer (heightfield plan T3c): Lit by default, so
             // a solid renders as it always has until asked otherwise.
             ui.separator();
-            show_path_tracing(ui, config_manager, &esc, ConfigPath::EscapeSolidTier, esc.solid_tier, "solid_tier");
+            show_path_tracing(ui, config_manager, &esc.path, &escape_path_paths(), ConfigPath::EscapeSolidTier, esc.solid_tier, "solid_tier");
         }
     }
 
@@ -1479,19 +1479,47 @@ fn suggested_coloring_scale(coloring: &str, max_iter: u32) -> f32 {
 /// The solid camera's controls. `with_target` is mode D's: a terrain's
 /// target is the view's own centre (heightfield plan, T2b), so it has
 /// none to edit here.
+/// The ConfigPaths of a block of path-tracing settings.
+pub(crate) struct PathPaths {
+    pub samples: ConfigPath,
+    pub bounces: ConfigPath,
+    pub environment: ConfigPath,
+    pub gloss: ConfigPath,
+    pub roughness: ConfigPath,
+    pub emission: ConfigPath,
+    pub aperture: ConfigPath,
+    pub focus: ConfigPath,
+}
+
+/// The escape view's: a terrain's and a solid's.
+fn escape_path_paths() -> PathPaths {
+    PathPaths {
+        samples: ConfigPath::EscapePathSamples,
+        bounces: ConfigPath::EscapePathBounces,
+        environment: ConfigPath::EscapePathEnvironment,
+        gloss: ConfigPath::EscapePathGloss,
+        roughness: ConfigPath::EscapePathRoughness,
+        emission: ConfigPath::EscapePathEmission,
+        aperture: ConfigPath::EscapePathAperture,
+        focus: ConfigPath::EscapePathFocus,
+    }
+}
+
 /// How a 3D view is rendered -- the lit tier, the path tracer, or both by
-/// turns -- and, when it path traces, the path tracer's settings: shared
-/// by a terrain and a solid (`escape.path`), each with its own tier.
-fn show_path_tracing(
+/// turns -- and, when it path traces, the path tracer's settings `pt`
+/// (escape's are shared by a terrain and a solid, each with its own tier;
+/// a simulation's terrain keeps its own), written through `paths`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn show_path_tracing(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
-    esc: &crate::config::escape::EscapeConfig,
+    pt: &crate::config::escape::PathTraceConfig,
+    paths: &PathPaths,
     tier_path: ConfigPath,
     tier: crate::config::escape::RenderTier,
     id: &str,
 ) {
     use crate::config::escape::RenderTier;
-    let pt = &esc.path;
     ui.horizontal(|ui| {
         ui.label(t!("escape_panel.terrain_tier"));
         let label = |s: RenderTier| match s {
@@ -1522,7 +1550,7 @@ fn show_path_tracing(
             .on_hover_text(t!("escape_panel.terrain_samples_tip"))
             .changed()
         {
-            let _ = config_manager.update_param(ConfigPath::EscapePathSamples, ConfigValue::UInt(v));
+            let _ = config_manager.update_param(paths.samples.clone(), ConfigValue::UInt(v));
         }
     });
     ui.horizontal(|ui| {
@@ -1533,7 +1561,7 @@ fn show_path_tracing(
             .on_hover_text(t!("escape_panel.terrain_bounces_tip"))
             .changed()
         {
-            let _ = config_manager.update_param(ConfigPath::EscapePathBounces, ConfigValue::UInt(v));
+            let _ = config_manager.update_param(paths.bounces.clone(), ConfigValue::UInt(v));
         }
     });
     let mut row = |ui: &mut egui::Ui, label: &str, tip: &str, path: ConfigPath, value: f32, range: std::ops::RangeInclusive<f32>| {
@@ -1547,17 +1575,17 @@ fn show_path_tracing(
     };
     // The sky, then the material and the lens -- folded away, since the
     // defaults (matte, everything sharp) are what most pictures want.
-    row(ui, "escape_panel.terrain_environment", "escape_panel.terrain_environment_tip", ConfigPath::EscapePathEnvironment, pt.environment, 0.0..=4.0);
+    row(ui, "escape_panel.terrain_environment", "escape_panel.terrain_environment_tip", paths.environment.clone(), pt.environment, 0.0..=4.0);
     egui::CollapsingHeader::new(t!("escape_panel.path_material"))
         .id_salt(format!("{id}_material"))
         .default_open(false)
         .show(ui, |ui| {
             for (label, tip, path, value, range) in [
-                ("escape_panel.terrain_gloss", "escape_panel.terrain_gloss_tip", ConfigPath::EscapePathGloss, pt.gloss, 0.0..=1.0),
-                ("escape_panel.terrain_roughness", "escape_panel.terrain_roughness_tip", ConfigPath::EscapePathRoughness, pt.roughness, 0.02..=1.0),
-                ("escape_panel.terrain_emission", "escape_panel.terrain_emission_tip", ConfigPath::EscapePathEmission, pt.emission, 0.0..=4.0),
-                ("escape_panel.terrain_aperture", "escape_panel.terrain_aperture_tip", ConfigPath::EscapePathAperture, pt.aperture, 0.0..=0.2),
-                ("escape_panel.terrain_focus", "escape_panel.terrain_focus_tip", ConfigPath::EscapePathFocus, pt.focus, 0.0..=8.0),
+                ("escape_panel.terrain_gloss", "escape_panel.terrain_gloss_tip", paths.gloss.clone(), pt.gloss, 0.0..=1.0),
+                ("escape_panel.terrain_roughness", "escape_panel.terrain_roughness_tip", paths.roughness.clone(), pt.roughness, 0.02..=1.0),
+                ("escape_panel.terrain_emission", "escape_panel.terrain_emission_tip", paths.emission.clone(), pt.emission, 0.0..=4.0),
+                ("escape_panel.terrain_aperture", "escape_panel.terrain_aperture_tip", paths.aperture.clone(), pt.aperture, 0.0..=0.2),
+                ("escape_panel.terrain_focus", "escape_panel.terrain_focus_tip", paths.focus.clone(), pt.focus, 0.0..=8.0),
             ] {
                 row(ui, label, tip, path, value, range);
             }
@@ -1803,7 +1831,7 @@ fn show_terrain_section(
             // How it is rendered: the lit tier, the path tracer, or both
             // by turns (plan section 8).
             ui.separator();
-            show_path_tracing(ui, config_manager, esc, ConfigPath::EscapeTerrainTier, t.tier, "terrain_tier");
+            show_path_tracing(ui, config_manager, &esc.path, &escape_path_paths(), ConfigPath::EscapeTerrainTier, t.tier, "terrain_tier");
             // How it is lit: the Solid Lighting panel's lights, world-
             // fixed, with these.
             ui.separator();

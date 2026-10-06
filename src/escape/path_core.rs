@@ -79,7 +79,17 @@ impl Default for PathSettings {
 ///   camera dollies: the aperture a fraction of the distance, the focus
 ///   a multiple of it (0, the target itself).
 pub fn path_settings(config: &FractalConfig, target: f32) -> PathSettings {
-    let t = &config.escape.path;
+    path_settings_from(&config.escape.path, config, target, config.escape.terrain.lake_roughness)
+}
+
+/// [`path_settings`] from any path-tracing block -- a simulation's
+/// terrain keeps its own -- with the config's sky and lights.
+pub fn path_settings_from(
+    t: &crate::config::escape::PathTraceConfig,
+    config: &FractalConfig,
+    target: f32,
+    lake_roughness: f32,
+) -> PathSettings {
     let gamma = if config.gamma > 0.0 { config.gamma } else { 1.0 };
     let exposure = config.exposure.max(1.0e-6);
     let env = config.background_color.map(|c| t.environment * c.max(0.0).powf(gamma) / exposure);
@@ -96,7 +106,7 @@ pub fn path_settings(config: &FractalConfig, target: f32) -> PathSettings {
         emission: t.emission,
         aperture: t.aperture * target,
         focus: if t.focus > 0.0 { t.focus } else { 1.0 } * target,
-        lake_roughness: config.escape.terrain.lake_roughness,
+        lake_roughness,
     }
 }
 

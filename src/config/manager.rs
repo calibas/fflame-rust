@@ -1868,6 +1868,33 @@ impl ConfigManager {
             ConfigPath::SimSteps => Ok(ConfigValue::UInt(config.sim.steps)),
             ConfigPath::SimStepsPerFrame => Ok(ConfigValue::UInt(config.sim.steps_per_frame)),
             ConfigPath::SimDt => Ok(ConfigValue::Float(config.sim.dt)),
+            ConfigPath::SimTerrainEnabled => Ok(config.sim.terrain.enabled.into()),
+            ConfigPath::SimTerrainLayer => Ok(ConfigValue::UInt(config.sim.terrain.layer)),
+            ConfigPath::SimTerrainChannel => Ok(ConfigValue::UInt(config.sim.terrain.channel)),
+            ConfigPath::SimTerrainSoftness => Ok(ConfigValue::Float(config.sim.terrain.softness)),
+            ConfigPath::SimTerrainHeight => Ok(ConfigValue::Float(config.sim.terrain.height)),
+            ConfigPath::SimTerrainTiling => Ok(ConfigValue::String(config.sim.terrain.tiling.as_str().to_string())),
+            ConfigPath::SimTerrainTier => Ok(ConfigValue::String(config.sim.terrain.tier.as_str().to_string())),
+            ConfigPath::SimTerrainShadow => Ok(ConfigValue::Float(config.sim.terrain.shadow)),
+            ConfigPath::SimTerrainShadowSharpness => Ok(ConfigValue::Float(config.sim.terrain.shadow_sharpness)),
+            ConfigPath::SimTerrainOcclusion => Ok(ConfigValue::Float(config.sim.terrain.occlusion)),
+            ConfigPath::SimTerrainFar => Ok(ConfigValue::Float(config.sim.terrain.far)),
+            ConfigPath::SimTerrainHaze => Ok(ConfigValue::Float(config.sim.terrain.haze)),
+            ConfigPath::SimTerrainCamPitch => Ok(ConfigValue::Float(config.sim.terrain.cam_pitch)),
+            ConfigPath::SimTerrainCamYaw => Ok(ConfigValue::Float(config.sim.terrain.cam_yaw)),
+            ConfigPath::SimTerrainCamBank => Ok(ConfigValue::Float(config.sim.terrain.cam_bank)),
+            ConfigPath::SimTerrainCamFov => Ok(ConfigValue::Float(config.sim.terrain.cam_fov)),
+            ConfigPath::SimTerrainCamDistance => Ok(ConfigValue::Float(config.sim.terrain.cam_distance)),
+            ConfigPath::SimTerrainTargetX => Ok(ConfigValue::Float(config.sim.terrain.target_x)),
+            ConfigPath::SimTerrainTargetY => Ok(ConfigValue::Float(config.sim.terrain.target_y)),
+            ConfigPath::SimPathSamples => Ok(ConfigValue::UInt(config.sim.terrain.path.samples)),
+            ConfigPath::SimPathBounces => Ok(ConfigValue::UInt(config.sim.terrain.path.bounces)),
+            ConfigPath::SimPathEnvironment => Ok(ConfigValue::Float(config.sim.terrain.path.environment)),
+            ConfigPath::SimPathGloss => Ok(ConfigValue::Float(config.sim.terrain.path.gloss)),
+            ConfigPath::SimPathRoughness => Ok(ConfigValue::Float(config.sim.terrain.path.roughness)),
+            ConfigPath::SimPathEmission => Ok(ConfigValue::Float(config.sim.terrain.path.emission)),
+            ConfigPath::SimPathAperture => Ok(ConfigValue::Float(config.sim.terrain.path.aperture)),
+            ConfigPath::SimPathFocus => Ok(ConfigValue::Float(config.sim.terrain.path.focus)),
             ConfigPath::SimWarpZoom => Ok(ConfigValue::Float(config.sim.warp.zoom)),
             ConfigPath::SimWarpRotation => Ok(ConfigValue::Float(config.sim.warp.rotation)),
             ConfigPath::SimWarpPanX => Ok(ConfigValue::Float(config.sim.warp.pan_x)),
@@ -3090,6 +3117,114 @@ impl ConfigManager {
             }
             ConfigPath::SimStepsPerFrame => {
                 self.current.sim.steps_per_frame = u32::try_from(value)?.clamp(1, 4096);
+            }
+            ConfigPath::SimTerrainEnabled => {
+                let v: bool = value.try_into()?;
+                self.current.sim.terrain.enabled = v;
+            }
+            ConfigPath::SimTerrainLayer => {
+                let v: u32 = value.try_into()?;
+                self.current.sim.terrain.layer = v.min(7);
+            }
+            ConfigPath::SimTerrainChannel => {
+                let v: u32 = value.try_into()?;
+                self.current.sim.terrain.channel = v.min(3);
+            }
+            ConfigPath::SimTerrainSoftness => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.softness = v.clamp(0.0, 8.0);
+            }
+            ConfigPath::SimTerrainHeight => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.height = v.clamp(-1.0, 1.0);
+            }
+            ConfigPath::SimTerrainTiling => {
+                let v: String = value.try_into()?;
+                self.current.sim.terrain.tiling = crate::config::sim::SimTiling::from_str_or_default(&v);
+            }
+            ConfigPath::SimTerrainTier => {
+                let v: String = value.try_into()?;
+                self.current.sim.terrain.tier = crate::config::escape::RenderTier::from_str_or_default(&v);
+            }
+            ConfigPath::SimTerrainShadow => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.shadow = v.clamp(0.0, 1.0);
+            }
+            ConfigPath::SimTerrainShadowSharpness => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.shadow_sharpness = v.clamp(1.0, 128.0);
+            }
+            ConfigPath::SimTerrainOcclusion => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.occlusion = v.clamp(0.0, 0.2);
+            }
+            ConfigPath::SimTerrainFar => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.far = v.clamp(0.5, 64.0);
+            }
+            ConfigPath::SimTerrainHaze => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.haze = v.clamp(0.0, 1.0);
+            }
+            ConfigPath::SimTerrainCamPitch => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.cam_pitch = v.clamp(-1.5607964, 1.5607964);
+            }
+            ConfigPath::SimTerrainCamYaw => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.cam_yaw = v;
+            }
+            ConfigPath::SimTerrainCamBank => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.cam_bank = v;
+            }
+            ConfigPath::SimTerrainCamFov => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.cam_fov = v.clamp(0.05, 3.0);
+            }
+            ConfigPath::SimTerrainCamDistance => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.cam_distance = v.clamp(0.01, 100.0);
+            }
+            ConfigPath::SimTerrainTargetX => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.target_x = v;
+            }
+            ConfigPath::SimTerrainTargetY => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.target_y = v;
+            }
+            ConfigPath::SimPathSamples => {
+                let v: u32 = value.try_into()?;
+                self.current.sim.terrain.path.samples = v.clamp(1, 65_536);
+            }
+            ConfigPath::SimPathBounces => {
+                let v: u32 = value.try_into()?;
+                self.current.sim.terrain.path.bounces = v.min(16);
+            }
+            ConfigPath::SimPathEnvironment => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.path.environment = v.clamp(0.0, 16.0);
+            }
+            ConfigPath::SimPathGloss => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.path.gloss = v.clamp(0.0, 1.0);
+            }
+            ConfigPath::SimPathRoughness => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.path.roughness = v.clamp(0.02, 1.0);
+            }
+            ConfigPath::SimPathEmission => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.path.emission = v.clamp(0.0, 16.0);
+            }
+            ConfigPath::SimPathAperture => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.path.aperture = v.clamp(0.0, 1.0);
+            }
+            ConfigPath::SimPathFocus => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.path.focus = v.clamp(0.0, 64.0);
             }
             ConfigPath::SimDt => {
                 let d: f32 = f32::try_from(value)?;

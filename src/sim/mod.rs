@@ -43,6 +43,8 @@ pub mod colorings;
 pub mod fft;
 pub mod models;
 pub mod renderer;
+#[cfg(feature = "terrain")]
+pub mod terrain;
 pub mod spectral;
 
 pub use renderer::SimRenderer;

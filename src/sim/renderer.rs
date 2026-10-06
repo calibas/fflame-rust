@@ -550,6 +550,9 @@ pub struct SimRenderer {
     /// [1] the (height, d/dx, d/dy) the colour pass reads. Allocated
     /// while a colouring reads relief, freed when none does.
     relief: Option<[(Texture, TextureView); 2]>,
+    /// A 3D terrain's inputs (heightfield plan T4), while one is drawn.
+    #[cfg(feature = "terrain")]
+    terrain: Option<TerrainInputs>,
     /// The relief stage's uniform: one `SimParamsGpu`.
     relief_params_buffer: Buffer,
     /// One `SimParamsGpu` per jump-flood pass, its jump in the
@@ -710,6 +713,8 @@ impl SimRenderer {
             sdf: None,
             sdf_dummy,
             relief: None,
+            #[cfg(feature = "terrain")]
+            terrain: None,
             relief_params_buffer,
             jfa_params_buffer,
             level_params_buffer,
@@ -1060,6 +1065,124 @@ impl SimRenderer {
         });
     }
 
+    /// A 3D terrain's inputs (heightfield plan section 6), at grid size:
+    /// the relief stage over the terrain's own layer, channel and
+    /// softness -- (h, dh/dx, dh/dy) -- and the colour stack evaluated
+    /// once a cell, as the colour pass would at a scale of one (so every
+    /// resolve reads one cell). The colour pass's distance field and
+    /// relief are this frame's: call after `color`. Submits its own work.
+    #[cfg(feature = "terrain")]
+    pub(crate) fn terrain_inputs(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        cfg: &SimConfig,
+        palette_view: &TextureView,
+    ) -> (&TextureView, &TextureView) {
+        self.ensure_pipelines(device, cfg);
+        let (w, h) = (self.grid_w, self.grid_h);
+        if self.terrain.as_ref().is_none_or(|t| (t.w, t.h) != (w, h)) {
+            let uniform = |label: &str| {
+                device.create_buffer(&BufferDescriptor {
+                    label: Some(label),
+                    size: self.params_stride,
+                    usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            };
+            self.terrain = Some(TerrainInputs {
+                relief: [Self::create_level(device, w, h, "Sim Terrain Relief A"), Self::create_level(device, w, h, "Sim Terrain Relief")],
+                albedo: Self::create_level(device, w, h, "Sim Terrain Albedo"),
+                block: device.create_buffer(&BufferDescriptor {
+                    label: Some("Sim Terrain Relief Block"),
+                    size: 16 * 4,
+                    usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }),
+                relief_params: uniform("Sim Terrain Relief Params"),
+                color_params: uniform("Sim Terrain Colour Params"),
+                w,
+                h,
+            });
+        }
+        let t = &cfg.terrain;
+        let layer = (t.layer as usize).min(cfg.layer_count().saturating_sub(1));
+        let inputs = self.terrain.as_ref().expect("made above");
+        // The relief's channel and softness, as a colouring's parameter
+        // block would hold them (`RELIEF_COMMON`).
+        let mut block = [0.0f32; 16];
+        block[0] = t.channel.min(3) as f32;
+        block[1] = t.softness;
+        queue.write_buffer(&inputs.block, 0, bytemuck::cast_slice(&block));
+        let mut p = self.params_for_layer(cfg, self.step_index, layer);
+        p.kernel_offset = 0;
+        queue.write_buffer(&inputs.relief_params, 0, bytemuck::bytes_of(&p));
+        // The colour pass at a scale of one: the output IS the grid.
+        let mut c = self.params_for(cfg, self.step_index);
+        c.out_size = [w, h];
+        c.view[0] = 1.0;
+        queue.write_buffer(&inputs.color_params, 0, bytemuck::bytes_of(&c));
+
+        let pipes = self.pipelines.as_ref().expect("pipelines built above");
+        fn binding(buffer: &Buffer) -> BindingResource<'_> {
+            BindingResource::Buffer(BufferBinding {
+                buffer,
+                offset: 0,
+                size: std::num::NonZeroU64::new(std::mem::size_of::<SimParamsGpu>() as u64),
+            })
+        }
+        let relief_group = |out: &TextureView, ping: &TextureView| {
+            device.create_bind_group(&BindGroupDescriptor {
+                label: Some("Sim Terrain Relief BG"),
+                layout: &pipes.jfa_layout,
+                entries: &[
+                    BindGroupEntry { binding: 0, resource: binding(&inputs.relief_params) },
+                    BindGroupEntry { binding: 1, resource: self.model_params_buffer.as_entire_binding() },
+                    BindGroupEntry { binding: 2, resource: inputs.block.as_entire_binding() },
+                    BindGroupEntry { binding: 3, resource: BindingResource::TextureView(out) },
+                    BindGroupEntry { binding: 4, resource: BindingResource::TextureView(&self.field_view[self.current]) },
+                    BindGroupEntry { binding: 5, resource: BindingResource::TextureView(ping) },
+                ],
+            })
+        };
+        let along_x = relief_group(&inputs.relief[0].1, &inputs.relief[1].1);
+        let along_y = relief_group(&inputs.relief[1].1, &inputs.relief[0].1);
+        let sdf_view = self.sdf.as_ref().map(|(_, v)| v).unwrap_or(&self.sdf_dummy.1);
+        let colour_relief = self.relief.as_ref().map(|r| &r[1].1).unwrap_or(&self.sdf_dummy.1);
+        let colour = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Sim Terrain Colour BG"),
+            layout: &pipes.color_layout,
+            entries: &[
+                BindGroupEntry { binding: 0, resource: binding(&inputs.color_params) },
+                BindGroupEntry { binding: 1, resource: self.model_params_buffer.as_entire_binding() },
+                BindGroupEntry { binding: 2, resource: self.coloring_params_buffer.as_entire_binding() },
+                BindGroupEntry { binding: 3, resource: BindingResource::TextureView(&inputs.albedo.1) },
+                BindGroupEntry { binding: 4, resource: BindingResource::TextureView(&self.field_view[self.current]) },
+                BindGroupEntry { binding: 5, resource: BindingResource::TextureView(palette_view) },
+                BindGroupEntry { binding: 6, resource: BindingResource::TextureView(sdf_view) },
+                BindGroupEntry { binding: 7, resource: self.color_layers_buffer.as_entire_binding() },
+                BindGroupEntry { binding: 8, resource: BindingResource::TextureView(colour_relief) },
+            ],
+        });
+        let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Sim Terrain Inputs") });
+        {
+            let (gx, gy) = Self::dispatch_size(w, h);
+            let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: Some("Sim Terrain Inputs"), timestamp_writes: None });
+            pass.set_pipeline(&pipes.relief_h);
+            pass.set_bind_group(0, &along_x, &[0]);
+            pass.dispatch_workgroups(gx, gy, 1);
+            pass.set_pipeline(&pipes.relief_v);
+            pass.set_bind_group(0, &along_y, &[0]);
+            pass.dispatch_workgroups(gx, gy, 1);
+            pass.set_pipeline(&pipes.color);
+            pass.set_bind_group(0, &colour, &[0]);
+            pass.dispatch_workgroups(gx, gy, 1);
+        }
+        queue.submit(std::iter::once(enc.finish()));
+        let inputs = self.terrain.as_ref().expect("made above");
+        (&inputs.relief[1].1, &inputs.albedo.1)
+    }
+
     /// The relief texture, for a test to read back.
     #[cfg(test)]
     pub(crate) fn relief_texture(&self) -> Option<&Texture> {
@@ -1403,6 +1526,10 @@ impl SimRenderer {
             self.jfa = None;
             self.sdf = None;
             self.relief = None;
+            #[cfg(feature = "terrain")]
+            {
+                self.terrain = None;
+            }
             let (d, c) = Self::create_cell_buffers(device, gw, gh);
             self.deposit_buffer = d;
             self.claim_buffer = c;
@@ -3210,6 +3337,22 @@ impl SimRenderer {
         self.run_steps(device, queue, cfg, cfg.steps);
         self.color(device, queue, cfg, palette_view);
     }
+}
+
+/// A 3D terrain's inputs at grid size (`SimRenderer::terrain_inputs`).
+#[cfg(feature = "terrain")]
+struct TerrainInputs {
+    /// The relief stage's pair: along x into [0], then along y into [1],
+    /// which holds (h, dh/dx, dh/dy).
+    relief: [(Texture, TextureView); 2],
+    /// The colour stack, once a cell.
+    albedo: (Texture, TextureView),
+    /// The relief's channel and softness, in a colouring block's place.
+    block: Buffer,
+    relief_params: Buffer,
+    color_params: Buffer,
+    w: u32,
+    h: u32,
 }
 
 #[cfg(test)]

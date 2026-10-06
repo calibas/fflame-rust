@@ -71,6 +71,22 @@ impl App {
                 }
             }
             RenderMode::Simulation => {
+                // A terrain's path tracer, once it is the one working: the
+                // run at rest (a running one shows the lit tier).
+                #[cfg(all(feature = "engine-sim", feature = "terrain"))]
+                if config.sim.terrain_active()
+                    && config.sim.terrain.tier != crate::config::escape::RenderTier::Lit
+                    && !self.sim_running
+                {
+                    if let Some(t) = self.sim_terrain.as_ref() {
+                        let target = config.sim.terrain.path.samples.max(1);
+                        let (samples, _) = t.path_progress();
+                        if samples > 0 {
+                            let samples = samples.min(target);
+                            return RenderProgress::PathTrace { samples, target, fraction: samples as f32 / target as f32 };
+                        }
+                    }
+                }
                 #[cfg(feature = "engine-sim")]
                 {
                     RenderProgress::Sim {
