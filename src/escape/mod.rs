@@ -41,6 +41,7 @@ pub mod formulas;
 pub mod presets;
 pub mod diag;
 pub mod renderer;
+pub mod terrain;
 
 pub use renderer::{DerivativeGap, EscapeRenderer, UsableDepth};
 
