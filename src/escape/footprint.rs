@@ -213,7 +213,12 @@ pub fn terrain_ingest(config: &FractalConfig, derivative: bool) -> TerrainIngest
         TerrainSource::Distance | TerrainSource::EscapeCount => 9,
         TerrainSource::Relief => config.escape.shading.field.to_gpu(),
     };
-    TerrainIngest { source, hole: t.interior == TerrainInterior::Hole, background: config.background_color }
+    let interior = match t.interior {
+        TerrainInterior::Plateau => 0,
+        TerrainInterior::Hole => 1,
+        TerrainInterior::Lake => 2,
+    };
+    TerrainIngest { source, interior, background: config.background_color, tint: t.lake_tint }
 }
 
 /// The plane's frame for the sections: a point in exact decimals and a

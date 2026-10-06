@@ -2014,6 +2014,8 @@ impl ConfigManager {
             ConfigPath::EscapeTerrainInterior => Ok(ConfigValue::String(config.escape.terrain.interior.as_str().to_string())),
             ConfigPath::EscapeTerrainShadow => Ok(config.escape.terrain.shadow.into()),
             ConfigPath::EscapeTerrainShadowSharpness => Ok(config.escape.terrain.shadow_sharpness.into()),
+            ConfigPath::EscapeTerrainLakeTint => Ok(ConfigValue::ColorRgb(config.escape.terrain.lake_tint)),
+            ConfigPath::EscapeTerrainLakeRoughness => Ok(config.escape.terrain.lake_roughness.into()),
             ConfigPath::EscapeTerrainOcclusion => Ok(config.escape.terrain.occlusion.into()),
             ConfigPath::EscapeShadingTextureKind => Ok(ConfigValue::String(
                 config.escape.shading.texture_kind.as_str().to_string(),
@@ -3473,6 +3475,14 @@ impl ConfigManager {
             ConfigPath::EscapeTerrainShadowSharpness => {
                 let v: f32 = value.try_into()?;
                 self.current.escape.terrain.shadow_sharpness = v.clamp(1.0, 128.0);
+            }
+            ConfigPath::EscapeTerrainLakeTint => {
+                let v: [f32; 3] = value.try_into()?;
+                self.current.escape.terrain.lake_tint = v.map(|c| c.clamp(0.0, 1.0));
+            }
+            ConfigPath::EscapeTerrainLakeRoughness => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.terrain.lake_roughness = v.clamp(0.02, 1.0);
             }
             ConfigPath::EscapeTerrainOcclusion => {
                 let v: f32 = value.try_into()?;
