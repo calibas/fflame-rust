@@ -231,6 +231,13 @@ pub struct EscapeConfig {
     #[serde(default, skip_serializing_if = "EscapeShading::is_default")]
     pub shading: EscapeShading,
 
+    /// The 3D terrain view (docs/projects/heightfield-3d.md): this
+    /// picture as a height field, seen through the solid camera. Off by
+    /// default and skipped when off, so every existing file is
+    /// byte-stable.
+    #[serde(default, skip_serializing_if = "TerrainConfig::is_default")]
+    pub terrain: TerrainConfig,
+
     /// Auto-exposure for the coloring's value field. Off by default
     /// and skipped when off, so every existing file is byte-stable.
     #[serde(default, skip_serializing_if = "EscapeContrast::is_default")]
@@ -1734,6 +1741,135 @@ fn is_zero_f64(v: &f64) -> bool {
     *v == 0.0
 }
 
+/// What a terrain's height is made from (heightfield plan, section 5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerrainSource {
+    /// `H exp(-DE / w)`: the set the plateau, every filament on smooth
+    /// flanks of width `w`. Where the formula has no derivative, the
+    /// escape count instead.
+    #[default]
+    Distance,
+    /// The smooth escape count, on a log curve: spiky toward the set.
+    EscapeCount,
+    /// The 2D relief's own height source (the Escape panel's relief
+    /// field: the colouring's value, banded, a layer's).
+    Relief,
+}
+
+impl TerrainSource {
+    pub const ALL: [TerrainSource; 3] = [TerrainSource::Distance, TerrainSource::EscapeCount, TerrainSource::Relief];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TerrainSource::Distance => "distance",
+            TerrainSource::EscapeCount => "escape_count",
+            TerrainSource::Relief => "relief",
+        }
+    }
+    /// The iterate pass's height mode for it: the shaders' relief
+    /// source codes, past the relief's own (0-5), for the two the
+    /// terrain adds.
+    pub fn shade_flags(self, relief: ShadingField) -> u32 {
+        match self {
+            TerrainSource::Distance => 8,
+            TerrainSource::EscapeCount => 9,
+            TerrainSource::Relief => relief.to_gpu(),
+        }
+    }
+}
+
+/// What a terrain does where the set's interior is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerrainInterior {
+    /// Flat at the terrain's top, in the interior's colour: the set
+    /// stands as a mesa.
+    #[default]
+    Plateau,
+    /// Transparent, sunk to the slab's floor: a hole through it.
+    Hole,
+}
+
+/// The 3D terrain view (heightfield plan): the escape picture as a
+/// height field. The FOOTPRINT is a square of the plane at the view,
+/// rendered as an ordinary escape picture with the height kept, then
+/// lit in 3D.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TerrainConfig {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "is_default_terrain_source")]
+    pub source: TerrainSource,
+    /// The terrain's relief, as a fraction of the footprint's width.
+    #[serde(default = "default_terrain_height", skip_serializing_if = "is_default_terrain_height")]
+    pub height: f32,
+    /// Distance: the flanks' width `w`, as a fraction of the footprint.
+    #[serde(default = "default_terrain_de_width", skip_serializing_if = "is_default_terrain_de_width")]
+    pub de_width: f32,
+    /// The footprint's side, in pixels.
+    #[serde(default = "default_terrain_resolution", skip_serializing_if = "is_default_terrain_resolution")]
+    pub resolution: u32,
+    #[serde(default, skip_serializing_if = "is_default_terrain_interior")]
+    pub interior: TerrainInterior,
+}
+
+fn default_terrain_height() -> f32 {
+    0.06
+}
+fn is_default_terrain_height(v: &f32) -> bool {
+    *v == default_terrain_height()
+}
+fn default_terrain_de_width() -> f32 {
+    1.0 / 150.0
+}
+fn is_default_terrain_de_width(v: &f32) -> bool {
+    *v == default_terrain_de_width()
+}
+fn default_terrain_resolution() -> u32 {
+    2048
+}
+fn is_default_terrain_resolution(v: &u32) -> bool {
+    *v == default_terrain_resolution()
+}
+fn is_default_terrain_source(v: &TerrainSource) -> bool {
+    *v == TerrainSource::default()
+}
+fn is_default_terrain_interior(v: &TerrainInterior) -> bool {
+    *v == TerrainInterior::default()
+}
+
+impl Default for TerrainConfig {
+    fn default() -> Self {
+        TerrainConfig {
+            enabled: false,
+            source: TerrainSource::default(),
+            height: default_terrain_height(),
+            de_width: default_terrain_de_width(),
+            resolution: default_terrain_resolution(),
+            interior: TerrainInterior::default(),
+        }
+    }
+}
+
+impl TerrainConfig {
+    pub fn is_default(v: &TerrainConfig) -> bool {
+        *v == TerrainConfig::default()
+    }
+    /// Whether the footprint render needs the derivative: the
+    /// distance source.
+    pub fn wants_derivative(&self) -> bool {
+        self.enabled && self.source == TerrainSource::Distance
+    }
+}
+
+impl EscapeConfig {
+    /// Whether the iterate pass needs the derivative orbit: the
+    /// relief's analytic slopes, or the terrain's distance.
+    pub fn wants_derivative(&self) -> bool {
+        self.shading.wants_derivative() || self.terrain.wants_derivative()
+    }
+}
+
 impl Default for EscapeConfig {
     fn default() -> Self {
         Self {
@@ -1767,6 +1903,7 @@ impl Default for EscapeConfig {
             downsample: DownsampleMode::Box,
             reference_period: None,
             shading: EscapeShading::default(),
+            terrain: TerrainConfig::default(),
             contrast: EscapeContrast::default(),
             palette_map: PaletteMap::default(),
             layer: ColoringLayer::default(),

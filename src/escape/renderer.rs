@@ -3253,7 +3253,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// single-term recurrence (docs/projects/derivative-under-perturbation.md).
     pub(crate) fn perturbed_derivative(escape: &EscapeConfig, floatexp: bool) -> Option<&'static super::FormulaDef> {
         let wanted = Self::colourings_have(escape, super::ColoringFeature::NeedsDerivative)
-            || escape.shading.wants_derivative();
+            || escape.wants_derivative();
         let formula = super::get_formula(&escape.formula);
         let tier = Self::perturb_tier(escape)?;
         let single = !matches!(tier, assembler::PerturbTier::Phoenix | assembler::PerturbTier::Manowar);
@@ -3282,7 +3282,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         let formula = super::get_formula(&escape.formula);
         (Self::colourings_have(escape, super::ColoringFeature::NeedsDerivative)
-            || escape.shading.wants_derivative())
+            || escape.wants_derivative())
             && !formula.wgsl_derivative.is_empty()
     }
 
@@ -3839,6 +3839,24 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         self.ifs = packed;
         self.ifs_seed_key.clear();
         true
+    }
+
+    /// The height field (render size, `Rgba32Float`): the colouring's
+    /// raw value in red, the relief's -- or a terrain footprint's --
+    /// height source in green. Full size only while something asks for
+    /// it (`ensure_height`).
+    pub(crate) fn height_view(&self) -> &TextureView {
+        &self.height_view
+    }
+
+    /// The height field and the render texture, for a test to read back.
+    #[cfg(test)]
+    pub(crate) fn height_texture_for_test(&self) -> &Texture {
+        &self.height_texture
+    }
+    #[cfg(test)]
+    pub(crate) fn output_texture_for_test(&self) -> &Texture {
+        self.final_texture.as_ref().unwrap_or(&self.output_texture)
     }
 
     /// Whether a qualifying flame is loaded.
@@ -6711,7 +6729,8 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let shading = &escape.shading;
         let mode = escape.downsample;
         let factor = self.supersample;
-        let shade_on = shading.enabled;
+        // A terrain's footprint is lit in 3D, not by the 2D relief.
+        let shade_on = shading.enabled && !escape.terrain.enabled;
         let overlay_on = self.overlay_on(escape);
         if factor <= 1 && !shade_on && !overlay_on {
             return;
@@ -7581,7 +7600,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let registry = crate::variations::global_registry();
         let lens_src = super::lens::lens_source(escape, &registry);
         let layer = super::layer_of(escape);
-        let analytic = escape.shading.wants_derivative();
+        let analytic = escape.wants_derivative();
         let orbits = if !escape.shading.wants_offset_orbits() {
             assembler::ReliefOrbits::None
         } else if escape.shading.field == crate::config::escape::ShadingField::Embossed {
@@ -7778,7 +7797,13 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             bailout: escape.bailout.max(1e-6),
             tile_y0: 0,
             damping: [escape.damping_re, escape.damping_im],
-            shade_flags: escape.shading.field.to_gpu(),
+            // A terrain's footprint writes the terrain's height source
+            // into the relief channel instead.
+            shade_flags: if escape.terrain.enabled {
+                escape.terrain.source.shade_flags(escape.shading.field)
+            } else {
+                escape.shading.field.to_gpu()
+            },
             stride: self.stride(escape),
             degree,
             pmap_flags: escape.palette_map.gpu_flags()
@@ -7832,8 +7857,13 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // from the colour it reads; both are allocated on demand, so
         // an escape view with shading off carries neither.
         let overlay = self.overlay_on(escape);
-        self.ensure_height(device, escape.shading.enabled || escape.contrast.is_active() || overlay);
-        self.ensure_resolve_target(device, escape.shading.enabled || overlay);
+        // A terrain's footprint keeps its height field too: it is the
+        // terrain (heightfield plan, section 5).
+        self.ensure_height(
+            device,
+            escape.shading.enabled || escape.contrast.is_active() || overlay || escape.terrain.enabled,
+        );
+        self.ensure_resolve_target(device, (escape.shading.enabled && !escape.terrain.enabled) || overlay);
         // Diagnostics: CPU time of this whole call, whatever path or
         // early return it takes (the drop guard writes on exit).
         let _diag_cpu = super::diag::CpuTimer::start();
