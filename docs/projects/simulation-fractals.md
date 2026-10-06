@@ -5,7 +5,7 @@
 that day. What is left is at the end of §5 and is three items, none of
 them engine work: translations (deferred as their own project), a
 display-time view (held), and the online browser's render-mode filter
-(a gap shared with escape). 31 models and 11 colourings are in the
+(a gap shared with escape). 31 models and 11 colourings were in the
 registry, on branch `simulation-mode`.
 
 **§5 is where the per-phase status lives**, and each wave records what
@@ -46,7 +46,7 @@ same instinct that gave the variation and formula registries.
 Points where planning changed or corrected the seed document:
 
 1. **The Reusser quotation is not verbatim.** The seed document
-   quotes Jonathan Reusser describing McCabe's algorithm; the text
+   quotes Ricky Reusser describing McCabe's algorithm; the text
    could not be matched to his page. What his implementation does that
    matters here: the multi-scale averages are computed with analytic
    kernels **in the frequency domain inside an FFT pipeline**. That is

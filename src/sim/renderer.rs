@@ -66,10 +66,105 @@ struct SimCouplingGpu {
     pad: [u32; 3],
 }
 
-/// Floats in the model-parameter buffer. Sixteen was every model until
-/// the coupled Turing lattice, whose coupling matrix alone is sixteen;
-/// `every_model_fits_the_parameter_buffer` keeps this honest.
-pub const MODEL_PARAM_SLOTS: usize = 32;
+/// Floats in each layer's block of the model-parameter buffer. Sixteen
+/// was every model until the coupled Turing lattice, whose coupling
+/// matrix alone is sixteen; 64 since McCabe's per-scale table
+/// (mccabe-multiscale plan, section 3); 128 since its per-scale warps
+/// (section 10). `MODEL_PARAM_SLOTS` in the
+/// WGSL must agree, and `every_model_fits_the_parameter_buffer` keeps
+/// the models inside it.
+pub const MODEL_PARAM_SLOTS: usize = 128;
+
+/// The block's last slots are the renderer's, not the model's: whether
+/// any of the layer's per-scale warps is on (section 10, read by
+/// `sim_scale_warped`), its first scratch slice or 0 (plan section 9,
+/// read by `sim_scratch_base`), then its memory slice count and first
+/// slice (mccabe-multiscale plan, section 2, read by `sim_mem_count` /
+/// `sim_mem_base`).
+pub const RESERVED_PARAM_SLOTS: usize = 4;
+
+/// Steps between moves of a shifted pyramid lattice (mccabe-multiscale
+/// plan, section 6). Measured on the coarse-fastest table at 512^2, 32
+/// seeds: every 1 and every 4 steps both take the axis lean from 1.07 to
+/// 0.93 (exact averages give 0.96-0.99), every 16 to 0.97. Every step
+/// adds motion -- direction flips 0.32 -> 0.37 per step -- where every
+/// 4 has fewer flips than the fixed lattice (0.26), and a preset's four
+/// or more steps a frame see one move a frame.
+pub const LATTICE_SHIFT_EVERY: u32 = 4;
+
+/// Uniform slots for the pyramid's levels: one per (step in a batch,
+/// layer, level). A batch's steps times its slices is at most
+/// `MAX_STEPS_PER_SUBMIT`, and a pyramid has at most eight levels.
+const LEVEL_RING_SLOTS: u32 = MAX_STEPS_PER_SUBMIT * MAX_PYRAMID_LEVELS;
+
+/// Where each layer's internal slices live: per user layer its MEMORY
+/// (mccabe-multiscale plan, section 2) and its SCRATCH (section 9), each
+/// as (first slice, slice count), and the field's total slice count.
+/// Memory comes after every user layer, so the indices couplings, the
+/// colour stack and `gather` use are the user's own whatever memory
+/// exists; scratch comes after all memory, so turning a measure pass on
+/// or off moves no slice that persists. A layer without either has
+/// (0, 0) for it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SliceLayout {
+    memory: Vec<(u32, u32)>,
+    scratch: Vec<(u32, u32)>,
+    total: u32,
+}
+
+impl SliceLayout {
+    fn of(cfg: &SimConfig) -> Self {
+        let n = cfg.layer_count();
+        let mut next = n as u32;
+        let mut take = |count: u32| {
+            let base = if count > 0 { next } else { 0 };
+            next += count;
+            (base, count)
+        };
+        let memory: Vec<(u32, u32)> = (0..n)
+            .map(|l| take(model_or_default(cfg.layer_model_name(l)).memory_slices(cfg.layer_model_params(l))))
+            .collect();
+        let scratch: Vec<(u32, u32)> = (0..n)
+            .map(|l| take(model_or_default(cfg.layer_model_name(l)).scratch_slices(cfg.layer_model_params(l))))
+            .collect();
+        SliceLayout { memory, scratch, total: next }
+    }
+
+    /// The slices whose contents carry from one step to the next: the
+    /// user's layers and their memory. Scratch is rewritten every step
+    /// before anything reads it.
+    fn persistent(&self) -> u32 {
+        self.memory.len() as u32 + self.memory.iter().map(|&(_, c)| c).sum::<u32>()
+    }
+
+    /// What slice `s` of the field is.
+    fn role(&self, s: usize) -> SliceRole {
+        if s < self.memory.len() {
+            return SliceRole::Layer(s);
+        }
+        let s32 = s as u32;
+        for (owner, &(base, count)) in self.memory.iter().enumerate() {
+            if count > 0 && s32 >= base && s32 < base + count {
+                return SliceRole::Memory { owner, k: s32 - base };
+            }
+        }
+        for (owner, &(base, count)) in self.scratch.iter().enumerate() {
+            if count > 0 && s32 >= base && s32 < base + count {
+                return SliceRole::Scratch { owner };
+            }
+        }
+        unreachable!("slice {s} is past the field")
+    }
+}
+
+/// What a slice of the field is: a user layer, slice `k` of user layer
+/// `owner`'s memory, or one of its scratch slices.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SliceRole {
+    Layer(usize),
+    Memory { owner: usize, k: u32 },
+    Scratch { owner: usize },
+}
 use crate::sim::{assembler, coloring_or_default, model_or_default, pyramid_levels, ModelDef, ModelFeature, SimColoringDef, MAX_KERNEL_RADIUS, MAX_PYRAMID_LEVELS, MINMAX_RING, MAX_AGENTS};
 #[allow(unused_imports)]
 use crate::sim::ColoringFeature;
@@ -255,6 +350,11 @@ struct SeedIdentity {
     boundary: crate::config::sim::SimBoundary,
     init: crate::config::sim::SimInit,
     seed: u64,
+    /// Each layer's memory slice count. A memory switched on mid-run
+    /// would make the picture at step N depend on WHEN it was switched
+    /// on, so switching it is a new run (mccabe-multiscale plan,
+    /// section 2). Its rate is a parameter like any other.
+    memory: Vec<u32>,
 }
 
 impl SeedIdentity {
@@ -264,6 +364,7 @@ impl SeedIdentity {
             boundary: cfg.boundary,
             init: cfg.init,
             seed: cfg.seed,
+            memory: SliceLayout::of(cfg).memory.iter().map(|&(_, c)| c).collect(),
         }
     }
 }
@@ -288,6 +389,9 @@ struct Pipelines {
     agent_layer: Option<usize>,
     /// Per layer, its model's seed pipeline.
     layer_seeds: Vec<ComputePipeline>,
+    /// The seed of a memory slice: zeros. Built when a layer's model
+    /// keeps a memory.
+    mem_seed: Option<ComputePipeline>,
     /// The layer-map warp -- group 0 the step layout, group 1 the
     /// flame's buffers -- built when the config uses transforms and a
     /// map has been set.
@@ -311,6 +415,11 @@ struct Pipelines {
     jfa_step: ComputePipeline,
     jfa_final: ComputePipeline,
     jfa_layout: BindGroupLayout,
+    /// The relief stage's two passes (along x, then y), for a
+    /// `NeedsRelief` colouring. Always built, on the jump flood's layout:
+    /// the field in, one target out, the first pass's result in.
+    relief_h: ComputePipeline,
+    relief_v: ComputePipeline,
     /// The agent passes and their seeding, for `NeedsAgents`.
     agents: Vec<ComputePipeline>,
     agent_seed: Option<ComputePipeline>,
@@ -393,6 +502,20 @@ pub struct SimRenderer {
     kernel_lens: Vec<u32>,
     /// How many slices the field arrays carry.
     layers: u32,
+    /// How many of them persist from step to step
+    /// ([`SliceLayout::persistent`]).
+    persistent: u32,
+    /// Steps between moves of a shifted pyramid lattice. See
+    /// `LATTICE_SHIFT_EVERY`; settable for measurements.
+    lattice_shift_every: u32,
+    /// Exact disc averages (mccabe-multiscale plan, section 6b): per user
+    /// layer, its spectral stage when its averaging is Exact discs and
+    /// the grid has a plan, and the first slice of its difference fields
+    /// in `diffs`, which every step bind group carries at binding 18.
+    spectral: Vec<Option<crate::sim::spectral::SpectralAverages>>,
+    exact_base: Vec<Option<u32>>,
+    diffs: (Texture, TextureView),
+    diffs_key: (u32, u32, u32),
     /// The coupling table (`SimCouplingGpu` x MAX_COUPLINGS).
     coupling_buffer: Buffer,
     /// The flame's transforms as layer maps, once `set_layer_transforms`
@@ -420,8 +543,15 @@ pub struct SimRenderer {
     jfa: Option<[(Texture, TextureView); 2]>,
     sdf: Option<(Texture, TextureView)>,
     /// Bound at the colour pass's distance slot when there is no
-    /// distance field; the shader never reads it then.
+    /// distance field; the shader never reads it then. And at its relief
+    /// slot when there is no relief.
     sdf_dummy: (Texture, TextureView),
+    /// The relief stage's two grid-sized textures: [0] the pass along x,
+    /// [1] the (height, d/dx, d/dy) the colour pass reads. Allocated
+    /// while a colouring reads relief, freed when none does.
+    relief: Option<[(Texture, TextureView); 2]>,
+    /// The relief stage's uniform: one `SimParamsGpu`.
+    relief_params_buffer: Buffer,
     /// One `SimParamsGpu` per jump-flood pass, its jump in the
     /// kernel-radius word. Sixteen slots covers a 32768-cell grid.
     jfa_params_buffer: Buffer,
@@ -472,7 +602,9 @@ pub struct SimRenderer {
 impl SimRenderer {
     pub fn new(device: &Device, cfg: &SimConfig, out_w: u32, out_h: u32) -> Self {
         let (grid_w, grid_h) = Self::allocatable_grid(cfg, out_w, out_h);
-        let layers = cfg.layer_count();
+        // Every slice: the user's layers, their memory and their scratch.
+        let layout = SliceLayout::of(cfg);
+        let layers = layout.total as usize;
         let (field, field_view) = Self::create_field_pair(device, grid_w, grid_h, layers as u32);
         let (output_texture, output_view) = Self::create_output(device, out_w, out_h);
 
@@ -517,9 +649,15 @@ impl SimRenderer {
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let relief_params_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Sim Relief Params"),
+            size: params_stride,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let level_params_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Sim Level Params"),
-            size: params_stride * MAX_PYRAMID_LEVELS as u64 * MAX_LAYERS as u64,
+            size: params_stride * LEVEL_RING_SLOTS as u64,
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -571,6 +709,8 @@ impl SimRenderer {
             jfa: None,
             sdf: None,
             sdf_dummy,
+            relief: None,
+            relief_params_buffer,
             jfa_params_buffer,
             level_params_buffer,
             minmax_buffer,
@@ -585,6 +725,12 @@ impl SimRenderer {
             kernel_offsets: Vec::new(),
             kernel_lens: Vec::new(),
             layers: layers as u32,
+            persistent: layout.persistent(),
+            lattice_shift_every: LATTICE_SHIFT_EVERY,
+            spectral: Vec::new(),
+            exact_base: Vec::new(),
+            diffs: crate::sim::spectral::SpectralAverages::create_diffs(device, 1, 1, 1),
+            diffs_key: (1, 1, 1),
             coupling_buffer,
             layer_map: None,
             color_layers_buffer,
@@ -785,23 +931,50 @@ impl SimRenderer {
     /// Whether this frame builds a distance field: the matte's edge
     /// asked for one, or the colouring reads one. Either way the matte
     /// must be on -- it is what says which cells are the figure.
-    /// A config with a different number of layers needs field arrays
-    /// with that many slices; the state cannot survive, so it reseeds.
-    fn ensure_layers(&mut self, device: &Device, cfg: &SimConfig) {
-        let want = cfg.layer_count() as u32;
+    /// A config with a different number of slices -- layers, memory or
+    /// scratch -- needs field arrays with that many. When only the
+    /// scratch changed, the slices that persist are where they were, so
+    /// they are copied across and the run goes on (a measure pass turned
+    /// on mid-run starts measuring at the next step). Otherwise the state
+    /// cannot survive, so it reseeds.
+    fn ensure_layers(&mut self, device: &Device, queue: &Queue, cfg: &SimConfig) {
+        let layout = SliceLayout::of(cfg);
+        let want = layout.total;
         if want == self.layers {
             return;
         }
         let (f, fv) = Self::create_field_pair(device, self.grid_w, self.grid_h, want);
+        let keep = layout.persistent();
+        if keep == self.persistent && !self.needs_seed {
+            let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Sim Keep Field") });
+            enc.copy_texture_to_texture(
+                TexelCopyTextureInfo {
+                    texture: &self.field[self.current],
+                    mip_level: 0,
+                    origin: Origin3d::ZERO,
+                    aspect: TextureAspect::All,
+                },
+                TexelCopyTextureInfo {
+                    texture: &f[self.current],
+                    mip_level: 0,
+                    origin: Origin3d::ZERO,
+                    aspect: TextureAspect::All,
+                },
+                Extent3d { width: self.grid_w, height: self.grid_h, depth_or_array_layers: keep },
+            );
+            queue.submit(std::iter::once(enc.finish()));
+        } else {
+            self.current = 0;
+            self.needs_seed = true;
+        }
         self.field = f;
         self.field_view = fv;
         self.layers = want;
-        self.current = 0;
+        self.persistent = keep;
         self.step_bind_groups = None;
         self.pyramid_bind_groups = None;
         self.reduce_bind_groups = None;
         self.agent_bind_groups = None;
-        self.needs_seed = true;
     }
 
     fn wants_sdf(cfg: &SimConfig) -> bool {
@@ -856,6 +1029,90 @@ impl SimRenderer {
     /// The signed distance field, for a test to read back.
     pub fn sdf_texture(&self) -> Option<&Texture> {
         self.sdf.as_ref().map(|(t, _)| t)
+    }
+
+    /// The colouring the relief stage builds its height for: the FIRST
+    /// enabled one that reads relief, as (its colour-parameter block, the
+    /// simulation layer it reads), or `None`. One height per frame, as
+    /// there is one distance field.
+    fn relief_source(cfg: &SimConfig) -> Option<(usize, usize)> {
+        let last = cfg.layer_count().saturating_sub(1);
+        if cfg.color_layers.is_empty() {
+            return coloring_or_default(&cfg.coloring).has(ColoringFeature::NeedsRelief).then_some((0, 0));
+        }
+        cfg.color_layers
+            .iter()
+            .take(crate::config::sim::MAX_COLOR_LAYERS)
+            .enumerate()
+            .find(|(_, l)| l.enabled && coloring_or_default(&l.coloring).has(ColoringFeature::NeedsRelief))
+            .map(|(k, l)| (k, l.source.min(last)))
+    }
+
+    /// Allocate the relief stage's textures while a colouring reads
+    /// relief, free them when none does.
+    fn ensure_relief(&mut self, device: &Device, wants: bool) {
+        if wants == self.relief.is_some() {
+            return;
+        }
+        self.relief = wants.then(|| {
+            let (w, h) = (self.grid_w, self.grid_h);
+            [Self::create_level(device, w, h, "Sim Relief A"), Self::create_level(device, w, h, "Sim Relief")]
+        });
+    }
+
+    /// The relief texture, for a test to read back.
+    #[cfg(test)]
+    pub(crate) fn relief_texture(&self) -> Option<&Texture> {
+        self.relief.as_ref().map(|r| &r[1].0)
+    }
+
+    /// The relief stage over the live field (mccabe-multiscale plan,
+    /// section 10): the Gaussian and its derivative along x into [0],
+    /// then along y into [1]. The uniform is the source layer's, its
+    /// kernel-offset word naming the colour-parameter block whose
+    /// channel and softness it reads.
+    fn encode_relief(&mut self, device: &Device, queue: &Queue, cfg: &SimConfig, enc: &mut CommandEncoder, block: usize, source: usize) {
+        let mut p = self.params_for_layer(cfg, self.step_index, source);
+        p.kernel_offset = block as u32;
+        queue.write_buffer(&self.relief_params_buffer, 0, bytemuck::bytes_of(&p));
+        let pipes = self.pipelines.as_ref().expect("pipelines built above");
+        let relief = self.relief.as_ref().expect("ensure_relief allocated it");
+        let group = |out: &TextureView, ping: &TextureView| {
+            device.create_bind_group(&BindGroupDescriptor {
+                label: Some("Sim Relief BG"),
+                layout: &pipes.jfa_layout,
+                entries: &[
+                    BindGroupEntry {
+                        binding: 0,
+                        resource: BindingResource::Buffer(BufferBinding {
+                            buffer: &self.relief_params_buffer,
+                            offset: 0,
+                            size: std::num::NonZeroU64::new(std::mem::size_of::<SimParamsGpu>() as u64),
+                        }),
+                    },
+                    BindGroupEntry { binding: 1, resource: self.model_params_buffer.as_entire_binding() },
+                    BindGroupEntry { binding: 2, resource: self.coloring_params_buffer.as_entire_binding() },
+                    BindGroupEntry { binding: 3, resource: BindingResource::TextureView(out) },
+                    BindGroupEntry {
+                        binding: 4,
+                        resource: BindingResource::TextureView(&self.field_view[self.current]),
+                    },
+                    BindGroupEntry { binding: 5, resource: BindingResource::TextureView(ping) },
+                ],
+            })
+        };
+        // Along x reads nothing at the ping slot: bind the other texture,
+        // never the one it writes.
+        let along_x = group(&relief[0].1, &relief[1].1);
+        let along_y = group(&relief[1].1, &relief[0].1);
+        let (gx, gy) = Self::dispatch_size(self.grid_w, self.grid_h);
+        let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: Some("Sim Relief"), timestamp_writes: None });
+        pass.set_pipeline(&pipes.relief_h);
+        pass.set_bind_group(0, &along_x, &[0]);
+        pass.dispatch_workgroups(gx, gy, 1);
+        pass.set_pipeline(&pipes.relief_v);
+        pass.set_bind_group(0, &along_y, &[0]);
+        pass.dispatch_workgroups(gx, gy, 1);
     }
 
     /// The jump flood over the live field, into `self.sdf`: seed, then
@@ -1104,6 +1361,12 @@ impl SimRenderer {
         (self.grid_w, self.grid_h)
     }
 
+    /// Move a shifted pyramid lattice every `steps` steps instead of
+    /// every one. For measurements; a run should keep one period.
+    pub fn set_lattice_shift_every(&mut self, steps: u32) {
+        self.lattice_shift_every = steps.max(1);
+    }
+
     /// Mark the field stale so the next render reseeds it.
     pub fn request_seed(&mut self) {
         self.needs_seed = true;
@@ -1139,6 +1402,7 @@ impl SimRenderer {
             self.pyramid.clear();
             self.jfa = None;
             self.sdf = None;
+            self.relief = None;
             let (d, c) = Self::create_cell_buffers(device, gw, gh);
             self.deposit_buffer = d;
             self.claim_buffer = c;
@@ -1270,6 +1534,8 @@ impl SimRenderer {
         let color_mod = make("Sim Color", &color_src);
         let pyramid_mod = pyramid_src.as_ref().map(|src| make("Sim Pyramid", src));
         let reduce_mod = reduce_src.as_ref().map(|src| make("Sim Reduce", src));
+        let relief_h_mod = make("Sim Relief H", &assembler::assemble_relief_h(cfg.boundary));
+        let relief_v_mod = make("Sim Relief V", &assembler::assemble_relief_v(cfg.boundary));
         let jfa_init_mod = make("Sim JFA Init", &assembler::assemble_jfa_init());
         let jfa_step_mod = make("Sim JFA Step", &assembler::assemble_jfa_step());
         let jfa_final_mod = make("Sim JFA Final", &assembler::assemble_jfa_final());
@@ -1382,6 +1648,11 @@ impl SimRenderer {
                 // The coupling table, declared only by a coupled
                 // config's step shaders.
                 storage_ro(17),
+                // Exact averages' difference fields (mccabe-multiscale
+                // plan, section 6b): a sampled array, so it adds nothing
+                // to the storage-buffer count browsers limit. A 1x1
+                // dummy where no layer has them.
+                sampled_field(18),
             ],
         });
         let agent_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -1429,6 +1700,8 @@ impl SimRenderer {
                 sampled_tex(6, true),
                 // The colour stack's layer records.
                 storage_ro(7),
+                // The relief stage's height and slope, or its dummy.
+                sampled_tex(8, true),
             ],
         });
         // The jump flood: the shared uniform and param buffers (its
@@ -1536,6 +1809,10 @@ impl SimRenderer {
                 seed_pipelines.iter().find(|(n, _)| *n == m.name).map(|(_, p)| p.clone()).expect("built above")
             }).collect(),
             layer_steps: models.iter().map(|m| lookup_steps(m.name)).collect(),
+            mem_seed: models
+                .iter()
+                .any(|m| m.has(ModelFeature::Memory) || m.measure.is_some())
+                .then(|| pipeline("Sim Memory Seed", &seed_layout, &make("Sim Memory Seed", &assembler::assemble_seed_zero()))),
             agent_layer,
             // Same layout as a step: it reads binding 4 and writes 3,
             // and ignores the rest.
@@ -1544,6 +1821,8 @@ impl SimRenderer {
             jfa_init: pipeline("Sim JFA Init", &jfa_layout, &jfa_init_mod),
             jfa_step: pipeline("Sim JFA Step", &jfa_layout, &jfa_step_mod),
             jfa_final: pipeline("Sim JFA Final", &jfa_layout, &jfa_final_mod),
+            relief_h: pipeline("Sim Relief H", &jfa_layout, &relief_h_mod),
+            relief_v: pipeline("Sim Relief V", &jfa_layout, &relief_v_mod),
             jfa_layout,
             pyramid: pyramid_mod
                 .as_ref()
@@ -1666,7 +1945,109 @@ impl SimRenderer {
                 };
                 [0, 1, 2, 3].map(|b| if m & (1 << b) != 0 { 1.0 } else { 0.0 })
             },
-            xform: [self.layer_rate(cfg, layer), 0.0, 0.0, 0.0],
+            // y: set on the pyramid dispatch that builds level 1 from the
+            // field. z: the lattice shift's period, 0 when fixed
+            // (mccabe-multiscale plan, section 6). w: the first slice of
+            // the layer's exact difference fields plus one, 0 when it
+            // reads the pyramid (section 6b).
+            xform: [
+                self.layer_rate(cfg, layer),
+                0.0,
+                self.lattice_shift_period(cfg, layer) as f32,
+                self.exact_base.get(layer).copied().flatten().map_or(0.0, |b| (b + 1) as f32),
+            ],
+        }
+    }
+
+    /// The uniform of any slice. A memory slice is its owner's, moved
+    /// to its own slice: the same warp and the same layer-map rate, so
+    /// the memory travels with the pattern it remembers -- on every
+    /// channel when the owner's warp moves its state (`.x`), on none
+    /// when it does not -- and no kernel, which it never reads.
+    fn params_for_slice(&self, cfg: &SimConfig, step_index: u32, layout: &SliceLayout, s: usize) -> SimParamsGpu {
+        match layout.role(s) {
+            SliceRole::Layer(l) => self.params_for_layer(cfg, step_index, l),
+            // Scratch is never dispatched; its slot is filled alike.
+            SliceRole::Memory { owner, .. } | SliceRole::Scratch { owner } => {
+                let mut p = self.params_for_layer(cfg, step_index, owner);
+                p.layer = s as u32;
+                p.kernel_radius = 0;
+                p.kernel_offset = 0;
+                p.warp_mask = if p.warp_mask[0] > 0.0 { [1.0; 4] } else { [0.0; 4] };
+                p
+            }
+        }
+    }
+
+    /// Whether a layer asks for exact disc averages and can have them: a
+    /// model the spectral stage serves, `averaging` = 2, and the periodic
+    /// boundary a circular convolution is. The grid's own FFT plan is the
+    /// last condition, checked when the stage is made.
+    fn wants_exact(cfg: &SimConfig, layer: usize) -> bool {
+        let m = model_or_default(cfg.layer_model_name(layer));
+        let params = cfg.layer_model_params(layer);
+        m.has(ModelFeature::NeedsPyramid)
+            && params.get("averaging").is_some_and(|v| v.round() == 2.0)
+            && cfg.boundary == crate::config::sim::SimBoundary::Periodic
+            && crate::sim::spectral_scales(m.name, params).is_some()
+    }
+
+    /// Make or drop each layer's spectral stage, the difference array
+    /// they share, and the stages' disc spectra for the layers' current
+    /// radii. A layer whose grid has no FFT plan, or whose buffers would
+    /// pass the device's binding limit, keeps reading the pyramid.
+    fn ensure_spectral(&mut self, device: &Device, queue: &Queue, cfg: &SimConfig) {
+        use crate::sim::spectral::{SpectralAverages, MAX_SPECTRAL_SCALES};
+        let layers = cfg.layer_count();
+        let wanted: Vec<usize> = (0..layers).filter(|&l| Self::wants_exact(cfg, l)).collect();
+        let slices = (wanted.len() * MAX_SPECTRAL_SCALES) as u32;
+        let key = if slices > 0 { (self.grid_w, self.grid_h, slices) } else { (1, 1, 1) };
+        if key != self.diffs_key {
+            self.diffs = SpectralAverages::create_diffs(device, key.0, key.1, key.2);
+            self.diffs_key = key;
+            // Every step bind group carries the array.
+            self.step_bind_groups = None;
+            self.pyramid_bind_groups = None;
+        }
+        self.spectral.resize_with(layers, || None);
+        self.spectral.truncate(layers);
+        self.exact_base = vec![None; layers];
+        for l in 0..layers {
+            let Some(q) = wanted.iter().position(|&w| w == l) else {
+                self.spectral[l] = None;
+                continue;
+            };
+            let base = (q * MAX_SPECTRAL_SCALES) as u32;
+            let fits = self.spectral[l]
+                .as_ref()
+                .is_some_and(|s| s.width == self.grid_w && s.height == self.grid_h && s.serves(l as u32, base));
+            if !fits {
+                self.spectral[l] = SpectralAverages::new(device, self.grid_w, self.grid_h, l as u32, base);
+            }
+            let (fv, dv) = (&self.field_view, &self.diffs.1);
+            if let Some(s) = self.spectral[l].as_mut() {
+                s.bind(device, [&fv[0], &fv[1]], dv);
+                let m = model_or_default(cfg.layer_model_name(l));
+                let radii = crate::sim::spectral_scales(m.name, cfg.layer_model_params(l)).unwrap_or_default();
+                s.set_radii(device, queue, &radii);
+                self.exact_base[l] = Some(base);
+            }
+        }
+    }
+
+    /// How often a layer's pyramid lattice moves, in steps; 0 when it is
+    /// fixed. A model reading the pyramid asks for the shift with
+    /// `averaging` = 1, and it applies on a periodic boundary only:
+    /// elsewhere a moved lattice would leave one edge's cells outside
+    /// every texel.
+    fn lattice_shift_period(&self, cfg: &SimConfig, layer: usize) -> u32 {
+        let m = model_or_default(cfg.layer_model_name(layer));
+        let asks = m.has(ModelFeature::NeedsPyramid)
+            && cfg.layer_model_params(layer).get("averaging").is_some_and(|v| v.round() == 1.0);
+        if asks && cfg.boundary == crate::config::sim::SimBoundary::Periodic {
+            self.lattice_shift_every
+        } else {
+            0
         }
     }
 
@@ -1783,11 +2164,13 @@ impl SimRenderer {
     /// in the batch the last step's index.
     fn write_params_ring(&self, queue: &Queue, cfg: &SimConfig, start: u32, count: u32) {
         let stride = self.params_stride as usize;
-        let layers = cfg.layer_count();
+        // One slot pair per SLICE: the user's layers, memory, scratch.
+        let layout = SliceLayout::of(cfg);
+        let layers = layout.total as usize;
         let mut bytes = vec![0u8; stride * count as usize * layers * 2];
         for i in 0..count {
             for l in 0..layers {
-                let p = self.params_for_layer(cfg, start + i, l);
+                let p = self.params_for_slice(cfg, start + i, &layout, l);
                 let at = self.ring_slot(i, l, 0, layers) as usize * stride;
                 bytes[at..at + std::mem::size_of::<SimParamsGpu>()]
                     .copy_from_slice(bytemuck::bytes_of(&p));
@@ -1840,17 +2223,28 @@ impl SimRenderer {
         // buffer never needs resizing; the shader indexes its own
         // layer's block.
         let layers = cfg.layer_count();
+        let layout = SliceLayout::of(cfg);
         let mut mp: Vec<f32> = Vec::with_capacity(MODEL_PARAM_SLOTS * MAX_LAYERS);
         for l in 0..layers {
             let m = model_or_default(cfg.layer_model_name(l));
             let mut block = m.pack_params_from(cfg.layer_model_params(l));
             assert!(
-                block.len() <= MODEL_PARAM_SLOTS,
-                "{} declares {} parameters; the buffer holds {MODEL_PARAM_SLOTS}",
+                block.len() <= MODEL_PARAM_SLOTS - RESERVED_PARAM_SLOTS,
+                "{} declares {} parameters; the block holds {}",
                 m.name,
-                block.len()
+                block.len(),
+                MODEL_PARAM_SLOTS - RESERVED_PARAM_SLOTS
             );
             block.resize(MODEL_PARAM_SLOTS, 0.0);
+            // The reserved end: the scratch's first slice (0 when there
+            // is none), then the memory's slice count and first slice,
+            // exact in f32 at any count the field can have.
+            let (base, count) = layout.memory[l];
+            let warped = crate::sim::scale_warps(m.name).is_some_and(|w| w.any_active(m, cfg.layer_model_params(l)));
+            block[MODEL_PARAM_SLOTS - 4] = if warped { 1.0 } else { 0.0 };
+            block[MODEL_PARAM_SLOTS - 3] = layout.scratch[l].0 as f32;
+            block[MODEL_PARAM_SLOTS - 2] = count as f32;
+            block[MODEL_PARAM_SLOTS - 1] = base as f32;
             mp.extend_from_slice(&block);
         }
         mp.resize(MODEL_PARAM_SLOTS * MAX_LAYERS, 0.0);
@@ -1946,30 +2340,45 @@ impl SimRenderer {
             queue.write_buffer(&self.coupling_buffer, 0, bytemuck::cast_slice(&table));
         }
 
-        // One uniform per pyramid level, carrying the SOURCE level's
-        // size: the pyramid pass reads its input through the shared
-        // boundary wrap, which sizes itself from `grid`.
-        if layer_models(cfg).iter().any(|m| m.has(ModelFeature::NeedsPyramid)) {
-            let stride = self.params_stride as usize;
-            let levels = pyramid_levels(self.grid_w, self.grid_h) as usize;
-            // Slots (layer, level): level 0 reads the layer's own slice
-            // of the field, every level above reads a one-layer level
-            // texture, so its slot says layer 0.
-            let mut bytes = vec![0u8; stride * levels * layers];
-            for layer in 0..layers {
-            let (mut w, mut h) = (self.grid_w, self.grid_h);
-            for l in 0..levels {
-                let mut p = self.params_for_layer(cfg, self.step_index, if l == 0 { layer } else { 0 });
-                p.grid = [w, h];
-                let at = (layer * levels + l) * stride;
-                bytes[at..at + std::mem::size_of::<SimParamsGpu>()]
-                    .copy_from_slice(bytemuck::bytes_of(&p));
-                w = w.div_ceil(2);
-                h = h.div_ceil(2);
-            }
-            }
-            queue.write_buffer(&self.level_params_buffer, 0, &bytes);
+    }
+
+    /// The pyramid's uniforms for a batch: one per (step, layer, level),
+    /// each carrying the SOURCE level's size -- the pyramid pass reads
+    /// its input through the shared boundary wrap, which sizes itself
+    /// from `grid` -- and its step, which a shifted lattice moves with.
+    /// Level 0's dispatch reads the layer's own slice of the field and
+    /// is marked (`xform.y`) as the one that applies the shift; every
+    /// level above reads a one-layer level texture, so its slot says
+    /// layer 0.
+    fn write_level_params_ring(&self, queue: &Queue, cfg: &SimConfig, start: u32, count: u32) {
+        if !layer_models(cfg).iter().any(|m| m.has(ModelFeature::NeedsPyramid)) {
+            return;
         }
+        let stride = self.params_stride as usize;
+        let layers = cfg.layer_count();
+        let levels = pyramid_levels(self.grid_w, self.grid_h) as usize;
+        let mut bytes = vec![0u8; stride * count as usize * layers * levels];
+        for i in 0..count as usize {
+            for layer in 0..layers {
+                let (mut w, mut h) = (self.grid_w, self.grid_h);
+                for l in 0..levels {
+                    let mut p = self.params_for_layer(cfg, start + i as u32, if l == 0 { layer } else { 0 });
+                    p.grid = [w, h];
+                    if l == 0 {
+                        // The shift is the layer's own; the levels above
+                        // carry layer 0's uniform and must not apply one.
+                        p.xform[1] = 1.0;
+                        p.xform[2] = self.lattice_shift_period(cfg, layer) as f32;
+                    }
+                    let at = ((i * layers + layer) * levels + l) * stride;
+                    bytes[at..at + std::mem::size_of::<SimParamsGpu>()]
+                        .copy_from_slice(bytemuck::bytes_of(&p));
+                    w = w.div_ceil(2);
+                    h = h.div_ceil(2);
+                }
+            }
+        }
+        queue.write_buffer(&self.level_params_buffer, 0, &bytes);
     }
 
     /// Reset min/max ring slots `start..start + count` (mod the ring)
@@ -2126,6 +2535,7 @@ impl SimRenderer {
         entries.push(BindGroupEntry { binding: 14, resource: self.minmax_buffer.as_entire_binding() });
         entries.push(BindGroupEntry { binding: 13, resource: self.deposit_buffer.as_entire_binding() });
         entries.push(BindGroupEntry { binding: 17, resource: self.coupling_buffer.as_entire_binding() });
+        entries.push(BindGroupEntry { binding: 18, resource: BindingResource::TextureView(&self.diffs.1) });
         entries
     }
 
@@ -2137,7 +2547,7 @@ impl SimRenderer {
     /// pair (seed, step_index) is the state's identity, and a reseed
     /// starts a new run.
     pub fn seed(&mut self, device: &Device, queue: &Queue, cfg: &SimConfig) {
-        self.ensure_layers(device, cfg);
+        self.ensure_layers(device, queue, cfg);
         self.ensure_pipelines(device, cfg);
         self.ensure_pyramid(device, cfg);
         // `ensure_agents` may set `needs_seed`; this IS the seed, so
@@ -2190,9 +2600,17 @@ impl SimRenderer {
                 timestamp_writes: None,
             });
             let (gx, gy) = Self::dispatch_size(self.grid_w, self.grid_h);
-            for l in 0..layers {
-                pass.set_pipeline(&p.layer_seeds[l]);
-                pass.set_bind_group(0, &bg, &[self.ring_slot(0, l, 0, layers) * stride]);
+            let layout = SliceLayout::of(cfg);
+            let slices = layout.total;
+            for s in 0..slices as usize {
+                match layout.role(s) {
+                    SliceRole::Layer(l) => pass.set_pipeline(&p.layer_seeds[l]),
+                    SliceRole::Memory { .. } | SliceRole::Scratch { .. } => pass.set_pipeline(
+                        p.mem_seed.as_ref().expect("a model with memory or a measure pass builds it"),
+                    ),
+                }
+                // Slot (0, s, 0) is 2s whatever the slice count.
+                pass.set_bind_group(0, &bg, &[self.ring_slot(0, s, 0, slices as usize) * stride]);
                 pass.dispatch_workgroups(gx, gy, 1);
             }
         }
@@ -2302,12 +2720,14 @@ impl SimRenderer {
         }
         self.ensure_pipelines(device, cfg);
         self.ensure_pyramid(device, cfg);
-        self.ensure_layers(device, cfg);
+        self.ensure_layers(device, queue, cfg);
         let model = model_or_default(cfg.layer_model_name(0));
         let coloring = coloring_or_default(&cfg.coloring);
         self.write_param_arrays(queue, model, coloring, cfg);
 
         self.ensure_agents(device, cfg);
+        // Before the bind groups: a new difference array drops them.
+        self.ensure_spectral(device, queue, cfg);
         self.ensure_step_bind_groups(device);
         self.ensure_stage_bind_groups(device);
         self.ensure_flame_bind_group(device);
@@ -2315,6 +2735,10 @@ impl SimRenderer {
         let (gx, gy) = Self::dispatch_size(self.grid_w, self.grid_h);
         let stride = self.params_stride as u32;
         let layers = cfg.layer_count();
+        // Every slice of the field, memory included: each stage writes
+        // all of them, and the uniform ring holds a slot pair for each.
+        let layout = SliceLayout::of(cfg);
+        let slices = layout.total as usize;
         let models = layer_models(cfg);
         let wants_minmax = models.iter().any(|m| m.has(ModelFeature::NeedsMinMax));
         // Per layer, its passes in order with their repeats unrolled:
@@ -2327,6 +2751,10 @@ impl SimRenderer {
                 let params = cfg.layer_model_params(l);
                 let mut v = Vec::new();
                 for n in 0..m.passes {
+                    // A measure pass that is off is not a stage at all.
+                    if !m.runs_pass(n, params) {
+                        continue;
+                    }
                     let rep = match m.repeat {
                         Some((idx, name)) if idx == n => m
                             .parameters
@@ -2375,11 +2803,12 @@ impl SimRenderer {
         let octaves = cfg.warp.mode == crate::config::sim::SimWarpMode::Octaves;
         if self.steps_per_submit == FIRST_SUBMIT {
             let dispatches: u32 =
-                (max_stages as u32 + u32::from(wants_minmax) + u32::from(warping)) * layers as u32;
+                (max_stages as u32 + u32::from(wants_minmax) + u32::from(warping)) * slices as u32
+                    + self.spectral.iter().flatten().map(|s| s.dispatches() as u32).sum::<u32>();
             self.steps_per_submit = (FIRST_SUBMIT * 2 / dispatches.max(1)).clamp(1, FIRST_SUBMIT);
         }
         // The ring holds (step, layer, variant) slots.
-        let per_submit_cap = (MAX_STEPS_PER_SUBMIT / layers as u32).max(1);
+        let per_submit_cap = (MAX_STEPS_PER_SUBMIT / slices as u32).max(1);
         let mut done = 0;
         while done < count {
             let batch = self.steps_per_submit.clamp(1, per_submit_cap).min(count - done);
@@ -2387,6 +2816,7 @@ impl SimRenderer {
             // dispatches inside it are ordered against each other, and
             // each reads its own ring slot by dynamic offset.
             self.write_params_ring(queue, cfg, self.step_index, batch);
+            self.write_level_params_ring(queue, cfg, self.step_index, batch);
             if wants_minmax {
                 self.clear_minmax_slots(queue, self.step_index * layers as u32, batch * layers as u32);
             }
@@ -2409,7 +2839,7 @@ impl SimRenderer {
                     timestamp_writes: None,
                 });
                 for i in 0..batch {
-                    let slot = |l: usize, variant: u32| (i * layers as u32 + l as u32) * 2 + variant;
+                    let slot = |l: usize, variant: u32| (i * slices as u32 + l as u32) * 2 + variant;
                     // The warp goes first, before anything reads the
                     // field: it moves the FIELD, through the boundary
                     // rule, and nothing else -- an agent population's
@@ -2424,7 +2854,11 @@ impl SimRenderer {
                     };
                     if warp_now {
                         pass.set_pipeline(&p.warp);
-                        for l in 0..layers {
+                        for l in 0..slices {
+                            // Scratch is rewritten before it is read.
+                            if matches!(layout.role(l), SliceRole::Scratch { .. }) {
+                                continue;
+                            }
                             pass.set_bind_group(0, &groups[self.current], &[slot(l, 0) * stride]);
                             pass.dispatch_workgroups(gx, gy, 1);
                         }
@@ -2434,8 +2868,14 @@ impl SimRenderer {
                     // transform at its rate; a layer at rate 0 is
                     // carried across. One stage, one flip.
                     if let (Some(lw), Some(fbg)) = (p.layer_warp.as_ref(), flame_bg) {
-                        for l in 0..layers {
-                            if self.layer_rate(cfg, l) > 0.0 {
+                        for l in 0..slices {
+                            // A memory slice moves at its owner's rate;
+                            // scratch is rewritten before it is read.
+                            let rate_of = match layout.role(l) {
+                                SliceRole::Layer(o) | SliceRole::Memory { owner: o, .. } => o,
+                                SliceRole::Scratch { .. } => continue,
+                            };
+                            if self.layer_rate(cfg, rate_of) > 0.0 {
                                 pass.set_pipeline(lw);
                                 pass.set_bind_group(0, &groups[self.current], &[slot(l, 0) * stride]);
                                 pass.set_bind_group(1, fbg, &[]);
@@ -2468,31 +2908,64 @@ impl SimRenderer {
                             .expect("built by ensure_stage_bind_groups");
                         pass.set_pipeline(pyr);
                         for l in 0..layers {
-                            if !models[l].has(ModelFeature::NeedsPyramid) {
+                            // A layer with exact averages reads its
+                            // spectral stage instead.
+                            if !models[l].has(ModelFeature::NeedsPyramid) || self.exact_base[l].is_some() {
                                 continue;
                             }
                             for (lv, per_side) in pgroups.iter().enumerate() {
                                 let bg = if lv == 0 { &per_side[self.current] } else { &per_side[0] };
-                                pass.set_bind_group(0, bg, &[((l * levels + lv) as u32) * stride]);
+                                pass.set_bind_group(0, bg, &[(((i as usize * layers + l) * levels + lv) as u32) * stride]);
                                 let (lx, ly) = level_dispatch[lv];
                                 pass.dispatch_workgroups(lx, ly, 1);
                             }
+                        }
+                    }
+                    // A layer averaging over exact discs gets its
+                    // difference fields here instead, from the same field
+                    // the pyramid would have been built from
+                    // (mccabe-multiscale plan, section 6b).
+                    for (l, stage) in self.spectral.iter().enumerate() {
+                        if let (Some(s), Some(_)) = (stage, self.exact_base.get(l).copied().flatten()) {
+                            s.encode(&mut pass, self.current);
                         }
                     }
                     // groups[src] reads field[src] and writes
                     // field[1 - src], so alternating the index IS the
                     // ping-pong. Every stage writes every layer.
                     for stage in 0..max_stages {
-                        for l in 0..layers {
-                            match layer_stages[l].get(stage) {
-                                Some(&n) if cfg.layer_enabled(l) => {
-                                    pass.set_pipeline(&p.layer_steps[l][n]);
-                                    pass.set_bind_group(0, &groups[self.current], &[slot(l, 0) * stride]);
+                        for l in 0..slices {
+                            match layout.role(l) {
+                                SliceRole::Layer(l) => match layer_stages[l].get(stage) {
+                                    Some(&n) if cfg.layer_enabled(l) => {
+                                        pass.set_pipeline(&p.layer_steps[l][n]);
+                                        pass.set_bind_group(0, &groups[self.current], &[slot(l, 0) * stride]);
+                                    }
+                                    _ => {
+                                        pass.set_pipeline(&p.warp);
+                                        pass.set_bind_group(0, &groups[self.current], &[slot(l, VARIANT_COPY) * stride]);
+                                    }
+                                },
+                                // The owner's LAST pass writes its memory
+                                // (`sim_mem_write`), so that stage gives the
+                                // slice no dispatch -- a copy-through would
+                                // overwrite the write. Every other stage
+                                // carries it, as for any slice without a pass.
+                                SliceRole::Memory { owner, .. }
+                                    if cfg.layer_enabled(owner) && stage + 1 == layer_stages[owner].len() =>
+                                {
+                                    continue;
                                 }
-                                _ => {
+                                SliceRole::Memory { .. } => {
                                     pass.set_pipeline(&p.warp);
                                     pass.set_bind_group(0, &groups[self.current], &[slot(l, VARIANT_COPY) * stride]);
                                 }
+                                // The measure pass writes the scratch and
+                                // the passes after it read it from the
+                                // side it was written to, so no stage
+                                // carries it: a copy-through in the
+                                // measure's own stage would overwrite it.
+                                SliceRole::Scratch { .. } => continue,
                             }
                             pass.dispatch_workgroups(gx, gy, 1);
                         }
@@ -2574,8 +3047,14 @@ impl SimRenderer {
         if sdf {
             self.encode_jump_flood(device, queue, cfg, &mut enc);
         }
+        let relief = Self::relief_source(cfg);
+        self.ensure_relief(device, relief.is_some());
+        if let Some((block, source)) = relief {
+            self.encode_relief(device, queue, cfg, &mut enc, block, source);
+        }
         let p = self.pipelines.as_ref().expect("pipelines built above");
         let sdf_view = self.sdf.as_ref().map(|(_, v)| v).unwrap_or(&self.sdf_dummy.1);
+        let relief_view = self.relief.as_ref().map(|r| &r[1].1).unwrap_or(&self.sdf_dummy.1);
         let bg = device.create_bind_group(&BindGroupDescriptor {
             label: Some("Sim Color BG"),
             layout: &p.color_layout,
@@ -2603,6 +3082,7 @@ impl SimRenderer {
                 BindGroupEntry { binding: 5, resource: BindingResource::TextureView(palette_view) },
                 BindGroupEntry { binding: 6, resource: BindingResource::TextureView(sdf_view) },
                 BindGroupEntry { binding: 7, resource: self.color_layers_buffer.as_entire_binding() },
+                BindGroupEntry { binding: 8, resource: BindingResource::TextureView(relief_view) },
             ],
         });
         {
