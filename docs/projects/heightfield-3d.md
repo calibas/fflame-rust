@@ -642,6 +642,83 @@ terrain.**
   - Mode D's IFS baselines byte-identical.
   - Traversal steps per ray recorded at 1080p on all four terrains.
 - **Measured.** The cost estimate of section 4, replaced by numbers.
+- **As built** (2026-10-05). [src/escape/terrain.rs](../../src/escape/terrain.rs):
+  `TerrainRenderer`, a self-contained stage of the escape engine. It
+  takes a tile (heights and albedo, in cell units) and a
+  `TerrainView` (a `SolidCamera`, the Solid lighting, fog, shadow,
+  softness, occlusion reach). T2 wires it to the config.
+  - **Three passes:**
+    - The maximum mipmap: level 0 a cell's highest corner, each level
+      above the highest of a 2x2 block. Real mips of one `R32Float`.
+    - The walk: mode D's 16-byte geometry record per pixel.
+    - The relight: mode D's rig, spliced as the same WGSL text
+      (`assembler::ifs_rig_plain`), so a terrain and an IFS solid
+      cannot disagree about a light.
+  - **The traversal.** Skip a node the ray stays above, descend where
+    it does not, ascend a level after every skip. At the leaf, the
+    exact bilinear-patch intersection: a quadratic in t, rebased at the
+    cell's entry.
+  - **Decisions made while building:**
+    - **The mipmap is allocated at power-of-two sides.** A texture's
+      mips halve rounding down and the node grid halves rounding up.
+      They agree only at powers of two; otherwise the top levels' last
+      nodes fell outside their mip. The build's writes were dropped
+      and the walk read zero there: 57 wrong pixels in 19,200 and
+      distances 29 cells off on the first run.
+    - **A step never goes backward and is sized to the coordinates.**
+      With the eye 2,200 cells out, a point just past a node's edge
+      could round back into the node it left. Its exit then lay behind
+      t, and the ray crawled: rays reached the 4,096-step cap, and the
+      mean primary steps read 68–208 instead of 8–21.
+    - **Occlusion comes from the horizon, not rays.** In eight
+      directions, the steepest rise within the reach. A height field's
+      own occlusion: deterministic, so there is no noise for a lit
+      frame to show. Ray occlusion is the path tracer's (T3).
+    - **The penumbra is measured at the leaves.** It is how close a
+      shadow ray passed the surface at the cells it descended to,
+      over its distance: mode D's `k·d/t` in a height field's terms.
+      The coarse nodes' maxima would understate the clearance and
+      darken every penumbra, so they are not used.
+    - **The tile is a slab.** A ray entering through a side under the
+      surface meets a wall, shaded by its face's outward normal and
+      open to the sky; the albedo runs down it like a cross-section.
+      The slab's floor is 1% of the tile's longer side below its
+      lowest point. A wall is recognised only ON the boundary: a point
+      a rounding under a steep flank is the flank (it was misread as a
+      wall on the spike field until this rule).
+    - **The solid camera's yaw is the eye's azimuth about the target.**
+      So −90° puts the eye south of the target, looking north; T2's
+      default camera uses that.
+  - **Gates, all passing:**
+    - Hits against the CPU reference on the four terrains at 160×120:
+      no hit/miss disagreement on any pixel. Distances to 7e-4 cells
+      (the gate is 1e-4 of the tile, 0.026). Normals to 1e-3, the f16
+      packing, including 100–1,200 wall hits per terrain.
+    - The CPU reference itself against a dense march with bisection:
+      to 1e-3 on 400 random rays.
+    - The mipmap's every level equals the CPU maximum.
+    - A flat plane under one sun: `albedo·E·cos θ` to 3e-8.
+    - A light's colour, power or fog is a relight (no walk, the same
+      picture a fresh walk makes); its direction walks.
+    - The shaders pass the fast-math lints.
+    - Mode D is untouched: only `ifs_rig_plain` was added beside it.
+  - **Measured** at 1080p over 2049² tiles, on this machine's GTX 1660
+    SUPER, batched:
+
+    | terrain | primary steps, mean / max | all rays, steps a pixel | walk + relight | relight alone |
+    |---|---|---|---|---|
+    | sinusoid | 7.7 / 80 | 14.8 | 2.5 ms | 0.3 ms |
+    | cone | 8.4 / 162 | 10.5 | 1.8 ms | 0.3 ms |
+    | step | 7.9 / 64 | 14.6 | 1.9 ms | 0.3 ms |
+    | spikes | 21.2 / 190 | 35.7 | 5.1 ms | 0.3 ms |
+
+    The estimate was 3–6 ms for the lit tier, so it lands inside it.
+    Timing one submission at a time measured latency, not work: rays
+    stuck at 4,096 steps "cost" the same 0.6 ms. The measurement
+    batches twenty.
+  - **Seen** (`output/heightfield_t1/mandelbrot_de.png`). The
+    prototype's distance terrain through the GPU renderer: plateaus,
+    filigree cliffs and spirals, a cross-section along the near wall.
 
 **T2 — Escape terrain, lit.**
 - **Built.**
