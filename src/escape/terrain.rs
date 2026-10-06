@@ -286,7 +286,7 @@ struct GridParamsGpu {
 }
 
 /// A simulation's grid as a section (heightfield plan T4): sample (i, j)
-/// is cell (i, m - 1 - j) -- rows flipped, the picture's top north -- its
+/// is cell (i, h - 1 - j) -- rows flipped, the picture's top north -- its
 /// height the relief's (`x`) times the scale, in cells, and its albedo
 /// the colour stack's at the cell, coverage and all. A repeated grid has
 /// a sample more each way, its first again, so copies meet without a
@@ -319,7 +319,9 @@ fn grid_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x >= gp.n || gid.y >= gp.m) {
         return;
     }
-    let cell = vec2<i32>(i32(gid.x % gp.w), i32((gp.m - 1u - gid.y) % gp.h));
+    // Row j is cell row h - 1 - j, wrapped: the same placement a single
+    // grid has, so turning repeat on moves nothing.
+    let cell = vec2<i32>(i32(gid.x % gp.w), i32((2u * gp.h - 1u - gid.y) % gp.h));
     let at = vec2<i32>(gid.xy);
     let h = textureLoad(relief, cell, 0).x * gp.scale;
     textureStore(out_raw, at, vec4<f32>(h, 0.0, 0.0, 0.0));
@@ -604,8 +606,9 @@ struct HfHit {
     // the softness: a penumbra, as mode D's shadow rays measure one.
     soft: f32,
     steps: u32,
-    // The section the hit is in.
+    // The section the hit is in, and the copy's offset it was read at.
     sec: i32,
+    off: vec2<f32>,
 }
 
 // The maximum-mipmap traversal of the current section over [ta, tb], in
@@ -766,25 +769,28 @@ fn hf_trace(o: vec3<f32>, d: vec3<f32>, tmax: f32, soft_k: f32) -> HfHit {
     let ext = vec2<f32>(params.fdata[1].x, params.fdata[1].y) * params.fdata[0].z;
     var t0 = 0.0;
     var t1 = tmax;
-    if (abs(d.x) < 1.0e-12) {
-        if (o.x < ro.x || o.x > ro.x + ext.x) {
-            return out;
+    // A repeated ground has no edge to clip to: the view's far bounds it.
+    if (!hf_repeats()) {
+        if (abs(d.x) < 1.0e-12) {
+            if (o.x < ro.x || o.x > ro.x + ext.x) {
+                return out;
+            }
+        } else {
+            let ta = (ro.x - o.x) / d.x;
+            let tb = (ro.x + ext.x - o.x) / d.x;
+            t0 = max(t0, min(ta, tb));
+            t1 = min(t1, max(ta, tb));
         }
-    } else {
-        let ta = (ro.x - o.x) / d.x;
-        let tb = (ro.x + ext.x - o.x) / d.x;
-        t0 = max(t0, min(ta, tb));
-        t1 = min(t1, max(ta, tb));
-    }
-    if (abs(d.y) < 1.0e-12) {
-        if (o.y < ro.y || o.y > ro.y + ext.y) {
-            return out;
+        if (abs(d.y) < 1.0e-12) {
+            if (o.y < ro.y || o.y > ro.y + ext.y) {
+                return out;
+            }
+        } else {
+            let ta = (ro.y - o.y) / d.y;
+            let tb = (ro.y + ext.y - o.y) / d.y;
+            t0 = max(t0, min(ta, tb));
+            t1 = min(t1, max(ta, tb));
         }
-    } else {
-        let ta = (ro.y - o.y) / d.y;
-        let tb = (ro.y + ext.y - o.y) / d.y;
-        t0 = max(t0, min(ta, tb));
-        t1 = min(t1, max(ta, tb));
     }
     if (d.z < 0.0) {
         if (o.z > top) {
@@ -816,7 +822,7 @@ fn hf_trace(o: vec3<f32>, d: vec3<f32>, tmax: f32, soft_k: f32) -> HfHit {
             break;
         }
         let lo = look.lo;
-        let hi = lo + vec2<f32>(look.size, look.size);
+        let hi = look.hi;
         var tx = 1.0e30;
         if (d.x > 0.0) {
             tx = (hi.x - o.x) / d.x;
@@ -831,7 +837,7 @@ fn hf_trace(o: vec3<f32>, d: vec3<f32>, tmax: f32, soft_k: f32) -> HfHit {
         }
         let te = min(min(tx, ty), t1);
         if (look.sec >= 0) {
-            hf_sec = hf_sections[look.sec];
+            hf_load(look.sec, look.off);
             let inv = hf_sec.geo.w;
             let os = vec3<f32>((o.xy - hf_sec.geo.xy) * inv, o.z * inv);
             let h = hf_trace_section(os, d * inv, t, te, soft_k);
@@ -841,6 +847,7 @@ fn hf_trace(o: vec3<f32>, d: vec3<f32>, tmax: f32, soft_k: f32) -> HfHit {
                 out.t = h.t;
                 out.hit = true;
                 out.sec = look.sec;
+                out.off = look.off;
                 return out;
             }
         }
@@ -861,7 +868,7 @@ fn hf_ground(q: vec2<f32>) -> f32 {
     if (look.sec < 0) {
         return params.eye.w;
     }
-    hf_sec = hf_sections[look.sec];
+    hf_load(look.sec, look.off);
     let s = (q - hf_sec.geo.xy) * hf_sec.geo.w;
     return hf_height_at(s.x, s.y) * hf_sec.geo.z;
 }
@@ -967,7 +974,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         ifs_geom[idx] = vec4<u32>(0u, 0u, 0u, 0u);
     } else {
         let p = o + d * h.t;
-        hf_sec = hf_sections[h.sec];
+        hf_load(h.sec, h.off);
         let ps = vec3<f32>((p.xy - hf_sec.geo.xy) * hf_sec.geo.w, p.z * hf_sec.geo.w);
         var n = hf_normal(ps.x, ps.y);
         var ao = hf_occlusion(p, params.misc.z);
@@ -976,7 +983,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // sections of different detail -- lit by its own outward normal,
         // and open to the sky. Only ON the boundary: elsewhere a point a
         // rounding under a steep flank is the flank.
-        hf_sec = hf_sections[h.sec];
+        hf_load(h.sec, h.off);
         let edge = min(min(ps.x, f32(hf_sec.dims.x - 1u) - ps.x), min(ps.y, f32(hf_sec.dims.y - 1u) - ps.y));
         if (edge < 1.0e-2 && hf_height_at(ps.x, ps.y) - ps.z > 1.0e-3) {
             n = hf_wall_normal(ps);
@@ -1021,13 +1028,14 @@ fn hf_albedo_at(q: vec2<f32>, foot: f32) -> vec4<f32> {
     // Held inside the ground: a wall's hit lies on its edge, where a
     // rounding puts half of them outside -- off the ground, transparent --
     // and a wall in a simulation's view read as speckled with the sky.
+    // A repeated ground has no edge: its lookup wraps.
     let ro = params.fdata[0].xy;
     let ext = vec2<f32>(params.fdata[1].x, params.fdata[1].y) * params.fdata[0].z;
-    let look = hf_lookup(clamp(q, ro, ro + ext * (1.0 - 1.0e-6)));
+    let look = hf_lookup(select(clamp(q, ro, ro + ext * (1.0 - 1.0e-6)), q, hf_repeats()));
     if (look.sec < 0) {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
-    hf_sec = hf_sections[look.sec];
+    hf_load(look.sec, look.off);
     let s = (q - hf_sec.geo.xy) * hf_sec.geo.w;
     let dims = vec2<f32>(textureDimensions(hf_albedo));
     let uv = (s + vec2<f32>(0.5, 0.5)) / dims;
@@ -1134,10 +1142,10 @@ fn pt_surface(o: vec3<f32>, d: vec3<f32>, h: HfHit, travelled: f32) -> PtHit {
         return out;
     }
     let p = o + d * h.t;
-    hf_sec = hf_sections[h.sec];
+    hf_load(h.sec, h.off);
     let ps = vec3<f32>((p.xy - hf_sec.geo.xy) * hf_sec.geo.w, p.z * hf_sec.geo.w);
     var n = hf_normal(ps.x, ps.y);
-    hf_sec = hf_sections[h.sec];
+    hf_load(h.sec, h.off);
     let edge = min(min(ps.x, f32(hf_sec.dims.x - 1u) - ps.x), min(ps.y, f32(hf_sec.dims.y - 1u) - ps.y));
     if (edge < 1.0e-2 && hf_height_at(ps.x, ps.y) - ps.z > 1.0e-3) {
         n = hf_wall_normal(ps);
@@ -1230,7 +1238,23 @@ struct HfLook {
     sec: i32,
     lo: vec2<f32>,
     size: f32,
+    // The region's far corner, and the offset of the copy the section is
+    // read at (a repeated ground's; zero otherwise).
+    hi: vec2<f32>,
+    off: vec2<f32>,
 };
+
+// Whether the ground repeats -- one section, a periodic simulation's,
+// copied to the horizon -- and its period, in the world (fdata[19]).
+fn hf_repeats() -> bool {
+    return params.fdata[19].z > 0.5;
+}
+
+// The section `sec` as the copy at `off` reads it.
+fn hf_load(sec: i32, off: vec2<f32>) {
+    hf_sec = hf_sections[sec];
+    hf_sec.geo = vec4<f32>(hf_sec.geo.xy + off, hf_sec.geo.zw);
+}
 
 // The finest ready section under q, and the square over which that
 // answer holds: down the quadtree from the root grid (fdata[0]: its
@@ -1242,7 +1266,19 @@ fn hf_lookup(q: vec2<f32>) -> HfLook {
     var out: HfLook;
     out.sec = -1;
     out.size = 0.0;
+    out.off = vec2<f32>(0.0, 0.0);
     let ro = params.fdata[0].xy;
+    // A repeated ground: q is in the copy of its one section whole periods
+    // away, and the region that answer holds over is that copy.
+    if (hf_repeats()) {
+        let per = params.fdata[19].xy;
+        out.sec = 0;
+        out.off = floor((q - ro) / per) * per;
+        out.lo = ro + out.off;
+        out.hi = out.lo + per;
+        out.size = max(per.x, per.y);
+        return out;
+    }
     let rs = params.fdata[0].z;
     let nx = i32(params.fdata[1].x);
     let ny = i32(params.fdata[1].y);
@@ -1275,6 +1311,7 @@ fn hf_lookup(q: vec2<f32>) -> HfLook {
     }
     out.lo = lo;
     out.size = size;
+    out.hi = lo + vec2<f32>(size, size);
     return out;
 }
 "#;
@@ -1497,6 +1534,9 @@ pub struct Ground {
     pub top: f64,
     pub floor: f64,
     pub mode: u32,
+    /// Its one section repeated, a period its extent apart, to the
+    /// horizon (a periodic simulation's).
+    pub repeat: bool,
 }
 
 /// The ground on the GPU, and its version: a new one for every set.
@@ -1991,12 +2031,12 @@ impl TerrainRenderer {
         // A lake's sentinel stands at the plain's level, 0.
         let heights: Vec<f32> = heights.iter().map(|&h| if h.abs() >= 2.0e30 { 0.0 } else { h }).collect();
         let top = heights.iter().cloned().fold(f32::NEG_INFINITY, f32::max) as f64;
-        self.set_ground(device, queue, Self::one_section_ground(n, m, 0, top, slab_floor(&heights, n, m) as f64));
+        self.set_ground(device, queue, Self::one_section_ground(n, m, 0, top, slab_floor(&heights, n, m) as f64, false));
     }
 
     /// A ground of one section of `n x m` cells from the origin, its own
     /// root.
-    fn one_section_ground(n: u32, m: u32, mode: u32, top: f64, floor: f64) -> Ground {
+    fn one_section_ground(n: u32, m: u32, mode: u32, top: f64, floor: f64, repeat: bool) -> Ground {
         Ground {
             root_origin: [0.0, 0.0],
             root_side: (n.max(m) - 1) as f64,
@@ -2006,6 +2046,7 @@ impl TerrainRenderer {
             top,
             floor,
             mode,
+            repeat,
         }
     }
 
@@ -2073,7 +2114,7 @@ impl TerrainRenderer {
         }
         queue.submit(std::iter::once(enc.finish()));
         self.build_layer(device, queue, 0, 0);
-        self.set_ground(device, queue, Self::one_section_ground(n, m, 4, bound as f64, -(bound as f64)));
+        self.set_ground(device, queue, Self::one_section_ground(n, m, 4, bound as f64, -(bound as f64), repeat));
     }
 
     /// A one-section ground from one footprint render (heightfield plan,
@@ -2098,7 +2139,7 @@ impl TerrainRenderer {
         self.ingest_region(device, queue, colour, height_field, 0, 0, n, m);
         self.finish_section(device, queue);
         let floor = -0.01 * n.max(m) as f64;
-        self.set_ground(device, queue, Self::one_section_ground(n, m, ingest.mode(), top, floor));
+        self.set_ground(device, queue, Self::one_section_ground(n, m, ingest.mode(), top, floor, false));
     }
 
     /// The atlas for `capacity` layers of `w x h` samples; true when it
@@ -2478,6 +2519,10 @@ impl TerrainRenderer {
         // which there is no ground.
         let per_ray = 2.0 * (view.camera.fov * 0.5).tan() / self.out_h.max(1) as f32 / view.samples_per_axis.max(1) as f32;
         fdata[6] = [view.height, view.width, per_ray, view.far];
+        // A repeated ground's period: its one section's extent.
+        if let (true, Some(s)) = (g.repeat, g.sections.first()) {
+            fdata[19] = [((s.n - 1) as f64 * s.texel) as f32, ((s.m - 1) as f64 * s.texel) as f32, 1.0, 0.0];
+        }
         let p = TerrainParamsGpu {
             width: self.out_w,
             height: self.out_h,
@@ -3526,6 +3571,82 @@ pub(crate) mod gpu_tests {
         assert!(brightest <= 1.01, "no brighter than the sky: {brightest}");
     }
 
+    /// A repeated grid is the grid tiled (T4): a periodic 32x24 field
+    /// repeated meets every surface a 3x3 tiling of it built by hand does,
+    /// over the tiling's extent -- same placement, no seam, no wall at a
+    /// copy's edge.
+    #[test]
+    fn a_repeated_grid_is_the_grid_tiled() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (32u32, 24u32);
+        let field = |x: u32, y: u32| {
+            let (a, b) = (std::f32::consts::TAU * x as f32 / w as f32, std::f32::consts::TAU * y as f32 / h as f32);
+            [a.sin() + 0.5 * (2.0 * b).cos(), 0.0, 0.0, 0.0]
+        };
+        let texture = |tw: u32, th: u32| {
+            let texels: Vec<[f32; 4]> = (0..tw * th).map(|k| field(k % tw % w, k / tw % h)).collect();
+            let t = device.create_texture(&TextureDescriptor {
+                label: None,
+                size: Extent3d { width: tw, height: th, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format: TextureFormat::Rgba32Float,
+                usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            queue.write_texture(
+                t.as_image_copy(),
+                bytemuck::cast_slice(&texels),
+                TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(tw * 16), rows_per_image: Some(th) },
+                Extent3d { width: tw, height: th, depth_or_array_layers: 1 },
+            );
+            let v = t.create_view(&TextureViewDescriptor::default());
+            (t, v)
+        };
+        let ((_a, one), (_b, three)) = (texture(w, h), texture(3 * w, 3 * h));
+        let (ow, oh) = (96u32, 64u32);
+        // Over the middle copy, toward the far one.
+        let cam = camera([1.5 * w as f64, 1.2 * h as f64, 3.0], 0.45, -std::f64::consts::FRAC_PI_2 + 0.3, 40.0, 0.8);
+        let hits = |r: &mut TerrainRenderer| {
+            r.render(&device, &queue, &view(cam));
+            let raw = read_buffer(&device, &queue, r.geometry_buffer(), (ow * oh) as u64 * 16);
+            let geom: Vec<f32> = bytemuck::cast_slice::<u8, [u32; 4]>(&raw).iter().map(|g| f32::from_bits(g[3])).collect();
+            geom
+        };
+        let mut repeated = TerrainRenderer::new(&device, ow, oh);
+        repeated.set_grid(&device, &queue, &one, &one, w, h, 4.0, 100.0, true);
+        let mut tiled = TerrainRenderer::new(&device, ow, oh);
+        tiled.set_grid(&device, &queue, &three, &three, 3 * w, 3 * h, 4.0, 100.0, false);
+        let (a, b) = (hits(&mut repeated), hits(&mut tiled));
+        let (mut both, mut worst, mut beyond) = (0usize, 0.0f32, 0usize);
+        for py in 0..oh {
+            for px in 0..ow {
+                let k = (py * ow + px) as usize;
+                let d = ray(&cam, px, py, ow, oh);
+                if b[k] > 0.0 {
+                    // Where the hand-made tiling has ground, the repeat has
+                    // the same.
+                    let p = [cam.eye[0] + d[0] * b[k] as f64, cam.eye[1] + d[1] * b[k] as f64];
+                    let inside = p[0] > 0.5 && p[0] < (3 * w) as f64 - 1.5 && p[1] > 0.5 && p[1] < (3 * h) as f64 - 1.5;
+                    if inside {
+                        both += 1;
+                        worst = worst.max((a[k] - b[k]).abs() / b[k]);
+                    }
+                } else if a[k] > 0.0 {
+                    beyond += 1;
+                }
+            }
+        }
+        println!("repeat: {both} hits on the tiling, worst relative difference {worst:.2e}, {beyond} more beyond it");
+        assert!(both > 1000, "{both}");
+        assert!(worst < 1e-3, "{worst}");
+        assert!(beyond > 100, "the repeat reaches past the tiling: {beyond}");
+    }
+
     /// A ground's wall is drawn whole (T4): its hits lie on the ground's
     /// outer edge, where a rounding put half of them off the ground and
     /// their albedo -- coverage and all -- read as transparent: a
@@ -3603,7 +3724,7 @@ pub(crate) mod gpu_tests {
             let bits: Vec<u16> = bytemuck::cast_slice(&read_texture(&device, &queue, at, 0, n, m, 8)).to_vec();
             for j in 0..m {
                 for i in 0..n {
-                    let cell = ((m - 1 - j) % h * w + i % w) as usize;
+                    let cell = ((2 * h - 1 - j) % h * w + i % w) as usize;
                     let k = (j * n + i) as usize;
                     assert_eq!(raw[k], relief[cell][0] * 3.0, "repeat {repeat} ({i}, {j})");
                     for c in 0..4 {
