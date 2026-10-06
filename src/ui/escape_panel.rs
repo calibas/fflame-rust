@@ -1692,11 +1692,18 @@ fn show_terrain_section(
             });
             ui.horizontal(|ui| {
                 ui.label(t!("escape_panel.terrain_resolution"));
+                let label = |r: u32| {
+                    if r == 0 {
+                        t!("escape_panel.terrain_resolution_auto").to_string()
+                    } else {
+                        format!("{r} x {r}")
+                    }
+                };
                 egui::ComboBox::from_id_salt("terrain_resolution")
-                    .selected_text(format!("{0} x {0}", t.resolution))
+                    .selected_text(label(t.resolution))
                     .show_ui(ui, |ui| {
-                        for r in [512u32, 1024, 2048, 4096] {
-                            if ui.selectable_label(t.resolution == r, format!("{r} x {r}")).clicked() && r != t.resolution {
+                        for r in [0u32, 1024, 2048, 4096, 8192] {
+                            if ui.selectable_label(t.resolution == r, label(r)).clicked() && r != t.resolution {
                                 let _ = config_manager.update_param(ConfigPath::EscapeTerrainResolution, ConfigValue::UInt(r));
                             }
                         }

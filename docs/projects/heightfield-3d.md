@@ -967,14 +967,91 @@ terrain.**
     export settles, then the tile and the antialiasing grid. The
     in-app viewport-size and transparent exports read the terrain's
     image where they read the 2D picture's.
-  - **Not yet:** fly mode (T2d); the motion footprint; a readout of the
-    measured footprint time in the panel.
+  - **Not yet:** fly mode (moved to the end of the plan, the user's
+    call, 2026-10-05); the motion footprint; a readout of the measured
+    footprint time in the panel.
   - **Seen in the app** (the user, 2026-10-05): the picture's quality
     is the footprint's. 2048² and 4096² look good; near the camera it
     wants 8192² to 16384², and more antialiasing does not reach past
     the footprint's texels. That is the uniform footprint's limit: a
     perspective view wants texels small near the eye and large far
     away. See section 11.
+- **T2d as built** (2026-10-05): the footprint sized by the view, built
+  in tiles, its colour filtered (section 11's decision).
+  - **The size** (`wanted_resolution`): with `resolution` 0, the new
+    default, about `supersample` texels per screen pixel where the
+    terrain is nearest the eye -- the fractal sampled as finely as a 2D
+    render at that antialiasing. The nearest point is a grid of the
+    camera's rays cast at the terrain's box. Capped at 8192 (about
+    1.4 GB of tile, twice that while a build replaces one); a fixed
+    `resolution` is still itself.
+    - At 1080p in the default framing: 1792² without antialiasing,
+      3584² at 2x.
+    - The viewport follows the camera's want only when it would grow
+      by a fifth or shrink by half, so an orbit does not re-render the
+      footprint at every step. An export takes its own pixels' want
+      exactly.
+  - **The tiles** (`FootprintLayout`): a footprint past 2048 a side is
+    `per_side²` escape renders, each a multiple of 256 a side, each at
+    its own centre (`tile_config`: the offset kept as a power of two
+    and a mantissa, added in fixed point, so it holds at any depth).
+    They arrive region by region into a tile being built, and the
+    drawn tile is replaced only when the last has.
+    - **Against the whole render**, 2x2 at 2^2 rotated: 0.05% of the
+      raw samples and 0.5% of the colours differ, scattered (17 of the
+      1,249 within 2 px of a seam, where chance puts about 25). Not byte
+      for byte, as section 5 hoped: each tile computes its pixels'
+      coordinates from another centre, and where the last bit moves an
+      escape count the colour changes.
+    - **Deep tiles share the reference orbit:** a 4096² at 2^60 takes
+      4.1 times the 2048².
+  - **The tile keeps the RAW height source**, and the walk maps it to
+    heights (`hf_f`): the distance's `H exp(-d/w)`, the count's log
+    curve, the relief's linear one, with the interior's sentinels.
+    Every map is monotone, so the mipmap keeps the raw extreme that maps
+    highest (the least distance, the greatest count) and the walk maps
+    the bound too. A tile set from heights maps by the identity.
+    - Why: a tile no longer survives in the escape renderer (only its
+      last region does), so a height or flank-width edit would have
+      re-rendered the whole footprint. Now it is a uniform: a re-walk,
+      milliseconds.
+    - The count's and the relief's range is measured over every region
+      into the tile's own buffer, which the walk reads; nothing is read
+      back.
+    - The interior's encoding (plateau or hole) is in the footprint's
+      key: changing it re-renders.
+  - **The colour is filtered** by each ray's share of a pixel: the
+    albedo has a mip chain (2x2 box averages), and the relight samples
+    it trilinearly at `log2(t · pixel / samples_per_axis / √cosθ)`
+    cells. Distant ground is its texels' average, not whichever one a
+    ray struck. Gate: a one-cell checkerboard seen at about eight
+    cells a pixel comes out as even as a uniform grey tile (standard
+    deviation 0.0000).
+  - **The shadow speckles fixed.** At 8192² the plains shadowed
+    themselves in speckles, with a thin dark line. A shadow ray started
+    a fixed thousandth of a cell above its hit, which at coordinates
+    near ten thousand is the rounding; on curving ground it began under
+    the surface. It now starts `1e-3 + 1e-6 × span` above (span the
+    larger of the tile's side and the eye's coordinates).
+    - Confirmed by restoring the old bias alone: the speckles and the
+      line came back.
+    - The gate is gently curving ground (slopes under 4°, a 30° sun)
+      seen from 12,000 cells: 35 self-shadowed pixels at the old bias,
+      0 now. A flat plane does not show it; there the interpolated
+      normal is the patch's own.
+  - **Measured** (GTX 1660 SUPER), footprint renders as a dolly makes
+    them:
+
+    | footprint | direct, 2^3 | perturbed, 2^60, 30,000 iterations |
+    |---|---|---|
+    | 2048² | 18.6 ms | 915 ms |
+    | 4096² (4 tiles) | 75.7 ms | 3.7 s |
+    | 8192² (16 tiles) | 290 ms | -- |
+
+    The seahorse at 1080p, 2x: the auto footprint (3584², 4 tiles)
+    renders in 168 ms, against 773 ms at a fixed 8192², and differs
+    from it by 0.57 in 255 on average. The near crops are hard to tell
+    apart (`output/heightfield_clip/`).
 
 **T3 — Path tracing, for terrains and IFS solids.**
 - **Built.**
@@ -1052,10 +1129,14 @@ Two more, the same day:
    (H11).
 8. **The gallery modules skip terrains** (H2).
 
-## 11. The footprint's resolution, and the camera (proposed, 2026-10-05)
+## 11. The footprint's resolution, and the camera (decided, 2026-10-05)
 
 The user's question, after T2c: "Any chance we can tie the Footprint to
-the camera frustum?" Not decided; this is the proposal.
+the camera frustum?" The first answer below was the clipmap. A
+measurement before building it changed the answer, and the user chose
+the second: **the footprint's resolution tied to the screen, rendered
+in tiles, its colour filtered** (built as T2d). The clipmap waits for a
+terrain that runs toward the horizon.
 
 **The problem.** A footprint is uniform: every texel is the same size
 on the ground. A perspective view is not: a texel near the eye covers
@@ -1105,10 +1186,35 @@ far ground is sampled more finely than the screen can show.
    - A candidate for the last refinement of a path-traced still, not
      for the interactive view.
 
-**Recommended: the first**, as its own phase before T3. The path
-tracer's rays (shadows, bounces) would then walk the levels from the
-start, rather than being retrofitted.
-- **Build first:** a fixed level count from the camera; every stale
-  level re-rendered whole; the blend band.
-- **Later:** incremental updates (render only the strip a level
-  moved by) and a per-level live/release choice under the 15 ms line.
+**First recommended: the first**, as its own phase before T3. The user
+agreed ("Let's add a clipmap"); then the measurement:
+
+**What the extra resolution buys** (the seahorse at 1920x1080, mean
+difference from a 8192² footprint, by screen band):
+
+| band | 2048² | 4096² |
+|---|---|---|
+| far (the tile's top) | 4.2 | 3.4 |
+| middle | 2.3-3.0 | 1.8-2.4 |
+| near (the bottom) | 1.9 | 1.4 |
+
+- **Largest far, not near**, and nearly all on detailed pixels (13.0
+  against 0.06 on smooth ground).
+- **Near the camera, the gain is samples per pixel.** A 2048² footprint
+  already gives about 1.2 texels a screen pixel at the tile's near
+  edge, but each texel is one point sample of the fractal; the rays of
+  a pixel land on the same one or two texels and average nothing new.
+  At 8192² they average real fractal samples, as 2D antialiasing does.
+- **Far away, the need is filtering:** both sparkle there, the texels
+  smaller than a pixel and point-sampled.
+- **A clipmap could not help in this view.** The whole default tile lies
+  0.9 to 1.8 footprint widths from the eye, a range of two: its finest
+  level would cover nearly all of it. Nested levels pay where the
+  ground spans a wide range of distances -- terrain toward the horizon,
+  a low pitch, a camera near the ground.
+
+**Decided** (the user, 2026-10-05): the footprint's resolution tied to
+the screen (about the antialiasing factor's texels a pixel where the
+ground is nearest), rendered in tiles so 8192² fits, and mip-filtered
+colour. The clipmap comes later, with terrain toward the horizon (the
+far field, T5). Fly mode moves to the end of the plan.
