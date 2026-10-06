@@ -719,6 +719,29 @@ fn render_terrain_section(ui: &mut egui::Ui, config_manager: &mut ConfigManager,
             })
             .response
             .on_hover_text(t!("sim_panel.terrain_channel_tip"));
+            // The edge: the grid alone, or repeated to the horizon -- which
+            // only a wrapping grid tiles without a seam.
+            let periodic = sim.boundary == crate::config::sim::SimBoundary::Periodic;
+            ui.horizontal(|ui| {
+                use crate::config::sim::SimTiling;
+                ui.label(t!("sim_panel.terrain_tiling"));
+                for s in SimTiling::ALL {
+                    let label = match s {
+                        SimTiling::Single => t!("sim_panel.terrain_tiling_single"),
+                        SimTiling::Repeat => t!("sim_panel.terrain_tiling_repeat"),
+                    };
+                    let on = t.tiling == s;
+                    if ui
+                        .add_enabled(periodic || s == SimTiling::Single || on, egui::Button::selectable(on, label.as_ref()))
+                        .clicked()
+                        && !on
+                    {
+                        let _ = config_manager.update_param(ConfigPath::SimTerrainTiling, ConfigValue::String(s.as_str().to_string()));
+                    }
+                }
+            })
+            .response
+            .on_hover_text(t!("sim_panel.terrain_tiling_tip"));
             let mut slider = |ui: &mut egui::Ui, label: String, path: ConfigPath, value: f32, range: std::ops::RangeInclusive<f32>, tip: String| {
                 ui.horizontal(|ui| {
                     ui.label(label);
@@ -729,6 +752,10 @@ fn render_terrain_section(ui: &mut egui::Ui, config_manager: &mut ConfigManager,
                 });
             };
             slider(ui, t!("sim_panel.terrain_height").to_string(), ConfigPath::SimTerrainHeight, t.height, -0.5..=0.5, t!("sim_panel.terrain_height_tip").to_string());
+            if t.tiling == crate::config::sim::SimTiling::Repeat {
+                slider(ui, t!("escape_panel.terrain_far").to_string(), ConfigPath::SimTerrainFar, t.far, 0.5..=64.0, t!("sim_panel.terrain_far_tip").to_string());
+                slider(ui, t!("escape_panel.terrain_haze").to_string(), ConfigPath::SimTerrainHaze, t.haze, 0.0..=1.0, t!("escape_panel.terrain_haze_tip").to_string());
+            }
             slider(ui, t!("sim_panel.terrain_softness").to_string(), ConfigPath::SimTerrainSoftness, t.softness, 0.0..=8.0, t!("sim_panel.terrain_softness_tip").to_string());
             // How it is lit.
             slider(ui, t!("escape_panel.terrain_shadow").to_string(), ConfigPath::SimTerrainShadow, t.shadow, 0.0..=1.0, t!("escape_panel.terrain_shadow_tip").to_string());

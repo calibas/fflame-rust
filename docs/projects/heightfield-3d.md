@@ -1465,12 +1465,27 @@ terrain.**
       baseline `sim-sim-terrain-coral` (the coral Gray-Scott, path
       traced, 64 samples). 115 escape baselines, `release.py check` and
       the wasm build pass.
-  - **Not yet: Repeat tiling.** The config has it (`tiling`, offered on
-    the periodic boundary), the ingest makes the seamless extra sample,
-    and the traversal does not repeat yet: its root grid is square cells
-    and a simulation's grid is rarely square, so the copies need an
-    offset carried through the lookups and hits rather than more
-    sections. Next.
+  - **Repeat tiling** (decision H10), built after the rest: a periodic
+    simulation's grid repeated to the horizon.
+    - **The ingest** makes a sample more each way, its first again, so
+      copies meet without a seam; rows map to cells exactly as a single
+      grid's do, so turning repeat on moves nothing.
+    - **The traversal** keeps its one section and reads it as a COPY: the
+      ground's lookup wraps a point into the section and answers with
+      the copy's rectangle and its offset, every section load
+      (`hf_load`) adds the offset, and a hit carries it, so the surface,
+      its normal, its occlusion and its albedo are the copy's. A
+      repeated ground has no edge for the trace to clip to; the view's
+      `far` bounds it, with the haze before it (the escape terrain's
+      rule, in grid widths). Not more sections: the root grid is square
+      cells, and a simulation's grid is rarely square.
+    - **The panel** offers it on the periodic boundary, with Distance and
+      Haze when it is on.
+    - **Gate:** `a_repeated_grid_is_the_grid_tiled` -- a periodic 32x24
+      field repeated meets every surface a 3x3 tiling of it made by hand
+      does (4,708 pixels, worst relative distance 1.6e-6) and reaches
+      past it. Baseline `sim-sim-terrain-coral-repeat`: the coral to the
+      horizon, seamless, hazed.
 
 **T5 — Reach and polish**, each its own decision when it comes up:
 - a denoiser: à-trous guided by albedo and normal, which
