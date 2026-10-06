@@ -193,7 +193,7 @@ pub fn render_escape_content(
             show_ifs_criterion(ui, config_manager, d.solid);
         }
         if d.solid {
-            show_solid_camera(ui, config_manager, &esc);
+            show_solid_camera(ui, config_manager, &esc, true);
         }
     }
 
@@ -865,6 +865,13 @@ pub fn render_escape_content(
         .default_open(!esc.palette_map.is_default())
         .show(ui, |ui| palette_map_controls(ui, config_manager, &esc.palette_map));
 
+    // ---- 3D terrain ----
+    // The picture as a lit height field (docs/projects/heightfield-3d.md).
+    // Above the relief because, on, it replaces the relief's 2D lighting
+    // with its own.
+    #[cfg(feature = "terrain")]
+    show_terrain_section(ui, config_manager, &esc);
+
     // ---- Relief shading ----
     // A LAYER, not a coloring: it runs after the palette lookup, so it
     // composes with whatever is above it. Collapsed by default because
@@ -1465,14 +1472,28 @@ fn suggested_coloring_scale(coloring: &str, max_iter: u32) -> f32 {
 /// mode is not three-dimensional — one formula in it is — so gating on
 /// the mode would show these over a Mandelbrot and hide them over the
 /// thing they steer.
+/// The solid camera's controls. `with_target` is mode D's: a terrain's
+/// target is the view's own centre (heightfield plan, T2b), so it has
+/// none to edit here.
 fn show_solid_camera(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
     esc: &crate::config::escape::EscapeConfig,
+    with_target: bool,
 ) {
     ui.separator();
     ui.label(egui::RichText::new(t!("escape_panel.camera")).strong());
+    if with_target {
+        show_solid_camera_target(ui, config_manager, esc);
+    }
+    show_solid_camera_angles(ui, config_manager, esc);
+}
 
+fn show_solid_camera_target(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    esc: &crate::config::escape::EscapeConfig,
+) {
     // The target is decimal STRINGS: a deep zoom is an approach to a
     // point, so the target is the quantity that needs digits while the
     // distance shrinks around it. An f32 here would cap 3D at a zoom
@@ -1501,7 +1522,13 @@ fn show_solid_camera(
     ui.label(
         egui::RichText::new(t!("escape_panel.camera_target_tip")).small().weak(),
     );
+}
 
+fn show_solid_camera_angles(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    esc: &crate::config::escape::EscapeConfig,
+) {
     let mut angle = |ui: &mut egui::Ui,
                      label: String,
                      path: ConfigPath,
@@ -1553,6 +1580,198 @@ fn show_solid_camera(
         3.0..=170.0,
         t!("escape_panel.camera_fov_tip").to_string(),
     );
+}
+
+/// The **3D terrain** section: the switch, how the height is made, how
+/// it is lit, and the camera. The footprint, the camera mapping and the
+/// lighting rules are in `escape::footprint`.
+#[cfg(feature = "terrain")]
+fn show_terrain_section(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    esc: &crate::config::escape::EscapeConfig,
+) {
+    use crate::config::escape::{TerrainInterior, TerrainSource};
+    let t = esc.terrain.clone();
+    let solid = crate::escape::ifs::formula_is_solid(&esc.formula);
+    egui::CollapsingHeader::new(t!("escape_panel.terrain"))
+        .default_open(t.enabled)
+        .show(ui, |ui| {
+            let mut enabled = t.enabled;
+            if ui
+                .add_enabled(!solid, egui::Checkbox::new(&mut enabled, t!("escape_panel.terrain_enabled")))
+                .on_hover_text(t!("escape_panel.terrain_tip"))
+                .changed()
+            {
+                let _ = config_manager.update_param(ConfigPath::EscapeTerrainEnabled, enabled.into());
+            }
+            if solid {
+                ui.label(egui::RichText::new(t!("escape_panel.terrain_solid")).small().weak());
+                return;
+            }
+            if !t.enabled {
+                return;
+            }
+            ui.label(egui::RichText::new(t!("escape_panel.terrain_gestures")).small().weak());
+
+            // How the height is made.
+            ui.horizontal(|ui| {
+                ui.label(t!("escape_panel.terrain_source"));
+                let label = |s: TerrainSource| match s {
+                    TerrainSource::Distance => t!("escape_panel.terrain_source_distance"),
+                    TerrainSource::EscapeCount => t!("escape_panel.terrain_source_count"),
+                    TerrainSource::Relief => t!("escape_panel.terrain_source_relief"),
+                };
+                egui::ComboBox::from_id_salt("terrain_source")
+                    .selected_text(label(t.source))
+                    .show_ui(ui, |ui| {
+                        for s in TerrainSource::ALL {
+                            if ui.selectable_label(t.source == s, label(s)).clicked() && s != t.source {
+                                let _ = config_manager.update_param(
+                                    ConfigPath::EscapeTerrainSource,
+                                    ConfigValue::String(s.as_str().to_string()),
+                                );
+                            }
+                        }
+                    });
+            });
+            if t.source == TerrainSource::Distance
+                && crate::escape::get_formula(&esc.formula).wgsl_derivative.is_empty()
+            {
+                ui.label(egui::RichText::new(t!("escape_panel.terrain_no_derivative")).small().weak());
+            }
+            let mut percent = |ui: &mut egui::Ui, label: String, path: ConfigPath, value: f32, range: std::ops::RangeInclusive<f32>, tip: String| {
+                ui.horizontal(|ui| {
+                    ui.label(label);
+                    let mut pc = value * 100.0;
+                    if ui
+                        .add(egui::Slider::new(&mut pc, range).suffix("%").logarithmic(true))
+                        .on_hover_text(tip)
+                        .changed()
+                    {
+                        let _ = config_manager.update_param(path, (pc / 100.0).into());
+                    }
+                });
+            };
+            percent(
+                ui,
+                t!("escape_panel.terrain_height").to_string(),
+                ConfigPath::EscapeTerrainHeight,
+                t.height,
+                0.1..=30.0,
+                t!("escape_panel.terrain_height_tip").to_string(),
+            );
+            if t.source == TerrainSource::Distance {
+                percent(
+                    ui,
+                    t!("escape_panel.terrain_de_width").to_string(),
+                    ConfigPath::EscapeTerrainDeWidth,
+                    t.de_width,
+                    0.05..=10.0,
+                    t!("escape_panel.terrain_de_width_tip").to_string(),
+                );
+            }
+            ui.horizontal(|ui| {
+                ui.label(t!("escape_panel.terrain_interior"));
+                let label = |s: TerrainInterior| match s {
+                    TerrainInterior::Plateau => t!("escape_panel.terrain_interior_plateau"),
+                    TerrainInterior::Hole => t!("escape_panel.terrain_interior_hole"),
+                };
+                egui::ComboBox::from_id_salt("terrain_interior")
+                    .selected_text(label(t.interior))
+                    .show_ui(ui, |ui| {
+                        for s in TerrainInterior::ALL {
+                            if ui.selectable_label(t.interior == s, label(s)).clicked() && s != t.interior {
+                                let _ = config_manager.update_param(
+                                    ConfigPath::EscapeTerrainInterior,
+                                    ConfigValue::String(s.as_str().to_string()),
+                                );
+                            }
+                        }
+                    });
+            });
+            ui.horizontal(|ui| {
+                ui.label(t!("escape_panel.terrain_resolution"));
+                egui::ComboBox::from_id_salt("terrain_resolution")
+                    .selected_text(format!("{0} x {0}", t.resolution))
+                    .show_ui(ui, |ui| {
+                        for r in [512u32, 1024, 2048, 4096] {
+                            if ui.selectable_label(t.resolution == r, format!("{r} x {r}")).clicked() && r != t.resolution {
+                                let _ = config_manager.update_param(ConfigPath::EscapeTerrainResolution, ConfigValue::UInt(r));
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text(t!("escape_panel.terrain_resolution_tip"));
+            });
+
+            // How it is lit: the Solid Lighting panel's lights, world-
+            // fixed, with these.
+            ui.separator();
+            let (fog, fog_start) = {
+                let c = config_manager.active_config();
+                (c.fog_strength, c.fog_start)
+            };
+            let mut slider = |ui: &mut egui::Ui, label: String, path: ConfigPath, value: f32, range: std::ops::RangeInclusive<f32>, log: bool, tip: String| {
+                ui.horizontal(|ui| {
+                    ui.label(label);
+                    let mut v = value;
+                    if ui
+                        .add(egui::Slider::new(&mut v, range).logarithmic(log))
+                        .on_hover_text(tip)
+                        .changed()
+                    {
+                        let _ = config_manager.update_param(path, v.into());
+                    }
+                });
+            };
+            slider(
+                ui,
+                t!("escape_panel.terrain_shadow").to_string(),
+                ConfigPath::EscapeTerrainShadow,
+                t.shadow,
+                0.0..=1.0,
+                false,
+                t!("escape_panel.terrain_shadow_tip").to_string(),
+            );
+            slider(
+                ui,
+                t!("escape_panel.terrain_shadow_sharpness").to_string(),
+                ConfigPath::EscapeTerrainShadowSharpness,
+                t.shadow_sharpness,
+                1.0..=128.0,
+                true,
+                t!("escape_panel.terrain_shadow_sharpness_tip").to_string(),
+            );
+            slider(
+                ui,
+                t!("escape_panel.terrain_occlusion").to_string(),
+                ConfigPath::EscapeTerrainOcclusion,
+                t.occlusion,
+                0.0..=0.05,
+                false,
+                t!("escape_panel.terrain_occlusion_tip").to_string(),
+            );
+            slider(
+                ui,
+                t!("escape_panel.terrain_fog").to_string(),
+                ConfigPath::FogStrength,
+                fog,
+                0.0..=5.0,
+                false,
+                t!("escape_panel.terrain_fog_tip").to_string(),
+            );
+            slider(
+                ui,
+                t!("escape_panel.terrain_fog_start").to_string(),
+                ConfigPath::FogStart,
+                fog_start,
+                0.0..=3.0,
+                false,
+                t!("escape_panel.terrain_fog_start_tip").to_string(),
+            );
+            show_solid_camera(ui, config_manager, esc, false);
+        });
 }
 
 /// Mode D's criterion (the plan's §2.4), shown under the formula row.

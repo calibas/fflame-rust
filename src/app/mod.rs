@@ -404,6 +404,22 @@ pub(super) enum UrlLoadedData {
 /// the eye asks for it. The coalescing window in the config manager is
 /// 500 ms; this is deliberately shorter, because that one is about
 /// UNDO granularity and this one is about what is on screen.
+/// The escape engine's image for the tail: the terrain's while the
+/// config draws one, the 2D picture's otherwise. Takes the fields, not
+/// the app, so a caller holding the flame renderer can still ask.
+fn escape_view<'a>(
+    escape: &'a Option<crate::escape::EscapeRenderer>,
+    #[cfg(feature = "terrain")] terrain: &'a Option<crate::escape::footprint::EscapeTerrain>,
+    config: &crate::config::FractalConfig,
+) -> Option<&'a egui_wgpu::wgpu::TextureView> {
+    #[cfg(feature = "terrain")]
+    if config.escape.terrain_active() {
+        return terrain.as_ref().map(|t| t.output_view());
+    }
+    let _ = config;
+    escape.as_ref().map(|e| e.output_view())
+}
+
 const ESCAPE_INTERACTION_WINDOW: std::time::Duration = std::time::Duration::from_millis(250);
 
 pub struct App {
@@ -422,6 +438,12 @@ pub struct App {
     /// renderer: it consumes the flame renderer's palette texture and
     /// tonemap tail but owns its own pipelines and output.
     pub(super) escape_renderer: Option<crate::escape::EscapeRenderer>,
+    /// The 3D terrain view of the escape picture
+    /// (docs/projects/heightfield-3d.md): its footprint's renderer and
+    /// the terrain renderer. Held instead of `escape_renderer` while
+    /// the config draws a terrain, and freed when it does not.
+    #[cfg(feature = "terrain")]
+    pub(super) escape_terrain: Option<crate::escape::footprint::EscapeTerrain>,
     /// Set by `process_gpu_updates` when an edit requires re-running
     /// the escape pass (escape params, palette, structural loads).
     /// Starts true so the first escape frame always renders.
@@ -834,6 +856,8 @@ impl App {
             egui_layer,
             flame_renderer: Some(flame_renderer),
             escape_renderer: None,
+            #[cfg(feature = "terrain")]
+            escape_terrain: None,
             escape_dirty: true,
             escape_texture: Default::default(),
             escape_aa: Default::default(),
@@ -1154,6 +1178,10 @@ impl App {
                                 // its channel drops; the reference reloads
                                 // from the disk orbit store.
                                 app.escape_renderer = None;
+                                #[cfg(feature = "terrain")]
+                                {
+                                    app.escape_terrain = None;
+                                }
                                 // The field lives in GPU textures that
                                 // just went away; the run cannot be
                                 // recovered, only restarted.
@@ -1492,6 +1520,11 @@ impl App {
                 let mb = esc.resident_bytes() as f64 / (1024.0 * 1024.0);
                 esc.destroy();
                 log::info!("Left escape mode: freed {mb:.0} MB of escape renderer state");
+            }
+            #[cfg(feature = "terrain")]
+            if let Some(t) = self.escape_terrain.take() {
+                t.destroy();
+                log::info!("Left escape mode: freed the terrain");
             }
             // Rebuilt lazily; the flag makes the first frame back render.
             self.escape_dirty = true;
@@ -2047,9 +2080,12 @@ impl App {
                         // `&mut self.flame_renderer`, and only
                         // field-level borrows are disjoint from it.
                         let non_flame_view = match export_config.render_mode {
-                            crate::scene::transforms::RenderMode::Escape => {
-                                self.escape_renderer.as_ref().map(|e| e.output_view())
-                            }
+                            crate::scene::transforms::RenderMode::Escape => escape_view(
+                                &self.escape_renderer,
+                                #[cfg(feature = "terrain")]
+                                &self.escape_terrain,
+                                &export_config,
+                            ),
                             #[cfg(feature = "engine-sim")]
                             crate::scene::transforms::RenderMode::Simulation => {
                                 self.sim_renderer.as_ref().map(|r| r.output_view())
@@ -2157,9 +2193,12 @@ impl App {
                         // `&mut self.flame_renderer`, and only
                         // field-level borrows are disjoint from it.
                         let non_flame_view = match export_config.render_mode {
-                            crate::scene::transforms::RenderMode::Escape => {
-                                self.escape_renderer.as_ref().map(|e| e.output_view())
-                            }
+                            crate::scene::transforms::RenderMode::Escape => escape_view(
+                                &self.escape_renderer,
+                                #[cfg(feature = "terrain")]
+                                &self.escape_terrain,
+                                &export_config,
+                            ),
                             #[cfg(feature = "engine-sim")]
                             crate::scene::transforms::RenderMode::Simulation => {
                                 self.sim_renderer.as_ref().map(|r| r.output_view())
@@ -2339,6 +2378,54 @@ impl App {
                     // into a watchdog-length dispatch). set_fixed_chunk pins
                     // the size to the TDR-calibrated seed; the render is
                     // chunk-invariant, so the image is unchanged.
+                    // The terrain's export: its footprint settled as the
+                    // 2D export settles (fixed chunks, no waiting), the
+                    // tile made, and the antialiasing grid accumulated
+                    // -- what `render_with` does on the desktop.
+                    #[cfg(feature = "terrain")]
+                    let terrain_export = if is_escape_export && export_config.escape.terrain_active() {
+                        let mut t = crate::escape::footprint::EscapeTerrain::new(
+                            &self.gpu.device,
+                            export_width,
+                            export_height,
+                        );
+                        t.size_footprint(&self.gpu.device, &export_config.escape);
+                        t.footprint_renderer().set_fixed_chunk(true);
+                        let mut guard = 0u32;
+                        loop {
+                            let mut t_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+                                label: Some("WASM Export Terrain Footprint"),
+                            });
+                            let settled = t.render_footprint(
+                                &self.gpu.device,
+                                &self.gpu.queue,
+                                &mut t_encoder,
+                                &export_config,
+                                temp_renderer.escape_palette_view(export_config.escape.palette_map.stepped),
+                                temp_renderer.palette_generation(),
+                            );
+                            self.gpu.queue.submit(std::iter::once(t_encoder.finish()));
+                            if settled {
+                                break;
+                            }
+                            guard += 1;
+                            if guard > 4_000_000 {
+                                log::error!("WASM terrain footprint failed to settle; using what we have");
+                                break;
+                            }
+                        }
+                        t.ingest(&self.gpu.device, &self.gpu.queue, &export_config);
+                        t.reset_accumulation();
+                        for jitter in crate::escape::EscapeRenderer::sample_grid(export_config.escape.supersample.max(1)) {
+                            t.render(&self.gpu.device, &self.gpu.queue, &export_config, jitter);
+                            t.accumulate(&self.gpu.device, &self.gpu.queue);
+                        }
+                        Some(t)
+                    } else {
+                        None
+                    };
+                    #[cfg(feature = "terrain")]
+                    let is_escape_export = is_escape_export && terrain_export.is_none();
                     let escape_export = if is_escape_export {
                         let mut esc = crate::escape::EscapeRenderer::new(
                             &self.gpu.device,
@@ -2427,7 +2514,11 @@ impl App {
                     let sim_view = sim_export.as_ref().map(|s| s.output_view());
                     #[cfg(not(feature = "engine-sim"))]
                     let sim_view: Option<&egui_wgpu::wgpu::TextureView> = None;
-                    if let Some(view) = escape_export.as_ref().map(|e| e.output_view()).or(sim_view) {
+                    #[cfg(feature = "terrain")]
+                    let terrain_view = terrain_export.as_ref().map(|t| t.output_view());
+                    #[cfg(not(feature = "terrain"))]
+                    let terrain_view: Option<&egui_wgpu::wgpu::TextureView> = None;
+                    if let Some(view) = escape_export.as_ref().map(|e| e.output_view()).or(terrain_view).or(sim_view) {
                         temp_renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut final_encoder, view);
                     } else {
                         temp_renderer.tonemap_pass(&self.gpu.queue, &mut final_encoder);
@@ -2437,6 +2528,10 @@ impl App {
                     // nothing on wasm); queued work keeps its references.
                     if let Some(esc) = escape_export {
                         esc.destroy();
+                    }
+                    #[cfg(feature = "terrain")]
+                    if let Some(t) = terrain_export {
+                        t.destroy();
                     }
 
                     // Color effects (if any) allocate a full-res ping-pong
@@ -2569,9 +2664,12 @@ impl App {
                         // `&mut self.flame_renderer`, and only
                         // field-level borrows are disjoint from it.
                         let non_flame_view = match export_config.render_mode {
-                            crate::scene::transforms::RenderMode::Escape => {
-                                self.escape_renderer.as_ref().map(|e| e.output_view())
-                            }
+                            crate::scene::transforms::RenderMode::Escape => escape_view(
+                                &self.escape_renderer,
+                                #[cfg(feature = "terrain")]
+                                &self.escape_terrain,
+                                &export_config,
+                            ),
                             #[cfg(feature = "engine-sim")]
                             crate::scene::transforms::RenderMode::Simulation => {
                                 self.sim_renderer.as_ref().map(|r| r.output_view())
@@ -2832,7 +2930,106 @@ impl App {
             if !is_escape {
                 self.egui_layer.update_escape_aa(None);
             }
-            if is_escape {
+            // The 3D terrain view of the escape picture
+            // (docs/projects/heightfield-3d.md): a footprint -- the 2D
+            // picture at the view -- rendered when its picture changes,
+            // and the terrain drawn from it every frame something moves,
+            // accumulating the antialiasing grid while nothing does.
+            #[cfg(feature = "terrain")]
+            let terrain_on = is_escape && final_config.escape.terrain_active();
+            #[cfg(not(feature = "terrain"))]
+            let terrain_on = false;
+            #[cfg(feature = "terrain")]
+            if terrain_on {
+                self.egui_layer.update_escape_aa(None);
+                // One engine at a time: the footprint is a full escape
+                // render of its own.
+                if let Some(esc) = self.escape_renderer.take() {
+                    esc.destroy();
+                }
+                let (w, h) = (renderer.width, renderer.height);
+                let device = &self.gpu.device;
+                let queue = &self.gpu.queue;
+                let terrain = self.escape_terrain.get_or_insert_with(|| {
+                    #[allow(unused_mut)]
+                    let mut t = crate::escape::footprint::EscapeTerrain::new(device, w, h);
+                    // Reference orbits on the worker thread, as the
+                    // 2D view's: a deep footprint refines over frames
+                    // rather than stalling one.
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        t.footprint_renderer().progressive = true;
+                    }
+                    t
+                });
+                terrain.resize(device, w, h);
+                terrain.size_footprint(device, &final_config.escape);
+                // A 2D IFS formula draws the flame; nothing in the
+                // escape config says when it changed.
+                if let Some(def) = crate::escape::ifs::get_ifs(&final_config.escape.formula) {
+                    let registry = crate::variations::global_registry();
+                    let packed = crate::escape::ifs::pack_for(def, &final_config, &registry);
+                    let fp = terrain.footprint_renderer();
+                    fp.set_ifs(packed);
+                    fp.ensure_coarse(device, queue, &final_config.escape, &final_config.flame);
+                }
+                // A texture's image arrives on its own schedule; the
+                // config's recipe, which the footprint is keyed on,
+                // did not change when it did.
+                if self.escape_texture.update(terrain.footprint_renderer(), device, queue, &final_config.escape) {
+                    terrain.invalidate_footprint();
+                }
+                let mut busy = self.escape_texture.busy();
+                if terrain.footprint_stale(&final_config) || terrain.footprint_in_progress() {
+                    // H11: the footprint follows a dolly or a pan live
+                    // where its renders are measured under 15 ms, and
+                    // on the gesture's release where they are not --
+                    // the old one drawn meanwhile, the camera moved
+                    // over it.
+                    let interacting = self
+                        .escape_last_edit
+                        .is_some_and(|t| t.elapsed() < ESCAPE_INTERACTION_WINDOW);
+                    if terrain.footprint_in_progress() || !interacting || terrain.live_footprints() {
+                        let mut enc = device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+                            label: Some("Terrain Footprint"),
+                        });
+                        let settled = terrain.render_footprint(
+                            device,
+                            queue,
+                            &mut enc,
+                            &final_config,
+                            renderer.escape_palette_view(final_config.escape.palette_map.stepped),
+                            renderer.palette_generation(),
+                        );
+                        queue.submit(std::iter::once(enc.finish()));
+                        if settled {
+                            terrain.ingest(device, queue, &final_config);
+                        } else {
+                            busy = true;
+                        }
+                    } else {
+                        busy = true;
+                    }
+                } else {
+                    // A height, width or interior edit re-ingests the
+                    // footprint it already has.
+                    terrain.ingest(device, queue, &final_config);
+                }
+                if terrain.render_viewport(device, queue, &final_config) {
+                    busy = true;
+                }
+                self.escape_dirty = busy;
+                if busy {
+                    self.window.request_redraw();
+                }
+            }
+            #[cfg(feature = "terrain")]
+            if is_escape && !terrain_on {
+                if let Some(t) = self.escape_terrain.take() {
+                    t.destroy();
+                }
+            }
+            if is_escape && !terrain_on {
                 let escape = self.escape_renderer.get_or_insert_with(|| {
                     let mut esc = crate::escape::EscapeRenderer::new(
                         &self.gpu.device,
@@ -3491,10 +3688,13 @@ impl App {
             #[cfg(not(feature = "engine-sim"))]
             let sim_view: Option<&wgpu::TextureView> = None;
             let pre_tonemap_view = if is_escape {
-                self.escape_renderer
-                    .as_ref()
-                    .expect("escape branch above created it")
-                    .output_view()
+                escape_view(
+                    &self.escape_renderer,
+                    #[cfg(feature = "terrain")]
+                    &self.escape_terrain,
+                    final_config,
+                )
+                .expect("escape branch above created it")
             } else if let Some(v) = sim_view {
                 v
             } else if dof_ran {

@@ -1994,6 +1994,15 @@ impl ConfigManager {
                 Ok(config.escape.shading.highlight_strength.into())
             }
             ConfigPath::EscapeShadingSoftness => Ok(config.escape.shading.softness.into()),
+            ConfigPath::EscapeTerrainEnabled => Ok(config.escape.terrain.enabled.into()),
+            ConfigPath::EscapeTerrainSource => Ok(ConfigValue::String(config.escape.terrain.source.as_str().to_string())),
+            ConfigPath::EscapeTerrainHeight => Ok(config.escape.terrain.height.into()),
+            ConfigPath::EscapeTerrainDeWidth => Ok(config.escape.terrain.de_width.into()),
+            ConfigPath::EscapeTerrainResolution => Ok(ConfigValue::UInt(config.escape.terrain.resolution)),
+            ConfigPath::EscapeTerrainInterior => Ok(ConfigValue::String(config.escape.terrain.interior.as_str().to_string())),
+            ConfigPath::EscapeTerrainShadow => Ok(config.escape.terrain.shadow.into()),
+            ConfigPath::EscapeTerrainShadowSharpness => Ok(config.escape.terrain.shadow_sharpness.into()),
+            ConfigPath::EscapeTerrainOcclusion => Ok(config.escape.terrain.occlusion.into()),
             ConfigPath::EscapeShadingTextureKind => Ok(ConfigValue::String(
                 config.escape.shading.texture_kind.as_str().to_string(),
             )),
@@ -3373,6 +3382,41 @@ impl ConfigManager {
             ConfigPath::EscapeShadingSoftness => {
                 let v: f32 = value.try_into()?;
                 self.current.escape.shading.softness = v.clamp(0.0, 16.0);
+            }
+            ConfigPath::EscapeTerrainEnabled => {
+                self.current.escape.terrain.enabled = value.try_into()?;
+            }
+            ConfigPath::EscapeTerrainSource => {
+                let v: String = value.try_into()?;
+                self.current.escape.terrain.source = crate::config::escape::TerrainSource::from_str_or_default(&v);
+            }
+            ConfigPath::EscapeTerrainHeight => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.terrain.height = v.clamp(0.0, 1.0);
+            }
+            ConfigPath::EscapeTerrainDeWidth => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.terrain.de_width = v.clamp(1.0e-4, 0.5);
+            }
+            ConfigPath::EscapeTerrainResolution => {
+                let v: u32 = value.try_into()?;
+                self.current.escape.terrain.resolution = v.clamp(16, 16_384);
+            }
+            ConfigPath::EscapeTerrainInterior => {
+                let v: String = value.try_into()?;
+                self.current.escape.terrain.interior = crate::config::escape::TerrainInterior::from_str_or_default(&v);
+            }
+            ConfigPath::EscapeTerrainShadow => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.terrain.shadow = v.clamp(0.0, 1.0);
+            }
+            ConfigPath::EscapeTerrainShadowSharpness => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.terrain.shadow_sharpness = v.clamp(1.0, 128.0);
+            }
+            ConfigPath::EscapeTerrainOcclusion => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.terrain.occlusion = v.clamp(0.0, 0.1);
             }
             ConfigPath::EscapeShadingTextureKind => {
                 let v: String = value.try_into()?;

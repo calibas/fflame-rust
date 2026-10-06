@@ -839,6 +839,26 @@ fn apply_config_value(
         (ConfigPath::EscapeShadingSoftness, ConfigValue::Float(v)) => {
             config.escape.shading.softness = v.clamp(0.0, 16.0);
         }
+        (ConfigPath::EscapeTerrainHeight, ConfigValue::Float(v)) => {
+            let v = *v;
+            config.escape.terrain.height = v.clamp(0.0, 1.0);
+        }
+        (ConfigPath::EscapeTerrainDeWidth, ConfigValue::Float(v)) => {
+            let v = *v;
+            config.escape.terrain.de_width = v.clamp(1.0e-4, 0.5);
+        }
+        (ConfigPath::EscapeTerrainShadow, ConfigValue::Float(v)) => {
+            let v = *v;
+            config.escape.terrain.shadow = v.clamp(0.0, 1.0);
+        }
+        (ConfigPath::EscapeTerrainShadowSharpness, ConfigValue::Float(v)) => {
+            let v = *v;
+            config.escape.terrain.shadow_sharpness = v.clamp(1.0, 128.0);
+        }
+        (ConfigPath::EscapeTerrainOcclusion, ConfigValue::Float(v)) => {
+            let v = *v;
+            config.escape.terrain.occlusion = v.clamp(0.0, 0.1);
+        }
         (ConfigPath::EscapeShadingTextureStrength, ConfigValue::Float(v)) => {
             config.escape.shading.texture_strength = v.clamp(0.0, 4.0);
         }

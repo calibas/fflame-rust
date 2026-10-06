@@ -1113,6 +1113,11 @@ impl TerrainRenderer {
         self.accum_count = 0;
     }
 
+    /// The tile's version: a new one for every tile set.
+    pub fn tile_version(&self) -> u64 {
+        self.tile.as_ref().map_or(0, |t| t.version)
+    }
+
     /// Samples in the accumulation so far.
     pub fn accumulated_samples(&self) -> u32 {
         self.accum_count
