@@ -1724,9 +1724,11 @@ impl TerrainRenderer {
     }
 
     /// Resize the output; the next render walks.
-    pub fn resize(&mut self, device: &Device, out_w: u32, out_h: u32) {
+    /// Size the output; true when the size changed, and with it went the
+    /// accumulation and the path tracer's sum.
+    pub fn resize(&mut self, device: &Device, out_w: u32, out_h: u32) -> bool {
         if (out_w, out_h) == (self.out_w, self.out_h) {
-            return;
+            return false;
         }
         self.output = Self::create_output(device, out_w, out_h);
         self.accum = None;
@@ -1739,6 +1741,7 @@ impl TerrainRenderer {
         self.out_w = out_w;
         self.out_h = out_h;
         self.walked = None;
+        true
     }
 
     pub fn output_view(&self) -> &TextureView {
