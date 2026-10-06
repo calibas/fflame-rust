@@ -103,13 +103,15 @@ fn picture_key(escape: &EscapeConfig) -> EscapeConfig {
     k.cam_yaw = d.cam_yaw;
     k.cam_bank = d.cam_bank;
     k.cam_fov = d.cam_fov;
-    // The source decides what the iterate pass writes and the interior
-    // how a section encodes it; the rest is the walk's and the view's.
-    let (source, interior) = (k.terrain.source, k.terrain.interior);
+    // The source decides what the iterate pass writes, and the interior
+    // and a lake's tint how a section encodes it (the tint is its albedo);
+    // the rest is the walk's and the view's.
+    let (source, interior, tint) = (k.terrain.source, k.terrain.interior, k.terrain.lake_tint);
     k.terrain = d.terrain.clone();
     k.terrain.enabled = true;
     k.terrain.source = source;
     k.terrain.interior = interior;
+    k.terrain.lake_tint = tint;
     k
 }
 
@@ -546,9 +548,11 @@ impl EscapeTerrain {
     }
 
     pub fn resize(&mut self, device: &Device, out_w: u32, out_h: u32) {
-        self.terrain.resize(device, out_w, out_h);
-        // The accumulation went with the old size.
-        if self.terrain.accumulated_samples() == 0 {
+        // The accumulation and the path tracer's sum go with a new size.
+        // Only then: the app calls this every frame, and asking whether
+        // the LIT accumulation was empty instead restarted the Path Traced
+        // tier -- which never fills it -- every frame, on its first sample.
+        if self.terrain.resize(device, out_w, out_h) {
             self.viewport_key = None;
         }
     }
@@ -1026,6 +1030,9 @@ mod tests {
             |c: &mut EscapeConfig| c.max_iter += 1,
             |c: &mut EscapeConfig| c.terrain.source = TerrainSource::EscapeCount,
             |c: &mut EscapeConfig| c.terrain.interior = TerrainInterior::Hole,
+            // A lake's tint is its sections' albedo: reported cached in
+            // the app, the old colour until a pan brought new sections.
+            |c: &mut EscapeConfig| c.terrain.lake_tint = [0.5, 0.1, 0.1],
         ] {
             let mut c = a.clone();
             edit(&mut c);
@@ -1302,6 +1309,57 @@ mod tests {
         assert!(renders(&engines) - after_pan >= base / 2, "a new picture renders again");
         assert_eq!(frame(&c, &mut engines), render(&device, &queue, &c, 384, 216), "a reused engine draws a fresh render's picture");
         println!("first {base}, turn +{}, pan +{}", after_turn - base, after_pan - after_turn);
+    }
+
+    /// The viewport keeps path tracing (reported from the app: stuck on
+    /// its first sample). Driven as the app drives it -- `resize`,
+    /// `update`, `render_viewport`, every frame -- a terrain in the Path
+    /// Traced tier reaches its samples once its sections are in. `resize`
+    /// had restarted it whenever the LIT tier's accumulation was empty,
+    /// which in this tier it always is.
+    #[test]
+    fn the_path_traced_viewport_progresses() {
+        let Some((device, queue)) = crate::escape::terrain::gpu_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let palette = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("white palette"),
+            size: wgpu::Extent3d { width: 256, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            palette.as_image_copy(),
+            &[255u8; 256 * 4],
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(256 * 4), rows_per_image: Some(1) },
+            wgpu::Extent3d { width: 256, height: 1, depth_or_array_layers: 1 },
+        );
+        let pv = palette.create_view(&wgpu::TextureViewDescriptor::default());
+        let (w, h) = (320u32, 180u32);
+        let mut c = terrain_config();
+        c.escape.terrain.tier = RenderTier::PathTraced;
+        c.escape.path.samples = 24;
+        let mut t = EscapeTerrain::new(&device, w, h);
+        let mut frames = 0;
+        loop {
+            t.resize(&device, w, h);
+            let a = t.update(&device, &queue, &c, w, h, &pv, 1, 4);
+            let b = t.render_viewport(&device, &queue, &c);
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            frames += 1;
+            if !a && !b {
+                break;
+            }
+            assert!(frames < 2000, "still busy after {frames} frames at {} samples", t.path_progress().0);
+        }
+        println!("path traced viewport: {} samples in {frames} frames", t.path_progress().0);
+        assert_eq!(t.path_progress(), (24, true));
+        t.destroy();
     }
 
     /// Deep zoom is the 2D renderer's (plan H3): at 2^60, on the

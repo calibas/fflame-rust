@@ -980,7 +980,6 @@ impl App {
 
         // Initialize GPU state with initial config (ensures shaders are compiled with correct variations)
         app.import_config(initial_config, true);
-
         // Detect compact (mobile) mode from logical window size
         {
             let compact_mode = match app.config_manager.system_settings().compact_mode {

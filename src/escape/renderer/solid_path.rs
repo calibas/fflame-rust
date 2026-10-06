@@ -6,10 +6,26 @@
 //! A sample costs several walks -- the camera ray's march, a shadow
 //! march a light, a bounce's march, each surface's normal and colouring
 //! -- and a walk at 1080p is already hundreds of milliseconds. So the
-//! pass is BANDED as the walk is: a sample is a pass over the frame's
-//! rows in dispatches the watchdog never notices, sized by the walk's
-//! own cost model with the path's extra marches counted in. Where a
-//! whole frame fits one dispatch, one dispatch takes several samples.
+//! pass is BANDED: a sample is a pass over the frame's rows in
+//! dispatches the watchdog never notices.
+//!
+//! The bands are sized by MEASUREMENT, under a cap that is not. Each
+//! call's time on the GPU is recorded against the rows it traced, and a
+//! band is as many rows as a target time holds at those rows' costs --
+//! the last pass's where the view has been traced since it last changed,
+//! otherwise twice the costliest row this pass has seen. The walk's cost
+//! model, calibrated to a band of about 300 ms, sizes the first band and
+//! CAPS every dispatch, rows times samples: a measurement can only make
+//! a band smaller than the model's. (Sizing by the model alone made
+//! one-row bands on a machine whose tuning file had halved the walk's
+//! budget four times -- 540 frames to a sample, which read in the app as
+//! a path tracer stuck on its first. Sizing by measurement alone lost
+//! the device: completion callbacks run when wgpu next looks, so bands
+//! finishing together shared one timestamp, the later ones measured
+//! nothing, and a whole frame went out at sixty-four samples.) A call
+//! measured past 700 ms halves the cap for the session. Bands are whole
+//! multiples of the workgroup's eight rows -- a shorter one costs the
+//! same.
 
 use crate::config::escape::RenderTier;
 use crate::config::FractalConfig;
@@ -23,11 +39,33 @@ use egui_wgpu::wgpu::{
 };
 
 use super::{assembler, EscapeParamsGpu, EscapeRenderer};
+use std::sync::{Arc, Mutex};
 
-/// How much smaller than an export's a viewport band is: the walk's
-/// band budget is about 300 ms of GPU, and a frame the UI stays usable
-/// through wants a fraction of that.
-pub const VIEWPORT_BAND_DIVISOR: u64 = 6;
+/// The GPU time a viewport frame gives the path tracer, in ms: the UI
+/// stays usable (about 20 frames a second while it runs), and several
+/// bands go in a frame when they are cheap.
+pub const VIEWPORT_FRAME_MS: f32 = 40.0;
+
+/// The GPU time an export's call gives it, in ms: far inside the
+/// watchdog, long enough that a call's overhead is noise.
+pub const EXPORT_FRAME_MS: f32 = 250.0;
+
+/// The walk's band, as its model is calibrated: about 300 ms.
+const MODEL_BAND_MS: f32 = 300.0;
+
+/// A call past this, measured, halves the cap for the session.
+const SLOW_CALL_MS: f32 = 700.0;
+
+/// Calls the GPU has finished, for the sizing: (generation, the bands --
+/// first row, rows, samples -- and ms), the ms from the later of the
+/// call's first submission and the previous call's completion. One
+/// measurement a call: callbacks run when wgpu next looks, so bands
+/// finishing together could not be told apart.
+#[derive(Default)]
+struct BandClock {
+    done: Vec<(u32, Vec<(u32, u32, u32)>, f32)>,
+    last: Option<web_time::Instant>,
+}
 
 /// What the solid's path tracer keeps between frames.
 pub(super) struct SolidPath {
@@ -45,6 +83,18 @@ pub(super) struct SolidPath {
     row: u32,
     /// Whether the picture shown is this one, not the walk's.
     shown: bool,
+    /// Each row's measured cost in ms a sample since the picture last
+    /// restarted (0: not yet), and the most any row has cost.
+    row_ms: Vec<f32>,
+    max_ms: f32,
+    /// Restarts so far: a band measured before one is not this picture's.
+    generation: u32,
+    clock: Arc<Mutex<BandClock>>,
+    /// Halvings of the model's cap, after a slow call.
+    cap_shift: u32,
+    /// Every dispatch's rows times samples, and the cap it was under.
+    #[cfg(test)]
+    dispatched: Vec<(u32, u32)>,
 }
 
 impl SolidPath {
@@ -95,7 +145,76 @@ impl SolidPath {
             params,
             row: 0,
             shown: false,
+            row_ms: vec![0.0; h as usize],
+            max_ms: 0.0,
+            generation: 0,
+            clock: Arc::new(Mutex::new(BandClock::default())),
+            cap_shift: 0,
+            #[cfg(test)]
+            dispatched: Vec::new(),
         }
+    }
+
+    /// Start the picture over: its samples, and what its rows cost.
+    fn restart(&mut self) {
+        self.sum.reset();
+        self.row = 0;
+        self.shown = false;
+        self.row_ms.iter_mut().for_each(|c| *c = 0.0);
+        self.max_ms = 0.0;
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    /// Fold in the calls the GPU has finished since the last look: a
+    /// call's time spread evenly over the rows it traced.
+    fn collect(&mut self) {
+        let done = self.clock.lock().map(|mut c| std::mem::take(&mut c.done)).unwrap_or_default();
+        for (generation, bands, ms) in done {
+            if ms > SLOW_CALL_MS {
+                self.cap_shift = (self.cap_shift + 1).min(6);
+                log::warn!("escape solid path: a call took {ms:.0} ms; halving its bands");
+            }
+            let units: u32 = bands.iter().map(|&(_, rows, n)| rows * n).sum();
+            if generation != self.generation || units == 0 {
+                continue;
+            }
+            let per = ms / units as f32;
+            for (y0, rows, _) in bands {
+                for c in self.row_ms.iter_mut().skip(y0 as usize).take(rows as usize) {
+                    *c = per;
+                }
+            }
+            self.max_ms = self.max_ms.max(per);
+        }
+    }
+
+    /// The rows from `y0` a band of `target` ms holds at one sample: at
+    /// each row's measured cost, or twice the costliest row yet, or --
+    /// before anything is measured -- `model` ms a row. At least eight
+    /// (the workgroup's height) and a multiple of eight unless the frame
+    /// ends first; never more than `cap`, the model's band.
+    fn plan(&self, y0: u32, target: f32, model: f32, cap: u32) -> (u32, f32) {
+        let h = self.height;
+        let mut rows = 0u32;
+        let mut ms = 0.0f32;
+        while y0 + rows < h && rows < cap.max(8) {
+            let c = match self.row_ms[(y0 + rows) as usize] {
+                m if m > 0.0 => m,
+                _ if self.max_ms > 0.0 => 2.0 * self.max_ms,
+                _ => model,
+            };
+            if rows >= 8 && rows % 8 == 0 && ms + c > target {
+                break;
+            }
+            ms += c;
+            rows += 1;
+        }
+        (rows.max(1), ms)
+    }
+
+    /// A whole frame's cost at one sample, once every row is measured.
+    fn frame_ms(&self) -> Option<f32> {
+        self.row_ms.iter().all(|&c| c > 0.0).then(|| self.row_ms.iter().sum())
     }
 
     /// The output's size; the sum starts over when it changes.
@@ -108,8 +227,8 @@ impl SolidPath {
         self.sum.ensure(device, w * h);
         self.width = w;
         self.height = h;
-        self.row = 0;
-        self.shown = false;
+        self.row_ms = vec![0.0; h as usize];
+        self.restart();
     }
 
     pub(super) fn view(&self) -> Option<&TextureView> {
@@ -127,9 +246,7 @@ impl EscapeRenderer {
     /// Start the solid's path-traced picture over, and show the walk's.
     pub fn reset_solid_path(&mut self) {
         if let Some(p) = self.solid_path.as_mut() {
-            p.sum.reset();
-            p.row = 0;
-            p.shown = false;
+            p.restart();
         }
     }
 
@@ -170,7 +287,7 @@ impl EscapeRenderer {
             return false;
         }
         let target = config.escape.path.samples.max(1);
-        let more = self.trace_solid(device, queue, config, palette_view, target, VIEWPORT_BAND_DIVISOR);
+        let more = self.trace_solid(device, queue, config, palette_view, target, VIEWPORT_FRAME_MS);
         let show = tier == RenderTier::PathTraced || self.solid_path_samples() >= PATH_SHOW_SAMPLES.min(target);
         self.show_solid_path(show);
         more
@@ -189,7 +306,7 @@ impl EscapeRenderer {
         mut wait: impl FnMut(),
     ) {
         self.reset_solid_path();
-        while self.trace_solid(device, queue, config, palette_view, samples.max(1), 1) {
+        while self.trace_solid(device, queue, config, palette_view, samples.max(1), EXPORT_FRAME_MS) {
             wait();
         }
         wait();
@@ -197,11 +314,11 @@ impl EscapeRenderer {
         self.show_solid_path(any);
     }
 
-    /// One dispatch of the solid's path tracer: a band of rows at one
-    /// sample, or -- where the whole frame fits the budget -- every row
-    /// at as many samples as fit, up to `target`; then the mean into the
-    /// output. The band is the walk's budget over `divisor`. Submits its
-    /// own work. True while the sum holds fewer than `target` samples.
+    /// About `frame_ms` of the solid's path tracer on the GPU: bands of
+    /// rows at one sample -- or, where a whole frame fits, every row at as
+    /// many samples as fit, up to `target` -- then the mean into the
+    /// output. Submits its own work. True while the sum holds fewer than
+    /// `target` samples.
     pub fn trace_solid(
         &mut self,
         device: &Device,
@@ -209,7 +326,7 @@ impl EscapeRenderer {
         config: &FractalConfig,
         palette_view: &TextureView,
         target: u32,
-        divisor: u64,
+        frame_ms: f32,
     ) -> bool {
         let escape = &config.escape;
         let Some(def) = crate::escape::ifs::get_ifs(&escape.formula).filter(|d| d.solid) else {
@@ -252,63 +369,95 @@ impl EscapeRenderer {
             })
         };
         let radius = path_core::light_radius(param("shadow_sharpness", 12.0));
-        let rows_all = self.solid_path_rows(escape, def, settings.bounces, w, divisor);
-        let rows = rows_all.min(h).max(1);
+        // The model: its band at the session's shrink sizes the first
+        // band, and its calibrated band -- before any shrink -- caps all.
+        let model_cap = self.solid_path_rows(escape, def, settings.bounces, w, 0);
+        let model_ms = MODEL_BAND_MS / self.solid_path_rows(escape, def, settings.bounces, w, u32::MAX) as f32;
 
         let ifs_group = self.ifs_bind_group(device);
-        let path = self.solid_path.as_ref().expect("made above");
-        queue.write_buffer(&path.params, 0, bytemuck::bytes_of(&params));
-        let count = path.sum.count();
-        let (y0, band, n) = if path.row == 0 && rows >= h {
-            // A whole frame a dispatch: as many samples as fit.
-            (0, h, (rows_all / h).clamp(1, 64).min(target - count))
-        } else {
-            (path.row, rows.min(h - path.row), 1)
-        };
-        let uniform = PathParamsGpu::new(&settings, count, n, per_ray, param("shadow", 0.7), radius, (y0, band)).buffer(device, queue);
-        let group = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("Escape Solid Path"),
-            layout: &path.layout,
-            entries: &[
-                BindGroupEntry { binding: 0, resource: path.params.as_entire_binding() },
-                BindGroupEntry { binding: 2, resource: BindingResource::TextureView(palette_view) },
-                BindGroupEntry { binding: 3, resource: BindingResource::Sampler(&self.palette_sampler) },
-                BindGroupEntry { binding: 8, resource: path.sum.buffer().as_entire_binding() },
-                BindGroupEntry { binding: 9, resource: uniform.as_entire_binding() },
-            ],
-        });
-        let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Escape Solid Path") });
-        {
-            let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: Some("Escape Solid Path"), timestamp_writes: None });
-            pass.set_pipeline(&self.pipelines[&key]);
-            pass.set_bind_group(0, &group, &[]);
-            pass.set_bind_group(1, &ifs_group, &[]);
-            if let Some(l) = self.lens_gpu.as_ref() {
-                pass.set_bind_group(2, l.bind_group(), &[]);
-            }
-            pass.dispatch_workgroups(w.div_ceil(8), band.div_ceil(8), 1);
-        }
-        queue.submit(std::iter::once(enc.finish()));
-
         let path = self.solid_path.as_mut().expect("made above");
-        path.row = y0 + band;
-        if path.row >= h {
-            path.row = 0;
-            path.sum.add(n);
+        path.collect();
+        let cap = (model_cap >> path.cap_shift).max(8);
+        let mut traced: Vec<(u32, u32, u32)> = Vec::new();
+        let mut first_submit: Option<web_time::Instant> = None;
+        queue.write_buffer(&path.params, 0, bytemuck::bytes_of(&params));
+        let mut spent = 0.0f32;
+        let mut bands = 0;
+        while spent < frame_ms && bands < 16 && path.sum.count() < target {
+            let count = path.sum.count();
+            // A whole frame at several samples, where the measurements say
+            // they fit and the model's cap -- rows times samples -- agrees.
+            let whole = path.frame_ms().filter(|&f| path.row == 0 && f <= frame_ms - spent && h <= cap);
+            let (y0, band, n, ms) = match whole {
+                Some(f) => {
+                    let n = (((frame_ms - spent) / f).floor() as u32).min(cap / h).clamp(1, 64).min(target - count);
+                    (0, h, n, f * n as f32)
+                }
+                None => {
+                    let (rows, ms) = path.plan(path.row, frame_ms - spent, model_ms, cap);
+                    (path.row, rows, 1, ms)
+                }
+            };
+            let uniform = PathParamsGpu::new(&settings, count, n, per_ray, param("shadow", 0.7), radius, (y0, band)).buffer(device, queue);
+            let group = device.create_bind_group(&BindGroupDescriptor {
+                label: Some("Escape Solid Path"),
+                layout: &path.layout,
+                entries: &[
+                    BindGroupEntry { binding: 0, resource: path.params.as_entire_binding() },
+                    BindGroupEntry { binding: 2, resource: BindingResource::TextureView(palette_view) },
+                    BindGroupEntry { binding: 3, resource: BindingResource::Sampler(&self.palette_sampler) },
+                    BindGroupEntry { binding: 8, resource: path.sum.buffer().as_entire_binding() },
+                    BindGroupEntry { binding: 9, resource: uniform.as_entire_binding() },
+                ],
+            });
+            let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Escape Solid Path") });
+            {
+                let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: Some("Escape Solid Path"), timestamp_writes: None });
+                pass.set_pipeline(&self.pipelines[&key]);
+                pass.set_bind_group(0, &group, &[]);
+                pass.set_bind_group(1, &ifs_group, &[]);
+                if let Some(l) = self.lens_gpu.as_ref() {
+                    pass.set_bind_group(2, l.bind_group(), &[]);
+                }
+                pass.dispatch_workgroups(w.div_ceil(8), band.div_ceil(8), 1);
+            }
+            first_submit.get_or_insert_with(web_time::Instant::now);
+            queue.submit(std::iter::once(enc.finish()));
+            traced.push((y0, band, n));
+            #[cfg(test)]
+            path.dispatched.push((band * n, cap));
+            spent += ms;
+            bands += 1;
+            path.row = y0 + band;
+            if path.row >= h {
+                path.row = 0;
+                path.sum.add(n);
+            }
+        }
+        if let Some(submitted) = first_submit {
+            let (clock, generation) = (Arc::clone(&path.clock), path.generation);
+            queue.on_submitted_work_done(move || {
+                if let Ok(mut c) = clock.lock() {
+                    let now = web_time::Instant::now();
+                    let from = c.last.map_or(submitted, |l| l.max(submitted));
+                    c.done.push((generation, traced, now.duration_since(from).as_secs_f32() * 1000.0));
+                    c.last = Some(now);
+                }
+            });
         }
         path.sum.resolve(device, queue, &path.output.1, w, h, path.row);
         path.sum.count() < target
     }
 
-    /// Rows of a `w`-wide frame one dispatch of one sample may cover:
-    /// the walk's model (`direct_rows_per_dispatch`) with a sample's
-    /// marches counted -- at each of the camera's surface and `bounces`
-    /// more, a shadow march a light, the next march, and the normal's six
-    /// distances and the colouring's walk -- under the walk's budget, its
-    /// session shrink, and `divisor`.
-    fn solid_path_rows(&self, escape: &crate::config::escape::EscapeConfig, def: &crate::escape::ifs::IfsDef, bounces: u32, w: u32, divisor: u64) -> u32 {
+    /// Rows of a `w`-wide frame the walk's model (`direct_rows_per_dispatch`)
+    /// gives a band of one sample, with a sample's marches counted -- at
+    /// each of the camera's surface and `bounces` more, a shadow march a
+    /// light, the next march, and the normal's six distances and the
+    /// colouring's walk -- under the walk's budget halved `shift` times
+    /// (`u32::MAX`: the session's own shrink).
+    fn solid_path_rows(&self, escape: &crate::config::escape::EscapeConfig, def: &crate::escape::ifs::IfsDef, bounces: u32, w: u32, shift: u32) -> u32 {
         super::tuning::ensure_loaded();
-        let shift = super::DIRECT_BUDGET_SHIFT.load(std::sync::atomic::Ordering::Relaxed);
+        let shift = if shift == u32::MAX { super::DIRECT_BUDGET_SHIFT.load(std::sync::atomic::Ordering::Relaxed) } else { shift };
         let param = |name: &str, fallback: f32| {
             escape.formula_params.get(name).copied().unwrap_or_else(|| {
                 def.parameters.iter().find(|p| p.name == name).map_or(fallback, |p| p.default)
@@ -330,7 +479,7 @@ impl EscapeRenderer {
             .saturating_mul(per_sample)
             .saturating_mul(maps.max(1));
         let per_row = (w.max(1) as u64).saturating_mul(per_pixel);
-        let rows = ((super::IFS_SOLID_BUDGET >> shift) / divisor.max(1)) / per_row.max(1);
+        let rows = (super::IFS_SOLID_BUDGET >> shift.min(63)) / per_row.max(1);
         rows.clamp(1, u32::MAX as u64) as u32
     }
 
@@ -744,6 +893,75 @@ mod tests {
         r.destroy();
     }
 
+    /// The viewport's pace, measured: a 1080p solid driven a frame at a
+    /// time as the app drives it (a step, then the GPU's completion), with
+    /// the walk's budget shrunk as a machine's tuning file can leave it.
+    /// Prints frames and seconds to each of the first samples.
+    #[test]
+    #[ignore = "measurement; needs a GPU"]
+    fn the_viewport_pace() {
+        let (device, queue) = device().expect("gpu");
+        let (_pt, palette) = white_palette(&device, &queue);
+        let shift: u32 = std::env::var("PACE_SHIFT").ok().and_then(|v| v.parse().ok()).unwrap_or(4);
+        let old = super::super::DIRECT_BUDGET_SHIFT.swap(shift, std::sync::atomic::Ordering::Relaxed);
+        let (w, h) = (1920u32, 1080u32);
+        let mut c = cube_config();
+        c.flame.transforms.truncate(4);
+        for (t, v) in c.flame.transforms.iter_mut().zip([[0.0f32, 0.0, 0.0], [1.0, 1.0, 0.0], [1.0, 0.0, 1.0], [0.0, 1.0, 1.0]]) {
+            t.e = v[0];
+            t.f = v[1];
+            t.g = v[2];
+        }
+        c.escape.cam_yaw = 2.6;
+        c.escape.cam_pitch = 0.25;
+        c.solid_shading.lights[0].enabled = true;
+        c.solid_shading.lights[1].enabled = true;
+        c.background_color = [0.55, 0.62, 0.72];
+        c.escape.path.samples = 64;
+        let mut r = renderer_for(&device, &c, w, h);
+        let t0 = std::time::Instant::now();
+        let mut frames = 0u32;
+        let mut seen = 0u32;
+        while t0.elapsed().as_secs_f32() < 20.0 && r.solid_path_samples() < 8 {
+            r.trace_solid_viewport(&device, &queue, &c, &palette);
+            wait(&device);
+            frames += 1;
+            if r.solid_path_samples() > seen {
+                seen = r.solid_path_samples();
+                println!("shift {shift}: sample {seen} after {frames} frames, {:.2} s", t0.elapsed().as_secs_f32());
+            }
+        }
+        println!("shift {shift}: {} samples in {frames} frames, {:.2} s", r.solid_path_samples(), t0.elapsed().as_secs_f32());
+        super::super::DIRECT_BUDGET_SHIFT.store(old, std::sync::atomic::Ordering::Relaxed);
+        r.destroy();
+    }
+
+    /// No dispatch outgrows the model's band, whatever the measurements
+    /// say: given all the time in the world, a 1080p solid still goes out
+    /// in bands -- rows times samples -- no larger than the cap, before
+    /// anything is measured and after. (Measurement alone once sent a
+    /// whole frame at 64 samples and lost the device.)
+    #[test]
+    fn no_dispatch_outgrows_the_model() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (_pt, palette) = white_palette(&device, &queue);
+        let (w, h) = (1920u32, 1080u32);
+        let c = cube_config();
+        let mut r = renderer_for(&device, &c, w, h);
+        for _ in 0..3 {
+            r.trace_solid(&device, &queue, &c, &palette, 4, 1.0e9);
+            wait(&device);
+        }
+        let d = &r.solid_path.as_ref().expect("traced").dispatched;
+        let worst = d.iter().map(|&(units, cap)| units as f32 / cap as f32).fold(0.0f32, f32::max);
+        println!("{} dispatches, the largest {worst:.2} of its cap", d.len());
+        assert!(d.len() > 1 && worst <= 1.0, "{worst}");
+        r.destroy();
+    }
+
     /// The same samples in any banding are the same bits: three samples
     /// as whole frames and as one-row bands, a sky and a sun, three
     /// bounces and a coat -- and again.
@@ -762,10 +980,11 @@ mod tests {
         c.escape.path.gloss = 0.04;
         let mut r = renderer_for(&device, &c, w, h);
         let mut sums = Vec::new();
-        for divisor in [1u64, u64::MAX, 1, u64::MAX] {
+        for frame_ms in [1.0e9f32, 1.0e-9, 1.0e9, 1.0e-9] {
             r.reset_solid_path();
             let mut guard = 0;
-            while r.trace_solid(&device, &queue, &c, &palette, 3, divisor) {
+            while r.trace_solid(&device, &queue, &c, &palette, 3, frame_ms) {
+                wait(&device);
                 guard += 1;
                 assert!(guard < 10_000);
             }

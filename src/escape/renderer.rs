@@ -28,7 +28,7 @@ use super::assembler::{self, PARAM_VEC4S};
 use super::reference::OrbitCache;
 
 mod solid_path;
-pub use solid_path::VIEWPORT_BAND_DIVISOR;
+pub use solid_path::{EXPORT_FRAME_MS, VIEWPORT_FRAME_MS};
 
 /// Above this zoom the direct path's f32 pixel mapping visibly
 /// pixelates: the center's f32 ulp (~6e-8 near |c| = 1) stops
