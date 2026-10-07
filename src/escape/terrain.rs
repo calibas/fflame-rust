@@ -98,7 +98,10 @@ struct BuildParamsGpu {
     /// 0 keeps the maximum of the raw values, 1 the minimum: whichever
     /// the tile's map takes to the highest point.
     mode: u32,
-    pad: [u32; 2],
+    /// Level 0 of a smooth ground: each cell's 4x4 control points, and
+    /// whether they wrap (a repeated ground).
+    spline: u32,
+    wrap: u32,
 }
 
 const BUILD_WGSL: &str = r#"
@@ -109,20 +112,37 @@ struct BuildParams {
     src_h: u32,
     step: u32,
     mode: u32,
-    pad1: u32,
-    pad2: u32,
+    // Level 0 of a smooth ground (a spline's): the 4x4 control points a
+    // cell's surface is made of, wrapped round a repeated ground's
+    // period.
+    spline: u32,
+    wrap: u32,
 };
 @group(0) @binding(0) var<uniform> bp: BuildParams;
 @group(0) @binding(1) var src: texture_2d<f32>;
 @group(0) @binding(2) var dst: texture_storage_2d<r32float, write>;
 
 fn at(x: i32, y: i32) -> f32 {
-    let q = clamp(vec2<i32>(x, y), vec2<i32>(0, 0), vec2<i32>(i32(bp.src_w) - 1, i32(bp.src_h) - 1));
+    let last = vec2<i32>(i32(bp.src_w) - 1, i32(bp.src_h) - 1);
+    var q = clamp(vec2<i32>(x, y), vec2<i32>(0, 0), last);
+    if (bp.wrap != 0u) {
+        // The last sample is the first again: the period is one less. A
+        // period added first, never the remainder of a negative (see
+        // `hf_raw`): x and y are at least -1 here.
+        q = vec2<i32>(vec2<u32>(vec2<i32>(x, y) + last) % vec2<u32>(last));
+    }
     return textureLoad(src, q, 0).r;
 }
 
+// A uniform cubic B-spline segment's Bezier control points, from its
+// four B-spline ones: the segment lies within their range, which hugs it
+// far closer than the B-spline points' own.
+fn bz(p0: f32, p1: f32, p2: f32, p3: f32) -> vec4<f32> {
+    return vec4<f32>((p0 + 4.0 * p1 + p2) / 6.0, (2.0 * p1 + p2) / 3.0, (p1 + 2.0 * p2) / 3.0, (p1 + 4.0 * p2 + p3) / 6.0);
+}
+
 // Level 0: a cell's highest corner, so no bilinear patch rises above
-// it. Above: the highest of the 2x2 block of nodes below. "Highest" is
+// it -- or, for a spline, its 16 Bezier points' highest. Above: the highest of the 2x2 block of nodes below. "Highest" is
 // the raw extreme the tile's map takes to the top: the maximum, or for
 // a distance the minimum.
 @compute @workgroup_size(8, 8, 1)
@@ -133,6 +153,26 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let s = i32(bp.step);
     let x = i32(gid.x) * s;
     let y = i32(gid.y) * s;
+    if (bp.spline != 0u) {
+        // A bicubic B-spline cell in Bezier form: each row's segment,
+        // then each column of those. The cell lies within the 16 points'
+        // range -- a bound as close as the corners' is to a bilinear
+        // patch, where the 4x4 B-spline points' own range stood high
+        // enough over a cell to triple a path tracer's time.
+        var r: array<vec4<f32>, 4>;
+        for (var j = 0; j < 4; j = j + 1) {
+            r[j] = bz(at(x - 1, y - 1 + j), at(x, y - 1 + j), at(x + 1, y - 1 + j), at(x + 2, y - 1 + j));
+        }
+        var m = r[0].x;
+        for (var k = 0; k < 4; k = k + 1) {
+            let c = bz(r[0][k], r[1][k], r[2][k], r[3][k]);
+            let hi = max(max(c.x, c.y), max(c.z, c.w));
+            let lo = min(min(c.x, c.y), min(c.z, c.w));
+            m = select(max(m, hi), min(m, lo), bp.mode == 1u);
+        }
+        textureStore(dst, vec2<i32>(gid.xy), vec4<f32>(m, 0.0, 0.0, 0.0));
+        return;
+    }
     let a = at(x, y);
     let b = at(x + 1, y);
     let c = at(x, y + 1);
@@ -493,8 +533,87 @@ fn hf_load_range() {
 
 // A raw sample of the current section, its grid's edge held beyond it.
 fn hf_raw(i: i32, j: i32) -> f32 {
-    let q = clamp(vec2<i32>(i, j), vec2<i32>(0, 0), vec2<i32>(hf_sec.dims.xy) - vec2<i32>(1, 1));
+    let last = vec2<i32>(hf_sec.dims.xy) - vec2<i32>(1, 1);
+    var q = clamp(vec2<i32>(i, j), vec2<i32>(0, 0), last);
+    // A repeated ground's neighbours past its edge are its other edge's:
+    // its last sample is its first again, so the period is one less.
+    // Never the remainder of a negative: measured on this machine's
+    // Vulkan driver, -1 % 24 came out as if -1 were unsigned (row 15 for
+    // row 23). An index here is at least -1, so a period added first
+    // keeps it whole.
+    if (hf_repeats()) {
+        q = vec2<i32>(vec2<u32>(vec2<i32>(i, j) + last) % vec2<u32>(last));
+    }
     return textureLoad(hf_raw_tex, q, i32(hf_sec.dims.z), 0).r;
+}
+
+// Whether the ground's surface is the samples' spline (fdata[19].w): a
+// simulation's. Else a bilinear patch a cell.
+fn hf_smooth() -> bool {
+    return params.fdata[19].w > 0.5;
+}
+
+// The uniform cubic B-spline's weights for the control points at -1, 0,
+// 1 and 2 at t in [0, 1], and their derivatives. Positive and summing to
+// one, so a cell's surface lies within its 4x4 control points' range --
+// what the mipmap's level 0 keeps for it.
+fn hf_bs(t: f32) -> vec4<f32> {
+    let s = 1.0 - t;
+    let t2 = t * t;
+    let t3 = t2 * t;
+    return vec4<f32>(s * s * s, 3.0 * t3 - 6.0 * t2 + 4.0, -3.0 * t3 + 3.0 * t2 + 3.0 * t + 1.0, t3) / 6.0;
+}
+
+fn hf_dbs(t: f32) -> vec4<f32> {
+    let s = 1.0 - t;
+    return vec4<f32>(-s * s, 3.0 * t * t - 4.0 * t, -3.0 * t * t + 2.0 * t + 1.0, t * t) * 0.5;
+}
+
+// Cell (a, b)'s control points: row r (y = b - 1 + r) the r-th column,
+// its x = a - 1 .. a + 2, in the section's cells.
+fn hf_cell(a: i32, b: i32) -> mat4x4<f32> {
+    // Inside the section with an identity map (a simulation's, the only
+    // smooth ground): the 16 samples as they are, scaled, with no edge
+    // to clamp or wrap and no map to apply. Rows written out: a matrix
+    // filled in a loop can go to local memory.
+    let n = i32(hf_sec.dims.x);
+    let m = i32(hf_sec.dims.y);
+    if (a >= 1 && b >= 1 && a + 2 < n && b + 2 < m && u32(params.fdata[1].w) == 4u) {
+        return mat4x4<f32>(hf_row_raw(a, b - 1), hf_row_raw(a, b), hf_row_raw(a, b + 1), hf_row_raw(a, b + 2)) * hf_sec.geo.w;
+    }
+    return mat4x4<f32>(hf_row(a, b - 1), hf_row(a, b), hf_row(a, b + 1), hf_row(a, b + 2));
+}
+
+// Row y of a cell's control points, x = a - 1 .. a + 2: straight from
+// the texture inside the section, through the map (`hf_h`) otherwise.
+fn hf_row_raw(a: i32, y: i32) -> vec4<f32> {
+    let layer = i32(hf_sec.dims.z);
+    return vec4<f32>(
+        textureLoad(hf_raw_tex, vec2<i32>(a - 1, y), layer, 0).r,
+        textureLoad(hf_raw_tex, vec2<i32>(a, y), layer, 0).r,
+        textureLoad(hf_raw_tex, vec2<i32>(a + 1, y), layer, 0).r,
+        textureLoad(hf_raw_tex, vec2<i32>(a + 2, y), layer, 0).r,
+    );
+}
+
+fn hf_row(a: i32, y: i32) -> vec4<f32> {
+    return vec4<f32>(hf_h(a - 1, y), hf_h(a, y), hf_h(a + 1, y), hf_h(a + 2, y));
+}
+
+// A cell's spline at (u, v) in [0, 1]^2.
+fn hf_spline(c: mat4x4<f32>, u: f32, v: f32) -> f32 {
+    return dot(hf_bs(clamp(v, 0.0, 1.0)), transpose(c) * hf_bs(clamp(u, 0.0, 1.0)));
+}
+
+// The cell under (x, y), clamped into the section, and where in it.
+fn hf_cell_at(x: f32, y: f32) -> vec4<f32> {
+    let n = i32(hf_sec.dims.x);
+    let m = i32(hf_sec.dims.y);
+    let cx = clamp(x, 0.0, f32(n - 1));
+    let cy = clamp(y, 0.0, f32(m - 1));
+    let a = min(i32(floor(cx)), n - 2);
+    let b = min(i32(floor(cy)), m - 2);
+    return vec4<f32>(f32(a), f32(b), cx - f32(a), cy - f32(b));
 }
 
 // A raw value's height in the WORLD's units: the identity (a tile set
@@ -536,8 +655,17 @@ fn hf_h(i: i32, j: i32) -> f32 {
 }
 
 // The surface's height at (x, y) in the current section's cells: the
-// bilinear patch of its cell.
+// spline, or the bilinear patch of its cell.
 fn hf_height_at(x: f32, y: f32) -> f32 {
+    if (hf_smooth()) {
+        let k = hf_cell_at(x, y);
+        return hf_spline(hf_cell(i32(k.x), i32(k.y)), k.z, k.w);
+    }
+    return hf_bilinear_at(x, y);
+}
+
+// The bilinear patch's height at (x, y), whatever the surface.
+fn hf_bilinear_at(x: f32, y: f32) -> f32 {
     let n = i32(hf_sec.dims.x);
     let m = i32(hf_sec.dims.y);
     let cx = clamp(x, 0.0, f32(n - 1));
@@ -556,6 +684,9 @@ fn hf_height_at(x: f32, y: f32) -> f32 {
 // cell's own coordinates. Along the ray the patch is a quadratic in t,
 // and so is the gap between them: solved exactly, the smaller root kept.
 fn hf_patch(a: i32, b: i32, o: vec3<f32>, d: vec3<f32>, t0: f32, t1: f32) -> f32 {
+    if (hf_smooth()) {
+        return hf_spline_hit(a, b, o, d, t0, t1);
+    }
     let h00 = hf_h(a, b);
     let h10 = hf_h(a + 1, b);
     let h01 = hf_h(a, b + 1);
@@ -600,6 +731,124 @@ fn hf_patch(a: i32, b: i32, o: vec3<f32>, d: vec3<f32>, t0: f32, t1: f32) -> f32
     }
     if (s >= 0.0 && s <= len) {
         return t0 + s;
+    }
+    return -1.0;
+}
+
+// The first t in [t0, t1] where the ray meets cell (a, b)'s spline, or
+// -1. Along the ray the spline is a polynomial of degree six in t
+// (`hf_spline_poly`): the gap is sampled at eight points across the
+// segment and the first crossing refined by false position. A feature
+// the samples step over would be narrower than an eighth of a cell,
+// which the spline -- a smoothing of the samples -- does not make.
+// Rebased at t0, as the patch is.
+const HF_SPLINE_STEPS: u32 = 8u;
+
+// The gap along the ray as its polynomial in s (degree six), from the
+// basis's Taylor expansions at the entry point: each weight a cubic in
+// s, the rows' cubics (C B(u(s))) against the columns' (B(v(s))) -- a
+// couple of hundred operations once, after which a sample is a Horner
+// evaluation where a spline's cost fifty. Written out: indexed arrays
+// here went to local memory and cost more than they saved.
+struct HfPoly {
+    lo: vec4<f32>,
+    hi: vec3<f32>,
+};
+
+fn hf_spline_poly(c: mat4x4<f32>, q: vec3<f32>, u0: f32, v0: f32, d: vec3<f32>) -> HfPoly {
+    let third = vec4<f32>(-1.0, 3.0, -3.0, 1.0) / 6.0;
+    let tu0 = hf_bs(u0);
+    let tu1 = hf_dbs(u0) * d.x;
+    let tu2 = vec4<f32>(1.0 - u0, 3.0 * u0 - 2.0, 1.0 - 3.0 * u0, u0) * (0.5 * d.x * d.x);
+    let tu3 = third * (d.x * d.x * d.x);
+    let tv0 = hf_bs(v0);
+    let tv1 = hf_dbs(v0) * d.y;
+    let tv2 = vec4<f32>(1.0 - v0, 3.0 * v0 - 2.0, 1.0 - 3.0 * v0, v0) * (0.5 * d.y * d.y);
+    let tv3 = third * (d.y * d.y * d.y);
+    let ct = transpose(c);
+    let q0 = ct * tu0;
+    let q1 = ct * tu1;
+    let q2 = ct * tu2;
+    let q3 = ct * tu3;
+    var out: HfPoly;
+    out.lo = vec4<f32>(
+        q.z - dot(tv0, q0),
+        d.z - (dot(tv0, q1) + dot(tv1, q0)),
+        -(dot(tv0, q2) + dot(tv1, q1) + dot(tv2, q0)),
+        -(dot(tv0, q3) + dot(tv1, q2) + dot(tv2, q1) + dot(tv3, q0)),
+    );
+    out.hi = vec3<f32>(
+        -(dot(tv1, q3) + dot(tv2, q2) + dot(tv3, q1)),
+        -(dot(tv2, q3) + dot(tv3, q2)),
+        -dot(tv3, q3),
+    );
+    return out;
+}
+
+fn hf_poly_at(g: HfPoly, s: f32) -> f32 {
+    return (((((g.hi.z * s + g.hi.y) * s + g.hi.x) * s + g.lo.w) * s + g.lo.z) * s + g.lo.y) * s + g.lo.x;
+}
+
+fn hf_spline_hit(a: i32, b: i32, o: vec3<f32>, d: vec3<f32>, t0: f32, t1: f32) -> f32 {
+    let c = hf_cell(a, b);
+    let q = o + d * t0;
+    let u0 = q.x - f32(a);
+    let v0 = q.y - f32(b);
+    let len = t1 - t0;
+    let g = hf_spline_poly(c, q, u0, v0, d);
+    var s0 = 0.0;
+    var g0 = g.lo.x;
+    if (g0 <= 0.0) {
+        return t0;
+    }
+    // No segment: a ray on a cell's edge heading out of it.
+    if (!(len > 0.0)) {
+        return -1.0;
+    }
+    for (var k = 1u; k <= HF_SPLINE_STEPS; k = k + 1u) {
+        let s1 = len * f32(k) / f32(HF_SPLINE_STEPS);
+        let g1 = hf_poly_at(g, s1);
+        if (g1 <= 0.0) {
+            // Between s0 (above) and s1 (on or below): false position,
+            // the Illinois way, to a millionth of a cell.
+            var lo = s0;
+            var hi = s1;
+            var glo = g0;
+            var ghi = g1;
+            var side = 0;
+            for (var i = 0; i < 16; i = i + 1) {
+                let m = (lo * ghi - hi * glo) / (ghi - glo);
+                let gm = hf_poly_at(g, m);
+                if (gm > 0.0) {
+                    lo = m;
+                    glo = gm;
+                    if (side == 1) {
+                        ghi = ghi * 0.5;
+                    }
+                    side = 1;
+                } else {
+                    hi = m;
+                    ghi = gm;
+                    if (side == -1) {
+                        glo = glo * 0.5;
+                    }
+                    side = -1;
+                }
+                // On the surface: this point, not the bracket's far end,
+                // which can still be well below it when the iterates came
+                // from above -- a hit inside the ground, a shadow ray
+                // from it shadowed, the light's terminator dotted.
+                if (abs(gm) < 1.0e-7) {
+                    return t0 + m;
+                }
+                if (hi - lo < 1.0e-6 * max(len, 1.0)) {
+                    break;
+                }
+            }
+            return t0 + hi;
+        }
+        s0 = s1;
+        g0 = g1;
     }
     return -1.0;
 }
@@ -908,9 +1157,17 @@ fn hf_wall_normal(p: vec3<f32>) -> vec3<f32> {
 }
 
 // The shading normal at (x, y) in the current section's cells: the
-// corners' normals, bilinearly, so the light is smooth across a cell
-// even where the patch is faceted. A section's slopes are the world's.
+// spline's own -- its gradient, continuous everywhere -- or the corners'
+// normals, bilinearly, so the light is smooth across a cell even where
+// the patch is faceted. A section's slopes are the world's.
 fn hf_normal(x: f32, y: f32) -> vec3<f32> {
+    if (hf_smooth()) {
+        let k = hf_cell_at(x, y);
+        let c = transpose(hf_cell(i32(k.x), i32(k.y)));
+        let du = dot(hf_bs(k.w), c * hf_dbs(k.z));
+        let dv = dot(hf_dbs(k.w), c * hf_bs(k.z));
+        return normalize(vec3<f32>(-du, -dv, 1.0));
+    }
     let n = i32(hf_sec.dims.x);
     let m = i32(hf_sec.dims.y);
     let cx = clamp(x, 0.0, f32(n - 1));
@@ -1246,6 +1503,7 @@ struct HfNode {
 // The section the helpers read.
 var<private> hf_sec: HfSection;
 
+
 struct HfLook {
     sec: i32,
     lo: vec2<f32>,
@@ -1552,6 +1810,11 @@ pub struct Ground {
     /// Its one section repeated, a period its extent apart, to the
     /// horizon (a periodic simulation's).
     pub repeat: bool,
+    /// A smooth surface through the samples -- a uniform cubic B-spline,
+    /// continuous to its curvature -- rather than a bilinear patch a
+    /// cell, whose creases at every grid line show as a serrated
+    /// silhouette however fine the grid (a simulation's).
+    pub smooth: bool,
 }
 
 /// The ground on the GPU, and its version: a new one for every set.
@@ -2081,12 +2344,12 @@ impl TerrainRenderer {
         // A lake's sentinel stands at the plain's level, 0.
         let heights: Vec<f32> = heights.iter().map(|&h| if h.abs() >= 2.0e30 { 0.0 } else { h }).collect();
         let top = heights.iter().cloned().fold(f32::NEG_INFINITY, f32::max) as f64;
-        self.set_ground(device, queue, Self::one_section_ground(n, m, 0, top, slab_floor(&heights, n, m) as f64, false));
+        self.set_ground(device, queue, Self::one_section_ground(n, m, 0, top, slab_floor(&heights, n, m) as f64, false, false));
     }
 
     /// A ground of one section of `n x m` cells from the origin, its own
     /// root.
-    fn one_section_ground(n: u32, m: u32, mode: u32, top: f64, floor: f64, repeat: bool) -> Ground {
+    fn one_section_ground(n: u32, m: u32, mode: u32, top: f64, floor: f64, repeat: bool, smooth: bool) -> Ground {
         Ground {
             root_origin: [0.0, 0.0],
             root_side: (n.max(m) - 1) as f64,
@@ -2097,6 +2360,7 @@ impl TerrainRenderer {
             floor,
             mode,
             repeat,
+            smooth,
         }
     }
 
@@ -2163,8 +2427,8 @@ impl TerrainRenderer {
             pass.dispatch_workgroups(n.div_ceil(8), m.div_ceil(8), 1);
         }
         queue.submit(std::iter::once(enc.finish()));
-        self.build_layer(device, queue, 0, 0);
-        self.set_ground(device, queue, Self::one_section_ground(n, m, 4, bound as f64, -(bound as f64), repeat));
+        self.build_layer_shaped(device, queue, 0, 0, (true, repeat));
+        self.set_ground(device, queue, Self::one_section_ground(n, m, 4, bound as f64, -(bound as f64), repeat, true));
     }
 
     /// A one-section ground from one footprint render (heightfield plan,
@@ -2189,7 +2453,7 @@ impl TerrainRenderer {
         self.ingest_region(device, queue, colour, height_field, 0, 0, n, m);
         self.finish_section(device, queue);
         let floor = -0.01 * n.max(m) as f64;
-        self.set_ground(device, queue, Self::one_section_ground(n, m, ingest.mode(), top, floor, false));
+        self.set_ground(device, queue, Self::one_section_ground(n, m, ingest.mode(), top, floor, false, false));
     }
 
     /// The atlas for `capacity` layers of `w x h` samples; true when it
@@ -2358,6 +2622,12 @@ impl TerrainRenderer {
     /// A layer's maximum mipmap (the raw maximum, or for `min_mode` the
     /// minimum) and its albedo's mip chain.
     fn build_layer(&mut self, device: &Device, queue: &Queue, layer: u32, min_mode: u32) {
+        self.build_layer_shaped(device, queue, layer, min_mode, (false, false));
+    }
+
+    /// [`Self::build_layer`] for a smooth ground's spline (`shape.0`),
+    /// wrapped round a repeat (`shape.1`).
+    fn build_layer_shaped(&mut self, device: &Device, queue: &Queue, layer: u32, min_mode: u32, shape: (bool, bool)) {
         let atlas = self.atlas.as_ref().expect("ensure_atlas first");
         let raw = atlas.raw.create_view(&TextureViewDescriptor {
             dimension: Some(TextureViewDimension::D2),
@@ -2365,7 +2635,7 @@ impl TerrainRenderer {
             array_layer_count: Some(1),
             ..Default::default()
         });
-        self.build_mips(device, queue, &raw, &atlas.mips, layer, atlas.w, atlas.h, atlas.levels, min_mode);
+        self.build_mips(device, queue, &raw, &atlas.mips, layer, atlas.w, atlas.h, atlas.levels, min_mode, shape);
         self.build_albedo_mips(device, queue, &atlas.albedo, layer);
         self.walked = None;
     }
@@ -2480,6 +2750,7 @@ impl TerrainRenderer {
         m: u32,
         levels: u32,
         mode: u32,
+        shape: (bool, bool),
     ) {
         let align = device.limits().min_uniform_buffer_offset_alignment as u64;
         let stride = (std::mem::size_of::<BuildParamsGpu>() as u64).div_ceil(align) * align;
@@ -2498,7 +2769,8 @@ impl TerrainRenderer {
                 src_h,
                 step: if l == 0 { 1 } else { 2 },
                 mode,
-                pad: [0; 2],
+                spline: u32::from(l == 0 && shape.0),
+                wrap: u32::from(l == 0 && shape.1),
             };
             let at = l * stride as usize;
             bytes[at..at + std::mem::size_of::<BuildParamsGpu>()].copy_from_slice(bytemuck::bytes_of(&p));
@@ -2573,6 +2845,8 @@ impl TerrainRenderer {
         if let (true, Some(s)) = (g.repeat, g.sections.first()) {
             fdata[19] = [((s.n - 1) as f64 * s.texel) as f32, ((s.m - 1) as f64 * s.texel) as f32, 1.0, 0.0];
         }
+        // Its surface: the samples' spline, or a bilinear patch a cell.
+        fdata[19][3] = if g.smooth { 1.0 } else { 0.0 };
         // A gradient sky's zenith.
         if let Some(z) = view.sky {
             fdata[20] = [z[0], z[1], z[2], 1.0];
@@ -3769,7 +4043,9 @@ pub(crate) mod gpu_tests {
                     // Where the hand-made tiling has ground, the repeat has
                     // the same.
                     let p = [cam.eye[0] + d[0] * b[k] as f64, cam.eye[1] + d[1] * b[k] as f64];
-                    let inside = p[0] > 0.5 && p[0] < (3 * w) as f64 - 1.5 && p[1] > 0.5 && p[1] < (3 * h) as f64 - 1.5;
+                    // Clear of the tiling's own edge, where its spline's
+                    // neighbours are clamped and the repeat's wrap.
+                    let inside = p[0] > 2.0 && p[0] < (3 * w) as f64 - 3.0 && p[1] > 2.0 && p[1] < (3 * h) as f64 - 3.0;
                     if inside {
                         both += 1;
                         worst = worst.max((a[k] - b[k]).abs() / b[k]);
@@ -3783,6 +4059,119 @@ pub(crate) mod gpu_tests {
         assert!(both > 1000, "{both}");
         assert!(worst < 1e-3, "{worst}");
         assert!(beyond > 100, "the repeat reaches past the tiling: {beyond}");
+    }
+
+    /// A simulation's ground is the samples' cubic B-spline (T4): every
+    /// hit lies on the spline -- its distance the CPU's root of it, over
+    /// the samples as stored -- and its normal is the spline's own, with
+    /// no crease at a cell's edge for a silhouette to show.
+    #[test]
+    fn a_grid_ground_is_its_spline() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (40u32, 30u32);
+        let texels: Vec<[f32; 4]> = (0..w * h)
+            .map(|k| {
+                let (x, y) = ((k % w) as f32, (k / w) as f32);
+                [(x * 0.37).sin() + 0.6 * (y * 0.29 + 0.4 * x * 0.1).cos(), 0.0, 0.0, 0.0]
+            })
+            .collect();
+        let tex = device.create_texture(&TextureDescriptor {
+            label: None,
+            size: Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba32Float,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            tex.as_image_copy(),
+            bytemuck::cast_slice(&texels),
+            TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 16), rows_per_image: Some(h) },
+            Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        let view_ = tex.create_view(&TextureViewDescriptor::default());
+        let (ow, oh) = (96u32, 64u32);
+        let mut r = TerrainRenderer::new(&device, ow, oh);
+        r.set_grid(&device, &queue, &view_, &view_, w, h, 4.0, 100.0, false);
+        let (raw_tex, _) = r.tile_textures_for_test().unwrap();
+        let stored: Vec<f32> = bytemuck::cast_slice(&read_texture(&device, &queue, raw_tex, 0, w, h, 4)).to_vec();
+        let at = |i: i64, j: i64| stored[(j.clamp(0, h as i64 - 1) * w as i64 + i.clamp(0, w as i64 - 1)) as usize] as f64;
+        let bs = |t: f64| [(1.0 - t).powi(3) / 6.0, (3.0 * t.powi(3) - 6.0 * t * t + 4.0) / 6.0, (-3.0 * t.powi(3) + 3.0 * t * t + 3.0 * t + 1.0) / 6.0, t.powi(3) / 6.0];
+        let dbs = |t: f64| [-(1.0 - t).powi(2) / 2.0, (3.0 * t * t - 4.0 * t) / 2.0, (-3.0 * t * t + 2.0 * t + 1.0) / 2.0, t * t / 2.0];
+        // The spline and its gradient at (x, y), in cells.
+        let spline = |x: f64, y: f64| {
+            let (a, b) = (x.floor(), y.floor());
+            let (bu, bv, du, dv) = (bs(x - a), bs(y - b), dbs(x - a), dbs(y - b));
+            let (mut s, mut gx, mut gy) = (0.0, 0.0, 0.0);
+            for j in 0..4 {
+                for i in 0..4 {
+                    let p = at(a as i64 - 1 + i as i64, b as i64 - 1 + j as i64);
+                    s += bu[i] * bv[j] * p;
+                    gx += du[i] * bv[j] * p;
+                    gy += bu[i] * dv[j] * p;
+                }
+            }
+            (s, gx, gy)
+        };
+        for (pitch, yaw) in [(0.5f64, 0.3f64), (0.25, -1.2), (1.2, 2.0)] {
+            let cam = camera([20.0, 15.0, 0.0], pitch, yaw, 45.0, 0.9);
+            r.render(&device, &queue, &view(cam.clone()));
+            let raw = read_buffer(&device, &queue, r.geometry_buffer(), (ow * oh) as u64 * 16);
+            let geom: &[[u32; 4]] = bytemuck::cast_slice(&raw);
+            let (mut checked, mut worst_t, mut worst_n) = (0, 0.0f64, 0.0f64);
+            for py in 0..oh {
+                for px in 0..ow {
+                    let g = geom[(py * ow + px) as usize];
+                    let t = f32::from_bits(g[3]) as f64;
+                    if !(t > 0.0) {
+                        continue;
+                    }
+                    let d = ray(&cam, px, py, ow, oh);
+                    let p = [cam.eye[0] + d[0] * t, cam.eye[1] + d[1] * t];
+                    // Inside, clear of the clamped edge.
+                    if p[0] < 2.0 || p[1] < 2.0 || p[0] > (w - 3) as f64 || p[1] > (h - 3) as f64 {
+                        continue;
+                    }
+                    // The CPU's first crossing: stepped finely, bisected.
+                    let gap = |t: f64| cam.eye[2] + d[2] * t - spline(cam.eye[0] + d[0] * t, cam.eye[1] + d[1] * t).0;
+                    let (mut lo, step) = (t - 2.0, 1.0e-3);
+                    while gap(lo) <= 0.0 {
+                        lo -= 1.0;
+                    }
+                    while gap(lo + step) > 0.0 {
+                        lo += step;
+                    }
+                    let mut hi = lo + step;
+                    for _ in 0..40 {
+                        let m = 0.5 * (lo + hi);
+                        if gap(m) > 0.0 {
+                            lo = m;
+                        } else {
+                            hi = m;
+                        }
+                    }
+                    worst_t = worst_t.max((t - hi).abs() / hi);
+                    // Its normal against the spline's gradient (the record
+                    // keeps it in f16).
+                    let (_, gx, gy) = spline(p[0], p[1]);
+                    let l = (gx * gx + gy * gy + 1.0).sqrt();
+                    let want = [-gx / l, -gy / l, 1.0 / l];
+                    let nxy = [half::f16::from_bits(g[0] as u16).to_f64(), half::f16::from_bits((g[0] >> 16) as u16).to_f64()];
+                    let nz = half::f16::from_bits(g[1] as u16).to_f64();
+                    worst_n = worst_n.max((nxy[0] - want[0]).abs().max((nxy[1] - want[1]).abs()).max((nz - want[2]).abs()));
+                    checked += 1;
+                }
+            }
+            println!("pitch {pitch}: {checked} hits, worst relative distance {worst_t:.2e}, worst normal {worst_n:.2e}");
+            assert!(checked > 500, "{checked}");
+            assert!(worst_t < 1.0e-4, "{worst_t}");
+            assert!(worst_n < 2.0e-3, "{worst_n}");
+        }
     }
 
     /// A ground's wall is drawn whole (T4): its hits lie on the ground's

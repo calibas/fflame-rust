@@ -325,6 +325,28 @@ mod tests {
         t.destroy();
     }
 
+    /// Renders config files for inspection, as the CLI's export does:
+    /// `INSPECT="a.fflame=a.png;b.fflame=b.png"`, `INSPECT_SIZE=WxH`.
+    /// For when the release executable is busy.
+    #[test]
+    #[ignore = "inspection; needs a GPU and INSPECT"]
+    fn render_configs_for_inspection() {
+        let (device, queue) = device().expect("gpu");
+        let list = std::env::var("INSPECT").unwrap_or_default();
+        let (w, h) = std::env::var("INSPECT_SIZE")
+            .ok()
+            .and_then(|s| s.split_once('x').and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?))))
+            .unwrap_or((1920u32, 1080u32));
+        for pair in list.split(';').filter(|p| !p.is_empty()) {
+            let (src, dst) = pair.split_once('=').expect("in=out");
+            let c = FractalConfig::from_json(&std::fs::read_to_string(src).expect("read")).expect("parse");
+            let out = pollster::block_on(crate::renderer::render(&device, &queue, crate::renderer::RenderJob::new(&c, w, h), &mut crate::renderer::NoProgress))
+                .expect("render");
+            image::save_buffer(dst, &out.rgba_data, out.width, out.height, image::ColorType::Rgba8).expect("write");
+            println!("{src} -> {dst} in {:.0} ms", out.render_time_ms);
+        }
+    }
+
     /// The interactive budget (plan T4's gate), measured: a running
     /// simulation's frame at 1080p -- a step batch, its colour, the ground
     /// made again and the lit tier's frame.
