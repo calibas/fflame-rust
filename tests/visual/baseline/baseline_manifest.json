@@ -514,6 +514,10 @@
       "bytes": 38330,
       "sha256": "d906dc7cdd7505ba163b29c02d7b9084ee51fb58d1556e52d8d616f660c4a6ea"
     },
+    "escape-terrain-seahorse-denoised.png": {
+      "bytes": 18410,
+      "sha256": "0a38a72e2881e1d5a4253ba8e38c8edd08cff7ade671dcea6ca52e730a983fa0"
+    },
     "escape-terrain-seahorse-lake.png": {
       "bytes": 18744,
       "sha256": "4101417b7e36b2164a36f8807a3cf3f26af9b0af30603d78fa484cb7f559d513"

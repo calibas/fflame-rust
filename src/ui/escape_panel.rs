@@ -1489,6 +1489,7 @@ pub(crate) struct PathPaths {
     pub emission: ConfigPath,
     pub aperture: ConfigPath,
     pub focus: ConfigPath,
+    pub denoise: ConfigPath,
 }
 
 /// The escape view's: a terrain's and a solid's.
@@ -1501,6 +1502,7 @@ fn escape_path_paths() -> PathPaths {
         roughness: ConfigPath::EscapePathRoughness,
         emission: ConfigPath::EscapePathEmission,
         aperture: ConfigPath::EscapePathAperture,
+        denoise: ConfigPath::EscapePathDenoise,
         focus: ConfigPath::EscapePathFocus,
     }
 }
@@ -1564,6 +1566,10 @@ pub(crate) fn show_path_tracing(
             let _ = config_manager.update_param(paths.bounces.clone(), ConfigValue::UInt(v));
         }
     });
+    let mut denoise = pt.denoise;
+    if ui.checkbox(&mut denoise, t!("escape_panel.path_denoise")).on_hover_text(t!("escape_panel.path_denoise_tip")).changed() {
+        let _ = config_manager.update_param(paths.denoise.clone(), denoise.into());
+    }
     let mut row = |ui: &mut egui::Ui, label: &str, tip: &str, path: ConfigPath, value: f32, range: std::ops::RangeInclusive<f32>| {
         ui.horizontal(|ui| {
             ui.label(t!(label));

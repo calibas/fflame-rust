@@ -4,7 +4,7 @@
 //! escape terrain and a simulation's share -- each hands in its own view
 //! and settings.
 
-use super::path_core::{PathSettings, PATH_SHOW_SAMPLES};
+use super::path_core::{PathSettings, DENOISE_REACH, PATH_SHOW_SAMPLES};
 use super::terrain::{TerrainRenderer, TerrainView};
 use super::EscapeRenderer;
 use crate::config::escape::RenderTier;
@@ -116,6 +116,10 @@ impl TerrainTiers {
         let per_frame = self.path_ms().map_or(1, |ms| (PATH_FRAME_MS / ms.max(0.05)).floor().clamp(1.0, 64.0) as u32);
         let n = per_frame.min(target - have);
         self.trace(terrain, device, queue, i, n);
+        // The last picture current, whatever the denoiser's schedule.
+        if terrain.path_samples() >= target {
+            terrain.resolve_path(device, queue);
+        }
         self.showing_path = i.tier == RenderTier::PathTraced || terrain.path_samples() >= PATH_SHOW_SAMPLES;
         terrain.path_samples() < target
     }
@@ -152,7 +156,12 @@ impl TerrainTiers {
         mut wait: impl FnMut(),
     ) {
         self.showing_picture = false;
-        let (cols, rows) = still_grid(frame.0, frame.1, side);
+        // A denoised tile is drawn with the denoiser's reach more around
+        // it, so its pixels are filtered over the neighbours the whole
+        // frame would give them; only its own are kept. The apron comes
+        // out of the tile's side, so the buffers stay bounded.
+        let apron = if i.tier != RenderTier::Lit && i.settings.denoise { DENOISE_REACH } else { 0 };
+        let (cols, rows) = still_grid(frame.0, frame.1, side.saturating_sub(2 * apron).max(16));
         if (cols, rows) == (1, 1) {
             terrain.resize(device, frame.0, frame.1);
             self.still_whole(terrain, device, queue, i, &mut wait);
@@ -183,14 +192,21 @@ impl TerrainTiers {
                     continue;
                 }
                 let (w, h) = (tw.min(frame.0 - ox), th.min(frame.1 - oy));
-                terrain.resize(device, w, h);
-                terrain.set_frame(frame, (ox, oy));
+                let (ax, ay) = (ox.saturating_sub(apron), oy.saturating_sub(apron));
+                let (bx, by) = ((ox + w + apron).min(frame.0), (oy + h + apron).min(frame.1));
+                terrain.resize(device, bx - ax, by - ay);
+                terrain.set_frame(frame, (ax, ay));
                 self.still_whole(terrain, device, queue, i, &mut wait);
                 let src = if self.showing_path { Some(terrain.output_texture()) } else { terrain.accumulated_texture() };
                 let (Some(src), Some((picture, _))) = (src, self.picture.as_ref()) else { continue };
                 let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Terrain Still Tile") });
                 enc.copy_texture_to_texture(
-                    src.as_image_copy(),
+                    wgpu::TexelCopyTextureInfo {
+                        texture: src,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d { x: ox - ax, y: oy - ay, z: 0 },
+                        aspect: wgpu::TextureAspect::All,
+                    },
                     wgpu::TexelCopyTextureInfo {
                         texture: picture,
                         mip_level: 0,
@@ -227,6 +243,7 @@ impl TerrainTiers {
             self.trace(terrain, device, queue, i, n);
             wait();
         }
+        terrain.resolve_path(device, queue);
         self.showing_path = true;
     }
 

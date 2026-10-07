@@ -19,7 +19,10 @@
 //! - `pt_tile()`: the part of the frame the sum holds -- its origin in
 //!   the frame's pixels and its size -- which is the whole frame
 //!   (`params.width` by `params.height`) unless a still is drawn in
-//!   tiles.
+//!   tiles;
+//!
+//! and calls `pt_first(h)` with a sample's first surface, which the
+//! denoiser's guides are made of.
 //!
 //! and the rig's accessors (`ifs_fov`, `ifs_forward`, ..., the lights),
 //! which both get from the same text (`assembler::IFS_RIG`'s family).
@@ -51,6 +54,9 @@ pub struct PathSettings {
     pub focus: f32,
     /// A terrain lake's roughness.
     pub lake_roughness: f32,
+    /// Gather the denoiser's guides with the samples, and filter the
+    /// resolve (`PathSum::resolve`).
+    pub denoise: bool,
 }
 
 impl Default for PathSettings {
@@ -67,6 +73,7 @@ impl Default for PathSettings {
             aperture: 0.0,
             focus: 1.0,
             lake_roughness: 0.05,
+            denoise: false,
         }
     }
 }
@@ -111,6 +118,7 @@ pub fn path_settings_from(
         aperture: t.aperture * target,
         focus: if t.focus > 0.0 { t.focus } else { 1.0 } * target,
         lake_roughness,
+        denoise: t.denoise,
     }
 }
 
@@ -157,7 +165,7 @@ impl PathParamsGpu {
                 settings.lake_roughness.clamp(0.02, 1.0),
             ],
             lens: [settings.aperture.max(0.0), settings.focus.max(1.0e-6), 0.0, 0.0],
-            band: [band.0, band.1, 0, 0],
+            band: [band.0, band.1, u32::from(settings.denoise), 0],
         }
     }
 
@@ -191,6 +199,10 @@ pub(crate) fn light_radius(sharpness: f32) -> f32 {
 pub(crate) const PT_CORE_WGSL: &str = r#"
 @group(0) @binding(8) var<storage, read_write> pt_sum: array<vec4<f32>>;
 @group(0) @binding(9) var<uniform> pt: PtParams;
+// The denoiser's guides, two a pixel, summed with the samples weighted
+// by their coverage: (albedo, the light's luminance squared) and
+// (normal, distance). Written only when `pt.band.z` asks.
+@group(0) @binding(10) var<storage, read_write> pt_guide: array<vec4<f32>>;
 
 struct PtParams {
     // Samples already in the sum, and to add now.
@@ -213,9 +225,22 @@ struct PtParams {
     // depth.
     lens: vec4<f32>,
     // x: the dispatch's first row, y: its rows (a band, for a geometry
-    // whose sample would outlast the GPU's watchdog over a whole frame).
+    // whose sample would outlast the GPU's watchdog over a whole frame),
+    // z: 1 to gather the denoiser's guides.
     band: vec4<u32>,
 };
+
+// A sample's first surface, as its geometry reports it (`pt_first`):
+// what the denoiser's guides are made of.
+var<private> pt_g_albedo: vec3<f32>;
+var<private> pt_g_normal: vec3<f32>;
+var<private> pt_g_t: f32;
+
+fn pt_first(h: PtHit) {
+    pt_g_albedo = h.albedo.rgb;
+    pt_g_normal = h.n;
+    pt_g_t = h.t;
+}
 
 // The sample's random numbers. Each draw is a point of its own
 // shuffled, Owen-scrambled Sobol (0,2)-sequence (Burley 2020, "Practical
@@ -540,14 +565,31 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (pt.sample_base == 0u) {
         sum = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
+    let guided = pt.band.z != 0u;
+    var g0 = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    var g1 = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    if (guided && pt.sample_base != 0u) {
+        g0 = pt_guide[2u * idx];
+        g1 = pt_guide[2u * idx + 1u];
+    }
     let pixel = pt_hash((fy * params.width + fx) * 0x9E3779B9u + pt.seed);
     for (var s = 0u; s < pt.samples; s = s + 1u) {
         pt_seed = pixel;
         pt_index = pt.sample_base + s;
         pt_dim = 0u;
-        sum = sum + pt_sample(fx, fy);
+        let v = pt_sample(fx, fy);
+        sum = sum + v;
+        if (guided && v.a > 0.0) {
+            let l = dot(v.rgb / v.a, vec3<f32>(0.2126, 0.7152, 0.0722));
+            g0 = g0 + vec4<f32>(pt_g_albedo * v.a, l * l * v.a);
+            g1 = g1 + vec4<f32>(pt_g_normal * v.a, pt_g_t * v.a);
+        }
     }
     pt_sum[idx] = sum;
+    if (guided) {
+        pt_guide[2u * idx] = g0;
+        pt_guide[2u * idx + 1u] = g1;
+    }
 }
 "#;
 
@@ -587,6 +629,326 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 "#;
 
+/// The denoiser (heightfield plan T5): edge-avoiding à-trous wavelet
+/// filtering, after Dammertz et al. 2010 and its variance guidance after
+/// Schied et al. 2017 (SVGF), over one accumulation rather than frames.
+///
+/// - `prepare`: each pixel's mean light divided by its mean albedo -- so
+///   the filter sees the light alone and the colouring's detail, which
+///   lives in the albedo, is multiplied back untouched -- with that
+///   light's variance: of the mean, from the samples' moments, or with
+///   fewer than four samples from its neighbours'. And its features: the
+///   normal (octahedral) and the distance, with the distance's gradient
+///   across a pixel.
+/// - `atrous`, five times at strides 1 to 16: a 5x5 B3 kernel whose taps
+///   are weighted by the normals' agreement, the distances' against the
+///   gradient, and the lights' against the noise -- a few standard
+///   deviations of the mean, so as the samples gather and the noise
+///   falls the filter stops crossing anything.
+/// - `finish`: the light times the albedo, and the coverage as the
+///   resolve has it.
+pub(crate) const PATH_DENOISE_WGSL: &str = r#"
+struct DenoiseParams {
+    width: u32,
+    height: u32,
+    count: u32,
+    split: u32,
+    step: u32,
+    // How many of the noise's standard deviations two lights may differ
+    // by and still be averaged.
+    sigma: f32,
+    pad1: u32,
+    pad2: u32,
+};
+@group(0) @binding(0) var<uniform> dp: DenoiseParams;
+@group(0) @binding(1) var<storage, read> pt_sum: array<vec4<f32>>;
+@group(0) @binding(2) var<storage, read> pt_guide: array<vec4<f32>>;
+@group(0) @binding(3) var light_in: texture_2d<f32>;
+@group(0) @binding(4) var feat_in: texture_2d<f32>;
+@group(0) @binding(5) var light_out: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(6) var feat_out: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(7) var out_tex: texture_storage_2d<rgba32float, write>;
+
+// The albedo's luminance below which the variance is not divided by it.
+const DN_FLOOR: f32 = 0.01;
+
+fn dn_lum(c: vec3<f32>) -> f32 {
+    return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+}
+
+// A row's samples: the count, one more above the split.
+fn dn_n(y: u32) -> u32 {
+    return dp.count + select(0u, 1u, y < dp.split);
+}
+
+fn dn_inside(q: vec2<i32>) -> bool {
+    return q.x >= 0 && q.y >= 0 && q.x < i32(dp.width) && q.y < i32(dp.height);
+}
+
+// A pixel's means over its coverage (0: no sample found a surface).
+struct DnPixel {
+    cover: f32,
+    light: vec3<f32>,
+    albedo: vec3<f32>,
+    normal: vec3<f32>,
+    depth: f32,
+    // The radiance's luminance, its mean and its mean square.
+    m1: f32,
+    m2: f32,
+};
+
+fn dn_pixel(q: vec2<i32>) -> DnPixel {
+    var o: DnPixel;
+    o.cover = 0.0;
+    let i = u32(q.y) * dp.width + u32(q.x);
+    let s = pt_sum[i];
+    if (!(s.a > 0.0) || dn_n(u32(q.y)) == 0u) {
+        return o;
+    }
+    let g0 = pt_guide[2u * i];
+    let g1 = pt_guide[2u * i + 1u];
+    o.cover = s.a;
+    o.albedo = g0.rgb / s.a;
+    let c = s.rgb / s.a;
+    // The light: the colour over the albedo, exactly, channel by channel
+    // -- a floor in the division leaves a dark channel's light a fraction
+    // of its neighbours', and averaging them multiplied it back up (a
+    // yellow face gained +13 levels of blue). A channel with no albedo
+    // reflects nothing to divide; the others' light stands in for its
+    // neighbours to average, and it is multiplied back by zero.
+    let has = o.albedo > vec3<f32>(1.0e-12, 1.0e-12, 1.0e-12);
+    let e = select(vec3<f32>(0.0, 0.0, 0.0), c / max(o.albedo, vec3<f32>(1.0e-12, 1.0e-12, 1.0e-12)), has);
+    let k = dot(select(vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(1.0, 1.0, 1.0), has), vec3<f32>(1.0, 1.0, 1.0));
+    let stand_in = (e.x + e.y + e.z) / max(k, 1.0);
+    o.light = select(vec3<f32>(stand_in, stand_in, stand_in), e, has);
+    o.m1 = dn_lum(c);
+    o.m2 = g0.a / s.a;
+    let l = length(g1.xyz);
+    o.normal = select(vec3<f32>(0.0, 0.0, 1.0), g1.xyz / max(l, 1.0e-20), l > 1.0e-12);
+    o.depth = g1.w / s.a;
+    return o;
+}
+
+// The octahedral map of a unit normal into two numbers, and back.
+fn dn_oct(n: vec3<f32>) -> vec2<f32> {
+    let p = n.xy / (abs(n.x) + abs(n.y) + abs(n.z));
+    if (n.z >= 0.0) {
+        return p;
+    }
+    return (vec2<f32>(1.0, 1.0) - abs(p.yx)) * select(vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, 1.0), p >= vec2<f32>(0.0, 0.0));
+}
+
+fn dn_unoct(e: vec2<f32>) -> vec3<f32> {
+    var n = vec3<f32>(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
+    let t = max(-n.z, 0.0);
+    n.x = n.x + select(t, -t, n.x >= 0.0);
+    n.y = n.y + select(t, -t, n.y >= 0.0);
+    return normalize(n);
+}
+
+// The distance's change across a pixel along one axis: the smaller of
+// the one-sided differences, so a silhouette beside the pixel does not
+// read as a slope.
+fn dn_slope(c: f32, a: f32, b: f32) -> f32 {
+    let da = select(1.0e30, abs(c - a), a > 0.0);
+    let db = select(1.0e30, abs(b - c), b > 0.0);
+    let m = min(da, db);
+    return select(0.0, m, m < 1.0e29);
+}
+
+fn dn_depth(q: vec2<i32>) -> f32 {
+    if (!dn_inside(q)) {
+        return 0.0;
+    }
+    let i = u32(q.y) * dp.width + u32(q.x);
+    let a = pt_sum[i].a;
+    if (!(a > 0.0) || dn_n(u32(q.y)) == 0u) {
+        return 0.0;
+    }
+    return pt_guide[2u * i + 1u].w / a;
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn prepare(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= dp.width || gid.y >= dp.height) {
+        return;
+    }
+    let px = vec2<i32>(gid.xy);
+    let p = dn_pixel(px);
+    if (!(p.cover > 0.0)) {
+        textureStore(light_out, px, vec4<f32>(0.0, 0.0, 0.0, 0.0));
+        textureStore(feat_out, px, vec4<f32>(0.0, 0.0, 0.0, 0.0));
+        return;
+    }
+    let al = max(dn_lum(p.albedo), DN_FLOOR);
+    var variance = 0.0;
+    if (dn_n(gid.y) >= 4u) {
+        // The mean's: the samples' over their number.
+        variance = max(p.m2 - p.m1 * p.m1, 0.0) / max(p.cover, 1.0) / (al * al);
+    } else {
+        // Too few samples for moments: the light's spread over the
+        // neighbours on the same surface.
+        var s1 = 0.0;
+        var s2 = 0.0;
+        var sw = 0.0;
+        for (var dy = -3; dy <= 3; dy = dy + 1) {
+            for (var dx = -3; dx <= 3; dx = dx + 1) {
+                let q = px + vec2<i32>(dx, dy);
+                if (!dn_inside(q)) {
+                    continue;
+                }
+                let o = dn_pixel(q);
+                if (!(o.cover > 0.0)) {
+                    continue;
+                }
+                let w = max(dot(o.normal, p.normal), 0.0) * exp(-abs(o.depth - p.depth) / (p.depth * 0.02 + 1.0e-20));
+                let l = dn_lum(o.light);
+                s1 = s1 + w * l;
+                s2 = s2 + w * l * l;
+                sw = sw + w;
+            }
+        }
+        if (sw > 0.0) {
+            let m = s1 / sw;
+            variance = max(s2 / sw - m * m, 0.0);
+        }
+    }
+    let gx = dn_slope(p.depth, dn_depth(px - vec2<i32>(1, 0)), dn_depth(px + vec2<i32>(1, 0)));
+    let gy = dn_slope(p.depth, dn_depth(px - vec2<i32>(0, 1)), dn_depth(px + vec2<i32>(0, 1)));
+    textureStore(light_out, px, vec4<f32>(p.light, variance));
+    textureStore(feat_out, px, vec4<f32>(dn_oct(p.normal), p.depth, max(gx, gy)));
+}
+
+// The B3 spline's weights by the tap's distance from the centre.
+fn dn_b3(k: i32) -> f32 {
+    let a = abs(k);
+    return select(select(0.0625, 0.25, a == 1), 0.375, a == 0);
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn atrous(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= dp.width || gid.y >= dp.height) {
+        return;
+    }
+    let px = vec2<i32>(gid.xy);
+    let fc = textureLoad(feat_in, px, 0);
+    let c = textureLoad(light_in, px, 0);
+    if (!(fc.z > 0.0)) {
+        textureStore(light_out, px, c);
+        return;
+    }
+    // The noise's deviation, from the variance blurred 3x3.
+    var gv = 0.0;
+    var gw = 0.0;
+    for (var dy = -1; dy <= 1; dy = dy + 1) {
+        for (var dx = -1; dx <= 1; dx = dx + 1) {
+            let q = px + vec2<i32>(dx, dy);
+            if (!dn_inside(q)) {
+                continue;
+            }
+            if (!(textureLoad(feat_in, q, 0).z > 0.0)) {
+                continue;
+            }
+            let k = select(select(0.0625, 0.125, dx == 0 || dy == 0), 0.25, dx == 0 && dy == 0);
+            gv = gv + k * textureLoad(light_in, q, 0).a;
+            gw = gw + k;
+        }
+    }
+    let deviation = dp.sigma * sqrt(max(gv / max(gw, 1.0e-20), 0.0)) + 1.0e-20;
+    let nc = dn_unoct(fc.xy);
+    let lc = dn_lum(c.rgb);
+    let step = i32(dp.step);
+    let h0 = 0.375 * 0.375;
+    var sum = c.rgb * h0;
+    var wsum = h0;
+    var vsum = c.a * h0 * h0;
+    for (var ky = -2; ky <= 2; ky = ky + 1) {
+        for (var kx = -2; kx <= 2; kx = kx + 1) {
+            if (kx == 0 && ky == 0) {
+                continue;
+            }
+            let q = px + vec2<i32>(kx, ky) * step;
+            if (!dn_inside(q)) {
+                continue;
+            }
+            let fq = textureLoad(feat_in, q, 0);
+            if (!(fq.z > 0.0)) {
+                continue;
+            }
+            let lq = textureLoad(light_in, q, 0);
+            // The normals': their cosine to the 128th.
+            var wn = max(dot(nc, dn_unoct(fq.xy)), 0.0);
+            wn = wn * wn;
+            wn = wn * wn;
+            wn = wn * wn;
+            wn = wn * wn;
+            wn = wn * wn;
+            wn = wn * wn;
+            wn = wn * wn;
+            let reach = f32(step * max(abs(kx), abs(ky)));
+            let wz = exp(-abs(fc.z - fq.z) / (fc.w * reach + fc.z * 1.0e-3));
+            let wl = exp(-abs(lc - dn_lum(lq.rgb)) / deviation);
+            let w = dn_b3(kx) * dn_b3(ky) * wn * wz * wl;
+            sum = sum + lq.rgb * w;
+            wsum = wsum + w;
+            vsum = vsum + w * w * lq.a;
+        }
+    }
+    textureStore(light_out, px, vec4<f32>(sum / wsum, vsum / (wsum * wsum)));
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn finish(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= dp.width || gid.y >= dp.height) {
+        return;
+    }
+    let px = vec2<i32>(gid.xy);
+    let n = dn_n(gid.y);
+    let p = dn_pixel(px);
+    if (n == 0u || !(p.cover > 0.0)) {
+        textureStore(out_tex, px, vec4<f32>(0.0, 0.0, 0.0, 0.0));
+        return;
+    }
+    let light = textureLoad(light_in, px, 0).rgb;
+    textureStore(out_tex, px, vec4<f32>(light * p.albedo, p.cover / f32(n)));
+}
+"#;
+
+/// How many of the noise's standard deviations two pixels' lights may
+/// differ by and still be averaged: SVGF's 4. Measured against 1, 2 and
+/// 8 on a terrain and two solids at 4 and 16 samples, it was the best or
+/// within 0.03 of it everywhere.
+const DENOISE_SIGMA: f32 = 4.0;
+
+/// The samples to which the filter keeps that width; past them it
+/// narrows as `sqrt(DENOISE_FULL / n)`. Where a pixel's light varies
+/// within it -- a solid's sub-pixel holes -- its samples' spread is the
+/// geometry's, not noise to average away, and neighbours that truly
+/// differ stay within four deviations of the mean for hundreds of
+/// samples: at a constant width a sponge at 128 samples came out 50%
+/// further from converged than undenoised. Narrowed from 8 it is never
+/// further (measured to 128), and a terrain keeps most of its gain (64
+/// samples: 0.0021 from 0.0029; constant width, 0.0017).
+const DENOISE_FULL: f32 = 8.0;
+
+/// The à-trous passes' strides.
+const DENOISE_STEPS: [u32; 5] = [1, 2, 4, 8, 16];
+
+/// How far the denoiser reaches from a pixel, in pixels: the gradient's
+/// and the few-sample variance's neighbours, and each pass's two strides.
+/// A tile drawn with this much more around it denoises as the whole
+/// frame does.
+pub(crate) const DENOISE_REACH: u32 = 3 + 2 * (1 + 2 + 4 + 8 + 16);
+
+/// The denoiser's pipelines and its textures, at a size.
+struct Denoiser {
+    prepare: ComputePipeline,
+    atrous: ComputePipeline,
+    finish: ComputePipeline,
+    /// Two lights (ping-pong) and the features, at `size`.
+    textures: Option<([(Texture, TextureView); 3], (u32, u32))>,
+}
+
 /// A path tracer's per-pixel sum (premultiplied radiance, coverage),
 /// the samples in it, and the pass that resolves it into an output.
 pub(crate) struct PathSum {
@@ -595,6 +957,16 @@ pub(crate) struct PathSum {
     count: u32,
     resolve_layout: BindGroupLayout,
     resolve_pipeline: ComputePipeline,
+    /// The denoiser's guides (two vec4s a pixel), once it has been asked
+    /// for, and a stand-in for binding 10 while it is not.
+    guide: Option<Buffer>,
+    guide_px: u32,
+    guided: bool,
+    no_guide: Buffer,
+    denoiser: Option<Denoiser>,
+    /// When the denoiser last ran: the count and split it filtered, and
+    /// the time (`resolve`'s schedule).
+    denoised: Option<(u32, u32, web_time::Instant)>,
 }
 
 impl PathSum {
@@ -648,7 +1020,55 @@ impl PathSum {
             cache: None,
         });
         let px = px.max(1);
-        PathSum { sum: Self::create(device, px), px, count: 0, resolve_layout, resolve_pipeline }
+        let no_guide = device.create_buffer(&BufferDescriptor {
+            label: Some("Path Guide (none)"),
+            size: 32,
+            usage: BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        PathSum {
+            sum: Self::create(device, px),
+            px,
+            count: 0,
+            resolve_layout,
+            resolve_pipeline,
+            guide: None,
+            guide_px: 0,
+            guided: false,
+            no_guide,
+            denoiser: None,
+            denoised: None,
+        }
+    }
+
+    /// Gather the denoiser's guides with the samples from now on, or
+    /// not. True when that changed: the guides start with the sum, so the
+    /// caller starts it over.
+    pub(crate) fn set_guided(&mut self, device: &Device, on: bool) -> bool {
+        let changed = on != self.guided;
+        self.guided = on;
+        if on && (self.guide.is_none() || self.guide_px < self.px) {
+            if let Some(g) = self.guide.take() {
+                g.destroy();
+            }
+            self.guide = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Path Guide"),
+                size: self.px as u64 * 32,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }));
+            self.guide_px = self.px;
+        }
+        changed
+    }
+
+    /// What binding 10 holds: the guides, or a stand-in the shader does
+    /// not touch.
+    pub(crate) fn guide_buffer(&self) -> &Buffer {
+        match (&self.guide, self.guided) {
+            (Some(g), true) => g,
+            _ => &self.no_guide,
+        }
     }
 
     fn create(device: &Device, px: u32) -> Buffer {
@@ -668,6 +1088,7 @@ impl PathSum {
             self.px = px;
         }
         self.count = 0;
+        self.denoised = None;
     }
 
     pub(crate) fn buffer(&self) -> &Buffer {
@@ -682,6 +1103,7 @@ impl PathSum {
     /// Start over: the next dispatch at sample 0 replaces the sum.
     pub(crate) fn reset(&mut self) {
         self.count = 0;
+        self.denoised = None;
     }
 
     /// `n` more samples are in it, over the whole frame.
@@ -691,7 +1113,29 @@ impl PathSum {
 
     /// The mean into `out` (`w` by `h`); rows above `split` hold one
     /// sample more than the count. Submits its own work.
-    pub(crate) fn resolve(&self, device: &Device, queue: &Queue, out: &TextureView, w: u32, h: u32, split: u32) {
+    ///
+    /// Denoised when the guides are on -- on a schedule, since the filter
+    /// costs about a sample of a terrain at 1080p (10 ms on a GTX 1660)
+    /// and a few more samples change the picture little: every count up
+    /// to 4, then each time the count has grown by a quarter, and at
+    /// least every quarter second while anything new is in the sum. In
+    /// between, `out` keeps the last. [`Self::resolve_now`] for the
+    /// picture that must be current.
+    pub(crate) fn resolve(&mut self, device: &Device, queue: &Queue, out: &TextureView, w: u32, h: u32, split: u32) {
+        if self.guided && self.guide.is_some() {
+            let due = match self.denoised {
+                None => true,
+                Some((count, at_split, at)) => {
+                    (self.count, split) != (count, at_split)
+                        && (self.count <= 4 || self.count * 4 >= count * 5 || at.elapsed().as_millis() >= 250)
+                }
+            };
+            if due {
+                self.denoise(device, queue, out, w, h, split);
+                self.denoised = Some((self.count, split, web_time::Instant::now()));
+            }
+            return;
+        }
         let buf = device.create_buffer(&BufferDescriptor {
             label: Some("Path Resolve Params"),
             size: 16,
@@ -718,7 +1162,132 @@ impl PathSum {
         queue.submit(std::iter::once(enc.finish()));
     }
 
+    /// [`Self::resolve`], denoised now whatever the schedule says: the
+    /// last of a still, or of a viewport's target.
+    pub(crate) fn resolve_now(&mut self, device: &Device, queue: &Queue, out: &TextureView, w: u32, h: u32, split: u32) {
+        self.denoised = None;
+        self.resolve(device, queue, out, w, h, split);
+    }
+
+    /// The denoiser's resolve: `prepare`, the à-trous passes and
+    /// `finish`, into `out`.
+    fn denoise(&mut self, device: &Device, queue: &Queue, out: &TextureView, w: u32, h: u32, split: u32) {
+        let d = self.denoiser.get_or_insert_with(|| {
+            let module = device.create_shader_module(ShaderModuleDescriptor {
+                label: Some("Path Denoise"),
+                source: ShaderSource::Wgsl(PATH_DENOISE_WGSL.into()),
+            });
+            let make = |entry: &str| {
+                device.create_compute_pipeline(&ComputePipelineDescriptor {
+                    label: Some(&format!("Path Denoise {entry}")),
+                    layout: None,
+                    module: &module,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    cache: None,
+                })
+            };
+            Denoiser { prepare: make("prepare"), atrous: make("atrous"), finish: make("finish"), textures: None }
+        });
+        if d.textures.as_ref().is_none_or(|(_, s)| *s != (w, h)) {
+            if let Some((ts, _)) = d.textures.take() {
+                for (t, _) in ts {
+                    t.destroy();
+                }
+            }
+            let make = || {
+                let t = device.create_texture(&TextureDescriptor {
+                    label: Some("Path Denoise"),
+                    size: Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: TextureDimension::D2,
+                    format: TextureFormat::Rgba32Float,
+                    usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                });
+                let v = t.create_view(&TextureViewDescriptor::default());
+                (t, v)
+            };
+            d.textures = Some(([make(), make(), make()], (w, h)));
+        }
+        let ([a, b, feat], _) = d.textures.as_ref().expect("made above");
+        let guide = self.guide.as_ref().expect("guided");
+        let params = |step: u32| {
+            let buf = device.create_buffer(&BufferDescriptor {
+                label: Some("Path Denoise Params"),
+                size: 32,
+                usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let sigma = DENOISE_SIGMA * (DENOISE_FULL / self.count.max(1) as f32).sqrt().min(1.0);
+            queue.write_buffer(&buf, 0, bytemuck::cast_slice(&[w, h, self.count, split, step, sigma.to_bits(), 0, 0]));
+            buf
+        };
+        let (gx, gy) = (w.div_ceil(8), h.div_ceil(8));
+        let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Path Denoise") });
+        let mut run = |enc: &mut CommandEncoder, pipeline: &ComputePipeline, entries: &[BindGroupEntry]| {
+            let bg = device.create_bind_group(&BindGroupDescriptor {
+                label: Some("Path Denoise"),
+                layout: &pipeline.get_bind_group_layout(0),
+                entries,
+            });
+            let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: Some("Path Denoise"), timestamp_writes: None });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.dispatch_workgroups(gx, gy, 1);
+        };
+        let p0 = params(0);
+        run(
+            &mut enc,
+            &d.prepare,
+            &[
+                BindGroupEntry { binding: 0, resource: p0.as_entire_binding() },
+                BindGroupEntry { binding: 1, resource: self.sum.as_entire_binding() },
+                BindGroupEntry { binding: 2, resource: guide.as_entire_binding() },
+                BindGroupEntry { binding: 5, resource: BindingResource::TextureView(&a.1) },
+                BindGroupEntry { binding: 6, resource: BindingResource::TextureView(&feat.1) },
+            ],
+        );
+        let (mut from, mut to) = (a, b);
+        for step in DENOISE_STEPS {
+            let ps = params(step);
+            run(
+                &mut enc,
+                &d.atrous,
+                &[
+                    BindGroupEntry { binding: 0, resource: ps.as_entire_binding() },
+                    BindGroupEntry { binding: 3, resource: BindingResource::TextureView(&from.1) },
+                    BindGroupEntry { binding: 4, resource: BindingResource::TextureView(&feat.1) },
+                    BindGroupEntry { binding: 5, resource: BindingResource::TextureView(&to.1) },
+                ],
+            );
+            std::mem::swap(&mut from, &mut to);
+        }
+        run(
+            &mut enc,
+            &d.finish,
+            &[
+                BindGroupEntry { binding: 0, resource: p0.as_entire_binding() },
+                BindGroupEntry { binding: 1, resource: self.sum.as_entire_binding() },
+                BindGroupEntry { binding: 2, resource: guide.as_entire_binding() },
+                BindGroupEntry { binding: 3, resource: BindingResource::TextureView(&from.1) },
+                BindGroupEntry { binding: 7, resource: BindingResource::TextureView(out) },
+            ],
+        );
+        queue.submit(std::iter::once(enc.finish()));
+    }
+
     pub(crate) fn destroy(&self) {
         self.sum.destroy();
+        self.no_guide.destroy();
+        if let Some(g) = &self.guide {
+            g.destroy();
+        }
+        if let Some((ts, _)) = self.denoiser.as_ref().and_then(|d| d.textures.as_ref()) {
+            for (t, _) in ts {
+                t.destroy();
+            }
+        }
     }
 }

@@ -7584,6 +7584,7 @@ fn pt_sample(px: u32, py: u32) -> vec4<f32> {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
     let h = pt_ifs_surface(ray.o + ray.d * t, t, t);
+    pt_first(h);
     var l = min(pt_path(ray.o, ray.d, h), vec3<f32>(pt.misc.y));
     if (ifs_fog_strength() > 0.0) {
         let depth = t * dot(ray.d, ifs_forward());

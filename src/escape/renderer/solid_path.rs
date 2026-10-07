@@ -128,6 +128,14 @@ impl SolidPath {
                     },
                 ),
                 entry(9, uniform),
+                entry(
+                    10,
+                    BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                ),
             ],
         });
         let params = device.create_buffer(&BufferDescriptor {
@@ -376,6 +384,10 @@ impl EscapeRenderer {
 
         let ifs_group = self.ifs_bind_group(device);
         let path = self.solid_path.as_mut().expect("made above");
+        // The denoiser's guides start with the sum.
+        if path.sum.set_guided(device, settings.denoise) {
+            path.restart();
+        }
         path.collect();
         let cap = (model_cap >> path.cap_shift).max(8);
         let mut traced: Vec<(u32, u32, u32)> = Vec::new();
@@ -408,6 +420,7 @@ impl EscapeRenderer {
                     BindGroupEntry { binding: 3, resource: BindingResource::Sampler(&self.palette_sampler) },
                     BindGroupEntry { binding: 8, resource: path.sum.buffer().as_entire_binding() },
                     BindGroupEntry { binding: 9, resource: uniform.as_entire_binding() },
+                    BindGroupEntry { binding: 10, resource: path.sum.guide_buffer().as_entire_binding() },
                 ],
             });
             let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Escape Solid Path") });
@@ -445,7 +458,12 @@ impl EscapeRenderer {
                 }
             });
         }
-        path.sum.resolve(device, queue, &path.output.1, w, h, path.row);
+        // The last picture current, whatever the denoiser's schedule.
+        if path.sum.count() >= target {
+            path.sum.resolve_now(device, queue, &path.output.1, w, h, path.row);
+        } else {
+            path.sum.resolve(device, queue, &path.output.1, w, h, path.row);
+        }
         path.sum.count() < target
     }
 
@@ -679,6 +697,31 @@ mod tests {
     /// The unit cube as an IFS: eight half-scale maps to its corners. A
     /// solid with no concavity, so a ray leaving its surface never meets
     /// it again.
+    /// The Menger sponge: the 20 cells of the 3x3x3 grid not centred on
+    /// two axes, each a third the size.
+    fn sponge() -> Flame {
+        let mut fl = cube();
+        fl.transforms.clear();
+        for (i, j, k) in (0..27).map(|n| (n % 3, n / 3 % 3, n / 9)) {
+            if (i == 1) as u32 + (j == 1) as u32 + (k == 1) as u32 >= 2 {
+                continue;
+            }
+            let mut t = Transform::default();
+            t.a = 1.0;
+            t.b = 0.0;
+            t.c = 0.0;
+            t.d = 1.0;
+            t.e = i as f32;
+            t.f = j as f32;
+            t.g = k as f32;
+            t.color = fl.transforms.len() as f32 / 20.0;
+            t.variations = HashMap::from([("linear3D".to_string(), 1.0 / 3.0)]);
+            t.variation_order = vec!["linear3D".to_string()];
+            fl.transforms.push(t);
+        }
+        fl
+    }
+
     fn cube() -> Flame {
         let mut fl = Flame::default();
         fl.transforms.clear();
@@ -738,6 +781,69 @@ mod tests {
         r.set_ifs(packed);
         r.set_solid_lighting(&c.solid_shading, (c.fog_strength, c.fog_start, c.background_color));
         r
+    }
+
+    /// The denoiser (T5) on a solid: a few samples of a lit, shadowed
+    /// sponge under the sky -- its holes occlude the sky, which is the
+    /// noise; a cube is convex and has next to none -- denoised, are
+    /// nearer 256 than they are alone, inside the silhouette, and a
+    /// picture of more samples is no worse for it. Less nearer than a
+    /// terrain's: much of a solid's error at a few samples is its
+    /// sub-pixel geometry's antialiasing, which filtering the light
+    /// cannot touch (measured here: 16% less at 4 samples, 5% at 16).
+    #[test]
+    fn a_denoised_solid_is_nearer_converged() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (128u32, 96u32);
+        let (_pt, palette) = white_palette(&device, &queue);
+        let mut c = cube_config();
+        c.flame = sponge();
+        c.solid_shading.lights[0].enabled = true;
+        c.solid_shading.lights[0].azimuth = 30.0;
+        c.solid_shading.lights[0].elevation = 35.0;
+        c.background_color = [0.5, 0.6, 0.8];
+        c.escape.path.bounces = 2;
+        let mut r = renderer_for(&device, &c, w, h);
+        let mut picture = |samples: u32, denoise: bool| {
+            c.escape.path.denoise = denoise;
+            r.render_solid_still(&device, &queue, &c, &palette, samples, || wait(&device));
+            read_texture(&device, &queue, r.solid_path_texture_for_test().expect("traced"), w, h)
+        };
+        let reference = picture(256, false);
+        let inside: Vec<bool> = (0..(w * h) as i32)
+            .map(|k| {
+                let (x, y) = (k % w as i32, k / w as i32);
+                (-1..=1).all(|dy| {
+                    (-1..=1).all(|dx| {
+                        let (qx, qy) = (x + dx, y + dy);
+                        qx >= 0 && qy >= 0 && qx < w as i32 && qy < h as i32 && reference[(qy * w as i32 + qx) as usize][3] >= 0.999
+                    })
+                })
+            })
+            .collect();
+        assert!(inside.iter().filter(|&&b| b).count() > (w * h / 8) as usize, "the solid fills the frame");
+        let rmse = |a: &[[f32; 4]]| {
+            let (mut e, mut k) = (0.0f64, 0usize);
+            for ((p, q), &keep) in a.iter().zip(&reference).zip(&inside) {
+                if keep {
+                    e += (0..3).map(|c| ((p[c] - q[c]) as f64).powi(2)).sum::<f64>();
+                    k += 3;
+                }
+            }
+            (e / k.max(1) as f64).sqrt()
+        };
+        for (samples, bar) in [(4u32, 0.9), (16, 1.0)] {
+            let (raw, dn) = (rmse(&picture(samples, false)), rmse(&picture(samples, true)));
+            println!("{samples} samples: raw {raw:.4}, denoised {dn:.4}");
+            assert!(dn < bar * raw, "{samples} samples: denoised {dn} against raw {raw}");
+        }
+        // Where the filter narrows: at a constant width this was 24% worse.
+        let (raw, dn) = (rmse(&picture(64, false)), rmse(&picture(64, true)));
+        println!("64 samples: raw {raw:.4}, denoised {dn:.4}");
+        assert!(dn <= raw * 1.05, "more samples, and the filter made it worse");
     }
 
     /// The white furnace on a solid: albedo 1, a uniform sky L and no

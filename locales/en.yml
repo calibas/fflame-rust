@@ -2471,6 +2471,8 @@ escape_panel:
   terrain_aperture_tip: "The lens's size, as a fraction of the distance to the target: 0 keeps everything sharp; larger blurs whatever is off the focal plane."
   terrain_focus: "Focus"
   terrain_focus_tip: "The distance in focus, as a multiple of the target's; 0 focuses on the target at the screen's centre."
+  path_denoise: "Denoise"
+  path_denoise_tip: "Filter the path tracer's noise: blur the light between neighbouring pixels of the same surface, keeping the colouring's detail, the edges and the shadows. It eases off as the samples gather; a few samples denoised look like many more."
   terrain_detail: "Detail"
   terrain_detail_tip: "How finely the ground is sampled: texels per screen pixel, against the antialiasing factor. More is crisper and costs more sections to render and hold."
   ifs_qualifies: "Qualifies: %{count} affine maps, contraction %{lo}–%{hi}."
