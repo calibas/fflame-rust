@@ -1487,6 +1487,64 @@ terrain.**
       past it. Baseline `sim-sim-terrain-coral-repeat`: the coral to the
       horizon, seamless, hazed.
 
+- **A smooth surface (2026-10-07), the user's request:** "The simulation
+  grid resolution creates these 'serrated' edges and bumpy surface in 3D
+  mode. Increasing the grid resolution improves things, but it never
+  really goes away." A bilinear patch a cell is continuous but creased
+  at every grid line; the shading normals were already blended across a
+  cell, so the creases showed where blending cannot reach -- the
+  silhouettes, kinked once a cell, and the shadows.
+  - **The surface** of a simulation's ground is now the samples' uniform
+    cubic B-spline: continuous to its curvature, so no crease anywhere,
+    at any resolution. It smooths rather than interpolates -- a sample's
+    own height becomes `(1, 4, 1) / 6` of it and its neighbours each way,
+    about half a cell more softness -- which suits a simulation's fields
+    (a step, a cellular automaton's cell, comes out a smooth bump, where
+    an interpolating spline would ring). The escape terrain keeps its
+    bilinear patches: its sections are screen-tied, its texels about a
+    pixel, and its pictures (the T3a seahorse) do not move.
+  - **The walk:** the maximum mipmap's level 0 holds each cell's bicubic
+    in Bezier form, its 16 points' highest -- a valid bound, and as close
+    as the corners are to a bilinear patch. The B-spline points' own
+    4x4 range stood high enough above the surface to triple a path
+    tracer's time. At a leaf the gap along the ray is its polynomial
+    (degree six, from the basis's Taylor expansions at the entry, written
+    out: indexed arrays went to local memory and cost more than they
+    saved), sampled at eight points, the first crossing refined by false
+    position. Normals are the spline's gradient, occlusion and the
+    penumbra read its heights. A repeated ground wraps its neighbours
+    round the period.
+  - **Found on the way, two shader traps:**
+    - **The remainder of a negative.** The repeat's wrap of row -1, as
+      `((j % p) + p) % p`, read row 15 of a 24-row period on this
+      machine's Vulkan driver -- as if -1 were unsigned -- though the
+      formula is right and a CPU copy of it over the stored samples was
+      exact. The wraps now add a period first and never divide a
+      negative.
+    - **False position's exit.** Leaving on a tiny gap, it returned the
+      bracket's far end, which can still be well below the surface when
+      the iterates come from above: a hit inside the ground, a shadow ray
+      from it shadowed -- the light's terminator drawn in dotted lines,
+      with streaks down the cells' columns. It returns the converged
+      point. (The dotted lines first looked like the polynomial's fault;
+      it agreed with the spline to 1e-5 on the CPU, and once the exit
+      was fixed it was clean in the shader too.)
+  - **Cost**, measured warm on this machine (a GTX 1660 SUPER), the
+    coral close up: path traced at 1080p and 64 samples, 4.2 s against
+    the bilinear's 3.5 (1.2x); a running 1920x1080 Gray-Scott's lit
+    frame, 5.5 ms of terrain against 4.3 (1.6 ms of steps). Timings of a
+    first render include the shader's compile and misled two rounds of
+    this work: compare the second render in a process.
+  - **Gates:** `a_grid_ground_is_its_spline` -- every hit of a 40x30
+    grid's ground, from three views, lies on the CPU's spline over the
+    stored samples (2.4e-6 of the distance at worst) and its normal is
+    the spline's gradient (4.9e-4, the record's f16);
+    `a_repeated_grid_is_the_grid_tiled` holds at 4.9e-7 with the spline
+    (its margin widened to the spline's reach past the tiling's clamped
+    edge). New baseline `sim-sim-terrain-coral-near` (the coral close
+    up, path traced). The 118 escape and 104 sim baselines pass;
+    `release.py check` and the wasm build pass.
+
 **T5 — Reach and polish**, each its own decision when it comes up:
 - a denoiser: à-trous guided by albedo and normal, which
   `shaders/atrous.wgsl` already implements for flame normals;

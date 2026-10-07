@@ -922,6 +922,10 @@
       "bytes": 36744,
       "sha256": "08ccfcb72f9f407f2957a3601f826ee40fc40cb18a2cc96013411caf762e0a95"
     },
+    "sim-sim-terrain-coral-near.png": {
+      "bytes": 30147,
+      "sha256": "120fda47fea74c37b6432fc3194f310a34968c54b9b08c0d81d2cf959c04ef9d"
+    },
     "sim-sim-terrain-coral-repeat.png": {
       "bytes": 21715,
       "sha256": "81bfc03118849384b50ea3defc6cdd1aa282936f418513b04c2ac3e4998d7cd2"

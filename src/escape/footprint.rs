@@ -794,6 +794,7 @@ impl EscapeTerrain {
         let t = &config.escape.terrain;
         let ground = Ground {
             repeat: false,
+            smooth: false,
             root_origin: [
                 (wanted.root_first[0] as f64 * rs - eye[0]) * z,
                 (wanted.root_first[1] as f64 * rs - eye[1]) * z,
