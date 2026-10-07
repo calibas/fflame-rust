@@ -1527,6 +1527,73 @@ terrain.**
     exports (256 samples, path traced, 90 s); a simulation's terrain at
     5000x3000 too. The baselines, `release.py check` and the wasm build
     pass; the viewport is never tiled.
+- **The denoiser (2026-10-06),** opt-in (`path.denoise`, "Denoise" in
+  the path-tracing panel, both blocks; off by default, so nothing renders
+  differently until it is switched on). Edge-avoiding à-trous wavelet
+  filtering (Dammertz et al. 2010) with SVGF's variance guidance (Schied
+  et al. 2017), over one accumulation instead of frames; it lives in
+  `path_core` and so serves a terrain, a simulation's terrain and a
+  solid alike.
+  - **The guides** are gathered with the samples, when it is on: each
+    sample's first surface -- its albedo, normal and distance, which the
+    geometry reports through `pt_first` -- and its radiance's luminance
+    squared, summed by coverage into a second buffer (binding 10, two
+    vec4s a pixel; a stand-in buffer while off, so an untextured solid
+    still binds 8 storage buffers, the browser's floor). Turning it on or
+    off restarts the sum.
+  - **The filter** divides each pixel's mean light by its mean albedo,
+    so it filters the light alone and the colouring's detail is
+    multiplied back untouched; then five passes of a 5x5 B3 kernel at
+    strides 1 to 16, a tap weighted by the normals' agreement (cos^128),
+    the distances' against the pixel's distance gradient, and the
+    lights' against the noise: four standard deviations of the mean,
+    from the samples' moments, or with fewer than four samples from the
+    neighbours'. Coverage is the resolve's.
+  - **Two corrections the measurements forced:**
+    - Dividing by `albedo + 0.01` biased dark channels: on a yellow face
+      the blue light came out a third of its neighbours', and averaging
+      them multiplied it back up, +13.5 levels of blue (the sponge, and
+      the tetrahedron, came out WORSE than undenoised). The division is
+      now exact, channel by channel; a channel with no albedo takes the
+      others' light as a stand-in and is multiplied back by zero.
+    - At a constant width the filter never eased off on a solid whose
+      light varies inside its pixels -- a sponge's sub-pixel holes: the
+      samples' spread is the geometry's, and neighbours that truly
+      differ stay within four deviations for hundreds of samples (a
+      sponge at 128 samples came out 50% further from converged). Past
+      8 samples the width narrows as `sqrt(8 / n)`: never worse there
+      (measured to 128), and a terrain keeps most of its gain.
+  - **Measured** (RMSE in 8-bit levels against a converged reference,
+    960x540; raw → denoised):
+
+    | | 4 samples | 16 samples |
+    |---|---|---|
+    | the seahorse lake (terrain) | 10.58 → 4.90 | 3.40 → 2.13 |
+    | the tetrahedron (solid) | 2.72 → 2.58 | 1.16 → 1.11 |
+    | the Menger sponge (solid) | 2.13 → 1.73 | 0.98 → 0.86 |
+
+    A terrain gains most; a solid's error at a few samples is largely
+    its sub-pixel geometry's antialiasing, which filtering the light
+    cannot reach. Visually the solids' grain goes.
+  - **Cost:** about 10 ms a resolve at 1080p on a GTX 1660 SUPER -- a
+    terrain sample's worth (`the_denoiser_cost_at_1080p`). So the
+    viewport denoises on a schedule -- every count to 4, then each time
+    the count grows by a quarter, at least every quarter second while
+    the sum changes, and always at the target -- and an export once, at
+    the end (`PathSum::resolve`, `resolve_now`).
+  - **Tiles:** a denoised tile is drawn with the filter's reach (65
+    pixels) more around it, its own pixels kept, the apron taken out of
+    the tile's side.
+  - **Gates:** `the_denoiser_lowers_the_error` (a terrain inside its
+    silhouette: 73% less at 4 samples, 56% at 16, none worse at 256);
+    `a_denoised_solid_is_nearer_converged` (a sponge: 16% less at 4, no
+    worse at 16 or 64); `a_still_in_tiles_is_the_still_whole` now with
+    the denoiser too, bit for bit; the shader validates. Baseline
+    `escape-terrain-seahorse-denoised` (8 samples). Denoise off, every
+    picture is unchanged: the 116 escape and 103 sim baselines pass.
+  - **Not done:** filtering what reflects rather than diffuses (a lake's
+    gloss is divided by the albedo like the rest); temporal reuse while
+    the camera moves (the lit tier covers motion).
 
 ## 10. The user's answers (2026-10-05)
 

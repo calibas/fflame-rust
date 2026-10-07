@@ -1213,6 +1213,7 @@ fn pt_sample(px: u32, py: u32) -> vec4<f32> {
     if (!h.hit) {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
+    pt_first(h);
     var coverage = clamp(h.albedo.a, 0.0, 1.0);
     if (params.fdata[7].x > 0.0) {
         let depth = h.t * dot(ray.d, ifs_forward());
@@ -1717,6 +1718,7 @@ impl TerrainRenderer {
                 storage(7, true),
                 storage(8, false),
                 uniform(9),
+                storage(10, false),
             ],
         });
         let ingest_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -2652,10 +2654,19 @@ impl TerrainRenderer {
         self.path.count()
     }
 
+    /// The path tracer's mean into the output now -- denoised, if it is,
+    /// whatever the denoiser's schedule says (`PathSum::resolve`).
+    /// Submits its own work.
+    pub fn resolve_path(&mut self, device: &Device, queue: &Queue) {
+        self.path.resolve_now(device, queue, &self.output.1, self.out_w, self.out_h, 0);
+    }
+
     /// Add `samples` path-traced samples of the view to the sum -- in
     /// dispatches of at most `per_dispatch` -- and resolve the mean into
-    /// the output. Submits its own work. The samples are the next ones
-    /// in order, so the sum is the same bits however they are split.
+    /// the output (a denoised one on the denoiser's schedule:
+    /// `resolve_path` for the current one). Submits its own work. The
+    /// samples are the next ones in order, so the sum is the same bits
+    /// however they are split.
     pub fn render_path(
         &mut self,
         device: &Device,
@@ -2665,8 +2676,14 @@ impl TerrainRenderer {
         samples: u32,
         per_dispatch: u32,
     ) {
-        let (Some(ground), Some(atlas)) = (self.ground.as_ref(), self.atlas.as_ref()) else { return };
-        let _ = ground;
+        if self.ground.is_none() || self.atlas.is_none() {
+            return;
+        }
+        // The denoiser's guides start with the sum.
+        if self.path.set_guided(device, settings.denoise) {
+            self.path.reset();
+        }
+        let atlas = self.atlas.as_ref().expect("checked");
         self.write_params(queue, view);
         let ground = self.ground.as_ref().expect("checked");
         let (gx, gy) = (self.out_w.div_ceil(8), self.out_h.div_ceil(8));
@@ -2693,6 +2710,7 @@ impl TerrainRenderer {
                     BindGroupEntry { binding: 7, resource: ground.nodes.as_entire_binding() },
                     BindGroupEntry { binding: 8, resource: self.path.buffer().as_entire_binding() },
                     BindGroupEntry { binding: 9, resource: buf.as_entire_binding() },
+                    BindGroupEntry { binding: 10, resource: self.path.guide_buffer().as_entire_binding() },
                 ],
             });
             let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Terrain Path") });
@@ -2932,6 +2950,7 @@ mod tests {
         validate(&assemble_relight(), "relight");
         validate(&assemble_path(), "path");
         validate(super::super::path_core::PATH_RESOLVE_WGSL, "path resolve");
+        validate(super::super::path_core::PATH_DENOISE_WGSL, "path denoise");
     }
 
     #[test]
@@ -3896,8 +3915,15 @@ pub(crate) mod gpu_tests {
             v.samples_per_axis = 2;
             v
         };
-        let settings = PathSettings { bounces: 2, environment: [0.3, 0.4, 0.6], seed: 5, aperture: 4.0, focus: 150.0, ..PathSettings::default() };
-        for tier in [RenderTier::Lit, RenderTier::PathTraced] {
+        let plain = PathSettings { bounces: 2, environment: [0.3, 0.4, 0.6], seed: 5, aperture: 4.0, focus: 150.0, ..PathSettings::default() };
+        // Denoised, the tiles carry the denoiser's reach around them: a
+        // larger frame, so they are more than the apron.
+        let denoised = PathSettings { denoise: true, ..plain };
+        for (tier, settings, (fw, fh), tiles) in [
+            (RenderTier::Lit, plain, (fw, fh), 40),
+            (RenderTier::PathTraced, plain, (fw, fh), 40),
+            (RenderTier::PathTraced, denoised, (400, 260), 40 + 2 * super::super::path_core::DENOISE_REACH),
+        ] {
             let still = |side: u32| {
                 let mut r = TerrainRenderer::new(&device, 8, 8);
                 r.set_tile(&device, &queue, n, m, &hs, &albedo);
@@ -3910,13 +3936,113 @@ pub(crate) mod gpu_tests {
                 read_texture(&device, &queue, tiers.output_texture_for_test(&r), 0, fw, fh, 16)
             };
             let whole = still(1024);
-            let tiled = still(40);
+            let tiled = still(tiles);
             let px: &[[f32; 4]] = bytemuck::cast_slice(&whole);
             let lit_px = px.iter().filter(|p| p[3] > 0.0).count();
             println!("{tier:?}: {lit_px} of {} pixels on the ground", fw * fh);
             assert!(lit_px > (fw * fh / 4) as usize, "{tier:?}: the ground fills the frame");
             let differ = whole.chunks(16).zip(tiled.chunks(16)).filter(|(a, b)| a != b).count();
-            assert_eq!(differ, 0, "{tier:?}: {differ} pixels differ between the tiled and the whole still");
+            assert_eq!(differ, 0, "{tier:?} (denoised {}): {differ} pixels differ between the tiled and the whole still", settings.denoise);
+        }
+    }
+
+    /// The denoiser (T5) brings a few samples nearer the converged
+    /// picture than they are alone -- a lit, shadowed terrain lit by the
+    /// sky too, its colour varying across it, against 1024 samples, away
+    /// from the silhouette (the antialiasing there is the samples', not
+    /// the light's, and no filter of the light changes it) -- and eases
+    /// off as the samples gather, leaving a converged picture as it was.
+    #[test]
+    fn the_denoiser_lowers_the_error() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (160u32, 120u32);
+        let (n, m) = (129u32, 97u32);
+        let hs = terrain("sinusoid", n as usize, m as usize);
+        let albedo: Vec<[f32; 4]> = (0..n * m)
+            .map(|k| {
+                let (x, y) = ((k % n) as f32 / n as f32, (k / n) as f32 / m as f32);
+                [0.2 + 0.7 * x, 0.6, 0.05 + 0.75 * y, 1.0]
+            })
+            .collect();
+        let mut v = view(camera([64.0, 48.0, 8.0], 0.55, 0.4, 110.0, 0.9));
+        v.shading.shading_strength = 1.0;
+        v.shading.diffuse = 0.9;
+        v.shading.lights[0].enabled = true;
+        v.shading.lights[0].azimuth = 135.0;
+        v.shading.lights[0].elevation = 20.0;
+        let base = PathSettings { bounces: 2, environment: [0.3, 0.4, 0.6], seed: 9, ..PathSettings::default() };
+        let mut r = TerrainRenderer::new(&device, w, h);
+        r.set_tile(&device, &queue, n, m, &hs, &albedo);
+        let mut picture = |samples: u32, denoise: bool| {
+            r.reset_path();
+            r.render_path(&device, &queue, &v, &PathSettings { denoise, ..base }, samples, 32);
+            read_output(&device, &queue, &r, w, h)
+        };
+        let reference = picture(1024, false);
+        // The ground's pixels a pixel or more inside its silhouette.
+        let inside: Vec<bool> = (0..(w * h) as i32)
+            .map(|k| {
+                let (x, y) = (k % w as i32, k / w as i32);
+                (-1..=1).all(|dy| {
+                    (-1..=1).all(|dx| {
+                        let (qx, qy) = (x + dx, y + dy);
+                        qx >= 0 && qy >= 0 && qx < w as i32 && qy < h as i32 && reference[(qy * w as i32 + qx) as usize][3] >= 0.999
+                    })
+                })
+            })
+            .collect();
+        assert!(inside.iter().filter(|&&b| b).count() > (w * h / 4) as usize, "the ground fills the frame");
+        let rmse = |a: &[[f32; 4]]| {
+            let (mut e, mut k) = (0.0f64, 0usize);
+            for ((p, q), &keep) in a.iter().zip(&reference).zip(&inside) {
+                if keep {
+                    e += (0..3).map(|c| ((p[c] - q[c]) as f64).powi(2)).sum::<f64>();
+                    k += 3;
+                }
+            }
+            (e / k.max(1) as f64).sqrt()
+        };
+        for samples in [4u32, 16] {
+            let (raw, dn) = (rmse(&picture(samples, false)), rmse(&picture(samples, true)));
+            println!("{samples} samples: raw {raw:.4}, denoised {dn:.4}");
+            assert!(dn < 0.6 * raw, "{samples} samples: denoised {dn} against raw {raw}");
+        }
+        // Converged, the filter crosses almost nothing.
+        let (raw, dn) = (picture(256, false), picture(256, true));
+        println!("256 samples: raw {:.4}, denoised {:.4}", rmse(&raw), rmse(&dn));
+        assert!(rmse(&dn) <= rmse(&raw) * 1.05, "converged, the filter made it worse");
+    }
+
+    /// The denoiser's cost at 1080p (T5), measured: a path-traced sample
+    /// resolved, against the same sample denoised.
+    #[test]
+    #[ignore = "measurement; needs a GPU"]
+    fn the_denoiser_cost_at_1080p() {
+        let (device, queue) = device().expect("gpu");
+        let (w, h) = (1920u32, 1080u32);
+        let (n, m) = (129u32, 97u32);
+        let hs = terrain("sinusoid", n as usize, m as usize);
+        let albedo = vec![[0.7, 0.6, 0.5, 1.0]; (n * m) as usize];
+        let v = view(camera([64.0, 48.0, 8.0], 0.55, 0.4, 110.0, 0.9));
+        let mut r = TerrainRenderer::new(&device, w, h);
+        r.set_tile(&device, &queue, n, m, &hs, &albedo);
+        let wait = || {
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        };
+        for denoise in [false, true, false, true] {
+            let s = PathSettings { bounces: 2, environment: [0.3, 0.4, 0.6], denoise, ..PathSettings::default() };
+            r.reset_path();
+            r.render_path(&device, &queue, &v, &s, 1, 1);
+            wait();
+            let t0 = std::time::Instant::now();
+            for _ in 0..20 {
+                r.render_path(&device, &queue, &v, &s, 1, 1);
+                wait();
+            }
+            println!("denoise {denoise}: {:.2} ms a sample and its resolve", t0.elapsed().as_secs_f64() * 1000.0 / 20.0);
         }
     }
 

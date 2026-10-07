@@ -1893,6 +1893,11 @@ pub struct PathTraceConfig {
     pub aperture: f32,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub focus: f32,
+    /// Filter the path tracer's noise (T5): an edge-aware blur of the
+    /// light, guided by each pixel's surface -- its albedo, normal and
+    /// depth -- that eases off as the samples gather. Off by default.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub denoise: bool,
 }
 
 fn default_path_samples() -> u32 {
@@ -1941,6 +1946,7 @@ impl Default for PathTraceConfig {
             emission: 0.0,
             aperture: 0.0,
             focus: 0.0,
+            denoise: false,
         }
     }
 }

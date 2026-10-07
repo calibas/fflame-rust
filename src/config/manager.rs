@@ -1895,6 +1895,7 @@ impl ConfigManager {
             ConfigPath::SimPathEmission => Ok(ConfigValue::Float(config.sim.terrain.path.emission)),
             ConfigPath::SimPathAperture => Ok(ConfigValue::Float(config.sim.terrain.path.aperture)),
             ConfigPath::SimPathFocus => Ok(ConfigValue::Float(config.sim.terrain.path.focus)),
+            ConfigPath::SimPathDenoise => Ok(config.sim.terrain.path.denoise.into()),
             ConfigPath::SimWarpZoom => Ok(ConfigValue::Float(config.sim.warp.zoom)),
             ConfigPath::SimWarpRotation => Ok(ConfigValue::Float(config.sim.warp.rotation)),
             ConfigPath::SimWarpPanX => Ok(ConfigValue::Float(config.sim.warp.pan_x)),
@@ -2038,6 +2039,7 @@ impl ConfigManager {
             ConfigPath::EscapePathEmission => Ok(config.escape.path.emission.into()),
             ConfigPath::EscapePathAperture => Ok(config.escape.path.aperture.into()),
             ConfigPath::EscapePathFocus => Ok(config.escape.path.focus.into()),
+            ConfigPath::EscapePathDenoise => Ok(config.escape.path.denoise.into()),
             ConfigPath::EscapeTerrainInterior => Ok(ConfigValue::String(config.escape.terrain.interior.as_str().to_string())),
             ConfigPath::EscapeTerrainShadow => Ok(config.escape.terrain.shadow.into()),
             ConfigPath::EscapeTerrainShadowSharpness => Ok(config.escape.terrain.shadow_sharpness.into()),
@@ -3226,6 +3228,10 @@ impl ConfigManager {
                 let v: f32 = value.try_into()?;
                 self.current.sim.terrain.path.focus = v.clamp(0.0, 64.0);
             }
+            ConfigPath::SimPathDenoise => {
+                let v: bool = value.try_into()?;
+                self.current.sim.terrain.path.denoise = v;
+            }
             ConfigPath::SimDt => {
                 let d: f32 = f32::try_from(value)?;
                 // Stored as REQUESTED, bounded only by the model's own
@@ -3598,6 +3604,10 @@ impl ConfigManager {
             ConfigPath::EscapePathFocus => {
                 let v: f32 = value.try_into()?;
                 self.current.escape.path.focus = v.clamp(0.0, 64.0);
+            }
+            ConfigPath::EscapePathDenoise => {
+                let v: bool = value.try_into()?;
+                self.current.escape.path.denoise = v;
             }
             ConfigPath::EscapeTerrainInterior => {
                 let v: String = value.try_into()?;
