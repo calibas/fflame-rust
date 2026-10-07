@@ -775,6 +775,8 @@ fn render_terrain_section(ui: &mut egui::Ui, config_manager: &mut ConfigManager,
                 aperture: ConfigPath::SimPathAperture,
                 focus: ConfigPath::SimPathFocus,
                 denoise: ConfigPath::SimPathDenoise,
+                sky: ConfigPath::SimPathSky,
+                zenith: ConfigPath::SimPathZenith,
             };
             super::escape_panel::show_path_tracing(ui, config_manager, &t.path, &paths, ConfigPath::SimTerrainTier, t.tier, "sim_terrain_tier");
             // The camera over the grid.

@@ -87,6 +87,7 @@ pub fn sim_terrain_view(config: &FractalConfig, gw: u32, gh: u32, jitter: [f32; 
         width: 1.0,
         samples_per_axis: SUPERSAMPLE,
         far,
+        sky: crate::escape::path_core::sky_seen(&t.path, config),
     }
 }
 

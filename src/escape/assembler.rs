@@ -6038,6 +6038,27 @@ const IFS_RIG: &str = r#"
 // `ao` is the raw occlusion and `sun` the four raw shadow terms; the
 // panel's strengths are applied HERE, not where they were measured, so
 // a strength change is a relight and not a walk.
+// The sky (heightfield plan T5): the tonemap's background, or a
+// gradient from it at the horizon to a zenith colour overhead
+// (fdata[20]: the zenith in the accumulator's units, 1 when on). How
+// far toward the zenith a direction is: 0 at and below the horizon, 1
+// straight up, most of the change low, as a clear sky's is.
+fn ifs_sky_t(d: vec3<f32>) -> f32 {
+    let u = 1.0 - clamp(d.z, 0.0, 1.0);
+    return 1.0 - u * u * u;
+}
+
+// What a ray that meets nothing shows, straight alpha: the zenith's
+// colour over the background at its share, which the tonemap's
+// background blend turns into the gradient. Nothing for a flat sky.
+fn ifs_sky_seen(d: vec3<f32>) -> vec4<f32> {
+    let s = params.fdata[20];
+    if (!(s.w > 0.5)) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    return vec4<f32>(s.xyz, ifs_sky_t(d));
+}
+
 fn ifs_rig(albedo: vec3<f32>, n: vec3<f32>, ao_raw: f32, sun: vec4<f32>, dir: vec3<f32>, t: f32) -> vec3<f32> {
     let ao = mix(1.0, ao_raw, clamp(ifs_occlusion_strength(), 0.0, 1.0));
     let shadow_amount = clamp(ifs_shadow_strength(), 0.0, 1.0);
@@ -6477,10 +6498,11 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let t = bitcast<f32>(g.w);
 
     // Absent: the walk found nothing here, or has not reached this row
-    // yet (a cleared geometry record reads as depth zero). Left
-    // transparent so the tonemap's background fills it.
+    // yet (a cleared geometry record reads as depth zero). The sky:
+    // transparent, so the tonemap's background fills it, or a gradient's
+    // zenith over it.
     if ((r.escaped & 2u) != 0u || !(t > 0.0)) {
-        textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(0.0, 0.0, 0.0, 0.0));
+        textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), ifs_sky_seen(ifs_ray(gid.x, gid.y)));
         textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(0.0));
         return;
     }
@@ -7562,7 +7584,7 @@ fn pt_sample(px: u32, py: u32) -> vec4<f32> {
     let j = pt_rand2() - vec2<f32>(0.5, 0.5);
     let ray = pt_ray(px, py, j.x, j.y);
     if (ifs_count() == 0u) {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        return pt_sky_seen(ray.d);
     }
     let span = pt_ifs_ball(ray.o, ray.d);
     var t = span.x;
@@ -7581,7 +7603,7 @@ fn pt_sample(px: u32, py: u32) -> vec4<f32> {
         t = t + dist;
     }
     if (!hit) {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        return pt_sky_seen(ray.d);
     }
     let h = pt_ifs_surface(ray.o + ray.d * t, t, t);
     pt_first(h);

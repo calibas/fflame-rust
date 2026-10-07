@@ -1316,6 +1316,7 @@ async fn prepare_escape(
                 config.background_color,
             ),
         );
+        escape_renderer.set_solid_sky(crate::escape::path_core::sky_seen(&config.escape.path, config));
     }
     // The texture's image (docs/projects/sim-textures.md): the
     // config carries the recipe, and the image comes from the cache or

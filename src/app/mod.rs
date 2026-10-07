@@ -2484,6 +2484,7 @@ impl App {
                                 &export_config.solid_shading,
                                 (export_config.fog_strength, export_config.fog_start, export_config.background_color),
                             );
+                            esc.set_solid_sky(crate::escape::path_core::sky_seen(&export_config.escape.path, &export_config));
                         }
                         let mut guard = 0u32;
                         loop {
@@ -3179,6 +3180,9 @@ impl App {
                             final_config.background_color,
                         ),
                     ) {
+                        self.escape_dirty = true;
+                    }
+                    if escape.set_solid_sky(crate::escape::path_core::sky_seen(&final_config.escape.path, &final_config)) {
                         self.escape_dirty = true;
                     }
                 }

@@ -1898,6 +1898,22 @@ pub struct PathTraceConfig {
     /// depth -- that eases off as the samples gather. Off by default.
     #[serde(default, skip_serializing_if = "is_false")]
     pub denoise: bool,
+    /// The sky (T5): the background alone (off), or a gradient from the
+    /// background at the horizon to `zenith` overhead -- what a ray that
+    /// meets nothing sees, and what lights the scene. In sRGB, as the
+    /// background is picked.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub sky_gradient: bool,
+    #[serde(default = "default_path_zenith", skip_serializing_if = "is_default_path_zenith")]
+    pub zenith: [f32; 3],
+}
+
+/// A clear sky's blue overhead.
+fn default_path_zenith() -> [f32; 3] {
+    [0.22, 0.40, 0.72]
+}
+fn is_default_path_zenith(v: &[f32; 3]) -> bool {
+    *v == default_path_zenith()
 }
 
 fn default_path_samples() -> u32 {
@@ -1947,6 +1963,8 @@ impl Default for PathTraceConfig {
             aperture: 0.0,
             focus: 0.0,
             denoise: false,
+            sky_gradient: false,
+            zenith: default_path_zenith(),
         }
     }
 }

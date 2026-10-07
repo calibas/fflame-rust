@@ -196,6 +196,7 @@ pub fn terrain_view(config: &FractalConfig, jitter: [f32; 2]) -> TerrainView {
         width: t.de_width,
         samples_per_axis: config.escape.supersample.max(1),
         far: t.far,
+        sky: super::path_core::sky_seen(&config.escape.path, config),
     }
 }
 

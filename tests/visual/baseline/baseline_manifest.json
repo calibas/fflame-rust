@@ -182,6 +182,10 @@
       "bytes": 9047,
       "sha256": "055f0286b93b7eb301bed17853c9a4b0b0746d43ce4920050076f8ec573b324b"
     },
+    "escape-ifs-solid-tetrahedron-sky.png": {
+      "bytes": 11353,
+      "sha256": "531d1b024c362bd29aade683e86b7cf8a81cad2cfef619e3c15e763f8ef18954"
+    },
     "escape-julia-deep-perturbed.png": {
       "bytes": 8056,
       "sha256": "7884a689172148b78297dcd2fc46f83cc9c3be4137ae00ab925fa2f1cb78fc33"
@@ -525,6 +529,10 @@
     "escape-terrain-seahorse-lit.png": {
       "bytes": 14799,
       "sha256": "e0ac08e636ed97c01e0f8f805ea0ccbf4c34b59e1d9027127031d3fb6624ecff"
+    },
+    "escape-terrain-seahorse-sky.png": {
+      "bytes": 15920,
+      "sha256": "13a38583367ace8babd3d6c4d412e0a44e8273c747967a3c5b6483c5d340793b"
     },
     "escape-terrain-seahorse.png": {
       "bytes": 15521,
