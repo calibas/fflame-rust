@@ -1896,6 +1896,8 @@ impl ConfigManager {
             ConfigPath::SimPathAperture => Ok(ConfigValue::Float(config.sim.terrain.path.aperture)),
             ConfigPath::SimPathFocus => Ok(ConfigValue::Float(config.sim.terrain.path.focus)),
             ConfigPath::SimPathDenoise => Ok(config.sim.terrain.path.denoise.into()),
+            ConfigPath::SimPathSky => Ok(config.sim.terrain.path.sky_gradient.into()),
+            ConfigPath::SimPathZenith => Ok(ConfigValue::ColorRgb(config.sim.terrain.path.zenith)),
             ConfigPath::SimWarpZoom => Ok(ConfigValue::Float(config.sim.warp.zoom)),
             ConfigPath::SimWarpRotation => Ok(ConfigValue::Float(config.sim.warp.rotation)),
             ConfigPath::SimWarpPanX => Ok(ConfigValue::Float(config.sim.warp.pan_x)),
@@ -2040,6 +2042,8 @@ impl ConfigManager {
             ConfigPath::EscapePathAperture => Ok(config.escape.path.aperture.into()),
             ConfigPath::EscapePathFocus => Ok(config.escape.path.focus.into()),
             ConfigPath::EscapePathDenoise => Ok(config.escape.path.denoise.into()),
+            ConfigPath::EscapePathSky => Ok(config.escape.path.sky_gradient.into()),
+            ConfigPath::EscapePathZenith => Ok(ConfigValue::ColorRgb(config.escape.path.zenith)),
             ConfigPath::EscapeTerrainInterior => Ok(ConfigValue::String(config.escape.terrain.interior.as_str().to_string())),
             ConfigPath::EscapeTerrainShadow => Ok(config.escape.terrain.shadow.into()),
             ConfigPath::EscapeTerrainShadowSharpness => Ok(config.escape.terrain.shadow_sharpness.into()),
@@ -3232,6 +3236,14 @@ impl ConfigManager {
                 let v: bool = value.try_into()?;
                 self.current.sim.terrain.path.denoise = v;
             }
+            ConfigPath::SimPathSky => {
+                let v: bool = value.try_into()?;
+                self.current.sim.terrain.path.sky_gradient = v;
+            }
+            ConfigPath::SimPathZenith => {
+                let v: [f32; 3] = value.try_into()?;
+                self.current.sim.terrain.path.zenith = v.map(|c| c.clamp(0.0, 1.0));
+            }
             ConfigPath::SimDt => {
                 let d: f32 = f32::try_from(value)?;
                 // Stored as REQUESTED, bounded only by the model's own
@@ -3608,6 +3620,14 @@ impl ConfigManager {
             ConfigPath::EscapePathDenoise => {
                 let v: bool = value.try_into()?;
                 self.current.escape.path.denoise = v;
+            }
+            ConfigPath::EscapePathSky => {
+                let v: bool = value.try_into()?;
+                self.current.escape.path.sky_gradient = v;
+            }
+            ConfigPath::EscapePathZenith => {
+                let v: [f32; 3] = value.try_into()?;
+                self.current.escape.path.zenith = v.map(|c| c.clamp(0.0, 1.0));
             }
             ConfigPath::EscapeTerrainInterior => {
                 let v: String = value.try_into()?;

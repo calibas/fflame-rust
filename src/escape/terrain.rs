@@ -81,8 +81,8 @@ struct TerrainParamsGpu {
     tile: [u32; 4],
     /// Mode D's rig slots: [2].w the FOV, [3] forward, [4] right, [5]
     /// up, [7].z the light count, [8]-[10] the material and fog, [11..]
-    /// two per light (direction and power, colour).
-    fdata: [[f32; 4]; 20],
+    /// two per light (direction and power, colour), [20] the sky.
+    fdata: [[f32; 4]; 21],
 }
 
 /// One level of the mipmap build. Mirrored by `BuildParams`.
@@ -422,7 +422,7 @@ struct TerrainParams {
     eye: vec4<f32>,
     misc: vec4<f32>,
     tile: vec4<u32>,
-    fdata: array<vec4<f32>, 20>,
+    fdata: array<vec4<f32>, 21>,
 };
 @group(0) @binding(0) var<uniform> params: TerrainParams;
 
@@ -1072,12 +1072,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let g = ifs_geom[idx];
     let t = bitcast<f32>(g.w);
     let px = vec2<i32>(i32(gid.x), i32(gid.y));
-    // No surface: transparent, so the tonemap's background shows.
+    let dir = ifs_ray(params.tile.x + gid.x, params.tile.y + gid.y);
+    // No surface: the sky -- transparent, so the tonemap's background
+    // shows, or a gradient's zenith over it.
     if (!(t > 0.0)) {
-        textureStore(out_tex, px, vec4<f32>(0.0, 0.0, 0.0, 0.0));
+        textureStore(out_tex, px, ifs_sky_seen(dir));
         return;
     }
-    let dir = ifs_ray(params.tile.x + gid.x, params.tile.y + gid.y);
     let p = params.eye.xyz + dir * t;
     let nxy = unpack2x16float(g.x);
     let nz_ao = unpack2x16float(g.y);
@@ -1211,7 +1212,7 @@ fn pt_sample(px: u32, py: u32) -> vec4<f32> {
     let tmax = params.fdata[6].w / max(dot(ray.d, ifs_forward()), 1.0e-4);
     let h = pt_surface(ray.o, ray.d, hf_trace(ray.o, ray.d, tmax, 0.0), 0.0);
     if (!h.hit) {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        return pt_sky_seen(ray.d);
     }
     pt_first(h);
     var coverage = clamp(h.albedo.a, 0.0, 1.0);
@@ -1405,6 +1406,9 @@ pub struct TerrainView {
     /// The view depth past which there is no ground, in the world's
     /// units (the fog has reached the background there).
     pub far: f32,
+    /// A gradient sky's zenith, as a ray that meets nothing sees it
+    /// (`path_core::sky_seen`); None for the background alone.
+    pub sky: Option<[f32; 3]>,
 }
 
 pub use super::path_core::PathSettings;
@@ -1424,7 +1428,7 @@ pub fn light_direction(azimuth_deg: f32, elevation_deg: f32) -> [f32; 3] {
 /// The rig's slots of `fdata` for a terrain: mode D's material, fog and
 /// lights, the lights world-fixed. An untouched panel means a default
 /// sun, as mode D's untouched panel means a default key light.
-fn pack_rig(cam: &SolidCamera, shading: &SolidShadingSettings, fog: (f32, f32, [f32; 3]), out: &mut [[f32; 4]; 20]) {
+fn pack_rig(cam: &SolidCamera, shading: &SolidShadingSettings, fog: (f32, f32, [f32; 3]), out: &mut [[f32; 4]; 21]) {
     out[2][3] = cam.fov;
     out[3] = [cam.forward[0] as f32, cam.forward[1] as f32, cam.forward[2] as f32, 0.0];
     out[4] = [cam.right[0] as f32, cam.right[1] as f32, cam.right[2] as f32, 0.0];
@@ -2549,7 +2553,7 @@ impl TerrainRenderer {
 
     fn write_params(&self, queue: &Queue, view: &TerrainView) {
         let g = &self.ground.as_ref().expect("a ground").ground;
-        let mut fdata = [[0.0f32; 4]; 20];
+        let mut fdata = [[0.0f32; 4]; 21];
         // The terrain's fog fades its COVERAGE (the relight), so the
         // tonemap composites the background itself: a colour fog mixed
         // in linear light could never match a background composited
@@ -2568,6 +2572,10 @@ impl TerrainRenderer {
         // A repeated ground's period: its one section's extent.
         if let (true, Some(s)) = (g.repeat, g.sections.first()) {
             fdata[19] = [((s.n - 1) as f64 * s.texel) as f32, ((s.m - 1) as f64 * s.texel) as f32, 1.0, 0.0];
+        }
+        // A gradient sky's zenith.
+        if let Some(z) = view.sky {
+            fdata[20] = [z[0], z[1], z[2], 1.0];
         }
         let p = TerrainParamsGpu {
             width: self.frame.0,
@@ -2955,8 +2963,8 @@ mod tests {
 
     #[test]
     fn the_uniform_matches_its_wgsl_mirror() {
-        // 8 words, three vec4s (the tile's), twenty vec4s.
-        assert_eq!(std::mem::size_of::<TerrainParamsGpu>(), 32 + 48 + 320);
+        // 8 words, three vec4s (the tile's), twenty-one vec4s.
+        assert_eq!(std::mem::size_of::<TerrainParamsGpu>(), 32 + 48 + 336);
     }
 
     #[test]
@@ -3210,6 +3218,7 @@ pub(crate) mod gpu_tests {
             width: 0.0,
             samples_per_axis: 1,
             far: 1.0e30,
+            sky: None,
         }
     }
 
@@ -3515,6 +3524,71 @@ pub(crate) mod gpu_tests {
             println!("valley furnace, channel {k}: mean {mean:.4} against {}", l[k]);
             assert!((mean / l[k] as f64 - 1.0).abs() < 0.01, "channel {k}: {mean}");
         }
+    }
+
+    /// The gradient sky (T5). Its light: a white plane under it, no
+    /// lights, one bounce -- every bounce escapes, so a pixel is the
+    /// sky's cosine-weighted mean, `2 int L(mu) mu dmu` over the
+    /// profile `t = 1 - (1 - mu)^3`: exactly 0.1 the horizon's and 0.9
+    /// the zenith's. And what a ray that meets nothing shows, in both
+    /// tiers: the zenith's colour at the profile's share of its ray --
+    /// at the pixel's centre lit, over its jitter path traced.
+    #[test]
+    fn a_gradient_sky_lights_and_is_seen() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (48u32, 32u32);
+        let (horizon, zenith) = ([0.6f32, 0.7, 0.8], [0.1f32, 0.2, 0.9]);
+        let mut r = TerrainRenderer::new(&device, w, h);
+        let (n, m) = (129u32, 97u32);
+        r.set_tile(&device, &queue, n, m, &vec![0.0; (n * m) as usize], &vec![[1.0; 4]; (n * m) as usize]);
+        let mut v = view(camera([64.0, 48.0, 0.0], 0.9, 0.3, 60.0, 0.6));
+        v.shading = dark();
+        let settings = PathSettings { bounces: 1, environment: horizon, sky: Some(zenith), clamp: 1.0e30, seed: 7, ..PathSettings::default() };
+        r.reset_path();
+        r.render_path(&device, &queue, &v, &settings, 1024, 64);
+        let out = read_output(&device, &queue, &r, w, h);
+        let hit: Vec<&[f32; 4]> = out.iter().filter(|p| p[3] > 0.0).collect();
+        assert!(hit.len() > (w * h / 2) as usize, "the plane fills the frame");
+        for k in 0..3 {
+            let want = 0.1 * horizon[k] as f64 + 0.9 * zenith[k] as f64;
+            let mean = hit.iter().map(|p| p[k] as f64).sum::<f64>() / hit.len() as f64;
+            println!("the plane under the gradient, channel {k}: {mean:.4} against {want:.4}");
+            assert!((mean / want - 1.0).abs() < 0.005, "channel {k}: {mean} against {want}");
+        }
+
+        // Seen: low over the plane, the sky in the frame's top rows.
+        let cam = camera([64.0, 48.0, 0.0], 0.15, 0.3, 60.0, 0.6);
+        let seen = [0.05f32, 0.1, 0.6];
+        let mut v = view(cam.clone());
+        v.sky = Some(seen);
+        let profile = |d: [f64; 3]| 1.0 - (1.0 - d[2].clamp(0.0, 1.0)).powi(3);
+        r.render(&device, &queue, &v);
+        let lit = read_output(&device, &queue, &r, w, h);
+        r.reset_path();
+        r.render_path(&device, &queue, &v, &settings, 64, 64);
+        let path = read_output(&device, &queue, &r, w, h);
+        let mut skies = 0;
+        for py in 0..h {
+            for px in 0..w {
+                let k = (py * w + px) as usize;
+                let want = profile(ray(&cam, px, py, w, h)) as f32;
+                if want < 0.05 || lit[k][3] == 1.0 {
+                    continue;
+                }
+                skies += 1;
+                for (name, p, tol) in [("lit", lit[k], 1.0e-4), ("path traced", path[k], 1.0e-2)] {
+                    assert!((p[3] - want).abs() < tol, "{name} ({px}, {py}): coverage {} against {want}", p[3]);
+                    for c in 0..3 {
+                        assert!((p[c] - seen[c]).abs() < 1.0e-4, "{name} ({px}, {py}) channel {c}: {}", p[c]);
+                    }
+                }
+            }
+        }
+        println!("{skies} pixels of sky");
+        assert!(skies > (w * 4) as usize, "the sky is in the frame: {skies}");
     }
 
     /// Sun only: with no environment and a near-point sun, the path

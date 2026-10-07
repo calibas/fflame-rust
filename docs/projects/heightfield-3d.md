@@ -1594,6 +1594,69 @@ terrain.**
   - **Not done:** filtering what reflects rather than diffuses (a lake's
     gloss is divided by the albedo like the rest); temporal reuse while
     the camera moves (the lit tier covers motion).
+- **The gradient sky (2026-10-06),** opt-in (`path.sky_gradient` and
+  `path.zenith`, "Gradient sky" and its Zenith colour in the
+  path-tracing block, shown in every tier since every tier draws it; off
+  by default, so nothing renders differently until it is switched on).
+  For terrains, simulation terrains and solids alike.
+  - **The sky:** the background at the horizon and below, the zenith's
+    colour straight up, between them by the profile
+    `t = 1 - (1 - max(d.z, 0))^3` -- most of the change low, as a clear
+    sky's is (`ifs_sky_t`, in the shared rig).
+  - **What a ray that meets nothing shows** is the zenith's colour over
+    the tonemap's background at the profile's share: straight alpha `t`
+    in the output, so the tonemap's own background blend makes the
+    gradient. The background stays the horizon -- where the fog goes,
+    so the fog meets the sky without a seam -- the alpha antialiases a
+    silhouette against the sky as it does against the background, and a
+    transparent export keeps its transparency at the horizon. Drawn by
+    the terrain's relight (lit), mode D's relight (a solid, lit) and
+    both path tracers' first rays, from the rig's slot 20 (the
+    terrain's uniform grew to 21 slots for it).
+  - **What it lights:** an escaping path's environment is the gradient
+    in radiance, the horizon's (the old uniform environment) mixed to
+    the zenith's by the same profile (`pt_sky`). A white plane under it
+    with no lights converges to exactly `0.1 horizon + 0.9 zenith`, the
+    profile's cosine-weighted mean (`a_gradient_sky_lights_and_is_seen`,
+    to four places).
+  - **Found on the way: the tonemap's chain.** The Linear tonemap takes
+    the accumulator `c` to `(c exposure)^(1/gamma)` and then composites
+    that over the background DECODED from sRGB (`^2.2`), as if it were
+    linear, before the display's `^(1/2.2)`. So a zenith stored the way
+    the environment's light is (`z^gamma / exposure`) showed as about
+    `z^(1/2.2)` -- far paler than picked. What a ray SEES is therefore
+    stored as the inverse of the whole chain, `(z^2.2)^gamma / exposure`
+    (`path_core::sky_seen`), and shows as picked: measured, the top of a
+    view 13 degrees above the horizon at (105, 136, 193) against the
+    predicted (106, 136, 195), lit and path traced alike. The LIGHT
+    keeps T3's environment convention (`z^gamma / exposure`), so the
+    zenith's light is to its colour exactly as the horizon's is to the
+    background, and no existing render changes.
+    - **Open question, the user's:** by the same chain, T3's claim that
+      "the sky and an albedo-1 surface it lights read as the background
+      does" does not hold under the Linear tonemap at gamma 2.2: an
+      albedo-1 surface under Sky light 1 shows the background raised to
+      `1/2.2` (0.55 as 0.76). Fixing the environment's convention would
+      darken the sky light of every path-traced picture, the T3a
+      seahorse among them, so it is left as it was.
+  - **Found on the way: the denoiser's guides.** A sample that meets
+    nothing reported no surface, and its guides were the last sample's
+    or zero: with the gradient on, a pixel of sky divided its light by
+    an albedo of zero and the denoiser drew it black. A sample's guides
+    now start as an albedo of one and a distance of zero, which the
+    denoiser passes through as no surface.
+  - **Gates:** `a_gradient_sky_lights_and_is_seen` (a terrain: the
+    plane's light analytic, every sky pixel's colour and coverage
+    against its ray's profile, lit to 1e-4, path traced to 1e-2);
+    `a_solid_draws_the_gradient_sky` (mode D's lit tier and path tracer
+    agree on every pixel of sky, denoised or not; off, nothing drawn).
+    Baselines `escape-terrain-seahorse-sky` (path traced, the camera low
+    over the plain) and `escape-ifs-solid-tetrahedron-sky` (looking up
+    at it). Off, every picture is unchanged: the 116 escape and 103 sim
+    baselines pass.
+  - **Not done:** a ground colour below the horizon (the background
+    serves); the lit tier's ambient is not the sky's (its occlusion
+    stands in for the traced sky, as before); an HDRI.
 
 ## 10. The user's answers (2026-10-05)
 

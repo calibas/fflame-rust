@@ -472,6 +472,8 @@ pub enum ConfigPath {
     SimPathAperture,
     SimPathFocus,
     SimPathDenoise,
+    SimPathSky,
+    SimPathZenith,
     /// Colouring layer `index`: one of its colouring's parameters, its
     /// opacity, its matte's cutoff and softness. All animatable; the
     /// layer's other fields are snapshot edits.
@@ -534,6 +536,8 @@ pub enum ConfigPath {
     EscapePathAperture,
     EscapePathFocus,
     EscapePathDenoise,
+    EscapePathSky,
+    EscapePathZenith,
     EscapeTerrainInterior,
     EscapeTerrainShadow,
     EscapeTerrainShadowSharpness,
@@ -1156,6 +1160,8 @@ impl Display for ConfigPath {
             ConfigPath::SimPathAperture => write!(f, "Simulation Aperture"),
             ConfigPath::SimPathFocus => write!(f, "Simulation Focus"),
             ConfigPath::SimPathDenoise => write!(f, "Simulation Denoise"),
+            ConfigPath::SimPathSky => write!(f, "Simulation Gradient Sky"),
+            ConfigPath::SimPathZenith => write!(f, "Simulation Zenith"),
             ConfigPath::SimColorLayerParam { index, param } => write!(f, "Simulation Colour Layer {index} {param}"),
             ConfigPath::SimColorLayerOpacity { index } => write!(f, "Simulation Colour Layer {index} Opacity"),
             ConfigPath::SimColorLayerMatteCutoff { index } => write!(f, "Simulation Colour Layer {index} Matte Cutoff"),
@@ -1205,6 +1211,8 @@ impl Display for ConfigPath {
             ConfigPath::EscapePathAperture => write!(f, "Aperture"),
             ConfigPath::EscapePathFocus => write!(f, "Focus"),
             ConfigPath::EscapePathDenoise => write!(f, "Denoise"),
+            ConfigPath::EscapePathSky => write!(f, "Gradient Sky"),
+            ConfigPath::EscapePathZenith => write!(f, "Zenith"),
             ConfigPath::EscapeTerrainInterior => write!(f, "Terrain Interior"),
             ConfigPath::EscapeTerrainShadow => write!(f, "Terrain Shadows"),
             ConfigPath::EscapeTerrainShadowSharpness => write!(f, "Terrain Shadow Sharpness"),
@@ -1556,6 +1564,8 @@ impl ConfigPath {
             ConfigPath::SimPathAperture => I18nKey::simple("history.param.sim_path_aperture"),
             ConfigPath::SimPathFocus => I18nKey::simple("history.param.sim_path_focus"),
             ConfigPath::SimPathDenoise => I18nKey::simple("history.param.sim_path_denoise"),
+            ConfigPath::SimPathSky => I18nKey::simple("history.param.sim_path_sky"),
+            ConfigPath::SimPathZenith => I18nKey::simple("history.param.sim_path_zenith"),
             ConfigPath::SimColorLayerParam { index, param } => I18nKey::with_params(
                 "history.param.sim_color_layer_param",
                 vec![("index", index.to_string()), ("param", param.clone())],
@@ -1618,6 +1628,8 @@ impl ConfigPath {
             ConfigPath::EscapePathAperture => I18nKey::simple("history.param.escape_path_aperture"),
             ConfigPath::EscapePathFocus => I18nKey::simple("history.param.escape_path_focus"),
             ConfigPath::EscapePathDenoise => I18nKey::simple("history.param.escape_path_denoise"),
+            ConfigPath::EscapePathSky => I18nKey::simple("history.param.escape_path_sky"),
+            ConfigPath::EscapePathZenith => I18nKey::simple("history.param.escape_path_zenith"),
             ConfigPath::EscapeTerrainInterior => I18nKey::simple("history.param.escape_terrain_interior"),
             ConfigPath::EscapeTerrainShadow => I18nKey::simple("history.param.escape_terrain_shadow"),
             ConfigPath::EscapeTerrainShadowSharpness => I18nKey::simple("history.param.escape_terrain_shadow_sharpness"),
@@ -3032,6 +3044,8 @@ impl ConfigPath {
             | ConfigPath::EscapePathAperture
             | ConfigPath::EscapePathFocus
             | ConfigPath::EscapePathDenoise
+            | ConfigPath::EscapePathSky
+            | ConfigPath::EscapePathZenith
             | ConfigPath::EscapeTerrainInterior
             | ConfigPath::EscapeTerrainShadow
             | ConfigPath::EscapeTerrainShadowSharpness
@@ -3138,6 +3152,8 @@ impl ConfigPath {
             | ConfigPath::SimPathAperture
             | ConfigPath::SimPathFocus
             | ConfigPath::SimPathDenoise
+            | ConfigPath::SimPathSky
+            | ConfigPath::SimPathZenith
             | ConfigPath::SimColoringParam { .. } => UpdateType::SimRerender,
 
             // A bound grid's scale change resamples the live field
@@ -3450,6 +3466,8 @@ impl ConfigPath {
             ConfigPath::SimPathAperture => "Sim.Path.Aperture".to_string(),
             ConfigPath::SimPathFocus => "Sim.Path.Focus".to_string(),
             ConfigPath::SimPathDenoise => "Sim.Path.Denoise".to_string(),
+            ConfigPath::SimPathSky => "Sim.Path.Sky".to_string(),
+            ConfigPath::SimPathZenith => "Sim.Path.Zenith".to_string(),
             ConfigPath::SimColoring => "Sim.Coloring".to_string(),
             ConfigPath::SimGridMode => "Sim.GridMode".to_string(),
             ConfigPath::SimGridWidth => "Sim.GridWidth".to_string(),
@@ -3540,6 +3558,8 @@ impl ConfigPath {
             ConfigPath::EscapePathAperture => "Escape.Path.Aperture".to_string(),
             ConfigPath::EscapePathFocus => "Escape.Path.Focus".to_string(),
             ConfigPath::EscapePathDenoise => "Escape.Path.Denoise".to_string(),
+            ConfigPath::EscapePathSky => "Escape.Path.Sky".to_string(),
+            ConfigPath::EscapePathZenith => "Escape.Path.Zenith".to_string(),
             ConfigPath::EscapeTerrainInterior => "Escape.Terrain.Interior".to_string(),
             ConfigPath::EscapeTerrainShadow => "Escape.Terrain.Shadow".to_string(),
             ConfigPath::EscapeTerrainShadowSharpness => "Escape.Terrain.ShadowSharpness".to_string(),
@@ -3808,6 +3828,8 @@ impl ConfigPath {
                 ["Path", "Aperture"] => return Some(ConfigPath::EscapePathAperture),
                 ["Path", "Focus"] => return Some(ConfigPath::EscapePathFocus),
                 ["Path", "Denoise"] => return Some(ConfigPath::EscapePathDenoise),
+                ["Path", "Sky"] => return Some(ConfigPath::EscapePathSky),
+                ["Path", "Zenith"] => return Some(ConfigPath::EscapePathZenith),
                 ["Terrain", "Interior"] => return Some(ConfigPath::EscapeTerrainInterior),
                 ["Terrain", "Shadow"] => return Some(ConfigPath::EscapeTerrainShadow),
                 ["Terrain", "ShadowSharpness"] => return Some(ConfigPath::EscapeTerrainShadowSharpness),
@@ -3888,6 +3910,8 @@ impl ConfigPath {
                 ["Path", "Aperture"] => return Some(ConfigPath::SimPathAperture),
                 ["Path", "Focus"] => return Some(ConfigPath::SimPathFocus),
                 ["Path", "Denoise"] => return Some(ConfigPath::SimPathDenoise),
+                ["Path", "Sky"] => return Some(ConfigPath::SimPathSky),
+                ["Path", "Zenith"] => return Some(ConfigPath::SimPathZenith),
                 ["Coloring"] => return Some(ConfigPath::SimColoring),
                 ["GridMode"] => return Some(ConfigPath::SimGridMode),
                 ["GridWidth"] => return Some(ConfigPath::SimGridWidth),
@@ -4438,7 +4462,9 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SimTerrainTier
         | ConfigPath::SimPathSamples
         | ConfigPath::SimPathBounces
-        | ConfigPath::SimPathDenoise => None,
+        | ConfigPath::SimPathDenoise
+        | ConfigPath::SimPathSky
+        | ConfigPath::SimPathZenith => None,
 
         // Vec2 (pan coordinates)
         ConfigPath::Pan => {
@@ -4692,7 +4718,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         }
         ConfigPath::EscapeShadingShadowColor
         | ConfigPath::EscapeShadingHighlightColor
-        | ConfigPath::EscapeTerrainLakeTint => {
+        | ConfigPath::EscapeTerrainLakeTint
+        | ConfigPath::EscapePathZenith => {
             let a = json.as_array()?;
             if a.len() != 3 {
                 return None;
@@ -4709,6 +4736,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapePathSamples
         | ConfigPath::EscapePathBounces
         | ConfigPath::EscapePathDenoise
+        | ConfigPath::EscapePathSky
         | ConfigPath::EscapeTerrainEnabled
         | ConfigPath::EscapeTerrainSource
         | ConfigPath::EscapeTerrainInterior
@@ -5386,6 +5414,8 @@ mod tests {
             (ConfigPath::EscapePathAperture, ConfigValue::Float(0.25), true),
             (ConfigPath::EscapePathFocus, ConfigValue::Float(0.25), true),
             (ConfigPath::EscapePathDenoise, ConfigValue::Bool(true), false),
+            (ConfigPath::EscapePathSky, ConfigValue::Bool(true), false),
+            (ConfigPath::EscapePathZenith, ConfigValue::ColorRgb([0.1, 0.2, 0.3]), false),
             (ConfigPath::EscapeTerrainInterior, ConfigValue::String("hole".into()), false),
             (ConfigPath::EscapeTerrainShadow, ConfigValue::Float(0.25), true),
             (ConfigPath::EscapeTerrainShadowSharpness, ConfigValue::Float(20.0), true),
@@ -5448,6 +5478,8 @@ mod tests {
             (ConfigPath::SimPathAperture, ConfigValue::Float(0.25), true),
             (ConfigPath::SimPathFocus, ConfigValue::Float(0.25), true),
             (ConfigPath::SimPathDenoise, ConfigValue::Bool(true), false),
+            (ConfigPath::SimPathSky, ConfigValue::Bool(true), false),
+            (ConfigPath::SimPathZenith, ConfigValue::ColorRgb([0.1, 0.2, 0.3]), false),
         ];
         let mut m = crate::config::ConfigManager::new(crate::config::FractalConfig::default());
         for (path, value, animates) in paths {

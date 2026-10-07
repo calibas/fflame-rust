@@ -57,6 +57,9 @@ pub struct PathSettings {
     /// Gather the denoiser's guides with the samples, and filter the
     /// resolve (`PathSum::resolve`).
     pub denoise: bool,
+    /// A gradient sky's zenith radiance, the environment's at the
+    /// horizon (None: the environment is uniform).
+    pub sky: Option<[f32; 3]>,
 }
 
 impl Default for PathSettings {
@@ -74,6 +77,7 @@ impl Default for PathSettings {
             focus: 1.0,
             lake_roughness: 0.05,
             denoise: false,
+            sky: None,
         }
     }
 }
@@ -101,11 +105,13 @@ pub fn path_settings_from(
     target: f32,
     lake_roughness: f32,
 ) -> PathSettings {
-    let gamma = if config.gamma > 0.0 { config.gamma } else { 1.0 };
-    let exposure = config.exposure.max(1.0e-6);
-    let env = config.background_color.map(|c| t.environment * c.max(0.0).powf(gamma) / exposure);
+    let env = light(config, config.background_color).map(|c| t.environment * c);
+    let sky = t.sky_gradient.then(|| light(config, t.zenith).map(|c| t.environment * c));
     let lights: f32 = config.solid_shading.lights.iter().filter(|l| l.enabled).map(|l| l.intensity.max(0.0)).sum();
-    let brightest = lights.max(1.0).max(env.iter().cloned().fold(0.0, f32::max));
+    let brightest = lights
+        .max(1.0)
+        .max(env.iter().cloned().fold(0.0, f32::max))
+        .max(sky.map_or(0.0, |z| z.iter().cloned().fold(0.0, f32::max)));
     let target = target.max(1.0e-30);
     PathSettings {
         bounces: t.bounces.min(16),
@@ -119,7 +125,28 @@ pub fn path_settings_from(
         focus: if t.focus > 0.0 { t.focus } else { 1.0 } * target,
         lake_roughness,
         denoise: t.denoise,
+        sky,
     }
+}
+
+/// A colour picked in sRGB as LIGHT, the environment's convention since
+/// T3: through the inverse of the Linear tonemap's exposure and gamma.
+fn light(config: &FractalConfig, c: [f32; 3]) -> [f32; 3] {
+    let gamma = if config.gamma > 0.0 { config.gamma } else { 1.0 };
+    let exposure = config.exposure.max(1.0e-6);
+    c.map(|v| v.max(0.0).powf(gamma) / exposure)
+}
+
+/// A gradient sky's zenith as a camera ray sees it, in the
+/// accumulator's units (the rig's `ifs_sky_seen`): None for a flat sky,
+/// the tonemap's background. Seen, it must come out of the tonemap as
+/// the background does -- decoded from sRGB (its 2.2) before the
+/// composite -- so it is the inverse of the whole of that: the Linear
+/// tonemap's exposure and gamma, and the decode. The light keeps the
+/// environment's convention (`light`), so the zenith's light is to its
+/// colour as the horizon's is to the background.
+pub fn sky_seen(t: &crate::config::escape::PathTraceConfig, config: &FractalConfig) -> Option<[f32; 3]> {
+    t.sky_gradient.then(|| light(config, t.zenith.map(|v| v.max(0.0).powf(2.2))))
 }
 
 /// The path tracer's uniform. Mirrored by `PtParams`.
@@ -135,6 +162,7 @@ pub(crate) struct PathParamsGpu {
     mat: [f32; 4],
     lens: [f32; 4],
     band: [u32; 4],
+    sky: [f32; 4],
 }
 
 impl PathParamsGpu {
@@ -166,6 +194,7 @@ impl PathParamsGpu {
             ],
             lens: [settings.aperture.max(0.0), settings.focus.max(1.0e-6), 0.0, 0.0],
             band: [band.0, band.1, u32::from(settings.denoise), 0],
+            sky: settings.sky.map_or([0.0; 4], |z| [z[0], z[1], z[2], 1.0]),
         }
     }
 
@@ -228,7 +257,28 @@ struct PtParams {
     // whose sample would outlast the GPU's watchdog over a whole frame),
     // z: 1 to gather the denoiser's guides.
     band: vec4<u32>,
+    // A gradient sky's zenith radiance, and 1 when there is one: the
+    // environment (`env`) is then the horizon's.
+    sky: vec4<f32>,
 };
+
+// The environment's radiance from direction d: uniform, or the gradient
+// sky's -- the horizon's below and at the horizon, the zenith's
+// overhead, by the rig's own profile (`ifs_sky_t`).
+fn pt_sky(d: vec3<f32>) -> vec3<f32> {
+    if (pt.sky.w > 0.5) {
+        return mix(pt.env.rgb, pt.sky.rgb, ifs_sky_t(d));
+    }
+    return pt.env.rgb;
+}
+
+// What a camera ray that meets nothing adds to the sum, (radiance times
+// coverage, coverage): the gradient's zenith over the tonemap's
+// background, at its share; nothing for a flat sky.
+fn pt_sky_seen(d: vec3<f32>) -> vec4<f32> {
+    let s = ifs_sky_seen(d);
+    return vec4<f32>(s.rgb * s.a, s.a);
+}
 
 // A sample's first surface, as its geometry reports it (`pt_first`):
 // what the denoiser's guides are made of.
@@ -458,7 +508,7 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
             // A hole's floor: nothing there; past the first surface, the
             // sky through it.
             if (bounce > 0u) {
-                radiance = radiance + through * pt.env.rgb;
+                radiance = radiance + through * pt_sky(d);
             }
             break;
         }
@@ -539,7 +589,7 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
         d = nd;
         h = pt_scene_next(o, d, travelled);
         if (!h.hit) {
-            radiance = radiance + through * pt.env.rgb;
+            radiance = radiance + through * pt_sky(d);
             break;
         }
     }
@@ -577,6 +627,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         pt_seed = pixel;
         pt_index = pt.sample_base + s;
         pt_dim = 0u;
+        // A sample that meets no surface -- the sky -- reports none: its
+        // guides are an albedo of one, which divides nothing out, and a
+        // distance of zero, which the denoiser reads as no surface, so a
+        // pixel of sky passes through it as it is.
+        pt_g_albedo = vec3<f32>(1.0, 1.0, 1.0);
+        pt_g_normal = vec3<f32>(0.0, 0.0, 0.0);
+        pt_g_t = 0.0;
         let v = pt_sample(fx, fy);
         sum = sum + v;
         if (guided && v.a > 0.0) {

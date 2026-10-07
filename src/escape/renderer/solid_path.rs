@@ -780,6 +780,7 @@ mod tests {
         assert!(packed.is_some(), "the cube does not qualify");
         r.set_ifs(packed);
         r.set_solid_lighting(&c.solid_shading, (c.fog_strength, c.fog_start, c.background_color));
+        r.set_solid_sky(crate::escape::path_core::sky_seen(&c.escape.path, c));
         r
     }
 
@@ -844,6 +845,77 @@ mod tests {
         let (raw, dn) = (rmse(&picture(64, false)), rmse(&picture(64, true)));
         println!("64 samples: raw {raw:.4}, denoised {dn:.4}");
         assert!(dn <= raw * 1.05, "more samples, and the filter made it worse");
+    }
+
+    /// A gradient sky on a solid (T5): where the walk and the path
+    /// tracer find nothing, both draw the zenith's colour (as seen) at
+    /// the profile's share of the ray, and agree on it -- the lit tier at
+    /// the pixel's centre, the path tracer over its jitter, denoised or
+    /// not (a sky sample once reported no surface and the denoiser
+    /// multiplied its light by a zero albedo: a black sky). Off, nothing.
+    #[test]
+    fn a_solid_draws_the_gradient_sky() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (96u32, 64u32);
+        let (_pt, palette) = white_palette(&device, &queue);
+        for (gradient, denoise) in [(false, false), (true, false), (true, true)] {
+            let mut c = cube_config();
+            // Looking up at it, so the sky above the horizon is in the
+            // frame.
+            c.escape.cam_pitch = -0.3;
+            c.escape.path.denoise = denoise;
+            c.escape.path.sky_gradient = gradient;
+            c.escape.path.zenith = [0.2, 0.3, 0.9];
+            c.escape.solid_tier = RenderTier::Lit;
+            let seen = crate::escape::path_core::sky_seen(&c.escape.path, &c);
+            let mut r = renderer_for(&device, &c, w, h);
+            loop {
+                let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
+                let settled = r.render(&device, &queue, &mut enc, &c.escape, &palette, 1);
+                queue.submit(std::iter::once(enc.finish()));
+                if settled {
+                    break;
+                }
+            }
+            let lit = read_texture(&device, &queue, &r.output_texture, w, h);
+            r.render_solid_still(&device, &queue, &c, &palette, 16, || wait(&device));
+            let path = read_texture(&device, &queue, r.solid_path_texture_for_test().expect("traced"), w, h);
+            // The sky's pixels: no surface within a pixel of them, lit -- a
+            // jittered sample can reach a solid the centre's ray misses.
+            let clear = |x: u32, y: u32| {
+                (0..9u32).all(|i| {
+                    let (qx, qy) = (x as i32 + (i % 3) as i32 - 1, y as i32 + (i / 3) as i32 - 1);
+                    qx < 0 || qy < 0 || qx >= w as i32 || qy >= h as i32 || lit[(qy as u32 * w + qx as u32) as usize][3] < 1.0
+                })
+            };
+            let mut skies = 0;
+            for (k, (a, b)) in lit.iter().zip(&path).enumerate() {
+                if !clear(k as u32 % w, k as u32 / w) {
+                    continue;
+                }
+                skies += 1;
+                match seen {
+                    None => assert_eq!((a[3], b[3]), (0.0, 0.0), "pixel {k}: a flat sky draws nothing"),
+                    Some(z) => {
+                        for ch in 0..3 {
+                            if a[3] > 0.0 && b[3] > 0.0 {
+                                assert!((a[ch] - z[ch]).abs() < 1.0e-4 && (b[ch] - z[ch]).abs() < 1.0e-4, "pixel {k}: {a:?} {b:?} against {z:?}");
+                            }
+                        }
+                        assert!((a[3] - b[3]).abs() < 0.02, "pixel {k}: coverage {} lit, {} path traced", a[3], b[3]);
+                    }
+                }
+            }
+            println!("gradient {gradient}, denoised {denoise}: {skies} pixels of sky");
+            assert!(skies > (w * h / 4) as usize, "the sky is in the frame: {skies}");
+            if gradient {
+                let drawn = lit.iter().filter(|p| p[3] > 0.0 && p[3] < 1.0).count();
+                assert!(drawn > (w * h / 8) as usize, "the gradient shows: {drawn}");
+            }
+        }
     }
 
     /// The white furnace on a solid: albedo 1, a uniform sky L and no

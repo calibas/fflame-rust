@@ -740,6 +740,9 @@ pub struct EscapeRenderer {
     /// vocabulary for it. Set alongside the flame, by the same callers,
     /// for the same reason.
     solid_lighting: (crate::config::SolidShadingSettings, f32, f32, [f32; 3]),
+    /// A gradient sky's zenith as a ray that meets nothing sees it
+    /// (`path_core::sky_seen`); None for the background alone.
+    solid_sky: Option<[f32; 3]>,
     ifs_chain: Option<Vec<super::ifs::IfsLinkGpu>>,
     ifs_chain_key: String,
     ifs_chain_buffer: Buffer,
@@ -1751,6 +1754,7 @@ impl EscapeRenderer {
             ifs_seeds: None,
             ifs_seed_key: String::new(),
             solid_lighting: (crate::config::SolidShadingSettings::default(), 0.0, 0.0, [0.0; 3]),
+            solid_sky: None,
             ifs_chain: None,
             ifs_chain_key: String::new(),
             ifs_chain_buffer,
@@ -4023,6 +4027,17 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             return false;
         }
         self.solid_lighting = next;
+        true
+    }
+
+    /// A solid's sky (heightfield plan T5): a gradient's zenith, or None
+    /// for the background alone. Drawn by the relight, so a change needs
+    /// no walk. True when it changed.
+    pub fn set_solid_sky(&mut self, sky: Option<[f32; 3]>) -> bool {
+        if self.solid_sky == sky {
+            return false;
+        }
+        self.solid_sky = sky;
         true
     }
 
@@ -7738,6 +7753,10 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                         ),
                         &mut fdata,
                     );
+                    // The sky, past the rig's lights (`ifs_sky_seen`).
+                    if let Some(z) = self.solid_sky {
+                        fdata[20] = [z[0], z[1], z[2], 1.0];
+                    }
                 }
                 // A flame that is planar but not solid leaves the map
                 // count at zero, and the marcher draws nothing.

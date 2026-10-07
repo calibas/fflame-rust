@@ -1490,6 +1490,8 @@ pub(crate) struct PathPaths {
     pub aperture: ConfigPath,
     pub focus: ConfigPath,
     pub denoise: ConfigPath,
+    pub sky: ConfigPath,
+    pub zenith: ConfigPath,
 }
 
 /// The escape view's: a terrain's and a solid's.
@@ -1503,6 +1505,8 @@ fn escape_path_paths() -> PathPaths {
         emission: ConfigPath::EscapePathEmission,
         aperture: ConfigPath::EscapePathAperture,
         denoise: ConfigPath::EscapePathDenoise,
+        sky: ConfigPath::EscapePathSky,
+        zenith: ConfigPath::EscapePathZenith,
         focus: ConfigPath::EscapePathFocus,
     }
 }
@@ -1540,6 +1544,21 @@ pub(crate) fn show_path_tracing(
             })
             .response
             .on_hover_text(t!("escape_panel.terrain_tier_tip"));
+    });
+    // The sky, which every tier draws: the background alone, or a
+    // gradient from it at the horizon to the zenith's colour.
+    ui.horizontal(|ui| {
+        let mut on = pt.sky_gradient;
+        if ui.checkbox(&mut on, t!("escape_panel.path_sky")).on_hover_text(t!("escape_panel.path_sky_tip")).changed() {
+            let _ = config_manager.update_param(paths.sky.clone(), on.into());
+        }
+        if pt.sky_gradient {
+            let mut rgb = pt.zenith;
+            if ui.color_edit_button_rgb(&mut rgb).on_hover_text(t!("escape_panel.path_zenith_tip")).changed() {
+                let _ = config_manager.update_param(paths.zenith.clone(), ConfigValue::ColorRgb(rgb));
+            }
+            ui.label(t!("escape_panel.path_zenith"));
+        }
     });
     if tier == RenderTier::Lit {
         return;
