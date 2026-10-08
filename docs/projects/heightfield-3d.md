@@ -1600,8 +1600,31 @@ terrain.**
     Along a contour the two disagree wherever the palette bends -- that
     config's ran black to grey to white, three times over (scale 3),
     on faces 190 cells of height to a field unit. Faint, and only a
-    colour looked up from the interpolated value per hit would remove
-    it: an option offered to the user, not built.
+    colour looked up from the height per hit removes it -- built, at
+    the user's word ("if that's what's needed to get rid of the rest of
+    the banding"):
+  - **The colour by the height.** When the colour stack is the palette
+    over the height's own channel -- one Channel colouring, the base or
+    the one enabled layer at full opacity and Normal, of the terrain's
+    layer and channel (`sim::terrain::height_colour`) -- each point is
+    coloured by the palette at its own height, as the 2D picture is at
+    its value: `t = (scale / the ground's cells a field unit) z +
+    offset`, clamped or wrapped, the colour pass's `sim_palette`
+    lookup (`hf_height_colour`; the palette bound to the relight and the
+    path tracer, a 1x1 stand-in otherwise; the mapping in the uniform's
+    slot 21). Automatic: no control, since it is what that stack means
+    in 3D; any other stack keeps a cell's colours. The bands follow the
+    height's contours down the steepest face, and the Softness softens
+    the colour with the shape (the height's value is the softened
+    one). Coverage stays the stored colour's (a matte), and a wall at a
+    grid's edge keeps its top's colour -- below the field's lowest
+    point the palette's first entry would draw a band of it.
+    Gates: `colour_by_height_applies_to_the_heights_own_channel` (what
+    qualifies, with the colouring's defaults);
+    `a_ground_coloured_by_its_height` (unlit, 8,439 pixels the palette
+    at their height to 6.4e-6; off, the stored colour); baseline
+    `sim-sim-terrain-coral-contours` (the coral close up, lifted by the
+    channel it is coloured by).
 - **Found with it: a stale binary.** The visual suite runs
   `target/release/FractalArtEditor.exe` as it is. During the spline work
   the user's running app held it, `cargo build --release` failed, and

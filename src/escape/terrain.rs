@@ -81,8 +81,9 @@ struct TerrainParamsGpu {
     tile: [u32; 4],
     /// Mode D's rig slots: [2].w the FOV, [3] forward, [4] right, [5]
     /// up, [7].z the light count, [8]-[10] the material and fog, [11..]
-    /// two per light (direction and power, colour), [20] the sky.
-    fdata: [[f32; 4]; 21],
+    /// two per light (direction and power, colour), [20] the sky, [21]
+    /// the colour by the height.
+    fdata: [[f32; 4]; 22],
 }
 
 /// One level of the mipmap build. Mirrored by `BuildParams`.
@@ -462,7 +463,7 @@ struct TerrainParams {
     eye: vec4<f32>,
     misc: vec4<f32>,
     tile: vec4<u32>,
-    fdata: array<vec4<f32>, 21>,
+    fdata: array<vec4<f32>, 22>,
 };
 @group(0) @binding(0) var<uniform> params: TerrainParams;
 
@@ -1287,7 +1288,51 @@ const HF_ALBEDO_WGSL: &str = r#"
 // texel -- bilinearly, or a smooth ground's spline -- the mip chain's
 // averages where it covers several, so distant ground is the average
 // of its texels rather than whichever one a ray struck.
-fn hf_albedo_at(q: vec2<f32>, foot: f32) -> vec4<f32> {
+// No height to colour by: a wall's hit, whose colour is its top's.
+const HF_NO_HEIGHT: f32 = -3.0e38;
+
+fn hf_albedo_at(q: vec2<f32>, z: f32, foot: f32) -> vec4<f32> {
+    let c = hf_albedo_xy(q, foot);
+    // Coloured by its own height (fdata[21]): the palette at the height,
+    // the stored colour's coverage. Not a wall at a grid's edge: below
+    // the field's lowest point the palette's first entry would draw it,
+    // a band of it along the horizon, where the stored colour carries
+    // the edge's own down it.
+    if (params.fdata[21].w > 0.5 && z > -1.0e38) {
+        return vec4<f32>(hf_height_colour(z), c.a);
+    }
+    return c;
+}
+
+// When the colour is the palette over the height's own channel -- the
+// colour stack one Channel colouring of the layer and channel the
+// ground is made of -- a point's colour is the palette at its height,
+// exactly as the 2D picture's is at its value: bands that follow the
+// height's contours however steep the face. A colour a cell, already
+// through the palette and interpolated across the ground on its own,
+// could not: where the palette bends, along a contour of the height
+// the colour wandered, drawn down a steep face as vertical streaks.
+// fdata[21]: the palette coordinate per unit of height (the colouring's
+// scale over the ground's), its offset, and 1 to wrap; the lookup is
+// the colour pass's `sim_palette`.
+fn hf_height_colour(z: f32) -> vec3<f32> {
+    let m = params.fdata[21];
+    var t = z * m.x + m.y;
+    if (m.z >= 0.5) {
+        t = fract(t);
+    } else {
+        t = clamp(t, 0.0, 1.0);
+    }
+    let w = i32(textureDimensions(hf_palette).x);
+    let x = clamp(t, 0.0, 1.0) * f32(w - 1);
+    let i0 = i32(floor(x));
+    let i1 = min(i0 + 1, w - 1);
+    let f = x - f32(i0);
+    return mix(textureLoad(hf_palette, vec2<i32>(i0, 0), 0).rgb, textureLoad(hf_palette, vec2<i32>(i1, 0), 0).rgb, f);
+}
+
+// The stored colour at q.
+fn hf_albedo_xy(q: vec2<f32>, foot: f32) -> vec4<f32> {
     // Held inside the ground: a wall's hit lies on its edge, where a
     // rounding puts half of them outside -- off the ground, transparent --
     // and a wall in a simulation's view read as speckled with the sky.
@@ -1349,6 +1394,7 @@ fn hf_albedo_spline(s: vec2<f32>, layer: i32, dims: vec2<f32>) -> vec4<f32> {
 
 const RELIGHT_WGSL: &str = r#"
 @group(0) @binding(1) var hf_albedo: texture_2d_array<f32>;
+@group(0) @binding(5) var hf_palette: texture_2d<f32>;
 @group(0) @binding(2) var<storage, read> ifs_geom: array<vec4<u32>>;
 @group(0) @binding(3) var out_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(4) var hf_sampler: sampler;
@@ -1382,7 +1428,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // A ray's share of a pixel at the hit, in the world's units, widened
     // where the surface is seen at a slant.
     let foot = t * params.fdata[6].z / sqrt(max(abs(dot(n, dir)), 0.05));
-    let albedo = hf_albedo_at(p.xy, foot);
+    // A wall's normal is level, a surface's never is (the spline's
+    // (-du, -dv, 1)): a wall keeps the colour at its top.
+    let albedo = hf_albedo_at(p.xy, select(HF_NO_HEIGHT, p.z, abs(n.z) > 1.0e-4), foot);
     let sun = unpack4x8unorm(g.z);
     let rgb = ifs_rig(albedo.rgb, n, nz_ao.y, sun, dir, t);
     // The fog: the ground's coverage fading with view depth past its
@@ -1419,6 +1467,7 @@ const PATH_WGSL: &str = r#"
 @group(0) @binding(5) var<storage, read> hf_range: array<u32>;
 @group(0) @binding(6) var<storage, read> hf_sections: array<HfSection>;
 @group(0) @binding(7) var<storage, read> hf_nodes: array<HfNode>;
+@group(0) @binding(11) var hf_palette: texture_2d<f32>;
 
 //__HF_HELPERS__
 
@@ -1454,7 +1503,8 @@ fn pt_surface(o: vec3<f32>, d: vec3<f32>, h: HfHit, travelled: f32) -> PtHit {
     var n = hf_normal(ps.x, ps.y);
     hf_load(h.sec, h.off);
     let edge = min(min(ps.x, f32(hf_sec.dims.x - 1u) - ps.x), min(ps.y, f32(hf_sec.dims.y - 1u) - ps.y));
-    if (edge < 1.0e-2 && hf_height_at(ps.x, ps.y) - ps.z > 1.0e-3) {
+    let wall = edge < 1.0e-2 && hf_height_at(ps.x, ps.y) - ps.z > 1.0e-3;
+    if (wall) {
         n = hf_wall_normal(ps);
     }
     // The coat: the config's gloss -- or, on a cell whose four corners
@@ -1473,7 +1523,7 @@ fn pt_surface(o: vec3<f32>, d: vec3<f32>, h: HfHit, travelled: f32) -> PtHit {
     }
     out.n = n;
     let foot = (travelled + h.t) * pt.misc.x / sqrt(max(abs(dot(n, d)), 0.05));
-    out.albedo = hf_albedo_at(p.xy, foot);
+    out.albedo = hf_albedo_at(p.xy, select(p.z, HF_NO_HEIGHT, wall), foot);
     // Off the surface by a thousandth of its cell, and by what f32 can
     // tell apart at its distance from the origin and the eye's.
     out.bias = hf_sec.geo.z * 1.0e-3 + (length(p) + length(params.eye.xyz)) * 1.0e-6;
@@ -1725,7 +1775,7 @@ pub fn light_direction(azimuth_deg: f32, elevation_deg: f32) -> [f32; 3] {
 /// The rig's slots of `fdata` for a terrain: mode D's material, fog and
 /// lights, the lights world-fixed. An untouched panel means a default
 /// sun, as mode D's untouched panel means a default key light.
-fn pack_rig(cam: &SolidCamera, shading: &SolidShadingSettings, fog: (f32, f32, [f32; 3]), out: &mut [[f32; 4]; 21]) {
+fn pack_rig(cam: &SolidCamera, shading: &SolidShadingSettings, fog: (f32, f32, [f32; 3]), out: &mut [[f32; 4]; 22]) {
     out[2][3] = cam.fov;
     out[3] = [cam.forward[0] as f32, cam.forward[1] as f32, cam.forward[2] as f32, 0.0];
     out[4] = [cam.right[0] as f32, cam.right[1] as f32, cam.right[2] as f32, 0.0];
@@ -1918,6 +1968,10 @@ pub struct TerrainRenderer {
     pub walks: u32,
     /// Count traversal steps into the stats buffer.
     pub count_steps: bool,
+    /// The colour by the height (`set_height_colour`): the palette, a
+    /// 1x1 stand-in without one, and the mapping.
+    palette: TextureView,
+    height_colour: Option<[f32; 3]>,
 }
 
 impl TerrainRenderer {
@@ -1990,6 +2044,7 @@ impl TerrainRenderer {
             entries: &[
                 uniform(0),
                 tex_array(1, true),
+                tex(5),
                 storage(2, true),
                 storage_tex(3, TextureFormat::Rgba32Float),
                 BindGroupLayoutEntry {
@@ -2025,6 +2080,7 @@ impl TerrainRenderer {
                 storage(8, false),
                 uniform(9),
                 storage(10, false),
+                tex(11),
             ],
         });
         let ingest_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -2141,7 +2197,32 @@ impl TerrainRenderer {
             walked: None,
             walks: 0,
             count_steps: false,
+            palette: device
+                .create_texture(&TextureDescriptor {
+                    label: Some("Terrain Palette (none)"),
+                    size: Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: TextureDimension::D2,
+                    format: TextureFormat::Rgba16Float,
+                    usage: TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                })
+                .create_view(&TextureViewDescriptor::default()),
+            height_colour: None,
         }
+    }
+
+    /// Colour the ground by the palette at each point's own height, for a
+    /// colour that is the palette over the height's own channel (a
+    /// simulation's Channel colouring): `mapping` the palette coordinate
+    /// per unit of height, the offset and 1 to wrap -- or None, the
+    /// stored colours. The palette as the colour pass reads it.
+    pub fn set_height_colour(&mut self, palette: &TextureView, mapping: Option<[f32; 3]>) {
+        if mapping.is_some() {
+            self.palette = palette.clone();
+        }
+        self.height_colour = mapping;
     }
 
     fn create_geom(device: &Device, px: u32) -> Buffer {
@@ -2864,7 +2945,7 @@ impl TerrainRenderer {
 
     fn write_params(&self, queue: &Queue, view: &TerrainView) {
         let g = &self.ground.as_ref().expect("a ground").ground;
-        let mut fdata = [[0.0f32; 4]; 21];
+        let mut fdata = [[0.0f32; 4]; 22];
         // The terrain's fog fades its COVERAGE (the relight), so the
         // tonemap composites the background itself: a colour fog mixed
         // in linear light could never match a background composited
@@ -2889,6 +2970,11 @@ impl TerrainRenderer {
         // A gradient sky's zenith.
         if let Some(z) = view.sky {
             fdata[20] = [z[0], z[1], z[2], 1.0];
+        }
+        // The colour by the height: the palette coordinate per unit of
+        // height, its offset, wrap.
+        if let Some([k, offset, wrap]) = self.height_colour {
+            fdata[21] = [k, offset, wrap, 1.0];
         }
         let p = TerrainParamsGpu {
             width: self.frame.0,
@@ -2948,6 +3034,7 @@ impl TerrainRenderer {
                     BindGroupEntry { binding: 2, resource: self.geom.as_entire_binding() },
                     BindGroupEntry { binding: 3, resource: BindingResource::TextureView(&self.output.1) },
                     BindGroupEntry { binding: 4, resource: BindingResource::Sampler(&self.sampler) },
+                    BindGroupEntry { binding: 5, resource: BindingResource::TextureView(&self.palette) },
                     BindGroupEntry { binding: 6, resource: ground.sections.as_entire_binding() },
                     BindGroupEntry { binding: 7, resource: ground.nodes.as_entire_binding() },
                 ],
@@ -3032,6 +3119,7 @@ impl TerrainRenderer {
                     BindGroupEntry { binding: 8, resource: self.path.buffer().as_entire_binding() },
                     BindGroupEntry { binding: 9, resource: buf.as_entire_binding() },
                     BindGroupEntry { binding: 10, resource: self.path.guide_buffer().as_entire_binding() },
+                    BindGroupEntry { binding: 11, resource: BindingResource::TextureView(&self.palette) },
                 ],
             });
             let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Terrain Path") });
@@ -3276,8 +3364,8 @@ mod tests {
 
     #[test]
     fn the_uniform_matches_its_wgsl_mirror() {
-        // 8 words, three vec4s (the tile's), twenty-one vec4s.
-        assert_eq!(std::mem::size_of::<TerrainParamsGpu>(), 32 + 48 + 336);
+        // 8 words, three vec4s (the tile's), twenty-two vec4s.
+        assert_eq!(std::mem::size_of::<TerrainParamsGpu>(), 32 + 48 + 352);
     }
 
     #[test]
@@ -4317,6 +4405,93 @@ pub(crate) mod gpu_tests {
         // The sampler's bilinear taps carry the weights in 8-bit
         // fractions (the hardware's), so not to f32's last digit.
         assert!(worst < 5.0e-3, "{worst}");
+    }
+
+    /// Coloured by its height, a ground's every point is the palette at
+    /// its own height -- the colour pass's lookup at `k z + offset`,
+    /// clamped -- whatever the stored colour; unlit, pixel by pixel.
+    #[test]
+    fn a_ground_coloured_by_its_height() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (40u32, 30u32);
+        let texels: Vec<[f32; 4]> = (0..w * h)
+            .map(|k| {
+                let (x, y) = ((k % w) as f32, (k / w) as f32);
+                [(x * 0.37).sin() + 0.6 * (y * 0.29).cos(), 0.0, 0.0, 0.0]
+            })
+            .collect();
+        let texture = |tw: u32, th: u32, data: &[[f32; 4]]| {
+            let t = device.create_texture(&TextureDescriptor {
+                label: None,
+                size: Extent3d { width: tw, height: th, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format: TextureFormat::Rgba32Float,
+                usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            queue.write_texture(
+                t.as_image_copy(),
+                bytemuck::cast_slice(data),
+                TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(tw * 16), rows_per_image: Some(th) },
+                Extent3d { width: tw, height: th, depth_or_array_layers: 1 },
+            );
+            let v = t.create_view(&TextureViewDescriptor::default());
+            (t, v)
+        };
+        let field = texture(w, h, &texels);
+        // A stored colour the height's must replace, and a palette whose
+        // three channels run three ways.
+        let grey = texture(w, h, &vec![[0.3, 0.3, 0.3, 1.0]; (w * h) as usize]);
+        let entries: Vec<[f32; 4]> = (0..256).map(|i| { let u = i as f32 / 255.0; [u, 1.0 - u, (u * 9.0).sin().abs(), 1.0] }).collect();
+        let palette = texture(256, 1, &entries);
+        let (ow, oh) = (128u32, 96u32);
+        let mut r = TerrainRenderer::new(&device, ow, oh);
+        let scale = 4.0f32;
+        r.set_grid(&device, &queue, &field.1, &grey.1, w, h, scale, 100.0, false);
+        let (k, offset) = (0.6 / scale, 0.5);
+        r.set_height_colour(&palette.1, Some([k, offset, 0.0]));
+        let cam = camera([20.0, 15.0, 0.0], 0.7, 0.3, 30.0, 0.9);
+        let mut v = view(cam.clone());
+        v.shading.shading_strength = 0.0;
+        v.shading.ambient = 0.123;
+        r.render(&device, &queue, &v);
+        let out = read_output(&device, &queue, &r, ow, oh);
+        let raw = read_buffer(&device, &queue, r.geometry_buffer(), (ow * oh) as u64 * 16);
+        let geom: &[[u32; 4]] = bytemuck::cast_slice(&raw);
+        let (mut checked, mut worst) = (0, 0.0f64);
+        for py in 0..oh {
+            for px in 0..ow {
+                let i = (py * ow + px) as usize;
+                let t = f32::from_bits(geom[i][3]) as f64;
+                if !(t > 0.0) {
+                    continue;
+                }
+                let d = ray(&cam, px, py, ow, oh);
+                let z = cam.eye[2] + d[2] * t;
+                let u = (z * k as f64 + offset as f64).clamp(0.0, 1.0) * 255.0;
+                let (i0, f) = (u.floor() as usize, u - u.floor());
+                let i1 = (i0 + 1).min(255);
+                for c in 0..3 {
+                    let want = entries[i0][c] as f64 * (1.0 - f) + entries[i1][c] as f64 * f;
+                    worst = worst.max((out[i][c] as f64 - want).abs());
+                }
+                checked += 1;
+            }
+        }
+        println!("{checked} pixels, worst channel off the palette at their height {worst:.2e}");
+        assert!(checked > 1000, "{checked}");
+        // The hit's height in f32 against the CPU's in f64.
+        assert!(worst < 2.0e-3, "{worst}");
+        // Off again, the stored colour.
+        r.set_height_colour(&palette.1, None);
+        r.render(&device, &queue, &v);
+        let out = read_output(&device, &queue, &r, ow, oh);
+        assert!(out.iter().filter(|p| p[3] > 0.0).all(|p| (p[0] - 0.3).abs() < 1.0e-3), "the stored colour");
     }
 
     /// A ground's wall is drawn whole (T4): its hits lie on the ground's
