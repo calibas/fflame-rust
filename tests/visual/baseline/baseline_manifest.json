@@ -518,6 +518,10 @@
       "bytes": 38330,
       "sha256": "d906dc7cdd7505ba163b29c02d7b9084ee51fb58d1556e52d8d616f660c4a6ea"
     },
+    "escape-terrain-deep-60.png": {
+      "bytes": 16714,
+      "sha256": "f4aa7200dc186d28933b9a875c61241d37283e93791a7045c461f3d745adfaf6"
+    },
     "escape-terrain-seahorse-denoised.png": {
       "bytes": 17654,
       "sha256": "b6967f9071e3a6510da22f798d1fb73bf1b95dbeb966c490eea994f5f44d8552"

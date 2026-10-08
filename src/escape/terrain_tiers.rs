@@ -47,6 +47,14 @@ pub struct TierInputs<'a> {
     pub samples: u32,
     /// The lit tier's antialiasing grid, a side.
     pub supersample: u32,
+    /// The ground is still arriving (an escape terrain's sections): the
+    /// viewport draws one picture a ground and leaves the GPU to the
+    /// fill. Each section that lands restarts the accumulation, so
+    /// samples taken meanwhile are thrown away -- and they were not
+    /// free: path traced each frame, a deep fill at 1080p took 110 s
+    /// instead of 11, the tracer's share of every frame shrinking the
+    /// sections' chunks as well as delaying them.
+    pub filling: bool,
 }
 
 /// The tiers' state between frames.
@@ -106,10 +114,16 @@ impl TerrainTiers {
             if i.tier == RenderTier::Lit {
                 return false;
             }
+            // Auto: the lit picture until the ground is in, as while
+            // anything moves.
+            if i.filling {
+                return false;
+            }
         }
         let target = i.samples.max(1);
         let have = terrain.path_samples();
-        if have >= target {
+        // Path traced: a sample a ground while it fills.
+        if have >= target || (i.filling && have >= 1) {
             return false;
         }
         // As many samples as fit the frame at the measured cost.
