@@ -1545,6 +1545,42 @@ terrain.**
     up, path traced). The 118 escape and 104 sim baselines pass;
     `release.py check` and the wasm build pass.
 
+- **Near-black palettes, path traced (2026-10-07), the user's report:**
+  "harsh boundaries of extreme black where there should be smooth
+  gradients. If I switch the dark black to R 13 G 11 B 11, the sections
+  suddenly appear as bright red" (a simulation terrain, path traced,
+  denoised, a 0.02 gloss coat, a palette from near-black up). Two
+  faults, both found by reading the denoiser's inputs back:
+  - **The palette tables were 8-bit, filled by truncation**
+    (`(v * 255.0) as u8`). Eight bits of a palette's values have no
+    resolution near black, and each channel rounded down on its own:
+    sRGB (13, 11, 11), stored (0.0040, 0.0034, 0.0034), reached the GPU
+    as (1, 0, 0) / 255 -- pure red. They are `Rgba16Float` now
+    (`gpu::buffers::PALETTE_FORMAT`, one upload for the app's tables and
+    the tiled exporter's): the darks to a millionth, an Apophysis entry
+    k/255 to a sixteenth of a level, where truncation could take a whole
+    level off any entry. This is every engine's palette -- flames,
+    escape, simulations -- so its colours move by under a level; the
+    full visual suite was rerun for it.
+  - **The denoiser divided the light by the albedo alone.** A coat
+    reflects whatever the albedo, so on a black surface its reflection
+    was divided by nothing and multiplied back by nothing: flat black,
+    and on the red near-black only the red survived. The guide is now
+    the surface's whole reflectance along the ray -- the albedo under
+    the coat and the coat's Fresnel share (`pt_first(h, d)`) -- which is
+    the albedo exactly with no coat, so a gloss-0 picture is unchanged.
+  - **Gates:** `a_dark_palette_entry_keeps_its_hue` (the upload, every
+    k/255, the user's darks); `a_glossy_black_keeps_its_reflection_denoised`
+    (black and near-black under a 0.04 coat: denoised within 0.3% of
+    plain).
+- **Found with it: a stale binary.** The visual suite runs
+  `target/release/FractalArtEditor.exe` as it is. During the spline work
+  the user's running app held it, `cargo build --release` failed, and
+  the suite ran the binary from before: that commit's visual results,
+  and its new baseline `sim-sim-terrain-coral-near`, were not the
+  spline's. Rebuilt and rerun; the baseline regenerated. Check the
+  build succeeded before trusting a visual run.
+
 **T5 — Reach and polish**, each its own decision when it comes up:
 - a denoiser: à-trous guided by albedo and normal, which
   `shaders/atrous.wgsl` already implements for flame normals;

@@ -1471,7 +1471,7 @@ fn pt_sample(px: u32, py: u32) -> vec4<f32> {
     if (!h.hit) {
         return pt_sky_seen(ray.d);
     }
-    pt_first(h);
+    pt_first(h, ray.d);
     var coverage = clamp(h.albedo.a, 0.0, 1.0);
     if (params.fdata[7].x > 0.0) {
         let depth = h.t * dot(ray.d, ifs_forward());
@@ -4477,6 +4477,49 @@ pub(crate) mod gpu_tests {
         let (raw, dn) = (picture(256, false), picture(256, true));
         println!("256 samples: raw {:.4}, denoised {:.4}", rmse(&raw), rmse(&dn));
         assert!(rmse(&dn) <= rmse(&raw) * 1.05, "converged, the filter made it worse");
+    }
+
+    /// A glossy black surface keeps its reflection through the denoiser:
+    /// the coat reflects whatever the albedo, and dividing the light by
+    /// the albedo alone made it flat black (and a near-black the hue of
+    /// whichever channel the palette left non-zero). Denoised, it is what
+    /// it is path traced plainly, near enough, and not black.
+    #[test]
+    fn a_glossy_black_keeps_its_reflection_denoised() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (96u32, 64u32);
+        let (n, m) = (129u32, 97u32);
+        let hs = terrain("sinusoid", n as usize, m as usize);
+        let mut r = TerrainRenderer::new(&device, w, h);
+        let mut v = view(camera([64.0, 48.0, 8.0], 0.5, 0.4, 110.0, 0.9));
+        v.shading = dark();
+        for black in [[0.0f32, 0.0, 0.0, 1.0], [0.0040, 0.0034, 0.0034, 1.0]] {
+            r.set_tile(&device, &queue, n, m, &hs, &vec![black; (n * m) as usize]);
+            let mut mean = |denoise: bool| {
+                let s = PathSettings { bounces: 1, environment: [0.6, 0.7, 0.9], gloss: 0.04, roughness: 0.3, denoise, seed: 3, ..PathSettings::default() };
+                r.reset_path();
+                r.render_path(&device, &queue, &v, &s, 64, 16);
+                let out = read_output(&device, &queue, &r, w, h);
+                let hit: Vec<&[f32; 4]> = out.iter().filter(|p| p[3] > 0.999).collect();
+                assert!(hit.len() > (w * h / 4) as usize);
+                let mut c = [0.0f64; 3];
+                for p in &hit {
+                    for k in 0..3 {
+                        c[k] += p[k] as f64 / hit.len() as f64;
+                    }
+                }
+                c
+            };
+            let (raw, dn) = (mean(false), mean(true));
+            println!("albedo {black:?}: raw {raw:.4?}, denoised {dn:.4?}");
+            for k in 0..3 {
+                assert!(raw[k] > 1.0e-3, "the coat reflects the sky: {raw:?}");
+                assert!((dn[k] / raw[k] - 1.0).abs() < 0.05, "channel {k}: denoised {dn:?} against {raw:?}");
+            }
+        }
     }
 
     /// The denoiser's cost at 1080p (T5), measured: a path-traced sample
