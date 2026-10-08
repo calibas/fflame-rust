@@ -519,24 +519,24 @@
       "sha256": "d906dc7cdd7505ba163b29c02d7b9084ee51fb58d1556e52d8d616f660c4a6ea"
     },
     "escape-terrain-seahorse-denoised.png": {
-      "bytes": 18410,
-      "sha256": "0a38a72e2881e1d5a4253ba8e38c8edd08cff7ade671dcea6ca52e730a983fa0"
+      "bytes": 17654,
+      "sha256": "b6967f9071e3a6510da22f798d1fb73bf1b95dbeb966c490eea994f5f44d8552"
     },
     "escape-terrain-seahorse-lake.png": {
-      "bytes": 18744,
-      "sha256": "4101417b7e36b2164a36f8807a3cf3f26af9b0af30603d78fa484cb7f559d513"
+      "bytes": 17978,
+      "sha256": "7d629cf72b344cfdb1f575903dd7f3fae43bbd2fe30b91a4cb4034897a3bb617"
     },
     "escape-terrain-seahorse-lit.png": {
       "bytes": 14799,
       "sha256": "e0ac08e636ed97c01e0f8f805ea0ccbf4c34b59e1d9027127031d3fb6624ecff"
     },
     "escape-terrain-seahorse-sky.png": {
-      "bytes": 15920,
-      "sha256": "13a38583367ace8babd3d6c4d412e0a44e8273c747967a3c5b6483c5d340793b"
+      "bytes": 15567,
+      "sha256": "76e758c6409c1ebcb224e88299c78462d5653a28ccf26f2c3bab6a5a499df61b"
     },
     "escape-terrain-seahorse.png": {
-      "bytes": 15521,
-      "sha256": "963cd66e86918868a37ab74654073b4b6741aa0f8a1d17120fa9faffc3910db8"
+      "bytes": 15128,
+      "sha256": "b3b3949f4e1284849ca2ab8fe546d0d338bab2f1ec104537fb6dbdbbb6c1d204"
     },
     "escape-tetration-period.png": {
       "bytes": 11866,
@@ -923,20 +923,20 @@
       "sha256": "08ccfcb72f9f407f2957a3601f826ee40fc40cb18a2cc96013411caf762e0a95"
     },
     "sim-sim-terrain-coral-contours.png": {
-      "bytes": 30324,
-      "sha256": "c8e0e5243c806d734f22fde6f801bd1f95772ea7c239bab04b0b34d42af93855"
+      "bytes": 31273,
+      "sha256": "f4ccad1b9d6d20a6121a9d01608ee8570584ae4114bcaddf07c065920944174f"
     },
     "sim-sim-terrain-coral-near.png": {
-      "bytes": 30198,
-      "sha256": "c2588f306693bd0c972ab1f81266faeffc2bc4d1c2d2ffba53ad9ca8300ca13f"
+      "bytes": 29885,
+      "sha256": "4c32fb93ae7bbddea70443f0c9c0bf3a013138b3e2b52391f42a8a3fa249ddd4"
     },
     "sim-sim-terrain-coral-repeat.png": {
-      "bytes": 21715,
-      "sha256": "81bfc03118849384b50ea3defc6cdd1aa282936f418513b04c2ac3e4998d7cd2"
+      "bytes": 21530,
+      "sha256": "f7daacbb2d8fce06e8eda5a47857f1a4352c0c6d303987f6e26952b56d28d1e1"
     },
     "sim-sim-terrain-coral.png": {
-      "bytes": 21486,
-      "sha256": "afebe9121e5bfb1c821fa25ce6def3299fdf2fedf11b7b870bcc4acf3aadd007"
+      "bytes": 21140,
+      "sha256": "9214ff5222016fcbe2091a8d1e1fa5a8b9228e36cb0ccc2208ffdb9ab5997199"
     },
     "sim-smoothlife-glider.png": {
       "bytes": 17688,

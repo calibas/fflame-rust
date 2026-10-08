@@ -1645,6 +1645,13 @@ terrain.**
 - volumetric sun shafts;
 - presets.
 
+**Where the list stands (2026-10-08):** the denoiser, output tiling and
+the gradient sky are built (below); the far field is largely T2e's
+sections. The filmic curve already exists -- the tonemap's highlight
+modes include ACES filmic, Reinhard and the hue-keeping Max-Norm -- so
+it is struck. **Deferred by the user, to be planned later:** the HDRI
+environment, sun shafts, presets, and fly mode (still last).
+
 **T5 as built.**
 - **Output tiling, first (2026-10-06): it was a crash.** A terrain still
   of 6000x4000 panicked on this machine's 6 GB card: the renderer held
@@ -1778,13 +1785,26 @@ terrain.**
     keeps T3's environment convention (`z^gamma / exposure`), so the
     zenith's light is to its colour exactly as the horizon's is to the
     background, and no existing render changes.
-    - **Open question, the user's:** by the same chain, T3's claim that
-      "the sky and an albedo-1 surface it lights read as the background
-      does" does not hold under the Linear tonemap at gamma 2.2: an
-      albedo-1 surface under Sky light 1 shows the background raised to
-      `1/2.2` (0.55 as 0.76). Fixing the environment's convention would
-      darken the sky light of every path-traced picture, the T3a
-      seahorse among them, so it is left as it was.
+    - **Then an open question, fixed 2026-10-08 at the user's word**
+      ("fix sky light calibration now and see how much it changes
+      things"): by the same chain, T3's claim that "the sky and an
+      albedo-1 surface it lights read as the background does" did not
+      hold -- an albedo-1 surface under Sky light 1 showed the
+      background raised to `1/2.2` (0.55 as 0.76). The light now takes
+      the same inverse as the sight (`path_core::shown`, the sRGB decode
+      included), so it does: the sky lit a scene `bg^(1.2 gamma)` times
+      too strongly. Measured on the lit pixels (960x540, the same
+      configs before and after): the seahorse terrains x0.81-0.85 of
+      their light (display 206 to 192 on the T3a seahorse), the
+      tetrahedron x0.82, the coral terrains x0.72-0.75; the sunlit faces
+      barely move, the sky-lit shadows deepen. A blue zenith tints no
+      less -- decoded, the sRGB blue is bluer in linear light (red 0.25
+      to 0.05, blue 0.85 to 0.70) -- so a white-lit scene under a blue
+      sky is the sun's, with Sky light below 1: the physical balance,
+      and no "sky light colour" control is needed for it. Eight
+      path-traced baselines re-made (the seahorse terrains and the
+      corals; the tetrahedra stayed within tolerance), and the solid's
+      white furnace now expects the decoded sky.
   - **Found on the way: the denoiser's guides.** A sample that meets
     nothing reported no surface, and its guides were the last sample's
     or zero: with the gradient on, a pixel of sky divided its light by

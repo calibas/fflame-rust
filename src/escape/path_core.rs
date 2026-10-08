@@ -85,9 +85,8 @@ impl Default for PathSettings {
 /// The settings from the config (`escape.path`, plan section 4), for a
 /// geometry whose target is `target` world units from the eye:
 /// - the environment is the background colour brought into the
-///   accumulator's units -- through the inverse of the Linear tonemap's
-///   exposure and gamma -- so the sky and an albedo-1 surface it lights
-///   read as the background does, times Sky light;
+///   accumulator's units (`shown`) -- so the sky and an albedo-1 surface
+///   it lights read as the background does, times Sky light;
 /// - a sample's radiance is clamped at ten times the brightest light
 ///   (the environment and the glow count as lights);
 /// - the lens is in the target's terms, so it keeps its look as the
@@ -105,8 +104,8 @@ pub fn path_settings_from(
     target: f32,
     lake_roughness: f32,
 ) -> PathSettings {
-    let env = light(config, config.background_color).map(|c| t.environment * c);
-    let sky = t.sky_gradient.then(|| light(config, t.zenith).map(|c| t.environment * c));
+    let env = shown(config, config.background_color).map(|c| t.environment * c);
+    let sky = t.sky_gradient.then(|| shown(config, t.zenith).map(|c| t.environment * c));
     let lights: f32 = config.solid_shading.lights.iter().filter(|l| l.enabled).map(|l| l.intensity.max(0.0)).sum();
     let brightest = lights
         .max(1.0)
@@ -129,24 +128,29 @@ pub fn path_settings_from(
     }
 }
 
-/// A colour picked in sRGB as LIGHT, the environment's convention since
-/// T3: through the inverse of the Linear tonemap's exposure and gamma.
-fn light(config: &FractalConfig, c: [f32; 3]) -> [f32; 3] {
+/// A colour picked in sRGB as the accumulator holds what the tonemap
+/// shows as that colour: the inverse of the whole chain the background
+/// goes through -- the Linear tonemap's exposure and gamma, and the
+/// sRGB decode (2.2) the tonemap composites the background with. Light
+/// and sight alike: an albedo-1 surface the sky alone lights at Sky
+/// light 1 reads exactly as the sky behind it.
+///
+/// Until 2026-10-08 the light left the decode out (T3's convention, its
+/// claim of a match measured only in the accumulator): that surface read
+/// as the background raised to 1/2.2, brighter -- the sky lit a scene
+/// `bg^(1.2 gamma)` times too strongly, about twice at gamma 1 and two to
+/// five times at the escape engine's 2.2.
+fn shown(config: &FractalConfig, c: [f32; 3]) -> [f32; 3] {
     let gamma = if config.gamma > 0.0 { config.gamma } else { 1.0 };
     let exposure = config.exposure.max(1.0e-6);
-    c.map(|v| v.max(0.0).powf(gamma) / exposure)
+    c.map(|v| v.max(0.0).powf(2.2).powf(gamma) / exposure)
 }
 
 /// A gradient sky's zenith as a camera ray sees it, in the
 /// accumulator's units (the rig's `ifs_sky_seen`): None for a flat sky,
-/// the tonemap's background. Seen, it must come out of the tonemap as
-/// the background does -- decoded from sRGB (its 2.2) before the
-/// composite -- so it is the inverse of the whole of that: the Linear
-/// tonemap's exposure and gamma, and the decode. The light keeps the
-/// environment's convention (`light`), so the zenith's light is to its
-/// colour as the horizon's is to the background.
+/// the tonemap's background. Its light is the same times Sky light.
 pub fn sky_seen(t: &crate::config::escape::PathTraceConfig, config: &FractalConfig) -> Option<[f32; 3]> {
-    t.sky_gradient.then(|| light(config, t.zenith.map(|v| v.max(0.0).powf(2.2))))
+    t.sky_gradient.then(|| shown(config, t.zenith))
 }
 
 /// The path tracer's uniform. Mirrored by `PtParams`.
