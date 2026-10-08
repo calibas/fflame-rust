@@ -1823,6 +1823,82 @@ environment, sun shafts, presets, and fly mode (still last).
   - **Not done:** a ground colour below the horizon (the background
     serves); the lit tier's ambient is not the sky's (its occlusion
     stands in for the traced sky, as before); an HDRI.
+- **Deep zoom (2026-10-08),** at the user's word ("deep zoom for escape
+  time terrain, like sharing reference orbits"). Measured on
+  `fe-zoom-60-edge` (Mandelbrot at 2^60, 30,000 iterations) as a terrain
+  at 1080p, 46 sections, on the GTX 1660 SUPER.
+  - **The orbits were already shared.** A fill from nothing built 2
+    reference orbits and relocated one for each of the other 44 sections;
+    a refill built none. The export's path and the app's (the orbit
+    worker) alike. T2e's note that sections far apart "do not share a
+    reference orbit" was wrong. Sharing is not even the faster choice:
+    with a reference of its own each section filled 6-11% faster (the
+    BLA's bound grows with the pixels' offsets from the reference, up to
+    ~3000 px relocated). Not worth a worker round trip a section; not
+    done.
+  - **Where the time goes:** a section costs what a 2D render of its
+    pixels does at that depth (0.17-0.3 ms a thousand pixels here, by
+    region, against 0.0034 on the direct path at 2^3), and the fill was
+    48 MP for a 2 MP screen:
+    - 30% in sections no pixel draws: the nine roots (split, so the
+      leaves under them cover all of them in view) and the margin's
+      leaves;
+    - 22% in the parts of drawn sections outside the view;
+    - the rest draws the ground at about 13 samples a pixel: 2.95 from
+      the grazing angle, which a square texel pays, and 4.7 from the
+      quadtree's rule (texels as fine as the NEAREST point needs, in
+      steps of two).
+  - **The app's fill was ten times the export's.** With the viewport
+    path tracing each frame (Auto or Path Traced), the same fill took
+    110 s, against 11 s alone: the tracer's ~30 ms a frame delayed each
+    chunk and shrank the next (chunks are sized to their measured time),
+    and every section that landed restarted the tracer's sum, so nearly
+    all its samples were thrown away.
+  - **Built:**
+    - **The viewport yields to the fill** (`TierInputs::filling`): while
+      sections are missing it draws one picture a ground -- Auto and Lit
+      their lit tier, Path Traced one sample -- and traces once the
+      ground is complete. Measured: 110 s to 12-13 s, every tier.
+    - **A deep picture's hidden roots at a sixteenth of the samples**
+      (`COARSE_SAMPLES`, 257²): a root that was split, or is out of
+      view, serves only shadows, bounces and the moment before its
+      leaves arrive. Only when the root renders perturbed -- a direct
+      one costs too little to bother, so the T3a seahorse and every
+      shallow terrain are unchanged. A root wanted fuller later (come
+      into view unsplit) is rendered again, its coarse copy standing in
+      meanwhile. The walk reads a section's own mip levels
+      (`levels_for(n, m)`), so a section smaller than its layer tops out
+      where its cells do. Measured: 14.3 s to 11.4 s alone.
+    - **The leaves reach the walk's clip.** A box was wanted within
+      `far` of the eye, but the walk clips `far` DEEP along the view,
+      which reaches further at the corners: a picture's far corners
+      were drawn from the roots, undersampled (82 pixels at 2^60; none
+      in the seahorse views, whose sections are unchanged). A leaf is
+      now wanted while its least depth is within `far`, so no primary
+      ray meets a split root -- which is what makes the coarse roots
+      invisible.
+  - **What it changes:** a deep picture's shadows from ground out of
+    view, and its paths' bounces off it, come from a ground four times
+    coarser (as does the moment before the leaves arrive). A count's or
+    a relief's range is gathered over every section, the roots
+    included, so a deep count terrain's heights can move by what a
+    coarse root's extremes miss; a distance terrain's cannot.
+  - **Gates:** `the_leaves_cover_every_ray_the_walk_draws` (seven views:
+    no ray within the clip meets a hidden root; at 1080p every root is
+    hidden); `a_deep_pictures_hidden_roots_are_coarse_and_unseen` (2^60,
+    unshadowed: the picture with coarse roots is the one with full
+    roots, byte for byte; a direct picture's roots stay full);
+    `section_config` at both sizes. New baseline
+    `escape-terrain-deep-60` (lit, 800x600, 4 s). The 118 escape and
+    105 sim baselines pass unchanged; `release.py check` and the wasm
+    build pass.
+  - **Not done -- the next levers, measured above:** the oversampling
+    inside a drawn section. Smaller sections (the parts out of view and
+    the nearest-point rule's spread both shrink with them) or texels
+    chosen per section rather than in steps of two; each changes how the
+    ground is sampled, to be decided with pictures in hand. The
+    measurements: `deep_fill_in_the_app` and `section_coverage`
+    (ignored).
 
 ## 10. The user's answers (2026-10-05)
 
@@ -2119,10 +2195,12 @@ sections stream.
   | perturbed 2^60, far 8 | 58 | 23.6 s | 406 ms |
 
 - **Open:**
-  - **Deep zoom is slow:** a deep section costs about 10x its share of
-    the single 2048² footprint's time. Sections far apart in their own
-    pixels do not share a reference orbit, the likely cause; a shared
-    reference with wider relocation is the lever.
+  - **Deep zoom is slow:** a deep fill costs about 10x the single 2048²
+    footprint's time. Sections far apart in their own pixels do not
+    share a reference orbit, the likely cause; a shared reference with
+    wider relocation is the lever. **Corrected (2026-10-08):** they did
+    share it; the time was the sections' pixels, 48 MP for a 2 MP screen,
+    and in the app the viewport's tracer -- see T5 as built, deep zoom.
   - Shadows from off-screen ground come only from the coarse roots.
   - A count's or a relief's range grows as sections arrive, so their
     heights shift slightly while the view fills.

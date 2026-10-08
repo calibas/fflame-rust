@@ -2777,7 +2777,10 @@ impl TerrainRenderer {
                     s.n,
                     s.m,
                     s.layer,
-                    atlas.levels,
+                    // Its own levels: a section smaller than its layer
+                    // (a deep picture's hidden root) tops out where its
+                    // cells do, not over the layer's stale rest.
+                    Self::levels_for(s.n, s.m).min(atlas.levels),
                 ]
             })
             .collect();
@@ -4712,7 +4715,7 @@ pub(crate) mod gpu_tests {
                 r.set_tile(&device, &queue, n, m, &hs, &albedo);
                 let mut tiers = TerrainTiers::default();
                 let view = |jitter: [f32; 2]| TerrainView { jitter, ..base.clone() };
-                let inputs = TierInputs { view: &view, settings: settings.clone(), tier, samples: 6, supersample: 2 };
+                let inputs = TierInputs { view: &view, settings: settings.clone(), tier, samples: 6, supersample: 2, filling: false };
                 tiers.still_in_tiles(&mut r, &device, &queue, &inputs, (fw, fh), side, || {
                     let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
                 });

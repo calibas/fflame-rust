@@ -203,6 +203,7 @@ impl SimTerrain {
             tier: t.tier,
             samples: t.path.samples,
             supersample: SUPERSAMPLE,
+            filling: false,
         }
     }
 

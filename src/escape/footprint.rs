@@ -61,6 +61,16 @@ pub const FRAME_DISTANCE: f64 = 1.3;
 pub const SECTION_CELLS: u32 = 1024;
 pub const SECTION_SAMPLES: u32 = SECTION_CELLS + 1;
 
+/// A hidden root's samples a side, when its render is perturbed (deep):
+/// a sixteenth of a section's. A root no primary ray reaches once the
+/// view is filled -- split, so the leaves under it cover all of it in
+/// view, or out of view -- serves only shadows, bounces and the moment
+/// before its leaves arrive, none of which needs a section's detail;
+/// and the roots, the widest sections, cost the most a sample in a
+/// deep picture: measured at 2^60, the nine of a 1080p view were a
+/// quarter of the fill.
+pub const COARSE_SAMPLES: u32 = 257;
+
 /// The most sections the atlas holds (each about 21 MB).
 pub const MAX_SECTIONS: u32 = 64;
 
@@ -208,6 +218,7 @@ fn tier_inputs<'a>(config: &FractalConfig, view: &'a dyn Fn([f32; 2]) -> Terrain
         tier: config.escape.terrain.tier,
         samples: config.escape.path.samples,
         supersample: config.escape.supersample,
+        filling: false,
     }
 }
 
@@ -313,15 +324,15 @@ fn view_offset(escape: &EscapeConfig, a: &Anchor) -> [f64; 2] {
 pub type SectionKey = (i32, i64, i64);
 
 /// A section's render config: rotation 0, its samples on its grid
-/// points -- `SECTION_SAMPLES` of them across a span one texel wider
-/// than its side, centred on its centre, so sample (0, 0) is its
-/// south-west corner and neighbours share their edges.
-fn section_config(fp: &EscapeConfig, a: &Anchor, key: SectionKey) -> EscapeConfig {
+/// points -- `samples` of them across a span one texel wider than its
+/// side, centred on its centre, so sample (0, 0) is its south-west
+/// corner and neighbours share their edges.
+fn section_config(fp: &EscapeConfig, a: &Anchor, key: SectionKey, samples: u32) -> EscapeConfig {
     use super::fixedpoint::FixedPoint;
     let (level, i, j) = key;
     let mut c = fp.clone();
     c.rotation = 0.0;
-    c.zoom_log2 = a.zoom - level as f64 - (SECTION_SAMPLES as f64 / SECTION_CELLS as f64).log2();
+    c.zoom_log2 = a.zoom - level as f64 - (samples as f64 / (samples - 1) as f64).log2();
     // The centre from the anchor: (i + 1/2) 2^level anchor widths, a
     // width 4 * 2^-zoom, kept as a power of two and a mantissa.
     let x = 2.0 + level as f64 - a.zoom;
@@ -340,13 +351,15 @@ fn section_config(fp: &EscapeConfig, a: &Anchor, key: SectionKey) -> EscapeConfi
 /// What the view wants: the root grid's level and its first square, the
 /// grid's size, and the sections wanted -- the roots, and the leaves of
 /// the split -- each with its nearest distance from the eye (current
-/// widths), roots first.
+/// widths), roots first; and the roots no primary ray reaches once the
+/// leaves are in: split, or out of view.
 #[derive(Debug, Clone)]
 pub struct Wanted {
     pub root_level: i32,
     pub root_first: [i64; 2],
     pub root_dims: [u32; 2],
     pub sections: Vec<(SectionKey, f64, bool)>,
+    pub hidden_roots: std::collections::HashSet<SectionKey>,
 }
 
 /// The camera relative to the anchor: the eye's ground point in anchor
@@ -397,7 +410,9 @@ pub fn wanted_sections(escape: &EscapeConfig, out_w: u32, out_h: u32, capacity: 
     let eye_z = cam.eye[2];
     // A node's box in the world (current widths, origin the eye's ground
     // point): its nearest distance from the eye, and whether it is in
-    // view.
+    // view -- inside the widened frustum, and nearer than the walk's
+    // clip, `far` deep along the view (not `far` away: the clip's corners
+    // reach further, and the ground there was drawn from the roots).
     let geometry = |level: i32, i: i64, j: i64| -> (f64, bool) {
         let side = (level as f64).exp2();
         let (x0, y0) = ((i as f64 * side - eye[0]) * z, (j as f64 * side - eye[1]) * z);
@@ -406,6 +421,12 @@ pub fn wanted_sections(escape: &EscapeConfig, out_w: u32, out_h: u32, capacity: 
         let dy = 0.0f64.clamp(y0, y0 + s);
         let dz = if eye_z > top { eye_z - top } else { 0.0 };
         let near = (dx * dx + dy * dy + dz * dz).sqrt();
+        // The box's least depth: depth is linear, so at a corner.
+        let depth = [(x0, y0), (x0 + s, y0), (x0, y0 + s), (x0 + s, y0 + s)]
+            .into_iter()
+            .flat_map(|(x, y)| [[x, y, -eye_z], [x, y, top - eye_z]])
+            .map(|p| dot(p, cam.forward))
+            .fold(f64::INFINITY, f64::min);
         let mut inside = true;
         for n in &planes {
             let mut any = false;
@@ -423,7 +444,7 @@ pub fn wanted_sections(escape: &EscapeConfig, out_w: u32, out_h: u32, capacity: 
                 break;
             }
         }
-        (near, inside && near <= far)
+        (near, inside && depth <= far)
     };
     // The roots: the coarsest level at least `far` wide, about the eye.
     let root_level = (far / z).log2().ceil() as i32;
@@ -436,6 +457,7 @@ pub fn wanted_sections(escape: &EscapeConfig, out_w: u32, out_h: u32, capacity: 
     let mut coarsen = 1.0f64;
     loop {
         let mut out: Vec<(SectionKey, f64, bool)> = Vec::new();
+        let mut hidden_roots = std::collections::HashSet::new();
         let mut stack: Vec<(i32, i64, i64)> = Vec::new();
         for j in lo[1]..=hi[1] {
             for i in lo[0]..=hi[0] {
@@ -447,11 +469,17 @@ pub fn wanted_sections(escape: &EscapeConfig, out_w: u32, out_h: u32, capacity: 
         while let Some((level, i, j)) = stack.pop() {
             let (near, inside) = geometry(level, i, j);
             if !inside {
+                if level == root_level {
+                    hidden_roots.insert((level, i, j));
+                }
                 continue;
             }
             let texel = (level as f64).exp2() * z / SECTION_CELLS as f64;
             let need = near.max(1.0e-9) * per_pixel / rho * coarsen;
             if texel > need && level > finest {
+                if level == root_level {
+                    hidden_roots.insert((level, i, j));
+                }
                 for (di, dj) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
                     stack.push((level - 1, i * 2 + di, j * 2 + dj));
                 }
@@ -462,22 +490,25 @@ pub fn wanted_sections(escape: &EscapeConfig, out_w: u32, out_h: u32, capacity: 
         if out.len() <= capacity || coarsen > 1.0e6 {
             // Roots first, then nearest first.
             out.sort_by(|a, b| b.2.cmp(&a.2).then(a.1.total_cmp(&b.1)));
-            return Wanted { root_level, root_first: lo, root_dims, sections: out };
+            return Wanted { root_level, root_first: lo, root_dims, sections: out, hidden_roots };
         }
         coarsen *= 1.5;
     }
 }
 
-/// A cached section: its atlas layer, and the frame it was last wanted.
+/// A cached section: its atlas layer, its samples a side, and the frame
+/// it was last wanted.
 struct Cached {
     layer: u32,
+    samples: u32,
     wanted: u64,
 }
 
-/// A section being rendered.
+/// A section being rendered, at `samples` a side.
 struct Building {
     key: SectionKey,
     layer: u32,
+    samples: u32,
     started: web_time::Instant,
 }
 
@@ -507,6 +538,9 @@ pub struct EscapeTerrain {
     section_ms: Option<f32>,
     /// The tiers: the lit tier's grid and the path tracer.
     tiers: TerrainTiers,
+    /// A deep picture's hidden roots' samples a side ([`COARSE_SAMPLES`];
+    /// a test sets a section's to compare).
+    pub(crate) coarse_samples: u32,
 }
 
 pub use super::path_core::PATH_SHOW_SAMPLES;
@@ -530,6 +564,7 @@ impl EscapeTerrain {
             section_done: std::sync::Arc::new(std::sync::Mutex::new(None)),
             section_ms: None,
             tiers: TerrainTiers::default(),
+            coarse_samples: COARSE_SAMPLES,
         }
     }
 
@@ -537,7 +572,7 @@ impl EscapeTerrain {
     /// section's escape render, the terrain's own buffers, or the atlas.
     pub fn allocation_error(device: &Device, escape: &EscapeConfig, w: u32, h: u32) -> Option<String> {
         let probe = Anchor { re: escape.center_re.clone(), im: escape.center_im.clone(), zoom: escape.zoom_log2 };
-        let section = section_config(&footprint_config(escape), &probe, (0, 0, 0));
+        let section = section_config(&footprint_config(escape), &probe, (0, 0, 0), SECTION_SAMPLES);
         EscapeRenderer::allocation_error(device, &section, SECTION_SAMPLES, SECTION_SAMPLES, 1)
             .or_else(|| TerrainRenderer::allocation_error(device, w, h))
             .or_else(|| {
@@ -651,49 +686,66 @@ impl EscapeTerrain {
                 c.wanted = self.frame;
             }
         }
-        let missing: Vec<SectionKey> = wanted.sections.iter().map(|w| w.0).filter(|k| !self.cache.contains_key(k)).collect();
+        let fp = footprint_config(escape);
+        // A hidden root of a deep picture at a sixteenth of the samples
+        // (`COARSE_SAMPLES`); a direct one costs too little to bother.
+        let coarse = self.coarse_samples;
+        let samples = |key: &SectionKey| -> u32 {
+            if wanted.hidden_roots.contains(key) && EscapeRenderer::wants_perturbation(&section_config(&fp, &anchor, *key, coarse)) {
+                coarse
+            } else {
+                SECTION_SAMPLES
+            }
+        };
+        // Missing: not cached, or cached coarser than now wanted (a
+        // hidden root come into view), which stands in until it lands.
+        let missing: Vec<(SectionKey, u32)> = wanted
+            .sections
+            .iter()
+            .map(|w| (w.0, samples(&w.0)))
+            .filter(|(k, n)| self.cache.get(k).is_none_or(|c| c.samples < *n))
+            .collect();
         self.missing = missing.len();
-        // A section no longer wanted is not finished.
-        if self.building.as_ref().is_some_and(|b| !missing.contains(&b.key)) {
+        // A section no longer wanted, or no longer at its samples, is not
+        // finished.
+        if self.building.as_ref().is_some_and(|b| !missing.contains(&(b.key, b.samples))) {
             if let Some(b) = self.building.take() {
                 self.free.push(b.layer);
             }
         }
-        let fp = footprint_config(escape);
-        let derivative = self.footprint.derivative_active(&section_config(&fp, &anchor, (0, 0, 0)));
+        let derivative = self.footprint.derivative_active(&section_config(&fp, &anchor, (0, 0, 0), SECTION_SAMPLES));
         let ingest = terrain_ingest(config, derivative);
         let mut landed = false;
         let current = self.building.as_ref().map(|b| b.key);
-        let mut todo = missing.iter().copied().filter(move |k| Some(*k) != current);
+        let mut todo = missing.iter().copied().filter(move |(k, _)| Some(*k) != current);
         for _ in 0..steps.max(1) {
             if self.building.is_none() {
-                let Some(key) = todo.next() else { break };
-                let Some(layer) = self.free.pop().or_else(|| self.evict()) else { break };
-                self.building = Some(Building { key, layer, started: web_time::Instant::now() });
+                let Some((key, samples)) = todo.next() else { break };
+                // At the atlas's capacity, a coarse copy being replaced
+                // gives up its own layer rather than wait for one.
+                let Some(layer) = self.free.pop().or_else(|| self.evict()).or_else(|| self.cache.remove(&key).map(|c| c.layer)) else { break };
+                self.building = Some(Building { key, layer, samples, started: web_time::Instant::now() });
             }
             let b = self.building.as_ref().expect("made above");
-            let (key, layer) = (b.key, b.layer);
-            let section = section_config(&fp, &anchor, key);
+            let (key, layer, n) = (b.key, b.layer, b.samples);
+            let section = section_config(&fp, &anchor, key, n);
+            // Resizing keeps the renderer's pipelines and orbit, and is a
+            // no-op at the size it has.
+            self.footprint.resize(device, n, n, 1);
             let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Terrain Section") });
             let settled = self.footprint.render(device, queue, &mut enc, &section, palette_view, palette_generation);
             queue.submit(std::iter::once(enc.finish()));
             if !settled {
                 continue;
             }
-            self.terrain.begin_section(layer, SECTION_SAMPLES, SECTION_SAMPLES, &ingest);
-            self.terrain.ingest_region(
-                device,
-                queue,
-                self.footprint.output_view(),
-                self.footprint.height_view(),
-                0,
-                0,
-                SECTION_SAMPLES,
-                SECTION_SAMPLES,
-            );
+            self.terrain.begin_section(layer, n, n, &ingest);
+            self.terrain.ingest_region(device, queue, self.footprint.output_view(), self.footprint.height_view(), 0, 0, n, n);
             self.terrain.finish_section(device, queue);
             let b = self.building.take().expect("made above");
-            self.cache.insert(key, Cached { layer, wanted: self.frame });
+            // A coarser copy it replaces gives its layer back.
+            if let Some(old) = self.cache.insert(key, Cached { layer, samples: n, wanted: self.frame }) {
+                self.free.push(old.layer);
+            }
             self.footprint_renders += 1;
             self.missing = self.missing.saturating_sub(1);
             landed = true;
@@ -784,9 +836,9 @@ impl EscapeTerrain {
             sections.push(GroundSection {
                 layer: c.layer,
                 origin: [(i as f64 * side - eye[0]) * z, (j as f64 * side - eye[1]) * z],
-                texel: side * z / SECTION_CELLS as f64,
-                n: SECTION_SAMPLES,
-                m: SECTION_SAMPLES,
+                texel: side * z / (c.samples - 1) as f64,
+                n: c.samples,
+                m: c.samples,
             });
             nodes[node].section = (sections.len() - 1) as i32;
         }
@@ -820,7 +872,8 @@ impl EscapeTerrain {
     /// the ground restarts both. True while there is more to do.
     pub fn render_viewport(&mut self, device: &Device, queue: &Queue, config: &FractalConfig) -> bool {
         let view = |jitter| terrain_view(config, jitter);
-        self.tiers.viewport(&mut self.terrain, device, queue, &tier_inputs(config, &view))
+        let inputs = TierInputs { filling: self.sections_missing() > 0, ..tier_inputs(config, &view) };
+        self.tiers.viewport(&mut self.terrain, device, queue, &inputs)
     }
 
     /// A path-traced sample's average time, in ms, once measured.
@@ -875,6 +928,12 @@ impl EscapeTerrain {
 
     /// The cached sections' keys, for a test.
     #[cfg(test)]
+    pub(crate) fn cached_samples_for_test(&self) -> Vec<(SectionKey, u32)> {
+        let mut v: Vec<(SectionKey, u32)> = self.cache.iter().map(|(k, c)| (*k, c.samples)).collect();
+        v.sort();
+        v
+    }
+
     pub(crate) fn cached_for_test(&self) -> Vec<SectionKey> {
         let mut k: Vec<SectionKey> = self.cache.keys().copied().collect();
         k.sort();
@@ -1011,27 +1070,28 @@ mod tests {
         let (are, aim) = (a.re.parse::<f64>().unwrap(), a.im.parse::<f64>().unwrap());
         // The escape view's pixel centres: x right, y down, the span the
         // render's height.
-        let pixel = |c: &EscapeConfig, px: f64, py: f64| -> (f64, f64) {
-            let n = SECTION_SAMPLES as f64;
+        let pixel = |c: &EscapeConfig, n: u32, px: f64, py: f64| -> (f64, f64) {
+            let n = n as f64;
             let span = 4.0 * (-c.zoom_log2).exp2();
             let (cx, cy) = (c.center_re.parse::<f64>().unwrap(), c.center_im.parse::<f64>().unwrap());
             (cx + ((px + 0.5) / n - 0.5) * span, cy - ((py + 0.5) / n - 0.5) * span)
         };
-        let s = SECTION_CELLS as f64;
-        for key in [(0, 0, 0), (-3, 5, -2), (2, -1, 1)] {
-            let c = section_config(&esc, &a, key);
+        // A section's samples and a hidden root's coarse ones alike.
+        for (key, n) in [((0, 0, 0), SECTION_SAMPLES), ((-3, 5, -2), SECTION_SAMPLES), ((2, -1, 1), SECTION_SAMPLES), ((2, -1, 1), COARSE_SAMPLES)] {
+            let s = (n - 1) as f64;
+            let c = section_config(&esc, &a, key, n);
             assert_eq!(c.rotation, 0.0);
             let side = (key.0 as f64).exp2() * width;
             let (x0, y0) = (are + key.1 as f64 * side, aim + key.2 as f64 * side);
-            let sw = pixel(&c, 0.0, s);
-            let nw = pixel(&c, 0.0, 0.0);
-            let se = pixel(&c, s, s);
+            let sw = pixel(&c, n, 0.0, s);
+            let nw = pixel(&c, n, 0.0, 0.0);
+            let se = pixel(&c, n, s, s);
             let tol = side * 1e-9;
             assert!((sw.0 - x0).abs() < tol && (sw.1 - y0).abs() < tol, "{key:?} south-west {sw:?} vs {:?}", (x0, y0));
             assert!((nw.1 - (y0 + side)).abs() < tol, "{key:?} north edge");
             assert!((se.0 - (x0 + side)).abs() < tol, "{key:?} east edge");
-            let east = section_config(&esc, &a, (key.0, key.1 + 1, key.2));
-            let e_sw = pixel(&east, 0.0, s);
+            let east = section_config(&esc, &a, (key.0, key.1 + 1, key.2), n);
+            let e_sw = pixel(&east, n, 0.0, s);
             assert!((e_sw.0 - se.0).abs() < tol && (e_sw.1 - se.1).abs() < tol, "{key:?}: the east neighbour starts where it ends");
         }
     }
@@ -1054,7 +1114,11 @@ mod tests {
         assert!((20..=64).contains(&w.sections.len()), "{}", w.sections.len());
         let per_pixel = 2.0 * (esc.cam_fov as f64 * 0.5).tan() / 1080.0;
         for &&((level, _, _), near, _) in &leaves {
-            assert!(near <= esc.terrain.far as f64 + 1e-9, "a leaf within reach: {near}");
+            // Within the clip: `far` deep, so at most `far` along the
+            // widened frustum's corner ray.
+            let th = (esc.cam_fov as f64 * 0.5).tan() * 1.2;
+            let corner = (1.0 + (th * 1920.0 / 1080.0).powi(2) + th * th).sqrt();
+            assert!(near <= esc.terrain.far as f64 * corner + 1e-9, "a leaf within reach: {near}");
             let texel = (level as f64).exp2() * z / SECTION_CELLS as f64;
             assert!(texel <= near * per_pixel * 1.0001 || level <= ((FINEST_REL / z).log2().floor() as i32), "texels fine enough at {near}");
         }
@@ -1067,6 +1131,99 @@ mod tests {
         esc.supersample = 4;
         let w4 = wanted_sections(&esc, 1920, 1080, MAX_SECTIONS as usize, a.zoom, eye);
         assert!(w4.sections.len() <= MAX_SECTIONS as usize, "{}", w4.sections.len());
+    }
+
+    /// The leaves cover every point a primary ray can meet the ground at
+    /// -- within the slab, `far` deep along the view, the walk's clip --
+    /// so no pixel draws on a root that was split or is out of view -- a
+    /// hidden one. Views: the default, deep, turned, low and steep, whose
+    /// every root is hidden; a wide angle's and a thumbnail's, where a
+    /// root in view can be coarse enough to be a leaf, and draws.
+    #[test]
+    fn the_leaves_cover_every_ray_the_walk_draws() {
+        let deep: FractalConfig = serde_json::from_str(
+            &std::fs::read_to_string("tests/visual/configs/escape/fe-zoom-60-edge.fflame").expect("config"),
+        )
+        .expect("parse");
+        let mut views: Vec<(&str, EscapeConfig, u32, u32)> = Vec::new();
+        let mut esc = EscapeConfig::default();
+        esc.terrain.enabled = true;
+        views.push(("default", esc.clone(), 1920, 1080));
+        let mut d = deep.escape.clone();
+        d.terrain.enabled = true;
+        d.terrain.far = 4.0;
+        views.push(("2^60", d, 1920, 1080));
+        let mut v = esc.clone();
+        v.cam_yaw = 2.3;
+        v.rotation = 0.4;
+        views.push(("turned", v, 1920, 1080));
+        let mut v = esc.clone();
+        v.cam_pitch = 0.12;
+        v.terrain.far = 8.0;
+        views.push(("low", v, 1920, 1080));
+        let mut v = esc.clone();
+        v.cam_pitch = 1.3;
+        views.push(("steep", v, 1920, 1080));
+        let mut v = esc.clone();
+        v.cam_fov = 1.6;
+        views.push(("wide", v, 2560, 1080));
+        views.push(("thumbnail", esc.clone(), 48, 27));
+        for (name, escape, w, h) in views {
+            let a = canonical_anchor(&escape);
+            let (eye, z) = eye_in_anchor(&escape, &a);
+            let wanted = wanted_sections(&escape, w, h, MAX_SECTIONS as usize, a.zoom, eye);
+            let leaves: std::collections::HashSet<SectionKey> = wanted.sections.iter().filter(|s| !s.2).map(|s| s.0).collect();
+            let roots: Vec<SectionKey> = wanted.sections.iter().filter(|s| s.2).map(|s| s.0).collect();
+            let finest = wanted.sections.iter().map(|s| s.0 .0).min().unwrap();
+            let cam = terrain_camera(&escape);
+            let th = (cam.fov as f64 * 0.5).tan();
+            let (far, top) = (escape.terrain.far as f64, escape.terrain.height as f64);
+            let mut drawn_roots = std::collections::HashSet::new();
+            let (mut points, mut on_roots) = (0u32, 0u32);
+            let step = (w / 96).max(1);
+            for py in (0..h).step_by(step as usize) {
+                for px in (0..w).step_by(step as usize) {
+                    let (u, v) = ((px as f64 + 0.5) / w as f64 - 0.5, (py as f64 + 0.5) / h as f64 - 0.5);
+                    let d: [f64; 3] = std::array::from_fn(|k| cam.forward[k] + cam.right[k] * u * w as f64 / h as f64 * 2.0 * th - cam.up[k] * v * 2.0 * th);
+                    let depth = d[0] * cam.forward[0] + d[1] * cam.forward[1] + d[2] * cam.forward[2];
+                    // Where the ray crosses the slab's top and floor, and
+                    // between, inside the clip.
+                    for zp in [top, top * 0.5, 0.0] {
+                        if !(d[2] < 0.0) || cam.eye[2] <= zp {
+                            continue;
+                        }
+                        let t = (zp - cam.eye[2]) / d[2];
+                        if t * depth > far {
+                            continue;
+                        }
+                        let (ax, ay) = (eye[0] + (cam.eye[0] + d[0] * t) / z, eye[1] + (cam.eye[1] + d[1] * t) / z);
+                        let found = (finest..=wanted.root_level).find_map(|level| {
+                            let side = (level as f64).exp2();
+                            let key = (level, (ax / side).floor() as i64, (ay / side).floor() as i64);
+                            wanted.sections.iter().any(|s| s.0 == key).then_some(key)
+                        });
+                        let Some(key) = found else { continue };
+                        points += 1;
+                        if !leaves.contains(&key) {
+                            on_roots += 1;
+                            drawn_roots.insert(key);
+                        }
+                    }
+                }
+            }
+            let hidden: Vec<&SectionKey> = roots.iter().filter(|r| wanted.hidden_roots.contains(r)).collect();
+            println!("{name}: {} sections, {} roots ({} hidden), {points} points, {on_roots} on a root", wanted.sections.len(), roots.len(), hidden.len());
+            assert!(points > 100, "{name}: {points}");
+            // A root draws only where no leaf is: it must be a leaf itself
+            // (unsplit, in view), never a hidden one.
+            for r in &drawn_roots {
+                assert!(!wanted.hidden_roots.contains(r), "{name}: hidden root {r:?} draws");
+            }
+            if !["wide", "thumbnail"].contains(&name) {
+                assert_eq!(on_roots, 0, "{name}: the leaves cover the clip");
+                assert_eq!(hidden.len(), roots.len(), "{name}: every root split or out of view");
+            }
+        }
     }
 
     /// A Mandelbrot terrain config: the whole set about the view, a
@@ -1313,6 +1470,143 @@ mod tests {
             .count();
         println!("2^60: {ground} of {} pixels ground", w * h);
         assert!(ground > (w * h / 3) as usize, "{ground}");
+    }
+
+    /// A deep picture's hidden roots render at [`COARSE_SAMPLES`], and no
+    /// pixel shows it: unshadowed and without occlusion, so that only
+    /// what primary rays meet is drawn, the picture is the one with
+    /// every root a full section's, byte for byte. A shallow picture's
+    /// roots stay full.
+    #[test]
+    fn a_deep_pictures_hidden_roots_are_coarse_and_unseen() {
+        let Some((device, queue)) = crate::escape::terrain::gpu_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let mut c: FractalConfig = serde_json::from_str(
+            &std::fs::read_to_string("tests/visual/configs/escape/fe-zoom-60-edge.fflame").expect("config"),
+        )
+        .expect("parse");
+        c.render_mode = crate::scene::transforms::RenderMode::Escape;
+        c.escape.max_iter = 3000;
+        c.escape.shading.enabled = false;
+        c.escape.terrain.enabled = true;
+        c.escape.terrain.far = 2.0;
+        c.escape.terrain.tier = RenderTier::Lit;
+        c.escape.terrain.shadow = 0.0;
+        c.escape.terrain.occlusion = 0.0;
+        let (w, h) = (320u32, 180u32);
+        let mut engines = crate::renderer::render::RenderEngines::default();
+        let mut picture = |c: &FractalConfig, engines: &mut crate::renderer::render::RenderEngines| {
+            pollster::block_on(crate::renderer::render(
+                &device,
+                &queue,
+                crate::renderer::RenderJob::new(c, w, h).with_engines(engines),
+                &mut crate::renderer::NoProgress,
+            ))
+            .expect("render")
+            .rgba_data
+        };
+        let coarse = picture(&c, &mut engines);
+        let t = engines.terrain.as_mut().expect("the terrain engine");
+        let cached = t.cached_samples_for_test();
+        let roots: Vec<_> = cached.iter().filter(|(_, n)| *n == COARSE_SAMPLES).collect();
+        println!("{} sections, {} coarse", cached.len(), roots.len());
+        assert!(!roots.is_empty(), "{cached:?}");
+        let top = cached.iter().map(|(k, _)| k.0).max().unwrap();
+        assert!(roots.iter().all(|(k, _)| k.0 == top), "only roots coarse: {cached:?}");
+        // The same picture with every root a full section's.
+        t.coarse_samples = SECTION_SAMPLES;
+        t.invalidate_footprint();
+        let full = picture(&c, &mut engines);
+        let t = engines.terrain.as_mut().unwrap();
+        assert!(t.cached_samples_for_test().iter().all(|(_, n)| *n == SECTION_SAMPLES));
+        let differ = coarse.chunks_exact(4).zip(full.chunks_exact(4)).filter(|(a, b)| a != b).count();
+        assert_eq!(differ, 0, "{differ} pixels see a hidden root");
+        // Shallow: direct, so every root full.
+        t.coarse_samples = COARSE_SAMPLES;
+        let mut s = terrain_config();
+        s.escape.terrain.tier = RenderTier::Lit;
+        let _ = picture(&s, &mut engines);
+        let t = engines.terrain.as_mut().unwrap();
+        assert!(t.cached_samples_for_test().iter().all(|(_, n)| *n == SECTION_SAMPLES), "a direct picture's roots stay full");
+    }
+
+    /// A deep fill in the app, measured: `fe-zoom-60-edge` as a terrain
+    /// at 1080p, its sections from nothing on the frame loop's terms (the
+    /// orbits on the worker thread, as many steps a frame as fit 8 ms at
+    /// the measured section time, each frame's work waited on), alone and
+    /// with the viewport drawing each tier -- and how many orbits were
+    /// relocated rather than built.
+    #[test]
+    #[ignore = "measurement"]
+    fn deep_fill_in_the_app() {
+        let Some((device, queue)) = crate::escape::terrain::gpu_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let mut c: FractalConfig = serde_json::from_str(
+            &std::fs::read_to_string("tests/visual/configs/escape/fe-zoom-60-edge.fflame").expect("config"),
+        )
+        .expect("parse");
+        c.render_mode = crate::scene::transforms::RenderMode::Escape;
+        c.escape.terrain.enabled = true;
+        c.escape.terrain.far = 4.0;
+        c.escape.shading.enabled = false;
+        println!("{}, zoom 2^{}, max_iter {}", c.escape.formula, c.escape.zoom_log2, c.escape.max_iter);
+        let palette = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d { width: 256, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let palette_view = palette.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut app = EscapeTerrain::new(&device, 1920, 1080);
+        app.footprint_renderer().progressive = true;
+        let passes = [
+            ("cold", None),
+            ("refill", None),
+            ("refill, viewport Lit", Some(RenderTier::Lit)),
+            ("refill, viewport Auto", Some(RenderTier::Auto)),
+            ("refill, viewport Path Traced", Some(RenderTier::PathTraced)),
+        ];
+        for (pass, viewport) in passes {
+            // A new picture: every section again.
+            c.escape.max_iter += 1;
+            if let Some(tier) = viewport {
+                c.escape.terrain.tier = tier;
+            }
+            let d0 = crate::escape::diag::snapshot();
+            let mut frames = 0u32;
+            let t0 = std::time::Instant::now();
+            loop {
+                let steps = app.section_ms().map_or(1, |ms| (8.0 / ms.max(0.5)).floor().clamp(1.0, 4.0) as u32);
+                let more = app.update(&device, &queue, &c, 1920, 1080, &palette_view, 1, steps);
+                if viewport.is_some() {
+                    app.render_viewport(&device, &queue, &c);
+                }
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                frames += 1;
+                if !more || frames > 200_000 {
+                    break;
+                }
+            }
+            let d1 = crate::escape::diag::snapshot();
+            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            let cached = app.cached_samples_for_test();
+            let coarse = cached.iter().filter(|(_, n)| *n == COARSE_SAMPLES).count();
+            println!(
+                "{pass}: {ms:.0} ms, {} sections ({coarse} coarse), {frames} frames ({:.1} ms a frame); orbits {} built, {} relocated",
+                cached.len(),
+                ms / frames as f64,
+                d1.orbit_rebuilds - d0.orbit_rebuilds,
+                d1.orbit_relocations - d0.orbit_relocations,
+            );
+        }
     }
 
     /// The fill, measured: every section a view wants rendered from
