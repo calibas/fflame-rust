@@ -115,6 +115,22 @@ fn picture_key(escape: &EscapeConfig) -> EscapeConfig {
     k.cam_yaw = d.cam_yaw;
     k.cam_bank = d.cam_bank;
     k.cam_fov = d.cam_fov;
+    // The path tracer's and the solid tier's settings, the downsample
+    // (a section renders at one sample a pixel) and the relief's LIGHT
+    // (the 2D relief is off under a terrain, whose own lights light it)
+    // are the walk's or nobody's: kept, a sample count or a lens edit
+    // threw away every section and rendered them all again -- seconds
+    // at depth -- where the path tracer only needed to restart.
+    k.path = d.path.clone();
+    k.solid_tier = d.solid_tier;
+    k.downsample = d.downsample;
+    k.shading.light_angle = d.shading.light_angle;
+    k.shading.shadow_color = d.shading.shadow_color;
+    k.shading.shadow_strength = d.shading.shadow_strength;
+    k.shading.shadow_blend = d.shading.shadow_blend;
+    k.shading.highlight_color = d.shading.highlight_color;
+    k.shading.highlight_strength = d.shading.highlight_strength;
+    k.shading.highlight_blend = d.shading.highlight_blend;
     // The source decides what the iterate pass writes, and the interior
     // and a lake's tint how a section encodes it (the tint is its albedo);
     // the rest is the walk's and the view's.
@@ -348,6 +364,19 @@ fn section_config(fp: &EscapeConfig, a: &Anchor, key: SectionKey, samples: u32) 
     c
 }
 
+/// Where auto contrast's one fit for a terrain is measured: the config's
+/// own 2D view, unrotated -- the picture the terrain was turned on from,
+/// whose colours it then keeps. Measured when the sections start (a new
+/// picture, a new anchor) and held while they last, so a pan within the
+/// anchor keeps it: an export from another view fits there. Fitted each
+/// its own way, every section was a palette turn of its own, a step of
+/// colour at every edge.
+fn contrast_probe_config(fp: &EscapeConfig) -> EscapeConfig {
+    let mut c = fp.clone();
+    c.rotation = 0.0;
+    c
+}
+
 /// What the view wants: the root grid's level and its first square, the
 /// grid's size, and the sections wanted -- the roots, and the leaves of
 /// the split -- each with its nearest distance from the eye (current
@@ -538,6 +567,9 @@ pub struct EscapeTerrain {
     section_ms: Option<f32>,
     /// The tiers: the lit tier's grid and the path tracer.
     tiers: TerrainTiers,
+    /// Auto contrast's one fit for every section is measured and pinned
+    /// (`contrast_probe_config`).
+    contrast_pinned: bool,
     /// A deep picture's hidden roots' samples a side ([`COARSE_SAMPLES`];
     /// a test sets a section's to compare).
     pub(crate) coarse_samples: u32,
@@ -564,6 +596,7 @@ impl EscapeTerrain {
             section_done: std::sync::Arc::new(std::sync::Mutex::new(None)),
             section_ms: None,
             tiers: TerrainTiers::default(),
+            contrast_pinned: false,
             coarse_samples: COARSE_SAMPLES,
         }
     }
@@ -659,6 +692,7 @@ impl EscapeTerrain {
             self.picture = Some(picture);
             self.clear();
             self.terrain.reset_range(queue);
+            self.unpin_contrast();
         }
         // Out of the anchor's band or lattice cell: the sections start
         // over on the new one.
@@ -666,6 +700,7 @@ impl EscapeTerrain {
         if self.anchor.as_ref() != Some(&canonical) {
             self.anchor = Some(canonical);
             self.clear();
+            self.unpin_contrast();
         }
         let anchor = self.anchor.clone().expect("set above");
         let (eye, z) = eye_in_anchor(escape, &anchor);
@@ -716,6 +751,30 @@ impl EscapeTerrain {
         let derivative = self.footprint.derivative_active(&section_config(&fp, &anchor, (0, 0, 0), SECTION_SAMPLES));
         let ingest = terrain_ingest(config, derivative);
         let mut landed = false;
+        // Auto contrast: one fit for every section, measured first from a
+        // view of the anchor's own (`contrast_probe_config`) and held.
+        if escape.contrast.is_active() && !self.contrast_pinned {
+            let probe = contrast_probe_config(&fp);
+            self.footprint.resize(device, COARSE_SAMPLES, COARSE_SAMPLES, 1);
+            let mut settled = false;
+            for _ in 0..steps.max(1) {
+                let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Terrain Contrast Probe") });
+                settled = self.footprint.render(device, queue, &mut enc, &probe, palette_view, palette_generation);
+                queue.submit(std::iter::once(enc.finish()));
+                if settled {
+                    break;
+                }
+            }
+            if !settled {
+                self.missing = wanted.sections.len();
+                self.set_ground(device, queue, config, &wanted, eye, z, false, &ingest);
+                return true;
+            }
+            self.footprint.pin_contrast();
+            self.contrast_pinned = true;
+        } else if !escape.contrast.is_active() && self.contrast_pinned {
+            self.unpin_contrast();
+        }
         let current = self.building.as_ref().map(|b| b.key);
         let mut todo = missing.iter().copied().filter(move |(k, _)| Some(*k) != current);
         for _ in 0..steps.max(1) {
@@ -738,7 +797,7 @@ impl EscapeTerrain {
             if !settled {
                 continue;
             }
-            self.terrain.begin_section(layer, n, n, &ingest);
+            self.terrain.begin_section(queue, layer, n, n, &ingest);
             self.terrain.ingest_region(device, queue, self.footprint.output_view(), self.footprint.height_view(), 0, 0, n, n);
             self.terrain.finish_section(device, queue);
             let b = self.building.take().expect("made above");
@@ -759,6 +818,14 @@ impl EscapeTerrain {
         }
         self.set_ground(device, queue, config, &wanted, eye, z, landed, &ingest);
         self.missing > 0 || self.building.is_some()
+    }
+
+    /// Measure auto contrast's fit again (`contrast_probe_config`).
+    fn unpin_contrast(&mut self) {
+        if self.contrast_pinned {
+            self.footprint.unpin_contrast();
+            self.contrast_pinned = false;
+        }
     }
 
     /// A layer from the section wanted longest ago that the view does
@@ -859,6 +926,11 @@ impl EscapeTerrain {
             floor: -0.01,
             mode: ingest.mode(),
         };
+        // A count's or a relief's range: the ground's sections' own, so
+        // the heights are this ground's and not what was panned past or
+        // zoomed through before (the doc's "the picture is the config's").
+        let layers: Vec<u32> = ground.sections.iter().map(|s| s.layer).collect();
+        self.terrain.reduce_range(device, queue, &layers);
         self.terrain.set_ground(device, queue, ground);
     }
 
@@ -1010,6 +1082,13 @@ mod tests {
         b.terrain.far = 20.0;
         b.terrain.haze = 0.0;
         b.terrain.detail = 3.0;
+        b.path.samples = 17;
+        b.path.denoise = true;
+        b.path.sky_gradient = true;
+        b.path.aperture = 0.3;
+        b.solid_tier = crate::config::escape::RenderTier::PathTraced;
+        b.shading.light_angle = 10.0;
+        b.shading.highlight_strength = 0.9;
         assert_eq!(picture_key(&a), picture_key(&b));
         for edit in [
             |c: &mut EscapeConfig| c.max_iter += 1,
@@ -1018,6 +1097,8 @@ mod tests {
             // A lake's tint is its sections' albedo: reported cached in
             // the app, the old colour until a pan brought new sections.
             |c: &mut EscapeConfig| c.terrain.lake_tint = [0.5, 0.1, 0.1],
+            // The relief source's field is what a section writes.
+            |c: &mut EscapeConfig| c.shading.field = crate::config::escape::ShadingField::Banded,
         ] {
             let mut c = a.clone();
             edit(&mut c);
@@ -1470,6 +1551,135 @@ mod tests {
             .count();
         println!("2^60: {ground} of {} pixels ground", w * h);
         assert!(ground > (w * h / 3) as usize, "{ground}");
+    }
+
+    /// Auto contrast is one fit for the whole ground: the anchor's probe
+    /// view's, held for every section -- not each section's own, which
+    /// stepped the colour at every section's edge, and not whichever was
+    /// rendered last.
+    #[test]
+    fn auto_contrast_is_one_fit_for_the_ground() {
+        let Some((device, queue)) = crate::escape::terrain::gpu_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let palette = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d { width: 256, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let palette_view = palette.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut c = terrain_config();
+        c.escape.center_re = "-0.7453".into();
+        c.escape.center_im = "0.1127".into();
+        c.escape.zoom_log2 = 9.0;
+        c.escape.contrast.mode = crate::config::escape::ContrastMode::AutoRange;
+        c.escape.contrast.strength = 1.0;
+        let (w, h) = (160u32, 120u32);
+        let mut t = EscapeTerrain::new(&device, w, h);
+        let mut guard = 0;
+        while t.update(&device, &queue, &c, w, h, &palette_view, 1, 1) && guard < 100_000 {
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            guard += 1;
+        }
+        assert!(t.contrast_pinned);
+        let held = t.footprint.contrast_fit_for_test();
+        assert!(held.is_some(), "a fit");
+        // The probe's own, measured alone.
+        let anchor = t.anchor.clone().unwrap();
+        let probe = contrast_probe_config(&footprint_config(&c.escape));
+        let mut alone = EscapeRenderer::new(&device, COARSE_SAMPLES, COARSE_SAMPLES);
+        let mut guard = 0;
+        loop {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+            let settled = alone.render(&device, &queue, &mut enc, &probe, &palette_view, 1);
+            queue.submit(std::iter::once(enc.finish()));
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            guard += 1;
+            if settled || guard > 10_000 {
+                break;
+            }
+        }
+        assert_eq!(held, alone.contrast_fit_for_test(), "the probe's fit");
+        // And a section rendered now keeps it.
+        let section = section_config(&footprint_config(&c.escape), &anchor, t.cached_for_test()[0], SECTION_SAMPLES);
+        let fp = t.footprint_renderer();
+        fp.resize(&device, SECTION_SAMPLES, SECTION_SAMPLES, 1);
+        let mut guard = 0;
+        loop {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+            let settled = fp.render(&device, &queue, &mut enc, &section, &palette_view, 1);
+            queue.submit(std::iter::once(enc.finish()));
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            guard += 1;
+            if settled || guard > 10_000 {
+                break;
+            }
+        }
+        assert_eq!(held, t.footprint.contrast_fit_for_test(), "held through a section");
+        alone.destroy();
+        t.destroy();
+    }
+
+    /// A count's range is the ground's, not the engine's history: filled
+    /// over a wide view, then zoomed into another band -- every section
+    /// re-made -- an engine's range is a fresh engine's at the new view.
+    /// It kept the wide view's least count, and the deep ground came out
+    /// nearly flat beside what an export of it draws.
+    #[test]
+    fn a_counts_range_is_the_grounds() {
+        let Some((device, queue)) = crate::escape::terrain::gpu_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let palette = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d { width: 256, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let palette_view = palette.create_view(&wgpu::TextureViewDescriptor::default());
+        let (w, h) = (160u32, 120u32);
+        let fill = |t: &mut EscapeTerrain, c: &FractalConfig| {
+            let mut guard = 0;
+            while t.update(&device, &queue, c, w, h, &palette_view, 1, 1) && guard < 100_000 {
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                guard += 1;
+            }
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            let raw = crate::escape::terrain::gpu_tests::read_buffer(&device, &queue, t.terrain.range_buffer_for_test(), 8);
+            let r: [u32; 2] = bytemuck::cast_slice::<u8, u32>(&raw).try_into().unwrap();
+            r
+        };
+        let mut wide = terrain_config();
+        wide.escape.terrain.source = TerrainSource::EscapeCount;
+        wide.escape.max_iter = 200;
+        let mut deep = wide.clone();
+        deep.escape.center_re = "-0.7453".into();
+        deep.escape.center_im = "0.1127".into();
+        deep.escape.zoom_log2 = 9.0;
+        // One engine at a time: each holds an atlas of sections, and the
+        // suite's other GPU tests run beside it.
+        let mut a = EscapeTerrain::new(&device, w, h);
+        let first = fill(&mut a, &wide);
+        let after = fill(&mut a, &deep);
+        a.destroy();
+        drop(a);
+        let mut b = EscapeTerrain::new(&device, w, h);
+        let fresh = fill(&mut b, &deep);
+        b.destroy();
+        println!("wide {first:?}, then deep {after:?}, fresh deep {fresh:?}");
+        assert_ne!(first, fresh, "the views' ranges differ");
+        assert_eq!(after, fresh);
     }
 
     /// An export reports its progress as it goes -- the sections, then the

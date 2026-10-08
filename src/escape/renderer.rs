@@ -1103,6 +1103,10 @@ pub struct EscapeRenderer {
     contrast_fit: Option<ContrastFit>,
     /// Identity the current fit was measured under.
     contrast_fit_key: Option<String>,
+    /// The current fit held for every render to come, whatever its view
+    /// (`pin_contrast`): a terrain's sections, each a view of its own,
+    /// share one.
+    contrast_pinned: bool,
     /// The palette the current render is drawn with (`render`'s
     /// `palette_generation`): part of the iteration's identity for a
     /// colouring that samples it inside the loop (`PaletteInLoop`).
@@ -1833,6 +1837,7 @@ impl EscapeRenderer {
             contrast_readback: None,
             contrast_fit: None,
             contrast_fit_key: None,
+            contrast_pinned: false,
             palette_generation: 0,
             current_ref_offset: [0.0, 0.0],
             iter_state_buffer: None,
@@ -5864,6 +5869,26 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         want.clamp(64, 50_000)
     }
 
+    /// Hold the auto contrast fit the last settled render measured for
+    /// every render to come, whatever its view, until `unpin_contrast`.
+    /// A terrain's sections are views of their own: fitted each its own
+    /// way, they drew a step of colour at every section's edge.
+    pub(crate) fn pin_contrast(&mut self) {
+        self.contrast_pinned = true;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn contrast_fit_for_test(&self) -> Option<ContrastFit> {
+        self.contrast_fit
+    }
+
+    /// Measure each view's fit again (`pin_contrast`).
+    pub(crate) fn unpin_contrast(&mut self) {
+        self.contrast_pinned = false;
+        self.contrast_fit = None;
+        self.contrast_fit_key = None;
+    }
+
     /// Whether a settled frame still owes the user a contrast pass.
     ///
     /// The fit is measured FROM the finished field, so it cannot be
@@ -5874,6 +5899,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// while dirty.
     fn contrast_pending(&self, escape: &EscapeConfig, iterate_key: Option<&str>) -> bool {
         escape.contrast.is_active()
+            && !self.contrast_pinned
             && self.results_key.is_some()
             && iterate_key.is_some_and(|ik| self.contrast_fit_key.as_deref() != Some(Self::contrast_key(escape, ik).as_str()))
     }
@@ -5960,7 +5986,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         escape: &EscapeConfig,
         key: &str,
     ) {
-        if !escape.contrast.is_active() || self.contrast_fit_key.as_deref() == Some(key) {
+        if !escape.contrast.is_active() || self.contrast_pinned || self.contrast_fit_key.as_deref() == Some(key) {
             return;
         }
         let cells = (PROBE_W * PROBE_H) as u64;
@@ -7947,7 +7973,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             {
                 let t0 = web_time::Instant::now();
                 let ckey = Self::contrast_key(escape, ik);
-                if escape.contrast.is_active() && self.contrast_fit_key.as_deref() != Some(ckey.as_str()) {
+                if escape.contrast.is_active() && !self.contrast_pinned && self.contrast_fit_key.as_deref() != Some(ckey.as_str()) {
                     // The height field the probe reads may still hold the
                     // previous colouring's values -- a recolour edit does
                     // not re-iterate -- so recolour once through the

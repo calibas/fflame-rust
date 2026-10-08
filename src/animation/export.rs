@@ -2666,7 +2666,12 @@ mod escape_export_tests {
     /// forgotten here.
     #[test]
     fn every_offered_escape_target_reaches_the_exporter() {
-        for base in [solid(), FractalConfig::default()] {
+        // And a plane drawn as a terrain, whose camera, ground and path
+        // tracer are offered too.
+        let mut terrain = FractalConfig::default();
+        terrain.render_mode = crate::scene::transforms::RenderMode::Escape;
+        terrain.escape.terrain.enabled = true;
+        for base in [solid(), FractalConfig::default(), terrain] {
             for item in crate::ui::target_selector::escape_items_for_test(&base) {
                 // Two probes, because a count target reads an integer.
                 let mut moved = false;
@@ -2690,6 +2695,32 @@ mod escape_export_tests {
                     item.to_string_key()
                 );
             }
+        }
+    }
+
+    /// The same for a simulation's targets, its terrain's among them.
+    #[cfg(feature = "engine-sim")]
+    #[test]
+    fn every_offered_sim_target_reaches_the_exporter() {
+        let mut base = FractalConfig::default();
+        base.render_mode = crate::scene::transforms::RenderMode::Simulation;
+        base.sim.terrain.enabled = true;
+        let offered = crate::ui::target_selector::sim_items_for_test(&base);
+        assert!(offered.contains(&ConfigPath::SimTerrainCamPitch), "the terrain's camera is offered");
+        for item in offered {
+            let mut moved = false;
+            for probe in [serde_json::json!(0.375), serde_json::json!(3)] {
+                let Some(value) = crate::config::delta::json_to_config_value(&probe, &item) else {
+                    continue;
+                };
+                let mut c = base.clone();
+                apply_config_value(&mut c, EditingTarget::Main, &item, &value);
+                if serde_json::to_string(&c.sim).unwrap() != serde_json::to_string(&base.sim).unwrap() {
+                    moved = true;
+                    break;
+                }
+            }
+            assert!(moved, "`{}` is offered as a track target but the exporter ignores it", item.to_string_key());
         }
     }
 }

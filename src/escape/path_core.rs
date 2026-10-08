@@ -854,7 +854,14 @@ fn prepare(@builtin(global_invocation_id) gid: vec3<u32>) {
     let al = max(dn_lum(p.albedo), DN_FLOOR);
     var variance = 0.0;
     if (dn_n(gid.y) >= 4u) {
-        // The mean's: the samples' over their number.
+        // The mean's: the samples' over their number. A coverage-weighted
+        // mean's is the samples' times sum(a^2) / sum(a)^2, which lies
+        // between 1/n and 1/sum(a) and is neither without a channel for
+        // sum(a^2). 1/sum(a) is the bound that never trusts too little
+        // noise: exact at a silhouette (hits whole, misses none), and up to
+        // 1/a too wide under a uniform haze -- so the hazy distance blurs
+        // somewhat more, rather than an edge against the sky keeping its
+        // noise.
         variance = max(p.m2 - p.m1 * p.m1, 0.0) / max(p.cover, 1.0) / (al * al);
     } else {
         // Too few samples for moments: the light's spread over the
@@ -1033,6 +1040,8 @@ pub(crate) struct PathSum {
     guide: Option<Buffer>,
     guide_px: u32,
     guided: bool,
+    /// The guides were asked for and did not fit (warned once).
+    guided_refused: bool,
     no_guide: Buffer,
     denoiser: Option<Denoiser>,
     /// When the denoiser last ran: the count and split it filtered, and
@@ -1106,6 +1115,7 @@ impl PathSum {
             guide: None,
             guide_px: 0,
             guided: false,
+            guided_refused: false,
             no_guide,
             denoiser: None,
             denoised: None,
@@ -1116,6 +1126,17 @@ impl PathSum {
     /// not. True when that changed: the guides start with the sum, so the
     /// caller starts it over.
     pub(crate) fn set_guided(&mut self, device: &Device, on: bool) -> bool {
+        // The guides are 32 bytes a pixel, bound whole: past what one
+        // binding holds (128 MB on a browser's floor: 2048 x 2048), the
+        // picture goes undenoised rather than failing validation. A
+        // terrain's still tiles stay within it; a solid's frame need not.
+        let limits = device.limits();
+        let fits = self.px as u64 * 32 <= (limits.max_storage_buffer_binding_size as u64).min(limits.max_buffer_size);
+        if on && !fits && !self.guided_refused {
+            log::warn!("Denoise is off for this picture: its {} pixels' guides exceed one storage binding", self.px);
+        }
+        self.guided_refused = on && !fits;
+        let on = on && fits;
         let changed = on != self.guided;
         self.guided = on;
         if on && (self.guide.is_none() || self.guide_px < self.px) {
@@ -1131,6 +1152,12 @@ impl PathSum {
             self.guide_px = self.px;
         }
         changed
+    }
+
+    /// Whether the guides are gathered: the denoiser asked for, and room
+    /// for them. What the pass's uniform must say.
+    pub(crate) fn guided(&self) -> bool {
+        self.guided
     }
 
     /// What binding 10 holds: the guides, or a stand-in the shader does

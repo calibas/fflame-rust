@@ -356,6 +356,38 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
             TargetItem::new(ConfigPath::EscapeCamFov, "Camera FoV"),
         ]);
     }
+    // A plane drawn as a 3D terrain has a camera too -- the view's centre
+    // is its target, so its angles and lens are what move -- and the
+    // terrain's own settings.
+    if esc.terrain_active() {
+        items.extend([
+            TargetItem::new(ConfigPath::EscapeCamPitch, "Camera Pitch"),
+            TargetItem::new(ConfigPath::EscapeCamYaw, "Camera Yaw"),
+            TargetItem::new(ConfigPath::EscapeCamBank, "Camera Bank"),
+            TargetItem::new(ConfigPath::EscapeCamFov, "Camera FoV"),
+            TargetItem::new(ConfigPath::EscapeTerrainHeight, "Terrain: Height"),
+            TargetItem::new(ConfigPath::EscapeTerrainDeWidth, "Terrain: Flank width"),
+            TargetItem::new(ConfigPath::EscapeTerrainDetail, "Terrain: Detail"),
+            TargetItem::new(ConfigPath::EscapeTerrainFar, "Terrain: Distance"),
+            TargetItem::new(ConfigPath::EscapeTerrainHaze, "Terrain: Haze"),
+            TargetItem::new(ConfigPath::EscapeTerrainShadow, "Terrain: Shadows"),
+            TargetItem::new(ConfigPath::EscapeTerrainShadowSharpness, "Terrain: Shadow sharpness"),
+            TargetItem::new(ConfigPath::EscapeTerrainOcclusion, "Terrain: Occlusion reach"),
+            TargetItem::new(ConfigPath::EscapeTerrainLakeRoughness, "Terrain: Lake roughness"),
+        ]);
+    }
+    // The path tracer's material and lens, for whatever it traces: a
+    // terrain, or a solid.
+    if esc.terrain_active() || ifs.is_some_and(|d| d.solid) {
+        items.extend([
+            TargetItem::new(ConfigPath::EscapePathEnvironment, "Path: Sky light"),
+            TargetItem::new(ConfigPath::EscapePathGloss, "Path: Gloss"),
+            TargetItem::new(ConfigPath::EscapePathRoughness, "Path: Roughness"),
+            TargetItem::new(ConfigPath::EscapePathEmission, "Path: Glow"),
+            TargetItem::new(ConfigPath::EscapePathAperture, "Path: Aperture"),
+            TargetItem::new(ConfigPath::EscapePathFocus, "Path: Focus"),
+        ]);
+    }
 
     // The formula's own parameters, from whichever registry owns it.
     // Mode D was missing entirely, which is what hid Inverse Depth,
@@ -515,7 +547,39 @@ fn get_sim_items(config: &FractalConfig) -> Vec<TargetItem> {
             ));
         }
     }
+
+    // The 3D terrain's camera, ground and path tracer, when it is on.
+    if sim.terrain_active() {
+        items.extend([
+            TargetItem::new(ConfigPath::SimTerrainCamPitch, "Camera Pitch"),
+            TargetItem::new(ConfigPath::SimTerrainCamYaw, "Camera Yaw"),
+            TargetItem::new(ConfigPath::SimTerrainCamBank, "Camera Bank"),
+            TargetItem::new(ConfigPath::SimTerrainCamFov, "Camera FoV"),
+            TargetItem::new(ConfigPath::SimTerrainCamDistance, "Camera Distance"),
+            TargetItem::new(ConfigPath::SimTerrainTargetX, "Camera Target X"),
+            TargetItem::new(ConfigPath::SimTerrainTargetY, "Camera Target Y"),
+            TargetItem::new(ConfigPath::SimTerrainHeight, "Terrain: Height"),
+            TargetItem::new(ConfigPath::SimTerrainSoftness, "Terrain: Softness"),
+            TargetItem::new(ConfigPath::SimTerrainFar, "Terrain: Distance"),
+            TargetItem::new(ConfigPath::SimTerrainHaze, "Terrain: Haze"),
+            TargetItem::new(ConfigPath::SimTerrainShadow, "Terrain: Shadows"),
+            TargetItem::new(ConfigPath::SimTerrainShadowSharpness, "Terrain: Shadow sharpness"),
+            TargetItem::new(ConfigPath::SimTerrainOcclusion, "Terrain: Occlusion reach"),
+            TargetItem::new(ConfigPath::SimPathEnvironment, "Path: Sky light"),
+            TargetItem::new(ConfigPath::SimPathGloss, "Path: Gloss"),
+            TargetItem::new(ConfigPath::SimPathRoughness, "Path: Roughness"),
+            TargetItem::new(ConfigPath::SimPathEmission, "Path: Glow"),
+            TargetItem::new(ConfigPath::SimPathAperture, "Path: Aperture"),
+            TargetItem::new(ConfigPath::SimPathFocus, "Path: Focus"),
+        ]);
+    }
     items
+}
+
+/// The simulation targets' paths, for the exporter's coverage test.
+#[cfg(all(test, feature = "engine-sim"))]
+pub fn sim_items_for_test(config: &FractalConfig) -> Vec<ConfigPath> {
+    get_sim_items(config).into_iter().map(|i| i.path).collect()
 }
 
 /// Render a single category with its items
