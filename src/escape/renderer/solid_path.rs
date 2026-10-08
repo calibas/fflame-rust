@@ -930,10 +930,13 @@ mod tests {
         };
         let (w, h) = (48u32, 32u32);
         let (_pt, palette) = white_palette(&device, &queue);
-        let l = [0.5f32, 0.25, 0.75];
+        let bg = [0.5f32, 0.25, 0.75];
+        // The sky's radiance: the background decoded from sRGB, as the
+        // tonemap shows it (`path_core::shown`; gamma and exposure 1).
+        let l = bg.map(|v| v.powf(2.2));
         for bounces in [1u32, 3] {
             let mut c = cube_config();
-            c.background_color = l;
+            c.background_color = bg;
             c.escape.path.bounces = bounces;
             let mut r = renderer_for(&device, &c, w, h);
             r.render_solid_still(&device, &queue, &c, &palette, 64, || wait(&device));
