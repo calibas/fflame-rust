@@ -404,6 +404,40 @@ pub(super) enum UrlLoadedData {
 /// the eye asks for it. The coalescing window in the config manager is
 /// 500 ms; this is deliberately shorter, because that one is about
 /// UNDO granularity and this one is about what is on screen.
+/// The escape engine's image for the tail: the terrain's while the
+/// config draws one, the 2D picture's otherwise. Takes the fields, not
+/// the app, so a caller holding the flame renderer can still ask.
+fn escape_view<'a>(
+    escape: &'a Option<crate::escape::EscapeRenderer>,
+    #[cfg(feature = "terrain")] terrain: &'a Option<crate::escape::footprint::EscapeTerrain>,
+    config: &crate::config::FractalConfig,
+) -> Option<&'a egui_wgpu::wgpu::TextureView> {
+    #[cfg(feature = "terrain")]
+    if config.escape.terrain_active() {
+        return terrain.as_ref().map(|t| t.output_view());
+    }
+    let _ = config;
+    escape.as_ref().map(|e| e.output_view())
+}
+
+/// The simulation's image for the tail: its terrain's while the config
+/// draws one, the grid's picture otherwise.
+#[cfg(feature = "engine-sim")]
+fn sim_view<'a>(
+    sim: &'a Option<crate::sim::SimRenderer>,
+    #[cfg(feature = "terrain")] terrain: &'a Option<crate::sim::terrain::SimTerrain>,
+    config: &crate::config::FractalConfig,
+) -> Option<&'a egui_wgpu::wgpu::TextureView> {
+    #[cfg(feature = "terrain")]
+    if config.sim.terrain_active() {
+        if let Some(t) = terrain.as_ref() {
+            return Some(t.output_view());
+        }
+    }
+    let _ = config;
+    sim.as_ref().map(|s| s.output_view())
+}
+
 const ESCAPE_INTERACTION_WINDOW: std::time::Duration = std::time::Duration::from_millis(250);
 
 pub struct App {
@@ -422,6 +456,12 @@ pub struct App {
     /// renderer: it consumes the flame renderer's palette texture and
     /// tonemap tail but owns its own pipelines and output.
     pub(super) escape_renderer: Option<crate::escape::EscapeRenderer>,
+    /// The 3D terrain view of the escape picture
+    /// (docs/projects/heightfield-3d.md): its footprint's renderer and
+    /// the terrain renderer. Held instead of `escape_renderer` while
+    /// the config draws a terrain, and freed when it does not.
+    #[cfg(feature = "terrain")]
+    pub(super) escape_terrain: Option<crate::escape::footprint::EscapeTerrain>,
     /// Set by `process_gpu_updates` when an edit requires re-running
     /// the escape pass (escape params, palette, structural loads).
     /// Starts true so the first escape frame always renders.
@@ -442,6 +482,10 @@ pub struct App {
     /// use so a flame session never allocates it.
     #[cfg(feature = "engine-sim")]
     pub(super) sim_renderer: Option<crate::sim::SimRenderer>,
+    /// The simulation's 3D terrain (heightfield plan T4), while the config
+    /// draws one.
+    #[cfg(all(feature = "terrain", feature = "engine-sim"))]
+    pub(super) sim_terrain: Option<crate::sim::terrain::SimTerrain>,
     /// Whether the Run button is engaged. Deliberately NOT in the
     /// config: it is a view state like the playhead, not part of the
     /// picture, and saving it would make a file that starts moving as
@@ -834,6 +878,8 @@ impl App {
             egui_layer,
             flame_renderer: Some(flame_renderer),
             escape_renderer: None,
+            #[cfg(feature = "terrain")]
+            escape_terrain: None,
             escape_dirty: true,
             escape_texture: Default::default(),
             escape_aa: Default::default(),
@@ -841,6 +887,8 @@ impl App {
             escape_last_edit: None,
             #[cfg(feature = "engine-sim")]
             sim_renderer: None,
+            #[cfg(all(feature = "terrain", feature = "engine-sim"))]
+            sim_terrain: None,
             // Runs on entry: a simulation that sits still looks broken,
             // and the first thing anyone does is press Run anyway.
             sim_running: true,
@@ -1154,12 +1202,20 @@ impl App {
                                 // its channel drops; the reference reloads
                                 // from the disk orbit store.
                                 app.escape_renderer = None;
+                                #[cfg(feature = "terrain")]
+                                {
+                                    app.escape_terrain = None;
+                                }
                                 // The field lives in GPU textures that
                                 // just went away; the run cannot be
                                 // recovered, only restarted.
                                 #[cfg(feature = "engine-sim")]
                                 {
                                     app.sim_renderer = None;
+                                    #[cfg(feature = "terrain")]
+                                    {
+                                        app.sim_terrain = None;
+                                    }
                                 }
                                 app.sim_reseed = true;
 
@@ -1493,11 +1549,20 @@ impl App {
                 esc.destroy();
                 log::info!("Left escape mode: freed {mb:.0} MB of escape renderer state");
             }
+            #[cfg(feature = "terrain")]
+            if let Some(t) = self.escape_terrain.take() {
+                t.destroy();
+                log::info!("Left escape mode: freed the terrain");
+            }
             // Rebuilt lazily; the flag makes the first frame back render.
             self.escape_dirty = true;
         }
         #[cfg(feature = "engine-sim")]
         if !crate::ui::render_mode::keeps_sim_engine(mode) {
+            #[cfg(feature = "terrain")]
+            if let Some(t) = self.sim_terrain.take() {
+                t.destroy();
+            }
             if self.sim_renderer.take().is_some() {
                 log::info!("Left simulation mode: freed the simulation grid");
                 // The grid was the state; coming back starts from the
@@ -2047,12 +2112,20 @@ impl App {
                         // `&mut self.flame_renderer`, and only
                         // field-level borrows are disjoint from it.
                         let non_flame_view = match export_config.render_mode {
-                            crate::scene::transforms::RenderMode::Escape => {
-                                self.escape_renderer.as_ref().map(|e| e.output_view())
-                            }
+                            crate::scene::transforms::RenderMode::Escape => escape_view(
+                                &self.escape_renderer,
+                                #[cfg(feature = "terrain")]
+                                &self.escape_terrain,
+                                &export_config,
+                            ),
                             #[cfg(feature = "engine-sim")]
                             crate::scene::transforms::RenderMode::Simulation => {
-                                self.sim_renderer.as_ref().map(|r| r.output_view())
+                                sim_view(
+                                    &self.sim_renderer,
+                                    #[cfg(feature = "terrain")]
+                                    &self.sim_terrain,
+                                    &export_config,
+                                )
                             }
                             _ => None,
                         };
@@ -2157,12 +2230,20 @@ impl App {
                         // `&mut self.flame_renderer`, and only
                         // field-level borrows are disjoint from it.
                         let non_flame_view = match export_config.render_mode {
-                            crate::scene::transforms::RenderMode::Escape => {
-                                self.escape_renderer.as_ref().map(|e| e.output_view())
-                            }
+                            crate::scene::transforms::RenderMode::Escape => escape_view(
+                                &self.escape_renderer,
+                                #[cfg(feature = "terrain")]
+                                &self.escape_terrain,
+                                &export_config,
+                            ),
                             #[cfg(feature = "engine-sim")]
                             crate::scene::transforms::RenderMode::Simulation => {
-                                self.sim_renderer.as_ref().map(|r| r.output_view())
+                                sim_view(
+                                    &self.sim_renderer,
+                                    #[cfg(feature = "terrain")]
+                                    &self.sim_terrain,
+                                    &export_config,
+                                )
                             }
                             _ => None,
                         };
@@ -2339,6 +2420,51 @@ impl App {
                     // into a watchdog-length dispatch). set_fixed_chunk pins
                     // the size to the TDR-calibrated seed; the render is
                     // chunk-invariant, so the image is unchanged.
+                    // The terrain's export: its footprint settled as the
+                    // 2D export settles (fixed chunks, no waiting), the
+                    // tile made, and the antialiasing grid accumulated
+                    // -- what `render_with` does on the desktop.
+                    #[cfg(feature = "terrain")]
+                    let terrain_export = if is_escape_export && export_config.escape.terrain_active() {
+                        // Sized to the still's tiles: it sizes itself.
+                        let (tile_w, tile_h) = crate::escape::terrain_tiers::still_tile(export_width, export_height);
+                        let mut t = crate::escape::footprint::EscapeTerrain::new(&self.gpu.device, tile_w, tile_h);
+                        t.footprint_renderer().set_fixed_chunk(true);
+                        // A 2D IFS formula draws the flame: its analysis
+                        // and coarse pass, as the viewport's terrain and
+                        // the desktop's `prepare_escape` give them.
+                        if let Some(def) = crate::escape::ifs::get_ifs(&export_config.escape.formula) {
+                            let registry = crate::variations::global_registry();
+                            let fp = t.footprint_renderer();
+                            fp.set_ifs(crate::escape::ifs::pack_for(def, &export_config, &registry));
+                            fp.ensure_coarse(&self.gpu.device, &self.gpu.queue, &export_config.escape, &export_config.flame);
+                        }
+                        let mut guard = 0u32;
+                        while t.update(
+                            &self.gpu.device,
+                            &self.gpu.queue,
+                            &export_config,
+                            export_width,
+                            export_height,
+                            temp_renderer.escape_palette_view(export_config.escape.palette_map.stepped),
+                            temp_renderer.palette_generation(),
+                            1,
+                        ) {
+                            guard += 1;
+                            if guard > 4_000_000 {
+                                log::error!("WASM terrain sections failed to settle; using what we have");
+                                break;
+                            }
+                        }
+                        // No blocking wait in a browser: the queue keeps
+                        // the batches in order regardless.
+                        t.render_still(&self.gpu.device, &self.gpu.queue, &export_config, (export_width, export_height), |_| {});
+                        Some(t)
+                    } else {
+                        None
+                    };
+                    #[cfg(feature = "terrain")]
+                    let is_escape_export = is_escape_export && terrain_export.is_none();
                     let escape_export = if is_escape_export {
                         let mut esc = crate::escape::EscapeRenderer::new(
                             &self.gpu.device,
@@ -2346,14 +2472,44 @@ impl App {
                             export_height,
                         );
                         esc.set_fixed_chunk(true);
+                        // A solid path traced renders display pixels; its
+                        // jitter is the antialiasing.
+                        let solid_path = crate::escape::ifs::formula_is_solid(&export_config.escape.formula)
+                            && export_config.escape.solid_tier != crate::config::escape::RenderTier::Lit;
                         esc.resize(
                             &self.gpu.device,
                             export_width,
                             export_height,
-                            export_config.escape.supersample,
+                            if solid_path { 1 } else { export_config.escape.supersample },
                         );
+                        // Mode D reads the flame as an IFS, lit by the
+                        // app's own lights: what `prepare_escape` hands the
+                        // desktop's export.
+                        if let Some(def) = crate::escape::ifs::get_ifs(&export_config.escape.formula) {
+                            let registry = crate::variations::global_registry();
+                            esc.set_ifs(crate::escape::ifs::pack_for(def, &export_config, &registry));
+                            esc.ensure_coarse(&self.gpu.device, &self.gpu.queue, &export_config.escape, &export_config.flame);
+                            esc.set_solid_lighting(
+                                &export_config.solid_shading,
+                                (export_config.fog_strength, export_config.fog_start, export_config.background_color),
+                            );
+                            esc.set_solid_sky(crate::escape::path_core::sky_seen(&export_config.escape.path, &export_config));
+                        }
                         let mut guard = 0u32;
                         loop {
+                            if solid_path {
+                                // No blocking wait in a browser: the queue
+                                // keeps the bands in order regardless.
+                                esc.render_solid_still(
+                                    &self.gpu.device,
+                                    &self.gpu.queue,
+                                    &export_config,
+                                    temp_renderer.escape_palette_view(export_config.escape.palette_map.stepped),
+                                    export_config.escape.path.samples,
+                                    || {},
+                                );
+                                break;
+                            }
                             let mut esc_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                                 label: Some("WASM Export Escape Chunk"),
                             });
@@ -2389,7 +2545,8 @@ impl App {
                     // it would advance or restart what is on screen as
                     // a side effect of exporting.
                     #[cfg(feature = "engine-sim")]
-                    let sim_export = if export_config.render_mode
+                    #[allow(unused_mut)]
+                    let mut sim_export = if export_config.render_mode
                         == crate::scene::transforms::RenderMode::Simulation
                     {
                         let mut sim = crate::sim::SimRenderer::new(
@@ -2415,6 +2572,27 @@ impl App {
                     } else {
                         None
                     };
+                    // The simulation's terrain, made from the field it ran
+                    // to, and its still -- what `render_sim` does on the
+                    // desktop. No blocking wait in a browser.
+                    #[cfg(all(feature = "engine-sim", feature = "terrain"))]
+                    let sim_terrain_export = match sim_export.as_mut() {
+                        Some(sim) if export_config.sim.terrain_active() => {
+                            let (tile_w, tile_h) = crate::escape::terrain_tiers::still_tile(export_width, export_height);
+                            let mut t = crate::sim::terrain::SimTerrain::new(&self.gpu.device, tile_w, tile_h);
+                            t.update(
+                                &self.gpu.device,
+                                &self.gpu.queue,
+                                sim,
+                                &export_config,
+                                temp_renderer.palette_view(),
+                                temp_renderer.palette_generation(),
+                            );
+                            t.render_still(&self.gpu.device, &self.gpu.queue, &export_config, (export_width, export_height), |_| {});
+                            Some(t)
+                        }
+                        _ => None,
+                    };
                     #[cfg(not(feature = "engine-sim"))]
                     let sim_export: Option<()> = None;
 
@@ -2423,11 +2601,20 @@ impl App {
                     let mut final_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                         label: Some("WASM Export Final Tonemap"),
                     });
-                    #[cfg(feature = "engine-sim")]
+                    #[cfg(all(feature = "engine-sim", feature = "terrain"))]
+                    let sim_view = sim_terrain_export
+                        .as_ref()
+                        .map(|t| t.output_view())
+                        .or(sim_export.as_ref().map(|s| s.output_view()));
+                    #[cfg(all(feature = "engine-sim", not(feature = "terrain")))]
                     let sim_view = sim_export.as_ref().map(|s| s.output_view());
                     #[cfg(not(feature = "engine-sim"))]
                     let sim_view: Option<&egui_wgpu::wgpu::TextureView> = None;
-                    if let Some(view) = escape_export.as_ref().map(|e| e.output_view()).or(sim_view) {
+                    #[cfg(feature = "terrain")]
+                    let terrain_view = terrain_export.as_ref().map(|t| t.output_view());
+                    #[cfg(not(feature = "terrain"))]
+                    let terrain_view: Option<&egui_wgpu::wgpu::TextureView> = None;
+                    if let Some(view) = escape_export.as_ref().map(|e| e.output_view()).or(terrain_view).or(sim_view) {
                         temp_renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut final_encoder, view);
                     } else {
                         temp_renderer.tonemap_pass(&self.gpu.queue, &mut final_encoder);
@@ -2437,6 +2624,10 @@ impl App {
                     // nothing on wasm); queued work keeps its references.
                     if let Some(esc) = escape_export {
                         esc.destroy();
+                    }
+                    #[cfg(feature = "terrain")]
+                    if let Some(t) = terrain_export {
+                        t.destroy();
                     }
 
                     // Color effects (if any) allocate a full-res ping-pong
@@ -2569,12 +2760,20 @@ impl App {
                         // `&mut self.flame_renderer`, and only
                         // field-level borrows are disjoint from it.
                         let non_flame_view = match export_config.render_mode {
-                            crate::scene::transforms::RenderMode::Escape => {
-                                self.escape_renderer.as_ref().map(|e| e.output_view())
-                            }
+                            crate::scene::transforms::RenderMode::Escape => escape_view(
+                                &self.escape_renderer,
+                                #[cfg(feature = "terrain")]
+                                &self.escape_terrain,
+                                &export_config,
+                            ),
                             #[cfg(feature = "engine-sim")]
                             crate::scene::transforms::RenderMode::Simulation => {
-                                self.sim_renderer.as_ref().map(|r| r.output_view())
+                                sim_view(
+                                    &self.sim_renderer,
+                                    #[cfg(feature = "terrain")]
+                                    &self.sim_terrain,
+                                    &export_config,
+                                )
                             }
                             _ => None,
                         };
@@ -2832,7 +3031,90 @@ impl App {
             if !is_escape {
                 self.egui_layer.update_escape_aa(None);
             }
-            if is_escape {
+            // The 3D terrain view of the escape picture
+            // (docs/projects/heightfield-3d.md): a footprint -- the 2D
+            // picture at the view -- rendered when its picture changes,
+            // and the terrain drawn from it every frame something moves,
+            // accumulating the antialiasing grid while nothing does.
+            #[cfg(feature = "terrain")]
+            let terrain_on = is_escape && final_config.escape.terrain_active();
+            #[cfg(not(feature = "terrain"))]
+            let terrain_on = false;
+            #[cfg(feature = "terrain")]
+            if terrain_on {
+                self.egui_layer.update_escape_aa(None);
+                // One engine at a time: the footprint is a full escape
+                // render of its own.
+                if let Some(esc) = self.escape_renderer.take() {
+                    esc.destroy();
+                }
+                let (w, h) = (renderer.width, renderer.height);
+                let device = &self.gpu.device;
+                let queue = &self.gpu.queue;
+                let terrain = self.escape_terrain.get_or_insert_with(|| {
+                    #[allow(unused_mut)]
+                    let mut t = crate::escape::footprint::EscapeTerrain::new(device, w, h);
+                    // Reference orbits on the worker thread, as the
+                    // 2D view's: a deep footprint refines over frames
+                    // rather than stalling one.
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        t.footprint_renderer().progressive = true;
+                    }
+                    t
+                });
+                terrain.resize(device, w, h);
+                // A 2D IFS formula draws the flame; nothing in the
+                // escape config says when it changed.
+                if let Some(def) = crate::escape::ifs::get_ifs(&final_config.escape.formula) {
+                    let registry = crate::variations::global_registry();
+                    let packed = crate::escape::ifs::pack_for(def, &final_config, &registry);
+                    let fp = terrain.footprint_renderer();
+                    fp.set_ifs(packed);
+                    fp.ensure_coarse(device, queue, &final_config.escape, &final_config.flame);
+                }
+                // A texture's image arrives on its own schedule; the
+                // config's recipe, which the footprint is keyed on,
+                // did not change when it did.
+                if self.escape_texture.update(terrain.footprint_renderer(), device, queue, &final_config.escape) {
+                    terrain.invalidate_footprint();
+                }
+                let mut busy = self.escape_texture.busy();
+                // The sections the view wants (plan section 12): as many
+                // render steps a frame as fit about 8 ms, at the measured
+                // section time, so a pan or a dolly fills in as it goes.
+                // An export in the background has the GPU meanwhile: the
+                // viewport keeps its picture, and resumes after.
+                let exporting = self.export_status.lock().map(|s| s.active).unwrap_or(false);
+                let steps = terrain.section_ms().map_or(1, |ms| (8.0 / ms.max(0.5)).floor().clamp(1.0, 4.0) as u32);
+                if !exporting && terrain.update(
+                    device,
+                    queue,
+                    &final_config,
+                    w,
+                    h,
+                    renderer.escape_palette_view(final_config.escape.palette_map.stepped),
+                    renderer.palette_generation(),
+                    steps,
+                ) {
+                    busy = true;
+                }
+                if !exporting && terrain.render_viewport(device, queue, &final_config) {
+                    busy = true;
+                }
+                // Not settled while paused; the export's cadence redraws.
+                self.escape_dirty = busy || exporting;
+                if busy {
+                    self.window.request_redraw();
+                }
+            }
+            #[cfg(feature = "terrain")]
+            if is_escape && !terrain_on {
+                if let Some(t) = self.escape_terrain.take() {
+                    t.destroy();
+                }
+            }
+            if is_escape && !terrain_on {
                 let escape = self.escape_renderer.get_or_insert_with(|| {
                     let mut esc = crate::escape::EscapeRenderer::new(
                         &self.gpu.device,
@@ -2913,6 +3195,9 @@ impl App {
                     ) {
                         self.escape_dirty = true;
                     }
+                    if escape.set_solid_sky(crate::escape::path_core::sky_seen(&final_config.escape.path, &final_config)) {
+                        self.escape_dirty = true;
+                    }
                 }
                 // The interaction window. A mode-D walk at 1080p is
                 // hundreds of milliseconds; a drag that re-walks at
@@ -2945,6 +3230,19 @@ impl App {
                 }
                 if self.escape_texture.busy() {
                     self.window.request_redraw();
+                }
+                // A solid's tier (heightfield plan T3c): the walk alone
+                // (Lit), the walk while anything moves and the path tracer
+                // once it settles (Auto), or the path tracer alone.
+                let solid_tier = if crate::escape::ifs::formula_is_solid(&final_config.escape.formula) {
+                    final_config.escape.solid_tier
+                } else {
+                    crate::config::escape::RenderTier::Lit
+                };
+                if self.escape_dirty && solid_tier == crate::config::escape::RenderTier::PathTraced {
+                    // No walk to wait for: the path tracer starts over.
+                    escape.reset_solid_path();
+                    self.escape_dirty = false;
                 }
                 if self.escape_dirty {
                     let settled = escape.render(
@@ -2979,6 +3277,17 @@ impl App {
                             }
                         }
                     }
+                }
+                if solid_tier != crate::config::escape::RenderTier::Lit
+                    && !self.escape_dirty
+                    && escape.trace_solid_viewport(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        &final_config,
+                        renderer.escape_palette_view(final_config.escape.palette_map.stepped),
+                    )
+                {
+                    self.window.request_redraw();
                 }
             }
 
@@ -3106,6 +3415,28 @@ impl App {
                     if self.sim_running {
                         self.window.request_redraw();
                     }
+                }
+                // The 3D terrain (heightfield plan T4): its ground made
+                // from the field as this frame left it -- every step of a
+                // run, so a run shows the lit tier -- then a frame of its
+                // tiers, which path trace once the run rests.
+                #[cfg(feature = "terrain")]
+                if final_config.sim.terrain_active() {
+                    let device = &self.gpu.device;
+                    let queue = &self.gpu.queue;
+                    let terrain = self
+                        .sim_terrain
+                        .get_or_insert_with(|| crate::sim::terrain::SimTerrain::new(device, w, h));
+                    terrain.resize(device, w, h);
+                    terrain.update(device, queue, sim, &final_config, renderer.palette_view(), renderer.palette_generation());
+                    // An export in the background has the GPU meanwhile;
+                    // its own cadence redraws the window.
+                    let exporting = self.export_status.lock().map(|s| s.active).unwrap_or(false);
+                    if !exporting && terrain.render_viewport(device, queue, &final_config) {
+                        self.window.request_redraw();
+                    }
+                } else if let Some(t) = self.sim_terrain.take() {
+                    t.destroy();
                 }
             }
 
@@ -3480,10 +3811,13 @@ impl App {
             #[cfg(feature = "engine-sim")]
             let sim_view = if is_sim {
                 Some(
-                    self.sim_renderer
-                        .as_ref()
-                        .expect("sim branch above created it")
-                        .output_view(),
+                    sim_view(
+                        &self.sim_renderer,
+                        #[cfg(feature = "terrain")]
+                        &self.sim_terrain,
+                        final_config,
+                    )
+                    .expect("sim branch above created it"),
                 )
             } else {
                 None
@@ -3491,10 +3825,13 @@ impl App {
             #[cfg(not(feature = "engine-sim"))]
             let sim_view: Option<&wgpu::TextureView> = None;
             let pre_tonemap_view = if is_escape {
-                self.escape_renderer
-                    .as_ref()
-                    .expect("escape branch above created it")
-                    .output_view()
+                escape_view(
+                    &self.escape_renderer,
+                    #[cfg(feature = "terrain")]
+                    &self.escape_terrain,
+                    final_config,
+                )
+                .expect("escape branch above created it")
             } else if let Some(v) = sim_view {
                 v
             } else if dof_ran {

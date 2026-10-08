@@ -197,6 +197,11 @@ pub struct EscapeConfig {
     /// width follows the aspect.
     #[serde(default = "default_cam_fov", skip_serializing_if = "is_default_cam_fov")]
     pub cam_fov: f32,
+    /// How mode D's solid is rendered (heightfield plan T3c). Lit by
+    /// default, so a solid saved before the path tracer renders as it
+    /// did; a terrain's tier is its own.
+    #[serde(default = "default_solid_tier", skip_serializing_if = "is_default_solid_tier")]
+    pub solid_tier: RenderTier,
 
     /// Supersampling factor: the image renders at N× resolution per
     /// axis and box-downsamples (N² samples per display pixel).
@@ -230,6 +235,17 @@ pub struct EscapeConfig {
     /// off, so every existing file is byte-stable.
     #[serde(default, skip_serializing_if = "EscapeShading::is_default")]
     pub shading: EscapeShading,
+
+    /// The 3D terrain view (docs/projects/heightfield-3d.md): this
+    /// picture as a height field, seen through the solid camera. Off by
+    /// default and skipped when off, so every existing file is
+    /// byte-stable.
+    #[serde(default, skip_serializing_if = "TerrainConfig::is_default")]
+    pub terrain: TerrainConfig,
+
+    /// The path tracer's settings, for a terrain and a solid alike.
+    #[serde(default, skip_serializing_if = "PathTraceConfig::is_default")]
+    pub path: PathTraceConfig,
 
     /// Auto-exposure for the coloring's value field. Off by default
     /// and skipped when off, so every existing file is byte-stable.
@@ -1734,6 +1750,412 @@ fn is_zero_f64(v: &f64) -> bool {
     *v == 0.0
 }
 
+/// What a terrain's height is made from (heightfield plan, section 5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerrainSource {
+    /// `H exp(-DE / w)`: the set the plateau, every filament on smooth
+    /// flanks of width `w`. Where the formula has no derivative, the
+    /// escape count instead.
+    #[default]
+    Distance,
+    /// The smooth escape count, on a log curve: spiky toward the set.
+    EscapeCount,
+    /// The 2D relief's own height source (the Escape panel's relief
+    /// field: the colouring's value, banded, a layer's).
+    Relief,
+}
+
+impl TerrainSource {
+    pub const ALL: [TerrainSource; 3] = [TerrainSource::Distance, TerrainSource::EscapeCount, TerrainSource::Relief];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TerrainSource::Distance => "distance",
+            TerrainSource::EscapeCount => "escape_count",
+            TerrainSource::Relief => "relief",
+        }
+    }
+    /// The iterate pass's height mode for it: the shaders' relief
+    /// source codes, past the relief's own (0-5), for the two the
+    /// terrain adds.
+    pub fn from_str_or_default(s: &str) -> Self {
+        match s {
+            "escape_count" => TerrainSource::EscapeCount,
+            "relief" => TerrainSource::Relief,
+            _ => TerrainSource::Distance,
+        }
+    }
+    pub fn shade_flags(self, relief: ShadingField) -> u32 {
+        match self {
+            TerrainSource::Distance => 8,
+            TerrainSource::EscapeCount => 9,
+            TerrainSource::Relief => relief.to_gpu(),
+        }
+    }
+}
+
+/// How a 3D view -- a terrain, or mode D's solid -- is rendered
+/// (heightfield plan section 4's two tiers).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RenderTier {
+    /// The lit tier while anything moves, path traced while nothing does;
+    /// exports path traced.
+    #[default]
+    Auto,
+    /// The lit tier only: direct light, traced shadows, horizon occlusion.
+    Lit,
+    /// Path traced always: noisy while moving.
+    PathTraced,
+}
+
+impl RenderTier {
+    pub const ALL: [RenderTier; 3] = [RenderTier::Auto, RenderTier::Lit, RenderTier::PathTraced];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RenderTier::Auto => "auto",
+            RenderTier::Lit => "lit",
+            RenderTier::PathTraced => "path_traced",
+        }
+    }
+    pub fn from_str_or_default(s: &str) -> Self {
+        match s {
+            "lit" => RenderTier::Lit,
+            "path_traced" => RenderTier::PathTraced,
+            _ => RenderTier::Auto,
+        }
+    }
+}
+
+/// What a terrain does where the set's interior is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerrainInterior {
+    /// Flat at the terrain's top, in the interior's colour: the set
+    /// stands as a mesa.
+    #[default]
+    Plateau,
+    /// Transparent, sunk to the slab's floor: a hole through it.
+    Hole,
+    /// Water, flat at the plain's level -- the height the ground falls
+    /// to far from the set -- so the set's rim rises round it: a lake the
+    /// path tracer renders as a dielectric mirror over the tint.
+    Lake,
+}
+
+impl TerrainInterior {
+    pub const ALL: [TerrainInterior; 3] = [TerrainInterior::Plateau, TerrainInterior::Hole, TerrainInterior::Lake];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TerrainInterior::Plateau => "plateau",
+            TerrainInterior::Hole => "hole",
+            TerrainInterior::Lake => "lake",
+        }
+    }
+    pub fn from_str_or_default(s: &str) -> Self {
+        match s {
+            "hole" => TerrainInterior::Hole,
+            "lake" => TerrainInterior::Lake,
+            _ => TerrainInterior::Plateau,
+        }
+    }
+}
+
+/// The path tracer's settings (heightfield plan T3), shared by the two
+/// geometries it renders: a terrain and mode D's solid. Which tier each
+/// uses is its own (`TerrainConfig::tier`, `EscapeConfig::solid_tier`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PathTraceConfig {
+    /// Samples a pixel: the viewport's target, and an export's count.
+    #[serde(default = "default_path_samples", skip_serializing_if = "is_default_path_samples")]
+    pub samples: u32,
+    /// Bounces after the first surface: 0 is direct light only.
+    #[serde(default = "default_path_bounces", skip_serializing_if = "is_default_path_bounces")]
+    pub bounces: u32,
+    /// The environment's brightness: the background colour lighting the
+    /// scene from the whole sky, times this.
+    #[serde(default = "default_path_environment", skip_serializing_if = "is_default_path_environment")]
+    pub environment: f32,
+    /// The gloss coat over the albedo: its reflectance at normal
+    /// incidence (0, the default, is Lambert alone; 0.04 a dielectric's)
+    /// and its roughness.
+    #[serde(default = "default_path_gloss", skip_serializing_if = "is_default_path_gloss")]
+    pub gloss: f32,
+    #[serde(default = "default_path_roughness", skip_serializing_if = "is_default_path_roughness")]
+    pub roughness: f32,
+    /// The albedo's own glow.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub emission: f32,
+    /// The lens: its radius, as a fraction of the distance to the target
+    /// (0, a pinhole, is everything sharp), and the focal plane's
+    /// distance, as a multiple of the target's (0 is the target).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub aperture: f32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub focus: f32,
+    /// Filter the path tracer's noise (T5): an edge-aware blur of the
+    /// light, guided by each pixel's surface -- its albedo, normal and
+    /// depth -- that eases off as the samples gather. Off by default.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub denoise: bool,
+    /// The sky (T5): the background alone (off), or a gradient from the
+    /// background at the horizon to `zenith` overhead -- what a ray that
+    /// meets nothing sees, and what lights the scene. In sRGB, as the
+    /// background is picked.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub sky_gradient: bool,
+    #[serde(default = "default_path_zenith", skip_serializing_if = "is_default_path_zenith")]
+    pub zenith: [f32; 3],
+}
+
+/// A clear sky's blue overhead.
+fn default_path_zenith() -> [f32; 3] {
+    [0.22, 0.40, 0.72]
+}
+fn is_default_path_zenith(v: &[f32; 3]) -> bool {
+    *v == default_path_zenith()
+}
+
+fn default_path_samples() -> u32 {
+    256
+}
+fn is_default_path_samples(v: &u32) -> bool {
+    *v == default_path_samples()
+}
+fn default_path_bounces() -> u32 {
+    2
+}
+fn is_default_path_bounces(v: &u32) -> bool {
+    *v == default_path_bounces()
+}
+fn default_path_environment() -> f32 {
+    1.0
+}
+fn is_default_path_environment(v: &f32) -> bool {
+    *v == default_path_environment()
+}
+/// Lambert alone. A dielectric's 0.04 coat is physically fair, but on a
+/// fractal solid most of what shows is faces at a glance, where Fresnel
+/// takes the coat towards a mirror of the sky: a solid's dark faces read
+/// as the background's colour, speckled.
+fn default_path_gloss() -> f32 {
+    0.0
+}
+fn is_default_path_gloss(v: &f32) -> bool {
+    *v == default_path_gloss()
+}
+fn default_path_roughness() -> f32 {
+    0.5
+}
+fn is_default_path_roughness(v: &f32) -> bool {
+    *v == default_path_roughness()
+}
+
+impl Default for PathTraceConfig {
+    fn default() -> Self {
+        PathTraceConfig {
+            samples: default_path_samples(),
+            bounces: default_path_bounces(),
+            environment: default_path_environment(),
+            gloss: default_path_gloss(),
+            roughness: default_path_roughness(),
+            emission: 0.0,
+            aperture: 0.0,
+            focus: 0.0,
+            denoise: false,
+            sky_gradient: false,
+            zenith: default_path_zenith(),
+        }
+    }
+}
+
+impl PathTraceConfig {
+    pub fn is_default(v: &PathTraceConfig) -> bool {
+        *v == PathTraceConfig::default()
+    }
+}
+
+/// The 3D terrain view (heightfield plan): the escape picture as a
+/// height field. The FOOTPRINT is a square of the plane at the view,
+/// rendered as an ordinary escape picture with the height kept, then
+/// lit in 3D.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TerrainConfig {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "is_default_terrain_source")]
+    pub source: TerrainSource,
+    /// The terrain's relief, as a fraction of the footprint's width.
+    #[serde(default = "default_terrain_height", skip_serializing_if = "is_default_terrain_height")]
+    pub height: f32,
+    /// Distance: the flanks' width `w`, as a fraction of the footprint.
+    #[serde(default = "default_terrain_de_width", skip_serializing_if = "is_default_terrain_de_width")]
+    pub de_width: f32,
+    /// Texels per screen pixel, against the antialiasing factor: the
+    /// sections' fineness (plan section 12). 1 samples the fractal as a
+    /// 2D render at that antialiasing does.
+    #[serde(default = "default_terrain_detail", skip_serializing_if = "is_default_terrain_detail")]
+    pub detail: f32,
+    /// How far the ground reaches, in view widths from the eye; the fog
+    /// reaches the background just before.
+    #[serde(default = "default_terrain_far", skip_serializing_if = "is_default_terrain_far")]
+    pub far: f32,
+    /// How much of that distance the fog takes: 0 none (the ground's
+    /// edge shows), 1 from about a third of the way out.
+    #[serde(default = "default_terrain_haze", skip_serializing_if = "is_default_terrain_haze")]
+    pub haze: f32,
+    /// How it is rendered: lit, path traced, or both by turns.
+    #[serde(default, skip_serializing_if = "is_default_terrain_tier")]
+    pub tier: RenderTier,
+    #[serde(default, skip_serializing_if = "is_default_terrain_interior")]
+    pub interior: TerrainInterior,
+    /// A lake's colour under its surface (linear), and how blurred its
+    /// reflections are: 0.02 is a still mirror.
+    #[serde(default = "default_terrain_lake_tint", skip_serializing_if = "is_default_terrain_lake_tint")]
+    pub lake_tint: [f32; 3],
+    #[serde(default = "default_terrain_lake_roughness", skip_serializing_if = "is_default_terrain_lake_roughness")]
+    pub lake_roughness: f32,
+    /// How dark a shadowed surface goes; 0 traces no shadow rays. Mode
+    /// D's Shadows, which are its formula's parameter.
+    #[serde(default = "default_terrain_shadow", skip_serializing_if = "is_default_terrain_shadow")]
+    pub shadow: f32,
+    /// How sharply a shadow's edge falls off: the inverse of the
+    /// light's size, as mode D's Shadow Sharpness.
+    #[serde(default = "default_terrain_shadow_sharpness", skip_serializing_if = "is_default_terrain_shadow_sharpness")]
+    pub shadow_sharpness: f32,
+    /// How far occlusion looks for the slopes that enclose a point, as
+    /// a fraction of the footprint. About the distance flanks' width.
+    #[serde(default = "default_terrain_occlusion", skip_serializing_if = "is_default_terrain_occlusion")]
+    pub occlusion: f32,
+}
+
+fn default_terrain_height() -> f32 {
+    0.06
+}
+fn is_default_terrain_height(v: &f32) -> bool {
+    *v == default_terrain_height()
+}
+fn default_terrain_de_width() -> f32 {
+    1.0 / 150.0
+}
+fn is_default_terrain_de_width(v: &f32) -> bool {
+    *v == default_terrain_de_width()
+}
+fn is_default_terrain_tier(v: &RenderTier) -> bool {
+    *v == RenderTier::default()
+}
+fn default_terrain_detail() -> f32 {
+    1.0
+}
+fn default_solid_tier() -> RenderTier {
+    RenderTier::Lit
+}
+fn is_default_solid_tier(v: &RenderTier) -> bool {
+    *v == default_solid_tier()
+}
+fn is_default_terrain_detail(v: &f32) -> bool {
+    *v == default_terrain_detail()
+}
+fn default_terrain_far() -> f32 {
+    8.0
+}
+fn is_default_terrain_far(v: &f32) -> bool {
+    *v == default_terrain_far()
+}
+fn default_terrain_haze() -> f32 {
+    1.0
+}
+fn is_default_terrain_haze(v: &f32) -> bool {
+    *v == default_terrain_haze()
+}
+fn default_terrain_shadow() -> f32 {
+    0.7
+}
+fn is_default_terrain_shadow(v: &f32) -> bool {
+    *v == default_terrain_shadow()
+}
+fn default_terrain_shadow_sharpness() -> f32 {
+    12.0
+}
+fn is_default_terrain_shadow_sharpness(v: &f32) -> bool {
+    *v == default_terrain_shadow_sharpness()
+}
+fn default_terrain_occlusion() -> f32 {
+    0.006
+}
+fn is_default_terrain_occlusion(v: &f32) -> bool {
+    *v == default_terrain_occlusion()
+}
+fn is_default_terrain_source(v: &TerrainSource) -> bool {
+    *v == TerrainSource::default()
+}
+fn default_terrain_lake_tint() -> [f32; 3] {
+    [0.02, 0.05, 0.07]
+}
+fn is_default_terrain_lake_tint(v: &[f32; 3]) -> bool {
+    *v == default_terrain_lake_tint()
+}
+fn default_terrain_lake_roughness() -> f32 {
+    0.05
+}
+fn is_default_terrain_lake_roughness(v: &f32) -> bool {
+    *v == default_terrain_lake_roughness()
+}
+fn is_default_terrain_interior(v: &TerrainInterior) -> bool {
+    *v == TerrainInterior::default()
+}
+
+impl Default for TerrainConfig {
+    fn default() -> Self {
+        TerrainConfig {
+            enabled: false,
+            source: TerrainSource::default(),
+            height: default_terrain_height(),
+            de_width: default_terrain_de_width(),
+            detail: default_terrain_detail(),
+            far: default_terrain_far(),
+            haze: default_terrain_haze(),
+            tier: RenderTier::default(),
+            interior: TerrainInterior::default(),
+            lake_tint: default_terrain_lake_tint(),
+            lake_roughness: default_terrain_lake_roughness(),
+            shadow: default_terrain_shadow(),
+            shadow_sharpness: default_terrain_shadow_sharpness(),
+            occlusion: default_terrain_occlusion(),
+        }
+    }
+}
+
+impl TerrainConfig {
+    pub fn is_default(v: &TerrainConfig) -> bool {
+        *v == TerrainConfig::default()
+    }
+}
+
+impl EscapeConfig {
+    /// Whether the iterate pass needs the derivative orbit: the
+    /// relief's analytic slopes, or the terrain's distance.
+    pub fn wants_derivative(&self) -> bool {
+        self.shading.wants_derivative() || (self.terrain_active() && self.terrain.source == TerrainSource::Distance)
+    }
+
+    /// Whether the 3D terrain is in force: switched on, for a formula
+    /// that draws a plane (a solid IFS is already 3D, mode D's own),
+    /// in a build that carries it. The gallery modules are built
+    /// without the `terrain` feature (plan H2) and render a terrain
+    /// config as its 2D picture, relief and all.
+    pub fn terrain_active(&self) -> bool {
+        #[cfg(feature = "terrain")]
+        {
+            self.terrain.enabled && crate::escape::ifs::get_ifs(&self.formula).is_none_or(|d| !d.solid)
+        }
+        #[cfg(not(feature = "terrain"))]
+        {
+            false
+        }
+    }
+}
+
 impl Default for EscapeConfig {
     fn default() -> Self {
         Self {
@@ -1752,6 +2174,7 @@ impl Default for EscapeConfig {
             cam_yaw: 0.0,
             cam_bank: 0.0,
             cam_fov: default_cam_fov(),
+            solid_tier: default_solid_tier(),
             max_iter: default_max_iter(),
             bailout: default_bailout(),
             damping_re: default_damping_re(),
@@ -1767,6 +2190,8 @@ impl Default for EscapeConfig {
             downsample: DownsampleMode::Box,
             reference_period: None,
             shading: EscapeShading::default(),
+            terrain: TerrainConfig::default(),
+            path: PathTraceConfig::default(),
             contrast: EscapeContrast::default(),
             palette_map: PaletteMap::default(),
             layer: ColoringLayer::default(),

@@ -1382,7 +1382,20 @@ impl FractalConfig {
         let version = value.get("version")
             .and_then(|v| v.as_u64())
             .map(|v| v as u32)
-            .unwrap_or(default_version);
+            .unwrap_or_else(|| {
+                // A top-level escape or simulation mode dates the file:
+                // both modes came after v3 (2026-08 and 2026-09; v3 is
+                // 2026-06), so a file using one is at least v3 whatever
+                // wrote it without a version. Assuming less would run the
+                // v2 -> v3 migration, which takes the render mode from the
+                // flame -- 2D -- over the one the file names.
+                let mode = value.get("render_mode").and_then(|m| m.as_str());
+                if matches!(mode, Some("escape") | Some("simulation")) {
+                    default_version.max(3)
+                } else {
+                    default_version
+                }
+            });
 
         if version > CURRENT_CONFIG_VERSION {
             return Err(serde_json::Error::io(std::io::Error::new(
@@ -1649,6 +1662,23 @@ mod tests {
         let result = FractalConfig::from_json(json);
         // Should succeed - v0 migrates to v1
         assert!(result.is_ok());
+    }
+
+    /// A file without a version that names an escape or simulation
+    /// render mode keeps it: both modes postdate v3, so the v2 -> v3
+    /// migration (which takes the mode from the flame) cannot apply. A
+    /// flame mode at the top level of an unversioned file still migrates.
+    #[test]
+    fn an_unversioned_escape_or_simulation_file_keeps_its_mode() {
+        use crate::scene::transforms::RenderMode;
+        for (mode, want) in [("escape", RenderMode::Escape), ("simulation", RenderMode::Simulation)] {
+            let json = format!(r#"{{"render_mode": "{mode}", "flame": {{"name": "test", "transforms": []}}}}"#);
+            let c = FractalConfig::from_json(&json).expect("loads");
+            assert_eq!(c.render_mode, want, "{mode}");
+        }
+        let json = r#"{"render_mode": "3d", "flame": {"name": "test", "transforms": [], "render_mode": "2d"}}"#;
+        let c = FractalConfig::from_json(json).expect("loads");
+        assert_eq!(c.render_mode, RenderMode::TwoD, "a flame mode in an unversioned file still migrates");
     }
 
     #[test]

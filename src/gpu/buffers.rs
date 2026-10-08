@@ -1705,51 +1705,9 @@ impl FlameBuffers {
         // Note: scale_buffer removed - now using params.histogram_color_scale (global uniform)
 
         // Create palette texture (1D, dynamic size: 256-4096 samples)
-        // Use Rgba8Unorm for efficient, standard color storage
         let default_palette = Palette::fire(); // Default palette
-        let palette_data = default_palette.generate_texture_data(palette_size as usize);
-
-        // Convert f32 [0.0, 1.0] to u8 [0, 255] for Rgba8Unorm
-        let palette_data_u8: Vec<u8> = palette_data
-            .iter()
-            .map(|&v| (v.clamp(0.0, 1.0) * 255.0) as u8)
-            .collect();
-
-        let palette_texture = device.create_texture(&TextureDescriptor {
-            label: Some("Palette Texture"),
-            size: Extent3d {
-                width: palette_size,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: TextureDimension::D2,
-            format: TextureFormat::Rgba8Unorm,
-            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-
-        // Upload palette data
-        queue.write_texture(
-            TexelCopyTextureInfo {
-                texture: &palette_texture,
-                mip_level: 0,
-                origin: Origin3d::ZERO,
-                aspect: TextureAspect::All,
-            },
-            &palette_data_u8,
-            TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(palette_size * 4), // N pixels * 4 components * 1 byte
-                rows_per_image: None,
-            },
-            Extent3d {
-                width: palette_size,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-        );
+        let palette_texture = create_palette_texture(device, palette_size, "Palette Texture");
+        write_palette_table(queue, &palette_texture, palette_size, &default_palette.generate_texture_data(palette_size as usize));
 
         let palette_view = palette_texture.create_view(&TextureViewDescriptor::default());
         let stepped_palette_texture = create_palette_texture(device, palette_size, "Stepped Palette Texture");
@@ -2445,20 +2403,7 @@ impl FlameBuffers {
 
         self.palette_size = new_size;
 
-        self.palette_texture = device.create_texture(&TextureDescriptor {
-            label: Some("Palette Texture"),
-            size: Extent3d {
-                width: new_size,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: TextureDimension::D2,
-            format: TextureFormat::Rgba8Unorm,
-            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
+        self.palette_texture = create_palette_texture(device, new_size, "Palette Texture");
         self.palette_view = self.palette_texture.create_view(&TextureViewDescriptor::default());
         self.stepped_palette_texture =
             create_palette_texture(device, new_size, "Stepped Palette Texture");
@@ -3005,9 +2950,28 @@ mod tests {
     }
 }
 
-/// A 1D palette table: `size` texels of Rgba8Unorm, sampled by the
-/// shaders and written by `write_palette_table`.
-fn create_palette_texture(device: &Device, size: u32, label: &str) -> Texture {
+/// The palette tables' format: 16-bit float, filterable everywhere.
+///
+/// They were Rgba8Unorm, filled by truncating `v * 255`. Eight bits of
+/// a palette's values have no resolution near black -- the first steps
+/// above zero, in linear light, are sRGB 13 and 22 -- and each channel
+/// rounded down on its own, so a dark grey picked as sRGB (13, 11, 11),
+/// stored (0.0040, 0.0034, 0.0034), arrived as (1, 0, 0) / 255: pure red,
+/// which a path tracer's denoiser then made plain. Truncation also took
+/// up to a level off every entry, an Apophysis palette's included (its
+/// k/255 times 255 can land a hair under k). A half float carries a
+/// k/255 to within a sixteenth of a level and the darks to a millionth.
+pub const PALETTE_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
+
+/// A palette table's texels, RGBA f32 in 0..1, as [`PALETTE_FORMAT`]'s
+/// bytes.
+pub fn palette_texel_bytes(data: &[f32]) -> Vec<u8> {
+    data.iter().flat_map(|&v| half::f16::from_f32(v.clamp(0.0, 1.0)).to_le_bytes()).collect()
+}
+
+/// A 1D palette table: `size` texels of [`PALETTE_FORMAT`], sampled by
+/// the shaders and written by `write_palette_table`.
+pub fn create_palette_texture(device: &Device, size: u32, label: &str) -> Texture {
     device.create_texture(&TextureDescriptor {
         label: Some(label),
         size: Extent3d {
@@ -3018,15 +2982,15 @@ fn create_palette_texture(device: &Device, size: u32, label: &str) -> Texture {
         mip_level_count: 1,
         sample_count: 1,
         dimension: TextureDimension::D2,
-        format: TextureFormat::Rgba8Unorm,
+        format: PALETTE_FORMAT,
         usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
         view_formats: &[],
     })
 }
 
-/// Upload an RGBA f32 table (0..1) into a palette texture as 8-bit.
-fn write_palette_table(queue: &Queue, texture: &Texture, size: u32, data: &[f32]) {
-    let bytes: Vec<u8> = data.iter().map(|&v| (v.clamp(0.0, 1.0) * 255.0) as u8).collect();
+/// Upload an RGBA f32 table (0..1) into a palette texture.
+pub fn write_palette_table(queue: &Queue, texture: &Texture, size: u32, data: &[f32]) {
+    let bytes = palette_texel_bytes(data);
     queue.write_texture(
         TexelCopyTextureInfo {
             texture,
@@ -3037,7 +3001,7 @@ fn write_palette_table(queue: &Queue, texture: &Texture, size: u32, data: &[f32]
         &bytes,
         TexelCopyBufferLayout {
             offset: 0,
-            bytes_per_row: Some(size * 4), // N pixels * 4 components * 1 byte
+            bytes_per_row: Some(size * 8), // N texels * 4 components * 2 bytes
             rows_per_image: None,
         },
         Extent3d {
@@ -3046,4 +3010,31 @@ fn write_palette_table(queue: &Queue, texture: &Texture, size: u32, data: &[f32]
             depth_or_array_layers: 1,
         },
     );
+}
+
+#[cfg(test)]
+mod palette_format_tests {
+    use super::*;
+
+    /// A palette's dark entries keep their channels: sRGB (13, 11, 11)
+    /// stored as (0.0040, 0.0034, 0.0034) came out of the 8-bit, truncated
+    /// upload as (1, 0, 0) / 255 -- pure red. And an Apophysis entry k/255
+    /// lands within a sixteenth of a level of itself (the half float's
+    /// step above 0.5; Rgba32Float would be exact, but a browser cannot
+    /// filter it and the escape engine filters its palette).
+    #[test]
+    fn a_dark_palette_entry_keeps_its_hue() {
+        let back = |v: f32| {
+            let b = palette_texel_bytes(&[v]);
+            half::f16::from_le_bytes([b[0], b[1]]).to_f32()
+        };
+        for v in [0.0040182224f32, 0.0033460835, 0.0, 1.0, 0.5] {
+            assert!((back(v) - v).abs() <= v * 1.0e-3 + 1.0e-7, "{v} came back {}", back(v));
+        }
+        for k in 0..=255u32 {
+            let v = k as f32 / 255.0;
+            assert!((back(v) - v).abs() * 255.0 <= 0.0625, "{k}/255 came back {}", back(v) * 255.0);
+        }
+        assert_eq!(palette_texel_bytes(&[0.5; 4]).len(), 8, "four channels of two bytes a texel");
+    }
 }

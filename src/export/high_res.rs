@@ -689,45 +689,10 @@ impl HighResExporter {
             .clamp(crate::gpu::buffers::DEFAULT_PALETTE_SIZE, crate::gpu::buffers::MAX_PALETTE_SIZE);
         let palette_data =
             crate::scene::palette::render_palette_lookup(palette, &palette_transform, palette_size as usize);
-        let palette_data_u8: Vec<u8> = palette_data
-            .iter()
-            .map(|&v| (v.clamp(0.0, 1.0) * 255.0) as u8)
-            .collect();
-
-        let palette_texture = device.create_texture(&TextureDescriptor {
-            label: Some("Export Palette Texture"),
-            size: Extent3d {
-                width: palette_size,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: TextureDimension::D2,
-            format: TextureFormat::Rgba8Unorm,
-            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-
-        queue.write_texture(
-            TexelCopyTextureInfo {
-                texture: &palette_texture,
-                mip_level: 0,
-                origin: Origin3d::ZERO,
-                aspect: TextureAspect::All,
-            },
-            &palette_data_u8,
-            TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(palette_size * 4),
-                rows_per_image: None,
-            },
-            Extent3d {
-                width: palette_size,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-        );
+        // The app's palette format and upload (`gpu::buffers`), so an
+        // export's colours are the viewport's.
+        let palette_texture = crate::gpu::buffers::create_palette_texture(&device, palette_size, "Export Palette Texture");
+        crate::gpu::buffers::write_palette_table(&queue, &palette_texture, palette_size, &palette_data);
 
         let palette_sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("Export Palette Sampler"),

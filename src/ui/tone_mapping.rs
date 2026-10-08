@@ -324,9 +324,15 @@ pub fn render_colors_content(
                                     }
                                 });
                         });
+                    });
 
-                        // Highlight handling — how channels exceeding 1.0 after
-                        // exposure are mapped back into [0,1].
+                    // Highlight handling — how channels exceeding 1.0 after
+                    // exposure are mapped back into [0,1]. Outside the mode's
+                    // gate: the tonemap applies it after every branch, Linear
+                    // included, so an escape or simulation picture (Linear
+                    // only) has it as a flame does. It was inside, and greyed
+                    // out with the mode selector there.
+                    {
                         let current_highlight_mode = config_manager.active_config().highlight_mode;
                         let selected_label = match current_highlight_mode {
                             HighlightMode::Clip => t!("tonemap.highlight_clip"),
@@ -355,7 +361,7 @@ pub fn render_colors_content(
                                     }
                                 });
                         });
-                    });
+                    }
 
                     ui.separator();
 

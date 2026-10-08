@@ -27,6 +27,9 @@ pub enum RenderProgress {
     /// An escape render. `fraction` is the share of the iteration budget
     /// the perturbed path has submitted, when it reports one.
     Escape { settled: bool, fraction: Option<f32> },
+    /// A path tracer -- a terrain's or a solid's -- at `samples` of
+    /// `target`; `fraction` counts a part-done pass as its share.
+    PathTrace { samples: u32, target: u32, fraction: f32 },
     /// A simulation at `step` of `cap` (a cap of 0 means no Max Steps).
     Sim { step: u32, cap: u32, running: bool },
     /// Animation playback: frames keep coming, with no end to measure.
@@ -62,6 +65,7 @@ impl RenderProgress {
             }
             RenderProgress::Escape { settled: true, .. } => part(1.0, false),
             RenderProgress::Escape { settled: false, .. } => Fill::Sweep,
+            RenderProgress::PathTrace { samples, target, fraction } => part(fraction, samples < target),
             RenderProgress::Sim { step, cap, running } => {
                 if cap > 0 && step < cap {
                     part(step as f32 / cap as f32, running)
@@ -112,6 +116,13 @@ impl RenderProgress {
             }
             RenderProgress::Escape { settled: false, fraction: None } => {
                 t!("progress.escape_rendering").to_string()
+            }
+            RenderProgress::PathTrace { samples, target, .. } => {
+                if samples < target {
+                    t!("progress.path_tracing", samples = samples, target = target).to_string()
+                } else {
+                    t!("progress.path_traced", samples = samples).to_string()
+                }
             }
             RenderProgress::Sim { step, cap, running } => {
                 if *cap > 0 && step < cap && *running {
@@ -223,6 +234,17 @@ mod tests {
         assert_eq!(busy.fill(), Fill::Sweep);
         let done = RenderProgress::Escape { settled: true, fraction: None };
         assert_eq!(part(&done), (1.0, false));
+    }
+
+    /// A path tracer fills by samples -- a part-done pass counted -- and
+    /// goes quiet at its target.
+    #[test]
+    fn a_path_tracer_fills_toward_its_samples() {
+        let at = |samples, fraction| RenderProgress::PathTrace { samples, target: 256, fraction };
+        assert_eq!(part(&at(64, 0.255)), (0.255, true));
+        assert_eq!(part(&at(256, 1.0)), (1.0, false));
+        assert!(at(64, 0.255).is_active());
+        assert!(!at(256, 1.0).is_active());
     }
 
     #[test]

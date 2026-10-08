@@ -705,6 +705,12 @@ fn escape_pan_view(
     drag_delta: egui::Vec2,
     panel_size: egui::Vec2,
 ) {
+    // A terrain's target is the view's centre, slid across the ground.
+    #[cfg(feature = "terrain")]
+    if config_manager.active_config().escape.terrain_active() {
+        terrain_pan(config_manager, drag_delta, panel_size);
+        return;
+    }
     // A solid has no centre to move: its view is a camera about a
     // target, and a drag slides the target across the screen plane at
     // its own depth, so the surface under the cursor follows the
@@ -728,6 +734,17 @@ fn escape_pan_view(
         return;
     }
     let esc = config_manager.active_config().escape.clone();
+    escape_pan_plane(config_manager, &esc, drag_delta, panel_size);
+}
+
+/// The plane's pan: the centre moves opposite a drag of `drag_delta`
+/// pixels on a picture `panel_size` high.
+fn escape_pan_plane(
+    config_manager: &mut crate::config::ConfigManager,
+    esc: &crate::config::escape::EscapeConfig,
+    drag_delta: egui::Vec2,
+    panel_size: egui::Vec2,
+) {
     // The center accumulates in FIXED-POINT with a SYMBOLIC delta
     // (mantissa · 2^exponent): an f64 round-trip caps the step at the
     // center's own ulp (the zoom-45 "horizontal pan skips" bug), and
@@ -737,14 +754,14 @@ fn escape_pan_view(
     // renderer reaches. Parse failure (mid-edit center text) falls
     // back to the f64 path so panning never dead-stops.
     let z = esc.zoom_log2;
-    let (mx, my, se) = escape_pan_delta_symbolic(&esc, f64::from(drag_delta.x), f64::from(drag_delta.y), panel_size);
+    let (mx, my, se) = escape_pan_delta_symbolic(esc, f64::from(drag_delta.x), f64::from(drag_delta.y), panel_size);
     let fx = crate::escape::fixedpoint::FixedPoint::decimal_add_floatexp(&esc.center_re, -mx, se, z);
     let fy = crate::escape::fixedpoint::FixedPoint::decimal_add_floatexp(&esc.center_im, -my, se, z);
     let (new_re, new_im) = match (fx, fy) {
         (Some(re), Some(im)) => (re, im),
         _ => {
             let (cx, cy) = esc.center_f64();
-            let (wx, wy) = escape_screen_to_world(&esc, f64::from(drag_delta.x), f64::from(drag_delta.y), panel_size);
+            let (wx, wy) = escape_screen_to_world(esc, f64::from(drag_delta.x), f64::from(drag_delta.y), panel_size);
             (format!("{}", cx - wx), format!("{}", cy - wy))
         }
     };
@@ -755,6 +772,140 @@ fn escape_pan_view(
         ],
         "history.param.escape_center_re".to_string(),
     );
+}
+
+/// Pan a terrain: the ground under the cursor follows it. A drag is a
+/// displacement of the target across the ground -- along the camera's
+/// right, and along its heading foreshortened by the pitch -- in view
+/// widths, in the plane's own axes (the terrain's world), added to the
+/// centre in fixed point: exact decimals at any depth.
+#[cfg(feature = "terrain")]
+fn terrain_pan(
+    config_manager: &mut crate::config::ConfigManager,
+    drag_delta: egui::Vec2,
+    panel_size: egui::Vec2,
+) {
+    use crate::escape::fixedpoint::FixedPoint;
+    let esc = config_manager.active_config().escape.clone();
+    let cam = crate::escape::footprint::terrain_camera(&esc);
+    // View widths per screen pixel at the target's depth, as `ifs_ray`
+    // spreads the rays.
+    let s = 2.0 * (f64::from(cam.fov) * 0.5).tan() * cam.distance / f64::from(panel_size.y.max(1.0));
+    let flat = |v: [f64; 3]| {
+        let l = (v[0] * v[0] + v[1] * v[1]).sqrt();
+        (l > 1e-6).then(|| [v[0] / l, v[1] / l])
+    };
+    let right = flat(cam.right).unwrap_or([1.0, 0.0]);
+    // Looking straight down, the heading is the screen's up.
+    let ahead = flat(cam.forward).or_else(|| flat(cam.up)).unwrap_or([0.0, 1.0]);
+    // A screen pixel up the picture covers 1/sin(pitch) as much ground;
+    // capped near the horizon, where it runs away.
+    let along = s / (-cam.forward[2]).clamp(0.2, 1.0);
+    let (dx, dy) = (f64::from(drag_delta.x), f64::from(drag_delta.y));
+    let widths = [
+        -dx * s * right[0] + dy * along * ahead[0],
+        -dx * s * right[1] + dy * along * ahead[1],
+    ];
+    // A view width is 4 * 2^-zoom: kept as a power of two and a mantissa.
+    let x = 2.0 - esc.zoom_log2;
+    let e = x.floor();
+    let m = (x - e).exp2();
+    if let (Some(re), Some(im)) = (
+        FixedPoint::decimal_add_floatexp(&esc.center_re, widths[0] * m, e as i64, esc.zoom_log2),
+        FixedPoint::decimal_add_floatexp(&esc.center_im, widths[1] * m, e as i64, esc.zoom_log2),
+    ) {
+        let _ = config_manager.update_batch(
+            vec![
+                (crate::config::ConfigPath::EscapeCenterRe, crate::config::ConfigValue::String(re)),
+                (crate::config::ConfigPath::EscapeCenterIm, crate::config::ConfigValue::String(im)),
+            ],
+            "history.param.escape_center_re".to_string(),
+        );
+    }
+}
+
+/// Orbit a terrain's camera about its target: a horizontal drag turns
+/// the yaw, a vertical one the pitch, so the ground under the cursor
+/// turns with it. The pitch stays above the horizon and short of the
+/// zenith, where the yaw would stop meaning anything.
+#[cfg(feature = "terrain")]
+fn terrain_orbit(config_manager: &mut crate::config::ConfigManager, drag_delta: egui::Vec2) {
+    const RAD_PER_PX: f32 = 0.005;
+    let esc = &config_manager.active_config().escape;
+    let mut yaw = esc.cam_yaw - drag_delta.x * RAD_PER_PX;
+    yaw = (yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+    let pitch = (esc.cam_pitch + drag_delta.y * RAD_PER_PX).clamp(0.02, std::f32::consts::FRAC_PI_2 - 0.001);
+    let _ = config_manager.update_batch(
+        vec![
+            (crate::config::ConfigPath::EscapeCamYaw, yaw.into()),
+            (crate::config::ConfigPath::EscapeCamPitch, pitch.into()),
+        ],
+        "history.param.escape_cam_yaw".to_string(),
+    );
+}
+
+/// Whether the viewport shows a simulation's 3D terrain (heightfield plan
+/// T4), whose camera the viewport's gestures steer.
+#[cfg(feature = "terrain")]
+fn sim_terrain_shown(config: &crate::config::FractalConfig) -> bool {
+    config.render_mode == crate::scene::transforms::RenderMode::Simulation && config.sim.terrain_active()
+}
+
+/// Orbit a simulation terrain's camera about its target, as an escape
+/// terrain's: a horizontal drag turns the yaw, a vertical one the pitch.
+#[cfg(feature = "terrain")]
+fn sim_terrain_orbit(config_manager: &mut crate::config::ConfigManager, drag_delta: egui::Vec2) {
+    const RAD_PER_PX: f32 = 0.005;
+    let t = &config_manager.active_config().sim.terrain;
+    let mut yaw = t.cam_yaw - drag_delta.x * RAD_PER_PX;
+    yaw = (yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+    let pitch = (t.cam_pitch + drag_delta.y * RAD_PER_PX).clamp(0.02, std::f32::consts::FRAC_PI_2 - 0.001);
+    let _ = config_manager.update_batch(
+        vec![
+            (crate::config::ConfigPath::SimTerrainCamYaw, yaw.into()),
+            (crate::config::ConfigPath::SimTerrainCamPitch, pitch.into()),
+        ],
+        "history.param.sim_terrain_cam_yaw".to_string(),
+    );
+}
+
+/// Slide a simulation terrain's target across the grid so the ground under
+/// the cursor follows it -- in grid fractions, at the pixel's step at the
+/// target's depth.
+#[cfg(feature = "terrain")]
+fn sim_terrain_pan(config_manager: &mut crate::config::ConfigManager, drag_delta: egui::Vec2, panel_size: egui::Vec2) {
+    let config = config_manager.active_config();
+    let (gw, gh) = crate::sim::SimRenderer::grid_for(&config.sim, panel_size.x.max(1.0) as u32, panel_size.y.max(1.0) as u32);
+    let cam = crate::sim::terrain::sim_terrain_camera(config, gw, gh);
+    let s = 2.0 * (f64::from(cam.fov) * 0.5).tan() * cam.distance / f64::from(panel_size.y.max(1.0));
+    let flat = |v: [f64; 3]| {
+        let l = (v[0] * v[0] + v[1] * v[1]).sqrt();
+        (l > 1e-6).then(|| [v[0] / l, v[1] / l])
+    };
+    let right = flat(cam.right).unwrap_or([1.0, 0.0]);
+    let ahead = flat(cam.forward).or_else(|| flat(cam.up)).unwrap_or([0.0, 1.0]);
+    let along = s / (-cam.forward[2]).clamp(0.2, 1.0);
+    let (dx, dy) = (f64::from(drag_delta.x), f64::from(drag_delta.y));
+    let cells = [-dx * s * right[0] + dy * along * ahead[0], -dx * s * right[1] + dy * along * ahead[1]];
+    let t = &config.sim.terrain;
+    let x = (t.target_x as f64 + cells[0] / (gw.max(2) - 1) as f64) as f32;
+    let y = (t.target_y as f64 + cells[1] / (gh.max(2) - 1) as f64) as f32;
+    let _ = config_manager.update_batch(
+        vec![
+            (crate::config::ConfigPath::SimTerrainTargetX, x.into()),
+            (crate::config::ConfigPath::SimTerrainTargetY, y.into()),
+        ],
+        "history.param.sim_terrain_target_x".to_string(),
+    );
+}
+
+/// Move a simulation terrain's camera toward its target or away: a wheel
+/// notch is about an eighth of the distance.
+#[cfg(feature = "terrain")]
+fn sim_terrain_dolly(config_manager: &mut crate::config::ConfigManager, scroll: f32) {
+    let d = config_manager.active_config().sim.terrain.cam_distance;
+    let next = (d * (-scroll * 0.0025).exp()).clamp(0.01, 100.0);
+    let _ = config_manager.update_param(crate::config::ConfigPath::SimTerrainCamDistance, next.into());
 }
 
 /// The solid a config renders, if it renders one: the analysis and
@@ -838,6 +989,10 @@ fn escape_zoom_view(
     zoom_to_cursor: bool,
 ) {
     let esc = config_manager.active_config().escape.clone();
+    // A terrain dollies toward its target, the screen's centre: the
+    // point under the cursor is somewhere on the ground, at a depth a
+    // plane's anchor knows nothing of.
+    let zoom_to_cursor = zoom_to_cursor && !esc.terrain_active();
 
     let zoom_factor = if scroll_delta.abs() > 0.1 {
         f64::from(1.1f32).powf(f64::from(scroll_delta) * 0.03)
@@ -1614,15 +1769,69 @@ impl<'a> PanelViewer<'a> {
             // avoid double-handling.
             if !touch_active && response.dragged_by(egui::PointerButton::Primary) {
                 let drag_delta = response.drag_delta();
-                let alt = ui.input(|i| i.modifiers.alt);
-                self.handle_fractal_drag(drag_delta, available_size, alt);
+                let (alt, shift) = ui.input(|i| (i.modifiers.alt, i.modifiers.shift));
+                // A terrain orbits on a drag and pans on Shift+drag.
+                #[cfg(feature = "terrain")]
+                let terrain = self.context.config_manager.active_config().render_mode
+                    == crate::scene::transforms::RenderMode::Escape
+                    && self.context.config_manager.active_config().escape.terrain_active();
+                #[cfg(not(feature = "terrain"))]
+                let terrain = false;
+                #[cfg(feature = "terrain")]
+                let sim_terrain = sim_terrain_shown(self.context.config_manager.active_config());
+                #[cfg(not(feature = "terrain"))]
+                let sim_terrain = false;
+                if sim_terrain {
+                    #[cfg(feature = "terrain")]
+                    if shift {
+                        sim_terrain_pan(self.context.config_manager, drag_delta, available_size);
+                    } else {
+                        sim_terrain_orbit(self.context.config_manager, drag_delta);
+                    }
+                } else if terrain && !self.context.fly_mode_active {
+                    #[cfg(feature = "terrain")]
+                    if shift {
+                        pan_fractal_view(self.context.config_manager, drag_delta, available_size);
+                    } else {
+                        terrain_orbit(self.context.config_manager, drag_delta);
+                    }
+                    let _ = shift;
+                } else {
+                    self.handle_fractal_drag(drag_delta, available_size, alt);
+                }
+            }
+            // ...and pans on a right-drag, as orbit viewers do.
+            #[cfg(feature = "terrain")]
+            if !touch_active
+                && response.dragged_by(egui::PointerButton::Secondary)
+                && self.context.config_manager.active_config().render_mode
+                    == crate::scene::transforms::RenderMode::Escape
+                && self.context.config_manager.active_config().escape.terrain_active()
+            {
+                pan_fractal_view(self.context.config_manager, response.drag_delta(), available_size);
+            }
+            #[cfg(feature = "terrain")]
+            if !touch_active
+                && response.dragged_by(egui::PointerButton::Secondary)
+                && sim_terrain_shown(self.context.config_manager.active_config())
+            {
+                sim_terrain_pan(self.context.config_manager, response.drag_delta(), available_size);
             }
 
             // Handle mouse wheel for zooming
             if response.hovered() {
                 let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
                 if scroll_delta.abs() > 0.1 {
-                    self.handle_fractal_scroll(scroll_delta, response.hover_pos(), response.rect, available_size);
+                    #[cfg(feature = "terrain")]
+                    let dolly = sim_terrain_shown(self.context.config_manager.active_config());
+                    #[cfg(not(feature = "terrain"))]
+                    let dolly = false;
+                    if dolly {
+                        #[cfg(feature = "terrain")]
+                        sim_terrain_dolly(self.context.config_manager, scroll_delta);
+                    } else {
+                        self.handle_fractal_scroll(scroll_delta, response.hover_pos(), response.rect, available_size);
+                    }
                 }
             }
 

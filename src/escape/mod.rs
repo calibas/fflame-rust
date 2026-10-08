@@ -40,7 +40,14 @@ pub mod lens;
 pub mod formulas;
 pub mod presets;
 pub mod diag;
+pub mod path_core;
 pub mod renderer;
+#[cfg(feature = "terrain")]
+pub mod footprint;
+#[cfg(feature = "terrain")]
+pub mod terrain;
+#[cfg(feature = "terrain")]
+pub mod terrain_tiers;
 
 pub use renderer::{DerivativeGap, EscapeRenderer, UsableDepth};
 

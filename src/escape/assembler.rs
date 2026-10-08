@@ -591,9 +591,13 @@ fn layer_wgsl(layer: Option<&ColoringDef>, stretched: bool) -> String {
                 // The relief's source (ShadingField): 1 is Banded; Layer,\n\
                 // with no layer, falls back to the raw value.\n\
                 fn esc_relief_source(raw: f32, t: f32, sum: OrbitSummary, state: vec4<f32>) -> f32 {\n\
+                \x20   if (params.shade_flags >= 8u) {\n\
+                \x20       return esc_terrain_source(sum);\n\
+                \x20   }\n\
                 \x20   return select(raw, t, params.shade_flags == 1u);\n\
-                }"
-            .to_string();
+                }\n"
+            .to_string()
+            + TERRAIN_SOURCE_WGSL;
     };
     let colors_interior = l.has_feature(ColoringFeature::ColorsInterior);
     let bounded = l.has_feature(ColoringFeature::Bounded);
@@ -601,13 +605,39 @@ fn layer_wgsl(layer: Option<&ColoringDef>, stretched: bool) -> String {
         "fn lparam(i: u32) -> f32 {{\n    return params.lparams[i / 4u][i % 4u];\n}}\n\
          const LAYER_COLORS_INTERIOR: bool = {colors_interior};\n\
          const LAYER_IS_BOUNDED: bool = {bounded};\n\
-         // texture layer: {}\n{}\n{}\n{}",
+         // texture layer: {}\n{}\n{}\n{}\n{}",
         l.name,
         layer_source(l.wgsl).trim(),
         if stretched { LAYER_VALUE_STRETCHED_WGSL } else { LAYER_VALUE_WGSL },
-        ESC_LAYER_WGSL.trim()
+        ESC_LAYER_WGSL.trim(),
+        TERRAIN_SOURCE_WGSL.trim()
     )
 }
+
+/// The terrain's height sources (docs/projects/heightfield-3d.md,
+/// section 5), the relief source codes past the relief's own: 8 the
+/// distance estimate, 9 the smooth escape count. Read by
+/// `esc_relief_source` into the height field's green channel while a
+/// terrain footprint renders; the relief's own codes never reach here.
+///
+/// A pixel that did not escape returns `-1e30`, so the ingest can tell
+/// the interior from a value even under a colouring that draws it.
+const TERRAIN_SOURCE_WGSL: &str = r#"
+// The terrain's height source: the distance estimate in render pixels
+// -- the terrain's own cells -- where the formula compiled a
+// derivative, else the smooth escape count.
+fn esc_terrain_source(sum: OrbitSummary) -> f32 {
+    if (!sum.escaped) {
+        return -1.0e30;
+    }
+    let r = max(length(sum.z), 1.0000001);
+    if (params.shade_flags == 8u && HAS_DERIVATIVE) {
+        let deriv = max(length(sum.dz), 1e-30);
+        return max(r * log(r) / deriv, 1e-30);
+    }
+    return f32(sum.n) + 1.0 - log(max(log(r), 1e-30)) / log(max(params.degree, 1.0001));
+}
+"#;
 
 /// A pixel's colour from its value (`esc_colour`): the palette at the
 /// wrapped position, through the texture layer -- or, for a colouring
@@ -974,6 +1004,9 @@ const ESC_LAYER_WGSL: &str = r#"
 // from one field and colour from another, as UF's Slope lights a
 // different value than the one it colours (survey R3).
 fn esc_relief_source(raw: f32, t: f32, sum: OrbitSummary, state: vec4<f32>) -> f32 {
+    if (params.shade_flags >= 8u) {
+        return esc_terrain_source(sum);
+    }
     if (params.shade_flags == 2u && (sum.escaped || LAYER_COLORS_INTERIOR)) {
         return layer_coloring_map(sum, state);
     }
@@ -6005,6 +6038,27 @@ const IFS_RIG: &str = r#"
 // `ao` is the raw occlusion and `sun` the four raw shadow terms; the
 // panel's strengths are applied HERE, not where they were measured, so
 // a strength change is a relight and not a walk.
+// The sky (heightfield plan T5): the tonemap's background, or a
+// gradient from it at the horizon to a zenith colour overhead
+// (fdata[20]: the zenith in the accumulator's units, 1 when on). How
+// far toward the zenith a direction is: 0 at and below the horizon, 1
+// straight up, most of the change low, as a clear sky's is.
+fn ifs_sky_t(d: vec3<f32>) -> f32 {
+    let u = 1.0 - clamp(d.z, 0.0, 1.0);
+    return 1.0 - u * u * u;
+}
+
+// What a ray that meets nothing shows, straight alpha: the zenith's
+// colour over the background at its share, which the tonemap's
+// background blend turns into the gradient. Nothing for a flat sky.
+fn ifs_sky_seen(d: vec3<f32>) -> vec4<f32> {
+    let s = params.fdata[20];
+    if (!(s.w > 0.5)) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    return vec4<f32>(s.xyz, ifs_sky_t(d));
+}
+
 fn ifs_rig(albedo: vec3<f32>, n: vec3<f32>, ao_raw: f32, sun: vec4<f32>, dir: vec3<f32>, t: f32) -> vec3<f32> {
     let ao = mix(1.0, ao_raw, clamp(ifs_occlusion_strength(), 0.0, 1.0));
     let shadow_amount = clamp(ifs_shadow_strength(), 0.0, 1.0);
@@ -6444,10 +6498,11 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let t = bitcast<f32>(g.w);
 
     // Absent: the walk found nothing here, or has not reached this row
-    // yet (a cleared geometry record reads as depth zero). Left
-    // transparent so the tonemap's background fills it.
+    // yet (a cleared geometry record reads as depth zero). The sky:
+    // transparent, so the tonemap's background fills it, or a gradient's
+    // zenith over it.
     if ((r.escaped & 2u) != 0u || !(t > 0.0)) {
-        textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(0.0, 0.0, 0.0, 0.0));
+        textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), ifs_sky_seen(ifs_ray(gid.x, gid.y)));
         textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(0.0));
         return;
     }
@@ -7281,6 +7336,19 @@ fn ifs_rig(lens: Option<&str>) -> String {
         .replace("//__LENS_APPLY_RAY__", &apply.join("\n"))
 }
 
+/// The rig for the terrain passes (`super::terrain`), which light with
+/// the same text so a terrain and an IFS solid cannot disagree about
+/// what a light does. In place of a lens, the ray moves by the
+/// terrain's sub-pixel jitter: its antialiasing is accumulation, where
+/// mode D's is a supersampled grid.
+#[cfg(feature = "terrain")]
+pub(crate) fn ifs_rig_jittered() -> String {
+    IFS_RIG.trim().replace(
+        "//__LENS_APPLY_RAY__",
+        "uv = uv + params.jitter / vec2<f32>(f32(params.width), f32(params.height));",
+    )
+}
+
 pub fn assemble_ifs(def: &IfsDef, coloring: &IfsColoringDef, beam: u32) -> String {
     assemble_ifs_with_lens(def, coloring, beam, None, false, false)
 }
@@ -7407,6 +7475,173 @@ pub fn assemble_ifs_with_lens(
         }
     }
     out.join("\n")
+}
+
+/// The distance field's side of the path tracer (`super::path_core`),
+/// for mode D's solids (heightfield plan T3c). Spliced after the solid
+/// template's distance function, colouring and helpers, in place of the
+/// walk's entry point.
+const IFS_PATH_WGSL: &str = r#"
+// Positions are offsets from the target, as in the walk: the eye is the
+// camera's offset from it.
+fn pt_eye() -> vec3<f32> {
+    return params.fdata[2].xyz;
+}
+
+fn pt_scene_begin() {
+}
+
+// The whole frame: a solid is not drawn in tiles.
+fn pt_tile() -> vec4<u32> {
+    return vec4<u32>(0u, 0u, params.width, params.height);
+}
+
+// The hit tolerance a ray asks for when it has come `dist`: its pixel's
+// width there, the walk's own.
+fn pt_ifs_eps(dist: f32) -> f32 {
+    return max(pt.misc.x * dist, 1.0e-30);
+}
+
+// The bounding ball along a ray: (entry, exit), the exit below the entry
+// when the ray misses it. Past it every point is provably outside the
+// set.
+fn pt_ifs_ball(o: vec3<f32>, d: vec3<f32>) -> vec2<f32> {
+    let oc = o + ifs_target_offset();
+    let b = dot(oc, d);
+    let disc = b * b - (dot(oc, oc) - ifs_radius() * ifs_radius());
+    if (!(disc > 0.0)) {
+        return vec2<f32>(1.0, -1.0);
+    }
+    let root = sqrt(disc);
+    return vec2<f32>(max(-b - root, 0.0), -b + root);
+}
+
+// The surface where a march stopped at p, `dist` along the path: the
+// normal from the distance's gradient and the albedo the colouring and
+// the palette give it -- the walk's and the relight's own -- and a ray
+// leaving it starts two pixels off it.
+fn pt_ifs_surface(p: vec3<f32>, t: f32, dist: f32) -> PtHit {
+    var out: PtHit;
+    out.hit = true;
+    out.t = t;
+    let eps = pt_ifs_eps(dist);
+    out.n = ifs_normal(p, eps);
+    let shade = ifs_color(ifs_evaluate3(p));
+    let tt = esc_wrap(esc_transfer(shade.t), false);
+    out.albedo = vec4<f32>(esc_palette(tt) * clamp(shade.lum, 0.0, 4.0), 1.0);
+    out.bias = eps * 2.0;
+    out.f0 = pt.mat.x;
+    out.rough = pt.mat.y;
+    return out;
+}
+
+// A ray leaving a surface `travelled` along the path, as the walk's
+// shadow rays leave one (`ifs_shadow`): from four of its pixels out,
+// and calling a hit at a tenth of that (or a ten-thousandth of the
+// ball), so it clears the surface it left. The distance to the hit,
+// or -1.
+fn pt_ifs_leave(o: vec3<f32>, d: vec3<f32>, travelled: f32) -> f32 {
+    let span = pt_ifs_ball(o, d);
+    if (span.y < span.x) {
+        return -1.0;
+    }
+    let e0 = pt_ifs_eps(travelled);
+    let eps = max(min(ifs_radius() * 1.0e-4, e0 * 0.4), 1.0e-30);
+    var t = max(e0 * 4.0, span.x);
+    let max_steps = u32(clamp(fparam(2u), 4.0, 512.0));
+    for (var i = 0u; i < max_steps; i = i + 1u) {
+        if (t > span.y) {
+            break;
+        }
+        let dist = ifs_distance_at(o + d * t, eps);
+        if (dist < eps) {
+            return t;
+        }
+        t = t + dist;
+    }
+    return -1.0;
+}
+
+fn pt_scene_next(o: vec3<f32>, d: vec3<f32>, travelled: f32) -> PtHit {
+    let t = pt_ifs_leave(o, d, travelled);
+    if (t < 0.0) {
+        var out: PtHit;
+        out.hit = false;
+        return out;
+    }
+    return pt_ifs_surface(o + d * t, t, travelled + t);
+}
+
+fn pt_scene_visible(o: vec3<f32>, d: vec3<f32>, travelled: f32) -> bool {
+    return pt_ifs_leave(o, d, travelled) < 0.0;
+}
+
+// One sample of the pixel: the camera's ray sphere-traced as the walk
+// traces it, from the ball's entry to its exit, stopping within a pixel
+// of the surface; then the path. A miss is coverage 0, the background
+// through it. The rig's fog after the light, toward its colour.
+fn pt_sample(px: u32, py: u32) -> vec4<f32> {
+    let j = pt_rand2() - vec2<f32>(0.5, 0.5);
+    let ray = pt_ray(px, py, j.x, j.y);
+    if (ifs_count() == 0u) {
+        return pt_sky_seen(ray.d);
+    }
+    let span = pt_ifs_ball(ray.o, ray.d);
+    var t = span.x;
+    let max_steps = u32(clamp(fparam(2u), 4.0, 512.0));
+    var hit = false;
+    for (var i = 0u; i < max_steps; i = i + 1u) {
+        if (t > span.y) {
+            break;
+        }
+        let eps = pt_ifs_eps(t);
+        let dist = ifs_distance_at(ray.o + ray.d * t, eps * 0.01);
+        if (dist < eps) {
+            hit = true;
+            break;
+        }
+        t = t + dist;
+    }
+    if (!hit) {
+        return pt_sky_seen(ray.d);
+    }
+    let h = pt_ifs_surface(ray.o + ray.d * t, t, t);
+    pt_first(h, ray.d);
+    var l = min(pt_path(ray.o, ray.d, h), vec3<f32>(pt.misc.y));
+    if (ifs_fog_strength() > 0.0) {
+        let depth = t * dot(ray.d, ifs_forward());
+        let f = 1.0 - exp(-ifs_fog_strength() * max(depth - ifs_fog_start(), 0.0));
+        l = mix(l, ifs_fog_color(), f);
+    }
+    return vec4<f32>(l, 1.0);
+}
+"#;
+
+/// Assemble mode D's PATH TRACER for one solid formula and colouring
+/// (heightfield plan T3c): the walk's shader -- its distance function,
+/// colouring, rig accessors and helpers -- with the walk's entry point
+/// replaced by the shared core (`super::path_core`) and the distance
+/// field's side of it. A lens reaches the camera ray as it reaches the
+/// walk's.
+pub fn assemble_ifs_path(
+    def: &IfsDef,
+    coloring: &IfsColoringDef,
+    beam: u32,
+    lens: Option<&str>,
+    sums: bool,
+) -> String {
+    let walk = assemble_ifs_with_lens(def, coloring, beam, lens, false, sums);
+    let cut = walk
+        .find("@compute @workgroup_size(8, 8, 1)\nfn escape_main")
+        .expect("the solid template ends in the walk's entry point");
+    let mut ray = Vec::new();
+    lens_apply_uv(&mut ray, lens, "uv");
+    format!(
+        "{}\n{}\n{}",
+        &walk[..cut],
+        super::path_core::PT_CORE_WGSL.replace("//__LENS_APPLY_RAY__", &ray.join("\n")),
+        IFS_PATH_WGSL
+    )
 }
 
 /// Assemble a mode-B field shader: splice one field def and one field
@@ -8868,6 +9103,33 @@ mod lens_tests {
             );
             validate_lens(&lensed, &what);
         }
+    }
+
+    /// Mode D's path tracer (heightfield plan T3c) assembles and
+    /// validates for every solid formula and colouring, with and without
+    /// a lens; the walk's entry point is gone from it, and a lens reaches
+    /// its camera ray.
+    #[test]
+    fn every_solid_path_tracer_validates() {
+        let src = lens_for("eyefish");
+        let mut n = 0;
+        for def in crate::escape::ifs::IFS_DEFS.iter().filter(|d| d.solid) {
+            for col in crate::escape::ifs::IFS_COLORINGS {
+                if crate::escape::ifs::get_ifs_coloring(col.name, def).name != col.name {
+                    continue;
+                }
+                let plain = assemble_ifs_path(def, col, 4, None, false);
+                let lensed = assemble_ifs_path(def, col, 4, Some(&src), false);
+                let what = format!("path {} / {}", def.name, col.name);
+                assert!(!plain.contains("fn escape_main"), "{what}: the walk's entry point survived");
+                assert!(!plain.contains("esc_lens("), "{what}: lens glue without a lens");
+                assert!(lensed.contains("esc_lens("), "{what}: the lens is not applied");
+                validate_lens(&plain, &what);
+                validate_lens(&lensed, &what);
+                n += 1;
+            }
+        }
+        assert!(n > 0, "no solid formula");
     }
 
     /// Every mode-D combination still validates with the SUM rung

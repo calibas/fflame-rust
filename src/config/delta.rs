@@ -444,6 +444,36 @@ pub enum ConfigPath {
     SimCouplingChannels { index: usize },
     /// Use the flame's transforms as the layers' maps. Bool.
     SimUseTransforms,
+    SimTerrainEnabled,
+    SimTerrainLayer,
+    SimTerrainChannel,
+    SimTerrainSoftness,
+    SimTerrainHeight,
+    SimTerrainTiling,
+    SimTerrainTier,
+    SimTerrainShadow,
+    SimTerrainShadowSharpness,
+    SimTerrainOcclusion,
+    SimTerrainFar,
+    SimTerrainHaze,
+    SimTerrainCamPitch,
+    SimTerrainCamYaw,
+    SimTerrainCamBank,
+    SimTerrainCamFov,
+    SimTerrainCamDistance,
+    SimTerrainTargetX,
+    SimTerrainTargetY,
+    SimPathSamples,
+    SimPathBounces,
+    SimPathEnvironment,
+    SimPathGloss,
+    SimPathRoughness,
+    SimPathEmission,
+    SimPathAperture,
+    SimPathFocus,
+    SimPathDenoise,
+    SimPathSky,
+    SimPathZenith,
     /// Colouring layer `index`: one of its colouring's parameters, its
     /// opacity, its matte's cutoff and softness. All animatable; the
     /// layer's other fields are snapshot edits.
@@ -487,6 +517,33 @@ pub enum ConfigPath {
     EscapeShadingHighlightStrength,
     EscapeShadingHighlightBlend,
     EscapeShadingSoftness,
+    // The 3D terrain view (docs/projects/heightfield-3d.md).
+    EscapeTerrainEnabled,
+    EscapeTerrainSource,
+    EscapeTerrainHeight,
+    EscapeTerrainDeWidth,
+    EscapeTerrainDetail,
+    EscapeTerrainFar,
+    EscapeTerrainHaze,
+    EscapeTerrainTier,
+    EscapeSolidTier,
+    EscapePathSamples,
+    EscapePathBounces,
+    EscapePathEnvironment,
+    EscapePathGloss,
+    EscapePathRoughness,
+    EscapePathEmission,
+    EscapePathAperture,
+    EscapePathFocus,
+    EscapePathDenoise,
+    EscapePathSky,
+    EscapePathZenith,
+    EscapeTerrainInterior,
+    EscapeTerrainShadow,
+    EscapeTerrainShadowSharpness,
+    EscapeTerrainLakeTint,
+    EscapeTerrainLakeRoughness,
+    EscapeTerrainOcclusion,
     EscapeShadingTextureKind,
     EscapeShadingTextureStrength,
     EscapeShadingTextureScale,
@@ -1075,6 +1132,36 @@ impl Display for ConfigPath {
             ConfigPath::SimCouplingStrength { index } => write!(f, "Simulation Coupling {index} Strength"),
             ConfigPath::SimCouplingChannels { index } => write!(f, "Simulation Coupling {index} Channels"),
             ConfigPath::SimUseTransforms => write!(f, "Simulation Use Transforms"),
+            ConfigPath::SimTerrainEnabled => write!(f, "Simulation Terrain"),
+            ConfigPath::SimTerrainLayer => write!(f, "Simulation Terrain Layer"),
+            ConfigPath::SimTerrainChannel => write!(f, "Simulation Terrain Channel"),
+            ConfigPath::SimTerrainSoftness => write!(f, "Simulation Terrain Softness"),
+            ConfigPath::SimTerrainHeight => write!(f, "Simulation Terrain Height"),
+            ConfigPath::SimTerrainTiling => write!(f, "Simulation Terrain Tiling"),
+            ConfigPath::SimTerrainTier => write!(f, "Simulation Terrain Rendering"),
+            ConfigPath::SimTerrainShadow => write!(f, "Simulation Terrain Shadows"),
+            ConfigPath::SimTerrainShadowSharpness => write!(f, "Simulation Terrain Shadow Sharpness"),
+            ConfigPath::SimTerrainOcclusion => write!(f, "Simulation Terrain Occlusion"),
+            ConfigPath::SimTerrainFar => write!(f, "Simulation Terrain Distance"),
+            ConfigPath::SimTerrainHaze => write!(f, "Simulation Terrain Haze"),
+            ConfigPath::SimTerrainCamPitch => write!(f, "Simulation Terrain Pitch"),
+            ConfigPath::SimTerrainCamYaw => write!(f, "Simulation Terrain Yaw"),
+            ConfigPath::SimTerrainCamBank => write!(f, "Simulation Terrain Bank"),
+            ConfigPath::SimTerrainCamFov => write!(f, "Simulation Terrain Field of View"),
+            ConfigPath::SimTerrainCamDistance => write!(f, "Simulation Terrain Distance to Target"),
+            ConfigPath::SimTerrainTargetX => write!(f, "Simulation Terrain Target X"),
+            ConfigPath::SimTerrainTargetY => write!(f, "Simulation Terrain Target Y"),
+            ConfigPath::SimPathSamples => write!(f, "Simulation Path Samples"),
+            ConfigPath::SimPathBounces => write!(f, "Simulation Path Bounces"),
+            ConfigPath::SimPathEnvironment => write!(f, "Simulation Sky Light"),
+            ConfigPath::SimPathGloss => write!(f, "Simulation Gloss"),
+            ConfigPath::SimPathRoughness => write!(f, "Simulation Roughness"),
+            ConfigPath::SimPathEmission => write!(f, "Simulation Glow"),
+            ConfigPath::SimPathAperture => write!(f, "Simulation Aperture"),
+            ConfigPath::SimPathFocus => write!(f, "Simulation Focus"),
+            ConfigPath::SimPathDenoise => write!(f, "Simulation Denoise"),
+            ConfigPath::SimPathSky => write!(f, "Simulation Gradient Sky"),
+            ConfigPath::SimPathZenith => write!(f, "Simulation Zenith"),
             ConfigPath::SimColorLayerParam { index, param } => write!(f, "Simulation Colour Layer {index} {param}"),
             ConfigPath::SimColorLayerOpacity { index } => write!(f, "Simulation Colour Layer {index} Opacity"),
             ConfigPath::SimColorLayerMatteCutoff { index } => write!(f, "Simulation Colour Layer {index} Matte Cutoff"),
@@ -1106,6 +1193,32 @@ impl Display for ConfigPath {
             ConfigPath::EscapeShadingHighlightStrength => write!(f, "Relief Highlight Strength"),
             ConfigPath::EscapeShadingHighlightBlend => write!(f, "Relief Highlight Blend"),
             ConfigPath::EscapeShadingSoftness => write!(f, "Relief Softness"),
+            ConfigPath::EscapeTerrainEnabled => write!(f, "3D Terrain"),
+            ConfigPath::EscapeTerrainSource => write!(f, "Terrain Height Source"),
+            ConfigPath::EscapeTerrainHeight => write!(f, "Terrain Height"),
+            ConfigPath::EscapeTerrainDeWidth => write!(f, "Terrain Flank Width"),
+            ConfigPath::EscapeTerrainDetail => write!(f, "Terrain Detail"),
+            ConfigPath::EscapeTerrainFar => write!(f, "Terrain Distance"),
+            ConfigPath::EscapeTerrainHaze => write!(f, "Terrain Haze"),
+            ConfigPath::EscapeTerrainTier => write!(f, "Terrain Rendering"),
+            ConfigPath::EscapeSolidTier => write!(f, "Solid Rendering Tier"),
+            ConfigPath::EscapePathSamples => write!(f, "Path Samples"),
+            ConfigPath::EscapePathBounces => write!(f, "Path Bounces"),
+            ConfigPath::EscapePathEnvironment => write!(f, "Sky Light"),
+            ConfigPath::EscapePathGloss => write!(f, "Gloss"),
+            ConfigPath::EscapePathRoughness => write!(f, "Roughness"),
+            ConfigPath::EscapePathEmission => write!(f, "Glow"),
+            ConfigPath::EscapePathAperture => write!(f, "Aperture"),
+            ConfigPath::EscapePathFocus => write!(f, "Focus"),
+            ConfigPath::EscapePathDenoise => write!(f, "Denoise"),
+            ConfigPath::EscapePathSky => write!(f, "Gradient Sky"),
+            ConfigPath::EscapePathZenith => write!(f, "Zenith"),
+            ConfigPath::EscapeTerrainInterior => write!(f, "Terrain Interior"),
+            ConfigPath::EscapeTerrainShadow => write!(f, "Terrain Shadows"),
+            ConfigPath::EscapeTerrainShadowSharpness => write!(f, "Terrain Shadow Sharpness"),
+            ConfigPath::EscapeTerrainLakeTint => write!(f, "Lake Tint"),
+            ConfigPath::EscapeTerrainLakeRoughness => write!(f, "Lake Roughness"),
+            ConfigPath::EscapeTerrainOcclusion => write!(f, "Terrain Occlusion Reach"),
             ConfigPath::EscapeShadingTextureKind => write!(f, "Relief Texture"),
             ConfigPath::EscapeShadingTextureStrength => write!(f, "Relief Texture Strength"),
             ConfigPath::EscapeShadingTextureScale => write!(f, "Relief Texture Scale"),
@@ -1423,6 +1536,36 @@ impl ConfigPath {
                 I18nKey::with_params("history.param.sim_coupling", vec![("index", index.to_string())])
             }
             ConfigPath::SimUseTransforms => I18nKey::simple("history.param.sim_use_transforms"),
+            ConfigPath::SimTerrainEnabled => I18nKey::simple("history.param.sim_terrain_enabled"),
+            ConfigPath::SimTerrainLayer => I18nKey::simple("history.param.sim_terrain_layer"),
+            ConfigPath::SimTerrainChannel => I18nKey::simple("history.param.sim_terrain_channel"),
+            ConfigPath::SimTerrainSoftness => I18nKey::simple("history.param.sim_terrain_softness"),
+            ConfigPath::SimTerrainHeight => I18nKey::simple("history.param.sim_terrain_height"),
+            ConfigPath::SimTerrainTiling => I18nKey::simple("history.param.sim_terrain_tiling"),
+            ConfigPath::SimTerrainTier => I18nKey::simple("history.param.sim_terrain_tier"),
+            ConfigPath::SimTerrainShadow => I18nKey::simple("history.param.sim_terrain_shadow"),
+            ConfigPath::SimTerrainShadowSharpness => I18nKey::simple("history.param.sim_terrain_shadow_sharpness"),
+            ConfigPath::SimTerrainOcclusion => I18nKey::simple("history.param.sim_terrain_occlusion"),
+            ConfigPath::SimTerrainFar => I18nKey::simple("history.param.sim_terrain_far"),
+            ConfigPath::SimTerrainHaze => I18nKey::simple("history.param.sim_terrain_haze"),
+            ConfigPath::SimTerrainCamPitch => I18nKey::simple("history.param.sim_terrain_cam_pitch"),
+            ConfigPath::SimTerrainCamYaw => I18nKey::simple("history.param.sim_terrain_cam_yaw"),
+            ConfigPath::SimTerrainCamBank => I18nKey::simple("history.param.sim_terrain_cam_bank"),
+            ConfigPath::SimTerrainCamFov => I18nKey::simple("history.param.sim_terrain_cam_fov"),
+            ConfigPath::SimTerrainCamDistance => I18nKey::simple("history.param.sim_terrain_cam_distance"),
+            ConfigPath::SimTerrainTargetX => I18nKey::simple("history.param.sim_terrain_target_x"),
+            ConfigPath::SimTerrainTargetY => I18nKey::simple("history.param.sim_terrain_target_y"),
+            ConfigPath::SimPathSamples => I18nKey::simple("history.param.sim_path_samples"),
+            ConfigPath::SimPathBounces => I18nKey::simple("history.param.sim_path_bounces"),
+            ConfigPath::SimPathEnvironment => I18nKey::simple("history.param.sim_path_environment"),
+            ConfigPath::SimPathGloss => I18nKey::simple("history.param.sim_path_gloss"),
+            ConfigPath::SimPathRoughness => I18nKey::simple("history.param.sim_path_roughness"),
+            ConfigPath::SimPathEmission => I18nKey::simple("history.param.sim_path_emission"),
+            ConfigPath::SimPathAperture => I18nKey::simple("history.param.sim_path_aperture"),
+            ConfigPath::SimPathFocus => I18nKey::simple("history.param.sim_path_focus"),
+            ConfigPath::SimPathDenoise => I18nKey::simple("history.param.sim_path_denoise"),
+            ConfigPath::SimPathSky => I18nKey::simple("history.param.sim_path_sky"),
+            ConfigPath::SimPathZenith => I18nKey::simple("history.param.sim_path_zenith"),
             ConfigPath::SimColorLayerParam { index, param } => I18nKey::with_params(
                 "history.param.sim_color_layer_param",
                 vec![("index", index.to_string()), ("param", param.clone())],
@@ -1467,6 +1610,32 @@ impl ConfigPath {
             ConfigPath::EscapeShadingHighlightStrength => I18nKey::simple("history.param.escape_shading_highlight_strength"),
             ConfigPath::EscapeShadingHighlightBlend => I18nKey::simple("history.param.escape_shading_highlight_blend"),
             ConfigPath::EscapeShadingSoftness => I18nKey::simple("history.param.escape_shading_softness"),
+            ConfigPath::EscapeTerrainEnabled => I18nKey::simple("history.param.escape_terrain_enabled"),
+            ConfigPath::EscapeTerrainSource => I18nKey::simple("history.param.escape_terrain_source"),
+            ConfigPath::EscapeTerrainHeight => I18nKey::simple("history.param.escape_terrain_height"),
+            ConfigPath::EscapeTerrainDeWidth => I18nKey::simple("history.param.escape_terrain_de_width"),
+            ConfigPath::EscapeTerrainDetail => I18nKey::simple("history.param.escape_terrain_detail"),
+            ConfigPath::EscapeTerrainFar => I18nKey::simple("history.param.escape_terrain_far"),
+            ConfigPath::EscapeTerrainHaze => I18nKey::simple("history.param.escape_terrain_haze"),
+            ConfigPath::EscapeTerrainTier => I18nKey::simple("history.param.escape_terrain_tier"),
+            ConfigPath::EscapeSolidTier => I18nKey::simple("history.param.escape_solid_tier"),
+            ConfigPath::EscapePathSamples => I18nKey::simple("history.param.escape_path_samples"),
+            ConfigPath::EscapePathBounces => I18nKey::simple("history.param.escape_path_bounces"),
+            ConfigPath::EscapePathEnvironment => I18nKey::simple("history.param.escape_path_environment"),
+            ConfigPath::EscapePathGloss => I18nKey::simple("history.param.escape_path_gloss"),
+            ConfigPath::EscapePathRoughness => I18nKey::simple("history.param.escape_path_roughness"),
+            ConfigPath::EscapePathEmission => I18nKey::simple("history.param.escape_path_emission"),
+            ConfigPath::EscapePathAperture => I18nKey::simple("history.param.escape_path_aperture"),
+            ConfigPath::EscapePathFocus => I18nKey::simple("history.param.escape_path_focus"),
+            ConfigPath::EscapePathDenoise => I18nKey::simple("history.param.escape_path_denoise"),
+            ConfigPath::EscapePathSky => I18nKey::simple("history.param.escape_path_sky"),
+            ConfigPath::EscapePathZenith => I18nKey::simple("history.param.escape_path_zenith"),
+            ConfigPath::EscapeTerrainInterior => I18nKey::simple("history.param.escape_terrain_interior"),
+            ConfigPath::EscapeTerrainShadow => I18nKey::simple("history.param.escape_terrain_shadow"),
+            ConfigPath::EscapeTerrainShadowSharpness => I18nKey::simple("history.param.escape_terrain_shadow_sharpness"),
+            ConfigPath::EscapeTerrainLakeTint => I18nKey::simple("history.param.escape_terrain_lake_tint"),
+            ConfigPath::EscapeTerrainLakeRoughness => I18nKey::simple("history.param.escape_terrain_lake_roughness"),
+            ConfigPath::EscapeTerrainOcclusion => I18nKey::simple("history.param.escape_terrain_occlusion"),
             ConfigPath::EscapeShadingTextureKind => I18nKey::simple("history.param.escape_shading_texture_kind"),
             ConfigPath::EscapeShadingTextureStrength => I18nKey::simple("history.param.escape_shading_texture_strength"),
             ConfigPath::EscapeShadingTextureScale => I18nKey::simple("history.param.escape_shading_texture_scale"),
@@ -2857,6 +3026,32 @@ impl ConfigPath {
             | ConfigPath::EscapeShadingHighlightStrength
             | ConfigPath::EscapeShadingHighlightBlend
             | ConfigPath::EscapeShadingSoftness
+            | ConfigPath::EscapeTerrainEnabled
+            | ConfigPath::EscapeTerrainSource
+            | ConfigPath::EscapeTerrainHeight
+            | ConfigPath::EscapeTerrainDeWidth
+            | ConfigPath::EscapeTerrainDetail
+            | ConfigPath::EscapeTerrainFar
+            | ConfigPath::EscapeTerrainHaze
+            | ConfigPath::EscapeTerrainTier
+            | ConfigPath::EscapeSolidTier
+            | ConfigPath::EscapePathSamples
+            | ConfigPath::EscapePathBounces
+            | ConfigPath::EscapePathEnvironment
+            | ConfigPath::EscapePathGloss
+            | ConfigPath::EscapePathRoughness
+            | ConfigPath::EscapePathEmission
+            | ConfigPath::EscapePathAperture
+            | ConfigPath::EscapePathFocus
+            | ConfigPath::EscapePathDenoise
+            | ConfigPath::EscapePathSky
+            | ConfigPath::EscapePathZenith
+            | ConfigPath::EscapeTerrainInterior
+            | ConfigPath::EscapeTerrainShadow
+            | ConfigPath::EscapeTerrainShadowSharpness
+            | ConfigPath::EscapeTerrainLakeTint
+            | ConfigPath::EscapeTerrainLakeRoughness
+            | ConfigPath::EscapeTerrainOcclusion
             | ConfigPath::EscapeShadingTextureKind
             | ConfigPath::EscapeShadingTextureStrength
             | ConfigPath::EscapeShadingTextureScale
@@ -2929,6 +3124,36 @@ impl ConfigPath {
             | ConfigPath::SimColorLayerOpacity { .. }
             | ConfigPath::SimColorLayerMatteCutoff { .. }
             | ConfigPath::SimColorLayerMatteSoftness { .. }
+            | ConfigPath::SimTerrainEnabled
+            | ConfigPath::SimTerrainLayer
+            | ConfigPath::SimTerrainChannel
+            | ConfigPath::SimTerrainSoftness
+            | ConfigPath::SimTerrainHeight
+            | ConfigPath::SimTerrainTiling
+            | ConfigPath::SimTerrainTier
+            | ConfigPath::SimTerrainShadow
+            | ConfigPath::SimTerrainShadowSharpness
+            | ConfigPath::SimTerrainOcclusion
+            | ConfigPath::SimTerrainFar
+            | ConfigPath::SimTerrainHaze
+            | ConfigPath::SimTerrainCamPitch
+            | ConfigPath::SimTerrainCamYaw
+            | ConfigPath::SimTerrainCamBank
+            | ConfigPath::SimTerrainCamFov
+            | ConfigPath::SimTerrainCamDistance
+            | ConfigPath::SimTerrainTargetX
+            | ConfigPath::SimTerrainTargetY
+            | ConfigPath::SimPathSamples
+            | ConfigPath::SimPathBounces
+            | ConfigPath::SimPathEnvironment
+            | ConfigPath::SimPathGloss
+            | ConfigPath::SimPathRoughness
+            | ConfigPath::SimPathEmission
+            | ConfigPath::SimPathAperture
+            | ConfigPath::SimPathFocus
+            | ConfigPath::SimPathDenoise
+            | ConfigPath::SimPathSky
+            | ConfigPath::SimPathZenith
             | ConfigPath::SimColoringParam { .. } => UpdateType::SimRerender,
 
             // A bound grid's scale change resamples the live field
@@ -3213,6 +3438,36 @@ impl ConfigPath {
             ConfigPath::EscapeRotation => "Escape.Rotation".to_string(),
             ConfigPath::EscapeMaxIter => "Escape.MaxIter".to_string(),
             ConfigPath::SimModel => "Sim.Model".to_string(),
+            ConfigPath::SimTerrainEnabled => "Sim.Terrain.Enabled".to_string(),
+            ConfigPath::SimTerrainLayer => "Sim.Terrain.Layer".to_string(),
+            ConfigPath::SimTerrainChannel => "Sim.Terrain.Channel".to_string(),
+            ConfigPath::SimTerrainSoftness => "Sim.Terrain.Softness".to_string(),
+            ConfigPath::SimTerrainHeight => "Sim.Terrain.Height".to_string(),
+            ConfigPath::SimTerrainTiling => "Sim.Terrain.Tiling".to_string(),
+            ConfigPath::SimTerrainTier => "Sim.Terrain.Tier".to_string(),
+            ConfigPath::SimTerrainShadow => "Sim.Terrain.Shadow".to_string(),
+            ConfigPath::SimTerrainShadowSharpness => "Sim.Terrain.ShadowSharpness".to_string(),
+            ConfigPath::SimTerrainOcclusion => "Sim.Terrain.Occlusion".to_string(),
+            ConfigPath::SimTerrainFar => "Sim.Terrain.Far".to_string(),
+            ConfigPath::SimTerrainHaze => "Sim.Terrain.Haze".to_string(),
+            ConfigPath::SimTerrainCamPitch => "Sim.Terrain.CamPitch".to_string(),
+            ConfigPath::SimTerrainCamYaw => "Sim.Terrain.CamYaw".to_string(),
+            ConfigPath::SimTerrainCamBank => "Sim.Terrain.CamBank".to_string(),
+            ConfigPath::SimTerrainCamFov => "Sim.Terrain.CamFov".to_string(),
+            ConfigPath::SimTerrainCamDistance => "Sim.Terrain.CamDistance".to_string(),
+            ConfigPath::SimTerrainTargetX => "Sim.Terrain.TargetX".to_string(),
+            ConfigPath::SimTerrainTargetY => "Sim.Terrain.TargetY".to_string(),
+            ConfigPath::SimPathSamples => "Sim.Path.Samples".to_string(),
+            ConfigPath::SimPathBounces => "Sim.Path.Bounces".to_string(),
+            ConfigPath::SimPathEnvironment => "Sim.Path.Environment".to_string(),
+            ConfigPath::SimPathGloss => "Sim.Path.Gloss".to_string(),
+            ConfigPath::SimPathRoughness => "Sim.Path.Roughness".to_string(),
+            ConfigPath::SimPathEmission => "Sim.Path.Emission".to_string(),
+            ConfigPath::SimPathAperture => "Sim.Path.Aperture".to_string(),
+            ConfigPath::SimPathFocus => "Sim.Path.Focus".to_string(),
+            ConfigPath::SimPathDenoise => "Sim.Path.Denoise".to_string(),
+            ConfigPath::SimPathSky => "Sim.Path.Sky".to_string(),
+            ConfigPath::SimPathZenith => "Sim.Path.Zenith".to_string(),
             ConfigPath::SimColoring => "Sim.Coloring".to_string(),
             ConfigPath::SimGridMode => "Sim.GridMode".to_string(),
             ConfigPath::SimGridWidth => "Sim.GridWidth".to_string(),
@@ -3285,6 +3540,32 @@ impl ConfigPath {
             ConfigPath::EscapeShadingHighlightStrength => "Escape.Shading.HighlightStrength".to_string(),
             ConfigPath::EscapeShadingHighlightBlend => "Escape.Shading.HighlightBlend".to_string(),
             ConfigPath::EscapeShadingSoftness => "Escape.Shading.Softness".to_string(),
+            ConfigPath::EscapeTerrainEnabled => "Escape.Terrain.Enabled".to_string(),
+            ConfigPath::EscapeTerrainSource => "Escape.Terrain.Source".to_string(),
+            ConfigPath::EscapeTerrainHeight => "Escape.Terrain.Height".to_string(),
+            ConfigPath::EscapeTerrainDeWidth => "Escape.Terrain.DeWidth".to_string(),
+            ConfigPath::EscapeTerrainDetail => "Escape.Terrain.Detail".to_string(),
+            ConfigPath::EscapeTerrainFar => "Escape.Terrain.Far".to_string(),
+            ConfigPath::EscapeTerrainHaze => "Escape.Terrain.Haze".to_string(),
+            ConfigPath::EscapeTerrainTier => "Escape.Terrain.Tier".to_string(),
+            ConfigPath::EscapeSolidTier => "Escape.SolidTier".to_string(),
+            ConfigPath::EscapePathSamples => "Escape.Path.Samples".to_string(),
+            ConfigPath::EscapePathBounces => "Escape.Path.Bounces".to_string(),
+            ConfigPath::EscapePathEnvironment => "Escape.Path.Environment".to_string(),
+            ConfigPath::EscapePathGloss => "Escape.Path.Gloss".to_string(),
+            ConfigPath::EscapePathRoughness => "Escape.Path.Roughness".to_string(),
+            ConfigPath::EscapePathEmission => "Escape.Path.Emission".to_string(),
+            ConfigPath::EscapePathAperture => "Escape.Path.Aperture".to_string(),
+            ConfigPath::EscapePathFocus => "Escape.Path.Focus".to_string(),
+            ConfigPath::EscapePathDenoise => "Escape.Path.Denoise".to_string(),
+            ConfigPath::EscapePathSky => "Escape.Path.Sky".to_string(),
+            ConfigPath::EscapePathZenith => "Escape.Path.Zenith".to_string(),
+            ConfigPath::EscapeTerrainInterior => "Escape.Terrain.Interior".to_string(),
+            ConfigPath::EscapeTerrainShadow => "Escape.Terrain.Shadow".to_string(),
+            ConfigPath::EscapeTerrainShadowSharpness => "Escape.Terrain.ShadowSharpness".to_string(),
+            ConfigPath::EscapeTerrainLakeTint => "Escape.Terrain.LakeTint".to_string(),
+            ConfigPath::EscapeTerrainLakeRoughness => "Escape.Terrain.LakeRoughness".to_string(),
+            ConfigPath::EscapeTerrainOcclusion => "Escape.Terrain.Occlusion".to_string(),
             ConfigPath::EscapeShadingTextureKind => "Escape.Shading.TextureKind".to_string(),
             ConfigPath::EscapeShadingTextureStrength => "Escape.Shading.TextureStrength".to_string(),
             ConfigPath::EscapeShadingTextureScale => "Escape.Shading.TextureScale".to_string(),
@@ -3529,6 +3810,32 @@ impl ConfigPath {
                 ["Shading", "HighlightStrength"] => return Some(ConfigPath::EscapeShadingHighlightStrength),
                 ["Shading", "HighlightBlend"] => return Some(ConfigPath::EscapeShadingHighlightBlend),
                 ["Shading", "Softness"] => return Some(ConfigPath::EscapeShadingSoftness),
+                ["Terrain", "Enabled"] => return Some(ConfigPath::EscapeTerrainEnabled),
+                ["Terrain", "Source"] => return Some(ConfigPath::EscapeTerrainSource),
+                ["Terrain", "Height"] => return Some(ConfigPath::EscapeTerrainHeight),
+                ["Terrain", "DeWidth"] => return Some(ConfigPath::EscapeTerrainDeWidth),
+                ["Terrain", "Detail"] => return Some(ConfigPath::EscapeTerrainDetail),
+                ["Terrain", "Far"] => return Some(ConfigPath::EscapeTerrainFar),
+                ["Terrain", "Haze"] => return Some(ConfigPath::EscapeTerrainHaze),
+                ["Terrain", "Tier"] => return Some(ConfigPath::EscapeTerrainTier),
+                ["SolidTier"] => return Some(ConfigPath::EscapeSolidTier),
+                ["Path", "Samples"] => return Some(ConfigPath::EscapePathSamples),
+                ["Path", "Bounces"] => return Some(ConfigPath::EscapePathBounces),
+                ["Path", "Environment"] => return Some(ConfigPath::EscapePathEnvironment),
+                ["Path", "Gloss"] => return Some(ConfigPath::EscapePathGloss),
+                ["Path", "Roughness"] => return Some(ConfigPath::EscapePathRoughness),
+                ["Path", "Emission"] => return Some(ConfigPath::EscapePathEmission),
+                ["Path", "Aperture"] => return Some(ConfigPath::EscapePathAperture),
+                ["Path", "Focus"] => return Some(ConfigPath::EscapePathFocus),
+                ["Path", "Denoise"] => return Some(ConfigPath::EscapePathDenoise),
+                ["Path", "Sky"] => return Some(ConfigPath::EscapePathSky),
+                ["Path", "Zenith"] => return Some(ConfigPath::EscapePathZenith),
+                ["Terrain", "Interior"] => return Some(ConfigPath::EscapeTerrainInterior),
+                ["Terrain", "Shadow"] => return Some(ConfigPath::EscapeTerrainShadow),
+                ["Terrain", "ShadowSharpness"] => return Some(ConfigPath::EscapeTerrainShadowSharpness),
+                ["Terrain", "LakeTint"] => return Some(ConfigPath::EscapeTerrainLakeTint),
+                ["Terrain", "LakeRoughness"] => return Some(ConfigPath::EscapeTerrainLakeRoughness),
+                ["Terrain", "Occlusion"] => return Some(ConfigPath::EscapeTerrainOcclusion),
                 ["Shading", "TextureKind"] => return Some(ConfigPath::EscapeShadingTextureKind),
                 ["Shading", "TextureStrength"] => return Some(ConfigPath::EscapeShadingTextureStrength),
                 ["Shading", "TextureScale"] => return Some(ConfigPath::EscapeShadingTextureScale),
@@ -3575,6 +3882,36 @@ impl ConfigPath {
             let parts: Vec<&str> = rest.split('.').collect();
             match parts.as_slice() {
                 ["Model"] => return Some(ConfigPath::SimModel),
+                ["Terrain", "Enabled"] => return Some(ConfigPath::SimTerrainEnabled),
+                ["Terrain", "Layer"] => return Some(ConfigPath::SimTerrainLayer),
+                ["Terrain", "Channel"] => return Some(ConfigPath::SimTerrainChannel),
+                ["Terrain", "Softness"] => return Some(ConfigPath::SimTerrainSoftness),
+                ["Terrain", "Height"] => return Some(ConfigPath::SimTerrainHeight),
+                ["Terrain", "Tiling"] => return Some(ConfigPath::SimTerrainTiling),
+                ["Terrain", "Tier"] => return Some(ConfigPath::SimTerrainTier),
+                ["Terrain", "Shadow"] => return Some(ConfigPath::SimTerrainShadow),
+                ["Terrain", "ShadowSharpness"] => return Some(ConfigPath::SimTerrainShadowSharpness),
+                ["Terrain", "Occlusion"] => return Some(ConfigPath::SimTerrainOcclusion),
+                ["Terrain", "Far"] => return Some(ConfigPath::SimTerrainFar),
+                ["Terrain", "Haze"] => return Some(ConfigPath::SimTerrainHaze),
+                ["Terrain", "CamPitch"] => return Some(ConfigPath::SimTerrainCamPitch),
+                ["Terrain", "CamYaw"] => return Some(ConfigPath::SimTerrainCamYaw),
+                ["Terrain", "CamBank"] => return Some(ConfigPath::SimTerrainCamBank),
+                ["Terrain", "CamFov"] => return Some(ConfigPath::SimTerrainCamFov),
+                ["Terrain", "CamDistance"] => return Some(ConfigPath::SimTerrainCamDistance),
+                ["Terrain", "TargetX"] => return Some(ConfigPath::SimTerrainTargetX),
+                ["Terrain", "TargetY"] => return Some(ConfigPath::SimTerrainTargetY),
+                ["Path", "Samples"] => return Some(ConfigPath::SimPathSamples),
+                ["Path", "Bounces"] => return Some(ConfigPath::SimPathBounces),
+                ["Path", "Environment"] => return Some(ConfigPath::SimPathEnvironment),
+                ["Path", "Gloss"] => return Some(ConfigPath::SimPathGloss),
+                ["Path", "Roughness"] => return Some(ConfigPath::SimPathRoughness),
+                ["Path", "Emission"] => return Some(ConfigPath::SimPathEmission),
+                ["Path", "Aperture"] => return Some(ConfigPath::SimPathAperture),
+                ["Path", "Focus"] => return Some(ConfigPath::SimPathFocus),
+                ["Path", "Denoise"] => return Some(ConfigPath::SimPathDenoise),
+                ["Path", "Sky"] => return Some(ConfigPath::SimPathSky),
+                ["Path", "Zenith"] => return Some(ConfigPath::SimPathZenith),
                 ["Coloring"] => return Some(ConfigPath::SimColoring),
                 ["GridMode"] => return Some(ConfigPath::SimGridMode),
                 ["GridWidth"] => return Some(ConfigPath::SimGridWidth),
@@ -4117,7 +4454,17 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SimCouplingTo { .. }
         | ConfigPath::SimCouplingForm { .. }
         | ConfigPath::SimCouplingChannels { .. }
-        | ConfigPath::SimUseTransforms => None,
+        | ConfigPath::SimUseTransforms
+        | ConfigPath::SimTerrainEnabled
+        | ConfigPath::SimTerrainLayer
+        | ConfigPath::SimTerrainChannel
+        | ConfigPath::SimTerrainTiling
+        | ConfigPath::SimTerrainTier
+        | ConfigPath::SimPathSamples
+        | ConfigPath::SimPathBounces
+        | ConfigPath::SimPathDenoise
+        | ConfigPath::SimPathSky
+        | ConfigPath::SimPathZenith => None,
 
         // Vec2 (pan coordinates)
         ConfigPath::Pan => {
@@ -4286,6 +4633,26 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SimInitRadius
         | ConfigPath::SimInitCount => json_as_round_u64(json).map(|v| ConfigValue::UInt(v as u32)),
         ConfigPath::SimDt
+        | ConfigPath::SimTerrainSoftness
+        | ConfigPath::SimTerrainHeight
+        | ConfigPath::SimTerrainShadow
+        | ConfigPath::SimTerrainShadowSharpness
+        | ConfigPath::SimTerrainOcclusion
+        | ConfigPath::SimTerrainFar
+        | ConfigPath::SimTerrainHaze
+        | ConfigPath::SimTerrainCamPitch
+        | ConfigPath::SimTerrainCamYaw
+        | ConfigPath::SimTerrainCamBank
+        | ConfigPath::SimTerrainCamFov
+        | ConfigPath::SimTerrainCamDistance
+        | ConfigPath::SimTerrainTargetX
+        | ConfigPath::SimTerrainTargetY
+        | ConfigPath::SimPathEnvironment
+        | ConfigPath::SimPathGloss
+        | ConfigPath::SimPathRoughness
+        | ConfigPath::SimPathEmission
+        | ConfigPath::SimPathAperture
+        | ConfigPath::SimPathFocus
         | ConfigPath::SimGridScale
         | ConfigPath::SimInitAmplitude
         | ConfigPath::SimWarpZoom
@@ -4319,6 +4686,21 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeShadingShadowStrength
         | ConfigPath::EscapeShadingHighlightStrength
         | ConfigPath::EscapeShadingSoftness
+        | ConfigPath::EscapeTerrainHeight
+        | ConfigPath::EscapeTerrainDeWidth
+        | ConfigPath::EscapeTerrainShadow
+        | ConfigPath::EscapeTerrainShadowSharpness
+        | ConfigPath::EscapeTerrainLakeRoughness
+        | ConfigPath::EscapeTerrainOcclusion
+        | ConfigPath::EscapeTerrainDetail
+        | ConfigPath::EscapeTerrainFar
+        | ConfigPath::EscapeTerrainHaze
+        | ConfigPath::EscapePathEnvironment
+        | ConfigPath::EscapePathGloss
+        | ConfigPath::EscapePathRoughness
+        | ConfigPath::EscapePathEmission
+        | ConfigPath::EscapePathAperture
+        | ConfigPath::EscapePathFocus
         | ConfigPath::EscapeShadingTextureStrength
         | ConfigPath::EscapeShadingTextureScale
         | ConfigPath::EscapeShadingElevation
@@ -4334,7 +4716,10 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeTextureOverlayTile => {
             json.as_f64().map(|v| ConfigValue::Float(v as f32))
         }
-        ConfigPath::EscapeShadingShadowColor | ConfigPath::EscapeShadingHighlightColor => {
+        ConfigPath::EscapeShadingShadowColor
+        | ConfigPath::EscapeShadingHighlightColor
+        | ConfigPath::EscapeTerrainLakeTint
+        | ConfigPath::EscapePathZenith => {
             let a = json.as_array()?;
             if a.len() != 3 {
                 return None;
@@ -4346,6 +4731,15 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
             Some(ConfigValue::ColorRgb(rgb))
         }
         ConfigPath::EscapeShadingEnabled
+        | ConfigPath::EscapeTerrainTier
+        | ConfigPath::EscapeSolidTier
+        | ConfigPath::EscapePathSamples
+        | ConfigPath::EscapePathBounces
+        | ConfigPath::EscapePathDenoise
+        | ConfigPath::EscapePathSky
+        | ConfigPath::EscapeTerrainEnabled
+        | ConfigPath::EscapeTerrainSource
+        | ConfigPath::EscapeTerrainInterior
         | ConfigPath::EscapeShadingModel
         | ConfigPath::EscapeShadingStencil
         | ConfigPath::EscapeShadingHeightCurve
@@ -4994,6 +5388,111 @@ mod tests {
             let parsed = ConfigPath::from_string_key(&key);
             assert_eq!(parsed, Some(path.clone()), "Failed roundtrip for key: {}", key);
         }
+    }
+
+    /// The terrain's paths: each names itself and parses back, the
+    /// manager writes and reads each, and only the quantities animate.
+    #[test]
+    fn terrain_paths_round_trip() {
+        use crate::config::ConfigManager;
+        let paths = [
+            (ConfigPath::EscapeTerrainEnabled, ConfigValue::Bool(true), false),
+            (ConfigPath::EscapeTerrainSource, ConfigValue::String("escape_count".into()), false),
+            (ConfigPath::EscapeTerrainHeight, ConfigValue::Float(0.125), true),
+            (ConfigPath::EscapeTerrainDeWidth, ConfigValue::Float(0.02), true),
+            (ConfigPath::EscapeTerrainDetail, ConfigValue::Float(2.0), true),
+            (ConfigPath::EscapeTerrainFar, ConfigValue::Float(12.0), true),
+            (ConfigPath::EscapeTerrainHaze, ConfigValue::Float(0.5), true),
+            (ConfigPath::EscapeTerrainTier, ConfigValue::String("path_traced".into()), false),
+            (ConfigPath::EscapeSolidTier, ConfigValue::String("auto".into()), false),
+            (ConfigPath::EscapePathSamples, ConfigValue::UInt(64), false),
+            (ConfigPath::EscapePathBounces, ConfigValue::UInt(4), false),
+            (ConfigPath::EscapePathEnvironment, ConfigValue::Float(0.5), true),
+            (ConfigPath::EscapePathGloss, ConfigValue::Float(0.25), true),
+            (ConfigPath::EscapePathRoughness, ConfigValue::Float(0.25), true),
+            (ConfigPath::EscapePathEmission, ConfigValue::Float(0.25), true),
+            (ConfigPath::EscapePathAperture, ConfigValue::Float(0.25), true),
+            (ConfigPath::EscapePathFocus, ConfigValue::Float(0.25), true),
+            (ConfigPath::EscapePathDenoise, ConfigValue::Bool(true), false),
+            (ConfigPath::EscapePathSky, ConfigValue::Bool(true), false),
+            (ConfigPath::EscapePathZenith, ConfigValue::ColorRgb([0.1, 0.2, 0.3]), false),
+            (ConfigPath::EscapeTerrainInterior, ConfigValue::String("hole".into()), false),
+            (ConfigPath::EscapeTerrainShadow, ConfigValue::Float(0.25), true),
+            (ConfigPath::EscapeTerrainShadowSharpness, ConfigValue::Float(20.0), true),
+            (ConfigPath::EscapeTerrainLakeTint, ConfigValue::ColorRgb([0.1, 0.2, 0.3]), false),
+            (ConfigPath::EscapeTerrainLakeRoughness, ConfigValue::Float(0.25), true),
+            (ConfigPath::EscapeTerrainOcclusion, ConfigValue::Float(0.01), true),
+        ];
+        let mut m = ConfigManager::new(crate::config::FractalConfig::default());
+        for (path, value, animates) in paths {
+            let key = path.to_string_key();
+            // The path tracer's settings are shared with mode D's solid,
+            // and the solid's tier is its own.
+            assert!(
+                key.starts_with("Escape.Terrain.") || key.starts_with("Escape.Path.") || key == "Escape.SolidTier",
+                "{key}"
+            );
+            assert_eq!(ConfigPath::from_string_key(&key), Some(path.clone()), "{key}");
+            m.update_param(path.clone(), value.clone()).expect("set");
+            assert_eq!(m.get_value(&path).expect("get"), value, "{key}");
+            assert_eq!(json_to_config_value(&serde_json::json!(0.5), &path).is_some(), animates, "{key}");
+        }
+        let t = &m.config().escape.terrain;
+        assert!(t.enabled && t.interior == crate::config::escape::TerrainInterior::Hole);
+        assert_eq!(t.source, crate::config::escape::TerrainSource::EscapeCount);
+        let e = &m.config().escape;
+        assert_eq!(e.solid_tier, crate::config::escape::RenderTier::Auto);
+        assert_eq!((e.path.samples, e.path.bounces, e.path.gloss), (64, 4, 0.25));
+    }
+
+    /// Every simulation terrain path round-trips its key, sets and reads
+    /// its value, and animates exactly when it is a float.
+    #[test]
+    fn sim_terrain_paths_round_trip() {
+        let paths = [
+            (ConfigPath::SimTerrainEnabled, ConfigValue::Bool(true), false),
+            (ConfigPath::SimTerrainLayer, ConfigValue::UInt(2), false),
+            (ConfigPath::SimTerrainChannel, ConfigValue::UInt(2), false),
+            (ConfigPath::SimTerrainSoftness, ConfigValue::Float(0.25), true),
+            (ConfigPath::SimTerrainHeight, ConfigValue::Float(0.25), true),
+            (ConfigPath::SimTerrainTiling, ConfigValue::String("repeat".into()), false),
+            (ConfigPath::SimTerrainTier, ConfigValue::String("path_traced".into()), false),
+            (ConfigPath::SimTerrainShadow, ConfigValue::Float(0.25), true),
+            (ConfigPath::SimTerrainShadowSharpness, ConfigValue::Float(20.0), true),
+            (ConfigPath::SimTerrainOcclusion, ConfigValue::Float(0.05), true),
+            (ConfigPath::SimTerrainFar, ConfigValue::Float(12.0), true),
+            (ConfigPath::SimTerrainHaze, ConfigValue::Float(0.25), true),
+            (ConfigPath::SimTerrainCamPitch, ConfigValue::Float(0.25), true),
+            (ConfigPath::SimTerrainCamYaw, ConfigValue::Float(0.25), true),
+            (ConfigPath::SimTerrainCamBank, ConfigValue::Float(0.25), true),
+            (ConfigPath::SimTerrainCamFov, ConfigValue::Float(0.25), true),
+            (ConfigPath::SimTerrainCamDistance, ConfigValue::Float(0.25), true),
+            (ConfigPath::SimTerrainTargetX, ConfigValue::Float(0.25), true),
+            (ConfigPath::SimTerrainTargetY, ConfigValue::Float(0.25), true),
+            (ConfigPath::SimPathSamples, ConfigValue::UInt(2), false),
+            (ConfigPath::SimPathBounces, ConfigValue::UInt(2), false),
+            (ConfigPath::SimPathEnvironment, ConfigValue::Float(0.25), true),
+            (ConfigPath::SimPathGloss, ConfigValue::Float(0.25), true),
+            (ConfigPath::SimPathRoughness, ConfigValue::Float(0.25), true),
+            (ConfigPath::SimPathEmission, ConfigValue::Float(0.25), true),
+            (ConfigPath::SimPathAperture, ConfigValue::Float(0.25), true),
+            (ConfigPath::SimPathFocus, ConfigValue::Float(0.25), true),
+            (ConfigPath::SimPathDenoise, ConfigValue::Bool(true), false),
+            (ConfigPath::SimPathSky, ConfigValue::Bool(true), false),
+            (ConfigPath::SimPathZenith, ConfigValue::ColorRgb([0.1, 0.2, 0.3]), false),
+        ];
+        let mut m = crate::config::ConfigManager::new(crate::config::FractalConfig::default());
+        for (path, value, animates) in paths {
+            let key = path.to_string_key();
+            assert!(key.starts_with("Sim.Terrain.") || key.starts_with("Sim.Path."), "{key}");
+            assert_eq!(ConfigPath::from_string_key(&key), Some(path.clone()), "{key}");
+            m.update_param(path.clone(), value.clone()).expect("set");
+            assert_eq!(m.get_value(&path).expect("get"), value, "{key}");
+            assert_eq!(json_to_config_value(&serde_json::json!(0.5), &path).is_some(), animates, "{key}");
+        }
+        let t = &m.config().sim.terrain;
+        assert!(t.enabled && t.tiling == crate::config::sim::SimTiling::Repeat);
+        assert_eq!((t.layer, t.path.samples), (2, 2));
     }
 
     #[test]
