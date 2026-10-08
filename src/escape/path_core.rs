@@ -21,8 +21,8 @@
 //!   (`params.width` by `params.height`) unless a still is drawn in
 //!   tiles;
 //!
-//! and calls `pt_first(h)` with a sample's first surface, which the
-//! denoiser's guides are made of.
+//! and calls `pt_first(h, d)` with a sample's first surface and its ray,
+//! which the denoiser's guides are made of.
 //!
 //! and the rig's accessors (`ifs_fov`, `ifs_forward`, ..., the lights),
 //! which both get from the same text (`assembler::IFS_RIG`'s family).
@@ -286,8 +286,18 @@ var<private> pt_g_albedo: vec3<f32>;
 var<private> pt_g_normal: vec3<f32>;
 var<private> pt_g_t: f32;
 
-fn pt_first(h: PtHit) {
-    pt_g_albedo = h.albedo.rgb;
+fn pt_first(h: PtHit, d: vec3<f32>) {
+    // The surface's whole reflectance seen along d: the albedo under the
+    // coat, and the coat's own share, which reflects whatever the albedo.
+    // Divided by the albedo alone, a black glossy surface's reflection
+    // was divided by nothing and multiplied back by nothing: flat black,
+    // and on a near-black the hue of whichever channel was not zero. No
+    // coat, the albedo exactly.
+    var f = 0.0;
+    if (h.f0 > 0.0) {
+        f = pt_fresnel(h.f0, max(dot(h.n, -d), 0.0));
+    }
+    pt_g_albedo = h.albedo.rgb * (1.0 - f) + vec3<f32>(f, f, f);
     pt_g_normal = h.n;
     pt_g_t = h.t;
 }
