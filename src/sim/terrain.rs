@@ -91,6 +91,41 @@ pub fn sim_terrain_view(config: &FractalConfig, gw: u32, gh: u32, jitter: [f32; 
     }
 }
 
+/// The colour by the height: when the colour stack is the palette over
+/// the height's own channel -- one Channel colouring (the base, or the
+/// one enabled layer at full opacity, Normal) of the terrain's layer and
+/// channel -- the palette coordinate per unit of the ground's height
+/// (the colouring's scale over `height_scale`, the ground's cells a
+/// field unit), its offset, and 1 to wrap. Then the terrain colours
+/// each point by the palette at its own height, and the bands follow
+/// the height's contours down the steepest face (heightfield plan, T4).
+/// None for any other stack: its colours, a cell's each.
+pub fn height_colour(config: &FractalConfig, height_scale: f32) -> Option<[f32; 3]> {
+    let s = &config.sim;
+    let t = &s.terrain;
+    let (coloring, params, source) = if s.color_layers.is_empty() {
+        (&s.coloring, &s.coloring_params, 0usize)
+    } else {
+        let mut on = s.color_layers.iter().filter(|l| l.enabled);
+        let layer = on.next()?;
+        if on.next().is_some() || layer.gather || layer.opacity < 1.0 || layer.blend != crate::config::sim::SimBlend::Normal {
+            return None;
+        }
+        (&layer.coloring, &layer.coloring_params, layer.source)
+    };
+    if coloring != "channel" || source != t.layer as usize || !(height_scale.abs() > 1.0e-20) {
+        return None;
+    }
+    let def = crate::sim::COLORINGS.iter().find(|c| c.name == "channel")?;
+    let param = |name: &str| {
+        params.get(name).copied().unwrap_or_else(|| def.parameters.iter().find(|p| p.name == name).map_or(0.0, |p| p.default))
+    };
+    if param("channel").round().clamp(0.0, 3.0) as u32 != t.channel {
+        return None;
+    }
+    Some([param("scale") / height_scale, param("offset"), if param("wrap") >= 0.5 { 1.0 } else { 0.0 }])
+}
+
 /// The path tracer's settings: the terrain's own block, the lens in
 /// the target's terms.
 pub fn sim_path_settings(config: &FractalConfig, gw: u32) -> PathSettings {
@@ -154,6 +189,7 @@ impl SimTerrain {
         let bound = FIELD_BOUND * scale.abs() + gw as f32;
         let (relief, albedo) = sim.terrain_inputs(device, queue, &config.sim, palette_view);
         self.terrain.set_grid(device, queue, relief, albedo, gw, gh, scale, bound, repeat);
+        self.terrain.set_height_colour(palette_view, height_colour(config, scale));
         self.made = Some(key);
         self.grid = (gw, gh);
         true
@@ -248,6 +284,49 @@ mod tests {
         c.sim.terrain.enabled = true;
         c.background_color = [0.4, 0.5, 0.6];
         c
+    }
+
+    /// The colour by the height applies exactly when the colour stack is
+    /// the palette over the height's own channel: one Channel colouring of
+    /// the terrain's layer and channel, at full opacity and Normal. Its
+    /// mapping is the colouring's scale over the ground's height scale,
+    /// the offset and the wrap, with the colouring's defaults.
+    #[test]
+    fn colour_by_height_applies_to_the_heights_own_channel() {
+        let mut c = config(64, 10);
+        c.sim.terrain.channel = 1;
+        c.sim.coloring = "channel".into();
+        c.sim.coloring_params.clear();
+        // The defaults: channel 1, scale 3, offset 0, clamp.
+        assert_eq!(height_colour(&c, 12.0), Some([3.0 / 12.0, 0.0, 0.0]));
+        c.sim.coloring_params.insert("scale".into(), 2.0);
+        c.sim.coloring_params.insert("offset".into(), 0.25);
+        c.sim.coloring_params.insert("wrap".into(), 1.0);
+        assert_eq!(height_colour(&c, 4.0), Some([0.5, 0.25, 1.0]));
+        // Another channel, another colouring, another layer: its colours.
+        c.sim.coloring_params.insert("channel".into(), 0.0);
+        assert_eq!(height_colour(&c, 4.0), None);
+        c.sim.coloring_params.insert("channel".into(), 1.0);
+        c.sim.coloring = "two_channel".into();
+        assert_eq!(height_colour(&c, 4.0), None);
+        c.sim.coloring = "channel".into();
+        c.sim.terrain.layer = 1;
+        assert_eq!(height_colour(&c, 4.0), None);
+        c.sim.terrain.layer = 0;
+        // A stack: one enabled Channel layer of the terrain's layer.
+        let layer = crate::config::sim::SimColorLayer {
+            coloring: "channel".into(),
+            coloring_params: [("channel".to_string(), 1.0), ("scale".to_string(), 5.0)].into_iter().collect(),
+            ..Default::default()
+        };
+        c.sim.color_layers = vec![layer.clone()];
+        assert_eq!(height_colour(&c, 10.0), Some([0.5, 0.0, 0.0]));
+        c.sim.color_layers = vec![crate::config::sim::SimColorLayer { opacity: 0.5, ..layer.clone() }];
+        assert_eq!(height_colour(&c, 10.0), None, "a translucent layer is a blend");
+        c.sim.color_layers = vec![layer.clone(), layer.clone()];
+        assert_eq!(height_colour(&c, 10.0), None, "two layers are a blend");
+        c.sim.color_layers = vec![layer.clone(), crate::config::sim::SimColorLayer { enabled: false, ..layer }];
+        assert_eq!(height_colour(&c, 10.0), Some([0.5, 0.0, 0.0]), "a disabled layer is not drawn");
     }
 
     /// A simulation's terrain renders through `render_with` -- lit, and
