@@ -1283,10 +1283,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 /// tracer (each declares `hf_albedo` and `hf_sampler`).
 const HF_ALBEDO_WGSL: &str = r#"
 // The albedo at the world point q, filtered over `foot` world units:
-// bilinear between the samples where a ray's share of a pixel is
-// smaller than a texel, the mip chain's averages where it covers
-// several -- so distant ground is the average of its texels rather than
-// whichever one a ray struck.
+// between the samples where a ray's share of a pixel is smaller than a
+// texel -- bilinearly, or a smooth ground's spline -- the mip chain's
+// averages where it covers several, so distant ground is the average
+// of its texels rather than whichever one a ray struck.
 fn hf_albedo_at(q: vec2<f32>, foot: f32) -> vec4<f32> {
     // Held inside the ground: a wall's hit lies on its edge, where a
     // rounding puts half of them outside -- off the ground, transparent --
@@ -1303,7 +1303,46 @@ fn hf_albedo_at(q: vec2<f32>, foot: f32) -> vec4<f32> {
     let dims = vec2<f32>(textureDimensions(hf_albedo));
     let uv = (s + vec2<f32>(0.5, 0.5)) / dims;
     let lod = clamp(log2(max(foot * hf_sec.geo.w, 1.0e-6)), 0.0, f32(textureNumLevels(hf_albedo) - 1u));
-    return textureSampleLevel(hf_albedo, hf_sampler, uv, i32(hf_sec.dims.z), lod);
+    let mip = textureSampleLevel(hf_albedo, hf_sampler, uv, i32(hf_sec.dims.z), lod);
+    // A smooth ground's colour is its samples' spline, as its height is,
+    // where a ray's share of a pixel is under a texel; the mips' average
+    // past two. Bilinear, the colour kinked at every cell's edge while
+    // the height did not: on a steep face, where a step sideways is a
+    // long way down, where the colour changed sat at a height that
+    // moved once a cell along the face -- vertical stripes, a cell
+    // apart.
+    if (params.fdata[19].w > 0.5 && lod < 1.0) {
+        return mix(hf_albedo_spline(s, i32(hf_sec.dims.z), dims), mip, lod);
+    }
+    return mip;
+}
+
+// The uniform cubic B-spline's weights for the texels at -1, 0, 1 and 2.
+fn hf_albedo_bs(t: f32) -> vec4<f32> {
+    let u = 1.0 - t;
+    let t2 = t * t;
+    let t3 = t2 * t;
+    return vec4<f32>(u * u * u, 3.0 * t3 - 6.0 * t2 + 4.0, -3.0 * t3 + 3.0 * t2 + 3.0 * t + 1.0, t3) / 6.0;
+}
+
+// The albedo's cubic B-spline at s (the section's samples, a texel's
+// centre at each whole number) at level 0, in four bilinear taps:
+// each pair of weights is one tap placed between its two texels in
+// their ratio (Sigg and Hadwiger, "Fast Third-Order Texture Filtering",
+// GPU Gems 2). The height's own spline, on the colour.
+fn hf_albedo_spline(s: vec2<f32>, layer: i32, dims: vec2<f32>) -> vec4<f32> {
+    let i = floor(s);
+    let f = s - i;
+    let wx = hf_albedo_bs(f.x);
+    let wy = hf_albedo_bs(f.y);
+    let g0 = vec2<f32>(wx.x + wx.y, wy.x + wy.y);
+    let g1 = vec2<f32>(wx.z + wx.w, wy.z + wy.w);
+    let h0 = (i - vec2<f32>(1.0, 1.0) + vec2<f32>(wx.y, wy.y) / g0 + vec2<f32>(0.5, 0.5)) / dims;
+    let h1 = (i + vec2<f32>(1.0, 1.0) + vec2<f32>(wx.w, wy.w) / g1 + vec2<f32>(0.5, 0.5)) / dims;
+    return g0.x * g0.y * textureSampleLevel(hf_albedo, hf_sampler, h0, layer, 0.0)
+        + g1.x * g0.y * textureSampleLevel(hf_albedo, hf_sampler, vec2<f32>(h1.x, h0.y), layer, 0.0)
+        + g0.x * g1.y * textureSampleLevel(hf_albedo, hf_sampler, vec2<f32>(h0.x, h1.y), layer, 0.0)
+        + g1.x * g1.y * textureSampleLevel(hf_albedo, hf_sampler, h1, layer, 0.0);
 }
 
 "#;
@@ -4172,6 +4211,112 @@ pub(crate) mod gpu_tests {
             assert!(worst_t < 1.0e-4, "{worst_t}");
             assert!(worst_n < 2.0e-3, "{worst_n}");
         }
+    }
+
+    /// A simulation's ground's colour is its colours' cubic B-spline, as
+    /// its height is (where a ray's share of a pixel is under a texel):
+    /// unlit, every pixel the CPU's spline of the stored albedo at its
+    /// hit. Bilinear, the colour kinked at each cell's edge where the
+    /// height did not, and a steep face drew vertical stripes a cell apart.
+    #[test]
+    fn a_grid_grounds_colour_is_its_spline() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (40u32, 30u32);
+        let texels: Vec<[f32; 4]> = (0..w * h)
+            .map(|k| {
+                let (x, y) = ((k % w) as f32, (k / w) as f32);
+                [(x * 0.37).sin() + 0.6 * (y * 0.29).cos(), 0.0, 0.0, 0.0]
+            })
+            .collect();
+        let colours: Vec<[f32; 4]> = (0..w * h)
+            .map(|k| {
+                let (x, y) = ((k % w) as f32, (k / w) as f32);
+                [0.5 + 0.4 * (x * 0.9).sin(), 0.5 + 0.4 * (y * 1.3).cos(), ((k * 7919) % 97) as f32 / 97.0, 1.0]
+            })
+            .collect();
+        let texture = |data: &[[f32; 4]]| {
+            let t = device.create_texture(&TextureDescriptor {
+                label: None,
+                size: Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format: TextureFormat::Rgba32Float,
+                usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            queue.write_texture(
+                t.as_image_copy(),
+                bytemuck::cast_slice(data),
+                TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 16), rows_per_image: Some(h) },
+                Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            );
+            let v = t.create_view(&TextureViewDescriptor::default());
+            (t, v)
+        };
+        let ((_a, relief), (_b, albedo)) = (texture(&texels), texture(&colours));
+        let (ow, oh) = (128u32, 96u32);
+        let mut r = TerrainRenderer::new(&device, ow, oh);
+        r.set_grid(&device, &queue, &relief, &albedo, w, h, 4.0, 100.0, false);
+        let (_, at) = r.tile_textures_for_test().unwrap();
+        let halves: Vec<u16> = bytemuck::cast_slice(&read_texture(&device, &queue, at, 0, w, h, 8)).to_vec();
+        let stored = |i: i64, j: i64, c: usize| {
+            let k = (j.clamp(0, h as i64 - 1) * w as i64 + i.clamp(0, w as i64 - 1)) as usize;
+            half::f16::from_bits(halves[k * 4 + c]).to_f64()
+        };
+        let bs = |t: f64| [(1.0 - t).powi(3) / 6.0, (3.0 * t.powi(3) - 6.0 * t * t + 4.0) / 6.0, (-3.0 * t.powi(3) + 3.0 * t * t + 3.0 * t + 1.0) / 6.0, t.powi(3) / 6.0];
+        // Unlit: the shading's strength 0 draws the albedo itself.
+        let cam = camera([20.0, 15.0, 0.0], 0.7, 0.3, 30.0, 0.9);
+        let mut v = view(cam.clone());
+        v.shading.shading_strength = 0.0;
+        v.shading.ambient = 0.123;
+        r.render(&device, &queue, &v);
+        let out = read_output(&device, &queue, &r, ow, oh);
+        let raw = read_buffer(&device, &queue, r.geometry_buffer(), (ow * oh) as u64 * 16);
+        let geom: &[[u32; 4]] = bytemuck::cast_slice(&raw);
+        let per_ray = 2.0 * (cam.fov as f64 * 0.5).tan() / oh as f64;
+        let (mut checked, mut worst) = (0, 0.0f64);
+        for py in 0..oh {
+            for px in 0..ow {
+                let k = (py * ow + px) as usize;
+                let t = f32::from_bits(geom[k][3]) as f64;
+                if !(t > 0.0) {
+                    continue;
+                }
+                let d = ray(&cam, px, py, ow, oh);
+                let p = [cam.eye[0] + d[0] * t, cam.eye[1] + d[1] * t];
+                if p[0] < 2.0 || p[1] < 2.0 || p[0] > (w - 3) as f64 || p[1] > (h - 3) as f64 {
+                    continue;
+                }
+                // Only where the lookup is the spline alone: a ray's share
+                // of a pixel under a texel (the relight's own footprint).
+                let n = [half::f16::from_bits(geom[k][0] as u16).to_f64(), half::f16::from_bits((geom[k][0] >> 16) as u16).to_f64(), half::f16::from_bits(geom[k][1] as u16).to_f64()];
+                let nd = (n[0] * d[0] + n[1] * d[1] + n[2] * d[2]).abs();
+                if t * per_ray / nd.max(0.05).sqrt() >= 0.9 {
+                    continue;
+                }
+                let (a0, b0) = (p[0].floor(), p[1].floor());
+                let (bu, bv) = (bs(p[0] - a0), bs(p[1] - b0));
+                for c in 0..3 {
+                    let mut s = 0.0;
+                    for j in 0..4 {
+                        for i in 0..4 {
+                            s += bu[i] * bv[j] * stored(a0 as i64 - 1 + i as i64, b0 as i64 - 1 + j as i64, c);
+                        }
+                    }
+                    worst = worst.max((out[k][c] as f64 - s).abs());
+                }
+                checked += 1;
+            }
+        }
+        println!("{checked} pixels, worst channel off the spline {worst:.2e}");
+        assert!(checked > 1000, "{checked}");
+        // The sampler's bilinear taps carry the weights in 8-bit
+        // fractions (the hardware's), so not to f32's last digit.
+        assert!(worst < 5.0e-3, "{worst}");
     }
 
     /// A ground's wall is drawn whole (T4): its hits lie on the ground's

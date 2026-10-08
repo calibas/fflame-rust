@@ -1573,6 +1573,35 @@ terrain.**
     k/255, the user's darks); `a_glossy_black_keeps_its_reflection_denoised`
     (black and near-black under a 0.04 coat: denoised within 0.3% of
     plain).
+- **Vertical stripes down steep faces (2026-10-07), the user's report:**
+  "What causes the darker vertical stripes along the steep parts? I
+  thought the height and the palette color are connected?" They are --
+  that config's colouring and its height read the same channel -- but
+  the terrain keeps one colour a cell, already through the palette, and
+  interpolates it across the ground on its own, apart from the height.
+  On a steep face a step sideways is a long way down, so wherever the
+  colour does not follow the height's contours it is drawn out down the
+  face. Three ways it did not:
+  - **The colour was bilinear and the height a spline** (since the
+    smooth surface): where the colour changed, along a face, sat at a
+    height that moved once a cell -- stripes a cell apart. Fixed: a
+    smooth ground's colour is its colours' cubic B-spline too, in four
+    bilinear taps (Sigg and Hadwiger), where a ray's share of a pixel is
+    under a texel, blended into the mips' average by two
+    (`hf_albedo_spline`). Gate `a_grid_grounds_colour_is_its_spline`:
+    unlit, 7,303 pixels against the CPU's spline of the stored colours,
+    within 2.2e-3 (the hardware's bilinear weights).
+  - **The height is softened, the colour is not** (the terrain's
+    Softness, 1 cell by default, blurs the relief only): along a
+    contour of the blurred height the unblurred colour still wanders.
+    Softness 0 removes it; not changed.
+  - **A palette is not linear.** The colour is the spline of colours
+    already through the palette; the height the spline of the values.
+    Along a contour the two disagree wherever the palette bends -- that
+    config's ran black to grey to white, three times over (scale 3),
+    on faces 190 cells of height to a field unit. Faint, and only a
+    colour looked up from the interpolated value per hit would remove
+    it: an option offered to the user, not built.
 - **Found with it: a stale binary.** The visual suite runs
   `target/release/FractalArtEditor.exe` as it is. During the spline work
   the user's running app held it, `cargo build --release` failed, and
