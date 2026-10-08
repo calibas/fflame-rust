@@ -463,7 +463,7 @@ Thread-safe atomic u32 accumulation (4×u32 per pixel: R, G, B, density), fixed 
 ## Optional/Future Features
 
 ### Medium Priority
-- **Async export progress UI** - export currently blocks the UI during rendering
+- **Async export progress UI** - a custom-size export of a 2D escape or simulation picture still blocks the UI while it renders (flame high-res/long renders and 3D terrains already run in the background with the progress bar)
 - **EXR/HDR export** - high dynamic range output for compositing
 
 ### Low Priority / Future Expansions

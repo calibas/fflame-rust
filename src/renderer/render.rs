@@ -814,11 +814,22 @@ async fn render_sim(
     // keeps the queue from growing without bound.
     const PROGRESS_BATCH: u32 = 512;
     let total = job.config.sim.steps;
+    // A terrain's still follows the steps, and takes most of a path
+    // traced export: the bar's share of each, in thousandths.
+    #[cfg(feature = "terrain")]
+    let still_share = match (job.config.sim.terrain_active(), job.config.sim.terrain.tier) {
+        (false, _) => 0.0,
+        (true, crate::config::escape::RenderTier::Lit) => 0.1,
+        (true, _) => 0.75,
+    };
+    #[cfg(not(feature = "terrain"))]
+    let still_share = 0.0;
     loop {
         let reached =
             sim.advance_steps(device, queue, &job.config.sim, total, Some(PROGRESS_BATCH));
         let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
-        progress.on_progress(sim.step_index() as u64, total.max(1) as u64);
+        let steps = sim.step_index() as f64 / total.max(1) as f64;
+        progress.on_progress(((1.0 - still_share) * steps.min(1.0) * 1000.0) as u64, 1000);
         if reached {
             break;
         }
@@ -841,8 +852,9 @@ async fn render_sim(
             None => terrain_owned.insert(make()),
         };
         t.update(device, queue, sim, job.config, renderer.palette_view(), renderer.palette_generation());
-        t.render_still(device, queue, job.config, (job.width, job.height), || {
+        t.render_still(device, queue, job.config, (job.width, job.height), |f| {
             let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            progress.on_progress((((1.0 - still_share) + still_share * f as f64) * 1000.0) as u64, 1000);
         });
         Some(t)
     } else {
@@ -1371,9 +1383,15 @@ async fn render_escape_terrain(
     prepare_escape(terrain.footprint_renderer(), device, queue, config).await;
     terrain.footprint_renderer().set_chunk_time_target(200.0);
     let before = terrain.footprint_renders;
+    // The bar's shares: the sections, then the still, which takes most
+    // of a path traced export.
+    let fill_share = if config.escape.terrain.tier == crate::config::escape::RenderTier::Lit { 0.9 } else { 0.25 };
     let mut guard = 0u32;
     while terrain.update(device, queue, config, job.width, job.height, palette, generation, 1) {
         let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let done = (terrain.footprint_renders - before) as f64;
+        let fill = done / (done + terrain.sections_missing() as f64).max(1.0);
+        progress.on_progress((fill_share * fill * 1000.0) as u64, 1000);
         guard += 1;
         if guard > 4_000_000 {
             log::error!("terrain sections failed to settle; using what we have");
@@ -1383,8 +1401,9 @@ async fn render_escape_terrain(
     let n = terrain.footprint_renders - before;
     // The picture: path traced at `samples`, or the lit tier's grid.
     let ss = config.escape.supersample.max(1);
-    terrain.render_still(device, queue, config, (job_w, job_h), || {
+    terrain.render_still(device, queue, config, (job_w, job_h), |f| {
         let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        progress.on_progress(((fill_share + (1.0 - fill_share) * f as f64) * 1000.0) as u64, 1000);
     });
     let pixels = escape_tail(renderer, device, queue, config, (job_w, job_h, transparent), terrain.output_view(), oom_scope).await;
     if !caller_owned {

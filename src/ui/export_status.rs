@@ -114,3 +114,11 @@ impl crate::export::ExportReporter for UiReporter {
         }
     }
 }
+
+/// The unified render's progress, for an export through `render` (a
+/// terrain's, in the background).
+impl crate::renderer::RenderProgress for UiReporter {
+    fn on_progress(&mut self, current: u64, total: u64) {
+        crate::export::ExportReporter::progress(self, current as f32 / total.max(1) as f32, "");
+    }
+}

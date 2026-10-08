@@ -217,8 +217,8 @@ impl SimTerrain {
     }
 
     /// The export's picture: path traced at `samples` unless the tier is
-    /// Lit. `wait` between batches.
-    pub fn render_still(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, frame: (u32, u32), wait: impl FnMut()) {
+    /// Lit. `wait` between batches, with the share of the still done.
+    pub fn render_still(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, frame: (u32, u32), wait: impl FnMut(f32)) {
         let (gw, gh) = self.grid;
         let view = |jitter| sim_terrain_view(config, gw, gh, jitter);
         let inputs = self.inputs(config, &view);

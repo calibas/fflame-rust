@@ -384,6 +384,19 @@ impl App {
             crate::export::CustomSizeRoute::Direct => {}
         }
 
+        // A terrain's still -- its sections, then hundreds of path traced
+        // samples -- takes a minute at 4K and several with 2x AA. On the
+        // window's device it held the window that long with no progress,
+        // which Windows shows as a hang. So it renders in the background,
+        // on a device of its own, with the progress bar.
+        #[cfg(feature = "terrain")]
+        if (escape_mode && config.escape.terrain_active())
+            || (config.render_mode == crate::scene::transforms::RenderMode::Simulation && config.sim.terrain_active())
+        {
+            self.export_terrain_background(transparent, premultiplied, config, meta_config, render_width, render_height, supersample);
+            return;
+        }
+
         // The viewport's own escape renderer is about to compete with
         // the export for VRAM on the SAME device, and at a high
         // antialiasing factor it holds gigabytes of per-pixel state.
@@ -488,6 +501,100 @@ impl App {
         if let Some((message, is_error)) = toast {
             self.egui_layer.show_api_notification(&message, is_error);
         }
+    }
+
+    /// A terrain's custom-size export, in the background: the unified
+    /// render on a device of its own (`headless_device`), the progress bar
+    /// fed from it. The viewport's terrain pauses meanwhile (the frame
+    /// loop), so the export has the GPU, and keeps its picture.
+    #[cfg(all(feature = "terrain", not(target_arch = "wasm32")))]
+    #[allow(clippy::too_many_arguments)]
+    fn export_terrain_background(&mut self, transparent: bool, premultiplied: bool, config: FractalConfig, meta_config: FractalConfig, render_width: u32, render_height: u32, supersample: bool) {
+        use crate::renderer::{render, RenderJob};
+        use crate::ui::{ExportKind, UiReporter};
+
+        let (out_width, out_height) = if supersample { (render_width / 2, render_height / 2) } else { (render_width, render_height) };
+        let iterations_per_thread = self.config_manager.system_settings().iterations_per_thread;
+        let burn_in = self.config_manager.system_settings().burn_in;
+
+        // The destination first, on the UI thread: see
+        // `export_high_res_background`.
+        let path = match rfd::FileDialog::new()
+            .set_parent(self.window.as_ref())
+            .add_filter("PNG Image", &["png"])
+            .set_file_name("fractal.png")
+            .save_file()
+        {
+            Some(p) => p,
+            None => return,
+        };
+        if let Ok(mut s) = self.export_status.lock() {
+            s.begin(ExportKind::Png, format!("Exporting PNG · {out_width}×{out_height}{}",
+                if supersample { " · 2× AA" } else { "" }));
+        }
+        let status_arc = Arc::clone(&self.export_status);
+        std::thread::spawn(move || {
+            let mut reporter = UiReporter::new(Arc::clone(&status_arc));
+            // A panic here (a device error, which wgpu raises as one) must
+            // still end the export: left active, the bar would stay up and
+            // the viewport stay paused for good. (A build that aborts on
+            // panic ends the process instead, as the synchronous path did.)
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                pollster::block_on(async {
+                    let (device, queue) = super::export::headless_device().await?;
+                    let job = RenderJob::new(&config, render_width, render_height)
+                        .with_iterations_per_thread(iterations_per_thread)
+                        .with_burn_in(burn_in)
+                        .with_transparent(transparent)
+                        .with_premultiplied(premultiplied);
+                    render(&device, &queue, job, &mut reporter).await.map_err(|e| e.to_string())
+                })
+            }))
+            .unwrap_or_else(|_| Err("the render failed (see the log)".to_string()));
+            let output = match result {
+                Ok(o) => o,
+                Err(e) => {
+                    eprintln!("Terrain export failed: {e}");
+                    if let Ok(mut s) = status_arc.lock() { s.finish_err(format!("Export failed: {e}")); }
+                    return;
+                }
+            };
+            let (final_width, final_height, rgba) = if supersample {
+                let (fw, fh) = (output.width / 2, output.height / 2);
+                (fw, fh, crate::export::supersample::downsample_2x_firefly(&output.rgba_data, fw, fh))
+            } else {
+                (output.width, output.height, output.rgba_data)
+            };
+            let metadata = crate::png_metadata::PngMetadata::from_app_state(
+                final_width,
+                final_height,
+                output.total_iterations,
+                output.render_time_ms,
+                iterations_per_thread,
+                meta_config.speed_factor,
+                &meta_config,
+            );
+            let png = match crate::renderer::compute_kernel::encode_png_from_rgba(final_width, final_height, rgba, Some(metadata)) {
+                Ok(d) => d,
+                Err(e) => {
+                    if let Ok(mut s) = status_arc.lock() { s.finish_err(format!("PNG encode failed: {e}")); }
+                    return;
+                }
+            };
+            match std::fs::write(&path, png) {
+                Ok(()) => {
+                    println!("PNG exported to: {} ({}×{}, {:.2}s)", path.display(), final_width, final_height, output.render_time_ms / 1000.0);
+                    if let Ok(mut s) = status_arc.lock() {
+                        s.finish_ok(format!("PNG saved · {}",
+                            path.file_name().map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| path.display().to_string())));
+                    }
+                }
+                Err(e) => {
+                    if let Ok(mut s) = status_arc.lock() { s.finish_err(format!("Save failed: {e}")); }
+                }
+            }
+        });
     }
 
     /// Background PNG export through HighResExporter on its own headless

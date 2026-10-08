@@ -885,7 +885,7 @@ impl EscapeTerrain {
     /// unless the tier is Lit, which draws the antialiasing grid. In
     /// dispatches of a few samples each, `wait` called between them (a
     /// blocking poll on the desktop). Submits its own work.
-    pub fn render_still(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, frame: (u32, u32), wait: impl FnMut()) {
+    pub fn render_still(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, frame: (u32, u32), wait: impl FnMut(f32)) {
         let view = |jitter| terrain_view(config, jitter);
         self.tiers.still(&mut self.terrain, device, queue, &tier_inputs(config, &view), frame, wait);
     }
@@ -1470,6 +1470,37 @@ mod tests {
             .count();
         println!("2^60: {ground} of {} pixels ground", w * h);
         assert!(ground > (w * h / 3) as usize, "{ground}");
+    }
+
+    /// An export reports its progress as it goes -- the sections, then the
+    /// still's samples, tile by tile -- never backwards, and ends at 1: what
+    /// the app's progress bar shows while a terrain exports in the
+    /// background. Lit and path traced, and in tiles.
+    #[test]
+    fn a_terrain_export_reports_its_progress() {
+        let Some((device, queue)) = crate::escape::terrain::gpu_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        struct Record(Vec<f64>);
+        impl crate::renderer::RenderProgress for Record {
+            fn on_progress(&mut self, current: u64, total: u64) {
+                self.0.push(current as f64 / total.max(1) as f64);
+            }
+        }
+        for (tier, (w, h)) in [(RenderTier::Lit, (160u32, 120u32)), (RenderTier::PathTraced, (160, 120)), (RenderTier::PathTraced, (2200, 60))] {
+            let mut c = terrain_config();
+            c.escape.terrain.tier = tier;
+            c.escape.path.samples = 8;
+            let mut record = Record(Vec::new());
+            pollster::block_on(crate::renderer::render(&device, &queue, crate::renderer::RenderJob::new(&c, w, h), &mut record)).expect("render");
+            let p = &record.0;
+            println!("{tier:?} {w}x{h}: {} reports", p.len());
+            assert!(p.len() >= 4, "{p:?}");
+            assert!(p.windows(2).all(|v| v[1] >= v[0] - 1e-9), "never backwards: {p:?}");
+            assert!((p.last().unwrap() - 1.0).abs() < 1e-9, "ends at 1: {p:?}");
+            assert!(p.iter().any(|&f| f > 0.05 && f < 0.95), "between: {p:?}");
+        }
     }
 
     /// A deep picture's hidden roots render at [`COARSE_SAMPLES`], and no

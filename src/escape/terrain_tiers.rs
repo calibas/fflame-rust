@@ -140,8 +140,9 @@ impl TerrainTiers {
 
     /// The export's picture, `frame` in pixels: path traced at `samples`
     /// unless the tier is Lit, which draws the antialiasing grid. In
-    /// dispatches of a few samples each, `wait` called between them (a
-    /// blocking poll on the desktop). Sizes the renderer itself: to the
+    /// dispatches of a few samples each, `wait` called between them with
+    /// the share of the still done (a blocking poll on the desktop, and
+    /// the export's progress). Sizes the renderer itself: to the
     /// frame, or past [`STILL_TILE_SIDE`]² pixels to each tile in turn,
     /// the tiles copied into a picture of the frame's size -- the same
     /// pixels, since a tile's rays and samples are the frame's own.
@@ -153,7 +154,7 @@ impl TerrainTiers {
         queue: &Queue,
         i: &TierInputs,
         frame: (u32, u32),
-        wait: impl FnMut(),
+        wait: impl FnMut(f32),
     ) {
         self.still_in_tiles(terrain, device, queue, i, frame, STILL_TILE_SIDE, wait);
     }
@@ -167,7 +168,7 @@ impl TerrainTiers {
         i: &TierInputs,
         frame: (u32, u32),
         side: u32,
-        mut wait: impl FnMut(),
+        mut wait: impl FnMut(f32),
     ) {
         self.showing_picture = false;
         // A denoised tile is drawn with the denoiser's reach more around
@@ -199,18 +200,20 @@ impl TerrainTiers {
             let v = p.create_view(&wgpu::TextureViewDescriptor::default());
             self.picture = Some((p, v));
         }
+        let tiles = (cols * rows) as f32;
         for row in 0..rows {
             for col in 0..cols {
                 let (ox, oy) = (col * tw, row * th);
                 if ox >= frame.0 || oy >= frame.1 {
                     continue;
                 }
+                let done = (row * cols + col) as f32;
                 let (w, h) = (tw.min(frame.0 - ox), th.min(frame.1 - oy));
                 let (ax, ay) = (ox.saturating_sub(apron), oy.saturating_sub(apron));
                 let (bx, by) = ((ox + w + apron).min(frame.0), (oy + h + apron).min(frame.1));
                 terrain.resize(device, bx - ax, by - ay);
                 terrain.set_frame(frame, (ax, ay));
-                self.still_whole(terrain, device, queue, i, &mut wait);
+                self.still_whole(terrain, device, queue, i, &mut |f| wait((done + f) / tiles));
                 let src = if self.showing_path { Some(terrain.output_texture()) } else { terrain.accumulated_texture() };
                 let (Some(src), Some((picture, _))) = (src, self.picture.as_ref()) else { continue };
                 let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Terrain Still Tile") });
@@ -230,14 +233,14 @@ impl TerrainTiers {
                     wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
                 );
                 queue.submit(std::iter::once(enc.finish()));
-                wait();
+                wait((done + 1.0) / tiles);
             }
         }
         self.showing_picture = true;
     }
 
     /// A still of the renderer's own size.
-    fn still_whole(&mut self, terrain: &mut TerrainRenderer, device: &Device, queue: &Queue, i: &TierInputs, wait: &mut impl FnMut()) {
+    fn still_whole(&mut self, terrain: &mut TerrainRenderer, device: &Device, queue: &Queue, i: &TierInputs, wait: &mut impl FnMut(f32)) {
         if i.tier == RenderTier::Lit {
             terrain.reset_accumulation();
             for jitter in EscapeRenderer::sample_grid(i.supersample.max(1)) {
@@ -245,6 +248,7 @@ impl TerrainTiers {
                 terrain.accumulate(device, queue);
             }
             self.showing_path = false;
+            wait(1.0);
             return;
         }
         terrain.reset_path();
@@ -255,7 +259,7 @@ impl TerrainTiers {
             let per = self.path_ms().map_or(2, |ms| (250.0 / ms.max(0.05)).floor().clamp(1.0, 64.0) as u32);
             let n = per.min(target - terrain.path_samples());
             self.trace(terrain, device, queue, i, n);
-            wait();
+            wait(terrain.path_samples() as f32 / target as f32);
         }
         terrain.resolve_path(device, queue);
         self.showing_path = true;
