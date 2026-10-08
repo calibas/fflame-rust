@@ -2430,6 +2430,15 @@ impl App {
                         let (tile_w, tile_h) = crate::escape::terrain_tiers::still_tile(export_width, export_height);
                         let mut t = crate::escape::footprint::EscapeTerrain::new(&self.gpu.device, tile_w, tile_h);
                         t.footprint_renderer().set_fixed_chunk(true);
+                        // A 2D IFS formula draws the flame: its analysis
+                        // and coarse pass, as the viewport's terrain and
+                        // the desktop's `prepare_escape` give them.
+                        if let Some(def) = crate::escape::ifs::get_ifs(&export_config.escape.formula) {
+                            let registry = crate::variations::global_registry();
+                            let fp = t.footprint_renderer();
+                            fp.set_ifs(crate::escape::ifs::pack_for(def, &export_config, &registry));
+                            fp.ensure_coarse(&self.gpu.device, &self.gpu.queue, &export_config.escape, &export_config.flame);
+                        }
                         let mut guard = 0u32;
                         while t.update(
                             &self.gpu.device,

@@ -219,6 +219,9 @@ struct IngestParamsGpu {
     oy: u32,
     rw: u32,
     rh: u32,
+    /// The atlas layer being made: its own slots of the range.
+    layer: u32,
+    pad: [u32; 3],
     /// The interior's colour on a plateau, where the colouring leaves
     /// it undrawn: the background's.
     background: [f32; 4],
@@ -252,6 +255,10 @@ struct IngestParams {
     oy: u32,
     rw: u32,
     rh: u32,
+    layer: u32,
+    p0: u32,
+    p1: u32,
+    p2: u32,
     background: vec4<f32>,
     tint: vec4<f32>,
 };
@@ -284,6 +291,10 @@ fn range_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     atomicMin(&range[0], ordered(g));
     atomicMax(&range[1], ordered(g));
+    // And the section's own, which a ground of sections reduces to the
+    // range of what it holds (`reduce_range`).
+    atomicMin(&range[2u + 2u * ip.layer], ordered(g));
+    atomicMax(&range[3u + 2u * ip.layer], ordered(g));
 }
 
 @compute @workgroup_size(8, 8, 1)
@@ -361,6 +372,7 @@ fn ordered(f: f32) -> u32 {
 
 @compute @workgroup_size(8, 8, 1)
 fn grid_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    // (The albedo is stored premultiplied: `hf_unpremultiply`.)
     if (gid.x >= gp.n || gid.y >= gp.m) {
         return;
     }
@@ -370,7 +382,8 @@ fn grid_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let at = vec2<i32>(gid.xy);
     let h = textureLoad(relief, cell, 0).x * gp.scale;
     textureStore(out_raw, at, vec4<f32>(h, 0.0, 0.0, 0.0));
-    textureStore(out_a, at, textureLoad(albedo, cell, 0));
+    let c = textureLoad(albedo, cell, 0);
+    textureStore(out_a, at, vec4<f32>(c.rgb * c.a, c.a));
     // The heights' range: the slab the trace clips to (map mode 4).
     if (abs(h) < 1.0e30) {
         atomicMin(&range[0], ordered(h));
@@ -378,6 +391,30 @@ fn grid_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 "#;
+
+/// A ground of sections' range: the least and the most of its sections'
+/// own (the ingest's per-layer slots), into the two the walk reads.
+/// Listed: the count, then the layers.
+const RANGE_REDUCE_WGSL: &str = r#"
+@group(0) @binding(0) var<storage, read_write> range: array<u32>;
+@group(0) @binding(1) var<storage, read> layers: array<u32>;
+
+@compute @workgroup_size(1, 1, 1)
+fn main() {
+    var lo = 0xffffffffu;
+    var hi = 0u;
+    for (var k = 0u; k < layers[0]; k = k + 1u) {
+        let l = layers[1u + k];
+        lo = min(lo, range[2u + 2u * l]);
+        hi = max(hi, range[3u + 2u * l]);
+    }
+    range[0] = lo;
+    range[1] = hi;
+}
+"#;
+
+/// The most atlas layers the range keeps slots for.
+const RANGE_LAYERS: u64 = 256;
 
 /// The accumulation: a jittered render folded into the running mean,
 /// read from one texture of a pair and written to the other. Averaged
@@ -883,8 +920,12 @@ fn hf_trace_section(o: vec3<f32>, d: vec3<f32>, ta: f32, tb: f32, soft_k: f32) -
     let top = hf_f(textureLoad(hf_mips, vec2<i32>(0, 0), i32(hf_sec.dims.z), top_level).r) * hf_sec.geo.w;
 
     // Clip to the section's box: x in [0, cn], y in [0, cm], z between
-    // the floor and its highest point.
-    let floor_z = params.eye.w * hf_sec.geo.w;
+    // the floor and its highest point. The floor is the slab's: a
+    // simulation's measured one (`hf_load_range`), not the stand-in bound
+    // its grid was set with, which a channel's values can pass -- a
+    // negative height over an age channel put its pits below it, and the
+    // rays down into them stopped there and missed.
+    let floor_z = hf_slab_floor * hf_sec.geo.w;
     var t0 = ta;
     var t1 = tb;
     if (abs(d.x) < 1.0e-12) {
@@ -1349,6 +1390,7 @@ fn hf_albedo_xy(q: vec2<f32>, foot: f32) -> vec4<f32> {
     let uv = (s + vec2<f32>(0.5, 0.5)) / dims;
     let lod = clamp(log2(max(foot * hf_sec.geo.w, 1.0e-6)), 0.0, f32(textureNumLevels(hf_albedo) - 1u));
     let mip = textureSampleLevel(hf_albedo, hf_sampler, uv, i32(hf_sec.dims.z), lod);
+    var c = mip;
     // A smooth ground's colour is its samples' spline, as its height is,
     // where a ray's share of a pixel is under a texel; the mips' average
     // past two. Bilinear, the colour kinked at every cell's edge while
@@ -1357,9 +1399,22 @@ fn hf_albedo_xy(q: vec2<f32>, foot: f32) -> vec4<f32> {
     // moved once a cell along the face -- vertical stripes, a cell
     // apart.
     if (params.fdata[19].w > 0.5 && lod < 1.0) {
-        return mix(hf_albedo_spline(s, i32(hf_sec.dims.z), dims), mip, lod);
+        c = mix(hf_albedo_spline(s, i32(hf_sec.dims.z), dims), mip, lod);
     }
-    return mip;
+    return hf_unpremultiply(c);
+}
+
+// The albedo is stored premultiplied by its coverage -- a hole is
+// (0, 0, 0, 0) -- so every filter of it, the mips', the bilinear taps' and
+// the spline's, weighs a colour by how much of it there is; the walk and
+// the path tracer take it straight, the colour and its coverage. Filtered
+// straight, half a hole halved the colour AND its coverage, and the land
+// round every hole drew a dark rim.
+fn hf_unpremultiply(c: vec4<f32>) -> vec4<f32> {
+    if (c.a > 1.0e-4) {
+        return vec4<f32>(c.rgb / c.a, c.a);
+    }
+    return vec4<f32>(0.0, 0.0, 0.0, 0.0);
 }
 
 // The uniform cubic B-spline's weights for the texels at -1, 0, 1 and 2.
@@ -1380,6 +1435,25 @@ fn hf_albedo_spline(s: vec2<f32>, layer: i32, dims: vec2<f32>) -> vec4<f32> {
     let f = s - i;
     let wx = hf_albedo_bs(f.x);
     let wy = hf_albedo_bs(f.y);
+    // A repeated ground's colour wraps round its period, as its height
+    // does (`hf_raw`): the sampler's taps past a copy's edge clamped, and
+    // drew a seam at every copy's edge. Sixteen loads, wrapped -- the
+    // period one less than the samples, a period added before the
+    // remainder.
+    if (hf_repeats()) {
+        let last = vec2<i32>(hf_sec.dims.xy) - vec2<i32>(1, 1);
+        let base = vec2<i32>(i) - vec2<i32>(1, 1) + last;
+        var acc = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        for (var b = 0; b < 4; b = b + 1) {
+            var row = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+            for (var a = 0; a < 4; a = a + 1) {
+                let q = vec2<i32>(vec2<u32>(base + vec2<i32>(a, b)) % vec2<u32>(last));
+                row = row + wx[a] * textureLoad(hf_albedo, q, layer, 0);
+            }
+            acc = acc + wy[b] * row;
+        }
+        return acc;
+    }
     let g0 = vec2<f32>(wx.x + wx.y, wy.x + wy.y);
     let g1 = vec2<f32>(wx.z + wx.w, wy.z + wy.w);
     let h0 = (i - vec2<f32>(1.0, 1.0) + vec2<f32>(wx.y, wy.y) / g0 + vec2<f32>(0.5, 0.5)) / dims;
@@ -1942,8 +2016,12 @@ pub struct TerrainRenderer {
     /// The layer being made from footprint regions, and its ingest.
     building: Option<(u32, IngestParamsGpu)>,
     /// A count's or a relief's range over every section ingested since
-    /// the last `reset_range`, in the ordered encoding (`hf_range`).
+    /// the last `reset_range`, in the ordered encoding (`hf_range`) --
+    /// or, once `reduce_range` has run, over the ground's sections --
+    /// then each atlas layer's own.
     range: Buffer,
+    range_reduce_layout: BindGroupLayout,
+    range_reduce_pipeline: ComputePipeline,
     /// The accumulation's pair, allocated on the first `accumulate`;
     /// `accum_front` is the one holding the mean.
     accum: Option<[(Texture, TextureView); 2]>,
@@ -2094,6 +2172,10 @@ impl TerrainRenderer {
                 storage_tex(5, TextureFormat::Rgba16Float),
             ],
         });
+        let range_reduce_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Terrain Range Reduce"),
+            entries: &[storage(0, false), storage(1, true)],
+        });
         let accum_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Terrain Accumulate"),
             entries: &[uniform(0), tex(1), tex(2), storage_tex(3, TextureFormat::Rgba32Float)],
@@ -2122,6 +2204,7 @@ impl TerrainRenderer {
         let walk_pipeline = pipeline("Terrain Walk", &walk_layout, assemble_walk());
         let relight_pipeline = pipeline("Terrain Relight", &relight_layout, assemble_relight());
         let range_pipeline = entry("Terrain Range", &ingest_layout, INGEST_WGSL, "range_main");
+        let range_reduce_pipeline = entry("Terrain Range Reduce", &range_reduce_layout, RANGE_REDUCE_WGSL, "main");
         let ingest_pipeline = entry("Terrain Ingest", &ingest_layout, INGEST_WGSL, "ingest_main");
         let grid_pipeline = entry("Terrain Grid", &ingest_layout, GRID_WGSL, "grid_main");
         let accum_pipeline = entry("Terrain Accumulate", &accum_layout, ACCUM_WGSL, "main");
@@ -2154,8 +2237,8 @@ impl TerrainRenderer {
         let output = Self::create_output(device, out_w, out_h);
         let range = device.create_buffer(&BufferDescriptor {
             label: Some("Terrain Range"),
-            size: 8,
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            size: 8 + 8 * RANGE_LAYERS,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         TerrainRenderer {
@@ -2167,6 +2250,8 @@ impl TerrainRenderer {
             relight_pipeline,
             ingest_layout,
             range_pipeline,
+            range_reduce_layout,
+            range_reduce_pipeline,
             ingest_pipeline,
             grid_pipeline,
             accum_layout,
@@ -2453,7 +2538,12 @@ impl TerrainRenderer {
             TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(n * 4), rows_per_image: Some(m) },
             Extent3d { width: n, height: m, depth_or_array_layers: 1 },
         );
-        let halves: Vec<u16> = albedo.iter().flatten().map(|v| half::f16::from_f32(*v).to_bits()).collect();
+        // Premultiplied, as the walk reads it (`hf_unpremultiply`).
+        let halves: Vec<u16> = albedo
+            .iter()
+            .flat_map(|c| [c[0] * c[3], c[1] * c[3], c[2] * c[3], c[3]])
+            .map(|v| half::f16::from_f32(v).to_bits())
+            .collect();
         queue.write_texture(
             TexelCopyTextureInfo { texture: &atlas.albedo, mip_level: 0, origin: at, aspect: TextureAspect::All },
             bytemuck::cast_slice(&halves),
@@ -2569,7 +2659,7 @@ impl TerrainRenderer {
     ) {
         self.ensure_atlas(device, n, m, 1);
         self.reset_range(queue);
-        self.begin_section(0, n, m, ingest);
+        self.begin_section(queue, 0, n, m, ingest);
         self.ingest_region(device, queue, colour, height_field, 0, 0, n, m);
         self.finish_section(device, queue);
         let floor = -0.01 * n.max(m) as f64;
@@ -2640,16 +2730,55 @@ impl TerrainRenderer {
         self.atlas.as_ref().map(|a| (a.w, a.h, a.capacity))
     }
 
+    #[cfg(test)]
+    pub(crate) fn range_buffer_for_test(&self) -> &Buffer {
+        &self.range
+    }
+
     /// Empty the count's and the relief's range: a new picture.
     pub fn reset_range(&mut self, queue: &Queue) {
         queue.write_buffer(&self.range, 0, bytemuck::cast_slice(&[u32::MAX, 0u32]));
     }
 
+    /// The range of a ground of sections: its `layers`' own ranges, not
+    /// every section ever ingested -- so a count's or a relief's heights
+    /// are the ground's, whatever was panned past or zoomed through
+    /// before. Submits its own work.
+    pub fn reduce_range(&mut self, device: &Device, queue: &Queue, layers: &[u32]) {
+        let list: Vec<u32> = std::iter::once(layers.len() as u32).chain(layers.iter().copied()).collect();
+        let buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Terrain Range Layers"),
+            size: (list.len() * 4) as u64,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&list));
+        let bg = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Terrain Range Reduce"),
+            layout: &self.range_reduce_layout,
+            entries: &[
+                BindGroupEntry { binding: 0, resource: self.range.as_entire_binding() },
+                BindGroupEntry { binding: 1, resource: buffer.as_entire_binding() },
+            ],
+        });
+        let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Terrain Range Reduce") });
+        {
+            let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: Some("Terrain Range Reduce"), timestamp_writes: None });
+            pass.set_pipeline(&self.range_reduce_pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
+        queue.submit(std::iter::once(enc.finish()));
+    }
+
     /// Start making atlas layer `layer` -- `n x m` samples -- from
     /// footprint regions.
-    pub fn begin_section(&mut self, layer: u32, n: u32, m: u32, ingest: &TerrainIngest) {
+    pub fn begin_section(&mut self, queue: &Queue, layer: u32, n: u32, m: u32, ingest: &TerrainIngest) {
         let atlas = self.atlas.as_ref().expect("ensure_atlas first");
         assert!(layer < atlas.capacity && n <= atlas.w && m <= atlas.h, "a section inside the atlas");
+        assert!((layer as u64) < RANGE_LAYERS, "a layer the range has slots for");
+        // The layer's own range starts empty.
+        queue.write_buffer(&self.range, 8 + 8 * layer as u64, bytemuck::cast_slice(&[u32::MAX, 0u32]));
         let params = IngestParamsGpu {
             n,
             m,
@@ -2659,6 +2788,8 @@ impl TerrainRenderer {
             oy: 0,
             rw: 0,
             rh: 0,
+            layer,
+            pad: [0; 3],
             background: [ingest.background[0], ingest.background[1], ingest.background[2], 1.0],
             tint: [ingest.tint[0], ingest.tint[1], ingest.tint[2], 1.0],
         };
@@ -3090,10 +3221,12 @@ impl TerrainRenderer {
         if self.ground.is_none() || self.atlas.is_none() {
             return;
         }
-        // The denoiser's guides start with the sum.
+        // The denoiser's guides start with the sum; the pass gathers them
+        // only where they fit (`set_guided`).
         if self.path.set_guided(device, settings.denoise) {
             self.path.reset();
         }
+        let settings = &PathSettings { denoise: self.path.guided(), ..*settings };
         let atlas = self.atlas.as_ref().expect("checked");
         self.write_params(queue, view);
         let ground = self.ground.as_ref().expect("checked");
@@ -4497,6 +4630,162 @@ pub(crate) mod gpu_tests {
         assert!(out.iter().filter(|p| p[3] > 0.0).all(|p| (p[0] - 0.3).abs() < 1.0e-3), "the stored colour");
     }
 
+    /// A repeated ground's colour is its spline wrapped round the period,
+    /// as its height is: unlit, every pixel near enough for the spline
+    /// alone is the CPU's wrapped spline of the stored colours, across
+    /// the copies' edges too. Through the sampler, the taps past an edge
+    /// clamped, and every copy's edge drew a seam.
+    #[test]
+    fn a_repeated_grounds_colour_wraps_round_its_period() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (12u32, 9u32);
+        let tau = std::f32::consts::TAU;
+        let texels: Vec<[f32; 4]> = (0..w * h)
+            .map(|k| {
+                let (x, y) = ((k % w) as f32, (k / w) as f32);
+                [(x * tau / w as f32).sin() + 0.6 * (y * tau / h as f32).cos(), 0.0, 0.0, 0.0]
+            })
+            .collect();
+        let colours: Vec<[f32; 4]> = (0..w * h).map(|k| [((k * 7919) % 97) as f32 / 97.0, ((k * 31) % 13) as f32 / 13.0, 0.5, 1.0]).collect();
+        let texture = |data: &[[f32; 4]]| {
+            let t = device.create_texture(&TextureDescriptor {
+                label: None,
+                size: Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format: TextureFormat::Rgba32Float,
+                usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            queue.write_texture(
+                t.as_image_copy(),
+                bytemuck::cast_slice(data),
+                TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 16), rows_per_image: Some(h) },
+                Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            );
+            let v = t.create_view(&TextureViewDescriptor::default());
+            (t, v)
+        };
+        let ((_a, relief), (_b, albedo)) = (texture(&texels), texture(&colours));
+        let (ow, oh) = (128u32, 96u32);
+        let mut r = TerrainRenderer::new(&device, ow, oh);
+        r.set_grid(&device, &queue, &relief, &albedo, w, h, 2.0, 100.0, true);
+        let (n, m) = (w + 1, h + 1);
+        let (_, at) = r.tile_textures_for_test().unwrap();
+        let halves: Vec<u16> = bytemuck::cast_slice(&read_texture(&device, &queue, at, 0, n, m, 8)).to_vec();
+        // The period is the samples less one: the last is the first again.
+        let stored = |i: i64, j: i64, c: usize| {
+            let k = (j.rem_euclid(h as i64) * n as i64 + i.rem_euclid(w as i64)) as usize;
+            half::f16::from_bits(halves[k * 4 + c]).to_f64()
+        };
+        let bs = |t: f64| [(1.0 - t).powi(3) / 6.0, (3.0 * t.powi(3) - 6.0 * t * t + 4.0) / 6.0, (-3.0 * t.powi(3) + 3.0 * t * t + 3.0 * t + 1.0) / 6.0, t.powi(3) / 6.0];
+        // Over a corner where four copies meet, near.
+        let cam = camera([w as f64, h as f64, 0.0], 0.8, 0.4, 9.0, 0.9);
+        let mut v = view(cam.clone());
+        v.shading.shading_strength = 0.0;
+        v.shading.ambient = 0.123;
+        r.render(&device, &queue, &v);
+        let out = read_output(&device, &queue, &r, ow, oh);
+        let raw = read_buffer(&device, &queue, r.geometry_buffer(), (ow * oh) as u64 * 16);
+        let geom: &[[u32; 4]] = bytemuck::cast_slice(&raw);
+        let per_ray = 2.0 * (cam.fov as f64 * 0.5).tan() / oh as f64;
+        let (mut checked, mut near_edge, mut worst) = (0, 0, 0.0f64);
+        for py in 0..oh {
+            for px in 0..ow {
+                let k = (py * ow + px) as usize;
+                let t = f32::from_bits(geom[k][3]) as f64;
+                if !(t > 0.0) {
+                    continue;
+                }
+                let d = ray(&cam, px, py, ow, oh);
+                let p = [cam.eye[0] + d[0] * t, cam.eye[1] + d[1] * t];
+                let nrm = [half::f16::from_bits(geom[k][0] as u16).to_f64(), half::f16::from_bits((geom[k][0] >> 16) as u16).to_f64(), half::f16::from_bits(geom[k][1] as u16).to_f64()];
+                let nd = (nrm[0] * d[0] + nrm[1] * d[1] + nrm[2] * d[2]).abs();
+                if t * per_ray / nd.max(0.05).sqrt() >= 0.9 {
+                    continue;
+                }
+                let (a0, b0) = (p[0].floor(), p[1].floor());
+                let (bu, bv) = (bs(p[0] - a0), bs(p[1] - b0));
+                for c in 0..3 {
+                    let mut s = 0.0;
+                    for j in 0..4 {
+                        for i in 0..4 {
+                            s += bu[i] * bv[j] * stored(a0 as i64 - 1 + i as i64, b0 as i64 - 1 + j as i64, c);
+                        }
+                    }
+                    worst = worst.max((out[k][c] as f64 - s).abs());
+                }
+                checked += 1;
+                let (fx, fy) = (p[0].rem_euclid(w as f64), p[1].rem_euclid(h as f64));
+                if fx.min(w as f64 - fx) < 1.0 || fy.min(h as f64 - fy) < 1.0 {
+                    near_edge += 1;
+                }
+            }
+        }
+        println!("{checked} pixels ({near_edge} within a cell of a copy's edge), worst channel off the wrapped spline {worst:.2e}");
+        assert!(checked > 500 && near_edge > 100, "{checked} {near_edge}");
+        assert!(worst < 2.0e-3, "{worst}");
+    }
+
+    /// A simulation's ground below its stand-in bound is met: the grid's
+    /// slab floor is the measured range's, and so is each section's. A
+    /// pit at -500 under a bound of 100 is hit where the plane is.
+    #[test]
+    fn a_ground_below_its_stand_in_bound_is_met() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (16u32, 16u32);
+        let texture = |data: &[[f32; 4]]| {
+            let t = device.create_texture(&TextureDescriptor {
+                label: None,
+                size: Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format: TextureFormat::Rgba32Float,
+                usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            queue.write_texture(
+                t.as_image_copy(),
+                bytemuck::cast_slice(data),
+                TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 16), rows_per_image: Some(h) },
+                Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            );
+            let v = t.create_view(&TextureViewDescriptor::default());
+            (t, v)
+        };
+        let (_a, relief) = texture(&vec![[-500.0, 0.0, 0.0, 0.0]; (w * h) as usize]);
+        let (_b, albedo) = texture(&vec![[0.5, 0.5, 0.5, 1.0]; (w * h) as usize]);
+        let (ow, oh) = (64u32, 48u32);
+        let mut r = TerrainRenderer::new(&device, ow, oh);
+        r.set_grid(&device, &queue, &relief, &albedo, w, h, 1.0, 100.0, false);
+        let cam = camera([8.0, 8.0, -500.0], 1.2, 0.3, 600.0, 0.02);
+        r.render(&device, &queue, &view(cam.clone()));
+        let raw = read_buffer(&device, &queue, r.geometry_buffer(), (ow * oh) as u64 * 16);
+        let geom: &[[u32; 4]] = bytemuck::cast_slice(&raw);
+        let mut hits = 0;
+        for py in 0..oh {
+            for px in 0..ow {
+                let t = f32::from_bits(geom[(py * ow + px) as usize][3]) as f64;
+                if t > 0.0 {
+                    let d = ray(&cam, px, py, ow, oh);
+                    let z = cam.eye[2] + d[2] * t;
+                    assert!((z + 500.0).abs() < 0.5, "a hit on the plane: z {z}");
+                    hits += 1;
+                }
+            }
+        }
+        println!("{hits} of {} pixels meet the plane at -500", ow * oh);
+        assert!(hits > (ow * oh / 4) as usize, "{hits}");
+    }
+
     /// A ground's wall is drawn whole (T4): its hits lie on the ground's
     /// outer edge, where a rounding put half of them off the ground and
     /// their albedo -- coverage and all -- read as transparent: a
@@ -4577,9 +4866,11 @@ pub(crate) mod gpu_tests {
                     let cell = ((2 * h - 1 - j) % h * w + i % w) as usize;
                     let k = (j * n + i) as usize;
                     assert_eq!(raw[k], relief[cell][0] * 3.0, "repeat {repeat} ({i}, {j})");
+                    // Stored premultiplied by its coverage.
                     for c in 0..4 {
                         let a = half::f16::from_bits(bits[k * 4 + c]).to_f32();
-                        assert!((a - albedo[cell][c]).abs() < 1e-3, "repeat {repeat} ({i}, {j}) channel {c}: {a}");
+                        let want = if c < 3 { albedo[cell][c] * albedo[cell][3] } else { albedo[cell][3] };
+                        assert!((a - want).abs() < 1e-3, "repeat {repeat} ({i}, {j}) channel {c}: {a}");
                     }
                 }
             }

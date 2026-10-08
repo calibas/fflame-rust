@@ -94,7 +94,9 @@ impl TerrainTiers {
         if terrain.tile_version() == 0 {
             return false;
         }
-        let key = format!("{:?}|{}|{:?}", (i.view)([0.0, 0.0]), terrain.tile_version(), i.settings);
+        // The tier too: from Auto's traced picture to Lit, the lit
+        // accumulation had finished and the traced picture stayed up.
+        let key = format!("{:?}|{}|{:?}|{:?}", (i.view)([0.0, 0.0]), terrain.tile_version(), i.settings, i.tier);
         if self.key.as_deref() != Some(key.as_str()) {
             self.key = Some(key);
             self.lit_samples = 0;

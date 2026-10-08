@@ -92,6 +92,8 @@ pub(super) struct SolidPath {
     clock: Arc<Mutex<BandClock>>,
     /// Halvings of the model's cap, after a slow call.
     cap_shift: u32,
+    /// The path tracer's settings the sum was gathered under.
+    settings: Option<String>,
     /// Every dispatch's rows times samples, and the cap it was under.
     #[cfg(test)]
     dispatched: Vec<(u32, u32)>,
@@ -158,6 +160,7 @@ impl SolidPath {
             generation: 0,
             clock: Arc::new(Mutex::new(BandClock::default())),
             cap_shift: 0,
+            settings: None,
             #[cfg(test)]
             dispatched: Vec::new(),
         }
@@ -348,6 +351,21 @@ impl EscapeRenderer {
             Some(p) => p.resize(device, w, h),
             None => self.solid_path = Some(SolidPath::new(device, w, h)),
         }
+        // What lights the scene that no re-render reports: the tone
+        // map's exposure and gamma enter the sky's light
+        // (`path_core::shown`) and are tone-map-only edits, so a finished
+        // sum kept the old light under the new tone map. A change starts
+        // it over, as a terrain's tiers do. (The lens's focus is in the
+        // config's units; the distance only scales it.)
+        let key = format!("{:?}", path_core::path_settings(config, 1.0));
+        if let Some(p) = self.solid_path.as_mut() {
+            if p.settings.as_deref() != Some(key.as_str()) {
+                if p.settings.is_some() {
+                    p.restart();
+                }
+                p.settings = Some(key);
+            }
+        }
         if self.solid_path_samples() >= target {
             return false;
         }
@@ -369,7 +387,7 @@ impl EscapeRenderer {
         // The eye's offset from the target, and the field of view.
         let eye = params.fdata[2];
         let distance = (eye[0] * eye[0] + eye[1] * eye[1] + eye[2] * eye[2]).sqrt();
-        let settings = path_core::path_settings(config, distance);
+        let mut settings = path_core::path_settings(config, distance);
         let per_ray = 2.0 * (eye[3] * 0.5).tan() / h as f32;
         let param = |name: &str, fallback: f32| {
             escape.formula_params.get(name).copied().unwrap_or_else(|| {
@@ -384,10 +402,12 @@ impl EscapeRenderer {
 
         let ifs_group = self.ifs_bind_group(device);
         let path = self.solid_path.as_mut().expect("made above");
-        // The denoiser's guides start with the sum.
+        // The denoiser's guides start with the sum; the pass gathers them
+        // only where they fit (`set_guided`).
         if path.sum.set_guided(device, settings.denoise) {
             path.restart();
         }
+        settings.denoise = path.sum.guided();
         path.collect();
         let cap = (model_cap >> path.cap_shift).max(8);
         let mut traced: Vec<(u32, u32, u32)> = Vec::new();
@@ -1114,6 +1134,85 @@ mod tests {
         }
         println!("shift {shift}: {} samples in {frames} frames, {:.2} s", r.solid_path_samples(), t0.elapsed().as_secs_f32());
         super::super::DIRECT_BUDGET_SHIFT.store(old, std::sync::atomic::Ordering::Relaxed);
+        r.destroy();
+    }
+
+    /// Denoise asked for where the guides -- 32 bytes a pixel, bound
+    /// whole -- exceed what one storage binding holds: the picture is
+    /// path traced undenoised, with no validation error (the test
+    /// device panics on one). A device whose binding holds 24 bytes a
+    /// pixel of the frame: the sum's 16 fit, the guides' 32 do not.
+    #[test]
+    fn denoise_past_the_binding_limit_is_refused() {
+        let (w, h) = (128u32, 96u32);
+        let instance = Instance::new(InstanceDescriptor {
+            backends: Backends::all(),
+            ..InstanceDescriptor::new_without_display_handle()
+        });
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&RequestAdapterOptions {
+            power_preference: PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        })) else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let limits = egui_wgpu::wgpu::Limits { max_storage_buffer_binding_size: (w * h * 24) as u64, ..adapter.limits() };
+        let (device, queue) = pollster::block_on(adapter.request_device(&egui_wgpu::wgpu::DeviceDescriptor {
+            label: Some("solid path tests (small bindings)"),
+            required_features: adapter.features() & Features::CLEAR_TEXTURE,
+            required_limits: limits,
+            memory_hints: MemoryHints::Performance,
+            experimental_features: Default::default(),
+            trace: Default::default(),
+        }))
+        .expect("device");
+        device.on_uncaptured_error(std::sync::Arc::new(|e| panic!("wgpu error in solid path tests: {e}")));
+        let (_pt, palette) = white_palette(&device, &queue);
+        let mut c = cube_config();
+        c.escape.solid_tier = RenderTier::PathTraced;
+        c.escape.path.denoise = true;
+        c.background_color = [0.55, 0.62, 0.72];
+        let mut r = renderer_for(&device, &c, w, h);
+        r.render_solid_still(&device, &queue, &c, &palette, 2, || wait(&device));
+        assert_eq!(r.solid_path_samples(), 2);
+        assert!(!r.solid_path.as_ref().unwrap().sum.guided(), "the guides do not fit");
+        r.destroy();
+    }
+
+    /// A finished sum starts over when the light it was gathered under
+    /// changes without a re-render: the tone map's exposure, which the
+    /// sky's light is the inverse of, is a tone-map-only edit.
+    #[test]
+    fn a_solids_sum_follows_the_exposure() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (_pt, palette) = white_palette(&device, &queue);
+        let mut c = cube_config();
+        c.escape.solid_tier = RenderTier::PathTraced;
+        c.escape.path.samples = 2;
+        // A sky to light it: a black one is no light at any exposure.
+        c.background_color = [0.55, 0.62, 0.72];
+        let mut r = renderer_for(&device, &c, 48, 32);
+        let mut guard = 0;
+        while r.trace_solid_viewport(&device, &queue, &c, &palette) && guard < 400 {
+            wait(&device);
+            guard += 1;
+        }
+        wait(&device);
+        assert_eq!(r.solid_path_samples(), 2, "finished");
+        let generation = |r: &EscapeRenderer| r.solid_path.as_ref().map(|p| p.generation).unwrap();
+        // Nothing changed: it stays finished.
+        let g0 = generation(&r);
+        assert!(!r.trace_solid_viewport(&device, &queue, &c, &palette));
+        assert_eq!(generation(&r), g0);
+        // The exposure: it starts over (and, this small, finishes again).
+        c.exposure *= 2.0;
+        r.trace_solid_viewport(&device, &queue, &c, &palette);
+        wait(&device);
+        assert_eq!(generation(&r), g0.wrapping_add(1), "started over");
         r.destroy();
     }
 

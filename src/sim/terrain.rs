@@ -113,7 +113,10 @@ pub fn height_colour(config: &FractalConfig, height_scale: f32) -> Option<[f32; 
         }
         (&layer.coloring, &layer.coloring_params, layer.source)
     };
-    if coloring != "channel" || source != t.layer as usize || !(height_scale.abs() > 1.0e-20) {
+    // Both layers as the passes clamp them: the relief's to the layers
+    // there are, a colouring's source likewise.
+    let last = s.layer_count().saturating_sub(1);
+    if coloring != "channel" || source.min(last) != (t.layer as usize).min(last) || !(height_scale.abs() > 1.0e-20) {
         return None;
     }
     let def = crate::sim::COLORINGS.iter().find(|c| c.name == "channel")?;
@@ -311,8 +314,15 @@ mod tests {
         c.sim.coloring = "two_channel".into();
         assert_eq!(height_colour(&c, 4.0), None);
         c.sim.coloring = "channel".into();
+        // A layer past the last is the last, as the relief reads it: one
+        // layer, so the same.
         c.sim.terrain.layer = 1;
+        assert_eq!(height_colour(&c, 4.0), Some([0.5, 0.25, 1.0]));
+        // Two, and it is the other.
+        let one = crate::config::sim::SimLayer { model: c.sim.model.clone(), model_params: Default::default(), enabled: true };
+        c.sim.layers = vec![one.clone(), one];
         assert_eq!(height_colour(&c, 4.0), None);
+        c.sim.layers.clear();
         c.sim.terrain.layer = 0;
         // A stack: one enabled Channel layer of the terrain's layer.
         let layer = crate::config::sim::SimColorLayer {

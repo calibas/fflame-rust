@@ -1933,6 +1933,75 @@ environment, sun shafts, presets, and fly mode (still last).
     and 105 sim baselines through the CLI, which now makes its device
     through the same helper. The app's dialog and progress bar are not
     exercised by a test.
+- **The review before merge (2026-10-08),** the user's ask ("any subtle
+  bugs?"): four reviewers over the branch's diff, by area -- the walk,
+  the sections and export plumbing, the path tracer, config and UI --
+  every finding traced before it was fixed. Fixed -- with a test for
+  each but the albedo's filtering, the tier's key and the browser's
+  export:
+  - **A path-tracer edit threw away every section.** The sections'
+    picture key kept the path tracer's settings, the solid tier, the
+    downsample and the 2D relief's light, which no section reads: a
+    sample count, a lens or a gloss edit re-rendered the whole ground --
+    seconds at depth -- where the tracer only needed to restart.
+  - **Auto contrast was fitted per section.** Each section is a view of
+    its own, so each mapped its own range onto a palette turn: the
+    plain a patchwork of squares (`output/t5/contrast-seams-before.png`
+    against `-after.png`). Now one fit, measured from the config's own
+    2D view (257², `contrast_probe_config`) when the sections start --
+    a new picture or anchor -- and held for every section
+    (`EscapeRenderer::pin_contrast`). Held while panning within the
+    anchor: an export from another view fits there.
+  - **A count's or a relief's range followed the engine's history.**
+    It took the least and most of every section ever ingested, so after
+    a dolly into another band the deep ground was nearly flat beside a
+    fresh export of it. Each atlas layer now keeps its own range, and a
+    ground's is reduced from its sections' (`reduce_range`), so it is
+    the ground's. (It still moves while a view fills, as before.)
+  - **The albedo was filtered straight.** A hole is (0,0,0,0), so half a
+    hole halved the colour AND its coverage: a dark rim round every
+    hole, and a simulation's transparent cells bled. Stored
+    premultiplied, read straight (`hf_unpremultiply`); an escape
+    section's land is opaque, so its pictures are unchanged.
+  - **A repeated ground's colour seamed at every copy's edge:** the
+    spline's taps past an edge clamped through the sampler, while the
+    height wraps. Sixteen wrapped loads on a repeated ground.
+  - **A simulation's ground below its stand-in bound was missed.** A
+    section clipped its rays at the grid's stand-in floor, not the
+    measured one: a negative height over an age channel put its pits
+    below it.
+  - **A solid's path tracer kept its light through an exposure or gamma
+    edit.** The sky's light is the tone map's inverse (`shown`), and
+    those are tone-map-only edits: a finished sum stayed lit for the old
+    values. Its sum now restarts when its settings change, as a
+    terrain's does.
+  - **Denoise on a frame whose guides exceed one storage binding failed
+    validation** (32 bytes a pixel: a browser's 128 MB floor is 2048²;
+    a solid's frame is not tiled). Refused there: the picture is path
+    traced undenoised, with a warning.
+  - **Auto to Lit kept showing the traced picture** until the camera
+    moved: the tier was not in the viewport's key.
+  - **A simulation terrain's lights could not be edited:** the Solid
+    Lighting panel was greyed in Simulation whatever the terrain.
+  - **The animation picker offered no terrain targets** -- no camera,
+    ground or path-tracer settings -- though the exporter applies them.
+    Offered when the terrain is on, for both engines; the simulation's
+    targets now have the escape's exporter-coverage test.
+  - **Colour by height compared the terrain's layer unclamped**, so a
+    layer past the last (after removing layers) turned it off while the
+    relief read the last layer.
+  - **The browser's terrain export never prepared a 2D IFS footprint**
+    (its analysis and coarse pass), so such a terrain exported empty.
+  - **Kept, with the reason in the code:** the denoiser divides the
+    moments by the summed coverage, which over-estimates the noise under
+    a uniform haze (a reviewer's finding). The true count lies between
+    the samples and the coverage and needs a channel the guides do not
+    have; the coverage is the bound that never under-estimates at a
+    silhouette against the sky, where leftover noise shows most.
+  - **Known, not fixed:** a texture layer is not generated for the
+    browser's export of either a 2D or a terrain picture (it predates
+    the branch); a step met going from a fine section into a coarse one
+    is not shaded as a wall (the steps are tiny).
 
 ## 10. The user's answers (2026-10-05)
 
