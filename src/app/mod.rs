@@ -2449,7 +2449,7 @@ impl App {
                         }
                         // No blocking wait in a browser: the queue keeps
                         // the batches in order regardless.
-                        t.render_still(&self.gpu.device, &self.gpu.queue, &export_config, (export_width, export_height), || {});
+                        t.render_still(&self.gpu.device, &self.gpu.queue, &export_config, (export_width, export_height), |_| {});
                         Some(t)
                     } else {
                         None
@@ -2579,7 +2579,7 @@ impl App {
                                 temp_renderer.palette_view(),
                                 temp_renderer.palette_generation(),
                             );
-                            t.render_still(&self.gpu.device, &self.gpu.queue, &export_config, (export_width, export_height), || {});
+                            t.render_still(&self.gpu.device, &self.gpu.queue, &export_config, (export_width, export_height), |_| {});
                             Some(t)
                         }
                         _ => None,
@@ -3074,8 +3074,11 @@ impl App {
                 // The sections the view wants (plan section 12): as many
                 // render steps a frame as fit about 8 ms, at the measured
                 // section time, so a pan or a dolly fills in as it goes.
+                // An export in the background has the GPU meanwhile: the
+                // viewport keeps its picture, and resumes after.
+                let exporting = self.export_status.lock().map(|s| s.active).unwrap_or(false);
                 let steps = terrain.section_ms().map_or(1, |ms| (8.0 / ms.max(0.5)).floor().clamp(1.0, 4.0) as u32);
-                if terrain.update(
+                if !exporting && terrain.update(
                     device,
                     queue,
                     &final_config,
@@ -3087,10 +3090,11 @@ impl App {
                 ) {
                     busy = true;
                 }
-                if terrain.render_viewport(device, queue, &final_config) {
+                if !exporting && terrain.render_viewport(device, queue, &final_config) {
                     busy = true;
                 }
-                self.escape_dirty = busy;
+                // Not settled while paused; the export's cadence redraws.
+                self.escape_dirty = busy || exporting;
                 if busy {
                     self.window.request_redraw();
                 }
@@ -3416,7 +3420,10 @@ impl App {
                         .get_or_insert_with(|| crate::sim::terrain::SimTerrain::new(device, w, h));
                     terrain.resize(device, w, h);
                     terrain.update(device, queue, sim, &final_config, renderer.palette_view(), renderer.palette_generation());
-                    if terrain.render_viewport(device, queue, &final_config) {
+                    // An export in the background has the GPU meanwhile;
+                    // its own cadence redraws the window.
+                    let exporting = self.export_status.lock().map(|s| s.active).unwrap_or(false);
+                    if !exporting && terrain.render_viewport(device, queue, &final_config) {
                         self.window.request_redraw();
                     }
                 } else if let Some(t) = self.sim_terrain.take() {

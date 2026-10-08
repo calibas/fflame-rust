@@ -1899,6 +1899,40 @@ environment, sun shafts, presets, and fly mode (still last).
     ground is sampled, to be decided with pictures in hand. The
     measurements: `deep_fill_in_the_app` and `section_coverage`
     (ignored).
+- **The export "hang" (2026-10-08),** reported on
+  `output/3dexponential2.fflame` (an exponential terrain, path traced,
+  denoised, supersample 8), exported while the viewport was path
+  tracing.
+  - **Not a deadlock.** Replayed headless -- the viewport's terrain run
+    eight seconds into its tracing, destroyed as the export destroys it,
+    the export rendered on the same device -- it finished: 16 s at 1080p,
+    65 s at 4K. But the custom-size export (and 2x AA, which routes
+    through it at twice the size) rendered SYNCHRONOUSLY on the window's
+    thread, with no progress: a minute at 4K, several with 2x AA, through
+    which Windows shows the app as not responding. The terrain still
+    reported progress only at its start and end.
+  - **Fixed:** a terrain's custom-size export -- an escape terrain's or a
+    simulation's -- renders in the background on a device of its own
+    (`headless_device`, the CLI's), with the menu bar's progress bar, the
+    destination chosen first on the window's thread, as the flame's
+    high-res export does. The still reports as it goes: the sections,
+    then each batch of samples, tile by tile (`still`'s `wait` carries
+    the share done; the sections are a quarter of the bar when path
+    traced, nine tenths when lit). The viewport's terrain pauses
+    meanwhile -- no sections, no samples -- so the export has the GPU;
+    it keeps its picture and resumes after. A viewport-size export
+    still reads the picture on screen back at once.
+  - **Memory:** the viewport's terrain is kept, not freed as the
+    synchronous path freed it, so both atlases are held at once (about
+    1.1 GB each at 64 sections); not tried at a card's limit. A panic in
+    the export's thread ends the export with an error, so the bar and
+    the paused viewport cannot be left behind (a build that aborts on
+    panic ends the process, as the synchronous path's would have).
+  - **Gates:** `a_terrain_export_reports_its_progress` (lit, path
+    traced and in tiles: never backwards, ends at 1); the 119 escape
+    and 105 sim baselines through the CLI, which now makes its device
+    through the same helper. The app's dialog and progress bar are not
+    exercised by a test.
 
 ## 10. The user's answers (2026-10-05)
 

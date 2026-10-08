@@ -4716,7 +4716,7 @@ pub(crate) mod gpu_tests {
                 let mut tiers = TerrainTiers::default();
                 let view = |jitter: [f32; 2]| TerrainView { jitter, ..base.clone() };
                 let inputs = TierInputs { view: &view, settings: settings.clone(), tier, samples: 6, supersample: 2, filling: false };
-                tiers.still_in_tiles(&mut r, &device, &queue, &inputs, (fw, fh), side, || {
+                tiers.still_in_tiles(&mut r, &device, &queue, &inputs, (fw, fh), side, |_| {
                     let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
                 });
                 read_texture(&device, &queue, tiers.output_texture_for_test(&r), 0, fw, fh, 16)
