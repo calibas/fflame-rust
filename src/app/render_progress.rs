@@ -6,6 +6,30 @@ use crate::scene::transforms::RenderMode;
 use crate::ui::{ExportStatus, RenderProgress};
 
 impl App {
+    /// The escape view's path tracer, once it is the one working --
+    /// a terrain's, or a solid's once its walk has settled (or at once,
+    /// in the Path Traced tier): its samples, target, and the fraction
+    /// with a part-done pass counted.
+    fn escape_path_progress(&self) -> Option<(u32, u32, f32)> {
+        use crate::config::escape::RenderTier;
+        let escape = &self.config_manager.active_config().escape;
+        let target = escape.path.samples.max(1);
+        #[cfg(feature = "terrain")]
+        if escape.terrain_active() {
+            if escape.terrain.tier == RenderTier::Lit {
+                return None;
+            }
+            let (samples, _) = self.escape_terrain.as_ref()?.path_progress();
+            return (samples > 0).then(|| (samples.min(target), target, samples as f32 / target as f32));
+        }
+        if !crate::escape::ifs::formula_is_solid(&escape.formula) || escape.solid_tier == RenderTier::Lit || self.escape_dirty {
+            return None;
+        }
+        let r = self.escape_renderer.as_ref()?;
+        let samples = r.solid_path_samples().min(target);
+        Some((samples, target, r.solid_path_progress().min(target as f32) / target as f32))
+    }
+
     /// The one rendering task the bar reports, in priority order: an
     /// export, then playback, then the mode's own render.
     ///
@@ -27,6 +51,9 @@ impl App {
         let config = self.config_manager.active_config();
         match config.render_mode {
             RenderMode::Escape => {
+                if let Some((samples, target, fraction)) = self.escape_path_progress() {
+                    return RenderProgress::PathTrace { samples, target, fraction };
+                }
                 // The same conditions that keep the escape frames
                 // coming: an unsettled render, a texture being made, and
                 // the interaction window, whose quarter-resolution
@@ -44,6 +71,22 @@ impl App {
                 }
             }
             RenderMode::Simulation => {
+                // A terrain's path tracer, once it is the one working: the
+                // run at rest (a running one shows the lit tier).
+                #[cfg(all(feature = "engine-sim", feature = "terrain"))]
+                if config.sim.terrain_active()
+                    && config.sim.terrain.tier != crate::config::escape::RenderTier::Lit
+                    && !self.sim_running
+                {
+                    if let Some(t) = self.sim_terrain.as_ref() {
+                        let target = config.sim.terrain.path.samples.max(1);
+                        let (samples, _) = t.path_progress();
+                        if samples > 0 {
+                            let samples = samples.min(target);
+                            return RenderProgress::PathTrace { samples, target, fraction: samples as f32 / target as f32 };
+                        }
+                    }
+                }
                 #[cfg(feature = "engine-sim")]
                 {
                     RenderProgress::Sim {

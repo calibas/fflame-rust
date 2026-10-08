@@ -839,6 +839,62 @@ fn apply_config_value(
         (ConfigPath::EscapeShadingSoftness, ConfigValue::Float(v)) => {
             config.escape.shading.softness = v.clamp(0.0, 16.0);
         }
+        (ConfigPath::EscapeTerrainHeight, ConfigValue::Float(v)) => {
+            let v = *v;
+            config.escape.terrain.height = v.clamp(0.0, 1.0);
+        }
+        (ConfigPath::EscapeTerrainDeWidth, ConfigValue::Float(v)) => {
+            let v = *v;
+            config.escape.terrain.de_width = v.clamp(1.0e-4, 0.5);
+        }
+        (ConfigPath::EscapeTerrainShadow, ConfigValue::Float(v)) => {
+            let v = *v;
+            config.escape.terrain.shadow = v.clamp(0.0, 1.0);
+        }
+        (ConfigPath::EscapeTerrainLakeRoughness, ConfigValue::Float(v)) => {
+            let v = *v;
+            config.escape.terrain.lake_roughness = v.clamp(0.02, 1.0);
+        }
+        (ConfigPath::EscapeTerrainShadowSharpness, ConfigValue::Float(v)) => {
+            let v = *v;
+            config.escape.terrain.shadow_sharpness = v.clamp(1.0, 128.0);
+        }
+        (ConfigPath::EscapeTerrainDetail, ConfigValue::Float(v)) => {
+            config.escape.terrain.detail = v.clamp(0.1, 8.0);
+        }
+        (ConfigPath::EscapeTerrainFar, ConfigValue::Float(v)) => {
+            config.escape.terrain.far = v.clamp(0.5, 64.0);
+        }
+        (ConfigPath::EscapePathGloss, ConfigValue::Float(v)) => {
+            let v = *v;
+            config.escape.path.gloss = v.clamp(0.0, 1.0);
+        }
+        (ConfigPath::EscapePathRoughness, ConfigValue::Float(v)) => {
+            let v = *v;
+            config.escape.path.roughness = v.clamp(0.02, 1.0);
+        }
+        (ConfigPath::EscapePathEmission, ConfigValue::Float(v)) => {
+            let v = *v;
+            config.escape.path.emission = v.clamp(0.0, 16.0);
+        }
+        (ConfigPath::EscapePathAperture, ConfigValue::Float(v)) => {
+            let v = *v;
+            config.escape.path.aperture = v.clamp(0.0, 1.0);
+        }
+        (ConfigPath::EscapePathFocus, ConfigValue::Float(v)) => {
+            let v = *v;
+            config.escape.path.focus = v.clamp(0.0, 64.0);
+        }
+        (ConfigPath::EscapePathEnvironment, ConfigValue::Float(v)) => {
+            config.escape.path.environment = v.clamp(0.0, 16.0);
+        }
+        (ConfigPath::EscapeTerrainHaze, ConfigValue::Float(v)) => {
+            config.escape.terrain.haze = v.clamp(0.0, 1.0);
+        }
+        (ConfigPath::EscapeTerrainOcclusion, ConfigValue::Float(v)) => {
+            let v = *v;
+            config.escape.terrain.occlusion = v.clamp(0.0, 0.1);
+        }
         (ConfigPath::EscapeShadingTextureStrength, ConfigValue::Float(v)) => {
             config.escape.shading.texture_strength = v.clamp(0.0, 4.0);
         }
@@ -903,6 +959,86 @@ fn apply_config_value(
         // exporter reads it off the config it has just built.
         (ConfigPath::SimSteps, ConfigValue::UInt(v)) => {
             config.sim.steps = (*v).min(10_000_000);
+        }
+        (ConfigPath::SimTerrainSoftness, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.softness = v.clamp(0.0, 8.0);
+        }
+        (ConfigPath::SimTerrainHeight, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.height = v.clamp(-1.0, 1.0);
+        }
+        (ConfigPath::SimTerrainShadow, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.shadow = v.clamp(0.0, 1.0);
+        }
+        (ConfigPath::SimTerrainShadowSharpness, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.shadow_sharpness = v.clamp(1.0, 128.0);
+        }
+        (ConfigPath::SimTerrainOcclusion, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.occlusion = v.clamp(0.0, 0.2);
+        }
+        (ConfigPath::SimTerrainFar, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.far = v.clamp(0.5, 64.0);
+        }
+        (ConfigPath::SimTerrainHaze, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.haze = v.clamp(0.0, 1.0);
+        }
+        (ConfigPath::SimTerrainCamPitch, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.cam_pitch = v.clamp(-1.5607964, 1.5607964);
+        }
+        (ConfigPath::SimTerrainCamYaw, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.cam_yaw = v;
+        }
+        (ConfigPath::SimTerrainCamBank, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.cam_bank = v;
+        }
+        (ConfigPath::SimTerrainCamFov, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.cam_fov = v.clamp(0.05, 3.0);
+        }
+        (ConfigPath::SimTerrainCamDistance, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.cam_distance = v.clamp(0.01, 100.0);
+        }
+        (ConfigPath::SimTerrainTargetX, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.target_x = v;
+        }
+        (ConfigPath::SimTerrainTargetY, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.target_y = v;
+        }
+        (ConfigPath::SimPathEnvironment, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.path.environment = v.clamp(0.0, 16.0);
+        }
+        (ConfigPath::SimPathGloss, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.path.gloss = v.clamp(0.0, 1.0);
+        }
+        (ConfigPath::SimPathRoughness, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.path.roughness = v.clamp(0.02, 1.0);
+        }
+        (ConfigPath::SimPathEmission, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.path.emission = v.clamp(0.0, 16.0);
+        }
+        (ConfigPath::SimPathAperture, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.path.aperture = v.clamp(0.0, 1.0);
+        }
+        (ConfigPath::SimPathFocus, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.path.focus = v.clamp(0.0, 64.0);
         }
         (ConfigPath::SimStepsPerFrame, ConfigValue::UInt(v)) => {
             config.sim.steps_per_frame = (*v).clamp(1, 4096);
@@ -2530,7 +2666,12 @@ mod escape_export_tests {
     /// forgotten here.
     #[test]
     fn every_offered_escape_target_reaches_the_exporter() {
-        for base in [solid(), FractalConfig::default()] {
+        // And a plane drawn as a terrain, whose camera, ground and path
+        // tracer are offered too.
+        let mut terrain = FractalConfig::default();
+        terrain.render_mode = crate::scene::transforms::RenderMode::Escape;
+        terrain.escape.terrain.enabled = true;
+        for base in [solid(), FractalConfig::default(), terrain] {
             for item in crate::ui::target_selector::escape_items_for_test(&base) {
                 // Two probes, because a count target reads an integer.
                 let mut moved = false;
@@ -2554,6 +2695,32 @@ mod escape_export_tests {
                     item.to_string_key()
                 );
             }
+        }
+    }
+
+    /// The same for a simulation's targets, its terrain's among them.
+    #[cfg(feature = "engine-sim")]
+    #[test]
+    fn every_offered_sim_target_reaches_the_exporter() {
+        let mut base = FractalConfig::default();
+        base.render_mode = crate::scene::transforms::RenderMode::Simulation;
+        base.sim.terrain.enabled = true;
+        let offered = crate::ui::target_selector::sim_items_for_test(&base);
+        assert!(offered.contains(&ConfigPath::SimTerrainCamPitch), "the terrain's camera is offered");
+        for item in offered {
+            let mut moved = false;
+            for probe in [serde_json::json!(0.375), serde_json::json!(3)] {
+                let Some(value) = crate::config::delta::json_to_config_value(&probe, &item) else {
+                    continue;
+                };
+                let mut c = base.clone();
+                apply_config_value(&mut c, EditingTarget::Main, &item, &value);
+                if serde_json::to_string(&c.sim).unwrap() != serde_json::to_string(&base.sim).unwrap() {
+                    moved = true;
+                    break;
+                }
+            }
+            assert!(moved, "`{}` is offered as a track target but the exporter ignores it", item.to_string_key());
         }
     }
 }

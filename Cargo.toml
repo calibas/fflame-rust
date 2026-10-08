@@ -187,7 +187,7 @@ base64 = "0.22"
 # what makes them count: they are most of the surface any
 # engine-level feature has to thread `#[cfg]` through. Off, a
 # rendering module compiles the engine and nothing else.
-default = ["web-app", "engine-flame", "engine-escape", "engine-sim"]
+default = ["web-app", "engine-flame", "engine-escape", "engine-sim", "terrain"]
 web-app = []
 # The flame engine's VARIATION CATALOG. On by default, so the app and
 # every existing build are unchanged.
@@ -213,6 +213,12 @@ engine-escape = []
 # fraction of a module's download; unlike it, there is no deep-zoom
 # machinery, so the whole thing is light.
 engine-sim = []
+# The 3D terrain view (docs/projects/heightfield-3d.md): an escape
+# picture, and later a simulation's, as a lit height field on the
+# escape engine's solid camera. ON by default; the gallery modules
+# build without it (the plan's H2) and render a terrain config as its
+# 2D picture.
+terrain = ["engine-escape"]
 
 [build-dependencies]
 chrono = "0.4"

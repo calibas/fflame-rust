@@ -277,25 +277,11 @@ async fn probe_max_binding_size() -> Option<u64> {
     Some(adapter.limits().max_storage_buffer_binding_size as u64)
 }
 
-/// GPU-based export using unified render API
+/// A device of the adapter's own, for an export off the window's: what
+/// the CLI renders on, and the app's background export of a terrain,
+/// which on the window's device would hold the window for minutes.
 #[cfg(not(target_arch = "wasm32"))]
-async fn export_headless_gpu(
-    config: &FractalConfig,
-    // Unscaled original — embedded in PNG metadata for exact round-trip.
-    meta_config: &FractalConfig,
-    output_path: &std::path::Path,
-    width: u32,
-    height: u32,
-    test_category: Option<String>,
-    iterations_per_thread: u32,
-    transparent: bool,
-    premultiplied: bool,
-    supersample: bool,
-) -> Result<bool, Box<dyn std::error::Error>> {
-    use std::time::Instant;
-
-    let export_start = Instant::now();
-
+pub(crate) async fn headless_device() -> Result<(egui_wgpu::wgpu::Device, egui_wgpu::wgpu::Queue), String> {
     // Create headless GPU instance
     let instance = egui_wgpu::wgpu::Instance::new(egui_wgpu::wgpu::InstanceDescriptor {
         backends: egui_wgpu::wgpu::Backends::all(),
@@ -349,7 +335,31 @@ async fn export_headless_gpu(
             experimental_features: Default::default(),
             trace: Default::default(),
         })
-        .await?;
+        .await
+        .map_err(|e| format!("Failed to create a device: {e}"))?;
+    Ok((device, queue))
+}
+
+/// GPU-based export using unified render API
+#[cfg(not(target_arch = "wasm32"))]
+async fn export_headless_gpu(
+    config: &FractalConfig,
+    // Unscaled original — embedded in PNG metadata for exact round-trip.
+    meta_config: &FractalConfig,
+    output_path: &std::path::Path,
+    width: u32,
+    height: u32,
+    test_category: Option<String>,
+    iterations_per_thread: u32,
+    transparent: bool,
+    premultiplied: bool,
+    supersample: bool,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    use std::time::Instant;
+
+    let export_start = Instant::now();
+
+    let (device, queue) = headless_device().await?;
 
     // Use unified render API
     let job = RenderJob::new(config, width, height)

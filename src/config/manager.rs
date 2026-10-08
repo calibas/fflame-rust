@@ -1868,6 +1868,36 @@ impl ConfigManager {
             ConfigPath::SimSteps => Ok(ConfigValue::UInt(config.sim.steps)),
             ConfigPath::SimStepsPerFrame => Ok(ConfigValue::UInt(config.sim.steps_per_frame)),
             ConfigPath::SimDt => Ok(ConfigValue::Float(config.sim.dt)),
+            ConfigPath::SimTerrainEnabled => Ok(config.sim.terrain.enabled.into()),
+            ConfigPath::SimTerrainLayer => Ok(ConfigValue::UInt(config.sim.terrain.layer)),
+            ConfigPath::SimTerrainChannel => Ok(ConfigValue::UInt(config.sim.terrain.channel)),
+            ConfigPath::SimTerrainSoftness => Ok(ConfigValue::Float(config.sim.terrain.softness)),
+            ConfigPath::SimTerrainHeight => Ok(ConfigValue::Float(config.sim.terrain.height)),
+            ConfigPath::SimTerrainTiling => Ok(ConfigValue::String(config.sim.terrain.tiling.as_str().to_string())),
+            ConfigPath::SimTerrainTier => Ok(ConfigValue::String(config.sim.terrain.tier.as_str().to_string())),
+            ConfigPath::SimTerrainShadow => Ok(ConfigValue::Float(config.sim.terrain.shadow)),
+            ConfigPath::SimTerrainShadowSharpness => Ok(ConfigValue::Float(config.sim.terrain.shadow_sharpness)),
+            ConfigPath::SimTerrainOcclusion => Ok(ConfigValue::Float(config.sim.terrain.occlusion)),
+            ConfigPath::SimTerrainFar => Ok(ConfigValue::Float(config.sim.terrain.far)),
+            ConfigPath::SimTerrainHaze => Ok(ConfigValue::Float(config.sim.terrain.haze)),
+            ConfigPath::SimTerrainCamPitch => Ok(ConfigValue::Float(config.sim.terrain.cam_pitch)),
+            ConfigPath::SimTerrainCamYaw => Ok(ConfigValue::Float(config.sim.terrain.cam_yaw)),
+            ConfigPath::SimTerrainCamBank => Ok(ConfigValue::Float(config.sim.terrain.cam_bank)),
+            ConfigPath::SimTerrainCamFov => Ok(ConfigValue::Float(config.sim.terrain.cam_fov)),
+            ConfigPath::SimTerrainCamDistance => Ok(ConfigValue::Float(config.sim.terrain.cam_distance)),
+            ConfigPath::SimTerrainTargetX => Ok(ConfigValue::Float(config.sim.terrain.target_x)),
+            ConfigPath::SimTerrainTargetY => Ok(ConfigValue::Float(config.sim.terrain.target_y)),
+            ConfigPath::SimPathSamples => Ok(ConfigValue::UInt(config.sim.terrain.path.samples)),
+            ConfigPath::SimPathBounces => Ok(ConfigValue::UInt(config.sim.terrain.path.bounces)),
+            ConfigPath::SimPathEnvironment => Ok(ConfigValue::Float(config.sim.terrain.path.environment)),
+            ConfigPath::SimPathGloss => Ok(ConfigValue::Float(config.sim.terrain.path.gloss)),
+            ConfigPath::SimPathRoughness => Ok(ConfigValue::Float(config.sim.terrain.path.roughness)),
+            ConfigPath::SimPathEmission => Ok(ConfigValue::Float(config.sim.terrain.path.emission)),
+            ConfigPath::SimPathAperture => Ok(ConfigValue::Float(config.sim.terrain.path.aperture)),
+            ConfigPath::SimPathFocus => Ok(ConfigValue::Float(config.sim.terrain.path.focus)),
+            ConfigPath::SimPathDenoise => Ok(config.sim.terrain.path.denoise.into()),
+            ConfigPath::SimPathSky => Ok(config.sim.terrain.path.sky_gradient.into()),
+            ConfigPath::SimPathZenith => Ok(ConfigValue::ColorRgb(config.sim.terrain.path.zenith)),
             ConfigPath::SimWarpZoom => Ok(ConfigValue::Float(config.sim.warp.zoom)),
             ConfigPath::SimWarpRotation => Ok(ConfigValue::Float(config.sim.warp.rotation)),
             ConfigPath::SimWarpPanX => Ok(ConfigValue::Float(config.sim.warp.pan_x)),
@@ -1994,6 +2024,32 @@ impl ConfigManager {
                 Ok(config.escape.shading.highlight_strength.into())
             }
             ConfigPath::EscapeShadingSoftness => Ok(config.escape.shading.softness.into()),
+            ConfigPath::EscapeTerrainEnabled => Ok(config.escape.terrain.enabled.into()),
+            ConfigPath::EscapeTerrainSource => Ok(ConfigValue::String(config.escape.terrain.source.as_str().to_string())),
+            ConfigPath::EscapeTerrainHeight => Ok(config.escape.terrain.height.into()),
+            ConfigPath::EscapeTerrainDeWidth => Ok(config.escape.terrain.de_width.into()),
+            ConfigPath::EscapeTerrainDetail => Ok(config.escape.terrain.detail.into()),
+            ConfigPath::EscapeTerrainFar => Ok(config.escape.terrain.far.into()),
+            ConfigPath::EscapeTerrainHaze => Ok(config.escape.terrain.haze.into()),
+            ConfigPath::EscapeTerrainTier => Ok(ConfigValue::String(config.escape.terrain.tier.as_str().to_string())),
+            ConfigPath::EscapeSolidTier => Ok(ConfigValue::String(config.escape.solid_tier.as_str().to_string())),
+            ConfigPath::EscapePathSamples => Ok(ConfigValue::UInt(config.escape.path.samples)),
+            ConfigPath::EscapePathBounces => Ok(ConfigValue::UInt(config.escape.path.bounces)),
+            ConfigPath::EscapePathEnvironment => Ok(config.escape.path.environment.into()),
+            ConfigPath::EscapePathGloss => Ok(config.escape.path.gloss.into()),
+            ConfigPath::EscapePathRoughness => Ok(config.escape.path.roughness.into()),
+            ConfigPath::EscapePathEmission => Ok(config.escape.path.emission.into()),
+            ConfigPath::EscapePathAperture => Ok(config.escape.path.aperture.into()),
+            ConfigPath::EscapePathFocus => Ok(config.escape.path.focus.into()),
+            ConfigPath::EscapePathDenoise => Ok(config.escape.path.denoise.into()),
+            ConfigPath::EscapePathSky => Ok(config.escape.path.sky_gradient.into()),
+            ConfigPath::EscapePathZenith => Ok(ConfigValue::ColorRgb(config.escape.path.zenith)),
+            ConfigPath::EscapeTerrainInterior => Ok(ConfigValue::String(config.escape.terrain.interior.as_str().to_string())),
+            ConfigPath::EscapeTerrainShadow => Ok(config.escape.terrain.shadow.into()),
+            ConfigPath::EscapeTerrainShadowSharpness => Ok(config.escape.terrain.shadow_sharpness.into()),
+            ConfigPath::EscapeTerrainLakeTint => Ok(ConfigValue::ColorRgb(config.escape.terrain.lake_tint)),
+            ConfigPath::EscapeTerrainLakeRoughness => Ok(config.escape.terrain.lake_roughness.into()),
+            ConfigPath::EscapeTerrainOcclusion => Ok(config.escape.terrain.occlusion.into()),
             ConfigPath::EscapeShadingTextureKind => Ok(ConfigValue::String(
                 config.escape.shading.texture_kind.as_str().to_string(),
             )),
@@ -3068,6 +3124,126 @@ impl ConfigManager {
             ConfigPath::SimStepsPerFrame => {
                 self.current.sim.steps_per_frame = u32::try_from(value)?.clamp(1, 4096);
             }
+            ConfigPath::SimTerrainEnabled => {
+                let v: bool = value.try_into()?;
+                self.current.sim.terrain.enabled = v;
+            }
+            ConfigPath::SimTerrainLayer => {
+                let v: u32 = value.try_into()?;
+                self.current.sim.terrain.layer = v.min(7);
+            }
+            ConfigPath::SimTerrainChannel => {
+                let v: u32 = value.try_into()?;
+                self.current.sim.terrain.channel = v.min(3);
+            }
+            ConfigPath::SimTerrainSoftness => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.softness = v.clamp(0.0, 8.0);
+            }
+            ConfigPath::SimTerrainHeight => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.height = v.clamp(-1.0, 1.0);
+            }
+            ConfigPath::SimTerrainTiling => {
+                let v: String = value.try_into()?;
+                self.current.sim.terrain.tiling = crate::config::sim::SimTiling::from_str_or_default(&v);
+            }
+            ConfigPath::SimTerrainTier => {
+                let v: String = value.try_into()?;
+                self.current.sim.terrain.tier = crate::config::escape::RenderTier::from_str_or_default(&v);
+            }
+            ConfigPath::SimTerrainShadow => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.shadow = v.clamp(0.0, 1.0);
+            }
+            ConfigPath::SimTerrainShadowSharpness => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.shadow_sharpness = v.clamp(1.0, 128.0);
+            }
+            ConfigPath::SimTerrainOcclusion => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.occlusion = v.clamp(0.0, 0.2);
+            }
+            ConfigPath::SimTerrainFar => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.far = v.clamp(0.5, 64.0);
+            }
+            ConfigPath::SimTerrainHaze => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.haze = v.clamp(0.0, 1.0);
+            }
+            ConfigPath::SimTerrainCamPitch => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.cam_pitch = v.clamp(-1.5607964, 1.5607964);
+            }
+            ConfigPath::SimTerrainCamYaw => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.cam_yaw = v;
+            }
+            ConfigPath::SimTerrainCamBank => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.cam_bank = v;
+            }
+            ConfigPath::SimTerrainCamFov => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.cam_fov = v.clamp(0.05, 3.0);
+            }
+            ConfigPath::SimTerrainCamDistance => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.cam_distance = v.clamp(0.01, 100.0);
+            }
+            ConfigPath::SimTerrainTargetX => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.target_x = v;
+            }
+            ConfigPath::SimTerrainTargetY => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.target_y = v;
+            }
+            ConfigPath::SimPathSamples => {
+                let v: u32 = value.try_into()?;
+                self.current.sim.terrain.path.samples = v.clamp(1, 65_536);
+            }
+            ConfigPath::SimPathBounces => {
+                let v: u32 = value.try_into()?;
+                self.current.sim.terrain.path.bounces = v.min(16);
+            }
+            ConfigPath::SimPathEnvironment => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.path.environment = v.clamp(0.0, 16.0);
+            }
+            ConfigPath::SimPathGloss => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.path.gloss = v.clamp(0.0, 1.0);
+            }
+            ConfigPath::SimPathRoughness => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.path.roughness = v.clamp(0.02, 1.0);
+            }
+            ConfigPath::SimPathEmission => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.path.emission = v.clamp(0.0, 16.0);
+            }
+            ConfigPath::SimPathAperture => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.path.aperture = v.clamp(0.0, 1.0);
+            }
+            ConfigPath::SimPathFocus => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.path.focus = v.clamp(0.0, 64.0);
+            }
+            ConfigPath::SimPathDenoise => {
+                let v: bool = value.try_into()?;
+                self.current.sim.terrain.path.denoise = v;
+            }
+            ConfigPath::SimPathSky => {
+                let v: bool = value.try_into()?;
+                self.current.sim.terrain.path.sky_gradient = v;
+            }
+            ConfigPath::SimPathZenith => {
+                let v: [f32; 3] = value.try_into()?;
+                self.current.sim.terrain.path.zenith = v.map(|c| c.clamp(0.0, 1.0));
+            }
             ConfigPath::SimDt => {
                 let d: f32 = f32::try_from(value)?;
                 // Stored as REQUESTED, bounded only by the model's own
@@ -3373,6 +3549,109 @@ impl ConfigManager {
             ConfigPath::EscapeShadingSoftness => {
                 let v: f32 = value.try_into()?;
                 self.current.escape.shading.softness = v.clamp(0.0, 16.0);
+            }
+            ConfigPath::EscapeTerrainEnabled => {
+                self.current.escape.terrain.enabled = value.try_into()?;
+            }
+            ConfigPath::EscapeTerrainSource => {
+                let v: String = value.try_into()?;
+                self.current.escape.terrain.source = crate::config::escape::TerrainSource::from_str_or_default(&v);
+            }
+            ConfigPath::EscapeTerrainHeight => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.terrain.height = v.clamp(0.0, 1.0);
+            }
+            ConfigPath::EscapeTerrainDeWidth => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.terrain.de_width = v.clamp(1.0e-4, 0.5);
+            }
+            ConfigPath::EscapeTerrainDetail => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.terrain.detail = v.clamp(0.1, 8.0);
+            }
+            ConfigPath::EscapeTerrainFar => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.terrain.far = v.clamp(0.5, 64.0);
+            }
+            ConfigPath::EscapeTerrainHaze => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.terrain.haze = v.clamp(0.0, 1.0);
+            }
+            ConfigPath::EscapeTerrainTier => {
+                let v: String = value.try_into()?;
+                self.current.escape.terrain.tier = crate::config::escape::RenderTier::from_str_or_default(&v);
+            }
+            ConfigPath::EscapeSolidTier => {
+                let v: String = value.try_into()?;
+                self.current.escape.solid_tier = crate::config::escape::RenderTier::from_str_or_default(&v);
+            }
+            ConfigPath::EscapePathSamples => {
+                let v: u32 = value.try_into()?;
+                self.current.escape.path.samples = v.clamp(1, 65_536);
+            }
+            ConfigPath::EscapePathBounces => {
+                let v: u32 = value.try_into()?;
+                self.current.escape.path.bounces = v.min(16);
+            }
+            ConfigPath::EscapePathEnvironment => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.path.environment = v.clamp(0.0, 16.0);
+            }
+            ConfigPath::EscapePathGloss => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.path.gloss = v.clamp(0.0, 1.0);
+            }
+            ConfigPath::EscapePathRoughness => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.path.roughness = v.clamp(0.02, 1.0);
+            }
+            ConfigPath::EscapePathEmission => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.path.emission = v.clamp(0.0, 16.0);
+            }
+            ConfigPath::EscapePathAperture => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.path.aperture = v.clamp(0.0, 1.0);
+            }
+            ConfigPath::EscapePathFocus => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.path.focus = v.clamp(0.0, 64.0);
+            }
+            ConfigPath::EscapePathDenoise => {
+                let v: bool = value.try_into()?;
+                self.current.escape.path.denoise = v;
+            }
+            ConfigPath::EscapePathSky => {
+                let v: bool = value.try_into()?;
+                self.current.escape.path.sky_gradient = v;
+            }
+            ConfigPath::EscapePathZenith => {
+                let v: [f32; 3] = value.try_into()?;
+                self.current.escape.path.zenith = v.map(|c| c.clamp(0.0, 1.0));
+            }
+            ConfigPath::EscapeTerrainInterior => {
+                let v: String = value.try_into()?;
+                self.current.escape.terrain.interior = crate::config::escape::TerrainInterior::from_str_or_default(&v);
+            }
+            ConfigPath::EscapeTerrainShadow => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.terrain.shadow = v.clamp(0.0, 1.0);
+            }
+            ConfigPath::EscapeTerrainShadowSharpness => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.terrain.shadow_sharpness = v.clamp(1.0, 128.0);
+            }
+            ConfigPath::EscapeTerrainLakeTint => {
+                let v: [f32; 3] = value.try_into()?;
+                self.current.escape.terrain.lake_tint = v.map(|c| c.clamp(0.0, 1.0));
+            }
+            ConfigPath::EscapeTerrainLakeRoughness => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.terrain.lake_roughness = v.clamp(0.02, 1.0);
+            }
+            ConfigPath::EscapeTerrainOcclusion => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.terrain.occlusion = v.clamp(0.0, 0.1);
             }
             ConfigPath::EscapeShadingTextureKind => {
                 let v: String = value.try_into()?;

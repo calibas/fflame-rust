@@ -882,6 +882,220 @@ pub struct SimConfig {
     /// 0; with layers, they are ignored and the stack is the picture.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub color_layers: Vec<SimColorLayer>,
+
+    /// The 3D terrain view (docs/projects/heightfield-3d.md, T4): the
+    /// grid as a height field. Off by default and skipped when off, so
+    /// every existing file is byte-stable.
+    #[serde(default, skip_serializing_if = "SimTerrainConfig::is_default")]
+    pub terrain: SimTerrainConfig,
+}
+
+/// How a simulation's terrain meets the edge of its grid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SimTiling {
+    /// The grid alone, the background beyond it.
+    #[default]
+    Single,
+    /// The grid repeated to the horizon -- seamless on the periodic
+    /// boundary, which is the only one that offers it.
+    Repeat,
+}
+
+impl SimTiling {
+    pub const ALL: [SimTiling; 2] = [SimTiling::Single, SimTiling::Repeat];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SimTiling::Single => "single",
+            SimTiling::Repeat => "repeat",
+        }
+    }
+    pub fn from_str_or_default(s: &str) -> Self {
+        match s {
+            "repeat" => SimTiling::Repeat,
+            _ => SimTiling::Single,
+        }
+    }
+}
+
+/// A simulation's 3D terrain (heightfield plan section 6): one channel
+/// of a layer, smoothed (the relief stage), as the height; the colour
+/// stack once a cell as the albedo; a solid camera over the grid. The
+/// world is the grid's cells, x right and y up the picture.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SimTerrainConfig {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub enabled: bool,
+    /// The layer, and its channel (0-3), that is the height.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub layer: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub channel: u32,
+    /// Its smoothing, in cells (the relief stage's softness).
+    #[serde(default = "default_sim_terrain_softness", skip_serializing_if = "is_default_sim_terrain_softness")]
+    pub softness: f32,
+    /// A field unit's height, as a fraction of the grid's width.
+    #[serde(default = "default_sim_terrain_height", skip_serializing_if = "is_default_sim_terrain_height")]
+    pub height: f32,
+    #[serde(default, skip_serializing_if = "is_default_sim_tiling")]
+    pub tiling: SimTiling,
+    /// How it is rendered: lit while the run moves, path traced while it
+    /// rests (Auto); or one of them always.
+    #[serde(default, skip_serializing_if = "is_default_sim_terrain_tier")]
+    pub tier: super::escape::RenderTier,
+    /// The lit tier's shadows, their sharpness, and its occlusion's reach
+    /// (a fraction of the grid's width) -- the escape terrain's.
+    #[serde(default = "default_sim_terrain_shadow", skip_serializing_if = "is_default_sim_terrain_shadow")]
+    pub shadow: f32,
+    #[serde(default = "default_sim_terrain_sharpness", skip_serializing_if = "is_default_sim_terrain_sharpness")]
+    pub shadow_sharpness: f32,
+    #[serde(default = "default_sim_terrain_occlusion", skip_serializing_if = "is_default_sim_terrain_occlusion")]
+    pub occlusion: f32,
+    /// How far a repeated ground reaches, in grid widths from the eye, and
+    /// how much of that the fog takes.
+    #[serde(default = "default_sim_terrain_far", skip_serializing_if = "is_default_sim_terrain_far")]
+    pub far: f32,
+    #[serde(default = "default_sim_terrain_haze", skip_serializing_if = "is_default_sim_terrain_haze")]
+    pub haze: f32,
+    /// The camera: angles in radians (the solid camera's), its distance
+    /// from the target in grid widths, and the target on the grid as a
+    /// fraction of its width and height (0.5, 0.5 its centre).
+    #[serde(default = "default_sim_terrain_pitch", skip_serializing_if = "is_default_sim_terrain_pitch")]
+    pub cam_pitch: f32,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub cam_yaw: f32,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub cam_bank: f32,
+    #[serde(default = "default_sim_terrain_fov", skip_serializing_if = "is_default_sim_terrain_fov")]
+    pub cam_fov: f32,
+    #[serde(default = "default_sim_terrain_distance", skip_serializing_if = "is_default_sim_terrain_distance")]
+    pub cam_distance: f32,
+    #[serde(default = "default_half", skip_serializing_if = "is_half")]
+    pub target_x: f32,
+    #[serde(default = "default_half", skip_serializing_if = "is_half")]
+    pub target_y: f32,
+    /// The path tracer's settings for this terrain.
+    #[serde(default, skip_serializing_if = "super::escape::PathTraceConfig::is_default")]
+    pub path: super::escape::PathTraceConfig,
+}
+
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
+}
+fn is_zero_f32(v: &f32) -> bool {
+    *v == 0.0
+}
+fn default_half() -> f32 {
+    0.5
+}
+fn is_half(v: &f32) -> bool {
+    *v == 0.5
+}
+fn default_sim_terrain_softness() -> f32 {
+    1.0
+}
+fn is_default_sim_terrain_softness(v: &f32) -> bool {
+    *v == default_sim_terrain_softness()
+}
+fn default_sim_terrain_height() -> f32 {
+    0.1
+}
+fn is_default_sim_terrain_height(v: &f32) -> bool {
+    *v == default_sim_terrain_height()
+}
+fn is_default_sim_tiling(v: &SimTiling) -> bool {
+    *v == SimTiling::default()
+}
+fn is_default_sim_terrain_tier(v: &super::escape::RenderTier) -> bool {
+    *v == super::escape::RenderTier::default()
+}
+fn default_sim_terrain_shadow() -> f32 {
+    0.7
+}
+fn is_default_sim_terrain_shadow(v: &f32) -> bool {
+    *v == default_sim_terrain_shadow()
+}
+fn default_sim_terrain_sharpness() -> f32 {
+    12.0
+}
+fn is_default_sim_terrain_sharpness(v: &f32) -> bool {
+    *v == default_sim_terrain_sharpness()
+}
+fn default_sim_terrain_occlusion() -> f32 {
+    0.02
+}
+fn is_default_sim_terrain_occlusion(v: &f32) -> bool {
+    *v == default_sim_terrain_occlusion()
+}
+fn default_sim_terrain_far() -> f32 {
+    8.0
+}
+fn is_default_sim_terrain_far(v: &f32) -> bool {
+    *v == default_sim_terrain_far()
+}
+fn default_sim_terrain_haze() -> f32 {
+    1.0
+}
+fn is_default_sim_terrain_haze(v: &f32) -> bool {
+    *v == default_sim_terrain_haze()
+}
+fn default_sim_terrain_pitch() -> f32 {
+    0.6
+}
+fn is_default_sim_terrain_pitch(v: &f32) -> bool {
+    *v == default_sim_terrain_pitch()
+}
+fn default_sim_terrain_fov() -> f32 {
+    0.7
+}
+fn is_default_sim_terrain_fov(v: &f32) -> bool {
+    *v == default_sim_terrain_fov()
+}
+fn default_sim_terrain_distance() -> f32 {
+    1.3
+}
+fn is_default_sim_terrain_distance(v: &f32) -> bool {
+    *v == default_sim_terrain_distance()
+}
+
+impl Default for SimTerrainConfig {
+    fn default() -> Self {
+        SimTerrainConfig {
+            enabled: false,
+            layer: 0,
+            channel: 0,
+            softness: default_sim_terrain_softness(),
+            height: default_sim_terrain_height(),
+            tiling: SimTiling::default(),
+            tier: super::escape::RenderTier::default(),
+            shadow: default_sim_terrain_shadow(),
+            shadow_sharpness: default_sim_terrain_sharpness(),
+            occlusion: default_sim_terrain_occlusion(),
+            far: default_sim_terrain_far(),
+            haze: default_sim_terrain_haze(),
+            cam_pitch: default_sim_terrain_pitch(),
+            cam_yaw: 0.0,
+            cam_bank: 0.0,
+            cam_fov: default_sim_terrain_fov(),
+            cam_distance: default_sim_terrain_distance(),
+            target_x: 0.5,
+            target_y: 0.5,
+            path: super::escape::PathTraceConfig::default(),
+        }
+    }
+}
+
+impl SimTerrainConfig {
+    pub fn is_default(v: &SimTerrainConfig) -> bool {
+        *v == SimTerrainConfig::default()
+    }
+}
+
+impl SimConfig {
+    /// Whether the config draws its 3D terrain.
+    pub fn terrain_active(&self) -> bool {
+        self.terrain.enabled
+    }
 }
 
 /// One colouring of the stack: a colouring of one simulation layer,
@@ -1280,6 +1494,7 @@ impl Default for SimConfig {
             couplings: Vec::new(),
             use_transforms: false,
             color_layers: Vec::new(),
+            terrain: SimTerrainConfig::default(),
         }
     }
 }

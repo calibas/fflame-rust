@@ -80,10 +80,16 @@ impl Solid {
     pub fn of(config: &crate::config::FractalConfig) -> Solid {
         let yes = match config.render_mode {
             RenderMode::ThreeD => true,
+            // A solid formula, or the 3D terrain view of a plane's
+            // picture: both are lit surfaces.
             RenderMode::Escape => {
                 crate::escape::ifs::formula_is_solid(&config.escape.formula)
+                    || config.escape.terrain_active()
             }
-            RenderMode::TwoD | RenderMode::Simulation => false,
+            // A simulation drawn as a 3D terrain is lit by the same
+            // lights.
+            RenderMode::Simulation => cfg!(feature = "terrain") && config.sim.terrain_active(),
+            RenderMode::TwoD => false,
         };
         if yes { Solid::Yes } else { Solid::No }
     }
@@ -532,6 +538,18 @@ mod tests {
         // TwoD never reports Solid::Yes, so the flag alone deciding is
         // not a licence for the 2D mode to show it -- `Solid::of` is.
         assert_eq!(Solid::of(&crate::config::FractalConfig::default()), Solid::No);
+        // An escape plane drawn as a 3D terrain is lit like a solid.
+        let mut terrain = crate::config::FractalConfig::default();
+        terrain.render_mode = RenderMode::Escape;
+        assert_eq!(Solid::of(&terrain), Solid::No);
+        terrain.escape.terrain.enabled = true;
+        assert_eq!(Solid::of(&terrain), if cfg!(feature = "terrain") { Solid::Yes } else { Solid::No });
+        // And a simulation's.
+        let mut sim = crate::config::FractalConfig::default();
+        sim.render_mode = RenderMode::Simulation;
+        assert_eq!(Solid::of(&sim), Solid::No);
+        sim.sim.terrain.enabled = true;
+        assert_eq!(Solid::of(&sim), if cfg!(feature = "terrain") { Solid::Yes } else { Solid::No });
 
         // A 3D flame is the other thing that renders a surface, and
         // `Solid::of` has to say so or the two answers disagree.

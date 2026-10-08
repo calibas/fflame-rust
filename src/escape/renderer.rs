@@ -27,6 +27,9 @@ use crate::config::escape::EscapeConfig;
 use super::assembler::{self, PARAM_VEC4S};
 use super::reference::OrbitCache;
 
+mod solid_path;
+pub use solid_path::{EXPORT_FRAME_MS, VIEWPORT_FRAME_MS};
+
 /// Above this zoom the direct path's f32 pixel mapping visibly
 /// pixelates: the center's f32 ulp (~6e-8 near |c| = 1) stops
 /// resolving pixel spacing a couple of octaves before it equals it —
@@ -737,6 +740,9 @@ pub struct EscapeRenderer {
     /// vocabulary for it. Set alongside the flame, by the same callers,
     /// for the same reason.
     solid_lighting: (crate::config::SolidShadingSettings, f32, f32, [f32; 3]),
+    /// A gradient sky's zenith as a ray that meets nothing sees it
+    /// (`path_core::sky_seen`); None for the background alone.
+    solid_sky: Option<[f32; 3]>,
     ifs_chain: Option<Vec<super::ifs::IfsLinkGpu>>,
     ifs_chain_key: String,
     ifs_chain_buffer: Buffer,
@@ -800,6 +806,8 @@ pub struct EscapeRenderer {
     /// Compiled pipelines keyed `"formula|coloring"` — tiny shaders,
     /// but a live panel flips combinations and recompiles add up.
     pipelines: HashMap<String, ComputePipeline>,
+    /// Mode D's path tracer (heightfield plan T3c), made on first use.
+    solid_path: Option<solid_path::SolidPath>,
     /// Test-only: force the perturbed path regardless of zoom so the
     /// direct/perturbed agreement test can render the SAME shallow
     /// view both ways.
@@ -1095,6 +1103,10 @@ pub struct EscapeRenderer {
     contrast_fit: Option<ContrastFit>,
     /// Identity the current fit was measured under.
     contrast_fit_key: Option<String>,
+    /// The current fit held for every render to come, whatever its view
+    /// (`pin_contrast`): a terrain's sections, each a view of its own,
+    /// share one.
+    contrast_pinned: bool,
     /// The palette the current render is drawn with (`render`'s
     /// `palette_generation`): part of the iteration's identity for a
     /// colouring that samples it inside the loop (`PaletteInLoop`).
@@ -1746,6 +1758,7 @@ impl EscapeRenderer {
             ifs_seeds: None,
             ifs_seed_key: String::new(),
             solid_lighting: (crate::config::SolidShadingSettings::default(), 0.0, 0.0, [0.0; 3]),
+            solid_sky: None,
             ifs_chain: None,
             ifs_chain_key: String::new(),
             ifs_chain_buffer,
@@ -1824,6 +1837,7 @@ impl EscapeRenderer {
             contrast_readback: None,
             contrast_fit: None,
             contrast_fit_key: None,
+            contrast_pinned: false,
             palette_generation: 0,
             current_ref_offset: [0.0, 0.0],
             iter_state_buffer: None,
@@ -1832,6 +1846,7 @@ impl EscapeRenderer {
             chunk_next: 0,
             chunk_key: None,
             timestamps: None,
+            solid_path: None,
             gpu_ms_per_iter: None,
             gpu_ms_per_iter_cold: None,
             gpu_regime: None,
@@ -3253,7 +3268,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// single-term recurrence (docs/projects/derivative-under-perturbation.md).
     pub(crate) fn perturbed_derivative(escape: &EscapeConfig, floatexp: bool) -> Option<&'static super::FormulaDef> {
         let wanted = Self::colourings_have(escape, super::ColoringFeature::NeedsDerivative)
-            || escape.shading.wants_derivative();
+            || escape.wants_derivative();
         let formula = super::get_formula(&escape.formula);
         let tier = Self::perturb_tier(escape)?;
         let single = !matches!(tier, assembler::PerturbTier::Phoenix | assembler::PerturbTier::Manowar);
@@ -3276,13 +3291,13 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// Whether the iterate pass compiles a real derivative orbit. On the
     /// perturbed path, where `perturbed_derivative` says it can carry one.
     /// Mirrors assemble_with and assemble_perturbed_full.
-    fn derivative_active(&self, escape: &EscapeConfig) -> bool {
+    pub(crate) fn derivative_active(&self, escape: &EscapeConfig) -> bool {
         if self.perturbed_path(escape) {
             return Self::perturbed_derivative(escape, self.floatexp_for(escape)).is_some();
         }
         let formula = super::get_formula(&escape.formula);
         (Self::colourings_have(escape, super::ColoringFeature::NeedsDerivative)
-            || escape.shading.wants_derivative())
+            || escape.wants_derivative())
             && !formula.wgsl_derivative.is_empty()
     }
 
@@ -3841,6 +3856,25 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         true
     }
 
+    /// The height field (render size, `Rgba32Float`): the colouring's
+    /// raw value in red, the relief's -- or a terrain footprint's --
+    /// height source in green. Full size only while something asks for
+    /// it (`ensure_height`).
+    #[cfg(feature = "terrain")]
+    pub(crate) fn height_view(&self) -> &TextureView {
+        &self.height_view
+    }
+
+    /// The height field and the render texture, for a test to read back.
+    #[cfg(test)]
+    pub(crate) fn height_texture_for_test(&self) -> &Texture {
+        &self.height_texture
+    }
+    #[cfg(test)]
+    pub(crate) fn output_texture_for_test(&self) -> &Texture {
+        self.final_texture.as_ref().unwrap_or(&self.output_texture)
+    }
+
     /// Whether a qualifying flame is loaded.
     pub fn has_ifs(&self) -> bool {
         self.ifs.is_some()
@@ -3998,6 +4032,17 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             return false;
         }
         self.solid_lighting = next;
+        true
+    }
+
+    /// A solid's sky (heightfield plan T5): a gradient's zenith, or None
+    /// for the background alone. Drawn by the relight, so a change needs
+    /// no walk. True when it changed.
+    pub fn set_solid_sky(&mut self, sky: Option<[f32; 3]>) -> bool {
+        if self.solid_sky == sky {
+            return false;
+        }
+        self.solid_sky = sky;
         true
     }
 
@@ -5824,6 +5869,26 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         want.clamp(64, 50_000)
     }
 
+    /// Hold the auto contrast fit the last settled render measured for
+    /// every render to come, whatever its view, until `unpin_contrast`.
+    /// A terrain's sections are views of their own: fitted each its own
+    /// way, they drew a step of colour at every section's edge.
+    pub(crate) fn pin_contrast(&mut self) {
+        self.contrast_pinned = true;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn contrast_fit_for_test(&self) -> Option<ContrastFit> {
+        self.contrast_fit
+    }
+
+    /// Measure each view's fit again (`pin_contrast`).
+    pub(crate) fn unpin_contrast(&mut self) {
+        self.contrast_pinned = false;
+        self.contrast_fit = None;
+        self.contrast_fit_key = None;
+    }
+
     /// Whether a settled frame still owes the user a contrast pass.
     ///
     /// The fit is measured FROM the finished field, so it cannot be
@@ -5834,6 +5899,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// while dirty.
     fn contrast_pending(&self, escape: &EscapeConfig, iterate_key: Option<&str>) -> bool {
         escape.contrast.is_active()
+            && !self.contrast_pinned
             && self.results_key.is_some()
             && iterate_key.is_some_and(|ik| self.contrast_fit_key.as_deref() != Some(Self::contrast_key(escape, ik).as_str()))
     }
@@ -5920,7 +5986,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         escape: &EscapeConfig,
         key: &str,
     ) {
-        if !escape.contrast.is_active() || self.contrast_fit_key.as_deref() == Some(key) {
+        if !escape.contrast.is_active() || self.contrast_pinned || self.contrast_fit_key.as_deref() == Some(key) {
             return;
         }
         let cells = (PROBE_W * PROBE_H) as u64;
@@ -6342,6 +6408,10 @@ fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     /// tail expects — display-sized (the downsampled target when
     /// supersampling is on).
     pub fn output_view(&self) -> &TextureView {
+        // A solid's path-traced picture, while it is the one shown.
+        if let Some(v) = self.solid_path.as_ref().and_then(|p| p.view()) {
+            return v;
+        }
         self.final_view.as_ref().unwrap_or(&self.output_view)
     }
 
@@ -6711,7 +6781,8 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let shading = &escape.shading;
         let mode = escape.downsample;
         let factor = self.supersample;
-        let shade_on = shading.enabled;
+        // A terrain's footprint is lit in 3D, not by the 2D relief.
+        let shade_on = shading.enabled && !escape.terrain_active();
         let overlay_on = self.overlay_on(escape);
         if factor <= 1 && !shade_on && !overlay_on {
             return;
@@ -7581,7 +7652,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let registry = crate::variations::global_registry();
         let lens_src = super::lens::lens_source(escape, &registry);
         let layer = super::layer_of(escape);
-        let analytic = escape.shading.wants_derivative();
+        let analytic = escape.wants_derivative();
         let orbits = if !escape.shading.wants_offset_orbits() {
             assembler::ReliefOrbits::None
         } else if escape.shading.field == crate::config::escape::ShadingField::Embossed {
@@ -7708,6 +7779,10 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                         ),
                         &mut fdata,
                     );
+                    // The sky, past the rig's lights (`ifs_sky_seen`).
+                    if let Some(z) = self.solid_sky {
+                        fdata[20] = [z[0], z[1], z[2], 1.0];
+                    }
                 }
                 // A flame that is planar but not solid leaves the map
                 // count at zero, and the marcher draws nothing.
@@ -7778,7 +7853,13 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             bailout: escape.bailout.max(1e-6),
             tile_y0: 0,
             damping: [escape.damping_re, escape.damping_im],
-            shade_flags: escape.shading.field.to_gpu(),
+            // A terrain's footprint writes the terrain's height source
+            // into the relief channel instead.
+            shade_flags: if escape.terrain_active() {
+                escape.terrain.source.shade_flags(escape.shading.field)
+            } else {
+                escape.shading.field.to_gpu()
+            },
             stride: self.stride(escape),
             degree,
             pmap_flags: escape.palette_map.gpu_flags()
@@ -7828,12 +7909,20 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         palette_generation: u64,
     ) -> bool {
         self.palette_generation = palette_generation;
+        // Whatever made this frame render changed the solid's picture:
+        // its path-traced samples are of something else now.
+        self.reset_solid_path();
         // Relief needs its scalar field and a destination distinct
         // from the colour it reads; both are allocated on demand, so
         // an escape view with shading off carries neither.
         let overlay = self.overlay_on(escape);
-        self.ensure_height(device, escape.shading.enabled || escape.contrast.is_active() || overlay);
-        self.ensure_resolve_target(device, escape.shading.enabled || overlay);
+        // A terrain's footprint keeps its height field too: it is the
+        // terrain (heightfield plan, section 5).
+        self.ensure_height(
+            device,
+            escape.shading.enabled || escape.contrast.is_active() || overlay || escape.terrain_active(),
+        );
+        self.ensure_resolve_target(device, (escape.shading.enabled && !escape.terrain_active()) || overlay);
         // Diagnostics: CPU time of this whole call, whatever path or
         // early return it takes (the drop guard writes on exit).
         let _diag_cpu = super::diag::CpuTimer::start();
@@ -7884,7 +7973,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             {
                 let t0 = web_time::Instant::now();
                 let ckey = Self::contrast_key(escape, ik);
-                if escape.contrast.is_active() && self.contrast_fit_key.as_deref() != Some(ckey.as_str()) {
+                if escape.contrast.is_active() && !self.contrast_pinned && self.contrast_fit_key.as_deref() != Some(ckey.as_str()) {
                     // The height field the probe reads may still hold the
                     // previous colouring's values -- a recolour edit does
                     // not re-iterate -- so recolour once through the
@@ -8578,6 +8667,9 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         if let Some(ts) = &self.timestamps {
             ts.resolve.destroy();
             ts.staging.destroy();
+        }
+        if let Some(p) = &self.solid_path {
+            p.destroy();
         }
     }
 }
