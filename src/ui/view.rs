@@ -6,14 +6,12 @@ use rust_i18n::t;
 pub fn render_view_content(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
-    flame: &Flame,
+    _flame: &Flame,
     fly_mode_active: bool,
     fly_mode_toggle_requested: &mut bool,
     deep_zoom: &super::DeepZoom,
     escape_aa: Option<super::EscapeAa>,
 ) {
-    use crate::config::slider::LazyUndoUi;
-
     // Clone config to avoid borrow conflicts
     let config = config_manager.active_config().clone();
 
@@ -22,7 +20,6 @@ pub fn render_view_content(
     // then -- for a flame -- its own sections below.
     use crate::camera::gesture::{self, ViewKind};
     let kind = gesture::view_kind(&config);
-    let _ = &escape_aa;
 
     // ── Camera: the 2D views, and a 3D flame's picture after its
     // projection (its pan, zoom and roll).
@@ -30,6 +27,15 @@ pub fn render_view_content(
         egui::CollapsingHeader::new(t!("view.camera").as_ref())
             .default_open(true)
             .show(ui, |ui| super::view_controls::camera_2d(ui, config_manager));
+    }
+    // ── The 3D camera, every 3D view's: position, target, angles,
+    // projection, fly mode.
+    if kind.is_3d() {
+        egui::CollapsingHeader::new(t!("view.camera_3d").as_ref())
+            .default_open(true)
+            .show(ui, |ui| {
+                super::view_controls::camera_3d(ui, config_manager, fly_mode_active, fly_mode_toggle_requested)
+            });
     }
 
     // ── What each engine draws the picture with.
@@ -53,8 +59,19 @@ pub fn render_view_content(
         }
         _ => {}
     }
-    if matches!(kind, ViewKind::Solid | ViewKind::EscapeTerrain | ViewKind::SimTerrain) {
-        ui.label(egui::RichText::new(t!("view.camera_3d_elsewhere")).small().weak());
+
+    // ── Every 3D view's: what lies between the eye and the picture, its
+    // focus, and how it is lit and what it is made of.
+    if kind.is_3d() {
+        egui::CollapsingHeader::new(t!("view.atmosphere").as_ref())
+            .default_open(false)
+            .show(ui, |ui| super::view_controls::atmosphere_3d(ui, config_manager));
+        egui::CollapsingHeader::new(t!("view.depth_of_field").as_ref())
+            .default_open(false)
+            .show(ui, |ui| super::view_controls::depth_of_field_3d(ui, config_manager));
+        egui::CollapsingHeader::new(t!("view.lighting_material").as_ref())
+            .default_open(false)
+            .show(ui, |ui| super::view_controls::lighting_3d(ui, config_manager));
     }
     if !matches!(kind, ViewKind::Flame2d | ViewKind::Flame3d) {
         return;
@@ -104,232 +121,24 @@ pub fn render_view_content(
 
     ui.separator();
 
-    // 3D Rendering Controls
+    // The flame's render mode: 2D or 3D.
     ui.label(t!("view.render_mode")).on_hover_text(t!("view.tooltip_render_mode"));
     ui.horizontal(|ui| {
         // Through the shared helper, so this control resets the tone
         // mapping on the same terms every other one does.
-        let was_2d = matches!(config.render_mode, crate::scene::transforms::RenderMode::TwoD);
-        if ui.selectable_label(was_2d, t!("view.mode_2d").as_ref())
-            .on_hover_text(t!("view.tooltip_mode_2d"))
-            .clicked()
-        {
-            if let Err(e) = super::render_mode::switch_render_mode(
-                config_manager,
-                crate::scene::transforms::RenderMode::TwoD,
-            ) {
-                log::error!("Failed to update render mode: {}", e);
-            }
-        }
-        let was_3d = matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD);
-        if ui.selectable_label(was_3d, t!("view.mode_3d").as_ref())
-            .on_hover_text(t!("view.tooltip_mode_3d"))
-            .clicked()
-        {
-            if let Err(e) = super::render_mode::switch_render_mode(
-                config_manager,
-                crate::scene::transforms::RenderMode::ThreeD,
-            ) {
-                log::error!("Failed to update render mode: {}", e);
+        for (mode, label, tip) in [
+            (RenderMode::TwoD, t!("view.mode_2d"), t!("view.tooltip_mode_2d")),
+            (RenderMode::ThreeD, t!("view.mode_3d"), t!("view.tooltip_mode_3d")),
+        ] {
+            if ui.selectable_label(config.render_mode == mode, label.as_ref()).on_hover_text(tip.as_ref()).clicked() {
+                if let Err(e) = super::render_mode::switch_render_mode(config_manager, mode) {
+                    log::error!("Failed to update render mode: {}", e);
+                }
             }
         }
     });
 
-    // Show perspective control only in 3D mode
-    if matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD) {
-        let mut perspective = config.perspective_strength;
-        let response = ui.add(
-            super::VkbSlider::new(&mut perspective, 0.0..=10.0)
-                .text(t!("view.perspective").as_ref())
-                .step_by(0.01)
-        ).on_hover_text(t!("view.tooltip_perspective"));
-        let changed = response.changed();
-        if changed {
-            if let Err(e) = config_manager.update_param(
-                ConfigPath::PerspectiveStrength,
-                perspective.into()
-            ) {
-                log::error!("Failed to update perspective strength: {}", e);
-            }
-        }
-
-    }
-
-    // 3D Camera rotation controls (only visible in 3D mode)
-    if matches!(config.render_mode, RenderMode::ThreeD) {
-        ui.separator();
-        ui.label(t!("view.camera_3d"));
-
-        let mut degrees_x = config.camera_rotation_x.to_degrees();
-        let response = ui.add(
-            super::VkbSlider::new(&mut degrees_x, -180.0..=180.0)
-                .text(t!("view.camera_pitch").as_ref())
-                .suffix("°")
-        ).on_hover_text(t!("view.tooltip_camera_pitch"));
-        if response.changed() {
-            let new_camera_x = degrees_x.to_radians();
-            let _ = config_manager.update_param(
-                ConfigPath::CameraRotationX,
-                new_camera_x.into()
-            );
-        }
-
-        let mut degrees_y = config.camera_rotation_y.to_degrees();
-        let response = ui.add(
-            super::VkbSlider::new(&mut degrees_y, -180.0..=180.0)
-                .text(t!("view.camera_yaw").as_ref())
-                .suffix("°")
-        ).on_hover_text(t!("view.tooltip_camera_yaw"));
-        if response.changed() {
-            let new_camera_y = degrees_y.to_radians();
-            let _ = config_manager.update_param(
-                ConfigPath::CameraRotationY,
-                new_camera_y.into()
-            );
-        }
-
-        // Bank — JWildfire/Apophysis Y-axis rotation, the 4th camera
-        // angle. Tilts the view horizontally (perspective skew).
-        // Round-trips through XML as `cam_roll` per JWildfire's
-        // rename quirk; see docs/projects/jwf-features.md.
-        let mut degrees_bank = config.camera_bank.to_degrees();
-        let response = ui.add(
-            super::VkbSlider::new(&mut degrees_bank, -180.0..=180.0)
-                .text(t!("view.camera_bank").as_ref())
-                .suffix("°")
-        ).on_hover_text(t!("view.tooltip_camera_bank"));
-        if response.changed() {
-            let new_bank = degrees_bank.to_radians();
-            let _ = config_manager.update_param(
-                ConfigPath::CameraBank,
-                new_bank.into()
-            );
-        }
-
-        // Camera world-space position. Round-trips through JWildfire's
-        // `cam_pos_x/y/z` triple. Default (0, 0, 0). Will be driven by
-        // WASD / mouse-look in stage 2; for now, numeric sliders only.
-        ui.horizontal(|ui| {
-            ui.label(t!("view.camera_x")).on_hover_text(t!("view.tooltip_camera_x"));
-            let _ = ui.lazy_drag(config_manager, ConfigPath::CameraX, 0.01, "");
-        });
-        ui.horizontal(|ui| {
-            ui.label(t!("view.camera_y")).on_hover_text(t!("view.tooltip_camera_y"));
-            let _ = ui.lazy_drag(config_manager, ConfigPath::CameraY, 0.01, "");
-        });
-        ui.horizontal(|ui| {
-            ui.label(t!("view.camera_z")).on_hover_text(t!("view.tooltip_camera_z"));
-            let _ = ui.lazy_drag(config_manager, ConfigPath::CameraZ, 0.01, "");
-        });
-
-        // Free-fly camera mode toggle. When on:
-        //   - Primary mouse drag in the fractal viewport rotates the
-        //     view (pitch + yaw) instead of panning the fractal.
-        //   - WASD moves the camera along its forward / right axes.
-        //   - Q / E move it along world-down / world-up.
-        //   - Shift acts as a sprint multiplier.
-        // F2 toggles the same state from any focus. Sensitivity and
-        // speed live in Settings → Preferences. See
-        // `docs/projects/free-camera-movement.md` for the full plan.
-        let fly_label = if fly_mode_active {
-            t!("view.fly_mode_on")
-        } else {
-            t!("view.fly_mode_off")
-        };
-        if ui.button(fly_label.as_ref())
-            .on_hover_text(t!("view.tooltip_fly_mode"))
-            .clicked()
-        {
-            *fly_mode_toggle_requested = true;
-        }
-
-        // Fly-mode tuning. Folded behind a collapsing header so it
-        // doesn't crowd the main View panel; the defaults are good
-        // for typical mice and most users will never touch these.
-        egui::CollapsingHeader::new(t!("view.fly_mode_settings").as_ref())
-            .default_open(false)
-            .show(ui, |ui| {
-                // Mouse-look model. FreeLook = screen-relative
-                // (space-sim); Fps = world-up anchored (horizon
-                // stays level). Q/E rise axis follows the choice.
-                let mode = config_manager.system_settings().fly_camera_mode;
-                ui.horizontal(|ui| {
-                    ui.label(t!("view.fly_camera_mode"));
-                    if ui.selectable_label(
-                        mode == crate::storage::FlyCameraMode::FreeLook,
-                        t!("view.fly_camera_mode_free_look").as_ref(),
-                    )
-                    .on_hover_text(t!("view.tooltip_fly_camera_mode_free_look"))
-                    .clicked()
-                        && mode != crate::storage::FlyCameraMode::FreeLook
-                    {
-                        let _ = config_manager.update_system_setting(
-                            ConfigPath::SystemFlyCameraMode,
-                            "free_look".into(),
-                        );
-                    }
-                    if ui.selectable_label(
-                        mode == crate::storage::FlyCameraMode::Fps,
-                        t!("view.fly_camera_mode_fps").as_ref(),
-                    )
-                    .on_hover_text(t!("view.tooltip_fly_camera_mode_fps"))
-                    .clicked()
-                        && mode != crate::storage::FlyCameraMode::Fps
-                    {
-                        let _ = config_manager.update_system_setting(
-                            ConfigPath::SystemFlyCameraMode,
-                            "fps".into(),
-                        );
-                    }
-                });
-
-                let mut sensitivity = config_manager.system_settings().fly_mouse_sensitivity;
-                ui.horizontal(|ui| {
-                    ui.label(t!("view.fly_sensitivity"));
-                    if ui.add(super::VkbSlider::new(&mut sensitivity, 0.0005..=0.05)
-                            .logarithmic(true)
-                            ).changed() {
-                        let _ = config_manager.update_system_setting(
-                            ConfigPath::SystemFlyMouseSensitivity,
-                            sensitivity.into(),
-                        );
-                    }
-                });
-
-                let mut speed = config_manager.system_settings().fly_move_speed;
-                ui.horizontal(|ui| {
-                    ui.label(t!("view.fly_move_speed"));
-                    if ui.add(super::VkbSlider::new(&mut speed, 0.05..=20.0)
-                            .logarithmic(true)
-                            ).changed() {
-                        let _ = config_manager.update_system_setting(
-                            ConfigPath::SystemFlyMoveSpeed,
-                            speed.into(),
-                        );
-                    }
-                });
-
-                let mut sprint = config_manager.system_settings().fly_sprint_multiplier;
-                ui.horizontal(|ui| {
-                    ui.label(t!("view.fly_sprint_multiplier"));
-                    if ui.add(super::VkbSlider::new(&mut sprint, 1.0..=20.0)
-                            ).changed() {
-                        let _ = config_manager.update_system_setting(
-                            ConfigPath::SystemFlySprintMultiplier,
-                            sprint.into(),
-                        );
-                    }
-                });
-
-                let mut invert_y = config_manager.system_settings().fly_invert_y;
-                if ui.checkbox(&mut invert_y, t!("view.fly_invert_y").as_ref()).changed() {
-                    let _ = config_manager.update_system_setting(
-                        ConfigPath::SystemFlyInvertY,
-                        invert_y.into(),
-                    );
-                }
-            });
-
+    if kind == ViewKind::Flame3d {
         // Preserve Z — JWildfire's `preserve_z` flag. Defaults to
         // off (Apo/JWF default) so flames with variations that scale
         // Z by >1 (e.g. spherical at high weight) don't explode and
@@ -343,126 +152,11 @@ pub fn render_view_content(
                 preserve_z.into(),
             );
         }
-
-        // Depth Effects (collapsible, hidden by default)
-        ui.separator();
-        egui::CollapsingHeader::new(t!("view.depth_effects").as_ref())
-            .default_open(false)
-            .show(ui, |ui| {
-                // Depth of Field controls
-                ui.label(t!("view.depth_of_field"));
-
-                let mut dof_focus = config.dof_focus_distance;
-                let response = ui.add(
-                    super::VkbSlider::new(&mut dof_focus, -5.0..=5.0)
-                        .text(t!("view.dof_focus_distance").as_ref())
-                ).on_hover_text(t!("view.tooltip_dof_focus_distance"));
-                if response.changed() {
-                    let _ = config_manager.update_param(
-                        ConfigPath::DofFocusDistance,
-                        dof_focus.into()
-                    );
-                }
-
-                let mut dof_blur = config.dof_blur_strength;
-                let response = ui.add(
-                    super::VkbSlider::new(&mut dof_blur, 0.0..=1.0)
-                        .text(t!("view.dof_blur_strength").as_ref())
-                        .step_by(0.001)
-                ).on_hover_text(t!("view.tooltip_dof_blur_strength"));
-                if response.changed() {
-                    let _ = config_manager.update_param(
-                        ConfigPath::DofBlurStrength,
-                        dof_blur.into()
-                    );
-                }
-
-                // Depth Fog controls
-                ui.add_space(8.0);
-                ui.label(t!("view.fog_section").as_ref());
-
-                let mut fog_strength = config.fog_strength;
-                let response = ui.add(
-                    super::VkbSlider::new(&mut fog_strength, 0.0..=5.0)
-                        .text(t!("view.fog_strength").as_ref())
-                ).on_hover_text(t!("view.tooltip_fog_strength"));
-                if response.changed() {
-                    let _ = config_manager.update_param(
-                        ConfigPath::FogStrength,
-                        fog_strength.into()
-                    );
-                }
-
-                let mut fog_start = config.fog_start;
-                let response = ui.add(
-                    super::VkbSlider::new(&mut fog_start, -5.0..=5.0)
-                        .text(t!("view.fog_start").as_ref())
-                ).on_hover_text(t!("view.tooltip_fog_start"));
-                if response.changed() {
-                    let _ = config_manager.update_param(
-                        ConfigPath::FogStart,
-                        fog_start.into()
-                    );
-                }
-
-                // Density weighting by depth
-                ui.add_space(8.0);
-                ui.label(t!("view.depth_density_section").as_ref());
-
-                // Depth-density compensation — only meaningful with
-                // perspective > 0 (the weight collapses to 1 in
-                // orthographic).
-                let mut depth_comp = config.depth_density_compensation;
-                let response = ui.add(
-                    super::VkbSlider::new(&mut depth_comp, 0.0..=1.0)
-                        .text(t!("view.depth_density_compensation").as_ref())
-                        .step_by(0.01)
-                ).on_hover_text(t!("view.tooltip_depth_density_compensation"));
-                if response.changed() {
-                    let _ = config_manager.update_param(
-                        ConfigPath::DepthDensityCompensation,
-                        depth_comp.into()
-                    );
-                }
-
-                // Far density fade: thins far samples' density with a
-                // Gaussian falloff past the start depth (unlike fog,
-                // which recolors at full density). Our own extension.
-                ui.add_space(8.0);
-                ui.label(t!("view.far_density_fade_section").as_ref());
-
-                let mut far_fade = config.far_density_fade;
-                let response = ui.add(
-                    super::VkbSlider::new(&mut far_fade, 0.0..=5.0)
-                        .text(t!("view.far_density_fade").as_ref())
-                        .step_by(0.01)
-                ).on_hover_text(t!("view.tooltip_far_density_fade"));
-                if response.changed() {
-                    let _ = config_manager.update_param(
-                        ConfigPath::FarDensityFade,
-                        far_fade.into()
-                    );
-                }
-
-                let mut far_fade_start = config.far_density_fade_start;
-                let response = ui.add(
-                    super::VkbSlider::new(&mut far_fade_start, -5.0..=5.0)
-                        .text(t!("view.far_density_fade_start").as_ref())
-                ).on_hover_text(t!("view.tooltip_far_density_fade_start"));
-                if response.changed() {
-                    let _ = config_manager.update_param(
-                        ConfigPath::FarDensityFadeStart,
-                        far_fade_start.into()
-                    );
-                }
-
-            });
     }
 
     ui.separator();
 
     render_post_symmetry_section(ui, config_manager, &config);
-
 }
 
 /// Post-symmetry section. Type dropdown + the per-mode controls
@@ -565,17 +259,33 @@ mod tests {
     /// visual suite renders fractals, not panels. Two frames, so the
     /// second takes egui's "widget already exists" path.
     fn lay_out(config: FractalConfig) {
-        let ctx = egui::Context::default();
-        let mut manager = ConfigManager::new(config);
-        let flame = manager.active_config().flame.clone();
-        let deep = super::super::DeepZoom::default();
-        let mut toggle = false;
-        for _ in 0..2 {
-            let _ = ctx.run(Default::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    render_view_content(ui, &mut manager, &flame, false, &mut toggle, &deep, None);
+        // As it ships, and with every folded section's body drawn: lit
+        // (the lights' rows show) and path traced (the lens shows).
+        let mut lit = config.clone();
+        lit.solid_shading.shading_strength = 0.5;
+        lit.solid_shading.lights[1].enabled = true;
+        lit.escape.solid_tier = crate::config::escape::RenderTier::PathTraced;
+        lit.escape.terrain.tier = crate::config::escape::RenderTier::PathTraced;
+        lit.sim.terrain.tier = crate::config::escape::RenderTier::PathTraced;
+        for config in [config, lit] {
+            let ctx = egui::Context::default();
+            let mut manager = ConfigManager::new(config);
+            let flame = manager.active_config().flame.clone();
+            let deep = super::super::DeepZoom::default();
+            let mut toggle = false;
+            for _ in 0..2 {
+                let _ = ctx.run(Default::default(), |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        render_view_content(ui, &mut manager, &flame, false, &mut toggle, &deep, None);
+                        ui.separator();
+                        use super::super::view_controls as vc;
+                        vc::atmosphere_3d(ui, &mut manager);
+                        vc::depth_of_field_3d(ui, &mut manager);
+                        vc::lighting_3d(ui, &mut manager);
+                        super::super::solid_panel::render_solid_panel_content(ui, &mut manager);
+                    });
                 });
-            });
+            }
         }
     }
 

@@ -643,9 +643,9 @@ pub fn render_sim_content(
 }
 
 /// The **3D terrain** section (heightfield plan T4): the grid as a height
-/// field -- which layer and channel, smoothed how much, how high -- how it
-/// is rendered and lit, and the camera over it. The engine is
-/// `sim::terrain`.
+/// field -- which layer and channel, smoothed how much, how high, and
+/// whether it repeats. How it is seen, lit and rendered is the View
+/// panel's (camera-unification C5). The engine is `sim::terrain`.
 #[cfg(feature = "terrain")]
 fn render_terrain_section(ui: &mut egui::Ui, config_manager: &mut ConfigManager, sim: &SimConfig) {
     let t = sim.terrain.clone();
@@ -718,61 +718,8 @@ fn render_terrain_section(ui: &mut egui::Ui, config_manager: &mut ConfigManager,
                 });
             };
             slider(ui, t!("sim_panel.terrain_height").to_string(), ConfigPath::SimTerrainHeight, t.height, -0.5..=0.5, t!("sim_panel.terrain_height_tip").to_string());
-            if t.tiling == crate::config::sim::SimTiling::Repeat {
-                slider(ui, t!("escape_panel.terrain_far").to_string(), ConfigPath::SimTerrainFar, t.far, 0.5..=64.0, t!("sim_panel.terrain_far_tip").to_string());
-                slider(ui, t!("escape_panel.terrain_haze").to_string(), ConfigPath::SimTerrainHaze, t.haze, 0.0..=1.0, t!("escape_panel.terrain_haze_tip").to_string());
-            }
             slider(ui, t!("sim_panel.terrain_softness").to_string(), ConfigPath::SimTerrainSoftness, t.softness, 0.0..=8.0, t!("sim_panel.terrain_softness_tip").to_string());
-            // How it is lit.
-            slider(ui, t!("escape_panel.terrain_shadow").to_string(), ConfigPath::SimTerrainShadow, t.shadow, 0.0..=1.0, t!("escape_panel.terrain_shadow_tip").to_string());
-            slider(ui, t!("escape_panel.terrain_shadow_sharpness").to_string(), ConfigPath::SimTerrainShadowSharpness, t.shadow_sharpness, 1.0..=128.0, t!("escape_panel.terrain_shadow_sharpness_tip").to_string());
-            if t.tier != crate::config::escape::RenderTier::PathTraced {
-                slider(ui, t!("escape_panel.terrain_occlusion").to_string(), ConfigPath::SimTerrainOcclusion, t.occlusion, 0.0..=0.2, t!("sim_panel.terrain_occlusion_tip").to_string());
-            }
-            // How it is rendered.
-            ui.separator();
-            let paths = super::escape_panel::PathPaths {
-                samples: ConfigPath::SimPathSamples,
-                bounces: ConfigPath::SimPathBounces,
-                environment: ConfigPath::SimPathEnvironment,
-                gloss: ConfigPath::SimPathGloss,
-                roughness: ConfigPath::SimPathRoughness,
-                emission: ConfigPath::SimPathEmission,
-                aperture: ConfigPath::SimPathAperture,
-                focus: ConfigPath::SimPathFocus,
-                denoise: ConfigPath::SimPathDenoise,
-                sky: ConfigPath::SimPathSky,
-                zenith: ConfigPath::SimPathZenith,
-            };
-            super::escape_panel::show_path_tracing(ui, config_manager, &t.path, &paths, ConfigPath::SimTerrainTier, t.tier, "sim_terrain_tier");
-            // The camera over the grid.
-            ui.separator();
-            ui.label(egui::RichText::new(t!("escape_panel.camera")).strong());
-            let mut degrees = |ui: &mut egui::Ui, label: String, path: ConfigPath, value: f32, range: std::ops::RangeInclusive<f32>| {
-                ui.horizontal(|ui| {
-                    ui.label(label);
-                    let mut d = value.to_degrees();
-                    if ui.add(egui::Slider::new(&mut d, range).suffix("°")).changed() {
-                        let _ = config_manager.update_param(path, d.to_radians().into());
-                    }
-                });
-            };
-            degrees(ui, t!("escape_panel.camera_pitch").to_string(), ConfigPath::SimTerrainCamPitch, t.cam_pitch, -89.0..=89.0);
-            degrees(ui, t!("escape_panel.camera_yaw").to_string(), ConfigPath::SimTerrainCamYaw, t.cam_yaw, -180.0..=180.0);
-            degrees(ui, t!("escape_panel.camera_bank").to_string(), ConfigPath::SimTerrainCamBank, t.cam_bank, -180.0..=180.0);
-            degrees(ui, t!("escape_panel.camera_fov").to_string(), ConfigPath::SimTerrainCamFov, t.cam_fov, 3.0..=170.0);
-            let mut plain = |ui: &mut egui::Ui, label: String, path: ConfigPath, value: f32, range: std::ops::RangeInclusive<f32>, log: bool| {
-                ui.horizontal(|ui| {
-                    ui.label(label);
-                    let mut v = value;
-                    if ui.add(egui::Slider::new(&mut v, range).logarithmic(log)).changed() {
-                        let _ = config_manager.update_param(path, v.into());
-                    }
-                });
-            };
-            plain(ui, t!("sim_panel.terrain_distance").to_string(), ConfigPath::SimTerrainCamDistance, t.cam_distance, 0.05..=8.0, true);
-            plain(ui, t!("sim_panel.terrain_target_x").to_string(), ConfigPath::SimTerrainTargetX, t.target_x, 0.0..=1.0, false);
-            plain(ui, t!("sim_panel.terrain_target_y").to_string(), ConfigPath::SimTerrainTargetY, t.target_y, 0.0..=1.0, false);
+            ui.label(egui::RichText::new(t!("escape_panel.view_has_camera")).small().weak());
         });
 }
 
