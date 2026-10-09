@@ -360,12 +360,9 @@ mod target_tests {
     use crate::config::{ConfigManager, ConfigValue};
 
     /// The lens target reads the REGISTRY default for a parameter the
-    /// config has never stored.
-    ///
-    /// `ConfigManager::get_value` answers 0.0 there, deliberately --
-    /// a def's default is a registry concern -- so a panel that used
-    /// it directly would open every lens with its parameters slammed
-    /// to zero and silently rewrite them on the first drag.
+    /// config has never stored -- and so, now, does the manager's own
+    /// path: it answered 0.0, and undoing a first edit wrote that 0
+    /// back, slamming the parameter to zero.
     #[test]
     fn an_unset_lens_parameter_reads_its_registry_default() {
         let registry = crate::variations::global_registry();
@@ -386,10 +383,9 @@ mod target_tests {
             .expect("a value");
         assert_eq!(got, 1.0, "an unset parameter did not read its default");
 
-        // And the raw config path still answers 0.0, which is the
-        // asymmetry this exists to absorb.
+        // And the config path agrees.
         let raw = cm.get_value(&ConfigPath::EscapeLensParam { param: "c1".into() });
-        assert_eq!(raw.ok(), Some(ConfigValue::Float(0.0)));
+        assert_eq!(raw.ok(), Some(ConfigValue::Float(1.0)));
     }
 
     /// An edit round-trips: the path the target hands back is the one

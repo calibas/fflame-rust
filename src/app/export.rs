@@ -171,11 +171,14 @@ pub async fn export_headless(
     // The PNG metadata embeds the ORIGINAL config, not the scaled copy.
     let orig_config = config;
     let ss_config;
-    let (config, render_width, render_height) = if supersample {
-        ss_config = crate::export::supersample::scale_config_for_supersample(config);
-        (&ss_config, width * 2, height * 2)
+    // Each engine's way to 2x (`supersample_plan`): `supersample` below
+    // is whether the render is twice the output and boxed down.
+    let (config, render_width, render_height, supersample) = if supersample {
+        let (c, scale) = crate::export::supersample::supersample_plan(config, width, height);
+        ss_config = c;
+        (&ss_config, width * scale, height * scale, scale == 2)
     } else {
-        (config, width, height)
+        (config, width, height, false)
     };
     let max_binding = probe_max_binding_size().await
         .unwrap_or(128 * 1024 * 1024);
@@ -202,6 +205,21 @@ pub async fn export_headless(
             ExportEngine::HighRes => true,
             ExportEngine::FlameRenderer => false,
         };
+    // The escape and simulation engines hand their picture to the flame
+    // renderer's tail, which allocates its histogram at the export size
+    // whatever the mode: past one binding that is a validation error, and
+    // wgpu panics on it. Refused here, as the app refuses it.
+    if non_flame_mode && hist_size > max_binding {
+        return Err(format!(
+            "{} export at {}x{} exceeds this GPU's buffer limit ({} MB > {} MB) -- try a smaller size",
+            if config.render_mode == crate::scene::transforms::RenderMode::Escape { "escape-time" } else { "simulation" },
+            render_width,
+            render_height,
+            hist_size / (1024 * 1024),
+            max_binding / (1024 * 1024),
+        )
+        .into());
+    }
     if !non_flame_mode && engine == ExportEngine::FlameRenderer && hist_size > max_binding {
         log::warn!(
             "--engine flamerenderer forced at {}x{}, but histogram {} MB > binding {} MB — allocation will likely fail.",
@@ -371,11 +389,18 @@ async fn export_headless_gpu(
         .await
         .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
 
-    // Progress indicator (desktop only)
-    println!(
-        "\r  Progress: {}/{} (100.0%)",
-        result.total_iterations, config.max_iterations
-    );
+    // Progress indicator (desktop only). Iterations are the chaos game's;
+    // an escape or simulation picture is said in its own terms (it printed
+    // the flame's, "256/501187233").
+    match config.render_mode {
+        crate::scene::transforms::RenderMode::Escape => {
+            println!("  Rendered: escape-time, at most {} iterations a pixel", config.escape.max_iter)
+        }
+        crate::scene::transforms::RenderMode::Simulation => {
+            println!("  Rendered: simulation, {} steps", config.sim.steps)
+        }
+        _ => println!("\r  Progress: {}/{} (100.0%)", result.total_iterations, config.max_iterations),
+    }
 
     // Calculate total export time
     let total_export_time_ms = export_start.elapsed().as_secs_f64() * 1000.0;

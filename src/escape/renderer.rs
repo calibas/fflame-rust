@@ -281,6 +281,22 @@ static PERTURB_BUDGET_SHIFT: std::sync::atomic::AtomicU32 =
 static PERTURB_RENDER_IN_FLIGHT: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// Halvings of mode D's PATH TRACER's dispatch ceiling and band cap
+/// (`renderer::solid_path`), the third generator's mirror of
+/// [`DIRECT_BUDGET_SHIFT`]. Its own, not the walk's: the walk's shift is
+/// learned from escape renders at any iteration count, and a machine's
+/// four halvings there made the path tracer's bands a row high. Raised
+/// by a call measured past the slow mark (the session) and by a device
+/// loss while a call was in flight (persisted).
+pub(super) static PATH_BUDGET_SHIFT: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+
+/// The solid path tracer's calls submitted and not yet complete -- the
+/// window in which a device loss is attributed to its dispatch size. A
+/// count, not a flag: a viewport's and an export's can overlap.
+pub(super) static PATH_CALLS_IN_FLIGHT: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+
 /// Ceiling on an adaptively grown chunk, before the session shift.
 /// The feedback loop stops well below this on any real configuration;
 /// it exists so a pathological measurement (a frame that reports
@@ -306,20 +322,20 @@ mod tuning {
     }
 
     /// The file's contents for a pair of shifts.
-    pub(super) fn encode(direct: u32, perturb: u32) -> String {
-        serde_json::json!({ "direct_shift": direct, "perturb_shift": perturb }).to_string()
+    pub(super) fn encode(direct: u32, perturb: u32, path: u32) -> String {
+        serde_json::json!({ "direct_shift": direct, "perturb_shift": perturb, "path_shift": path }).to_string()
     }
 
     /// Shifts from file contents. Anything unreadable, missing or out
     /// of range reads as zero-to-six: a hand-edited or corrupted file
     /// must never be able to shrink a budget into uselessness, and a
     /// missing key just means that generator never lost a device.
-    pub(super) fn decode(text: &str) -> (u32, u32) {
+    pub(super) fn decode(text: &str) -> (u32, u32, u32) {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else {
-            return (0, 0);
+            return (0, 0, 0);
         };
         let get = |k: &str| v.get(k).and_then(|x| x.as_u64()).unwrap_or(0).min(6) as u32;
-        (get("direct_shift"), get("perturb_shift"))
+        (get("direct_shift"), get("perturb_shift"), get("path_shift"))
     }
 
     /// Load once per process, before the first read of either shift.
@@ -340,14 +356,15 @@ mod tuning {
             ONCE.call_once(|| {
                 let Some(p) = path() else { return };
                 let Ok(text) = std::fs::read_to_string(&p) else { return };
-                let (d, pt) = decode(&text);
+                let (d, pt, pa) = decode(&text);
                 super::DIRECT_BUDGET_SHIFT.store(d, Ordering::Relaxed);
                 super::PERTURB_BUDGET_SHIFT.store(pt, Ordering::Relaxed);
-                if d > 0 || pt > 0 {
+                super::PATH_BUDGET_SHIFT.store(pa, Ordering::Relaxed);
+                if d > 0 || pt > 0 || pa > 0 {
                     log::info!(
                         "escape: restored GPU tuning from a previous session \
-                         (direct shift {d}, perturbed shift {pt}) -- this machine \
-                         lost the device at the unshifted budgets"
+                         (direct shift {d}, perturbed shift {pt}, path shift {pa}) -- \
+                         this machine lost the device at the unshifted budgets"
                     );
                 }
             });
@@ -370,6 +387,7 @@ mod tuning {
                 encode(
                     super::DIRECT_BUDGET_SHIFT.load(Ordering::Relaxed),
                     super::PERTURB_BUDGET_SHIFT.load(Ordering::Relaxed),
+                    super::PATH_BUDGET_SHIFT.load(Ordering::Relaxed),
                 ),
             );
         }
@@ -388,16 +406,16 @@ mod tuning {
 
     const KEY: &str = "gpu_tuning.json";
 
-    pub(super) fn encode(direct: u32, perturb: u32) -> String {
-        serde_json::json!({ "direct_shift": direct, "perturb_shift": perturb }).to_string()
+    pub(super) fn encode(direct: u32, perturb: u32, path: u32) -> String {
+        serde_json::json!({ "direct_shift": direct, "perturb_shift": perturb, "path_shift": path }).to_string()
     }
 
-    pub(super) fn decode(text: &str) -> (u32, u32) {
+    pub(super) fn decode(text: &str) -> (u32, u32, u32) {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else {
-            return (0, 0);
+            return (0, 0, 0);
         };
         let get = |k: &str| v.get(k).and_then(|x| x.as_u64()).unwrap_or(0).min(6) as u32;
-        (get("direct_shift"), get("perturb_shift"))
+        (get("direct_shift"), get("perturb_shift"), get("path_shift"))
     }
 
     pub(super) fn ensure_loaded() {
@@ -406,13 +424,14 @@ mod tuning {
             let Ok(text) = crate::storage::backend::read_file(std::path::Path::new(KEY)) else {
                 return;
             };
-            let (d, pt) = decode(&text);
+            let (d, pt, pa) = decode(&text);
             super::DIRECT_BUDGET_SHIFT.store(d, Ordering::Relaxed);
             super::PERTURB_BUDGET_SHIFT.store(pt, Ordering::Relaxed);
-            if d > 0 || pt > 0 {
+            super::PATH_BUDGET_SHIFT.store(pa, Ordering::Relaxed);
+            if d > 0 || pt > 0 || pa > 0 {
                 log::info!(
                     "escape: restored GPU tuning from a previous session \
-                     (direct shift {d}, perturbed shift {pt})"
+                     (direct shift {d}, perturbed shift {pt}, path shift {pa})"
                 );
             }
         });
@@ -424,6 +443,7 @@ mod tuning {
             &encode(
                 super::DIRECT_BUDGET_SHIFT.load(Ordering::Relaxed),
                 super::PERTURB_BUDGET_SHIFT.load(Ordering::Relaxed),
+                super::PATH_BUDGET_SHIFT.load(Ordering::Relaxed),
             ),
         );
     }
@@ -459,9 +479,24 @@ pub fn note_device_lost() {
             CHUNK_ITERS_MAX_BASE >> s
         );
     }
+    if PATH_CALLS_IN_FLIGHT.swap(0, Ordering::Relaxed) > 0 {
+        let s = PATH_BUDGET_SHIFT.load(Ordering::Relaxed).min(5) + 1;
+        PATH_BUDGET_SHIFT.store(s, Ordering::Relaxed);
+        changed = true;
+        log::warn!(
+            "escape: device lost while the solid path tracer had work in flight -- \
+             halving its dispatch ceiling (shift {s})"
+        );
+    }
     if changed {
         tuning::save();
     }
+}
+
+/// The path shift, loaded: the tuning file read first, once.
+pub(super) fn path_budget_shift() -> u32 {
+    tuning::ensure_loaded();
+    PATH_BUDGET_SHIFT.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// The perturbed path's seed chunk for a pixel count, after the
@@ -8792,6 +8827,8 @@ mod tests {
         );
         assert!(perturb_chunk_seed(false, 1920 * 1080) >= 16, "floor holds");
         PERTURB_BUDGET_SHIFT.store(0, Ordering::Relaxed);
+        // A GPU test's path call out meanwhile took these losses as its.
+        PATH_BUDGET_SHIFT.store(0, Ordering::Relaxed);
     }
 
     #[test]
@@ -8825,6 +8862,34 @@ mod tests {
         );
         DIRECT_BUDGET_SHIFT.store(0, Ordering::Relaxed);
         DIRECT_RENDER_IN_FLIGHT.store(false, Ordering::Relaxed);
+        // A GPU test's path call out meanwhile took these losses as its.
+        PATH_BUDGET_SHIFT.store(0, Ordering::Relaxed);
+    }
+
+    /// The solid path tracer's losses are its own: a device lost while
+    /// its calls are out halves its ceiling and cap, to a floor. Until
+    /// they were counted, the path tracer lost the device, recovered, and
+    /// sent the same bands again -- every two or three seconds, in the
+    /// field. (Not the converse -- that a loss with none out shrinks
+    /// nothing: the GPU tests running beside this one have calls out at
+    /// any moment.)
+    #[test]
+    fn device_loss_halves_the_path_budget_when_its_calls_are_out() {
+        use std::sync::atomic::Ordering;
+        let _guard = BREAKER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        DIRECT_RENDER_IN_FLIGHT.store(false, Ordering::Relaxed);
+        PERTURB_RENDER_IN_FLIGHT.store(false, Ordering::Relaxed);
+        PATH_BUDGET_SHIFT.store(0, Ordering::Relaxed);
+        PATH_CALLS_IN_FLIGHT.fetch_add(1000, Ordering::Relaxed);
+        note_device_lost();
+        assert_eq!(PATH_BUDGET_SHIFT.load(Ordering::Relaxed), 1);
+        assert_eq!(path_budget_shift(), 1);
+        for _ in 0..10 {
+            PATH_CALLS_IN_FLIGHT.fetch_add(1000, Ordering::Relaxed);
+            note_device_lost();
+        }
+        assert_eq!(PATH_BUDGET_SHIFT.load(Ordering::Relaxed), 6, "clamped");
+        PATH_BUDGET_SHIFT.store(0, Ordering::Relaxed);
     }
 
     /// The persisted tuning file: round-trip, and refuse to let a
@@ -8833,16 +8898,18 @@ mod tests {
     /// device -- but a file that says "shift 40" must not be believed.
     #[test]
     fn tuning_file_round_trips_and_clamps_hostile_input() {
-        assert_eq!(tuning::decode(&tuning::encode(0, 0)), (0, 0));
-        assert_eq!(tuning::decode(&tuning::encode(2, 5)), (2, 5));
-        assert_eq!(tuning::decode(&tuning::encode(6, 6)), (6, 6));
+        assert_eq!(tuning::decode(&tuning::encode(0, 0, 0)), (0, 0, 0));
+        assert_eq!(tuning::decode(&tuning::encode(2, 5, 1)), (2, 5, 1));
+        assert_eq!(tuning::decode(&tuning::encode(6, 6, 6)), (6, 6, 6));
         // Out of range, wrong types, missing keys, and outright
-        // garbage all read as "no tuning learned" or a clamp.
-        assert_eq!(tuning::decode(r#"{"direct_shift":40,"perturb_shift":99}"#), (6, 6));
-        assert_eq!(tuning::decode(r#"{"direct_shift":"lots"}"#), (0, 0));
-        assert_eq!(tuning::decode("{}"), (0, 0));
-        assert_eq!(tuning::decode("not json at all"), (0, 0));
-        assert_eq!(tuning::decode(""), (0, 0));
+        // garbage all read as "no tuning learned" or a clamp. A file
+        // from before the path tracer had a shift reads it as zero.
+        assert_eq!(tuning::decode(r#"{"direct_shift":40,"perturb_shift":99}"#), (6, 6, 0));
+        assert_eq!(tuning::decode(r#"{"direct_shift":4,"perturb_shift":6}"#), (4, 6, 0));
+        assert_eq!(tuning::decode(r#"{"direct_shift":"lots"}"#), (0, 0, 0));
+        assert_eq!(tuning::decode("{}"), (0, 0, 0));
+        assert_eq!(tuning::decode("not json at all"), (0, 0, 0));
+        assert_eq!(tuning::decode(""), (0, 0, 0));
     }
 
     /// The reference orbit's parameter must be the SAME VALUE the

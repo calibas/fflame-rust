@@ -1904,9 +1904,14 @@ impl App {
             self.release_inactive_engines(mode_now);
         }
 
-        // Consume fly-mode responses produced by the UI this frame.
+        // Consume fly-mode responses produced by the UI this frame. The
+        // look moves the 3D flame's camera, so only where it is drawn: in
+        // escape or simulation mode an Alt+drag wrote a camera nobody saw
+        // into the history, and the flame came back moved.
         if let Some((dx, dy)) = ui_response.fly_mouse_drag {
-            self.apply_fly_mouse_look(dx, dy);
+            if self.config_manager.active_config().render_mode == crate::scene::transforms::RenderMode::ThreeD {
+                self.apply_fly_mouse_look(dx, dy);
+            }
         }
         if ui_response.fly_mode_toggle_requested {
             self.toggle_fly_mode();
@@ -2164,6 +2169,19 @@ impl App {
                     match pixels_result {
                         Ok((width, height, rgba_data)) => {
                             // Build metadata with captured values
+                            // A simulation's picture here is the run as it
+                            // stands, which need not have reached the config's
+                            // cap: the PNG records the step it shows, so it
+                            // re-renders as saved.
+                            #[cfg(feature = "engine-sim")]
+                            let export_config = match (&self.sim_renderer, export_config.render_mode) {
+                                (Some(sim), crate::scene::transforms::RenderMode::Simulation) if sim.step_index() > 0 => {
+                                    let mut c = export_config.clone();
+                                    c.sim.steps = sim.step_index();
+                                    c
+                                }
+                                _ => export_config.clone(),
+                            };
                             let metadata = crate::png_metadata::PngMetadata::from_app_state(
                                 width,
                                 height,
@@ -2458,7 +2476,7 @@ impl App {
                         }
                         // No blocking wait in a browser: the queue keeps
                         // the batches in order regardless.
-                        t.render_still(&self.gpu.device, &self.gpu.queue, &export_config, (export_width, export_height), |_| {});
+                        t.render_still(&self.gpu.device, &self.gpu.queue, &export_config, (export_width, export_height), |_| true);
                         Some(t)
                     } else {
                         None
@@ -2506,7 +2524,7 @@ impl App {
                                     &export_config,
                                     temp_renderer.escape_palette_view(export_config.escape.palette_map.stepped),
                                     export_config.escape.path.samples,
-                                    || {},
+                                    || true,
                                 );
                                 break;
                             }
@@ -2586,9 +2604,8 @@ impl App {
                                 sim,
                                 &export_config,
                                 temp_renderer.palette_view(),
-                                temp_renderer.palette_generation(),
                             );
-                            t.render_still(&self.gpu.device, &self.gpu.queue, &export_config, (export_width, export_height), |_| {});
+                            t.render_still(&self.gpu.device, &self.gpu.queue, &export_config, (export_width, export_height), |_| true);
                             Some(t)
                         }
                         _ => None,
@@ -3428,7 +3445,7 @@ impl App {
                         .sim_terrain
                         .get_or_insert_with(|| crate::sim::terrain::SimTerrain::new(device, w, h));
                     terrain.resize(device, w, h);
-                    terrain.update(device, queue, sim, &final_config, renderer.palette_view(), renderer.palette_generation());
+                    terrain.update(device, queue, sim, &final_config, renderer.palette_view());
                     // An export in the background has the GPU meanwhile;
                     // its own cadence redraws the window.
                     let exporting = self.export_status.lock().map(|s| s.active).unwrap_or(false);

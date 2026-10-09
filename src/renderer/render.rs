@@ -155,6 +155,72 @@ pub struct RenderOutput {
     pub frame_coverage: f32,
 }
 
+/// The names a config gives that this build has no engine entry for: an
+/// escape formula, colouring, colouring layer or lens; a simulation's
+/// model or colouring, its layers' and colour layers'. The engines fall
+/// back to a default for these (a file from a newer build still opens),
+/// which in the app comes with a warning -- and from the CLI was a
+/// Mandelbrot saved under the unknown formula's name, exit code 0.
+pub fn unknown_names(config: &crate::config::FractalConfig) -> Vec<String> {
+    #[allow(unused_mut)]
+    let mut out = Vec::new();
+    match config.render_mode {
+        #[cfg(feature = "engine-escape")]
+        crate::scene::transforms::RenderMode::Escape => {
+            let e = &config.escape;
+            let a = crate::escape::FORMULAS.iter().any(|f| f.name == e.formula);
+            let b = crate::escape::fields::get_field(&e.formula).is_some();
+            let d = crate::escape::ifs::get_ifs(&e.formula).is_some();
+            if !(a || b || d) {
+                out.push(format!("escape formula `{}`", e.formula));
+            }
+            // A colouring from another formula family is the state right
+            // after a switch, and its default draws; one in no registry
+            // is unknown.
+            let colouring = |name: &str| {
+                crate::escape::COLORINGS.iter().any(|c| c.name == name)
+                    || crate::escape::fields::FIELD_COLORINGS.iter().any(|c| c.name == name)
+                    || crate::escape::ifs::IFS_COLORINGS.iter().any(|c| c.name == name)
+            };
+            if !colouring(&e.coloring) {
+                out.push(format!("escape colouring `{}`", e.coloring));
+            }
+            if !e.layer.coloring.is_empty() && !colouring(&e.layer.coloring) {
+                out.push(format!("escape colouring layer `{}`", e.layer.coloring));
+            }
+            if !e.lens.is_empty() && crate::variations::global_registry().get(&e.lens).is_none() {
+                out.push(format!("escape lens `{}`", e.lens));
+            }
+        }
+        #[cfg(feature = "engine-sim")]
+        crate::scene::transforms::RenderMode::Simulation => {
+            let s = &config.sim;
+            let model = |name: &str| crate::sim::MODELS.iter().any(|m| m.name == name);
+            let colouring = |name: &str| crate::sim::COLORINGS.iter().any(|c| c.name == name);
+            for l in 0..s.layer_count() {
+                let name = s.layer_model_name(l);
+                if !model(name) {
+                    out.push(format!("simulation model `{name}`"));
+                }
+            }
+            if s.color_layers.is_empty() {
+                if !colouring(&s.coloring) {
+                    out.push(format!("simulation colouring `{}`", s.coloring));
+                }
+            } else {
+                for l in &s.color_layers {
+                    if !colouring(&l.coloring) {
+                        out.push(format!("simulation colouring `{}`", l.coloring));
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    out.dedup();
+    out
+}
+
 /// Progress callback for long-running renders
 pub trait RenderProgress {
     /// Called periodically with current/total iterations
@@ -195,6 +261,11 @@ pub enum RenderError {
     /// and writes an all-black PNG. A render that could not allocate
     /// what it needed has to say so.
     OutOfMemory(String),
+    /// A size this device's limits refuse before anything is allocated
+    /// (a texture side, a binding): the reason says which. Not memory
+    /// running out, and not always the export's size -- a fixed
+    /// simulation grid is the grid's.
+    TooLarge(String),
 }
 
 impl std::fmt::Display for RenderError {
@@ -210,6 +281,7 @@ impl std::fmt::Display for RenderError {
                 f,
                 "the GPU ran out of memory ({what}); try a smaller size or less antialiasing"
             ),
+            RenderError::TooLarge(why) => write!(f, "too large for this GPU: {why}"),
         }
     }
 }
@@ -255,7 +327,7 @@ pub async fn render(
         if let Some(why) =
             crate::escape::footprint::EscapeTerrain::allocation_error(device, &job.config.escape, job.width, job.height)
         {
-            return Err(RenderError::OutOfMemory(why));
+            return Err(RenderError::TooLarge(why));
         }
     }
     #[cfg(feature = "engine-escape")]
@@ -275,7 +347,7 @@ pub async fn render(
                 job.config.escape.supersample,
             ),
         ) {
-            return Err(RenderError::OutOfMemory(why));
+            return Err(RenderError::TooLarge(why));
         }
     }
 
@@ -287,7 +359,7 @@ pub async fn render(
             job.width,
             job.height,
         ) {
-            return Err(RenderError::OutOfMemory(why));
+            return Err(RenderError::TooLarge(why));
         }
     }
 
@@ -851,11 +923,15 @@ async fn render_sim(
             Some(slot) => slot.get_or_insert_with(make),
             None => terrain_owned.insert(make()),
         };
-        t.update(device, queue, sim, job.config, renderer.palette_view(), renderer.palette_generation());
+        t.update(device, queue, sim, job.config, renderer.palette_view());
         t.render_still(device, queue, job.config, (job.width, job.height), |f| {
             let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
             progress.on_progress((((1.0 - still_share) + still_share * f as f64) * 1000.0) as u64, 1000);
+            !progress.is_cancelled()
         });
+        if progress.is_cancelled() {
+            return Err(RenderError::Cancelled);
+        }
         Some(t)
     } else {
         None
@@ -1082,8 +1158,12 @@ async fn render_escape(
             job.config.escape.path.samples,
             || {
                 let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+                !progress.is_cancelled()
             },
         );
+        if progress.is_cancelled() {
+            return Err(RenderError::Cancelled);
+        }
         log::info!("Render: escape solid path traced at {} samples", job.config.escape.path.samples);
     }
     // No UI to keep responsive here, and every chunk pays a downsample
@@ -1148,6 +1228,9 @@ async fn render_escape(
                 renderer.escape_palette_view(job.config.escape.palette_map.stepped),
             renderer.palette_generation(),
             );
+            if progress.is_cancelled() {
+                return Err(RenderError::Cancelled);
+            }
             guard += 1;
             if guard > 4_000_000 {
                 log::error!("escape chunk loop failed to settle; rendering what we have");
@@ -1389,6 +1472,9 @@ async fn render_escape_terrain(
     let mut guard = 0u32;
     while terrain.update(device, queue, config, job.width, job.height, palette, generation, 1) {
         let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        if progress.is_cancelled() {
+            return Err(RenderError::Cancelled);
+        }
         let done = (terrain.footprint_renders - before) as f64;
         let fill = done / (done + terrain.sections_missing() as f64).max(1.0);
         progress.on_progress((fill_share * fill * 1000.0) as u64, 1000);
@@ -1404,7 +1490,11 @@ async fn render_escape_terrain(
     terrain.render_still(device, queue, config, (job_w, job_h), |f| {
         let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
         progress.on_progress(((fill_share + (1.0 - fill_share) * f as f64) * 1000.0) as u64, 1000);
+        !progress.is_cancelled()
     });
+    if progress.is_cancelled() {
+        return Err(RenderError::Cancelled);
+    }
     let pixels = escape_tail(renderer, device, queue, config, (job_w, job_h, transparent), terrain.output_view(), oom_scope).await;
     if !caller_owned {
         terrain.destroy();

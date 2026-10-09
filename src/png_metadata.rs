@@ -126,14 +126,13 @@ impl PngMetadata {
         }
     }
 
-    /// Calculate SHA256 checksum of a string
+    /// The config's SHA-256, hex. (It was the standard library's
+    /// `DefaultHasher`, which is neither SHA-256, as the docs say, nor
+    /// stable across Rust versions -- two builds' checksums of one config
+    /// could differ.)
     fn calculate_checksum(data: &str) -> String {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        let mut hasher = DefaultHasher::new();
-        data.hash(&mut hasher);
-        format!("{:x}", hasher.finish())
+        use sha2::{Digest, Sha256};
+        Sha256::digest(data.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
     }
 
     /// Convert metadata to PNG tEXt chunk key-value pairs
@@ -153,7 +152,7 @@ impl PngMetadata {
             ("IterationsPerThread".to_string(), self.iterations_per_thread.to_string()),
             ("SpeedFactor".to_string(), format!("{:.2}", self.speed_factor)),
 
-            ("ConfigChecksum".to_string(), format!("hash:{}", self.config_checksum)),
+            ("ConfigChecksum".to_string(), format!("sha256:{}", self.config_checksum)),
             ("Config".to_string(), self.config_json.clone()),  // Full JSON config
 
             ("BackgroundColor".to_string(), format!("{},{},{}",
@@ -303,7 +302,7 @@ pub fn read_png_metadata(png_data: &[u8]) -> Result<PngMetadata, String> {
 
         config_json,
         config_checksum: text_chunks.get("ConfigChecksum")
-            .map(|s| s.strip_prefix("hash:").unwrap_or(s).to_string())
+            .map(|s| s.strip_prefix("sha256:").or_else(|| s.strip_prefix("hash:")).unwrap_or(s).to_string())
             .unwrap_or_default(),
 
         test_name: None,

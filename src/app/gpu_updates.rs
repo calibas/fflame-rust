@@ -401,8 +401,13 @@ impl App {
             self.escape_dirty = true;
             // An EDIT, as opposed to the other reasons the pass
             // re-runs (a resize, a mode switch): this is what opens
-            // the interaction window.
-            self.escape_last_edit = Some(web_time::Instant::now());
+            // the interaction window. Not a frame of animation playback:
+            // playback advances when the frame settles, so a preview
+            // settling first showed every frame at a quarter of its
+            // resolution -- not the frame the export renders.
+            if !self.animation_controller.is_playing() {
+                self.escape_last_edit = Some(web_time::Instant::now());
+            }
         }
 
         // Simulation: the three actions differ in how much of the run
