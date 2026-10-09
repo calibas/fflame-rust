@@ -28,8 +28,9 @@ fn active_target_flame_mut<'a>(
 pub enum TouchGesture {
     /// Single finger drag (translation delta)
     Pan(egui::Vec2),
-    /// Two-finger pinch (zoom_delta, translation_delta, midpoint)
-    Pinch { zoom_delta: f32, translation: egui::Vec2, midpoint: egui::Pos2 },
+    /// Two-finger pinch (zoom_delta, translation_delta, midpoint), and the
+    /// angle the fingers turned through (radians, clockwise on screen)
+    Pinch { zoom_delta: f32, translation: egui::Vec2, midpoint: egui::Pos2, twist: f32 },
 }
 
 /// Tracks active touch points for manual gesture detection.
@@ -44,6 +45,8 @@ pub struct TouchTracker {
     prev_distance: Option<f32>,
     /// Previous frame's midpoint (for two-finger translation)
     prev_midpoint: Option<egui::Pos2>,
+    /// Previous frame's angle between the fingers (for a twist)
+    prev_angle: Option<f32>,
     /// Previous frame's single-finger position (for one-finger pan)
     prev_single_pos: Option<egui::Pos2>,
 }
@@ -72,6 +75,7 @@ impl TouchTracker {
             self.prev_single_pos = None;
             self.prev_midpoint = None;
             self.prev_distance = None;
+            self.prev_angle = None;
         }
 
         for event in events {
@@ -95,12 +99,14 @@ impl TouchTracker {
             0 => {
                 self.prev_distance = None;
                 self.prev_midpoint = None;
+                self.prev_angle = None;
                 self.prev_single_pos = None;
                 None
             }
             1 => {
                 self.prev_distance = None;
                 self.prev_midpoint = None;
+                self.prev_angle = None;
 
                 let pos = *self.active.values().next().unwrap();
                 let delta = if let Some(prev) = self.prev_single_pos {
@@ -137,10 +143,20 @@ impl TouchTracker {
                     egui::Vec2::ZERO
                 };
 
+                let angle = (p2.y - p1.y).atan2(p2.x - p1.x);
+                let twist = match self.prev_angle {
+                    Some(prev) => {
+                        let d = angle - prev;
+                        d - std::f32::consts::TAU * (d / std::f32::consts::TAU).round()
+                    }
+                    None => 0.0,
+                };
+
                 self.prev_distance = Some(distance);
                 self.prev_midpoint = Some(midpoint);
+                self.prev_angle = Some(angle);
 
-                Some(TouchGesture::Pinch { zoom_delta, translation, midpoint })
+                Some(TouchGesture::Pinch { zoom_delta, translation, midpoint, twist })
             }
         }
     }
@@ -489,81 +505,89 @@ impl<'a> TabViewer for PanelViewer<'a> {
 
 }
 
-/// Pan the fractal view by a screen-pixel drag delta.
+/// Pan the view by a screen-pixel drag delta (`camera::gesture::pan`):
+/// whichever camera the viewport shows, the picture follows the drag.
 ///
-/// Free function so it can be called from outside `PanelViewer` --
-/// the tab-bar cover Area in `ui::mod` forwards its drag input here,
-/// using the leaf's full rect as `panel_size` so the drag scale stays
-/// consistent whether the user is dragging in the body or in the
-/// cover. The camera math is `camera::gesture`'s.
+/// Free function so it can be called from outside `PanelViewer` -- the
+/// tab-bar strip and the arrow keys -- with the leaf's full rect as
+/// `panel_size`, so a drag scales alike in the body and the strip.
 pub fn pan_fractal_view(
     config_manager: &mut crate::config::ConfigManager,
     drag_delta: egui::Vec2,
     panel_size: egui::Vec2,
 ) {
-    let config = config_manager.active_config();
-    let (drag, panel) = ([drag_delta.x, drag_delta.y], [panel_size.x, panel_size.y]);
-
-    if config.render_mode == crate::scene::transforms::RenderMode::Escape {
-        apply_camera_edit(config_manager, crate::camera::gesture::escape_pan(config, drag, panel));
-        return;
-    }
-    // Simulation has no view to move (see `Control::ViewNavigation`).
-    // Falling through to the flame path wrote `config.zoom`/`pan_*`,
-    // which the simulation ignores -- an invisible gesture that still
-    // drifted the flame view and filled the history.
-    if super::visibility::control(
-        super::visibility::Control::ViewNavigation,
-        config.render_mode,
-        config.tonemap_mode,
-    ) == super::visibility::Vis::Hide
-    {
-        return;
-    }
-    apply_camera_edit(config_manager, crate::camera::gesture::flame_pan(config, drag, panel));
+    let edit = crate::camera::gesture::pan(
+        config_manager.active_config(),
+        [drag_delta.x, drag_delta.y],
+        [panel_size.x, panel_size.y],
+    );
+    apply_camera_edit(config_manager, edit);
 }
 
-/// Zoom the fractal view via mouse-wheel scroll.
-///
-/// Free function so the tab-bar cover Area can forward its scroll
-/// input here, passing the leaf's full rect/size so zoom-toward-cursor
-/// stays anchored correctly whether the cursor is in the body or the
-/// cover.
-///
-/// `zoom_to_cursor = false` (fly mode) always zooms to center: the
-/// cursor-anchored pan adjustment fights the fly camera -- the view
-/// should stay locked to where the camera points, not drift toward
-/// wherever the mouse happens to rest.
-pub fn zoom_fractal_view(
+/// A drag over the viewport, the body or the tab-bar strip
+/// (camera-unification C3): a look in fly mode, a turn with Alt or the
+/// right button -- a 2D view rotates, a 3D camera orbits -- and a pan
+/// otherwise. Shift makes it a quarter as fine. `pointer` is where the
+/// pointer is now.
+#[allow(clippy::too_many_arguments)]
+pub fn view_drag(
     config_manager: &mut crate::config::ConfigManager,
-    scroll_delta: f32,
-    mouse_pos: Option<egui::Pos2>,
+    delta: egui::Vec2,
+    pointer: Option<egui::Pos2>,
     panel_rect: egui::Rect,
     panel_size: egui::Vec2,
-    zoom_to_cursor: bool,
+    turn: bool,
+    fine: bool,
+    fly_mode_active: bool,
+    fly_mouse_drag: &mut Option<(f32, f32)>,
 ) {
+    if delta == egui::Vec2::ZERO {
+        return;
+    }
+    let delta = if fine { delta * 0.25 } else { delta };
+    if fly_mode_active {
+        let prev = fly_mouse_drag.unwrap_or((0.0, 0.0));
+        *fly_mouse_drag = Some((prev.0 + delta.x, prev.1 + delta.y));
+        return;
+    }
+    if !turn {
+        pan_fractal_view(config_manager, delta, panel_size);
+        return;
+    }
     let config = config_manager.active_config();
-    let cursor = mouse_pos.map(|m| [m.x - panel_rect.center().x, m.y - panel_rect.center().y]);
-    let panel = [panel_size.x, panel_size.y];
+    let settings = crate::camera::gesture::TurnSettings::from_system(config_manager.system_settings());
+    let pointer = pointer.map(|p| [p.x - panel_rect.center().x, p.y - panel_rect.center().y]);
+    let edit = crate::camera::gesture::turn(config, [delta.x, delta.y], pointer, settings);
+    apply_camera_edit(config_manager, edit);
+}
 
-    if config.render_mode == crate::scene::transforms::RenderMode::Escape {
-        let edit = crate::camera::gesture::escape_zoom(config, scroll_delta, cursor, panel, zoom_to_cursor);
-        apply_camera_edit(config_manager, edit);
+/// A wheel over the viewport: the fly speed in fly mode, a zoom toward
+/// the pointer otherwise (`camera::gesture::zoom`). Shift makes it a
+/// quarter as fine.
+pub fn view_scroll(
+    config_manager: &mut crate::config::ConfigManager,
+    scroll: f32,
+    pointer: Option<egui::Pos2>,
+    panel_rect: egui::Rect,
+    panel_size: egui::Vec2,
+    fine: bool,
+    fly_mode_active: bool,
+) {
+    let mut factor = crate::camera::gesture::wheel_factor(scroll);
+    if fine {
+        factor = factor.powf(0.25);
+    }
+    if factor == 1.0 {
         return;
     }
-    // Simulation has no view to move (see `Control::ViewNavigation`).
-    // Falling through to the flame path wrote `config.zoom`/`pan_*`,
-    // which the simulation ignores -- an invisible gesture that still
-    // drifted the flame view and filled the history.
-    if super::visibility::control(
-        super::visibility::Control::ViewNavigation,
-        config.render_mode,
-        config.tonemap_mode,
-    ) == super::visibility::Vis::Hide
-    {
+    if fly_mode_active {
+        let speed = config_manager.system_settings().fly_move_speed as f64;
+        let next = (speed * factor).clamp(0.05, 20.0) as f32;
+        let _ = config_manager.update_system_setting(crate::config::ConfigPath::SystemFlyMoveSpeed, next.into());
         return;
     }
-    let edit = crate::camera::gesture::flame_zoom(config, scroll_delta, cursor, panel, zoom_to_cursor);
+    let cursor = pointer.map(|p| [p.x - panel_rect.center().x, p.y - panel_rect.center().y]);
+    let edit = crate::camera::gesture::zoom(config_manager.active_config(), factor, cursor, [panel_size.x, panel_size.y]);
     apply_camera_edit(config_manager, edit);
 }
 
@@ -572,55 +596,6 @@ fn apply_camera_edit(config_manager: &mut crate::config::ConfigManager, edit: Op
     if let Some(edit) = edit {
         edit.apply(config_manager);
     }
-}
-
-/// A screen offset on the escape plane as a world offset (the pinch's).
-fn escape_screen_to_world(
-    esc: &crate::config::escape::EscapeConfig,
-    dx_px: f64,
-    dy_px: f64,
-    panel_size: egui::Vec2,
-) -> (f64, f64) {
-    crate::camera::gesture::escape_screen_to_world(esc, dx_px, dy_px, [panel_size.x, panel_size.y])
-}
-
-/// Orbit an escape terrain's camera about its target.
-#[cfg(feature = "terrain")]
-fn terrain_orbit(config_manager: &mut crate::config::ConfigManager, drag_delta: egui::Vec2) {
-    let edit = crate::camera::gesture::terrain_orbit(config_manager.active_config(), [drag_delta.x, drag_delta.y]);
-    apply_camera_edit(config_manager, edit);
-}
-
-/// Whether the viewport shows a simulation's 3D terrain (heightfield plan
-/// T4), whose camera the viewport's gestures steer.
-#[cfg(feature = "terrain")]
-fn sim_terrain_shown(config: &crate::config::FractalConfig) -> bool {
-    config.render_mode == crate::scene::transforms::RenderMode::Simulation && config.sim.terrain_active()
-}
-
-/// Orbit a simulation terrain's camera about its target.
-#[cfg(feature = "terrain")]
-fn sim_terrain_orbit(config_manager: &mut crate::config::ConfigManager, drag_delta: egui::Vec2) {
-    let edit = crate::camera::gesture::sim_terrain_orbit(config_manager.active_config(), [drag_delta.x, drag_delta.y]);
-    apply_camera_edit(config_manager, edit);
-}
-
-/// Slide a simulation terrain's target across the grid.
-#[cfg(feature = "terrain")]
-fn sim_terrain_pan(config_manager: &mut crate::config::ConfigManager, drag_delta: egui::Vec2, panel_size: egui::Vec2) {
-    let edit = crate::camera::gesture::sim_terrain_pan(
-        config_manager.active_config(),
-        [drag_delta.x, drag_delta.y],
-        [panel_size.x, panel_size.y],
-    );
-    apply_camera_edit(config_manager, edit);
-}
-
-/// Move a simulation terrain's camera toward its target or away.
-#[cfg(feature = "terrain")]
-fn sim_terrain_dolly(config_manager: &mut crate::config::ConfigManager, scroll: f32) {
-    let edit = crate::camera::gesture::sim_terrain_dolly(config_manager.active_config(), scroll);
-    apply_camera_edit(config_manager, edit);
 }
 
 impl<'a> PanelViewer<'a> {
@@ -1295,91 +1270,75 @@ impl<'a> PanelViewer<'a> {
             });
             let touch_active = self.touch_tracker.is_touch_active();
 
+            let pointer = response.interact_pointer_pos().or_else(|| response.hover_pos());
+            let fly = self.context.fly_mode_active;
             match touch_gesture {
                 Some(TouchGesture::Pan(delta)) => {
-                    self.handle_fractal_drag(delta, available_size, false);
+                    view_drag(
+                        self.context.config_manager,
+                        delta,
+                        None,
+                        response.rect,
+                        available_size,
+                        false,
+                        false,
+                        fly,
+                        self.context.fly_mouse_drag,
+                    );
                 }
-                Some(TouchGesture::Pinch { zoom_delta, translation, midpoint }) => {
-                    self.handle_fractal_pinch_zoom(zoom_delta, translation, midpoint, response.rect, available_size);
+                Some(TouchGesture::Pinch { zoom_delta, translation, midpoint, twist }) => {
+                    let mid = [midpoint.x - response.rect.center().x, midpoint.y - response.rect.center().y];
+                    let edit = crate::camera::gesture::pinch(
+                        self.context.config_manager.active_config(),
+                        f64::from(zoom_delta),
+                        [translation.x, translation.y],
+                        f64::from(twist),
+                        mid,
+                        [available_size.x, available_size.y],
+                    );
+                    apply_camera_edit(self.context.config_manager, edit);
                 }
                 None => {}
             }
 
-            // Handle mouse drag: pans, or looks (pitch/yaw) while Alt is
-            // held — like fly-mode mouse-look. Skipped during touch to
-            // avoid double-handling.
-            if !touch_active && response.dragged_by(egui::PointerButton::Primary) {
-                let drag_delta = response.drag_delta();
+            // The mouse (camera-unification C3): a drag pans, Alt+drag or a
+            // right drag turns -- a 2D view rotates, a 3D camera orbits --
+            // and fly mode looks. Skipped during touch to avoid
+            // double-handling.
+            if !touch_active {
                 let (alt, shift) = ui.input(|i| (i.modifiers.alt, i.modifiers.shift));
-                // A terrain orbits on a drag and pans on Shift+drag.
-                #[cfg(feature = "terrain")]
-                let terrain = self.context.config_manager.active_config().render_mode
-                    == crate::scene::transforms::RenderMode::Escape
-                    && self.context.config_manager.active_config().escape.terrain_active();
-                #[cfg(not(feature = "terrain"))]
-                let terrain = false;
-                #[cfg(feature = "terrain")]
-                let sim_terrain = sim_terrain_shown(self.context.config_manager.active_config());
-                #[cfg(not(feature = "terrain"))]
-                let sim_terrain = false;
-                if sim_terrain {
-                    #[cfg(feature = "terrain")]
-                    if shift {
-                        sim_terrain_pan(self.context.config_manager, drag_delta, available_size);
-                    } else {
-                        sim_terrain_orbit(self.context.config_manager, drag_delta);
+                for (button, turn) in [(egui::PointerButton::Primary, alt), (egui::PointerButton::Secondary, true)] {
+                    if response.dragged_by(button) {
+                        view_drag(
+                            self.context.config_manager,
+                            response.drag_delta(),
+                            pointer,
+                            response.rect,
+                            available_size,
+                            turn,
+                            shift,
+                            fly,
+                            self.context.fly_mouse_drag,
+                        );
                     }
-                } else if terrain && !self.context.fly_mode_active {
-                    #[cfg(feature = "terrain")]
-                    if shift {
-                        pan_fractal_view(self.context.config_manager, drag_delta, available_size);
-                    } else {
-                        terrain_orbit(self.context.config_manager, drag_delta);
-                    }
-                    let _ = shift;
-                } else {
-                    self.handle_fractal_drag(drag_delta, available_size, alt);
                 }
             }
-            // ...and pans on a right-drag, as orbit viewers do.
-            #[cfg(feature = "terrain")]
-            if !touch_active
-                && response.dragged_by(egui::PointerButton::Secondary)
-                && self.context.config_manager.active_config().render_mode
-                    == crate::scene::transforms::RenderMode::Escape
-                && self.context.config_manager.active_config().escape.terrain_active()
-            {
-                pan_fractal_view(self.context.config_manager, response.drag_delta(), available_size);
-            }
-            #[cfg(feature = "terrain")]
-            if !touch_active
-                && response.dragged_by(egui::PointerButton::Secondary)
-                && sim_terrain_shown(self.context.config_manager.active_config())
-            {
-                sim_terrain_pan(self.context.config_manager, response.drag_delta(), available_size);
-            }
 
-            // Handle mouse wheel for zooming
+            // The wheel: zoom toward the pointer (fly mode: its speed).
             if response.hovered() {
-                let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
-                if scroll_delta.abs() > 0.1 {
-                    #[cfg(feature = "terrain")]
-                    let dolly = sim_terrain_shown(self.context.config_manager.active_config());
-                    #[cfg(not(feature = "terrain"))]
-                    let dolly = false;
-                    if dolly {
-                        #[cfg(feature = "terrain")]
-                        sim_terrain_dolly(self.context.config_manager, scroll_delta);
-                    } else {
-                        self.handle_fractal_scroll(scroll_delta, response.hover_pos(), response.rect, available_size);
-                    }
+                let (scroll, shift) = ui.input(|i| (i.smooth_scroll_delta.y, i.modifiers.shift));
+                if scroll.abs() > 0.1 {
+                    view_scroll(self.context.config_manager, scroll, response.hover_pos(), response.rect, available_size, shift, fly);
                 }
             }
 
-            // Handle right-click (or drag with right button held) to query path at pixel (PathMap mode)
-            // Use down() to detect when button is held, allowing continuous updates while dragging
+            // Holding the right button queries the path at the pixel -- in
+            // PathMap mode, the one place it is drawn. (Everywhere else the
+            // query was a blocking readback every frame of a right drag.)
+            let is_path_map_mode = self.context.config_manager.active_config().color_mode
+                == crate::scene::palette::ColorMode::PathMap;
             let secondary_held = ui.input(|i| i.pointer.secondary_down());
-            if secondary_held && response.hovered() {
+            if is_path_map_mode && secondary_held && response.hovered() {
                 if let Some(pointer_pos) = ui.input(|i| i.pointer.hover_pos()) {
                     // Convert from panel coordinates to texture coordinates
                     let local_x = pointer_pos.x - response.rect.min.x;
@@ -1391,8 +1350,6 @@ impl<'a> PanelViewer<'a> {
             }
 
             // Display path info overlay when available (PathMap mode only)
-            let is_path_map_mode = self.context.config_manager.active_config().color_mode
-                == crate::scene::palette::ColorMode::PathMap;
             if is_path_map_mode {
                 if let Some(click_info) = self.context.path_click_info {
                     self.render_path_overlay(ui, &response, click_info);
@@ -1404,154 +1361,6 @@ impl<'a> PanelViewer<'a> {
                 ui.label(t!("viewport.initializing"));
             });
         }
-    }
-
-    /// Handle a fractal drag. It becomes a camera look-around (pitch/
-    /// yaw) instead of a pan when fly mode is active OR `look` is set
-    /// (viewport Alt+drag) — recorded into `fly_mouse_drag` for the App
-    /// to consume after the UI render, identical to fly-mode mouse-look.
-    /// Otherwise the drag pans.
-    fn handle_fractal_drag(&mut self, drag_delta: egui::Vec2, panel_size: egui::Vec2, look: bool) {
-        if self.context.fly_mode_active || look {
-            let prev = self.context.fly_mouse_drag.unwrap_or((0.0, 0.0));
-            *self.context.fly_mouse_drag = Some((prev.0 + drag_delta.x, prev.1 + drag_delta.y));
-        } else {
-            pan_fractal_view(self.context.config_manager, drag_delta, panel_size);
-        }
-    }
-
-    /// Handle fractal zooming via mouse wheel
-    fn handle_fractal_scroll(
-        &mut self,
-        scroll_delta: f32,
-        mouse_pos: Option<egui::Pos2>,
-        panel_rect: egui::Rect,
-        panel_size: egui::Vec2,
-    ) {
-        zoom_fractal_view(
-            self.context.config_manager,
-            scroll_delta,
-            mouse_pos,
-            panel_rect,
-            panel_size,
-            // In fly mode, zoom to center — cursor-anchored pan
-            // adjustments fight the camera.
-            !self.context.fly_mode_active,
-        );
-    }
-
-    fn handle_fractal_pinch_zoom(
-        &mut self,
-        zoom_delta: f32,
-        translation: egui::Vec2,
-        pinch_center: egui::Pos2,
-        panel_rect: egui::Rect,
-        panel_size: egui::Vec2,
-    ) {
-        let config = self.context.config_manager.active_config();
-
-        // Escape mode: pinch = zoom anchored at the finger midpoint
-        // plus the two-finger translation as a pan, expressed in the
-        // escape view's own center/zoom_log2 vocabulary.
-        if config.render_mode == crate::scene::transforms::RenderMode::Escape {
-            let esc = config.escape.clone();
-            let mut updates = Vec::new();
-            let (mut cx, mut cy) = esc.center_f64();
-            if zoom_delta != 1.0 {
-                let new_zoom_log2 =
-                    (esc.zoom_log2 + f64::from(zoom_delta).log2()).clamp(-8.0, 300.0);
-                let off_x = f64::from(pinch_center.x - panel_rect.center().x);
-                let off_y = f64::from(pinch_center.y - panel_rect.center().y);
-                let (wx_old, wy_old) = escape_screen_to_world(&esc, off_x, off_y, panel_size);
-                let shrink = esc.zoom_factor() / f64::exp2(new_zoom_log2);
-                cx += wx_old * (1.0 - shrink);
-                cy += wy_old * (1.0 - shrink);
-                updates.push((
-                    crate::config::ConfigPath::EscapeZoomLog2,
-                    crate::config::ConfigValue::Float(new_zoom_log2 as f32),
-                ));
-            }
-            if translation != egui::Vec2::ZERO {
-                let (wx, wy) = escape_screen_to_world(
-                    &esc,
-                    f64::from(translation.x),
-                    f64::from(translation.y),
-                    panel_size,
-                );
-                cx -= wx;
-                cy -= wy;
-            }
-            if zoom_delta != 1.0 || translation != egui::Vec2::ZERO {
-                updates.push((
-                    crate::config::ConfigPath::EscapeCenterRe,
-                    crate::config::ConfigValue::String(format!("{}", cx)),
-                ));
-                updates.push((
-                    crate::config::ConfigPath::EscapeCenterIm,
-                    crate::config::ConfigValue::String(format!("{}", cy)),
-                ));
-                let _ = self.context.config_manager.update_batch(
-                    updates,
-                    "history.action.wheel_zoom".to_string(),
-                );
-            }
-            return;
-        }
-
-        // Same refusal as the drag and wheel paths.
-        if super::visibility::control(
-            super::visibility::Control::ViewNavigation,
-            config.render_mode,
-            config.tonemap_mode,
-        ) == super::visibility::Vis::Hide
-        {
-            return;
-        }
-
-        let new_zoom = (config.zoom * zoom_delta).clamp(0.01, config.max_view_zoom());
-
-        // Start with current pan, then apply zoom-toward-center adjustment
-        let mut new_pan_x = config.pan_x;
-        let mut new_pan_y = config.pan_y;
-
-        if zoom_delta != 1.0 {
-            // Zoom toward the midpoint between the two fingers
-            let center_x = panel_rect.center().x;
-            let center_y = panel_rect.center().y;
-            let offset_x = pinch_center.x - center_x;
-            let offset_y = pinch_center.y - center_y;
-
-            let scale = f32::min(panel_size.x, panel_size.y) * 0.25;
-            // Screen space → pan frame (rotation-aware in 2D, identity in 3D)
-            let (rot_x, rot_y) = config.screen_delta_to_pan_frame(offset_x as f64, offset_y as f64);
-
-            let point_x = config.pan_x + rot_x / (scale * config.zoom) as f64;
-            let point_y = config.pan_y + rot_y / (scale * config.zoom) as f64;
-
-            new_pan_x = point_x - rot_x / (scale * new_zoom) as f64;
-            new_pan_y = point_y - rot_y / (scale * new_zoom) as f64;
-        }
-
-        // Apply two-finger translation on top of the zoom pan adjustment
-        if translation != egui::Vec2::ZERO {
-            let ref_size = panel_size.x.min(panel_size.y);
-            let drag_scale = 4.0 / (new_zoom * ref_size);
-            let dx = -translation.x * drag_scale;
-            let dy = -translation.y * drag_scale;
-
-            let (pan_dx, pan_dy) = config.screen_delta_to_pan_frame(dx as f64, dy as f64);
-            new_pan_x += pan_dx;
-            new_pan_y += pan_dy;
-        }
-
-        // Single batch update: zoom + combined pan = one history entry
-        let _ = self.context.config_manager.update_batch(
-            vec![
-                (crate::config::ConfigPath::Zoom, new_zoom.into()),
-                (crate::config::ConfigPath::Pan, (new_pan_x, new_pan_y).into()),
-            ],
-            "history.action.pinch_zoom".to_string()
-        );
     }
 
     /// Render path overlay showing pixel info, coordinates, path, and color preview

@@ -6,12 +6,428 @@
 //! tested without a window, and every input that moves a camera -- the
 //! viewport, the tab strip, the keys, the menus -- moves it the same way.
 //!
-//! Moved here from `ui::panel_viewer` unchanged (camera-unification P0):
-//! the arithmetic, its f32/f64 mix and its history names are what the
-//! viewport did. P1 makes the gestures the plan's.
+//! The gestures are the plan's (camera-unification C3), the same in every
+//! mode -- what each moves is the camera's own:
+//!
+//! | | 2D | 3D |
+//! |---|---|---|
+//! | drag | [`pan`] | [`pan`]: in the screen plane; a terrain's along the ground |
+//! | Alt+drag, right drag | [`turn`]: rotate the view about the centre | [`turn`]: orbit the target, a turntable |
+//! | wheel | [`zoom`] toward the cursor, in and out | [`zoom`]: dolly toward the cursor (a flame: its 2D zoom) |
+//! | pinch | [`pinch`]: zoom, pan, twist to rotate | [`pinch`]: dolly, pan, twist to orbit |
+//!
+//! Every gesture of a kind goes under one history name ([`PAN`], [`ZOOM`],
+//! [`ROTATE`], [`ORBIT`]), which the ConfigManager coalesces as one
+//! gesture (`GESTURE_HISTORY_DESCS`).
 
-use super::CameraEdit;
+use super::view3d::{self, Angles, Convention};
+use super::{quat::Quat, CameraEdit};
 use crate::config::{ConfigPath, ConfigValue, FractalConfig};
+
+/// A pan's history entry.
+pub const PAN: &str = "history.action.pan_view";
+/// A zoom's, a dolly's or a pinch's.
+pub const ZOOM: &str = "history.action.zoom_view";
+/// A 2D view's rotation.
+pub const ROTATE: &str = "history.action.rotate_view";
+/// A 3D camera's orbit.
+pub const ORBIT: &str = "history.action.orbit_camera";
+/// A Reset View.
+pub const RESET: &str = "history.action.reset_view";
+
+/// Which camera the viewport shows, and so what a gesture moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewKind {
+    /// The flame's 2D view: pan, zoom, rotation.
+    Flame2d,
+    /// The flame's 3D camera: its angles and position, and the 2D pan and
+    /// zoom after its projection.
+    Flame3d,
+    /// The escape plane: its centre (exact decimals), zoom and rotation.
+    EscapePlane,
+    /// Mode D's solid camera: a target, a distance (the zoom), angles.
+    Solid,
+    /// The escape terrain: the plane's centre as its target on the
+    /// ground, mode D's angles, the zoom as its scale.
+    EscapeTerrain,
+    /// A simulation's 2D picture. No view yet (camera-unification P2).
+    Sim2d,
+    /// A simulation terrain's camera.
+    SimTerrain,
+}
+
+impl ViewKind {
+    /// Whether it is a 3D camera.
+    pub fn is_3d(self) -> bool {
+        matches!(self, ViewKind::Flame3d | ViewKind::Solid | ViewKind::EscapeTerrain | ViewKind::SimTerrain)
+    }
+}
+
+/// The camera a config's picture is seen through.
+pub fn view_kind(config: &FractalConfig) -> ViewKind {
+    use crate::scene::transforms::RenderMode;
+    match config.render_mode {
+        RenderMode::TwoD => ViewKind::Flame2d,
+        RenderMode::ThreeD => ViewKind::Flame3d,
+        RenderMode::Escape => {
+            if config.escape.terrain_active() {
+                return ViewKind::EscapeTerrain;
+            }
+            #[cfg(feature = "engine-escape")]
+            if crate::escape::ifs::formula_is_solid(&config.escape.formula) {
+                return ViewKind::Solid;
+            }
+            ViewKind::EscapePlane
+        }
+        RenderMode::Simulation => {
+            #[cfg(feature = "terrain")]
+            if config.sim.terrain_active() {
+                return ViewKind::SimTerrain;
+            }
+            ViewKind::Sim2d
+        }
+    }
+}
+
+/// The zoom a wheel's scroll asks for: a notch of about 15%.
+pub fn wheel_factor(scroll: f32) -> f64 {
+    if scroll.abs() > 0.1 {
+        f64::from(1.1f32).powf(f64::from(scroll) * 0.03)
+    } else {
+        1.0
+    }
+}
+
+/// What a turn reads from the settings: radians a pixel, and whether a
+/// vertical drag is reversed.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TurnSettings {
+    pub radians_per_pixel: f64,
+    pub invert_y: bool,
+}
+
+impl TurnSettings {
+    /// The fly mode's settings, which every turn shares.
+    pub fn from_system(settings: &crate::storage::SystemSettings) -> Self {
+        TurnSettings { radians_per_pixel: settings.fly_mouse_sensitivity as f64, invert_y: settings.fly_invert_y }
+    }
+}
+
+/// Pan the view by a drag of `drag` pixels on a panel `panel` in size:
+/// the picture follows the drag.
+pub fn pan(config: &FractalConfig, drag: [f32; 2], panel: [f32; 2]) -> Option<CameraEdit> {
+    match view_kind(config) {
+        ViewKind::Flame2d | ViewKind::Flame3d => flame_pan(config, drag, panel),
+        #[cfg(feature = "engine-escape")]
+        ViewKind::EscapePlane | ViewKind::Solid | ViewKind::EscapeTerrain => escape_pan(config, drag, panel),
+        #[cfg(all(feature = "terrain", feature = "engine-sim"))]
+        ViewKind::SimTerrain => sim_terrain_pan(config, drag, panel),
+        _ => None,
+    }
+}
+
+/// Zoom by `factor` (above one: closer) toward `cursor`, its offset from
+/// the panel's centre in pixels -- the point under it stays under it,
+/// in and out. A 2D view zooms; a solid dollies toward the point; a
+/// terrain dollies toward its target, the screen's centre (the point
+/// under the cursor is somewhere on the ground, at a depth an anchor on
+/// the plane knows nothing of); a flame's 3D camera zooms its 2D picture.
+pub fn zoom(config: &FractalConfig, factor: f64, cursor: Option<[f32; 2]>, panel: [f32; 2]) -> Option<CameraEdit> {
+    if !(factor > 0.0) || factor == 1.0 {
+        return None;
+    }
+    match view_kind(config) {
+        ViewKind::Flame2d | ViewKind::Flame3d => flame_zoom(config, factor, cursor, panel),
+        #[cfg(feature = "engine-escape")]
+        ViewKind::EscapePlane | ViewKind::Solid => escape_zoom(config, factor, cursor, panel),
+        #[cfg(feature = "engine-escape")]
+        ViewKind::EscapeTerrain => escape_zoom(config, factor, None, panel),
+        #[cfg(all(feature = "terrain", feature = "engine-sim"))]
+        ViewKind::SimTerrain => sim_terrain_dolly(config, factor),
+        _ => None,
+    }
+}
+
+/// Turn the view by a drag of `drag` pixels: a 2D view rotates about the
+/// screen's centre by the angle the pointer swept round it (`pointer` is
+/// where it ended, as an offset from the centre); a 3D camera orbits its
+/// target.
+pub fn turn(config: &FractalConfig, drag: [f32; 2], pointer: Option<[f32; 2]>, settings: TurnSettings) -> Option<CameraEdit> {
+    let kind = view_kind(config);
+    if kind.is_3d() {
+        let s = settings.radians_per_pixel;
+        let dy = if settings.invert_y { -drag[1] } else { drag[1] };
+        return orbit(config, kind, f64::from(drag[0]) * s, f64::from(dy) * s);
+    }
+    let [ax, ay] = pointer?;
+    let (bx, by) = (ax - drag[0], ay - drag[1]);
+    // Too near the centre, the angle is noise.
+    if (ax * ax + ay * ay).sqrt() < 4.0 || (bx * bx + by * by).sqrt() < 4.0 {
+        return None;
+    }
+    let swept = f64::from(bx * ay - by * ax).atan2(f64::from(bx * ax + by * ay));
+    rotate_2d(config, kind, swept)
+}
+
+/// Rotate a 2D view by `swept`, the angle a point under the pointer turned
+/// through on screen (positive clockwise, the screen's y running down):
+/// the picture turns with it.
+fn rotate_2d(config: &FractalConfig, kind: ViewKind, swept: f64) -> Option<CameraEdit> {
+    match kind {
+        ViewKind::Flame2d => Some(CameraEdit::batch(
+            vec![(ConfigPath::Rotation, (wrap_pi(config.rotation as f64 + swept) as f32).into())],
+            ROTATE,
+        )),
+        ViewKind::EscapePlane => Some(CameraEdit::batch(
+            vec![(ConfigPath::EscapeRotation, (wrap_pi(config.escape.rotation as f64 + swept) as f32).into())],
+            ROTATE,
+        )),
+        _ => None,
+    }
+}
+
+/// An angle in [−π, π].
+fn wrap_pi(a: f64) -> f64 {
+    use std::f64::consts::TAU;
+    a - TAU * (a / TAU).round()
+}
+
+/// What a 3D camera's orbit writes: its convention and stored angles,
+/// the paths of its pitch, yaw and bank, and the range its pitch keeps
+/// (a terrain's eye stays above the ground).
+struct Turnable {
+    conv: Convention,
+    angles: Angles,
+    paths: [ConfigPath; 3],
+    pitch_range: Option<(f64, f64)>,
+}
+
+fn turnable(config: &FractalConfig, kind: ViewKind) -> Option<Turnable> {
+    #[cfg(feature = "terrain")]
+    const ABOVE_GROUND: Option<(f64, f64)> = Some((0.02, std::f64::consts::FRAC_PI_2 - 0.001));
+    match kind {
+        ViewKind::Flame3d => {
+            let (conv, angles) = view3d::flame_angles(config);
+            Some(Turnable {
+                conv,
+                angles,
+                paths: [ConfigPath::CameraRotationX, ConfigPath::CameraRotationY, ConfigPath::CameraBank],
+                pitch_range: None,
+            })
+        }
+        #[cfg(feature = "engine-escape")]
+        ViewKind::Solid => {
+            let (conv, angles) = view3d::solid_angles(&config.escape);
+            Some(Turnable {
+                conv,
+                angles,
+                paths: [ConfigPath::EscapeCamPitch, ConfigPath::EscapeCamYaw, ConfigPath::EscapeCamBank],
+                pitch_range: None,
+            })
+        }
+        #[cfg(feature = "terrain")]
+        ViewKind::EscapeTerrain => {
+            let (conv, angles) = view3d::escape_terrain_angles(&config.escape);
+            Some(Turnable {
+                conv,
+                angles,
+                paths: [ConfigPath::EscapeCamPitch, ConfigPath::EscapeCamYaw, ConfigPath::EscapeCamBank],
+                pitch_range: ABOVE_GROUND,
+            })
+        }
+        #[cfg(all(feature = "terrain", feature = "engine-sim"))]
+        ViewKind::SimTerrain => {
+            let (conv, angles) = view3d::sim_terrain_angles(&config.sim.terrain);
+            Some(Turnable {
+                conv,
+                angles,
+                paths: [ConfigPath::SimTerrainCamPitch, ConfigPath::SimTerrainCamYaw, ConfigPath::SimTerrainCamBank],
+                pitch_range: ABOVE_GROUND,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+fn normalized(v: [f64; 3]) -> Option<[f64; 3]> {
+    let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    (l > 1e-9).then(|| [v[0] / l, v[1] / l, v[2] / l])
+}
+
+/// Orbit a 3D camera about its target, a turntable: `across` radians
+/// about world up (the drag across the screen) and `along` about the
+/// level axis across the view (the drag down it), so the horizon stays
+/// level and the bank stays what it was. The near side of the scene
+/// follows the drag. The screen's roll turns the drag first, so a drag
+/// is in the screen as it is drawn.
+pub fn orbit(config: &FractalConfig, kind: ViewKind, across: f64, along: f64) -> Option<CameraEdit> {
+    let t = turnable(config, kind)?;
+    // In steps of a quarter radian at most: the way back to angles takes
+    // the solution nearest the last, so one long turn could come back on
+    // the far side of a pole (a fast flick is hundreds of pixels a frame).
+    let n = ((across.abs().max(along.abs()) / 0.25).ceil() as usize).clamp(1, 64);
+    let mut a = t.angles;
+    for _ in 0..n {
+        a = orbit_step(&t, a, across / n as f64, along / n as f64);
+    }
+    a.pitch = match t.pitch_range {
+        Some(_) => a.pitch,
+        None => wrap_pi(a.pitch),
+    };
+    a.yaw = wrap_pi(a.yaw);
+    a.bank = wrap_pi(a.bank);
+    Some(CameraEdit::batch(
+        vec![
+            (t.paths[0].clone(), (a.pitch as f32).into()),
+            (t.paths[1].clone(), (a.yaw as f32).into()),
+            (t.paths[2].clone(), (a.bank as f32).into()),
+        ],
+        ORBIT,
+    ))
+}
+
+/// One step of [`orbit`] from the angles `from`, the pitch kept in range.
+fn orbit_step(t: &Turnable, from: Angles, across: f64, along: f64) -> Angles {
+    let q = t.conv.orientation(from);
+    let f = t.conv.frame_of(&q);
+    // The drag in the unrolled screen: the screen's right and down are
+    // the frame's right and −up, and the level axis is where right
+    // would be with no roll.
+    let up_world = [0.0, 0.0, 1.0];
+    let level = normalized(cross(f.forward, up_world))
+        .or_else(|| normalized([f.right[0], f.right[1], 0.0]))
+        .unwrap_or([1.0, 0.0, 0.0]);
+    let level = if level[0] * f.right[0] + level[1] * f.right[1] + level[2] * f.right[2] < 0.0 {
+        [-level[0], -level[1], -level[2]]
+    } else {
+        level
+    };
+    let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let down_screen = [-f.up[0], -f.up[1], -f.up[2]];
+    // Down the unrolled screen: across the view from the level axis, in
+    // the screen's own handedness (a solid's screen is mirrored).
+    let dl = cross(level, f.forward);
+    let down_level = if dot(cross(f.right, down_screen), f.forward) > 0.0 { [-dl[0], -dl[1], -dl[2]] } else { dl };
+    // The drag, from the screen as drawn into the unrolled one.
+    let (dx, dy) = (
+        across * dot(f.right, level) + along * dot(down_screen, level),
+        across * dot(f.right, down_level) + along * dot(down_screen, down_level),
+    );
+    // The camera turns by R (a world rotation about the target), so its
+    // world → camera rows become M · Rᵀ. A mirrored screen (the flame's:
+    // right × up is forward) turns the other way for the same look.
+    let hand = if dot(cross(f.right, f.up), f.forward) > 0.0 { 1.0 } else { -1.0 };
+    let r = Quat::from_axis_angle(up_world, hand * dx) * Quat::from_axis_angle(level, hand * dy);
+    let mut a = t.conv.angles_near(&(q * r.conjugate()), from);
+    if let Some((lo, hi)) = t.pitch_range {
+        a.pitch = a.pitch.clamp(lo, hi);
+    }
+    a
+}
+
+/// A two-finger gesture: zoom by `factor` about `midpoint` (its offset
+/// from the centre), the midpoint's `translation` as a pan, and `twist`
+/// radians (screen, clockwise) as a rotation in 2D or an orbit about
+/// world up in 3D -- one history entry.
+pub fn pinch(
+    config: &FractalConfig,
+    factor: f64,
+    translation: [f32; 2],
+    twist: f64,
+    midpoint: [f32; 2],
+    panel: [f32; 2],
+) -> Option<CameraEdit> {
+    use crate::config::manager::{ConfigManager, EditingTarget};
+    let kind = view_kind(config);
+    let mut work = config.clone();
+    let mut changes: Vec<(ConfigPath, ConfigValue)> = Vec::new();
+    let mut take = |edit: Option<CameraEdit>, work: &mut FractalConfig| {
+        for (path, value) in edit.map(|e| e.changes).unwrap_or_default() {
+            let _ = ConfigManager::apply_value_detached(work, EditingTarget::Main, &path, value.clone());
+            match changes.iter_mut().find(|(p, _)| *p == path) {
+                Some(slot) => slot.1 = value,
+                None => changes.push((path, value)),
+            }
+        }
+    };
+    if factor > 0.0 && factor != 1.0 {
+        let e = zoom(&work, factor, Some(midpoint), panel);
+        take(e, &mut work);
+    }
+    if translation != [0.0, 0.0] {
+        let e = pan(&work, translation, panel);
+        take(e, &mut work);
+    }
+    if twist != 0.0 && twist.is_finite() {
+        let e = if kind.is_3d() { orbit(&work, kind, twist, 0.0) } else { rotate_2d(&work, kind, twist) };
+        take(e, &mut work);
+    }
+    (!changes.is_empty()).then(|| CameraEdit::batch(changes, ZOOM))
+}
+
+/// The view as it starts: a flame's centred and unrotated, and its 3D
+/// camera home; the escape plane's centre and zoom at the defaults; a
+/// solid framed again; a terrain's camera at its defaults over the same
+/// ground.
+pub fn reset(config: &FractalConfig) -> Option<CameraEdit> {
+    let mut changes: Vec<(ConfigPath, ConfigValue)> = Vec::new();
+    match view_kind(config) {
+        ViewKind::Flame2d | ViewKind::Flame3d => {
+            changes.push((ConfigPath::Zoom, 1.0f32.into()));
+            changes.push((ConfigPath::Pan, (0.0f64, 0.0f64).into()));
+            changes.push((ConfigPath::Rotation, 0.0f32.into()));
+            if config.render_mode == crate::scene::transforms::RenderMode::ThreeD {
+                for p in [
+                    ConfigPath::CameraRotationX,
+                    ConfigPath::CameraRotationY,
+                    ConfigPath::CameraBank,
+                    ConfigPath::CameraX,
+                    ConfigPath::CameraY,
+                    ConfigPath::CameraZ,
+                ] {
+                    changes.push((p, 0.0f32.into()));
+                }
+            }
+        }
+        ViewKind::EscapePlane | ViewKind::Solid | ViewKind::EscapeTerrain => {
+            let home = crate::config::escape::EscapeConfig::default();
+            changes.push((ConfigPath::EscapeZoomLog2, ConfigValue::Float(0.0)));
+            changes.push((ConfigPath::EscapeRotation, 0.0f32.into()));
+            match view_kind(config) {
+                ViewKind::EscapePlane => {
+                    changes.push((ConfigPath::EscapeCenterRe, ConfigValue::String(home.center_re.clone())));
+                    changes.push((ConfigPath::EscapeCenterIm, ConfigValue::String(home.center_im.clone())));
+                }
+                kind => {
+                    if kind == ViewKind::Solid {
+                        for p in [ConfigPath::EscapeCamTargetX, ConfigPath::EscapeCamTargetY, ConfigPath::EscapeCamTargetZ] {
+                            changes.push((p, ConfigValue::String(String::new())));
+                        }
+                    }
+                    changes.push((ConfigPath::EscapeCamPitch, home.cam_pitch.into()));
+                    changes.push((ConfigPath::EscapeCamYaw, home.cam_yaw.into()));
+                    changes.push((ConfigPath::EscapeCamBank, home.cam_bank.into()));
+                }
+            }
+        }
+        #[cfg(feature = "engine-sim")]
+        ViewKind::SimTerrain => {
+            let home = crate::config::sim::SimTerrainConfig::default();
+            changes.push((ConfigPath::SimTerrainCamPitch, home.cam_pitch.into()));
+            changes.push((ConfigPath::SimTerrainCamYaw, home.cam_yaw.into()));
+            changes.push((ConfigPath::SimTerrainCamBank, home.cam_bank.into()));
+            changes.push((ConfigPath::SimTerrainCamDistance, home.cam_distance.into()));
+            changes.push((ConfigPath::SimTerrainTargetX, home.target_x.into()));
+            changes.push((ConfigPath::SimTerrainTargetY, home.target_y.into()));
+        }
+        _ => return None,
+    }
+    Some(CameraEdit::batch(changes, RESET))
+}
 
 /// Pan the flame view by a drag of `drag` pixels on a panel `panel`
 /// pixels in size. The smaller side scales both axes, so a drag moves as
@@ -22,40 +438,28 @@ pub fn flame_pan(config: &FractalConfig, drag: [f32; 2], panel: [f32; 2]) -> Opt
     let dx = -drag[0] * scale;
     let dy = -drag[1] * scale;
     let (fractal_dx, fractal_dy) = config.screen_delta_to_pan_frame(dx as f64, dy as f64);
-    Some(CameraEdit::param(ConfigPath::Pan, (config.pan_x + fractal_dx, config.pan_y + fractal_dy).into()))
+    Some(CameraEdit::batch(vec![(ConfigPath::Pan, (config.pan_x + fractal_dx, config.pan_y + fractal_dy).into())], PAN))
 }
 
-/// Zoom the flame view by a wheel's `scroll`: in toward `cursor` (its
-/// offset from the panel's centre, in pixels) when there is one and
-/// `zoom_to_cursor` allows, out from the centre always.
-pub fn flame_zoom(
-    config: &FractalConfig,
-    scroll: f32,
-    cursor: Option<[f32; 2]>,
-    panel: [f32; 2],
-    zoom_to_cursor: bool,
-) -> Option<CameraEdit> {
-    let zoom_factor = if scroll.abs() > 0.1 { 1.1f32.powf(scroll * 0.03) } else { 1.0 };
-    if zoom_factor == 1.0 {
+/// Zoom the flame view by `factor` toward `cursor` (its offset from the
+/// panel's centre, in pixels), in or out -- the point under the cursor
+/// stays under it -- or about the centre without one.
+pub fn flame_zoom(config: &FractalConfig, factor: f64, cursor: Option<[f32; 2]>, panel: [f32; 2]) -> Option<CameraEdit> {
+    if !(factor > 0.0) || factor == 1.0 {
         return None;
     }
-    let new_zoom = (config.zoom * zoom_factor).clamp(0.01, config.max_view_zoom());
-    match cursor.filter(|_| zoom_to_cursor && zoom_factor > 1.0) {
-        Some([ox, oy]) => {
-            // The point under the cursor stays under it.
-            let scale = panel[0].min(panel[1]) * 0.25;
-            let (rx, ry) = config.screen_delta_to_pan_frame(ox as f64, oy as f64);
-            let point_x = config.pan_x + rx / (scale * config.zoom) as f64;
-            let point_y = config.pan_y + ry / (scale * config.zoom) as f64;
-            let new_pan_x = point_x - rx / (scale * new_zoom) as f64;
-            let new_pan_y = point_y - ry / (scale * new_zoom) as f64;
-            Some(CameraEdit::batch(
-                vec![(ConfigPath::Zoom, new_zoom.into()), (ConfigPath::Pan, (new_pan_x, new_pan_y).into())],
-                "history.action.wheel_zoom",
-            ))
-        }
-        None => Some(CameraEdit::param(ConfigPath::Zoom, new_zoom.into())),
+    let new_zoom = (config.zoom * factor as f32).clamp(0.01, config.max_view_zoom());
+    let mut changes = vec![(ConfigPath::Zoom, new_zoom.into())];
+    if let Some([ox, oy]) = cursor {
+        let scale = panel[0].min(panel[1]) * 0.25;
+        let (rx, ry) = config.screen_delta_to_pan_frame(ox as f64, oy as f64);
+        let point_x = config.pan_x + rx / (scale * config.zoom) as f64;
+        let point_y = config.pan_y + ry / (scale * config.zoom) as f64;
+        let new_pan_x = point_x - rx / (scale * new_zoom) as f64;
+        let new_pan_y = point_y - ry / (scale * new_zoom) as f64;
+        changes.push((ConfigPath::Pan, (new_pan_x, new_pan_y).into()));
     }
+    Some(CameraEdit::batch(changes, ZOOM))
 }
 
 #[cfg(feature = "engine-escape")]
@@ -182,7 +586,7 @@ mod escape {
                 f64::from(drag[1]),
                 f64::from(panel[1]),
             );
-            return Some(CameraEdit::batch(solid_target_updates(shifted), "history.param.escape_cam_target_x"));
+            return Some(CameraEdit::batch(solid_target_updates(shifted), PAN));
         }
         Some(escape_pan_plane(&config.escape, drag, panel))
     }
@@ -216,7 +620,7 @@ mod escape {
                 (ConfigPath::EscapeCenterRe, ConfigValue::String(new_re)),
                 (ConfigPath::EscapeCenterIm, ConfigValue::String(new_im)),
             ],
-            "history.action.pan_view",
+            PAN,
         )
     }
 
@@ -252,46 +656,19 @@ mod escape {
         let im = FixedPoint::decimal_add_floatexp(&esc.center_im, widths[1] * m, e as i64, esc.zoom_log2)?;
         Some(CameraEdit::batch(
             vec![(ConfigPath::EscapeCenterRe, ConfigValue::String(re)), (ConfigPath::EscapeCenterIm, ConfigValue::String(im))],
-            "history.action.pan_view",
+            PAN,
         ))
     }
 
-    /// Orbit a terrain's camera about its target: a horizontal drag turns
-    /// the yaw, a vertical one the pitch, so the ground under the cursor
-    /// turns with it. The pitch stays above the horizon and short of the
-    /// zenith, where the yaw would stop meaning anything.
-    #[cfg(feature = "terrain")]
-    pub fn terrain_orbit(config: &FractalConfig, drag: [f32; 2]) -> Option<CameraEdit> {
+    /// Zoom the escape view by `zoom_factor` toward `cursor` (its offset
+    /// from the panel's centre, in pixels), in or out: the point under
+    /// it stays put. A solid's anchor is in its target's plane. Without a
+    /// cursor, about the centre.
+    pub fn escape_zoom(config: &FractalConfig, zoom_factor: f64, cursor: Option<[f32; 2]>, panel: [f32; 2]) -> Option<CameraEdit> {
         let esc = &config.escape;
-        let (yaw, pitch) = orbit_step(esc.cam_yaw, esc.cam_pitch, drag);
-        Some(CameraEdit::batch(
-            vec![(ConfigPath::EscapeCamYaw, yaw.into()), (ConfigPath::EscapeCamPitch, pitch.into())],
-            "history.action.orbit_camera",
-        ))
-    }
-
-    /// Wheel zoom for the escape view: zoom-in anchors to the cursor
-    /// (the point under it stays put), zoom-out recedes from center --
-    /// the same feel as the flame viewport. `cursor` is the cursor's
-    /// offset from the panel's centre, in pixels.
-    pub fn escape_zoom(
-        config: &FractalConfig,
-        scroll: f32,
-        cursor: Option<[f32; 2]>,
-        panel: [f32; 2],
-        zoom_to_cursor: bool,
-    ) -> Option<CameraEdit> {
-        let esc = &config.escape;
-        // A terrain dollies toward its target, the screen's centre: the
-        // point under the cursor is somewhere on the ground, at a depth a
-        // plane's anchor knows nothing of.
-        let zoom_to_cursor = zoom_to_cursor && !esc.terrain_active();
-
-        let zoom_factor = if scroll.abs() > 0.1 {
-            f64::from(1.1f32).powf(f64::from(scroll) * 0.03)
-        } else {
+        if !(zoom_factor > 0.0) || zoom_factor == 1.0 {
             return None;
-        };
+        }
         // Ceiling far past practical use but far below the floatexp
         // rung's i32-exponent arithmetic (~2^31): the old 300 was the
         // phase-1 travel clamp and would COLLAPSE a deep session's zoom
@@ -306,9 +683,9 @@ mod escape {
         // is a zoom that walks the target under the cursor.
         let solid = solid_view(config);
 
-        if zoom_factor > 1.0 {
+        {
             if let Some((ifs3, cam)) = &solid {
-                if let Some([off_x, off_y]) = cursor.filter(|_| zoom_to_cursor) {
+                if let Some([off_x, off_y]) = cursor {
                     let (off_x, off_y) = (f64::from(off_x), f64::from(off_y));
                     let mut esc_new = esc.clone();
                     esc_new.zoom_log2 = new_zoom_log2;
@@ -323,7 +700,7 @@ mod escape {
                     );
                     updates.extend(solid_target_updates(shifted));
                 }
-            } else if let Some([off_x, off_y]) = cursor.filter(|_| zoom_to_cursor) {
+            } else if let Some([off_x, off_y]) = cursor {
                 // Keep the point under the cursor fixed: with the offset o
                 // (screen → world) and scale ratio k = old/new span,
                 // center' = center + o·(1 − 1/k) -- computed here as the
@@ -358,7 +735,7 @@ mod escape {
             }
         }
 
-        Some(CameraEdit::batch(updates, "history.action.wheel_zoom"))
+        Some(CameraEdit::batch(updates, ZOOM))
     }
 
     #[cfg(test)]
@@ -507,31 +884,7 @@ mod escape {
 #[cfg(feature = "engine-escape")]
 pub use escape::{escape_pan, escape_pan_plane, escape_zoom, screen_to_world as escape_screen_to_world};
 #[cfg(feature = "terrain")]
-pub use escape::{terrain_orbit, terrain_pan};
-
-/// A terrain orbit's step: a drag of `drag` pixels turns the yaw against
-/// the horizontal and the pitch with the vertical, 0.005 radians a pixel;
-/// the pitch kept above the horizon and short of the zenith.
-#[cfg(feature = "terrain")]
-fn orbit_step(yaw: f32, pitch: f32, drag: [f32; 2]) -> (f32, f32) {
-    const RAD_PER_PX: f32 = 0.005;
-    let mut yaw = yaw - drag[0] * RAD_PER_PX;
-    yaw = (yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
-    let pitch = (pitch + drag[1] * RAD_PER_PX).clamp(0.02, std::f32::consts::FRAC_PI_2 - 0.001);
-    (yaw, pitch)
-}
-
-/// Orbit a simulation terrain's camera about its target, as an escape
-/// terrain's: a horizontal drag turns the yaw, a vertical one the pitch.
-#[cfg(all(feature = "terrain", feature = "engine-sim"))]
-pub fn sim_terrain_orbit(config: &FractalConfig, drag: [f32; 2]) -> Option<CameraEdit> {
-    let t = &config.sim.terrain;
-    let (yaw, pitch) = orbit_step(t.cam_yaw, t.cam_pitch, drag);
-    Some(CameraEdit::batch(
-        vec![(ConfigPath::SimTerrainCamYaw, yaw.into()), (ConfigPath::SimTerrainCamPitch, pitch.into())],
-        "history.action.orbit_camera",
-    ))
-}
+pub use escape::terrain_pan;
 
 /// Slide a simulation terrain's target across the grid so the ground under
 /// the cursor follows it -- in grid fractions, at the pixel's step at the
@@ -555,17 +908,17 @@ pub fn sim_terrain_pan(config: &FractalConfig, drag: [f32; 2], panel: [f32; 2]) 
     let y = (t.target_y as f64 + cells[1] / (gh.max(2) - 1) as f64) as f32;
     Some(CameraEdit::batch(
         vec![(ConfigPath::SimTerrainTargetX, x.into()), (ConfigPath::SimTerrainTargetY, y.into())],
-        "history.action.pan_view",
+        PAN,
     ))
 }
 
-/// Move a simulation terrain's camera toward its target or away: a wheel
-/// notch is about an eighth of the distance.
+/// Move a simulation terrain's camera toward its target (`factor` above
+/// one) or away.
 #[cfg(all(feature = "terrain", feature = "engine-sim"))]
-pub fn sim_terrain_dolly(config: &FractalConfig, scroll: f32) -> Option<CameraEdit> {
+pub fn sim_terrain_dolly(config: &FractalConfig, factor: f64) -> Option<CameraEdit> {
     let d = config.sim.terrain.cam_distance;
-    let next = (d * (-scroll * 0.0025).exp()).clamp(0.01, 100.0);
-    Some(CameraEdit::param(ConfigPath::SimTerrainCamDistance, next.into()))
+    let next = (d / factor as f32).clamp(0.01, 100.0);
+    Some(CameraEdit::batch(vec![(ConfigPath::SimTerrainCamDistance, next.into())], ZOOM))
 }
 
 #[cfg(test)]
@@ -618,7 +971,7 @@ mod tests {
         let panel = [800.0, 600.0];
         let cur = [137.0f32, -52.0];
         let before = flame_point(&c, panel, cur);
-        let after = applied(&c, &flame_zoom(&c, 120.0, Some(cur), panel, true).expect("a zoom"));
+        let after = applied(&c, &flame_zoom(&c, wheel_factor(120.0), Some(cur), panel).expect("a zoom"));
         assert!(after.zoom > c.zoom);
         let still = flame_point(&after, panel, cur);
         assert!((before.0 - still.0).abs() < 1e-6 && (before.1 - still.1).abs() < 1e-6, "{before:?} vs {still:?}");
@@ -666,10 +1019,243 @@ mod tests {
         let panel = [800.0, 600.0];
         let cur = [137.0f32, -52.0];
         let before = escape_point(&c, panel, cur);
-        let after = applied(&c, &escape_zoom(&c, 120.0, Some(cur), panel, true).expect("a zoom"));
+        let after = applied(&c, &escape_zoom(&c, wheel_factor(120.0), Some(cur), panel).expect("a zoom"));
         assert!(after.escape.zoom_log2 > c.escape.zoom_log2);
         let still = escape_point(&after, panel, cur);
         let tol = 1e-6 * (4.0 / c.escape.zoom_factor());
         assert!((before.0 - still.0).abs() < tol && (before.1 - still.1).abs() < tol, "{before:?} vs {still:?}");
+    }
+
+    /// The camera kinds' configs for the 3D tests: a flame and a solid with
+    /// the screen rolled, and the two terrains.
+    fn cameras_3d() -> Vec<(&'static str, FractalConfig)> {
+        let mut out = Vec::new();
+        let mut flame = FractalConfig::default();
+        flame.render_mode = crate::scene::transforms::RenderMode::ThreeD;
+        flame.camera_rotation_x = 1.0;
+        flame.camera_rotation_y = 0.4;
+        flame.rotation = 0.5;
+        out.push(("flame", flame));
+        #[cfg(feature = "engine-escape")]
+        {
+            let mut solid = FractalConfig::default();
+            solid.render_mode = crate::scene::transforms::RenderMode::Escape;
+            solid.escape.formula = "ifs_flame_3d".to_string();
+            solid.escape.cam_pitch = 0.4;
+            solid.escape.cam_yaw = 0.9;
+            solid.escape.rotation = -0.6;
+            out.push(("solid", solid));
+        }
+        #[cfg(feature = "terrain")]
+        {
+            let mut terrain = FractalConfig::default();
+            terrain.render_mode = crate::scene::transforms::RenderMode::Escape;
+            terrain.escape.terrain.enabled = true;
+            terrain.escape.cam_pitch = 0.6;
+            terrain.escape.cam_yaw = -0.3;
+            terrain.escape.rotation = 0.7;
+            out.push(("escape terrain", terrain));
+        }
+        #[cfg(all(feature = "terrain", feature = "engine-sim"))]
+        {
+            let mut sim = FractalConfig::default();
+            sim.render_mode = crate::scene::transforms::RenderMode::Simulation;
+            sim.sim.terrain.enabled = true;
+            sim.sim.terrain.cam_pitch = 0.7;
+            sim.sim.terrain.cam_yaw = 1.2;
+            out.push(("sim terrain", sim));
+        }
+        out
+    }
+
+    fn frame_of(c: &FractalConfig) -> crate::camera::view3d::Frame {
+        let t = turnable(c, view_kind(c)).expect("a 3D camera");
+        t.conv.frame(t.angles)
+    }
+
+    /// Where a point lands on screen, seen from `eye` (x right, y down,
+    /// in units of the distance in front).
+    fn on_screen(f: &crate::camera::view3d::Frame, eye: [f64; 3], p: [f64; 3]) -> (f64, f64) {
+        let d = [p[0] - eye[0], p[1] - eye[1], p[2] - eye[2]];
+        let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        let z = dot(d, f.forward);
+        (dot(d, f.right) / z, -dot(d, f.up) / z)
+    }
+
+    /// An orbit turns the camera about its target so the near side of the
+    /// scene follows the drag -- across and down, every camera, a rolled
+    /// screen included.
+    #[test]
+    fn an_orbit_carries_the_near_side_with_the_drag() {
+        let settings = TurnSettings { radians_per_pixel: 0.005, invert_y: false };
+        for (name, c) in cameras_3d() {
+            for drag in [[12.0f32, 0.0], [0.0, 9.0], [-7.0, 0.0], [0.0, -10.0]] {
+                let before = frame_of(&c);
+                let after = applied(&c, &turn(&c, drag, None, settings).expect("an orbit"));
+                let f1 = frame_of(&after);
+                // The target at the origin, the eye a unit behind it; a
+                // point half way.
+                let eye0 = [-before.forward[0], -before.forward[1], -before.forward[2]];
+                let eye1 = [-f1.forward[0], -f1.forward[1], -f1.forward[2]];
+                let p = [eye0[0] * 0.5, eye0[1] * 0.5, eye0[2] * 0.5];
+                let (x0, y0) = on_screen(&before, eye0, p);
+                let (x1, y1) = on_screen(&f1, eye1, p);
+                let moved = [x1 - x0, y1 - y0];
+                let along = moved[0] * drag[0] as f64 + moved[1] * drag[1] as f64;
+                assert!(along > 0.0, "{name} {drag:?}: the near side moved {moved:?}");
+                let across = moved[0] * drag[1] as f64 - moved[1] * drag[0] as f64;
+                assert!(across.abs() < 0.5 * along.abs() + 1e-12, "{name} {drag:?}: it moved {moved:?}, off the drag");
+            }
+        }
+    }
+
+    /// A terrain orbits as it always did: the yaw against a drag across,
+    /// the pitch with a drag down, at the fly mode's 0.005 a pixel.
+    #[cfg(feature = "terrain")]
+    #[test]
+    fn a_terrain_orbits_as_it_did() {
+        let settings = TurnSettings { radians_per_pixel: 0.005, invert_y: false };
+        let c = cameras_3d().into_iter().find(|(n, _)| *n == "escape terrain").unwrap().1;
+        let after = applied(&c, &turn(&c, [20.0, 8.0], None, settings).unwrap());
+        assert!((after.escape.cam_yaw - (c.escape.cam_yaw - 0.1)).abs() < 1e-5, "{}", after.escape.cam_yaw);
+        assert!((after.escape.cam_pitch - (c.escape.cam_pitch + 0.04)).abs() < 1e-5, "{}", after.escape.cam_pitch);
+        assert!(after.escape.cam_bank.abs() < 1e-6);
+    }
+
+    /// The turntable keeps the horizon as tilted as it was on screen: the
+    /// angle between the screen's right and the level axis across the
+    /// view. (The stored bank is the right's slope out of the horizontal,
+    /// which a pitch changes while the tilt seen stays; at a level horizon
+    /// both are zero and stay so.)
+    #[test]
+    fn an_orbit_keeps_the_horizon_as_tilted() {
+        let settings = TurnSettings { radians_per_pixel: 0.005, invert_y: false };
+        let tilt = |c: &FractalConfig| {
+            let f = frame_of(c);
+            let level = normalized(cross(f.forward, [0.0, 0.0, 1.0])).unwrap();
+            let d = (f.right[0] * level[0] + f.right[1] * level[1] + f.right[2] * level[2]).abs();
+            d.clamp(-1.0, 1.0).acos()
+        };
+        for (name, mut c) in cameras_3d() {
+            c.camera_bank = 0.3;
+            c.escape.cam_bank = 0.3;
+            c.sim.terrain.cam_bank = 0.3;
+            let t0 = tilt(&c);
+            let mut cur = c.clone();
+            for drag in [[30.0f32, 0.0], [0.0, 25.0], [-12.0, 14.0]] {
+                cur = applied(&cur, &turn(&cur, drag, None, settings).unwrap());
+                assert!((tilt(&cur) - t0).abs() < 1e-4, "{name}: {} vs {t0}", tilt(&cur));
+            }
+            let mut level = c.clone();
+            level.camera_bank = 0.0;
+            level.escape.cam_bank = 0.0;
+            level.sim.terrain.cam_bank = 0.0;
+            let after = applied(&level, &turn(&level, [20.0, 15.0], None, settings).unwrap());
+            assert!(after.camera_bank.abs() < 1e-6 && after.escape.cam_bank.abs() < 1e-6 && after.sim.terrain.cam_bank.abs() < 1e-6, "{name}");
+        }
+    }
+
+    /// A terrain's eye stays above the ground: its pitch stops short of
+    /// the horizon.
+    #[cfg(feature = "terrain")]
+    #[test]
+    fn a_terrain_orbit_stays_above_the_ground() {
+        let settings = TurnSettings { radians_per_pixel: 0.005, invert_y: false };
+        let c = cameras_3d().into_iter().find(|(n, _)| *n == "escape terrain").unwrap().1;
+        let after = applied(&c, &turn(&c, [0.0, -1000.0], None, settings).unwrap());
+        assert!((after.escape.cam_pitch - 0.02).abs() < 1e-6, "{}", after.escape.cam_pitch);
+    }
+
+    /// A 2D turn rotates the picture with the pointer: the point that was
+    /// under it is under it still, swept round the centre.
+    #[test]
+    fn a_2d_turn_rotates_the_picture_with_the_pointer() {
+        let settings = TurnSettings { radians_per_pixel: 0.005, invert_y: false };
+        let panel = [800.0, 600.0];
+        let c = rotated_flame();
+        let (r, a) = (110.0f32, 0.35f32);
+        let before = [r, 0.0];
+        let after_ptr = [r * a.cos(), r * a.sin()];
+        let drag = [after_ptr[0] - before[0], after_ptr[1] - before[1]];
+        let held = flame_point(&c, panel, before);
+        let after = applied(&c, &turn(&c, drag, Some(after_ptr), settings).expect("a rotation"));
+        let now = flame_point(&after, panel, after_ptr);
+        assert!((held.0 - now.0).abs() < 1e-5 && (held.1 - now.1).abs() < 1e-5, "{held:?} vs {now:?}");
+    }
+
+    /// And the escape plane's, whose screen draws Im up.
+    #[cfg(feature = "engine-escape")]
+    #[test]
+    fn an_escape_turn_rotates_the_picture_with_the_pointer() {
+        let settings = TurnSettings { radians_per_pixel: 0.005, invert_y: false };
+        let panel = [800.0, 600.0];
+        let c = rotated_plane();
+        let (r, a) = (110.0f32, -0.5f32);
+        let before = [0.0, r];
+        let after_ptr = [-r * a.sin(), r * a.cos()];
+        let drag = [after_ptr[0] - before[0], after_ptr[1] - before[1]];
+        let held = escape_point(&c, panel, before);
+        let after = applied(&c, &turn(&c, drag, Some(after_ptr), settings).expect("a rotation"));
+        let now = escape_point(&after, panel, after_ptr);
+        let tol = 1e-6 * (4.0 / c.escape.zoom_factor());
+        assert!((held.0 - now.0).abs() < tol && (held.1 - now.1).abs() < tol, "{held:?} vs {now:?}");
+    }
+
+    /// Zooming out keeps the point under the cursor too.
+    #[test]
+    fn a_zoom_out_keeps_the_point_under_the_cursor() {
+        let panel = [800.0, 600.0];
+        let cur = [-90.0f32, 140.0];
+        let c = rotated_flame();
+        let before = flame_point(&c, panel, cur);
+        let after = applied(&c, &zoom(&c, 1.0 / 1.4, Some(cur), panel).expect("a zoom"));
+        let still = flame_point(&after, panel, cur);
+        assert!(after.zoom < c.zoom);
+        assert!((before.0 - still.0).abs() < 1e-6 && (before.1 - still.1).abs() < 1e-6, "{before:?} vs {still:?}");
+        #[cfg(feature = "engine-escape")]
+        {
+            let c = rotated_plane();
+            let before = escape_point(&c, panel, cur);
+            let after = applied(&c, &zoom(&c, 1.0 / 1.4, Some(cur), panel).expect("a zoom"));
+            let still = escape_point(&after, panel, cur);
+            let tol = 1e-6 * (4.0 / c.escape.zoom_factor());
+            assert!((before.0 - still.0).abs() < tol && (before.1 - still.1).abs() < tol, "{before:?} vs {still:?}");
+        }
+    }
+
+    /// A pinch is a zoom about the midpoint, the midpoint's move as a pan
+    /// and a twist as a rotation -- one entry, each path once.
+    #[test]
+    fn a_pinch_is_zoom_pan_and_twist_in_one_entry() {
+        let panel = [800.0, 600.0];
+        let c = rotated_flame();
+        let edit = pinch(&c, 1.25, [6.0, -4.0], 0.1, [50.0, 30.0], panel).expect("a pinch");
+        assert_eq!(edit.history, Some(ZOOM));
+        let paths: Vec<_> = edit.changes.iter().map(|(p, _)| p.clone()).collect();
+        assert_eq!(paths.len(), 3, "{paths:?}");
+        let after = applied(&c, &edit);
+        assert!(after.zoom > c.zoom && (after.rotation - c.rotation).abs() > 0.05);
+    }
+
+    /// Reset View returns the shown camera home; a 2D simulation has none
+    /// yet.
+    #[test]
+    fn reset_returns_each_camera_home() {
+        let c = rotated_flame();
+        let after = applied(&c, &reset(&c).expect("a flame resets"));
+        assert_eq!((after.zoom, after.pan_x, after.pan_y, after.rotation), (1.0, 0.0, 0.0, 0.0));
+        #[cfg(feature = "engine-escape")]
+        {
+            let c = rotated_plane();
+            let after = applied(&c, &reset(&c).expect("the plane resets"));
+            let home = crate::config::escape::EscapeConfig::default();
+            assert_eq!(
+                (after.escape.center_re.as_str(), after.escape.zoom_log2, after.escape.rotation),
+                (home.center_re.as_str(), 0.0, 0.0)
+            );
+        }
+        let mut sim = FractalConfig::default();
+        sim.render_mode = crate::scene::transforms::RenderMode::Simulation;
+        assert!(reset(&sim).is_none());
     }
 }

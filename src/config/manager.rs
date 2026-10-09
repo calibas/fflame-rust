@@ -138,10 +138,10 @@ pub const FLY_CAMERA_HISTORY_DESC: &str = "history.action.fly_camera";
 /// pan or orbit left a history entry a frame.
 pub const GESTURE_HISTORY_DESCS: [&str; 5] = [
     FLY_CAMERA_HISTORY_DESC,
-    "history.action.wheel_zoom",
-    "history.action.pinch_zoom",
-    "history.action.pan_view",
-    "history.action.orbit_camera",
+    crate::camera::gesture::PAN,
+    crate::camera::gesture::ZOOM,
+    crate::camera::gesture::ROTATE,
+    crate::camera::gesture::ORBIT,
 ];
 
 /// Inactivity threshold - pausing longer than this creates a new undo point
