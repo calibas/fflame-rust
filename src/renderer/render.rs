@@ -155,6 +155,72 @@ pub struct RenderOutput {
     pub frame_coverage: f32,
 }
 
+/// The names a config gives that this build has no engine entry for: an
+/// escape formula, colouring, colouring layer or lens; a simulation's
+/// model or colouring, its layers' and colour layers'. The engines fall
+/// back to a default for these (a file from a newer build still opens),
+/// which in the app comes with a warning -- and from the CLI was a
+/// Mandelbrot saved under the unknown formula's name, exit code 0.
+pub fn unknown_names(config: &crate::config::FractalConfig) -> Vec<String> {
+    #[allow(unused_mut)]
+    let mut out = Vec::new();
+    match config.render_mode {
+        #[cfg(feature = "engine-escape")]
+        crate::scene::transforms::RenderMode::Escape => {
+            let e = &config.escape;
+            let a = crate::escape::FORMULAS.iter().any(|f| f.name == e.formula);
+            let b = crate::escape::fields::get_field(&e.formula).is_some();
+            let d = crate::escape::ifs::get_ifs(&e.formula).is_some();
+            if !(a || b || d) {
+                out.push(format!("escape formula `{}`", e.formula));
+            }
+            // A colouring from another formula family is the state right
+            // after a switch, and its default draws; one in no registry
+            // is unknown.
+            let colouring = |name: &str| {
+                crate::escape::COLORINGS.iter().any(|c| c.name == name)
+                    || crate::escape::fields::FIELD_COLORINGS.iter().any(|c| c.name == name)
+                    || crate::escape::ifs::IFS_COLORINGS.iter().any(|c| c.name == name)
+            };
+            if !colouring(&e.coloring) {
+                out.push(format!("escape colouring `{}`", e.coloring));
+            }
+            if !e.layer.coloring.is_empty() && !colouring(&e.layer.coloring) {
+                out.push(format!("escape colouring layer `{}`", e.layer.coloring));
+            }
+            if !e.lens.is_empty() && crate::variations::global_registry().get(&e.lens).is_none() {
+                out.push(format!("escape lens `{}`", e.lens));
+            }
+        }
+        #[cfg(feature = "engine-sim")]
+        crate::scene::transforms::RenderMode::Simulation => {
+            let s = &config.sim;
+            let model = |name: &str| crate::sim::MODELS.iter().any(|m| m.name == name);
+            let colouring = |name: &str| crate::sim::COLORINGS.iter().any(|c| c.name == name);
+            for l in 0..s.layer_count() {
+                let name = s.layer_model_name(l);
+                if !model(name) {
+                    out.push(format!("simulation model `{name}`"));
+                }
+            }
+            if s.color_layers.is_empty() {
+                if !colouring(&s.coloring) {
+                    out.push(format!("simulation colouring `{}`", s.coloring));
+                }
+            } else {
+                for l in &s.color_layers {
+                    if !colouring(&l.coloring) {
+                        out.push(format!("simulation colouring `{}`", l.coloring));
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    out.dedup();
+    out
+}
+
 /// Progress callback for long-running renders
 pub trait RenderProgress {
     /// Called periodically with current/total iterations
@@ -195,6 +261,11 @@ pub enum RenderError {
     /// and writes an all-black PNG. A render that could not allocate
     /// what it needed has to say so.
     OutOfMemory(String),
+    /// A size this device's limits refuse before anything is allocated
+    /// (a texture side, a binding): the reason says which. Not memory
+    /// running out, and not always the export's size -- a fixed
+    /// simulation grid is the grid's.
+    TooLarge(String),
 }
 
 impl std::fmt::Display for RenderError {
@@ -210,6 +281,7 @@ impl std::fmt::Display for RenderError {
                 f,
                 "the GPU ran out of memory ({what}); try a smaller size or less antialiasing"
             ),
+            RenderError::TooLarge(why) => write!(f, "too large for this GPU: {why}"),
         }
     }
 }
@@ -255,7 +327,7 @@ pub async fn render(
         if let Some(why) =
             crate::escape::footprint::EscapeTerrain::allocation_error(device, &job.config.escape, job.width, job.height)
         {
-            return Err(RenderError::OutOfMemory(why));
+            return Err(RenderError::TooLarge(why));
         }
     }
     #[cfg(feature = "engine-escape")]
@@ -275,7 +347,7 @@ pub async fn render(
                 job.config.escape.supersample,
             ),
         ) {
-            return Err(RenderError::OutOfMemory(why));
+            return Err(RenderError::TooLarge(why));
         }
     }
 
@@ -287,7 +359,7 @@ pub async fn render(
             job.width,
             job.height,
         ) {
-            return Err(RenderError::OutOfMemory(why));
+            return Err(RenderError::TooLarge(why));
         }
     }
 

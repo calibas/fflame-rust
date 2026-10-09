@@ -986,7 +986,7 @@ pub struct TonemapParams {
     pub gamma_threshold: f32,  // Smooths gamma curve at low densities (see DEFAULT_GAMMA_THRESHOLD)
     pub alpha_blend_low: f32,  // Start blending toward linear alpha at this gamma-corrected value
     pub alpha_blend_high: f32,  // Full linear alpha above this value
-    pub transparent_mode: u32,  // 0 = normal (blend with background), 1 = transparent export
+    pub transparent_mode: u32,  // 0 = normal (blend with background), 1 = transparent (a flame's split), 2 = premultiplied, 3 = straight for an image (escape/sim)
     pub color_mode: u32,  // 0 = palette, 1 = speed, 2 = path_map
     pub width: u32,  // Texture width for path buffer indexing
     pub height: u32,  // Texture height for path buffer indexing

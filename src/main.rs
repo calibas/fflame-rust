@@ -89,11 +89,11 @@ enum Commands {
         #[arg(short, long)]
         output: String,
 
-        /// Image width (default: from config or 1920)
+        /// Image width (default: 1920; a config does not carry one)
         #[arg(short, long)]
         width: Option<u32>,
 
-        /// Image height (default: from config or 1080)
+        /// Image height (default: 1080; a config does not carry one)
         #[arg(short = 'H', long)]
         height: Option<u32>,
 
@@ -123,7 +123,7 @@ enum Commands {
         #[arg(long)]
         strip_metadata: bool,
 
-        /// 2× supersampled antialiasing: render at double resolution and box-filter down (with firefly clamp). ~4× render cost.
+        /// 2× supersampled antialiasing: render at double resolution and box-filter down (with firefly clamp). ~4× render cost. An escape-time picture doubles its own antialiasing instead, at the output size; a simulation keeps the output's grid.
         #[arg(long, default_value_t = false)]
         supersample: bool,
 
