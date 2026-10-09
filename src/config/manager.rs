@@ -2007,6 +2007,11 @@ impl ConfigManager {
             ConfigPath::SimPathSky => Ok(config.sim.terrain.path.sky_gradient.into()),
             ConfigPath::SimPathZenith => Ok(ConfigValue::ColorRgb(config.sim.terrain.path.zenith)),
             ConfigPath::SimWarpZoom => Ok(ConfigValue::Float(config.sim.warp.zoom)),
+            ConfigPath::SimViewCenterX => Ok(ConfigValue::Float(config.sim.view.center_x)),
+            ConfigPath::SimViewCenterY => Ok(ConfigValue::Float(config.sim.view.center_y)),
+            ConfigPath::SimViewZoom => Ok(ConfigValue::Float(config.sim.view.zoom)),
+            ConfigPath::SimViewRotation => Ok(ConfigValue::Float(config.sim.view.rotation)),
+            ConfigPath::SimViewTile => Ok(ConfigValue::Bool(config.sim.view.tile)),
             ConfigPath::SimWarpRotation => Ok(ConfigValue::Float(config.sim.warp.rotation)),
             ConfigPath::SimWarpPanX => Ok(ConfigValue::Float(config.sim.warp.pan_x)),
             ConfigPath::SimWarpPanY => Ok(ConfigValue::Float(config.sim.warp.pan_y)),
@@ -3390,6 +3395,27 @@ impl ConfigManager {
             ConfigPath::SimWarpZoom => {
                 let v: f32 = f32::try_from(value)?;
                 self.current.sim.warp.zoom = if v.is_finite() { v.clamp(0.5, 2.0) } else { 1.0 };
+            }
+            // The view: a centre anywhere (a tiled field goes on), a zoom
+            // from a speck to a cell filling the screen, any turn.
+            ConfigPath::SimViewCenterX => {
+                let v: f32 = f32::try_from(value)?;
+                self.current.sim.view.center_x = if v.is_finite() { v.clamp(-1.0e6, 1.0e6) } else { 0.5 };
+            }
+            ConfigPath::SimViewCenterY => {
+                let v: f32 = f32::try_from(value)?;
+                self.current.sim.view.center_y = if v.is_finite() { v.clamp(-1.0e6, 1.0e6) } else { 0.5 };
+            }
+            ConfigPath::SimViewZoom => {
+                let v: f32 = f32::try_from(value)?;
+                self.current.sim.view.zoom = if v.is_finite() { v.clamp(1.0e-3, 1.0e4) } else { 1.0 };
+            }
+            ConfigPath::SimViewRotation => {
+                let v: f32 = f32::try_from(value)?;
+                self.current.sim.view.rotation = if v.is_finite() { v } else { 0.0 };
+            }
+            ConfigPath::SimViewTile => {
+                self.current.sim.view.tile = bool::try_from(value)?;
             }
             ConfigPath::SimWarpRotation => {
                 let v: f32 = f32::try_from(value)?;

@@ -710,6 +710,59 @@ fn is_default_boundary(v: &SimBoundary) -> bool {
 fn is_default_matte(v: &SimMatte) -> bool {
     *v == SimMatte::default()
 }
+/// The 2D picture's view (camera-unification C6): a pan, a zoom and a turn
+/// the colour pass applies between the output's pixels and the grid's
+/// cells. Display only -- the step never reads it, so moving it never
+/// changes the run -- and the same in the viewport, an export and a
+/// video.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SimView {
+    /// The point of the field at the picture's centre, as a fraction of
+    /// the grid (0.5, 0.5: its middle). Past 0..1 on a tiled view.
+    #[serde(default = "default_half", skip_serializing_if = "is_half")]
+    pub center_x: f32,
+    #[serde(default = "default_half", skip_serializing_if = "is_half")]
+    pub center_y: f32,
+    /// Magnification over the fit (1: the whole grid, letterboxed or
+    /// covering as `fit` says).
+    #[serde(default = "default_view_zoom", skip_serializing_if = "is_default_view_zoom")]
+    pub zoom: f32,
+    /// The picture's turn in radians, positive clockwise on screen -- the
+    /// flame's `rotation` and the escape plane's convention.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub rotation: f32,
+    /// Repeat the field past its edges, as the torus a periodic boundary
+    /// makes it. Off: the picture shows the grid's edges. Only a
+    /// periodic boundary tiles; under any other the edges show.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub tile: bool,
+}
+
+fn default_view_zoom() -> f32 {
+    1.0
+}
+fn is_default_view_zoom(v: &f32) -> bool {
+    *v == 1.0
+}
+
+impl Default for SimView {
+    fn default() -> Self {
+        SimView { center_x: 0.5, center_y: 0.5, zoom: 1.0, rotation: 0.0, tile: false }
+    }
+}
+
+impl SimView {
+    pub fn is_default(v: &SimView) -> bool {
+        *v == SimView::default()
+    }
+
+    /// Whether the picture repeats past the grid's edges: asked for, and a
+    /// boundary that makes the field a torus.
+    pub fn tiles(&self, boundary: SimBoundary) -> bool {
+        self.tile && boundary == SimBoundary::Periodic
+    }
+}
+
 fn is_identity_warp(v: &SimWarp) -> bool {
     v.is_identity()
         && v.filter == SimWarpFilter::default()
@@ -831,6 +884,13 @@ pub struct SimConfig {
     /// default, and absent from the file then.
     #[serde(default, skip_serializing_if = "is_identity_warp")]
     pub warp: SimWarp,
+
+    /// Where the 2D picture looks at the field: a camera the colour pass
+    /// applies, which the field never sees (camera-unification C6).
+    /// The whole grid, letterboxed, by default, and absent from the file
+    /// then.
+    #[serde(default, skip_serializing_if = "SimView::is_default")]
+    pub view: SimView,
 
     /// Per-model parameters, keyed `"name"` (see module docs).
     #[serde(default, skip_serializing_if = "is_empty_map")]
@@ -1484,6 +1544,7 @@ impl Default for SimConfig {
             dt: default_dt(),
             boundary: SimBoundary::default(),
             warp: SimWarp::default(),
+            view: SimView::default(),
             model_params: BTreeMap::new(),
             coloring_params: BTreeMap::new(),
             matte: SimMatte::default(),
@@ -1771,6 +1832,11 @@ mod tests {
             ConfigPath::SimWarpPanX,
             ConfigPath::SimWarpPanY,
             ConfigPath::SimWarpFlow,
+            ConfigPath::SimViewCenterX,
+            ConfigPath::SimViewCenterY,
+            ConfigPath::SimViewZoom,
+            ConfigPath::SimViewRotation,
+            ConfigPath::SimViewTile,
             ConfigPath::SimWarpFilter,
             ConfigPath::SimWarpMode,
             ConfigPath::SimWarpCull,
@@ -1817,14 +1883,14 @@ mod tests {
     #[test]
     #[cfg(feature = "engine-sim")]
     fn the_panel_writes_every_sim_path() {
-        let panel = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .join("ui")
-            .join("sim_panel.rs");
-        let Ok(source) = std::fs::read_to_string(&panel) else {
+        // The panel, and the shared view controls it draws.
+        let ui = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join("ui");
+        let read = |f: &str| std::fs::read_to_string(ui.join(f));
+        let (Ok(panel), Ok(view)) = (read("sim_panel.rs"), read("view_controls.rs")) else {
             eprintln!("no source tree; skipping");
             return;
         };
+        let source = format!("{panel}\n{view}");
         // Nothing yet: every simulation path has a control.
         const NOT_ON_THE_PANEL: &[&str] = &[];
         let mut missing: Vec<String> = Vec::new();

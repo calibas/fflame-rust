@@ -14,7 +14,7 @@ use crate::config::delta::ConfigPath;
 use crate::config::ConfigValue;
 use crate::config::manager::ConfigManager;
 use crate::config::sim::{
-    SimBoundary, SimConfig, SimDownscale, SimGrid, SimInit, SimUpscale, SimWarp,
+    SimBoundary, SimConfig, SimGrid, SimInit, SimWarp,
     SimWarpFilter,
 };
 use crate::scene::transforms::RenderMode;
@@ -314,46 +314,8 @@ pub fn render_sim_content(
                     }
                 }
 
-                // ---- Resolve filters ----
-                ui.horizontal(|ui| {
-                    ui.label(t!("sim_panel.upscale").as_ref());
-                    egui::ComboBox::from_id_salt("sim_upscale")
-                        .selected_text(sim.upscale.name())
-                        .show_ui(ui, |ui| {
-                            for n in SimUpscale::NAMES {
-                                if ui.selectable_label(sim.upscale.name() == *n, *n).clicked() {
-                                    let _ = config_manager
-                                        .update_param(ConfigPath::SimUpscale, (*n).to_string().into());
-                                }
-                            }
-                        })
-                        .response
-                        .on_hover_text(t!("sim_panel.upscale_tip"));
-                    ui.label(t!("sim_panel.fit").as_ref());
-                    egui::ComboBox::from_id_salt("sim_fit")
-                        .selected_text(sim.fit.name())
-                        .show_ui(ui, |ui| {
-                            for n in crate::config::sim::SimFit::NAMES {
-                                if ui.selectable_label(sim.fit.name() == *n, *n).clicked() {
-                                    let _ = config_manager
-                                        .update_param(ConfigPath::SimFit, (*n).to_string().into());
-                                }
-                            }
-                        })
-                        .response
-                        .on_hover_text(t!("sim_panel.fit_tip"));
-                    ui.label(t!("sim_panel.downscale").as_ref());
-                    egui::ComboBox::from_id_salt("sim_downscale")
-                        .selected_text(sim.downscale.name())
-                        .show_ui(ui, |ui| {
-                            for n in SimDownscale::NAMES {
-                                if ui.selectable_label(sim.downscale.name() == *n, *n).clicked() {
-                                    let _ = config_manager
-                                        .update_param(ConfigPath::SimDownscale, (*n).to_string().into());
-                                }
-                            }
-                        });
-                });
+                // How the grid is shown -- the resolve filters, the fit, the
+                // view -- is the View panel's (camera-unification C5).
 
                 ui.separator();
 
@@ -552,17 +514,21 @@ pub fn render_sim_content(
                 {
                     let _ = config_manager.update_param(ConfigPath::SimWarpZoom, zoom.into());
                 }
-                let mut rot = w.rotation;
+                // Degrees a step (no radians in the UI); the range is the
+                // radians' it always was, about ±2.9°.
+                let mut rot = w.rotation.to_degrees();
                 if ui
                     .add(
-                        egui::Slider::new(&mut rot, -0.05..=0.05)
+                        egui::Slider::new(&mut rot, -2.9..=2.9)
                             .text(t!("sim_panel.warp_rotation").as_ref())
-                            .fixed_decimals(4),
+                            .suffix("°")
+                            .fixed_decimals(3)
+                            .clamping(egui::SliderClamping::Never),
                     )
                     .on_hover_text(t!("sim_panel.warp_rotation_tip"))
                     .changed()
                 {
-                    let _ = config_manager.update_param(ConfigPath::SimWarpRotation, rot.into());
+                    let _ = config_manager.update_param(ConfigPath::SimWarpRotation, rot.to_radians().into());
                 }
                 let mut px = w.pan_x;
                 if ui

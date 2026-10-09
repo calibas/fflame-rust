@@ -10,34 +10,55 @@ pub fn render_view_content(
     fly_mode_active: bool,
     fly_mode_toggle_requested: &mut bool,
     deep_zoom: &super::DeepZoom,
+    escape_aa: Option<super::EscapeAa>,
 ) {
     use crate::config::slider::LazyUndoUi;
 
     // Clone config to avoid borrow conflicts
     let config = config_manager.active_config().clone();
 
-    ui.label(t!("view.zoom")).on_hover_text(t!("view.tooltip_zoom"));
-    ui.horizontal(|ui| {
-        if ui.button(t!("view.zoom_in").as_ref()).on_hover_text(t!("view.tooltip_zoom")).clicked() {
-            let new_zoom = config.zoom * 1.5;
-            let _ = config_manager.update_param(
-                ConfigPath::Zoom,
-                new_zoom.into());
-        }
-        if ui.button(t!("view.zoom_out").as_ref()).on_hover_text(t!("view.tooltip_zoom")).clicked() {
-            let new_zoom = config.zoom / 1.5;
-            let _ = config_manager.update_param(
-                ConfigPath::Zoom,
-                new_zoom.into()
-            );
-        }
-    });
-    ui.horizontal(|ui| {
-        ui.label(t!("view.zoom_value")).on_hover_text(t!("view.tooltip_zoom"));
-        let _ = ui.lazy_drag(config_manager, ConfigPath::Zoom, 0.01, "");
-    });
+    // One View panel for every mode (camera-unification C5): the camera
+    // the viewport shows, then what that mode draws the picture with,
+    // then -- for a flame -- its own sections below.
+    use crate::camera::gesture::{self, ViewKind};
+    let kind = gesture::view_kind(&config);
+    let _ = &escape_aa;
 
-    ui.separator();
+    // ── Camera: the 2D views, and a 3D flame's picture after its
+    // projection (its pan, zoom and roll).
+    if !kind.is_3d() || kind == ViewKind::Flame3d {
+        egui::CollapsingHeader::new(t!("view.camera").as_ref())
+            .default_open(true)
+            .show(ui, |ui| super::view_controls::camera_2d(ui, config_manager));
+    }
+
+    // ── What each engine draws the picture with.
+    match kind {
+        #[cfg(feature = "engine-escape")]
+        ViewKind::EscapePlane | ViewKind::Solid | ViewKind::EscapeTerrain => {
+            // A lens bends a plane's pixels and a solid's rays; a
+            // terrain's camera has none.
+            if kind != ViewKind::EscapeTerrain {
+                super::escape_panel::show_lens_section(ui, config_manager);
+            }
+            egui::CollapsingHeader::new(t!("view.image").as_ref())
+                .default_open(true)
+                .show(ui, |ui| super::view_controls::escape_image(ui, config_manager, escape_aa));
+        }
+        #[cfg(feature = "engine-sim")]
+        ViewKind::Sim2d => {
+            egui::CollapsingHeader::new(t!("view.image").as_ref())
+                .default_open(true)
+                .show(ui, |ui| super::view_controls::sim_image(ui, config_manager));
+        }
+        _ => {}
+    }
+    if matches!(kind, ViewKind::Solid | ViewKind::EscapeTerrain | ViewKind::SimTerrain) {
+        ui.label(egui::RichText::new(t!("view.camera_3d_elsewhere")).small().weak());
+    }
+    if !matches!(kind, ViewKind::Flame2d | ViewKind::Flame3d) {
+        return;
+    }
 
     // ── Deep zoom ────────────────────────────────────────────────
     // Both controls are REQUESTS; the renderer decides per view and
@@ -79,103 +100,6 @@ pub fn render_view_content(
                 // what it is doing, shared with the Paths panel.
                 super::paths_panel::focused_rendering(ui, config_manager, &config, deep_zoom);
             });
-    }
-
-    ui.separator();
-
-
-    ui.label(t!("view.pan")).on_hover_text(t!("view.tooltip_pan"));
-    ui.horizontal(|ui| {
-        ui.label(t!("view.pan_x")).on_hover_text(t!("view.tooltip_pan"));
-        let mut pan_x = config.pan_x;
-        let response_x = ui.add(
-            egui::DragValue::new(&mut pan_x)
-                .speed(0.001 / config.zoom)
-                .custom_formatter(|v, _| format!("{:.7}", v))
-        ).on_hover_text(t!("view.tooltip_pan"));
-        super::vkb_sync_opts(ui, &response_x, &format!("{pan_x:.7}"), "decimal");
-        super::vkb_sync_opts(ui, &response_x, &format!("{}", pan_x), "decimal");
-        if response_x.changed() {
-            let _ = config_manager.update_param(
-                ConfigPath::Pan,
-                (pan_x, config.pan_y).into()
-            );
-        }
-
-        ui.label(t!("view.pan_y")).on_hover_text(t!("view.tooltip_pan"));
-        let mut pan_y = config.pan_y;
-        let response_y = ui.add(
-            egui::DragValue::new(&mut pan_y)
-                .speed(0.001 / config.zoom)
-                .custom_formatter(|v, _| format!("{:.7}", v))
-        ).on_hover_text(t!("view.tooltip_pan"));
-        super::vkb_sync_opts(ui, &response_y, &format!("{pan_y:.7}"), "decimal");
-        super::vkb_sync_opts(ui, &response_y, &format!("{}", pan_y), "decimal");
-        if response_y.changed() {
-            let _ = config_manager.update_param(
-                ConfigPath::Pan,
-                (config.pan_x, pan_y).into()
-            );
-        }
-    });
-
-    // Pan step size depends on zoom
-    let pan_step = 0.1 / config.zoom;
-
-    ui.separator();
-    ui.label(t!("view.arrow_controls"));
-
-    // Arrow buttons pan in screen space; conversion to the pan frame
-    // is rotation-aware in 2D and identity in 3D (see
-    // FractalConfig::screen_delta_to_pan_frame).
-    ui.horizontal(|ui| {
-        ui.add_space(36.0);
-        if ui.button("  ^  ").clicked() {
-            let (dx, dy) = config.screen_delta_to_pan_frame(0.0, -pan_step as f64);
-            let _ = config_manager.update_param(
-                ConfigPath::Pan,
-                (config.pan_x + dx, config.pan_y + dy).into()
-            );
-        }
-    });
-    ui.horizontal(|ui| {
-        if ui.button("  <  ").clicked() {
-            let (dx, dy) = config.screen_delta_to_pan_frame(-pan_step as f64, 0.0);
-            let _ = config_manager.update_param(
-                ConfigPath::Pan,
-                (config.pan_x + dx, config.pan_y + dy).into()
-            );
-        }
-        if ui.button("  v  ").clicked() {
-            let (dx, dy) = config.screen_delta_to_pan_frame(0.0, pan_step as f64);
-            let _ = config_manager.update_param(
-                ConfigPath::Pan,
-                (config.pan_x + dx, config.pan_y + dy).into()
-            );
-        }
-        if ui.button("  >  ").clicked() {
-            let (dx, dy) = config.screen_delta_to_pan_frame(pan_step as f64, 0.0);
-            let _ = config_manager.update_param(
-                ConfigPath::Pan,
-                (config.pan_x + dx, config.pan_y + dy).into()
-            );
-        }
-    });
-
-    ui.separator();
-
-    let mut degrees = config.rotation.to_degrees();
-    let response = ui.add(
-        super::VkbSlider::new(&mut degrees, -180.0..=180.0)
-            .text(t!("view.rotation").as_ref())
-            .suffix("°")
-    ).on_hover_text(t!("view.tooltip_rotation"));
-    if response.changed() {
-        let new_rotation = degrees.to_radians();
-        let _ = config_manager.update_param(
-            ConfigPath::Rotation,
-            new_rotation.into()
-        );
     }
 
     ui.separator();
@@ -539,28 +463,6 @@ pub fn render_view_content(
 
     render_post_symmetry_section(ui, config_manager, &config);
 
-    ui.separator();
-
-    if ui.button(t!("view.reset").as_ref()).clicked() {
-        let _ = config_manager.update_batch(
-            vec![
-                (ConfigPath::Zoom, 1.0.into()),
-                (ConfigPath::Pan, (0.0, 0.0).into()),
-                (ConfigPath::Rotation, 0.0.into()),
-                (ConfigPath::CameraRotationX, 0.0.into()),
-                (ConfigPath::CameraRotationY, 0.0.into()),
-                (ConfigPath::CameraBank, 0.0.into()),
-                (ConfigPath::CameraX, 0.0.into()),
-                (ConfigPath::CameraY, 0.0.into()),
-                (ConfigPath::CameraZ, 0.0.into()),
-                (ConfigPath::DofFocusDistance, crate::config::DEFAULT_DOF_FOCUS_DISTANCE.into()),
-                (ConfigPath::DofBlurStrength, crate::config::DEFAULT_DOF_BLUR_STRENGTH.into()),
-                (ConfigPath::FogStrength, crate::config::DEFAULT_FOG_STRENGTH.into()),
-                (ConfigPath::FogStart, crate::config::DEFAULT_FOG_START.into()),
-            ],
-            "history.action.reset_view".to_string()
-        );
-    }
 }
 
 /// Post-symmetry section. Type dropdown + the per-mode controls
@@ -649,5 +551,64 @@ fn render_post_symmetry_section(
             });
         }
         PostSymmetryType::None => unreachable!(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_dock::egui;
+
+    /// Lay the View panel out for real, in every view it serves
+    /// (camera-unification C5): a panel that compiles can still panic at
+    /// layout -- a duplicate widget id, an empty slider range -- and the
+    /// visual suite renders fractals, not panels. Two frames, so the
+    /// second takes egui's "widget already exists" path.
+    fn lay_out(config: FractalConfig) {
+        let ctx = egui::Context::default();
+        let mut manager = ConfigManager::new(config);
+        let flame = manager.active_config().flame.clone();
+        let deep = super::super::DeepZoom::default();
+        let mut toggle = false;
+        for _ in 0..2 {
+            let _ = ctx.run(Default::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    render_view_content(ui, &mut manager, &flame, false, &mut toggle, &deep, None);
+                });
+            });
+        }
+    }
+
+    #[test]
+    fn the_view_panel_lays_out_in_every_view() {
+        use crate::scene::transforms::RenderMode;
+        let mut c = FractalConfig::default();
+        c.render_mode = RenderMode::TwoD;
+        lay_out(c.clone());
+        c.render_mode = RenderMode::ThreeD;
+        lay_out(c.clone());
+        #[cfg(feature = "engine-escape")]
+        {
+            let mut e = FractalConfig::default();
+            e.render_mode = RenderMode::Escape;
+            lay_out(e.clone());
+            e.escape.formula = "quaternion_julia_solid".to_string();
+            lay_out(e.clone());
+            #[cfg(feature = "terrain")]
+            {
+                let mut t = FractalConfig::default();
+                t.render_mode = RenderMode::Escape;
+                t.escape.terrain.enabled = true;
+                lay_out(t);
+            }
+        }
+        #[cfg(feature = "engine-sim")]
+        {
+            let mut s = FractalConfig::default();
+            s.render_mode = RenderMode::Simulation;
+            lay_out(s.clone());
+            s.sim.terrain.enabled = true;
+            lay_out(s);
+        }
     }
 }

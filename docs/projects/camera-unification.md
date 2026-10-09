@@ -468,21 +468,55 @@ changes input lists what to try in the app.
     point under the cursor; a pinch is one entry; Reset View per camera.
   - Try in the app: each mode's drag, Alt+drag, right drag, wheel, keys,
     and the tab strip; touch where available.
-- **P2. The simulation's 2D view (C6).**
-  - `sim.view`, its ConfigPaths, tracks and the resolve transform;
-    periodic tiling; `ViewNavigation` Show for simulations.
-  - Tests: an identity view is bit-identical to today's resolve; a
-    view's pixels equal the field sampled at the transformed position; a
-    periodic view's seam is continuous; the field's bytes are unchanged
-    by any view.
-- **P3. The View panel's 2D layout.**
-  - Camera, lens, image and deep-zoom sections for the three 2D modes;
-    the escape camera and lens controls leave the Escape panel.
-  - Angles in degrees on −180 to 180 sliders that take typed values
-    beyond (C5): the 2D rotations, the warp's rotation per step, and the
-    track editor's angle tracks.
-  - The animation picker's View category offers only the active
-    camera's targets (the gating deferred from PR #129).
+- **P2. The simulation's 2D view (C6).** *Built 2026-10-09.*
+  - `sim.view` (`SimView`: centre as grid fractions, zoom over the fit,
+    turn, tile), its ConfigPaths (`SimView*`, tracks `Sim.View.*`,
+    `SimRerender`), the colour pass's camera, the gestures, and
+    `ViewNavigation` Show for simulations.
+  - **The default view keeps the letterbox code path**, so every saved
+    simulation renders the same bits (visual suite 375/375); a camera
+    path draws any other view. The step pass never reads the view, and
+    the octave mode's cull keeps its own window.
+  - **Tiling is a choice, off by default** (my decision, reported): on, a
+    periodic field fills the letterbox bars with copies of itself, which
+    would have changed every saved periodic picture. Under any other
+    boundary the toggle is disabled and the grid's edges show.
+  - A simulation terrain's ground is coloured by the same pass at the
+    default view: the 2D view never moves it.
+  - Tests: a pan of whole cells shifts the picture by them, a half turn
+    flips it, a tiled view wraps round where the untiled one shows its
+    edge, and the camera's mapping at the default's values is the
+    letterbox's bit for bit (GPU, 64x64 at a cell a pixel); a zoomed,
+    panned, turned, tiled view under the octave cull steps the same
+    field bit for bit; the gestures keep the point under the cursor and
+    the pointer.
+- **P3. The View panel's 2D layout.** *Built 2026-10-09.*
+  - One View panel for every mode, docked in the escape and simulation
+    workspaces too. Its **Camera** section is one widget for every 2D
+    view and a 3D flame's projected picture (`view_controls::camera_2d`):
+    zoom (a magnification; the escape plane's as 10^n, since a deep zoom
+    is no slider's), centre (the escape centre as exact decimals),
+    rotation in degrees, an arrow pad and Reset -- the buttons through
+    `camera::gesture`, as the keys and the mouse.
+  - **Display options moved to the View panel** (my rule, reported): the
+    escape lens, antialiasing and downsample; a simulation's upscale,
+    fit, downscale and tiling. What each engine computes stays in its
+    panel (the escape Reference and Diagnostics, a simulation's grid).
+  - **Reset View** is the camera's reset, the same as the View menu's;
+    the flame panel's old Reset also reset depth of field and fog, which
+    are not the camera, and no longer does.
+  - Angles in degrees: the 2D rotations (the escape one was an unbounded
+    drag value), the warp's rotation per step (raw radians before), and
+    the track editor's angle tracks (`is_angle_path`), shown and typed
+    in degrees, stored in radians.
+  - The animation picker's View and Rendering categories offer what the
+    shown picture reads: the flame's camera only in the flame modes,
+    the lights and fog where a solid or a terrain reads them.
+  - The 3D views other than a flame's keep their camera in the Escape and
+    Simulation panels until P4 (the View panel says so).
+  - Tests: the View panel lays out in all seven views (headless egui, two
+    frames); the workspace and visibility rules now require the View
+    panel in every mode.
 - **P4. The View panel's 3D layout, with lighting and material.**
   - Camera (with Position X/Y/Z everywhere), fly settings, atmosphere
     (mode D's fog editable), depth of field -- angles in degrees as P3.
