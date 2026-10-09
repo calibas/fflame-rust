@@ -4837,6 +4837,17 @@ pub fn solid_pixel_step(
     ((x - e).exp2(), e as i64)
 }
 
+/// The solid camera's distance from its target, as a mantissa and a
+/// power of two (`FRAME_DISTANCE · radius / 2^zoom`, which leaves f64's
+/// range at a deep enough zoom): what a step measured in distances --
+/// a fly mode's -- is added to the decimal target in.
+pub fn solid_distance(escape: &crate::config::escape::EscapeConfig, ifs: &Ifs3) -> (f64, i64) {
+    let r = ifs.frame_radius.max(1e-12);
+    let x = (FRAME_DISTANCE * r).log2() - escape.zoom_log2;
+    let e = x.floor();
+    ((x - e).exp2(), e as i64)
+}
+
 /// Pack the whole-IFS constants and the camera for a solid render.
 ///
 /// Layout, one `vec4` each:

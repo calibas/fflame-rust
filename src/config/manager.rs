@@ -3296,7 +3296,9 @@ impl ConfigManager {
             }
             ConfigPath::SimTerrainCamPitch => {
                 let v: f32 = value.try_into()?;
-                self.current.sim.terrain.cam_pitch = v.clamp(-1.5607964, 1.5607964);
+                // To the poles, as the escape cameras: `solid_frame`
+                // holds there, and a fly mode's look passes through them.
+                self.current.sim.terrain.cam_pitch = v.clamp(-1.5708, 1.5708);
             }
             ConfigPath::SimTerrainCamYaw => {
                 let v: f32 = value.try_into()?;

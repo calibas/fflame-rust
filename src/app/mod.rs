@@ -1147,6 +1147,12 @@ impl App {
                                 window.request_redraw();
                             }
                         },
+                        WindowEvent::Focused(false) => {
+                            // A key held as the window lost focus never
+                            // sends its key-up here: let go of them all,
+                            // or the fly camera flies on.
+                            app.release_fly_keys();
+                        }
                         WindowEvent::Focused(true) => {
                             // Reconfigure surface on focus regain to fix UI offset
                             // (Windows DWM composition changes can desync surface position)
@@ -1904,12 +1910,11 @@ impl App {
             self.release_inactive_engines(mode_now);
         }
 
-        // Consume fly-mode responses produced by the UI this frame. The
-        // look moves the 3D flame's camera, so only where it is drawn: in
-        // escape or simulation mode an Alt+drag wrote a camera nobody saw
-        // into the history, and the flame came back moved.
+        // Consume fly-mode responses produced by the UI this frame: a
+        // look turns the camera the viewport shows, whichever 3D camera
+        // it is (`camera::fly`), and nothing in a 2D view.
         if let Some((dx, dy)) = ui_response.fly_mouse_drag {
-            if self.config_manager.active_config().render_mode == crate::scene::transforms::RenderMode::ThreeD {
+            if self.fly_mode {
                 self.apply_fly_mouse_look(dx, dy);
             }
         }
