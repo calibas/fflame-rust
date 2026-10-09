@@ -116,7 +116,10 @@ pub fn panel(p: PanelType, m: RenderMode, solid: Solid) -> Vis {
         // both non-flame engines write an image in the flame
         // accumulator's layout and go through the same density
         // effects, tonemap and colour effects.
+        // The View panel: every mode's camera, and how its picture is
+        // drawn (camera-unification C5).
         P::FractalViewport
+        | P::View
         | P::Colors
         | P::PaletteEditor
         | P::PaletteLibrary
@@ -147,7 +150,7 @@ pub fn panel(p: PanelType, m: RenderMode, solid: Solid) -> Vis {
         | P::Variations => Vis::Show,
 
         // Flame-only editing surfaces.
-        P::View | P::XaosEditor | P::Subflames | P::Paths => match m {
+        P::XaosEditor | P::Subflames | P::Paths => match m {
             M::TwoD | M::ThreeD => Vis::Show,
             M::Escape | M::Simulation => Vis::Grey(FLAME_ONLY),
         },
@@ -257,22 +260,11 @@ pub enum Control {
     /// Panning and zooming the viewport: drag, wheel, pinch, the
     /// arrow keys, and the View menu's Reset / Zoom In / Zoom Out.
     ///
-    /// Simulation has no view to move. Flames and escape each have an
-    /// absolute view the renderer reads (`config.zoom`/`pan_*` and the
-    /// escape centre respectively), but the simulation's only spatial
-    /// control is `sim.warp`, which is a PER-STEP transform of the
-    /// field itself -- a velocity applied to the content, not a camera
-    /// over it. Binding a drag to it would advect the field, blur it
-    /// through a resample every step, do nothing at all while paused,
-    /// and do nothing in octave mode. So the gesture is refused rather
-    /// than misdirected: it used to fall through to the flame path and
-    /// write `config.zoom`/`pan_*`, which the simulation ignores --
-    /// invisible, but it drifted the flame view you would see on
-    /// switching back and filled the history with entries that changed
-    /// nothing.
-    ///
-    /// A real display-time view for the simulation is a feature, not a
-    /// bug fix; when it exists this arm becomes `Show`.
+    /// Every mode has a view now. A simulation's is `sim.view`, a camera
+    /// the colour pass applies over the field (camera-unification C6) --
+    /// not `sim.warp`, which is a PER-STEP transform of the field itself,
+    /// a velocity applied to the content: binding a drag to that advected
+    /// the field, so until the view existed the gesture was refused.
     ViewNavigation,
     /// The deep-zoom section: auto exposure and cylinder targeting.
     /// Both are properties of the CHAOS GAME -- one counts the plot
@@ -319,13 +311,7 @@ pub fn control(c: Control, m: RenderMode, tone: ToneMapMode) -> Vis {
             RenderMode::ThreeD => Vis::Grey(TWO_D_ONLY),
             RenderMode::Escape | RenderMode::Simulation => Vis::Hide,
         },
-        C::ViewNavigation => {
-            if matches!(m, RenderMode::Simulation) {
-                Vis::Hide
-            } else {
-                Vis::Show
-            }
-        }
+        C::ViewNavigation => Vis::Show,
         C::OrbitCache => {
             if matches!(m, RenderMode::Escape) {
                 Vis::Show
@@ -610,16 +596,12 @@ mod tests {
         assert!(checked > 0, "the scan found nothing to check");
     }
 
-    /// Simulation has no viewport navigation; every other mode does.
+    /// Every mode navigates its view: a simulation's too, since it has
+    /// one (`sim.view`).
     #[test]
-    fn only_simulation_refuses_viewport_navigation() {
+    fn every_mode_navigates_its_view() {
         for m in RenderMode::ALL {
-            let want = *m != RenderMode::Simulation;
-            assert_eq!(
-                control(Control::ViewNavigation, *m, ToneMapMode::Linear).is_show(),
-                want,
-                "{m:?}"
-            );
+            assert!(control(Control::ViewNavigation, *m, ToneMapMode::Linear).is_show(), "{m:?}");
         }
     }
 
@@ -698,14 +680,10 @@ mod tests {
             assert!(hidden(Control::DeepZoom), "{m:?} deep zoom");
             assert!(hidden(Control::ColorMode), "{m:?} colour mode");
             assert!(hidden(Control::FocusedRendering), "{m:?} focused rendering");
-            if m == RenderMode::Simulation {
-                assert!(hidden(Control::ViewNavigation), "sim viewport navigation");
-            } else {
-                assert!(
-                    control(Control::ViewNavigation, m, ToneMapMode::Logarithmic).is_show(),
-                    "escape keeps its own navigation"
-                );
-            }
+            assert!(
+                control(Control::ViewNavigation, m, ToneMapMode::Logarithmic).is_show(),
+                "{m:?} has its own view to navigate"
+            );
             assert!(greyed(Control::TonemapMode), "{m:?} tone map mode");
             assert!(greyed(Control::LogOnlyTone), "{m:?} log-only tone");
             assert!(greyed(Control::AlphaBlendCurve), "{m:?} alpha blend");
@@ -754,14 +732,14 @@ mod tests {
         // the flame's attractor as a distance field, so editing a
         // transform edits the picture.
         let mut want_escape = vec![
-            "View", "XaosEditor",
+            "XaosEditor",
             "Subflames", "Paths", "SolidLighting", "RandomGenerator", "Simulation",
         ];
         want_escape.sort();
         assert_eq!(greyed(RenderMode::Escape), want_escape, "Escape");
 
         let mut want_sim = vec![
-            "View", "XaosEditor", "Subflames", "Paths", "SolidLighting",
+            "XaosEditor", "Subflames", "Paths", "SolidLighting",
             "RandomGenerator", "Escape",
         ];
         want_sim.sort();

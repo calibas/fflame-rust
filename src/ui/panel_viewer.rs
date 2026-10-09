@@ -708,7 +708,6 @@ impl<'a> PanelViewer<'a> {
                     ui,
                     self.context.config_manager,
                     self.context.workspace_layout_requested,
-                    self.context.escape_aa,
                 );
             }
             PanelType::Textures => {
@@ -863,6 +862,7 @@ impl<'a> PanelViewer<'a> {
             self.context.fly_mode_active,
             self.context.fly_mode_toggle_requested,
             self.context.deep_zoom,
+            self.context.escape_aa,
         );
     }
 

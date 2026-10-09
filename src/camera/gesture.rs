@@ -50,7 +50,7 @@ pub enum ViewKind {
     /// The escape terrain: the plane's centre as its target on the
     /// ground, mode D's angles, the zoom as its scale.
     EscapeTerrain,
-    /// A simulation's 2D picture. No view yet (camera-unification P2).
+    /// A simulation's 2D picture: `sim.view`, a camera over the field.
     Sim2d,
     /// A simulation terrain's camera.
     SimTerrain,
@@ -122,6 +122,8 @@ pub fn pan(config: &FractalConfig, drag: [f32; 2], panel: [f32; 2]) -> Option<Ca
         ViewKind::EscapePlane | ViewKind::Solid | ViewKind::EscapeTerrain => escape_pan(config, drag, panel),
         #[cfg(all(feature = "terrain", feature = "engine-sim"))]
         ViewKind::SimTerrain => sim_terrain_pan(config, drag, panel),
+        #[cfg(feature = "engine-sim")]
+        ViewKind::Sim2d => sim_view::pan(config, drag, panel),
         _ => None,
     }
 }
@@ -144,6 +146,8 @@ pub fn zoom(config: &FractalConfig, factor: f64, cursor: Option<[f32; 2]>, panel
         ViewKind::EscapeTerrain => escape_zoom(config, factor, None, panel),
         #[cfg(all(feature = "terrain", feature = "engine-sim"))]
         ViewKind::SimTerrain => sim_terrain_dolly(config, factor),
+        #[cfg(feature = "engine-sim")]
+        ViewKind::Sim2d => sim_view::zoom(config, factor, cursor, panel),
         _ => None,
     }
 }
@@ -182,7 +186,69 @@ fn rotate_2d(config: &FractalConfig, kind: ViewKind, swept: f64) -> Option<Camer
             vec![(ConfigPath::EscapeRotation, (wrap_pi(config.escape.rotation as f64 + swept) as f32).into())],
             ROTATE,
         )),
+        ViewKind::Sim2d => Some(CameraEdit::batch(
+            vec![(ConfigPath::SimViewRotation, (wrap_pi(config.sim.view.rotation as f64 + swept) as f32).into())],
+            ROTATE,
+        )),
         _ => None,
+    }
+}
+
+/// The simulation's 2D view: the colour pass's mapping (`COLOR_TEMPLATE`
+/// in `sim::assembler`) between panel pixels and grid cells -- the fit
+/// times the zoom, the turn undone, the grid's y running down as the
+/// screen's does.
+#[cfg(feature = "engine-sim")]
+mod sim_view {
+    use super::*;
+
+    /// Panel pixels a cell at the view's zoom, and the grid's size in
+    /// cells, for a panel `panel` in size.
+    fn scale(config: &FractalConfig, panel: [f32; 2]) -> (f64, f64, f64) {
+        let (gw, gh) = crate::sim::SimRenderer::grid_for(&config.sim, panel[0].max(1.0) as u32, panel[1].max(1.0) as u32);
+        let (gw, gh) = (gw.max(1) as f64, gh.max(1) as f64);
+        let (rx, ry) = (panel[0].max(1.0) as f64 / gw, panel[1].max(1.0) as f64 / gh);
+        let fit = match config.sim.fit {
+            crate::config::sim::SimFit::Letterbox => rx.min(ry),
+            crate::config::sim::SimFit::Cover => rx.max(ry),
+        };
+        (fit * config.sim.view.zoom.max(1.0e-6) as f64, gw, gh)
+    }
+
+    /// A screen offset as a grid offset, in cells, at `s` pixels a cell.
+    fn to_cells(config: &FractalConfig, s: f64, d: [f64; 2]) -> [f64; 2] {
+        let (sn, cs) = (config.sim.view.rotation as f64).sin_cos();
+        [(cs * d[0] + sn * d[1]) / s, (cs * d[1] - sn * d[0]) / s]
+    }
+
+    /// The picture follows the drag.
+    pub fn pan(config: &FractalConfig, drag: [f32; 2], panel: [f32; 2]) -> Option<CameraEdit> {
+        let (s, gw, gh) = scale(config, panel);
+        let c = to_cells(config, s, [drag[0] as f64, drag[1] as f64]);
+        let v = &config.sim.view;
+        Some(CameraEdit::batch(
+            vec![
+                (ConfigPath::SimViewCenterX, ((v.center_x as f64 - c[0] / gw) as f32).into()),
+                (ConfigPath::SimViewCenterY, ((v.center_y as f64 - c[1] / gh) as f32).into()),
+            ],
+            PAN,
+        ))
+    }
+
+    /// Zoom by `factor` toward `cursor`: the point under it stays.
+    pub fn zoom(config: &FractalConfig, factor: f64, cursor: Option<[f32; 2]>, panel: [f32; 2]) -> Option<CameraEdit> {
+        let v = &config.sim.view;
+        let new_zoom = (v.zoom.max(1.0e-6) as f64 * factor).clamp(1.0e-3, 1.0e4);
+        let mut changes = vec![(ConfigPath::SimViewZoom, (new_zoom as f32).into())];
+        if let Some([cx, cy]) = cursor {
+            let (s, gw, gh) = scale(config, panel);
+            let s_new = s / v.zoom.max(1.0e-6) as f64 * new_zoom;
+            let d = [cx as f64, cy as f64];
+            let (at, at_new) = (to_cells(config, s, d), to_cells(config, s_new, d));
+            changes.push((ConfigPath::SimViewCenterX, ((v.center_x as f64 + (at[0] - at_new[0]) / gw) as f32).into()));
+            changes.push((ConfigPath::SimViewCenterY, ((v.center_y as f64 + (at[1] - at_new[1]) / gh) as f32).into()));
+        }
+        Some(CameraEdit::batch(changes, ZOOM))
     }
 }
 
@@ -413,6 +479,15 @@ pub fn reset(config: &FractalConfig) -> Option<CameraEdit> {
                     changes.push((ConfigPath::EscapeCamBank, home.cam_bank.into()));
                 }
             }
+        }
+        #[cfg(feature = "engine-sim")]
+        ViewKind::Sim2d => {
+            // The whole grid again; tiling is the picture's choice, kept.
+            let home = crate::config::sim::SimView::default();
+            changes.push((ConfigPath::SimViewCenterX, home.center_x.into()));
+            changes.push((ConfigPath::SimViewCenterY, home.center_y.into()));
+            changes.push((ConfigPath::SimViewZoom, home.zoom.into()));
+            changes.push((ConfigPath::SimViewRotation, home.rotation.into()));
         }
         #[cfg(feature = "engine-sim")]
         ViewKind::SimTerrain => {
@@ -1271,8 +1346,73 @@ mod tests {
                 (home.center_re.as_str(), 0.0, 0.0)
             );
         }
-        let mut sim = FractalConfig::default();
-        sim.render_mode = crate::scene::transforms::RenderMode::Simulation;
-        assert!(reset(&sim).is_none());
+        #[cfg(feature = "engine-sim")]
+        {
+            let mut sim = FractalConfig::default();
+            sim.render_mode = crate::scene::transforms::RenderMode::Simulation;
+            sim.sim.view.zoom = 3.0;
+            sim.sim.view.tile = true;
+            let after = applied(&sim, &reset(&sim).expect("a simulation's view resets"));
+            assert_eq!(after.sim.view.zoom, 1.0);
+            assert!(after.sim.view.tile, "tiling is the picture's choice");
+        }
+    }
+
+    /// The simulation's picture point under a screen offset, in grid
+    /// fractions: the colour pass's mapping.
+    #[cfg(feature = "engine-sim")]
+    fn sim_point(c: &FractalConfig, panel: [f32; 2], off: [f32; 2]) -> (f64, f64) {
+        let (gw, gh) = crate::sim::SimRenderer::grid_for(&c.sim, panel[0] as u32, panel[1] as u32);
+        let fit = (panel[0] as f64 / gw as f64).min(panel[1] as f64 / gh as f64) * c.sim.view.zoom as f64;
+        let (sn, cs) = (c.sim.view.rotation as f64).sin_cos();
+        let d = [off[0] as f64 / fit, off[1] as f64 / fit];
+        (
+            c.sim.view.center_x as f64 + (cs * d[0] + sn * d[1]) / gw as f64,
+            c.sim.view.center_y as f64 + (cs * d[1] - sn * d[0]) / gh as f64,
+        )
+    }
+
+    #[cfg(feature = "engine-sim")]
+    fn viewed_sim() -> FractalConfig {
+        let mut c = FractalConfig::default();
+        c.render_mode = crate::scene::transforms::RenderMode::Simulation;
+        c.sim.grid = crate::config::sim::SimGrid::Fixed { width: 200, height: 120 };
+        c.sim.view.zoom = 2.5;
+        c.sim.view.rotation = 0.4;
+        c.sim.view.center_x = 0.3;
+        c.sim.view.center_y = 0.6;
+        c
+    }
+
+    /// The simulation's view pans, zooms and turns as the other 2D views
+    /// do: the picture follows a drag, the point under the cursor stays
+    /// under it, and a twist keeps the point under the pointer.
+    #[cfg(feature = "engine-sim")]
+    #[test]
+    fn the_simulation_view_moves_as_the_other_2d_views_do() {
+        let panel = [800.0f32, 600.0];
+        let c = viewed_sim();
+        let (at, drag) = ([40.0f32, -25.0], [17.0f32, 9.0]);
+        let before = sim_point(&c, panel, at);
+        let after = applied(&c, &pan(&c, drag, panel).expect("a pan"));
+        let moved = sim_point(&after, panel, [at[0] + drag[0], at[1] + drag[1]]);
+        assert!((before.0 - moved.0).abs() < 1e-5 && (before.1 - moved.1).abs() < 1e-5, "pan: {before:?} vs {moved:?}");
+
+        let cur = [-90.0f32, 140.0];
+        let before = sim_point(&c, panel, cur);
+        for factor in [1.4, 1.0 / 1.4] {
+            let after = applied(&c, &zoom(&c, factor, Some(cur), panel).expect("a zoom"));
+            let still = sim_point(&after, panel, cur);
+            assert!((before.0 - still.0).abs() < 1e-5 && (before.1 - still.1).abs() < 1e-5, "zoom {factor}: {before:?} vs {still:?}");
+        }
+
+        let settings = TurnSettings { radians_per_pixel: 0.005, invert_y: false };
+        let (r, a) = (110.0f32, 0.35f32);
+        let from = [r, 0.0];
+        let to = [r * a.cos(), r * a.sin()];
+        let held = sim_point(&c, panel, from);
+        let after = applied(&c, &turn(&c, [to[0] - from[0], to[1] - from[1]], Some(to), settings).expect("a turn"));
+        let now = sim_point(&after, panel, to);
+        assert!((held.0 - now.0).abs() < 1e-5 && (held.1 - now.1).abs() < 1e-5, "turn: {held:?} vs {now:?}");
     }
 }

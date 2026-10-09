@@ -9,7 +9,7 @@
 //! params generate theirs.
 
 use crate::config::escape::{
-    ContrastMode, DownsampleMode, ShadingBlend, ShadingField, ShadingTexture,
+    ContrastMode, ShadingBlend, ShadingField, ShadingTexture,
 };
 use crate::config::{ConfigManager, ConfigPath, ConfigValue};
 use crate::scene::transforms::RenderMode;
@@ -20,7 +20,6 @@ pub fn render_escape_content(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
     workspace_request: &mut Option<super::workspace::WorkspaceLayout>,
-    viewport_aa: Option<super::EscapeAa>,
 ) {
     let config = config_manager.active_config().clone();
     let esc = config.escape.clone();
@@ -293,8 +292,6 @@ pub fn render_escape_content(
         }
     }
 
-    show_lens_section(ui, config_manager);
-
     // ---- Julia toggle ----
     //
     // Mode A only (fields have no Julia plane), and only where the map
@@ -338,45 +335,9 @@ pub fn render_escape_content(
 
     ui.separator();
 
-    // ---- View: center (exact decimal strings), zoom exponent, rotation ----
-    ui.label(t!("escape_panel.view_heading"));
-    for (label, value, path) in [
-        ("re", &esc.center_re, ConfigPath::EscapeCenterRe),
-        ("im", &esc.center_im, ConfigPath::EscapeCenterIm),
-    ] {
-        ui.horizontal(|ui| {
-            ui.label(format!("{}:", label));
-            let mut text = value.clone();
-            // The center is an exact decimal string (deep-zoom ready);
-            // an unparseable intermediate state falls back to the
-            // default center at render time and corrects as you type.
-            if ui.text_edit_singleline(&mut text).changed() {
-                let _ = config_manager.update_param(path.clone(), ConfigValue::String(text));
-            }
-        });
-    }
-
-    ui.horizontal(|ui| {
-        ui.label(t!("escape_panel.zoom_log10"));
-        // Shown in base 10 — the unit every other deep-zoom tool
-        // reports — while the engine keeps base 2 (see
-        // EscapeConfig::zoom_log10 for why the STORED value must).
-        let mut z10 = esc.zoom_log10();
-        // Same drag feel as before: 0.02 octaves per step, in decades.
-        let resp = ui
-            .add(
-                egui::DragValue::new(&mut z10)
-                    .speed(0.02 * std::f64::consts::LOG10_2)
-                    .max_decimals(4),
-            )
-            .on_hover_text(t!("escape_panel.tooltip_zoom_log10"));
-        if resp.changed() {
-            let z2 = crate::config::escape::EscapeConfig::log10_to_log2(z10);
-            let _ = config_manager.update_param(ConfigPath::EscapeZoomLog2, (z2 as f32).into());
-        }
-        ui.label(egui::RichText::new(magnification_label(esc.zoom_log10())).weak());
-    });
-
+    // The view -- centre, zoom, turn, lens, antialiasing -- is the View
+    // panel's (camera-unification C5). What stays here is how the deep
+    // zoom finds its reference, which changes nothing you see.
     // Newton navigation: locate the minibrot governing the current
     // view and recenter on its nucleus exactly (arbitrary-precision
     // digits). One batch -> one undo point. Eligible formulas match
@@ -684,17 +645,6 @@ pub fn render_escape_content(
             }
         });
 
-    ui.horizontal(|ui| {
-        ui.label(t!("escape_panel.rotation"));
-        let mut deg = esc.rotation.to_degrees();
-        if ui
-            .add(egui::DragValue::new(&mut deg).speed(0.5).suffix("°"))
-            .changed()
-        {
-            let _ = config_manager.update_param(ConfigPath::EscapeRotation, deg.to_radians().into());
-        }
-    });
-
     ui.separator();
 
     // ---- Iteration ----
@@ -709,78 +659,6 @@ pub fn render_escape_content(
             let _ = config_manager.update_param(ConfigPath::EscapeMaxIter, ConfigValue::UInt(iter));
         }
     });
-    ui.horizontal(|ui| {
-        ui.label(t!("escape_panel.supersample"));
-        let max = crate::escape::renderer::MAX_SUPERSAMPLE;
-        let current = esc.supersample.clamp(1, max);
-        let label_for = |n: u32| match n {
-            1 => t!("escape_panel.supersample_off").to_string(),
-            n => format!("{n}\u{00d7} ({} samples)", n * n),
-        };
-        egui::ComboBox::from_id_salt("escape_supersample")
-            .selected_text(label_for(current))
-            .show_ui(ui, |ui| {
-                // Whole factors only, and not every one: 5x and 7x
-                // cost more than 4x and 6x for no visible gain.
-                for n in [1u32, 2, 3, 4, 6, 8] {
-                    if n > max {
-                        continue;
-                    }
-                    if ui.selectable_label(n == current, label_for(n)).clicked() && n != current
-                    {
-                        let _ = config_manager
-                            .update_param(ConfigPath::EscapeSupersample, ConfigValue::UInt(n));
-                    }
-                }
-            })
-            .response
-            .on_hover_text(t!("escape_panel.tooltip_supersample"));
-    });
-    // What the view is actually drawn at, when that is not the setting:
-    // the frame governor during playback, or the view's size.
-    if let Some(aa) = viewport_aa.filter(|aa| aa.in_use != aa.requested) {
-        let (text, tip) = match aa.reason {
-            Some(super::AaReason::Governor) => (
-                t!("escape_panel.aa_in_use_governor", used = aa.in_use),
-                t!("escape_panel.aa_in_use_governor_tip"),
-            ),
-            _ => (t!("escape_panel.aa_in_use_size", used = aa.in_use), t!("escape_panel.aa_in_use_size_tip")),
-        };
-        ui.label(egui::RichText::new(text).small().weak()).on_hover_text(tip);
-    }
-    // How those samples are combined. Only meaningful when there is
-    // more than one of them.
-    if esc.supersample > 1 {
-        ui.horizontal(|ui| {
-            ui.label(t!("escape_panel.downsample"));
-            let cur = esc.downsample;
-            let label_for = |m: DownsampleMode| match m {
-                DownsampleMode::Box => t!("escape_panel.downsample_box"),
-                DownsampleMode::Perceptual => t!("escape_panel.downsample_perceptual"),
-                DownsampleMode::Vivid => t!("escape_panel.downsample_vivid"),
-            };
-            egui::ComboBox::from_id_salt("escape_downsample")
-                .selected_text(label_for(cur))
-                .show_ui(ui, |ui| {
-                    for m in [
-                        DownsampleMode::Box,
-                        DownsampleMode::Perceptual,
-                        DownsampleMode::Vivid,
-                    ] {
-                        if ui.selectable_label(cur == m, label_for(m).as_ref()).clicked()
-                            && cur != m
-                        {
-                            let _ = config_manager.update_param(
-                                ConfigPath::EscapeDownsample,
-                                ConfigValue::String(m.as_str().to_string()),
-                            );
-                        }
-                    }
-                })
-                .response
-                .on_hover_text(t!("escape_panel.tooltip_downsample"));
-        });
-    }
     // ---- Auto contrast ----
     // Sits above relief because it changes what relief slopes: both
     // read the coloring's value field, and this one decides how much
@@ -1993,7 +1871,7 @@ fn lens_choice(name: &str) -> Vec<(ConfigPath, ConfigValue)> {
 /// have to reproduce the ParamType zoo, the undo coalescing and the
 /// "a quantising widget must not rewrite the value merely by being
 /// drawn" rule, and would drift from the original.
-fn show_lens_section(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
+pub(super) fn show_lens_section(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
     use crate::ui::variation_params::{render_variation_params, LensTarget};
 
     let registry = crate::variations::global_registry();
@@ -2941,7 +2819,7 @@ mod tests {
         for _ in 0..2 {
             let out = ctx.run(Default::default(), |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    render_escape_content(ui, &mut manager, &mut None, None);
+                    render_escape_content(ui, &mut manager, &mut None);
                 });
             });
             labels = out

@@ -48,6 +48,7 @@ mod triangle_editor;
 mod undo_history;
 mod variation_params;
 mod view;
+mod view_controls;
 mod escape_panel;
 mod sim_panel;
 mod textures_panel;

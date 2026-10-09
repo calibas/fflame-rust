@@ -410,6 +410,15 @@ pub enum ConfigPath {
     SimWarpCull,
     /// Which channels the warp moves, a bit mask 0..15. Int.
     SimWarpLayers,
+    /// The 2D picture's view (`SimView`): its centre as a fraction of the
+    /// grid, its zoom over the fit, its turn in radians -- all animatable
+    /// -- and whether a periodic field tiles (bool, not animatable).
+    /// Display only: none of them touches the run.
+    SimViewCenterX,
+    SimViewCenterY,
+    SimViewZoom,
+    SimViewRotation,
+    SimViewTile,
     /// The matte: which cells are figure and which are background
     /// (`SimMatte`). The channel and the direction are choices; the
     /// cutoff and the softness are quantities and animate -- a cutoff
@@ -1114,6 +1123,11 @@ impl Display for ConfigPath {
             ConfigPath::SimWarpMode => write!(f, "Simulation Warp Mode"),
             ConfigPath::SimWarpCull => write!(f, "Simulation Warp Cull"),
             ConfigPath::SimWarpLayers => write!(f, "Simulation Warp Layers"),
+            ConfigPath::SimViewCenterX => write!(f, "Simulation View Center X"),
+            ConfigPath::SimViewCenterY => write!(f, "Simulation View Center Y"),
+            ConfigPath::SimViewZoom => write!(f, "Simulation View Zoom"),
+            ConfigPath::SimViewRotation => write!(f, "Simulation View Rotation"),
+            ConfigPath::SimViewTile => write!(f, "Simulation View Tile"),
             ConfigPath::SimMatteChannel => write!(f, "Simulation Matte Channel"),
             ConfigPath::SimMatteCutoff => write!(f, "Simulation Matte Cutoff"),
             ConfigPath::SimMatteSoftness => write!(f, "Simulation Matte Softness"),
@@ -1506,6 +1520,11 @@ impl ConfigPath {
             ConfigPath::SimWarpMode => I18nKey::simple("history.param.sim_warp_mode"),
             ConfigPath::SimWarpCull => I18nKey::simple("history.param.sim_warp_cull"),
             ConfigPath::SimWarpLayers => I18nKey::simple("history.param.sim_warp_layers"),
+            ConfigPath::SimViewCenterX => I18nKey::simple("history.param.sim_view_center_x"),
+            ConfigPath::SimViewCenterY => I18nKey::simple("history.param.sim_view_center_y"),
+            ConfigPath::SimViewZoom => I18nKey::simple("history.param.sim_view_zoom"),
+            ConfigPath::SimViewRotation => I18nKey::simple("history.param.sim_view_rotation"),
+            ConfigPath::SimViewTile => I18nKey::simple("history.param.sim_view_tile"),
             ConfigPath::SimMatteChannel => I18nKey::simple("history.param.sim_matte_channel"),
             ConfigPath::SimMatteCutoff => I18nKey::simple("history.param.sim_matte_cutoff"),
             ConfigPath::SimMatteSoftness => I18nKey::simple("history.param.sim_matte_softness"),
@@ -3107,6 +3126,12 @@ impl ConfigPath {
             | ConfigPath::SimWarpMode
             | ConfigPath::SimWarpCull
             | ConfigPath::SimWarpLayers
+            // The view is where the picture looks, not what the field is.
+            | ConfigPath::SimViewCenterX
+            | ConfigPath::SimViewCenterY
+            | ConfigPath::SimViewZoom
+            | ConfigPath::SimViewRotation
+            | ConfigPath::SimViewTile
             // The matte is a colouring decision: the field is
             // untouched, only which of it is drawn.
             | ConfigPath::SimMatteChannel
@@ -3494,6 +3519,11 @@ impl ConfigPath {
             ConfigPath::SimWarpMode => "Sim.WarpMode".to_string(),
             ConfigPath::SimWarpCull => "Sim.WarpCull".to_string(),
             ConfigPath::SimWarpLayers => "Sim.WarpLayers".to_string(),
+            ConfigPath::SimViewCenterX => "Sim.View.CenterX".to_string(),
+            ConfigPath::SimViewCenterY => "Sim.View.CenterY".to_string(),
+            ConfigPath::SimViewZoom => "Sim.View.Zoom".to_string(),
+            ConfigPath::SimViewRotation => "Sim.View.Rotation".to_string(),
+            ConfigPath::SimViewTile => "Sim.View.Tile".to_string(),
             ConfigPath::SimMatteChannel => "Sim.MatteChannel".to_string(),
             ConfigPath::SimMatteCutoff => "Sim.MatteCutoff".to_string(),
             ConfigPath::SimMatteSoftness => "Sim.MatteSoftness".to_string(),
@@ -3938,6 +3968,11 @@ impl ConfigPath {
                 ["WarpMode"] => return Some(ConfigPath::SimWarpMode),
                 ["WarpCull"] => return Some(ConfigPath::SimWarpCull),
                 ["WarpLayers"] => return Some(ConfigPath::SimWarpLayers),
+                ["View", "CenterX"] => return Some(ConfigPath::SimViewCenterX),
+                ["View", "CenterY"] => return Some(ConfigPath::SimViewCenterY),
+                ["View", "Zoom"] => return Some(ConfigPath::SimViewZoom),
+                ["View", "Rotation"] => return Some(ConfigPath::SimViewRotation),
+                ["View", "Tile"] => return Some(ConfigPath::SimViewTile),
                 ["MatteChannel"] => return Some(ConfigPath::SimMatteChannel),
                 ["MatteCutoff"] => return Some(ConfigPath::SimMatteCutoff),
                 ["MatteSoftness"] => return Some(ConfigPath::SimMatteSoftness),
@@ -4445,6 +4480,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SimWarpMode
         | ConfigPath::SimWarpCull
         | ConfigPath::SimWarpLayers
+        | ConfigPath::SimViewTile
         | ConfigPath::SimMatteChannel
         | ConfigPath::SimMatteInvert
         | ConfigPath::SimMatteEdge
@@ -4666,6 +4702,10 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SimWarpPanX
         | ConfigPath::SimWarpPanY
         | ConfigPath::SimWarpFlow
+        | ConfigPath::SimViewCenterX
+        | ConfigPath::SimViewCenterY
+        | ConfigPath::SimViewZoom
+        | ConfigPath::SimViewRotation
         | ConfigPath::SimMatteCutoff
         | ConfigPath::SimMatteSoftness
         | ConfigPath::SimModelParam { .. }

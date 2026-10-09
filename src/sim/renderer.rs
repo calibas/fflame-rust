@@ -277,6 +277,14 @@ struct SimParamsGpu {
     /// x: the layer map's rate for this layer (simulation-layers plan,
     /// section 4); 0 when the config does not use transforms.
     xform: [f32; 4],
+    /// The 2D picture's view (`SimView`, camera-unification C6), read by
+    /// the colour pass alone: the centre in cells, the zoom over the fit,
+    /// the turn in radians.
+    camera: [f32; 4],
+    /// x: 1 when the picture tiles a periodic field. y: 1 when the view
+    /// is not the default -- the default keeps the letterbox mapping it
+    /// always had, bit for bit. z, w: spare.
+    camera_b: [f32; 4],
 }
 
 /// The flame's transforms as the layers' maps: the definitions the
@@ -1121,6 +1129,10 @@ impl SimRenderer {
         let mut c = self.params_for(cfg, self.step_index);
         c.out_size = [w, h];
         c.view[0] = 1.0;
+        // The ground is the grid itself: the 2D picture's view
+        // (camera-unification C6) is not the terrain's, and must not
+        // move what the terrain is coloured with.
+        c.camera_b = [0.0; 4];
         queue.write_buffer(&inputs.color_params, 0, bytemuck::bytes_of(&c));
 
         let pipes = self.pipelines.as_ref().expect("pipelines built above");
@@ -1572,14 +1584,17 @@ impl SimRenderer {
             upscale: cfg.upscale,
             downscale: cfg.downscale,
             init_kind: cfg.init.kind_name(),
-            magnifying: self.magnifying(),
+            magnifying: self.magnifying(cfg),
         }
     }
 
-    /// Whether the output is larger than the grid, which decides which
-    /// resolve filter the colour pass compiles.
-    fn magnifying(&self) -> bool {
-        self.out_w >= self.grid_w && self.out_h >= self.grid_h
+    /// Whether the picture shows the grid larger than its cells, which
+    /// decides which resolve filter the colour pass compiles: the output
+    /// against the grid, the view's zoom included (a zoom-in on a large
+    /// grid magnifies it).
+    fn magnifying(&self, cfg: &SimConfig) -> bool {
+        let z = cfg.view.zoom.max(1.0e-6) as f64;
+        self.out_w as f64 * z >= self.grid_w as f64 && self.out_h as f64 * z >= self.grid_h as f64
     }
 
     fn ensure_pipelines(&mut self, device: &Device, cfg: &SimConfig) {
@@ -2082,6 +2097,18 @@ impl SimRenderer {
                 0.0,
                 self.lattice_shift_period(cfg, layer) as f32,
                 self.exact_base.get(layer).copied().flatten().map_or(0.0, |b| (b + 1) as f32),
+            ],
+            camera: [
+                cfg.view.center_x * self.grid_w as f32,
+                cfg.view.center_y * self.grid_h as f32,
+                cfg.view.zoom.max(1.0e-6),
+                cfg.view.rotation,
+            ],
+            camera_b: [
+                if cfg.view.tiles(cfg.boundary) { 1.0 } else { 0.0 },
+                if crate::config::sim::SimView::is_default(&cfg.view) { 0.0 } else { 1.0 },
+                0.0,
+                0.0,
             ],
         }
     }

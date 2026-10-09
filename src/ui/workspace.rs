@@ -524,10 +524,10 @@ impl Workspace {
     /// right.
     ///
     /// Deliberately NOT a copy of Standard with one panel swapped:
-    /// Transforms, the Triangle Editor and the View panel all edit a
-    /// flame, and in escape mode they are either inert or actively
-    /// misleading. What is left is the formula, the picture, and the
-    /// colouring of it.
+    /// Transforms and the Triangle Editor edit a flame, and in escape
+    /// mode they are either inert or actively misleading. What is left
+    /// is the formula, the picture and how it is seen (the View panel,
+    /// every mode's camera), and the colouring of it.
     fn create_escape_layout(preserve_help: bool) -> DockState<PanelType> {
         let mut state = DockState::new(vec![PanelType::FractalViewport]);
 
@@ -540,7 +540,7 @@ impl Workspace {
         let [_fractal_node, _right_node] = state.main_surface_mut().split_right(
             egui_dock::NodeIndex::root(),
             0.72,
-            vec![PanelType::Colors, PanelType::Textures, PanelType::History],
+            vec![PanelType::Colors, PanelType::View, PanelType::Textures, PanelType::History],
         );
 
         if preserve_help {
@@ -564,7 +564,7 @@ impl Workspace {
         let [_fractal_node, _right_node] = state.main_surface_mut().split_right(
             egui_dock::NodeIndex::root(),
             0.72,
-            vec![PanelType::Colors, PanelType::Textures, PanelType::History],
+            vec![PanelType::Colors, PanelType::View, PanelType::Textures, PanelType::History],
         );
 
         if preserve_help {
@@ -792,18 +792,20 @@ mod layout_tests {
     /// The Escape layout must not carry the flame-only editors.
     ///
     /// Their presence is exactly the confusion this layout exists to
-    /// remove: Transforms, the Triangle Editor and the View panel all
-    /// edit a flame, and none of them does anything in escape mode.
+    /// remove: Transforms and the Triangle Editor edit a flame, and
+    /// neither does anything in escape mode. The View panel is every
+    /// mode's camera, and is there.
     #[test]
     fn escape_layout_omits_the_flame_only_editors() {
         let mut ws = Workspace::new();
         ws.apply_layout(WorkspaceLayout::EscapeTime);
-        for p in [PanelType::Transforms, PanelType::TriangleEditor, PanelType::View] {
+        for p in [PanelType::Transforms, PanelType::TriangleEditor] {
             assert!(
                 !ws.panel_exists(p),
                 "{p:?} is a flame-only editor and must not be in the Escape layout"
             );
         }
+        assert!(ws.panel_exists(PanelType::View), "the View panel is the escape view's camera");
     }
 
     /// The simulation layout drops the flame-only editors for the same
@@ -817,7 +819,6 @@ mod layout_tests {
         for p in [
             PanelType::Transforms,
             PanelType::TriangleEditor,
-            PanelType::View,
             PanelType::Escape,
         ] {
             assert!(
@@ -825,6 +826,7 @@ mod layout_tests {
                 "{p:?} must not be in the Simulation layout"
             );
         }
+        assert!(ws.panel_exists(PanelType::View), "the View panel is the simulation's camera");
     }
 
     /// Help stays open across a layout switch — the layouts that
