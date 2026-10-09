@@ -565,12 +565,36 @@ changes input lists what to try in the app.
   - Tests: the View panel lays out in all seven views with every folded
     section drawn, lit and path traced; the simulation path coverage
     scan reads the View controls too.
-- **P5. The escape terrain's eye-based camera (C4).**
-  - The eye's ground point, height and orientation; the target derived;
-    old terrains converted on load to the same view.
-  - Gates: the shipped terrains render as before (visual suite and
-    before/after renders); the sections' resolution near the eye
-    measured against today's at the same view; looking at the sky works.
+- **P5. A terrain camera that can look anywhere (C4).** *Built
+  2026-10-09.*
+  - **A target height, not an eye-based camera** (my decision, reported:
+    it changes the plan above). Both terrains' targets get a `target_lift`
+    -- above the relief's top for the escape terrain, in view widths;
+    above half the relief for a simulation's, in grid widths -- which
+    carries the eye with it. With the lift, the eye goes anywhere and
+    looks anywhere, sky included, and the three non-flame 3D cameras
+    share one model (target, distance, angles). What it avoids: no
+    conversion on load, and saved terrains' animation tracks on the
+    centre keep their meaning (an eye-based camera would have made the
+    centre the eye's ground point). Skip-if-default, so no file changes;
+    `Escape.Terrain.TargetLift` and `Sim.Terrain.TargetLift` are tracks.
+  - **The sections needed nothing.** `wanted_sections` already measures
+    each node from the eye in 3D and culls by the frustum, and the walk
+    clips to the relief's slab from an eye inside it or a ray going up --
+    so the resolution near the eye is the same machinery at any lift,
+    and a lift of 0 is the camera as it was (visual suite 375/375).
+  - **The orbit's floor follows the eye**, not the pitch: where the eye
+    would be at a pitch of 0.02 with the target at rest -- exactly the old
+    clamp for an unlifted target -- so a lifted one orbits below the
+    horizon, and a pitch already under the floor is not snapped up.
+  - The View panel's 3D Camera has a Target lift row for both terrains,
+    and Reset returns it to 0.
+  - Tests: a lifted target carries the eye straight up and keeps the
+    frame; a lifted orbit reaches below the horizon with the eye at the
+    old floor's height; a GPU render from a lifted eye looking ten
+    degrees up has the sky across the top, ground along the bottom, and
+    no ray under the horizon within reach through the ground (3586
+    checked). Before/after renders in `output/camera-p5/`.
 - **P6. One quaternion fly mode (C4).**
   - Fly mode for every 3D camera through the adapters; speed scaled by
     the distance to the target; look about the eye.

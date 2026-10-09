@@ -346,6 +346,18 @@ fn position_readout(ui: &mut egui::Ui, eye: [f64; 3], decimals: usize, tip: &str
     });
 }
 
+/// A terrain target's lift above where it rests, which carries the eye
+/// with it: what lets a terrain's camera look level or up.
+fn lift_row(ui: &mut egui::Ui, config_manager: &mut ConfigManager, path: ConfigPath, lift: f32, tip: &str) {
+    ui.horizontal(|ui| {
+        ui.label(t!("view.target_lift").as_ref()).on_hover_text(tip);
+        let mut v = lift;
+        if ui.add(egui::DragValue::new(&mut v).speed(0.005).max_decimals(4)).on_hover_text(tip).changed() {
+            let _ = config_manager.update_param(path, v.into());
+        }
+    });
+}
+
 /// An escape zoom as 10^n, the plane's way: for a solid it sets the
 /// distance to the target, for a terrain the world's scale.
 #[cfg(feature = "engine-escape")]
@@ -450,8 +462,7 @@ pub fn camera_3d(ui: &mut egui::Ui, config_manager: &mut ConfigManager, fly_mode
             let cam = crate::escape::footprint::terrain_camera(&esc);
             let unit = 4.0 * (-esc.zoom_log2).exp2();
             let (cx, cy) = esc.center_f64();
-            let top = esc.terrain.height as f64;
-            let eye = [cx + cam.eye_rel[0] * unit, cy + cam.eye_rel[1] * unit, (top + cam.eye_rel[2]) * unit];
+            let eye = [cx + cam.eye_rel[0] * unit, cy + cam.eye_rel[1] * unit, cam.eye[2] * unit];
             position_readout(ui, eye, 9, &t!("view.position_tip_terrain"));
             // The target: the ground at the view's centre, exact decimals.
             for (axis, value, path) in [
@@ -467,6 +478,7 @@ pub fn camera_3d(ui: &mut egui::Ui, config_manager: &mut ConfigManager, fly_mode
                     }
                 });
             }
+            lift_row(ui, config_manager, ConfigPath::EscapeTerrainTargetLift, esc.terrain.target_lift, &t!("view.target_lift_tip_terrain"));
             escape_zoom_row(ui, config_manager, &esc);
             angle_row(ui, config_manager, &t!("escape_panel.camera_pitch"), &t!("escape_panel.camera_pitch_tip"), ConfigPath::EscapeCamPitch, esc.cam_pitch);
             angle_row(ui, config_manager, &t!("escape_panel.camera_yaw"), &t!("view.terrain_yaw_tip"), ConfigPath::EscapeCamYaw, esc.cam_yaw);
@@ -492,6 +504,7 @@ pub fn camera_3d(ui: &mut egui::Ui, config_manager: &mut ConfigManager, fly_mode
                     let _ = config_manager.update_param(path, v.into());
                 }
             }
+            lift_row(ui, config_manager, ConfigPath::SimTerrainTargetLift, t.target_lift, &t!("view.target_lift_tip_sim"));
             let mut d = t.cam_distance;
             if ui
                 .add(egui::Slider::new(&mut d, 0.05..=8.0).logarithmic(true).text(t!("sim_panel.terrain_distance").as_ref()))
