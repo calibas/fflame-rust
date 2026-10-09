@@ -1150,6 +1150,11 @@ history:
     load_animation_config: "Load Animation Config"
     animation_exit: "Animation Exit"
     wheel_zoom: "Wheel Zoom"
+    pinch_zoom: "Pinch Zoom"
+    pan_view: "Pan View"
+    orbit_camera: "Orbit Camera"
+    center_minibrot: "Center on Minibrot"
+    solid_light_color: "Light Color"
     fly_camera: "Fly Camera"
 
 # Triangle Editor Panel

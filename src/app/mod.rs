@@ -1904,9 +1904,14 @@ impl App {
             self.release_inactive_engines(mode_now);
         }
 
-        // Consume fly-mode responses produced by the UI this frame.
+        // Consume fly-mode responses produced by the UI this frame. The
+        // look moves the 3D flame's camera, so only where it is drawn: in
+        // escape or simulation mode an Alt+drag wrote a camera nobody saw
+        // into the history, and the flame came back moved.
         if let Some((dx, dy)) = ui_response.fly_mouse_drag {
-            self.apply_fly_mouse_look(dx, dy);
+            if self.config_manager.active_config().render_mode == crate::scene::transforms::RenderMode::ThreeD {
+                self.apply_fly_mouse_look(dx, dy);
+            }
         }
         if ui_response.fly_mode_toggle_requested {
             self.toggle_fly_mode();
