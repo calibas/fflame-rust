@@ -969,7 +969,7 @@ fn render_coloring_section(
     let structural = |config_manager: &mut ConfigManager, edit: &dyn Fn(&mut SimConfig)| {
         let mut after = config.clone();
         edit(&mut after.sim);
-        let _ = config_manager.load_config(after, "history.action.sim_color_layers".to_string());
+        let _ = config_manager.apply_config_edit(after, "history.action.sim_color_layers".to_string());
     };
     let layered = !sim.color_layers.is_empty();
     let count = if layered { sim.color_layers.len() } else { 1 };
@@ -1556,7 +1556,7 @@ fn render_model_section(
     let structural = |config_manager: &mut ConfigManager, edit: &dyn Fn(&mut SimConfig)| {
         let mut after = config.clone();
         edit(&mut after.sim);
-        let _ = config_manager.load_config(after, "history.action.sim_layers".to_string());
+        let _ = config_manager.apply_config_edit(after, "history.action.sim_layers".to_string());
     };
     let layered = !sim.layers.is_empty();
     let count = sim.layer_count();

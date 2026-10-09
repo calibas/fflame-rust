@@ -4121,7 +4121,7 @@ fn escape_rejects_names_that_do_not_exist() {
             r#"escape.coloring("smooth"); escape.coloring_param("scail", 1.0);"#,
             "has no parameter",
         ),
-        (r#"escape.center("not a number", "0");"#, "is not a decimal number"),
+        (r#"escape.center("not a number", "0");"#, "is not a plain decimal number"),
     ] {
         let text = format!("script(\"X\", \"generator\");\n{src}");
         let e = run(&text, 1).expect_err("must fail");
@@ -4369,3 +4369,111 @@ fn escape_scripts_are_reproducible() {
     assert_eq!(a.config.escape.max_iter, b.config.escape.max_iter);
 }
 
+/// A script enters escape and simulation mode as the Mode menu does:
+/// the same tone mapping, so a scripted picture and a clicked one are
+/// the same picture (it set exposure 1 where the app sets escape's 2).
+#[cfg(all(feature = "engine-escape", feature = "engine-sim"))]
+#[test]
+fn a_script_enters_a_mode_as_the_app_does() {
+    use crate::scene::transforms::RenderMode;
+    let base = FractalConfig::default();
+    for (text, mode) in [("escape.formula(\"mandelbrot\");", RenderMode::Escape), ("sim.model(\"gray_scott\");", RenderMode::Simulation)] {
+        let out = run(&format!("script(\"Mode\", \"generator\");\n{text}"), 1).expect("script ran");
+        let (exposure, gamma) = crate::config::defaults::entry_tone_mapping(&base, mode).expect("a flame's Log tone map is switched");
+        assert_eq!(out.config.render_mode, mode);
+        assert_eq!(out.config.tonemap_mode, crate::scene::tonemap::ToneMapMode::Linear);
+        assert_eq!((out.config.exposure, out.config.gamma), (exposure, gamma), "{mode:?}");
+    }
+}
+
+/// The `sim` handle takes whole numbers where it takes numbers, as the
+/// escape handle does: `sim.param("feed", 1)` was "function not found".
+#[cfg(feature = "engine-sim")]
+#[test]
+fn sim_numbers_accept_ints() {
+    let out = run(
+        r#"
+        script("Ints", "generator");
+        sim.model("gray_scott");
+        sim.param("feed", 1);
+        sim.coloring_param("scale", 2);
+        sim.dt(1);
+        sim.grid_viewport(1);
+        "#,
+        1,
+    )
+    .expect("script ran");
+    assert_eq!(out.config.sim.model_params.get("feed"), Some(&1.0));
+    assert_eq!(out.config.sim.coloring_params.get("scale"), Some(&2.0));
+    assert_eq!(out.config.sim.dt, 1.0);
+}
+
+/// On a layered simulation the handle writes the first layer and the
+/// first colour layer, which are what render: written flat, the edits
+/// had no visible effect.
+#[cfg(feature = "engine-sim")]
+#[test]
+fn sim_setters_reach_a_layered_simulation() {
+    let mut base = FractalConfig::default();
+    base.render_mode = crate::scene::transforms::RenderMode::Simulation;
+    base.sim.model = "gray_scott".into();
+    base.sim.promote_model_to_layers();
+    base.sim.layers.push(base.sim.layers[0].clone());
+    base.sim.promote_coloring_to_layers();
+    let out = ScriptHost::new()
+        .run(
+            r#"
+            script("Layered", "generator");
+            sim.param("feed", 0.031);
+            sim.coloring_param("scale", 5.0);
+            "#,
+            &base,
+            1,
+            HashMap::new(),
+        )
+        .expect("script ran");
+    assert_eq!(out.config.sim.layers[0].model_params.get("feed"), Some(&0.031));
+    assert_eq!(out.config.sim.color_layers[0].coloring_params.get("scale"), Some(&5.0));
+}
+
+/// What would save as `null` and not load again is refused: a NaN or an
+/// infinite number, and a centre deep zoom cannot read.
+#[cfg(feature = "engine-escape")]
+#[test]
+fn escape_refuses_what_would_not_load() {
+    for bad in [
+        "escape.zoom = 0.0 / 0.0;",
+        "escape.bailout = 1.0 / 0.0;",
+        "escape.param(\"p_re\", 0.0 / 0.0);",
+        "escape.center(\"1e-30\", \"0\");",
+        "escape.center(\"nan\", \"0\");",
+    ] {
+        let r = run(&format!("script(\"Bad\", \"generator\");\nescape.formula(\"phoenix\");\n{bad}"), 1);
+        assert!(r.is_err(), "`{bad}` was accepted");
+    }
+}
+
+/// A relief blend or field by a name that does not exist is an error,
+/// not Multiply or Smooth in silence; a capital is fine.
+#[cfg(feature = "engine-escape")]
+#[test]
+fn escape_relief_names_are_checked() {
+    let ok = run(
+        "script(\"R\", \"generator\");\nescape.shading_highlight(1.0, 1.0, 1.0, 0.5, \"Screen\");\nescape.shading_field(\"Banded\");",
+        1,
+    )
+    .expect("script ran");
+    assert_eq!(ok.config.escape.shading.highlight_blend, crate::config::escape::ShadingBlend::Screen);
+    assert_eq!(ok.config.escape.shading.field, crate::config::escape::ShadingField::Banded);
+    assert!(run("script(\"R\", \"generator\");\nescape.shading_highlight(1.0, 1.0, 1.0, 0.5, \"scren\");", 1).is_err());
+    assert!(run("script(\"R\", \"generator\");\nescape.shading_field(\"smoth\");", 1).is_err());
+}
+
+/// An escape or simulation track by its dotted snake_case name resolves
+/// to the same target as its track name.
+#[test]
+fn anim_keys_take_dotted_snake_case() {
+    assert_eq!(super::anim::resolve_flame_target("escape.zoom_log2").ok(), super::anim::resolve_flame_target("Escape.ZoomLog2").ok());
+    assert!(super::anim::resolve_flame_target("Escape.ZoomLog2").is_ok());
+    assert!(super::anim::resolve_flame_target("sim.steps").is_ok());
+}

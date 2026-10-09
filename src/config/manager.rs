@@ -131,6 +131,19 @@ const MAX_COALESCE_SPAN: Duration = Duration::from_millis(3000);
 /// flooding the undo stack within seconds of flight.
 pub const FLY_CAMERA_HISTORY_DESC: &str = "history.action.fly_camera";
 
+/// Viewport gestures: a drag or a run of wheel ticks writes a varying set
+/// of paths each frame -- an axis that did not move this frame is left
+/// out of the batch -- so they coalesce by their shared description, path
+/// by path, as the fly camera's do. Required to match exactly, a wobbly
+/// pan or orbit left a history entry a frame.
+pub const GESTURE_HISTORY_DESCS: [&str; 5] = [
+    FLY_CAMERA_HISTORY_DESC,
+    "history.action.wheel_zoom",
+    "history.action.pinch_zoom",
+    "history.action.pan_view",
+    "history.action.orbit_camera",
+];
+
 /// Inactivity threshold - pausing longer than this creates a new undo point
 const COALESCE_INACTIVITY_THRESHOLD: Duration = Duration::from_millis(500);
 
@@ -422,6 +435,18 @@ struct ModifySession {
     initial_transform: crate::scene::transforms::Transform,
 }
 
+#[cfg(feature = "engine-escape")]
+use crate::escape::ParamOf as EscapeParamOf;
+/// Stand-in when the escape engine is not built.
+#[cfg(not(feature = "engine-escape"))]
+#[derive(Debug, Clone, Copy)]
+enum EscapeParamOf {
+    Formula,
+    Coloring,
+    Layer,
+    Lens,
+}
+
 impl ConfigManager {
     pub fn new(config: FractalConfig) -> Self {
         // Load system settings from disk (or use defaults)
@@ -446,6 +471,36 @@ impl ConfigManager {
             editing_target: EditingTarget::Main,
             load_generation: 0,
         }
+    }
+
+    /// Apply one value to a config exactly as the manager applies an
+    /// edit -- the same clamps and side effects -- with no history, no
+    /// preview and no disk. The video exporter's fallback, so a track
+    /// renders in the video as it plays in the app: the exporter's own
+    /// arms had fallen behind (Palette Squeeze, Xaos, Solo and several
+    /// more animated in the preview and froze in the video).
+    pub fn apply_value_detached(
+        config: &mut FractalConfig,
+        target: EditingTarget,
+        path: &ConfigPath,
+        value: ConfigValue,
+    ) -> Result<(), ConfigError> {
+        let mut m = Self {
+            current: std::mem::take(config),
+            preview: None,
+            history: Vec::new(),
+            position: 0,
+            max_undo_depth: 0,
+            system_settings: crate::storage::SystemSettings::default(),
+            pending_actions: UpdateAction::none(),
+            modify_session: None,
+            animation_mode: true,
+            editing_target: target,
+            load_generation: 0,
+        };
+        let r = m.set_value(path, value);
+        *config = m.current;
+        r
     }
 
     /// Monotonic "new fractal loaded" counter — see field docs. Bumps on
@@ -841,6 +896,24 @@ impl ConfigManager {
         }
 
         let delta = ConfigDelta::new(path.clone(), old_value, new_value.clone());
+        // A setter that changes more than its own field -- a model pick
+        // resets that model's parameters, time step and steps; the grid
+        // mode its sizes; the init kind its shape -- is recorded as the
+        // config before and after, labelled as the edit. A delta of the
+        // one field restored the model name and kept the new model's
+        // defaults, and the run reseeded with them.
+        if matches!(
+            path,
+            ConfigPath::SimModel | ConfigPath::SimLayerModel { .. } | ConfigPath::SimGridMode | ConfigPath::SimInitKind
+        ) {
+            let before = self.current.clone();
+            self.set_value(&path, new_value)?;
+            let change = ConfigChange::full_config_snapshot(before, self.current.clone(), delta.description());
+            self.push_undo(change);
+            let update_type = path.update_type();
+            self.record_action(update_type);
+            return Ok(update_type);
+        }
         let change = ConfigChange::single(delta);
         let update_type = change.update_type();
 
@@ -1663,10 +1736,10 @@ impl ConfigManager {
         // position only). Identified by the shared batch description;
         // merged path-keyed in push_undo. Timing rules below still
         // apply, so a pause still starts a new history entry.
-        let fly_gesture = last_change.description == FLY_CAMERA_HISTORY_DESC
-            && new_change.description == FLY_CAMERA_HISTORY_DESC;
+        let gesture = last_change.description == new_change.description
+            && GESTURE_HISTORY_DESCS.contains(&new_change.description.as_str());
 
-        if !fly_gesture {
+        if !gesture {
             // Must have same number of deltas (same parameters being changed)
             if last_change.deltas.len() != new_change.deltas.len() {
                 return false;
@@ -1704,7 +1777,40 @@ impl ConfigManager {
     }
 
     /// Extract value from any FractalConfig by path (helper for undo/redo)
-    fn get_value_from_config(
+    /// The default of an escape parameter the config does not hold (the
+    /// panel's, `escape::param_default`): what reading it must give, or
+    /// undoing its first edit wrote 0 -- Smooth's Scale below its minimum.
+    #[cfg(feature = "engine-escape")]
+    fn escape_param_default(config: &FractalConfig, of: EscapeParamOf, name: &str) -> Option<f32> {
+        crate::escape::param_default(&config.escape, of, name)
+    }
+    #[cfg(not(feature = "engine-escape"))]
+    fn escape_param_default(_config: &FractalConfig, _of: EscapeParamOf, _name: &str) -> Option<f32> {
+        None
+    }
+
+    /// The default of a simulation model's parameter the config does not
+    /// hold: undoing a first edit wrote 0, and Gray-Scott's pattern died.
+    #[cfg(feature = "engine-sim")]
+    fn sim_model_default(model: &str, name: &str) -> Option<f32> {
+        crate::sim::model_or_default(model).parameters.iter().find(|p| p.name == name).map(|p| p.default)
+    }
+    #[cfg(not(feature = "engine-sim"))]
+    fn sim_model_default(_model: &str, _name: &str) -> Option<f32> {
+        None
+    }
+
+    /// The same for a simulation colouring's parameter.
+    #[cfg(feature = "engine-sim")]
+    fn sim_coloring_default(coloring: &str, name: &str) -> Option<f32> {
+        crate::sim::coloring_or_default(coloring).parameters.iter().find(|p| p.name == name).map(|p| p.default)
+    }
+    #[cfg(not(feature = "engine-sim"))]
+    fn sim_coloring_default(_coloring: &str, _name: &str) -> Option<f32> {
+        None
+    }
+
+    pub(crate) fn get_value_from_config(
         config: &FractalConfig,
         path: &ConfigPath,
         target: EditingTarget,
@@ -1847,7 +1953,9 @@ impl ConfigManager {
                 crate::config::sim::SimGrid::Viewport { scale } => scale,
                 crate::config::sim::SimGrid::Fixed { .. } => 1.0,
             })),
-            ConfigPath::SimSeed => Ok(ConfigValue::UInt(config.sim.seed as u32)),
+            // The whole seed: a script or a file can carry one past 32
+            // bits, and undoing an edit of it put back the low half.
+            ConfigPath::SimSeed => Ok(ConfigValue::UInt64(config.sim.seed)),
             ConfigPath::SimInitKind => {
                 Ok(ConfigValue::String(config.sim.init.kind_name().to_string()))
             }
@@ -1931,7 +2039,7 @@ impl ConfigManager {
             }
             ConfigPath::SimFit => Ok(ConfigValue::String(config.sim.fit.name().to_string())),
             ConfigPath::SimModelParam { param } => Ok(ConfigValue::Float(
-                config.sim.model_params.get(param).copied().unwrap_or(0.0),
+                config.sim.model_params.get(param).copied().or_else(|| Self::sim_model_default(&config.sim.model, param)).unwrap_or(0.0),
             )),
             ConfigPath::SimLayerModel { layer } => Ok(ConfigValue::String(
                 config.sim.layers.get(*layer).map(|l| l.model.clone()).unwrap_or_default(),
@@ -1944,7 +2052,7 @@ impl ConfigManager {
                     .sim
                     .layers
                     .get(*layer)
-                    .and_then(|l| l.model_params.get(param).copied())
+                    .and_then(|l| l.model_params.get(param).copied().or_else(|| Self::sim_model_default(&l.model, param)))
                     .unwrap_or(0.0),
             )),
             ConfigPath::SimCouplingFrom { index } => Ok(ConfigValue::Int(
@@ -1968,7 +2076,7 @@ impl ConfigManager {
                     .sim
                     .color_layers
                     .get(*index)
-                    .and_then(|l| l.coloring_params.get(param).copied())
+                    .and_then(|l| l.coloring_params.get(param).copied().or_else(|| Self::sim_coloring_default(&l.coloring, param)))
                     .unwrap_or(0.0),
             )),
             ConfigPath::SimColorLayerOpacity { index } => Ok(ConfigValue::Float(
@@ -1981,7 +2089,7 @@ impl ConfigManager {
                 config.sim.color_layers.get(*index).map(|l| l.matte.softness).unwrap_or(0.0),
             )),
             ConfigPath::SimColoringParam { param } => Ok(ConfigValue::Float(
-                config.sim.coloring_params.get(param).copied().unwrap_or(0.0),
+                config.sim.coloring_params.get(param).copied().or_else(|| Self::sim_coloring_default(&config.sim.coloring, param)).unwrap_or(0.0),
             )),
             ConfigPath::EscapeSupersample => Ok(ConfigValue::UInt(config.escape.supersample)),
             ConfigPath::EscapeDownsample => Ok(ConfigValue::String(
@@ -2109,6 +2217,7 @@ impl ConfigManager {
                 .formula_params
                 .get(param)
                 .copied()
+                .or_else(|| Self::escape_param_default(config, EscapeParamOf::Formula, param))
                 .unwrap_or(0.0)
                 .into()),
             ConfigPath::EscapeColoringParam { param } => Ok(config
@@ -2116,6 +2225,7 @@ impl ConfigManager {
                 .coloring_params
                 .get(param)
                 .copied()
+                .or_else(|| Self::escape_param_default(config, EscapeParamOf::Coloring, param))
                 .unwrap_or(0.0)
                 .into()),
             ConfigPath::EscapeLayerColoring => Ok(config.escape.layer.coloring.clone().into()),
@@ -2125,6 +2235,7 @@ impl ConfigManager {
                 .params
                 .get(param)
                 .copied()
+                .or_else(|| Self::escape_param_default(config, EscapeParamOf::Layer, param))
                 .unwrap_or(0.0)
                 .into()),
             ConfigPath::EscapeLayerBlend => Ok(ConfigValue::String(
@@ -2138,6 +2249,7 @@ impl ConfigManager {
                 .lens_params
                 .get(param)
                 .copied()
+                .or_else(|| Self::escape_param_default(config, EscapeParamOf::Lens, param))
                 .unwrap_or(0.0)
                 .into()),
 
@@ -3084,7 +3196,10 @@ impl ConfigManager {
                 self.current.sim.grid = crate::config::sim::SimGrid::Viewport { scale: sc };
             }
             ConfigPath::SimSeed => {
-                self.current.sim.seed = u32::try_from(value)? as u64;
+                self.current.sim.seed = match value {
+                    ConfigValue::UInt64(v) => v,
+                    other => u32::try_from(other)? as u64,
+                };
             }
             ConfigPath::SimInitKind => {
                 let kind = String::try_from(value)?;
@@ -4498,6 +4613,30 @@ impl ConfigManager {
         Ok(())
     }
 
+    /// Replace the config by an edit of it that no single path carries --
+    /// a simulation's layers, colour layers or couplings added, removed or
+    /// reordered -- as one undo step, its pending actions those of a load.
+    /// Not a load: the editing target, the workspace and the panels'
+    /// per-fractal state stay. Through `load_config`, every layer edit
+    /// switched a chosen layout back to the Simulation workspace and
+    /// collapsed the Transforms panel.
+    pub fn apply_config_edit(&mut self, mut after: FractalConfig, description: String) -> Result<(), ConfigError> {
+        self.preview = None;
+        after.fixup_ids();
+        let change = ConfigChange::full_config_snapshot(self.current.clone(), after.clone(), description);
+        self.push_undo(change);
+        self.current = after;
+        let mut action = UpdateAction::none();
+        action.update_flame = true;
+        action.update_view = true;
+        action.update_palette = true;
+        action.update_tone_curve = true;
+        action.reset_accumulation = true;
+        action.structural_changed = true;
+        self.pending_actions.merge(&action);
+        Ok(())
+    }
+
     /// Load a complete config silently (no undo entry)
     /// Used when restoring base config after animation stops
     /// The undo entry should have already been created by handle_animation_exit
@@ -5113,6 +5252,59 @@ mod tests {
     /// API — a rename that reached only one of them would put the local
     /// file and the online record permanently out of step, which is the
     /// class of bug this method exists to end.
+    /// Undoing the first edit of a parameter the config did not hold puts
+    /// back its default -- what the panel showed -- not the 0 the getter
+    /// read for a missing key. Gray-Scott at feed 0 dies; Smooth's scale
+    /// at 0 is below its minimum.
+    #[test]
+    fn undoing_a_first_edit_restores_the_default() {
+        #[cfg(feature = "engine-sim")]
+        {
+            let mut c = FractalConfig::default();
+            c.render_mode = crate::scene::transforms::RenderMode::Simulation;
+            c.sim.model = "gray_scott".into();
+            c.sim.model_params.clear();
+            let want = crate::sim::model_or_default("gray_scott").parameters.iter().find(|p| p.name == "feed").unwrap().default;
+            let mut m = ConfigManager::new(c);
+            m.update_param(ConfigPath::SimModelParam { param: "feed".into() }, 0.06f32.into()).unwrap();
+            m.undo().unwrap();
+            assert_eq!(m.config().sim.model_params.get("feed").copied().unwrap_or(want), want);
+        }
+        #[cfg(feature = "engine-escape")]
+        {
+            let mut c = FractalConfig::default();
+            c.render_mode = crate::scene::transforms::RenderMode::Escape;
+            c.escape.coloring = "smooth".into();
+            c.escape.coloring_params.clear();
+            let want = crate::escape::param_default(&c.escape, crate::escape::ParamOf::Coloring, "scale").unwrap();
+            let mut m = ConfigManager::new(c);
+            m.update_param(ConfigPath::EscapeColoringParam { param: "scale".into() }, (want * 3.0).into()).unwrap();
+            m.undo().unwrap();
+            assert_eq!(m.config().escape.coloring_params.get("scale").copied().unwrap_or(want), want);
+        }
+    }
+
+    /// A model pick resets the new model's parameters, time step and steps;
+    /// undoing it puts back the old model's tuned values with its name.
+    #[cfg(feature = "engine-sim")]
+    #[test]
+    fn undoing_a_model_pick_restores_its_tuning() {
+        let mut c = FractalConfig::default();
+        c.render_mode = crate::scene::transforms::RenderMode::Simulation;
+        c.sim.model = "gray_scott".into();
+        c.sim.model_params.insert("feed".into(), 0.031);
+        c.sim.dt = 0.7;
+        c.sim.steps = 1234;
+        let before = c.sim.clone();
+        let mut m = ConfigManager::new(c);
+        m.update_param(ConfigPath::SimModel, ConfigValue::String("hodgepodge".into())).unwrap();
+        assert_eq!(m.config().sim.model, "hodgepodge");
+        m.undo().unwrap();
+        assert_eq!(m.config().sim, before);
+        m.redo().unwrap();
+        assert_eq!(m.config().sim.model, "hodgepodge");
+    }
+
     #[test]
     fn rename_flame_reaches_every_reader() {
         let mut manager = ConfigManager::new(FractalConfig::default());

@@ -138,14 +138,16 @@ pub fn sim_path_settings(config: &FractalConfig, gw: u32) -> PathSettings {
 
 /// What the ground is made from: the run's step, what is drawn of it (the
 /// simulation's config with the terrain's view and rendering taken out)
-/// and the palette's generation.
-fn ground_key(config: &FractalConfig, step: u32, palette_generation: u64) -> String {
+/// and the palette, by content -- not by the renderer's palette
+/// generation, which every config load bumps, so a video's every frame
+/// (a load each) re-made the ground for a camera-only track.
+fn ground_key(config: &FractalConfig, step: u32) -> String {
     let mut sim = config.sim.clone();
     let t = &config.sim.terrain;
     let kept = (t.enabled, t.layer, t.channel, t.softness, t.height, t.tiling);
     sim.terrain = Default::default();
     (sim.terrain.enabled, sim.terrain.layer, sim.terrain.channel, sim.terrain.softness, sim.terrain.height, sim.terrain.tiling) = kept;
-    format!("{step}|{palette_generation}|{:?}", sim)
+    format!("{step}|{}|{:?}", crate::escape::footprint::palette_key(config), sim)
 }
 
 /// A simulation's terrain: the renderer, its tiers, and what its ground
@@ -179,9 +181,8 @@ impl SimTerrain {
         sim: &mut super::SimRenderer,
         config: &FractalConfig,
         palette_view: &TextureView,
-        palette_generation: u64,
     ) -> bool {
-        let key = ground_key(config, sim.step_index(), palette_generation);
+        let key = ground_key(config, sim.step_index());
         let (gw, gh) = sim.grid_size();
         if self.made.as_deref() == Some(key.as_str()) && self.grid == (gw, gh) {
             return false;
@@ -221,7 +222,7 @@ impl SimTerrain {
 
     /// The export's picture: path traced at `samples` unless the tier is
     /// Lit. `wait` between batches, with the share of the still done.
-    pub fn render_still(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, frame: (u32, u32), wait: impl FnMut(f32)) {
+    pub fn render_still(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, frame: (u32, u32), wait: impl FnMut(f32) -> bool) {
         let (gw, gh) = self.grid;
         let view = |jitter| sim_terrain_view(config, gw, gh, jitter);
         let inputs = self.inputs(config, &view);
@@ -394,7 +395,7 @@ mod tests {
         };
         for _ in 0..12 {
             sim.render_frame(&device, &queue, &c.sim, &palette, 20);
-            assert!(t.update(&device, &queue, &mut sim, &c, &palette, 1), "a step makes a new ground");
+            assert!(t.update(&device, &queue, &mut sim, &c, &palette), "a step makes a new ground");
             t.render_viewport(&device, &queue, &c);
             wait();
             assert_eq!(t.path_progress().0, 0, "a running simulation is not path traced");
@@ -402,7 +403,7 @@ mod tests {
         let mut frames = 0;
         loop {
             sim.render_frame(&device, &queue, &c.sim, &palette, 0);
-            assert!(!t.update(&device, &queue, &mut sim, &c, &palette, 1), "a resting run keeps its ground");
+            assert!(!t.update(&device, &queue, &mut sim, &c, &palette), "a resting run keeps its ground");
             let more = t.render_viewport(&device, &queue, &c);
             wait();
             frames += 1;
@@ -459,7 +460,7 @@ mod tests {
             sim.render_frame(&device, &queue, &c.sim, &palette, 4);
             wait();
             let t1 = std::time::Instant::now();
-            t.update(&device, &queue, &mut sim, &c, &palette, 1);
+            t.update(&device, &queue, &mut sim, &c, &palette);
             t.render_viewport(&device, &queue, &c);
             wait();
             if k >= 30 {

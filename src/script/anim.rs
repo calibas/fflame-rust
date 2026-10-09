@@ -175,7 +175,10 @@ fn pascal_case(s: &str) -> String {
 /// Accepts the script's own spelling (`"camera_rotation_x"`) and the
 /// `ConfigPath` key (`"CameraRotationX"`), so neither is wrong.
 pub(crate) fn resolve_flame_target(name: &str) -> Result<String, String> {
-    let candidates = [name.to_string(), pascal_case(name)];
+    // And a dotted name segment by segment: "escape.zoom_log2" is
+    // "Escape.ZoomLog2", "sim.terrain.height" "Sim.Terrain.Height".
+    let dotted = name.split('.').map(pascal_case).collect::<Vec<_>>().join(".");
+    let candidates = [name.to_string(), pascal_case(name), dotted];
     for candidate in &candidates {
         if let Some(path) = ConfigPath::from_string_key(candidate) {
             return Ok(path.to_string_key());
@@ -184,6 +187,8 @@ pub(crate) fn resolve_flame_target(name: &str) -> Result<String, String> {
     Err(format!(
         "`{name}` is not an animatable setting. Use the same name `config.set` takes \
          (for example \"zoom\", \"rotation\", \"camera_rotation_x\", \"exposure\"), \
+         an escape or simulation setting by its track name (\"Escape.ZoomLog2\", \
+         \"Sim.Steps\", \"Sim.Terrain.Height\" -- or \"escape.zoom_log2\"), \
          or a transform's own `key()` for per-transform values."
     ))
 }

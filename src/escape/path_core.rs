@@ -202,6 +202,13 @@ impl PathParamsGpu {
         }
     }
 
+    /// The dispatch starts at column `x0` (a tile of a band): its
+    /// threads are that column on.
+    pub(crate) fn from_column(mut self, x0: u32) -> Self {
+        self.band[3] = x0;
+        self
+    }
+
     /// The uniform buffer holding it.
     pub(crate) fn buffer(&self, device: &Device, queue: &Queue) -> Buffer {
         let buf = device.create_buffer(&BufferDescriptor {
@@ -259,7 +266,8 @@ struct PtParams {
     lens: vec4<f32>,
     // x: the dispatch's first row, y: its rows (a band, for a geometry
     // whose sample would outlast the GPU's watchdog over a whole frame),
-    // z: 1 to gather the denoiser's guides.
+    // z: 1 to gather the denoiser's guides, w: its first column (a band
+    // too costly for one dispatch goes across in tiles).
     band: vec4<u32>,
     // A gradient sky's zenith radiance, and 1 when there is one: the
     // environment (`env`) is then the horizon's.
@@ -618,11 +626,12 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let tile = pt_tile();
     let y = gid.y + pt.band.x;
-    if (gid.x >= tile.z || gid.y >= pt.band.y || y >= tile.w) {
+    let x = gid.x + pt.band.w;
+    if (x >= tile.z || gid.y >= pt.band.y || y >= tile.w) {
         return;
     }
-    let idx = y * tile.z + gid.x;
-    let fx = tile.x + gid.x;
+    let idx = y * tile.z + x;
+    let fx = tile.x + x;
     let fy = tile.y + y;
     pt_scene_begin();
     var sum = pt_sum[idx];
@@ -667,13 +676,19 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 /// The path tracer's sum into an output: colour the premultiplied mean
 /// over the coverage, alpha the mean coverage -- the accumulator
 /// contract. Rows above `split` hold one sample more than `count` (a
-/// banded pass part-way down the frame).
+/// banded pass part-way down the frame), and so do the columns left of
+/// `split_col` of the band from it to `band_end` (a band part-way across:
+/// [`PathSplit`]).
 pub(crate) const PATH_RESOLVE_WGSL: &str = r#"
 struct ResolveParams {
     width: u32,
     height: u32,
     count: u32,
     split: u32,
+    band_end: u32,
+    split_col: u32,
+    pad0: u32,
+    pad1: u32,
 };
 @group(0) @binding(0) var<uniform> rp: ResolveParams;
 @group(0) @binding(1) var<storage, read> pt_sum: array<vec4<f32>>;
@@ -689,7 +704,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (s.a > 0.0) {
         rgb = s.rgb / s.a;
     }
-    let n = rp.count + select(0u, 1u, gid.y < rp.split);
+    let ahead = gid.y < rp.split || (gid.y < rp.band_end && gid.x < rp.split_col);
+    let n = rp.count + select(0u, 1u, ahead);
     // A row no sample has reached yet: nothing there, whatever the sum
     // still holds from before.
     if (n == 0u) {
@@ -728,8 +744,9 @@ struct DenoiseParams {
     // How many of the noise's standard deviations two lights may differ
     // by and still be averaged.
     sigma: f32,
-    pad1: u32,
-    pad2: u32,
+    // The band part-way across, as the resolve has it.
+    band_end: u32,
+    split_col: u32,
 };
 @group(0) @binding(0) var<uniform> dp: DenoiseParams;
 @group(0) @binding(1) var<storage, read> pt_sum: array<vec4<f32>>;
@@ -747,9 +764,10 @@ fn dn_lum(c: vec3<f32>) -> f32 {
     return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
 }
 
-// A row's samples: the count, one more above the split.
-fn dn_n(y: u32) -> u32 {
-    return dp.count + select(0u, 1u, y < dp.split);
+// A pixel's samples: the count, one more where the pass has been.
+fn dn_n(x: u32, y: u32) -> u32 {
+    let ahead = y < dp.split || (y < dp.band_end && x < dp.split_col);
+    return dp.count + select(0u, 1u, ahead);
 }
 
 fn dn_inside(q: vec2<i32>) -> bool {
@@ -773,7 +791,7 @@ fn dn_pixel(q: vec2<i32>) -> DnPixel {
     o.cover = 0.0;
     let i = u32(q.y) * dp.width + u32(q.x);
     let s = pt_sum[i];
-    if (!(s.a > 0.0) || dn_n(u32(q.y)) == 0u) {
+    if (!(s.a > 0.0) || dn_n(u32(q.x), u32(q.y)) == 0u) {
         return o;
     }
     let g0 = pt_guide[2u * i];
@@ -833,7 +851,7 @@ fn dn_depth(q: vec2<i32>) -> f32 {
     }
     let i = u32(q.y) * dp.width + u32(q.x);
     let a = pt_sum[i].a;
-    if (!(a > 0.0) || dn_n(u32(q.y)) == 0u) {
+    if (!(a > 0.0) || dn_n(u32(q.x), u32(q.y)) == 0u) {
         return 0.0;
     }
     return pt_guide[2u * i + 1u].w / a;
@@ -853,7 +871,7 @@ fn prepare(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let al = max(dn_lum(p.albedo), DN_FLOOR);
     var variance = 0.0;
-    if (dn_n(gid.y) >= 4u) {
+    if (dn_n(gid.x, gid.y) >= 4u) {
         // The mean's: the samples' over their number. A coverage-weighted
         // mean's is the samples' times sum(a^2) / sum(a)^2, which lies
         // between 1/n and 1/sum(a) and is neither without a channel for
@@ -981,7 +999,7 @@ fn finish(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let px = vec2<i32>(gid.xy);
-    let n = dn_n(gid.y);
+    let n = dn_n(gid.x, gid.y);
     let p = dn_pixel(px);
     if (n == 0u || !(p.cover > 0.0)) {
         textureStore(out_tex, px, vec4<f32>(0.0, 0.0, 0.0, 0.0));
@@ -1027,6 +1045,24 @@ struct Denoiser {
     textures: Option<([(Texture, TextureView); 3], (u32, u32))>,
 }
 
+/// Where a pass over the frame has reached: the pixels it has given one
+/// sample more than the sum's count. Every row above `row`; and of the
+/// band from `row` to `band_end`, the columns left of `col` -- a band
+/// too costly for one dispatch goes across its width in tiles.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PathSplit {
+    pub(crate) row: u32,
+    pub(crate) band_end: u32,
+    pub(crate) col: u32,
+}
+
+impl PathSplit {
+    /// Whole rows: those above `row`.
+    pub(crate) fn rows(row: u32) -> Self {
+        PathSplit { row, band_end: row, col: 0 }
+    }
+}
+
 /// A path tracer's per-pixel sum (premultiplied radiance, coverage),
 /// the samples in it, and the pass that resolves it into an output.
 pub(crate) struct PathSum {
@@ -1046,7 +1082,7 @@ pub(crate) struct PathSum {
     denoiser: Option<Denoiser>,
     /// When the denoiser last ran: the count and split it filtered, and
     /// the time (`resolve`'s schedule).
-    denoised: Option<(u32, u32, web_time::Instant)>,
+    denoised: Option<(u32, PathSplit, web_time::Instant)>,
 }
 
 impl PathSum {
@@ -1209,8 +1245,8 @@ impl PathSum {
         self.count += n;
     }
 
-    /// The mean into `out` (`w` by `h`); rows above `split` hold one
-    /// sample more than the count. Submits its own work.
+    /// The mean into `out` (`w` by `h`); the pixels `split` names hold
+    /// one sample more than the count. Submits its own work.
     ///
     /// Denoised when the guides are on -- on a schedule, since the filter
     /// costs about a sample of a terrain at 1080p (10 ms on a GTX 1660)
@@ -1219,7 +1255,7 @@ impl PathSum {
     /// least every quarter second while anything new is in the sum. In
     /// between, `out` keeps the last. [`Self::resolve_now`] for the
     /// picture that must be current.
-    pub(crate) fn resolve(&mut self, device: &Device, queue: &Queue, out: &TextureView, w: u32, h: u32, split: u32) {
+    pub(crate) fn resolve(&mut self, device: &Device, queue: &Queue, out: &TextureView, w: u32, h: u32, split: PathSplit) {
         if self.guided && self.guide.is_some() {
             let due = match self.denoised {
                 None => true,
@@ -1236,11 +1272,11 @@ impl PathSum {
         }
         let buf = device.create_buffer(&BufferDescriptor {
             label: Some("Path Resolve Params"),
-            size: 16,
+            size: 32,
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(&buf, 0, bytemuck::cast_slice(&[w, h, self.count, split]));
+        queue.write_buffer(&buf, 0, bytemuck::cast_slice(&[w, h, self.count, split.row, split.band_end, split.col, 0, 0]));
         let bg = device.create_bind_group(&BindGroupDescriptor {
             label: Some("Path Resolve"),
             layout: &self.resolve_layout,
@@ -1262,14 +1298,14 @@ impl PathSum {
 
     /// [`Self::resolve`], denoised now whatever the schedule says: the
     /// last of a still, or of a viewport's target.
-    pub(crate) fn resolve_now(&mut self, device: &Device, queue: &Queue, out: &TextureView, w: u32, h: u32, split: u32) {
+    pub(crate) fn resolve_now(&mut self, device: &Device, queue: &Queue, out: &TextureView, w: u32, h: u32, split: PathSplit) {
         self.denoised = None;
         self.resolve(device, queue, out, w, h, split);
     }
 
     /// The denoiser's resolve: `prepare`, the à-trous passes and
     /// `finish`, into `out`.
-    fn denoise(&mut self, device: &Device, queue: &Queue, out: &TextureView, w: u32, h: u32, split: u32) {
+    fn denoise(&mut self, device: &Device, queue: &Queue, out: &TextureView, w: u32, h: u32, split: PathSplit) {
         let d = self.denoiser.get_or_insert_with(|| {
             let module = device.create_shader_module(ShaderModuleDescriptor {
                 label: Some("Path Denoise"),
@@ -1319,7 +1355,7 @@ impl PathSum {
                 mapped_at_creation: false,
             });
             let sigma = DENOISE_SIGMA * (DENOISE_FULL / self.count.max(1) as f32).sqrt().min(1.0);
-            queue.write_buffer(&buf, 0, bytemuck::cast_slice(&[w, h, self.count, split, step, sigma.to_bits(), 0, 0]));
+            queue.write_buffer(&buf, 0, bytemuck::cast_slice(&[w, h, self.count, split.row, step, sigma.to_bits(), split.band_end, split.col]));
             buf
         };
         let (gx, gy) = (w.div_ceil(8), h.div_ceil(8));

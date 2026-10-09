@@ -725,9 +725,8 @@ fn apply_config_value(
         (ConfigPath::PaletteRotation, ConfigValue::Float(v)) => config.palette_rotation = *v,
         (ConfigPath::SpeedFactor, ConfigValue::Float(v)) => config.speed_factor = *v,
         (ConfigPath::BackgroundColor, ConfigValue::ColorRgb(rgb)) => config.background_color = *rgb,
-        (ConfigPath::BackgroundColorR, ConfigValue::Float(v)) => config.background_color[0] = *v,
-        (ConfigPath::BackgroundColorG, ConfigValue::Float(v)) => config.background_color[1] = *v,
-        (ConfigPath::BackgroundColorB, ConfigValue::Float(v)) => config.background_color[2] = *v,
+        // (The background's channels go to the manager's setter, which
+        // clamps them as the app does.)
 
         // Effect parameters (FractalConfig-level, not per-flame).
         // These intentionally stay outside the per-flame match below
@@ -801,10 +800,8 @@ fn apply_config_value(
         (ConfigPath::EscapeCamTargetZ, ConfigValue::String(v)) => {
             config.escape.cam_target_z = v.clone();
         }
-        (ConfigPath::EscapeCamPitch, ConfigValue::Float(v)) => config.escape.cam_pitch = *v,
         (ConfigPath::EscapeCamYaw, ConfigValue::Float(v)) => config.escape.cam_yaw = *v,
         (ConfigPath::EscapeCamBank, ConfigValue::Float(v)) => config.escape.cam_bank = *v,
-        (ConfigPath::EscapeCamFov, ConfigValue::Float(v)) => config.escape.cam_fov = *v,
         // The camera lens. The amount is clamped as the manager
         // clamps it, so an exported frame equals the in-app one.
         (ConfigPath::EscapeLensAmount, ConfigValue::Float(v)) => {
@@ -1043,10 +1040,6 @@ fn apply_config_value(
         (ConfigPath::SimStepsPerFrame, ConfigValue::UInt(v)) => {
             config.sim.steps_per_frame = (*v).clamp(1, 4096);
         }
-        (ConfigPath::SimDt, ConfigValue::Float(v)) => {
-            // NaN from a wild signal must not make the solver diverge.
-            config.sim.dt = if v.is_finite() { v.clamp(1e-4, 10.0) } else { 1.0 };
-        }
         // The warp's rates, bounded as the manager bounds them, so a
         // wild signal cannot ask the resampler for a NaN.
         (ConfigPath::SimWarpZoom, ConfigValue::Float(v)) => {
@@ -1113,13 +1106,22 @@ fn apply_config_value(
         // delegate to apply_flame_value. Broken targets (missing
         // subflame) silently drop — UI surfaces these.
         _ => {
-            if let Some(flame) = resolve_flame_mut(config, target) {
-                apply_flame_value(flame, path, value);
-            } else {
-                log::debug!(
-                    "apply_animation: skipping {} — flame target {:?} not found",
-                    path, target,
-                );
+            let handled = match resolve_flame_mut(config, target) {
+                Some(flame) => apply_flame_value(flame, path, value),
+                None => {
+                    log::debug!(
+                        "apply_animation: skipping {} — flame target {:?} not found",
+                        path, target,
+                    );
+                    return;
+                }
+            };
+            // What no arm here knows, the app's own setter applies, as it
+            // does when the track plays in the preview.
+            if !handled {
+                if let Err(e) = crate::config::ConfigManager::apply_value_detached(config, target, path, value.clone()) {
+                    log::debug!("apply_animation: {} not applied: {e:?}", path);
+                }
             }
         }
     }
@@ -1129,11 +1131,12 @@ fn apply_config_value(
 ///
 /// Mirrors the per-flame arms of `ConfigManager::set_value` but
 /// operates on a `Flame` directly so it works on subflames too.
+/// False for a path it has no arm for.
 fn apply_flame_value(
     flame: &mut Flame,
     path: &ConfigPath,
     value: &crate::config::ConfigValue,
-) {
+) -> bool {
     use crate::config::ConfigValue;
 
     match (path, value) {
@@ -1350,11 +1353,10 @@ fn apply_flame_value(
             }
         }
 
-        // Other parameters can be added as needed
-        _ => {
-            log::debug!("Unhandled animation path: {:?}", path);
-        }
+        // The rest: the caller hands them to the manager's setter.
+        _ => return false,
     }
+    true
 }
 
 // ============================================================================
@@ -2671,11 +2673,24 @@ mod escape_export_tests {
         let mut terrain = FractalConfig::default();
         terrain.render_mode = crate::scene::transforms::RenderMode::Escape;
         terrain.escape.terrain.enabled = true;
-        for base in [solid(), FractalConfig::default(), terrain] {
+        // And one with its colouring's options on: relief, contrast, a
+        // colouring layer, the texture overlay, a bent transfer.
+        let mut dressed = FractalConfig::default();
+        dressed.render_mode = crate::scene::transforms::RenderMode::Escape;
+        dressed.escape.shading.enabled = true;
+        dressed.escape.contrast.mode = crate::config::escape::ContrastMode::AutoRange;
+        dressed.escape.contrast.strength = 1.0;
+        dressed.escape.texture_overlay.enabled = true;
+        dressed.escape.palette_map.transfer = crate::config::escape::TransferCurve::Log;
+        dressed.escape.layer.coloring = "smooth".into();
+        for base in [solid(), FractalConfig::default(), terrain, dressed] {
             for item in crate::ui::target_selector::escape_items_for_test(&base) {
                 // Two probes, because a count target reads an integer.
                 let mut moved = false;
-                for probe in [serde_json::json!(0.375), serde_json::json!(3)] {
+                // As a keyframe holds them: f64, whole or not. (An integer
+                // probe passed while every stored Max Iterations keyframe,
+                // an f64, was refused.)
+                for probe in [serde_json::json!(0.375), serde_json::json!(3.0)] {
                     let Some(value) = crate::config::delta::json_to_config_value(&probe, &item)
                     else {
                         continue;
@@ -2698,6 +2713,49 @@ mod escape_export_tests {
         }
     }
 
+    /// A track renders in the video as it plays in the app: for every
+    /// target the picker offers, in every mode, the exporter leaves the
+    /// config exactly as the app's own setter does. The exporter's arms
+    /// had fallen behind -- Palette Squeeze, Xaos, Solo and more animated
+    /// in the preview and held still in the video -- and its clamps
+    /// differed from the manager's.
+    #[test]
+    fn every_offered_target_renders_in_the_video_as_in_the_app() {
+        use crate::scene::transforms::RenderMode;
+        let mut configs = vec![FractalConfig::default(), solid()];
+        let mut three = FractalConfig::default();
+        three.render_mode = RenderMode::ThreeD;
+        configs.push(three);
+        let mut terrain = FractalConfig::default();
+        terrain.render_mode = RenderMode::Escape;
+        terrain.escape.terrain.enabled = true;
+        configs.push(terrain);
+        let mut sim = FractalConfig::default();
+        sim.render_mode = RenderMode::Simulation;
+        sim.sim.terrain.enabled = true;
+        configs.push(sim);
+        let mut differ = Vec::new();
+        for base in &configs {
+            for item in crate::ui::target_selector::all_items_for_test(base) {
+                for probe in [serde_json::json!(0.375), serde_json::json!(3.0), serde_json::json!(-1.25)] {
+                    let Some(value) = crate::config::delta::json_to_config_value(&probe, &item) else {
+                        continue;
+                    };
+                    let mut video = base.clone();
+                    apply_config_value(&mut video, EditingTarget::Main, &item, &value);
+                    let mut app = base.clone();
+                    let _ = crate::config::ConfigManager::apply_value_detached(&mut app, EditingTarget::Main, &item, value.clone());
+                    if serde_json::to_value(&video).unwrap() != serde_json::to_value(&app).unwrap() {
+                        differ.push(format!("{} = {probe} ({:?})", item.to_string_key(), base.render_mode));
+                    }
+                }
+            }
+        }
+        differ.sort();
+        differ.dedup();
+        assert!(differ.is_empty(), "{} targets differ between the video and the app:\n  {}", differ.len(), differ.join("\n  "));
+    }
+
     /// The same for a simulation's targets, its terrain's among them.
     #[cfg(feature = "engine-sim")]
     #[test]
@@ -2709,7 +2767,7 @@ mod escape_export_tests {
         assert!(offered.contains(&ConfigPath::SimTerrainCamPitch), "the terrain's camera is offered");
         for item in offered {
             let mut moved = false;
-            for probe in [serde_json::json!(0.375), serde_json::json!(3)] {
+            for probe in [serde_json::json!(0.375), serde_json::json!(3.0)] {
                 let Some(value) = crate::config::delta::json_to_config_value(&probe, &item) else {
                     continue;
                 };

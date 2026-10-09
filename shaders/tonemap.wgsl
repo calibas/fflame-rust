@@ -521,6 +521,16 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             return vec4<f32>(over_black_srgb, fractal_alpha);
         }
 
+        if (tonemap_params.transparent_mode == 3u) {
+            // Straight alpha for an IMAGE (an escape-time or simulation
+            // picture): its colour, and its own coverage as the alpha. Such
+            // a picture is opaque where it is drawn; the flame's split
+            // below made it a luminance matte (white everywhere, its grey
+            // levels in the alpha).
+            let rgb_srgb = pow(max(fractal_color, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
+            return vec4<f32>(rgb_srgb, fractal_alpha);
+        }
+
         // Mode 1 (default): straight-alpha reconstruction — split so a standard
         // straight flatten over black (rgb·a) returns the over-black colour. The
         // coverage alpha = max channel of C keeps the un-multiplied rgb ≤ 1.

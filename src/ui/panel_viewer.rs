@@ -770,7 +770,7 @@ fn escape_pan_plane(
             (crate::config::ConfigPath::EscapeCenterRe, crate::config::ConfigValue::String(new_re)),
             (crate::config::ConfigPath::EscapeCenterIm, crate::config::ConfigValue::String(new_im)),
         ],
-        "history.param.escape_center_re".to_string(),
+        "history.action.pan_view".to_string(),
     );
 }
 
@@ -819,7 +819,7 @@ fn terrain_pan(
                 (crate::config::ConfigPath::EscapeCenterRe, crate::config::ConfigValue::String(re)),
                 (crate::config::ConfigPath::EscapeCenterIm, crate::config::ConfigValue::String(im)),
             ],
-            "history.param.escape_center_re".to_string(),
+            "history.action.pan_view".to_string(),
         );
     }
 }
@@ -840,7 +840,7 @@ fn terrain_orbit(config_manager: &mut crate::config::ConfigManager, drag_delta: 
             (crate::config::ConfigPath::EscapeCamYaw, yaw.into()),
             (crate::config::ConfigPath::EscapeCamPitch, pitch.into()),
         ],
-        "history.param.escape_cam_yaw".to_string(),
+        "history.action.orbit_camera".to_string(),
     );
 }
 
@@ -865,7 +865,7 @@ fn sim_terrain_orbit(config_manager: &mut crate::config::ConfigManager, drag_del
             (crate::config::ConfigPath::SimTerrainCamYaw, yaw.into()),
             (crate::config::ConfigPath::SimTerrainCamPitch, pitch.into()),
         ],
-        "history.param.sim_terrain_cam_yaw".to_string(),
+        "history.action.orbit_camera".to_string(),
     );
 }
 
@@ -895,7 +895,7 @@ fn sim_terrain_pan(config_manager: &mut crate::config::ConfigManager, drag_delta
             (crate::config::ConfigPath::SimTerrainTargetX, x.into()),
             (crate::config::ConfigPath::SimTerrainTargetY, y.into()),
         ],
-        "history.param.sim_terrain_target_x".to_string(),
+        "history.action.pan_view".to_string(),
     );
 }
 

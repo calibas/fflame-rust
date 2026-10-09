@@ -2073,6 +2073,9 @@ impl ConfigValue {
 
         match (self, other) {
             (ConfigValue::Float(a), ConfigValue::Float(b)) => (a - b).abs() < EPSILON_F32,
+            // A count read whole and written narrow (the simulation's
+            // seed) is the same count.
+            (ConfigValue::UInt(a), ConfigValue::UInt64(b)) | (ConfigValue::UInt64(b), ConfigValue::UInt(a)) => *a as u64 == *b,
             // The pan's own epsilon is far tighter than f32's,
             // because at a deep zoom two centres 1e-6 apart are
             // thousands of pixels apart. Coalescing undo entries on
@@ -4533,7 +4536,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         ConfigPath::SoloTransform
         | ConfigPath::PostSymmetryType
         | ConfigPath::PostSymmetryOrder => {
-            json.as_i64().map(|i| ConfigValue::Int(i as i32))
+            // Rounded, as the unsigned ones are: keyframes are f64.
+            json.as_i64().or_else(|| json.as_f64().map(|f| f.round() as i64)).map(|i| ConfigValue::Int(i as i32))
         }
 
         // String parameters
@@ -4618,7 +4622,9 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeLensParam { .. } => {
             json.as_f64().map(|f| ConfigValue::Float(f as f32))
         }
-        ConfigPath::EscapeMaxIter => json.as_u64().map(|v| ConfigValue::UInt(v as u32)),
+        // Rounded: a keyframe is stored, and interpolated, as an f64, and
+        // `as_u64` refused every one of them -- the track never applied.
+        ConfigPath::EscapeMaxIter => json_as_round_u64(json).map(|v| ConfigValue::UInt(v as u32)),
 
         // Simulation. Only the quantities that mean something when
         // interpolated between two keyframes are here; the rest fall

@@ -3200,7 +3200,7 @@ impl TerrainRenderer {
     /// whatever the denoiser's schedule says (`PathSum::resolve`).
     /// Submits its own work.
     pub fn resolve_path(&mut self, device: &Device, queue: &Queue) {
-        self.path.resolve_now(device, queue, &self.output.1, self.out_w, self.out_h, 0);
+        self.path.resolve_now(device, queue, &self.output.1, self.out_w, self.out_h, crate::escape::path_core::PathSplit::rows(0));
     }
 
     /// Add `samples` path-traced samples of the view to the sum -- in
@@ -3270,7 +3270,7 @@ impl TerrainRenderer {
             done += n;
         }
         // The mean, into the output.
-        self.path.resolve(device, queue, &self.output.1, self.out_w, self.out_h, 0);
+        self.path.resolve(device, queue, &self.output.1, self.out_w, self.out_h, crate::escape::path_core::PathSplit::rows(0));
         // The output no longer holds a lit render.
         self.walked = None;
     }
@@ -5009,6 +5009,7 @@ pub(crate) mod gpu_tests {
                 let inputs = TierInputs { view: &view, settings: settings.clone(), tier, samples: 6, supersample: 2, filling: false };
                 tiers.still_in_tiles(&mut r, &device, &queue, &inputs, (fw, fh), side, |_| {
                     let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                    true
                 });
                 read_texture(&device, &queue, tiers.output_texture_for_test(&r), 0, fw, fh, 16)
             };

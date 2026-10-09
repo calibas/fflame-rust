@@ -236,17 +236,35 @@ async fn export_async(input: &str, output: &str, width: Option<u32>, height: Opt
         std::fs::create_dir_all(output_path)?;
     }
 
-    // Export each config
+    // Export each config. One that fails is reported and the batch goes
+    // on; the exit code says so at the end. (A `?` here stopped the batch
+    // at the first failure and never exported the rest.)
+    let mut failed: Vec<String> = Vec::new();
+    let mut used_names: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
     for (i, config) in flame_files.iter().enumerate() {
         let flame_name = &config.flame.name;
         println!("[{}/{}] Exporting {}...", i + 1, flame_files.len(), flame_name);
 
-        // Determine output file path
+        // Determine output file path: two configs of one name each get a
+        // file (they overwrote each other).
         let output_file = if flame_files.len() == 1 && output_path.extension().is_some() {
             output_path.to_path_buf()
         } else {
-            output_path.join(format!("{}.png", flame_name.to_lowercase().replace(" ", "_")))
+            let stem = flame_name.to_lowercase().replace(" ", "_");
+            let n = used_names.entry(stem.clone()).or_insert(0);
+            *n += 1;
+            let file = if *n == 1 { format!("{stem}.png") } else { format!("{stem}_{n}.png") };
+            output_path.join(file)
         };
+
+        // A name this build has no engine for renders a default in its
+        // place: not that picture, so not a success.
+        let unknown = crate::renderer::render::unknown_names(config);
+        if !unknown.is_empty() {
+            eprintln!("  ✗ {} not exported: this build has no {}", flame_name, unknown.join(", no "));
+            failed.push(flame_name.clone());
+            continue;
+        }
 
         // Use config dimensions or provided dimensions
         let (w, h) = (
@@ -261,15 +279,25 @@ async fn export_async(input: &str, output: &str, width: Option<u32>, height: Opt
 
         // Call the existing PNG export logic from app
         // We'll need to add a headless export helper
-        let success = app::export_headless(config, &output_file, w, h, category.clone(), ipt, transparent, premultiplied, engine, supersample).await?;
-
-        if success {
-            println!("  ✓ Saved to {}", output_file.display());
+        match app::export_headless(config, &output_file, w, h, category.clone(), ipt, transparent, premultiplied, engine, supersample).await {
+            Ok(true) => println!("  ✓ Saved to {}", output_file.display()),
+            Ok(false) => {
+                eprintln!("  ✗ {} not exported", flame_name);
+                failed.push(flame_name.clone());
+            }
+            Err(e) => {
+                eprintln!("  ✗ {} failed: {e}", flame_name);
+                failed.push(flame_name.clone());
+            }
         }
     }
 
-    println!("\nExport complete!");
-    Ok(())
+    if failed.is_empty() {
+        println!("\nExport complete!");
+        Ok(())
+    } else {
+        Err(format!("{} of {} config(s) not exported: {}", failed.len(), flame_files.len(), failed.join(", ")).into())
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

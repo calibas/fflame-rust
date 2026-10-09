@@ -58,17 +58,9 @@ pub fn switch_render_mode(
     if config.render_mode == mode {
         return Ok(());
     }
-    let entering_non_flame = is_non_flame(mode) && !is_non_flame(config.render_mode);
-    let default_tonemap = entering_non_flame
-        && config.tonemap_mode == crate::scene::tonemap::ToneMapMode::Logarithmic;
-    if default_tonemap {
-        // Escape output has its own calibration; a simulation keeps the
-        // flame defaults.
-        let (exposure, gamma) = if mode == RenderMode::Escape {
-            (crate::config::defaults::ESCAPE_EXPOSURE, crate::config::defaults::ESCAPE_GAMMA)
-        } else {
-            (crate::config::defaults::DEFAULT_EXPOSURE, crate::config::defaults::DEFAULT_GAMMA)
-        };
+    // Escape output has its own calibration; a simulation keeps the flame
+    // defaults (`entry_tone_mapping`, shared with the script handles).
+    if let Some((exposure, gamma)) = crate::config::defaults::entry_tone_mapping(config, mode) {
         config_manager
             .update_batch(
                 vec![

@@ -3402,7 +3402,20 @@ impl FlameRenderer {
             alpha_blend_high: config.alpha_blend_high,
             // 0 = opaque, 1 = straight-alpha reconstruction (flatten over black),
             // 2 = premultiplied. See tonemap.wgsl.
-            transparent_mode: if !transparent { 0 } else if premultiplied { 2 } else { 1 },
+            // 3: straight alpha for an IMAGE -- an escape-time or
+            // simulation picture, opaque where it is drawn -- whose
+            // coverage is its own alpha. The flame's split (1) put the
+            // brightness in the alpha and made an opaque picture a
+            // luminance matte.
+            transparent_mode: if !transparent {
+                0
+            } else if premultiplied {
+                2
+            } else if matches!(config.render_mode, crate::scene::transforms::RenderMode::Escape | crate::scene::transforms::RenderMode::Simulation) {
+                3
+            } else {
+                1
+            },
             color_mode: self.color_mode as u32,
             width: self.width,
             height: self.height,
