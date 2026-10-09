@@ -149,6 +149,10 @@ impl App {
     pub fn import_config(&mut self, config: FractalConfig, restart_sim: bool) {
         // Sync working copy for renderer (only field not in ConfigManager)
         self.flame = config.flame.clone();
+        // The escape view re-renders only when told: a whole config put
+        // back (an undo of a texture assignment or of a load) records no
+        // pending action, and the old picture stayed up.
+        self.escape_dirty = true;
 
         // Sync palette editor with the config palette
         self.egui_layer.update_palette_editor(config.palette.clone());
@@ -184,12 +188,36 @@ impl App {
         self.update_current_api_state_snapshot();
 
         let pos_before = self.config_manager.position();
+        let restart = pos_before > 0 && self.restarted_the_run(pos_before - 1);
         if let Ok(_update_type) = self.config_manager.undo() {
             // Sync App working copy and GPU state from ConfigManager
             let config = self.config_manager.config();
-            self.import_config(config.clone(), false);
+            self.import_config(config.clone(), restart);
             self.restore_api_state_for_undo(pos_before);
         }
+    }
+
+    /// Whether the history's entry `index` restarted the simulation when
+    /// it was made: a preset (whose reseed is not a config edit) or a
+    /// load. Undoing or redoing it restarts it too, so the field is the
+    /// one the config describes -- an undone preset kept running the
+    /// pattern the preset had grown under the old parameters.
+    fn restarted_the_run(&self, index: usize) -> bool {
+        const RESTARTS: [&str; 9] = [
+            "history.action.sim_preset",
+            "history.action.import_config",
+            "history.action.load_config",
+            "history.action.load_preset",
+            "history.action.import_flame_xml",
+            "history.action.load_animation_config",
+            "history.action.run_script",
+            "history.action.new_flame",
+            "history.action.random_flame",
+        ];
+        self.config_manager
+            .history()
+            .get(index)
+            .is_some_and(|c| RESTARTS.contains(&c.description.as_str()))
     }
 
     /// Redo to next state
@@ -197,9 +225,10 @@ impl App {
         self.update_current_api_state_snapshot();
 
         let pos_before = self.config_manager.position();
+        let restart = self.restarted_the_run(pos_before);
         if let Ok(_update_type) = self.config_manager.redo() {
             let config = self.config_manager.config();
-            self.import_config(config.clone(), false);
+            self.import_config(config.clone(), restart);
             self.restore_api_state_for_redo(pos_before);
         }
     }

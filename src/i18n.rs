@@ -103,6 +103,23 @@ mod tests {
     #[test]
     fn every_key_the_code_uses_has_english_text() {
         fn keys_in(text: &str, out: &mut Vec<String>) {
+            // And every history action description, which is passed as a
+            // plain string and looked up when the history is drawn.
+            let mut from = 0;
+            while let Some(at) = text[from..].find("\"history.action.") {
+                let start = from + at + 1;
+                let end = text[start..].find('"').map_or(start, |e| start + e);
+                from = end.max(start + 1);
+                let line_start = text[..start].rfind('\n').map_or(0, |p| p + 1);
+                if text[line_start..start].trim_start().starts_with("//") {
+                    continue;
+                }
+                let key = &text[start..end];
+                // (Not this scan's own needle, which ends at the dot.)
+                if !key.ends_with('.') && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.') {
+                    out.push(key.to_string());
+                }
+            }
             for marker in ["t!(", "I18nKey::simple(", "I18nKey::with_params("] {
                 let mut from = 0;
                 while let Some(at) = text[from..].find(marker) {

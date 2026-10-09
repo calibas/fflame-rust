@@ -558,6 +558,43 @@ pub fn layer_refusal(base: &ColoringDef, layer: &ColoringDef) -> Option<LayerRef
 /// mode-A colouring that fits over the base ([`layer_fits`]). `None`
 /// draws the base alone -- no layer, an unknown name, or a refused
 /// pair -- and is what every renderer path asks.
+/// Which of an escape config's parameter maps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParamOf {
+    Formula,
+    Coloring,
+    Layer,
+    Lens,
+}
+
+/// The default of a parameter the config's map does not hold -- what the
+/// panel shows for it, from whichever registry owns the formula (mode A,
+/// B or D), its colouring, the colouring layer, or the lens's variation.
+/// The undo history reads a value through this: a 0.0 stood in, and
+/// undoing a first edit wrote it (Smooth's Scale to 0, below its minimum).
+pub fn param_default(escape: &crate::config::escape::EscapeConfig, of: ParamOf, name: &str) -> Option<f32> {
+    let find = |ps: &[EscapeParamDef]| ps.iter().find(|p| p.name == name).map(|p| p.default);
+    let ifs = ifs::get_ifs(&escape.formula);
+    let field = fields::get_field(&escape.formula);
+    match of {
+        ParamOf::Formula => match (ifs, field) {
+            (Some(d), _) => find(d.parameters),
+            (None, Some(f)) => find(f.parameters),
+            (None, None) => find(get_formula(&escape.formula).parameters),
+        },
+        ParamOf::Coloring => match (ifs, field) {
+            (Some(d), _) => find(ifs::get_ifs_coloring(&escape.coloring, d).parameters),
+            (None, Some(f)) => find(fields::get_field_coloring(&escape.coloring, f).parameters),
+            (None, None) => find(get_coloring(&escape.coloring).parameters),
+        },
+        ParamOf::Layer => layer_of(escape).and_then(|l| find(l.parameters)),
+        ParamOf::Lens => {
+            let registry = crate::variations::global_registry();
+            registry.get(&escape.lens).and_then(|v| v.parameters.iter().find(|p| p.name == name).map(|p| p.default_value))
+        }
+    }
+}
+
 pub fn layer_of(escape: &crate::config::escape::EscapeConfig) -> Option<&'static ColoringDef> {
     if !escape.layer.is_on() {
         return None;
