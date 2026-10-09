@@ -2458,7 +2458,7 @@ impl App {
                         }
                         // No blocking wait in a browser: the queue keeps
                         // the batches in order regardless.
-                        t.render_still(&self.gpu.device, &self.gpu.queue, &export_config, (export_width, export_height), |_| {});
+                        t.render_still(&self.gpu.device, &self.gpu.queue, &export_config, (export_width, export_height), |_| true);
                         Some(t)
                     } else {
                         None
@@ -2506,7 +2506,7 @@ impl App {
                                     &export_config,
                                     temp_renderer.escape_palette_view(export_config.escape.palette_map.stepped),
                                     export_config.escape.path.samples,
-                                    || {},
+                                    || true,
                                 );
                                 break;
                             }
@@ -2586,9 +2586,8 @@ impl App {
                                 sim,
                                 &export_config,
                                 temp_renderer.palette_view(),
-                                temp_renderer.palette_generation(),
                             );
-                            t.render_still(&self.gpu.device, &self.gpu.queue, &export_config, (export_width, export_height), |_| {});
+                            t.render_still(&self.gpu.device, &self.gpu.queue, &export_config, (export_width, export_height), |_| true);
                             Some(t)
                         }
                         _ => None,
@@ -3428,7 +3427,7 @@ impl App {
                         .sim_terrain
                         .get_or_insert_with(|| crate::sim::terrain::SimTerrain::new(device, w, h));
                     terrain.resize(device, w, h);
-                    terrain.update(device, queue, sim, &final_config, renderer.palette_view(), renderer.palette_generation());
+                    terrain.update(device, queue, sim, &final_config, renderer.palette_view());
                     // An export in the background has the GPU meanwhile;
                     // its own cadence redraws the window.
                     let exporting = self.export_status.lock().map(|s| s.active).unwrap_or(false);

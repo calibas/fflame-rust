@@ -314,11 +314,14 @@ impl EscapeRenderer {
         config: &FractalConfig,
         palette_view: &TextureView,
         samples: u32,
-        mut wait: impl FnMut(),
+        mut wait: impl FnMut() -> bool,
     ) {
         self.reset_solid_path();
+        // False from `wait` stops it where it is (a cancelled export).
         while self.trace_solid(device, queue, config, palette_view, samples.max(1), EXPORT_FRAME_MS) {
-            wait();
+            if !wait() {
+                break;
+            }
         }
         wait();
         let any = self.solid_path_samples() > 0;
@@ -830,7 +833,7 @@ mod tests {
         let mut r = renderer_for(&device, &c, w, h);
         let mut picture = |samples: u32, denoise: bool| {
             c.escape.path.denoise = denoise;
-            r.render_solid_still(&device, &queue, &c, &palette, samples, || wait(&device));
+            r.render_solid_still(&device, &queue, &c, &palette, samples, || { wait(&device); true });
             read_texture(&device, &queue, r.solid_path_texture_for_test().expect("traced"), w, h)
         };
         let reference = picture(256, false);
@@ -901,7 +904,7 @@ mod tests {
                 }
             }
             let lit = read_texture(&device, &queue, &r.output_texture, w, h);
-            r.render_solid_still(&device, &queue, &c, &palette, 16, || wait(&device));
+            r.render_solid_still(&device, &queue, &c, &palette, 16, || { wait(&device); true });
             let path = read_texture(&device, &queue, r.solid_path_texture_for_test().expect("traced"), w, h);
             // The sky's pixels: no surface within a pixel of them, lit -- a
             // jittered sample can reach a solid the centre's ray misses.
@@ -959,7 +962,7 @@ mod tests {
             c.background_color = bg;
             c.escape.path.bounces = bounces;
             let mut r = renderer_for(&device, &c, w, h);
-            r.render_solid_still(&device, &queue, &c, &palette, 64, || wait(&device));
+            r.render_solid_still(&device, &queue, &c, &palette, 64, || { wait(&device); true });
             assert_eq!(r.solid_path_samples(), 64);
             let out = read_texture(&device, &queue, r.solid_path_texture_for_test().expect("traced"), w, h);
             let hit: Vec<&[f32; 4]> = out.iter().filter(|p| p[3] > 0.0).collect();
@@ -1005,7 +1008,7 @@ mod tests {
             }
         }
         let lit = read_texture(&device, &queue, &r.output_texture, w, h);
-        r.render_solid_still(&device, &queue, &c, &palette, 4, || wait(&device));
+        r.render_solid_still(&device, &queue, &c, &palette, 4, || { wait(&device); true });
         let path = read_texture(&device, &queue, r.solid_path_texture_for_test().expect("traced"), w, h);
         // A face's inside: lit there and alike to all eight neighbours --
         // a jittered sample anywhere in the pixel is on the same face, and
@@ -1073,7 +1076,7 @@ mod tests {
             }
         }
         let lit = read_texture(&device, &queue, &r.output_texture, w, h);
-        r.render_solid_still(&device, &queue, &c, &palette, 16, || wait(&device));
+        r.render_solid_still(&device, &queue, &c, &palette, 16, || { wait(&device); true });
         let path = read_texture(&device, &queue, r.solid_path_texture_for_test().expect("traced"), w, h);
         let mean = |img: &[[f32; 4]]| img.iter().map(|p| p[3] as f64).sum::<f64>() / img.len() as f64;
         let at = |x: u32, y: u32| lit[(y * w + x) as usize][3];
@@ -1174,7 +1177,7 @@ mod tests {
         c.escape.path.denoise = true;
         c.background_color = [0.55, 0.62, 0.72];
         let mut r = renderer_for(&device, &c, w, h);
-        r.render_solid_still(&device, &queue, &c, &palette, 2, || wait(&device));
+        r.render_solid_still(&device, &queue, &c, &palette, 2, || { wait(&device); true });
         assert_eq!(r.solid_path_samples(), 2);
         assert!(!r.solid_path.as_ref().unwrap().sum.guided(), "the guides do not fit");
         r.destroy();

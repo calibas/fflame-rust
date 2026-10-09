@@ -851,11 +851,15 @@ async fn render_sim(
             Some(slot) => slot.get_or_insert_with(make),
             None => terrain_owned.insert(make()),
         };
-        t.update(device, queue, sim, job.config, renderer.palette_view(), renderer.palette_generation());
+        t.update(device, queue, sim, job.config, renderer.palette_view());
         t.render_still(device, queue, job.config, (job.width, job.height), |f| {
             let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
             progress.on_progress((((1.0 - still_share) + still_share * f as f64) * 1000.0) as u64, 1000);
+            !progress.is_cancelled()
         });
+        if progress.is_cancelled() {
+            return Err(RenderError::Cancelled);
+        }
         Some(t)
     } else {
         None
@@ -1082,8 +1086,12 @@ async fn render_escape(
             job.config.escape.path.samples,
             || {
                 let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+                !progress.is_cancelled()
             },
         );
+        if progress.is_cancelled() {
+            return Err(RenderError::Cancelled);
+        }
         log::info!("Render: escape solid path traced at {} samples", job.config.escape.path.samples);
     }
     // No UI to keep responsive here, and every chunk pays a downsample
@@ -1148,6 +1156,9 @@ async fn render_escape(
                 renderer.escape_palette_view(job.config.escape.palette_map.stepped),
             renderer.palette_generation(),
             );
+            if progress.is_cancelled() {
+                return Err(RenderError::Cancelled);
+            }
             guard += 1;
             if guard > 4_000_000 {
                 log::error!("escape chunk loop failed to settle; rendering what we have");
@@ -1389,6 +1400,9 @@ async fn render_escape_terrain(
     let mut guard = 0u32;
     while terrain.update(device, queue, config, job.width, job.height, palette, generation, 1) {
         let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        if progress.is_cancelled() {
+            return Err(RenderError::Cancelled);
+        }
         let done = (terrain.footprint_renders - before) as f64;
         let fill = done / (done + terrain.sections_missing() as f64).max(1.0);
         progress.on_progress((fill_share * fill * 1000.0) as u64, 1000);
@@ -1404,7 +1418,11 @@ async fn render_escape_terrain(
     terrain.render_still(device, queue, config, (job_w, job_h), |f| {
         let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
         progress.on_progress(((fill_share + (1.0 - fill_share) * f as f64) * 1000.0) as u64, 1000);
+        !progress.is_cancelled()
     });
+    if progress.is_cancelled() {
+        return Err(RenderError::Cancelled);
+    }
     let pixels = escape_tail(renderer, device, queue, config, (job_w, job_h, transparent), terrain.output_view(), oom_scope).await;
     if !caller_owned {
         terrain.destroy();

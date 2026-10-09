@@ -148,7 +148,7 @@ fn picture_key(escape: &EscapeConfig) -> EscapeConfig {
 /// plateau's colour), and the flame when the formula is a 2D IFS that
 /// draws it. Keyed by content, not by the flame renderer's palette
 /// generation, which every config load bumps.
-fn palette_key(config: &FractalConfig) -> String {
+pub(crate) fn palette_key(config: &FractalConfig) -> String {
     let flame = if super::ifs::get_ifs(&config.escape.formula).is_some() {
         format!("{:?}", config.flame)
     } else {
@@ -957,7 +957,7 @@ impl EscapeTerrain {
     /// unless the tier is Lit, which draws the antialiasing grid. In
     /// dispatches of a few samples each, `wait` called between them (a
     /// blocking poll on the desktop). Submits its own work.
-    pub fn render_still(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, frame: (u32, u32), wait: impl FnMut(f32)) {
+    pub fn render_still(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, frame: (u32, u32), wait: impl FnMut(f32) -> bool) {
         let view = |jitter| terrain_view(config, jitter);
         self.tiers.still(&mut self.terrain, device, queue, &tier_inputs(config, &view), frame, wait);
     }
@@ -1023,6 +1023,17 @@ impl EscapeTerrain {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A device, and the turn of a test that renders a terrain: one at a
+    /// time, since each holds an atlas of sections -- hundreds of MB --
+    /// and the suite runs its tests in parallel on one card (two at once
+    /// ran a 6 GB card out of memory).
+    fn gpu() -> Option<(std::sync::MutexGuard<'static, ()>, Device, Queue)> {
+        static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+        let (device, queue) = crate::escape::terrain::gpu_tests::device()?;
+        Some((turn, device, queue))
+    }
 
     /// Where a world point lands on the screen, as `ifs_ray` spreads
     /// the rays: normalised offsets from the centre, x right, y DOWN.
@@ -1343,7 +1354,7 @@ mod tests {
     /// at the centre, the same bytes every time, and not the 2D picture.
     #[test]
     fn a_terrain_renders_through_render_with() {
-        let Some((device, queue)) = crate::escape::terrain::gpu_tests::device() else {
+        let Some((_one_at_a_time, device, queue)) = gpu() else {
             eprintln!("no GPU adapter; skipping");
             return;
         };
@@ -1372,7 +1383,7 @@ mod tests {
     /// none falls through a seam between sections of different detail.
     #[test]
     fn no_ray_falls_through_the_ground() {
-        let Some((device, queue)) = crate::escape::terrain::gpu_tests::device() else {
+        let Some((_one_at_a_time, device, queue)) = gpu() else {
             eprintln!("no GPU adapter; skipping");
             return;
         };
@@ -1434,7 +1445,7 @@ mod tests {
     /// engine's frames equal a fresh render's.
     #[test]
     fn sections_are_reused_across_frames() {
-        let Some((device, queue)) = crate::escape::terrain::gpu_tests::device() else {
+        let Some((_one_at_a_time, device, queue)) = gpu() else {
             eprintln!("no GPU adapter; skipping");
             return;
         };
@@ -1483,7 +1494,7 @@ mod tests {
     /// which in this tier it always is.
     #[test]
     fn the_path_traced_viewport_progresses() {
-        let Some((device, queue)) = crate::escape::terrain::gpu_tests::device() else {
+        let Some((_one_at_a_time, device, queue)) = gpu() else {
             eprintln!("no GPU adapter; skipping");
             return;
         };
@@ -1531,7 +1542,7 @@ mod tests {
     /// renders at their own centres, and the walk sees only view widths.
     #[test]
     fn a_deep_zoom_terrain_renders() {
-        let Some((device, queue)) = crate::escape::terrain::gpu_tests::device() else {
+        let Some((_one_at_a_time, device, queue)) = gpu() else {
             eprintln!("no GPU adapter; skipping");
             return;
         };
@@ -1559,7 +1570,7 @@ mod tests {
     /// rendered last.
     #[test]
     fn auto_contrast_is_one_fit_for_the_ground() {
-        let Some((device, queue)) = crate::escape::terrain::gpu_tests::device() else {
+        let Some((_one_at_a_time, device, queue)) = gpu() else {
             eprintln!("no GPU adapter; skipping");
             return;
         };
@@ -1633,7 +1644,7 @@ mod tests {
     /// nearly flat beside what an export of it draws.
     #[test]
     fn a_counts_range_is_the_grounds() {
-        let Some((device, queue)) = crate::escape::terrain::gpu_tests::device() else {
+        let Some((_one_at_a_time, device, queue)) = gpu() else {
             eprintln!("no GPU adapter; skipping");
             return;
         };
@@ -1688,7 +1699,7 @@ mod tests {
     /// background. Lit and path traced, and in tiles.
     #[test]
     fn a_terrain_export_reports_its_progress() {
-        let Some((device, queue)) = crate::escape::terrain::gpu_tests::device() else {
+        let Some((_one_at_a_time, device, queue)) = gpu() else {
             eprintln!("no GPU adapter; skipping");
             return;
         };
@@ -1720,7 +1731,7 @@ mod tests {
     /// roots stay full.
     #[test]
     fn a_deep_pictures_hidden_roots_are_coarse_and_unseen() {
-        let Some((device, queue)) = crate::escape::terrain::gpu_tests::device() else {
+        let Some((_one_at_a_time, device, queue)) = gpu() else {
             eprintln!("no GPU adapter; skipping");
             return;
         };
@@ -1782,7 +1793,7 @@ mod tests {
     #[test]
     #[ignore = "measurement"]
     fn deep_fill_in_the_app() {
-        let Some((device, queue)) = crate::escape::terrain::gpu_tests::device() else {
+        let Some((_one_at_a_time, device, queue)) = gpu() else {
             eprintln!("no GPU adapter; skipping");
             return;
         };
@@ -1856,7 +1867,7 @@ mod tests {
     #[test]
     #[ignore = "measurement"]
     fn section_fill_times() {
-        let Some((device, queue)) = crate::escape::terrain::gpu_tests::device() else {
+        let Some((_one_at_a_time, device, queue)) = gpu() else {
             eprintln!("no GPU adapter; skipping");
             return;
         };
