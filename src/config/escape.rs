@@ -2027,6 +2027,12 @@ pub struct TerrainConfig {
     /// a fraction of the footprint. About the distance flanks' width.
     #[serde(default = "default_terrain_occlusion", skip_serializing_if = "is_default_terrain_occlusion")]
     pub occlusion: f32,
+    /// The camera's target above where it rests -- the relief's top at
+    /// the view's centre -- in view widths (camera-unification C4). It
+    /// lifts the eye with it, so the camera can look up, or level, from
+    /// above the ground; 0 is the camera every terrain had before.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub target_lift: f32,
 }
 
 fn default_terrain_height() -> f32 {
@@ -2122,6 +2128,7 @@ impl Default for TerrainConfig {
             shadow: default_terrain_shadow(),
             shadow_sharpness: default_terrain_shadow_sharpness(),
             occlusion: default_terrain_occlusion(),
+            target_lift: 0.0,
         }
     }
 }

@@ -888,6 +888,9 @@ fn apply_config_value(
         (ConfigPath::EscapeTerrainHaze, ConfigValue::Float(v)) => {
             config.escape.terrain.haze = v.clamp(0.0, 1.0);
         }
+        (ConfigPath::EscapeTerrainTargetLift, ConfigValue::Float(v)) => {
+            config.escape.terrain.target_lift = if v.is_finite() { v.clamp(-1.0e3, 1.0e3) } else { 0.0 };
+        }
         (ConfigPath::EscapeTerrainOcclusion, ConfigValue::Float(v)) => {
             let v = *v;
             config.escape.terrain.occlusion = v.clamp(0.0, 0.1);
@@ -1012,6 +1015,10 @@ fn apply_config_value(
         (ConfigPath::SimTerrainTargetY, ConfigValue::Float(v)) => {
             let v = if v.is_finite() { *v } else { 0.0 };
             config.sim.terrain.target_y = v;
+        }
+        (ConfigPath::SimTerrainTargetLift, ConfigValue::Float(v)) => {
+            let v = if v.is_finite() { *v } else { 0.0 };
+            config.sim.terrain.target_lift = v.clamp(-1.0e3, 1.0e3);
         }
         (ConfigPath::SimPathEnvironment, ConfigValue::Float(v)) => {
             let v = if v.is_finite() { *v } else { 0.0 };

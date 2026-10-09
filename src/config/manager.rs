@@ -1995,6 +1995,7 @@ impl ConfigManager {
             ConfigPath::SimTerrainCamDistance => Ok(ConfigValue::Float(config.sim.terrain.cam_distance)),
             ConfigPath::SimTerrainTargetX => Ok(ConfigValue::Float(config.sim.terrain.target_x)),
             ConfigPath::SimTerrainTargetY => Ok(ConfigValue::Float(config.sim.terrain.target_y)),
+            ConfigPath::SimTerrainTargetLift => Ok(ConfigValue::Float(config.sim.terrain.target_lift)),
             ConfigPath::SimPathSamples => Ok(ConfigValue::UInt(config.sim.terrain.path.samples)),
             ConfigPath::SimPathBounces => Ok(ConfigValue::UInt(config.sim.terrain.path.bounces)),
             ConfigPath::SimPathEnvironment => Ok(ConfigValue::Float(config.sim.terrain.path.environment)),
@@ -2144,6 +2145,7 @@ impl ConfigManager {
             ConfigPath::EscapeTerrainDetail => Ok(config.escape.terrain.detail.into()),
             ConfigPath::EscapeTerrainFar => Ok(config.escape.terrain.far.into()),
             ConfigPath::EscapeTerrainHaze => Ok(config.escape.terrain.haze.into()),
+            ConfigPath::EscapeTerrainTargetLift => Ok(config.escape.terrain.target_lift.into()),
             ConfigPath::EscapeTerrainTier => Ok(ConfigValue::String(config.escape.terrain.tier.as_str().to_string())),
             ConfigPath::EscapeSolidTier => Ok(ConfigValue::String(config.escape.solid_tier.as_str().to_string())),
             ConfigPath::EscapePathSamples => Ok(ConfigValue::UInt(config.escape.path.samples)),
@@ -3320,6 +3322,10 @@ impl ConfigManager {
                 let v: f32 = value.try_into()?;
                 self.current.sim.terrain.target_y = v;
             }
+            ConfigPath::SimTerrainTargetLift => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.target_lift = if v.is_finite() { v.clamp(-1.0e3, 1.0e3) } else { 0.0 };
+            }
             ConfigPath::SimPathSamples => {
                 let v: u32 = value.try_into()?;
                 self.current.sim.terrain.path.samples = v.clamp(1, 65_536);
@@ -3717,6 +3723,12 @@ impl ConfigManager {
             ConfigPath::EscapeTerrainHaze => {
                 let v: f32 = value.try_into()?;
                 self.current.escape.terrain.haze = v.clamp(0.0, 1.0);
+            }
+            ConfigPath::EscapeTerrainTargetLift => {
+                // Bounded where the f32 world still resolves a section:
+                // a target a thousand view widths up is a dot of ground.
+                let v: f32 = value.try_into()?;
+                self.current.escape.terrain.target_lift = if v.is_finite() { v.clamp(-1.0e3, 1.0e3) } else { 0.0 };
             }
             ConfigPath::EscapeTerrainTier => {
                 let v: String = value.try_into()?;

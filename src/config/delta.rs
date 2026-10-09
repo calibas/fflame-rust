@@ -472,6 +472,9 @@ pub enum ConfigPath {
     SimTerrainCamDistance,
     SimTerrainTargetX,
     SimTerrainTargetY,
+    /// The simulation terrain camera's target above half its relief, in
+    /// grid widths.
+    SimTerrainTargetLift,
     SimPathSamples,
     SimPathBounces,
     SimPathEnvironment,
@@ -534,6 +537,9 @@ pub enum ConfigPath {
     EscapeTerrainDetail,
     EscapeTerrainFar,
     EscapeTerrainHaze,
+    /// The escape terrain camera's target above the relief's top, in
+    /// view widths.
+    EscapeTerrainTargetLift,
     EscapeTerrainTier,
     EscapeSolidTier,
     EscapePathSamples,
@@ -1165,6 +1171,7 @@ impl Display for ConfigPath {
             ConfigPath::SimTerrainCamDistance => write!(f, "Simulation Terrain Distance to Target"),
             ConfigPath::SimTerrainTargetX => write!(f, "Simulation Terrain Target X"),
             ConfigPath::SimTerrainTargetY => write!(f, "Simulation Terrain Target Y"),
+            ConfigPath::SimTerrainTargetLift => write!(f, "Simulation Terrain Target Lift"),
             ConfigPath::SimPathSamples => write!(f, "Simulation Path Samples"),
             ConfigPath::SimPathBounces => write!(f, "Simulation Path Bounces"),
             ConfigPath::SimPathEnvironment => write!(f, "Simulation Sky Light"),
@@ -1214,6 +1221,7 @@ impl Display for ConfigPath {
             ConfigPath::EscapeTerrainDetail => write!(f, "Terrain Detail"),
             ConfigPath::EscapeTerrainFar => write!(f, "Terrain Distance"),
             ConfigPath::EscapeTerrainHaze => write!(f, "Terrain Haze"),
+            ConfigPath::EscapeTerrainTargetLift => write!(f, "Terrain Target Lift"),
             ConfigPath::EscapeTerrainTier => write!(f, "Terrain Rendering"),
             ConfigPath::EscapeSolidTier => write!(f, "Solid Rendering Tier"),
             ConfigPath::EscapePathSamples => write!(f, "Path Samples"),
@@ -1574,6 +1582,7 @@ impl ConfigPath {
             ConfigPath::SimTerrainCamDistance => I18nKey::simple("history.param.sim_terrain_cam_distance"),
             ConfigPath::SimTerrainTargetX => I18nKey::simple("history.param.sim_terrain_target_x"),
             ConfigPath::SimTerrainTargetY => I18nKey::simple("history.param.sim_terrain_target_y"),
+            ConfigPath::SimTerrainTargetLift => I18nKey::simple("history.param.sim_terrain_target_lift"),
             ConfigPath::SimPathSamples => I18nKey::simple("history.param.sim_path_samples"),
             ConfigPath::SimPathBounces => I18nKey::simple("history.param.sim_path_bounces"),
             ConfigPath::SimPathEnvironment => I18nKey::simple("history.param.sim_path_environment"),
@@ -1636,6 +1645,7 @@ impl ConfigPath {
             ConfigPath::EscapeTerrainDetail => I18nKey::simple("history.param.escape_terrain_detail"),
             ConfigPath::EscapeTerrainFar => I18nKey::simple("history.param.escape_terrain_far"),
             ConfigPath::EscapeTerrainHaze => I18nKey::simple("history.param.escape_terrain_haze"),
+            ConfigPath::EscapeTerrainTargetLift => I18nKey::simple("history.param.escape_terrain_target_lift"),
             ConfigPath::EscapeTerrainTier => I18nKey::simple("history.param.escape_terrain_tier"),
             ConfigPath::EscapeSolidTier => I18nKey::simple("history.param.escape_solid_tier"),
             ConfigPath::EscapePathSamples => I18nKey::simple("history.param.escape_path_samples"),
@@ -3055,6 +3065,7 @@ impl ConfigPath {
             | ConfigPath::EscapeTerrainDetail
             | ConfigPath::EscapeTerrainFar
             | ConfigPath::EscapeTerrainHaze
+            | ConfigPath::EscapeTerrainTargetLift
             | ConfigPath::EscapeTerrainTier
             | ConfigPath::EscapeSolidTier
             | ConfigPath::EscapePathSamples
@@ -3171,6 +3182,7 @@ impl ConfigPath {
             | ConfigPath::SimTerrainCamDistance
             | ConfigPath::SimTerrainTargetX
             | ConfigPath::SimTerrainTargetY
+            | ConfigPath::SimTerrainTargetLift
             | ConfigPath::SimPathSamples
             | ConfigPath::SimPathBounces
             | ConfigPath::SimPathEnvironment
@@ -3485,6 +3497,7 @@ impl ConfigPath {
             ConfigPath::SimTerrainCamDistance => "Sim.Terrain.CamDistance".to_string(),
             ConfigPath::SimTerrainTargetX => "Sim.Terrain.TargetX".to_string(),
             ConfigPath::SimTerrainTargetY => "Sim.Terrain.TargetY".to_string(),
+            ConfigPath::SimTerrainTargetLift => "Sim.Terrain.TargetLift".to_string(),
             ConfigPath::SimPathSamples => "Sim.Path.Samples".to_string(),
             ConfigPath::SimPathBounces => "Sim.Path.Bounces".to_string(),
             ConfigPath::SimPathEnvironment => "Sim.Path.Environment".to_string(),
@@ -3580,6 +3593,7 @@ impl ConfigPath {
             ConfigPath::EscapeTerrainDetail => "Escape.Terrain.Detail".to_string(),
             ConfigPath::EscapeTerrainFar => "Escape.Terrain.Far".to_string(),
             ConfigPath::EscapeTerrainHaze => "Escape.Terrain.Haze".to_string(),
+            ConfigPath::EscapeTerrainTargetLift => "Escape.Terrain.TargetLift".to_string(),
             ConfigPath::EscapeTerrainTier => "Escape.Terrain.Tier".to_string(),
             ConfigPath::EscapeSolidTier => "Escape.SolidTier".to_string(),
             ConfigPath::EscapePathSamples => "Escape.Path.Samples".to_string(),
@@ -3850,6 +3864,7 @@ impl ConfigPath {
                 ["Terrain", "Detail"] => return Some(ConfigPath::EscapeTerrainDetail),
                 ["Terrain", "Far"] => return Some(ConfigPath::EscapeTerrainFar),
                 ["Terrain", "Haze"] => return Some(ConfigPath::EscapeTerrainHaze),
+                ["Terrain", "TargetLift"] => return Some(ConfigPath::EscapeTerrainTargetLift),
                 ["Terrain", "Tier"] => return Some(ConfigPath::EscapeTerrainTier),
                 ["SolidTier"] => return Some(ConfigPath::EscapeSolidTier),
                 ["Path", "Samples"] => return Some(ConfigPath::EscapePathSamples),
@@ -3934,6 +3949,7 @@ impl ConfigPath {
                 ["Terrain", "CamDistance"] => return Some(ConfigPath::SimTerrainCamDistance),
                 ["Terrain", "TargetX"] => return Some(ConfigPath::SimTerrainTargetX),
                 ["Terrain", "TargetY"] => return Some(ConfigPath::SimTerrainTargetY),
+                ["Terrain", "TargetLift"] => return Some(ConfigPath::SimTerrainTargetLift),
                 ["Path", "Samples"] => return Some(ConfigPath::SimPathSamples),
                 ["Path", "Bounces"] => return Some(ConfigPath::SimPathBounces),
                 ["Path", "Environment"] => return Some(ConfigPath::SimPathEnvironment),
@@ -4689,6 +4705,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SimTerrainCamDistance
         | ConfigPath::SimTerrainTargetX
         | ConfigPath::SimTerrainTargetY
+        | ConfigPath::SimTerrainTargetLift
         | ConfigPath::SimPathEnvironment
         | ConfigPath::SimPathGloss
         | ConfigPath::SimPathRoughness
@@ -4741,6 +4758,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeTerrainDetail
         | ConfigPath::EscapeTerrainFar
         | ConfigPath::EscapeTerrainHaze
+        | ConfigPath::EscapeTerrainTargetLift
         | ConfigPath::EscapePathEnvironment
         | ConfigPath::EscapePathGloss
         | ConfigPath::EscapePathRoughness
@@ -5449,6 +5467,7 @@ mod tests {
             (ConfigPath::EscapeTerrainDetail, ConfigValue::Float(2.0), true),
             (ConfigPath::EscapeTerrainFar, ConfigValue::Float(12.0), true),
             (ConfigPath::EscapeTerrainHaze, ConfigValue::Float(0.5), true),
+            (ConfigPath::EscapeTerrainTargetLift, ConfigValue::Float(0.5), true),
             (ConfigPath::EscapeTerrainTier, ConfigValue::String("path_traced".into()), false),
             (ConfigPath::EscapeSolidTier, ConfigValue::String("auto".into()), false),
             (ConfigPath::EscapePathSamples, ConfigValue::UInt(64), false),
@@ -5515,6 +5534,7 @@ mod tests {
             (ConfigPath::SimTerrainCamDistance, ConfigValue::Float(0.25), true),
             (ConfigPath::SimTerrainTargetX, ConfigValue::Float(0.25), true),
             (ConfigPath::SimTerrainTargetY, ConfigValue::Float(0.25), true),
+            (ConfigPath::SimTerrainTargetLift, ConfigValue::Float(0.25), true),
             (ConfigPath::SimPathSamples, ConfigValue::UInt(2), false),
             (ConfigPath::SimPathBounces, ConfigValue::UInt(2), false),
             (ConfigPath::SimPathEnvironment, ConfigValue::Float(0.25), true),

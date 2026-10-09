@@ -261,6 +261,12 @@ fn wrap_pi(a: f64) -> f64 {
 /// What a 3D camera's orbit writes: its convention and stored angles,
 /// the paths of its pitch, yaw and bank, and the range its pitch keeps
 /// (a terrain's eye stays above the ground).
+///
+/// A terrain's floor is where its eye would be at a pitch of 0.02 with
+/// the target at rest -- so an unlifted target orbits exactly as it
+/// always has -- and a lifted target lowers it, down to looking straight
+/// up. A pitch already below the floor (typed, or flown there) is a
+/// floor of its own: an orbit never snaps it up.
 struct Turnable {
     conv: Convention,
     angles: Angles,
@@ -269,8 +275,13 @@ struct Turnable {
 }
 
 fn turnable(config: &FractalConfig, kind: ViewKind) -> Option<Turnable> {
+    // `lift` and `distance` in the same unit, the pitch now.
     #[cfg(feature = "terrain")]
-    const ABOVE_GROUND: Option<(f64, f64)> = Some((0.02, std::f64::consts::FRAC_PI_2 - 0.001));
+    let above_ground = |lift: f64, distance: f64, pitch: f64| -> Option<(f64, f64)> {
+        use std::f64::consts::FRAC_PI_2;
+        let floor = (0.02f64.sin() - lift / distance.max(1e-9)).clamp(-1.0, 1.0).asin().max(-FRAC_PI_2 + 0.001);
+        Some((floor.min(pitch), FRAC_PI_2 - 0.001))
+    };
     match kind {
         ViewKind::Flame3d => {
             let (conv, angles) = view3d::flame_angles(config);
@@ -294,21 +305,23 @@ fn turnable(config: &FractalConfig, kind: ViewKind) -> Option<Turnable> {
         #[cfg(feature = "terrain")]
         ViewKind::EscapeTerrain => {
             let (conv, angles) = view3d::escape_terrain_angles(&config.escape);
+            let lift = config.escape.terrain.target_lift as f64;
             Some(Turnable {
                 conv,
                 angles,
                 paths: [ConfigPath::EscapeCamPitch, ConfigPath::EscapeCamYaw, ConfigPath::EscapeCamBank],
-                pitch_range: ABOVE_GROUND,
+                pitch_range: above_ground(lift, crate::escape::footprint::FRAME_DISTANCE, angles.pitch),
             })
         }
         #[cfg(all(feature = "terrain", feature = "engine-sim"))]
         ViewKind::SimTerrain => {
             let (conv, angles) = view3d::sim_terrain_angles(&config.sim.terrain);
+            let t = &config.sim.terrain;
             Some(Turnable {
                 conv,
                 angles,
                 paths: [ConfigPath::SimTerrainCamPitch, ConfigPath::SimTerrainCamYaw, ConfigPath::SimTerrainCamBank],
-                pitch_range: ABOVE_GROUND,
+                pitch_range: above_ground(t.target_lift as f64, t.cam_distance as f64, angles.pitch),
             })
         }
         _ => None,
@@ -473,6 +486,8 @@ pub fn reset(config: &FractalConfig) -> Option<CameraEdit> {
                         for p in [ConfigPath::EscapeCamTargetX, ConfigPath::EscapeCamTargetY, ConfigPath::EscapeCamTargetZ] {
                             changes.push((p, ConfigValue::String(String::new())));
                         }
+                    } else if config.escape.terrain.target_lift != 0.0 {
+                        changes.push((ConfigPath::EscapeTerrainTargetLift, 0.0f32.into()));
                     }
                     changes.push((ConfigPath::EscapeCamPitch, home.cam_pitch.into()));
                     changes.push((ConfigPath::EscapeCamYaw, home.cam_yaw.into()));
@@ -498,6 +513,7 @@ pub fn reset(config: &FractalConfig) -> Option<CameraEdit> {
             changes.push((ConfigPath::SimTerrainCamDistance, home.cam_distance.into()));
             changes.push((ConfigPath::SimTerrainTargetX, home.target_x.into()));
             changes.push((ConfigPath::SimTerrainTargetY, home.target_y.into()));
+            changes.push((ConfigPath::SimTerrainTargetLift, home.target_lift.into()));
         }
         _ => return None,
     }
@@ -1256,6 +1272,23 @@ mod tests {
         let c = cameras_3d().into_iter().find(|(n, _)| *n == "escape terrain").unwrap().1;
         let after = applied(&c, &turn(&c, [0.0, -1000.0], None, settings).unwrap());
         assert!((after.escape.cam_pitch - 0.02).abs() < 1e-6, "{}", after.escape.cam_pitch);
+
+        // A lifted target lets the eye down to the same height, and so
+        // below the horizon: the eye's floor, not the pitch's, is kept.
+        let rest_eye = crate::escape::footprint::terrain_camera(&after.escape).eye[2];
+        let mut lifted = c.clone();
+        lifted.escape.terrain.target_lift = 1.0;
+        let after = applied(&lifted, &turn(&lifted, [0.0, -1000.0], None, settings).unwrap());
+        assert!(after.escape.cam_pitch < -0.5, "it looks up: {}", after.escape.cam_pitch);
+        let eye = crate::escape::footprint::terrain_camera(&after.escape).eye[2];
+        assert!((eye - rest_eye).abs() < 1e-5, "the eye's floor: {eye} vs {rest_eye}");
+
+        // A pitch already under the floor is not snapped up by an orbit
+        // across.
+        let mut low = c.clone();
+        low.escape.cam_pitch = -0.3;
+        let after = applied(&low, &turn(&low, [40.0, 0.0], None, settings).unwrap());
+        assert!((after.escape.cam_pitch + 0.3).abs() < 1e-4, "{}", after.escape.cam_pitch);
     }
 
     /// A 2D turn rotates the picture with the pointer: the point that was

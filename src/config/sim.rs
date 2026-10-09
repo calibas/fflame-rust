@@ -1034,6 +1034,11 @@ pub struct SimTerrainConfig {
     pub target_x: f32,
     #[serde(default = "default_half", skip_serializing_if = "is_half")]
     pub target_y: f32,
+    /// The target above where it rests -- half the relief -- in grid
+    /// widths (camera-unification C4). It lifts the eye with it, so the
+    /// camera can look up, or level, from above the ground.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub target_lift: f32,
     /// The path tracer's settings for this terrain.
     #[serde(default, skip_serializing_if = "super::escape::PathTraceConfig::is_default")]
     pub path: super::escape::PathTraceConfig,
@@ -1140,6 +1145,7 @@ impl Default for SimTerrainConfig {
             cam_distance: default_sim_terrain_distance(),
             target_x: 0.5,
             target_y: 0.5,
+            target_lift: 0.0,
             path: super::escape::PathTraceConfig::default(),
         }
     }
