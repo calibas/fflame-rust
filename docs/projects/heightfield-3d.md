@@ -1231,6 +1231,44 @@ terrain.**
     one sample more), and a row no sample has reached is empty. It traces
     display pixels: the jitter is the antialiasing, and a path-traced
     export renders at supersample 1.
+  - **Losing the device, and re-banded (2026-10-08).** Reported: the
+    shipped Menger sponge path traced in the app lost the device every
+    two or three seconds (`wgpu DEVICE LOST (Unknown)` in crash.log) --
+    recovered, traced half the frame, lost it again. Measured on the
+    GTX 1660 SUPER at 1080p and the defaults: a sample is about five
+    seconds (the lit walk 0.6), the sky's rows a tenth of a millisecond,
+    the solid's 6 to 11. Four faults, each fixed in
+    [solid_path.rs](../../src/escape/renderer/solid_path.rs):
+    - A row nobody had measured was priced at twice the costliest yet --
+      in the first pass, the sky's -- so the bands that entered the solid
+      were the model's cap, half a second each and two a frame. Now at
+      the model at least.
+    - Calls overlapped: the viewport sent a frame's before the last had
+      finished, the queue held seconds of bands, and a call finishing
+      with the one before it measured next to nothing. The viewport now
+      waits for its last call (`SolidPath::busy`).
+    - Eight rows was the least a dispatch held, and enough bounces or
+      width make eight rows outlast the watchdog. A band priced past a
+      ceiling (500 ms) now goes across in tiles of whole workgroups; the
+      resolve and the denoiser read a band part-way across
+      (`path_core::PathSplit`).
+    - The breakers count a loss only while their own bands are out, and
+      the path tracer's were nobody's, so every recovery sent the same
+      bands. Its calls are counted (`PATH_CALLS_IN_FLIGHT`); a loss among
+      them halves the ceiling and cap, persisted as `path_shift` in
+      `gpu_tuning.json`, beside the walk's.
+    And a band now holds at least eight rows of 1920 in pixels, not eight
+    rows: a band costs at least its slowest path, so on a narrow view
+    eight rows were too few threads -- measured, a sample at 320 wide
+    0.70 s to 0.25, at 960 wide 2.7 to 1.5, at 1920 unchanged (6.3; a
+    viewport frame stays under a tenth of a second). The export's
+    250 ms calls take a sample in 4.7. What is left is the shader:
+    nine-tenths of a sample is its secondary marches (measured at
+    320x180: the camera's march and its surface 12 ms of 125; the
+    surfaces a bounce meets next to nothing), which hit at a
+    ten-thousandth of the ball -- the walk's shadow rule (`ifs_shadow`:
+    at a pixel's width they erased the sponge's sub-squares) -- with a
+    shadow ray to every light at every bounce.
   - **Tiers** (`escape.solid_tier`, `RenderTier`): **Lit by default**,
     so every solid saved before this renders as it did. Auto walks while
     anything moves and path traces once the walk settles, shown from 8

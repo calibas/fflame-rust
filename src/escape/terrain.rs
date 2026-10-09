@@ -3200,7 +3200,7 @@ impl TerrainRenderer {
     /// whatever the denoiser's schedule says (`PathSum::resolve`).
     /// Submits its own work.
     pub fn resolve_path(&mut self, device: &Device, queue: &Queue) {
-        self.path.resolve_now(device, queue, &self.output.1, self.out_w, self.out_h, 0);
+        self.path.resolve_now(device, queue, &self.output.1, self.out_w, self.out_h, crate::escape::path_core::PathSplit::rows(0));
     }
 
     /// Add `samples` path-traced samples of the view to the sum -- in
@@ -3270,7 +3270,7 @@ impl TerrainRenderer {
             done += n;
         }
         // The mean, into the output.
-        self.path.resolve(device, queue, &self.output.1, self.out_w, self.out_h, 0);
+        self.path.resolve(device, queue, &self.output.1, self.out_w, self.out_h, crate::escape::path_core::PathSplit::rows(0));
         // The output no longer holds a lit render.
         self.walked = None;
     }
