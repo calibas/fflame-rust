@@ -11,6 +11,7 @@ pub mod gpu;
 #[cfg(feature = "web-app")]
 mod ui;
 mod util;
+pub mod camera;
 pub mod scene;
 pub mod renderer;
 pub mod contract;

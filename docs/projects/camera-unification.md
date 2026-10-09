@@ -407,14 +407,31 @@ and the visual suite -- **pictures unchanged** unless the phase says
 otherwise. Gesture feel can't be judged by a test; each phase that
 changes input lists what to try in the app.
 
-- **P0. Adapters and the quaternion (no behaviour change).**
-  - New module `src/camera/`: `Quat`; `View2d` and `Camera3d`; one
-    adapter per renderer.
-  - Tests: each adapter's matrix equals the renderer's own
-    (`build_camera_matrix`'s chain, `solid_frame`, `terrain_camera`,
-    `sim_terrain_camera`) over an angle grid; Euler → quaternion → Euler
-    returns the nearest solution, bank included; every existing gesture
-    function, re-expressed through an adapter, produces the same batch.
+- **P0. Adapters and the quaternion (no behaviour change).** *Built
+  2026-10-09.*
+  - New module `src/camera/`: `quat` (the orientation); `chain` (the one
+    Euler chain, and the way back to its angles); `view3d` (each 3D
+    camera's angles as a `Convention` on that chain); `gesture` (the
+    viewport's pan, zoom, orbit and dolly, moved out of
+    `ui::panel_viewer` unchanged, as `CameraEdit`s the viewport applies).
+  - **The way back holds the roll and solves pitch, yaw and bank** -- a
+    Tait–Bryan sequence singular only at bank ±90°, a camera on its side.
+    Today's flame free-look solves pitch, yaw and roll, singular at pitch
+    0: the flame's home pose, which is why its sliders jumped there. When
+    the fly mode moves onto this (P6), free-look turns will move the
+    pitch, yaw and bank sliders and leave `rotation` -- the 2D view's
+    rotation too -- alone.
+  - Tests: the chain equals the main pass's flame camera
+    (`effective_camera_rows`) and each convention's frame equals its
+    renderer's (`solid_frame`, `terrain_camera`, `sim_terrain_camera`)
+    over an angle grid; angles round-trip through a quaternion in every
+    convention; free-look from the home pose moves the angles by about
+    the turn; a 3000-step free-look path stays faithful; the moved
+    gestures keep the point under the cursor and carry the picture with
+    a drag (flame and escape plane), and mode D's solid-navigation tests
+    moved with them.
+  - The `View2d`/`Camera3d` dispatch -- which camera a gesture moves --
+    is P1's: it is where the gestures change.
 - **P1. Gestures through the adapters.**
   - The table in C3, for the mouse, touch, keys and the tab-bar strip.
   - Fixes: the escape pinch (fixed point, the 1e8 clamp); one history
