@@ -2023,6 +2023,28 @@ pub fn pack_for(
     }
 }
 
+/// The analysis a solid's camera is built on, as the renderer builds it
+/// (`pack_for`): the flame's for a def that reads the flame, the def's
+/// own ball for one that does not. `None` for a formula that is not a
+/// solid, and for a solid flame that does not qualify.
+///
+/// What frames a camera has to be this, not the flame's analysis alone:
+/// a solid that needs no flame (the quaternion Julia) renders whatever
+/// the config's flame is, and a pan read its camera from that flame --
+/// which did not qualify, so the drag fell to the plane's centre, which
+/// the solid does not read.
+pub fn solid_analysis(
+    config: &crate::config::FractalConfig,
+    registry: &crate::variations::VariationRegistry,
+) -> Option<crate::scene::ifs_analysis::Ifs3> {
+    let def = get_ifs(&config.escape.formula).filter(|d| d.solid)?;
+    if def.needs_flame {
+        crate::scene::ifs_analysis::analyse_3d(&config.flame, registry).ok()
+    } else {
+        pack_standalone(def, &config.escape).solid.map(|(ifs3, _)| ifs3)
+    }
+}
+
 /// Ordered mode-D coloring registry. **Append-only.**
 /// `measure`: the flame's own invariant density and colour, read
 /// through the inverse walk instead of sampled by a chaos game.
