@@ -990,7 +990,7 @@ fn apply_config_value(
         }
         (ConfigPath::SimTerrainCamPitch, ConfigValue::Float(v)) => {
             let v = if v.is_finite() { *v } else { 0.0 };
-            config.sim.terrain.cam_pitch = v.clamp(-1.5607964, 1.5607964);
+            config.sim.terrain.cam_pitch = v.clamp(-1.5708, 1.5708);
         }
         (ConfigPath::SimTerrainCamYaw, ConfigValue::Float(v)) => {
             let v = if v.is_finite() { *v } else { 0.0 };

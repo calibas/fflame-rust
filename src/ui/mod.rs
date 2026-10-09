@@ -1540,6 +1540,7 @@ impl EguiLayer {
             frame_governor: config_manager.system_settings().frame_governor,
             manual_workgroups: config_manager.system_settings().manual_workgroups,
             render_mode: config_manager.config().render_mode,
+            fly_available: crate::ui::visibility::fly_mode(crate::camera::gesture::view_kind(config_manager.config())).is_show(),
             tonemap_mode: config_manager.config().tonemap_mode,
             solid: crate::ui::visibility::Solid::of(config_manager.config()),
             online_mode: config_manager.system_settings().online_mode,

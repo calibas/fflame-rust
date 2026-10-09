@@ -595,14 +595,47 @@ changes input lists what to try in the app.
     degrees up has the sky across the top, ground along the bottom, and
     no ray under the horizon within reach through the ground (3586
     checked). Before/after renders in `output/camera-p5/`.
-- **P6. One quaternion fly mode (C4).**
-  - Fly mode for every 3D camera through the adapters; speed scaled by
-    the distance to the target; look about the eye.
-  - The sim terrain's target height.
-  - Release held keys on focus loss.
-  - Tests: a flight path through each adapter is continuous and faithful
-    (the existing fly tests, generalised); mode D's flight is exact at a
-    deep zoom (fixed-point target).
+- **P6. One quaternion fly mode (C4).** *Built 2026-10-09.*
+  - `camera::fly`: `look` and `fly`, for the 3D flame, mode D and both
+    terrains, as `CameraEdit`s under the fly history entry (one undo a
+    flight). `app::fly_camera` is now only the keys and the drags; its
+    own ZXZ algebra (singular at the flame's home pose, bank ignored) is
+    gone with its tests.
+  - **Look about the eye.** FreeLook turns about the screen's axes;
+    FPS is a turntable about world up and the level axis, stopping a
+    hair short of the poles. Composed on the quaternion, written back as
+    pitch, yaw and bank with the roll held -- so a FreeLook roll now
+    shows in Bank, and the flame's 2D Rotation is never touched (it used
+    to drift). A solid-convention pitch past ±90° is written as its
+    equivalent the other way round (heading reversed, camera upside
+    down), since those cameras' pitch is ±90°.
+  - **The pivot.** Every camera's stored point sits a distance in front
+    of its eye and a look moves it by the forward's change times that
+    distance: mode D's and the terrains' targets, and a perspective
+    flame's `camera_x/y/z`, which sits `1/persp` in front of its
+    viewpoint -- so a flame's look no longer swings the viewpoint round
+    a short orbit. An orthographic flame turns about the screen's
+    centre, as before.
+  - **Flight:** a flame in world units a second, as before; the others
+    in distances to the target a second, so a flight feels the same at
+    every zoom. Mode D's steps are fixed-point adds to its decimal target
+    (it flies at 2^-200). A terrain's eye is kept above the orbit's floor.
+    A simulation terrain's lift is P5's.
+  - **Offered for every 3D camera** (`visibility::fly_mode`): the View
+    panel, the menu bar's button (it asked the render mode) and F2; fly
+    mode drops when the view stops being 3D by any path.
+  - **Held keys are released when the window loses focus** (the key-up
+    went to another window, and the camera flew on).
+  - A simulation terrain's pitch now reaches ±90°, as the escape
+    cameras' does (it stopped at 89.4°, with no recorded reason; its frame
+    holds at the poles).
+  - Tests: a look turns toward the drag about a still eye, both look
+    modes, every camera; FPS keeps a level horizon level; a 400-step
+    FreeLook path through the poles stays faithful to the composed
+    rotation, the pitch in range; W/D/E fly along the view's axes; a
+    terrain's flight stops at the floor; mode D flies at 2^-200; the
+    canonical angles are the same camera; every 3D view and no 2D one
+    flies.
 - **P7. Materials across the views (C7).** A design note first, with
   before/after renders, since it changes pictures.
 - **P8. Docs and text.** `docs/main/UI.md`, `free-camera-movement.md`,

@@ -352,13 +352,12 @@ pub fn control(c: Control, m: RenderMode, tone: ToneMapMode) -> Vis {
 ///
 /// A question about the CAMERA, not the render mode: escape mode is 3D
 /// for one formula and a terrain, a simulation for its terrain. Every 3D
-/// camera flies once its adapter does (camera-unification C4, P6); until
-/// then the 3D flame's alone.
+/// camera flies (`camera::fly`, camera-unification C4); a 2D view has no
+/// eye to fly.
 pub fn fly_mode(kind: crate::camera::gesture::ViewKind) -> Vis {
     use crate::camera::gesture::ViewKind as K;
     match kind {
-        K::Flame3d => Vis::Show,
-        K::Solid | K::EscapeTerrain | K::SimTerrain => Vis::Hide,
+        K::Flame3d | K::Solid | K::EscapeTerrain | K::SimTerrain => Vis::Show,
         K::Flame2d | K::EscapePlane | K::Sim2d => Vis::Hide,
     }
 }
@@ -772,6 +771,15 @@ mod tests {
         assert!(!panel(PanelType::Simulation, RenderMode::Escape, Solid::No).is_show());
         assert!(panel(PanelType::Escape, RenderMode::Escape, Solid::No).is_show());
         assert!(panel(PanelType::Simulation, RenderMode::Simulation, Solid::No).is_show());
+    }
+
+    /// Fly mode is every 3D camera's and no 2D view's.
+    #[test]
+    fn every_3d_camera_flies() {
+        use crate::camera::gesture::ViewKind as K;
+        for k in [K::Flame2d, K::Flame3d, K::EscapePlane, K::Solid, K::EscapeTerrain, K::Sim2d, K::SimTerrain] {
+            assert_eq!(fly_mode(k).is_show(), k.is_3d(), "{k:?}");
+        }
     }
 
     /// The compact submenu picks from the desktop table rather than

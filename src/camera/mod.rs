@@ -12,13 +12,16 @@
 //! - [`chain`]: the one Euler chain every 3D camera stores, and the way
 //!   back from a rotation to its angles;
 //! - [`view3d`]: how each 3D camera's stored angles enter that chain;
-//! - [`gesture`]: the viewport's camera gestures, as config edits.
+//! - [`gesture`]: the viewport's camera gestures, as config edits;
+//! - [`fly`]: one fly mode for every 3D camera -- look about the eye, fly
+//!   along its axes.
 //!
 //! A camera operation is a [`CameraEdit`]: config writes and the history
 //! entry they go under. The caller applies it through the ConfigManager,
 //! so undo, animation and scripts see the same writes they always did.
 
 pub mod chain;
+pub mod fly;
 pub mod gesture;
 pub mod quat;
 pub mod view3d;
