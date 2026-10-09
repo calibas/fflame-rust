@@ -33,6 +33,11 @@ use crate::scene::palette::ColorStop;
 /// point below takes `Dynamic` and comes through here.
 fn num(d: &Dynamic, what: &str) -> Result<f64, Box<EvalAltResult>> {
     if let Ok(f) = d.as_float() {
+        // A NaN or an infinity saves as `null`, and the file no longer
+        // loads: refused here, where the script can be told.
+        if !f.is_finite() {
+            return Err(err(format!("{what} must be a finite number, got {f}")));
+        }
         return Ok(f);
     }
     if let Ok(i) = d.as_int() {
@@ -1443,11 +1448,36 @@ fn register_sim(engine: &mut Engine) {
 
     fn enter(cfg: &mut FractalConfig) {
         if cfg.render_mode != RenderMode::Simulation {
+            // As the Mode menu enters it (`entry_tone_mapping`).
+            if let Some((exposure, gamma)) = crate::config::defaults::entry_tone_mapping(cfg, RenderMode::Simulation) {
+                cfg.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+                cfg.exposure = exposure;
+                cfg.gamma = gamma;
+            }
             cfg.render_mode = RenderMode::Simulation;
-            cfg.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
-            cfg.exposure = 1.0;
-            cfg.gamma = 1.0;
         }
+    }
+
+    // A layered simulation draws `layers[l]` and its colour stack, not the
+    // flat fields: the handle's model, parameters and colouring go to the
+    // first layer and the first colour layer there. Written flat, a
+    // script's edits had no visible effect on a layered config.
+    fn model_params(cfg: &mut FractalConfig) -> &mut std::collections::BTreeMap<String, f32> {
+        if cfg.sim.layers.is_empty() {
+            &mut cfg.sim.model_params
+        } else {
+            &mut cfg.sim.layers[0].model_params
+        }
+    }
+    fn coloring_params(cfg: &mut FractalConfig) -> &mut std::collections::BTreeMap<String, f32> {
+        if cfg.sim.color_layers.is_empty() {
+            &mut cfg.sim.coloring_params
+        } else {
+            &mut cfg.sim.color_layers[0].coloring_params
+        }
+    }
+    fn model_name(cfg: &FractalConfig) -> String {
+        cfg.sim.layer_model_name(0).to_string()
     }
 
     engine.register_fn("enter", |e: &mut SimHandle| {
@@ -1463,15 +1493,19 @@ fn register_sim(engine: &mut Engine) {
             }
             let mut cfg = e.cfg.borrow_mut();
             enter(&mut cfg);
-            if cfg.sim.model != name {
+            if model_name(&cfg) != name {
                 // Parameters belong to the model that declared them,
                 // and dt/steps are per-model working values.
-                cfg.sim.model_params.clear();
+                model_params(&mut cfg).clear();
                 let m = crate::sim::model_or_default(name);
                 cfg.sim.dt = m.default_dt;
                 cfg.sim.steps = m.default_steps;
             }
-            cfg.sim.model = name.to_string();
+            if cfg.sim.layers.is_empty() {
+                cfg.sim.model = name.to_string();
+            } else {
+                cfg.sim.layers[0].model = name.to_string();
+            }
             Ok(())
         },
     );
@@ -1491,10 +1525,15 @@ fn register_sim(engine: &mut Engine) {
             }
             let mut cfg = e.cfg.borrow_mut();
             enter(&mut cfg);
-            if cfg.sim.coloring != name {
-                cfg.sim.coloring_params.clear();
+            let current = cfg.sim.color_layers.first().map_or(cfg.sim.coloring.clone(), |l| l.coloring.clone());
+            if current != name {
+                coloring_params(&mut cfg).clear();
             }
-            cfg.sim.coloring = name.to_string();
+            if cfg.sim.color_layers.is_empty() {
+                cfg.sim.coloring = name.to_string();
+            } else {
+                cfg.sim.color_layers[0].coloring = name.to_string();
+            }
             Ok(())
         },
     );
@@ -1504,15 +1543,21 @@ fn register_sim(engine: &mut Engine) {
             .map(|c| rhai::Dynamic::from(c.name.to_string()))
             .collect()
     });
-    engine.register_fn("param", |e: &mut SimHandle, name: &str, v: f64| {
+    // Dynamic, through `num`: `sim.param("feed", 1)` was "function not
+    // found" for want of a `1.0`.
+    engine.register_fn("param", |e: &mut SimHandle, name: &str, v: Dynamic| -> Result<(), Box<EvalAltResult>> {
+        let v = num(&v, name)?;
         let mut cfg = e.cfg.borrow_mut();
         enter(&mut cfg);
-        cfg.sim.model_params.insert(name.to_string(), v as f32);
+        model_params(&mut cfg).insert(name.to_string(), v as f32);
+        Ok(())
     });
-    engine.register_fn("coloring_param", |e: &mut SimHandle, name: &str, v: f64| {
+    engine.register_fn("coloring_param", |e: &mut SimHandle, name: &str, v: Dynamic| -> Result<(), Box<EvalAltResult>> {
+        let v = num(&v, name)?;
         let mut cfg = e.cfg.borrow_mut();
         enter(&mut cfg);
-        cfg.sim.coloring_params.insert(name.to_string(), v as f32);
+        coloring_params(&mut cfg).insert(name.to_string(), v as f32);
+        Ok(())
     });
     engine.register_fn("grid", |e: &mut SimHandle, w: i64, h: i64| {
         let mut cfg = e.cfg.borrow_mut();
@@ -1522,13 +1567,12 @@ fn register_sim(engine: &mut Engine) {
             height: (h.clamp(16, 8192)) as u32,
         };
     });
-    engine.register_fn("grid_viewport", |e: &mut SimHandle, scale: f64| {
+    engine.register_fn("grid_viewport", |e: &mut SimHandle, scale: Dynamic| -> Result<(), Box<EvalAltResult>> {
+        let s = num(&scale, "scale")? as f32;
         let mut cfg = e.cfg.borrow_mut();
         enter(&mut cfg);
-        let s = scale as f32;
-        cfg.sim.grid = crate::config::sim::SimGrid::Viewport {
-            scale: if s.is_finite() { s.clamp(0.125, 4.0) } else { 1.0 },
-        };
+        cfg.sim.grid = crate::config::sim::SimGrid::Viewport { scale: s.clamp(0.125, 4.0) };
+        Ok(())
     });
     engine.register_fn("seed", |e: &mut SimHandle, n: i64| {
         let mut cfg = e.cfg.borrow_mut();
@@ -1560,11 +1604,14 @@ fn register_sim(engine: &mut Engine) {
         enter(&mut cfg);
         cfg.sim.steps_per_frame = n.clamp(1, 4096) as u32;
     });
-    engine.register_fn("dt", |e: &mut SimHandle, v: f64| {
+    engine.register_fn("dt", |e: &mut SimHandle, v: Dynamic| -> Result<(), Box<EvalAltResult>> {
+        let d = num(&v, "dt")? as f32;
         let mut cfg = e.cfg.borrow_mut();
         enter(&mut cfg);
-        let d = v as f32;
-        cfg.sim.dt = if d.is_finite() { d.clamp(1e-4, 10.0) } else { 1.0 };
+        // The panel's bound: the models' own ceiling (the solver applies
+        // the stability cap to what it runs at).
+        cfg.sim.dt = d.clamp(1e-4, cfg.sim.max_dt_ceiling());
+        Ok(())
     });
     engine.register_fn(
         "boundary",
@@ -1588,7 +1635,7 @@ fn register_sim(engine: &mut Engine) {
         |e: &mut SimHandle, name: &str| -> Result<(), Box<EvalAltResult>> {
             let mut cfg = e.cfg.borrow_mut();
             enter(&mut cfg);
-            let model = crate::sim::model_or_default(&cfg.sim.model);
+            let model = crate::sim::model_or_default(&model_name(&cfg));
             match model.preset(name) {
                 Some(p) => {
                     // A preset is a WHOLE RECIPE, and applying half of
@@ -1606,7 +1653,7 @@ fn register_sim(engine: &mut Engine) {
                     // override; then parameters over the defaults.
                     cfg.sim.dt = model.default_dt;
                     for (k, v) in p.params {
-                        cfg.sim.model_params.insert((*k).to_string(), *v);
+                        model_params(&mut cfg).insert((*k).to_string(), *v);
                     }
                     // The measured step count. The numbers without the
                     // steps show the pattern half-formed.
@@ -1626,12 +1673,17 @@ fn register_sim(engine: &mut Engine) {
                         // values must go or a shared name (`scale`
                         // belongs to both `channel` and `occupancy`)
                         // would carry over.
-                        if cfg.sim.coloring != c {
-                            cfg.sim.coloring_params.clear();
+                        let current = cfg.sim.color_layers.first().map_or(cfg.sim.coloring.clone(), |l| l.coloring.clone());
+                        if current != c {
+                            coloring_params(&mut cfg).clear();
                         }
-                        cfg.sim.coloring = c.to_string();
+                        if cfg.sim.color_layers.is_empty() {
+                            cfg.sim.coloring = c.to_string();
+                        } else {
+                            cfg.sim.color_layers[0].coloring = c.to_string();
+                        }
                         for (k, v) in p.coloring_params {
-                            cfg.sim.coloring_params.insert((*k).to_string(), *v);
+                            coloring_params(&mut cfg).insert((*k).to_string(), *v);
                         }
                     }
                     // Matte and warp are set EITHER WAY, so a preset
@@ -1651,6 +1703,18 @@ fn register_sim(engine: &mut Engine) {
 
 // ------------------------------------------------------------------ escape
 
+/// A relief blend by name. Unknown names fell back to Multiply, so a
+/// typo -- or "Screen" with a capital -- darkened the highlights.
+#[cfg(feature = "engine-escape")]
+fn blend_named(blend: &str) -> Result<crate::config::escape::ShadingBlend, Box<EvalAltResult>> {
+    const BLENDS: [&str; 6] = ["multiply", "screen", "overlay", "mix", "soft_light", "hard_light"];
+    let b = blend.trim().to_ascii_lowercase();
+    if !BLENDS.contains(&b.as_str()) {
+        return Err(err(format!("unknown relief blend '{blend}'; one of {}", BLENDS.join(", "))));
+    }
+    Ok(crate::config::escape::shading_blend_from_str(&b))
+}
+
 /// Escape-time settings: `escape.formula(...)`, `escape.center(...)`.
 ///
 /// Setting anything here switches the config to escape rendering, so
@@ -1665,14 +1729,16 @@ fn register_escape(engine: &mut Engine) {
 
     fn enter(cfg: &mut FractalConfig) {
         if cfg.render_mode != RenderMode::Escape {
-            cfg.render_mode = RenderMode::Escape;
             // Flame presets carry Log-calibrated tone mapping, which
-            // renders Linear escape output invisibly. The app does the
-            // same on entering escape mode; without it a script that
-            // set only a formula would produce a black image.
-            cfg.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
-            cfg.exposure = 1.0;
-            cfg.gamma = 1.0;
+            // renders Linear escape output invisibly: switched as the
+            // Mode menu switches it (`entry_tone_mapping`), so a script
+            // and a click agree.
+            if let Some((exposure, gamma)) = crate::config::defaults::entry_tone_mapping(cfg, RenderMode::Escape) {
+                cfg.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+                cfg.exposure = exposure;
+                cfg.gamma = gamma;
+            }
+            cfg.render_mode = RenderMode::Escape;
         }
     }
 
@@ -1707,10 +1773,17 @@ fn register_escape(engine: &mut Engine) {
             if cfg.escape.coloring != name {
                 cfg.escape.coloring_params.clear();
                 // What a fresh pick in the panel takes (debanded
-                // averages), so a script and a click agree.
+                // averages, and the bailout the colouring is best
+                // drawn at), so a script and a click agree.
                 let def = crate::escape::get_coloring(name);
                 for (param, v) in def.pick_params {
                     cfg.escape.coloring_params.insert(param.to_string(), *v);
+                }
+                let formula = crate::escape::get_formula(&cfg.escape.formula);
+                let fparams = crate::escape::packed_formula_params(formula, &cfg.escape.formula_params);
+                let biomorph_off = cfg.escape.biomorph == crate::config::escape::BiomorphMode::Off;
+                if let Some(b) = crate::escape::suggested_bailout(formula, &fparams, def, biomorph_off) {
+                    cfg.escape.bailout = b;
                 }
             }
             cfg.escape.coloring = name.to_string();
@@ -1736,10 +1809,12 @@ fn register_escape(engine: &mut Engine) {
     engine.register_fn(
         "center",
         |e: &mut EscapeHandle, re: &str, im: &str| -> Result<(), Box<EvalAltResult>> {
+            // A plain decimal, as deep zoom's fixed point reads it: "1e-30"
+            // and "nan" parse as f64 and then no reference orbit builds.
             for (label, v) in [("re", re), ("im", im)] {
-                if v.trim().parse::<f64>().is_err() {
+                if crate::escape::fixedpoint::FixedPoint::from_decimal(v.trim(), 4).is_none() {
                     return Err(err(format!(
-                        "centre {label} `{v}` is not a decimal number"
+                        "centre {label} `{v}` is not a plain decimal number (digits, a sign and a point; no exponent)"
                     )));
                 }
             }
@@ -1847,8 +1922,7 @@ fn register_escape(engine: &mut Engine) {
             enter(&mut cfg);
             cfg.escape.shading.shadow_color = rgb.map(|v| (v as f32).clamp(0.0, 1.0));
             cfg.escape.shading.shadow_strength = (strength as f32).clamp(0.0, 4.0);
-            cfg.escape.shading.shadow_blend =
-                crate::config::escape::shading_blend_from_str(blend);
+            cfg.escape.shading.shadow_blend = blend_named(blend)?;
             Ok(())
         },
     );
@@ -1861,8 +1935,7 @@ fn register_escape(engine: &mut Engine) {
             enter(&mut cfg);
             cfg.escape.shading.highlight_color = rgb.map(|v| (v as f32).clamp(0.0, 1.0));
             cfg.escape.shading.highlight_strength = (strength as f32).clamp(0.0, 4.0);
-            cfg.escape.shading.highlight_blend =
-                crate::config::escape::shading_blend_from_str(blend);
+            cfg.escape.shading.highlight_blend = blend_named(blend)?;
             Ok(())
         },
     );
@@ -1877,10 +1950,16 @@ fn register_escape(engine: &mut Engine) {
             Ok(())
         },
     );
-    engine.register_fn("shading_field", |e: &mut EscapeHandle, field: &str| {
+    engine.register_fn("shading_field", |e: &mut EscapeHandle, field: &str| -> Result<(), Box<EvalAltResult>> {
+        const FIELDS: [&str; 6] = ["smooth", "banded", "layer", "analytic", "offset", "embossed"];
+        let f = field.trim().to_ascii_lowercase();
+        if !FIELDS.contains(&f.as_str()) {
+            return Err(err(format!("unknown relief field '{field}'; one of {}", FIELDS.join(", "))));
+        }
         let mut cfg = e.cfg.borrow_mut();
         enter(&mut cfg);
-        cfg.escape.shading.field = crate::config::escape::shading_field_from_str(field);
+        cfg.escape.shading.field = crate::config::escape::shading_field_from_str(&f);
+        Ok(())
     });
 
     // ---- Relief lighting, slope and height curve ----------------------

@@ -92,3 +92,23 @@ pub const DEFAULT_SURFACE_THICKNESS: f32 = 0.02; // Depth shell treated as "the 
 pub const DEFAULT_MAX_ITERATIONS: u64 = 1_000_000_000;
 pub const DEFAULT_SPEED_FACTOR: f32 = 0.5;
 pub const DEFAULT_DENSITY_SCALE: f32 = 1.0;
+
+/// The tone mapping a config takes on when it enters `mode` from a flame
+/// mode: a Log-calibrated flame tone map renders an escape-time or
+/// simulation picture black, so it becomes Linear at the mode's own
+/// calibration -- `(exposure, gamma)`; None keeps the config's. One rule
+/// for the app's Mode menu and a script's `escape` / `sim` handles, which
+/// had drifted (a script-built escape picture came out at half the
+/// panel's exposure).
+pub fn entry_tone_mapping(
+    config: &crate::config::FractalConfig,
+    mode: crate::scene::transforms::RenderMode,
+) -> Option<(f32, f32)> {
+    use crate::scene::transforms::RenderMode;
+    let non_flame = |m: RenderMode| matches!(m, RenderMode::Escape | RenderMode::Simulation);
+    let entering = non_flame(mode) && !non_flame(config.render_mode);
+    if !(entering && config.tonemap_mode == crate::scene::tonemap::ToneMapMode::Logarithmic) {
+        return None;
+    }
+    Some(if mode == RenderMode::Escape { (ESCAPE_EXPOSURE, ESCAPE_GAMMA) } else { (DEFAULT_EXPOSURE, DEFAULT_GAMMA) })
+}

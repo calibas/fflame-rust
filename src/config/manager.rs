@@ -1953,7 +1953,9 @@ impl ConfigManager {
                 crate::config::sim::SimGrid::Viewport { scale } => scale,
                 crate::config::sim::SimGrid::Fixed { .. } => 1.0,
             })),
-            ConfigPath::SimSeed => Ok(ConfigValue::UInt(config.sim.seed as u32)),
+            // The whole seed: a script or a file can carry one past 32
+            // bits, and undoing an edit of it put back the low half.
+            ConfigPath::SimSeed => Ok(ConfigValue::UInt64(config.sim.seed)),
             ConfigPath::SimInitKind => {
                 Ok(ConfigValue::String(config.sim.init.kind_name().to_string()))
             }
@@ -3194,7 +3196,10 @@ impl ConfigManager {
                 self.current.sim.grid = crate::config::sim::SimGrid::Viewport { scale: sc };
             }
             ConfigPath::SimSeed => {
-                self.current.sim.seed = u32::try_from(value)? as u64;
+                self.current.sim.seed = match value {
+                    ConfigValue::UInt64(v) => v,
+                    other => u32::try_from(other)? as u64,
+                };
             }
             ConfigPath::SimInitKind => {
                 let kind = String::try_from(value)?;

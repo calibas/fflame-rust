@@ -216,9 +216,10 @@ Camera angles are stored in **radians**.
 ## The `escape` object
 
 Escape-time fractals (Mandelbrot and kin). **Touching `escape` at all
-switches the config to escape rendering** — and resets tone mapping to
-Linear with exposure and gamma at 1, because flame presets carry
-Log-calibrated values under which escape output renders black.
+switches the config to escape rendering** — and, as the Mode menu does,
+a Log-calibrated tone map becomes Linear at escape's calibration
+(exposure 2, gamma 1), because flame presets carry Log-calibrated
+values under which escape output renders black.
 
 | call | returns | what it does |
 |---|---|---|
@@ -243,7 +244,7 @@ Log-calibrated values under which escape output renders black.
 | `escape.layer(name, blend, weight)` | — | A **texture layer**: a second coloring blended into the first before the palette lookup -- stripes or a trap over a smooth gradient. `blend` is `"screen"`, `"multiply"`, `"add"`, `"overlay"` or `"mix"`; `weight` runs 0..1 (techmatt's composites use screen at 0.85). Only one of the two colorings may be an orbit average -- they share one accumulator -- and a pair that breaks that is drawn as the base coloring alone. A new layer coloring starts with the parameters a fresh pick in the panel takes. |
 | `escape.layer_param(name, value)` | — | A parameter of the layer's coloring, checked like `coloring_param`. |
 | `escape.no_layer()` | — | Removes the texture layer. |
-| `escape.center(re, im)` | — | The view centre, as **decimal STRINGS**. See the note below — this is the one place a float would quietly cost you the deep zoom. |
+| `escape.center(re, im)` | — | The view centre, as **decimal STRINGS** — plain decimals (digits, a sign, a point; no exponent, which deep zoom's fixed point cannot read). See the note below — this is the one place a float would quietly cost you the deep zoom. |
 | `escape.center_re` / `escape.center_im` | string | Read the centre back, still as text. |
 | `escape.zoom` | float | Read/write `zoom_log2`: the **exponent in BASE 2**, so zoom 30 is 2³⁰×, and animating it linearly reads as constant zoom speed. Note the panel displays base 10 (log10) — the engine, the `.fflame` field and this API are all base 2, which is what the deep-zoom maths needs; multiply by 3.3219 to go from a displayed log10 to this. |
 | `escape.max_iter` | int | Read/write the iteration cap. Deep views need far more than shallow ones; too low reads as a flat wash. |
@@ -261,9 +262,10 @@ Log-calibrated values under which escape output renders black.
 
 Neighbour-coupled simulations: reaction–diffusion, cellular automata,
 growth. **Touching `sim` at all switches the config to simulation
-rendering** — and resets tone mapping to Linear with exposure and gamma
-at 1, for the same reason `escape` does: flame presets carry
-Log-calibrated values under which a unit-range field renders black.
+rendering** — and, as the Mode menu does, a Log-calibrated tone map
+becomes Linear at the flame defaults (exposure 1, gamma 4), for the
+same reason `escape` does: flame presets carry Log-calibrated values
+under which a unit-range field renders black.
 
 Two things behave unlike the rest of this API, and both are the point
 of the mode rather than quirks:
@@ -284,16 +286,16 @@ of the mode rather than quirks:
 | `sim.models()` | array | Every model name, so a script can iterate the registry instead of copying a list out of these docs. |
 | `sim.coloring(name)` | — | Picks the colouring; likewise clears the colouring parameters. |
 | `sim.colorings()` | array | Every colouring name. |
-| `sim.param(name, value)` | — | A model parameter. |
-| `sim.coloring_param(name, value)` | — | A colouring parameter. |
+| `sim.param(name, value)` | — | A model parameter. On a layered simulation, the first layer's (as are `sim.model` and `sim.preset`). |
+| `sim.coloring_param(name, value)` | — | A colouring parameter. Under a colour stack, the first colour layer's (as is `sim.coloring`). |
 | `sim.preset(name)` | — | Applies a named parameter set **and its measured step count** — the numbers without the steps show the pattern half-formed. Throws if the current model has no such preset. |
 | `sim.grid(w, h)` | — | A fixed cell count, 16–8192 per side. Reproducible at any output size: the resolve pass scales the coloured grid to the export, letterboxed to the grid's aspect. |
 | `sim.grid_viewport(scale)` | — | Bind the grid to the output instead: `round(output × scale)` cells, 0.125–4. Fills the window, and **re-simulates** at a different export size. |
 | `sim.seed(n)` | — | Seed for the initial field and every stochastic model. With the model, the init and the step count, this is what makes a still reproducible. |
-| `sim.init(kind)` | — | The initial field: `"noise"`, `"blob"`, `"blobs"`, `"ring"`, `"line"` or `"center"`. The shape's SIZE matters — measured, 12-cell blobs die at Gray–Scott's mitosis parameters where 24-cell blobs survive. |
+| `sim.init(kind)` | — | The initial field: `"noise"`, `"blob"`, `"blobs"`, `"ring"`, `"line"`, `"center"` or `"broken_wave"`. The shape's SIZE matters — measured, 12-cell blobs die at Gray–Scott's mitosis parameters where 24-cell blobs survive. |
 | `sim.steps(n)` | — | How many steps a still is. **This is also the animation target that drives the run** — see below. |
 | `sim.steps_per_frame(n)` | — | Free-running speed for the panel's Run button only. Not an animation target. |
-| `sim.dt(x)` | — | Model time per step, clamped to the stability bound. Too large and the explicit solver diverges. |
+| `sim.dt(x)` | — | Model time per step, kept between 1e-4 and the models' own ceiling. The solver runs at no more than the stability bound for the current parameters; too large and an explicit solver diverges. |
 | `sim.boundary(name)` | — | What a step reads outside the grid: `"periodic"` (wraps, no edge artifacts), `"clamp"`, `"zero"` (a sink, for growth models) or `"mirror"`. |
 
 ### Animating the simulation itself
@@ -320,9 +322,11 @@ sim.init("blobs");
 sim.seed(7);
 
 // Animate the run: 0 to 8000 steps over the timeline.
-animate("Sim.Steps", [[0.0, 0.0], [10.0, 8000.0]]);
+anim.key("Sim.Steps", 0.0, 0.0);
+anim.key("Sim.Steps", 10.0, 8000.0);
 // ...while the pattern class drifts underneath it.
-animate("Sim.ModelParam.feed", [[0.0, 0.0545], [10.0, 0.030]]);
+anim.key("Sim.ModelParam.feed", 0.0, 0.0545);
+anim.key("Sim.ModelParam.feed", 10.0, 0.030);
 ```
 
 ### Why the centre is a string
@@ -360,7 +364,7 @@ flame; never touching it emits none.
 |---|---|---|
 | `anim.name` | string | Read/write: the animation's name. |
 | `anim.duration` | float | Read/write: seconds; defaults to the last keyframe. |
-| `anim.key(target, time, value)` | — | A keyframe on a flame-level setting — same names `config.set` takes (`"zoom"`, `"rotation"`, `"camera_rotation_x"`, …). |
+| `anim.key(target, time, value)` | — | A keyframe on a setting — the names `config.set` takes (`"zoom"`, `"rotation"`, `"camera_rotation_x"`, …), or an escape or simulation setting by its track name (`"Escape.ZoomLog2"`, `"Sim.Steps"`, `"Sim.Terrain.Height"`; `"escape.zoom_log2"` also works). |
 | `anim.key(target, time, value, easing)` | — | With per-key easing: `"linear"`, `"ease_in"`, `"ease_out"`, `"ease_in_out"`, or the `_quad`/`_cubic` variants. |
 | `anim.interpolation(target, mode)` | — | The whole track's interpolation: `"step"`, `"linear"`, `"smooth"`, `"sinusoidal"`, `"exponential"`. Use **exponential for zoom** — equal ratio per unit time reads as constant speed. |
 

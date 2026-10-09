@@ -2073,6 +2073,9 @@ impl ConfigValue {
 
         match (self, other) {
             (ConfigValue::Float(a), ConfigValue::Float(b)) => (a - b).abs() < EPSILON_F32,
+            // A count read whole and written narrow (the simulation's
+            // seed) is the same count.
+            (ConfigValue::UInt(a), ConfigValue::UInt64(b)) | (ConfigValue::UInt64(b), ConfigValue::UInt(a)) => *a as u64 == *b,
             // The pan's own epsilon is far tighter than f32's,
             // because at a deep zoom two centres 1e-6 apart are
             // thousands of pixels apart. Coalescing undo entries on
