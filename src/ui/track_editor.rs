@@ -11,7 +11,7 @@ use crate::animation::{
     Animation, AnimationController, EasingFunction, Interpolation,
     Keyframe, Track, TrackSource,
 };
-use crate::config::{ConfigPath, EditingTarget, FractalConfig};
+use crate::config::{ConfigPath, ConfigValue, EditingTarget, FractalConfig};
 use super::animation_panel::TimelineLayout;
 use super::target_selector::{TargetSelectorState, render_target_selector};
 
@@ -1487,8 +1487,41 @@ pub fn get_current_value(
         // `ConfigPath::from_string_key`, which maps them to indexed
         // variants at index 0 — they hit the indexed match arms above.
 
-        // Non-numeric or complex types
-        _ => None,
+        // Everything else -- the escape-time and simulation engines, their
+        // terrains, and whatever is added next -- as the undo history
+        // reads it. Without this a new track on any of them started at 0:
+        // a Zoom (log2) track jumped the view to zoom 0, a Steps track
+        // held the run at step 0. (System settings are not the config's
+        // and never a track's.)
+        // The solid's camera target: an exact decimal, or empty for the
+        // attractor's own centre, where the camera looks (`solid_camera`).
+        #[cfg(feature = "engine-escape")]
+        ConfigPath::EscapeCamTargetX | ConfigPath::EscapeCamTargetY | ConfigPath::EscapeCamTargetZ => {
+            let k = match path {
+                ConfigPath::EscapeCamTargetX => 0,
+                ConfigPath::EscapeCamTargetY => 1,
+                _ => 2,
+            };
+            let s = [&config.escape.cam_target_x, &config.escape.cam_target_y, &config.escape.cam_target_z][k].trim();
+            if !s.is_empty() {
+                s.parse::<f64>().ok()
+            } else {
+                let registry = crate::variations::global_registry();
+                crate::scene::ifs_analysis::analyse_3d(&config.flame, &registry).ok().map(|i| i.ball.centre[k])
+            }
+        }
+        _ if path.to_string_key().starts_with("System.") => None,
+        _ => crate::config::ConfigManager::get_value_from_config(config, path, flame_target)
+            .ok()
+            .and_then(|v| match v {
+                ConfigValue::Float(f) => Some(f as f64),
+                ConfigValue::Double(f) => Some(f),
+                ConfigValue::Int(i) => Some(i as f64),
+                ConfigValue::UInt(u) => Some(u as f64),
+                ConfigValue::UInt64(u) => Some(u as f64),
+                ConfigValue::Bool(b) => Some(if b { 1.0 } else { 0.0 }),
+                _ => None,
+            }),
     }
 }
 

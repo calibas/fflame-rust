@@ -448,6 +448,36 @@ impl ConfigManager {
         }
     }
 
+    /// Apply one value to a config exactly as the manager applies an
+    /// edit -- the same clamps and side effects -- with no history, no
+    /// preview and no disk. The video exporter's fallback, so a track
+    /// renders in the video as it plays in the app: the exporter's own
+    /// arms had fallen behind (Palette Squeeze, Xaos, Solo and several
+    /// more animated in the preview and froze in the video).
+    pub fn apply_value_detached(
+        config: &mut FractalConfig,
+        target: EditingTarget,
+        path: &ConfigPath,
+        value: ConfigValue,
+    ) -> Result<(), ConfigError> {
+        let mut m = Self {
+            current: std::mem::take(config),
+            preview: None,
+            history: Vec::new(),
+            position: 0,
+            max_undo_depth: 0,
+            system_settings: crate::storage::SystemSettings::default(),
+            pending_actions: UpdateAction::none(),
+            modify_session: None,
+            animation_mode: true,
+            editing_target: target,
+            load_generation: 0,
+        };
+        let r = m.set_value(path, value);
+        *config = m.current;
+        r
+    }
+
     /// Monotonic "new fractal loaded" counter — see field docs. Bumps on
     /// `load_config` (preset/import/browser), not on edits or undo/redo.
     pub fn load_generation(&self) -> u64 {
@@ -1704,7 +1734,7 @@ impl ConfigManager {
     }
 
     /// Extract value from any FractalConfig by path (helper for undo/redo)
-    fn get_value_from_config(
+    pub(crate) fn get_value_from_config(
         config: &FractalConfig,
         path: &ConfigPath,
         target: EditingTarget,

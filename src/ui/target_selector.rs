@@ -285,6 +285,21 @@ fn render_flame_group(
         }
     }
 
+    // The flame's own targets -- xaos, the transforms -- only where the
+    // flame is drawn: the flame modes, an escape formula that reads it as
+    // an IFS, a simulation whose layers map by its transforms.
+    let flame_drawn = match config.render_mode {
+        crate::scene::transforms::RenderMode::TwoD | crate::scene::transforms::RenderMode::ThreeD => true,
+        #[cfg(feature = "engine-escape")]
+        crate::scene::transforms::RenderMode::Escape => crate::escape::ifs::get_ifs(&config.escape.formula).is_some(),
+        crate::scene::transforms::RenderMode::Simulation => config.sim.use_transforms,
+        #[allow(unreachable_patterns)]
+        _ => false,
+    };
+    if !flame_drawn {
+        return selected;
+    }
+
     // Xaos
     let xaos_items = get_xaos_items(flame);
     if !xaos_items.is_empty() {
@@ -421,6 +436,53 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
         ));
     }
 
+    // The colouring's own settings, where they are on: the palette map's
+    // pivot (it bends nothing under a linear transfer), auto contrast,
+    // the colouring layer and its parameters, the texture overlay, and
+    // the 2D relief (off under a terrain, which lights itself).
+    if esc.palette_map.transfer != crate::config::escape::TransferCurve::Linear {
+        items.push(TargetItem::new(ConfigPath::EscapeTransferPivot, "Palette map: Pivot"));
+    }
+    if esc.contrast.is_active() {
+        items.extend([
+            TargetItem::new(ConfigPath::EscapeContrastStrength, "Contrast: Strength"),
+            TargetItem::new(ConfigPath::EscapeContrastClip, "Contrast: Clip"),
+            TargetItem::new(ConfigPath::EscapeContrastTurns, "Contrast: Turns"),
+        ]);
+    }
+    if let Some(layer) = crate::escape::layer_of(esc) {
+        items.push(TargetItem::new(ConfigPath::EscapeLayerWeight, "Layer: Weight"));
+        for p in layer.parameters {
+            items.push(TargetItem::new(
+                ConfigPath::EscapeLayerParam { param: p.name.to_string() },
+                &format!("Layer {}: {}", layer.display_name, p.display_name),
+            ));
+        }
+    }
+    if esc.texture_overlay.enabled {
+        items.extend([
+            TargetItem::new(ConfigPath::EscapeTextureOverlayMerge, "Texture overlay: Merge"),
+            TargetItem::new(ConfigPath::EscapeTextureOverlayRatio, "Texture overlay: Ratio"),
+            TargetItem::new(ConfigPath::EscapeTextureOverlayTile, "Texture overlay: Tile scale"),
+        ]);
+    }
+    if esc.shading.enabled && !esc.terrain_active() {
+        items.extend([
+            TargetItem::new(ConfigPath::EscapeShadingLightAngle, "Relief: Light angle"),
+            TargetItem::new(ConfigPath::EscapeShadingElevation, "Relief: Light elevation"),
+            TargetItem::new(ConfigPath::EscapeShadingHeight, "Relief: Height"),
+            TargetItem::new(ConfigPath::EscapeShadingHeightPre, "Relief: Height before curve"),
+            TargetItem::new(ConfigPath::EscapeShadingHeightPost, "Relief: Height after curve"),
+            TargetItem::new(ConfigPath::EscapeShadingOffset, "Relief: Offset"),
+            TargetItem::new(ConfigPath::EscapeShadingSoftness, "Relief: Softness"),
+            TargetItem::new(ConfigPath::EscapeShadingAmbient, "Relief: Ambient"),
+            TargetItem::new(ConfigPath::EscapeShadingShadowStrength, "Relief: Shadow strength"),
+            TargetItem::new(ConfigPath::EscapeShadingHighlightStrength, "Relief: Highlight strength"),
+            TargetItem::new(ConfigPath::EscapeShadingTextureStrength, "Relief: Texture strength"),
+            TargetItem::new(ConfigPath::EscapeShadingTextureScale, "Relief: Texture scale"),
+        ]);
+    }
+
     // The camera lens, when one is chosen. Its amount is the obvious
     // thing to ramp; its parameters come from the variation registry,
     // so the list follows the lens the way it follows the formula.
@@ -439,11 +501,40 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
     items
 }
 
-/// The escape targets' paths, for the exporter's coverage test.
-///
-/// The exporter has to apply everything this offers, and the only
+/// Every target the picker offers for a config, for the exporter's
+/// tests: the exporter has to apply everything offered, and the only
 /// honest way to check that is to enumerate what is actually offered
 /// rather than to keep a second list in step by hand.
+#[cfg(test)]
+pub fn all_items_for_test(config: &FractalConfig) -> Vec<ConfigPath> {
+    let flame = &config.flame;
+    let mut items = get_view_items();
+    items.extend(get_color_items());
+    items.extend(get_tonemapping_items());
+    items.extend(get_rendering_items());
+    items.extend(get_effects_items(config));
+    #[cfg(feature = "engine-escape")]
+    if config.render_mode == crate::scene::transforms::RenderMode::Escape {
+        items.extend(get_escape_items(config));
+    }
+    #[cfg(feature = "engine-sim")]
+    if config.render_mode == crate::scene::transforms::RenderMode::Simulation {
+        items.extend(get_sim_items(config));
+    }
+    items.extend(get_xaos_items(flame));
+    for (i, x) in flame.transforms.iter().enumerate() {
+        items.extend(get_transform_items(i, x));
+    }
+    for (i, x) in flame.linked_transforms.iter().enumerate() {
+        items.extend(get_linked_transform_items(i, x));
+    }
+    for (i, x) in flame.final_transforms.iter().enumerate() {
+        items.extend(get_pool_final_transform_items(i, x));
+    }
+    items.into_iter().map(|i| i.path).collect()
+}
+
+/// The escape targets' paths, for the exporter's coverage test.
 #[cfg(test)]
 pub fn escape_items_for_test(config: &FractalConfig) -> Vec<ConfigPath> {
     get_escape_items(config).into_iter().map(|i| i.path).collect()
@@ -488,6 +579,15 @@ fn get_sim_items(config: &FractalConfig) -> Vec<TargetItem> {
         TargetItem::new(ConfigPath::SimMatteCutoff, "Matte: cutoff"),
         TargetItem::new(ConfigPath::SimMatteSoftness, "Matte: softness"),
     ];
+    // Not what animates nothing here: a time step where no layer's model
+    // has one, and the flat matte under a colour stack (each colour layer
+    // has its own, below).
+    if !sim.any_layer_has_a_time_step() {
+        items.retain(|i| i.path != ConfigPath::SimDt);
+    }
+    if !sim.color_layers.is_empty() {
+        items.retain(|i| !matches!(i.path, ConfigPath::SimMatteCutoff | ConfigPath::SimMatteSoftness));
+    }
     // The model's parameters, per layer. With no `layers` list there
     // is one entry and it is the flat `SimModelParam` path -- the same
     // fallback the panel presents as "layer 0 IS the model" -- so a
@@ -546,6 +646,11 @@ fn get_sim_items(config: &FractalConfig) -> Vec<TargetItem> {
                 &format!("Colour {k} matte: softness"),
             ));
         }
+    }
+
+    // The couplings' strengths.
+    for k in 0..sim.couplings.len() {
+        items.push(TargetItem::new(ConfigPath::SimCouplingStrength { index: k }, &format!("Coupling {k}: Strength")));
     }
 
     // The 3D terrain's camera, ground and path tracer, when it is on.
@@ -1125,13 +1230,50 @@ mod escape_target_tests {
     /// arm for renders correctly in the app and wrong in the video,
     /// which is worse. This walks every item the selector offers and
     /// checks it parses.
+    /// A new track starts at the setting's current value: the track
+    /// editor reads every offered escape and simulation target, terrain
+    /// on. It read none of them, and a new Zoom (log2) track started at
+    /// 0, jumping the view.
+    #[test]
+    fn every_offered_target_has_a_current_value() {
+        let mut escape = solid_config();
+        escape.escape.zoom_log2 = 7.25;
+        // Set targets: an empty one is the attractor's centre, which this
+        // default flame (no 3D IFS) does not have.
+        escape.escape.cam_target_x = "0.25".into();
+        escape.escape.cam_target_y = "-1.5".into();
+        escape.escape.cam_target_z = "0".into();
+        let mut terrain = FractalConfig::default();
+        terrain.render_mode = crate::scene::transforms::RenderMode::Escape;
+        terrain.escape.terrain.enabled = true;
+        let mut paths: Vec<(FractalConfig, ConfigPath)> = Vec::new();
+        for c in [escape.clone(), terrain] {
+            paths.extend(get_escape_items(&c).into_iter().map(|i| (c.clone(), i.path)));
+        }
+        #[cfg(feature = "engine-sim")]
+        {
+            let mut sim = FractalConfig::default();
+            sim.render_mode = crate::scene::transforms::RenderMode::Simulation;
+            sim.sim.terrain.enabled = true;
+            paths.extend(get_sim_items(&sim).into_iter().map(|i| (sim.clone(), i.path)));
+        }
+        for (c, path) in &paths {
+            let v = super::super::track_editor::get_current_value(c, EditingTarget::Main, path);
+            assert!(v.is_some(), "`{}` has no current value", path.to_string_key());
+        }
+        let zoom = super::super::track_editor::get_current_value(&escape, EditingTarget::Main, &ConfigPath::EscapeZoomLog2);
+        assert_eq!(zoom, Some(7.25));
+        let y = super::super::track_editor::get_current_value(&escape, EditingTarget::Main, &ConfigPath::EscapeCamTargetY);
+        assert_eq!(y, Some(-1.5));
+    }
+
     #[test]
     fn every_offered_escape_target_can_carry_a_track() {
         for c in [solid_config(), FractalConfig::default()] {
             for item in get_escape_items(&c) {
-                // Both shapes: a count target (Max Iterations) reads
-                // an integer and a fraction is not one.
-                let ok = [serde_json::json!(0.5), serde_json::json!(2)]
+                // Both shapes, as a keyframe stores them -- f64: a count
+                // target (Max Iterations) rounds a whole one.
+                let ok = [serde_json::json!(0.5), serde_json::json!(2.0)]
                     .iter()
                     .any(|p| crate::config::delta::json_to_config_value(p, &item.path).is_some());
                 assert!(
