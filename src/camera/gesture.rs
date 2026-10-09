@@ -507,11 +507,8 @@ mod escape {
     pub(super) fn solid_view(
         config: &FractalConfig,
     ) -> Option<(crate::scene::ifs_analysis::Ifs3, crate::escape::ifs::SolidCamera)> {
-        if !crate::escape::ifs::formula_is_solid(&config.escape.formula) {
-            return None;
-        }
         let registry = crate::variations::global_registry();
-        let ifs3 = crate::scene::ifs_analysis::analyse_3d(&config.flame, &registry).ok()?;
+        let ifs3 = crate::escape::ifs::solid_analysis(config, &registry)?;
         let cam = crate::escape::ifs::solid_camera(&config.escape, &ifs3);
         Some((ifs3, cam))
     }
@@ -767,6 +764,26 @@ mod escape {
             broken.flame.transforms[0].variations.insert("spherical".to_string(), 1.0);
             broken.flame.transforms[0].variation_order.push("spherical".to_string());
             assert!(solid_view(&broken).is_none());
+        }
+
+        /// A solid that needs no flame -- the quaternion Julia -- is steered
+        /// whatever the config's flame is: a drag moves its target, not the
+        /// plane's centre (which it does not read). Reported in the app.
+        #[test]
+        fn a_flameless_solid_pans_its_target() {
+            let mut cfg = FractalConfig::default();
+            cfg.render_mode = crate::scene::transforms::RenderMode::Escape;
+            cfg.escape.formula = "quaternion_julia_solid".to_string();
+            // The default flame has no maps: it does not qualify as a solid.
+            let registry = crate::variations::global_registry();
+            assert!(crate::scene::ifs_analysis::analyse_3d(&cfg.flame, &registry).is_err());
+            drop(registry);
+            assert!(solid_view(&cfg).is_some());
+            let edit = escape_pan(&cfg, [30.0, -12.0], [800.0, 600.0]).expect("a pan");
+            let paths: Vec<_> = edit.changes.iter().map(|(p, _)| p.clone()).collect();
+            assert_eq!(paths, vec![ConfigPath::EscapeCamTargetX, ConfigPath::EscapeCamTargetY, ConfigPath::EscapeCamTargetZ]);
+            let zoom = escape_zoom(&cfg, 1.3, Some([40.0, 20.0]), [800.0, 600.0]).expect("a zoom");
+            assert!(zoom.changes.iter().any(|(p, _)| *p == ConfigPath::EscapeCamTargetX), "the zoom walks the target");
         }
 
         /// A drag slides the target across the screen plane at its own

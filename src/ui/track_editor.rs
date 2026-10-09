@@ -1507,7 +1507,7 @@ pub fn get_current_value(
                 s.parse::<f64>().ok()
             } else {
                 let registry = crate::variations::global_registry();
-                crate::scene::ifs_analysis::analyse_3d(&config.flame, &registry).ok().map(|i| i.ball.centre[k])
+                crate::escape::ifs::solid_analysis(config, &registry).map(|i| i.ball.centre[k])
             }
         }
         _ if path.to_string_key().starts_with("System.") => None,
