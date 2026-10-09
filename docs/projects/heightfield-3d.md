@@ -1268,7 +1268,8 @@ terrain.**
     surfaces a bounce meets next to nothing), which hit at a
     ten-thousandth of the ball -- the walk's shadow rule (`ifs_shadow`:
     at a pixel's width they erased the sponge's sub-squares) -- with a
-    shadow ray to every light at every bounce.
+    shadow ray to every light at every bounce. The candidates are a TODO
+    in [escape-sim-followups.md](escape-sim-followups.md).
   - **Tiers** (`escape.solid_tier`, `RenderTier`): **Lit by default**,
     so every solid saved before this renders as it did. Auto walks while
     anything moves and path traces once the walk settles, shown from 8
