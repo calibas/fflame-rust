@@ -58,6 +58,45 @@ pub fn scale_config_for_supersample(config: &FractalConfig) -> FractalConfig {
     c
 }
 
+/// 2x antialiasing of an export of `out_w x out_h`, for each engine:
+/// the config to render and the scale to render it at -- 2, boxed down
+/// after (`downsample_2x_firefly`), or 1, nothing to box.
+///
+/// Rendering every engine at twice the size changed what two of them
+/// draw, not only how smoothly:
+/// - an escape picture's pixel-measured colourings (a distance estimate
+///   in pixels, the relief's slope) are in the RENDER's pixels, so at
+///   twice the size the palette shifted. Its own antialiasing measures
+///   them in display pixels: doubled, at the output's size, the picture
+///   is the config's at that factor.
+/// - a simulation bound to the window ran on twice the cells: another
+///   simulation. Its grid is pinned to the output's, and the doubled
+///   render resolves the same field.
+///
+/// A flame scales its filter and iterations (`scale_config_for_supersample`);
+/// a terrain renders at twice the size, its sections finer as they would
+/// be for a larger output.
+pub fn supersample_plan(config: &FractalConfig, out_w: u32, out_h: u32) -> (FractalConfig, u32) {
+    use crate::scene::transforms::RenderMode;
+    match config.render_mode {
+        RenderMode::Escape if !config.escape.terrain_active() => {
+            let mut c = config.clone();
+            c.escape.supersample = (c.escape.supersample.max(1) * 2).min(crate::config::escape::MAX_SUPERSAMPLE);
+            (c, 1)
+        }
+        RenderMode::Escape => (config.clone(), 2),
+        RenderMode::Simulation => {
+            let mut c = config.clone();
+            if let crate::config::sim::SimGrid::Viewport { scale } = c.sim.grid {
+                let cells = |n: u32| ((n as f32 * scale).round() as u32).max(16);
+                c.sim.grid = crate::config::sim::SimGrid::Fixed { width: cells(out_w), height: cells(out_h) };
+            }
+            (c, 2)
+        }
+        RenderMode::TwoD | RenderMode::ThreeD => (scale_config_for_supersample(config), 2),
+    }
+}
+
 /// Box-filter an RGBA8 image from (2w, 2h) down to (w, h) with the
 /// per-quad firefly clamp. Alpha averages untouched (it's coverage, not
 /// energy); RGB samples are clamped to `FIREFLY_RATIO ×` the quad's
@@ -211,5 +250,42 @@ mod tests {
         let s = scale_config_for_supersample(&c);
         assert_eq!(s.filter_radius, 3.0);
         assert_eq!(s.max_iterations, 4_000_000);
+    }
+}
+
+#[cfg(test)]
+mod plan_tests {
+    use super::*;
+    use crate::scene::transforms::RenderMode;
+
+    /// Each engine's 2x: an escape picture doubles its own antialiasing
+    /// at the output's size (its pixel-measured colourings stay in
+    /// display pixels); a window-bound simulation keeps the output's grid
+    /// at twice the render; a flame scales its filter and iterations.
+    #[test]
+    fn each_engine_antialiases_its_own_way() {
+        let mut escape = FractalConfig::default();
+        escape.render_mode = RenderMode::Escape;
+        escape.escape.supersample = 2;
+        let (c, scale) = supersample_plan(&escape, 800, 600);
+        assert_eq!((c.escape.supersample, scale), (4, 1));
+
+        let mut terrain = escape.clone();
+        terrain.escape.terrain.enabled = true;
+        if terrain.escape.terrain_active() {
+            assert_eq!(supersample_plan(&terrain, 800, 600).1, 2);
+        }
+
+        let mut sim = FractalConfig::default();
+        sim.render_mode = RenderMode::Simulation;
+        sim.sim.grid = crate::config::sim::SimGrid::Viewport { scale: 0.5 };
+        let (c, scale) = supersample_plan(&sim, 800, 600);
+        assert_eq!(scale, 2);
+        assert_eq!(c.sim.grid, crate::config::sim::SimGrid::Fixed { width: 400, height: 300 });
+
+        let flame = FractalConfig::default();
+        let (c, scale) = supersample_plan(&flame, 800, 600);
+        assert_eq!(scale, 2);
+        assert_eq!(c.filter_radius, flame.filter_radius * 2.0);
     }
 }

@@ -324,23 +324,22 @@ impl App {
         // 2× supersampling: everything below renders at doubled
         // dimensions; the tonemapped result is box-filtered (+ firefly
         // clamp) back down before the PNG encode.
-        let supersample = self.png_export_supersample;
-        let (render_width, render_height) = if supersample {
-            (out_width * 2, out_height * 2)
-        } else {
-            (out_width, out_height)
-        };
         // Metadata embeds the ORIGINAL config for exact round-trip; the
-        // scaled copy (2× filter radius, 4× iterations) only renders.
+        // scaled copy (each engine's way to 2x, `supersample_plan`) only
+        // renders. `supersample` from here on: the render is twice the
+        // output and is boxed down.
+        let asked = self.png_export_supersample;
         let meta_config = config.clone();
-        let config = if supersample {
-            crate::export::supersample::scale_config_for_supersample(&config)
+        let (config, scale) = if asked {
+            crate::export::supersample::supersample_plan(&config, out_width, out_height)
         } else {
-            config
+            (config, 1)
         };
+        let supersample = scale == 2;
+        let (render_width, render_height) = (out_width * scale, out_height * scale);
 
         println!("Exporting at custom size: {}×{}{}", out_width, out_height,
-            if supersample { " (2× supersampled)" } else { "" });
+            if asked { " (2× supersampled)" } else { "" });
 
         // Two independent decisions:
         //

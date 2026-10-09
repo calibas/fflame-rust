@@ -2169,6 +2169,19 @@ impl App {
                     match pixels_result {
                         Ok((width, height, rgba_data)) => {
                             // Build metadata with captured values
+                            // A simulation's picture here is the run as it
+                            // stands, which need not have reached the config's
+                            // cap: the PNG records the step it shows, so it
+                            // re-renders as saved.
+                            #[cfg(feature = "engine-sim")]
+                            let export_config = match (&self.sim_renderer, export_config.render_mode) {
+                                (Some(sim), crate::scene::transforms::RenderMode::Simulation) if sim.step_index() > 0 => {
+                                    let mut c = export_config.clone();
+                                    c.sim.steps = sim.step_index();
+                                    c
+                                }
+                                _ => export_config.clone(),
+                            };
                             let metadata = crate::png_metadata::PngMetadata::from_app_state(
                                 width,
                                 height,
