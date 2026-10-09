@@ -162,8 +162,8 @@ help:
   # guessing (or sniffing the user agent).
   undo_shortcut_web: "  Ctrl/Cmd+Z - Undo"
   redo_shortcut_web: "  Ctrl/Cmd+Y - Redo"
-  alt_drag_rotate_web: "  Alt/Opt-Drag - Rotate view"
-  alt_drag_rotate_macos: "  Opt-Drag - Rotate view"
+  alt_drag_rotate_web: "  Alt/Opt-Drag or Right-Drag - Rotate view (3D: orbit)"
+  alt_drag_rotate_macos: "  Opt-Drag or Right-Drag - Rotate view (3D: orbit)"
   editing: "Editing:"
   undo_shortcut: "  Ctrl+Z   - Undo"
   redo_shortcut: "  Ctrl+Y   - Redo"
@@ -173,7 +173,7 @@ help:
   drag_pan: "  Drag     - Pan view"
   wheel_zoom: "  Wheel    - Zoom (toward cursor)"
   center_minibrot: "Center on Minibrot"
-  alt_drag_rotate: "  Alt-Drag - Rotate view"
+  alt_drag_rotate: "  Alt-Drag or Right-Drag - Rotate view (3D: orbit)"
 
 # Panel Titles (used in tabs and window titles)
 solid:
@@ -1149,8 +1149,8 @@ history:
     import_flame_xml: "Import Flame XML"
     load_animation_config: "Load Animation Config"
     animation_exit: "Animation Exit"
-    wheel_zoom: "Wheel Zoom"
-    pinch_zoom: "Pinch Zoom"
+    zoom_view: "Zoom View"
+    rotate_view: "Rotate View"
     pan_view: "Pan View"
     orbit_camera: "Orbit Camera"
     center_minibrot: "Center on Minibrot"

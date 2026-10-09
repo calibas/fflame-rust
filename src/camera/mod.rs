@@ -46,8 +46,16 @@ impl CameraEdit {
     }
 
     /// Make the writes: through `update_param` for one parameter's edit,
-    /// `update_batch` for a named one.
+    /// `update_batch` for a named one -- and silently while an animation
+    /// plays, as `update_param` already was and `update_batch` was not
+    /// (a gesture during playback filled the undo history).
     pub fn apply(self, config_manager: &mut crate::config::ConfigManager) {
+        if config_manager.is_animation_mode() {
+            for (path, value) in self.changes {
+                let _ = config_manager.update_param_silent(path, value);
+            }
+            return;
+        }
         match self.history {
             None => {
                 for (path, value) in self.changes {

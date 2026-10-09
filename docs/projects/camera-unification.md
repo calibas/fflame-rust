@@ -432,16 +432,42 @@ changes input lists what to try in the app.
     moved with them.
   - The `View2d`/`Camera3d` dispatch -- which camera a gesture moves --
     is P1's: it is where the gestures change.
-- **P1. Gestures through the adapters.**
-  - The table in C3, for the mouse, touch, keys and the tab-bar strip.
-  - Fixes: the escape pinch (fixed point, the 1e8 clamp); one history
-    name per gesture; the right-button readback only in PathMap; the View
-    menu routed through the adapter (it works in Escape, and appears in
-    Simulation once C6 lands).
-  - **Changes behaviour:** terrains pan on drag and orbit on Alt+drag;
-    mode D gains orbit; 2D Alt+drag rotates.
+- **P1. Gestures through the adapters.** *Built 2026-10-09.*
+  - The table in C3, for the mouse, touch, keys, the tab-bar strip and
+    the View menu: one dispatcher (`camera::gesture::{pan, turn, zoom,
+    pinch, reset}`, deciding by `ViewKind`), one viewport input path
+    (`ui::panel_viewer::{view_drag, view_scroll}`, the body and the strip
+    alike).
+  - **Orbit is a turntable** (my decision, reported): about world up and
+    the level axis across the view, so the horizon stays as level -- or
+    as tilted -- as it was; the near side of the scene follows the drag.
+    The terrains orbited this way already and still do, to the radian.
+    Fly mode's look keeps the FreeLook/FPS choice. The flame's Alt+drag
+    was a free-look, which tilted the horizon; it is the turntable now.
+  - **2D Alt+drag** rotates the picture by the angle the pointer sweeps
+    round the screen's centre (grab and twist).
+  - **Fixes:** the escape pinch is the wheel's fixed-point zoom (it was
+    f64, clamped at 300, and wrote the plane's centre for a solid); one
+    history name per gesture (`pan_view`, `zoom_view`, `rotate_view`,
+    `orbit_camera`), all coalescing; gestures are silent during playback,
+    as single-parameter edits already were; the right-button path
+    readback only in PathMap; the View menu moves the shown camera (it
+    wrote the flame's in Escape); zoom anchors to the cursor out as well
+    as in; the tab strip orbits a terrain and moves a simulation
+    terrain; touch and the keys reach the simulation terrain.
+  - **Changes behaviour:** terrains pan on drag and orbit on Alt+drag or
+    a right drag; mode D gains orbit; 2D Alt+drag rotates; in fly mode
+    the wheel sets the fly speed; a flame's arrow keys move 5% of the
+    view a press (they moved about 2.5%), as the escape keys did; the
+    View menu's zoom steps are the keys' 1.5 (they were 1.2).
+  - Tests: an orbit carries the near side with the drag for every 3D
+    camera, a rolled screen included; the terrains orbit as before; the
+    horizon's tilt is kept; a terrain's eye stays above the ground, and a
+    fast flick's orbit is taken in quarter-radian steps; a 2D turn keeps
+    the point under the pointer (flame and escape); zooming out keeps the
+    point under the cursor; a pinch is one entry; Reset View per camera.
   - Try in the app: each mode's drag, Alt+drag, right drag, wheel, keys,
-    and the tab strip.
+    and the tab strip; touch where available.
 - **P2. The simulation's 2D view (C6).**
   - `sim.view`, its ConfigPaths, tracks and the resolve transform;
     periodic tiling; `ViewNavigation` Show for simulations.

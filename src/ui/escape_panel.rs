@@ -2874,17 +2874,6 @@ pub(crate) fn magnification_label(log10: f64) -> String {
     }
 }
 
-/// Zoom the escape view by a plain factor (keyboard +/- keys): adds
-/// log2(factor) to the exponent, clamped to the same travel range the
-/// wheel uses.
-pub(crate) fn escape_zoom_by_factor(config_manager: &mut ConfigManager, factor: f64) {
-    let z = config_manager.active_config().escape.zoom_log2;
-    // Same ceiling as the wheel (panel_viewer): the phase-1 clamp of
-    // 300 would collapse a deep session's zoom on one keypress.
-    let new_z = (z + factor.log2()).clamp(-8.0, 100_000_000.0);
-    let _ = config_manager.update_param(ConfigPath::EscapeZoomLog2, (new_z as f32).into());
-}
-
 /// Background minibrot-search state (desktop). Module-static because
 /// the panel is stateless between frames; one search at a time.
 #[cfg(not(target_arch = "wasm32"))]
