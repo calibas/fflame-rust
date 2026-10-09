@@ -192,11 +192,9 @@ pub fn render_escape_content(
             show_ifs_criterion(ui, config_manager, d.solid);
         }
         if d.solid {
-            show_solid_camera(ui, config_manager, &esc, true);
-            // The path tracer (heightfield plan T3c): Lit by default, so
-            // a solid renders as it always has until asked otherwise.
-            ui.separator();
-            show_path_tracing(ui, config_manager, &esc.path, &escape_path_paths(), ConfigPath::EscapeSolidTier, esc.solid_tier, "solid_tier");
+            // The camera, fog, lighting and the path tracer are the View
+            // panel's (camera-unification C5).
+            ui.label(egui::RichText::new(t!("escape_panel.view_has_camera")).small().weak());
         }
     }
 
@@ -1347,16 +1345,6 @@ fn suggested_coloring_scale(coloring: &str, max_iter: u32) -> f32 {
     }
 }
 
-/// The solid camera (D8), shown only when the loaded formula is a
-/// solid one.
-///
-/// D2: the 3D controls follow the CONFIG, not the render mode. Escape
-/// mode is not three-dimensional — one formula in it is — so gating on
-/// the mode would show these over a Mandelbrot and hide them over the
-/// thing they steer.
-/// The solid camera's controls. `with_target` is mode D's: a terrain's
-/// target is the view's own centre (heightfield plan, T2b), so it has
-/// none to edit here.
 /// The ConfigPaths of a block of path-tracing settings.
 pub(crate) struct PathPaths {
     pub samples: ConfigPath,
@@ -1373,7 +1361,7 @@ pub(crate) struct PathPaths {
 }
 
 /// The escape view's: a terrain's and a solid's.
-fn escape_path_paths() -> PathPaths {
+pub(crate) fn escape_path_paths() -> PathPaths {
     PathPaths {
         samples: ConfigPath::EscapePathSamples,
         bounces: ConfigPath::EscapePathBounces,
@@ -1476,8 +1464,9 @@ pub(crate) fn show_path_tracing(
             }
         });
     };
-    // The sky, then the material and the lens -- folded away, since the
-    // defaults (matte, everything sharp) are what most pictures want.
+    // The sky, then the material -- folded away, since the default
+    // (matte) is what most pictures want. The lens is the View panel's
+    // Depth of Field ([`show_path_dof`]).
     row(ui, "escape_panel.terrain_environment", "escape_panel.terrain_environment_tip", paths.environment.clone(), pt.environment, 0.0..=4.0);
     egui::CollapsingHeader::new(t!("escape_panel.path_material"))
         .id_salt(format!("{id}_material"))
@@ -1487,119 +1476,32 @@ pub(crate) fn show_path_tracing(
                 ("escape_panel.terrain_gloss", "escape_panel.terrain_gloss_tip", paths.gloss.clone(), pt.gloss, 0.0..=1.0),
                 ("escape_panel.terrain_roughness", "escape_panel.terrain_roughness_tip", paths.roughness.clone(), pt.roughness, 0.02..=1.0),
                 ("escape_panel.terrain_emission", "escape_panel.terrain_emission_tip", paths.emission.clone(), pt.emission, 0.0..=4.0),
-                ("escape_panel.terrain_aperture", "escape_panel.terrain_aperture_tip", paths.aperture.clone(), pt.aperture, 0.0..=0.2),
-                ("escape_panel.terrain_focus", "escape_panel.terrain_focus_tip", paths.focus.clone(), pt.focus, 0.0..=8.0),
             ] {
                 row(ui, label, tip, path, value, range);
             }
         });
 }
 
-fn show_solid_camera(
+/// The path tracer's lens: its aperture and where it focuses (0 is sharp
+/// everywhere).
+pub(crate) fn show_path_dof(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
-    esc: &crate::config::escape::EscapeConfig,
-    with_target: bool,
+    pt: &crate::config::escape::PathTraceConfig,
+    paths: &PathPaths,
 ) {
-    ui.separator();
-    ui.label(egui::RichText::new(t!("escape_panel.camera")).strong());
-    if with_target {
-        show_solid_camera_target(ui, config_manager, esc);
-    }
-    show_solid_camera_angles(ui, config_manager, esc);
-}
-
-fn show_solid_camera_target(
-    ui: &mut egui::Ui,
-    config_manager: &mut ConfigManager,
-    esc: &crate::config::escape::EscapeConfig,
-) {
-    // The target is decimal STRINGS: a deep zoom is an approach to a
-    // point, so the target is the quantity that needs digits while the
-    // distance shrinks around it. An f32 here would cap 3D at a zoom
-    // the plane passed long ago.
-    let axes: [(&str, ConfigPath, &String); 3] = [
-        ("X", ConfigPath::EscapeCamTargetX, &esc.cam_target_x),
-        ("Y", ConfigPath::EscapeCamTargetY, &esc.cam_target_y),
-        ("Z", ConfigPath::EscapeCamTargetZ, &esc.cam_target_z),
-    ];
-    ui.horizontal(|ui| {
-        ui.label(t!("escape_panel.camera_target"));
-        for (name, path, value) in axes {
-            let mut text = value.clone();
-            ui.label(name);
-            let resp = ui.add(
-                egui::TextEdit::singleline(&mut text)
-                    .desired_width(78.0)
-                    .hint_text(t!("escape_panel.camera_target_auto")),
-            );
-            if resp.changed() {
-                let _ = config_manager
-                    .update_param(path, ConfigValue::String(text.trim().to_string()));
-            }
-        }
-    });
-    ui.label(
-        egui::RichText::new(t!("escape_panel.camera_target_tip")).small().weak(),
-    );
-}
-
-fn show_solid_camera_angles(
-    ui: &mut egui::Ui,
-    config_manager: &mut ConfigManager,
-    esc: &crate::config::escape::EscapeConfig,
-) {
-    let mut angle = |ui: &mut egui::Ui,
-                     label: String,
-                     path: ConfigPath,
-                     value: f32,
-                     range: std::ops::RangeInclusive<f32>,
-                     tip: String| {
+    for (label, tip, path, value, range) in [
+        ("escape_panel.terrain_aperture", "escape_panel.terrain_aperture_tip", paths.aperture.clone(), pt.aperture, 0.0..=0.2),
+        ("escape_panel.terrain_focus", "escape_panel.terrain_focus_tip", paths.focus.clone(), pt.focus, 0.0..=8.0),
+    ] {
         ui.horizontal(|ui| {
-            ui.label(label);
-            let mut deg = value.to_degrees();
-            if ui
-                .add(egui::Slider::new(&mut deg, *range.start()..=*range.end()).suffix("°"))
-                .on_hover_text(tip)
-                .changed()
-            {
-                let _ = config_manager.update_param(path, deg.to_radians().into());
+            ui.label(t!(label));
+            let mut v = value;
+            if ui.add(egui::Slider::new(&mut v, range)).on_hover_text(t!(tip)).changed() {
+                let _ = config_manager.update_param(path, v.into());
             }
         });
-    };
-
-    angle(
-        ui,
-        t!("escape_panel.camera_pitch").to_string(),
-        ConfigPath::EscapeCamPitch,
-        esc.cam_pitch,
-        -90.0..=90.0,
-        t!("escape_panel.camera_pitch_tip").to_string(),
-    );
-    angle(
-        ui,
-        t!("escape_panel.camera_yaw").to_string(),
-        ConfigPath::EscapeCamYaw,
-        esc.cam_yaw,
-        -180.0..=180.0,
-        t!("escape_panel.camera_yaw_tip").to_string(),
-    );
-    angle(
-        ui,
-        t!("escape_panel.camera_bank").to_string(),
-        ConfigPath::EscapeCamBank,
-        esc.cam_bank,
-        -180.0..=180.0,
-        t!("escape_panel.camera_bank_tip").to_string(),
-    );
-    angle(
-        ui,
-        t!("escape_panel.camera_fov").to_string(),
-        ConfigPath::EscapeCamFov,
-        esc.cam_fov,
-        3.0..=170.0,
-        t!("escape_panel.camera_fov_tip").to_string(),
-    );
+    }
 }
 
 /// The **3D terrain** section: the switch, how the height is made, how
@@ -1731,87 +1633,22 @@ fn show_terrain_section(
                     }
                 });
             }
-            // How it is rendered: the lit tier, the path tracer, or both
-            // by turns (plan section 8).
+            // How finely it is sampled. The camera, far and haze, the
+            // lighting and the path tracer are the View panel's
+            // (camera-unification C5).
             ui.separator();
-            show_path_tracing(ui, config_manager, &esc.path, &escape_path_paths(), ConfigPath::EscapeTerrainTier, t.tier, "terrain_tier");
-            // How it is lit: the Solid Lighting panel's lights, world-
-            // fixed, with these.
-            ui.separator();
-            let mut slider = |ui: &mut egui::Ui, label: String, path: ConfigPath, value: f32, range: std::ops::RangeInclusive<f32>, log: bool, tip: String| {
-                ui.horizontal(|ui| {
-                    ui.label(label);
-                    let mut v = value;
-                    if ui
-                        .add(egui::Slider::new(&mut v, range).logarithmic(log))
-                        .on_hover_text(tip)
-                        .changed()
-                    {
-                        let _ = config_manager.update_param(path, v.into());
-                    }
-                });
-            };
-            slider(
-                ui,
-                t!("escape_panel.terrain_shadow").to_string(),
-                ConfigPath::EscapeTerrainShadow,
-                t.shadow,
-                0.0..=1.0,
-                false,
-                t!("escape_panel.terrain_shadow_tip").to_string(),
-            );
-            slider(
-                ui,
-                t!("escape_panel.terrain_shadow_sharpness").to_string(),
-                ConfigPath::EscapeTerrainShadowSharpness,
-                t.shadow_sharpness,
-                1.0..=128.0,
-                true,
-                t!("escape_panel.terrain_shadow_sharpness_tip").to_string(),
-            );
-            // Occlusion is the lit tier's stand-in for the sky the path
-            // tracer traces.
-            if t.tier != crate::config::escape::RenderTier::PathTraced {
-                slider(
-                    ui,
-                    t!("escape_panel.terrain_occlusion").to_string(),
-                    ConfigPath::EscapeTerrainOcclusion,
-                    t.occlusion,
-                    0.0..=0.05,
-                    false,
-                    t!("escape_panel.terrain_occlusion_tip").to_string(),
-                );
-            }
-            // How far it reaches, and how finely it is sampled.
-            ui.separator();
-            slider(
-                ui,
-                t!("escape_panel.terrain_far").to_string(),
-                ConfigPath::EscapeTerrainFar,
-                t.far,
-                0.5..=64.0,
-                true,
-                t!("escape_panel.terrain_far_tip").to_string(),
-            );
-            slider(
-                ui,
-                t!("escape_panel.terrain_haze").to_string(),
-                ConfigPath::EscapeTerrainHaze,
-                t.haze,
-                0.0..=1.0,
-                false,
-                t!("escape_panel.terrain_haze_tip").to_string(),
-            );
-            slider(
-                ui,
-                t!("escape_panel.terrain_detail").to_string(),
-                ConfigPath::EscapeTerrainDetail,
-                t.detail,
-                0.1..=8.0,
-                true,
-                t!("escape_panel.terrain_detail_tip").to_string(),
-            );
-            show_solid_camera(ui, config_manager, esc, false);
+            ui.horizontal(|ui| {
+                ui.label(t!("escape_panel.terrain_detail"));
+                let mut v = t.detail;
+                if ui
+                    .add(egui::Slider::new(&mut v, 0.1..=8.0).logarithmic(true))
+                    .on_hover_text(t!("escape_panel.terrain_detail_tip"))
+                    .changed()
+                {
+                    let _ = config_manager.update_param(ConfigPath::EscapeTerrainDetail, v.into());
+                }
+            });
+            ui.label(egui::RichText::new(t!("escape_panel.view_has_camera")).small().weak());
         });
 }
 

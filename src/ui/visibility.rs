@@ -348,6 +348,21 @@ pub fn control(c: Control, m: RenderMode, tone: ToneMapMode) -> Vis {
     }
 }
 
+/// Is fly mode offered for the camera the viewport shows?
+///
+/// A question about the CAMERA, not the render mode: escape mode is 3D
+/// for one formula and a terrain, a simulation for its terrain. Every 3D
+/// camera flies once its adapter does (camera-unification C4, P6); until
+/// then the 3D flame's alone.
+pub fn fly_mode(kind: crate::camera::gesture::ViewKind) -> Vis {
+    use crate::camera::gesture::ViewKind as K;
+    match kind {
+        K::Flame3d => Vis::Show,
+        K::Solid | K::EscapeTerrain | K::SimTerrain => Vis::Hide,
+        K::Flame2d | K::EscapePlane | K::Sim2d => Vis::Hide,
+    }
+}
+
 /// Draw `body` under a control's policy: normally, disabled with a
 /// hover that explains itself, or not at all.
 ///
@@ -393,7 +408,9 @@ pub static WINDOW_MENU: &[WindowMenuRow] = &[
     row(PanelType::Escape, "menu.window_escape"),
     row(PanelType::Simulation, "menu.window_simulation"),
     row(PanelType::Textures, "menu.window_textures"),
-    row(PanelType::SolidLighting, "menu.window_solid_lighting"),
+    // No Solid Lighting row: its controls are the View panel's Lighting
+    // & Material section (camera-unification C5). The panel type stays
+    // so a saved layout that docks it still loads, and draws that section.
     row(PanelType::Transforms, "menu.window_transforms"),
     row(PanelType::TriangleEditor, "menu.window_triangle_editor"),
     row(PanelType::Colors, "menu.window_colors"),
@@ -428,7 +445,6 @@ pub static COMPACT_WINDOW_MENU: &[PanelType] = &[
     PanelType::Colors,
     PanelType::View,
     PanelType::Rendering,
-    PanelType::SolidLighting,
     PanelType::FractalBrowser,
     PanelType::Variations,
     PanelType::Subflames,

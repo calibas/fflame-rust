@@ -517,14 +517,54 @@ changes input lists what to try in the app.
   - Tests: the View panel lays out in all seven views (headless egui, two
     frames); the workspace and visibility rules now require the View
     panel in every mode.
-- **P4. The View panel's 3D layout, with lighting and material.**
-  - Camera (with Position X/Y/Z everywhere), fly settings, atmosphere
-    (mode D's fog editable), depth of field -- angles in degrees as P3.
-  - Lighting and material sections: the Solid Lighting panel folded in
-    (its `PanelType` kept for saved layouts), the render tier, samples
-    and path material moved in from the Escape and Simulation panels,
-    the hints and gating corrected; the camera blocks leave the Escape
-    and Simulation panels.
+- **P4. The View panel's 3D layout, with lighting and material.** *Built
+  2026-10-09.*
+  - **3D Camera** (`view_controls::camera_3d`), one section for the four
+    3D cameras in one order: Position, Target, zoom or distance, pitch,
+    yaw, bank, roll, FOV or Perspective, Reset, fly mode and its
+    settings. A flame's position is editable (its `camera_x/y/z`); the
+    others store a target and a distance, so their Position is a
+    **readout** of the eye (mode D in the attractor's units, the escape
+    terrain in the plane's, a simulation terrain in grid widths --
+    a window-bound grid read at 1080p) until P5/P6 give them an eye to
+    edit. A 3D flame keeps the 2D Camera section above it (its picture's
+    pan, zoom and roll -- the roll is that section's Rotation).
+  - **Atmosphere:** fog -- the flame's two fields, which mode D reads and
+    no panel offered in escape mode before -- the flame's depth density
+    and far fade, a terrain's Far and Haze (a simulation's only on a
+    repeated ground, as before; otherwise the panel says why).
+  - **Depth of Field:** the flame's focus and blur; the path tracer's
+    aperture and focus (moved out of its Material fold), or a note that
+    the lit tier draws everything sharp.
+  - **Lighting & Material** (`view_controls::lighting_3d`): the render
+    tier and the path tracer, a terrain's shadows and occlusion, then the
+    lights and the lit tier's shading (`solid_panel::lighting_rig`). A
+    solid and the terrains see only what they read -- shading, ambient,
+    diffuse, specular, shininess, occlusion strength, the lights -- with
+    a note that an untouched rig is a default sun; the splat-only
+    controls (solid strength, thickness, SSAO radius, normal smoothing,
+    gap fill, shadow maps) are the flame's.
+  - **Solid Lighting leaves the Window menus** (my decision, reported --
+    it reverses the July 2026 move out of the View panel, as §3.7 asked).
+    Its `PanelType` stays, so a saved layout that docks it still loads; it
+    draws the same Lighting & Material section, and its "3D only" hint
+    now asks the view (it said so over a solid and a terrain, which are
+    3D).
+  - **Out of the Escape and Simulation panels:** mode D's camera and path
+    tracer; the escape terrain's tier, path tracer, shadows, occlusion,
+    far, haze and camera (its height source, interior, lake and Detail
+    stay); the simulation terrain's far, haze, shadows, occlusion, path
+    tracer and camera (its layer, channel, tiling, height and softness
+    stay). Each panel says where they went. The terrains' gesture hints
+    describe P1's controls.
+  - Angles: every 3D camera angle on the −180..180 degree slider that
+    takes typed values beyond (mode D's pitch was a −90..90 slider, a
+    simulation terrain's −89..89); each tooltip says where its zero is.
+  - Fly mode is offered by `visibility::fly_mode(ViewKind)` -- the 3D
+    flame alone until P6.
+  - Tests: the View panel lays out in all seven views with every folded
+    section drawn, lit and path traced; the simulation path coverage
+    scan reads the View controls too.
 - **P5. The escape terrain's eye-based camera (C4).**
   - The eye's ground point, height and orientation; the target derived;
     old terrains converted on load to the same view.
