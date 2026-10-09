@@ -1,7 +1,8 @@
 # Camera unification: one 2D view, one 3D camera, one fly mode
 
-Branch `camera-unification`. Status: **plan, for review** (2026-10-08).
-Nothing is built yet.
+Branch `camera-unification`. Status: **plan, decided** -- written
+2026-10-08, the user's answers recorded 2026-10-09 (§3). Nothing is
+built yet.
 
 ## 0. What is being asked for
 
@@ -53,7 +54,7 @@ design rests on:
 | | stored as | zoom / distance | angles | screen roll |
 |---|---|---|---|---|
 | **Flame 2D** | `pan_x/pan_y` (f64), `zoom` (linear), `rotation` | `zoom`: the short side spans `4/zoom` | -- | `rotation` |
-| **Flame 3D** | the 2D fields, plus `camera_rotation_x/y` (pitch, yaw), `camera_bank`, `camera_x/y/z` (the focal-plane **pivot**, not the eye), `perspective_strength` | `zoom` is a 2D scale after projection; the eye sits `1/persp` behind the pivot | pitch 0 = looking straight down (JWF) | `rotation`, after projection |
+| **Flame 3D** | the 2D fields, plus `camera_rotation_x/y` (pitch, yaw), `camera_bank`, `camera_x/y/z` (moves the camera rigidly; the projection's viewpoint sits `1/persp` behind it), `perspective_strength` | `zoom` is a 2D scale after projection | pitch 0 = looking straight down (JWF) | `rotation`, after projection |
 | **Escape 2D** | `center_re/im` (exact decimal strings), `zoom_log2` (f64), `rotation` | `zoom_log2`: the HEIGHT spans `4/2^z`; Im up | -- | `rotation` |
 | **Mode D solid** | `cam_target_x/y/z` (decimal strings; empty = the attractor's centre), `cam_pitch/yaw/bank/fov`, `zoom_log2`, `rotation` | distance `3.2 r / 2^zoom_log2` | pitch 0 = horizon; yaw 0 looks -x | `rotation`, inside the matrix |
 | **Escape terrain** | **no fields of its own**: target = `center_re/im` at the ground height, angles = mode D's `cam_*`, `zoom_log2` = the world unit | eye fixed 1.3 view widths from the target; the wheel is `zoom_log2` | pitch 0 = horizon; yaw 0 looks up the picture | none: `rotation` is added to the **heading** |
@@ -65,9 +66,11 @@ design rests on:
   `shaders/core/utilities.wgsl`), re-zeroed: `solid_frame`
   (`src/escape/ifs.rs`) shifts pitch by π/2 and yaw by π/2 or π. So the
   conventions differ by constants, not by kind.
-- **Two projections.** Flames divide by `1 − persp·z` (Apophysis's depth
-  scaling; not a pinhole, no FOV). Mode D and both terrains are pinholes
-  with a vertical FOV.
+- **Two projections.** Flames divide by `1 − persp·z` (Apophysis's): a
+  pinhole whose viewpoint sits `1/persp` behind the stored camera
+  position, the stored position's plane at unit magnification, set by
+  perspective strength rather than a field of view. Mode D and both
+  terrains are pinholes with a vertical FOV.
 - **Precision.** The escape centre and mode D's target are exact
   decimals, moved by fixed-point adds (`FixedPoint::decimal_add_floatexp`)
   so a pan works at any deep zoom. Flame pan is f64. The sim terrain's
@@ -87,11 +90,14 @@ design rests on:
 | Sim terrain | **orbit** | orbit | pan | dolly (another curve) | **nothing** |
 
 - **Fly mode** is flame 3D only (`fly_mode_available`, `toggle_fly_mode`,
-  and the look delta dropped outside ThreeD in `app/mod.rs`). It keeps
-  **no quaternion**: each mouse event builds a 3x3 matrix from the
-  stored Euler angles, rotates it, and decomposes back
-  (`to_euler_near`), so the sliders can jump near straight up or down.
-  It ignores `camera_bank`.
+  and the look delta dropped outside ThreeD in `app/mod.rs`). Its
+  FreeLook already turns **without gimbal lock**: each mouse event
+  composes a true 3D rotation (a 3x3 matrix, the same math a quaternion
+  does) onto the view. What remains Euler is the storage: the result is
+  decomposed back into the stored angles (`to_euler_near`), so the
+  sliders can jump near straight up or down while the view moves
+  smoothly. It also ignores `camera_bank`, and it turns about the stored
+  camera position, not the projection's viewpoint (see C4).
 - **Orbit** on the terrains is its own code: 0.005 rad a pixel,
   hard-coded, no invert-Y, pitch clamped to [0.02, π/2).
 - **History** names differ by mode for the same gesture (`pan`,
@@ -178,9 +184,18 @@ a ConfigPath batch:
 
 Every gesture, panel control, menu row and the fly mode go through
 these. A batch is still a ConfigPath batch, so undo, animation and
-scripts see nothing new. **This is the main decision** (§3, Q1).
+scripts see nothing new.
+
+**Decided** (§3): keep the fields. The user likes a shared camera struct
+but it is not the point -- combining the features and the UI is. The
+adapters are exactly where a shared struct would plug in later.
 
 ### C2. Orientation is a quaternion at runtime
+
+The flame's FreeLook is already gimbal-free in how it turns (§1b). This
+generalises it: the same turning for every 3D camera, with bank
+included, and the slider jumps confined to where they can't be avoided.
+What the user wants from it is no gimbal lock in free-look.
 
 - A `Quat` type (hand-written, a few dozen lines -- no new dependency)
   composes every rotation: orbit, look, FPS-style world-up turns.
@@ -196,7 +211,7 @@ scripts see nothing new. **This is the main decision** (§3, Q1).
   the angles from outside (a slider, undo, a track, a script) ends the
   session's hold.
 - Stored angles stay because the files, tracks and JWF exchange speak
-  them. Storing a quaternion instead is the alternative (§3, Q2).
+  them (decided, §3).
 
 ### C3. One set of controls
 
@@ -231,11 +246,16 @@ scripts see nothing new. **This is the main decision** (§3, Q1).
 Fly mode works on the adapter's eye and quaternion, so it is one piece of
 code. What each renderer needs underneath:
 
-- **Flame 3D.** The eye is `1/persp` behind the stored pivot
-  (`camera_x/y/z`). Today's "look" turns about the pivot, which reads on
-  screen as an orbit; a true look turns about the eye, so the pivot
-  moves. An orthographic flame has no eye; its look stays about the
-  pivot.
+- **Flame 3D.** `camera_x/y/z` moves the whole camera rigidly, so the
+  camera already goes anywhere. But the projection divides by
+  `1 − persp·z`: a pinhole whose viewpoint sits `1/persp` behind the
+  stored point (10 units at perspective 0.1), with the stored point's
+  plane at unit magnification. Today's look rotates about the stored
+  point, so the viewpoint swings round it, reading on screen as a short
+  orbit. Look about the eye keeps the viewpoint still and moves the
+  stored point instead; the field and its meaning don't change. An
+  orthographic flame has no viewpoint; its look stays about the stored
+  point.
 - **Mode D.** Flying moves the target (a fixed-point add, so it works at
   any zoom) with the eye; looking moves the target around the eye at the
   same distance. Speed scales with the distance to the target, so a
@@ -244,12 +264,18 @@ code. What each renderer needs underneath:
 - **Escape terrain.** Its camera is defined by a target ON the ground
   (the view centre at height H), the eye 1.3 world units from it, and the
   world unit set by the zoom -- so it can never look above the horizon,
-  and climbing means zooming out. Two ways to fly it (§3, Q5):
-  - (a) keep that model: fly-look stays below the horizon; up and down
-    are zoom; forward is a pan plus a zoom;
-  - (b) give the terrain an eye-based camera (the eye's ground point and
-    height; the target derived), which can look anywhere, including the
-    sky the far field (T2e) already draws.
+  and climbing means zooming out. **Decided: the 3D camera can look
+  anywhere** (§3), so the terrain gets an eye-based camera: the eye's
+  ground point (exact decimals, as the centre is today) and height, the
+  orientation, and the target derived. It can then look at the sky the
+  far field (T2e) already draws.
+  - What has to hold: the sections stay sharp near the eye. Today the
+    zoom sets both the world unit and the sections' resolution band
+    (`canonical_anchor`). With an eye-based camera, the eye's height
+    above the ground sets that scale -- a phase with its own
+    measurement, before/after renders of the shipped terrains.
+  - Saved terrains keep their pictures: a terrain saved with the old
+    camera converts to the eye-based one on load, to the same view.
 - **Sim terrain.** No deep zoom, so f32 is enough; the target is pinned
   at half the height field's height, so a free look needs one new field,
   the target's height.
@@ -284,14 +310,30 @@ and simulation 2D):
 - **Depth of field:** the flame's focus and blur; the path tracer's
   aperture and focus where it runs.
 
-**Moved out of the View panel:** Preserve Z and post symmetry, which are
-the flame's content (§3, Q8). **Moved out of the Escape and Simulation
-panels:** every camera, lens, fog/far/haze and antialiasing control.
+**Lighting and material** (decided, §3: in the View panel for now; its
+own panel later if it grows complicated enough):
+- the lights and the lit tier's shading (today's Solid Lighting panel,
+  folded in -- its `PanelType` stays so saved layouts still load, and
+  opens the View panel);
+- the render tier, samples, bounces, denoise, sky and the path tracer's
+  material (gloss, roughness, glow), moved from the Escape and
+  Simulation panels.
 
-**Lighting and materials** stay a panel of their own: Solid Lighting
-becomes "Lighting & Material", docked in every 3D workspace, and takes
-the render tier, samples, bounces, sky and material from the Escape and
-Simulation panels (§3, Q7).
+**Stays in the View panel** (decided, §3): Preserve Z and post symmetry.
+**Moved out of the Escape and Simulation panels:** every camera, lens,
+fog/far/haze, lighting, material and antialiasing control.
+
+**Angles in the UI** (decided, §3): degrees, never radians, on a −180 to
+180 slider that takes a typed value beyond the range. That covers every
+camera angle, the 2D rotations (escape's is an unbounded drag value
+today), the simulation warp's rotation per step (raw radians today),
+and the animation track editor's values for angle tracks (raw radians
+today). Stored values stay radians, so files, tracks and scripts are
+untouched.
+- Each camera keeps its own zero (a flame's pitch 0 looks straight
+  down, as in JWildfire; mode D's and the terrains' pitch 0 is the
+  horizon), so the panel and the track editor show the same number the
+  file stores. Each slider's tooltip says where its zero is.
 
 ### C6. A 2D view for simulations
 
@@ -307,10 +349,9 @@ Simulation panels (§3, Q7).
   skip-if-default, so no saved simulation changes; ConfigPaths; tracks;
   `SimRerender` (not `SimReseed`). `Control::ViewNavigation` becomes Show
   for simulations, and the arrow and +/− keys stop being swallowed.
-- **Grid sizes.** The user named "a periodic boundary and a fixed grid
-  size". A view works on a window-bound grid too -- it only resamples
-  what is drawn -- so the plan offers it for every grid and tiles only a
-  periodic one (§3, Q6).
+- **Every grid** (decided, §3): pan, zoom and rotate work on any grid,
+  window-bound or fixed; a non-periodic grid simply shows its edges, and
+  a periodic one tiles.
 
 ### C7. Materials for every 3D view
 
@@ -331,42 +372,32 @@ with before/after renders, after the camera work (§4, P6). Until then
 the panel shows both sets in one place and labels which tier reads
 which.
 
-## 3. Questions for the user
+## 3. Decisions (the user, 2026-10-09)
 
-1. **Storage (C1).** Keep each camera's fields and route everything
-   through adapters, or move every camera into one shared config struct
-   (a file-version migration, new track names, new script paths)?
-   *Recommended: keep the fields.*
-2. **Orientation (C2).** A runtime quaternion, written back as each
-   camera's stored angles; or store a quaternion (gimbal-free sliders
-   too, but tracks would need quaternion interpolation, and JWF exchange
-   a conversion)? *Recommended: runtime.*
-3. **Controls (C3).** The table as proposed? In particular:
-   - right drag = Alt+drag (turn), for mouse users who don't want Alt;
-   - in 2D, Alt+drag rotates the view;
-   - in fly mode, the wheel changes the fly speed rather than zooming.
-4. **Fly look (C4).** Look turns about the eye for every camera (a flame
-   included, which today turns about its pivot), while Alt+drag orbits
-   the target. *Recommended.*
-5. **The escape terrain in fly mode (C4).** (a) Keep the ground-target
-   camera (no looking above the horizon; climbing is zooming out), or
-   (b) give the terrain an eye-based camera that can look at the sky?
-   *Recommended: prototype (b), and fall back to (a) if the sections
-   lose resolution with it.*
-6. **The simulation view (C6).** Offer pan/zoom/rotate for every grid and
-   tile only a periodic one, or only for a periodic, fixed-size grid?
-   *Recommended: every grid.*
-7. **Panels (C5).** View = camera, projection and lens, atmosphere,
-   depth of field, image quality; a "Lighting & Material" panel = lights,
-   material, render tier and samples. Or everything in View?
-   *Recommended: the two panels.*
-8. **Flame content in View.** Move Preserve Z and post symmetry out of
-   the View panel (to the transforms side)? *Recommended.*
-9. **Angle display.** The 3D layout shows one convention for every
-   camera (pitch = elevation above the horizon, yaw = heading), with the
-   flame's JWF values converted for display only -- or each camera's own
-   stored numbers? *Recommended: one convention; tracks and files keep
-   the stored units.*
+1. **Storage (C1): keep each camera's fields**, behind adapters. A
+   shared struct is liked but not the point; combining the features and
+   the UI is.
+2. **Orientation (C2): a runtime quaternion,** written back as the
+   stored angles. What matters is no gimbal lock in free-look. (The
+   flame's FreeLook already turns without it -- §1b -- so this carries
+   that to every 3D camera, bank included.)
+3. **Controls (C3): as proposed** -- right drag as Alt+drag, Alt+drag
+   rotating a 2D view, the wheel setting the fly speed in fly mode.
+4. **Fly look (C4): about the eye,** for every camera; Alt+drag orbits
+   the target. (The flame's Camera X/Y/Z does move the camera freely;
+   only its turning pivots on the stored point -- C4.)
+5. **The 3D camera can look anywhere**, the escape terrain included: an
+   eye-based terrain camera (C4).
+6. **The simulation view works on every grid**: pan, zoom and rotate;
+   a non-periodic grid shows its edges, a periodic one tiles (C6).
+7. **Lighting and material go in the View panel for now**; their own
+   panel later, if it grows complicated enough (C5).
+8. **Preserve Z and post symmetry stay** in the View panel.
+9. **Angles show in degrees**, never radians: a −180 to 180 slider that
+   takes a typed value beyond it (C5). Each camera keeps its own zero, so
+   the panel shows the number the file stores (decided here, not by the
+   user -- a converted zero would make the panel and the track editor
+   disagree with the file).
 
 ## 4. Phases and gates
 
@@ -404,25 +435,36 @@ changes input lists what to try in the app.
 - **P3. The View panel's 2D layout.**
   - Camera, lens, image and deep-zoom sections for the three 2D modes;
     the escape camera and lens controls leave the Escape panel.
+  - Angles in degrees on −180 to 180 sliders that take typed values
+    beyond (C5): the 2D rotations, the warp's rotation per step, and the
+    track editor's angle tracks.
   - The animation picker's View category offers only the active
     camera's targets (the gating deferred from PR #129).
-- **P4. The View panel's 3D layout and the Lighting & Material panel.**
+- **P4. The View panel's 3D layout, with lighting and material.**
   - Camera (with Position X/Y/Z everywhere), fly settings, atmosphere
-    (mode D's fog editable), depth of field.
-  - Lighting & Material docked in every 3D workspace, with the render
-    tier, samples and path material moved into it; its hint and gating
-    corrected; the camera blocks leave the Escape and Simulation panels.
-- **P5. One quaternion fly mode (C4).**
+    (mode D's fog editable), depth of field -- angles in degrees as P3.
+  - Lighting and material sections: the Solid Lighting panel folded in
+    (its `PanelType` kept for saved layouts), the render tier, samples
+    and path material moved in from the Escape and Simulation panels,
+    the hints and gating corrected; the camera blocks leave the Escape
+    and Simulation panels.
+- **P5. The escape terrain's eye-based camera (C4).**
+  - The eye's ground point, height and orientation; the target derived;
+    old terrains converted on load to the same view.
+  - Gates: the shipped terrains render as before (visual suite and
+    before/after renders); the sections' resolution near the eye
+    measured against today's at the same view; looking at the sky works.
+- **P6. One quaternion fly mode (C4).**
   - Fly mode for every 3D camera through the adapters; speed scaled by
     the distance to the target; look about the eye.
-  - The escape terrain's camera per Q5; the sim terrain's target height.
+  - The sim terrain's target height.
   - Release held keys on focus loss.
   - Tests: a flight path through each adapter is continuous and faithful
     (the existing fly tests, generalised); mode D's flight is exact at a
     deep zoom (fixed-point target).
-- **P6. Materials across the views (C7).** A design note first, with
+- **P7. Materials across the views (C7).** A design note first, with
   before/after renders, since it changes pictures.
-- **P7. Docs and text.** `docs/main/UI.md`, `free-camera-movement.md`,
+- **P8. Docs and text.** `docs/main/UI.md`, `free-camera-movement.md`,
   help text (the "Alt-Drag - Rotate view" line becomes true everywhere),
   the locales, `SCRIPTING.md` (the `anim.key("rotation", ...)` example
   implies degrees; tracks are radians), and the stale comments in §1d.
@@ -435,8 +477,12 @@ changes input lists what to try in the app.
 - **Terrain ground.** A free camera can fly under a terrain's ground,
   which the walk doesn't expect (the orbit clamps pitch above the
   horizon today). The terrain adapters keep the eye above the ground.
+- **The escape terrain's camera** is the largest change: the zoom sets
+  the sections' resolution band today, and the eye's height has to take
+  that over without blurring the near ground. P5 measures it before
+  anything else builds on it.
 - **Deep zoom.** Every 3D move on mode D must stay a fixed-point add to
   the target, never an f64 round trip -- the pinch's f64 path is exactly
   that defect in 2D.
 - **JWF round trips.** Flame cameras keep their stored angles and XML
-  mapping; only the panel's display converts (Q9).
+  mapping; the panel shows the stored angles in degrees.
