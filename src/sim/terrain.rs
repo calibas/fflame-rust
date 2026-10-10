@@ -91,6 +91,7 @@ pub fn sim_terrain_view(config: &FractalConfig, gw: u32, gh: u32, jitter: [f32; 
         material: crate::escape::path_core::lit_material(config),
         curve: 0,
         invert: false,
+        range: None,
     }
 }
 

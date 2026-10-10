@@ -2164,6 +2164,10 @@ impl ConfigManager {
             ConfigPath::EscapeTerrainInterior => Ok(ConfigValue::String(config.escape.terrain.interior.as_str().to_string())),
             ConfigPath::EscapeTerrainCurve => Ok(ConfigValue::String(config.escape.terrain.curve.as_str().to_string())),
             ConfigPath::EscapeTerrainInvert => Ok(config.escape.terrain.invert.into()),
+            ConfigPath::EscapeTerrainLocked => Ok(config.escape.terrain.locked.into()),
+            ConfigPath::EscapeTerrainLockZoom => Ok(ConfigValue::Double(config.escape.terrain.lock_zoom)),
+            ConfigPath::EscapeTerrainLockLo => Ok(config.escape.terrain.lock_range[0].into()),
+            ConfigPath::EscapeTerrainLockHi => Ok(config.escape.terrain.lock_range[1].into()),
             ConfigPath::EscapeTerrainShadow => Ok(config.escape.terrain.shadow.into()),
             ConfigPath::EscapeTerrainShadowSharpness => Ok(config.escape.terrain.shadow_sharpness.into()),
             ConfigPath::EscapeTerrainLakeTint => Ok(ConfigValue::ColorRgb(config.escape.terrain.lake_tint)),
@@ -3801,6 +3805,21 @@ impl ConfigManager {
             }
             ConfigPath::EscapeTerrainInvert => {
                 self.current.escape.terrain.invert = value.try_into()?;
+            }
+            ConfigPath::EscapeTerrainLocked => {
+                self.current.escape.terrain.locked = value.try_into()?;
+            }
+            ConfigPath::EscapeTerrainLockZoom => {
+                let v: f64 = value.try_into()?;
+                if v.is_finite() {
+                    self.current.escape.terrain.lock_zoom = v;
+                }
+            }
+            ConfigPath::EscapeTerrainLockLo => {
+                self.current.escape.terrain.lock_range[0] = value.try_into()?;
+            }
+            ConfigPath::EscapeTerrainLockHi => {
+                self.current.escape.terrain.lock_range[1] = value.try_into()?;
             }
             ConfigPath::EscapeTerrainShadow => {
                 let v: f32 = value.try_into()?;

@@ -565,6 +565,11 @@ pub enum ConfigPath {
     /// inverted (docs/projects/terrain-height.md, H2).
     EscapeTerrainCurve,
     EscapeTerrainInvert,
+    /// The relief fixed at a zoom, and the range pinned there (H3).
+    EscapeTerrainLocked,
+    EscapeTerrainLockZoom,
+    EscapeTerrainLockLo,
+    EscapeTerrainLockHi,
     EscapeTerrainShadow,
     EscapeTerrainShadowSharpness,
     EscapeTerrainLakeTint,
@@ -1249,6 +1254,10 @@ impl Display for ConfigPath {
             ConfigPath::EscapeTerrainInterior => write!(f, "Terrain Interior"),
             ConfigPath::EscapeTerrainCurve => write!(f, "Terrain Curve"),
             ConfigPath::EscapeTerrainInvert => write!(f, "Terrain Invert"),
+            ConfigPath::EscapeTerrainLocked => write!(f, "Terrain Height Locked"),
+            ConfigPath::EscapeTerrainLockZoom => write!(f, "Terrain Lock Zoom"),
+            ConfigPath::EscapeTerrainLockLo => write!(f, "Terrain Lock Range Low"),
+            ConfigPath::EscapeTerrainLockHi => write!(f, "Terrain Lock Range High"),
             ConfigPath::EscapeTerrainShadow => write!(f, "Terrain Shadows"),
             ConfigPath::EscapeTerrainShadowSharpness => write!(f, "Terrain Shadow Sharpness"),
             ConfigPath::EscapeTerrainLakeTint => write!(f, "Lake Tint"),
@@ -1678,6 +1687,10 @@ impl ConfigPath {
             ConfigPath::EscapeTerrainInterior => I18nKey::simple("history.param.escape_terrain_interior"),
             ConfigPath::EscapeTerrainCurve => I18nKey::simple("history.param.escape_terrain_curve"),
             ConfigPath::EscapeTerrainInvert => I18nKey::simple("history.param.escape_terrain_invert"),
+            ConfigPath::EscapeTerrainLocked => I18nKey::simple("history.param.escape_terrain_locked"),
+            ConfigPath::EscapeTerrainLockZoom => I18nKey::simple("history.param.escape_terrain_lock_zoom"),
+            ConfigPath::EscapeTerrainLockLo => I18nKey::simple("history.param.escape_terrain_lock_lo"),
+            ConfigPath::EscapeTerrainLockHi => I18nKey::simple("history.param.escape_terrain_lock_hi"),
             ConfigPath::EscapeTerrainShadow => I18nKey::simple("history.param.escape_terrain_shadow"),
             ConfigPath::EscapeTerrainShadowSharpness => I18nKey::simple("history.param.escape_terrain_shadow_sharpness"),
             ConfigPath::EscapeTerrainLakeTint => I18nKey::simple("history.param.escape_terrain_lake_tint"),
@@ -3106,6 +3119,10 @@ impl ConfigPath {
             | ConfigPath::EscapeTerrainInterior
             | ConfigPath::EscapeTerrainCurve
             | ConfigPath::EscapeTerrainInvert
+            | ConfigPath::EscapeTerrainLocked
+            | ConfigPath::EscapeTerrainLockZoom
+            | ConfigPath::EscapeTerrainLockLo
+            | ConfigPath::EscapeTerrainLockHi
             | ConfigPath::EscapeTerrainShadow
             | ConfigPath::EscapeTerrainShadowSharpness
             | ConfigPath::EscapeTerrainLakeTint
@@ -3636,6 +3653,10 @@ impl ConfigPath {
             ConfigPath::EscapeTerrainInterior => "Escape.Terrain.Interior".to_string(),
             ConfigPath::EscapeTerrainCurve => "Escape.Terrain.Curve".to_string(),
             ConfigPath::EscapeTerrainInvert => "Escape.Terrain.Invert".to_string(),
+            ConfigPath::EscapeTerrainLocked => "Escape.Terrain.Locked".to_string(),
+            ConfigPath::EscapeTerrainLockZoom => "Escape.Terrain.LockZoom".to_string(),
+            ConfigPath::EscapeTerrainLockLo => "Escape.Terrain.LockLo".to_string(),
+            ConfigPath::EscapeTerrainLockHi => "Escape.Terrain.LockHi".to_string(),
             ConfigPath::EscapeTerrainShadow => "Escape.Terrain.Shadow".to_string(),
             ConfigPath::EscapeTerrainShadowSharpness => "Escape.Terrain.ShadowSharpness".to_string(),
             ConfigPath::EscapeTerrainLakeTint => "Escape.Terrain.LakeTint".to_string(),
@@ -3915,6 +3936,10 @@ impl ConfigPath {
                 ["Terrain", "Interior"] => return Some(ConfigPath::EscapeTerrainInterior),
                 ["Terrain", "Curve"] => return Some(ConfigPath::EscapeTerrainCurve),
                 ["Terrain", "Invert"] => return Some(ConfigPath::EscapeTerrainInvert),
+                ["Terrain", "Locked"] => return Some(ConfigPath::EscapeTerrainLocked),
+                ["Terrain", "LockZoom"] => return Some(ConfigPath::EscapeTerrainLockZoom),
+                ["Terrain", "LockLo"] => return Some(ConfigPath::EscapeTerrainLockLo),
+                ["Terrain", "LockHi"] => return Some(ConfigPath::EscapeTerrainLockHi),
                 ["Terrain", "Shadow"] => return Some(ConfigPath::EscapeTerrainShadow),
                 ["Terrain", "ShadowSharpness"] => return Some(ConfigPath::EscapeTerrainShadowSharpness),
                 ["Terrain", "LakeTint"] => return Some(ConfigPath::EscapeTerrainLakeTint),
@@ -4845,6 +4870,12 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeTerrainInterior
         | ConfigPath::EscapeTerrainCurve
         | ConfigPath::EscapeTerrainInvert
+        // The lock is where the landscape is defined, not a quantity of
+        // it: animating it would be the rescaling it exists to stop.
+        | ConfigPath::EscapeTerrainLocked
+        | ConfigPath::EscapeTerrainLockZoom
+        | ConfigPath::EscapeTerrainLockLo
+        | ConfigPath::EscapeTerrainLockHi
         | ConfigPath::EscapeShadingModel
         | ConfigPath::EscapeShadingStencil
         | ConfigPath::EscapeShadingHeightCurve
@@ -5528,6 +5559,10 @@ mod tests {
             (ConfigPath::EscapeTerrainInterior, ConfigValue::String("hole".into()), false),
             (ConfigPath::EscapeTerrainCurve, ConfigValue::String("mesa".into()), false),
             (ConfigPath::EscapeTerrainInvert, ConfigValue::Bool(true), false),
+            (ConfigPath::EscapeTerrainLocked, ConfigValue::Bool(true), false),
+            (ConfigPath::EscapeTerrainLockZoom, ConfigValue::Double(12.25), false),
+            (ConfigPath::EscapeTerrainLockLo, ConfigValue::Float(3.5), false),
+            (ConfigPath::EscapeTerrainLockHi, ConfigValue::Float(250.0), false),
             (ConfigPath::EscapeTerrainShadow, ConfigValue::Float(0.25), true),
             (ConfigPath::EscapeTerrainShadowSharpness, ConfigValue::Float(20.0), true),
             (ConfigPath::EscapeTerrainLakeTint, ConfigValue::ColorRgb([0.1, 0.2, 0.3]), false),

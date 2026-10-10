@@ -1867,6 +1867,16 @@ impl App {
             },
             sim_timeline_holding,
             sim_timeline_driven,
+            {
+                #[cfg(feature = "terrain")]
+                {
+                    self.escape_terrain.as_ref().and_then(|t| t.measured_range())
+                }
+                #[cfg(not(feature = "terrain"))]
+                {
+                    None
+                }
+            },
         );
 
         // Simulation transport, back from the panel. `sim_running` is

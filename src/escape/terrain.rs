@@ -561,6 +561,13 @@ fn hf_load_range() {
         hf_lo = lo;
         hf_span = hi - lo;
     }
+    // A locked relief's range, pinned where it was locked (H3): fdata[2]
+    // .y and .z, empty (lo > hi) when none is.
+    let mode = u32(params.fdata[1].w);
+    if ((mode == 2u || mode == 3u) && params.fdata[2].y <= params.fdata[2].z) {
+        hf_lo = params.fdata[2].y;
+        hf_span = params.fdata[2].z - params.fdata[2].y;
+    }
     // The slab the trace clips to: the ground's, or -- heights given as
     // they are (mode 4, a simulation's) -- their measured range, with a
     // floor a hundredth of the ground's side below it.
@@ -657,15 +664,16 @@ fn hf_cell_at(x: f32, y: f32) -> vec4<f32> {
     return vec4<f32>(f32(a), f32(b), cx - f32(a), cy - f32(b));
 }
 
-// The height map's choices (docs/projects/terrain-height.md, H2): the
-// curve -- 0 the source's own (log for a count, linear for a relief),
-// 1 log, 2 linear, 3 mesa -- and the land inverted.
+// The height map's choices (docs/projects/terrain-height.md, H2), in
+// fdata[2].x: the curve in its low bits -- 0 the source's own (log for
+// a count, linear for a relief), 1 log, 2 linear, 3 mesa -- and 8 the
+// land inverted.
 fn hf_curve() -> u32 {
-    return u32(params.fdata[2].x);
+    return u32(params.fdata[2].x) & 7u;
 }
 
 fn hf_inverted() -> bool {
-    return params.fdata[2].y > 0.5;
+    return (u32(params.fdata[2].x) & 8u) != 0u;
 }
 
 // How far up the relief a count's or a relief's land value stands, 0 to
@@ -1889,6 +1897,9 @@ pub struct TerrainView {
     /// is inverted (docs/projects/terrain-height.md, H2).
     pub curve: u32,
     pub invert: bool,
+    /// A count's or a relief's range, pinned by a lock (H3); None for the
+    /// ground's own.
+    pub range: Option<[f32; 2]>,
     /// The material the lit tier reads as the path tracer does
     /// (camera-unification C7): the coat's reflectance and roughness,
     /// and the glow (`path_core::lit_material`).
@@ -1897,6 +1908,23 @@ pub struct TerrainView {
 
 pub use super::path_core::PathSettings;
 use super::path_core::{PathParamsGpu, PathSum};
+
+/// A read of the ground's range in flight, and the last that landed
+/// (`TerrainRenderer::read_range_back`).
+#[derive(Default)]
+struct RangeRead {
+    stage: Option<Buffer>,
+    /// Set by the map's callback: 1 mapped, 2 failed.
+    landed: Option<std::sync::Arc<std::sync::atomic::AtomicU8>>,
+    /// A reduction came while a read was in flight.
+    again: bool,
+    last: Option<[f32; 2]>,
+}
+
+/// The range's ordered encoding undone: `hf_unordered`.
+fn unordered(u: u32) -> f32 {
+    f32::from_bits(if u & 0x8000_0000 != 0 { u & 0x7fff_ffff } else { !u })
+}
 
 /// The default sun when the lighting panel is untouched (plan H7): the
 /// 2D relief's own light, azimuth 135 (upper left) at elevation 30.
@@ -2085,6 +2113,8 @@ pub struct TerrainRenderer {
     range: Buffer,
     range_reduce_layout: BindGroupLayout,
     range_reduce_pipeline: ComputePipeline,
+    /// The ground's range, read back for a lock to pin (H3).
+    range_read: RangeRead,
     /// The accumulation's pair, allocated on the first `accumulate`;
     /// `accum_front` is the one holding the mean.
     accum: Option<[(Texture, TextureView); 2]>,
@@ -2329,6 +2359,7 @@ impl TerrainRenderer {
             ground: None,
             building: None,
             range,
+            range_read: RangeRead::default(),
             accum: None,
             accum_front: 0,
             accum_count: 0,
@@ -2486,6 +2517,9 @@ impl TerrainRenderer {
             pair[1].0.destroy();
         }
         self.range.destroy();
+        if let Some(b) = &self.range_read.stage {
+            b.destroy();
+        }
         if let Some(a) = &self.atlas {
             a.raw.destroy();
             a.albedo.destroy();
@@ -2834,6 +2868,66 @@ impl TerrainRenderer {
         queue.submit(std::iter::once(enc.finish()));
     }
 
+    /// Read the ground's range back (`reduce_range`'s), without waiting:
+    /// copied out and mapped, collected by [`Self::poll_range`]. One read
+    /// at a time; a reduction meanwhile is read once it lands.
+    pub fn read_range_back(&mut self, device: &Device, queue: &Queue) {
+        if self.range_read.landed.is_some() {
+            self.range_read.again = true;
+            return;
+        }
+        self.range_read.again = false;
+        let stage = self.range_read.stage.get_or_insert_with(|| {
+            device.create_buffer(&BufferDescriptor {
+                label: Some("Terrain Range Readback"),
+                size: 8,
+                usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        });
+        let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Terrain Range Readback") });
+        enc.copy_buffer_to_buffer(&self.range, 0, stage, 0, 8);
+        queue.submit(std::iter::once(enc.finish()));
+        let landed = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0));
+        let flag = landed.clone();
+        stage.slice(..).map_async(MapMode::Read, move |r| {
+            flag.store(if r.is_ok() { 1 } else { 2 }, std::sync::atomic::Ordering::Release);
+        });
+        self.range_read.landed = Some(landed);
+    }
+
+    /// Collect a range read that has landed (`read_range_back`), polling
+    /// without waiting; a reduction that came meanwhile is read next.
+    pub fn poll_range(&mut self, device: &Device, queue: &Queue) {
+        let Some(landed) = self.range_read.landed.as_ref() else {
+            return;
+        };
+        let _ = device.poll(PollType::Poll);
+        let state = landed.load(std::sync::atomic::Ordering::Acquire);
+        if state == 0 {
+            return;
+        }
+        if let (1, Some(stage)) = (state, self.range_read.stage.as_ref()) {
+            let words: [u32; 2] = {
+                let data = stage.slice(..).get_mapped_range();
+                [u32::from_le_bytes(data[0..4].try_into().unwrap()), u32::from_le_bytes(data[4..8].try_into().unwrap())]
+            };
+            stage.unmap();
+            let [lo, hi] = words.map(unordered);
+            self.range_read.last = (lo <= hi).then_some([lo, hi]);
+        }
+        self.range_read.landed = None;
+        if self.range_read.again {
+            self.read_range_back(device, queue);
+        }
+    }
+
+    /// The ground's count or relief range as last read back: what a lock
+    /// pins (H3). None before a read lands, or with nothing escaped.
+    pub fn measured_range(&self) -> Option<[f32; 2]> {
+        self.range_read.last
+    }
+
     /// Start making atlas layer `layer` -- `n x m` samples -- from
     /// footprint regions.
     pub fn begin_section(&mut self, queue: &Queue, layer: u32, n: u32, m: u32, ingest: &TerrainIngest) {
@@ -3163,9 +3257,12 @@ impl TerrainRenderer {
         // which there is no ground.
         let per_ray = 2.0 * (view.camera.fov * 0.5).tan() / self.frame.1.max(1) as f32 / view.samples_per_axis.max(1) as f32;
         fdata[6] = [view.height, view.width, per_ray, view.far];
-        // The height map's curve and inversion (`hf_curve`, `hf_inverted`).
-        fdata[2][0] = view.curve as f32;
-        fdata[2][1] = if view.invert { 1.0 } else { 0.0 };
+        // The height map's curve and inversion (`hf_curve`, `hf_inverted`),
+        // and a pinned range (`hf_load_range`): empty, lo > hi, for none.
+        fdata[2][0] = (view.curve.min(7) | if view.invert { 8 } else { 0 }) as f32;
+        let [lo, hi] = view.range.unwrap_or([1.0, 0.0]);
+        fdata[2][1] = lo;
+        fdata[2][2] = hi;
         // A repeated ground's period: its one section's extent.
         if let (true, Some(s)) = (g.repeat, g.sections.first()) {
             fdata[19] = [((s.n - 1) as f64 * s.texel) as f32, ((s.m - 1) as f64 * s.texel) as f32, 1.0, 0.0];
@@ -3829,6 +3926,7 @@ pub(crate) mod gpu_tests {
             sky: None,
             curve: 0,
             invert: false,
+            range: None,
             material: [0.0, 0.5, 0.0],
         }
     }
