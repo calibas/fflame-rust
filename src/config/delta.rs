@@ -561,6 +561,10 @@ pub enum ConfigPath {
     EscapePathSky,
     EscapePathZenith,
     EscapeTerrainInterior,
+    /// How a count or a relief rises to its height, and the land
+    /// inverted (docs/projects/terrain-height.md, H2).
+    EscapeTerrainCurve,
+    EscapeTerrainInvert,
     EscapeTerrainShadow,
     EscapeTerrainShadowSharpness,
     EscapeTerrainLakeTint,
@@ -1243,6 +1247,8 @@ impl Display for ConfigPath {
             ConfigPath::EscapePathSky => write!(f, "Gradient Sky"),
             ConfigPath::EscapePathZenith => write!(f, "Zenith"),
             ConfigPath::EscapeTerrainInterior => write!(f, "Terrain Interior"),
+            ConfigPath::EscapeTerrainCurve => write!(f, "Terrain Curve"),
+            ConfigPath::EscapeTerrainInvert => write!(f, "Terrain Invert"),
             ConfigPath::EscapeTerrainShadow => write!(f, "Terrain Shadows"),
             ConfigPath::EscapeTerrainShadowSharpness => write!(f, "Terrain Shadow Sharpness"),
             ConfigPath::EscapeTerrainLakeTint => write!(f, "Lake Tint"),
@@ -1670,6 +1676,8 @@ impl ConfigPath {
             ConfigPath::EscapePathSky => I18nKey::simple("history.param.escape_path_sky"),
             ConfigPath::EscapePathZenith => I18nKey::simple("history.param.escape_path_zenith"),
             ConfigPath::EscapeTerrainInterior => I18nKey::simple("history.param.escape_terrain_interior"),
+            ConfigPath::EscapeTerrainCurve => I18nKey::simple("history.param.escape_terrain_curve"),
+            ConfigPath::EscapeTerrainInvert => I18nKey::simple("history.param.escape_terrain_invert"),
             ConfigPath::EscapeTerrainShadow => I18nKey::simple("history.param.escape_terrain_shadow"),
             ConfigPath::EscapeTerrainShadowSharpness => I18nKey::simple("history.param.escape_terrain_shadow_sharpness"),
             ConfigPath::EscapeTerrainLakeTint => I18nKey::simple("history.param.escape_terrain_lake_tint"),
@@ -3096,6 +3104,8 @@ impl ConfigPath {
             | ConfigPath::EscapePathSky
             | ConfigPath::EscapePathZenith
             | ConfigPath::EscapeTerrainInterior
+            | ConfigPath::EscapeTerrainCurve
+            | ConfigPath::EscapeTerrainInvert
             | ConfigPath::EscapeTerrainShadow
             | ConfigPath::EscapeTerrainShadowSharpness
             | ConfigPath::EscapeTerrainLakeTint
@@ -3624,6 +3634,8 @@ impl ConfigPath {
             ConfigPath::EscapePathSky => "Escape.Path.Sky".to_string(),
             ConfigPath::EscapePathZenith => "Escape.Path.Zenith".to_string(),
             ConfigPath::EscapeTerrainInterior => "Escape.Terrain.Interior".to_string(),
+            ConfigPath::EscapeTerrainCurve => "Escape.Terrain.Curve".to_string(),
+            ConfigPath::EscapeTerrainInvert => "Escape.Terrain.Invert".to_string(),
             ConfigPath::EscapeTerrainShadow => "Escape.Terrain.Shadow".to_string(),
             ConfigPath::EscapeTerrainShadowSharpness => "Escape.Terrain.ShadowSharpness".to_string(),
             ConfigPath::EscapeTerrainLakeTint => "Escape.Terrain.LakeTint".to_string(),
@@ -3901,6 +3913,8 @@ impl ConfigPath {
                 ["Path", "Sky"] => return Some(ConfigPath::EscapePathSky),
                 ["Path", "Zenith"] => return Some(ConfigPath::EscapePathZenith),
                 ["Terrain", "Interior"] => return Some(ConfigPath::EscapeTerrainInterior),
+                ["Terrain", "Curve"] => return Some(ConfigPath::EscapeTerrainCurve),
+                ["Terrain", "Invert"] => return Some(ConfigPath::EscapeTerrainInvert),
                 ["Terrain", "Shadow"] => return Some(ConfigPath::EscapeTerrainShadow),
                 ["Terrain", "ShadowSharpness"] => return Some(ConfigPath::EscapeTerrainShadowSharpness),
                 ["Terrain", "LakeTint"] => return Some(ConfigPath::EscapeTerrainLakeTint),
@@ -4829,6 +4843,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeTerrainEnabled
         | ConfigPath::EscapeTerrainSource
         | ConfigPath::EscapeTerrainInterior
+        | ConfigPath::EscapeTerrainCurve
+        | ConfigPath::EscapeTerrainInvert
         | ConfigPath::EscapeShadingModel
         | ConfigPath::EscapeShadingStencil
         | ConfigPath::EscapeShadingHeightCurve
@@ -5510,6 +5526,8 @@ mod tests {
             (ConfigPath::EscapePathSky, ConfigValue::Bool(true), false),
             (ConfigPath::EscapePathZenith, ConfigValue::ColorRgb([0.1, 0.2, 0.3]), false),
             (ConfigPath::EscapeTerrainInterior, ConfigValue::String("hole".into()), false),
+            (ConfigPath::EscapeTerrainCurve, ConfigValue::String("mesa".into()), false),
+            (ConfigPath::EscapeTerrainInvert, ConfigValue::Bool(true), false),
             (ConfigPath::EscapeTerrainShadow, ConfigValue::Float(0.25), true),
             (ConfigPath::EscapeTerrainShadowSharpness, ConfigValue::Float(20.0), true),
             (ConfigPath::EscapeTerrainLakeTint, ConfigValue::ColorRgb([0.1, 0.2, 0.3]), false),

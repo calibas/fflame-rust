@@ -235,6 +235,8 @@ pub fn terrain_view(config: &FractalConfig, jitter: [f32; 2]) -> TerrainView {
         far: t.far,
         sky: super::path_core::sky_seen(&config.escape.path, config),
         material: super::path_core::lit_material(config),
+        curve: t.curve.code(),
+        invert: t.invert,
     }
 }
 
@@ -1589,6 +1591,139 @@ mod tests {
         let fresh = shot(&c, &mut crate::renderer::render::RenderEngines::default());
         assert_ne!(low, fresh, "the height moved the picture");
         assert_eq!(raised, fresh, "a raised height drew through a kept engine as a fresh one draws it");
+    }
+
+    /// Where each pixel's ray meets the ground, as a height in view widths
+    /// (None for the sky): the walk's geometry record, read back.
+    fn hit_heights(device: &Device, queue: &Queue, c: &FractalConfig, w: u32, h: u32) -> Vec<Option<f64>> {
+        let mut engines = crate::renderer::render::RenderEngines::default();
+        let _ = pollster::block_on(crate::renderer::render(
+            device,
+            queue,
+            crate::renderer::RenderJob::new(c, w, h).with_engines(&mut engines),
+            &mut crate::renderer::NoProgress,
+        ))
+        .expect("render");
+        let t = engines.terrain.as_ref().unwrap();
+        let geom: Vec<[u32; 4]> = bytemuck::cast_slice(&crate::escape::terrain::gpu_tests::read_buffer(
+            device,
+            queue,
+            t.terrain_for_test().geometry_buffer(),
+            (w * h * 16) as u64,
+        ))
+        .to_vec();
+        let cam = terrain_camera(&c.escape);
+        let (aspect, th) = (w as f64 / h as f64, (cam.fov as f64 * 0.5).tan());
+        (0..h)
+            .flat_map(|py| (0..w).map(move |px| (px, py)))
+            .map(|(px, py)| {
+                let depth = f32::from_bits(geom[(py * w + px) as usize][3]) as f64;
+                if !(depth > 0.0) {
+                    return None;
+                }
+                let (u, v) = ((px as f64 + 0.5) / w as f64 - 0.5, (py as f64 + 0.5) / h as f64 - 0.5);
+                let d: [f64; 3] =
+                    std::array::from_fn(|k| cam.forward[k] + cam.right[k] * u * aspect * 2.0 * th - cam.up[k] * v * 2.0 * th);
+                let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                Some(cam.eye[2] + d[2] / len * depth)
+            })
+            .collect()
+    }
+
+    /// Looking straight down through a narrow lens over the seahorse
+    /// valley's busy boundary, an escape count's terrain: each pixel's ray
+    /// meets nearly the same column of ground whatever the surface, so two
+    /// maps can be compared pixel by pixel.
+    fn looking_down() -> FractalConfig {
+        let mut c = terrain_config();
+        c.escape.terrain.tier = RenderTier::Lit;
+        c.escape.terrain.source = TerrainSource::EscapeCount;
+        c.escape.terrain.interior = TerrainInterior::Lake;
+        c.escape.center_re = "-0.7453".into();
+        c.escape.center_im = "0.1127".into();
+        c.escape.zoom_log2 = 6.0;
+        c.escape.cam_pitch = 1.5707;
+        c.escape.cam_fov = 0.1;
+        c
+    }
+
+    /// Invert turns the land upside down (terrain-height.md, H2): where
+    /// the plain map stands at `h`, the inverted one stands at `H − h`.
+    /// Over land alone -- the exterior well away from the set -- since a
+    /// cell with an interior corner (a lake's 0, a plateau's top) mixes
+    /// the land with what Invert leaves as it is.
+    #[test]
+    fn invert_turns_the_land_upside_down() {
+        let Some((_one_at_a_time, device, queue)) = gpu() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (64u32, 64u32);
+        // Coarse ground (Detail 0.1: a texel about ten pixels): the two
+        // surfaces' hits are a pixel and a half apart however narrow the
+        // lens -- their heights differ by up to H over 2.6 frames of depth
+        // -- and at a texel a pixel both read one patch of ground, where at
+        // full detail an escape count is rough at exactly that scale.
+        for source in [TerrainSource::EscapeCount, TerrainSource::Distance] {
+            let mut c = looking_down();
+            c.escape.terrain.source = source;
+            c.escape.terrain.detail = 0.1;
+            c.escape.center_re = "0.45".into();
+            c.escape.center_im = "0.6".into();
+            c.escape.zoom_log2 = 2.0;
+            // Wide flanks: the set's hairs reach here, and at the default
+            // width their flanks are as steep as the count's roughness.
+            c.escape.terrain.de_width = 0.2;
+            let top = c.escape.terrain.height as f64;
+            let plain = hit_heights(&device, &queue, &c, w, h);
+            let mut inv = c.clone();
+            inv.escape.terrain.invert = true;
+            let inverted = hit_heights(&device, &queue, &inv, w, h);
+            let (mut land, mut agree, mut lake) = (0usize, 0usize, 0usize);
+            for (a, b) in plain.iter().zip(&inverted) {
+                let (Some(a), Some(b)) = (a, b) else { continue };
+                if a.abs() < 1e-5 && b.abs() < 1e-5 {
+                    lake += 1;
+                    continue;
+                }
+                land += 1;
+                agree += usize::from((a + b - top).abs() < 0.02 * top);
+            }
+            println!("invert {source:?}: {agree} of {land} land pixels stand at H - h, {lake} lake");
+            assert!(land > (w * h / 2) as usize, "{land}");
+            assert!(agree as f64 > 0.9 * land as f64, "{source:?}: {agree} of {land}");
+        }
+    }
+
+    /// The curves keep their order (H2): a mesa tops out above the log
+    /// rise, and the log rise stands above the linear one, pixel by pixel.
+    #[test]
+    fn the_curves_keep_their_order() {
+        let Some((_one_at_a_time, device, queue)) = gpu() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (64u32, 64u32);
+        let shot = |curve: crate::config::escape::TerrainCurve| {
+            let mut c = looking_down();
+            c.escape.terrain.curve = curve;
+            hit_heights(&device, &queue, &c, w, h)
+        };
+        use crate::config::escape::TerrainCurve;
+        let (linear, log, mesa, auto) = (shot(TerrainCurve::Linear), shot(TerrainCurve::Log), shot(TerrainCurve::Mesa), shot(TerrainCurve::Auto));
+        assert_eq!(log, auto, "a count's own curve is the log rise");
+        let top = looking_down().escape.terrain.height as f64;
+        let tol = 0.02 * top;
+        let (mut n, mut ordered, mut mesa_higher) = (0usize, 0usize, 0usize);
+        for k in 0..linear.len() {
+            let (Some(a), Some(b), Some(m)) = (linear[k], log[k], mesa[k]) else { continue };
+            n += 1;
+            ordered += usize::from(a <= b + tol && b <= m + tol);
+            mesa_higher += usize::from(m > b + tol);
+        }
+        println!("curves: {ordered} of {n} pixels linear <= log <= mesa, the mesa higher at {mesa_higher}");
+        assert!(ordered as f64 > 0.9 * n as f64, "{ordered} of {n}");
+        assert!(mesa_higher > n / 10, "the mesa tops out: {mesa_higher}");
     }
 
     /// A height of 0 is a flat plane, seen in 3D: every ray that meets
