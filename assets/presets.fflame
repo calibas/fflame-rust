@@ -1055,7 +1055,7 @@
   {
     "escape": {
       "bailout": 4.0,
-      "center_im": "0.3333333333333333",
+      "center_im": "-0.3333333333333333",
       "center_re": "0.5",
       "coloring": "ifs_address",
       "formula": "ifs_flame",
@@ -1185,7 +1185,7 @@
   {
     "escape": {
       "bailout": 4.0,
-      "center_im": "0.5000000223517421",
+      "center_im": "-0.5000000223517421",
       "center_re": "0.5000000223517421",
       "coloring": "ifs_level",
       "formula": "ifs_flame",
@@ -1420,7 +1420,7 @@
   {
     "escape": {
       "bailout": 4.0,
-      "center_im": "0.19999999999999998",
+      "center_im": "-0.19999999999999998",
       "center_re": "0.39999999999999997",
       "coloring": "ifs_distance",
       "formula": "ifs_flame",
@@ -1532,7 +1532,7 @@
   {
     "escape": {
       "bailout": 4.0,
-      "center_im": "0.06185895766012041",
+      "center_im": "-0.06185895766012041",
       "center_re": "0.5000000151672536",
       "coloring": "ifs_address",
       "formula": "ifs_flame",
@@ -2449,7 +2449,7 @@
   {
     "escape": {
       "bailout": 4.0,
-      "center_im": "-0.007065506963206407",
+      "center_im": "0.007065506963206407",
       "center_re": "0.031929445761839655",
       "coloring": "ifs_level",
       "formula": "ifs_flame",
@@ -2537,7 +2537,7 @@
   {
     "escape": {
       "bailout": 4.0,
-      "center_im": "0.002000280974576803",
+      "center_im": "-0.002000280974576803",
       "center_re": "0.019778474402273028",
       "coloring": "ifs_distance",
       "formula": "ifs_flame",
@@ -2625,7 +2625,7 @@
   {
     "escape": {
       "bailout": 4.0,
-      "center_im": "-0.0004921343834416683",
+      "center_im": "0.0004921343834416683",
       "center_re": "0.028764033263990258",
       "coloring": "ifs_address",
       "formula": "ifs_flame",
@@ -2740,7 +2740,7 @@
   {
     "escape": {
       "bailout": 4.0,
-      "center_im": "0.20164597996115077",
+      "center_im": "-0.20164597996115077",
       "center_re": "0.1357018949998583",
       "coloring": "ifs_distance",
       "coloring_params": {
