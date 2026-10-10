@@ -778,6 +778,9 @@ pub struct EscapeRenderer {
     /// A gradient sky's zenith as a ray that meets nothing sees it
     /// (`path_core::sky_seen`); None for the background alone.
     solid_sky: Option<[f32; 3]>,
+    /// The solid's material, the lit tier's as the path tracer's: the
+    /// coat's reflectance and roughness, and the glow.
+    solid_material: [f32; 3],
     ifs_chain: Option<Vec<super::ifs::IfsLinkGpu>>,
     ifs_chain_key: String,
     ifs_chain_buffer: Buffer,
@@ -1794,6 +1797,7 @@ impl EscapeRenderer {
             ifs_seed_key: String::new(),
             solid_lighting: (crate::config::SolidShadingSettings::default(), 0.0, 0.0, [0.0; 3]),
             solid_sky: None,
+            solid_material: [0.0, 0.5, 0.0],
             ifs_chain: None,
             ifs_chain_key: String::new(),
             ifs_chain_buffer,
@@ -4081,6 +4085,18 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         true
     }
 
+    /// A solid's material (camera-unification C7): the coat's reflectance
+    /// and roughness and the glow, which the lit tier reads as the path
+    /// tracer does. Applied by the relight, so a change needs no walk.
+    /// True when it changed.
+    pub fn set_solid_material(&mut self, material: [f32; 3]) -> bool {
+        if self.solid_material == material {
+            return false;
+        }
+        self.solid_material = material;
+        true
+    }
+
     /// A cheap identity for that lighting, for the band and chunk keys.
     ///
     /// Only what the WALK reads. A light's direction and whether it is
@@ -4094,7 +4110,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let (s, _, _, _) = &self.solid_lighting;
         // The fallback rig has a light of its own; whether it is in
         // force is a geometry fact.
-        let mut k = format!("{}", crate::config::SolidShadingSettings::is_default(s));
+        let mut k = format!("{}", s.rig_untouched());
         for l in &s.lights {
             k.push_str(&format!("|{}:{}:{}", l.enabled, l.azimuth, l.elevation));
         }
@@ -4734,7 +4750,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let steps = param("steps", 96.0) as u32;
                 let shadowed = if param("shadow", 0.7) > 0.0 {
                     let (sh, _, _, _) = &self.solid_lighting;
-                    if crate::config::SolidShadingSettings::is_default(sh) {
+                    if sh.rig_untouched() {
                         1
                     } else {
                         sh.lights.iter().filter(|l| l.enabled && l.intensity > 0.0).count() as u32
@@ -7817,6 +7833,11 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     // The sky, past the rig's lights (`ifs_sky_seen`).
                     if let Some(z) = self.solid_sky {
                         fdata[20] = [z[0], z[1], z[2], 1.0];
+                    }
+                    // The material, in the w of the camera's rows
+                    // (`ifs_gloss`, `ifs_rough`, `ifs_glow`).
+                    for k in 0..3 {
+                        fdata[3 + k][3] = self.solid_material[k];
                     }
                 }
                 // A flame that is planar but not solid leaves the map

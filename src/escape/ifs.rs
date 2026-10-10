@@ -4972,7 +4972,7 @@ fn pack_rig3(
     // the strength to zero deliberately is asking for the unlit
     // silhouette, and a rule keyed on the strength alone would take
     // that away from them — there would be no way to ask for it.
-    let any = !crate::config::SolidShadingSettings::is_default(shading);
+    let any = !shading.rig_untouched();
     let (strength, ambient, diffuse, specular, shininess, ssao) = if any {
         (
             shading.shading_strength,

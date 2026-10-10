@@ -6059,11 +6059,44 @@ fn ifs_sky_seen(d: vec3<f32>) -> vec4<f32> {
     return vec4<f32>(s.xyz, ifs_sky_t(d));
 }
 
+// The material (camera-unification C7), the path tracer's: a coat of
+// reflectance `ifs_gloss()` at normal incidence (0, none) and roughness
+// `ifs_rough()` (GGX's alpha its square) over the albedo, and the
+// albedo's glow -- in the w of the camera's three rows.
+fn ifs_gloss() -> f32 { return params.fdata[3].w; }
+fn ifs_rough() -> f32 { return params.fdata[4].w; }
+fn ifs_glow() -> f32 { return params.fdata[5].w; }
+
+fn ifs_coat_d(nh: f32, a2: f32) -> f32 {
+    let k = nh * nh * (a2 - 1.0) + 1.0;
+    return a2 / (3.141592654 * k * k);
+}
+
+fn ifs_coat_g1(nx: f32, a2: f32) -> f32 {
+    return 2.0 * nx / (nx + sqrt(a2 + (1.0 - a2) * nx * nx));
+}
+
+fn ifs_coat_fresnel(f0: f32, c: f32) -> f32 {
+    let m = clamp(1.0 - c, 0.0, 1.0);
+    let m2 = m * m;
+    return f0 + (1.0 - f0) * m2 * m2 * m;
+}
+
 fn ifs_rig(albedo: vec3<f32>, n: vec3<f32>, ao_raw: f32, sun: vec4<f32>, dir: vec3<f32>, t: f32) -> vec3<f32> {
     let ao = mix(1.0, ao_raw, clamp(ifs_occlusion_strength(), 0.0, 1.0));
     let shadow_amount = clamp(ifs_shadow_strength(), 0.0, 1.0);
     let v = -dir;
-    var lit_rgb = albedo * (ifs_ambient() * ao);
+    // The coat, as the path tracer's direct light evaluates it: GGX,
+    // Smith's masking, Schlick's Fresnel, the diffuse taking what the
+    // Fresnel does not -- and, for the sky the path tracer's bounces
+    // see, the ambient reflected by the coat at this view.
+    let f0 = clamp(ifs_gloss(), 0.0, 1.0);
+    let r2 = max(clamp(ifs_rough(), 0.02, 1.0), 0.01);
+    let a2 = max(r2 * r2, 1.0e-4) * max(r2 * r2, 1.0e-4);
+    let nv = max(dot(n, v), 1.0e-4);
+    let coat_v = select(0.0, ifs_coat_fresnel(f0, nv), f0 > 0.0);
+    var lit_rgb = albedo * (ifs_ambient() * ao * (1.0 - coat_v)) + vec3<f32>(ifs_ambient() * ao * coat_v);
+    lit_rgb = lit_rgb + albedo * max(ifs_glow(), 0.0);
     let lights = ifs_light_count();
     for (var li = 0u; li < lights; li = li + 1u) {
         let ld = ifs_light_dir(li);
@@ -6073,7 +6106,15 @@ fn ifs_rig(albedo: vec3<f32>, n: vec3<f32>, ao_raw: f32, sun: vec4<f32>, dir: ve
         }
         let lcol = ifs_light_color(li) * ifs_light_power(li);
         let s = mix(1.0, sun[li], shadow_amount);
-        lit_rgb = lit_rgb + albedo * lcol * (ifs_diffuse() * ndotl * ao * s);
+        var diff = 1.0;
+        if (f0 > 0.0) {
+            let hc = normalize(ld + v);
+            let fr = ifs_coat_fresnel(f0, max(dot(v, hc), 0.0));
+            let coat = 3.141592654 * ifs_coat_d(max(dot(n, hc), 0.0), a2) * ifs_coat_g1(ndotl, a2) * ifs_coat_g1(nv, a2) * fr / (4.0 * ndotl * nv);
+            lit_rgb = lit_rgb + lcol * (coat * ndotl * s);
+            diff = 1.0 - fr;
+        }
+        lit_rgb = lit_rgb + albedo * lcol * (ifs_diffuse() * diff * ndotl * ao * s);
         if (ifs_specular() > 0.0) {
             let hh = normalize(ld + v);
             let spec = pow(max(dot(n, hh), 0.0), max(ifs_shininess(), 1.0));

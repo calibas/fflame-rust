@@ -73,7 +73,7 @@ pub fn lighting_rig(
     ui.label(t!("view.lighting_section").as_ref());
 
     let shading = config.solid_shading.clone();
-    if !flame && crate::config::SolidShadingSettings::is_default(&shading) {
+    if !flame && shading.rig_untouched() {
         // A solid's or a terrain's untouched rig is a default sun, where
         // a flame's is no lighting: said, so the first change here is not
         // a surprise.
@@ -92,12 +92,18 @@ pub fn lighting_rig(
         );
     }
 
+    let slider = |ui: &mut egui::Ui, config_manager: &mut ConfigManager, path: ConfigPath, label: &str, tip: &str, value: f32, range: std::ops::RangeInclusive<f32>, step: f64| {
+        let mut v = value;
+        let response = ui.add(super::VkbSlider::new(&mut v, range).text(t!(label).as_ref()).step_by(step));
+        let response = if tip.is_empty() { response } else { response.on_hover_text(t!(tip)) };
+        if response.changed() {
+            let _ = config_manager.update_param(path, v.into());
+        }
+    };
+
     if shading.shading_strength > 0.0 {
         let mut global_sliders: Vec<(ConfigPath, &str, f32, std::ops::RangeInclusive<f32>, f64)> = vec![
             (ConfigPath::SolidAmbient, "view.solid_ambient", shading.ambient, 0.0..=1.0, 0.01),
-            (ConfigPath::SolidDiffuse, "view.solid_diffuse", shading.diffuse, 0.0..=2.0, 0.01),
-            (ConfigPath::SolidSpecular, "view.solid_specular", shading.specular, 0.0..=2.0, 0.01),
-            (ConfigPath::SolidShininess, "view.solid_shininess", shading.shininess, 1.0..=128.0, 1.0),
         ];
         if flame {
             global_sliders.extend([
@@ -168,5 +174,28 @@ pub fn lighting_rig(
                 }
             }
         }
+    }
+
+    // The material (docs/projects/materials.md): one per picture, and
+    // every tier reads all of it -- the lit tiers and the path tracer
+    // alike. Its coat and glow show wherever a surface is lit; the
+    // diffuse and the highlight are the rig's, so over a solid's or a
+    // terrain's untouched rig -- a default sun -- editing them would
+    // replace that sun, and they wait for the rig to be in use.
+    let rig_in_use = shading.shading_strength > 0.0;
+    if rig_in_use || !flame {
+        ui.add_space(6.0);
+        ui.label(t!("view.material_section").as_ref()).on_hover_text(t!("view.material_tip"));
+        if rig_in_use {
+            slider(ui, config_manager, ConfigPath::SolidDiffuse, "view.solid_diffuse", "view.material_diffuse_tip", shading.diffuse, 0.0..=2.0, 0.01);
+            slider(ui, config_manager, ConfigPath::SolidSpecular, "view.material_highlight", "view.material_highlight_tip", shading.specular, 0.0..=2.0, 0.01);
+            slider(ui, config_manager, ConfigPath::SolidShininess, "view.material_highlight_size", "view.material_highlight_size_tip", shading.shininess, 1.0..=128.0, 1.0);
+        }
+        slider(ui, config_manager, ConfigPath::SolidGloss, "view.material_gloss", "view.material_gloss_tip", shading.gloss, 0.0..=1.0, 0.01);
+        if shading.gloss > 0.0 {
+            slider(ui, config_manager, ConfigPath::SolidRoughness, "view.material_roughness", "view.material_roughness_tip", shading.roughness, 0.02..=1.0, 0.01);
+        }
+        slider(ui, config_manager, ConfigPath::SolidGlow, "view.material_glow", "view.material_glow_tip", shading.glow, 0.0..=4.0, 0.01);
+        ui.add_space(6.0);
     }
 }

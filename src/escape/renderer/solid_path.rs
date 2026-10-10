@@ -659,7 +659,7 @@ impl EscapeRenderer {
         };
         let steps = param("steps", 96.0).max(4.0) as u64;
         let (sh, _, _, _) = &self.solid_lighting;
-        let lights = if crate::config::SolidShadingSettings::is_default(sh) {
+        let lights = if sh.rig_untouched() {
             1
         } else {
             sh.lights.iter().filter(|l| l.enabled && l.intensity > 0.0).count() as u64
@@ -943,7 +943,7 @@ mod tests {
         for l in c.solid_shading.lights.iter_mut() {
             l.enabled = false;
         }
-        c.escape.path.gloss = 0.0;
+        c.solid_shading.gloss = 0.0;
         c
     }
 
@@ -957,6 +957,7 @@ mod tests {
         r.set_ifs(packed);
         r.set_solid_lighting(&c.solid_shading, (c.fog_strength, c.fog_start, c.background_color));
         r.set_solid_sky(crate::escape::path_core::sky_seen(&c.escape.path, c));
+        r.set_solid_material(crate::escape::path_core::lit_material(c));
         r
     }
 
@@ -1535,7 +1536,7 @@ mod tests {
         c.background_color = [0.3, 0.4, 0.6];
         c.solid_shading.lights[0].enabled = true;
         c.escape.path.bounces = 3;
-        c.escape.path.gloss = 0.04;
+        c.solid_shading.gloss = 0.04;
         let mut r = renderer_for(&device, &c, w, h);
         r.solid_path = Some(SolidPath::new(&device, w, h));
         let mut sums = Vec::new();

@@ -139,6 +139,15 @@ struct ShadeParams {
     // place a pixel and a depth become a position.
     projection: u32,
 
+    // The material's coat -- reflectance at normal incidence (0, none)
+    // and roughness (GGX's alpha its square) -- and the albedo's glow
+    // (docs/projects/materials.md): the path tracer's, which every tier
+    // reads alike.
+    gloss: f32,
+    roughness: f32,
+    glow: f32,
+    _pad_mat: f32,
+
     lights: array<ShadeLight, 4>,
 }
 
@@ -274,6 +283,24 @@ fn shade_store(lx: i32, ly: i32, v: vec4<f32>) {
         out = mix(v, prev, sp.temporal_ema);
     }
     textureStore(shade_out, vec2<i32>(lx, ly), out);
+}
+
+// The material's coat (docs/projects/materials.md), as the path tracer
+// evaluates it (`escape/path_core.rs`): GGX's distribution, Smith's
+// masking for one direction, Schlick's Fresnel on a scalar reflectance.
+fn coat_d(nh: f32, a2: f32) -> f32 {
+    let k = nh * nh * (a2 - 1.0) + 1.0;
+    return a2 / (3.141592654 * k * k);
+}
+
+fn coat_g1(nx: f32, a2: f32) -> f32 {
+    return 2.0 * nx / (nx + sqrt(a2 + (1.0 - a2) * nx * nx));
+}
+
+fn coat_fresnel(f0: f32, c: f32) -> f32 {
+    let m = clamp(1.0 - c, 0.0, 1.0);
+    let m2 = m * m;
+    return f0 + (1.0 - f0) * m2 * m2 * m;
 }
 
 @compute @workgroup_size(8, 8, 1)
@@ -479,9 +506,18 @@ fn shade_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     // Blinn-Phong with camera-space directional lights, plus
-    // splat-resolution shadow maps (Stage 2).
+    // splat-resolution shadow maps (Stage 2) -- under the material's coat,
+    // evaluated as the path tracer's direct light is (GGX, Smith, Schlick;
+    // the diffuse taking what the Fresnel does not), the coat reflecting
+    // the ambient sky at this view; and the glow.
     let v = normalize(-pos);
-    var lit = albedo * (sp.ambient * ao);
+    let f0 = clamp(sp.gloss, 0.0, 1.0);
+    let rough = clamp(sp.roughness, 0.02, 1.0);
+    let a2 = max(rough * rough, 1.0e-4) * max(rough * rough, 1.0e-4);
+    let nv = max(dot(n, v), 1.0e-4);
+    let coat_v = select(0.0, coat_fresnel(f0, nv), f0 > 0.0);
+    var lit = albedo * (sp.ambient * ao * (1.0 - coat_v)) + vec3<f32>(sp.ambient * ao * coat_v);
+    lit = lit + albedo * max(sp.glow, 0.0);
     let p1_shadows = sp.shadow_count > 0u && sp.shadow_strength > 0.0;
     var p1_wpos = vec3<f32>(0.0);
     if (p1_shadows) {
@@ -499,7 +535,15 @@ fn shade_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if (p1_shadows && ndotl > 0.0) {
             shadow = mix(1.0, shadow_map_factor(p1_wpos, dir_to_world(l), u32(li)), sp.shadow_strength);
         }
-        lit = lit + albedo * lcol * (sp.diffuse * ndotl * ao * shadow);
+        var diff = 1.0;
+        if (f0 > 0.0 && ndotl > 0.0) {
+            let hc = normalize(l + v);
+            let fr = coat_fresnel(f0, max(dot(v, hc), 0.0));
+            let coat = 3.141592654 * coat_d(max(dot(n, hc), 0.0), a2) * coat_g1(ndotl, a2) * coat_g1(nv, a2) * fr / (4.0 * ndotl * nv);
+            lit = lit + lcol * (coat * ndotl * shadow);
+            diff = 1.0 - fr;
+        }
+        lit = lit + albedo * lcol * (sp.diffuse * diff * ndotl * ao * shadow);
         if (sp.specular > 0.0 && ndotl > 0.0) {
             let hh = normalize(l + v);
             let spec = pow(max(dot(n, hh), 0.0), max(sp.shininess, 1.0));

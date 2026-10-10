@@ -403,9 +403,6 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
     if esc.terrain_active() || ifs.is_some_and(|d| d.solid) {
         items.extend([
             TargetItem::new(ConfigPath::EscapePathEnvironment, "Path: Sky light"),
-            TargetItem::new(ConfigPath::EscapePathGloss, "Path: Gloss"),
-            TargetItem::new(ConfigPath::EscapePathRoughness, "Path: Roughness"),
-            TargetItem::new(ConfigPath::EscapePathEmission, "Path: Glow"),
             TargetItem::new(ConfigPath::EscapePathAperture, "Path: Aperture"),
             TargetItem::new(ConfigPath::EscapePathFocus, "Path: Focus"),
         ]);
@@ -683,9 +680,6 @@ fn get_sim_items(config: &FractalConfig) -> Vec<TargetItem> {
             TargetItem::new(ConfigPath::SimTerrainShadowSharpness, "Terrain: Shadow sharpness"),
             TargetItem::new(ConfigPath::SimTerrainOcclusion, "Terrain: Occlusion reach"),
             TargetItem::new(ConfigPath::SimPathEnvironment, "Path: Sky light"),
-            TargetItem::new(ConfigPath::SimPathGloss, "Path: Gloss"),
-            TargetItem::new(ConfigPath::SimPathRoughness, "Path: Roughness"),
-            TargetItem::new(ConfigPath::SimPathEmission, "Path: Glow"),
             TargetItem::new(ConfigPath::SimPathAperture, "Path: Aperture"),
             TargetItem::new(ConfigPath::SimPathFocus, "Path: Focus"),
         ]);
@@ -824,6 +818,10 @@ fn lighting_items() -> Vec<TargetItem> {
         TargetItem::new(ConfigPath::SolidDiffuse, "Diffuse Light"),
         TargetItem::new(ConfigPath::SolidSpecular, "Specular"),
         TargetItem::new(ConfigPath::SolidShininess, "Shininess"),
+        // The material's coat and glow: every tier's (materials.md).
+        TargetItem::new(ConfigPath::SolidGloss, "Gloss"),
+        TargetItem::new(ConfigPath::SolidRoughness, "Roughness"),
+        TargetItem::new(ConfigPath::SolidGlow, "Glow"),
         TargetItem::new(ConfigPath::SsaoStrength, "SSAO Strength"),
         TargetItem::new(ConfigPath::SsaoRadius, "SSAO Radius"),
         TargetItem::new(ConfigPath::SolidShadowStrength, "Shadow Strength"),

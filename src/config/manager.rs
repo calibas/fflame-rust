@@ -1999,9 +1999,11 @@ impl ConfigManager {
             ConfigPath::SimPathSamples => Ok(ConfigValue::UInt(config.sim.terrain.path.samples)),
             ConfigPath::SimPathBounces => Ok(ConfigValue::UInt(config.sim.terrain.path.bounces)),
             ConfigPath::SimPathEnvironment => Ok(ConfigValue::Float(config.sim.terrain.path.environment)),
-            ConfigPath::SimPathGloss => Ok(ConfigValue::Float(config.sim.terrain.path.gloss)),
-            ConfigPath::SimPathRoughness => Ok(ConfigValue::Float(config.sim.terrain.path.roughness)),
-            ConfigPath::SimPathEmission => Ok(ConfigValue::Float(config.sim.terrain.path.emission)),
+            // The material is the picture's, beside the lights
+            // (docs/projects/materials.md): these are its aliases.
+            ConfigPath::SimPathGloss => Ok(ConfigValue::Float(config.solid_shading.gloss)),
+            ConfigPath::SimPathRoughness => Ok(ConfigValue::Float(config.solid_shading.roughness)),
+            ConfigPath::SimPathEmission => Ok(ConfigValue::Float(config.solid_shading.glow)),
             ConfigPath::SimPathAperture => Ok(ConfigValue::Float(config.sim.terrain.path.aperture)),
             ConfigPath::SimPathFocus => Ok(ConfigValue::Float(config.sim.terrain.path.focus)),
             ConfigPath::SimPathDenoise => Ok(config.sim.terrain.path.denoise.into()),
@@ -2151,9 +2153,9 @@ impl ConfigManager {
             ConfigPath::EscapePathSamples => Ok(ConfigValue::UInt(config.escape.path.samples)),
             ConfigPath::EscapePathBounces => Ok(ConfigValue::UInt(config.escape.path.bounces)),
             ConfigPath::EscapePathEnvironment => Ok(config.escape.path.environment.into()),
-            ConfigPath::EscapePathGloss => Ok(config.escape.path.gloss.into()),
-            ConfigPath::EscapePathRoughness => Ok(config.escape.path.roughness.into()),
-            ConfigPath::EscapePathEmission => Ok(config.escape.path.emission.into()),
+            ConfigPath::EscapePathGloss => Ok(config.solid_shading.gloss.into()),
+            ConfigPath::EscapePathRoughness => Ok(config.solid_shading.roughness.into()),
+            ConfigPath::EscapePathEmission => Ok(config.solid_shading.glow.into()),
             ConfigPath::EscapePathAperture => Ok(config.escape.path.aperture.into()),
             ConfigPath::EscapePathFocus => Ok(config.escape.path.focus.into()),
             ConfigPath::EscapePathDenoise => Ok(config.escape.path.denoise.into()),
@@ -2658,6 +2660,9 @@ impl ConfigManager {
             ConfigPath::SolidShadowStrength => Ok(config.solid_shading.shadow_strength.into()),
             ConfigPath::ShadingStrength => Ok(config.solid_shading.shading_strength.into()),
             ConfigPath::SolidAmbient => Ok(config.solid_shading.ambient.into()),
+            ConfigPath::SolidGloss => Ok(config.solid_shading.gloss.into()),
+            ConfigPath::SolidRoughness => Ok(config.solid_shading.roughness.into()),
+            ConfigPath::SolidGlow => Ok(config.solid_shading.glow.into()),
             ConfigPath::SolidDiffuse => Ok(config.solid_shading.diffuse.into()),
             ConfigPath::SolidSpecular => Ok(config.solid_shading.specular.into()),
             ConfigPath::SolidShininess => Ok(config.solid_shading.shininess.into()),
@@ -3342,15 +3347,15 @@ impl ConfigManager {
             }
             ConfigPath::SimPathGloss => {
                 let v: f32 = value.try_into()?;
-                self.current.sim.terrain.path.gloss = v.clamp(0.0, 1.0);
+                self.current.solid_shading.gloss = v.clamp(0.0, 1.0);
             }
             ConfigPath::SimPathRoughness => {
                 let v: f32 = value.try_into()?;
-                self.current.sim.terrain.path.roughness = v.clamp(0.02, 1.0);
+                self.current.solid_shading.roughness = v.clamp(0.02, 1.0);
             }
             ConfigPath::SimPathEmission => {
                 let v: f32 = value.try_into()?;
-                self.current.sim.terrain.path.emission = v.clamp(0.0, 16.0);
+                self.current.solid_shading.glow = v.clamp(0.0, 16.0);
             }
             ConfigPath::SimPathAperture => {
                 let v: f32 = value.try_into()?;
@@ -3754,15 +3759,15 @@ impl ConfigManager {
             }
             ConfigPath::EscapePathGloss => {
                 let v: f32 = value.try_into()?;
-                self.current.escape.path.gloss = v.clamp(0.0, 1.0);
+                self.current.solid_shading.gloss = v.clamp(0.0, 1.0);
             }
             ConfigPath::EscapePathRoughness => {
                 let v: f32 = value.try_into()?;
-                self.current.escape.path.roughness = v.clamp(0.02, 1.0);
+                self.current.solid_shading.roughness = v.clamp(0.02, 1.0);
             }
             ConfigPath::EscapePathEmission => {
                 let v: f32 = value.try_into()?;
-                self.current.escape.path.emission = v.clamp(0.0, 16.0);
+                self.current.solid_shading.glow = v.clamp(0.0, 16.0);
             }
             ConfigPath::EscapePathAperture => {
                 let v: f32 = value.try_into()?;
@@ -4358,6 +4363,18 @@ impl ConfigManager {
             }
             ConfigPath::SolidShininess => {
                 self.current.solid_shading.shininess = value.try_into()?;
+            }
+            ConfigPath::SolidGloss => {
+                let v: f32 = value.try_into()?;
+                self.current.solid_shading.gloss = if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
+            }
+            ConfigPath::SolidRoughness => {
+                let v: f32 = value.try_into()?;
+                self.current.solid_shading.roughness = if v.is_finite() { v.clamp(0.02, 1.0) } else { 0.5 };
+            }
+            ConfigPath::SolidGlow => {
+                let v: f32 = value.try_into()?;
+                self.current.solid_shading.glow = if v.is_finite() { v.clamp(0.0, 16.0) } else { 0.0 };
             }
             ConfigPath::SsaoStrength => {
                 self.current.solid_shading.ssao_strength = value.try_into()?;

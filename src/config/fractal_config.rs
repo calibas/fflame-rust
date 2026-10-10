@@ -4,6 +4,46 @@ use crate::scene::palette::{ColorMode, Palette, PathMapStyle};
 use crate::scene::tonemap::{HighlightMode, ToneMapMode, ToneCurve};
 use crate::effects::EffectInstance;
 
+/// The material moved beside the lights (docs/projects/materials.md
+/// §4.2). A picture saved before keeps its coat and glow in a path
+/// tracer's settings -- `escape.path` or `sim.terrain.path` -- as
+/// `gloss`, `roughness` and `emission`; they are lifted into
+/// `solid_shading` (as `gloss`, `roughness`, `glow`), the shown engine's
+/// first, so the picture renders as it did. A shape fix rather than a
+/// version: idempotent, and an older build reading a new file merely
+/// misses the material it never had. `solid_shading`'s own values win.
+fn lift_path_material(value: &mut serde_json::Value) {
+    let Some(obj) = value.as_object_mut() else { return };
+    let sim_first = obj.get("render_mode").and_then(|m| m.as_str()) == Some("simulation");
+    let mut take = |obj: &mut serde_json::Map<String, serde_json::Value>, sim: bool| -> serde_json::Map<String, serde_json::Value> {
+        let path = if sim {
+            obj.get_mut("sim").and_then(|s| s.get_mut("terrain")).and_then(|t| t.get_mut("path"))
+        } else {
+            obj.get_mut("escape").and_then(|e| e.get_mut("path"))
+        };
+        let mut out = serde_json::Map::new();
+        if let Some(p) = path.and_then(|p| p.as_object_mut()) {
+            for (from, to) in [("gloss", "gloss"), ("roughness", "roughness"), ("emission", "glow")] {
+                if let Some(v) = p.remove(from) {
+                    out.insert(to.to_string(), v);
+                }
+            }
+        }
+        out
+    };
+    let (a, b) = if sim_first { (take(obj, true), take(obj, false)) } else { (take(obj, false), take(obj, true)) };
+    let lifted = if !a.is_empty() { a } else { b };
+    if lifted.is_empty() {
+        return;
+    }
+    let shading = obj.entry("solid_shading").or_insert_with(|| serde_json::json!({}));
+    if let Some(s) = shading.as_object_mut() {
+        for (k, v) in lifted {
+            s.entry(k).or_insert(v);
+        }
+    }
+}
+
 /// Current config format version.
 ///
 /// v2 introduces the cloud "opaque blob" wire format (see
@@ -874,6 +914,20 @@ pub struct SolidShadingSettings {
     /// shading is turned on via the UI (the config default is all-off,
     /// so `is_default` stays cheap for untouched flames).
     pub lights: [SolidLight; 4],
+    /// The material's coat (docs/projects/materials.md): its reflectance
+    /// at normal incidence (0, the default, is none; 0.04 a dielectric's)
+    /// and its roughness (GGX's alpha is its square) -- and the albedo's
+    /// glow. Every tier reads them: the lit tiers and the path tracer
+    /// alike. One per picture, beside the lights; saved before, they
+    /// were the path settings' (`escape.path`, `sim.terrain.path`) and
+    /// are lifted here on load. No coat by default: a dielectric's 0.04
+    /// is physically fair, but on a fractal solid most of what shows is
+    /// faces at a glance, where Fresnel takes the coat towards a mirror
+    /// of the sky -- a solid's dark faces read as the background's
+    /// colour, speckled.
+    pub gloss: f32,
+    pub roughness: f32,
+    pub glow: f32,
 }
 
 impl Default for SolidShadingSettings {
@@ -895,6 +949,9 @@ impl Default for SolidShadingSettings {
                 SolidLight::default(),
                 SolidLight::default(),
             ],
+            gloss: 0.0,
+            roughness: 0.5,
+            glow: 0.0,
         }
     }
 }
@@ -902,6 +959,15 @@ impl Default for SolidShadingSettings {
 impl SolidShadingSettings {
     pub fn is_default(v: &SolidShadingSettings) -> bool {
         *v == SolidShadingSettings::default()
+    }
+
+    /// Whether the RIG is untouched -- the lights and their strengths,
+    /// the material's coat and glow aside. A solid and a terrain light an
+    /// untouched rig with a default sun, and giving one a coat must not
+    /// switch that sun off.
+    pub fn rig_untouched(&self) -> bool {
+        let d = SolidShadingSettings::default();
+        SolidShadingSettings { gloss: d.gloss, roughness: d.roughness, glow: d.glow, ..self.clone() } == d
     }
 
     /// Whether the shade pass should run at all.
@@ -1411,6 +1477,7 @@ impl FractalConfig {
         // deserialize — serde fills any still-absent field with the current
         // default, correct for every field a migration arm didn't touch.
         Self::migrate_value(version, &mut value)?;
+        lift_path_material(&mut value);
         let mut config: Self = serde_json::from_value(value)?;
 
         // Assign session-local IDs to every Transform / Flame / Effect that
@@ -1497,6 +1564,64 @@ fn fixup_flame_ids(flame: &mut Flame) {
 
 #[cfg(test)]
 mod tests {
+    /// A picture saved with its coat and glow in a path tracer's
+    /// settings keeps them (docs/projects/materials.md §4.2): they are
+    /// lifted beside the lights, the shown engine's first, and the
+    /// lighting's own values win.
+    #[test]
+    fn a_saved_material_is_lifted_beside_the_lights() {
+        use super::FractalConfig;
+        use serde_json::json;
+        // A saved picture: the default's JSON, with the old fields put in.
+        let saved_with = |edit: &dyn Fn(&mut serde_json::Map<String, serde_json::Value>)| -> FractalConfig {
+            let mut v: serde_json::Value = serde_json::from_str(&FractalConfig::default().to_json().unwrap()).unwrap();
+            edit(v.as_object_mut().unwrap());
+            FractalConfig::from_json(&v.to_string()).expect("loads")
+        };
+        let c = saved_with(&|o| {
+            o.insert("render_mode".into(), json!("escape"));
+            o.insert("escape".into(), json!({"path": {"samples": 32, "gloss": 0.3, "roughness": 0.2, "emission": 1.5}}));
+        });
+        assert_eq!((c.solid_shading.gloss, c.solid_shading.roughness, c.solid_shading.glow), (0.3, 0.2, 1.5));
+        assert_eq!(c.escape.path.samples, 32, "the render settings stay");
+        // A simulation's, when the simulation is shown -- over the escape's.
+        let both = saved_with(&|o| {
+            o.insert("render_mode".into(), json!("simulation"));
+            o.insert("escape".into(), json!({"path": {"gloss": 0.1}}));
+            o.insert("sim".into(), json!({"terrain": {"path": {"gloss": 0.6}}}));
+        });
+        assert_eq!(both.solid_shading.gloss, 0.6);
+        // The lighting's own material wins; nothing to lift is no change.
+        let own = saved_with(&|o| {
+            o.insert("solid_shading".into(), json!({"gloss": 0.05}));
+            o.insert("escape".into(), json!({"path": {"gloss": 0.9}}));
+        });
+        assert_eq!(own.solid_shading.gloss, 0.05);
+        let none = saved_with(&|_| {});
+        assert_eq!(none.solid_shading, super::SolidShadingSettings::default());
+        // And it saves where it lives now.
+        let saved = c.to_json().expect("saves");
+        let again = FractalConfig::from_json(&saved).expect("reloads");
+        assert_eq!(again.solid_shading.gloss, 0.3);
+        assert!(!saved.contains("\"emission\""), "the old field is not written back");
+    }
+
+    /// The material is not the rig: a solid's untouched rig -- a default
+    /// sun -- stays untouched under a coat and a glow, and any lighting
+    /// edit touches it.
+    #[test]
+    fn a_coat_leaves_the_rig_untouched() {
+        let mut s = super::SolidShadingSettings::default();
+        assert!(s.rig_untouched());
+        s.gloss = 0.4;
+        s.roughness = 0.1;
+        s.glow = 2.0;
+        assert!(s.rig_untouched(), "the material is not the rig");
+        assert!(!super::SolidShadingSettings::is_default(&s), "but it is saved");
+        s.ambient = 0.5;
+        assert!(!s.rig_untouched());
+    }
+
     /// The view's zoom limit follows the one thing that makes a deep
     /// view resolvable.
     #[test]
