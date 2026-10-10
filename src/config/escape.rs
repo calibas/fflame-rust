@@ -2059,6 +2059,21 @@ pub struct TerrainConfig {
     /// above the ground; 0 is the camera every terrain had before.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub target_lift: f32,
+    /// The relief fixed at a zoom (docs/projects/terrain-height.md, H3).
+    /// Locked, the height, the flanks' width, occlusion's reach and a
+    /// hole's depth are fractions of `lock_zoom`'s view width rather than
+    /// the current one's ([`EscapeConfig::terrain_scale`]), so zooming
+    /// approaches one landscape instead of rescaling it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub locked: bool,
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub lock_zoom: f64,
+    /// The count's or the relief's range at the lock, `[lo, hi]`, pinned
+    /// so the heights stop following the ground's own range as it zooms
+    /// and streams. `lo > hi` when none was measured: the ground's own
+    /// range stands in.
+    #[serde(default = "default_terrain_lock_range", skip_serializing_if = "is_default_terrain_lock_range")]
+    pub lock_range: [f32; 2],
 }
 
 fn default_terrain_height() -> f32 {
@@ -2139,6 +2154,12 @@ fn is_default_terrain_interior(v: &TerrainInterior) -> bool {
 fn is_default_terrain_curve(v: &TerrainCurve) -> bool {
     *v == TerrainCurve::default()
 }
+fn default_terrain_lock_range() -> [f32; 2] {
+    [1.0, 0.0]
+}
+fn is_default_terrain_lock_range(v: &[f32; 2]) -> bool {
+    *v == default_terrain_lock_range()
+}
 
 impl Default for TerrainConfig {
     fn default() -> Self {
@@ -2160,6 +2181,9 @@ impl Default for TerrainConfig {
             shadow_sharpness: default_terrain_shadow_sharpness(),
             occlusion: default_terrain_occlusion(),
             target_lift: 0.0,
+            locked: false,
+            lock_zoom: 0.0,
+            lock_range: default_terrain_lock_range(),
         }
     }
 }
@@ -2168,9 +2192,28 @@ impl TerrainConfig {
     pub fn is_default(v: &TerrainConfig) -> bool {
         *v == TerrainConfig::default()
     }
+
+    /// The pinned count or relief range, when the lock holds one.
+    pub fn pinned_range(&self) -> Option<[f32; 2]> {
+        let [lo, hi] = self.lock_range;
+        (self.locked && lo <= hi && lo.is_finite() && hi.is_finite()).then_some(self.lock_range)
+    }
 }
 
 impl EscapeConfig {
+    /// What the terrain's lengths -- its height, the flanks' width,
+    /// occlusion's reach, a hole's depth -- are fractions of, in current
+    /// view widths: 1, or with the relief locked (H3), the lock's view
+    /// width, `2^(zoom - lock_zoom)` current ones. Held within 2^±24 of
+    /// the lock, where an f32 world still resolves the view.
+    pub fn terrain_scale(&self) -> f64 {
+        if !self.terrain.locked {
+            return 1.0;
+        }
+        let d = self.zoom_log2 - self.terrain.lock_zoom;
+        if d.is_finite() { d.clamp(-24.0, 24.0).exp2() } else { 1.0 }
+    }
+
     /// Whether the iterate pass needs the derivative orbit: the
     /// relief's analytic slopes, or the terrain's distance.
     pub fn wants_derivative(&self) -> bool {

@@ -1,6 +1,6 @@
 # Escape terrain: height quality
 
-**Status:** in progress on `terrain-height` (2026-10-10). H1 and H2 built.
+**Status:** in progress on `terrain-height` (2026-10-10). H1, H2 and H3 built.
 
 The escape terrain's fine detail comes out as noise, its heights warp and
 shift as you zoom, and the Height slider did not always redraw. The
@@ -56,9 +56,29 @@ and `src/escape/terrain.rs` (`INGEST_WGSL`, `hf_f`).
   distance source's plateau sentinel became `−1e30` (from 0) so the
   inversion can tell it from land at distance 0; the plain picture is
   unchanged (both map to the top).
-- **H3. A height fixed at a zoom.** Lock the relief at the current zoom:
-  `H` and `w` become plane units there, and the count range is pinned in
-  the config -- so zooming approaches a fixed landscape.
+- **H3. A height fixed at a zoom.** *Built.* "Lock height at this zoom"
+  (`terrain.locked`, `lock_zoom`, `lock_range`). Locked, the height, the
+  flanks' width, occlusion's reach and a hole's depth are fractions of
+  the lock zoom's view width: `EscapeConfig::terrain_scale` is
+  `2^(zoom − lock_zoom)` current widths (held within 2^±24, where an f32
+  world still resolves the view), applied wherever the walk, the camera
+  and the section planner read them. A count's or a relief's range is
+  pinned as the view measured it at the lock -- the ground's reduced
+  range, read back without waiting (`read_range_back` / `poll_range`)
+  and handed to the panel -- so locking changes nothing on screen
+  (tested to the bit) and the heights stop following the ground's range
+  as it zooms and streams; the panel shows the range for editing. "Lock
+  here" moves the lock to the current zoom. A pinned range also makes an
+  export's count heights the viewport's: unlocked, the export measures
+  the range over its own, finer sections.
+  - **The camera** still rests its target on the relief's top -- the
+    locked top, in current widths -- so zooming in dollies toward a
+    point at the peaks' altitude: the peaks are approached, while a
+    valley falls away and, far past the lock, out of reach (Target lift
+    brings the camera down). A target resting on the ground under the
+    view's centre would follow the land but needs the height there,
+    which the GPU holds and which moves as finer sections land; not
+    done.
 - **H4. Section borders, prefilter, Softness.** Sections rendered with a
   border; heights averaged over each texel's footprint; a Softness blur
   in plane units.

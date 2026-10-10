@@ -28,8 +28,9 @@
 //! lattice cell starts the sections over.
 //!
 //! **The camera** is mode D's, read for a plane:
-//! - the target is the view's centre at the terrain's top, H, lifted by
-//!   `target_lift` view widths (0 by default), so with any pitch above
+//! - the target is the view's centre at the terrain's top, H (a locked
+//!   relief's, below), lifted by `target_lift` view widths (0 by
+//!   default), so with any pitch above
 //!   the horizon the eye is above every point of it -- and lifted, it
 //!   can look level or up, at the sky (camera-unification C4);
 //! - `cam_pitch` is above the horizon; `cam_yaw` turns about the target,
@@ -41,7 +42,13 @@
 //! **Heights are the view's.** H and the flanks' width are fractions of
 //! the current view width, applied in the walk to the sections' raw
 //! estimates: a dolly in flattens the far ground and raises the near
-//! detail -- the terrain at every zoom looks like itself.
+//! detail -- the terrain at every zoom looks like itself. A count's or a
+//! relief's range is the ground's own, measured as it is set.
+//!
+//! **Unless locked** (docs/projects/terrain-height.md, H3): then they are
+//! fractions of the LOCK's view width ([`EscapeConfig::terrain_scale`]),
+//! and the range is the one pinned at the lock -- one landscape, fixed
+//! in the plane, which a dolly approaches.
 
 use super::ifs::{solid_frame, SolidCamera};
 use super::terrain::{Ground, GroundNode, GroundSection, PathSettings, TerrainIngest, TerrainRenderer, TerrainView};
@@ -181,7 +188,9 @@ pub fn terrain_camera(escape: &EscapeConfig) -> SolidCamera {
     );
     let distance = FRAME_DISTANCE;
     let eye_rel = [-forward[0] * distance, -forward[1] * distance, -forward[2] * distance];
-    let target_z = escape.terrain.height as f64 + escape.terrain.target_lift as f64;
+    // The target rests on the relief's top -- a locked relief's, in
+    // current widths (H3) -- and is lifted from there.
+    let target_z = escape.terrain.height as f64 * escape.terrain_scale() + escape.terrain.target_lift as f64;
     SolidCamera {
         eye: [0.0, 0.0, target_z + eye_rel[2]],
         target: [-eye_rel[0], -eye_rel[1], target_z],
@@ -221,22 +230,26 @@ pub fn terrain_fog(escape: &EscapeConfig) -> (f32, f32) {
 pub fn terrain_view(config: &FractalConfig, jitter: [f32; 2]) -> TerrainView {
     let t = &config.escape.terrain;
     let (fog, fog_start) = terrain_fog(&config.escape);
+    // The relief's lengths, in current widths: a locked relief's are its
+    // lock's (H3).
+    let s = config.escape.terrain_scale() as f32;
     TerrainView {
         camera: terrain_camera(&config.escape),
         shading: config.solid_shading.clone(),
         fog: (fog, fog_start, config.background_color),
         shadow: t.shadow,
         softness: t.shadow_sharpness,
-        occlusion_reach: t.occlusion,
+        occlusion_reach: t.occlusion * s,
         jitter,
-        height: t.height,
-        width: t.de_width,
+        height: t.height * s,
+        width: t.de_width * s,
         samples_per_axis: config.escape.supersample.max(1),
         far: t.far,
         sky: super::path_core::sky_seen(&config.escape.path, config),
         material: super::path_core::lit_material(config),
         curve: t.curve.code(),
         invert: t.invert,
+        range: t.pinned_range(),
     }
 }
 
@@ -427,7 +440,7 @@ pub fn wanted_sections(escape: &EscapeConfig, out_w: u32, out_h: u32, capacity: 
     let z = (escape.zoom_log2 - anchor_zoom).exp2();
     let cam = terrain_camera(escape);
     let far = t.far.max(0.1) as f64;
-    let top = t.height as f64;
+    let top = t.height as f64 * escape.terrain_scale();
     let aspect = out_w.max(1) as f64 / out_h.max(1) as f64;
     let th = (cam.fov as f64 * 0.5).tan();
     let per_pixel = 2.0 * th / out_h.max(1) as f64;
@@ -699,6 +712,7 @@ impl EscapeTerrain {
         steps: u32,
     ) -> bool {
         self.frame += 1;
+        self.terrain.poll_range(device, queue);
         let escape = &config.escape;
         // A new picture: every section goes.
         let picture = (picture_key(escape), palette_key(config));
@@ -872,12 +886,15 @@ impl EscapeTerrain {
         // RAISED height drew the terrain cut flat at the old one until
         // something else -- a section landing, the camera moving -- set
         // the ground again (field-reported: the Height slider "does not
-        // always update"; it depended on what landed).
+        // always update"; it depended on what landed). A locked relief's
+        // scale too (H3), which a lock at the current zoom changes.
+        let scale = config.escape.terrain_scale();
         let key = format!(
-            "{eye:?}|{z}|{:?}|{:?}|{complete}|{}",
+            "{eye:?}|{z}|{:?}|{:?}|{complete}|{}|{}",
             wanted.root_first,
             wanted.root_dims,
-            config.escape.terrain.height.to_bits()
+            config.escape.terrain.height.to_bits(),
+            scale.to_bits()
         );
         if !landed && self.ground_key.as_deref() == Some(key.as_str()) {
             return;
@@ -947,8 +964,8 @@ impl EscapeTerrain {
             root_dims: wanted.root_dims,
             nodes,
             sections,
-            top: t.height as f64,
-            floor: hole_floor(t.height),
+            top: t.height as f64 * scale,
+            floor: hole_floor(t.height) * scale,
             mode: ingest.mode(),
         };
         // A count's or a relief's range: the ground's sections' own, so
@@ -956,6 +973,8 @@ impl EscapeTerrain {
         // zoomed through before (the doc's "the picture is the config's").
         let layers: Vec<u32> = ground.sections.iter().map(|s| s.layer).collect();
         self.terrain.reduce_range(device, queue, &layers);
+        // ...read back, so a lock can pin it (H3).
+        self.terrain.read_range_back(device, queue);
         self.terrain.set_ground(device, queue, ground);
     }
 
@@ -971,6 +990,12 @@ impl EscapeTerrain {
         let view = |jitter| terrain_view(config, jitter);
         let inputs = TierInputs { filling: self.sections_missing() > 0, ..tier_inputs(config, &view) };
         self.tiers.viewport(&mut self.terrain, device, queue, &inputs)
+    }
+
+    /// The ground's count or relief range as last measured: what a lock
+    /// pins (docs/projects/terrain-height.md, H3).
+    pub fn measured_range(&self) -> Option<[f32; 2]> {
+        self.terrain.measured_range()
     }
 
     /// A path-traced sample's average time, in ms, once measured.
@@ -1021,6 +1046,16 @@ impl EscapeTerrain {
     #[cfg(test)]
     pub(crate) fn terrain_for_test(&self) -> &TerrainRenderer {
         &self.terrain
+    }
+
+    /// The measured range once the last read of it has landed.
+    #[cfg(test)]
+    pub(crate) fn settled_range_for_test(&mut self, device: &Device, queue: &Queue) -> Option<[f32; 2]> {
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        self.terrain.poll_range(device, queue);
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        self.terrain.poll_range(device, queue);
+        self.terrain.measured_range()
     }
 
     /// The cached sections' keys, for a test.
@@ -1596,6 +1631,12 @@ mod tests {
     /// Where each pixel's ray meets the ground, as a height in view widths
     /// (None for the sky): the walk's geometry record, read back.
     fn hit_heights(device: &Device, queue: &Queue, c: &FractalConfig, w: u32, h: u32) -> Vec<Option<f64>> {
+        hit_heights_measured(device, queue, c, w, h).0
+    }
+
+    /// `hit_heights`, and the count's or relief's range the ground
+    /// measured: what a lock pins (H3).
+    fn hit_heights_measured(device: &Device, queue: &Queue, c: &FractalConfig, w: u32, h: u32) -> (Vec<Option<f64>>, Option<[f32; 2]>) {
         let mut engines = crate::renderer::render::RenderEngines::default();
         let _ = pollster::block_on(crate::renderer::render(
             device,
@@ -1604,6 +1645,7 @@ mod tests {
             &mut crate::renderer::NoProgress,
         ))
         .expect("render");
+        let range = engines.terrain.as_mut().unwrap().settled_range_for_test(device, queue);
         let t = engines.terrain.as_ref().unwrap();
         let geom: Vec<[u32; 4]> = bytemuck::cast_slice(&crate::escape::terrain::gpu_tests::read_buffer(
             device,
@@ -1614,7 +1656,7 @@ mod tests {
         .to_vec();
         let cam = terrain_camera(&c.escape);
         let (aspect, th) = (w as f64 / h as f64, (cam.fov as f64 * 0.5).tan());
-        (0..h)
+        let heights = (0..h)
             .flat_map(|py| (0..w).map(move |px| (px, py)))
             .map(|(px, py)| {
                 let depth = f32::from_bits(geom[(py * w + px) as usize][3]) as f64;
@@ -1627,7 +1669,8 @@ mod tests {
                 let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
                 Some(cam.eye[2] + d[2] / len * depth)
             })
-            .collect()
+            .collect();
+        (heights, range)
     }
 
     /// Looking straight down through a narrow lens over the seahorse
@@ -1693,6 +1736,115 @@ mod tests {
             assert!(land > (w * h / 2) as usize, "{land}");
             assert!(agree as f64 > 0.9 * land as f64, "{source:?}: {agree} of {land}");
         }
+    }
+
+    /// A locked relief's lengths are its lock's (H3): at the lock they
+    /// are the config's, a zoom in doubles them in current widths -- the
+    /// same lengths in the plane -- and the camera's target rests on the
+    /// locked top. Unlocked, nothing scales.
+    #[test]
+    fn a_locked_relief_keeps_its_lengths_in_the_plane() {
+        let mut c = terrain_config();
+        c.escape.terrain.target_lift = 0.05;
+        c.escape.terrain.locked = true;
+        c.escape.terrain.lock_zoom = c.escape.zoom_log2;
+        let (h, w, occ) = (c.escape.terrain.height, c.escape.terrain.de_width, c.escape.terrain.occlusion);
+        let at = terrain_view(&c, [0.0; 2]);
+        assert_eq!((at.height, at.width, at.occlusion_reach), (h, w, occ));
+        c.escape.zoom_log2 += 1.0;
+        let v = terrain_view(&c, [0.0; 2]);
+        assert_eq!((v.height, v.width, v.occlusion_reach), (2.0 * h, 2.0 * w, 2.0 * occ));
+        let cam = terrain_camera(&c.escape);
+        assert!((cam.target[2] - (2.0 * h as f64 + 0.05)).abs() < 1e-9, "{:?}", cam.target);
+        c.escape.terrain.locked = false;
+        let free = terrain_view(&c, [0.0; 2]);
+        assert_eq!((free.height, free.width), (h, w));
+        // Held where an f32 world still resolves the view.
+        c.escape.terrain.locked = true;
+        c.escape.zoom_log2 = c.escape.terrain.lock_zoom + 100.0;
+        assert_eq!(c.escape.terrain_scale(), 24f64.exp2());
+    }
+
+    /// Locking changes nothing on screen (H3): the range it pins is the
+    /// one the view measured, so the locked heights are the live ones.
+    /// And the pinned range is the one the heights rise over: twice as
+    /// wide, a linear count's land stands half as high.
+    #[test]
+    fn locking_pins_the_range_the_view_measured() {
+        let Some((_one_at_a_time, device, queue)) = gpu() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (64u32, 64u32);
+        let mut c = looking_down();
+        c.escape.terrain.detail = 0.1;
+        c.escape.terrain.curve = crate::config::escape::TerrainCurve::Linear;
+        c.escape.center_re = "0.45".into();
+        c.escape.center_im = "0.6".into();
+        c.escape.zoom_log2 = 2.0;
+        let top = c.escape.terrain.height as f64;
+        let (live, range) = hit_heights_measured(&device, &queue, &c, w, h);
+        let [lo, hi] = range.expect("the view measured a range");
+        assert!(lo < hi, "{lo} {hi}");
+
+        let mut locked = c.clone();
+        locked.escape.terrain.locked = true;
+        locked.escape.terrain.lock_zoom = c.escape.zoom_log2;
+        locked.escape.terrain.lock_range = [lo, hi];
+        let pinned = hit_heights(&device, &queue, &locked, w, h);
+        let same = live.iter().zip(&pinned).filter(|(a, b)| match (a, b) {
+            (Some(a), Some(b)) => (a - b).abs() < 1e-6 * top,
+            (None, None) => true,
+            _ => false,
+        });
+        assert_eq!(same.count(), (w * h) as usize, "locking moved the land");
+
+        locked.escape.terrain.lock_range = [lo, lo + 2.0 * (hi - lo)];
+        let wide = hit_heights(&device, &queue, &locked, w, h);
+        let (mut land, mut half) = (0usize, 0usize);
+        for (a, b) in live.iter().zip(&wide) {
+            if let (Some(a), Some(b)) = (a, b) {
+                land += 1;
+                if (b - a / 2.0).abs() < 0.02 * top {
+                    half += 1;
+                }
+            }
+        }
+        println!("pinned twice as wide: {half} of {land} land pixels stand half as high");
+        assert!(land > (w * h / 2) as usize, "{land}");
+        assert!(half as f64 > 0.9 * land as f64, "{half} of {land}");
+    }
+
+    /// Zooming in on a locked relief approaches one landscape (H3): the
+    /// ground under the view's centre stands at the same height in the
+    /// plane -- twice as many current widths, a zoom in -- where an
+    /// unlocked relief keeps its widths and so halves in the plane.
+    #[test]
+    fn a_locked_relief_stands_still_in_the_plane() {
+        let Some((_one_at_a_time, device, queue)) = gpu() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (32u32, 32u32);
+        let mut c = looking_down();
+        c.escape.terrain.source = TerrainSource::Distance;
+        c.escape.terrain.de_width = 0.2;
+        c.escape.center_re = "0.45".into();
+        c.escape.center_im = "0.6".into();
+        c.escape.zoom_log2 = 2.0;
+        c.escape.terrain.locked = true;
+        c.escape.terrain.lock_zoom = 2.0;
+        // The centre's four pixels: the ground under the target.
+        let centre = |hs: &[Option<f64>]| -> f64 {
+            let at = |x: u32, y: u32| hs[(y * w + x) as usize].expect("ground at the centre");
+            (at(w / 2 - 1, h / 2 - 1) + at(w / 2, h / 2 - 1) + at(w / 2 - 1, h / 2) + at(w / 2, h / 2)) / 4.0
+        };
+        let before = centre(&hit_heights(&device, &queue, &c, w, h));
+        c.escape.zoom_log2 = 3.0;
+        let after = centre(&hit_heights(&device, &queue, &c, w, h));
+        println!("locked: the centre's ground at {before:.5} widths, then {after:.5} (twice: {:.5})", 2.0 * before);
+        assert!(before > 0.05 * c.escape.terrain.height as f64, "land to measure: {before}");
+        assert!((after - 2.0 * before).abs() < 0.05 * after, "{before} then {after}");
     }
 
     /// The curves keep their order (H2): a mesa tops out above the log
