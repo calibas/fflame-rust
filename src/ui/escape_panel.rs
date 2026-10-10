@@ -1578,6 +1578,42 @@ fn show_terrain_section(
                     t!("escape_panel.terrain_de_width_tip").to_string(),
                 );
             }
+            // How the land rises: a count's or a relief's curve, and the
+            // land inverted for any source (terrain-height.md, H2).
+            if t.source != TerrainSource::Distance {
+                ui.horizontal(|ui| {
+                    use crate::config::escape::TerrainCurve;
+                    ui.label(t!("escape_panel.terrain_curve"));
+                    let label = |s: TerrainCurve| match s {
+                        TerrainCurve::Auto => t!("escape_panel.terrain_curve_auto"),
+                        TerrainCurve::Log => t!("escape_panel.terrain_curve_log"),
+                        TerrainCurve::Linear => t!("escape_panel.terrain_curve_linear"),
+                        TerrainCurve::Mesa => t!("escape_panel.terrain_curve_mesa"),
+                    };
+                    egui::ComboBox::from_id_salt("terrain_curve")
+                        .selected_text(label(t.curve))
+                        .show_ui(ui, |ui| {
+                            for s in TerrainCurve::ALL {
+                                if ui.selectable_label(t.curve == s, label(s)).clicked() && s != t.curve {
+                                    let _ = config_manager.update_param(
+                                        ConfigPath::EscapeTerrainCurve,
+                                        ConfigValue::String(s.as_str().to_string()),
+                                    );
+                                }
+                            }
+                        })
+                        .response
+                        .on_hover_text(t!("escape_panel.terrain_curve_tip"));
+                });
+            }
+            let mut invert = t.invert;
+            if ui
+                .checkbox(&mut invert, t!("escape_panel.terrain_invert"))
+                .on_hover_text(t!("escape_panel.terrain_invert_tip"))
+                .changed()
+            {
+                let _ = config_manager.update_param(ConfigPath::EscapeTerrainInvert, invert.into());
+            }
             ui.horizontal(|ui| {
                 ui.label(t!("escape_panel.terrain_interior"));
                 let label = |s: TerrainInterior| match s {

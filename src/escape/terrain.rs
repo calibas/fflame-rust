@@ -317,8 +317,11 @@ fn ingest_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             textureStore(out_a, dst, vec4<f32>(ip.tint.rgb, 1.0));
         } else {
             // The interior's own colour where the colouring draws one,
-            // the background's where it does not.
-            textureStore(out_raw, dst, vec4<f32>(select(1.0e30, 0.0, distance), 0.0, 0.0, 0.0));
+            // the background's where it does not. A distance's plateau is
+            // -1e30, not the set's own 0, so an inverted map can tell it
+            // from the set and leave it on top (and it is the minimum a
+            // distance's mipmap keeps, so it still bounds as the top).
+            textureStore(out_raw, dst, vec4<f32>(select(1.0e30, -1.0e30, distance), 0.0, 0.0, 0.0));
             textureStore(out_a, dst, vec4<f32>(select(ip.background.rgb, c.rgb, c.a > 0.0), 1.0));
         }
         return;
@@ -654,11 +657,43 @@ fn hf_cell_at(x: f32, y: f32) -> vec4<f32> {
     return vec4<f32>(f32(a), f32(b), cx - f32(a), cy - f32(b));
 }
 
+// The height map's choices (docs/projects/terrain-height.md, H2): the
+// curve -- 0 the source's own (log for a count, linear for a relief),
+// 1 log, 2 linear, 3 mesa -- and the land inverted.
+fn hf_curve() -> u32 {
+    return u32(params.fdata[2].x);
+}
+
+fn hf_inverted() -> bool {
+    return params.fdata[2].y > 0.5;
+}
+
+// How far up the relief a count's or a relief's land value stands, 0 to
+// 1, over the range the ground measured: the log rise, the linear one,
+// or the mesa -- the log rise topped out early, so the boundary's
+// highest counts are a flat top instead of a forest of spikes.
+fn hf_rise(raw: f32, mode: u32) -> f32 {
+    var curve = hf_curve();
+    if (curve == 0u) {
+        curve = select(2u, 1u, mode == 2u);
+    }
+    if (curve == 2u) {
+        return clamp((raw - hf_lo) / max(hf_span, 1.0e-20), 0.0, 1.0);
+    }
+    let v = clamp(log(1.0 + max(raw - hf_lo, 0.0)) / max(log(1.0 + hf_span), 1.0e-6), 0.0, 1.0);
+    if (curve == 3u) {
+        return (1.0 - exp(-6.0 * v)) / (1.0 - exp(-6.0));
+    }
+    return v;
+}
+
 // A raw value's height in the WORLD's units: the identity (a tile set
 // from heights), the distance's H exp(-d / w) -- d the raw estimate in
-// the section's pixels times its texel -- the count's log curve, or the
-// relief's linear one, each with the interior's sentinels. Monotone,
-// so a section's mipmap of raw extremes bounds its highest point.
+// the section's pixels times its texel -- or a count's or a relief's
+// rise (`hf_rise`), each with the interior's sentinels, and the land
+// inverted when asked. Increasing in the raw value unless inverted, so
+// a section's mipmap of raw extremes bounds its highest point -- and
+// for an inverted map `hf_bound` does instead.
 fn hf_f(raw: f32) -> f32 {
     // A lake: flat at the plain's level.
     if (abs(raw) >= 2.0e30) {
@@ -669,22 +704,42 @@ fn hf_f(raw: f32) -> f32 {
     if (mode == 0u || mode == 4u) {
         return raw;
     }
+    var land: f32;
     if (mode == 1u) {
         if (raw >= 1.0e29) {
             return params.eye.w;
         }
-        return top * exp(-max(raw, 0.0) * hf_sec.geo.z / max(params.fdata[6].y, 1.0e-30));
+        // A plateau: apart from the set's own distance 0, so an
+        // inverted map leaves it on top.
+        if (raw <= -1.0e29) {
+            return top;
+        }
+        land = top * exp(-max(raw, 0.0) * hf_sec.geo.z / max(params.fdata[6].y, 1.0e-30));
+    } else {
+        if (raw >= 1.0e29) {
+            return top;
+        }
+        if (raw <= -1.0e29) {
+            return params.eye.w;
+        }
+        land = top * hf_rise(raw, mode);
     }
-    if (raw >= 1.0e29) {
-        return top;
+    if (hf_inverted()) {
+        return top - land;
     }
-    if (raw <= -1.0e29) {
-        return params.eye.w;
+    return land;
+}
+
+// The highest a region of raw values stands, from its mipmap extreme:
+// the extreme's height -- or, inverted, the relief's top, since an
+// inverted map is not increasing. An inverted terrain stands at the top
+// almost everywhere (its plain), so the bound stays tight.
+fn hf_bound(raw: f32) -> f32 {
+    let mode = u32(params.fdata[1].w);
+    if (hf_inverted() && mode >= 1u && mode <= 3u) {
+        return params.fdata[6].x;
     }
-    if (mode == 2u) {
-        return top * clamp(log(1.0 + max(raw - hf_lo, 0.0)) / max(log(1.0 + hf_span), 1.0e-6), 0.0, 1.0);
-    }
-    return top * clamp((raw - hf_lo) / max(hf_span, 1.0e-20), 0.0, 1.0);
+    return hf_f(raw);
 }
 
 // A sample's height in the current section's cells.
@@ -917,7 +972,7 @@ fn hf_trace_section(o: vec3<f32>, d: vec3<f32>, ta: f32, tb: f32, soft_k: f32) -
     let cn = f32(hf_sec.dims.x - 1u);
     let cm = f32(hf_sec.dims.y - 1u);
     let top_level = i32(hf_sec.dims.w) - 1;
-    let top = hf_f(textureLoad(hf_mips, vec2<i32>(0, 0), i32(hf_sec.dims.z), top_level).r) * hf_sec.geo.w;
+    let top = hf_bound(textureLoad(hf_mips, vec2<i32>(0, 0), i32(hf_sec.dims.z), top_level).r) * hf_sec.geo.w;
 
     // Clip to the section's box: x in [0, cn], y in [0, cm], z between
     // the floor and its highest point. The floor is the slab's: a
@@ -1009,7 +1064,7 @@ fn hf_trace_section(o: vec3<f32>, d: vec3<f32>, ta: f32, tb: f32, soft_k: f32) -
             ty = (lo.y - o.y) / d.y;
         }
         let t_far = min(min(tx, ty), t1);
-        let zmax = hf_f(textureLoad(hf_mips, vec2<i32>(a, b), i32(hf_sec.dims.z), level).r) * hf_sec.geo.w;
+        let zmax = hf_bound(textureLoad(hf_mips, vec2<i32>(a, b), i32(hf_sec.dims.z), level).r) * hf_sec.geo.w;
         let z_lo = min(o.z + d.z * t, o.z + d.z * t_far);
         // Past the node, never backward: a far ray still advances.
         let eps = eps_base + abs(t_far) * 2.0e-7;
@@ -1830,6 +1885,10 @@ pub struct TerrainView {
     /// A gradient sky's zenith, as a ray that meets nothing sees it
     /// (`path_core::sky_seen`); None for the background alone.
     pub sky: Option<[f32; 3]>,
+    /// The height map's curve (`TerrainCurve::code`) and whether the land
+    /// is inverted (docs/projects/terrain-height.md, H2).
+    pub curve: u32,
+    pub invert: bool,
     /// The material the lit tier reads as the path tracer does
     /// (camera-unification C7): the coat's reflectance and roughness,
     /// and the glow (`path_core::lit_material`).
@@ -3104,6 +3163,9 @@ impl TerrainRenderer {
         // which there is no ground.
         let per_ray = 2.0 * (view.camera.fov * 0.5).tan() / self.frame.1.max(1) as f32 / view.samples_per_axis.max(1) as f32;
         fdata[6] = [view.height, view.width, per_ray, view.far];
+        // The height map's curve and inversion (`hf_curve`, `hf_inverted`).
+        fdata[2][0] = view.curve as f32;
+        fdata[2][1] = if view.invert { 1.0 } else { 0.0 };
         // A repeated ground's period: its one section's extent.
         if let (true, Some(s)) = (g.repeat, g.sections.first()) {
             fdata[19] = [((s.n - 1) as f64 * s.texel) as f32, ((s.m - 1) as f64 * s.texel) as f32, 1.0, 0.0];
@@ -3765,6 +3827,8 @@ pub(crate) mod gpu_tests {
             samples_per_axis: 1,
             far: 1.0e30,
             sky: None,
+            curve: 0,
+            invert: false,
             material: [0.0, 0.5, 0.0],
         }
     }
@@ -5639,7 +5703,9 @@ pub(crate) mod gpu_tests {
                     let (want_raw, want_a) = match (interior, ingest.interior) {
                         (true, 0) => {
                             plateau += 1;
-                            (0.0, [0.1, 0.2, 0.3, 1.0])
+                            // A distance's plateau is its own sentinel, not
+                            // the set's distance 0 (terrain-height.md, H2).
+                            (-1.0e30, [0.1, 0.2, 0.3, 1.0])
                         }
                         (true, 1) => (1.0e30, [0.0; 4]),
                         (true, _) => {

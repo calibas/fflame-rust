@@ -2162,6 +2162,8 @@ impl ConfigManager {
             ConfigPath::EscapePathSky => Ok(config.escape.path.sky_gradient.into()),
             ConfigPath::EscapePathZenith => Ok(ConfigValue::ColorRgb(config.escape.path.zenith)),
             ConfigPath::EscapeTerrainInterior => Ok(ConfigValue::String(config.escape.terrain.interior.as_str().to_string())),
+            ConfigPath::EscapeTerrainCurve => Ok(ConfigValue::String(config.escape.terrain.curve.as_str().to_string())),
+            ConfigPath::EscapeTerrainInvert => Ok(config.escape.terrain.invert.into()),
             ConfigPath::EscapeTerrainShadow => Ok(config.escape.terrain.shadow.into()),
             ConfigPath::EscapeTerrainShadowSharpness => Ok(config.escape.terrain.shadow_sharpness.into()),
             ConfigPath::EscapeTerrainLakeTint => Ok(ConfigValue::ColorRgb(config.escape.terrain.lake_tint)),
@@ -3792,6 +3794,13 @@ impl ConfigManager {
             ConfigPath::EscapeTerrainInterior => {
                 let v: String = value.try_into()?;
                 self.current.escape.terrain.interior = crate::config::escape::TerrainInterior::from_str_or_default(&v);
+            }
+            ConfigPath::EscapeTerrainCurve => {
+                let v: String = value.try_into()?;
+                self.current.escape.terrain.curve = crate::config::escape::TerrainCurve::from_str_or_default(&v);
+            }
+            ConfigPath::EscapeTerrainInvert => {
+                self.current.escape.terrain.invert = value.try_into()?;
             }
             ConfigPath::EscapeTerrainShadow => {
                 let v: f32 = value.try_into()?;

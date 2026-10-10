@@ -1827,6 +1827,51 @@ impl RenderTier {
     }
 }
 
+/// How a terrain's escape count or relief value rises to its height
+/// (docs/projects/terrain-height.md, H2): over the range the ground
+/// measured, a logarithmic or linear rise, or a mesa that tops out
+/// early, so the busy boundary is a flat top rather than spikes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerrainCurve {
+    /// The source's own: logarithmic for an escape count, linear for a
+    /// relief -- every terrain's map before the choice.
+    #[default]
+    Auto,
+    Log,
+    Linear,
+    Mesa,
+}
+
+impl TerrainCurve {
+    pub const ALL: [TerrainCurve; 4] = [TerrainCurve::Auto, TerrainCurve::Log, TerrainCurve::Linear, TerrainCurve::Mesa];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TerrainCurve::Auto => "auto",
+            TerrainCurve::Log => "log",
+            TerrainCurve::Linear => "linear",
+            TerrainCurve::Mesa => "mesa",
+        }
+    }
+    pub fn from_str_or_default(s: &str) -> Self {
+        match s {
+            "log" => TerrainCurve::Log,
+            "linear" => TerrainCurve::Linear,
+            "mesa" => TerrainCurve::Mesa,
+            _ => TerrainCurve::Auto,
+        }
+    }
+    /// The walk's code (`hf_rise`).
+    pub fn code(self) -> u32 {
+        match self {
+            TerrainCurve::Auto => 0,
+            TerrainCurve::Log => 1,
+            TerrainCurve::Linear => 2,
+            TerrainCurve::Mesa => 3,
+        }
+    }
+}
+
 /// What a terrain does where the set's interior is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1983,6 +2028,13 @@ pub struct TerrainConfig {
     pub tier: RenderTier,
     #[serde(default, skip_serializing_if = "is_default_terrain_interior")]
     pub interior: TerrainInterior,
+    /// How a count or a relief rises to its height (H2).
+    #[serde(default, skip_serializing_if = "is_default_terrain_curve")]
+    pub curve: TerrainCurve,
+    /// The land upside down: `H − h`, for every source -- spikes become
+    /// pits, the set's boundary a canyon. The interior stays as chosen.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub invert: bool,
     /// A lake's colour under its surface (linear), and how blurred its
     /// reflections are: 0.02 is a still mirror.
     #[serde(default = "default_terrain_lake_tint", skip_serializing_if = "is_default_terrain_lake_tint")]
@@ -2084,6 +2136,9 @@ fn is_default_terrain_lake_roughness(v: &f32) -> bool {
 fn is_default_terrain_interior(v: &TerrainInterior) -> bool {
     *v == TerrainInterior::default()
 }
+fn is_default_terrain_curve(v: &TerrainCurve) -> bool {
+    *v == TerrainCurve::default()
+}
 
 impl Default for TerrainConfig {
     fn default() -> Self {
@@ -2097,6 +2152,8 @@ impl Default for TerrainConfig {
             haze: default_terrain_haze(),
             tier: RenderTier::default(),
             interior: TerrainInterior::default(),
+            curve: TerrainCurve::default(),
+            invert: false,
             lake_tint: default_terrain_lake_tint(),
             lake_roughness: default_terrain_lake_roughness(),
             shadow: default_terrain_shadow(),
