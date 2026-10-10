@@ -1405,6 +1405,12 @@ impl FlameBuffers {
     }
 
     /// Create new FlameBuffers with specified palette size
+    /// The size its per-pixel state is made at, for a test.
+    #[cfg(test)]
+    pub(crate) fn size_for_test(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
     pub fn with_palette_size(device: &Device, queue: &Queue, width: u32, height: u32, flame: &Flame, palette_size: u32) -> Self {
         // Clamp palette size to valid range
         let palette_size = palette_size.clamp(DEFAULT_PALETTE_SIZE, MAX_PALETTE_SIZE);

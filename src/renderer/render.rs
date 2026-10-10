@@ -363,9 +363,22 @@ pub async fn render(
         }
     }
 
-    // Create renderer with config's palette size
+    // Create renderer with config's palette size. An escape picture, a
+    // terrain and a simulation use only its tail -- the tonemap of their
+    // own image -- so they get one without the flame's per-pixel state:
+    // 64 bytes a pixel never read, 2.1 GB of an 8K export (measured: a
+    // terrain export at 8K ran out of memory on a 6 GB card).
     let surface_format = TextureFormat::Rgba8Unorm;
-    let mut renderer = FlameRenderer::with_palette_size(
+    let tail_only = matches!(
+        job.config.render_mode,
+        crate::scene::transforms::RenderMode::Escape | crate::scene::transforms::RenderMode::Simulation
+    );
+    let build = if tail_only { FlameRenderer::for_tail } else { FlameRenderer::with_palette_size };
+    // Caught here, not by an engine's own scope: wgpu reports a failed
+    // allocation as an error that stops nothing, and the renderer is made
+    // before any engine's scope is pushed.
+    let alloc = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let mut renderer = build(
         device,
         queue,
         surface_format,
@@ -374,6 +387,10 @@ pub async fn render(
         &job.config.flame,
         job.config.palette_size,
     );
+    if let Some(err) = alloc.pop().await {
+        renderer.destroy();
+        return Err(RenderError::OutOfMemory(err.to_string()));
+    }
     // One-shot path: the sticky superset canonically reorders the local
     // index map, which is an ULP-class trajectory change — meaningless
     // for a persistent renderer, but exports and the visual suite must

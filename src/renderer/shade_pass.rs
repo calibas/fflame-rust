@@ -538,6 +538,12 @@ impl ShadePass {
         &self.output.as_ref().expect("ShadePass built pipeline-only has no output")[self.output_front].1
     }
 
+    /// The size its textures are made at, for a test.
+    #[cfg(test)]
+    pub(crate) fn size_for_test(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
     /// Drop the temporal history (lighting params changed, iteration
     /// reset, ...): the next shade starts fresh instead of blending
     /// against a stale look.

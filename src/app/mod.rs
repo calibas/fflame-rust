@@ -466,6 +466,13 @@ pub struct App {
     /// the escape pass (escape params, palette, structural loads).
     /// Starts true so the first escape frame always renders.
     pub(super) escape_dirty: bool,
+    /// The viewport frozen while an export runs in the background (a
+    /// PNG on a device of its own, a high-res PNG, a video): its last
+    /// picture stays on screen, nothing renders, and the engines that
+    /// rebuild themselves -- the escape renderer, the terrains -- give
+    /// their GPU memory back, since the export competes for the same
+    /// card (`freeze_viewport`).
+    pub(super) viewport_frozen: bool,
     /// Keeps `escape_renderer` holding the texture the config names.
     pub(super) escape_texture: texture_sync::TextureSync,
     /// The frame governor's antialiasing axis for escape playback
@@ -881,6 +888,7 @@ impl App {
             #[cfg(feature = "terrain")]
             escape_terrain: None,
             escape_dirty: true,
+            viewport_frozen: false,
             escape_texture: Default::default(),
             escape_aa: Default::default(),
             escape_aa_settled_at: None,
@@ -3042,6 +3050,10 @@ impl App {
         // ============================================================================
         // PHASE 3: Get FINAL Config and Render Fractal
         // ============================================================================
+        // An export in the background freezes the viewport: nothing below
+        // renders, and the picture it last drew stays on screen.
+        let frozen = self.freeze_viewport();
+
         // Single config read after all updates are complete
         let final_config = self.config_manager.active_config();
 
@@ -3059,7 +3071,7 @@ impl App {
         let timeline_owns_sim = self.timeline_owns_sim();
 
         // Run flame compute shader with progressive refinement
-        if let Some(ref mut renderer) = self.flame_renderer {
+        if let (false, Some(renderer)) = (frozen, self.flame_renderer.as_mut()) {
             renderer.set_overwrite_mode(use_overwrite);
 
             // Escape-time mode: the generator is one compute dispatch,

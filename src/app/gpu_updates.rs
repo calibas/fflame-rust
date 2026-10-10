@@ -545,6 +545,44 @@ impl App {
         let _ = view_changed_by_keyboard;
     }
 
+    /// Freeze the viewport while an export runs in the background, and
+    /// thaw it after; true while frozen. Frozen, the frame renders
+    /// nothing, so the picture last drawn stays on screen -- and the
+    /// engines that rebuild themselves give their GPU memory back: the
+    /// escape renderer and the terrains (an escape terrain's atlas
+    /// alone is over a gigabyte). The export, on a device of its own,
+    /// competes for the same card: a terrain export at full quality ran
+    /// out of memory beside the viewport's. Thawed, they are made again
+    /// on the next frame and render from scratch -- a terrain's
+    /// sections fill in again. The flame renderer stays (it is what the
+    /// viewport shows), and so does a simulation, whose run cannot be
+    /// made again but by running it.
+    pub(super) fn freeze_viewport(&mut self) -> bool {
+        let exporting = self.export_status.lock().map(|s| s.active).unwrap_or(false);
+        if exporting == self.viewport_frozen {
+            return exporting;
+        }
+        self.viewport_frozen = exporting;
+        if exporting {
+            if let Some(e) = self.escape_renderer.take() {
+                e.destroy();
+            }
+            #[cfg(feature = "terrain")]
+            if let Some(t) = self.escape_terrain.take() {
+                t.destroy();
+            }
+            #[cfg(all(feature = "terrain", feature = "engine-sim"))]
+            if let Some(t) = self.sim_terrain.take() {
+                t.destroy();
+            }
+        } else {
+            // Made again on this frame, and drawn.
+            self.escape_dirty = true;
+            self.window.request_redraw();
+        }
+        exporting
+    }
+
     /// Determine if overwrite mode should be used for the current frame.
     ///
     /// Overwrite mode is used when:

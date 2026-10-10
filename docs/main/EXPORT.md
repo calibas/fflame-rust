@@ -841,6 +841,40 @@ forward pictures exactly only when the model parameters are constant.
 
 ---
 
+## GPU memory during an export
+
+A background export -- a terrain's PNG, a high-res PNG, a video -- runs
+on a device of its own, so it competes with the viewport for the same
+card. Three things keep the two inside it (measured on a 6 GB GTX 1660
+SUPER, a seahorse terrain at a 3x3 prefilter, detail 8, 8x AA):
+
+- **The viewport freezes** (`App::freeze_viewport`, `app/gpu_updates.rs`)
+  while `export_status` is active: the frame renders nothing, so its last
+  picture stays on screen, and the engines that rebuild themselves give
+  their memory back -- the escape renderer, the escape terrain (its
+  section atlas alone is over 1 GB) and a simulation's terrain. They are
+  made again on the first frame after, and render from scratch: a
+  terrain's sections fill in again. The flame renderer stays (it is what
+  the viewport shows), and so does a simulation, whose run cannot be
+  remade but by running it.
+- **A tail-only renderer** (`FlameRenderer::for_tail`): an escape
+  picture, a terrain and a simulation use the flame renderer only for the
+  tonemap of their own image, so `render()` builds them one without the
+  flame's histograms and accumulators (64 bytes a pixel). And no renderer
+  makes the solid shade pass's four full-frame textures (64 bytes a pixel
+  more) until a lit solid first runs it.
+- **A terrain's section renderer** gives its per-pixel memory back
+  between bursts of sections (`EscapeRenderer::release_pixels`) -- before
+  an export's still is drawn, and in the viewport once the ground is in.
+
+Measured peaks above the idle card: the 8K export of that terrain (a 4K
+export at 2x AA) went from out of memory at 5.1 GB -- alone, before the
+viewport's share -- to 3.2 GB; the 4K one from 3.4 to 2.1 GB. Beside
+it, the frozen viewport frees its own terrain: an atlas of up to 64
+sections is about 1.1-1.3 GB by its sizes (not measured in the app).
+
+---
+
 ## Current Limitations
 
 ### Export Formats

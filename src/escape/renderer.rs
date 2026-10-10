@@ -6508,6 +6508,36 @@ fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         ss
     }
 
+    /// Give back the per-pixel memory -- the iteration state, the
+    /// records, the accumulation pair, the height field and the output
+    /// at its size -- keeping the pipelines, the reference orbits and
+    /// the settings. The next `resize` and render make them again, at
+    /// the cost of a full render. A terrain's section renderer holds
+    /// ~150 bytes a render pixel between bursts of sections: 1.5 GB at
+    /// a 3x3 prefilter, idle (terrain-height.md, H4).
+    pub fn release_pixels(&mut self, device: &Device) {
+        if let Some(b) = self.iter_state_buffer.take() {
+            b.destroy();
+        }
+        self.iter_state_px = 0;
+        if let Some(b) = self.results_buffer.take() {
+            b.destroy();
+        }
+        self.results_px = 0;
+        self.results_key = None;
+        if let Some((a, _, b, _)) = self.accum.take() {
+            a.destroy();
+            b.destroy();
+        }
+        self.ensure_height(device, false);
+        self.resize(device, 1, 1, 1);
+    }
+
+    /// Whether the per-pixel memory is held: anything past a 1x1 output.
+    pub fn holds_pixels(&self) -> bool {
+        self.width * self.height > 1 || self.iter_state_buffer.is_some() || self.results_buffer.is_some() || self.accum.is_some()
+    }
+
     pub fn resize(&mut self, device: &Device, width: u32, height: u32, supersample: u32) -> bool {
         let ss = Self::affordable_supersample(device, width, height, supersample);
         if width == self.out_width && height == self.out_height && ss == self.supersample {
