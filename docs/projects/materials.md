@@ -154,6 +154,28 @@ material -- the conversion keeps the goal and changes the picture.
 - No shipped picture moves: none sets a coat or a glow, and the only
   path-traced pictures with a rig set have no highlight.
 
+**Corrected after use (2026-10-09).** Two things the above missed:
+
+- **Every touched rig has a highlight.** `SolidShadingSettings`'
+  default specular is the flame's 0.35, so any solid or terrain whose
+  lighting was ever edited carried it -- and from P7 the path tracer drew
+  it, a sun glint over a plain, on pictures whose lit frames never showed
+  it (their shading strength was 0, which draws the lit tier unlit). The
+  path tracer now weights the highlight by the shading strength, as the
+  lit tier's `mix` does (decided with the user): at strength 0 no tier
+  draws it, at 1 both draw it whole
+  (`the_highlight_follows_the_shading_strength`). The panel also showed
+  a solid's or terrain's lights and highlight only above strength 0,
+  though the path tracer lights a touched rig at any strength; it now
+  shows them whenever the rig is touched.
+- **The denoiser dropped the highlight's white.** It divides the light by
+  the albedo and multiplies a channel the albedo does not reflect back by
+  zero; a palette's pure red or pure yellow lost the glint's other
+  channels, as hard bands. Its guide now takes the white share of the
+  first surface's direct light -- the highlight's and the coat's -- as it
+  already took the coat's reflection of the sky
+  (`a_highlight_keeps_its_colour_denoised`).
+
 ## 7. Gates
 
 Per step: the visual suite unchanged except where §4 says a picture

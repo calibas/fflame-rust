@@ -4219,6 +4219,50 @@ pub(crate) mod gpu_tests {
         assert!(worst < 1e-3, "{worst}");
     }
 
+    /// The path tracer weights the highlight by the shading strength, as
+    /// the lit tier's mix does: at 0 a highlight changes nothing, at a
+    /// half its glint is half. (A terrain's touched rig carries the flame
+    /// default 0.35; at strength 0 it glinted in the path tracer alone.)
+    #[test]
+    fn the_highlight_follows_the_shading_strength() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (32u32, 32u32);
+        let (n, m) = (64u32, 64u32);
+        let mut r = TerrainRenderer::new(&device, w, h);
+        r.set_tile(&device, &queue, n, m, &vec![0.0; (n * m) as usize], &vec![[0.5, 0.25, 1.0, 1.0]; (n * m) as usize]);
+        let mut shading = dark();
+        shading.ambient = 0.0;
+        shading.ssao_strength = 0.0;
+        shading.shininess = 8.0;
+        shading.lights[0].enabled = true;
+        shading.lights[0].azimuth = 30.0;
+        shading.lights[0].elevation = 35.0;
+        shading.lights[0].intensity = 2.0;
+        let mut v = view(camera([32.0, 32.0, 0.0], 1.0, 0.3, 40.0, 0.5));
+        v.softness = 1.0e6;
+        let s = PathSettings { bounces: 2, environment: [0.0; 3], clamp: 1.0e30, seed: 1, ..PathSettings::default() };
+        let mut shot = |strength: f32, specular: f32| {
+            let mut sh = shading.clone();
+            sh.shading_strength = strength;
+            sh.specular = specular;
+            v.shading = sh;
+            r.reset_path();
+            r.render_path(&device, &queue, &v, &s, 4, 4);
+            read_output(&device, &queue, &r, w, h)
+        };
+        let (bare, at_zero) = (shot(0.0, 0.0), shot(0.0, 0.6));
+        assert_eq!(bare, at_zero, "at strength 0 the highlight draws nothing");
+        let (plain, full, half) = (shot(1.0, 0.0), shot(1.0, 0.6), shot(0.5, 0.6));
+        let glint = |a: &[[f32; 4]], b: &[[f32; 4]]| a.iter().zip(b).map(|(p, q)| (p[1] - q[1]) as f64).sum::<f64>();
+        let (g_full, g_half) = (glint(&full, &plain), glint(&half, &plain));
+        println!("glint at full strength {g_full:.4}, at half {g_half:.4}");
+        assert!(g_full > 0.1, "the highlight is in the picture: {g_full}");
+        assert!((g_half / g_full - 0.5).abs() < 1.0e-3, "half the strength, half the glint: {g_half} of {g_full}");
+    }
+
     /// The material (T3b). Glow alone -- no light, no sky -- is the
     /// albedo times the emission, exactly. Under a uniform sky a
     /// dielectric coat (0.04) keeps a flat albedo-1 plane within the
