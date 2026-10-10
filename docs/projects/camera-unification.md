@@ -136,6 +136,12 @@ design rests on:
 
 ### 1d. Defects found, to fix along the way
 
+*Status after P8:* all fixed (P1: the View menu and compact Reset, the
+escape pinch, the right-button readback; P4: mode D's fog and the Solid
+Lighting hint and gating; P6 and P8: the stuck fly keys, on focus loss
+and on a release a text field takes; P8: the stale comments) except
+**mode D's lens sign**, still to verify with an asymmetric lens.
+
 - The **View menu** is shown in Escape, but Reset/Zoom In/Zoom Out write
   the flame's fields: they do nothing there. The compact menu's Reset is
   not gated at all and also appears in Simulation.
@@ -225,6 +231,8 @@ What the user wants from it is no gimbal lock in free-look.
 | W A S D Q E | -- | -- | fly |
 | Arrows, + / − | pan, zoom | pan, dolly | -- |
 | One finger | pan | pan | look |
+| One finger, Turn toggle on (touch's Alt) | rotate | orbit | look |
+| Long press, then drag (touch's right button) | rotate | orbit | look |
 | Pinch / twist | zoom / rotate | dolly / orbit | -- |
 
 - **Every mode gets every row.** Mode D gains orbit; both terrains swap
@@ -646,7 +654,25 @@ changes input lists what to try in the app.
   in both tiers to 7e-5). The 3D flame gains the coat and the glow. Old
   pictures' path-tracer materials are lifted beside the lights on load;
   the old paths are aliases. No shipped picture moves.
-- **P8. Docs and text.** `docs/main/UI.md`, `free-camera-movement.md`,
+- **P8. Docs, text, and touch.** *Built 2026-10-09.*
+  - **Touch equivalents of Alt and the right button** (the user's ask):
+    the viewport's **Pan/Turn toggle** (bottom left, shown on the
+    compact layout and once a touch has been seen) is the touch's Alt --
+    a one-finger drag turns -- and a **long press** (half a second, within
+    10 points) is its right button: held, it reads the path in PathMap;
+    dragged, it turns. A ring under the finger shows the press. Tests:
+    a drag pans with all its movement and is never a long press; a still
+    finger holds, then its drag turns; two fingers or a tap are neither.
+  - Docs: `docs/main/UI.md` (a View panel section; Input Handling
+    rewritten around `camera::gesture`, with the controls table);
+    `free-camera-movement.md` (Stage 4); `CLAUDE.md`; the Help panel's
+    controls (mouse, fly mode, touch); `SCRIPTING.md` and the guide's
+    Slow Turn (angles are radians: it keyed 360, about 57 turns).
+  - Fixes: a fly key's release that a text field takes still lets go;
+    the stale comments of §1d.
+  - The other locales hold none of the changed keys (they fall back to
+    English).
+- **P8 (as planned).** `docs/main/UI.md`, `free-camera-movement.md`,
   help text (the "Alt-Drag - Rotate view" line becomes true everywhere),
   the locales, `SCRIPTING.md` (the `anim.key("rotation", ...)` example
   implies degrees; tracks are radians), and the stale comments in §1d.

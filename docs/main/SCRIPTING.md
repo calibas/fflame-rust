@@ -364,7 +364,7 @@ flame; never touching it emits none.
 |---|---|---|
 | `anim.name` | string | Read/write: the animation's name. |
 | `anim.duration` | float | Read/write: seconds; defaults to the last keyframe. |
-| `anim.key(target, time, value)` | — | A keyframe on a setting — the names `config.set` takes (`"zoom"`, `"rotation"`, `"camera_rotation_x"`, …), or an escape or simulation setting by its track name (`"Escape.ZoomLog2"`, `"Sim.Steps"`, `"Sim.Terrain.Height"`; `"escape.zoom_log2"` also works). |
+| `anim.key(target, time, value)` | — | A keyframe on a setting — the names `config.set` takes (`"zoom"`, `"rotation"`, `"camera_rotation_x"`, …), or an escape or simulation setting by its track name (`"Escape.ZoomLog2"`, `"Sim.Steps"`, `"Sim.Terrain.Height"`; `"escape.zoom_log2"` also works). An angle's value is in **radians**, as the file stores it — the panels and the track editor show degrees (one turn is `2.0 * PI()`). |
 | `anim.key(target, time, value, easing)` | — | With per-key easing: `"linear"`, `"ease_in"`, `"ease_out"`, `"ease_in_out"`, or the `_quad`/`_cubic` variants. |
 | `anim.interpolation(target, mode)` | — | The whole track's interpolation: `"step"`, `"linear"`, `"smooth"`, `"sinusoidal"`, `"exponential"`. Use **exponential for zoom** — equal ratio per unit time reads as constant speed. |
 

@@ -1166,6 +1166,16 @@ impl App {
                             // Handle keyboard input only if egui didn't consume it
                             app.handle_keyboard(&key_event);
                         }
+                        WindowEvent::KeyboardInput { event: key_event, .. } => {
+                            // A release egui took (a text field had the
+                            // focus) still lets go of a fly key: held
+                            // otherwise, the camera flew on.
+                            if !key_event.state.is_pressed() {
+                                if let winit::keyboard::PhysicalKey::Code(code) = key_event.physical_key {
+                                    app.fly_keys_held.remove(&code);
+                                }
+                            }
+                        }
                         WindowEvent::ModifiersChanged(new_modifiers) => {
                             app.modifiers = new_modifiers.state();
                         }
@@ -4167,7 +4177,8 @@ impl App {
         let scaled_x = ndc_x * aspect;
         let scaled_y = ndc_y;
 
-        // Screen space → pan frame (rotation-aware in 2D, identity in 3D)
+        // Screen space → pan frame (rotation-aware: both modes compose
+        // pan → rotate → zoom)
         let (rotated_x, rotated_y) = config.screen_delta_to_pan_frame(scaled_x as f64, scaled_y as f64);
 
         // Apply inverse zoom and add pan
