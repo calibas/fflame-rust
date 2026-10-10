@@ -2006,9 +2006,11 @@ fn show_ifs_criterion(ui: &mut egui::Ui, config_manager: &mut ConfigManager, sol
                             ConfigPath::EscapeCenterRe,
                             ConfigValue::String(format!("{centre:?}", centre = centre[0])),
                         ),
+                        // The plane reads the flame's world mirrored, so the
+                        // ball's y is the plane's -Im (`ifs::view_basis`).
                         (
                             ConfigPath::EscapeCenterIm,
-                            ConfigValue::String(format!("{centre:?}", centre = centre[1])),
+                            ConfigValue::String(format!("{centre:?}", centre = crate::escape::ifs::plane_im(centre[1]))),
                         ),
                         (ConfigPath::EscapeZoomLog2, ((4.0f64 / span).log2() as f32).into()),
                     ]

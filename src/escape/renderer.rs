@@ -4336,7 +4336,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let span_x = span_y * (self.width as f64 / self.height.max(1) as f64);
         let basis = super::ifs::view_basis(span_x, span_y, escape.rotation);
         let px = span_y / self.height.max(1) as f64;
-        let (cx, cy) = escape.center_f64();
+        let (cx, cy) = super::ifs::world_centre_f64(escape);
         let beam = escape
             .formula_params
             .get("beam")
@@ -4642,7 +4642,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 // decimals, and a small value written by `{:?}` comes
                 // out in scientific notation -- so fall back to f64
                 // and render something rather than nothing.
-                let (x, y) = escape.center_f64();
+                let (x, y) = super::ifs::world_centre_f64(escape);
                 #[cfg(test)]
                 if let Some(level) = forced {
                     // The forced level belongs on BOTH paths. It was
@@ -4682,7 +4682,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     &packed.ifs, centre, basis, px, budget, beam,
                 ),
                 None => {
-                    let (x, y) = escape.center_f64();
+                    let (x, y) = super::ifs::world_centre_f64(escape);
                     crate::scene::ifs_estimate::reference_beam(
                         &packed.ifs, [x, y], basis, px, budget, beam,
                     )
