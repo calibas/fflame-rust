@@ -863,6 +863,10 @@ SUPER, a seahorse terrain at a 3x3 prefilter, detail 8, 8x AA):
   flame's histograms and accumulators (64 bytes a pixel). And no renderer
   makes the solid shade pass's four full-frame textures (64 bytes a pixel
   more) until a lit solid first runs it.
+- **A terrain export fits its section cap to the card**
+  (`fit_export_sections`): up to 256 sections where the memory is there
+  beside the rest of its peak, against the viewport's 64 -- the cap is
+  what decides how fine a large export's ground is.
 - **A terrain's section renderer** gives its per-pixel memory back
   between bursts of sections (`EscapeRenderer::release_pixels`) -- before
   an export's still is drawn, and in the viewport once the ground is in.

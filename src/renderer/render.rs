@@ -1483,6 +1483,9 @@ async fn render_escape_terrain(
     let generation = renderer.palette_generation();
     prepare_escape(terrain.footprint_renderer(), device, queue, config).await;
     terrain.footprint_renderer().set_chunk_time_target(200.0);
+    // As many sections as the card holds beside the rest of the export:
+    // past the viewport's 64, an export's nearest ground was magnified.
+    terrain.fit_sections_for_export(device, config, job_w, job_h).await;
     let before = terrain.footprint_renders;
     // The bar's shares: the sections, then the still, which takes most
     // of a path traced export.

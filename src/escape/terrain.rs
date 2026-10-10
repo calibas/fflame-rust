@@ -2767,6 +2767,15 @@ impl TerrainRenderer {
 
     /// Levels of the mipmap for an `n x m` tile: level 0 is its cells,
     /// each level above halves them (rounding up), to one node.
+    /// One atlas layer's bytes at `w x h` samples: the raw heights, the
+    /// albedo and its mips, and the max mipmap at the next powers of two
+    /// (`ensure_atlas`) -- about 21 MB a section.
+    pub fn atlas_layer_bytes(w: u32, h: u32) -> u64 {
+        let (w64, h64) = (w as u64, h as u64);
+        let p = w.saturating_sub(1).next_power_of_two() as u64 * h.saturating_sub(1).next_power_of_two() as u64;
+        w64 * h64 * 4 + w64 * h64 * 8 * 4 / 3 + p * 4 * 4 / 3
+    }
+
     pub fn levels_for(n: u32, m: u32) -> u32 {
         let (mut w, mut h) = (n.saturating_sub(1).max(1), m.saturating_sub(1).max(1));
         let mut levels = 1;

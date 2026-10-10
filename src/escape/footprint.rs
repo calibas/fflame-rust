@@ -87,8 +87,15 @@ pub const SECTION_SAMPLES: u32 = SECTION_CELLS + 1;
 /// quarter of the fill.
 pub const COARSE_SAMPLES: u32 = 257;
 
-/// The most sections the atlas holds (each about 21 MB).
+/// The most sections the atlas holds (each about 21 MB): the viewport's,
+/// and an export's floor.
 pub const MAX_SECTIONS: u32 = 64;
+
+/// The most an export's atlas holds, where the card has the memory
+/// ([`fit_export_sections`]): 256 sections, 5.4 GB. At 4K the export's
+/// own view wants ~230 at the default fineness; at 64 its nearest ground
+/// was 0.74 texels a screen pixel, magnified.
+pub const EXPORT_MAX_SECTIONS: u32 = 256;
 
 /// The finest section, against the view width: a section narrower than
 /// 2^-14 of it is never asked for, however near the eye.
@@ -225,6 +232,74 @@ pub fn section_filter(t: &crate::config::escape::TerrainConfig) -> SectionFilter
         apron: (3.0 * softness).ceil() as u32,
         softness,
     }
+}
+
+/// What an export of `config` at `w x h` holds beside its atlas at its
+/// peak, estimated on the high side: the larger of the section renderer
+/// while sections render (its prefilter's render pixels at ~148 bytes,
+/// within the escape renderer's 1.5 GB budget) and the still's picture
+/// (16 bytes a pixel, tiled stills only); the terrain renderer at its
+/// tile (~160 bytes a pixel); the tail's output and readback (8 bytes a
+/// pixel), and the effect chain's slots when effects are on.
+pub fn export_headroom(config: &FractalConfig, w: u32, h: u32) -> u64 {
+    let filter = section_filter(&config.escape.terrain);
+    let across = (SECTION_SAMPLES + 2 * filter.apron) as u64 * filter.samples as u64;
+    let sections = (across * across * 148).min(3 << 29);
+    let frame = w as u64 * h as u64;
+    let (tw, th) = super::terrain_tiers::still_tile(w, h);
+    let tile = tw as u64 * th as u64;
+    let picture = if tile < frame { frame * 16 } else { 0 };
+    use crate::renderer::effect_chain::EffectChainRunner;
+    let effects = if EffectChainRunner::has_enabled_effects(&config.density_effects) || EffectChainRunner::has_enabled_effects(&config.color_effects) { frame * 48 } else { 0 };
+    sections.max(picture) + tile * 160 + frame * 8 + effects
+}
+
+/// The most sections an export's atlas can hold on this card beside the
+/// rest of its peak ([`export_headroom`]): [`EXPORT_MAX_SECTIONS`] and
+/// down by halves to [`MAX_SECTIONS`], the first whose memory can be had.
+/// wgpu cannot say how much memory is free, so this asks for it -- in
+/// pieces, stopping at the first refused, and giving it all back at once.
+/// Measured on a 6 GB card: an export ran out of memory where nothing
+/// said it would, and the atlas is most of what it holds.
+pub async fn fit_export_sections(device: &Device, config: &FractalConfig, w: u32, h: u32) -> u32 {
+    let lim = device.limits();
+    let layer = TerrainRenderer::atlas_layer_bytes(SECTION_SAMPLES, SECTION_SAMPLES);
+    let headroom = export_headroom(config, w, h) + (256 << 20);
+    let piece = lim.max_buffer_size.min(256 << 20).max(1 << 20);
+    let mut cap = EXPORT_MAX_SECTIONS.min(lim.max_texture_array_layers).max(MAX_SECTIONS);
+    while cap > MAX_SECTIONS {
+        let want = cap as u64 * layer + headroom;
+        let mut held: Vec<Buffer> = Vec::new();
+        let mut got = 0u64;
+        let mut refused = false;
+        while got < want {
+            let size = piece.min(want - got);
+            let scope = device.push_error_scope(ErrorFilter::OutOfMemory);
+            let b = device.create_buffer(&BufferDescriptor {
+                label: Some("Terrain Export Memory Probe"),
+                size,
+                usage: BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            });
+            let failed = scope.pop().await.is_some();
+            held.push(b);
+            if failed {
+                refused = true;
+                break;
+            }
+            got += size;
+        }
+        for b in held {
+            b.destroy();
+        }
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        if !refused {
+            log::info!("terrain export: {cap} sections fit ({} MB with the rest of the export)", want >> 20);
+            return cap;
+        }
+        cap /= 2;
+    }
+    MAX_SECTIONS
 }
 
 /// How far below the plain a hole's floor is, in view widths: a sixth of
@@ -631,6 +706,11 @@ pub struct EscapeTerrain {
     /// A deep picture's hidden roots' samples a side ([`COARSE_SAMPLES`];
     /// a test sets a section's to compare).
     pub(crate) coarse_samples: u32,
+    /// The most sections the view may want: [`MAX_SECTIONS`], or what an
+    /// export fitted ([`fit_export_sections`]).
+    max_sections: u32,
+    /// Whether an export has fitted `max_sections` to the card.
+    sections_fitted: bool,
 }
 
 pub use super::path_core::PATH_SHOW_SAMPLES;
@@ -656,6 +736,8 @@ impl EscapeTerrain {
             tiers: TerrainTiers::default(),
             contrast_pinned: false,
             coarse_samples: COARSE_SAMPLES,
+            max_sections: MAX_SECTIONS,
+            sections_fitted: false,
         }
     }
 
@@ -763,12 +845,12 @@ impl EscapeTerrain {
         }
         let anchor = self.anchor.clone().expect("set above");
         let (eye, z) = eye_in_anchor(escape, &anchor);
-        let wanted = wanted_sections(escape, out_w, out_h, MAX_SECTIONS as usize, anchor.zoom, eye);
+        let wanted = wanted_sections(escape, out_w, out_h, self.max_sections as usize, anchor.zoom, eye);
         // The atlas holds what the view wants and a quarter more, growing
-        // in steps of eight to `MAX_SECTIONS` -- each section is about
+        // in steps of eight to `max_sections` -- each section is about
         // 21 MB, so a small view does not hold a large one's memory.
         // Growing re-makes it, and the sections start over.
-        let need = ((wanted.sections.len() as u32 * 5 / 4).div_ceil(8) * 8).clamp(8, MAX_SECTIONS);
+        let need = ((wanted.sections.len() as u32 * 5 / 4).div_ceil(8) * 8).clamp(8, self.max_sections);
         if need > self.capacity || self.terrain.atlas_shape().is_none() {
             let capacity = need.max(self.capacity);
             self.terrain.ensure_atlas(device, SECTION_SAMPLES, SECTION_SAMPLES, capacity);
@@ -1035,6 +1117,23 @@ impl EscapeTerrain {
         let view = |jitter| terrain_view(config, jitter);
         let inputs = TierInputs { filling: self.sections_missing() > 0, ..tier_inputs(config, &view) };
         self.tiers.viewport(&mut self.terrain, device, queue, &inputs)
+    }
+
+    /// The most sections the view may want.
+    pub fn max_sections(&self) -> u32 {
+        self.max_sections
+    }
+
+    /// Fit an export's section cap to the card, once
+    /// ([`fit_export_sections`]): the most it can hold beside the rest
+    /// of the export of `config` at `w x h`. Later calls keep it -- a
+    /// video's frames share one terrain.
+    pub async fn fit_sections_for_export(&mut self, device: &Device, config: &FractalConfig, w: u32, h: u32) -> u32 {
+        if !self.sections_fitted {
+            self.max_sections = fit_export_sections(device, config, w, h).await;
+            self.sections_fitted = true;
+        }
+        self.max_sections
     }
 
     /// The ground's count or relief range as last measured: what a lock
@@ -1319,6 +1418,48 @@ mod tests {
             let e_sw = pixel(&east, n, 0.0, s);
             assert!((e_sw.0 - se.0).abs() < tol && (e_sw.1 - se.1).abs() < tol, "{key:?}: the east neighbour starts where it ends");
         }
+    }
+
+    /// An export's estimate of the rest of its peak grows with what it
+    /// holds: the prefilter's section renderer, a tiled still's picture,
+    /// and the frame.
+    #[test]
+    fn an_exports_headroom_follows_what_it_holds() {
+        let mut c = terrain_config();
+        let small = export_headroom(&c, 1920, 1080);
+        // A tiled still holds its picture beside the tile, and the tail its
+        // output -- where the section renderer is smaller (they are never
+        // held at once: the sections are in before the still begins).
+        let tiled = export_headroom(&c, 7680, 4320);
+        assert!(tiled > 7680 * 4320 * 24, "{tiled}");
+        c.escape.terrain.prefilter = 3;
+        let prefiltered = export_headroom(&c, 1920, 1080);
+        assert!(prefiltered > small + (1 << 30), "{small} {prefiltered}");
+        // Within the escape renderer's own budget, whatever the samples.
+        assert!(prefiltered < (3 << 29) + 1920 * 1080 * 200);
+        // A layer is ~21 MB.
+        let layer = TerrainRenderer::atlas_layer_bytes(SECTION_SAMPLES, SECTION_SAMPLES);
+        assert!((20 << 20..23 << 20).contains(&layer), "{layer}");
+    }
+
+    /// An export's section cap is fitted to the card: one of the halvings
+    /// from [`EXPORT_MAX_SECTIONS`] to [`MAX_SECTIONS`], never past the
+    /// device's layers -- and a larger export never fits more.
+    #[test]
+    fn an_exports_section_cap_fits_the_card() {
+        let Some((_one_at_a_time, device, _queue)) = gpu() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let c = terrain_config();
+        let cap = pollster::block_on(fit_export_sections(&device, &c, 1920, 1080));
+        println!("1080p export: {cap} sections");
+        assert!([64, 128, 256].contains(&cap) && cap <= device.limits().max_texture_array_layers.max(MAX_SECTIONS), "{cap}");
+        let mut huge = c.clone();
+        huge.escape.terrain.prefilter = 3;
+        let fewer = pollster::block_on(fit_export_sections(&device, &huge, 16384, 16384));
+        println!("16K export at a 3x3 prefilter: {fewer} sections");
+        assert!(fewer <= cap && fewer >= MAX_SECTIONS, "{fewer} vs {cap}");
     }
 
     /// A bordered section's samples are its own and its border's (H4):
