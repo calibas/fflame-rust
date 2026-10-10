@@ -41,7 +41,7 @@ pub fn sim_terrain_camera(config: &FractalConfig, gw: u32, gh: u32) -> SolidCame
     let target = [
         t.target_x as f64 * (gw.max(2) - 1) as f64,
         t.target_y as f64 * (gh.max(2) - 1) as f64,
-        0.5 * t.height as f64 * w,
+        (0.5 * t.height as f64 + t.target_lift as f64) * w,
     ];
     let eye_rel = [-forward[0] * distance, -forward[1] * distance, -forward[2] * distance];
     SolidCamera {
@@ -88,6 +88,7 @@ pub fn sim_terrain_view(config: &FractalConfig, gw: u32, gh: u32, jitter: [f32; 
         samples_per_axis: SUPERSAMPLE,
         far,
         sky: crate::escape::path_core::sky_seen(&t.path, config),
+        material: crate::escape::path_core::lit_material(config),
     }
 }
 

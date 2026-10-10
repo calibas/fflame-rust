@@ -14,10 +14,48 @@
   - Bank composition order fixed to match JWildfire (`556f9bd`)
   - 3D pan unified with 2D semantics (`875cdc4` input side, `f151233` pipeline)
   - Camera modes: FreeLook | FPS as a SystemSettings preference (below)
+- **Stage 4 (2026-10-09, camera-unification P6): one fly mode for every
+  3D camera** -- the 3D flame, escape mode D's solid, and both terrains.
+  It supersedes Stage 3's implementation; see [Stage 4](#stage-4--one-fly-mode-for-every-3d-camera)
+  and [camera-unification.md](camera-unification.md).
 
 **Goal**: FPS-style free-fly navigation of the fractal. Mouse drag in the viewport rotates the view (look-around). `WASD` translates the camera along its current look/right axes. `Q` / `E` move down / up along the world-up axis.
 
 The goal is **free-fly**, not orbital. The camera is not tethered to a focus point; it moves freely in 3D space. We don't read JWildfire's `cam_xfocus` / `cam_yfocus` / `cam_zfocus` attributes (no orbital camera support for now).
+
+## Stage 4 — One fly mode for every 3D camera
+
+Shipped 2026-10-09 on `camera-unification` (its P6). The input stays in
+`src/app/fly_camera.rs` (the held keys, the drags); the camera algebra
+moved to `src/camera/fly.rs`, which works through each camera's adapter
+(`camera::view3d::Convention`) and returns config edits:
+
+- **Look about the eye.** The drag becomes a world rotation -- FreeLook
+  about the screen's axes, FPS a turntable about world up and the level
+  axis, stopping a hair short of the poles -- composed on the camera's
+  quaternion and written back as its **pitch, yaw and bank, the roll
+  held** (`chain::decompose_near`, singular only at bank ±90°, a camera
+  on its side). Stage 3's ZXZ chart was singular at pitch 0, the flame's
+  home pose, and drifted the 2D `rotation`; a FreeLook roll now shows in
+  Bank and `rotation` is never touched.
+- **The pivot.** Each camera's stored point sits a distance in front of
+  its eye; a look moves it by the forward's change times that distance.
+  For a perspective flame that point is `camera_x/y/z`, `1/persp` in
+  front of the projection's viewpoint -- so a look no longer swings the
+  viewpoint round a short orbit. An orthographic flame turns about the
+  screen's centre, with the pan compensation below.
+- **Flight.** A flame moves in world units a second (as before); a
+  solid's and a terrain's target in distances to the target a second,
+  so a flight feels the same at every zoom (the first open question
+  below, answered for those cameras). Mode D's steps are fixed-point adds
+  to its decimal target. A terrain's eye is kept above the orbit's floor.
+- **Offered for every 3D view** by `ui::visibility::fly_mode(ViewKind)`;
+  held keys are released when the window loses focus, or when a text
+  field swallows a key's release.
+- Tests in `camera::fly`: a look turns toward the drag about a still eye
+  for every camera in both modes; FPS keeps a level horizon level; a
+  400-step FreeLook path through the poles stays faithful; flights go
+  along the view's axes; mode D flies at 2^-200.
 
 ## Stage 1 — Shipped
 
@@ -148,7 +186,7 @@ Cost: circular mouse motions accumulate roll (rotation-group holonomy — inhere
 
 The stage-2 screen-frame drag conversion is gone: camera-space axes ARE screen axes (the projection uses camera-space x/y directly), so a twisted view gets screen-correct drag directions with no compensation at all.
 
-### Implementation (`src/app/fly_camera.rs`)
+### Implementation (`src/app/fly_camera.rs`) -- superseded by Stage 4
 
 Per mouse-look event:
 
@@ -177,7 +215,7 @@ The two-fold ambiguity `(P, Y, R) ≡ (−P, Y+π, R+π)` and all 2π wraps are 
 
 **Chart-singularity caveat — the residue of gimbal lock, confined to where it's harmless**: the *view* is smooth and faithful everywhere (`to_euler_near` guarantees the returned triple rebuilds the exact same matrix), but the stored P/Y/R values can reshuffle discontinuously when the camera passes near straight-down/straight-up — the longitude-at-the-north-pole effect. Example: a tiny free-look yaw from the exact default pose legitimately decomposes as `(P=δ, Y=90°, R=90°)`. Sliders may jump while the rendered view moves continuously. Unavoidable while storing Euler angles (a JWF-compatibility constraint we keep).
 
-### Tests (6, in `fly_camera.rs`)
+### Tests (6, in `fly_camera.rs`) -- removed with the ZXZ chart in Stage 4
 
 - `build_is_rotation_matrix` — orthonormality across an angle grid
 - `axis_angle_matches_euler_increments` — pins the two sign-convention identities everything rests on (Euler yaw ≡ world-up rotation; Euler pitch ≡ screen-plane-axis rotation)
@@ -248,8 +286,8 @@ return false`.)
 
 ## Open questions
 
-- **Movement speed scaling**: should speed scale with the visible fractal extent (zoom)? An FPS speed of 1 unit/second feels different at zoom=1× vs zoom=100×. Probably scale by `1 / zoom` so it stays comfortable at any magnification. (Deliberately left out of PR B; revisit after real use.)
-- **Mouse-look while not in fly mode**: should a right-click drag rotate the camera even without entering fly mode? Many 3D apps do this. Decide after fly mode has seen real use.
+- **Movement speed scaling** (answered in Stage 4 for the solid and the terrains, which fly in distances to their target; a flame still flies in world units): should speed scale with the visible fractal extent (zoom)? An FPS speed of 1 unit/second feels different at zoom=1× vs zoom=100×. Probably scale by `1 / zoom` so it stays comfortable at any magnification. (Deliberately left out of PR B; revisit after real use.)
+- **Mouse-look while not in fly mode**: answered by camera-unification C3 -- outside fly mode, Alt+drag or a right drag ORBITS the target (a turntable), in every 3D view; on touch, a long press then a drag, or the viewport's Turn toggle.
 - **Mouse capture / cursor hiding during fly mode**: deferred from PR B (complex on WASM). Drag-based look works without it.
 
 ## Out of scope

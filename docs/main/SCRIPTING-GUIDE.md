@@ -289,9 +289,11 @@ let seconds = param("seconds", 8.0, 2.0, 30.0);
 anim.name = "Slow Turn";
 anim.duration = seconds;
 
-// Flame-level targets use the same names config.set takes.
+// Flame-level targets use the same names config.set takes. Angles are
+// RADIANS, as the file stores them (the panels show degrees): one turn
+// is 2 PI.
 anim.key("rotation", 0.0, 0.0);
-anim.key("rotation", seconds, 360.0);
+anim.key("rotation", seconds, 2.0 * PI());
 
 anim.key("zoom", 0.0, 1.0);
 anim.key("zoom", seconds / 2.0, 1.6, "ease_in_out");

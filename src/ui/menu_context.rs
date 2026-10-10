@@ -94,6 +94,11 @@ pub struct MenuState {
     /// not tell Escape and Simulation from 3D -- so the View menu drew
     /// "3D Mode" as selected in both, and Fly Mode stayed enabled.
     pub render_mode: RenderMode,
+    /// Whether the camera the viewport shows flies
+    /// (`visibility::fly_mode`): every 3D camera's, which the render mode
+    /// alone does not settle -- escape mode is 3D for a solid and a
+    /// terrain, a simulation for its terrain.
+    pub fly_available: bool,
     /// The active tone-map mode, the visibility policy's second axis.
     pub tonemap_mode: crate::scene::tonemap::ToneMapMode,
     /// Whether the loaded config renders a SURFACE, which the mode

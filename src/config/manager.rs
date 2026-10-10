@@ -138,10 +138,10 @@ pub const FLY_CAMERA_HISTORY_DESC: &str = "history.action.fly_camera";
 /// pan or orbit left a history entry a frame.
 pub const GESTURE_HISTORY_DESCS: [&str; 5] = [
     FLY_CAMERA_HISTORY_DESC,
-    "history.action.wheel_zoom",
-    "history.action.pinch_zoom",
-    "history.action.pan_view",
-    "history.action.orbit_camera",
+    crate::camera::gesture::PAN,
+    crate::camera::gesture::ZOOM,
+    crate::camera::gesture::ROTATE,
+    crate::camera::gesture::ORBIT,
 ];
 
 /// Inactivity threshold - pausing longer than this creates a new undo point
@@ -1995,18 +1995,26 @@ impl ConfigManager {
             ConfigPath::SimTerrainCamDistance => Ok(ConfigValue::Float(config.sim.terrain.cam_distance)),
             ConfigPath::SimTerrainTargetX => Ok(ConfigValue::Float(config.sim.terrain.target_x)),
             ConfigPath::SimTerrainTargetY => Ok(ConfigValue::Float(config.sim.terrain.target_y)),
+            ConfigPath::SimTerrainTargetLift => Ok(ConfigValue::Float(config.sim.terrain.target_lift)),
             ConfigPath::SimPathSamples => Ok(ConfigValue::UInt(config.sim.terrain.path.samples)),
             ConfigPath::SimPathBounces => Ok(ConfigValue::UInt(config.sim.terrain.path.bounces)),
             ConfigPath::SimPathEnvironment => Ok(ConfigValue::Float(config.sim.terrain.path.environment)),
-            ConfigPath::SimPathGloss => Ok(ConfigValue::Float(config.sim.terrain.path.gloss)),
-            ConfigPath::SimPathRoughness => Ok(ConfigValue::Float(config.sim.terrain.path.roughness)),
-            ConfigPath::SimPathEmission => Ok(ConfigValue::Float(config.sim.terrain.path.emission)),
+            // The material is the picture's, beside the lights
+            // (docs/projects/materials.md): these are its aliases.
+            ConfigPath::SimPathGloss => Ok(ConfigValue::Float(config.solid_shading.gloss)),
+            ConfigPath::SimPathRoughness => Ok(ConfigValue::Float(config.solid_shading.roughness)),
+            ConfigPath::SimPathEmission => Ok(ConfigValue::Float(config.solid_shading.glow)),
             ConfigPath::SimPathAperture => Ok(ConfigValue::Float(config.sim.terrain.path.aperture)),
             ConfigPath::SimPathFocus => Ok(ConfigValue::Float(config.sim.terrain.path.focus)),
             ConfigPath::SimPathDenoise => Ok(config.sim.terrain.path.denoise.into()),
             ConfigPath::SimPathSky => Ok(config.sim.terrain.path.sky_gradient.into()),
             ConfigPath::SimPathZenith => Ok(ConfigValue::ColorRgb(config.sim.terrain.path.zenith)),
             ConfigPath::SimWarpZoom => Ok(ConfigValue::Float(config.sim.warp.zoom)),
+            ConfigPath::SimViewCenterX => Ok(ConfigValue::Float(config.sim.view.center_x)),
+            ConfigPath::SimViewCenterY => Ok(ConfigValue::Float(config.sim.view.center_y)),
+            ConfigPath::SimViewZoom => Ok(ConfigValue::Float(config.sim.view.zoom)),
+            ConfigPath::SimViewRotation => Ok(ConfigValue::Float(config.sim.view.rotation)),
+            ConfigPath::SimViewTile => Ok(ConfigValue::Bool(config.sim.view.tile)),
             ConfigPath::SimWarpRotation => Ok(ConfigValue::Float(config.sim.warp.rotation)),
             ConfigPath::SimWarpPanX => Ok(ConfigValue::Float(config.sim.warp.pan_x)),
             ConfigPath::SimWarpPanY => Ok(ConfigValue::Float(config.sim.warp.pan_y)),
@@ -2139,14 +2147,15 @@ impl ConfigManager {
             ConfigPath::EscapeTerrainDetail => Ok(config.escape.terrain.detail.into()),
             ConfigPath::EscapeTerrainFar => Ok(config.escape.terrain.far.into()),
             ConfigPath::EscapeTerrainHaze => Ok(config.escape.terrain.haze.into()),
+            ConfigPath::EscapeTerrainTargetLift => Ok(config.escape.terrain.target_lift.into()),
             ConfigPath::EscapeTerrainTier => Ok(ConfigValue::String(config.escape.terrain.tier.as_str().to_string())),
             ConfigPath::EscapeSolidTier => Ok(ConfigValue::String(config.escape.solid_tier.as_str().to_string())),
             ConfigPath::EscapePathSamples => Ok(ConfigValue::UInt(config.escape.path.samples)),
             ConfigPath::EscapePathBounces => Ok(ConfigValue::UInt(config.escape.path.bounces)),
             ConfigPath::EscapePathEnvironment => Ok(config.escape.path.environment.into()),
-            ConfigPath::EscapePathGloss => Ok(config.escape.path.gloss.into()),
-            ConfigPath::EscapePathRoughness => Ok(config.escape.path.roughness.into()),
-            ConfigPath::EscapePathEmission => Ok(config.escape.path.emission.into()),
+            ConfigPath::EscapePathGloss => Ok(config.solid_shading.gloss.into()),
+            ConfigPath::EscapePathRoughness => Ok(config.solid_shading.roughness.into()),
+            ConfigPath::EscapePathEmission => Ok(config.solid_shading.glow.into()),
             ConfigPath::EscapePathAperture => Ok(config.escape.path.aperture.into()),
             ConfigPath::EscapePathFocus => Ok(config.escape.path.focus.into()),
             ConfigPath::EscapePathDenoise => Ok(config.escape.path.denoise.into()),
@@ -2651,6 +2660,9 @@ impl ConfigManager {
             ConfigPath::SolidShadowStrength => Ok(config.solid_shading.shadow_strength.into()),
             ConfigPath::ShadingStrength => Ok(config.solid_shading.shading_strength.into()),
             ConfigPath::SolidAmbient => Ok(config.solid_shading.ambient.into()),
+            ConfigPath::SolidGloss => Ok(config.solid_shading.gloss.into()),
+            ConfigPath::SolidRoughness => Ok(config.solid_shading.roughness.into()),
+            ConfigPath::SolidGlow => Ok(config.solid_shading.glow.into()),
             ConfigPath::SolidDiffuse => Ok(config.solid_shading.diffuse.into()),
             ConfigPath::SolidSpecular => Ok(config.solid_shading.specular.into()),
             ConfigPath::SolidShininess => Ok(config.solid_shading.shininess.into()),
@@ -3289,7 +3301,9 @@ impl ConfigManager {
             }
             ConfigPath::SimTerrainCamPitch => {
                 let v: f32 = value.try_into()?;
-                self.current.sim.terrain.cam_pitch = v.clamp(-1.5607964, 1.5607964);
+                // To the poles, as the escape cameras: `solid_frame`
+                // holds there, and a fly mode's look passes through them.
+                self.current.sim.terrain.cam_pitch = v.clamp(-1.5708, 1.5708);
             }
             ConfigPath::SimTerrainCamYaw => {
                 let v: f32 = value.try_into()?;
@@ -3315,6 +3329,10 @@ impl ConfigManager {
                 let v: f32 = value.try_into()?;
                 self.current.sim.terrain.target_y = v;
             }
+            ConfigPath::SimTerrainTargetLift => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.target_lift = if v.is_finite() { v.clamp(-1.0e3, 1.0e3) } else { 0.0 };
+            }
             ConfigPath::SimPathSamples => {
                 let v: u32 = value.try_into()?;
                 self.current.sim.terrain.path.samples = v.clamp(1, 65_536);
@@ -3329,15 +3347,15 @@ impl ConfigManager {
             }
             ConfigPath::SimPathGloss => {
                 let v: f32 = value.try_into()?;
-                self.current.sim.terrain.path.gloss = v.clamp(0.0, 1.0);
+                self.current.solid_shading.gloss = v.clamp(0.0, 1.0);
             }
             ConfigPath::SimPathRoughness => {
                 let v: f32 = value.try_into()?;
-                self.current.sim.terrain.path.roughness = v.clamp(0.02, 1.0);
+                self.current.solid_shading.roughness = v.clamp(0.02, 1.0);
             }
             ConfigPath::SimPathEmission => {
                 let v: f32 = value.try_into()?;
-                self.current.sim.terrain.path.emission = v.clamp(0.0, 16.0);
+                self.current.solid_shading.glow = v.clamp(0.0, 16.0);
             }
             ConfigPath::SimPathAperture => {
                 let v: f32 = value.try_into()?;
@@ -3390,6 +3408,27 @@ impl ConfigManager {
             ConfigPath::SimWarpZoom => {
                 let v: f32 = f32::try_from(value)?;
                 self.current.sim.warp.zoom = if v.is_finite() { v.clamp(0.5, 2.0) } else { 1.0 };
+            }
+            // The view: a centre anywhere (a tiled field goes on), a zoom
+            // from a speck to a cell filling the screen, any turn.
+            ConfigPath::SimViewCenterX => {
+                let v: f32 = f32::try_from(value)?;
+                self.current.sim.view.center_x = if v.is_finite() { v.clamp(-1.0e6, 1.0e6) } else { 0.5 };
+            }
+            ConfigPath::SimViewCenterY => {
+                let v: f32 = f32::try_from(value)?;
+                self.current.sim.view.center_y = if v.is_finite() { v.clamp(-1.0e6, 1.0e6) } else { 0.5 };
+            }
+            ConfigPath::SimViewZoom => {
+                let v: f32 = f32::try_from(value)?;
+                self.current.sim.view.zoom = if v.is_finite() { v.clamp(1.0e-3, 1.0e4) } else { 1.0 };
+            }
+            ConfigPath::SimViewRotation => {
+                let v: f32 = f32::try_from(value)?;
+                self.current.sim.view.rotation = if v.is_finite() { v } else { 0.0 };
+            }
+            ConfigPath::SimViewTile => {
+                self.current.sim.view.tile = bool::try_from(value)?;
             }
             ConfigPath::SimWarpRotation => {
                 let v: f32 = f32::try_from(value)?;
@@ -3692,6 +3731,12 @@ impl ConfigManager {
                 let v: f32 = value.try_into()?;
                 self.current.escape.terrain.haze = v.clamp(0.0, 1.0);
             }
+            ConfigPath::EscapeTerrainTargetLift => {
+                // Bounded where the f32 world still resolves a section:
+                // a target a thousand view widths up is a dot of ground.
+                let v: f32 = value.try_into()?;
+                self.current.escape.terrain.target_lift = if v.is_finite() { v.clamp(-1.0e3, 1.0e3) } else { 0.0 };
+            }
             ConfigPath::EscapeTerrainTier => {
                 let v: String = value.try_into()?;
                 self.current.escape.terrain.tier = crate::config::escape::RenderTier::from_str_or_default(&v);
@@ -3714,15 +3759,15 @@ impl ConfigManager {
             }
             ConfigPath::EscapePathGloss => {
                 let v: f32 = value.try_into()?;
-                self.current.escape.path.gloss = v.clamp(0.0, 1.0);
+                self.current.solid_shading.gloss = v.clamp(0.0, 1.0);
             }
             ConfigPath::EscapePathRoughness => {
                 let v: f32 = value.try_into()?;
-                self.current.escape.path.roughness = v.clamp(0.02, 1.0);
+                self.current.solid_shading.roughness = v.clamp(0.02, 1.0);
             }
             ConfigPath::EscapePathEmission => {
                 let v: f32 = value.try_into()?;
-                self.current.escape.path.emission = v.clamp(0.0, 16.0);
+                self.current.solid_shading.glow = v.clamp(0.0, 16.0);
             }
             ConfigPath::EscapePathAperture => {
                 let v: f32 = value.try_into()?;
@@ -4318,6 +4363,18 @@ impl ConfigManager {
             }
             ConfigPath::SolidShininess => {
                 self.current.solid_shading.shininess = value.try_into()?;
+            }
+            ConfigPath::SolidGloss => {
+                let v: f32 = value.try_into()?;
+                self.current.solid_shading.gloss = if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
+            }
+            ConfigPath::SolidRoughness => {
+                let v: f32 = value.try_into()?;
+                self.current.solid_shading.roughness = if v.is_finite() { v.clamp(0.02, 1.0) } else { 0.5 };
+            }
+            ConfigPath::SolidGlow => {
+                let v: f32 = value.try_into()?;
+                self.current.solid_shading.glow = if v.is_finite() { v.clamp(0.0, 16.0) } else { 0.0 };
             }
             ConfigPath::SsaoStrength => {
                 self.current.solid_shading.ssao_strength = value.try_into()?;

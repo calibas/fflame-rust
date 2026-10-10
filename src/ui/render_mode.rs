@@ -87,16 +87,6 @@ pub fn is_non_flame(mode: RenderMode) -> bool {
     mode.is_non_flame()
 }
 
-/// Whether the fly camera means anything in this mode.
-///
-/// Its own function because the menu bar used to ask `!render_mode_2d`,
-/// which is true in Escape and Simulation as well -- so the button
-/// stayed live in both, and only a runtime check in
-/// `app::fly_camera` stopped it doing anything.
-pub fn fly_mode_available(mode: RenderMode) -> bool {
-    matches!(mode, RenderMode::ThreeD)
-}
-
 /// The workspace a mode wants, and the panel that edits it.
 ///
 /// `None` for the flame modes: they share the Standard workspace, and
@@ -350,18 +340,6 @@ mod tests {
                 space_runs_the_simulation(*m),
                 *m == RenderMode::Simulation,
                 "{m:?}"
-            );
-        }
-    }
-
-    /// Fly mode belongs to 3D alone.
-    #[test]
-    fn fly_mode_is_offered_in_three_d_alone() {
-        for mode in RenderMode::ALL {
-            assert_eq!(
-                fly_mode_available(*mode),
-                *mode == RenderMode::ThreeD,
-                "{mode:?}"
             );
         }
     }

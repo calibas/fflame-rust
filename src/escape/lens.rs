@@ -747,6 +747,90 @@ mod gpu_tests {
         a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count()
     }
 
+    /// The mean difference between two renders over each quadrant of the
+    /// screen, a margin either side of the centre lines left out --
+    /// `[upper left, upper right, lower left, lower right]` -- and how much
+    /// each quadrant of `a` holds (its luminance's spread), so a quadrant
+    /// of background alone can be told from one the lens left alone.
+    fn quadrants(a: &[u8], b: &[u8]) -> ([f64; 4], [f64; 4]) {
+        let (w, h) = (W as usize, H as usize);
+        let margin = 4usize;
+        let mut diff = [0.0f64; 4];
+        let mut lum = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+        for y in 0..h {
+            for x in 0..w {
+                if x.abs_diff(w / 2) < margin || y.abs_diff(h / 2) < margin {
+                    continue;
+                }
+                let q = usize::from(x >= w / 2) + 2 * usize::from(y >= h / 2);
+                let k = (y * w + x) * 4;
+                diff[q] += (0..3).map(|c| (a[k + c] as f64 - b[k + c] as f64).abs()).sum::<f64>() / 3.0;
+                lum[q].push((a[k] as f64 + a[k + 1] as f64 + a[k + 2] as f64) / 3.0);
+            }
+        }
+        let n = ((w / 2 - margin) * (h / 2 - margin)) as f64;
+        let spread = lum.map(|v| {
+            let m = v.iter().sum::<f64>() / v.len() as f64;
+            (v.iter().map(|l| (l - m) * (l - m)).sum::<f64>() / v.len() as f64).sqrt()
+        });
+        (diff.map(|d| d / n), spread)
+    }
+
+    /// A lens sees its view's own y (decided with the user, 2026-10-10):
+    /// the plane's Im UP; a Flame Attractor's and mode D's world y DOWN,
+    /// as flame mode draws it -- since `ifs::view_basis` stands a Flame
+    /// Attractor as its flame does, a lens bends it as the same variation
+    /// would bend the flame on screen. `bent` is the lopsided lens for
+    /// asking: in its own terms it leaves `x >= 0, y >= 0` alone and
+    /// moves everything else, so the quadrant of the screen a render with
+    /// it shares with one without says which way up the lens saw the
+    /// screen -- the upper right for y up, the lower right for y down.
+    #[test]
+    #[ignore = "needs a GPU; run with --ignored"]
+    fn a_lens_sees_its_views_own_y() {
+        let (device, queue) = device();
+        let names = ["upper left", "upper right", "lower left", "lower right"];
+        let mut solid = config("", 1.0);
+        solid.escape.formula = "quaternion_julia_solid".to_string();
+        solid.escape.coloring = crate::escape::ifs::get_ifs("quaternion_julia_solid").unwrap().default_coloring.to_string();
+        solid.escape.zoom_log2 = 1.0;
+        let mut plane = config("", 1.0);
+        plane.escape.center_re = "-0.745".to_string();
+        plane.escape.center_im = "0.11".to_string();
+        plane.escape.zoom_log2 = 6.0;
+        plane.escape.max_iter = 256;
+        let mut attractor: FractalConfig = {
+            let presets: Vec<FractalConfig> = serde_json::from_str::<Vec<serde_json::Value>>(crate::resources::presets::PRESETS_JSON)
+                .expect("presets parse")
+                .into_iter()
+                .filter_map(|v| FractalConfig::from_json(&v.to_string()).ok())
+                .collect();
+            presets.into_iter().find(|c| c.flame.name == "Heighway Dragon").expect("the dragon preset")
+        };
+        attractor.escape.zoom_log2 += 1.5;
+        for (name, base, expected) in [
+            ("plane", plane, "upper right"),
+            ("flame attractor", attractor, "lower right"),
+            ("mode D", solid, "lower right"),
+        ] {
+            let plain = render(&device, &queue, &base);
+            let mut lensed = base.clone();
+            lensed.escape.lens = "bent".to_string();
+            // An amount of -1 is the lens's map whole (its weight is the
+            // amount negated): `bent` itself.
+            lensed.escape.lens_amount = -1.0;
+            let (diff, spread) = quadrants(&plain, &render(&device, &queue, &lensed));
+            for q in 0..4 {
+                println!("  {name} {}: lens moved {:.2}, content {:.1}", names[q], diff[q], spread[q]);
+                assert!(spread[q] > 2.0, "{name}: the {} quadrant has nothing in it to bend", names[q]);
+            }
+            let still = (0..4).min_by(|a, b| diff[*a].total_cmp(&diff[*b])).unwrap();
+            let next = (0..4).filter(|q| *q != still).map(|q| diff[q]).fold(f64::INFINITY, f64::min);
+            assert!(diff[still] * 4.0 < next, "{name}: no quadrant stands out as untouched: {diff:?}");
+            assert_eq!(names[still], expected, "{name}: the lens left the {} quadrant alone", names[still]);
+        }
+    }
+
     /// End to end on a real device: a lens changes the picture, an
     /// amount of zero does not, and the amount is continuous between.
     ///

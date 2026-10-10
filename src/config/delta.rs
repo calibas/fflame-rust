@@ -253,6 +253,13 @@ pub enum ConfigPath {
     SolidDiffuse,
     SolidSpecular,
     SolidShininess,
+    /// The material's coat -- reflectance at normal incidence and
+    /// roughness -- and the albedo's glow (docs/projects/materials.md):
+    /// one per picture, read by every tier. `EscapePathGloss` and
+    /// `SimPathGloss` (and their roughness and emission) are aliases.
+    SolidGloss,
+    SolidRoughness,
+    SolidGlow,
     SsaoStrength,
     SsaoRadius,
     NormalSmoothing,
@@ -410,6 +417,15 @@ pub enum ConfigPath {
     SimWarpCull,
     /// Which channels the warp moves, a bit mask 0..15. Int.
     SimWarpLayers,
+    /// The 2D picture's view (`SimView`): its centre as a fraction of the
+    /// grid, its zoom over the fit, its turn in radians -- all animatable
+    /// -- and whether a periodic field tiles (bool, not animatable).
+    /// Display only: none of them touches the run.
+    SimViewCenterX,
+    SimViewCenterY,
+    SimViewZoom,
+    SimViewRotation,
+    SimViewTile,
     /// The matte: which cells are figure and which are background
     /// (`SimMatte`). The channel and the direction are choices; the
     /// cutoff and the softness are quantities and animate -- a cutoff
@@ -463,6 +479,9 @@ pub enum ConfigPath {
     SimTerrainCamDistance,
     SimTerrainTargetX,
     SimTerrainTargetY,
+    /// The simulation terrain camera's target above half its relief, in
+    /// grid widths.
+    SimTerrainTargetLift,
     SimPathSamples,
     SimPathBounces,
     SimPathEnvironment,
@@ -525,6 +544,9 @@ pub enum ConfigPath {
     EscapeTerrainDetail,
     EscapeTerrainFar,
     EscapeTerrainHaze,
+    /// The escape terrain camera's target above the relief's top, in
+    /// view widths.
+    EscapeTerrainTargetLift,
     EscapeTerrainTier,
     EscapeSolidTier,
     EscapePathSamples,
@@ -1114,6 +1136,11 @@ impl Display for ConfigPath {
             ConfigPath::SimWarpMode => write!(f, "Simulation Warp Mode"),
             ConfigPath::SimWarpCull => write!(f, "Simulation Warp Cull"),
             ConfigPath::SimWarpLayers => write!(f, "Simulation Warp Layers"),
+            ConfigPath::SimViewCenterX => write!(f, "Simulation View Center X"),
+            ConfigPath::SimViewCenterY => write!(f, "Simulation View Center Y"),
+            ConfigPath::SimViewZoom => write!(f, "Simulation View Zoom"),
+            ConfigPath::SimViewRotation => write!(f, "Simulation View Rotation"),
+            ConfigPath::SimViewTile => write!(f, "Simulation View Tile"),
             ConfigPath::SimMatteChannel => write!(f, "Simulation Matte Channel"),
             ConfigPath::SimMatteCutoff => write!(f, "Simulation Matte Cutoff"),
             ConfigPath::SimMatteSoftness => write!(f, "Simulation Matte Softness"),
@@ -1151,6 +1178,7 @@ impl Display for ConfigPath {
             ConfigPath::SimTerrainCamDistance => write!(f, "Simulation Terrain Distance to Target"),
             ConfigPath::SimTerrainTargetX => write!(f, "Simulation Terrain Target X"),
             ConfigPath::SimTerrainTargetY => write!(f, "Simulation Terrain Target Y"),
+            ConfigPath::SimTerrainTargetLift => write!(f, "Simulation Terrain Target Lift"),
             ConfigPath::SimPathSamples => write!(f, "Simulation Path Samples"),
             ConfigPath::SimPathBounces => write!(f, "Simulation Path Bounces"),
             ConfigPath::SimPathEnvironment => write!(f, "Simulation Sky Light"),
@@ -1200,6 +1228,7 @@ impl Display for ConfigPath {
             ConfigPath::EscapeTerrainDetail => write!(f, "Terrain Detail"),
             ConfigPath::EscapeTerrainFar => write!(f, "Terrain Distance"),
             ConfigPath::EscapeTerrainHaze => write!(f, "Terrain Haze"),
+            ConfigPath::EscapeTerrainTargetLift => write!(f, "Terrain Target Lift"),
             ConfigPath::EscapeTerrainTier => write!(f, "Terrain Rendering"),
             ConfigPath::EscapeSolidTier => write!(f, "Solid Rendering Tier"),
             ConfigPath::EscapePathSamples => write!(f, "Path Samples"),
@@ -1262,6 +1291,9 @@ impl Display for ConfigPath {
             ConfigPath::SolidDiffuse => write!(f, "Diffuse Light"),
             ConfigPath::SolidSpecular => write!(f, "Specular"),
             ConfigPath::SolidShininess => write!(f, "Shininess"),
+            ConfigPath::SolidGloss => write!(f, "Gloss"),
+            ConfigPath::SolidRoughness => write!(f, "Roughness"),
+            ConfigPath::SolidGlow => write!(f, "Glow"),
             ConfigPath::SsaoStrength => write!(f, "SSAO Strength"),
             ConfigPath::SsaoRadius => write!(f, "SSAO Radius"),
             ConfigPath::NormalSmoothing => write!(f, "Normal Smoothing"),
@@ -1506,6 +1538,11 @@ impl ConfigPath {
             ConfigPath::SimWarpMode => I18nKey::simple("history.param.sim_warp_mode"),
             ConfigPath::SimWarpCull => I18nKey::simple("history.param.sim_warp_cull"),
             ConfigPath::SimWarpLayers => I18nKey::simple("history.param.sim_warp_layers"),
+            ConfigPath::SimViewCenterX => I18nKey::simple("history.param.sim_view_center_x"),
+            ConfigPath::SimViewCenterY => I18nKey::simple("history.param.sim_view_center_y"),
+            ConfigPath::SimViewZoom => I18nKey::simple("history.param.sim_view_zoom"),
+            ConfigPath::SimViewRotation => I18nKey::simple("history.param.sim_view_rotation"),
+            ConfigPath::SimViewTile => I18nKey::simple("history.param.sim_view_tile"),
             ConfigPath::SimMatteChannel => I18nKey::simple("history.param.sim_matte_channel"),
             ConfigPath::SimMatteCutoff => I18nKey::simple("history.param.sim_matte_cutoff"),
             ConfigPath::SimMatteSoftness => I18nKey::simple("history.param.sim_matte_softness"),
@@ -1555,6 +1592,7 @@ impl ConfigPath {
             ConfigPath::SimTerrainCamDistance => I18nKey::simple("history.param.sim_terrain_cam_distance"),
             ConfigPath::SimTerrainTargetX => I18nKey::simple("history.param.sim_terrain_target_x"),
             ConfigPath::SimTerrainTargetY => I18nKey::simple("history.param.sim_terrain_target_y"),
+            ConfigPath::SimTerrainTargetLift => I18nKey::simple("history.param.sim_terrain_target_lift"),
             ConfigPath::SimPathSamples => I18nKey::simple("history.param.sim_path_samples"),
             ConfigPath::SimPathBounces => I18nKey::simple("history.param.sim_path_bounces"),
             ConfigPath::SimPathEnvironment => I18nKey::simple("history.param.sim_path_environment"),
@@ -1617,6 +1655,7 @@ impl ConfigPath {
             ConfigPath::EscapeTerrainDetail => I18nKey::simple("history.param.escape_terrain_detail"),
             ConfigPath::EscapeTerrainFar => I18nKey::simple("history.param.escape_terrain_far"),
             ConfigPath::EscapeTerrainHaze => I18nKey::simple("history.param.escape_terrain_haze"),
+            ConfigPath::EscapeTerrainTargetLift => I18nKey::simple("history.param.escape_terrain_target_lift"),
             ConfigPath::EscapeTerrainTier => I18nKey::simple("history.param.escape_terrain_tier"),
             ConfigPath::EscapeSolidTier => I18nKey::simple("history.param.escape_solid_tier"),
             ConfigPath::EscapePathSamples => I18nKey::simple("history.param.escape_path_samples"),
@@ -1946,6 +1985,9 @@ impl ConfigPath {
             ConfigPath::SolidDiffuse => I18nKey::simple("history.param.solid_diffuse"),
             ConfigPath::SolidSpecular => I18nKey::simple("history.param.solid_specular"),
             ConfigPath::SolidShininess => I18nKey::simple("history.param.solid_shininess"),
+            ConfigPath::SolidGloss => I18nKey::simple("history.param.solid_gloss"),
+            ConfigPath::SolidRoughness => I18nKey::simple("history.param.solid_roughness"),
+            ConfigPath::SolidGlow => I18nKey::simple("history.param.solid_glow"),
             ConfigPath::SsaoStrength => I18nKey::simple("history.param.ssao_strength"),
             ConfigPath::SsaoRadius => I18nKey::simple("history.param.ssao_radius"),
             ConfigPath::NormalSmoothing => I18nKey::simple("history.param.normal_smoothing"),
@@ -2843,6 +2885,9 @@ impl ConfigPath {
             | ConfigPath::SolidDiffuse
             | ConfigPath::SolidSpecular
             | ConfigPath::SolidShininess
+            | ConfigPath::SolidGloss
+            | ConfigPath::SolidRoughness
+            | ConfigPath::SolidGlow
             | ConfigPath::SsaoStrength
             | ConfigPath::SsaoRadius
             | ConfigPath::NormalSmoothing
@@ -3036,6 +3081,7 @@ impl ConfigPath {
             | ConfigPath::EscapeTerrainDetail
             | ConfigPath::EscapeTerrainFar
             | ConfigPath::EscapeTerrainHaze
+            | ConfigPath::EscapeTerrainTargetLift
             | ConfigPath::EscapeTerrainTier
             | ConfigPath::EscapeSolidTier
             | ConfigPath::EscapePathSamples
@@ -3107,6 +3153,12 @@ impl ConfigPath {
             | ConfigPath::SimWarpMode
             | ConfigPath::SimWarpCull
             | ConfigPath::SimWarpLayers
+            // The view is where the picture looks, not what the field is.
+            | ConfigPath::SimViewCenterX
+            | ConfigPath::SimViewCenterY
+            | ConfigPath::SimViewZoom
+            | ConfigPath::SimViewRotation
+            | ConfigPath::SimViewTile
             // The matte is a colouring decision: the field is
             // untouched, only which of it is drawn.
             | ConfigPath::SimMatteChannel
@@ -3146,6 +3198,7 @@ impl ConfigPath {
             | ConfigPath::SimTerrainCamDistance
             | ConfigPath::SimTerrainTargetX
             | ConfigPath::SimTerrainTargetY
+            | ConfigPath::SimTerrainTargetLift
             | ConfigPath::SimPathSamples
             | ConfigPath::SimPathBounces
             | ConfigPath::SimPathEnvironment
@@ -3460,6 +3513,7 @@ impl ConfigPath {
             ConfigPath::SimTerrainCamDistance => "Sim.Terrain.CamDistance".to_string(),
             ConfigPath::SimTerrainTargetX => "Sim.Terrain.TargetX".to_string(),
             ConfigPath::SimTerrainTargetY => "Sim.Terrain.TargetY".to_string(),
+            ConfigPath::SimTerrainTargetLift => "Sim.Terrain.TargetLift".to_string(),
             ConfigPath::SimPathSamples => "Sim.Path.Samples".to_string(),
             ConfigPath::SimPathBounces => "Sim.Path.Bounces".to_string(),
             ConfigPath::SimPathEnvironment => "Sim.Path.Environment".to_string(),
@@ -3494,6 +3548,11 @@ impl ConfigPath {
             ConfigPath::SimWarpMode => "Sim.WarpMode".to_string(),
             ConfigPath::SimWarpCull => "Sim.WarpCull".to_string(),
             ConfigPath::SimWarpLayers => "Sim.WarpLayers".to_string(),
+            ConfigPath::SimViewCenterX => "Sim.View.CenterX".to_string(),
+            ConfigPath::SimViewCenterY => "Sim.View.CenterY".to_string(),
+            ConfigPath::SimViewZoom => "Sim.View.Zoom".to_string(),
+            ConfigPath::SimViewRotation => "Sim.View.Rotation".to_string(),
+            ConfigPath::SimViewTile => "Sim.View.Tile".to_string(),
             ConfigPath::SimMatteChannel => "Sim.MatteChannel".to_string(),
             ConfigPath::SimMatteCutoff => "Sim.MatteCutoff".to_string(),
             ConfigPath::SimMatteSoftness => "Sim.MatteSoftness".to_string(),
@@ -3550,6 +3609,7 @@ impl ConfigPath {
             ConfigPath::EscapeTerrainDetail => "Escape.Terrain.Detail".to_string(),
             ConfigPath::EscapeTerrainFar => "Escape.Terrain.Far".to_string(),
             ConfigPath::EscapeTerrainHaze => "Escape.Terrain.Haze".to_string(),
+            ConfigPath::EscapeTerrainTargetLift => "Escape.Terrain.TargetLift".to_string(),
             ConfigPath::EscapeTerrainTier => "Escape.Terrain.Tier".to_string(),
             ConfigPath::EscapeSolidTier => "Escape.SolidTier".to_string(),
             ConfigPath::EscapePathSamples => "Escape.Path.Samples".to_string(),
@@ -3609,6 +3669,9 @@ impl ConfigPath {
             ConfigPath::SolidDiffuse => "SolidDiffuse".to_string(),
             ConfigPath::SolidSpecular => "SolidSpecular".to_string(),
             ConfigPath::SolidShininess => "SolidShininess".to_string(),
+            ConfigPath::SolidGloss => "SolidGloss".to_string(),
+            ConfigPath::SolidRoughness => "SolidRoughness".to_string(),
+            ConfigPath::SolidGlow => "SolidGlow".to_string(),
             ConfigPath::SsaoStrength => "SsaoStrength".to_string(),
             ConfigPath::SsaoRadius => "SsaoRadius".to_string(),
             ConfigPath::NormalSmoothing => "NormalSmoothing".to_string(),
@@ -3748,6 +3811,9 @@ impl ConfigPath {
             "SolidDiffuse" => return Some(ConfigPath::SolidDiffuse),
             "SolidSpecular" => return Some(ConfigPath::SolidSpecular),
             "SolidShininess" => return Some(ConfigPath::SolidShininess),
+            "SolidGloss" => return Some(ConfigPath::SolidGloss),
+            "SolidRoughness" => return Some(ConfigPath::SolidRoughness),
+            "SolidGlow" => return Some(ConfigPath::SolidGlow),
             "SsaoStrength" => return Some(ConfigPath::SsaoStrength),
             "SsaoRadius" => return Some(ConfigPath::SsaoRadius),
             "NormalSmoothing" => return Some(ConfigPath::NormalSmoothing),
@@ -3820,6 +3886,7 @@ impl ConfigPath {
                 ["Terrain", "Detail"] => return Some(ConfigPath::EscapeTerrainDetail),
                 ["Terrain", "Far"] => return Some(ConfigPath::EscapeTerrainFar),
                 ["Terrain", "Haze"] => return Some(ConfigPath::EscapeTerrainHaze),
+                ["Terrain", "TargetLift"] => return Some(ConfigPath::EscapeTerrainTargetLift),
                 ["Terrain", "Tier"] => return Some(ConfigPath::EscapeTerrainTier),
                 ["SolidTier"] => return Some(ConfigPath::EscapeSolidTier),
                 ["Path", "Samples"] => return Some(ConfigPath::EscapePathSamples),
@@ -3904,6 +3971,7 @@ impl ConfigPath {
                 ["Terrain", "CamDistance"] => return Some(ConfigPath::SimTerrainCamDistance),
                 ["Terrain", "TargetX"] => return Some(ConfigPath::SimTerrainTargetX),
                 ["Terrain", "TargetY"] => return Some(ConfigPath::SimTerrainTargetY),
+                ["Terrain", "TargetLift"] => return Some(ConfigPath::SimTerrainTargetLift),
                 ["Path", "Samples"] => return Some(ConfigPath::SimPathSamples),
                 ["Path", "Bounces"] => return Some(ConfigPath::SimPathBounces),
                 ["Path", "Environment"] => return Some(ConfigPath::SimPathEnvironment),
@@ -3938,6 +4006,11 @@ impl ConfigPath {
                 ["WarpMode"] => return Some(ConfigPath::SimWarpMode),
                 ["WarpCull"] => return Some(ConfigPath::SimWarpCull),
                 ["WarpLayers"] => return Some(ConfigPath::SimWarpLayers),
+                ["View", "CenterX"] => return Some(ConfigPath::SimViewCenterX),
+                ["View", "CenterY"] => return Some(ConfigPath::SimViewCenterY),
+                ["View", "Zoom"] => return Some(ConfigPath::SimViewZoom),
+                ["View", "Rotation"] => return Some(ConfigPath::SimViewRotation),
+                ["View", "Tile"] => return Some(ConfigPath::SimViewTile),
                 ["MatteChannel"] => return Some(ConfigPath::SimMatteChannel),
                 ["MatteCutoff"] => return Some(ConfigPath::SimMatteCutoff),
                 ["MatteSoftness"] => return Some(ConfigPath::SimMatteSoftness),
@@ -4352,6 +4425,9 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SolidDiffuse
         | ConfigPath::SolidSpecular
         | ConfigPath::SolidShininess
+        | ConfigPath::SolidGloss
+        | ConfigPath::SolidRoughness
+        | ConfigPath::SolidGlow
         | ConfigPath::SsaoStrength
         | ConfigPath::SsaoRadius
         | ConfigPath::NormalSmoothing
@@ -4445,6 +4521,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SimWarpMode
         | ConfigPath::SimWarpCull
         | ConfigPath::SimWarpLayers
+        | ConfigPath::SimViewTile
         | ConfigPath::SimMatteChannel
         | ConfigPath::SimMatteInvert
         | ConfigPath::SimMatteEdge
@@ -4653,6 +4730,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SimTerrainCamDistance
         | ConfigPath::SimTerrainTargetX
         | ConfigPath::SimTerrainTargetY
+        | ConfigPath::SimTerrainTargetLift
         | ConfigPath::SimPathEnvironment
         | ConfigPath::SimPathGloss
         | ConfigPath::SimPathRoughness
@@ -4666,6 +4744,10 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SimWarpPanX
         | ConfigPath::SimWarpPanY
         | ConfigPath::SimWarpFlow
+        | ConfigPath::SimViewCenterX
+        | ConfigPath::SimViewCenterY
+        | ConfigPath::SimViewZoom
+        | ConfigPath::SimViewRotation
         | ConfigPath::SimMatteCutoff
         | ConfigPath::SimMatteSoftness
         | ConfigPath::SimModelParam { .. }
@@ -4701,6 +4783,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeTerrainDetail
         | ConfigPath::EscapeTerrainFar
         | ConfigPath::EscapeTerrainHaze
+        | ConfigPath::EscapeTerrainTargetLift
         | ConfigPath::EscapePathEnvironment
         | ConfigPath::EscapePathGloss
         | ConfigPath::EscapePathRoughness
@@ -5295,6 +5378,9 @@ mod tests {
             ConfigPath::SolidDiffuse,
             ConfigPath::SolidSpecular,
             ConfigPath::SolidShininess,
+            ConfigPath::SolidGloss,
+            ConfigPath::SolidRoughness,
+            ConfigPath::SolidGlow,
             ConfigPath::SsaoStrength,
             ConfigPath::SsaoRadius,
             ConfigPath::NormalSmoothing,
@@ -5409,6 +5495,7 @@ mod tests {
             (ConfigPath::EscapeTerrainDetail, ConfigValue::Float(2.0), true),
             (ConfigPath::EscapeTerrainFar, ConfigValue::Float(12.0), true),
             (ConfigPath::EscapeTerrainHaze, ConfigValue::Float(0.5), true),
+            (ConfigPath::EscapeTerrainTargetLift, ConfigValue::Float(0.5), true),
             (ConfigPath::EscapeTerrainTier, ConfigValue::String("path_traced".into()), false),
             (ConfigPath::EscapeSolidTier, ConfigValue::String("auto".into()), false),
             (ConfigPath::EscapePathSamples, ConfigValue::UInt(64), false),
@@ -5448,7 +5535,9 @@ mod tests {
         assert_eq!(t.source, crate::config::escape::TerrainSource::EscapeCount);
         let e = &m.config().escape;
         assert_eq!(e.solid_tier, crate::config::escape::RenderTier::Auto);
-        assert_eq!((e.path.samples, e.path.bounces, e.path.gloss), (64, 4, 0.25));
+        assert_eq!((e.path.samples, e.path.bounces), (64, 4));
+        // The gloss is the picture's material now: the alias writes it.
+        assert_eq!(m.config().solid_shading.gloss, 0.25);
     }
 
     /// Every simulation terrain path round-trips its key, sets and reads
@@ -5475,6 +5564,7 @@ mod tests {
             (ConfigPath::SimTerrainCamDistance, ConfigValue::Float(0.25), true),
             (ConfigPath::SimTerrainTargetX, ConfigValue::Float(0.25), true),
             (ConfigPath::SimTerrainTargetY, ConfigValue::Float(0.25), true),
+            (ConfigPath::SimTerrainTargetLift, ConfigValue::Float(0.25), true),
             (ConfigPath::SimPathSamples, ConfigValue::UInt(2), false),
             (ConfigPath::SimPathBounces, ConfigValue::UInt(2), false),
             (ConfigPath::SimPathEnvironment, ConfigValue::Float(0.25), true),

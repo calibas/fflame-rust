@@ -1147,6 +1147,12 @@ impl App {
                                 window.request_redraw();
                             }
                         },
+                        WindowEvent::Focused(false) => {
+                            // A key held as the window lost focus never
+                            // sends its key-up here: let go of them all,
+                            // or the fly camera flies on.
+                            app.release_fly_keys();
+                        }
                         WindowEvent::Focused(true) => {
                             // Reconfigure surface on focus regain to fix UI offset
                             // (Windows DWM composition changes can desync surface position)
@@ -1159,6 +1165,16 @@ impl App {
                         WindowEvent::KeyboardInput { event: key_event, .. } if !consumed => {
                             // Handle keyboard input only if egui didn't consume it
                             app.handle_keyboard(&key_event);
+                        }
+                        WindowEvent::KeyboardInput { event: key_event, .. } => {
+                            // A release egui took (a text field had the
+                            // focus) still lets go of a fly key: held
+                            // otherwise, the camera flew on.
+                            if !key_event.state.is_pressed() {
+                                if let winit::keyboard::PhysicalKey::Code(code) = key_event.physical_key {
+                                    app.fly_keys_held.remove(&code);
+                                }
+                            }
                         }
                         WindowEvent::ModifiersChanged(new_modifiers) => {
                             app.modifiers = new_modifiers.state();
@@ -1904,12 +1920,11 @@ impl App {
             self.release_inactive_engines(mode_now);
         }
 
-        // Consume fly-mode responses produced by the UI this frame. The
-        // look moves the 3D flame's camera, so only where it is drawn: in
-        // escape or simulation mode an Alt+drag wrote a camera nobody saw
-        // into the history, and the flame came back moved.
+        // Consume fly-mode responses produced by the UI this frame: a
+        // look turns the camera the viewport shows, whichever 3D camera
+        // it is (`camera::fly`), and nothing in a 2D view.
         if let Some((dx, dy)) = ui_response.fly_mouse_drag {
-            if self.config_manager.active_config().render_mode == crate::scene::transforms::RenderMode::ThreeD {
+            if self.fly_mode {
                 self.apply_fly_mouse_look(dx, dy);
             }
         }
@@ -2512,6 +2527,7 @@ impl App {
                                 (export_config.fog_strength, export_config.fog_start, export_config.background_color),
                             );
                             esc.set_solid_sky(crate::escape::path_core::sky_seen(&export_config.escape.path, &export_config));
+                            esc.set_solid_material(crate::escape::path_core::lit_material(&export_config));
                         }
                         let mut guard = 0u32;
                         loop {
@@ -3213,6 +3229,9 @@ impl App {
                         self.escape_dirty = true;
                     }
                     if escape.set_solid_sky(crate::escape::path_core::sky_seen(&final_config.escape.path, &final_config)) {
+                        self.escape_dirty = true;
+                    }
+                    if escape.set_solid_material(crate::escape::path_core::lit_material(&final_config)) {
                         self.escape_dirty = true;
                     }
                 }
@@ -4158,7 +4177,8 @@ impl App {
         let scaled_x = ndc_x * aspect;
         let scaled_y = ndc_y;
 
-        // Screen space → pan frame (rotation-aware in 2D, identity in 3D)
+        // Screen space → pan frame (rotation-aware: both modes compose
+        // pan → rotate → zoom)
         let (rotated_x, rotated_y) = config.screen_delta_to_pan_frame(scaled_x as f64, scaled_y as f64);
 
         // Apply inverse zoom and add pan

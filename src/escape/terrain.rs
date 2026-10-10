@@ -1830,6 +1830,10 @@ pub struct TerrainView {
     /// A gradient sky's zenith, as a ray that meets nothing sees it
     /// (`path_core::sky_seen`); None for the background alone.
     pub sky: Option<[f32; 3]>,
+    /// The material the lit tier reads as the path tracer does
+    /// (camera-unification C7): the coat's reflectance and roughness,
+    /// and the glow (`path_core::lit_material`).
+    pub material: [f32; 3],
 }
 
 pub use super::path_core::PathSettings;
@@ -1854,7 +1858,7 @@ fn pack_rig(cam: &SolidCamera, shading: &SolidShadingSettings, fog: (f32, f32, [
     out[3] = [cam.forward[0] as f32, cam.forward[1] as f32, cam.forward[2] as f32, 0.0];
     out[4] = [cam.right[0] as f32, cam.right[1] as f32, cam.right[2] as f32, 0.0];
     out[5] = [cam.up[0] as f32, cam.up[1] as f32, cam.up[2] as f32, 0.0];
-    let any = !SolidShadingSettings::is_default(shading);
+    let any = !shading.rig_untouched();
     let (strength, ambient, diffuse, specular, shininess, ssao) = if any {
         (
             shading.shading_strength,
@@ -1909,7 +1913,7 @@ fn walk_key(view: &TerrainView, w: u32, h: u32, tile: u64) -> String {
         view.width
     );
     k.push_str(&format!("|{}", view.far));
-    let any = !SolidShadingSettings::is_default(&view.shading);
+    let any = !view.shading.rig_untouched();
     k.push_str(&format!("|{any}"));
     for l in &view.shading.lights {
         k.push_str(&format!("|{}:{}:{}", l.enabled && l.intensity > 0.0, l.azimuth, l.elevation));
@@ -3085,6 +3089,11 @@ impl TerrainRenderer {
         // in linear light could never match a background composited
         // after the tonemap's gamma. The rig gets none.
         pack_rig(&view.camera, &view.shading, (0.0, 0.0, view.fog.2), &mut fdata);
+        // The material, in the w of the camera's rows (`ifs_gloss`,
+        // `ifs_rough`, `ifs_glow`).
+        for k in 0..3 {
+            fdata[3 + k][3] = view.material[k];
+        }
         fdata[7][0] = view.fog.0;
         fdata[7][1] = view.fog.1;
         // The ground's index, its top, and its map.
@@ -3756,6 +3765,7 @@ pub(crate) mod gpu_tests {
             samples_per_axis: 1,
             far: 1.0e30,
             sky: None,
+            material: [0.0, 0.5, 0.0],
         }
     }
 
@@ -4161,6 +4171,96 @@ pub(crate) mod gpu_tests {
         let worst = lit.iter().zip(&path).flat_map(|(a, b)| (0..4).map(move |k| (a[k] - b[k]).abs())).fold(0.0f32, f32::max);
         println!("sunlit plane: path against lit, worst {worst:.2e}");
         assert!(worst < 1e-4, "{worst}");
+    }
+
+    /// One material, every tier's (docs/projects/materials.md): under a
+    /// sun alone, the lit tier's coat, glow and highlight are the path
+    /// tracer's direct light -- the same terms, so the same picture.
+    #[test]
+    fn a_coated_sunlit_plane_is_the_lit_tiers() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (32u32, 32u32);
+        let (n, m) = (64u32, 64u32);
+        let albedo = [0.5f32, 0.25, 1.0, 1.0];
+        let mut r = TerrainRenderer::new(&device, w, h);
+        r.set_tile(&device, &queue, n, m, &vec![0.0; (n * m) as usize], &vec![albedo; (n * m) as usize]);
+        let mut shading = dark();
+        shading.ambient = 0.0;
+        shading.specular = 0.4;
+        shading.shininess = 24.0;
+        shading.ssao_strength = 0.0;
+        shading.lights[0].enabled = true;
+        shading.lights[0].azimuth = 30.0;
+        shading.lights[0].elevation = 35.0;
+        shading.lights[0].intensity = 2.0;
+        shading.lights[0].color = [1.0, 0.5, 0.25];
+        let mut v = view(camera([32.0, 32.0, 0.0], 1.0, 0.3, 40.0, 0.5));
+        v.shading = shading;
+        v.softness = 1.0e6;
+        let (gloss, roughness, glow) = (0.3f32, 0.35f32, 0.25f32);
+        let plain = {
+            r.render(&device, &queue, &v);
+            read_output(&device, &queue, &r, w, h)
+        };
+        v.material = [gloss, roughness, glow];
+        r.render(&device, &queue, &v);
+        let lit = read_output(&device, &queue, &r, w, h);
+        let moved = lit.iter().zip(&plain).flat_map(|(a, b)| (0..3).map(move |k| (a[k] - b[k]).abs())).fold(0.0f32, f32::max);
+        assert!(moved > 0.05, "the material shows in the lit tier: {moved}");
+        r.reset_path();
+        let s = PathSettings { bounces: 2, environment: [0.0; 3], clamp: 1.0e30, seed: 1, gloss, roughness, emission: glow, ..PathSettings::default() };
+        r.render_path(&device, &queue, &v, &s, 4, 4);
+        let path = read_output(&device, &queue, &r, w, h);
+        let worst = lit.iter().zip(&path).flat_map(|(a, b)| (0..4).map(move |k| (a[k] - b[k]).abs() / a[k].abs().max(1.0))).fold(0.0f32, f32::max);
+        println!("coated sunlit plane: path against lit, worst {worst:.2e} (the material moved the lit tier by {moved:.3})");
+        assert!(worst < 1e-3, "{worst}");
+    }
+
+    /// The path tracer weights the highlight by the shading strength, as
+    /// the lit tier's mix does: at 0 a highlight changes nothing, at a
+    /// half its glint is half. (A terrain's touched rig carries the flame
+    /// default 0.35; at strength 0 it glinted in the path tracer alone.)
+    #[test]
+    fn the_highlight_follows_the_shading_strength() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (32u32, 32u32);
+        let (n, m) = (64u32, 64u32);
+        let mut r = TerrainRenderer::new(&device, w, h);
+        r.set_tile(&device, &queue, n, m, &vec![0.0; (n * m) as usize], &vec![[0.5, 0.25, 1.0, 1.0]; (n * m) as usize]);
+        let mut shading = dark();
+        shading.ambient = 0.0;
+        shading.ssao_strength = 0.0;
+        shading.shininess = 8.0;
+        shading.lights[0].enabled = true;
+        shading.lights[0].azimuth = 30.0;
+        shading.lights[0].elevation = 35.0;
+        shading.lights[0].intensity = 2.0;
+        let mut v = view(camera([32.0, 32.0, 0.0], 1.0, 0.3, 40.0, 0.5));
+        v.softness = 1.0e6;
+        let s = PathSettings { bounces: 2, environment: [0.0; 3], clamp: 1.0e30, seed: 1, ..PathSettings::default() };
+        let mut shot = |strength: f32, specular: f32| {
+            let mut sh = shading.clone();
+            sh.shading_strength = strength;
+            sh.specular = specular;
+            v.shading = sh;
+            r.reset_path();
+            r.render_path(&device, &queue, &v, &s, 4, 4);
+            read_output(&device, &queue, &r, w, h)
+        };
+        let (bare, at_zero) = (shot(0.0, 0.0), shot(0.0, 0.6));
+        assert_eq!(bare, at_zero, "at strength 0 the highlight draws nothing");
+        let (plain, full, half) = (shot(1.0, 0.0), shot(1.0, 0.6), shot(0.5, 0.6));
+        let glint = |a: &[[f32; 4]], b: &[[f32; 4]]| a.iter().zip(b).map(|(p, q)| (p[1] - q[1]) as f64).sum::<f64>();
+        let (g_full, g_half) = (glint(&full, &plain), glint(&half, &plain));
+        println!("glint at full strength {g_full:.4}, at half {g_half:.4}");
+        assert!(g_full > 0.1, "the highlight is in the picture: {g_full}");
+        assert!((g_half / g_full - 0.5).abs() < 1.0e-3, "half the strength, half the glint: {g_half} of {g_full}");
     }
 
     /// The material (T3b). Glow alone -- no light, no sky -- is the
@@ -5135,6 +5235,78 @@ pub(crate) mod gpu_tests {
                 assert!((dn[k] / raw[k] - 1.0).abs() < 0.05, "channel {k}: denoised {dn:?} against {raw:?}");
             }
         }
+    }
+
+    /// A highlight over a saturated albedo keeps its colour through the
+    /// denoiser. The glint is white; a palette's pure red has no green or
+    /// blue, its pure yellow no blue -- and the denoiser, dividing the
+    /// light by the albedo, drops a channel the albedo does not reflect
+    /// and multiplies it back by zero. Right for light the albedo shapes;
+    /// for the glint it lost the white exactly where a channel reached
+    /// zero: field-reported as hard bands of pure red and yellow across a
+    /// terrain's valleys, with no coat to make any of the light white.
+    #[test]
+    fn a_highlight_keeps_its_colour_denoised() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (96u32, 64u32);
+        let (n, m) = (129u32, 97u32);
+        let hs = terrain("sinusoid", n as usize, m as usize);
+        let mut r = TerrainRenderer::new(&device, w, h);
+        let mut v = view(camera([64.0, 48.0, 8.0], 0.5, 0.4, 110.0, 0.9));
+        let mut shading = dark();
+        shading.ambient = 0.0;
+        shading.specular = 0.6;
+        shading.shininess = 8.0;
+        shading.lights[0].enabled = true;
+        shading.lights[0].azimuth = 110.0;
+        shading.lights[0].elevation = 25.0;
+        shading.lights[0].intensity = 1.5;
+        v.shading = shading;
+        // Stripes of a palette's pure red and pure yellow, side by side as
+        // a colouring puts them.
+        let (red, yellow) = ([0.8f32, 0.0, 0.0, 1.0], [0.9f32, 0.75, 0.0, 1.0]);
+        let albedo: Vec<[f32; 4]> = (0..m).flat_map(|_| (0..n).map(move |i| if (i / 6) % 2 == 0 { red } else { yellow })).collect();
+        r.set_tile(&device, &queue, n, m, &hs, &albedo);
+        let mut picture = |denoise: bool, samples: u32| {
+            let s = PathSettings { bounces: 1, environment: [0.3, 0.35, 0.45], denoise, seed: 3, ..PathSettings::default() };
+            r.reset_path();
+            r.render_path(&device, &queue, &v, &s, samples, 16);
+            read_output(&device, &queue, &r, w, h)
+        };
+        // Against a plain render of many samples, in 8x8 blocks: noise
+        // averages out of a block, a band does not.
+        let (reference, denoised) = (picture(false, 1024), picture(true, 64));
+        let (mut worst, mut glint) = (0.0f64, 0.0f64);
+        for by in 0..h / 8 {
+            for bx in 0..w / 8 {
+                let block = |img: &[[f32; 4]]| {
+                    let mut c = [0.0f64; 4];
+                    for y in by * 8..by * 8 + 8 {
+                        for x in bx * 8..bx * 8 + 8 {
+                            let p = img[(y * w + x) as usize];
+                            for k in 0..4 {
+                                c[k] += p[k] as f64 / 64.0;
+                            }
+                        }
+                    }
+                    c
+                };
+                let (a, b) = (block(&reference), block(&denoised));
+                if a[3] < 0.999 {
+                    continue;
+                }
+                glint = glint.max(a[2]);
+                for k in 0..3 {
+                    worst = worst.max((b[k] - a[k]).abs() / a[0].max(a[1]).max(a[2]).max(0.05));
+                }
+            }
+        }
+        println!("striped glint: worst block error {worst:.4} (the brightest blue, the glint's, {glint:.3})");
+        assert!(glint > 0.1, "the glint is in the picture: {glint}");
+        assert!(worst < 0.06, "the denoiser moved a block's colour by {worst}");
     }
 
     /// The denoiser's cost at 1080p (T5), measured: a path-traced sample

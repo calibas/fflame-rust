@@ -1876,16 +1876,9 @@ pub struct PathTraceConfig {
     /// scene from the whole sky, times this.
     #[serde(default = "default_path_environment", skip_serializing_if = "is_default_path_environment")]
     pub environment: f32,
-    /// The gloss coat over the albedo: its reflectance at normal
-    /// incidence (0, the default, is Lambert alone; 0.04 a dielectric's)
-    /// and its roughness.
-    #[serde(default = "default_path_gloss", skip_serializing_if = "is_default_path_gloss")]
-    pub gloss: f32,
-    #[serde(default = "default_path_roughness", skip_serializing_if = "is_default_path_roughness")]
-    pub roughness: f32,
-    /// The albedo's own glow.
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub emission: f32,
+    // The coat and the glow were here; they are the picture's material
+    // now, beside the lights (`SolidShadingSettings::gloss`, and
+    // docs/projects/materials.md), lifted there on load.
     /// The lens: its radius, as a fraction of the distance to the target
     /// (0, a pinhole, is everything sharp), and the focal plane's
     /// distance, as a multiple of the target's (0 is the target).
@@ -1934,22 +1927,6 @@ fn default_path_environment() -> f32 {
 fn is_default_path_environment(v: &f32) -> bool {
     *v == default_path_environment()
 }
-/// Lambert alone. A dielectric's 0.04 coat is physically fair, but on a
-/// fractal solid most of what shows is faces at a glance, where Fresnel
-/// takes the coat towards a mirror of the sky: a solid's dark faces read
-/// as the background's colour, speckled.
-fn default_path_gloss() -> f32 {
-    0.0
-}
-fn is_default_path_gloss(v: &f32) -> bool {
-    *v == default_path_gloss()
-}
-fn default_path_roughness() -> f32 {
-    0.5
-}
-fn is_default_path_roughness(v: &f32) -> bool {
-    *v == default_path_roughness()
-}
 
 impl Default for PathTraceConfig {
     fn default() -> Self {
@@ -1957,9 +1934,6 @@ impl Default for PathTraceConfig {
             samples: default_path_samples(),
             bounces: default_path_bounces(),
             environment: default_path_environment(),
-            gloss: default_path_gloss(),
-            roughness: default_path_roughness(),
-            emission: 0.0,
             aperture: 0.0,
             focus: 0.0,
             denoise: false,
@@ -2027,6 +2001,12 @@ pub struct TerrainConfig {
     /// a fraction of the footprint. About the distance flanks' width.
     #[serde(default = "default_terrain_occlusion", skip_serializing_if = "is_default_terrain_occlusion")]
     pub occlusion: f32,
+    /// The camera's target above where it rests -- the relief's top at
+    /// the view's centre -- in view widths (camera-unification C4). It
+    /// lifts the eye with it, so the camera can look up, or level, from
+    /// above the ground; 0 is the camera every terrain had before.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub target_lift: f32,
 }
 
 fn default_terrain_height() -> f32 {
@@ -2122,6 +2102,7 @@ impl Default for TerrainConfig {
             shadow: default_terrain_shadow(),
             shadow_sharpness: default_terrain_shadow_sharpness(),
             occlusion: default_terrain_occlusion(),
+            target_lift: 0.0,
         }
     }
 }
