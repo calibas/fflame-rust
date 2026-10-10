@@ -2170,6 +2170,7 @@ impl ConfigManager {
             ConfigPath::EscapeTerrainLockHi => Ok(config.escape.terrain.lock_range[1].into()),
             ConfigPath::EscapeTerrainPrefilter => Ok(ConfigValue::UInt(config.escape.terrain.prefilter)),
             ConfigPath::EscapeTerrainSoftness => Ok(config.escape.terrain.softness.into()),
+            ConfigPath::EscapeTerrainSmooth => Ok(config.escape.terrain.smooth.into()),
             ConfigPath::EscapeTerrainShadow => Ok(config.escape.terrain.shadow.into()),
             ConfigPath::EscapeTerrainShadowSharpness => Ok(config.escape.terrain.shadow_sharpness.into()),
             ConfigPath::EscapeTerrainLakeTint => Ok(ConfigValue::ColorRgb(config.escape.terrain.lake_tint)),
@@ -3826,6 +3827,9 @@ impl ConfigManager {
             ConfigPath::EscapeTerrainPrefilter => {
                 let v: u32 = value.try_into()?;
                 self.current.escape.terrain.prefilter = v.clamp(1, crate::config::escape::MAX_TERRAIN_PREFILTER);
+            }
+            ConfigPath::EscapeTerrainSmooth => {
+                self.current.escape.terrain.smooth = value.try_into()?;
             }
             ConfigPath::EscapeTerrainSoftness => {
                 let v: f32 = value.try_into()?;

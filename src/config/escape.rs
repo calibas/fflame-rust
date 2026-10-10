@@ -2036,6 +2036,13 @@ pub struct TerrainConfig {
     /// without a seam.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub softness: f32,
+    /// The ground a smooth surface through its samples -- a cubic
+    /// B-spline, continuous to its curvature -- rather than a bilinear
+    /// patch a texel, whose creases at every grid line show as stepped
+    /// shadows and serrated ridges where the ground is magnified
+    /// (terrain-height.md, H5). Slower to draw; re-renders nothing.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub smooth: bool,
     /// How far the ground reaches, in view widths from the eye; the fog
     /// reaches the background just before.
     #[serde(default = "default_terrain_far", skip_serializing_if = "is_default_terrain_far")]
@@ -2198,6 +2205,7 @@ impl Default for TerrainConfig {
             detail: default_terrain_detail(),
             prefilter: default_terrain_prefilter(),
             softness: 0.0,
+            smooth: false,
             far: default_terrain_far(),
             haze: default_terrain_haze(),
             tier: RenderTier::default(),

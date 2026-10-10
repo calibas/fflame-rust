@@ -99,8 +99,10 @@ struct BuildParamsGpu {
     /// 0 keeps the maximum of the raw values, 1 the minimum: whichever
     /// the tile's map takes to the highest point.
     mode: u32,
-    /// Level 0 of a smooth ground: each cell's 4x4 control points, and
-    /// whether they wrap (a repeated ground).
+    /// Level 0 of a smooth ground: each cell's 4x4 control points' Bezier
+    /// bound (1, a simulation's), or their extreme (2, an escape
+    /// terrain's, whose spline is of mapped heights) -- and whether they
+    /// wrap (a repeated ground).
     spline: u32,
     wrap: u32,
 }
@@ -154,6 +156,23 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let s = i32(bp.step);
     let x = i32(gid.x) * s;
     let y = i32(gid.y) * s;
+    if (bp.spline == 2u) {
+        // An escape terrain's spline is of HEIGHTS, the raw values through
+        // a map that is not linear (a distance's exp, a count's log): a
+        // bound on the raw spline is no bound on that one. But the map is
+        // monotone and the spline a weighting of its 16 control points,
+        // never negative and summing to one -- past the section's edge
+        // too, where they continue in a straight line (`hf_cell`) -- so
+        // the extreme of the real ones bounds it.
+        var m = at(x - 1, y - 1);
+        for (var j = -1; j < 3; j = j + 1) {
+            for (var i = -1; i < 3; i = i + 1) {
+                m = select(max(m, at(x + i, y + j)), min(m, at(x + i, y + j)), bp.mode == 1u);
+            }
+        }
+        textureStore(dst, vec2<i32>(gid.xy), vec4<f32>(m, 0.0, 0.0, 0.0));
+        return;
+    }
     if (bp.spline != 0u) {
         // A bicubic B-spline cell in Bezier form: each row's segment,
         // then each column of those. The cell lies within the 16 points'
@@ -727,7 +746,8 @@ fn hf_raw(i: i32, j: i32) -> f32 {
 }
 
 // Whether the ground's surface is the samples' spline (fdata[19].w): a
-// simulation's. Else a bilinear patch a cell.
+// simulation's, or an escape terrain's Smooth surface. Else a bilinear
+// patch a cell.
 fn hf_smooth() -> bool {
     return params.fdata[19].w > 0.5;
 }
@@ -760,8 +780,21 @@ fn hf_cell(a: i32, b: i32) -> mat4x4<f32> {
     if (a >= 1 && b >= 1 && a + 2 < n && b + 2 < m && u32(params.fdata[1].w) == 4u) {
         return mat4x4<f32>(hf_row_raw(a, b - 1), hf_row_raw(a, b), hf_row_raw(a, b + 1), hf_row_raw(a, b + 2)) * hf_sec.geo.w;
     }
-    return mat4x4<f32>(hf_row(a, b - 1), hf_row(a, b), hf_row(a, b + 1), hf_row(a, b + 2));
+    var r0 = hf_row(a, b - 1);
+    let r1 = hf_row(a, b);
+    let r2 = hf_row(a, b + 1);
+    var r3 = hf_row(a, b + 2);
+    if (hf_extends()) {
+        if (b == 0) {
+            r0 = 2.0 * r1 - r2;
+        }
+        if (b + 2 >= m) {
+            r3 = 2.0 * r2 - r1;
+        }
+    }
+    return mat4x4<f32>(r0, r1, r2, r3);
 }
+
 
 // Row y of a cell's control points, x = a - 1 .. a + 2: straight from
 // the texture inside the section, through the map (`hf_h`) otherwise.
@@ -776,7 +809,16 @@ fn hf_row_raw(a: i32, y: i32) -> vec4<f32> {
 }
 
 fn hf_row(a: i32, y: i32) -> vec4<f32> {
-    return vec4<f32>(hf_h(a - 1, y), hf_h(a, y), hf_h(a + 1, y), hf_h(a + 2, y));
+    var r = vec4<f32>(hf_h(a - 1, y), hf_h(a, y), hf_h(a + 1, y), hf_h(a + 2, y));
+    if (hf_extends()) {
+        if (a == 0) {
+            r.x = 2.0 * r.y - r.z;
+        }
+        if (a + 2 >= i32(hf_sec.dims.x)) {
+            r.w = 2.0 * r.z - r.y;
+        }
+    }
+    return r;
 }
 
 // A cell's spline at (u, v) in [0, 1]^2.
@@ -1624,6 +1666,30 @@ fn hf_albedo_bs(t: f32) -> vec4<f32> {
 // each pair of weights is one tap placed between its two texels in
 // their ratio (Sigg and Hadwiger, "Fast Third-Order Texture Filtering",
 // GPU Gems 2). The height's own spline, on the colour.
+// The current section's colour at sample (x, y), continued past its edge
+// in a straight line (`hf_extends`).
+fn hf_albedo_row(x: i32, y: i32, layer: i32) -> vec4<f32> {
+    let n = i32(hf_sec.dims.x) - 1;
+    if (x < 0) {
+        return 2.0 * textureLoad(hf_albedo, vec2<i32>(0, y), layer, 0) - textureLoad(hf_albedo, vec2<i32>(1, y), layer, 0);
+    }
+    if (x > n) {
+        return 2.0 * textureLoad(hf_albedo, vec2<i32>(n, y), layer, 0) - textureLoad(hf_albedo, vec2<i32>(n - 1, y), layer, 0);
+    }
+    return textureLoad(hf_albedo, vec2<i32>(x, y), layer, 0);
+}
+
+fn hf_albedo_ext(x: i32, y: i32, layer: i32) -> vec4<f32> {
+    let m = i32(hf_sec.dims.y) - 1;
+    if (y < 0) {
+        return 2.0 * hf_albedo_row(x, 0, layer) - hf_albedo_row(x, 1, layer);
+    }
+    if (y > m) {
+        return 2.0 * hf_albedo_row(x, m, layer) - hf_albedo_row(x, m - 1, layer);
+    }
+    return hf_albedo_row(x, y, layer);
+}
+
 fn hf_albedo_spline(s: vec2<f32>, layer: i32, dims: vec2<f32>) -> vec4<f32> {
     let i = floor(s);
     let f = s - i;
@@ -1634,6 +1700,23 @@ fn hf_albedo_spline(s: vec2<f32>, layer: i32, dims: vec2<f32>) -> vec4<f32> {
     // drew a seam at every copy's edge. Sixteen loads, wrapped -- the
     // period one less than the samples, a period added before the
     // remainder.
+    // An escape terrain's sections: their samples, continued past the
+    // section's edge in straight lines as its heights are (`hf_cell`), so
+    // neighbours' colours meet as their heights do -- where the sampler's
+    // clamped taps drew a step at every seam, and in a coarse section,
+    // which does not fill its layer, read the texels past its edge.
+    if (hf_extends()) {
+        let base = vec2<i32>(i) - vec2<i32>(1, 1);
+        var acc = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        for (var b = 0; b < 4; b = b + 1) {
+            var row = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+            for (var a = 0; a < 4; a = a + 1) {
+                row = row + wx[a] * hf_albedo_ext(base.x + a, base.y + b, layer);
+            }
+            acc = acc + wy[b] * row;
+        }
+        return acc;
+    }
     if (hf_repeats()) {
         let last = vec2<i32>(hf_sec.dims.xy) - vec2<i32>(1, 1);
         let base = vec2<i32>(i) - vec2<i32>(1, 1) + last;
@@ -1875,6 +1958,19 @@ struct HfLook {
 // copied to the horizon -- and its period, in the world (fdata[19]).
 fn hf_repeats() -> bool {
     return params.fdata[19].z > 0.5;
+}
+
+// Whether a section's control points continue past its edge in a
+// straight line (2 P_edge - P_next) rather than holding the edge: an
+// escape terrain's. Its sections share their edge samples, and so
+// extended each one's spline passes through them -- along the edge it is
+// the same curve of the same samples on both sides, and neighbours meet
+// without a step (held, they stood apart by a sixth of the step at the
+// edge, a seam down every section's side). A weighting of the real
+// samples still, never negative: the max mipmap's extreme bounds it.
+fn hf_extends() -> bool {
+    let mode = u32(params.fdata[1].w);
+    return mode >= 1u && mode <= 3u && !hf_repeats();
 }
 
 // The section `sec` as the copy at `off` reads it.
@@ -2902,7 +2998,7 @@ impl TerrainRenderer {
             pass.dispatch_workgroups(n.div_ceil(8), m.div_ceil(8), 1);
         }
         queue.submit(std::iter::once(enc.finish()));
-        self.build_layer_shaped(device, queue, 0, 0, (true, repeat));
+        self.build_layer_shaped(device, queue, 0, 0, (1, repeat));
         self.set_ground(device, queue, Self::one_section_ground(n, m, 4, bound as f64, -(bound as f64), repeat, true));
     }
 
@@ -2926,7 +3022,7 @@ impl TerrainRenderer {
         self.reset_range(queue);
         self.begin_section(queue, 0, n, m, ingest, SectionFilter::default());
         self.ingest_region(device, queue, colour, height_field, 0, 0, n, m);
-        self.finish_section(device, queue);
+        self.finish_section(device, queue, false);
         let floor = -0.01 * n.max(m) as f64;
         self.set_ground(device, queue, Self::one_section_ground(n, m, ingest.mode(), top, floor, false, false));
     }
@@ -3227,10 +3323,28 @@ impl TerrainRenderer {
 
     /// Finish the section being made: its maximum mipmap and its albedo's
     /// mip chain. It is drawn once a ground names its layer.
-    pub fn finish_section(&mut self, device: &Device, queue: &Queue) {
+    /// `smooth`: bounded for a smooth ground's spline (`reshape_section`).
+    pub fn finish_section(&mut self, device: &Device, queue: &Queue, smooth: bool) {
         let (layer, base) = self.building.take().expect("begin_section first");
         let mode = TerrainIngest { source: base.source, interior: base.interior, background: [0.0; 3], tint: [0.0; 3] }.mode();
-        self.build_layer(device, queue, layer, u32::from(mode == 1));
+        self.build_layer_shaped(device, queue, layer, u32::from(mode == 1), (if smooth { 2 } else { 0 }, false));
+    }
+
+    /// Bound a made section's surface again: for the spline of a smooth
+    /// ground (`smooth`) or a bilinear patch a cell -- its max mipmap made
+    /// anew, its heights and colours as they are. Turning the smooth
+    /// surface on or off re-renders nothing.
+    pub fn reshape_section(&mut self, device: &Device, queue: &Queue, layer: u32, ingest: &TerrainIngest, smooth: bool) {
+        let atlas = self.atlas.as_ref().expect("ensure_atlas first");
+        let raw = atlas.raw.create_view(&TextureViewDescriptor {
+            dimension: Some(TextureViewDimension::D2),
+            base_array_layer: layer,
+            array_layer_count: Some(1),
+            ..Default::default()
+        });
+        let shape = (if smooth { 2 } else { 0 }, false);
+        self.build_mips(device, queue, &raw, &atlas.mips, layer, atlas.w, atlas.h, atlas.levels, u32::from(ingest.mode() == 1), shape);
+        self.walked = None;
     }
 
     /// Whether a section is being made.
@@ -3241,12 +3355,13 @@ impl TerrainRenderer {
     /// A layer's maximum mipmap (the raw maximum, or for `min_mode` the
     /// minimum) and its albedo's mip chain.
     fn build_layer(&mut self, device: &Device, queue: &Queue, layer: u32, min_mode: u32) {
-        self.build_layer_shaped(device, queue, layer, min_mode, (false, false));
+        self.build_layer_shaped(device, queue, layer, min_mode, (0, false));
     }
 
-    /// [`Self::build_layer`] for a smooth ground's spline (`shape.0`),
-    /// wrapped round a repeat (`shape.1`).
-    fn build_layer_shaped(&mut self, device: &Device, queue: &Queue, layer: u32, min_mode: u32, shape: (bool, bool)) {
+    /// [`Self::build_layer`] for a smooth ground's spline (`shape.0`: 1 a
+    /// simulation's Bezier bound, 2 an escape terrain's control-point
+    /// extreme; `BUILD_WGSL`), wrapped round a repeat (`shape.1`).
+    fn build_layer_shaped(&mut self, device: &Device, queue: &Queue, layer: u32, min_mode: u32, shape: (u32, bool)) {
         let atlas = self.atlas.as_ref().expect("ensure_atlas first");
         let raw = atlas.raw.create_view(&TextureViewDescriptor {
             dimension: Some(TextureViewDimension::D2),
@@ -3372,7 +3487,7 @@ impl TerrainRenderer {
         m: u32,
         levels: u32,
         mode: u32,
-        shape: (bool, bool),
+        shape: (u32, bool),
     ) {
         let align = device.limits().min_uniform_buffer_offset_alignment as u64;
         let stride = (std::mem::size_of::<BuildParamsGpu>() as u64).div_ceil(align) * align;
@@ -3391,7 +3506,7 @@ impl TerrainRenderer {
                 src_h,
                 step: if l == 0 { 1 } else { 2 },
                 mode,
-                spline: u32::from(l == 0 && shape.0),
+                spline: if l == 0 { shape.0 } else { 0 },
                 wrap: u32::from(l == 0 && shape.1),
             };
             let at = l * stride as usize;
@@ -4908,6 +5023,279 @@ pub(crate) mod gpu_tests {
             assert!(worst_t < 1.0e-4, "{worst_t}");
             assert!(worst_n < 2.0e-3, "{worst_n}");
         }
+    }
+
+    /// An escape terrain's smooth ground (H5): two sections side by side,
+    /// sharing their edge samples, each the spline of its mapped heights
+    /// with its control points continued past its edge in a straight
+    /// line. Every hit is the CPU's root of that spline -- across the seam
+    /// too, where the two sides' splines are one curve -- and no ray
+    /// that should meet it slips through (the max mipmap's control-point
+    /// extreme bounds the spline of a map that is not linear). Its colour
+    /// is its colours' spline, continued past the edge alike.
+    #[test]
+    fn an_escape_grounds_spline_meets_across_sections() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (n, m) = (24u32, 20u32);
+        let c = (n - 1) as i64;
+        // A rough field over the shared lattice: a few waves and a hash.
+        let field = |x: i64, y: i64| -> f32 {
+            let hash = ((x * 73_856_093) ^ (y * 19_349_663)).rem_euclid(1000) as f32 / 1000.0;
+            2.0 + (x as f32 * 0.37).sin() + 0.6 * (y as f32 * 0.29 + 0.04 * x as f32).cos() + 0.8 * hash
+        };
+        let layer = |s: i64| -> Vec<f32> { (0..m as i64).flat_map(|j| (0..n as i64).map(move |i| field(i + s * c, j))).collect() };
+        // And a colour field over it, as the ground stores it (f16).
+        let colour = |x: i64, y: i64, k: usize| -> f32 {
+            let v = 0.5 + 0.4 * (0.31 * x as f32 + 1.3 * k as f32).sin() * (0.23 * y as f32).cos();
+            half::f16::from_f32(v).to_f32()
+        };
+        let mut r = TerrainRenderer::new(&device, 96, 64);
+        r.ensure_atlas(&device, n, m, 2);
+        {
+            let atlas = r.atlas.as_ref().unwrap();
+            for s in 0..2u32 {
+                let at = Origin3d { x: 0, y: 0, z: s };
+                queue.write_texture(
+                    TexelCopyTextureInfo { texture: &atlas.raw, mip_level: 0, origin: at, aspect: TextureAspect::All },
+                    bytemuck::cast_slice(&layer(s as i64)),
+                    TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(n * 4), rows_per_image: Some(m) },
+                    Extent3d { width: n, height: m, depth_or_array_layers: 1 },
+                );
+                let colours: Vec<u16> = (0..m as i64)
+                    .flat_map(|j| (0..n as i64).map(move |i| (i + s as i64 * c, j)))
+                    .flat_map(|(x, y)| (0..4).map(move |k| if k == 3 { 1.0 } else { colour(x, y, k) }))
+                    .map(|v| half::f16::from_f32(v).to_bits())
+                    .collect();
+                queue.write_texture(
+                    TexelCopyTextureInfo { texture: &atlas.albedo, mip_level: 0, origin: at, aspect: TextureAspect::All },
+                    bytemuck::cast_slice(&colours),
+                    TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(n * 8), rows_per_image: Some(m) },
+                    Extent3d { width: n, height: m, depth_or_array_layers: 1 },
+                );
+            }
+        }
+        let relief = TerrainIngest { source: 0, interior: 0, background: [0.0; 3], tint: [0.0; 3] };
+        let albedo = r.atlas.as_ref().unwrap().albedo.clone();
+        for s in 0..2 {
+            r.reshape_section(&device, &queue, s, &relief, true);
+            r.build_albedo_mips(&device, &queue, &albedo, s);
+        }
+        // A relief's linear map over a pinned range: the CPU's heights.
+        let (lo, hi, top) = (1.0f32, 4.8f32, 6.0f32);
+        let height = |raw: f32| (top * ((raw - lo) / (hi - lo)).clamp(0.0, 1.0)) as f64;
+        r.set_ground(
+            &device,
+            &queue,
+            Ground {
+                root_origin: [0.0, 0.0],
+                root_side: c as f64,
+                root_dims: [2, 1],
+                nodes: vec![GroundNode { children: [-1; 4], section: 0 }, GroundNode { children: [-1; 4], section: 1 }],
+                sections: vec![
+                    GroundSection { layer: 0, origin: [0.0, 0.0], texel: 1.0, n, m },
+                    GroundSection { layer: 1, origin: [c as f64, 0.0], texel: 1.0, n, m },
+                ],
+                top: top as f64,
+                floor: -1.0,
+                mode: 3,
+                repeat: false,
+                smooth: true,
+            },
+        );
+        // The CPU's spline of a section's heights, its control points
+        // continued past its edges in straight lines.
+        let bs = |t: f64| [(1.0 - t).powi(3) / 6.0, (3.0 * t.powi(3) - 6.0 * t * t + 4.0) / 6.0, (-3.0 * t.powi(3) + 3.0 * t * t + 3.0 * t + 1.0) / 6.0, t.powi(3) / 6.0];
+        // The mapped heights over the shared lattice, once.
+        let table: Vec<f64> = (0..m as i64).flat_map(|j| (0..=2 * c).map(move |i| (i, j))).map(|(i, j)| height(field(i, j))).collect();
+        let point = |s: i64, i: i64, j: i64| -> f64 {
+            let h = |i: i64, j: i64| table[(j * (2 * c + 1) + i + s * c) as usize];
+            let col = |j: i64| -> f64 {
+                if i < 0 {
+                    2.0 * h(0, j) - h(1, j)
+                } else if i > c {
+                    2.0 * h(c, j) - h(c - 1, j)
+                } else {
+                    h(i, j)
+                }
+            };
+            let last = m as i64 - 1;
+            if j < 0 {
+                2.0 * col(0) - col(1)
+            } else if j > last {
+                2.0 * col(last) - col(last - 1)
+            } else {
+                col(j)
+            }
+        };
+        let spline_in = |s: i64, x: f64, y: f64| -> f64 {
+            let (a, b) = ((x.floor() as i64).clamp(0, c - 1), (y.floor() as i64).clamp(0, m as i64 - 2));
+            let (bu, bv) = (bs(x - a as f64), bs(y - b as f64));
+            let mut z = 0.0;
+            for jj in 0..4 {
+                for ii in 0..4 {
+                    z += bu[ii] * bv[jj] * point(s, a - 1 + ii as i64, b - 1 + jj as i64);
+                }
+            }
+            z
+        };
+        let spline = |x: f64, y: f64| -> f64 {
+            if x < c as f64 {
+                spline_in(0, x, y)
+            } else {
+                spline_in(1, x - c as f64, y)
+            }
+        };
+        // The two sides are one curve along the seam.
+        let mut seam = 0.0f64;
+        for k in 0..=200 {
+            let y = k as f64 * (m - 1) as f64 / 200.0;
+            seam = seam.max((spline_in(0, c as f64, y) - spline_in(1, 0.0, y)).abs());
+        }
+        assert!(seam < 1.0e-9, "the seam's step: {seam}");
+        let mut v = view(camera([c as f64, 9.5, 0.0], 0.9, 0.4, 30.0, 0.9));
+        v.height = top;
+        v.range = Some([lo, hi]);
+        for (pitch, yaw) in [(0.9f64, 0.4f64), (0.35, -1.3), (1.45, 2.0)] {
+            v.camera = camera([c as f64, 9.5, 0.0], pitch, yaw, 30.0, 0.9);
+            let cam = v.camera.clone();
+            r.render(&device, &queue, &v);
+            let raw = read_buffer(&device, &queue, r.geometry_buffer(), 96 * 64 * 16);
+            let geom: &[[u32; 4]] = bytemuck::cast_slice(&raw);
+            let (mut checked, mut missed, mut worst) = (0, 0, 0.0f64);
+            for py in 0..64 {
+                for px in 0..96 {
+                    let d = ray(&cam, px, py, 96, 64);
+                    let gap = |t: f64| cam.eye[2] + d[2] * t - spline(cam.eye[0] + d[0] * t, cam.eye[1] + d[1] * t);
+                    // The ray through the ground's box: its span over the
+                    // ground, between the slab's top and its floor.
+                    let (mut t0, mut t1) = (0.0f64, 1.0e9f64);
+                    for (o, dd, hi_) in [(cam.eye[0], d[0], 2.0 * c as f64), (cam.eye[1], d[1], (m - 1) as f64), (cam.eye[2], d[2], top as f64)] {
+                        let lo_ = if hi_ == top as f64 { -1.0 } else { 0.0 };
+                        if dd.abs() < 1.0e-12 {
+                            if o < lo_ || o > hi_ {
+                                t1 = -1.0;
+                            }
+                        } else {
+                            let (a, b) = ((lo_ - o) / dd, (hi_ - o) / dd);
+                            t0 = t0.max(a.min(b));
+                            t1 = t1.min(a.max(b));
+                        }
+                    }
+                    // A ray in through a side wall, below the surface, is
+                    // the wall's: not the spline's to answer.
+                    if !(t0 < t1) || gap(t0 + 1.0e-9) <= 0.0 {
+                        continue;
+                    }
+                    // The CPU's first crossing: stepped finely, bisected.
+                    let (mut t, step) = (t0, 1.0e-2);
+                    let mut found = None;
+                    while t < t1 {
+                        if gap(t) > 0.0 && gap((t + step).min(t1)) <= 0.0 {
+                            let step = (t + step).min(t1) - t;
+                            let (mut a, mut b) = (t, t + step);
+                            for _ in 0..40 {
+                                let mid = 0.5 * (a + b);
+                                if gap(mid) > 0.0 {
+                                    a = mid;
+                                } else {
+                                    b = mid;
+                                }
+                            }
+                            found = Some(b);
+                            break;
+                        }
+                        t += step;
+                    }
+                    let g = geom[(py * 96 + px) as usize];
+                    let got = f32::from_bits(g[3]) as f64;
+                    match found {
+                        Some(want) if got > 0.0 => {
+                            worst = worst.max((got - want).abs() / want);
+                            checked += 1;
+                        }
+                        Some(_) => missed += 1,
+                        None => {}
+                    }
+                }
+            }
+            println!("pitch {pitch}: {checked} hits, {missed} missed, worst relative distance {worst:.2e}");
+            assert!(checked > 500, "{checked}");
+            assert_eq!(missed, 0, "rays that slipped through the ground");
+            assert!(worst < 1.0e-4, "{worst}");
+        }
+
+        // Unlit, the colour is the colours' spline: each section's, its
+        // samples continued past its edge as its heights are.
+        let cpoint = |s: i64, i: i64, j: i64, k: usize| -> f64 {
+            let h = |i: i64, j: i64| colour(i + s * c, j, k) as f64;
+            let col = |j: i64| -> f64 {
+                if i < 0 {
+                    2.0 * h(0, j) - h(1, j)
+                } else if i > c {
+                    2.0 * h(c, j) - h(c - 1, j)
+                } else {
+                    h(i, j)
+                }
+            };
+            let last = m as i64 - 1;
+            if j < 0 {
+                2.0 * col(0) - col(1)
+            } else if j > last {
+                2.0 * col(last) - col(last - 1)
+            } else {
+                col(j)
+            }
+        };
+        let cam = camera([c as f64, 9.5, 0.0], 0.9, 0.4, 30.0, 0.9);
+        v.camera = cam.clone();
+        v.shading.shading_strength = 0.0;
+        v.shading.ambient = 0.123;
+        r.render(&device, &queue, &v);
+        let out = read_output(&device, &queue, &r, 96, 64);
+        let raw = read_buffer(&device, &queue, r.geometry_buffer(), 96 * 64 * 16);
+        let geom: &[[u32; 4]] = bytemuck::cast_slice(&raw);
+        let per_ray = 2.0 * (cam.fov as f64 * 0.5).tan() / 64.0;
+        let (mut checked, mut worst) = (0, 0.0f64);
+        for py in 0..64u32 {
+            for px in 0..96u32 {
+                let k = (py * 96 + px) as usize;
+                let t = f32::from_bits(geom[k][3]) as f64;
+                if !(t > 0.0) {
+                    continue;
+                }
+                let d = ray(&cam, px, py, 96, 64);
+                let p = [cam.eye[0] + d[0] * t, cam.eye[1] + d[1] * t];
+                if p[0] < 0.0 || p[1] < 0.0 || p[0] > 2.0 * c as f64 || p[1] > (m - 1) as f64 {
+                    continue;
+                }
+                // Where the lookup is the spline alone (the relight's own
+                // footprint: a ray's share of a pixel under a texel).
+                let nrm = [half::f16::from_bits(geom[k][0] as u16).to_f64(), half::f16::from_bits((geom[k][0] >> 16) as u16).to_f64(), half::f16::from_bits(geom[k][1] as u16).to_f64()];
+                let nd = (nrm[0] * d[0] + nrm[1] * d[1] + nrm[2] * d[2]).abs();
+                if t * per_ray / nd.max(0.05).sqrt() >= 0.9 {
+                    continue;
+                }
+                let (s, x) = if p[0] < c as f64 { (0, p[0]) } else { (1, p[0] - c as f64) };
+                let (a, b) = ((x.floor() as i64).min(c - 1), (p[1].floor() as i64).min(m as i64 - 2));
+                let (bu, bv) = (bs(x - a as f64), bs(p[1] - b as f64));
+                for ch in 0..3 {
+                    let mut want = 0.0;
+                    for jj in 0..4 {
+                        for ii in 0..4 {
+                            want += bu[ii] * bv[jj] * cpoint(s, a - 1 + ii as i64, b - 1 + jj as i64, ch);
+                        }
+                    }
+                    worst = worst.max((out[k][ch] as f64 - want).abs());
+                }
+                checked += 1;
+            }
+        }
+        println!("colour: {checked} pixels, worst channel off the spline {worst:.2e}");
+        assert!(checked > 500, "{checked}");
+        assert!(worst < 2.0e-3, "{worst}");
     }
 
     /// A simulation's ground's colour is its colours' cubic B-spline, as

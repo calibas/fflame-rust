@@ -711,6 +711,10 @@ pub struct EscapeTerrain {
     max_sections: u32,
     /// Whether an export has fitted `max_sections` to the card.
     sections_fitted: bool,
+    /// Whether the sections' max mipmaps bound a smooth surface's spline
+    /// (`TerrainRenderer::reshape_section`): the config's Smooth surface
+    /// when they were made, every one re-bounded when it changes.
+    mips_smooth: bool,
 }
 
 pub use super::path_core::PATH_SHOW_SAMPLES;
@@ -738,6 +742,7 @@ impl EscapeTerrain {
             coarse_samples: COARSE_SAMPLES,
             max_sections: MAX_SECTIONS,
             sections_fitted: false,
+            mips_smooth: false,
         }
     }
 
@@ -892,6 +897,15 @@ impl EscapeTerrain {
         let derivative = self.footprint.derivative_active(&section_config(&fp, &anchor, (0, 0, 0), SECTION_SAMPLES));
         let ingest = terrain_ingest(config, derivative);
         let filter = section_filter(&escape.terrain);
+        // The smooth surface turned on or off: every section bounded again
+        // for it, nothing re-rendered.
+        if escape.terrain.smooth != self.mips_smooth {
+            self.mips_smooth = escape.terrain.smooth;
+            let layers: Vec<u32> = self.cache.values().map(|c| c.layer).collect();
+            for layer in layers {
+                self.terrain.reshape_section(device, queue, layer, &ingest, self.mips_smooth);
+            }
+        }
         let mut landed = false;
         // Auto contrast: one fit for every section, measured first from a
         // view of the anchor's own (`contrast_probe_config`) and held.
@@ -947,7 +961,7 @@ impl EscapeTerrain {
             let filter = SectionFilter { samples: self.footprint.effective_supersample(), ..filter };
             self.terrain.begin_section(queue, layer, n, n, &ingest, filter);
             self.terrain.ingest_region(device, queue, self.footprint.render_view(), self.footprint.height_view(), 0, 0, n, n);
-            self.terrain.finish_section(device, queue);
+            self.terrain.finish_section(device, queue, self.mips_smooth);
             let b = self.building.take().expect("made above");
             // A coarser copy it replaces gives its layer back.
             if let Some(old) = self.cache.insert(key, Cached { layer, samples: n, wanted: self.frame }) {
@@ -1022,7 +1036,7 @@ impl EscapeTerrain {
             wanted.root_dims,
             config.escape.terrain.height.to_bits(),
             scale.to_bits()
-        );
+        ) + if self.mips_smooth { "|smooth" } else { "" };
         if !landed && self.ground_key.as_deref() == Some(key.as_str()) {
             return;
         }
@@ -1082,7 +1096,8 @@ impl EscapeTerrain {
         let t = &config.escape.terrain;
         let ground = Ground {
             repeat: false,
-            smooth: false,
+            // The samples' spline (H5), its sections bounded for it.
+            smooth: self.mips_smooth,
             root_origin: [
                 (wanted.root_first[0] as f64 * rs - eye[0]) * z,
                 (wanted.root_first[1] as f64 * rs - eye[1]) * z,
@@ -1460,6 +1475,38 @@ mod tests {
         let fewer = pollster::block_on(fit_export_sections(&device, &huge, 16384, 16384));
         println!("16K export at a 3x3 prefilter: {fewer} sections");
         assert!(fewer <= cap && fewer >= MAX_SECTIONS, "{fewer} vs {cap}");
+    }
+
+    /// The smooth surface (H5) is the walk's: turned on, every section
+    /// is bounded again for its spline and none is rendered again, and
+    /// the ground drawn is the spline.
+    #[test]
+    fn the_smooth_surface_renders_no_section_again() {
+        let Some((_one_at_a_time, device, queue)) = gpu() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let mut c = terrain_config();
+        c.escape.terrain.tier = RenderTier::Lit;
+        let mut engines = crate::renderer::render::RenderEngines::default();
+        let mut draw = |c: &FractalConfig, engines: &mut crate::renderer::render::RenderEngines| {
+            pollster::block_on(crate::renderer::render(
+                &device,
+                &queue,
+                crate::renderer::RenderJob::new(c, 64, 48).with_engines(engines),
+                &mut crate::renderer::NoProgress,
+            ))
+            .expect("render");
+        };
+        draw(&c, &mut engines);
+        let made = engines.terrain.as_ref().unwrap().footprint_renders;
+        assert!(made > 0);
+        assert!(!engines.terrain.as_ref().unwrap().terrain_for_test().ground_for_test().unwrap().smooth);
+        c.escape.terrain.smooth = true;
+        draw(&c, &mut engines);
+        let t = engines.terrain.as_ref().unwrap();
+        assert_eq!(t.footprint_renders, made, "a section rendered again");
+        assert!(t.terrain_for_test().ground_for_test().unwrap().smooth);
     }
 
     /// A bordered section's samples are its own and its border's (H4):
