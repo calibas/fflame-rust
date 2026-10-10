@@ -1548,8 +1548,10 @@ fn show_terrain_section(
                 ui.horizontal(|ui| {
                     ui.label(label);
                     let mut pc = value * 100.0;
+                    // A range from 0 reaches 0 at its left end and is
+                    // logarithmic from 0.1% (egui's smallest positive).
                     if ui
-                        .add(egui::Slider::new(&mut pc, range).suffix("%").logarithmic(true))
+                        .add(egui::Slider::new(&mut pc, range).suffix("%").logarithmic(true).smallest_positive(0.1))
                         .on_hover_text(tip)
                         .changed()
                     {
@@ -1562,7 +1564,8 @@ fn show_terrain_section(
                 t!("escape_panel.terrain_height").to_string(),
                 ConfigPath::EscapeTerrainHeight,
                 t.height,
-                0.1..=30.0,
+                // From 0: a flat plane, seen in 3D.
+                0.0..=30.0,
                 t!("escape_panel.terrain_height_tip").to_string(),
             );
             if t.source == TerrainSource::Distance {
