@@ -139,8 +139,13 @@ design rests on:
 *Status after P8:* all fixed (P1: the View menu and compact Reset, the
 escape pinch, the right-button readback; P4: mode D's fog and the Solid
 Lighting hint and gating; P6 and P8: the stuck fly keys, on focus loss
-and on a release a text field takes; P8: the stale comments) except
-**mode D's lens sign**, still to verify with an asymmetric lens.
+and on a release a text field takes; P8: the stale comments). **Mode
+D's lens sign** was measured (2026-10-10, `a_lens_sees_its_views_own_y`
+with `bent`): the plane's lens sees y up, the 2D Flame Attractor's and
+mode D's y down. Decided with the user to keep it -- a lens sees its
+view's own y, and a Flame Attractor's world now runs y down as its
+flame's does (a Flame Attractor no longer comes out upside down
+against its flame: `escape::ifs::view_basis`).
 
 - The **View menu** is shown in Escape, but Reset/Zoom In/Zoom Out write
   the flame's fields: they do nothing there. The compact menu's Reset is
