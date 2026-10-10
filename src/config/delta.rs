@@ -570,6 +570,9 @@ pub enum ConfigPath {
     EscapeTerrainLockZoom,
     EscapeTerrainLockLo,
     EscapeTerrainLockHi,
+    /// The sections' prefilter and softness (H4).
+    EscapeTerrainPrefilter,
+    EscapeTerrainSoftness,
     EscapeTerrainShadow,
     EscapeTerrainShadowSharpness,
     EscapeTerrainLakeTint,
@@ -1258,6 +1261,8 @@ impl Display for ConfigPath {
             ConfigPath::EscapeTerrainLockZoom => write!(f, "Terrain Lock Zoom"),
             ConfigPath::EscapeTerrainLockLo => write!(f, "Terrain Lock Range Low"),
             ConfigPath::EscapeTerrainLockHi => write!(f, "Terrain Lock Range High"),
+            ConfigPath::EscapeTerrainPrefilter => write!(f, "Terrain Prefilter"),
+            ConfigPath::EscapeTerrainSoftness => write!(f, "Terrain Softness"),
             ConfigPath::EscapeTerrainShadow => write!(f, "Terrain Shadows"),
             ConfigPath::EscapeTerrainShadowSharpness => write!(f, "Terrain Shadow Sharpness"),
             ConfigPath::EscapeTerrainLakeTint => write!(f, "Lake Tint"),
@@ -1691,6 +1696,8 @@ impl ConfigPath {
             ConfigPath::EscapeTerrainLockZoom => I18nKey::simple("history.param.escape_terrain_lock_zoom"),
             ConfigPath::EscapeTerrainLockLo => I18nKey::simple("history.param.escape_terrain_lock_lo"),
             ConfigPath::EscapeTerrainLockHi => I18nKey::simple("history.param.escape_terrain_lock_hi"),
+            ConfigPath::EscapeTerrainPrefilter => I18nKey::simple("history.param.escape_terrain_prefilter"),
+            ConfigPath::EscapeTerrainSoftness => I18nKey::simple("history.param.escape_terrain_softness"),
             ConfigPath::EscapeTerrainShadow => I18nKey::simple("history.param.escape_terrain_shadow"),
             ConfigPath::EscapeTerrainShadowSharpness => I18nKey::simple("history.param.escape_terrain_shadow_sharpness"),
             ConfigPath::EscapeTerrainLakeTint => I18nKey::simple("history.param.escape_terrain_lake_tint"),
@@ -3123,6 +3130,8 @@ impl ConfigPath {
             | ConfigPath::EscapeTerrainLockZoom
             | ConfigPath::EscapeTerrainLockLo
             | ConfigPath::EscapeTerrainLockHi
+            | ConfigPath::EscapeTerrainPrefilter
+            | ConfigPath::EscapeTerrainSoftness
             | ConfigPath::EscapeTerrainShadow
             | ConfigPath::EscapeTerrainShadowSharpness
             | ConfigPath::EscapeTerrainLakeTint
@@ -3657,6 +3666,8 @@ impl ConfigPath {
             ConfigPath::EscapeTerrainLockZoom => "Escape.Terrain.LockZoom".to_string(),
             ConfigPath::EscapeTerrainLockLo => "Escape.Terrain.LockLo".to_string(),
             ConfigPath::EscapeTerrainLockHi => "Escape.Terrain.LockHi".to_string(),
+            ConfigPath::EscapeTerrainPrefilter => "Escape.Terrain.Prefilter".to_string(),
+            ConfigPath::EscapeTerrainSoftness => "Escape.Terrain.Softness".to_string(),
             ConfigPath::EscapeTerrainShadow => "Escape.Terrain.Shadow".to_string(),
             ConfigPath::EscapeTerrainShadowSharpness => "Escape.Terrain.ShadowSharpness".to_string(),
             ConfigPath::EscapeTerrainLakeTint => "Escape.Terrain.LakeTint".to_string(),
@@ -3940,6 +3951,8 @@ impl ConfigPath {
                 ["Terrain", "LockZoom"] => return Some(ConfigPath::EscapeTerrainLockZoom),
                 ["Terrain", "LockLo"] => return Some(ConfigPath::EscapeTerrainLockLo),
                 ["Terrain", "LockHi"] => return Some(ConfigPath::EscapeTerrainLockHi),
+                ["Terrain", "Prefilter"] => return Some(ConfigPath::EscapeTerrainPrefilter),
+                ["Terrain", "Softness"] => return Some(ConfigPath::EscapeTerrainSoftness),
                 ["Terrain", "Shadow"] => return Some(ConfigPath::EscapeTerrainShadow),
                 ["Terrain", "ShadowSharpness"] => return Some(ConfigPath::EscapeTerrainShadowSharpness),
                 ["Terrain", "LakeTint"] => return Some(ConfigPath::EscapeTerrainLakeTint),
@@ -4876,6 +4889,10 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeTerrainLockZoom
         | ConfigPath::EscapeTerrainLockLo
         | ConfigPath::EscapeTerrainLockHi
+        // Both re-render every section: a track would re-render the
+        // ground at every frame it moves.
+        | ConfigPath::EscapeTerrainPrefilter
+        | ConfigPath::EscapeTerrainSoftness
         | ConfigPath::EscapeShadingModel
         | ConfigPath::EscapeShadingStencil
         | ConfigPath::EscapeShadingHeightCurve
@@ -5563,6 +5580,8 @@ mod tests {
             (ConfigPath::EscapeTerrainLockZoom, ConfigValue::Double(12.25), false),
             (ConfigPath::EscapeTerrainLockLo, ConfigValue::Float(3.5), false),
             (ConfigPath::EscapeTerrainLockHi, ConfigValue::Float(250.0), false),
+            (ConfigPath::EscapeTerrainPrefilter, ConfigValue::UInt(2), false),
+            (ConfigPath::EscapeTerrainSoftness, ConfigValue::Float(1.5), false),
             (ConfigPath::EscapeTerrainShadow, ConfigValue::Float(0.25), true),
             (ConfigPath::EscapeTerrainShadowSharpness, ConfigValue::Float(20.0), true),
             (ConfigPath::EscapeTerrainLakeTint, ConfigValue::ColorRgb([0.1, 0.2, 0.3]), false),

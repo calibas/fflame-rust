@@ -1827,6 +1827,13 @@ impl RenderTier {
     }
 }
 
+/// The most samples a terrain texel averages, each way (H4): 3² costs
+/// nine section renders' worth.
+pub const MAX_TERRAIN_PREFILTER: u32 = 3;
+/// The most a terrain's heights are smoothed, in texels (H4): its
+/// border of three sigmas stays a dozen texels.
+pub const MAX_TERRAIN_SOFTNESS: f32 = 4.0;
+
 /// How a terrain's escape count or relief value rises to its height
 /// (docs/projects/terrain-height.md, H2): over the range the ground
 /// measured, a logarithmic or linear rise, or a mesa that tops out
@@ -2015,6 +2022,20 @@ pub struct TerrainConfig {
     /// 2D render at that antialiasing does.
     #[serde(default = "default_terrain_detail", skip_serializing_if = "is_default_terrain_detail")]
     pub detail: f32,
+    /// Samples a texel, each way (docs/projects/terrain-height.md, H4):
+    /// a section's height texel is the mean of `prefilter²` samples over
+    /// its footprint rather than one at its centre, so detail finer than
+    /// a texel averages instead of aliasing into spikes. 1 is a point
+    /// sample; each step costs its square in section renders.
+    #[serde(default = "default_terrain_prefilter", skip_serializing_if = "is_default_terrain_prefilter")]
+    pub prefilter: u32,
+    /// How far the heights are smoothed, in texels (a Gaussian's sigma,
+    /// H4). A texel is about `supersample × detail` of a screen pixel
+    /// where the ground is nearest, so this is a softness on screen; the
+    /// sections are rendered with a border of three sigmas so they meet
+    /// without a seam.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub softness: f32,
     /// How far the ground reaches, in view widths from the eye; the fog
     /// reaches the background just before.
     #[serde(default = "default_terrain_far", skip_serializing_if = "is_default_terrain_far")]
@@ -2154,6 +2175,12 @@ fn is_default_terrain_interior(v: &TerrainInterior) -> bool {
 fn is_default_terrain_curve(v: &TerrainCurve) -> bool {
     *v == TerrainCurve::default()
 }
+fn default_terrain_prefilter() -> u32 {
+    1
+}
+fn is_default_terrain_prefilter(v: &u32) -> bool {
+    *v == default_terrain_prefilter()
+}
 fn default_terrain_lock_range() -> [f32; 2] {
     [1.0, 0.0]
 }
@@ -2169,6 +2196,8 @@ impl Default for TerrainConfig {
             height: default_terrain_height(),
             de_width: default_terrain_de_width(),
             detail: default_terrain_detail(),
+            prefilter: default_terrain_prefilter(),
+            softness: 0.0,
             far: default_terrain_far(),
             haze: default_terrain_haze(),
             tier: RenderTier::default(),
