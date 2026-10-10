@@ -28,6 +28,12 @@ fn active_target_flame_mut<'a>(
 pub enum TouchGesture {
     /// Single finger drag (translation delta)
     Pan(egui::Vec2),
+    /// A single finger's drag after a long press -- the touch's right
+    /// drag, which turns as Alt+drag does (camera-unification C3).
+    Turn(egui::Vec2),
+    /// A single finger held still past the long press -- the touch's
+    /// right button held, here.
+    Hold(egui::Pos2),
     /// Two-finger pinch (zoom_delta, translation_delta, midpoint), and the
     /// angle the fingers turned through (radians, clockwise on screen)
     Pinch { zoom_delta: f32, translation: egui::Vec2, midpoint: egui::Pos2, twist: f32 },
@@ -49,13 +55,44 @@ pub struct TouchTracker {
     prev_angle: Option<f32>,
     /// Previous frame's single-finger position (for one-finger pan)
     prev_single_pos: Option<egui::Pos2>,
+    /// The one finger's press, while it is down.
+    press: Option<Press>,
+    /// What a one-finger drag does, the touch's Alt: pan (false) or turn
+    /// (true). Sticky, set by the viewport's Pan/Turn toggle.
+    pub turn_lock: bool,
+    /// Whether a touch has been seen: what shows that toggle outside the
+    /// compact layout (a touchscreen laptop).
+    pub seen_touch: bool,
 }
+
+/// A one-finger press: where and when it began, the movement it has
+/// made inside the slop (not yet panned), and what it became -- a pan
+/// once it leaves the slop, a long press if it stays in it.
+#[derive(Debug, Clone, Copy)]
+struct Press {
+    start: egui::Pos2,
+    at: f64,
+    pending: egui::Vec2,
+    moved: bool,
+    held: bool,
+}
+
+/// How long a finger stays still to become a long press -- the touch's
+/// right button -- and how far it may wander meanwhile, in points.
+const LONG_PRESS_SECONDS: f64 = 0.5;
+const LONG_PRESS_SLOP: f32 = 10.0;
 
 impl TouchTracker {
     /// Process touch events and return the detected gesture, if any.
-    pub fn update(&mut self, events: &[egui::Event]) -> Option<TouchGesture> {
-        if events.is_empty() {
+    /// `now` is the input's time, in seconds: a finger held still becomes
+    /// a long press with no event to say so, so a frame with none still
+    /// counts while one finger is down.
+    pub fn update(&mut self, events: &[egui::Event], now: f64) -> Option<TouchGesture> {
+        if events.is_empty() && self.active.len() != 1 {
             return None;
+        }
+        if events.iter().any(|e| matches!(e, egui::Event::Touch { .. })) {
+            self.seen_touch = true;
         }
 
         // Collect IDs present in this event batch
@@ -76,6 +113,7 @@ impl TouchTracker {
             self.prev_midpoint = None;
             self.prev_distance = None;
             self.prev_angle = None;
+            self.press = None;
         }
 
         for event in events {
@@ -101,6 +139,7 @@ impl TouchTracker {
                 self.prev_midpoint = None;
                 self.prev_angle = None;
                 self.prev_single_pos = None;
+                self.press = None;
                 None
             }
             1 => {
@@ -116,14 +155,39 @@ impl TouchTracker {
                 };
                 self.prev_single_pos = Some(pos);
 
-                if delta != egui::Vec2::ZERO {
-                    Some(TouchGesture::Pan(delta))
-                } else {
-                    None
+                // The press decides what the finger is: a drag out of the
+                // slop pans (with the movement it made inside it), a
+                // finger still in it long enough is a long press, whose
+                // drags then turn.
+                let press = self.press.get_or_insert(Press {
+                    start: pos,
+                    at: now,
+                    pending: egui::Vec2::ZERO,
+                    moved: false,
+                    held: false,
+                });
+                if press.held {
+                    return Some(if delta != egui::Vec2::ZERO { TouchGesture::Turn(delta) } else { TouchGesture::Hold(pos) });
                 }
+                if press.moved {
+                    return (delta != egui::Vec2::ZERO).then_some(TouchGesture::Pan(delta));
+                }
+                press.pending += delta;
+                if (pos - press.start).length() > LONG_PRESS_SLOP {
+                    press.moved = true;
+                    let pan = press.pending;
+                    press.pending = egui::Vec2::ZERO;
+                    return Some(TouchGesture::Pan(pan));
+                }
+                if now - press.at >= LONG_PRESS_SECONDS {
+                    press.held = true;
+                    return Some(TouchGesture::Hold(pos));
+                }
+                None
             }
             _ => {
                 self.prev_single_pos = None;
+                self.press = None;
 
                 let points: Vec<egui::Pos2> = self.active.values().copied().collect();
                 let p1 = points[0];
@@ -169,6 +233,22 @@ impl TouchTracker {
     /// Returns true if any fingers are currently active
     pub fn is_touch_active(&self) -> bool {
         !self.active.is_empty()
+    }
+
+    /// One finger down that may yet become a long press: the caller keeps
+    /// frames coming, since nothing else would arrive to say it did.
+    pub fn pending_hold(&self) -> bool {
+        self.active.len() == 1 && self.press.is_some_and(|p| !p.moved && !p.held)
+    }
+
+    /// Where the one finger is, while exactly one is down.
+    pub fn finger(&self) -> Option<egui::Pos2> {
+        (self.active.len() == 1).then(|| *self.active.values().next().unwrap())
+    }
+
+    /// Where a long-pressed finger is, while it is down.
+    pub fn holding(&self) -> Option<egui::Pos2> {
+        (self.active.len() == 1 && self.press.is_some_and(|p| p.held)).then(|| *self.active.values().next().unwrap())
     }
 }
 
@@ -1266,26 +1346,39 @@ impl<'a> PanelViewer<'a> {
                     })
                     .cloned()
                     .collect();
-                self.touch_tracker.update(&touch_events)
+                self.touch_tracker.update(&touch_events, i.time)
             });
             let touch_active = self.touch_tracker.is_touch_active();
+            // A still finger becomes a long press with no event to say so:
+            // keep frames coming until it does or lifts.
+            if self.touch_tracker.pending_hold() {
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
+            }
 
             let pointer = response.interact_pointer_pos().or_else(|| response.hover_pos());
             let fly = self.context.fly_mode_active;
+            // Touch (camera-unification C3): a drag pans -- or turns, with
+            // the viewport's Turn toggle on, the touch's Alt -- and a long
+            // press is the right button: held, it reads the path in
+            // PathMap; dragged, it turns.
+            let mut touch_hold: Option<egui::Pos2> = None;
             match touch_gesture {
-                Some(TouchGesture::Pan(delta)) => {
+                Some(TouchGesture::Pan(delta)) | Some(TouchGesture::Turn(delta)) => {
+                    let turn = self.touch_tracker.turn_lock || matches!(touch_gesture, Some(TouchGesture::Turn(_)));
+                    let finger = self.touch_tracker.finger();
                     view_drag(
                         self.context.config_manager,
                         delta,
-                        None,
+                        finger,
                         response.rect,
                         available_size,
-                        false,
+                        turn,
                         false,
                         fly,
                         self.context.fly_mouse_drag,
                     );
                 }
+                Some(TouchGesture::Hold(pos)) => touch_hold = Some(pos),
                 Some(TouchGesture::Pinch { zoom_delta, translation, midpoint, twist }) => {
                     let mid = [midpoint.x - response.rect.center().x, midpoint.y - response.rect.center().y];
                     let edit = crate::camera::gesture::pinch(
@@ -1338,8 +1431,13 @@ impl<'a> PanelViewer<'a> {
             let is_path_map_mode = self.context.config_manager.active_config().color_mode
                 == crate::scene::palette::ColorMode::PathMap;
             let secondary_held = ui.input(|i| i.pointer.secondary_down());
-            if is_path_map_mode && secondary_held && response.hovered() {
-                if let Some(pointer_pos) = ui.input(|i| i.pointer.hover_pos()) {
+            let held_at = if secondary_held && response.hovered() {
+                ui.input(|i| i.pointer.hover_pos())
+            } else {
+                touch_hold
+            };
+            if is_path_map_mode {
+                if let Some(pointer_pos) = held_at {
                     // Convert from panel coordinates to texture coordinates
                     let local_x = pointer_pos.x - response.rect.min.x;
                     let local_y = pointer_pos.y - response.rect.min.y;
@@ -1347,6 +1445,22 @@ impl<'a> PanelViewer<'a> {
                     let pixel_y = (local_y / available_size.y * height as f32) as u32;
                     *self.context.hovered_pixel = Some((pixel_x.min(width - 1), pixel_y.min(height - 1)));
                 }
+            }
+
+            // The long press, shown: a ring under the finger, so the
+            // right button's stand-in is visible while it is held.
+            if let Some(pos) = self.touch_tracker.holding() {
+                ui.painter_at(response.rect).circle_stroke(
+                    pos,
+                    30.0,
+                    egui::Stroke::new(3.0, egui::Color32::from_white_alpha(200)),
+                );
+            }
+            // The touch's Alt: what a one-finger drag does, Pan or Turn,
+            // as a sticky toggle on the viewport -- shown on the compact
+            // layout and wherever a touch has been seen.
+            if self.context.compact_mode || self.touch_tracker.seen_touch {
+                self.render_touch_mode_toggle(ui, response.rect);
             }
 
             // Display path info overlay when available (PathMap mode only)
@@ -1361,6 +1475,36 @@ impl<'a> PanelViewer<'a> {
                 ui.label(t!("viewport.initializing"));
             });
         }
+    }
+
+    /// The Pan/Turn toggle for touch, at the viewport's bottom left: what a
+    /// one-finger drag does (Turn is Alt+drag: a 2D view rotates, a 3D
+    /// camera orbits). A long press and drag turns either way.
+    fn render_touch_mode_toggle(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
+        egui::Area::new(egui::Id::new("viewport_touch_mode"))
+            .fixed_pos(rect.left_bottom() + egui::vec2(12.0, -56.0))
+            .order(egui::Order::Foreground)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style())
+                    .fill(egui::Color32::from_black_alpha(170))
+                    .corner_radius(egui::CornerRadius::same(8))
+                    .inner_margin(egui::Margin::same(4))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            for (turn, label, tip) in [
+                                (false, t!("viewport.touch_pan"), t!("viewport.touch_pan_tip")),
+                                (true, t!("viewport.touch_turn"), t!("viewport.touch_turn_tip")),
+                            ] {
+                                let on = self.touch_tracker.turn_lock == turn;
+                                let button = egui::Button::selectable(on, egui::RichText::new(label.as_ref()).size(16.0))
+                                    .min_size(egui::vec2(64.0, 36.0));
+                                if ui.add(button).on_hover_text(tip.as_ref()).clicked() {
+                                    self.touch_tracker.turn_lock = turn;
+                                }
+                            }
+                        });
+                    });
+            });
     }
 
     /// Render path overlay showing pixel info, coordinates, path, and color preview
@@ -1803,5 +1947,82 @@ impl<'a> PanelViewer<'a> {
             self.context.load_signal_file,
             self.context.save_signal_file,
         );
+    }
+}
+
+#[cfg(test)]
+mod touch_tests {
+    use super::{TouchGesture, TouchTracker};
+    use egui_dock::egui;
+
+    fn touch(id: u64, phase: egui::TouchPhase, x: f32, y: f32) -> egui::Event {
+        egui::Event::Touch {
+            device_id: egui::TouchDeviceId(0),
+            id: egui::TouchId(id),
+            phase,
+            pos: egui::pos2(x, y),
+            force: None,
+        }
+    }
+
+    /// A drag out of the long press's slop pans -- all of it, the movement
+    /// inside the slop included -- and never becomes a long press.
+    #[test]
+    fn a_drag_pans_with_all_its_movement() {
+        let mut t = TouchTracker::default();
+        assert!(t.update(&[touch(1, egui::TouchPhase::Start, 100.0, 100.0)], 0.0).is_none());
+        assert!(t.pending_hold());
+        assert!(t.update(&[touch(1, egui::TouchPhase::Move, 104.0, 100.0)], 0.05).is_none(), "inside the slop: not yet");
+        match t.update(&[touch(1, egui::TouchPhase::Move, 115.0, 100.0)], 0.1) {
+            Some(TouchGesture::Pan(d)) => assert_eq!(d, egui::vec2(15.0, 0.0), "the slop's movement too"),
+            _ => panic!("a pan"),
+        }
+        assert!(t.update(&[], 2.0).is_none(), "a finger that moved is never a long press");
+        match t.update(&[touch(1, egui::TouchPhase::Move, 120.0, 100.0)], 2.1) {
+            Some(TouchGesture::Pan(d)) => assert_eq!(d, egui::vec2(5.0, 0.0)),
+            _ => panic!("still a pan"),
+        }
+        assert!(t.seen_touch);
+    }
+
+    /// A finger held still becomes the right button: held, at its place,
+    /// with no event to say so; dragged, a turn.
+    #[test]
+    fn a_long_press_holds_then_turns() {
+        let mut t = TouchTracker::default();
+        t.update(&[touch(1, egui::TouchPhase::Start, 50.0, 60.0)], 0.0);
+        assert!(t.update(&[], 0.3).is_none(), "not long enough");
+        match t.update(&[], 0.55) {
+            Some(TouchGesture::Hold(p)) => assert_eq!(p, egui::pos2(50.0, 60.0)),
+            _ => panic!("a hold"),
+        }
+        assert_eq!(t.holding(), Some(egui::pos2(50.0, 60.0)));
+        assert!(!t.pending_hold());
+        match t.update(&[touch(1, egui::TouchPhase::Move, 70.0, 60.0)], 0.6) {
+            Some(TouchGesture::Turn(d)) => assert_eq!(d, egui::vec2(20.0, 0.0)),
+            _ => panic!("a turn"),
+        }
+        assert!(t.update(&[touch(1, egui::TouchPhase::End, 70.0, 60.0)], 0.7).is_none());
+        assert_eq!(t.holding(), None);
+        // The next press starts afresh.
+        t.update(&[touch(2, egui::TouchPhase::Start, 10.0, 10.0)], 1.0);
+        assert!(t.pending_hold());
+    }
+
+    /// A second finger ends the press: two fingers pinch, and a quick tap
+    /// is nothing at all.
+    #[test]
+    fn two_fingers_or_a_tap_are_no_long_press() {
+        let mut t = TouchTracker::default();
+        t.update(&[touch(1, egui::TouchPhase::Start, 50.0, 50.0)], 0.0);
+        let second = [touch(2, egui::TouchPhase::Start, 150.0, 50.0), touch(1, egui::TouchPhase::Move, 51.0, 50.0)];
+        assert!(matches!(t.update(&second, 0.1), Some(TouchGesture::Pinch { .. })));
+        assert!(!t.pending_hold());
+        assert!(t.update(&[], 1.0).is_none(), "no event, no gesture, with two down");
+        assert_eq!(t.holding(), None);
+        let mut t = TouchTracker::default();
+        t.update(&[touch(1, egui::TouchPhase::Start, 50.0, 50.0)], 0.0);
+        assert!(t.update(&[touch(1, egui::TouchPhase::End, 50.0, 50.0)], 0.1).is_none());
+        assert!(t.update(&[], 1.0).is_none());
     }
 }

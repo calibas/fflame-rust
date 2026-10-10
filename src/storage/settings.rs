@@ -121,10 +121,11 @@ pub struct SystemSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub saved_credentials: Option<crate::storage::credentials::SavedCredentials>,
 
-    // Free-fly camera (3D mode) tuning. Used when the user enters
-    // fly mode (F key or toggle button) — WASD/QE for movement,
-    // mouse drag in viewport for look-around. See
-    // `docs/projects/free-camera-movement.md`.
+    // Free-fly camera tuning, for every 3D view. Used when the user
+    // enters fly mode (F2, or the View panel's or menu bar's button) —
+    // WASD/QE for movement, a drag in the viewport to look about the
+    // eye; the sensitivity and Invert Y turn the orbit too. See
+    // `docs/projects/free-camera-movement.md` and `camera::fly`.
     /// Mouse-look sensitivity in radians per pixel of drag.
     /// Default 0.005 = ~0.3° per pixel, comfortable for most mice.
     #[serde(default = "default_fly_mouse_sensitivity")]

@@ -112,11 +112,26 @@ pub fn render_keyboard_shortcuts_content(ui: &mut egui::Ui) {
     ui.label(shortcut("redo_shortcut").as_ref());
     ui.label(shortcut("play_pause_animation").as_ref());
 
+    // The viewport's controls, one set in every mode
+    // (docs/projects/camera-unification.md, C3).
     ui.separator();
     ui.label(t!("help.mouse_controls"));
     ui.label(shortcut("drag_pan").as_ref());
     ui.label(shortcut("wheel_zoom").as_ref());
     ui.label(shortcut("alt_drag_rotate").as_ref());
+    ui.label(shortcut("shift_fine").as_ref());
+
+    ui.separator();
+    ui.label(t!("help.fly_controls"));
+    ui.label(shortcut("fly_look").as_ref());
+    ui.label(shortcut("fly_move").as_ref());
+    ui.label(shortcut("fly_speed").as_ref());
+
+    ui.separator();
+    ui.label(t!("help.touch_controls"));
+    ui.label(shortcut("touch_drag").as_ref());
+    ui.label(shortcut("touch_long_press").as_ref());
+    ui.label(shortcut("touch_two_fingers").as_ref());
 }
 
 #[cfg(test)]
@@ -161,6 +176,8 @@ mod tests {
             "pan_view", "zoom_plus_minus", "zoom_numpad", "full_screen",
             "fly_mode", "undo_shortcut", "redo_shortcut", "drag_pan",
             "wheel_zoom", "alt_drag_rotate", "play_pause_animation",
+            "shift_fine", "fly_look", "fly_move", "fly_speed",
+            "touch_drag", "touch_long_press", "touch_two_fingers",
         ] {
             let s = shortcut(key);
             assert!(!s.contains("help."), "`{key}` does not resolve: {s}");

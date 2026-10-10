@@ -45,6 +45,7 @@
 
 - **Core Modules**:
   - `src/app/` - Application state and event handling (mod.rs core loop, input.rs, fly_camera.rs, export.rs, gpu_updates.rs)
+  - `src/camera/` - **Every camera, unified** (`docs/projects/camera-unification.md`): the seven cameras keep their own config fields behind adapters -- `view3d` (each 3D camera's angles as a `Convention` on the one Euler chain, `chain`, composed as a quaternion, `quat`), `gesture` (the viewport's pan/zoom/turn/orbit/pinch/reset per `ViewKind`), `fly` (one fly mode for every 3D camera) -- each returning a `CameraEdit` (writes + history entry) the caller applies
   - `src/config/` - **Delta-based state management** (manager.rs ConfigManager + undo/redo, delta.rs ConfigPath/ConfigValue, fractal_config.rs, defaults.rs, slider.rs)
   - `src/variations/` - **Variation system**: registry (mod.rs), static definitions with inline WGSL (`defs/*.rs`, 100+ files, 500+ variations)
   - `src/scene/` - Flame/Transform model (transforms.rs), palettes, presets, randomize.rs
@@ -96,7 +97,7 @@
   - **Docs**: status, measurements and order of work in [docs/projects/deep-zoom-tracker.md](docs/projects/deep-zoom-tracker.md); design in `flame-deep-zoom.md`, `gpu-cylinder-planning.md`, `deep-zoom-precision.md`, `inversive-targeting.md`, `word-editing.md`; the planned fix for restarted orbits in `persistent-orbits.md`
 - **Projection**: `perspective_strength: f32` (0 = orthographic; Apophysis `zr = 1 − persp·z` formula with behind-camera clipping)
 - **Camera**: full 4-angle Apophysis/JWildfire camera (pitch, yaw, bank, roll/rotation — effective chain `Rz(rotation)·Rx(pitch)·Ry(bank)·Rz(−yaw)`) plus world-space position (`camera_x/y/z`, JWF `cam_pos_*` round-trip)
-  - **Fly mode** (F2 / 🚀): WASD/QE movement + mouse-look; two modes in SystemSettings — FreeLook (screen-relative, gimbal-free) and FPS (world-up anchored)
+  - **Fly mode** (F2 / 🚀), for every 3D view (flame, solid, terrains): WASD/QE movement + look about the eye; two modes in SystemSettings — FreeLook (screen-relative, gimbal-free) and FPS (world-up anchored)
 - **Depth tools** (3D): DoF blur, depth fog, depth-density compensation (radiance-preserving splats), far-density fade
 - **Solid rendering** (3D): splat-native pipeline — occlusion = per-pixel nearest-depth culling (`solid_strength` 0 = classic transparency, 1 = hard surface, blendable via the per-sample `density_weight` channel; `surface_thickness` shell), lighting = deferred shade pass (Blinn-Phong + screen-space normals/AO), shadows = 4 light-space shadow maps at splat resolution (histogram tail, auto-fit from measured attractor bounds). Depth region lives inside the histogram buffer (5th u32/pixel, inverted ordered-float encoding, atomicMax); SOLID shader-builder flag ⇒ byte-identical WGSL when off; at-splat DoF compiles out in solid mode. All export paths supported (no shadow maps on the CPU-histogram fallback). Solid renders are NOT bit-reproducible (in-batch depth race) — the `solid-*` visual regression tests use tolerance compare. The Phase 2/3 density volume was removed 2026-07-16. See [docs/projects/solid-rendering.md](docs/projects/solid-rendering.md)
 - **Pan/rotation**: both render modes compose pan → rotate → zoom (Apophysis convention); all pan inputs share `FractalConfig::screen_delta_to_pan_frame`
@@ -428,13 +429,13 @@ Presets store **complete FractalConfig** (not just the Flame). Transform buffers
 Desktop builds auto-load `assets/palettes/packs/*.json` (pack scan), `assets/palettes/*.palette` (the "Local Files" pack) and `assets/presets/*.fflame` at startup; WASM embeds the builtin pack + a build-generated manifest and lazy-loads the rest via `src/resources/`.
 
 ### Pan / Zoom / Rotation Input
-All pan inputs (mouse drag, arrow keys, View-panel buttons, wheel zoom-to-cursor, pinch) convert screen deltas through `FractalConfig::screen_delta_to_pan_frame` — rotation-aware, identical in 2D and 3D because both pipelines compose pan → rotate → zoom. Wheel zoom anchors to the cursor except in fly mode (zooms to center).
+One set of controls for every camera (`camera::gesture`, deciding by `ViewKind`): drag pans, Alt+drag or a right drag turns (a 2D view rotates, a 3D camera orbits), the wheel zooms toward the cursor (a 3D camera dollies; in fly mode it sets the speed). Touch: one finger pans, a long press is the right button, the viewport's Pan/Turn toggle is the Alt, two fingers pinch/twist/pan. The flame's pan inputs convert screen deltas through `FractalConfig::screen_delta_to_pan_frame` — rotation-aware, identical in 2D and 3D because both pipelines compose pan → rotate → zoom. The table is in `docs/main/UI.md` (Input Handling).
 
 ### 3D Rendering System
 - Single `main_template.wgsl` specialized at build time via the RENDER_3D flag; 3D tracks `vec3` through the chaos game
 - **Camera**: JWildfire's 4-angle matrix built in `utilities.wgsl::build_camera_matrix` — effective chain `Rz(rotation)·Rx(pitch)·Ry(bank)·Rz(−yaw)` applied as `M·(p − camera_pos)`. JWF applies its matrix transposed, which is why the call-site slot mapping looks swapped; see the comments there before touching it.
 - **Projection**: Apophysis `zr = 1 − persp·z` with behind-camera clipping (`zr < 1e-3` discarded, matches JWF)
-- **Fly mode**: `src/app/fly_camera.rs` — SO(3) mouse-look composition with continuity-preserving Euler decomposition (FreeLook) or classic Euler increments (FPS mode); WASD basis comes from the camera matrix rows
+- **Fly mode**: `src/camera/fly.rs` (the keys and drags in `src/app/fly_camera.rs`) — a look is a world rotation composed on the camera's quaternion and written back as pitch/yaw/bank with the roll held (singular only at bank ±90°); every camera's stored point (a flame's `camera_x/y/z`, `1/persp` in front of its viewpoint; a target) moves by the forward's change times its distance, so the eye stays put
 - **Depth effects** at plot time: DoF blur, fog (color blend toward background), depth-density compensation and far-density fade (per-sample density weighting; carried through all accumulation paths)
 - **preserve_z**: JWF flag; default false flattens Z each iteration to keep Z-scaling variations from diverging
 - Old presets with array-style variations are migrated by the custom deserializers

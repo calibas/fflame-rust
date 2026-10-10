@@ -27,7 +27,8 @@ The rest group by what they edit:
 
 | Group | Panels |
 |---|---|
-| The flame | Transforms, Triangle Editor, Variations, Xaos Editor, Subflames, Paths, View, Solid & Lighting |
+| The camera, every mode's | View (its camera, image, atmosphere, depth of field, and lighting & material; see [The View panel](#the-view-panel)) |
+| The flame | Transforms, Triangle Editor, Variations, Xaos Editor, Subflames, Paths |
 | The other engines | Escape Fractal, Simulation |
 | Appearance, shared by every engine | Colors, Palette Editor, Palette Library, Effects |
 | Workflow, mode-independent | Fractal Browser, History, Animation, Signals, Scripts, Random Generator, Export, Config Import/Export, Rendering, Performance, Help, Keyboard Shortcuts, Account, Save Online |
@@ -76,7 +77,12 @@ or an `Option`, and `src/ui/mod.rs` acts on it after the frame is drawn.
 
 Right-aligned, above 500 points of width: the progress bar
 (rightmost), the language picker, connectivity and account status, and
-the Fly Mode button (3D only).
+the Fly Mode button (any 3D view: `MenuState::fly_available`, from
+`visibility::fly_mode`).
+
+There is no Solid & Lighting row in either Window menu: its controls
+are the View panel's Lighting & Material section. The panel type stays
+so a saved layout that docks it still loads, and draws that section.
 
 ### The progress bar
 
@@ -152,8 +158,6 @@ Also in that module:
 
 - `layout_for(mode)` — the workspace and editor panel a mode wants.
   `App::follow_loaded_render_mode` consults it; it does not keep a copy.
-- `fly_mode_available(mode)` — 3D alone. It used to be asked as "not
-  2D", which left Fly Mode live in Escape and Simulation.
 - `keeps_escape_engine` / `keeps_sim_engine` — which engine's GPU state
   a mode needs resident (below).
 - `mode_label_key` / `mode_tip_key` — the `mode.*` locale keys.
@@ -170,9 +174,9 @@ means.
 
 ```rust
 pub enum Vis { Show, Grey(&'static str), Hide }
-pub fn panel(p: PanelType, m: RenderMode) -> Vis;
-pub fn control(c: Control, m: RenderMode) -> Vis;
-pub fn gated(ui, c: Control, m: RenderMode, body) -> Option<R>;
+pub fn panel(p: PanelType, m: RenderMode, solid: Solid) -> Vis;
+pub fn control(c: Control, m: RenderMode, tone: ToneMapMode) -> Vis;
+pub fn fly_mode(kind: ViewKind) -> Vis;
 ```
 
 The `&'static str` is a locale key naming the **reason**, shown on
@@ -186,14 +190,18 @@ sections inside a panel.
 
 The rule of thumb the tables encode:
 
-- **Flame-only** (greyed in both non-flame modes): View, Xaos Editor,
+- **Every mode's**: the View panel, the camera of whatever the
+  viewport shows.
+- **Flame-only** (greyed in both non-flame modes): Xaos Editor,
   Subflames, Paths, and Random Generator, whose output would
   leave the mode.
 - **Transform editors** (Transforms, Triangle Editor, Variations):
   available in Simulation too, because the flame's transforms are the
   simulation's per-layer warps when `sim.use_transforms` is on. Greyed
   in Escape.
-- **3D only**: Solid & Lighting.
+- **3D views only**: Solid & Lighting (`Solid::of` -- a 3D flame, a
+  solid, a terrain), and fly mode (`fly_mode(ViewKind)`, a question
+  about the camera rather than the mode).
 - **Each engine's own panel** hides the other's.
 - **Everything else is available everywhere**, because both non-flame
   engines write an image in the flame accumulator's layout and go
@@ -289,8 +297,8 @@ contract.
 | Xaos Editor | [xaos_editor.rs](../../src/ui/xaos_editor.rs) |
 | Subflames | [subflames.rs](../../src/ui/subflames.rs) |
 | Paths | [paths_panel.rs](../../src/ui/paths_panel.rs) |
-| View | [view.rs](../../src/ui/view.rs) |
-| Solid & Lighting | [solid_panel.rs](../../src/ui/solid_panel.rs) |
+| View | [view.rs](../../src/ui/view.rs), [view_controls.rs](../../src/ui/view_controls.rs) |
+| Solid & Lighting (kept for saved layouts) | [solid_panel.rs](../../src/ui/solid_panel.rs) |
 | Escape Fractal | [escape_panel.rs](../../src/ui/escape_panel.rs) |
 | Simulation | [sim_panel.rs](../../src/ui/sim_panel.rs) |
 | Colors / Tone Mapping | [tone_mapping.rs](../../src/ui/tone_mapping.rs) |
@@ -402,117 +410,81 @@ if ui_response.preset_changed {
 
 ---
 
+## The View panel
+
+One panel, in every mode (docs/projects/camera-unification.md, C5):
+[view.rs](../../src/ui/view.rs) lays it out by the shown camera's
+`ViewKind`, from the shared widgets in
+[view_controls.rs](../../src/ui/view_controls.rs).
+
+- **Camera** (2D views, and a 3D flame's projected picture):
+  `camera_2d` -- zoom, centre (the escape centre as exact decimals),
+  rotation, an arrow pad and Reset, through `camera::gesture` as the
+  keys and the mouse are.
+- **3D Camera** (every 3D view): `camera_3d` -- position, target, zoom
+  or distance, pitch, yaw, bank, roll, field of view or perspective,
+  Reset, and fly mode with its settings. A camera that stores a target
+  shows its eye as a readout; a terrain's target has a lift.
+- **Lens and Image**: an escape view's lens, antialiasing and
+  downsampling; a simulation's resolve filters, fit and tiling.
+- **Atmosphere, Depth of Field, Lighting & Material** (every 3D view):
+  fog, a flame's depth weighting, a terrain's far and haze; a flame's
+  focus and blur or the path tracer's lens; the render tier and the
+  path tracer, a terrain's shadows, the lights, and the picture's one
+  material (docs/projects/materials.md).
+- **The flame's own**: deep zoom, the 2D/3D switch, Preserve Z, post
+  symmetry.
+
+Angles show in degrees on a −180..180 slider that takes typed values
+beyond (`view_controls::angle_slider`); the config stores radians.
+
+---
+
 ## Input Handling
 
-### Keyboard Input
-**Location:** [src/app/input.rs](../../src/app/input.rs) - `handle_keyboard()`
+One set of controls drives every camera (camera-unification C3). The
+gestures are pure functions on the config in
+[src/camera/gesture.rs](../../src/camera/gesture.rs) and
+[src/camera/fly.rs](../../src/camera/fly.rs), each returning a
+`CameraEdit` (the writes and their history entry) that the caller
+applies; `gesture::view_kind` decides which camera they move.
 
-**Shortcuts:**
-- **Arrow Keys** - Pan view (rotation-aware)
-  - Up: Pan in rotated "up" direction
-  - Down: Pan in rotated "down" direction
-  - Left: Pan in rotated "left" direction
-  - Right: Pan in rotated "right" direction
-- **+/=** - Zoom in (1.1x)
-- **-/_** - Zoom out (0.9x)
-- **Ctrl+Z** - Undo
-- **Ctrl+Y** - Redo
-- **R** - Reset view (zoom=1, pan=0, rotation=0)
-- **Space** - Play/pause the animation — except in Simulation mode,
-  where it runs and pauses the *grid* (the transport is what you reach
-  for there; `render_mode::space_runs_the_simulation`). Inert while
-  the timeline owns the step count, see **The timeline and the
-  simulation grid** above.
-- **F2** - Toggle fly mode (3D flame only)
+| | 2D view | 3D view | 3D, fly mode |
+|---|---|---|---|
+| Drag | pan | pan (a terrain: along the ground) | look (about the eye) |
+| Alt+drag, right drag | rotate (grab and twist) | orbit the target (a turntable) | look |
+| Wheel | zoom toward the cursor | dolly toward the cursor (a flame: its 2D zoom) | flying speed |
+| Shift | finer steps | finer steps | sprint |
+| W A S D Q E | -- | -- | fly (Q/E: screen up in FreeLook, world up in FPS) |
+| Arrows, + / − | pan, zoom | pan, dolly | -- |
+| One finger | pan (rotate with the Turn toggle) | pan (orbit with the Turn toggle) | look |
+| Long press, then drag | rotate | orbit | look |
+| Two fingers | pinch zoom, twist rotate, drag pan | pinch dolly, twist orbit, drag pan | -- |
 
-**Rotation-Aware Panning (Added 2025-10-24):**
-```rust
-// Convert screen delta to fractal space
-let cos_r = rotation.cos();
-let sin_r = rotation.sin();
-let fractal_dx = screen_dx * cos_r - screen_dy * sin_r;
-let fractal_dy = screen_dx * sin_r + screen_dy * cos_r;
-```
-
-**Behavior:**
-- Only processed if egui doesn't consume event
-- Sets `view_changed_by_keyboard` flag
-- Triggers reset on next frame
-
-### Mouse Input
-
-#### Mouse Button
-**Location:** [src/app/input.rs](../../src/app/input.rs) - `handle_mouse_button()`
-
-**Left Button:**
-- **Press** - Start drag (if not over egui)
-- **Release** - End drag
-
-**State Tracking:**
-```rust
-pub struct App {
-    dragging: bool,
-    last_mouse_pos: Option<PhysicalPosition<f64>>,
-    // ...
-}
-```
-
-#### Mouse Move
-**Location:** [src/app/input.rs](../../src/app/input.rs) - `handle_mouse_move()`
-
-**Behavior:**
-- If `dragging == true`:
-  - Calculate delta from `last_mouse_pos`
-  - Apply rotation-aware panning (same as keyboard)
-  - Update pan_x, pan_y
-  - Set `view_changed_by_keyboard` flag
-- Update `last_mouse_pos`
-
-**Panning Formula:**
-```rust
-// Screen space delta (pixels)
-let delta_x = (pos.x - last.x) as f32;
-let delta_y = (pos.y - last.y) as f32;
-
-// Convert to fractal space (normalized + rotation-aware)
-let scale = 2.0 / (zoom * height as f32);
-let screen_dx = delta_x * scale;
-let screen_dy = delta_y * scale;
-
-// Apply inverse rotation
-let fractal_dx = screen_dx * cos_r - screen_dy * sin_r;
-let fractal_dy = screen_dx * sin_r + screen_dy * cos_r;
-
-// Update pan (invert Y for screen coordinates)
-pan_x += fractal_dx;
-pan_y -= fractal_dy;
-```
-
-#### Mouse Wheel
-**Location:** [src/app/input.rs](../../src/app/input.rs) - `handle_mouse_wheel()`
-
-**Behavior:**
-- Zoom toward cursor position (not screen center)
-- Zoom factor: 1.1x per scroll unit
-- Adjusts pan to keep cursor position fixed
-
-**Zoom-to-Cursor Formula:**
-```rust
-// Cursor position in fractal space (before zoom)
-let cursor_world_x = (cursor_screen_x - width/2) / (zoom * height/2) - pan_x;
-let cursor_world_y = (cursor_screen_y - height/2) / (zoom * height/2) - pan_y;
-
-// Apply zoom
-zoom *= 1.1;  // or 0.9 for zoom out
-
-// Cursor position in fractal space (after zoom) should be same
-// Adjust pan to compensate:
-let new_cursor_world_x = (cursor_screen_x - width/2) / (zoom * height/2) - new_pan_x;
-// Solve: cursor_world_x = new_cursor_world_x
-new_pan_x = pan_x + (cursor_world_x - new_cursor_world_x);
-```
-
-**Code:** Both App keyboard handler and egui's Settings window arrow buttons use identical rotation logic
+- **The viewport** ([panel_viewer.rs](../../src/ui/panel_viewer.rs)):
+  `view_drag` and `view_scroll` are the one input path, used by the
+  viewport body and the tab-bar strip above it alike.
+- **Touch**: `TouchTracker`, because egui's own multi-touch does not
+  work on the web. A finger held still within 10 points for half a
+  second is a **long press -- the touch's right button**: held, it reads
+  the path in PathMap (as holding the right button does); dragged, it
+  turns. The **Pan/Turn toggle** at the viewport's bottom left is the
+  touch's **Alt**: a sticky choice of what a one-finger drag does. It
+  shows on the compact layout and once a touch has been seen.
+- **Keys** ([src/app/input.rs](../../src/app/input.rs),
+  `handle_keyboard`): arrows pan 5% of the view a press and + / −
+  zoom by 1.5, through the same gestures; Ctrl/Cmd+Z and +Y undo and
+  redo; Space plays the animation, or runs the grid in Simulation mode
+  (`render_mode::space_runs_the_simulation`; inert while the timeline
+  owns the step count); F toggles full screen; **F2 toggles fly mode**
+  in any 3D view. Keys go to the app only when egui has not consumed
+  them -- except a fly key's release, which always lets go, as does
+  losing the window's focus.
+- **History**: one entry name per gesture, all coalescing -- pan, zoom,
+  rotate, orbit, and the fly camera's -- and Reset View as its own entry.
+  During animation playback a gesture writes silently.
+- **Path readback**: in PathMap mode only, holding the right button (or
+  a long press) queries the path under the pointer.
 
 ---
 
@@ -676,8 +648,11 @@ Most controls write straight through `config_manager.update_param`.
 
 ### Add Keyboard Shortcut
 1. Add case to `handle_keyboard()` in [src/app/input.rs](../../src/app/input.rs)
-2. Set appropriate flag (`view_changed_by_keyboard`, etc.)
-3. Handle flag in next frame's `render()` function
+2. A key that moves the view goes through `camera::gesture` (as the
+   arrows and + / − do), so it moves whichever camera is shown
+3. Otherwise set the appropriate flag (`view_changed_by_keyboard`,
+   etc.) and handle it in the next frame's `render()`
+4. List it in the Help panel's controls ([help.rs](../../src/ui/help.rs))
 
 ### Modify Triangle Editor
 1. Edit [src/ui/triangle_editor.rs](../../src/ui/triangle_editor.rs)

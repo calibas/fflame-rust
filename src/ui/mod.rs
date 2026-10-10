@@ -1929,6 +1929,8 @@ impl EguiLayer {
                         // cover strip — no scale discontinuity at the seam.
                         let leaf_rect = leaf.rect;
                         let leaf_size = leaf_rect.size();
+                        // The touch's Alt, the viewport's Pan/Turn toggle.
+                        let turn_lock = self.touch_tracker.turn_lock;
                         egui::Area::new(egui::Id::new("viewport_tab_cover"))
                             .fixed_pos(tab_bar_rect.min)
                             .order(egui::Order::Background)
@@ -1959,7 +1961,7 @@ impl EguiLayer {
                                 // two regions.
                                 let (alt, shift) = ui.input(|i| (i.modifiers.alt, i.modifiers.shift));
                                 let pointer = response.interact_pointer_pos().or_else(|| response.hover_pos());
-                                for (button, turn) in [(egui::PointerButton::Primary, alt), (egui::PointerButton::Secondary, true)] {
+                                for (button, turn) in [(egui::PointerButton::Primary, alt || turn_lock), (egui::PointerButton::Secondary, true)] {
                                     if response.dragged_by(button) {
                                         panel_viewer::view_drag(
                                             config_manager,

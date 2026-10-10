@@ -150,11 +150,11 @@ help:
   zoom_plus_minus: "  + / -      - Zoom in/out"
   zoom_numpad: "  Numpad +/-  - Zoom in/out"
   full_screen: "  F        - Full Screen Mode"
-  fly_mode: "  F2       - Toggle Fly Mode"
+  fly_mode: "  F2       - Toggle Fly Mode (any 3D view)"
   # Platform variants. Only keys that genuinely differ need one; anything
   # without a `_macos` / `_web` twin falls back to the base string above
   # (see `shortcut()` in src/ui/help.rs). Windows and Linux use the base.
-  fly_mode_macos: "  Fn+F2    - Toggle Fly Mode"
+  fly_mode_macos: "  Fn+F2    - Toggle Fly Mode (any 3D view)"
   undo_shortcut_macos: "  Cmd+Z    - Undo"
   redo_shortcut_macos: "  Cmd+Y    - Redo"
   # Web: a wasm build cannot know at compile time which OS it is on, so
@@ -171,9 +171,18 @@ help:
   exit_fullscreen_hint: "Press F or Esc to exit fullscreen"
   mouse_controls: "Mouse Controls:"
   drag_pan: "  Drag     - Pan view"
-  wheel_zoom: "  Wheel    - Zoom (toward cursor)"
+  wheel_zoom: "  Wheel    - Zoom toward the cursor (3D: move closer)"
   center_minibrot: "Center on Minibrot"
   alt_drag_rotate: "  Alt-Drag or Right-Drag - Rotate view (3D: orbit)"
+  shift_fine: "  Shift    - Finer steps while dragging or scrolling"
+  fly_controls: "Fly Mode:"
+  fly_look: "  Drag     - Look around (turns about the eye)"
+  fly_move: "  W A S D  - Move;  Q / E - Down / up;  Shift - Sprint"
+  fly_speed: "  Wheel    - Flying speed"
+  touch_controls: "Touch:"
+  touch_drag: "  One finger      - Pan (Turn, with the viewport's Pan/Turn toggle)"
+  touch_long_press: "  Long press      - Right button: drag to turn; in PathMap, hold to read the path"
+  touch_two_fingers: "  Two fingers     - Pinch to zoom, twist to rotate (3D: orbit), drag to pan"
 
 # Panel Titles (used in tabs and window titles)
 solid:
@@ -1935,8 +1944,12 @@ messages:
 # Fractal Viewport
 viewport:
   initializing: "Initializing fractal renderer..."
+  touch_pan: "✋ Pan"
+  touch_pan_tip: "A one-finger drag moves the view. Long-press, then drag, to turn instead."
+  touch_turn: "⟳ Turn"
+  touch_turn_tip: "A one-finger drag turns the view, as Alt+drag does: a 2D view rotates, a 3D camera orbits. Two fingers still pinch to zoom."
 
-# Path Info Overlay (right-click in PathMap mode)
+# Path Info Overlay (right-click in PathMap mode, or a long press on touch)
 path_overlay:
   title: "Path"
   coordinates: "Coordinates"
