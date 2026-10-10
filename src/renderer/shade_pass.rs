@@ -24,7 +24,8 @@ struct ShadeLight {
 
 /// Mirrors WGSL `ShadeParams` (shade.wgsl) — 20 scalars + 4 camera
 /// vec4s + 2 scalar quads (shadow/ema/fog + background) + shadow fit
-/// vec4 + a shadow scalar quad + 4 lights × 32 B = 336 bytes.
+/// vec4 + a shadow scalar quad + the material quad + 4 lights × 32 B =
+/// 352 bytes.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct ShadeParams {
@@ -66,6 +67,12 @@ struct ShadeParams {
     shadow_res: u32,
     shadow_count: u32,
     projection: u32,
+    // The material's coat and glow (docs/projects/materials.md): every
+    // tier reads them; the flame's shade pass is a lit tier.
+    gloss: f32,
+    roughness: f32,
+    glow: f32,
+    _pad_mat: f32,
     lights: [ShadeLight; 4],
 }
 
@@ -739,6 +746,10 @@ impl ShadePass {
             projection: u32::from(
                 supplied.as_ref().is_some_and(|g| g.pinhole_tan_half.is_some()),
             ),
+            gloss: shading.gloss.clamp(0.0, 1.0),
+            roughness: shading.roughness.clamp(0.02, 1.0),
+            glow: shading.glow.max(0.0),
+            _pad_mat: 0.0,
             lights,
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
@@ -1043,6 +1054,10 @@ mod tests {
             "shadow_res: u32,",
             "shadow_count: u32,",
             "projection: u32,",
+            "gloss: f32,",
+            "roughness: f32,",
+            "glow: f32,",
+            "_pad_mat: f32,",
             "lights: array<ShadeLight, 4>,",
         ];
         let mut at = 0usize;
@@ -1055,7 +1070,7 @@ mod tests {
         // And nothing that used to be padding still claims to be.
         assert!(!src.contains("_pad_fog"), "shade.wgsl still declares _pad_fog");
         assert!(!src.contains("_pad_sm"), "shade.wgsl still declares _pad_sm");
-        // 336 bytes, as the struct's own doc records.
-        assert_eq!(std::mem::size_of::<ShadeParams>(), 336);
+        // 352 bytes, as the struct's own doc records.
+        assert_eq!(std::mem::size_of::<ShadeParams>(), 352);
     }
 }

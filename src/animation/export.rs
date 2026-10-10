@@ -666,6 +666,9 @@ fn apply_config_value(
         (ConfigPath::SolidDiffuse, ConfigValue::Float(v)) => config.solid_shading.diffuse = *v,
         (ConfigPath::SolidSpecular, ConfigValue::Float(v)) => config.solid_shading.specular = *v,
         (ConfigPath::SolidShininess, ConfigValue::Float(v)) => config.solid_shading.shininess = *v,
+        (ConfigPath::SolidGloss, ConfigValue::Float(v)) => config.solid_shading.gloss = v.clamp(0.0, 1.0),
+        (ConfigPath::SolidRoughness, ConfigValue::Float(v)) => config.solid_shading.roughness = v.clamp(0.02, 1.0),
+        (ConfigPath::SolidGlow, ConfigValue::Float(v)) => config.solid_shading.glow = v.clamp(0.0, 16.0),
         (ConfigPath::SsaoStrength, ConfigValue::Float(v)) => config.solid_shading.ssao_strength = *v,
         (ConfigPath::SsaoRadius, ConfigValue::Float(v)) => config.solid_shading.ssao_radius = *v,
         (ConfigPath::NormalSmoothing, ConfigValue::Float(v)) => {
@@ -864,15 +867,15 @@ fn apply_config_value(
         }
         (ConfigPath::EscapePathGloss, ConfigValue::Float(v)) => {
             let v = *v;
-            config.escape.path.gloss = v.clamp(0.0, 1.0);
+            config.solid_shading.gloss = v.clamp(0.0, 1.0);
         }
         (ConfigPath::EscapePathRoughness, ConfigValue::Float(v)) => {
             let v = *v;
-            config.escape.path.roughness = v.clamp(0.02, 1.0);
+            config.solid_shading.roughness = v.clamp(0.02, 1.0);
         }
         (ConfigPath::EscapePathEmission, ConfigValue::Float(v)) => {
             let v = *v;
-            config.escape.path.emission = v.clamp(0.0, 16.0);
+            config.solid_shading.glow = v.clamp(0.0, 16.0);
         }
         (ConfigPath::EscapePathAperture, ConfigValue::Float(v)) => {
             let v = *v;
@@ -1026,15 +1029,15 @@ fn apply_config_value(
         }
         (ConfigPath::SimPathGloss, ConfigValue::Float(v)) => {
             let v = if v.is_finite() { *v } else { 0.0 };
-            config.sim.terrain.path.gloss = v.clamp(0.0, 1.0);
+            config.solid_shading.gloss = v.clamp(0.0, 1.0);
         }
         (ConfigPath::SimPathRoughness, ConfigValue::Float(v)) => {
             let v = if v.is_finite() { *v } else { 0.0 };
-            config.sim.terrain.path.roughness = v.clamp(0.02, 1.0);
+            config.solid_shading.roughness = v.clamp(0.02, 1.0);
         }
         (ConfigPath::SimPathEmission, ConfigValue::Float(v)) => {
             let v = if v.is_finite() { *v } else { 0.0 };
-            config.sim.terrain.path.emission = v.clamp(0.0, 16.0);
+            config.solid_shading.glow = v.clamp(0.0, 16.0);
         }
         (ConfigPath::SimPathAperture, ConfigValue::Float(v)) => {
             let v = if v.is_finite() { *v } else { 0.0 };

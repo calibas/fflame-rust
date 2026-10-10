@@ -253,6 +253,13 @@ pub enum ConfigPath {
     SolidDiffuse,
     SolidSpecular,
     SolidShininess,
+    /// The material's coat -- reflectance at normal incidence and
+    /// roughness -- and the albedo's glow (docs/projects/materials.md):
+    /// one per picture, read by every tier. `EscapePathGloss` and
+    /// `SimPathGloss` (and their roughness and emission) are aliases.
+    SolidGloss,
+    SolidRoughness,
+    SolidGlow,
     SsaoStrength,
     SsaoRadius,
     NormalSmoothing,
@@ -1284,6 +1291,9 @@ impl Display for ConfigPath {
             ConfigPath::SolidDiffuse => write!(f, "Diffuse Light"),
             ConfigPath::SolidSpecular => write!(f, "Specular"),
             ConfigPath::SolidShininess => write!(f, "Shininess"),
+            ConfigPath::SolidGloss => write!(f, "Gloss"),
+            ConfigPath::SolidRoughness => write!(f, "Roughness"),
+            ConfigPath::SolidGlow => write!(f, "Glow"),
             ConfigPath::SsaoStrength => write!(f, "SSAO Strength"),
             ConfigPath::SsaoRadius => write!(f, "SSAO Radius"),
             ConfigPath::NormalSmoothing => write!(f, "Normal Smoothing"),
@@ -1975,6 +1985,9 @@ impl ConfigPath {
             ConfigPath::SolidDiffuse => I18nKey::simple("history.param.solid_diffuse"),
             ConfigPath::SolidSpecular => I18nKey::simple("history.param.solid_specular"),
             ConfigPath::SolidShininess => I18nKey::simple("history.param.solid_shininess"),
+            ConfigPath::SolidGloss => I18nKey::simple("history.param.solid_gloss"),
+            ConfigPath::SolidRoughness => I18nKey::simple("history.param.solid_roughness"),
+            ConfigPath::SolidGlow => I18nKey::simple("history.param.solid_glow"),
             ConfigPath::SsaoStrength => I18nKey::simple("history.param.ssao_strength"),
             ConfigPath::SsaoRadius => I18nKey::simple("history.param.ssao_radius"),
             ConfigPath::NormalSmoothing => I18nKey::simple("history.param.normal_smoothing"),
@@ -2872,6 +2885,9 @@ impl ConfigPath {
             | ConfigPath::SolidDiffuse
             | ConfigPath::SolidSpecular
             | ConfigPath::SolidShininess
+            | ConfigPath::SolidGloss
+            | ConfigPath::SolidRoughness
+            | ConfigPath::SolidGlow
             | ConfigPath::SsaoStrength
             | ConfigPath::SsaoRadius
             | ConfigPath::NormalSmoothing
@@ -3653,6 +3669,9 @@ impl ConfigPath {
             ConfigPath::SolidDiffuse => "SolidDiffuse".to_string(),
             ConfigPath::SolidSpecular => "SolidSpecular".to_string(),
             ConfigPath::SolidShininess => "SolidShininess".to_string(),
+            ConfigPath::SolidGloss => "SolidGloss".to_string(),
+            ConfigPath::SolidRoughness => "SolidRoughness".to_string(),
+            ConfigPath::SolidGlow => "SolidGlow".to_string(),
             ConfigPath::SsaoStrength => "SsaoStrength".to_string(),
             ConfigPath::SsaoRadius => "SsaoRadius".to_string(),
             ConfigPath::NormalSmoothing => "NormalSmoothing".to_string(),
@@ -3792,6 +3811,9 @@ impl ConfigPath {
             "SolidDiffuse" => return Some(ConfigPath::SolidDiffuse),
             "SolidSpecular" => return Some(ConfigPath::SolidSpecular),
             "SolidShininess" => return Some(ConfigPath::SolidShininess),
+            "SolidGloss" => return Some(ConfigPath::SolidGloss),
+            "SolidRoughness" => return Some(ConfigPath::SolidRoughness),
+            "SolidGlow" => return Some(ConfigPath::SolidGlow),
             "SsaoStrength" => return Some(ConfigPath::SsaoStrength),
             "SsaoRadius" => return Some(ConfigPath::SsaoRadius),
             "NormalSmoothing" => return Some(ConfigPath::NormalSmoothing),
@@ -4403,6 +4425,9 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SolidDiffuse
         | ConfigPath::SolidSpecular
         | ConfigPath::SolidShininess
+        | ConfigPath::SolidGloss
+        | ConfigPath::SolidRoughness
+        | ConfigPath::SolidGlow
         | ConfigPath::SsaoStrength
         | ConfigPath::SsaoRadius
         | ConfigPath::NormalSmoothing
@@ -5353,6 +5378,9 @@ mod tests {
             ConfigPath::SolidDiffuse,
             ConfigPath::SolidSpecular,
             ConfigPath::SolidShininess,
+            ConfigPath::SolidGloss,
+            ConfigPath::SolidRoughness,
+            ConfigPath::SolidGlow,
             ConfigPath::SsaoStrength,
             ConfigPath::SsaoRadius,
             ConfigPath::NormalSmoothing,
@@ -5507,7 +5535,9 @@ mod tests {
         assert_eq!(t.source, crate::config::escape::TerrainSource::EscapeCount);
         let e = &m.config().escape;
         assert_eq!(e.solid_tier, crate::config::escape::RenderTier::Auto);
-        assert_eq!((e.path.samples, e.path.bounces, e.path.gloss), (64, 4, 0.25));
+        assert_eq!((e.path.samples, e.path.bounces), (64, 4));
+        // The gloss is the picture's material now: the alias writes it.
+        assert_eq!(m.config().solid_shading.gloss, 0.25);
     }
 
     /// Every simulation terrain path round-trips its key, sets and reads

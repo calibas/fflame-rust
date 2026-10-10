@@ -1350,9 +1350,6 @@ pub(crate) struct PathPaths {
     pub samples: ConfigPath,
     pub bounces: ConfigPath,
     pub environment: ConfigPath,
-    pub gloss: ConfigPath,
-    pub roughness: ConfigPath,
-    pub emission: ConfigPath,
     pub aperture: ConfigPath,
     pub focus: ConfigPath,
     pub denoise: ConfigPath,
@@ -1366,9 +1363,6 @@ pub(crate) fn escape_path_paths() -> PathPaths {
         samples: ConfigPath::EscapePathSamples,
         bounces: ConfigPath::EscapePathBounces,
         environment: ConfigPath::EscapePathEnvironment,
-        gloss: ConfigPath::EscapePathGloss,
-        roughness: ConfigPath::EscapePathRoughness,
-        emission: ConfigPath::EscapePathEmission,
         aperture: ConfigPath::EscapePathAperture,
         denoise: ConfigPath::EscapePathDenoise,
         sky: ConfigPath::EscapePathSky,
@@ -1464,22 +1458,10 @@ pub(crate) fn show_path_tracing(
             }
         });
     };
-    // The sky, then the material -- folded away, since the default
-    // (matte) is what most pictures want. The lens is the View panel's
+    // The sky's light. The material is the picture's, every tier's
+    // (the Lighting & Material section's); the lens is the View panel's
     // Depth of Field ([`show_path_dof`]).
     row(ui, "escape_panel.terrain_environment", "escape_panel.terrain_environment_tip", paths.environment.clone(), pt.environment, 0.0..=4.0);
-    egui::CollapsingHeader::new(t!("escape_panel.path_material"))
-        .id_salt(format!("{id}_material"))
-        .default_open(false)
-        .show(ui, |ui| {
-            for (label, tip, path, value, range) in [
-                ("escape_panel.terrain_gloss", "escape_panel.terrain_gloss_tip", paths.gloss.clone(), pt.gloss, 0.0..=1.0),
-                ("escape_panel.terrain_roughness", "escape_panel.terrain_roughness_tip", paths.roughness.clone(), pt.roughness, 0.02..=1.0),
-                ("escape_panel.terrain_emission", "escape_panel.terrain_emission_tip", paths.emission.clone(), pt.emission, 0.0..=4.0),
-            ] {
-                row(ui, label, tip, path, value, range);
-            }
-        });
 }
 
 /// The path tracer's lens: its aperture and where it focuses (0 is sharp

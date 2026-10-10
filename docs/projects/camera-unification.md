@@ -636,8 +636,16 @@ changes input lists what to try in the app.
     terrain's flight stops at the floor; mode D flies at 2^-200; the
     canonical angles are the same camera; every 3D view and no 2D one
     flies.
-- **P7. Materials across the views (C7).** A design note first, with
-  before/after renders, since it changes pictures.
+- **P7. Materials across the views (C7).** *Built 2026-10-09.* The
+  design note, its renders and the decisions are
+  [materials.md](materials.md): one material per picture, beside the
+  lights -- Diffuse, the highlight (kept, in both tiers), and a new
+  Gloss, Roughness and Glow -- which the lit tiers (the flame's shade
+  pass, mode D's and the terrains' rig) and the path tracer all evaluate
+  alike on the direct light (a coated plane under a sun: the same picture
+  in both tiers to 7e-5). The 3D flame gains the coat and the glow. Old
+  pictures' path-tracer materials are lifted beside the lights on load;
+  the old paths are aliases. No shipped picture moves.
 - **P8. Docs and text.** `docs/main/UI.md`, `free-camera-movement.md`,
   help text (the "Alt-Drag - Rotate view" line becomes true everywhere),
   the locales, `SCRIPTING.md` (the `anim.key("rotation", ...)` example

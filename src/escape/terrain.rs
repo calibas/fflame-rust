@@ -1830,6 +1830,10 @@ pub struct TerrainView {
     /// A gradient sky's zenith, as a ray that meets nothing sees it
     /// (`path_core::sky_seen`); None for the background alone.
     pub sky: Option<[f32; 3]>,
+    /// The material the lit tier reads as the path tracer does
+    /// (camera-unification C7): the coat's reflectance and roughness,
+    /// and the glow (`path_core::lit_material`).
+    pub material: [f32; 3],
 }
 
 pub use super::path_core::PathSettings;
@@ -1854,7 +1858,7 @@ fn pack_rig(cam: &SolidCamera, shading: &SolidShadingSettings, fog: (f32, f32, [
     out[3] = [cam.forward[0] as f32, cam.forward[1] as f32, cam.forward[2] as f32, 0.0];
     out[4] = [cam.right[0] as f32, cam.right[1] as f32, cam.right[2] as f32, 0.0];
     out[5] = [cam.up[0] as f32, cam.up[1] as f32, cam.up[2] as f32, 0.0];
-    let any = !SolidShadingSettings::is_default(shading);
+    let any = !shading.rig_untouched();
     let (strength, ambient, diffuse, specular, shininess, ssao) = if any {
         (
             shading.shading_strength,
@@ -1909,7 +1913,7 @@ fn walk_key(view: &TerrainView, w: u32, h: u32, tile: u64) -> String {
         view.width
     );
     k.push_str(&format!("|{}", view.far));
-    let any = !SolidShadingSettings::is_default(&view.shading);
+    let any = !view.shading.rig_untouched();
     k.push_str(&format!("|{any}"));
     for l in &view.shading.lights {
         k.push_str(&format!("|{}:{}:{}", l.enabled && l.intensity > 0.0, l.azimuth, l.elevation));
@@ -3085,6 +3089,11 @@ impl TerrainRenderer {
         // in linear light could never match a background composited
         // after the tonemap's gamma. The rig gets none.
         pack_rig(&view.camera, &view.shading, (0.0, 0.0, view.fog.2), &mut fdata);
+        // The material, in the w of the camera's rows (`ifs_gloss`,
+        // `ifs_rough`, `ifs_glow`).
+        for k in 0..3 {
+            fdata[3 + k][3] = view.material[k];
+        }
         fdata[7][0] = view.fog.0;
         fdata[7][1] = view.fog.1;
         // The ground's index, its top, and its map.
@@ -3756,6 +3765,7 @@ pub(crate) mod gpu_tests {
             samples_per_axis: 1,
             far: 1.0e30,
             sky: None,
+            material: [0.0, 0.5, 0.0],
         }
     }
 
@@ -4161,6 +4171,52 @@ pub(crate) mod gpu_tests {
         let worst = lit.iter().zip(&path).flat_map(|(a, b)| (0..4).map(move |k| (a[k] - b[k]).abs())).fold(0.0f32, f32::max);
         println!("sunlit plane: path against lit, worst {worst:.2e}");
         assert!(worst < 1e-4, "{worst}");
+    }
+
+    /// One material, every tier's (docs/projects/materials.md): under a
+    /// sun alone, the lit tier's coat, glow and highlight are the path
+    /// tracer's direct light -- the same terms, so the same picture.
+    #[test]
+    fn a_coated_sunlit_plane_is_the_lit_tiers() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (32u32, 32u32);
+        let (n, m) = (64u32, 64u32);
+        let albedo = [0.5f32, 0.25, 1.0, 1.0];
+        let mut r = TerrainRenderer::new(&device, w, h);
+        r.set_tile(&device, &queue, n, m, &vec![0.0; (n * m) as usize], &vec![albedo; (n * m) as usize]);
+        let mut shading = dark();
+        shading.ambient = 0.0;
+        shading.specular = 0.4;
+        shading.shininess = 24.0;
+        shading.ssao_strength = 0.0;
+        shading.lights[0].enabled = true;
+        shading.lights[0].azimuth = 30.0;
+        shading.lights[0].elevation = 35.0;
+        shading.lights[0].intensity = 2.0;
+        shading.lights[0].color = [1.0, 0.5, 0.25];
+        let mut v = view(camera([32.0, 32.0, 0.0], 1.0, 0.3, 40.0, 0.5));
+        v.shading = shading;
+        v.softness = 1.0e6;
+        let (gloss, roughness, glow) = (0.3f32, 0.35f32, 0.25f32);
+        let plain = {
+            r.render(&device, &queue, &v);
+            read_output(&device, &queue, &r, w, h)
+        };
+        v.material = [gloss, roughness, glow];
+        r.render(&device, &queue, &v);
+        let lit = read_output(&device, &queue, &r, w, h);
+        let moved = lit.iter().zip(&plain).flat_map(|(a, b)| (0..3).map(move |k| (a[k] - b[k]).abs())).fold(0.0f32, f32::max);
+        assert!(moved > 0.05, "the material shows in the lit tier: {moved}");
+        r.reset_path();
+        let s = PathSettings { bounces: 2, environment: [0.0; 3], clamp: 1.0e30, seed: 1, gloss, roughness, emission: glow, ..PathSettings::default() };
+        r.render_path(&device, &queue, &v, &s, 4, 4);
+        let path = read_output(&device, &queue, &r, w, h);
+        let worst = lit.iter().zip(&path).flat_map(|(a, b)| (0..4).map(move |k| (a[k] - b[k]).abs() / a[k].abs().max(1.0))).fold(0.0f32, f32::max);
+        println!("coated sunlit plane: path against lit, worst {worst:.2e} (the material moved the lit tier by {moved:.3})");
+        assert!(worst < 1e-3, "{worst}");
     }
 
     /// The material (T3b). Glow alone -- no light, no sky -- is the
