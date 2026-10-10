@@ -5193,6 +5193,78 @@ pub(crate) mod gpu_tests {
         }
     }
 
+    /// A highlight over a saturated albedo keeps its colour through the
+    /// denoiser. The glint is white; a palette's pure red has no green or
+    /// blue, its pure yellow no blue -- and the denoiser, dividing the
+    /// light by the albedo, drops a channel the albedo does not reflect
+    /// and multiplies it back by zero. Right for light the albedo shapes;
+    /// for the glint it lost the white exactly where a channel reached
+    /// zero: field-reported as hard bands of pure red and yellow across a
+    /// terrain's valleys, with no coat to make any of the light white.
+    #[test]
+    fn a_highlight_keeps_its_colour_denoised() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (96u32, 64u32);
+        let (n, m) = (129u32, 97u32);
+        let hs = terrain("sinusoid", n as usize, m as usize);
+        let mut r = TerrainRenderer::new(&device, w, h);
+        let mut v = view(camera([64.0, 48.0, 8.0], 0.5, 0.4, 110.0, 0.9));
+        let mut shading = dark();
+        shading.ambient = 0.0;
+        shading.specular = 0.6;
+        shading.shininess = 8.0;
+        shading.lights[0].enabled = true;
+        shading.lights[0].azimuth = 110.0;
+        shading.lights[0].elevation = 25.0;
+        shading.lights[0].intensity = 1.5;
+        v.shading = shading;
+        // Stripes of a palette's pure red and pure yellow, side by side as
+        // a colouring puts them.
+        let (red, yellow) = ([0.8f32, 0.0, 0.0, 1.0], [0.9f32, 0.75, 0.0, 1.0]);
+        let albedo: Vec<[f32; 4]> = (0..m).flat_map(|_| (0..n).map(move |i| if (i / 6) % 2 == 0 { red } else { yellow })).collect();
+        r.set_tile(&device, &queue, n, m, &hs, &albedo);
+        let mut picture = |denoise: bool, samples: u32| {
+            let s = PathSettings { bounces: 1, environment: [0.3, 0.35, 0.45], denoise, seed: 3, ..PathSettings::default() };
+            r.reset_path();
+            r.render_path(&device, &queue, &v, &s, samples, 16);
+            read_output(&device, &queue, &r, w, h)
+        };
+        // Against a plain render of many samples, in 8x8 blocks: noise
+        // averages out of a block, a band does not.
+        let (reference, denoised) = (picture(false, 1024), picture(true, 64));
+        let (mut worst, mut glint) = (0.0f64, 0.0f64);
+        for by in 0..h / 8 {
+            for bx in 0..w / 8 {
+                let block = |img: &[[f32; 4]]| {
+                    let mut c = [0.0f64; 4];
+                    for y in by * 8..by * 8 + 8 {
+                        for x in bx * 8..bx * 8 + 8 {
+                            let p = img[(y * w + x) as usize];
+                            for k in 0..4 {
+                                c[k] += p[k] as f64 / 64.0;
+                            }
+                        }
+                    }
+                    c
+                };
+                let (a, b) = (block(&reference), block(&denoised));
+                if a[3] < 0.999 {
+                    continue;
+                }
+                glint = glint.max(a[2]);
+                for k in 0..3 {
+                    worst = worst.max((b[k] - a[k]).abs() / a[0].max(a[1]).max(a[2]).max(0.05));
+                }
+            }
+        }
+        println!("striped glint: worst block error {worst:.4} (the brightest blue, the glint's, {glint:.3})");
+        assert!(glint > 0.1, "the glint is in the picture: {glint}");
+        assert!(worst < 0.06, "the denoiser moved a block's colour by {worst}");
+    }
+
     /// The denoiser's cost at 1080p (T5), measured: a path-traced sample
     /// resolved, against the same sample denoised.
     #[test]

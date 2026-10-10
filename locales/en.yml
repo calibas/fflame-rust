@@ -474,6 +474,7 @@ view:
   far_needs_repeat: "A single grid ends at its edge. Far and Haze are a repeated ground's: Simulation panel, 3D terrain, Tiling: Repeat."
   dof_needs_path: "The lit tier draws everything sharp. Depth of field is the path tracer's: set the render tier to Auto or Path traced under Lighting & Material."
   lighting_material: "Lighting & Material"
+  lit_strength_zero: "Shading strength 0: the lit tier draws the colours unlit, while the path tracer lights them with all of these."
   lighting_default_rig: "Untouched, this view is lit by a default sun. Any change here replaces it with these settings."
   occlusion_strength: "Occlusion Strength"
   material_section: "Material"
