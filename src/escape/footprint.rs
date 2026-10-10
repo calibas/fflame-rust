@@ -194,6 +194,15 @@ pub fn terrain_camera(escape: &EscapeConfig) -> SolidCamera {
     }
 }
 
+/// How far below the plain a hole's floor is, in view widths: a sixth of
+/// the relief, and at most 0.01 -- the depth every terrain had at the
+/// default height (6%) and above, so those keep their holes. At a height
+/// of 0 the terrain is a flat plane, its holes included; a hair of slab
+/// is kept so the walk's clipping has two faces.
+pub fn hole_floor(height: f32) -> f64 {
+    -(height.max(0.0) as f64 / 6.0).clamp(1.0e-6, 0.01)
+}
+
 /// The terrain's fog: reaching the background just before `far`, from a
 /// start the haze brings nearer (none at 0). In the world's units.
 pub fn terrain_fog(escape: &EscapeConfig) -> (f32, f32) {
@@ -856,7 +865,18 @@ impl EscapeTerrain {
         ingest: &TerrainIngest,
     ) {
         let complete = wanted.sections.iter().all(|w| self.cache.contains_key(&w.0));
-        let key = format!("{eye:?}|{z}|{:?}|{:?}|{complete}", wanted.root_first, wanted.root_dims);
+        // The relief's height is in the key: the ground's slab top is set
+        // here, and the walk clips every ray to it. Out of the key, a
+        // RAISED height drew the terrain cut flat at the old one until
+        // something else -- a section landing, the camera moving -- set
+        // the ground again (field-reported: the Height slider "does not
+        // always update"; it depended on what landed).
+        let key = format!(
+            "{eye:?}|{z}|{:?}|{:?}|{complete}|{}",
+            wanted.root_first,
+            wanted.root_dims,
+            config.escape.terrain.height.to_bits()
+        );
         if !landed && self.ground_key.as_deref() == Some(key.as_str()) {
             return;
         }
@@ -926,7 +946,7 @@ impl EscapeTerrain {
             nodes,
             sections,
             top: t.height as f64,
-            floor: -0.01,
+            floor: hole_floor(t.height),
             mode: ingest.mode(),
         };
         // A count's or a relief's range: the ground's sections' own, so
@@ -1536,6 +1556,93 @@ mod tests {
         println!("{checked} rays under the horizon within reach, {holes} through the ground");
         assert!(checked > (w * 4) as usize, "{checked}");
         assert_eq!(holes, 0, "rays fell through the ground");
+    }
+
+    /// Raising the height redraws the ground at once. The ground's slab
+    /// top was the height when the ground was last set, and the height
+    /// was not in the ground's key: a raised height drew the terrain cut
+    /// flat at the old one, through an engine kept between frames, until
+    /// a section landed or the camera moved.
+    #[test]
+    fn raising_the_height_redraws_the_ground() {
+        let Some((_one_at_a_time, device, queue)) = gpu() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (96u32, 64u32);
+        let mut c = terrain_config();
+        c.escape.terrain.tier = RenderTier::Lit;
+        let shot = |c: &FractalConfig, engines: &mut crate::renderer::render::RenderEngines| {
+            pollster::block_on(crate::renderer::render(
+                &device,
+                &queue,
+                crate::renderer::RenderJob::new(c, w, h).with_engines(engines),
+                &mut crate::renderer::NoProgress,
+            ))
+            .expect("render")
+            .rgba_data
+        };
+        let mut kept = crate::renderer::render::RenderEngines::default();
+        let low = shot(&c, &mut kept);
+        c.escape.terrain.height = 0.2;
+        let raised = shot(&c, &mut kept);
+        let fresh = shot(&c, &mut crate::renderer::render::RenderEngines::default());
+        assert_ne!(low, fresh, "the height moved the picture");
+        assert_eq!(raised, fresh, "a raised height drew through a kept engine as a fresh one draws it");
+    }
+
+    /// A height of 0 is a flat plane, seen in 3D: every ray that meets
+    /// the ground meets it at the plain's level, holes included.
+    #[test]
+    fn a_height_of_zero_is_a_flat_plane() {
+        let Some((_one_at_a_time, device, queue)) = gpu() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (96u32, 64u32);
+        let mut c = terrain_config();
+        c.escape.terrain.tier = RenderTier::Lit;
+        c.escape.terrain.height = 0.0;
+        c.escape.terrain.interior = crate::config::escape::TerrainInterior::Hole;
+        let mut engines = crate::renderer::render::RenderEngines::default();
+        let rgba = pollster::block_on(crate::renderer::render(
+            &device,
+            &queue,
+            crate::renderer::RenderJob::new(&c, w, h).with_engines(&mut engines),
+            &mut crate::renderer::NoProgress,
+        ))
+        .expect("render")
+        .rgba_data;
+        let t = engines.terrain.as_ref().unwrap();
+        let geom: Vec<[u32; 4]> = bytemuck::cast_slice(&crate::escape::terrain::gpu_tests::read_buffer(
+            &device,
+            &queue,
+            t.terrain_for_test().geometry_buffer(),
+            (w * h * 16) as u64,
+        ))
+        .to_vec();
+        let cam = terrain_camera(&c.escape);
+        let (aspect, th) = (w as f64 / h as f64, (cam.fov as f64 * 0.5).tan());
+        let (mut hits, mut worst) = (0usize, 0.0f64);
+        for py in 0..h {
+            for px in 0..w {
+                let depth = f32::from_bits(geom[(py * w + px) as usize][3]) as f64;
+                if !(depth > 0.0) {
+                    continue;
+                }
+                let (u, v) = ((px as f64 + 0.5) / w as f64 - 0.5, (py as f64 + 0.5) / h as f64 - 0.5);
+                let d: [f64; 3] =
+                    std::array::from_fn(|k| cam.forward[k] + cam.right[k] * u * aspect * 2.0 * th - cam.up[k] * v * 2.0 * th);
+                let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                let z = cam.eye[2] + d[2] / len * depth;
+                worst = worst.max(z.abs());
+                hits += 1;
+            }
+        }
+        println!("flat plane: {hits} hits, the worst off the plain {worst:.2e} view widths");
+        assert!(hits > (w * h / 3) as usize, "{hits}");
+        assert!(worst < 1.0e-4, "a hit off the plain: {worst}");
+        assert!(rgba.chunks(4).all(|p| p[3] > 0), "every pixel drawn");
     }
 
     /// Sections are kept by their place in the plane: a camera move or a

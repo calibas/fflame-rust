@@ -2616,7 +2616,7 @@ escape_panel:
   terrain_source_relief: "Relief field"
   terrain_no_derivative: "This formula has no derivative, so its escape count is the height."
   terrain_height: "Height"
-  terrain_height_tip: "The terrain's tallest point, as a share of the ground's width."
+  terrain_height_tip: "The terrain's tallest point, as a share of the view's width. 0 is a flat plane, seen in 3D."
   terrain_de_width: "Flank width"
   terrain_de_width_tip: "How far from the set the ground falls away, as a share of its width: narrow is cliffs, wide is hills."
   terrain_interior: "Interior"
