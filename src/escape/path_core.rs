@@ -97,7 +97,7 @@ pub fn path_settings(config: &FractalConfig, target: f32) -> PathSettings {
 }
 
 /// [`path_settings`] from any path-tracing block -- a simulation's
-/// terrain keeps its own -- with the config's sky and lights.
+/// terrain keeps its own -- with the config's sky, lights and material.
 pub fn path_settings_from(
     t: &crate::config::escape::PathTraceConfig,
     config: &FractalConfig,
@@ -112,14 +112,15 @@ pub fn path_settings_from(
         .max(env.iter().cloned().fold(0.0, f32::max))
         .max(sky.map_or(0.0, |z| z.iter().cloned().fold(0.0, f32::max)));
     let target = target.max(1.0e-30);
+    let material = lit_material(config);
     PathSettings {
         bounces: t.bounces.min(16),
         environment: env,
-        clamp: 10.0 * brightest.max(t.emission),
+        clamp: 10.0 * brightest.max(material[2]),
         seed: 1,
-        gloss: t.gloss,
-        roughness: t.roughness,
-        emission: t.emission,
+        gloss: material[0],
+        roughness: material[1],
+        emission: material[2],
         aperture: t.aperture * target,
         focus: if t.focus > 0.0 { t.focus } else { 1.0 } * target,
         lake_roughness,
@@ -144,6 +145,14 @@ fn shown(config: &FractalConfig, c: [f32; 3]) -> [f32; 3] {
     let gamma = if config.gamma > 0.0 { config.gamma } else { 1.0 };
     let exposure = config.exposure.max(1.0e-6);
     c.map(|v| v.max(0.0).powf(2.2).powf(gamma) / exposure)
+}
+
+/// A picture's material (docs/projects/materials.md): the coat -- its
+/// reflectance at normal incidence and its roughness -- and the albedo's
+/// glow, beside the lights, which every tier reads.
+pub fn lit_material(config: &FractalConfig) -> [f32; 3] {
+    let s = &config.solid_shading;
+    [s.gloss.clamp(0.0, 1.0), s.roughness.clamp(0.02, 1.0), s.glow.max(0.0)]
 }
 
 /// A gradient sky's zenith as a camera ray sees it, in the
@@ -552,6 +561,11 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
         // diffuse in the rig's units (its I as pi times a radiance's), the
         // gloss's physical BRDF times the same irradiance, pi I cos. No
         // shadow ray at strength 0.
+        // At the first surface, how much of its direct light the albedo
+        // shapes (the diffuse, without the albedo) and how much it does not
+        // (the coat's and the highlight's): the denoiser's guide below.
+        var first_diffuse = 0.0;
+        var first_white = 0.0;
         for (var li = 0u; li < ifs_light_count(); li = li + 1u) {
             let ld = pt_cone(ifs_light_dir(li), pt.misc.w);
             let ndl = dot(n, ld);
@@ -570,7 +584,39 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
                 }
                 let light = ifs_light_color(li) * (ifs_light_power(li) * ndl * vis);
                 radiance = radiance + through * light * (albedo * (ifs_diffuse() * diff) + vec3<f32>(spec));
+                // The highlight, the lit tier's very term (materials.md
+                // §4.1): Blinn-Phong on the direct light, unnormalised and
+                // without the cosine, so both tiers draw it alike. Not a
+                // lobe a bounce samples: it is the lights' shine alone.
+                // Weighted by the shading strength, as the lit tier's mix
+                // weights it: a rig at strength 0 draws no highlight in
+                // either tier (a terrain's touched rig carried the flame
+                // default 0.35, and glinted from P7 on where it never had).
+                var shine = 0.0;
+                let shine_weight = ifs_specular() * clamp(ifs_shading_strength(), 0.0, 1.0);
+                if (shine_weight > 0.0) {
+                    let hb = normalize(ld + v);
+                    shine = shine_weight * pow(max(dot(n, hb), 0.0), max(ifs_shininess(), 1.0));
+                    radiance = radiance + through * ifs_light_color(li) * (ifs_light_power(li) * vis * shine);
+                }
+                if (bounce == 0u) {
+                    let lum = dot(ifs_light_color(li), vec3<f32>(0.2126, 0.7152, 0.0722)) * ifs_light_power(li) * vis;
+                    first_diffuse = first_diffuse + lum * ndl * ifs_diffuse() * diff;
+                    first_white = first_white + lum * (ndl * spec + shine);
+                }
             }
+        }
+        // The denoiser divides a pixel's light by its guide to keep the
+        // albedo's detail out of the blur, and multiplies it back after.
+        // Light the albedo does not shape -- a highlight, a coat's glint --
+        // divided by a saturated albedo's near-zero channels came back as
+        // bands of the wrong colour (field-reported: a terrain's sun glint,
+        // banded red and yellow in its valleys). So the guide takes that
+        // light's share as white, as it takes the coat's reflection of the
+        // sky (`pt_first`): exact where there is none.
+        if (bounce == 0u && first_white > 0.0) {
+            let w = first_white / max(first_diffuse + first_white, 1.0e-20);
+            pt_g_albedo = pt_g_albedo * (1.0 - w) + vec3<f32>(w, w, w);
         }
         if (bounce >= pt.bounces) {
             break;

@@ -24,8 +24,6 @@ mod palette_library;
 mod panel_viewer;
 /// Shared viewport pan entry (drag semantics; routes to escape-mode
 /// panning internally). Re-exported for the keyboard handler.
-pub(crate) use panel_viewer::pan_fractal_view;
-pub(crate) use escape_panel::escape_zoom_by_factor;
 mod paths_panel;
 mod performance;
 mod random_generator;
@@ -50,6 +48,7 @@ mod triangle_editor;
 mod undo_history;
 mod variation_params;
 mod view;
+mod view_controls;
 mod escape_panel;
 mod sim_panel;
 mod textures_panel;
@@ -1541,6 +1540,7 @@ impl EguiLayer {
             frame_governor: config_manager.system_settings().frame_governor,
             manual_workgroups: config_manager.system_settings().manual_workgroups,
             render_mode: config_manager.config().render_mode,
+            fly_available: crate::ui::visibility::fly_mode(crate::camera::gesture::view_kind(config_manager.config())).is_show(),
             tonemap_mode: config_manager.config().tonemap_mode,
             solid: crate::ui::visibility::Solid::of(config_manager.config()),
             online_mode: config_manager.system_settings().online_mode,
@@ -1929,6 +1929,8 @@ impl EguiLayer {
                         // cover strip — no scale discontinuity at the seam.
                         let leaf_rect = leaf.rect;
                         let leaf_size = leaf_rect.size();
+                        // The touch's Alt, the viewport's Pan/Turn toggle.
+                        let turn_lock = self.touch_tracker.turn_lock;
                         egui::Area::new(egui::Id::new("viewport_tab_cover"))
                             .fixed_pos(tab_bar_rect.min)
                             .order(egui::Order::Background)
@@ -1957,35 +1959,34 @@ impl EguiLayer {
                                 // input the same way; here we use the leaf's
                                 // full rect/size so scaling matches between the
                                 // two regions.
-                                if response.dragged_by(egui::PointerButton::Primary) {
-                                    // Pan, or look (pitch/yaw) when fly mode
-                                    // is active or Alt is held — same
-                                    // fly_mouse_drag channel the viewport
-                                    // body uses.
-                                    let alt = ui.input(|i| i.modifiers.alt);
-                                    if fly_mode_active || alt {
-                                        let d = response.drag_delta();
-                                        let prev = fly_mouse_drag.unwrap_or((0.0, 0.0));
-                                        fly_mouse_drag = Some((prev.0 + d.x, prev.1 + d.y));
-                                    } else {
-                                        panel_viewer::pan_fractal_view(
+                                let (alt, shift) = ui.input(|i| (i.modifiers.alt, i.modifiers.shift));
+                                let pointer = response.interact_pointer_pos().or_else(|| response.hover_pos());
+                                for (button, turn) in [(egui::PointerButton::Primary, alt || turn_lock), (egui::PointerButton::Secondary, true)] {
+                                    if response.dragged_by(button) {
+                                        panel_viewer::view_drag(
                                             config_manager,
                                             response.drag_delta(),
+                                            pointer,
+                                            leaf_rect,
                                             leaf_size,
+                                            turn,
+                                            shift,
+                                            fly_mode_active,
+                                            &mut fly_mouse_drag,
                                         );
                                     }
                                 }
                                 if response.hovered() {
                                     let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
                                     if scroll_delta.abs() > 0.1 {
-                                        panel_viewer::zoom_fractal_view(
+                                        panel_viewer::view_scroll(
                                             config_manager,
                                             scroll_delta,
                                             response.hover_pos(),
                                             leaf_rect,
                                             leaf_size,
-                                            // Fly mode: zoom to center, not cursor
-                                            !fly_mode_active,
+                                            shift,
+                                            fly_mode_active,
                                         );
                                     }
                                 }
@@ -2255,21 +2256,25 @@ impl EguiLayer {
         }
 
         // Handle View menu actions BEFORE syncing flame (so changes take effect this frame)
-        use crate::config::ConfigPath;
+        // The View menu moves the camera the viewport shows, as the keys
+        // and gestures do (`camera::gesture`): it wrote the flame's view in
+        // every mode, and did nothing in Escape.
+        let zoom_by = |config_manager: &mut crate::config::ConfigManager, factor: f64| {
+            let edit = crate::camera::gesture::zoom(config_manager.active_config(), factor, None, [1.0, 1.0]);
+            if let Some(edit) = edit {
+                edit.apply(config_manager);
+            }
+        };
         if menu_actions.view.reset_view {
-            let _ = config_manager.update_param(ConfigPath::Zoom, 1.0.into());
-            let _ = config_manager.update_param(ConfigPath::Pan, (0.0, 0.0).into());
-            let _ = config_manager.update_param(ConfigPath::Rotation, 0.0.into());
+            if let Some(edit) = crate::camera::gesture::reset(config_manager.active_config()) {
+                edit.apply(config_manager);
+            }
         }
-
         if menu_actions.view.zoom_in {
-            let current_zoom = config_manager.active_config().zoom;
-            let _ = config_manager.update_param(ConfigPath::Zoom, (current_zoom * 1.2).into());
+            zoom_by(config_manager, 1.5);
         }
-
         if menu_actions.view.zoom_out {
-            let current_zoom = config_manager.active_config().zoom;
-            let _ = config_manager.update_param(ConfigPath::Zoom, (current_zoom / 1.2).into());
+            zoom_by(config_manager, 1.0 / 1.5);
         }
 
         // Every mode change goes through the one helper, so the

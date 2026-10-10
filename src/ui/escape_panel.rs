@@ -9,7 +9,7 @@
 //! params generate theirs.
 
 use crate::config::escape::{
-    ContrastMode, DownsampleMode, ShadingBlend, ShadingField, ShadingTexture,
+    ContrastMode, ShadingBlend, ShadingField, ShadingTexture,
 };
 use crate::config::{ConfigManager, ConfigPath, ConfigValue};
 use crate::scene::transforms::RenderMode;
@@ -20,7 +20,6 @@ pub fn render_escape_content(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
     workspace_request: &mut Option<super::workspace::WorkspaceLayout>,
-    viewport_aa: Option<super::EscapeAa>,
 ) {
     let config = config_manager.active_config().clone();
     let esc = config.escape.clone();
@@ -193,11 +192,9 @@ pub fn render_escape_content(
             show_ifs_criterion(ui, config_manager, d.solid);
         }
         if d.solid {
-            show_solid_camera(ui, config_manager, &esc, true);
-            // The path tracer (heightfield plan T3c): Lit by default, so
-            // a solid renders as it always has until asked otherwise.
-            ui.separator();
-            show_path_tracing(ui, config_manager, &esc.path, &escape_path_paths(), ConfigPath::EscapeSolidTier, esc.solid_tier, "solid_tier");
+            // The camera, fog, lighting and the path tracer are the View
+            // panel's (camera-unification C5).
+            ui.label(egui::RichText::new(t!("escape_panel.view_has_camera")).small().weak());
         }
     }
 
@@ -293,8 +290,6 @@ pub fn render_escape_content(
         }
     }
 
-    show_lens_section(ui, config_manager);
-
     // ---- Julia toggle ----
     //
     // Mode A only (fields have no Julia plane), and only where the map
@@ -338,45 +333,9 @@ pub fn render_escape_content(
 
     ui.separator();
 
-    // ---- View: center (exact decimal strings), zoom exponent, rotation ----
-    ui.label(t!("escape_panel.view_heading"));
-    for (label, value, path) in [
-        ("re", &esc.center_re, ConfigPath::EscapeCenterRe),
-        ("im", &esc.center_im, ConfigPath::EscapeCenterIm),
-    ] {
-        ui.horizontal(|ui| {
-            ui.label(format!("{}:", label));
-            let mut text = value.clone();
-            // The center is an exact decimal string (deep-zoom ready);
-            // an unparseable intermediate state falls back to the
-            // default center at render time and corrects as you type.
-            if ui.text_edit_singleline(&mut text).changed() {
-                let _ = config_manager.update_param(path.clone(), ConfigValue::String(text));
-            }
-        });
-    }
-
-    ui.horizontal(|ui| {
-        ui.label(t!("escape_panel.zoom_log10"));
-        // Shown in base 10 — the unit every other deep-zoom tool
-        // reports — while the engine keeps base 2 (see
-        // EscapeConfig::zoom_log10 for why the STORED value must).
-        let mut z10 = esc.zoom_log10();
-        // Same drag feel as before: 0.02 octaves per step, in decades.
-        let resp = ui
-            .add(
-                egui::DragValue::new(&mut z10)
-                    .speed(0.02 * std::f64::consts::LOG10_2)
-                    .max_decimals(4),
-            )
-            .on_hover_text(t!("escape_panel.tooltip_zoom_log10"));
-        if resp.changed() {
-            let z2 = crate::config::escape::EscapeConfig::log10_to_log2(z10);
-            let _ = config_manager.update_param(ConfigPath::EscapeZoomLog2, (z2 as f32).into());
-        }
-        ui.label(egui::RichText::new(magnification_label(esc.zoom_log10())).weak());
-    });
-
+    // The view -- centre, zoom, turn, lens, antialiasing -- is the View
+    // panel's (camera-unification C5). What stays here is how the deep
+    // zoom finds its reference, which changes nothing you see.
     // Newton navigation: locate the minibrot governing the current
     // view and recenter on its nucleus exactly (arbitrary-precision
     // digits). One batch -> one undo point. Eligible formulas match
@@ -684,17 +643,6 @@ pub fn render_escape_content(
             }
         });
 
-    ui.horizontal(|ui| {
-        ui.label(t!("escape_panel.rotation"));
-        let mut deg = esc.rotation.to_degrees();
-        if ui
-            .add(egui::DragValue::new(&mut deg).speed(0.5).suffix("°"))
-            .changed()
-        {
-            let _ = config_manager.update_param(ConfigPath::EscapeRotation, deg.to_radians().into());
-        }
-    });
-
     ui.separator();
 
     // ---- Iteration ----
@@ -709,78 +657,6 @@ pub fn render_escape_content(
             let _ = config_manager.update_param(ConfigPath::EscapeMaxIter, ConfigValue::UInt(iter));
         }
     });
-    ui.horizontal(|ui| {
-        ui.label(t!("escape_panel.supersample"));
-        let max = crate::escape::renderer::MAX_SUPERSAMPLE;
-        let current = esc.supersample.clamp(1, max);
-        let label_for = |n: u32| match n {
-            1 => t!("escape_panel.supersample_off").to_string(),
-            n => format!("{n}\u{00d7} ({} samples)", n * n),
-        };
-        egui::ComboBox::from_id_salt("escape_supersample")
-            .selected_text(label_for(current))
-            .show_ui(ui, |ui| {
-                // Whole factors only, and not every one: 5x and 7x
-                // cost more than 4x and 6x for no visible gain.
-                for n in [1u32, 2, 3, 4, 6, 8] {
-                    if n > max {
-                        continue;
-                    }
-                    if ui.selectable_label(n == current, label_for(n)).clicked() && n != current
-                    {
-                        let _ = config_manager
-                            .update_param(ConfigPath::EscapeSupersample, ConfigValue::UInt(n));
-                    }
-                }
-            })
-            .response
-            .on_hover_text(t!("escape_panel.tooltip_supersample"));
-    });
-    // What the view is actually drawn at, when that is not the setting:
-    // the frame governor during playback, or the view's size.
-    if let Some(aa) = viewport_aa.filter(|aa| aa.in_use != aa.requested) {
-        let (text, tip) = match aa.reason {
-            Some(super::AaReason::Governor) => (
-                t!("escape_panel.aa_in_use_governor", used = aa.in_use),
-                t!("escape_panel.aa_in_use_governor_tip"),
-            ),
-            _ => (t!("escape_panel.aa_in_use_size", used = aa.in_use), t!("escape_panel.aa_in_use_size_tip")),
-        };
-        ui.label(egui::RichText::new(text).small().weak()).on_hover_text(tip);
-    }
-    // How those samples are combined. Only meaningful when there is
-    // more than one of them.
-    if esc.supersample > 1 {
-        ui.horizontal(|ui| {
-            ui.label(t!("escape_panel.downsample"));
-            let cur = esc.downsample;
-            let label_for = |m: DownsampleMode| match m {
-                DownsampleMode::Box => t!("escape_panel.downsample_box"),
-                DownsampleMode::Perceptual => t!("escape_panel.downsample_perceptual"),
-                DownsampleMode::Vivid => t!("escape_panel.downsample_vivid"),
-            };
-            egui::ComboBox::from_id_salt("escape_downsample")
-                .selected_text(label_for(cur))
-                .show_ui(ui, |ui| {
-                    for m in [
-                        DownsampleMode::Box,
-                        DownsampleMode::Perceptual,
-                        DownsampleMode::Vivid,
-                    ] {
-                        if ui.selectable_label(cur == m, label_for(m).as_ref()).clicked()
-                            && cur != m
-                        {
-                            let _ = config_manager.update_param(
-                                ConfigPath::EscapeDownsample,
-                                ConfigValue::String(m.as_str().to_string()),
-                            );
-                        }
-                    }
-                })
-                .response
-                .on_hover_text(t!("escape_panel.tooltip_downsample"));
-        });
-    }
     // ---- Auto contrast ----
     // Sits above relief because it changes what relief slopes: both
     // read the coloring's value field, and this one decides how much
@@ -1469,24 +1345,11 @@ fn suggested_coloring_scale(coloring: &str, max_iter: u32) -> f32 {
     }
 }
 
-/// The solid camera (D8), shown only when the loaded formula is a
-/// solid one.
-///
-/// D2: the 3D controls follow the CONFIG, not the render mode. Escape
-/// mode is not three-dimensional — one formula in it is — so gating on
-/// the mode would show these over a Mandelbrot and hide them over the
-/// thing they steer.
-/// The solid camera's controls. `with_target` is mode D's: a terrain's
-/// target is the view's own centre (heightfield plan, T2b), so it has
-/// none to edit here.
 /// The ConfigPaths of a block of path-tracing settings.
 pub(crate) struct PathPaths {
     pub samples: ConfigPath,
     pub bounces: ConfigPath,
     pub environment: ConfigPath,
-    pub gloss: ConfigPath,
-    pub roughness: ConfigPath,
-    pub emission: ConfigPath,
     pub aperture: ConfigPath,
     pub focus: ConfigPath,
     pub denoise: ConfigPath,
@@ -1495,14 +1358,11 @@ pub(crate) struct PathPaths {
 }
 
 /// The escape view's: a terrain's and a solid's.
-fn escape_path_paths() -> PathPaths {
+pub(crate) fn escape_path_paths() -> PathPaths {
     PathPaths {
         samples: ConfigPath::EscapePathSamples,
         bounces: ConfigPath::EscapePathBounces,
         environment: ConfigPath::EscapePathEnvironment,
-        gloss: ConfigPath::EscapePathGloss,
-        roughness: ConfigPath::EscapePathRoughness,
-        emission: ConfigPath::EscapePathEmission,
         aperture: ConfigPath::EscapePathAperture,
         denoise: ConfigPath::EscapePathDenoise,
         sky: ConfigPath::EscapePathSky,
@@ -1598,130 +1458,32 @@ pub(crate) fn show_path_tracing(
             }
         });
     };
-    // The sky, then the material and the lens -- folded away, since the
-    // defaults (matte, everything sharp) are what most pictures want.
+    // The sky's light. The material is the picture's, every tier's
+    // (the Lighting & Material section's); the lens is the View panel's
+    // Depth of Field ([`show_path_dof`]).
     row(ui, "escape_panel.terrain_environment", "escape_panel.terrain_environment_tip", paths.environment.clone(), pt.environment, 0.0..=4.0);
-    egui::CollapsingHeader::new(t!("escape_panel.path_material"))
-        .id_salt(format!("{id}_material"))
-        .default_open(false)
-        .show(ui, |ui| {
-            for (label, tip, path, value, range) in [
-                ("escape_panel.terrain_gloss", "escape_panel.terrain_gloss_tip", paths.gloss.clone(), pt.gloss, 0.0..=1.0),
-                ("escape_panel.terrain_roughness", "escape_panel.terrain_roughness_tip", paths.roughness.clone(), pt.roughness, 0.02..=1.0),
-                ("escape_panel.terrain_emission", "escape_panel.terrain_emission_tip", paths.emission.clone(), pt.emission, 0.0..=4.0),
-                ("escape_panel.terrain_aperture", "escape_panel.terrain_aperture_tip", paths.aperture.clone(), pt.aperture, 0.0..=0.2),
-                ("escape_panel.terrain_focus", "escape_panel.terrain_focus_tip", paths.focus.clone(), pt.focus, 0.0..=8.0),
-            ] {
-                row(ui, label, tip, path, value, range);
-            }
-        });
 }
 
-fn show_solid_camera(
+/// The path tracer's lens: its aperture and where it focuses (0 is sharp
+/// everywhere).
+pub(crate) fn show_path_dof(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
-    esc: &crate::config::escape::EscapeConfig,
-    with_target: bool,
+    pt: &crate::config::escape::PathTraceConfig,
+    paths: &PathPaths,
 ) {
-    ui.separator();
-    ui.label(egui::RichText::new(t!("escape_panel.camera")).strong());
-    if with_target {
-        show_solid_camera_target(ui, config_manager, esc);
-    }
-    show_solid_camera_angles(ui, config_manager, esc);
-}
-
-fn show_solid_camera_target(
-    ui: &mut egui::Ui,
-    config_manager: &mut ConfigManager,
-    esc: &crate::config::escape::EscapeConfig,
-) {
-    // The target is decimal STRINGS: a deep zoom is an approach to a
-    // point, so the target is the quantity that needs digits while the
-    // distance shrinks around it. An f32 here would cap 3D at a zoom
-    // the plane passed long ago.
-    let axes: [(&str, ConfigPath, &String); 3] = [
-        ("X", ConfigPath::EscapeCamTargetX, &esc.cam_target_x),
-        ("Y", ConfigPath::EscapeCamTargetY, &esc.cam_target_y),
-        ("Z", ConfigPath::EscapeCamTargetZ, &esc.cam_target_z),
-    ];
-    ui.horizontal(|ui| {
-        ui.label(t!("escape_panel.camera_target"));
-        for (name, path, value) in axes {
-            let mut text = value.clone();
-            ui.label(name);
-            let resp = ui.add(
-                egui::TextEdit::singleline(&mut text)
-                    .desired_width(78.0)
-                    .hint_text(t!("escape_panel.camera_target_auto")),
-            );
-            if resp.changed() {
-                let _ = config_manager
-                    .update_param(path, ConfigValue::String(text.trim().to_string()));
-            }
-        }
-    });
-    ui.label(
-        egui::RichText::new(t!("escape_panel.camera_target_tip")).small().weak(),
-    );
-}
-
-fn show_solid_camera_angles(
-    ui: &mut egui::Ui,
-    config_manager: &mut ConfigManager,
-    esc: &crate::config::escape::EscapeConfig,
-) {
-    let mut angle = |ui: &mut egui::Ui,
-                     label: String,
-                     path: ConfigPath,
-                     value: f32,
-                     range: std::ops::RangeInclusive<f32>,
-                     tip: String| {
+    for (label, tip, path, value, range) in [
+        ("escape_panel.terrain_aperture", "escape_panel.terrain_aperture_tip", paths.aperture.clone(), pt.aperture, 0.0..=0.2),
+        ("escape_panel.terrain_focus", "escape_panel.terrain_focus_tip", paths.focus.clone(), pt.focus, 0.0..=8.0),
+    ] {
         ui.horizontal(|ui| {
-            ui.label(label);
-            let mut deg = value.to_degrees();
-            if ui
-                .add(egui::Slider::new(&mut deg, *range.start()..=*range.end()).suffix("°"))
-                .on_hover_text(tip)
-                .changed()
-            {
-                let _ = config_manager.update_param(path, deg.to_radians().into());
+            ui.label(t!(label));
+            let mut v = value;
+            if ui.add(egui::Slider::new(&mut v, range)).on_hover_text(t!(tip)).changed() {
+                let _ = config_manager.update_param(path, v.into());
             }
         });
-    };
-
-    angle(
-        ui,
-        t!("escape_panel.camera_pitch").to_string(),
-        ConfigPath::EscapeCamPitch,
-        esc.cam_pitch,
-        -90.0..=90.0,
-        t!("escape_panel.camera_pitch_tip").to_string(),
-    );
-    angle(
-        ui,
-        t!("escape_panel.camera_yaw").to_string(),
-        ConfigPath::EscapeCamYaw,
-        esc.cam_yaw,
-        -180.0..=180.0,
-        t!("escape_panel.camera_yaw_tip").to_string(),
-    );
-    angle(
-        ui,
-        t!("escape_panel.camera_bank").to_string(),
-        ConfigPath::EscapeCamBank,
-        esc.cam_bank,
-        -180.0..=180.0,
-        t!("escape_panel.camera_bank_tip").to_string(),
-    );
-    angle(
-        ui,
-        t!("escape_panel.camera_fov").to_string(),
-        ConfigPath::EscapeCamFov,
-        esc.cam_fov,
-        3.0..=170.0,
-        t!("escape_panel.camera_fov_tip").to_string(),
-    );
+    }
 }
 
 /// The **3D terrain** section: the switch, how the height is made, how
@@ -1853,87 +1615,22 @@ fn show_terrain_section(
                     }
                 });
             }
-            // How it is rendered: the lit tier, the path tracer, or both
-            // by turns (plan section 8).
+            // How finely it is sampled. The camera, far and haze, the
+            // lighting and the path tracer are the View panel's
+            // (camera-unification C5).
             ui.separator();
-            show_path_tracing(ui, config_manager, &esc.path, &escape_path_paths(), ConfigPath::EscapeTerrainTier, t.tier, "terrain_tier");
-            // How it is lit: the Solid Lighting panel's lights, world-
-            // fixed, with these.
-            ui.separator();
-            let mut slider = |ui: &mut egui::Ui, label: String, path: ConfigPath, value: f32, range: std::ops::RangeInclusive<f32>, log: bool, tip: String| {
-                ui.horizontal(|ui| {
-                    ui.label(label);
-                    let mut v = value;
-                    if ui
-                        .add(egui::Slider::new(&mut v, range).logarithmic(log))
-                        .on_hover_text(tip)
-                        .changed()
-                    {
-                        let _ = config_manager.update_param(path, v.into());
-                    }
-                });
-            };
-            slider(
-                ui,
-                t!("escape_panel.terrain_shadow").to_string(),
-                ConfigPath::EscapeTerrainShadow,
-                t.shadow,
-                0.0..=1.0,
-                false,
-                t!("escape_panel.terrain_shadow_tip").to_string(),
-            );
-            slider(
-                ui,
-                t!("escape_panel.terrain_shadow_sharpness").to_string(),
-                ConfigPath::EscapeTerrainShadowSharpness,
-                t.shadow_sharpness,
-                1.0..=128.0,
-                true,
-                t!("escape_panel.terrain_shadow_sharpness_tip").to_string(),
-            );
-            // Occlusion is the lit tier's stand-in for the sky the path
-            // tracer traces.
-            if t.tier != crate::config::escape::RenderTier::PathTraced {
-                slider(
-                    ui,
-                    t!("escape_panel.terrain_occlusion").to_string(),
-                    ConfigPath::EscapeTerrainOcclusion,
-                    t.occlusion,
-                    0.0..=0.05,
-                    false,
-                    t!("escape_panel.terrain_occlusion_tip").to_string(),
-                );
-            }
-            // How far it reaches, and how finely it is sampled.
-            ui.separator();
-            slider(
-                ui,
-                t!("escape_panel.terrain_far").to_string(),
-                ConfigPath::EscapeTerrainFar,
-                t.far,
-                0.5..=64.0,
-                true,
-                t!("escape_panel.terrain_far_tip").to_string(),
-            );
-            slider(
-                ui,
-                t!("escape_panel.terrain_haze").to_string(),
-                ConfigPath::EscapeTerrainHaze,
-                t.haze,
-                0.0..=1.0,
-                false,
-                t!("escape_panel.terrain_haze_tip").to_string(),
-            );
-            slider(
-                ui,
-                t!("escape_panel.terrain_detail").to_string(),
-                ConfigPath::EscapeTerrainDetail,
-                t.detail,
-                0.1..=8.0,
-                true,
-                t!("escape_panel.terrain_detail_tip").to_string(),
-            );
-            show_solid_camera(ui, config_manager, esc, false);
+            ui.horizontal(|ui| {
+                ui.label(t!("escape_panel.terrain_detail"));
+                let mut v = t.detail;
+                if ui
+                    .add(egui::Slider::new(&mut v, 0.1..=8.0).logarithmic(true))
+                    .on_hover_text(t!("escape_panel.terrain_detail_tip"))
+                    .changed()
+                {
+                    let _ = config_manager.update_param(ConfigPath::EscapeTerrainDetail, v.into());
+                }
+            });
+            ui.label(egui::RichText::new(t!("escape_panel.view_has_camera")).small().weak());
         });
 }
 
@@ -1993,7 +1690,7 @@ fn lens_choice(name: &str) -> Vec<(ConfigPath, ConfigValue)> {
 /// have to reproduce the ParamType zoo, the undo coalescing and the
 /// "a quantising widget must not rewrite the value merely by being
 /// drawn" rule, and would drift from the original.
-fn show_lens_section(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
+pub(super) fn show_lens_section(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
     use crate::ui::variation_params::{render_variation_params, LensTarget};
 
     let registry = crate::variations::global_registry();
@@ -2309,9 +2006,11 @@ fn show_ifs_criterion(ui: &mut egui::Ui, config_manager: &mut ConfigManager, sol
                             ConfigPath::EscapeCenterRe,
                             ConfigValue::String(format!("{centre:?}", centre = centre[0])),
                         ),
+                        // The plane reads the flame's world mirrored, so the
+                        // ball's y is the plane's -Im (`ifs::view_basis`).
                         (
                             ConfigPath::EscapeCenterIm,
-                            ConfigValue::String(format!("{centre:?}", centre = centre[1])),
+                            ConfigValue::String(format!("{centre:?}", centre = crate::escape::ifs::plane_im(centre[1]))),
                         ),
                         (ConfigPath::EscapeZoomLog2, ((4.0f64 / span).log2() as f32).into()),
                     ]
@@ -2874,17 +2573,6 @@ pub(crate) fn magnification_label(log10: f64) -> String {
     }
 }
 
-/// Zoom the escape view by a plain factor (keyboard +/- keys): adds
-/// log2(factor) to the exponent, clamped to the same travel range the
-/// wheel uses.
-pub(crate) fn escape_zoom_by_factor(config_manager: &mut ConfigManager, factor: f64) {
-    let z = config_manager.active_config().escape.zoom_log2;
-    // Same ceiling as the wheel (panel_viewer): the phase-1 clamp of
-    // 300 would collapse a deep session's zoom on one keypress.
-    let new_z = (z + factor.log2()).clamp(-8.0, 100_000_000.0);
-    let _ = config_manager.update_param(ConfigPath::EscapeZoomLog2, (new_z as f32).into());
-}
-
 /// Background minibrot-search state (desktop). Module-static because
 /// the panel is stateless between frames; one search at a time.
 #[cfg(not(target_arch = "wasm32"))]
@@ -2952,7 +2640,7 @@ mod tests {
         for _ in 0..2 {
             let out = ctx.run(Default::default(), |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    render_escape_content(ui, &mut manager, &mut None, None);
+                    render_escape_content(ui, &mut manager, &mut None);
                 });
             });
             labels = out

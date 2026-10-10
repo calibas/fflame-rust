@@ -2023,6 +2023,28 @@ pub fn pack_for(
     }
 }
 
+/// The analysis a solid's camera is built on, as the renderer builds it
+/// (`pack_for`): the flame's for a def that reads the flame, the def's
+/// own ball for one that does not. `None` for a formula that is not a
+/// solid, and for a solid flame that does not qualify.
+///
+/// What frames a camera has to be this, not the flame's analysis alone:
+/// a solid that needs no flame (the quaternion Julia) renders whatever
+/// the config's flame is, and a pan read its camera from that flame --
+/// which did not qualify, so the drag fell to the plane's centre, which
+/// the solid does not read.
+pub fn solid_analysis(
+    config: &crate::config::FractalConfig,
+    registry: &crate::variations::VariationRegistry,
+) -> Option<crate::scene::ifs_analysis::Ifs3> {
+    let def = get_ifs(&config.escape.formula).filter(|d| d.solid)?;
+    if def.needs_flame {
+        crate::scene::ifs_analysis::analyse_3d(&config.flame, registry).ok()
+    } else {
+        pack_standalone(def, &config.escape).solid.map(|(ifs3, _)| ifs3)
+    }
+}
+
 /// Ordered mode-D coloring registry. **Append-only.**
 /// `measure`: the flame's own invariant density and colour, read
 /// through the inverse walk instead of sampled by a chaos game.
@@ -4560,10 +4582,29 @@ pub fn centre_at_precision(
     );
     let re = super::fixedpoint::FixedPoint::from_decimal(&escape.center_re, n)?;
     let im = super::fixedpoint::FixedPoint::from_decimal(&escape.center_im, n)?;
+    // The world point is the plane's mirror (see `view_basis`).
     Some([
         super::bigfloat::BigFloat::from_fixed(&re),
-        super::bigfloat::BigFloat::from_fixed(&im),
+        super::bigfloat::BigFloat::from_fixed(&im).neg(),
     ])
+}
+
+/// The flame's world point a planar view is centred on, in f64: the
+/// plane's `(re, −im)` (see [`view_basis`]). The fallback for a centre
+/// whose digits will not parse at the precision the zoom asks for.
+pub fn world_centre_f64(escape: &crate::config::escape::EscapeConfig) -> (f64, f64) {
+    let (re, im) = escape.center_f64();
+    (re, plane_im(im))
+}
+
+/// A world y as the plane's Im, and back -- the mirror is its own
+/// inverse -- without the minus zero a bare negation writes out as "-0".
+pub fn plane_im(y: f64) -> f64 {
+    if y == 0.0 {
+        0.0
+    } else {
+        -y
+    }
 }
 
 /// The camera's target at whatever precision the zoom asks for.
@@ -4604,13 +4645,25 @@ pub fn target_at_precision(
 }
 
 /// The view basis: takes a pixel's normalised offset — the screen
-/// spanning [-½, ½] on each axis — to a world offset from the centre.
+/// spanning [-½, ½] on each axis, y DOWN — to a world offset from the
+/// centre.
 ///
-/// The `-span_y` is the template's `d.y = -d.y`: screen y runs down.
+/// **A Flame Attractor stands as its flame does.** A flame draws its
+/// world's +y DOWN the screen (Apophysis does); the plane draws Im up.
+/// So the plane reads the flame's world MIRRORED: the plane point
+/// `(re, im)` is the world point `(re, −im)` ([`centre_at_precision`],
+/// [`world_centre_f64`]), and this basis is the plane's own --
+/// `rotate(diag(span_x, −span_y))`, Im up the screen -- mirrored the same
+/// way, `F·rotate(diag(span_x, −span_y))` with `F = diag(1, −1)`. Screen
+/// down is then world +y, as on the flame, and the escape view's centre,
+/// rotation and zoom are the flame's pan `(x, −y)`, rotation and zoom.
+/// The plane's gestures, which move `(re, im)` with Im up, are unchanged.
+/// (Until 2026-10-10 the attractor came out upside down against its
+/// flame; the user's call, before escape mode shipped.)
 pub fn view_basis(span_x: f64, span_y: f64, rotation: f32) -> [[f64; 2]; 2] {
     let (c, s) = ((rotation as f64).cos(), (rotation as f64).sin());
-    // rotate(diag(span_x, -span_y))
-    [[c * span_x, s * span_y], [s * span_x, -c * span_y]]
+    // F · rotate(diag(span_x, -span_y))
+    [[c * span_x, s * span_y], [-s * span_x, c * span_y]]
 }
 
 /// Where a solid render looks from, and which way.
@@ -4815,6 +4868,17 @@ pub fn solid_pixel_step(
     ((x - e).exp2(), e as i64)
 }
 
+/// The solid camera's distance from its target, as a mantissa and a
+/// power of two (`FRAME_DISTANCE · radius / 2^zoom`, which leaves f64's
+/// range at a deep enough zoom): what a step measured in distances --
+/// a fly mode's -- is added to the decimal target in.
+pub fn solid_distance(escape: &crate::config::escape::EscapeConfig, ifs: &Ifs3) -> (f64, i64) {
+    let r = ifs.frame_radius.max(1e-12);
+    let x = (FRAME_DISTANCE * r).log2() - escape.zoom_log2;
+    let e = x.floor();
+    ((x - e).exp2(), e as i64)
+}
+
 /// Pack the whole-IFS constants and the camera for a solid render.
 ///
 /// Layout, one `vec4` each:
@@ -4939,7 +5003,7 @@ fn pack_rig3(
     // the strength to zero deliberately is asking for the unlit
     // silhouette, and a rule keyed on the strength alone would take
     // that away from them — there would be no way to ask for it.
-    let any = !crate::config::SolidShadingSettings::is_default(shading);
+    let any = !shading.rig_untouched();
     let (strength, ambient, diffuse, specular, shininess, ssao) = if any {
         (
             shading.shading_strength,
@@ -5631,7 +5695,7 @@ mod tests {
                     c.escape.formula_params.insert("beam".to_string(), 8.0);
                 }
                 c.escape.center_re = format!("{}", ifs.ball.centre[0]);
-                c.escape.center_im = format!("{}", ifs.ball.centre[1]);
+                c.escape.center_im = format!("{}", plane_im(ifs.ball.centre[1]));
                 // The home view spans 4 units, so 2.4 radii leaves the
                 // attractor a comfortable margin — the same framing the
                 // panel's Frame button applies.
@@ -5846,7 +5910,7 @@ mod tests {
 
             // The saved view must hold the whole bounding ball.
             let span_y = 4.0 / 2f64.powf(cfg.escape.zoom_log2);
-            let (cx, cy) = cfg.escape.center_f64();
+            let (cx, cy) = world_centre_f64(&cfg.escape);
             let dx = cx - ifs.ball.centre[0];
             let dy = cy - ifs.ball.centre[1];
             let off = (dx * dx + dy * dy).sqrt();
@@ -6528,7 +6592,8 @@ mod tests {
         for y in 0..n {
             for x in 0..n {
                 let uv = [(x as f64 + 0.5) / n as f64 - 0.5, (y as f64 + 0.5) / n as f64 - 0.5];
-                let world = [centre[0] + span * uv[0], centre[1] - span * uv[1]];
+                // Screen down is world +y (`view_basis`).
+                let world = [centre[0] + span * uv[0], centre[1] + span * uv[1]];
                 let seeded =
                     crate::scene::ifs_estimate::estimate_seeded(&ifs, &seeds, uv, levels, beam)
                         .distance
@@ -6721,7 +6786,8 @@ mod tests {
 
         let mut esc = crate::config::escape::EscapeConfig::default();
         esc.center_re = decimal(5, 14, 400);
-        esc.center_im = decimal(1, 7, 400);
+        // The plane's Im is the world's -y (`view_basis`).
+        esc.center_im = format!("-{}", decimal(1, 7, 400));
 
         // f64 rounds this to 5.5e-17; the gate is that the render does
         // not.
@@ -7832,8 +7898,8 @@ mod gpu_tests {
         c.flame = flame;
         c.escape.formula = "ifs_flame".to_string();
         c.escape.coloring = "ifs_distance".to_string();
-        c.escape.center_re = "0.5".to_string();
-        c.escape.center_im = "0.4".to_string();
+        c.escape.center_re = format!("{}", CENTRE[0]);
+        c.escape.center_im = format!("{}", plane_im(CENTRE[1]));
         c.escape.zoom_log2 = ZOOM_LOG2;
         c.escape.rotation = 0.0;
         c.escape.supersample = 1;
@@ -7865,19 +7931,59 @@ mod gpu_tests {
         out.rgba_data
     }
 
-    /// The plane point a pixel centre maps to — the template's
-    /// mapping, transcribed.
+    /// The flame's world point a pixel centre maps to — the template's
+    /// mapping, transcribed: the centre is the world's, and screen down
+    /// is world +y, as on the flame (`view_basis`).
     fn pixel_to_plane(x: u32, y: u32) -> [f64; 2] {
         let span_y = 4.0 / 2f64.powf(ZOOM_LOG2);
         let span_x = span_y * W as f64 / H as f64;
         let u = (x as f64 + 0.5) / W as f64 - 0.5;
         let v = (y as f64 + 0.5) / H as f64 - 0.5;
-        [CENTRE[0] + u * span_x, CENTRE[1] - v * span_y]
+        [CENTRE[0] + u * span_x, CENTRE[1] + v * span_y]
     }
 
     fn brightness(rgba: &[u8], x: u32, y: u32) -> f64 {
         let i = ((y * W + x) * 4) as usize;
         (rgba[i] as f64 + rgba[i + 1] as f64 + rgba[i + 2] as f64) / 765.0
+    }
+
+    /// A Flame Attractor stands as its flame does (`view_basis`): the
+    /// dragon drawn by the flame engine and by the escape walk, framed on
+    /// the same ball -- the flame's pan the escape centre `(x, −y)`, its
+    /// zoom the escape's `2^zoom_log2` -- covers the same pixels, and
+    /// far fewer of them mirrored top to bottom. (It came out upside
+    /// down until 2026-10-10: the flame draws world +y down, the plane
+    /// Im up.)
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_flame_attractor_stands_as_its_flame_does() {
+        let flame = dragon_flame();
+        let ifs = {
+            let guard = global_registry();
+            crate::scene::ifs_analysis::analyse_2d(&flame, &guard).expect("qualifies")
+        };
+        let attractor = ifs_preset_config("Heighway Dragon", "ifs_distance", flame.transforms.clone());
+        let mut f = crate::config::FractalConfig::default();
+        f.render_mode = RenderMode::TwoD;
+        f.flame = flame;
+        f.pan_x = ifs.ball.centre[0];
+        f.pan_y = ifs.ball.centre[1];
+        f.zoom = 2f64.powf(attractor.escape.zoom_log2) as f32;
+        f.max_iterations = 400;
+        let mask = |rgba: &[u8]| -> Vec<bool> {
+            (0..H).flat_map(|y| (0..W).map(move |x| (x, y))).map(|(x, y)| brightness(rgba, x, y) > 0.05).collect()
+        };
+        let (drawn, walked) = (mask(&render(&f)), mask(&render(&attractor)));
+        let mirrored: Vec<bool> = (0..H).flat_map(|y| (0..W).map(move |x| (x, H - 1 - y))).map(|(x, y)| walked[(y * W + x) as usize]).collect();
+        let iou = |a: &[bool], b: &[bool]| {
+            let both = a.iter().zip(b).filter(|(p, q)| **p && **q).count() as f64;
+            let either = a.iter().zip(b).filter(|(p, q)| **p || **q).count() as f64;
+            both / either.max(1.0)
+        };
+        let (same, flipped) = (iou(&drawn, &walked), iou(&drawn, &mirrored));
+        println!("  the dragon, flame against escape: overlap {same:.3}, against it mirrored {flipped:.3}");
+        assert!(same > 0.6, "the attractor does not cover the flame's pixels: {same:.3}");
+        assert!(same > flipped + 0.15, "upside down: {same:.3} against {flipped:.3} mirrored");
     }
 
     #[test]
@@ -8118,7 +8224,7 @@ mod gpu_tests {
         c.escape.formula = "ifs_flame".to_string();
         c.escape.coloring = coloring.to_string();
         c.escape.center_re = format!("{}", ifs.ball.centre[0]);
-        c.escape.center_im = format!("{}", ifs.ball.centre[1]);
+        c.escape.center_im = format!("{}", plane_im(ifs.ball.centre[1]));
         c.escape.zoom_log2 = (4.0 / (ifs.ball.radius * 2.4)).log2();
         c.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
         c.exposure = crate::config::defaults::DEFAULT_EXPOSURE;
@@ -8267,7 +8373,7 @@ mod gpu_tests {
 
             let mut config = config_for(flame);
             config.escape.center_re = format!("{:?}", target[0]);
-            config.escape.center_im = format!("{:?}", target[1]);
+            config.escape.center_im = format!("{:?}", plane_im(target[1]));
             config.escape.zoom_log2 = ZOOM;
             config.escape.formula_params.insert("levels".to_string(), DEEP_LEVELS as f32);
             config.escape.formula_params.insert("beam".to_string(), BEAM as f32);
@@ -8485,7 +8591,7 @@ mod gpu_tests {
                 config.escape.formula = "ifs_flame".to_string();
                 config.escape.coloring = "ifs_distance".to_string();
                 config.escape.center_re = format!("{:?}", target[0]);
-                config.escape.center_im = format!("{:?}", target[1]);
+                config.escape.center_im = format!("{:?}", plane_im(target[1]));
                 config.escape.zoom_log2 = zoom;
                 config.escape.rotation = 0.0;
                 config.escape.supersample = 1;
@@ -8710,7 +8816,7 @@ mod gpu_tests {
         let px = span_y / RH as f64;
         let mut esc = crate::config::escape::EscapeConfig::default();
         esc.center_re = format!("{:?}", target[0]);
-        esc.center_im = format!("{:?}", target[1]);
+        esc.center_im = format!("{:?}", plane_im(target[1]));
         esc.zoom_log2 = zoom;
         let centre = centre_at_precision(&esc).expect("centre");
         let reach = |b: [[f64; 2]; 2]| -> f64 {
@@ -8851,7 +8957,7 @@ mod gpu_tests {
                 let centre = centre_at_precision(&{
                     let mut e = crate::config::escape::EscapeConfig::default();
                     e.center_re = format!("{:?}", target[0]);
-                    e.center_im = format!("{:?}", target[1]);
+                    e.center_im = format!("{:?}", plane_im(target[1]));
                     e.zoom_log2 = zoom;
                     e
                 })
@@ -8957,7 +9063,7 @@ mod gpu_tests {
                     config.escape.formula = "ifs_flame".to_string();
                     config.escape.coloring = "ifs_distance".to_string();
                     config.escape.center_re = format!("{:?}", target[0]);
-                    config.escape.center_im = format!("{:?}", target[1]);
+                    config.escape.center_im = format!("{:?}", plane_im(target[1]));
                     config.escape.zoom_log2 = zoom;
                     config.escape.supersample = 1;
                     config.escape.formula_params.insert("levels".to_string(), LEVELS as f32);
@@ -9242,7 +9348,7 @@ mod gpu_tests {
                 let mut c = config_for(flame.clone());
                 c.escape.coloring = "ifs_distance".to_string();
                 c.escape.center_re = format!("{:?}", target[0]);
-                c.escape.center_im = format!("{:?}", target[1]);
+                c.escape.center_im = format!("{:?}", plane_im(target[1]));
                 c.escape.zoom_log2 = zoom;
                 c.escape.formula_params.insert("levels".to_string(), 80.0);
                 c.escape.formula_params.insert("beam".to_string(), 8.0);
@@ -9331,7 +9437,11 @@ mod gpu_tests {
             config.escape.coloring = "ifs_distance".to_string();
             config.escape.supersample = 1;
             config.escape.center_re = cre.clone();
-            config.escape.center_im = cim.clone();
+            // The plane's Im is the world's -y (`view_basis`).
+            config.escape.center_im = match cim.strip_prefix('-') {
+                Some(s) => s.to_string(),
+                None => format!("-{cim}"),
+            };
             config.escape.zoom_log2 = zoom;
             config.escape.formula_params.insert("levels".to_string(), 140.0);
             config.escape.formula_params.insert("beam".to_string(), 8.0);
@@ -9615,7 +9725,7 @@ mod gpu_tests {
                     config.escape.coloring = "ifs_distance".to_string();
                     config.escape.supersample = 1;
                     config.escape.center_re = format!("{:?}", target[0]);
-                    config.escape.center_im = format!("{:?}", target[1]);
+                    config.escape.center_im = format!("{:?}", plane_im(target[1]));
                     config.escape.zoom_log2 =
                         (4.0 / (2.0 * ifs.ball.radius / 2f64.powf(zoom))).log2();
                     config.escape.formula_params.insert("levels".to_string(), LEVELS as f32);
@@ -10706,7 +10816,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             config.escape.formula = "ifs_flame".to_string();
             config.escape.coloring = "ifs_measure".to_string();
             config.escape.center_re = format!("{:?}", centre[0]);
-            config.escape.center_im = format!("{:?}", centre[1]);
+            config.escape.center_im = format!("{:?}", plane_im(centre[1]));
             config.escape.zoom_log2 = (4.0 / want_span).log2();
             config.escape.supersample = 1;
             config.escape.formula_params.insert("levels".to_string(), 60.0);
@@ -11132,7 +11242,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             config.escape.formula_params.insert("levels".to_string(), 24.0);
             config.escape.formula_params.insert("beam".to_string(), 8.0);
             config.escape.center_re = format!("{:?}", base.ball.centre[0]);
-            config.escape.center_im = format!("{:?}", base.ball.centre[1]);
+            config.escape.center_im = format!("{:?}", plane_im(base.ball.centre[1]));
             config.escape.zoom_log2 = (4.0 / (2.2 * base.ball.radius)).log2();
             render(&config)
         };
@@ -11171,7 +11281,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         config.escape.formula_params.insert("levels".to_string(), 24.0);
         config.escape.formula_params.insert("beam".to_string(), 8.0);
         config.escape.center_re = format!("{:?}", base.ball.centre[0]);
-        config.escape.center_im = format!("{:?}", base.ball.centre[1]);
+        config.escape.center_im = format!("{:?}", plane_im(base.ball.centre[1]));
         config.escape.zoom_log2 = (4.0 / (2.2 * base.ball.radius)).log2();
         let (w, h) = (W, H);
         let span_y = 4.0 / config.escape.zoom_factor();
@@ -11261,7 +11371,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 config.escape.coloring_params
                     .insert("scale".to_string(), if auto { 0.0 } else { 0.002 });
                 config.escape.center_re = format!("{}", target[0]);
-                config.escape.center_im = format!("{}", target[1]);
+                config.escape.center_im = format!("{}", plane_im(target[1]));
                 config.escape.zoom_log2 =
                     (4.0 / (2.0 * ifs.ball.radius / 2f64.powf(zoom))).log2();
                 let rgba = render(&config);
@@ -11359,7 +11469,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         config.escape.formula = "ifs_flame".to_string();
         config.escape.coloring = "ifs_distance".to_string();
         config.escape.center_re = format!("{}", centre[0]);
-        config.escape.center_im = format!("{}", centre[1]);
+        config.escape.center_im = format!("{}", plane_im(centre[1]));
         config.escape.zoom_log2 = zoom;
         config.escape.rotation = rot as f32;
         config.escape.formula_params.insert("levels".into(), LEVELS as f32);
@@ -11374,7 +11484,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let plane = |x: u32, y: u32| {
             let u = ((x as f64 + 0.5) / W as f64 - 0.5) * span * W as f64 / H as f64;
             let v = -((y as f64 + 0.5) / H as f64 - 0.5) * span;
-            [centre[0] + u * cs - v * sn, centre[1] + u * sn + v * cs]
+            // The plane's offset, turned, then mirrored into the
+            // flame's world (`view_basis`).
+            [centre[0] + u * cs - v * sn, centre[1] - (u * sn + v * cs)]
         };
         // The CPU says which pixels are near the set: within one pixel.
         let px = span / H as f64;
@@ -11418,7 +11530,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             drop(guard);
             let mut config = config_for(flame);
             config.escape.center_re = format!("{}", ifs.ball.centre[0]);
-            config.escape.center_im = format!("{}", ifs.ball.centre[1]);
+            config.escape.center_im = format!("{}", plane_im(ifs.ball.centre[1]));
             let span = ifs.ball.radius * 2.4;
             config.escape.zoom_log2 = (4.0 / span).log2();
             let rgba = render(&config);
@@ -11426,7 +11538,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             let plane = |x: u32, y: u32| -> [f64; 2] {
                 let u = (x as f64 + 0.5) / W as f64 - 0.5;
                 let v = (y as f64 + 0.5) / H as f64 - 0.5;
-                [ifs.ball.centre[0] + u * span * W as f64 / H as f64, ifs.ball.centre[1] - v * span]
+                [ifs.ball.centre[0] + u * span * W as f64 / H as f64, ifs.ball.centre[1] + v * span]
             };
             let (mut inside, mut outside) = (Vec::new(), Vec::new());
             for y in 0..H {
@@ -11514,7 +11626,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
 
         let mut config = config_for(flame);
         config.escape.center_re = format!("{}", ifs.ball.centre[0]);
-        config.escape.center_im = format!("{}", ifs.ball.centre[1]);
+        config.escape.center_im = format!("{}", plane_im(ifs.ball.centre[1]));
         let span = ifs.ball.radius * 2.4;
         config.escape.zoom_log2 = (4.0 / span).log2();
         let rgba = render(&config);
@@ -11522,7 +11634,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let plane = |x: u32, y: u32| -> [f64; 2] {
             let u = (x as f64 + 0.5) / W as f64 - 0.5;
             let v = (y as f64 + 0.5) / H as f64 - 0.5;
-            [ifs.ball.centre[0] + u * span * W as f64 / H as f64, ifs.ball.centre[1] - v * span]
+            [ifs.ball.centre[0] + u * span * W as f64 / H as f64, ifs.ball.centre[1] + v * span]
         };
         let (mut inside, mut outside) = (Vec::new(), Vec::new());
         for y in 0..H {
@@ -12755,7 +12867,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         for &beam in &[1u32, 2, 4, 8] {
             let mut c = config_for(dragon_flame());
             c.escape.center_re = "0.35".to_string();
-            c.escape.center_im = "0.25".to_string();
+            c.escape.center_im = "-0.25".to_string();
             c.escape.zoom_log2 = 1.6;
             c.escape.formula_params.insert("levels".to_string(), 40.0);
             c.escape.formula_params.insert("beam".to_string(), beam as f32);
@@ -13041,7 +13153,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             let mut c = config_for(flame.clone());
             c.escape.formula_params.insert("levels".to_string(), levels as f32);
             c.escape.center_re = re.clone();
-            c.escape.center_im = im.clone();
+            // The plane's Im is the world's -y (`view_basis`).
+            c.escape.center_im = format!("-{im}");
             c.escape.zoom_log2 = zoom;
 
             let rgba = {
@@ -15307,7 +15420,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     let mut c = config_for(flame.clone());
                     c.escape.coloring = coloring.to_string();
                     c.escape.center_re = format!("{:.17}", ifs.ball.centre[0]);
-                    c.escape.center_im = format!("{:.17}", ifs.ball.centre[1]);
+                    c.escape.center_im = format!("{:.17}", plane_im(ifs.ball.centre[1]));
                     c.escape.zoom_log2 = (4.0 / (ifs.ball.radius * 2.4)).log2();
                     c.escape.formula_params.insert("levels".to_string(), 40.0);
                     c.escape.formula_params.insert("beam".to_string(), beam as f32);
@@ -15360,7 +15473,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 let mut c = config_for(flame.clone());
                 c.escape.coloring = coloring.to_string();
                 c.escape.center_re = centre[0].to_string();
-                c.escape.center_im = centre[1].to_string();
+                c.escape.center_im = plane_im(centre[1]).to_string();
                 c.escape.zoom_log2 = zoom;
                 c.escape.supersample = 2;
                 c.escape.formula_params.insert("levels".to_string(), 40.0);

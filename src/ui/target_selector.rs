@@ -235,10 +235,13 @@ fn render_flame_group(
     };
 
     if include_fractal_categories {
-        if let Some(path) = render_category(
-            ui, state, flame_target, TargetCategory::View,
-            &get_view_items(), filter, has_filter, local_selection,
-        ) { selected = Some(path); }
+        let view_items = get_view_items(config);
+        if !view_items.is_empty() {
+            if let Some(path) = render_category(
+                ui, state, flame_target, TargetCategory::View,
+                &view_items, filter, has_filter, local_selection,
+            ) { selected = Some(path); }
+        }
 
         if let Some(path) = render_category(
             ui, state, flame_target, TargetCategory::Color,
@@ -250,10 +253,13 @@ fn render_flame_group(
             &get_tonemapping_items(), filter, has_filter, local_selection,
         ) { selected = Some(path); }
 
-        if let Some(path) = render_category(
-            ui, state, flame_target, TargetCategory::Rendering,
-            &get_rendering_items(), filter, has_filter, local_selection,
-        ) { selected = Some(path); }
+        let rendering_items = get_rendering_items(config);
+        if !rendering_items.is_empty() {
+            if let Some(path) = render_category(
+                ui, state, flame_target, TargetCategory::Rendering,
+                &rendering_items, filter, has_filter, local_selection,
+            ) { selected = Some(path); }
+        }
 
         let effects_items = get_effects_items(config);
         if !effects_items.is_empty() {
@@ -380,6 +386,7 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
             TargetItem::new(ConfigPath::EscapeCamYaw, "Camera Yaw"),
             TargetItem::new(ConfigPath::EscapeCamBank, "Camera Bank"),
             TargetItem::new(ConfigPath::EscapeCamFov, "Camera FoV"),
+            TargetItem::new(ConfigPath::EscapeTerrainTargetLift, "Camera Target Lift"),
             TargetItem::new(ConfigPath::EscapeTerrainHeight, "Terrain: Height"),
             TargetItem::new(ConfigPath::EscapeTerrainDeWidth, "Terrain: Flank width"),
             TargetItem::new(ConfigPath::EscapeTerrainDetail, "Terrain: Detail"),
@@ -396,9 +403,6 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
     if esc.terrain_active() || ifs.is_some_and(|d| d.solid) {
         items.extend([
             TargetItem::new(ConfigPath::EscapePathEnvironment, "Path: Sky light"),
-            TargetItem::new(ConfigPath::EscapePathGloss, "Path: Gloss"),
-            TargetItem::new(ConfigPath::EscapePathRoughness, "Path: Roughness"),
-            TargetItem::new(ConfigPath::EscapePathEmission, "Path: Glow"),
             TargetItem::new(ConfigPath::EscapePathAperture, "Path: Aperture"),
             TargetItem::new(ConfigPath::EscapePathFocus, "Path: Focus"),
         ]);
@@ -508,10 +512,10 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
 #[cfg(test)]
 pub fn all_items_for_test(config: &FractalConfig) -> Vec<ConfigPath> {
     let flame = &config.flame;
-    let mut items = get_view_items();
+    let mut items = get_view_items(config);
     items.extend(get_color_items());
     items.extend(get_tonemapping_items());
-    items.extend(get_rendering_items());
+    items.extend(get_rendering_items(config));
     items.extend(get_effects_items(config));
     #[cfg(feature = "engine-escape")]
     if config.render_mode == crate::scene::transforms::RenderMode::Escape {
@@ -571,6 +575,10 @@ fn get_sim_items(config: &FractalConfig) -> Vec<TargetItem> {
                  model parameters are not themselves animating.",
             ),
         TargetItem::new(ConfigPath::SimDt, "Time step (dt)"),
+        TargetItem::new(ConfigPath::SimViewZoom, "View: zoom"),
+        TargetItem::new(ConfigPath::SimViewRotation, "View: rotation"),
+        TargetItem::new(ConfigPath::SimViewCenterX, "View: center X"),
+        TargetItem::new(ConfigPath::SimViewCenterY, "View: center Y"),
         TargetItem::new(ConfigPath::SimWarpZoom, "Warp: zoom per step"),
         TargetItem::new(ConfigPath::SimWarpRotation, "Warp: rotation per step"),
         TargetItem::new(ConfigPath::SimWarpPanX, "Warp: pan X per step"),
@@ -663,6 +671,7 @@ fn get_sim_items(config: &FractalConfig) -> Vec<TargetItem> {
             TargetItem::new(ConfigPath::SimTerrainCamDistance, "Camera Distance"),
             TargetItem::new(ConfigPath::SimTerrainTargetX, "Camera Target X"),
             TargetItem::new(ConfigPath::SimTerrainTargetY, "Camera Target Y"),
+            TargetItem::new(ConfigPath::SimTerrainTargetLift, "Camera Target Lift"),
             TargetItem::new(ConfigPath::SimTerrainHeight, "Terrain: Height"),
             TargetItem::new(ConfigPath::SimTerrainSoftness, "Terrain: Softness"),
             TargetItem::new(ConfigPath::SimTerrainFar, "Terrain: Distance"),
@@ -671,9 +680,6 @@ fn get_sim_items(config: &FractalConfig) -> Vec<TargetItem> {
             TargetItem::new(ConfigPath::SimTerrainShadowSharpness, "Terrain: Shadow sharpness"),
             TargetItem::new(ConfigPath::SimTerrainOcclusion, "Terrain: Occlusion reach"),
             TargetItem::new(ConfigPath::SimPathEnvironment, "Path: Sky light"),
-            TargetItem::new(ConfigPath::SimPathGloss, "Path: Gloss"),
-            TargetItem::new(ConfigPath::SimPathRoughness, "Path: Roughness"),
-            TargetItem::new(ConfigPath::SimPathEmission, "Path: Glow"),
             TargetItem::new(ConfigPath::SimPathAperture, "Path: Aperture"),
             TargetItem::new(ConfigPath::SimPathFocus, "Path: Focus"),
         ]);
@@ -755,31 +761,67 @@ fn render_category(
 }
 
 /// Get view parameter items
-fn get_view_items() -> Vec<TargetItem> {
+/// The View category: the camera the viewport shows and its lighting
+/// (camera-unification C5) -- the flame's view in the flame modes, its 3D
+/// camera, depth effects and splat lighting in 3D; the lights and the fog
+/// a solid or a terrain reads. The escape and simulation cameras' own
+/// fields are in their categories. (It offered the flame's camera in
+/// every mode, where nothing reads it.)
+fn get_view_items(config: &FractalConfig) -> Vec<TargetItem> {
+    use crate::scene::transforms::RenderMode;
+    let solid = crate::ui::visibility::Solid::of(config) == crate::ui::visibility::Solid::Yes;
+    let mut items = Vec::new();
+    if matches!(config.render_mode, RenderMode::TwoD | RenderMode::ThreeD) {
+        items.extend([
+            TargetItem::new(ConfigPath::Zoom, "Zoom"),
+            TargetItem::new(ConfigPath::PanX, "Pan X"),
+            TargetItem::new(ConfigPath::PanY, "Pan Y"),
+            TargetItem::new(ConfigPath::Rotation, "Rotation"),
+        ]);
+    }
+    if config.render_mode == RenderMode::ThreeD {
+        items.extend([
+            TargetItem::new(ConfigPath::CameraRotationX, "Camera Pitch"),
+            TargetItem::new(ConfigPath::CameraRotationY, "Camera Yaw"),
+            TargetItem::new(ConfigPath::CameraBank, "Camera Bank"),
+            TargetItem::new(ConfigPath::CameraX, "Camera X"),
+            TargetItem::new(ConfigPath::CameraY, "Camera Y"),
+            TargetItem::new(ConfigPath::CameraZ, "Camera Z"),
+            TargetItem::new(ConfigPath::DofFocusDistance, "DOF Focus Distance"),
+            TargetItem::new(ConfigPath::DofBlurStrength, "DOF Blur Strength"),
+            TargetItem::new(ConfigPath::SolidStrength, "Solid Strength"),
+            TargetItem::new(ConfigPath::SurfaceThickness, "Surface Thickness"),
+        ]);
+    }
+    // The fog: a 3D flame's, and mode D's, which reads the same fields.
+    let mode_d = config.render_mode == RenderMode::Escape && solid && !config.escape.terrain_active();
+    if config.render_mode == RenderMode::ThreeD || mode_d {
+        items.extend([
+            TargetItem::new(ConfigPath::FogStrength, "Fog Density"),
+            TargetItem::new(ConfigPath::FogStart, "Fog Start"),
+        ]);
+    }
+    if config.render_mode == RenderMode::ThreeD || solid {
+        items.extend(lighting_items());
+    }
+    items
+}
+
+/// The Solid Lighting panel's animatable settings: the shade pass's, and
+/// what a solid's or a terrain's lit tier reads of them.
+fn lighting_items() -> Vec<TargetItem> {
     vec![
-        TargetItem::new(ConfigPath::Zoom, "Zoom"),
-        TargetItem::new(ConfigPath::PanX, "Pan X"),
-        TargetItem::new(ConfigPath::PanY, "Pan Y"),
-        TargetItem::new(ConfigPath::Rotation, "Rotation"),
-        TargetItem::new(ConfigPath::CameraRotationX, "Camera Pitch"),
-        TargetItem::new(ConfigPath::CameraRotationY, "Camera Yaw"),
-        TargetItem::new(ConfigPath::CameraBank, "Camera Bank"),
-        TargetItem::new(ConfigPath::CameraX, "Camera X"),
-        TargetItem::new(ConfigPath::CameraY, "Camera Y"),
-        TargetItem::new(ConfigPath::CameraZ, "Camera Z"),
-        TargetItem::new(ConfigPath::DofFocusDistance, "DOF Focus Distance"),
-        TargetItem::new(ConfigPath::DofBlurStrength, "DOF Blur Strength"),
-        TargetItem::new(ConfigPath::FogStrength, "Fog Density"),
-        TargetItem::new(ConfigPath::FogStart, "Fog Start"),
-        // Solid rendering + lighting (shade pass) — all animatable;
-        // lighting params don't even reset accumulation (ShadingOnly).
-        TargetItem::new(ConfigPath::SolidStrength, "Solid Strength"),
-        TargetItem::new(ConfigPath::SurfaceThickness, "Surface Thickness"),
+        // Lighting (shade pass) — all animatable; lighting params don't
+        // even reset accumulation (ShadingOnly).
         TargetItem::new(ConfigPath::ShadingStrength, "Shading Strength"),
         TargetItem::new(ConfigPath::SolidAmbient, "Ambient Light"),
         TargetItem::new(ConfigPath::SolidDiffuse, "Diffuse Light"),
         TargetItem::new(ConfigPath::SolidSpecular, "Specular"),
         TargetItem::new(ConfigPath::SolidShininess, "Shininess"),
+        // The material's coat and glow: every tier's (materials.md).
+        TargetItem::new(ConfigPath::SolidGloss, "Gloss"),
+        TargetItem::new(ConfigPath::SolidRoughness, "Roughness"),
+        TargetItem::new(ConfigPath::SolidGlow, "Glow"),
         TargetItem::new(ConfigPath::SsaoStrength, "SSAO Strength"),
         TargetItem::new(ConfigPath::SsaoRadius, "SSAO Radius"),
         TargetItem::new(ConfigPath::SolidShadowStrength, "Shadow Strength"),
@@ -822,15 +864,25 @@ fn get_tonemapping_items() -> Vec<TargetItem> {
 }
 
 /// Get rendering parameter items
-fn get_rendering_items() -> Vec<TargetItem> {
-    vec![
-        TargetItem::new(ConfigPath::BlendFactor, "Blend Factor"),
-        TargetItem::new(ConfigPath::PerspectiveStrength, "Perspective Strength"),
-        TargetItem::new(ConfigPath::DepthDensityCompensation, "Depth Density Compensation"),
-        TargetItem::new(ConfigPath::FarDensityFade, "Far Density Fade"),
-        TargetItem::new(ConfigPath::FarDensityFadeStart, "Far Density Fade Start"),
-        TargetItem::new(ConfigPath::SoloTransform, "Solo Transform"),
-    ]
+/// The flame's rendering settings: the accumulation's, and in 3D its
+/// projection and depth weighting. Nothing an escape or simulation
+/// picture reads.
+fn get_rendering_items(config: &FractalConfig) -> Vec<TargetItem> {
+    use crate::scene::transforms::RenderMode;
+    let mut items = Vec::new();
+    if matches!(config.render_mode, RenderMode::TwoD | RenderMode::ThreeD) {
+        items.push(TargetItem::new(ConfigPath::BlendFactor, "Blend Factor"));
+        items.push(TargetItem::new(ConfigPath::SoloTransform, "Solo Transform"));
+    }
+    if config.render_mode == RenderMode::ThreeD {
+        items.extend([
+            TargetItem::new(ConfigPath::PerspectiveStrength, "Perspective Strength"),
+            TargetItem::new(ConfigPath::DepthDensityCompensation, "Depth Density Compensation"),
+            TargetItem::new(ConfigPath::FarDensityFade, "Far Density Fade"),
+            TargetItem::new(ConfigPath::FarDensityFadeStart, "Far Density Fade Start"),
+        ]);
+    }
+    items
 }
 
 /// Get xaos parameter items (dynamic based on number of transforms)

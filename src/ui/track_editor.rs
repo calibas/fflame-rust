@@ -379,7 +379,7 @@ fn render_tracks_visual(
                             // Show tooltip on hover using manual tooltip window
                             if is_hovered {
                                 let value_str = keyframe.value.as_f64()
-                                    .map(|v| format!("{:.3}", v))
+                                    .map(|v| if is_angle_key(&path) { format!("{:.1}°", v.to_degrees()) } else { format!("{:.3}", v) })
                                     .unwrap_or_else(|| format!("{}", keyframe.value));
 
                                 // Create a tooltip area near the pointer.
@@ -769,6 +769,7 @@ fn render_keyframe_subpanel(
     // If editing an existing keyframe track, show the keyframes
     if let Some(track_index) = state.editing_track_index {
         if let Some(track) = animation.get_track_mut(track_index) {
+            let angle = is_angle_key(&track.target);
             if let TrackSource::Keyframes { ref mut keyframes } = track.source {
                 // Interpolation selector
                 ui.horizontal(|ui| {
@@ -803,11 +804,8 @@ fn render_keyframe_subpanel(
                                     .suffix("s")
                                     .min_decimals(2));
 
-                                // Value
-                                let mut value = kf.value.as_f64().unwrap_or(0.0);
-                                if ui.add(super::VkbDragValue::new(&mut value).speed(0.01).min_decimals(3)).changed() {
-                                    kf.value = serde_json::json!(value);
-                                }
+                                // Value (an angle in degrees)
+                                keyframe_value_ui(ui, &mut kf.value, angle);
 
                                 // Easing
                                 egui::ComboBox::from_id_salt(format!("kf_ease_{}", i))
@@ -891,6 +889,7 @@ fn render_keyframe_subpanel(
 
         // Preview keyframe list
         ui.label(format!("{}: {}", t!("track_editor.keyframe_count"), state.preview_keyframes.len()));
+        let angle = is_angle_key(&state.new_track_target);
 
         ScrollArea::vertical()
             .max_height(150.0)
@@ -907,11 +906,8 @@ fn render_keyframe_subpanel(
                             .suffix("s")
                             .min_decimals(2));
 
-                        // Value
-                        let mut value = kf.value.as_f64().unwrap_or(0.0);
-                        if ui.add(super::VkbDragValue::new(&mut value).speed(0.01).min_decimals(3)).changed() {
-                            kf.value = serde_json::json!(value);
-                        }
+                        // Value (an angle in degrees)
+                        keyframe_value_ui(ui, &mut kf.value, angle);
 
                         // Easing
                         egui::ComboBox::from_id_salt(format!("preview_kf_ease_{}", i))
@@ -1507,7 +1503,7 @@ pub fn get_current_value(
                 s.parse::<f64>().ok()
             } else {
                 let registry = crate::variations::global_registry();
-                crate::scene::ifs_analysis::analyse_3d(&config.flame, &registry).ok().map(|i| i.ball.centre[k])
+                crate::escape::ifs::solid_analysis(config, &registry).map(|i| i.ball.centre[k])
             }
         }
         _ if path.to_string_key().starts_with("System.") => None,
@@ -1523,6 +1519,62 @@ pub fn get_current_value(
                 _ => None,
             }),
     }
+}
+
+/// Whether a track's values are angles: stored in radians, shown and
+/// typed in degrees (camera-unification C5 -- no radians in the UI).
+pub fn is_angle_path(path: &ConfigPath) -> bool {
+    matches!(
+        path,
+        ConfigPath::TransformRotation { .. }
+            | ConfigPath::TransformPostAffineRotation { .. }
+            | ConfigPath::LinkedTransformRotation { .. }
+            | ConfigPath::LinkedTransformPostAffineRotation { .. }
+            | ConfigPath::FinalTransformRotation { .. }
+            | ConfigPath::FinalTransformPostAffineRotation { .. }
+            | ConfigPath::Rotation
+            | ConfigPath::CameraRotationX
+            | ConfigPath::CameraRotationY
+            | ConfigPath::CameraBank
+            | ConfigPath::EscapeRotation
+            | ConfigPath::EscapeCamPitch
+            | ConfigPath::EscapeCamYaw
+            | ConfigPath::EscapeCamBank
+            | ConfigPath::EscapeCamFov
+            | ConfigPath::SimTerrainCamPitch
+            | ConfigPath::SimTerrainCamYaw
+            | ConfigPath::SimTerrainCamBank
+            | ConfigPath::SimTerrainCamFov
+            | ConfigPath::SimViewRotation
+            | ConfigPath::SimWarpRotation
+    )
+}
+
+/// [`is_angle_path`] for a track's key.
+fn is_angle_key(key: &str) -> bool {
+    ConfigPath::from_string_key(key).is_some_and(|p| is_angle_path(&p))
+}
+
+/// A keyframe's value as the editor shows it, and edits it: degrees for
+/// an angle, the stored value otherwise. True when it changed.
+fn keyframe_value_ui(ui: &mut Ui, value: &mut serde_json::Value, angle: bool) -> bool {
+    let stored = value.as_f64().unwrap_or(0.0);
+    let changed = if angle {
+        let mut deg = stored.to_degrees();
+        let changed = ui.add(super::VkbDragValue::new(&mut deg).speed(0.5).min_decimals(1).suffix("°")).changed();
+        if changed {
+            *value = serde_json::json!(deg.to_radians());
+        }
+        changed
+    } else {
+        let mut v = stored;
+        let changed = ui.add(super::VkbDragValue::new(&mut v).speed(0.01).min_decimals(3)).changed();
+        if changed {
+            *value = serde_json::json!(v);
+        }
+        changed
+    };
+    changed
 }
 
 /// Determine the auto-fill end value for a parameter
@@ -1542,7 +1594,11 @@ pub fn get_auto_fill_end_value(path: &ConfigPath, start_value: f64) -> f64 {
         ConfigPath::Rotation |
         ConfigPath::CameraRotationX |
         ConfigPath::CameraRotationY |
-        ConfigPath::CameraBank => start_value + TAU,
+        ConfigPath::CameraBank |
+        ConfigPath::EscapeRotation |
+        ConfigPath::EscapeCamYaw |
+        ConfigPath::SimTerrainCamYaw |
+        ConfigPath::SimViewRotation => start_value + TAU,
 
         // Color index: add 1.0 for full palette cycle
         ConfigPath::TransformColor { .. } => start_value + 1.0,

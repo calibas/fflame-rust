@@ -73,7 +73,29 @@ struct SimParams {
     warp_mask: vec4<f32>,
     // The layer map's rate (x), for the transform-warp stage.
     xform: vec4<f32>,
+    // The 2D picture's view (camera-unification C6), the colour pass's
+    // alone: the centre in cells, the zoom over the fit, the turn. Then
+    // x: 1 when the picture tiles a periodic field, y: 1 when the view
+    // is not the default.
+    camera: vec4<f32>,
+    camera_b: vec4<f32>,
 };
+
+// A cell the resolve reads: wrapped round the torus when the picture
+// tiles, clamped to the grid otherwise -- which is what every resolve
+// filter did before the view.
+fn sim_view_cell(p: vec2<i32>, lim: vec2<i32>) -> vec2<i32> {
+    if (params.camera_b.x >= 0.5) {
+        let n = lim + vec2<i32>(1, 1);
+        return ((p % n) + n) % n;
+    }
+    return clamp(p, vec2<i32>(0, 0), lim);
+}
+
+// The view's zoom, 1 at the default.
+fn sim_view_zoom() -> f32 {
+    return select(1.0, params.camera.z, params.camera_b.y >= 0.5);
+}
 
 // The scale from grid cells to output pixels, by the fit: the smaller
 // ratio shows the whole grid with bars, the larger fills the output
@@ -1083,27 +1105,44 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // ... unless the fit is COVER, which fills the output and crops
     // the grid along the axis that does not fit.
     let fit = sim_fit_scale();
-    let shown = vec2<f32>(g) * fit;
-    let origin = (vec2<f32>(out_size) - shown) * 0.5;
-    // Cell-centre mapping: pixel centre (o + 0.5) to grid space.
-    // Sampling at the pixel's corner instead shifts the image half a
-    // cell, which is invisible at 1:1 and obvious at 8x.
-    let gf0 = (vec2<f32>(o) + vec2<f32>(0.5, 0.5) - origin) / fit;
-    // The FRAME is decided before the view: a pixel in a letterbox
+    let tiled = params.camera_b.x >= 0.5;
+    var gf0: vec2<f32>;
+    if (params.camera_b.y < 0.5) {
+        let shown = vec2<f32>(g) * fit;
+        let origin = (vec2<f32>(out_size) - shown) * 0.5;
+        // Cell-centre mapping: pixel centre (o + 0.5) to grid space.
+        // Sampling at the pixel's corner instead shifts the image half a
+        // cell, which is invisible at 1:1 and obvious at 8x.
+        gf0 = (vec2<f32>(o) + vec2<f32>(0.5, 0.5) - origin) / fit;
+    } else {
+        // The view (camera-unification C6): the pixel's offset from the
+        // output's centre, in cells at the fit, turned back by the view's
+        // turn and divided by its zoom, about the view's centre. At the
+        // default this is the letterbox mapping above -- which the default
+        // keeps, so a saved picture stays the same bits.
+        let d = (vec2<f32>(o) + vec2<f32>(0.5, 0.5) - vec2<f32>(out_size) * 0.5) / fit;
+        let cr = cos(params.camera.w);
+        let sr = sin(params.camera.w);
+        gf0 = params.camera.xy + vec2<f32>(cr * d.x + sr * d.y, cr * d.y - sr * d.x) / max(params.camera.z, 1.0e-6);
+    }
+    // The FRAME is decided before the octave view: a pixel in a letterbox
     // bar stays a bar at every magnification. The first version
     // tested the magnified coordinate, and a bar pixel that maps
     // outside the grid at 1x maps inside it once the view divides
     // its distance from the centre by m -- so the picture widened
     // into the bars over an octave and snapped back at the doubling.
-    if (gf0.x < 0.0 || gf0.y < 0.0 || gf0.x >= vec2<f32>(g).x || gf0.y >= vec2<f32>(g).y) {
+    // A tiled picture has no bars: the field goes on.
+    if (!tiled && (gf0.x < 0.0 || gf0.y < 0.0 || gf0.x >= vec2<f32>(g).x || gf0.y >= vec2<f32>(g).y)) {
         textureStore(out_image, o, vec4<f32>(0.0, 0.0, 0.0, 0.0));
         return;
     }
-    // The view: the octave mode's accumulated zoom, about the grid's
-    // centre. 1 otherwise, and then this is gf0 exactly.
+    // The octave mode's accumulated zoom, about the grid's centre. 1
+    // otherwise, and then this is gf0 exactly.
     let gc = vec2<f32>(g) * 0.5;
-    let gf = gc + (gf0 - gc) / max(params.view.x, 1.0e-4);
-    if (gf.x < 0.0 || gf.y < 0.0 || gf.x >= vec2<f32>(g).x || gf.y >= vec2<f32>(g).y) {
+    var gf = gc + (gf0 - gc) / max(params.view.x, 1.0e-4);
+    if (tiled) {
+        gf = gf - floor(gf / vec2<f32>(g)) * vec2<f32>(g);
+    } else if (gf.x < 0.0 || gf.y < 0.0 || gf.x >= vec2<f32>(g).x || gf.y >= vec2<f32>(g).y) {
         // Outside the grid: zero coverage, so the shared tonemap
         // composites the configured background exactly as it does for
         // an empty region of a flame.
@@ -1122,7 +1161,7 @@ fn resolve_body(up: SimUpscale, down: SimDownscale, magnifying: bool) -> String 
     if magnifying {
         match up {
             SimUpscale::Nearest => r#"
-    let cell = clamp(vec2<i32>(floor(gf)), vec2<i32>(0, 0), g - vec2<i32>(1, 1));
+    let cell = sim_view_cell(vec2<i32>(floor(gf)), g - vec2<i32>(1, 1));
     let col = sim_shade(cell);
 "#
             .to_string(),
@@ -1138,10 +1177,10 @@ fn resolve_body(up: SimUpscale, down: SimDownscale, magnifying: bool) -> String 
     let i0 = vec2<i32>(floor(f));
     let t = f - floor(f);
     let lim = g - vec2<i32>(1, 1);
-    let p00 = clamp(i0, vec2<i32>(0, 0), lim);
-    let p10 = clamp(i0 + vec2<i32>(1, 0), vec2<i32>(0, 0), lim);
-    let p01 = clamp(i0 + vec2<i32>(0, 1), vec2<i32>(0, 0), lim);
-    let p11 = clamp(i0 + vec2<i32>(1, 1), vec2<i32>(0, 0), lim);
+    let p00 = sim_view_cell(i0, lim);
+    let p10 = sim_view_cell(i0 + vec2<i32>(1, 0), lim);
+    let p01 = sim_view_cell(i0 + vec2<i32>(0, 1), lim);
+    let p11 = sim_view_cell(i0 + vec2<i32>(1, 1), lim);
     let x = sim_sample_lerp(
         sim_sample_lerp(sim_sample(p00), sim_sample(p10), t.x),
         sim_sample_lerp(sim_sample(p01), sim_sample(p11), t.x),
@@ -1165,7 +1204,7 @@ fn resolve_body(up: SimUpscale, down: SimDownscale, magnifying: bool) -> String 
     var x = sim_sample_zero();
     for (var j = 0; j < 4; j = j + 1) {
         for (var i = 0; i < 4; i = i + 1) {
-            let q = clamp(i0 + vec2<i32>(i - 1, j - 1), vec2<i32>(0, 0), lim);
+            let q = sim_view_cell(i0 + vec2<i32>(i - 1, j - 1), lim);
             x = sim_sample_mad(x, sim_sample(q), wx[i] * wy[j]);
         }
     }
@@ -1176,7 +1215,7 @@ fn resolve_body(up: SimUpscale, down: SimDownscale, magnifying: bool) -> String 
     } else {
         match down {
             SimDownscale::Nearest => r#"
-    let cell = clamp(vec2<i32>(floor(gf)), vec2<i32>(0, 0), g - vec2<i32>(1, 1));
+    let cell = sim_view_cell(vec2<i32>(floor(gf)), g - vec2<i32>(1, 1));
     let col = sim_shade(cell);
 "#
             .to_string(),
@@ -1187,7 +1226,7 @@ fn resolve_body(up: SimUpscale, down: SimDownscale, magnifying: bool) -> String 
     // Footprint of this output pixel in grid space, derived from the
     // SAME letterboxed mapping as the point sample above -- computing
     // it independently from o/out_size silently ignored the bars.
-    let half = 0.5 / fit;
+    let half = 0.5 / (fit * sim_view_zoom());
     let lo = vec2<i32>(floor(gf - vec2<f32>(half, half)));
     let hi = vec2<i32>(ceil(gf + vec2<f32>(half, half)));
     let a = clamp(lo, vec2<i32>(0, 0), g - vec2<i32>(1, 1));

@@ -28,8 +28,10 @@
 //! lattice cell starts the sections over.
 //!
 //! **The camera** is mode D's, read for a plane:
-//! - the target is the view's centre at the terrain's top, H, so with
-//!   any pitch above the horizon the eye is above every point of it;
+//! - the target is the view's centre at the terrain's top, H, lifted by
+//!   `target_lift` view widths (0 by default), so with any pitch above
+//!   the horizon the eye is above every point of it -- and lifted, it
+//!   can look level or up, at the sky (camera-unification C4);
 //! - `cam_pitch` is above the horizon; `cam_yaw` turns about the target,
 //!   0 looking up the 2D picture -- which the View's `rotation` turns,
 //!   so it turns the heading too;
@@ -179,10 +181,10 @@ pub fn terrain_camera(escape: &EscapeConfig) -> SolidCamera {
     );
     let distance = FRAME_DISTANCE;
     let eye_rel = [-forward[0] * distance, -forward[1] * distance, -forward[2] * distance];
-    let top = escape.terrain.height as f64;
+    let target_z = escape.terrain.height as f64 + escape.terrain.target_lift as f64;
     SolidCamera {
-        eye: [0.0, 0.0, top + eye_rel[2]],
-        target: [-eye_rel[0], -eye_rel[1], top],
+        eye: [0.0, 0.0, target_z + eye_rel[2]],
+        target: [-eye_rel[0], -eye_rel[1], target_z],
         forward,
         right,
         up,
@@ -223,6 +225,7 @@ pub fn terrain_view(config: &FractalConfig, jitter: [f32; 2]) -> TerrainView {
         samples_per_axis: config.escape.supersample.max(1),
         far: t.far,
         sky: super::path_core::sky_seen(&config.escape.path, config),
+        material: super::path_core::lit_material(config),
     }
 }
 
@@ -1071,6 +1074,28 @@ mod tests {
         assert!(ux.abs() < 1e-6 && uy < 0.0, "the picture's up is still the screen's: {ux} {uy}");
     }
 
+    /// A lifted target carries the eye with it, straight up: the frame,
+    /// the distance and the eye's ground point are the camera's at rest,
+    /// so a lift of 0 is every terrain's camera as it was.
+    #[test]
+    fn a_lifted_target_carries_the_eye() {
+        let mut esc = EscapeConfig::default();
+        esc.terrain.enabled = true;
+        let rest = terrain_camera(&esc);
+        esc.terrain.target_lift = 0.75;
+        let lifted = terrain_camera(&esc);
+        assert_eq!((lifted.forward, lifted.right, lifted.up), (rest.forward, rest.right, rest.up));
+        assert_eq!((lifted.eye_rel, lifted.distance), (rest.eye_rel, rest.distance));
+        assert_eq!((lifted.eye[0], lifted.eye[1]), (rest.eye[0], rest.eye[1]));
+        assert!((lifted.eye[2] - rest.eye[2] - 0.75).abs() < 1e-12);
+        assert!((lifted.target[2] - rest.target[2] - 0.75).abs() < 1e-12);
+        // Looking up from there: the eye above the ground, the view
+        // above the horizon.
+        esc.cam_pitch = -0.3;
+        let up = terrain_camera(&esc);
+        assert!(up.forward[2] > 0.0 && up.eye[2] > esc.terrain.height as f64, "{:?} {:?}", up.forward, up.eye);
+    }
+
     /// Only the picture keys the sections: the view (centre, zoom,
     /// rotation), the camera, the heights and the lights do not; the
     /// formula, the source and the interior do.
@@ -1436,6 +1461,80 @@ mod tests {
         }
         println!("{checked} rays under the horizon, {holes} through the ground, {} sections", t.cached_for_test().len());
         assert!(checked > (w * h / 3) as usize, "{checked}");
+        assert_eq!(holes, 0, "rays fell through the ground");
+    }
+
+    /// A camera lifted above the ground can look up (camera-unification
+    /// C4): the sky across the top of the picture, the ground along the
+    /// bottom, and no ray under the horizon within reach falls through
+    /// the ground the sections were chosen for -- the walk from an eye
+    /// far above the relief.
+    #[test]
+    fn a_lifted_camera_looks_at_the_sky() {
+        let Some((_one_at_a_time, device, queue)) = gpu() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (160u32, 120u32);
+        let mut c = terrain_config();
+        c.escape.terrain.tier = RenderTier::Lit;
+        c.escape.terrain.target_lift = 0.4;
+        c.escape.terrain.far = 8.0;
+        // Ten degrees above the horizon, the frame's lower edge below it.
+        c.escape.cam_pitch = -10f32.to_radians();
+        let mut engines = crate::renderer::render::RenderEngines::default();
+        let a = pollster::block_on(crate::renderer::render(
+            &device,
+            &queue,
+            crate::renderer::RenderJob::new(&c, w, h).with_engines(&mut engines),
+            &mut crate::renderer::NoProgress,
+        ))
+        .expect("render")
+        .rgba_data;
+        let px = |x: u32, y: u32| {
+            let k = ((y * w + x) * 4) as usize;
+            [a[k], a[k + 1], a[k + 2]]
+        };
+        let sky = [0.55f32, 0.65, 0.8].map(|v| (v * 255.0).round() as i32);
+        let is_sky = |p: [u8; 3]| (0..3).all(|i| (p[i] as i32 - sky[i]).abs() <= 2);
+        assert_eq!((0..w).filter(|&x| is_sky(px(x, 0))).count(), w as usize, "the top row is the sky");
+        let ground = (0..w).filter(|&x| !is_sky(px(x, h - 1))).count();
+        assert!(ground > (w / 2) as usize, "the bottom row is ground: {ground} of {w}");
+        // Every ray under the horizon that meets the plane within reach
+        // hits the ground.
+        let t = engines.terrain.as_ref().unwrap();
+        let geom: Vec<[u32; 4]> = bytemuck::cast_slice(&crate::escape::terrain::gpu_tests::read_buffer(
+            &device,
+            &queue,
+            t.terrain_for_test().geometry_buffer(),
+            (w * h * 16) as u64,
+        ))
+        .to_vec();
+        let cam = terrain_camera(&c.escape);
+        assert!(cam.forward[2] > 0.0, "the camera looks up");
+        let (aspect, th) = (w as f64 / h as f64, (cam.fov as f64 * 0.5).tan());
+        let (mut checked, mut holes) = (0usize, 0usize);
+        for py in 0..h {
+            for px in 0..w {
+                let (u, v) = ((px as f64 + 0.5) / w as f64 - 0.5, (py as f64 + 0.5) / h as f64 - 0.5);
+                let d: [f64; 3] =
+                    std::array::from_fn(|k| cam.forward[k] + cam.right[k] * u * aspect * 2.0 * th - cam.up[k] * v * 2.0 * th);
+                if d[2] >= 0.0 {
+                    continue;
+                }
+                let s = -cam.eye[2] / d[2];
+                let dist = s * (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                if dist > 0.6 * c.escape.terrain.far as f64 {
+                    continue;
+                }
+                checked += 1;
+                if !(f32::from_bits(geom[(py * w + px) as usize][3]) > 0.0) {
+                    holes += 1;
+                }
+            }
+        }
+        println!("{checked} rays under the horizon within reach, {holes} through the ground");
+        assert!(checked > (w * 4) as usize, "{checked}");
         assert_eq!(holes, 0, "rays fell through the ground");
     }
 

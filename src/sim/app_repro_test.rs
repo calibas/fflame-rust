@@ -8538,3 +8538,113 @@ fn four_turing_layers_are_the_lattices_ring() {
         assert!(worst_c < 1e-5, "{preset}: the gathered colouring differs by {worst_c:.2e}");
     }
 }
+
+/// The 2D view (camera-unification C6), re-colouring one field: the
+/// picture, at a 64-cell grid shown at 64 pixels so a cell is a pixel.
+fn view_picture(device: &Device, queue: &Queue, r: &mut SimRenderer, palette: &TextureView, cfg: &SimConfig) -> Vec<[f32; 4]> {
+    r.color(device, queue, cfg, palette);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    read_rgba32f(device, queue, r.output_texture(), 64, 64)
+}
+
+/// A field worth looking at: 300 steps of the small config.
+fn viewed_field(device: &Device, queue: &Queue, cfg: &SimConfig) -> SimRenderer {
+    let mut r = SimRenderer::new(device, cfg, 64, 64);
+    r.seed(device, queue, cfg);
+    r.run_steps(device, queue, cfg, 300);
+    r
+}
+
+/// The view moves the picture over the field exactly: a pan of whole
+/// cells shifts it by those cells, a half turn flips it, and a tiled
+/// periodic field wraps round where the untiled one shows its edge.
+/// And the view's own mapping at the default's values is the letterbox
+/// mapping, bit for bit.
+#[test]
+fn the_view_moves_the_picture_over_the_field() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let palette = test_palette(&device, &queue);
+    let cfg = small_config();
+    let mut r = viewed_field(&device, &queue, &cfg);
+    let plain = view_picture(&device, &queue, &mut r, &palette, &cfg);
+    let at = |img: &[[f32; 4]], x: usize, y: usize| img[y * 64 + x];
+
+    // The camera's path with the default's values (tile asked for under
+    // a boundary that cannot tile): the same picture.
+    let mut same = cfg.clone();
+    same.boundary = SimBoundary::Zero;
+    let plain_zero = {
+        let mut r0 = viewed_field(&device, &queue, &same);
+        let a = view_picture(&device, &queue, &mut r0, &palette, &same);
+        same.view.tile = true;
+        let b = view_picture(&device, &queue, &mut r0, &palette, &same);
+        assert!(a.iter().zip(&b).all(|(p, q)| p == q), "the camera's mapping at the default is not the letterbox's");
+        a
+    };
+    let _ = plain_zero;
+
+    // Twelve cells right: the picture moves twelve pixels left.
+    let mut panned = cfg.clone();
+    panned.view.center_x = 0.5 + 12.0 / 64.0;
+    let p = view_picture(&device, &queue, &mut r, &palette, &panned);
+    for y in 0..64 {
+        for x in 0..52 {
+            assert_eq!(at(&p, x, y), at(&plain, x + 12, y), "pan ({x}, {y})");
+        }
+        // Past the grid's edge, untiled: nothing.
+        for x in 52..64 {
+            assert_eq!(at(&p, x, y)[3], 0.0, "edge ({x}, {y})");
+        }
+    }
+    // Tiled: the field goes round.
+    panned.view.tile = true;
+    let t = view_picture(&device, &queue, &mut r, &palette, &panned);
+    for y in 0..64 {
+        for x in 0..64 {
+            assert_eq!(at(&t, x, y), at(&plain, (x + 12) % 64, y), "tile ({x}, {y})");
+        }
+    }
+
+    // A half turn: the picture upside down.
+    let mut turned = cfg.clone();
+    turned.view.rotation = std::f32::consts::PI;
+    let h = view_picture(&device, &queue, &mut r, &palette, &turned);
+    for y in 0..64 {
+        for x in 0..64 {
+            assert_eq!(at(&h, x, y), at(&plain, 63 - x, 63 - y), "half turn ({x}, {y})");
+        }
+    }
+}
+
+/// The view never touches the run: with the octave warp's cull -- which
+/// freezes cells outside the window the picture shows -- a zoomed,
+/// panned, turned view steps the same field as the default, bit for bit.
+#[test]
+fn the_view_never_changes_the_field() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let mut cfg = small_config();
+    cfg.warp.mode = crate::config::sim::SimWarpMode::Octaves;
+    cfg.warp.zoom = 0.995;
+    cfg.warp.cull = true;
+    let mut viewed = cfg.clone();
+    viewed.view.zoom = 4.0;
+    viewed.view.center_x = 0.2;
+    viewed.view.rotation = 0.7;
+    viewed.view.tile = true;
+    let run = |c: &SimConfig| {
+        let mut r = SimRenderer::new(&device, c, 64, 64);
+        r.seed(&device, &queue, c);
+        r.run_steps(&device, &queue, c, 200);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        read_rgba32f(&device, &queue, r.field_texture(), 64, 64)
+    };
+    let (a, b) = (run(&cfg), run(&viewed));
+    let differing = a.iter().zip(&b).filter(|(p, q)| p.iter().zip(q.iter()).any(|(x, y)| x.to_bits() != y.to_bits())).count();
+    assert_eq!(differing, 0, "the view changed {differing} cells of the field");
+}

@@ -82,135 +82,47 @@ impl App {
             }
         }
 
-        // Read current view state from config
-        let config = self.config_manager.active_config();
-        let pan_step = 0.1 / config.zoom;
-
-        // Escape mode speaks its own view vocabulary (center strings +
-        // zoom_log2): route arrows through the shared pan entry (which
-        // branches to escape panning internally, using drag semantics --
-        // one press scrolls 5% of the viewport) and +/- through the
-        // escape zoom helper. Escape re-renders come from the
-        // EscapeRerender update path, so `view_changed_by_keyboard`
-        // (a flame accumulation-reset signal) stays untouched.
-        if config.render_mode == crate::scene::transforms::RenderMode::Escape {
-            let (vw, vh) = self.fractal_viewport_size;
-            let panel_size = egui::Vec2::new(vw.max(1) as f32, vh.max(1) as f32);
-            let step = 0.05 * panel_size.x.min(panel_size.y);
-            // Drag semantics: content follows the drag, so the view
-            // moves OPPOSITE the delta -- matching the flame arrows'
-            // direction convention (Up scrolls the view up).
-            let drag = match event.physical_key {
-                PhysicalKey::Code(KeyCode::ArrowUp) => Some(egui::Vec2::new(0.0, step)),
-                PhysicalKey::Code(KeyCode::ArrowDown) => Some(egui::Vec2::new(0.0, -step)),
-                PhysicalKey::Code(KeyCode::ArrowLeft) => Some(egui::Vec2::new(step, 0.0)),
-                PhysicalKey::Code(KeyCode::ArrowRight) => Some(egui::Vec2::new(-step, 0.0)),
+        // The arrows pan and + / - zoom whichever camera the viewport
+        // shows (`camera::gesture`): a press moves the picture 5% of the
+        // viewport, as a drag of that length, and zooms by half again.
+        // (A simulation's picture has no view yet: its keys do nothing.)
+        let (vw, vh) = self.fractal_viewport_size;
+        let panel = [vw.max(1) as f32, vh.max(1) as f32];
+        let step = 0.05 * panel[0].min(panel[1]);
+        let drag = match event.physical_key {
+            PhysicalKey::Code(KeyCode::ArrowUp) => Some([0.0, step]),
+            PhysicalKey::Code(KeyCode::ArrowDown) => Some([0.0, -step]),
+            PhysicalKey::Code(KeyCode::ArrowLeft) => Some([step, 0.0]),
+            PhysicalKey::Code(KeyCode::ArrowRight) => Some([-step, 0.0]),
+            _ => None,
+        };
+        let zoom = match event.physical_key {
+            PhysicalKey::Code(KeyCode::Equal) | PhysicalKey::Code(KeyCode::NumpadAdd) => Some(1.5),
+            PhysicalKey::Code(KeyCode::Minus) | PhysicalKey::Code(KeyCode::NumpadSubtract) => Some(1.0 / 1.5),
+            _ => None,
+        };
+        if drag.is_some() || zoom.is_some() {
+            let config = self.config_manager.active_config();
+            let flame = matches!(
+                config.render_mode,
+                crate::scene::transforms::RenderMode::TwoD | crate::scene::transforms::RenderMode::ThreeD
+            );
+            let edit = match (drag, zoom) {
+                (Some(d), _) => crate::camera::gesture::pan(config, d, panel),
+                (None, Some(f)) => crate::camera::gesture::zoom(config, f, None, panel),
                 _ => None,
             };
-            if let Some(drag) = drag {
-                crate::ui::pan_fractal_view(&mut self.config_manager, drag, panel_size);
-                return;
+            if let Some(edit) = edit {
+                edit.apply(&mut self.config_manager);
+                // The flame's accumulation-reset signal; the other engines
+                // re-render from their update types.
+                self.view_changed_by_keyboard |= flame;
             }
-            match event.physical_key {
-                PhysicalKey::Code(KeyCode::Equal) | PhysicalKey::Code(KeyCode::NumpadAdd) => {
-                    crate::ui::escape_zoom_by_factor(&mut self.config_manager, 1.5);
-                    return;
-                }
-                PhysicalKey::Code(KeyCode::Minus) | PhysicalKey::Code(KeyCode::NumpadSubtract) => {
-                    crate::ui::escape_zoom_by_factor(&mut self.config_manager, 1.0 / 1.5);
-                    return;
-                }
-                _ => {}
-            }
-            // Space/F/Escape etc. fall through to the shared handling.
+            return;
         }
 
-        // Simulation has no view to move (`ui::visibility::Control::
-        // ViewNavigation`). Swallow the navigation keys rather than
-        // letting them write a flame pan/zoom nothing will read; every
-        // other key still falls through.
-        if crate::ui::visibility::control(
-            crate::ui::visibility::Control::ViewNavigation,
-            config.render_mode,
-            config.tonemap_mode,
-        ) == crate::ui::visibility::Vis::Hide
-        {
-            if matches!(
-                event.physical_key,
-                PhysicalKey::Code(KeyCode::ArrowUp)
-                    | PhysicalKey::Code(KeyCode::ArrowDown)
-                    | PhysicalKey::Code(KeyCode::ArrowLeft)
-                    | PhysicalKey::Code(KeyCode::ArrowRight)
-                    | PhysicalKey::Code(KeyCode::Equal)
-                    | PhysicalKey::Code(KeyCode::NumpadAdd)
-                    | PhysicalKey::Code(KeyCode::Minus)
-                    | PhysicalKey::Code(KeyCode::NumpadSubtract)
-            ) {
-                return;
-            }
-        }
-
+        let config = self.config_manager.active_config();
         match event.physical_key {
-            PhysicalKey::Code(KeyCode::ArrowUp) => {
-                // Up in screen space: (0, -1), convert to pan frame
-                let (dx, dy) = config.screen_delta_to_pan_frame(0.0, -pan_step as f64);
-                let new_pan_x = config.pan_x + dx;
-                let new_pan_y = config.pan_y + dy;
-                let _ = self.config_manager.update_param(
-                    crate::config::ConfigPath::Pan,
-                    (new_pan_x, new_pan_y).into(),
-                );
-                self.view_changed_by_keyboard = true;
-            }
-            PhysicalKey::Code(KeyCode::ArrowDown) => {
-                // Down in screen space: (0, 1), convert to pan frame
-                let (dx, dy) = config.screen_delta_to_pan_frame(0.0, pan_step as f64);
-                let new_pan_x = config.pan_x + dx;
-                let new_pan_y = config.pan_y + dy;
-                let _ = self.config_manager.update_param(
-                    crate::config::ConfigPath::Pan,
-                    (new_pan_x, new_pan_y).into(),
-                );
-                self.view_changed_by_keyboard = true;
-            }
-            PhysicalKey::Code(KeyCode::ArrowLeft) => {
-                // Left in screen space: (-1, 0), convert to pan frame
-                let (dx, dy) = config.screen_delta_to_pan_frame(-pan_step as f64, 0.0);
-                let new_pan_x = config.pan_x + dx;
-                let new_pan_y = config.pan_y + dy;
-                let _ = self.config_manager.update_param(
-                    crate::config::ConfigPath::Pan,
-                    (new_pan_x, new_pan_y).into(),
-                );
-                self.view_changed_by_keyboard = true;
-            }
-            PhysicalKey::Code(KeyCode::ArrowRight) => {
-                // Right in screen space: (1, 0), convert to pan frame
-                let (dx, dy) = config.screen_delta_to_pan_frame(pan_step as f64, 0.0);
-                let new_pan_x = config.pan_x + dx;
-                let new_pan_y = config.pan_y + dy;
-                let _ = self.config_manager.update_param(
-                    crate::config::ConfigPath::Pan,
-                    (new_pan_x, new_pan_y).into(),
-                );
-                self.view_changed_by_keyboard = true;
-            }
-            PhysicalKey::Code(KeyCode::Equal) | PhysicalKey::Code(KeyCode::NumpadAdd) => {
-                let new_zoom = config.zoom * 1.5;
-                let _ = self.config_manager.update_param(
-                    crate::config::ConfigPath::Zoom,
-                    new_zoom.into(),
-                );
-                self.view_changed_by_keyboard = true;
-            }
-            PhysicalKey::Code(KeyCode::Minus) | PhysicalKey::Code(KeyCode::NumpadSubtract) => {
-                let new_zoom = config.zoom / 1.5;
-                let _ = self.config_manager.update_param(
-                    crate::config::ConfigPath::Zoom,
-                    new_zoom.into(),
-                );
-                self.view_changed_by_keyboard = true;
-            }
             PhysicalKey::Code(KeyCode::Space) => {
                 // Only reachable when egui didn't consume the key, so a
                 // space typed into a text field never lands here.
