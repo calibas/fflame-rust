@@ -573,6 +573,8 @@ pub enum ConfigPath {
     /// The sections' prefilter and softness (H4).
     EscapeTerrainPrefilter,
     EscapeTerrainSoftness,
+    /// The ground's spline rather than a bilinear patch a texel (H5).
+    EscapeTerrainSmooth,
     EscapeTerrainShadow,
     EscapeTerrainShadowSharpness,
     EscapeTerrainLakeTint,
@@ -1263,6 +1265,7 @@ impl Display for ConfigPath {
             ConfigPath::EscapeTerrainLockHi => write!(f, "Terrain Lock Range High"),
             ConfigPath::EscapeTerrainPrefilter => write!(f, "Terrain Prefilter"),
             ConfigPath::EscapeTerrainSoftness => write!(f, "Terrain Softness"),
+            ConfigPath::EscapeTerrainSmooth => write!(f, "Terrain Smooth Surface"),
             ConfigPath::EscapeTerrainShadow => write!(f, "Terrain Shadows"),
             ConfigPath::EscapeTerrainShadowSharpness => write!(f, "Terrain Shadow Sharpness"),
             ConfigPath::EscapeTerrainLakeTint => write!(f, "Lake Tint"),
@@ -1698,6 +1701,7 @@ impl ConfigPath {
             ConfigPath::EscapeTerrainLockHi => I18nKey::simple("history.param.escape_terrain_lock_hi"),
             ConfigPath::EscapeTerrainPrefilter => I18nKey::simple("history.param.escape_terrain_prefilter"),
             ConfigPath::EscapeTerrainSoftness => I18nKey::simple("history.param.escape_terrain_softness"),
+            ConfigPath::EscapeTerrainSmooth => I18nKey::simple("history.param.escape_terrain_smooth"),
             ConfigPath::EscapeTerrainShadow => I18nKey::simple("history.param.escape_terrain_shadow"),
             ConfigPath::EscapeTerrainShadowSharpness => I18nKey::simple("history.param.escape_terrain_shadow_sharpness"),
             ConfigPath::EscapeTerrainLakeTint => I18nKey::simple("history.param.escape_terrain_lake_tint"),
@@ -3132,6 +3136,7 @@ impl ConfigPath {
             | ConfigPath::EscapeTerrainLockHi
             | ConfigPath::EscapeTerrainPrefilter
             | ConfigPath::EscapeTerrainSoftness
+            | ConfigPath::EscapeTerrainSmooth
             | ConfigPath::EscapeTerrainShadow
             | ConfigPath::EscapeTerrainShadowSharpness
             | ConfigPath::EscapeTerrainLakeTint
@@ -3668,6 +3673,7 @@ impl ConfigPath {
             ConfigPath::EscapeTerrainLockHi => "Escape.Terrain.LockHi".to_string(),
             ConfigPath::EscapeTerrainPrefilter => "Escape.Terrain.Prefilter".to_string(),
             ConfigPath::EscapeTerrainSoftness => "Escape.Terrain.Softness".to_string(),
+            ConfigPath::EscapeTerrainSmooth => "Escape.Terrain.Smooth".to_string(),
             ConfigPath::EscapeTerrainShadow => "Escape.Terrain.Shadow".to_string(),
             ConfigPath::EscapeTerrainShadowSharpness => "Escape.Terrain.ShadowSharpness".to_string(),
             ConfigPath::EscapeTerrainLakeTint => "Escape.Terrain.LakeTint".to_string(),
@@ -3953,6 +3959,7 @@ impl ConfigPath {
                 ["Terrain", "LockHi"] => return Some(ConfigPath::EscapeTerrainLockHi),
                 ["Terrain", "Prefilter"] => return Some(ConfigPath::EscapeTerrainPrefilter),
                 ["Terrain", "Softness"] => return Some(ConfigPath::EscapeTerrainSoftness),
+                ["Terrain", "Smooth"] => return Some(ConfigPath::EscapeTerrainSmooth),
                 ["Terrain", "Shadow"] => return Some(ConfigPath::EscapeTerrainShadow),
                 ["Terrain", "ShadowSharpness"] => return Some(ConfigPath::EscapeTerrainShadowSharpness),
                 ["Terrain", "LakeTint"] => return Some(ConfigPath::EscapeTerrainLakeTint),
@@ -4893,6 +4900,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         // ground at every frame it moves.
         | ConfigPath::EscapeTerrainPrefilter
         | ConfigPath::EscapeTerrainSoftness
+        | ConfigPath::EscapeTerrainSmooth
         | ConfigPath::EscapeShadingModel
         | ConfigPath::EscapeShadingStencil
         | ConfigPath::EscapeShadingHeightCurve
@@ -5582,6 +5590,7 @@ mod tests {
             (ConfigPath::EscapeTerrainLockHi, ConfigValue::Float(250.0), false),
             (ConfigPath::EscapeTerrainPrefilter, ConfigValue::UInt(2), false),
             (ConfigPath::EscapeTerrainSoftness, ConfigValue::Float(1.5), false),
+            (ConfigPath::EscapeTerrainSmooth, ConfigValue::Bool(true), false),
             (ConfigPath::EscapeTerrainShadow, ConfigValue::Float(0.25), true),
             (ConfigPath::EscapeTerrainShadowSharpness, ConfigValue::Float(20.0), true),
             (ConfigPath::EscapeTerrainLakeTint, ConfigValue::ColorRgb([0.1, 0.2, 0.3]), false),

@@ -1749,6 +1749,14 @@ fn show_terrain_section(
                     }
                 }
             });
+            let mut smooth = t.smooth;
+            if ui
+                .checkbox(&mut smooth, t!("escape_panel.terrain_smooth"))
+                .on_hover_text(t!("escape_panel.terrain_smooth_tip"))
+                .changed()
+            {
+                let _ = config_manager.update_param(ConfigPath::EscapeTerrainSmooth, smooth.into());
+            }
             ui.horizontal(|ui| {
                 ui.label(t!("escape_panel.terrain_softness"));
                 let mut v = t.softness;

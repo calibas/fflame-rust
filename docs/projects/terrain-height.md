@@ -118,6 +118,39 @@ and `src/escape/terrain.rs` (`INGEST_WGSL`, `hf_f`).
     resolution, as the detail already does.
   - Both are part of what the sections' pictures depend on
     (`picture_key`): changing either re-renders the ground.
+- **H5. A smooth surface.** *Built.* "Smooth surface"
+  (`terrain.smooth`, default off): the ground the cubic B-spline of its
+  mapped heights, as a simulation's is, rather than a bilinear patch a
+  texel -- whose crease at every grid line drew fine streaks down the
+  flanks and stepped shadow edges wherever the ground is magnified (an
+  8K export, 0.74 texels a pixel). Its colour is its colours' spline
+  where a ray's share of a pixel is under a texel. Three things make it
+  an escape terrain's:
+  - **Seams.** A section's control points past its edge continue in a
+    straight line (`hf_extends`: 2 P_edge - P_next) where a simulation's
+    single section holds its edge. Neighbours share their edge samples,
+    and so continued each side's spline passes through them: along the
+    seam both are the same curve of the same samples -- no step, as a
+    bilinear ground has none (held, they stood apart by a sixth of the
+    step at the edge). The colour is continued alike, in sixteen loads,
+    which also keeps a coarse section -- smaller than its layer -- from
+    reading the texels past its edge.
+  - **Bounds.** The spline is of HEIGHTS, the raw values through a map
+    that is not linear, so the raw values' Bezier bound a simulation uses
+    bounds nothing here. The map is monotone and the spline a weighting
+    of its control points, never negative and summing to one -- past the
+    edge too, continued as above: in the first cell the real samples'
+    weights are 2B0 + B1, B2 - B0 and B3, in the last B0, B1 - B3 and
+    B2 + 2B3, each non-negative over the cell -- so the extreme of the
+    4x4 real samples bounds it (`BUILD_WGSL`'s spline mode 2).
+  - **No re-render.** Turning it on or off re-bounds every cached
+    section (`reshape_section`) and renders none again.
+  Tested against the CPU's spline on a two-section ground with a rough
+  field: every hit within 5e-6 of the CPU's root, none slipping through,
+  the seam's step under 1e-9, the colour within 6e-7. The cost is the
+  walk's: path traced at 1080p, 340 ms a sample against 133 (2.6x); the
+  lit tier at 8K, 142 s against 43 s with the sections. Hence off by
+  default -- a still's choice, and the viewport's where it is affordable.
 - **H6. More sections for an export.** *Built.* The atlas held at most
   64 sections, and the planner coarsens every section alike until the
   view fits: at 4K a terrain's nearest ground was 0.74 texels a screen
