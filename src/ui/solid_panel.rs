@@ -92,6 +92,18 @@ pub fn lighting_rig(
         );
     }
 
+    // Whether the rig lights anything. A flame's shade pass runs above
+    // strength 0. A solid's or a terrain's rig is in use once it is
+    // touched, at ANY strength: the path tracer lights it fully, where
+    // the lit tier mixes it in by the strength -- so its lights and
+    // highlight must show even at 0, or a picture is shaped by settings
+    // the panel hides (field-reported: a terrain's default highlight,
+    // glinting in the path tracer with the lights out of sight).
+    let rig_in_use = if flame { shading.shading_strength > 0.0 } else { !shading.rig_untouched() };
+    if !flame && rig_in_use && !(shading.shading_strength > 0.0) {
+        ui.label(egui::RichText::new(t!("view.lit_strength_zero")).small().weak());
+    }
+
     let slider = |ui: &mut egui::Ui, config_manager: &mut ConfigManager, path: ConfigPath, label: &str, tip: &str, value: f32, range: std::ops::RangeInclusive<f32>, step: f64| {
         let mut v = value;
         let response = ui.add(super::VkbSlider::new(&mut v, range).text(t!(label).as_ref()).step_by(step));
@@ -101,7 +113,7 @@ pub fn lighting_rig(
         }
     };
 
-    if shading.shading_strength > 0.0 {
+    if rig_in_use {
         let mut global_sliders: Vec<(ConfigPath, &str, f32, std::ops::RangeInclusive<f32>, f64)> = vec![
             (ConfigPath::SolidAmbient, "view.solid_ambient", shading.ambient, 0.0..=1.0, 0.01),
         ];
@@ -182,7 +194,6 @@ pub fn lighting_rig(
     // diffuse and the highlight are the rig's, so over a solid's or a
     // terrain's untouched rig -- a default sun -- editing them would
     // replace that sun, and they wait for the rig to be in use.
-    let rig_in_use = shading.shading_strength > 0.0;
     if rig_in_use || !flame {
         ui.add_space(6.0);
         ui.label(t!("view.material_section").as_ref()).on_hover_text(t!("view.material_tip"));

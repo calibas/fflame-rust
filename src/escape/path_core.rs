@@ -561,6 +561,11 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
         // diffuse in the rig's units (its I as pi times a radiance's), the
         // gloss's physical BRDF times the same irradiance, pi I cos. No
         // shadow ray at strength 0.
+        // At the first surface, how much of its direct light the albedo
+        // shapes (the diffuse, without the albedo) and how much it does not
+        // (the coat's and the highlight's): the denoiser's guide below.
+        var first_diffuse = 0.0;
+        var first_white = 0.0;
         for (var li = 0u; li < ifs_light_count(); li = li + 1u) {
             let ld = pt_cone(ifs_light_dir(li), pt.misc.w);
             let ndl = dot(n, ld);
@@ -583,12 +588,30 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
                 // §4.1): Blinn-Phong on the direct light, unnormalised and
                 // without the cosine, so both tiers draw it alike. Not a
                 // lobe a bounce samples: it is the lights' shine alone.
+                var shine = 0.0;
                 if (ifs_specular() > 0.0) {
                     let hb = normalize(ld + v);
-                    let shine = ifs_specular() * pow(max(dot(n, hb), 0.0), max(ifs_shininess(), 1.0));
+                    shine = ifs_specular() * pow(max(dot(n, hb), 0.0), max(ifs_shininess(), 1.0));
                     radiance = radiance + through * ifs_light_color(li) * (ifs_light_power(li) * vis * shine);
                 }
+                if (bounce == 0u) {
+                    let lum = dot(ifs_light_color(li), vec3<f32>(0.2126, 0.7152, 0.0722)) * ifs_light_power(li) * vis;
+                    first_diffuse = first_diffuse + lum * ndl * ifs_diffuse() * diff;
+                    first_white = first_white + lum * (ndl * spec + shine);
+                }
             }
+        }
+        // The denoiser divides a pixel's light by its guide to keep the
+        // albedo's detail out of the blur, and multiplies it back after.
+        // Light the albedo does not shape -- a highlight, a coat's glint --
+        // divided by a saturated albedo's near-zero channels came back as
+        // bands of the wrong colour (field-reported: a terrain's sun glint,
+        // banded red and yellow in its valleys). So the guide takes that
+        // light's share as white, as it takes the coat's reflection of the
+        // sky (`pt_first`): exact where there is none.
+        if (bounce == 0u && first_white > 0.0) {
+            let w = first_white / max(first_diffuse + first_white, 1.0e-20);
+            pt_g_albedo = pt_g_albedo * (1.0 - w) + vec3<f32>(w, w, w);
         }
         if (bounce >= pt.bounces) {
             break;
