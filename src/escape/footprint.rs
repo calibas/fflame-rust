@@ -882,6 +882,13 @@ impl EscapeTerrain {
                 }
             });
         }
+        // Every section in: the section renderer's per-pixel memory goes
+        // back until the next one is wanted -- ~150 bytes a render pixel,
+        // 1.5 GB at a 3x3 prefilter, which an export's still and a
+        // background export's own terrain need more.
+        if self.missing == 0 && self.building.is_none() && self.footprint.holds_pixels() {
+            self.footprint.release_pixels(device);
+        }
         self.set_ground(device, queue, config, &wanted, eye, z, landed, &ingest);
         self.missing > 0 || self.building.is_some()
     }
