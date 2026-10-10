@@ -118,3 +118,16 @@ and `src/escape/terrain.rs` (`INGEST_WGSL`, `hf_f`).
     resolution, as the detail already does.
   - Both are part of what the sections' pictures depend on
     (`picture_key`): changing either re-renders the ground.
+- **H6. More sections for an export.** *Built.* The atlas held at most
+  64 sections, and the planner coarsens every section alike until the
+  view fits: at 4K a terrain's nearest ground was 0.74 texels a screen
+  pixel (magnified; 0.49 at 4K with 2x AA), while the viewport at
+  1600x900 had 2.5. An export now fits its cap to the card
+  (`fit_export_sections`): 256, then 128, then 64 -- the first whose
+  atlas (~21 MB a section) and the rest of the export's peak
+  (`export_headroom`, estimated high) the card will give, asked for in
+  256 MB pieces and given back at once, since wgpu cannot say what is
+  free. On a 6 GB card a 4K export holds 128 (1.66 texels a pixel, 108
+  sections, peak 4.25 GB) -- visibly crisper. The viewport keeps 64. An
+  export whose view wants no more than 64 is unchanged; one that wants
+  more is as fine as the card it is made on allows.
