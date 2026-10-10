@@ -588,10 +588,15 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
                 // §4.1): Blinn-Phong on the direct light, unnormalised and
                 // without the cosine, so both tiers draw it alike. Not a
                 // lobe a bounce samples: it is the lights' shine alone.
+                // Weighted by the shading strength, as the lit tier's mix
+                // weights it: a rig at strength 0 draws no highlight in
+                // either tier (a terrain's touched rig carried the flame
+                // default 0.35, and glinted from P7 on where it never had).
                 var shine = 0.0;
-                if (ifs_specular() > 0.0) {
+                let shine_weight = ifs_specular() * clamp(ifs_shading_strength(), 0.0, 1.0);
+                if (shine_weight > 0.0) {
                     let hb = normalize(ld + v);
-                    shine = ifs_specular() * pow(max(dot(n, hb), 0.0), max(ifs_shininess(), 1.0));
+                    shine = shine_weight * pow(max(dot(n, hb), 0.0), max(ifs_shininess(), 1.0));
                     radiance = radiance + through * ifs_light_color(li) * (ifs_light_power(li) * vis * shine);
                 }
                 if (bounce == 0u) {
