@@ -1732,6 +1732,34 @@ fn show_terrain_section(
                     let _ = config_manager.update_param(ConfigPath::EscapeTerrainDetail, v.into());
                 }
             });
+            // The sections' filter (terrain-height.md, H4): samples
+            // averaged into a texel, and a softness in texels.
+            ui.horizontal(|ui| {
+                use crate::config::escape::MAX_TERRAIN_PREFILTER;
+                ui.label(t!("escape_panel.terrain_prefilter")).on_hover_text(t!("escape_panel.terrain_prefilter_tip"));
+                for k in 1..=MAX_TERRAIN_PREFILTER {
+                    let text = if k == 1 { t!("escape_panel.terrain_prefilter_off").to_string() } else { format!("{k}×{k}") };
+                    if ui
+                        .selectable_label(t.prefilter == k, text)
+                        .on_hover_text(t!("escape_panel.terrain_prefilter_tip"))
+                        .clicked()
+                        && t.prefilter != k
+                    {
+                        let _ = config_manager.update_param(ConfigPath::EscapeTerrainPrefilter, ConfigValue::UInt(k));
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label(t!("escape_panel.terrain_softness"));
+                let mut v = t.softness;
+                // Each step re-renders the ground: a coarse step.
+                let r = ui
+                    .add(egui::Slider::new(&mut v, 0.0..=crate::config::escape::MAX_TERRAIN_SOFTNESS).step_by(0.25))
+                    .on_hover_text(t!("escape_panel.terrain_softness_tip"));
+                if r.changed() {
+                    let _ = config_manager.update_param(ConfigPath::EscapeTerrainSoftness, v.into());
+                }
+            });
             ui.label(egui::RichText::new(t!("escape_panel.view_has_camera")).small().weak());
         });
 }

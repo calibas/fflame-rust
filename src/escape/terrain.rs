@@ -221,7 +221,11 @@ struct IngestParamsGpu {
     rh: u32,
     /// The atlas layer being made: its own slots of the range.
     layer: u32,
-    pad: [u32; 3],
+    /// The section's filter (`SectionFilter`): samples a texel each
+    /// way, the border in texels, and the softness's sigma in texels.
+    k: u32,
+    apron: u32,
+    sigma: f32,
     /// The interior's colour on a plateau, where the colouring leaves
     /// it undrawn: the background's.
     background: [f32; 4],
@@ -256,18 +260,26 @@ struct IngestParams {
     rw: u32,
     rh: u32,
     layer: u32,
-    p0: u32,
-    p1: u32,
-    p2: u32,
+    // The section's filter (terrain-height.md, H4): samples a texel each
+    // way, the border in texels, and the softness's sigma in texels.
+    k: u32,
+    apron: u32,
+    sigma: f32,
     background: vec4<f32>,
     tint: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> ip: IngestParams;
+// The region's render, border and all, at k samples a texel each way:
+// its colour and its height field.
 @group(0) @binding(1) var colour: texture_2d<f32>;
 @group(0) @binding(2) var hsrc: texture_2d<f32>;
 @group(0) @binding(3) var<storage, read_write> range: array<atomic<u32>>;
 @group(0) @binding(4) var out_raw: texture_storage_2d<r32float, write>;
 @group(0) @binding(5) var out_a: texture_storage_2d<rgba16float, write>;
+// The texels' raw values, border and all: one pass writes what the next
+// reads.
+@group(0) @binding(6) var raw_in: texture_2d<f32>;
+@group(0) @binding(7) var raw_out: texture_storage_2d<r32float, write>;
 
 // A float's order as an integer, so atomics can take its min and max.
 fn ordered(f: f32) -> u32 {
@@ -279,55 +291,152 @@ fn interior(c: vec4<f32>, g: f32) -> bool {
     return !(c.a > 0.0) || g <= -1.0e29;
 }
 
-@compute @workgroup_size(8, 8, 1)
-fn range_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if (gid.x >= ip.rw || gid.y >= ip.rh || ip.source == 8u) {
-        return;
-    }
-    let p = vec2<i32>(gid.xy);
-    let g = textureLoad(hsrc, p, 0).g;
-    if (interior(textureLoad(colour, p, 0), g)) {
-        return;
-    }
-    atomicMin(&range[0], ordered(g));
-    atomicMax(&range[1], ordered(g));
-    // And the section's own, which a ground of sections reduces to the
-    // range of what it holds (`reduce_range`).
-    atomicMin(&range[2u + 2u * ip.layer], ordered(g));
-    atomicMax(&range[3u + 2u * ip.layer], ordered(g));
+fn is_land(v: f32) -> bool {
+    return abs(v) < 1.0e29;
 }
 
+// The interior's raw value: a hole's, a lake's or a plateau's sentinel
+// (`hf_f`). A distance's plateau is -1e30, not the set's own 0, so an
+// inverted map can tell it from the set and leave it on top (and it is
+// the minimum a distance's mipmap keeps, so it still bounds as the top).
+fn interior_raw() -> f32 {
+    let distance = ip.source == 8u;
+    if (ip.interior == 1u) {
+        return select(-1.0e30, 1.0e30, distance);
+    }
+    if (ip.interior == 2u) {
+        return select(-3.0e30, 3.0e30, distance);
+    }
+    return select(1.0e30, -1.0e30, distance);
+}
+
+// A texel's raw value: the mean over its k x k samples of those that
+// escaped -- a distance in texels, from the render's pixels -- or the
+// interior's where most did not. `p` is the texel in the region's
+// picture, border included.
+fn texel_raw(p: vec2<i32>) -> f32 {
+    let k = i32(max(ip.k, 1u));
+    let distance = ip.source == 8u;
+    var sum = 0.0;
+    var land = 0;
+    for (var sy = 0; sy < k; sy++) {
+        for (var sx = 0; sx < k; sx++) {
+            let q = p * k + vec2<i32>(sx, sy);
+            let g = textureLoad(hsrc, q, 0).g;
+            if (!interior(textureLoad(colour, q, 0), g)) {
+                sum += select(g, max(g, 0.0), distance);
+                land += 1;
+            }
+        }
+    }
+    if (land * 2 < k * k || land == 0) {
+        return interior_raw();
+    }
+    let mean = sum / f32(land);
+    return select(mean, mean / f32(k), distance);
+}
+
+// A texel's albedo: the mean colour of its samples that escaped, or the
+// interior's -- a plateau's own colour where the colouring draws one,
+// the background's where it does not.
+fn texel_albedo(p: vec2<i32>, land: bool) -> vec4<f32> {
+    let k = i32(max(ip.k, 1u));
+    var sum = vec3<f32>(0.0);
+    var count = 0;
+    for (var sy = 0; sy < k; sy++) {
+        for (var sx = 0; sx < k; sx++) {
+            let q = p * k + vec2<i32>(sx, sy);
+            let c = textureLoad(colour, q, 0);
+            let inside = interior(c, textureLoad(hsrc, q, 0).g);
+            if ((land && !inside) || (!land && inside && c.a > 0.0)) {
+                sum += c.rgb;
+                count += 1;
+            }
+        }
+    }
+    if (land) {
+        return vec4<f32>(sum / f32(max(count, 1)), 1.0);
+    }
+    if (ip.interior == 1u) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    if (ip.interior == 2u) {
+        return vec4<f32>(ip.tint.rgb, 1.0);
+    }
+    return vec4<f32>(select(ip.background.rgb, sum / f32(max(count, 1)), count > 0), 1.0);
+}
+
+fn bordered() -> vec2<i32> {
+    return vec2<i32>(i32(ip.rw + 2u * ip.apron), i32(ip.rh + 2u * ip.apron));
+}
+
+// The softness along one axis: a Gaussian of sigma texels over the land,
+// the interior left as it is. Weighted by the land alone, so the set's
+// edge is not pulled toward a sentinel; the border holds the reach.
+fn soften(p: vec2<i32>, axis: vec2<i32>) -> f32 {
+    let centre = textureLoad(raw_in, p, 0).r;
+    if (!is_land(centre) || !(ip.sigma > 0.0)) {
+        return centre;
+    }
+    let size = bordered();
+    let r = i32(ip.apron);
+    let fall = -0.5 / (ip.sigma * ip.sigma);
+    var sum = 0.0;
+    var weight = 0.0;
+    for (var d = -r; d <= r; d++) {
+        let v = textureLoad(raw_in, clamp(p + axis * d, vec2<i32>(0), size - 1), 0).r;
+        if (is_land(v)) {
+            let w = exp(f32(d * d) * fall);
+            sum += w * v;
+            weight += w;
+        }
+    }
+    return sum / weight;
+}
+
+// Pass 1: every texel's raw value, border and all.
 @compute @workgroup_size(8, 8, 1)
-fn ingest_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn filter_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let p = vec2<i32>(gid.xy);
+    if (any(p >= bordered())) {
+        return;
+    }
+    textureStore(raw_out, p, vec4<f32>(texel_raw(p), 0.0, 0.0, 0.0));
+}
+
+// Pass 2, with a softness: along the rows.
+@compute @workgroup_size(8, 8, 1)
+fn soften_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let p = vec2<i32>(gid.xy);
+    if (any(p >= bordered())) {
+        return;
+    }
+    textureStore(raw_out, p, vec4<f32>(soften(p, vec2<i32>(1, 0)), 0.0, 0.0, 0.0));
+}
+
+// The last pass: the section's own texels -- down the columns, with a
+// softness -- their albedo, and the count's or the relief's range, its
+// own and the running one, over what is stored.
+@compute @workgroup_size(8, 8, 1)
+fn store_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x >= ip.rw || gid.y >= ip.rh) {
         return;
     }
-    let src = vec2<i32>(gid.xy);
+    let p = vec2<i32>(gid.xy) + vec2<i32>(i32(ip.apron));
+    let raw = soften(p, vec2<i32>(0, 1));
+    let land = is_land(raw);
     // Tile row j is picture row m - 1 - j: the picture's top is north.
     let dst = vec2<i32>(i32(ip.ox + gid.x), i32(ip.m - 1u - (ip.oy + gid.y)));
-    let c = textureLoad(colour, src, 0);
-    let g = textureLoad(hsrc, src, 0).g;
-    let distance = ip.source == 8u;
-    if (interior(c, g)) {
-        if (ip.interior == 1u) {
-            textureStore(out_raw, dst, vec4<f32>(select(-1.0e30, 1.0e30, distance), 0.0, 0.0, 0.0));
-            textureStore(out_a, dst, vec4<f32>(0.0, 0.0, 0.0, 0.0));
-        } else if (ip.interior == 2u) {
-            textureStore(out_raw, dst, vec4<f32>(select(-3.0e30, 3.0e30, distance), 0.0, 0.0, 0.0));
-            textureStore(out_a, dst, vec4<f32>(ip.tint.rgb, 1.0));
-        } else {
-            // The interior's own colour where the colouring draws one,
-            // the background's where it does not. A distance's plateau is
-            // -1e30, not the set's own 0, so an inverted map can tell it
-            // from the set and leave it on top (and it is the minimum a
-            // distance's mipmap keeps, so it still bounds as the top).
-            textureStore(out_raw, dst, vec4<f32>(select(1.0e30, -1.0e30, distance), 0.0, 0.0, 0.0));
-            textureStore(out_a, dst, vec4<f32>(select(ip.background.rgb, c.rgb, c.a > 0.0), 1.0));
-        }
-        return;
+    textureStore(out_raw, dst, vec4<f32>(raw, 0.0, 0.0, 0.0));
+    textureStore(out_a, dst, texel_albedo(p, land));
+    if (land && ip.source != 8u) {
+        atomicMin(&range[0], ordered(raw));
+        atomicMax(&range[1], ordered(raw));
+        // And the section's own, which a ground of sections reduces to
+        // the range of what it holds (`reduce_range`).
+        atomicMin(&range[2u + 2u * ip.layer], ordered(raw));
+        atomicMax(&range[3u + 2u * ip.layer], ordered(raw));
     }
-    textureStore(out_raw, dst, vec4<f32>(select(g, max(g, 0.0), distance), 0.0, 0.0, 0.0));
-    textureStore(out_a, dst, vec4<f32>(c.rgb, 1.0));
 }
 "#;
 
@@ -476,6 +585,28 @@ pub struct TerrainIngest {
     /// A lake's colour under its surface.
     pub tint: [f32; 3],
 }
+
+/// How a section's texels are made from its render (terrain-height.md,
+/// H4): `samples` each way averaged into one (the prefilter), a border
+/// of `apron` texels about the section in the render, and the heights
+/// smoothed by a Gaussian of `softness` texels. The default is a texel
+/// a sample, no border, no softness: what every section was before.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SectionFilter {
+    pub samples: u32,
+    pub apron: u32,
+    pub softness: f32,
+}
+
+impl Default for SectionFilter {
+    fn default() -> Self {
+        SectionFilter { samples: 1, apron: 0, softness: 0.0 }
+    }
+}
+
+/// The ingest's scratch textures' least side: a section's, with the
+/// widest border a softness asks for, so they are made once.
+const SECTION_SCRATCH: u32 = 1025 + 2 * 12;
 
 impl TerrainIngest {
     /// The walk's map for this source: 1 distance, 2 the escape count's
@@ -2090,8 +2221,15 @@ pub struct TerrainRenderer {
     walk_pipeline: ComputePipeline,
     relight_pipeline: ComputePipeline,
     ingest_layout: BindGroupLayout,
-    range_pipeline: ComputePipeline,
-    ingest_pipeline: ComputePipeline,
+    /// A section's ingest from its render (`INGEST_WGSL`): the texels'
+    /// raw values, the softness along the rows, and the store.
+    filter_layout: BindGroupLayout,
+    filter_pipeline: ComputePipeline,
+    soften_pipeline: ComputePipeline,
+    store_pipeline: ComputePipeline,
+    /// The ingest's pair of raw scratch textures, border and all, and
+    /// their size.
+    scratch: Option<(u32, u32, [(Texture, TextureView); 2])>,
     grid_pipeline: ComputePipeline,
     accum_layout: BindGroupLayout,
     accum_pipeline: ComputePipeline,
@@ -2265,6 +2403,19 @@ impl TerrainRenderer {
                 storage_tex(5, TextureFormat::Rgba16Float),
             ],
         });
+        let filter_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Terrain Section Ingest"),
+            entries: &[
+                uniform(0),
+                tex(1),
+                tex(2),
+                storage(3, false),
+                storage_tex(4, TextureFormat::R32Float),
+                storage_tex(5, TextureFormat::Rgba16Float),
+                tex(6),
+                storage_tex(7, TextureFormat::R32Float),
+            ],
+        });
         let range_reduce_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Terrain Range Reduce"),
             entries: &[storage(0, false), storage(1, true)],
@@ -2296,9 +2447,10 @@ impl TerrainRenderer {
         let build_pipeline = pipeline("Terrain Build", &build_layout, assemble_build());
         let walk_pipeline = pipeline("Terrain Walk", &walk_layout, assemble_walk());
         let relight_pipeline = pipeline("Terrain Relight", &relight_layout, assemble_relight());
-        let range_pipeline = entry("Terrain Range", &ingest_layout, INGEST_WGSL, "range_main");
+        let filter_pipeline = entry("Terrain Section Raw", &filter_layout, INGEST_WGSL, "filter_main");
+        let soften_pipeline = entry("Terrain Section Soften", &filter_layout, INGEST_WGSL, "soften_main");
+        let store_pipeline = entry("Terrain Section Store", &filter_layout, INGEST_WGSL, "store_main");
         let range_reduce_pipeline = entry("Terrain Range Reduce", &range_reduce_layout, RANGE_REDUCE_WGSL, "main");
-        let ingest_pipeline = entry("Terrain Ingest", &ingest_layout, INGEST_WGSL, "ingest_main");
         let grid_pipeline = entry("Terrain Grid", &ingest_layout, GRID_WGSL, "grid_main");
         let accum_pipeline = entry("Terrain Accumulate", &accum_layout, ACCUM_WGSL, "main");
         let albedo_mip_pipeline = entry("Terrain Albedo Mips", &albedo_mip_layout, ALBEDO_MIP_WGSL, "main");
@@ -2342,10 +2494,13 @@ impl TerrainRenderer {
             walk_pipeline,
             relight_pipeline,
             ingest_layout,
-            range_pipeline,
+            filter_layout,
+            filter_pipeline,
+            soften_pipeline,
+            store_pipeline,
+            scratch: None,
             range_reduce_layout,
             range_reduce_pipeline,
-            ingest_pipeline,
             grid_pipeline,
             accum_layout,
             accum_pipeline,
@@ -2519,6 +2674,10 @@ impl TerrainRenderer {
         self.range.destroy();
         if let Some(b) = &self.range_read.stage {
             b.destroy();
+        }
+        if let Some((_, _, pair)) = &self.scratch {
+            pair[0].0.destroy();
+            pair[1].0.destroy();
         }
         if let Some(a) = &self.atlas {
             a.raw.destroy();
@@ -2756,7 +2915,7 @@ impl TerrainRenderer {
     ) {
         self.ensure_atlas(device, n, m, 1);
         self.reset_range(queue);
-        self.begin_section(queue, 0, n, m, ingest);
+        self.begin_section(queue, 0, n, m, ingest, SectionFilter::default());
         self.ingest_region(device, queue, colour, height_field, 0, 0, n, m);
         self.finish_section(device, queue);
         let floor = -0.01 * n.max(m) as f64;
@@ -2929,8 +3088,8 @@ impl TerrainRenderer {
     }
 
     /// Start making atlas layer `layer` -- `n x m` samples -- from
-    /// footprint regions.
-    pub fn begin_section(&mut self, queue: &Queue, layer: u32, n: u32, m: u32, ingest: &TerrainIngest) {
+    /// footprint regions, each rendered as `filter` says.
+    pub fn begin_section(&mut self, queue: &Queue, layer: u32, n: u32, m: u32, ingest: &TerrainIngest, filter: SectionFilter) {
         let atlas = self.atlas.as_ref().expect("ensure_atlas first");
         assert!(layer < atlas.capacity && n <= atlas.w && m <= atlas.h, "a section inside the atlas");
         assert!((layer as u64) < RANGE_LAYERS, "a layer the range has slots for");
@@ -2946,7 +3105,9 @@ impl TerrainRenderer {
             rw: 0,
             rh: 0,
             layer,
-            pad: [0; 3],
+            k: filter.samples.max(1),
+            apron: filter.apron,
+            sigma: filter.softness.max(0.0),
             background: [ingest.background[0], ingest.background[1], ingest.background[2], 1.0],
             tint: [ingest.tint[0], ingest.tint[1], ingest.tint[2], 1.0],
         };
@@ -2954,8 +3115,10 @@ impl TerrainRenderer {
     }
 
     /// One region of the footprint into the section being made: its
-    /// colour and height field, `rw x rh`, whose top-left is pixel
-    /// `(ox, oy)` of the section's picture. Submits its own work.
+    /// colour and height field -- `rw x rh` texels and the filter's
+    /// border about them, at its samples a texel each way -- whose
+    /// top-left texel is `(ox, oy)` of the section's picture. Submits its
+    /// own work.
     #[allow(clippy::too_many_arguments)]
     pub fn ingest_region(
         &mut self,
@@ -2990,25 +3153,64 @@ impl TerrainRenderer {
             })
         };
         let (hv, av) = (one(&atlas.raw), one(&atlas.albedo));
-        let bg = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("Terrain Ingest"),
-            layout: &self.ingest_layout,
-            entries: &[
-                BindGroupEntry { binding: 0, resource: params.as_entire_binding() },
-                BindGroupEntry { binding: 1, resource: BindingResource::TextureView(colour) },
-                BindGroupEntry { binding: 2, resource: BindingResource::TextureView(height_field) },
-                BindGroupEntry { binding: 3, resource: self.range.as_entire_binding() },
-                BindGroupEntry { binding: 4, resource: BindingResource::TextureView(&hv) },
-                BindGroupEntry { binding: 5, resource: BindingResource::TextureView(&av) },
-            ],
-        });
+        // The raw scratch pair, border and all.
+        let (bw, bh) = (rw + 2 * p.apron, rh + 2 * p.apron);
+        if self.scratch.as_ref().is_none_or(|(w, h, _)| *w < bw || *h < bh) {
+            if let Some((_, _, pair)) = self.scratch.take() {
+                pair[0].0.destroy();
+                pair[1].0.destroy();
+            }
+            let (w, h) = (bw.max(SECTION_SCRATCH), bh.max(SECTION_SCRATCH));
+            let make = || {
+                let t = device.create_texture(&TextureDescriptor {
+                    label: Some("Terrain Section Scratch"),
+                    size: Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: TextureDimension::D2,
+                    format: TextureFormat::R32Float,
+                    usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                });
+                let v = t.create_view(&TextureViewDescriptor::default());
+                (t, v)
+            };
+            self.scratch = Some((w, h, [make(), make()]));
+        }
+        let pair = &self.scratch.as_ref().expect("made above").2;
+        // Each pass reads one of the pair and writes the other.
+        let group = |read: usize| {
+            device.create_bind_group(&BindGroupDescriptor {
+                label: Some("Terrain Section Ingest"),
+                layout: &self.filter_layout,
+                entries: &[
+                    BindGroupEntry { binding: 0, resource: params.as_entire_binding() },
+                    BindGroupEntry { binding: 1, resource: BindingResource::TextureView(colour) },
+                    BindGroupEntry { binding: 2, resource: BindingResource::TextureView(height_field) },
+                    BindGroupEntry { binding: 3, resource: self.range.as_entire_binding() },
+                    BindGroupEntry { binding: 4, resource: BindingResource::TextureView(&hv) },
+                    BindGroupEntry { binding: 5, resource: BindingResource::TextureView(&av) },
+                    BindGroupEntry { binding: 6, resource: BindingResource::TextureView(&pair[read].1) },
+                    BindGroupEntry { binding: 7, resource: BindingResource::TextureView(&pair[1 - read].1) },
+                ],
+            })
+        };
+        let soft = p.sigma > 0.0;
         let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Terrain Ingest") });
         {
             let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: Some("Terrain Ingest"), timestamp_writes: None });
-            pass.set_bind_group(0, &bg, &[]);
-            pass.set_pipeline(&self.range_pipeline);
-            pass.dispatch_workgroups(rw.div_ceil(8), rh.div_ceil(8), 1);
-            pass.set_pipeline(&self.ingest_pipeline);
+            // The raw values into scratch 0; softened along the rows into
+            // scratch 1; stored from whichever holds the last.
+            pass.set_bind_group(0, &group(1), &[]);
+            pass.set_pipeline(&self.filter_pipeline);
+            pass.dispatch_workgroups(bw.div_ceil(8), bh.div_ceil(8), 1);
+            if soft {
+                pass.set_bind_group(0, &group(0), &[]);
+                pass.set_pipeline(&self.soften_pipeline);
+                pass.dispatch_workgroups(bw.div_ceil(8), bh.div_ceil(8), 1);
+            }
+            pass.set_bind_group(0, &group(if soft { 1 } else { 0 }), &[]);
+            pass.set_pipeline(&self.store_pipeline);
             pass.dispatch_workgroups(rw.div_ceil(8), rh.div_ceil(8), 1);
         }
         queue.submit(std::iter::once(enc.finish()));

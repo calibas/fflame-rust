@@ -1,6 +1,6 @@
 # Escape terrain: height quality
 
-**Status:** in progress on `terrain-height` (2026-10-10). H1, H2 and H3 built.
+**Status:** built on `terrain-height` (2026-10-10): H1 to H4.
 
 The escape terrain's fine detail comes out as noise, its heights warp and
 shift as you zoom, and the Height slider did not always redraw. The
@@ -79,6 +79,42 @@ and `src/escape/terrain.rs` (`INGEST_WGSL`, `hf_f`).
     view's centre would follow the land but needs the height there,
     which the GPU holds and which moves as finer sections land; not
     done.
-- **H4. Section borders, prefilter, Softness.** Sections rendered with a
-  border; heights averaged over each texel's footprint; a Softness blur
-  in plane units.
+- **H4. Section borders, prefilter, Softness.** *Built.* A section's
+  texels are made from its render in three passes (`INGEST_WGSL`: raw
+  values, the softness along the rows, the store down the columns), one
+  path for every filter -- at its defaults the ingest every section had,
+  which the visual suite confirms.
+  - **Prefilter** (Off, 2×2, 3×3; `terrain.prefilter`, default Off): the
+    section renders at that supersample, and a texel is the mean of its
+    samples that escaped (the interior where most did not; a distance
+    in texels, from the render's pixels). The supersample's samples sit
+    symmetrically about each grid point, so this is a box over the
+    texel's footprint and needs no border. It costs its square in
+    section render time and in the section renderer's memory -- about
+    0.15 GB off, 0.6 GB at 2×2 and 1.4 GB at 3×3 (148 bytes a render
+    pixel), within the escape renderer's 1.5 GB budget, which
+    clamps the factor where it cannot (a browser's limits may hold it
+    at 1). Measured over the seahorse valley's busiest section, 2×2
+    takes a fifth off the land's spikiness (mean |Laplacian| of the log
+    rise, 0.0052 to 0.0043); on screen a quarter off the step between
+    pixels.
+  - **Softness** (0 to 4, `terrain.softness`, default 0): a Gaussian of
+    that many texels over the land, the interior left as it is and the
+    weights the land's own, so a shore is not pulled toward a sentinel.
+    The section renders with a border of three sigmas, so the blur at
+    its edge reads its neighbour's ground: shared edges agree exactly,
+    softened or not. Softness 2 takes the same section's spikiness from
+    0.0052 to 0.0004. The colours are not blurred.
+  - **Texels, not plane units** -- a change from the plan above. A blur
+    in plane units would be a fraction of the view width, which changes
+    with every unlocked zoom step: every cached section would re-render
+    on each wheel notch, and near the eye, where texels are finest, its
+    reach in texels -- the border -- would run to hundreds. A texel is
+    about `supersample × detail` of a screen pixel where the ground is
+    nearest, so a softness in texels is a softness on screen: the same
+    fine bumps rounded off everywhere, the sections cacheable, the
+    border at most a dozen texels. Where a coarser section meets a
+    finer one, the blur's reach in the plane changes with the
+    resolution, as the detail already does.
+  - Both are part of what the sections' pictures depend on
+    (`picture_key`): changing either re-renders the ground.

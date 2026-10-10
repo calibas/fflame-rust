@@ -13,6 +13,13 @@
 //! ground ends at `far` view widths, where the fog has reached the
 //! background.
 //!
+//! **A section's texels** (docs/projects/terrain-height.md, H4) are its
+//! render's samples -- or with a prefilter, the mean of `prefilter²` of
+//! them over each texel's footprint -- softened by a Gaussian of
+//! `softness` texels, for which the render has a border of three sigmas
+//! about the section ([`section_filter`]), so neighbours still meet
+//! exactly.
+//!
 //! **Where things are.** The sections' grid hangs from an ANCHOR: a
 //! point of the plane in exact decimals and a zoom, a level-0 section
 //! being that zoom's view width. The shader's world is the CURRENT view
@@ -51,7 +58,7 @@
 //! in the plane, which a dolly approaches.
 
 use super::ifs::{solid_frame, SolidCamera};
-use super::terrain::{Ground, GroundNode, GroundSection, PathSettings, TerrainIngest, TerrainRenderer, TerrainView};
+use super::terrain::{Ground, GroundNode, GroundSection, PathSettings, SectionFilter, TerrainIngest, TerrainRenderer, TerrainView};
 use super::terrain_tiers::{TerrainTiers, TierInputs};
 #[cfg(test)]
 use crate::config::escape::RenderTier;
@@ -144,11 +151,15 @@ fn picture_key(escape: &EscapeConfig) -> EscapeConfig {
     // and a lake's tint how a section encodes it (the tint is its albedo);
     // the rest is the walk's and the view's.
     let (source, interior, tint) = (k.terrain.source, k.terrain.interior, k.terrain.lake_tint);
+    // And the filter makes them (H4).
+    let (prefilter, softness) = (k.terrain.prefilter, k.terrain.softness);
     k.terrain = d.terrain.clone();
     k.terrain.enabled = true;
     k.terrain.source = source;
     k.terrain.interior = interior;
     k.terrain.lake_tint = tint;
+    k.terrain.prefilter = prefilter;
+    k.terrain.softness = softness;
     k
 }
 
@@ -200,6 +211,19 @@ pub fn terrain_camera(escape: &EscapeConfig) -> SolidCamera {
         fov: escape.cam_fov.clamp(0.05, 3.0),
         distance,
         eye_rel,
+    }
+}
+
+/// How a config's sections are made from their renders (H4): its
+/// prefilter, and its softness with a border of three sigmas, so the
+/// blur at a section's edge reads its neighbour's ground.
+pub fn section_filter(t: &crate::config::escape::TerrainConfig) -> SectionFilter {
+    use crate::config::escape::{MAX_TERRAIN_PREFILTER, MAX_TERRAIN_SOFTNESS};
+    let softness = if t.softness.is_finite() { t.softness.clamp(0.0, MAX_TERRAIN_SOFTNESS) } else { 0.0 };
+    SectionFilter {
+        samples: t.prefilter.clamp(1, MAX_TERRAIN_PREFILTER),
+        apron: (3.0 * softness).ceil() as u32,
+        softness,
     }
 }
 
@@ -371,11 +395,18 @@ pub type SectionKey = (i32, i64, i64);
 /// side, centred on its centre, so sample (0, 0) is its south-west
 /// corner and neighbours share their edges.
 fn section_config(fp: &EscapeConfig, a: &Anchor, key: SectionKey, samples: u32) -> EscapeConfig {
+    bordered_section_config(fp, a, key, samples, 0)
+}
+
+/// [`section_config`] with a border of `apron` texels about the section
+/// (H4): `samples + 2 apron` a side on the same grid, the same centre.
+fn bordered_section_config(fp: &EscapeConfig, a: &Anchor, key: SectionKey, samples: u32, apron: u32) -> EscapeConfig {
     use super::fixedpoint::FixedPoint;
     let (level, i, j) = key;
     let mut c = fp.clone();
     c.rotation = 0.0;
-    c.zoom_log2 = a.zoom - level as f64 - (samples as f64 / (samples - 1) as f64).log2();
+    let across = (samples + 2 * apron) as f64;
+    c.zoom_log2 = a.zoom - level as f64 - (across / (samples - 1) as f64).log2();
     // The centre from the anchor: (i + 1/2) 2^level anchor widths, a
     // width 4 * 2^-zoom, kept as a power of two and a mantissa.
     let x = 2.0 + level as f64 - a.zoom;
@@ -778,6 +809,7 @@ impl EscapeTerrain {
         }
         let derivative = self.footprint.derivative_active(&section_config(&fp, &anchor, (0, 0, 0), SECTION_SAMPLES));
         let ingest = terrain_ingest(config, derivative);
+        let filter = section_filter(&escape.terrain);
         let mut landed = false;
         // Auto contrast: one fit for every section, measured first from a
         // view of the anchor's own (`contrast_probe_config`) and held.
@@ -815,18 +847,24 @@ impl EscapeTerrain {
             }
             let b = self.building.as_ref().expect("made above");
             let (key, layer, n) = (b.key, b.layer, b.samples);
-            let section = section_config(&fp, &anchor, key, n);
+            // With the filter's border about it, at its samples a texel
+            // (H4).
+            let section = bordered_section_config(&fp, &anchor, key, n, filter.apron);
+            let across = n + 2 * filter.apron;
             // Resizing keeps the renderer's pipelines and orbit, and is a
             // no-op at the size it has.
-            self.footprint.resize(device, n, n, 1);
+            self.footprint.resize(device, across, across, filter.samples);
             let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Terrain Section") });
             let settled = self.footprint.render(device, queue, &mut enc, &section, palette_view, palette_generation);
             queue.submit(std::iter::once(enc.finish()));
             if !settled {
                 continue;
             }
-            self.terrain.begin_section(queue, layer, n, n, &ingest);
-            self.terrain.ingest_region(device, queue, self.footprint.output_view(), self.footprint.height_view(), 0, 0, n, n);
+            // The samples the render could afford (a factor its budget
+            // clamped), the render's own colour beside its height field.
+            let filter = SectionFilter { samples: self.footprint.effective_supersample(), ..filter };
+            self.terrain.begin_section(queue, layer, n, n, &ingest, filter);
+            self.terrain.ingest_region(device, queue, self.footprint.render_view(), self.footprint.height_view(), 0, 0, n, n);
             self.terrain.finish_section(device, queue);
             let b = self.building.take().expect("made above");
             // A coarser copy it replaces gives its layer back.
@@ -1072,6 +1110,12 @@ impl EscapeTerrain {
         k
     }
 
+    /// A cached section's atlas layer and samples a side, for a test.
+    #[cfg(test)]
+    pub(crate) fn layer_for_test(&self, key: SectionKey) -> Option<(u32, u32)> {
+        self.cache.get(&key).map(|c| (c.layer, c.samples))
+    }
+
     /// Free the GPU memory now: dropping frees nothing on WebGPU.
     pub fn destroy(&self) {
         self.footprint.destroy();
@@ -1267,6 +1311,42 @@ mod tests {
             let east = section_config(&esc, &a, (key.0, key.1 + 1, key.2), n);
             let e_sw = pixel(&east, n, 0.0, s);
             assert!((e_sw.0 - se.0).abs() < tol && (e_sw.1 - se.1).abs() < tol, "{key:?}: the east neighbour starts where it ends");
+        }
+    }
+
+    /// A bordered section's samples are its own and its border's (H4):
+    /// sample (apron + i, apron + j) of the bordered render is sample
+    /// (i, j) of the plain one, on the same grid, the border beyond.
+    #[test]
+    fn a_bordered_section_keeps_its_grid() {
+        let mut esc = EscapeConfig::default();
+        esc.center_re = "-0.743".into();
+        esc.center_im = "0.131".into();
+        esc.zoom_log2 = 9.3;
+        let a = Anchor { re: esc.center_re.clone(), im: esc.center_im.clone(), zoom: 9.0 };
+        let pixel = |c: &EscapeConfig, n: u32, px: f64, py: f64| -> (f64, f64) {
+            let n = n as f64;
+            let span = 4.0 * (-c.zoom_log2).exp2();
+            let (cx, cy) = (c.center_re.parse::<f64>().unwrap(), c.center_im.parse::<f64>().unwrap());
+            (cx + ((px + 0.5) / n - 0.5) * span, cy - ((py + 0.5) / n - 0.5) * span)
+        };
+        for (key, n, apron) in [((0, 0, 0), SECTION_SAMPLES, 12u32), ((-3, 5, -2), SECTION_SAMPLES, 3), ((2, -1, 1), COARSE_SAMPLES, 6)] {
+            let plain = section_config(&esc, &a, key, n);
+            let bordered = bordered_section_config(&esc, &a, key, n, apron);
+            let side = (key.0 as f64).exp2() * 4.0 * (-a.zoom).exp2();
+            let tol = side * 1e-9;
+            let s = (n - 1) as f64;
+            for (i, j) in [(0.0, 0.0), (s, s), (0.0, s), (17.0, 250.0)] {
+                let p = pixel(&plain, n, i, j);
+                let q = pixel(&bordered, n + 2 * apron, i + apron as f64, j + apron as f64);
+                assert!((p.0 - q.0).abs() < tol && (p.1 - q.1).abs() < tol, "{key:?} ({i}, {j}): {p:?} vs {q:?}");
+            }
+            // The border reaches `apron` texels past each edge.
+            let corner = pixel(&bordered, n + 2 * apron, 0.0, 0.0);
+            let nw = pixel(&plain, n, 0.0, 0.0);
+            let texel = side / s;
+            assert!((nw.0 - corner.0 - apron as f64 * texel).abs() < tol, "{key:?} west border");
+            assert!((corner.1 - nw.1 - apron as f64 * texel).abs() < tol, "{key:?} north border");
         }
     }
 
@@ -1845,6 +1925,163 @@ mod tests {
         println!("locked: the centre's ground at {before:.5} widths, then {after:.5} (twice: {:.5})", 2.0 * before);
         assert!(before > 0.05 * c.escape.terrain.height as f64, "land to measure: {before}");
         assert!((after - 2.0 * before).abs() < 0.05 * after, "{before} then {after}");
+    }
+
+    /// The sections' filter smooths the ground (H4). Over the seahorse
+    /// valley's busy boundary, the same section's texels: how spiky the
+    /// land is -- the mean of the count's log rise's Laplacian, which a
+    /// smooth slope leaves at 0 and a lone spike makes four times its
+    /// height. A texel the mean of its footprint is less spiky than a
+    /// texel a sample, and a softness less again. Measured on the texels
+    /// themselves, since on screen a lake's shore is a cliff the filter
+    /// rightly leaves alone, and it dominates there.
+    #[test]
+    fn the_filter_smooths_the_ground() {
+        let Some((_one_at_a_time, device, queue)) = gpu() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        // The view's full sections' texels (rows north up) and the
+        // ground's range.
+        let texels = |prefilter: u32, softness: f32| -> (HashMap<SectionKey, Vec<f32>>, [f32; 2]) {
+            let mut c = looking_down();
+            c.escape.terrain.prefilter = prefilter;
+            c.escape.terrain.softness = softness;
+            let mut engines = crate::renderer::render::RenderEngines::default();
+            let _ = pollster::block_on(crate::renderer::render(
+                &device,
+                &queue,
+                crate::renderer::RenderJob::new(&c, 64, 64).with_engines(&mut engines),
+                &mut crate::renderer::NoProgress,
+            ))
+            .expect("render");
+            let t = engines.terrain.as_mut().unwrap();
+            let range = t.settled_range_for_test(&device, &queue).expect("a range");
+            let (raw, _) = t.terrain_for_test().tile_textures_for_test().expect("an atlas");
+            let all = t
+                .cached_for_test()
+                .into_iter()
+                .filter_map(|k| {
+                    let (layer, n) = t.layer_for_test(k)?;
+                    (n == SECTION_SAMPLES).then(|| (k, bytemuck::cast_slice(&read_layer(&device, &queue, raw, layer, n, n)).to_vec()))
+                })
+                .collect();
+            (all, range)
+        };
+        let n = SECTION_SAMPLES as usize;
+        let rough = |v: &[f32], [lo, hi]: [f32; 2]| -> (f64, usize) {
+            let rise = |r: f32| (1.0 + (r - lo).max(0.0) as f64).ln() / (1.0 + (hi - lo) as f64).ln();
+            let (mut sum, mut count) = (0.0, 0usize);
+            for y in 1..n - 1 {
+                for x in 1..n - 1 {
+                    let around = [v[y * n + x], v[y * n + x - 1], v[y * n + x + 1], v[(y - 1) * n + x], v[(y + 1) * n + x]];
+                    if around.iter().all(|r| r.abs() < 1.0e29) {
+                        let h = around.map(rise);
+                        sum += (4.0 * h[0] - h[1] - h[2] - h[3] - h[4]).abs();
+                        count += 1;
+                    }
+                }
+            }
+            (sum / count.max(1) as f64, count)
+        };
+        // The section with the most land, the same in each: the sections
+        // are the view's, whatever the filter.
+        let (point, range) = texels(1, 0.0);
+        let (averaged, range2) = texels(2, 0.0);
+        let (soft, range3) = texels(1, 2.0);
+        let key = *point.keys().max_by_key(|k| rough(&point[k], range).1).expect("a section");
+        let (p, land) = rough(&point[&key], range);
+        let (a, _) = rough(&averaged[&key], range2);
+        let (s, _) = rough(&soft[&key], range3);
+        println!("section {key:?}: {land} land texels; mean |laplacian| a sample a texel {p:.5}, 2x2 {a:.5}, softness 2 {s:.5}");
+        assert!(land > n * n / 10, "land to measure: {land}");
+        assert!(a < 0.9 * p, "the prefilter: {a} vs {p}");
+        assert!(s < 0.5 * p, "the softness: {s} vs {p}");
+    }
+
+    /// Softened sections meet without a seam (H4): rendered with a border
+    /// of three sigmas, two neighbours blur their shared edge from the
+    /// same ground, so its samples agree from both sides as closely as
+    /// unsoftened ones do.
+    #[test]
+    fn softened_sections_meet_without_a_seam() {
+        let Some((_one_at_a_time, device, queue)) = gpu() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let edge_gap = |softness: f32| -> (f64, usize) {
+            let mut c = looking_down();
+            c.escape.terrain.softness = softness;
+            c.escape.terrain.prefilter = 2;
+            let mut engines = crate::renderer::render::RenderEngines::default();
+            let _ = pollster::block_on(crate::renderer::render(
+                &device,
+                &queue,
+                crate::renderer::RenderJob::new(&c, 64, 64).with_engines(&mut engines),
+                &mut crate::renderer::NoProgress,
+            ))
+            .expect("render");
+            let t = engines.terrain.as_ref().unwrap();
+            let keys = t.cached_for_test();
+            let (raw, _) = t.terrain_for_test().tile_textures_for_test().expect("an atlas");
+            let column = |layer: u32, n: u32, x: u32| -> Vec<f32> {
+                let all: Vec<f32> = bytemuck::cast_slice(&read_layer(&device, &queue, raw, layer, n, n)).to_vec();
+                (0..n).map(|y| all[(y * n + x) as usize]).collect()
+            };
+            let (mut worst, mut pairs) = (0.0f64, 0usize);
+            for &(l, i, j) in &keys {
+                let (Some((la, na)), Some((lb, nb))) = (t.layer_for_test((l, i, j)), t.layer_for_test((l, i + 1, j))) else {
+                    continue;
+                };
+                if na != SECTION_SAMPLES || nb != SECTION_SAMPLES {
+                    continue;
+                }
+                // Its east column is its east neighbour's west one.
+                let (east, west) = (column(la, na, na - 1), column(lb, nb, 0));
+                for (a, b) in east.iter().zip(&west) {
+                    if a.abs() < 1.0e29 && b.abs() < 1.0e29 {
+                        worst = worst.max(((a - b).abs() / a.abs().max(b.abs()).max(1.0)) as f64);
+                    }
+                }
+                pairs += 1;
+            }
+            (worst, pairs)
+        };
+        let (plain, n0) = edge_gap(0.0);
+        let (soft, n1) = edge_gap(3.0);
+        println!("shared edges: {n0} pairs, worst {plain:.2e} unsoftened; {n1} pairs, worst {soft:.2e} softened");
+        assert!(n0 > 0 && n1 > 0, "neighbours to compare");
+        assert!(soft <= plain.max(1.0e-5) * 2.0, "a seam: {soft} against {plain}");
+    }
+
+    /// One layer of an atlas's raw array, `n x n` r32float texels.
+    fn read_layer(device: &Device, queue: &Queue, tex: &Texture, layer: u32, w: u32, h: u32) -> Vec<u8> {
+        let row = (w * 4).div_ceil(256) * 256;
+        let staging = device.create_buffer(&BufferDescriptor {
+            label: None,
+            size: (row * h) as u64,
+            usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
+        enc.copy_texture_to_buffer(
+            TexelCopyTextureInfo { texture: tex, mip_level: 0, origin: Origin3d { x: 0, y: 0, z: layer }, aspect: TextureAspect::All },
+            TexelCopyBufferInfo { buffer: &staging, layout: TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(h) } },
+            Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        queue.submit(std::iter::once(enc.finish()));
+        let slice = staging.slice(..);
+        slice.map_async(MapMode::Read, |_| {});
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let data = slice.get_mapped_range();
+        let mut out = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            let at = (y * row) as usize;
+            out.extend_from_slice(&data[at..at + (w * 4) as usize]);
+        }
+        drop(data);
+        staging.unmap();
+        out
     }
 
     /// The curves keep their order (H2): a mesa tops out above the log

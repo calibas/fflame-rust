@@ -3904,6 +3904,14 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         &self.height_view
     }
 
+    /// The render-resolution colour: the output before the supersample's
+    /// box resolve (the output itself at a factor of 1), beside the
+    /// height field at the same resolution. A terrain section's prefilter
+    /// averages its samples itself (terrain-height.md, H4).
+    pub(crate) fn render_view(&self) -> &TextureView {
+        &self.output_view
+    }
+
     /// The height field and the render texture, for a test to read back.
     #[cfg(test)]
     pub(crate) fn height_texture_for_test(&self) -> &Texture {
