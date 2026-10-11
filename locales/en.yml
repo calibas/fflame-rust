@@ -735,7 +735,7 @@ tonemap:
   curve_brighten_shadows: "Brighten Shadows"
   curve_darken_highlights: "Darken Highlights"
   curve_editor: "Curve Editor"
-  curve_instructions: "Double-click to add points, drag to move, Ctrl+click to remove"
+  curve_instructions: "Double-click to add points, drag to move, Ctrl+click or right-click (long press on touch) to remove"
   curve_control_points: "%{count} control points"
 
   # Color & Appearance

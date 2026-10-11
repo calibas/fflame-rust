@@ -257,7 +257,9 @@ it changes nothing.
 
 In the Colors panel's *Tone Curve* section: an enable box; presets Linear,
 S-Curve, Brighten Shadows and Darken Highlights; and an editor where
-dragging moves a point and a double-click adds one.
+dragging moves a point, a double-click adds one, and Ctrl+click
+(Cmd+click on a Mac) or a right-click -- a long press on touch --
+removes an interior one. The endpoints move vertically only.
 
 ---
 
