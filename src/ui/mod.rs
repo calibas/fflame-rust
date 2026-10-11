@@ -2649,6 +2649,26 @@ impl EguiLayer {
         }
     }
 
+    /// Load already-parsed configs from a file into the Fractal
+    /// Browser's Files tab -- what a multi-flame `.flame` wants. Not
+    /// [`Self::load_batch_into_fractal_browser`]: that one is the Random
+    /// tab, and replacing it threw away the last random batch.
+    pub fn load_configs_into_fractal_browser(
+        &mut self,
+        configs: Vec<crate::config::FractalConfig>,
+        path: std::path::PathBuf,
+    ) {
+        // Initialize panel if not already created
+        if self.fractal_browser_panel.is_none() {
+            self.fractal_browser_panel = Some(fractal_browser::FractalBrowserPanel::new());
+        }
+
+        if let Some(ref mut panel) = self.fractal_browser_panel {
+            let source = path.display().to_string();
+            panel.load_configs(configs, &source, Some(path));
+        }
+    }
+
     /// Load JSON configs into the unified Fractal Browser panel
     pub fn load_json_into_fractal_browser(&mut self, json: &str, source_name: &str) {
         // Initialize panel if not already created

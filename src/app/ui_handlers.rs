@@ -836,7 +836,7 @@ impl App {
                                 // tab). XML is already parsed; JSON loads by
                                 // path so the browser owns re-parsing.
                                 if is_xml {
-                                    self.egui_layer.load_batch_into_fractal_browser(configs.clone());
+                                    self.egui_layer.load_configs_into_fractal_browser(configs.clone(), path.clone());
                                 } else {
                                     self.egui_layer.load_file_into_fractal_browser(path.clone());
                                 }
@@ -902,7 +902,7 @@ impl App {
                                         println!("Found {} flames in {}, loading first and opening Fractal Browser", configs.len(), filename);
 
                                         // Load all configs into Fractal Browser (Files tab)
-                                        self.egui_layer.load_batch_into_fractal_browser(configs.clone());
+                                        self.egui_layer.load_configs_into_fractal_browser(configs.clone(), path.clone());
 
                                         // Load the first config
                                         let first_config = configs.into_iter().next().unwrap();
