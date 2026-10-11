@@ -108,8 +108,33 @@ impl App {
 
     /// Handle add, delete, and clone transform operations
     fn handle_transform_operations(&mut self, ui_response: &UiResponse) {
+        // One more transform must still fit the renderer's buffers, or
+        // the next frame panics packing them. Checked once for every
+        // kind of add: each takes one slot of the active target.
+        let adding = ui_response.add_transform
+            || ui_response.clone_transform.is_some()
+            || ui_response.add_linked_transform
+            || ui_response.add_final_transform;
+        let room = !adding || {
+            use crate::config::manager::EditingTarget;
+            let mut probe = self.config_manager.active_config().flame.clone();
+            match self.config_manager.editing_target() {
+                EditingTarget::Subflame { index } if index < probe.subflames.len() => {
+                    probe.subflames[index].transforms.push(Transform::default())
+                }
+                _ => probe.transforms.push(Transform::default()),
+            }
+            match probe.gpu_capacity_error() {
+                Some(why) => {
+                    self.egui_layer.show_api_notification(&format!("Can't add a transform: {why}"), true);
+                    false
+                }
+                None => true,
+            }
+        };
+
         // Handle add transform
-        if ui_response.add_transform {
+        if ui_response.add_transform && room {
             // Pull length + xaos from the active editing target so an
             // "Add Transform" while editing a subflame inserts at the
             // subflame's end, not the parent's.
@@ -179,7 +204,7 @@ impl App {
         }
 
         // Handle clone transform
-        if let Some(idx) = ui_response.clone_transform {
+        if let Some(idx) = ui_response.clone_transform.filter(|_| room) {
             // Source the cloned transform + xaos from the active
             // editing target, same as add/delete.
             let cloned_transform_with_xaos = {
@@ -211,7 +236,7 @@ impl App {
         }
 
         // ---------- LINKED POOL ----------
-        if ui_response.add_linked_transform {
+        if ui_response.add_linked_transform && room {
             self.apply_pool_full_snapshot("Add Linked Transform", |flame| {
                 let mut t = Transform::default();
                 t.set_variation("linear", 1.0);
@@ -242,7 +267,7 @@ impl App {
         }
 
         // ---------- FINAL POOL ----------
-        if ui_response.add_final_transform {
+        if ui_response.add_final_transform && room {
             self.apply_pool_full_snapshot("Add Final Transform", |flame| {
                 let mut t = Transform::default();
                 t.set_variation("linear", 1.0);

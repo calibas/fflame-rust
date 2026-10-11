@@ -5866,6 +5866,23 @@ mod edge_tests {
     /// which gathered two pixels' worth; flam3 rejects those points.
     /// At 64x64 and zoom 1 a pixel is 1/16 of a unit and x = 0 is at 32,
     /// so x = -2.03125 is pixel -0.5 and x = -1.96875 is pixel 0.5.
+    /// A flame with more transforms than the GPU buffers hold is refused
+    /// with a reason; it used to panic packing them.
+    #[test]
+    fn render_refuses_a_flame_past_the_transform_cap() {
+        let Some((device, queue)) = super::memory_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let mut config = FractalConfig::default();
+        config.flame.transforms = (0..129).map(|_| Transform::new()).collect();
+        let job = RenderJob::new(&config, 16, 16).with_iterations(1000);
+        match pollster::block_on(render(&device, &queue, job, &mut NoProgress)) {
+            Err(crate::renderer::render::RenderError::TooLarge(why)) => assert!(why.contains("129"), "{why}"),
+            other => panic!("expected TooLarge, got {:?}", other.map(|o| o.width)),
+        }
+    }
+
     #[test]
     fn a_point_left_of_the_frame_is_not_plotted() {
         let Some((device, queue)) = super::memory_tests::device() else {
