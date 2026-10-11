@@ -587,10 +587,6 @@ written through `system_settings_mut()` by their owners.
 
 Things the code does not do:
 
-- **The language is not persisted.** The language menu (the globe in
-  the menu bar, `src/ui/menu_bar.rs`) calls `i18n::set_locale` only.
-  Nothing writes `SystemLanguage`, and nothing reads `language` at
-  startup, so every launch starts in rust-i18n's default locale.
 - `recent_files`, `last_opened_file` and `default_save_location` are
   declared and serialized but nothing reads or writes them.
 

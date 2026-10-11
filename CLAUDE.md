@@ -203,7 +203,6 @@ See @Cargo.toml. Key: **wgpu 29.0** (desktop vulkan/metal/gles -- dx12 deliberat
 
 ## Known Issues
 - **macOS is not green**, both known and parked: `renderer::sticky::extras_alone_never_change_pixels` fails on Metal (dead variations change codegen; visually harmless; the fix is a tolerance compare), and 21 escape-time visual renders differ from Windows -- investigated, perceptually indistinguishable, next leads recorded in the escape design record.
-- **The chosen language is not persisted**: the globe menu calls `i18n::set_locale` only; `SystemSettings.language` exists but nothing writes or reads it.
 - **Config v1 files** saved before two unit changes (`levels_high`, `dof_blur_strength`) load with the wrong values: the v1->v2 migration arm never got its planned translations (`docs/projects/config-v2-migration.md`).
 - **Focused Rendering's open gaps** (opt-in only): a forced sample is plotted by the free orbit's transform's opacity, not its word's last transform's; in Speed colour mode it wears the free orbit's colour; the GPU planner's f32 can drop children at 1e5-1e6 (C16).
 - Density effects on the `HighResExporter` path are skipped above a ~4 GiB budget (~10,900^2) to avoid OOM; below it they apply as in the app.
