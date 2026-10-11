@@ -1432,29 +1432,53 @@ impl PaletteLibrary {
         }
     }
 
-    /// Sync pack states from global singleton (WASM only)
+    /// Take the packs another library has loaded, and rebuild the flat
+    /// palette list from them. Returns whether anything changed.
     ///
-    /// On WASM, async fetches update the global singleton, but the UI may hold
-    /// a separate instance. This method syncs pack load states and content.
-    #[cfg(target_arch = "wasm32")]
-    pub fn sync_from_global(&mut self) {
-        if let Ok(global) = global_palette_library().read() {
-            // Sync each pack's state
-            for (idx, global_info) in global.packs.iter().enumerate() {
-                if let Some(local_info) = self.packs.get_mut(idx) {
-                    // Only sync if states differ
-                    if local_info.load_state != global_info.load_state {
-                        local_info.load_state = global_info.load_state.clone();
-                        local_info.pack = global_info.pack.clone();
-                        local_info.enabled = global_info.enabled;
-                    }
+    /// On the web a pack is fetched asynchronously into the global
+    /// library, while the app holds its own copy (cloned at startup), so
+    /// the copy has to catch up. A pack is taken -- load state, content,
+    /// enabled flag -- when its load state differs.
+    ///
+    /// The flat list (random palettes, the Palette Editor's list,
+    /// scripts) is then REBUILT, not copied. It used to be copied when a
+    /// `generation` counter differed, which went wrong both ways: a
+    /// fetched pack never bumps the counter, so its palettes never
+    /// reached the list; and a custom save bumps only the copy's, so the
+    /// next sync overwrote the copy's list with the global's, dropping
+    /// the palette just saved. Rebuilding keeps the copy's own palettes,
+    /// as enabling a pack always has.
+    ///
+    /// The Custom pack is skipped: saves write it on this instance and
+    /// never reach the source, so the source's copy is the stale one.
+    pub fn sync_packs_from(&mut self, source: &PaletteLibrary) -> bool {
+        let mut changed = false;
+        for (idx, src) in source.packs.iter().enumerate() {
+            if Some(idx) == self.custom_pack_index {
+                continue;
+            }
+            if let Some(local) = self.packs.get_mut(idx) {
+                if local.load_state != src.load_state {
+                    local.load_state = src.load_state.clone();
+                    local.pack = src.pack.clone();
+                    local.enabled = src.enabled;
+                    changed = true;
                 }
             }
-            // Sync palette list if generation changed
-            if self.generation != global.generation {
-                self.palettes = global.palettes.clone();
-                self.generation = global.generation;
-            }
+        }
+        if changed {
+            self.rebuild_palette_list();
+        }
+        changed
+    }
+
+    /// [`Self::sync_packs_from`] the global singleton, which the web's
+    /// async pack fetches complete into.
+    #[cfg(target_arch = "wasm32")]
+    pub fn sync_from_global(&mut self) -> bool {
+        match global_palette_library().read() {
+            Ok(global) => self.sync_packs_from(&global),
+            Err(_) => false,
         }
     }
 
@@ -1521,6 +1545,56 @@ mod tests {
         let embedded = crate::resources::palettes::load_builtin_pack().unwrap();
         assert_eq!(embedded.pack_name, on_disk.pack_name);
         assert_eq!(embedded.palettes.len(), on_disk.palettes.len());
+    }
+
+    /// The web's shape: the app holds a copy of the global library, and
+    /// a pack's fetch completes into the global. The copy's flat list --
+    /// what random palettes, the Palette Editor and scripts read --
+    /// never received the fetched palettes, because only a `generation`
+    /// bump copied it and a pack load does not bump; and when it did
+    /// copy, it dropped what the copy had of its own.
+    #[test]
+    fn a_pack_loaded_on_one_library_reaches_the_others_palette_list() {
+        use crate::resources::{PackMetadata, PalettePackInfo};
+
+        let mut global = PaletteLibrary::new();
+        global.packs.push(PalettePackInfo::from_metadata(PackMetadata {
+            id: "sync_probe".to_string(),
+            name: "Sync Probe".to_string(),
+            description: String::new(),
+            file: "sync_probe.json".to_string(),
+            item_count: 1,
+            enabled_by_default: true,
+        }));
+        let idx = global.pack_count() - 1;
+        let mut app = global.clone();
+
+        // Something the app has that the global never sees.
+        let mut own = Palette::cool();
+        own.name = "Sync Probe Local".to_string();
+        app.add_or_update(own);
+
+        let mut fetched = Palette::fire();
+        fetched.name = "Sync Probe Fetched".to_string();
+        global.set_pack_loaded(
+            idx,
+            PalettePack {
+                pack_name: "Sync Probe".to_string(),
+                description: String::new(),
+                enabled_by_default: true,
+                palettes: vec![fetched],
+            },
+        );
+        let has = |lib: &PaletteLibrary, name: &str| lib.palettes().iter().any(|p| p.name == name);
+        assert!(!has(&app, "Sync Probe Fetched"));
+
+        assert!(app.sync_packs_from(&global));
+        assert!(has(&app, "Sync Probe Fetched"), "the fetched pack's palettes never reached the list");
+        assert!(has(&app, "Sync Probe Local"), "syncing dropped the app's own palette");
+        assert!(app.get_pack(idx).is_some(), "the pack itself was not taken");
+
+        // Nothing new: nothing to do.
+        assert!(!app.sync_packs_from(&global));
     }
 
     #[test]
