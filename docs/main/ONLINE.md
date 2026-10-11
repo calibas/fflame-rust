@@ -201,13 +201,15 @@ flames**, on the same endpoints, told apart by `render_mode` alone. An
 escape config's exact-decimal centre strings survive the round trip
 (`an_escape_config_round_trips_with_its_centre_intact`).
 
-A simulation is mapped to `"simulation"` and sent. `ApiRenderMode`'s
-documentation says `sync` refuses to upload one client-side until the
-server's `render_mode` enum knows the value, but no such refusal exists:
-`config_to_create_request` refuses nothing, `FetchError::Unsupported`
-(made for exactly this) is never constructed, and Save Online is
-offered in Simulation mode. The committed `openapi.json` lists
-`RenderMode` as `2d`, `3d`, `escape` only.
+A simulation maps to `"simulation"`, but the server's `render_mode`
+enum does not know that value yet (the committed `openapi.json` lists
+`RenderMode` as `2d`, `3d`, `escape` only; an upload is an HTTP 400
+`render_mode_invalid`). So `save_flame` and `update_flame` refuse a
+simulation client-side, before the token check and before anything is
+sent (`refuse_unsupported_online`, returning `FetchError::Unsupported`
+with a sentence the dialog shows) — the same seatbelt escape had until
+the server added `escape`. Remove it when the server adds `simulation`.
+(`simulation_configs_are_refused_by_save_and_update`)
 
 ### Names, never definitions
 
@@ -545,7 +547,8 @@ in [WASM.md](../WASM.md) and [RELEASE.md](../RELEASE.md) §5.
 
 ## Gotchas
 
-- **Simulations are not refused client-side** — see *Render modes*.
+- **Simulations cannot be saved online yet** — refused client-side
+  until the server knows the mode; see *Render modes*.
 - **An Online-tab 403 signs you out**, since the tab treats "Access
   denied" as an expired session.
 - **Loading an animation from the Animation panel's list goes through

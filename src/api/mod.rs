@@ -152,6 +152,30 @@ impl ApiState {
         self.auth.set_token(token.to_string());
     }
 
+    /// Refuse configs the server cannot store yet, BEFORE anything is
+    /// sent — and before the token check, so the refusal is the same
+    /// signed in or out.
+    ///
+    /// The server casts `render_mode` into a Postgres enum with no
+    /// "simulation" value (the committed `openapi.json` lists `2d`,
+    /// `3d`, `escape`); uploading one is an HTTP 400
+    /// `render_mode_invalid` on their side instead of a sentence on
+    /// ours. Nothing forces this coordination (the engine contract
+    /// carries no render-mode vocabulary), so this guard is the only
+    /// seatbelt. Escape went through the same sequence: refused here
+    /// until the API added the value on 2026-08-29. Remove the
+    /// Simulation arm when the API adds "simulation".
+    fn refuse_unsupported_online(config: &FractalConfig) -> FetchResult<()> {
+        if config.render_mode == crate::scene::transforms::RenderMode::Simulation {
+            return Err(FetchError::Unsupported(
+                "Simulations can't be saved online yet -- the server doesn't \
+                 know this render mode. Save locally for now."
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Clear auth state (sign out).
     pub fn clear_auth(&mut self) {
         self.auth.clear();
@@ -216,6 +240,7 @@ impl ApiState {
         visibility: Option<ApiVisibility>,
         thumbnail_jpg: Option<&[u8]>,
     ) -> FetchResult<String> {
+        Self::refuse_unsupported_online(config)?;
         let token = self.require_token()?;
 
         let mut flame_req = sync::config_to_create_request(config, name)?;
@@ -272,6 +297,7 @@ impl ApiState {
         visibility: Option<ApiVisibility>,
         thumbnail_jpg: Option<&[u8]>,
     ) -> FetchResult<FlameResponse> {
+        Self::refuse_unsupported_online(config)?;
         let token = self.require_token()?;
 
         let effective_visibility = match visibility {
@@ -635,5 +661,44 @@ impl ApiState {
     pub async fn list_variations(&self) -> FetchResult<Vec<types::VariationListItem>> {
         let url = build_url(API_BASE_URL, "/api/variations");
         client::api_get::<Vec<types::VariationListItem>>(&url, "").await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene::transforms::RenderMode;
+
+    /// The Save Online seatbelt: a simulation config is refused before
+    /// anything is sent — and before the token check, so it fires the
+    /// same signed in or out (which is also what makes it testable
+    /// without auth). Without it the server answers HTTP 400
+    /// `render_mode_invalid`.
+    #[test]
+    fn simulation_configs_are_refused_by_save_and_update() {
+        let mut config = FractalConfig::default();
+        config.render_mode = RenderMode::Simulation;
+        let api = ApiState::default();
+
+        let save = pollster::block_on(api.save_flame(&config, Some("x"), None, None));
+        assert!(
+            matches!(save, Err(FetchError::Unsupported(_))),
+            "save must refuse client-side: {save:?}"
+        );
+        let update = pollster::block_on(api.update_flame("id", &config, None, None, None));
+        assert!(
+            matches!(update, Err(FetchError::Unsupported(_))),
+            "update must refuse client-side: {update:?}"
+        );
+    }
+
+    /// The modes the server knows pass the guard.
+    #[test]
+    fn known_render_modes_pass_the_online_guard() {
+        for mode in [RenderMode::TwoD, RenderMode::ThreeD, RenderMode::Escape] {
+            let mut config = FractalConfig::default();
+            config.render_mode = mode;
+            assert!(ApiState::refuse_unsupported_online(&config).is_ok(), "{mode:?}");
+        }
     }
 }

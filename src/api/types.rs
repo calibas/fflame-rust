@@ -71,7 +71,8 @@ pub enum ApiRenderMode {
     /// `variation_names` is empty for these, legitimately.
     ///
     /// The server's Postgres `render_mode` enum does NOT know this
-    /// value yet, so `sync` refuses to upload one client-side until it
+    /// value yet, so `ApiState::save_flame` / `update_flame` refuse to
+    /// upload one client-side (`refuse_unsupported_online`) until it
     /// does — the same sequence escape went through on 2026-08-29.
     #[serde(rename = "simulation")]
     Simulation,
