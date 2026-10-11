@@ -25,7 +25,8 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEXT = ('.rs', '.wgsl', '.py', '.md', '.toml', '.yml', '.yaml', '.txt')
-SKIP_DIRS = {'.git', 'target', 'node_modules', 'output', 'pkg'}
+# .claude holds agent worktrees: other checkouts of this repo, not files of it.
+SKIP_DIRS = {'.git', '.claude', 'target', 'node_modules', 'output', 'pkg'}
 LINK = re.compile(r'(\[[^\]]*\]\()([^)\s]+?\.md)(#[^)\s]*)?(\))')
 
 

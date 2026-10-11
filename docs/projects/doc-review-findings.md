@@ -39,7 +39,7 @@ check before it is fixed.
 |---|---|---|---|
 | C1 | **Levels gamma 1.0 does not survive a save.** `is_default_levels_gamma` compares against 1.0, but the default is 0.5. A config at 1.0 is saved without the field and reloads at 0.5. This hits the High Contrast, Saturated Dim and Pop presets' values. | `src/config/fractal_config.rs:995` | confirmed |
 | C2 | **A PNG's embedded config reloads as v0.** The `Config` chunk is plain serde with no `version`. `FractalConfig::from_json` treats it as v0, and the v2->v3 arm forces a 3D flame to 2D, perspective 0, `preserve_z` true. This affects `scripts/png_metadata.py -o`. (`from_json_value_with_default_version` exists for exactly this case.) | `src/png_metadata.rs` `from_app_state` | |
-| C3 | The v1->v2 migration never applied its two translations (in CLAUDE.md's Known Issues). | [config-v2-migration.md](config-v2-migration.md) | confirmed |
+| C3 | The v1->v2 migration never applied its two translations (in CLAUDE.md's Known Issues). | [config-v2-migration.md](../archive/projects/config-v2-migration.md) | confirmed |
 | C4 | The chosen language is not persisted: `SystemSettings.language` is never written or read (in CLAUDE.md's Known Issues). | `src/ui/menu_bar.rs` | confirmed |
 | C5 | **`config.set` cannot reach a settings group that is still at its defaults.** The path is walked through the saved JSON, which leaves default groups out. For example, `config.set("sim.use_transforms", true)` after `sim.model(...)` fails with "unknown setting group `sim`". So a script can't set up sim terrain, view, warp, layers or escape textures. | `src/script/api.rs` `set_config_field` | |
 | C6 | **`--category` does nothing to the file**: `to_text_chunks` never writes `test_category`. | `src/png_metadata.rs` | |

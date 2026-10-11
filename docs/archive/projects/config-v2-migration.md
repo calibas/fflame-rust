@@ -1,14 +1,26 @@
 # Config v1 → v2 migration tracker
 
-> **Status 2026-10-10: open.** The bump happened -- `CURRENT_CONFIG_VERSION`
-> is 3 -- but `migrate_value`'s v1 -> v2 arm (`src/config/fractal_config.rs`)
-> is a no-op: the two value translations below, `levels_high` ÷1000 above
-> 100 (§2) and `dof_blur_strength` ×10 (§4), were never applied. A v1
-> file saved before those unit changes, with either value set
-> explicitly, now renders with different Levels or depth of field.
-> Decide whether to add them (they would also touch v1 files saved
-> after the changes, which §2's threshold guards against for Levels but
-> nothing guards for depth of field).
+> **Archived 2026-10-11** -- closed without a value migration (the status note below says why). Read [CONFIG.md](../../main/CONFIG.md) for how versioning works now; this is the record of what was planned and measured when it was written.
+
+> **Closed 2026-10-11: no value migration.** The bump happened (v2 on
+> 2026-06-29; `CURRENT_CONFIG_VERSION` is 4 now) and `migrate_value`'s
+> v1 -> v2 arm stays a no-op. The two translations below (§2, §4) would
+> be right only for v1 files saved in two windows:
+> - Levels values set explicitly between 2026-01-15 and 2026-05-12, when
+>   their units became multiples of the mean (879bee7c). That change
+>   moved `levels_low` as well as `levels_high`.
+> - A `dof_blur_strength` above 0 between 2026-01-24 and 2026-05-29,
+>   when the shader started scaling it by 0.1 (5c70da4b).
+>
+> A version-1 stamp cannot tell those files from later v1 saves (v1
+> lasted until 2026-06-29), nor from hand-written v1 fixtures in the new
+> units (`tests/visual/configs/solid/solid-depth-effects.fflame`, 2026-07).
+> A ÷1000 on `levels_high` above 100 would misfire on a later file whose
+> high sits past 100× the mean, which the log slider and Auto allow; a
+> ×10 on the blur breaks a tracked visual baseline. A scan of 2,522
+> configs (tests, assets, output and the app's data folder) found no
+> file in either window. Such a file is fixed by hand: re-set its Levels
+> or its blur strength.
 
 Running list of changes accumulating for the eventual `CURRENT_CONFIG_VERSION`
 bump to 2. **This document is a tracker, not an active project plan** — the
