@@ -1527,7 +1527,7 @@ impl App {
             // One page is 64 KiB.
             let pages = core::arch::wasm32::memory_size(0);
             let mib = (pages as f64) * 65536.0 / (1024.0 * 1024.0);
-            // The shadow stack grows DOWN from its top (16 MiB, set by
+            // The shadow stack grows DOWN from its top (64 MiB, set by
             // -zstack-size), so the address of a local IS the remaining
             // headroom. Read at the same point in the frame loop every
             // time, so it is comparable: if it falls load over load the
