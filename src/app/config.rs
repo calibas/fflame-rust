@@ -17,6 +17,15 @@ impl App {
         description: String,
         api_metadata: Option<ApiContentState>,
     ) -> Result<(), String> {
+        // A flame the renderer's transform buffers cannot hold would
+        // panic on its first frame; refuse it, and say why on screen
+        // (the callers only log a load error).
+        if let Some(why) = config.flame.gpu_capacity_error() {
+            let msg = format!("Can't load \"{}\": {why}", config.flame.name);
+            self.egui_layer.show_api_notification(&msg, true);
+            return Err(msg);
+        }
+
         // Snapshot the current api_state as the "after" of the previous snapshot
         // (captures any changes since the last load, e.g. saving online)
         self.update_current_api_state_snapshot();

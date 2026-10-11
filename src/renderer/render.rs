@@ -317,6 +317,10 @@ pub async fn render(
     job: RenderJob<'_>,
     progress: &mut dyn RenderProgress,
 ) -> Result<RenderOutput, RenderError> {
+    // A flame the transform buffers cannot hold would panic in packing.
+    if let Some(why) = job.config.flame.gpu_capacity_error() {
+        return Err(RenderError::TooLarge(format!("this flame cannot be rendered: {why}")));
+    }
     // Refuse a size this device cannot hold BEFORE allocating any of
     // it -- including the flame renderer's own textures, which are
     // built below whichever engine ends up rendering. The limits are
@@ -437,6 +441,10 @@ pub async fn render_with(
     job: RenderJob<'_>,
     progress: &mut dyn RenderProgress,
 ) -> Result<RenderOutput, RenderError> {
+    // Callers with their own renderer (video, the gallery) come in here.
+    if let Some(why) = job.config.flame.gpu_capacity_error() {
+        return Err(RenderError::TooLarge(format!("this flame cannot be rendered: {why}")));
+    }
     let start_time = web_time::Instant::now();
 
     // Escape-time mode is a different generator with the same tail:

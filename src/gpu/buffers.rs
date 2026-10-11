@@ -2772,6 +2772,29 @@ mod tests {
     use super::*;
     use crate::scene::transforms::Transform;
 
+    /// `scene` mirrors these caps rather than depending on `gpu`; the
+    /// capacity check every way in relies on the mirrors being right.
+    #[test]
+    fn the_scene_mirrors_the_transform_caps() {
+        use crate::scene::transforms as t;
+        assert_eq!(t::SUBFLAME_XFORM_ID_BASE as usize, MAX_TRANSFORMS);
+        assert_eq!(t::MAX_GPU_TRANSFORM_SLOTS, MAX_TRANSFORMS);
+        assert_eq!(t::MAX_GPU_SUBFLAMES, MAX_SUBFLAMES);
+        assert_eq!(t::MAX_GPU_SUBFLAME_TRANSFORMS, MAX_SUBFLAME_TRANSFORMS_TOTAL);
+    }
+
+    /// A flame at the cap packs; one past it is refused by the check
+    /// before packing could panic.
+    #[test]
+    fn a_flame_past_the_transform_cap_is_refused_not_packed() {
+        let mut flame = crate::scene::transforms::Flame::default();
+        flame.transforms = (0..MAX_TRANSFORMS).map(|_| Transform::default()).collect();
+        assert_eq!(flame.gpu_capacity_error(), None);
+        assert_eq!(pack_gpu_transforms(&flame, crate::scene::transforms::RenderMode::TwoD).len(), MAX_TRANSFORMS_UNIFIED);
+        flame.final_transforms.push(Transform::default());
+        assert!(flame.gpu_capacity_error().is_some(), "normals + finals count together");
+    }
+
     #[test]
     fn gpu_transform_std430_size_invariant() {
         // `array<GpuTransform>` in std430 needs a 16-byte-aligned stride.
