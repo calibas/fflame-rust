@@ -3947,6 +3947,11 @@ impl FlameRenderer {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         config.flame.has_xaos().hash(&mut h);
+        // Post-symmetry: the planner declines it (`NoCylinders::PostSymmetry`),
+        // so toggling it must replan. Unhashed, a live plan kept drawing
+        // after symmetry was turned on -- its copies turned about the
+        // view, not the world -- and a decline outlived turning it off.
+        (config.flame.post_symmetry.ty != crate::scene::transforms::PostSymmetryType::None).hash(&mut h);
         // The finals and linked transforms too: the walk pulls the view
         // back through the finals, and refuses a linked transform.
         let pools = [&config.flame.transforms, &config.flame.final_transforms, &config.flame.linked_transforms];
@@ -5871,5 +5876,23 @@ mod edge_tests {
         assert!(col0 && lit == 1, "a point at pixel 0.5 lights column 0 alone: {lit} lit, column 0 {col0}");
         let (lit, _) = lit_by_a_point_at(&device, &queue, -2.03125);
         assert_eq!(lit, 0, "a point at pixel -0.5 is off the frame");
+    }
+}
+
+#[cfg(test)]
+mod plan_key_tests {
+    use super::FlameRenderer;
+    use crate::config::FractalConfig;
+    use crate::scene::transforms::PostSymmetryType;
+
+    /// Turning post-symmetry on or off changes the flame key, so a
+    /// Focused Rendering plan is replanned (and declined) rather than
+    /// kept drawing.
+    #[test]
+    fn post_symmetry_is_part_of_the_flame_key() {
+        let config = FractalConfig::default();
+        let mut symmetric = config.clone();
+        symmetric.flame.post_symmetry.ty = PostSymmetryType::Point;
+        assert_ne!(FlameRenderer::flame_key(&config), FlameRenderer::flame_key(&symmetric));
     }
 }
