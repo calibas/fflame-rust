@@ -66,9 +66,9 @@ TOLERANCE_MAX = 40.0
 # platform differences were exactly that — blur-extras and jac_asn sit at
 # mean 1.11 and 0.23, well inside the MEAN limit, and fail only on `max`.
 #
-# Measured across all 148 tests the separation is wide: 0.823%, 0.135%,
-# then 0.000% for every other test. 1% clears the top of that with margin
-# while staying far below anything structural.
+# Measured across the 148 tests the suite had then, the separation is
+# wide: 0.823%, 0.135%, then 0.000% for every other test. 1% clears the
+# top of that with margin while staying far below anything structural.
 #
 # It is not a blanket loosening — it is strictly stronger than the old
 # `max` rule for real breakage, because `max` said nothing about HOW MANY
@@ -79,8 +79,9 @@ TOLERANCE_MAX = 40.0
 TOLERANCE_OUTLIER_FRAC = 0.01
 
 # How far below the run's median throughput a render may fall before it is
-# called a regression. The observed spread across 148 configs is ~46x
-# (37-1705 Miter/s) because variation cost genuinely varies that much, and
+# called a regression. The spread observed across the 148 configs the suite
+# had then is ~46x (37-1705 Miter/s) because variation cost genuinely
+# varies that much, and
 # the slowest sits 4.1x below the median — so this must clear that to avoid
 # flagging expensive-but-correct variations. A real collapse is far larger:
 # the vsync governor ratchet cost ~128x.
@@ -263,6 +264,10 @@ class VisualTestRunner:
         """Run a single test configuration."""
         output_path = self.current_dir / f"{config.name}.png"
         baseline_path = self.baseline_dir / f"{config.name}.png"
+
+        # An export that fails must not leave the previous run's PNG in
+        # place: --update-baseline would promote it as this run's output.
+        output_path.unlink(missing_ok=True)
 
         # Build command using binary directly (avoids cargo warnings)
         cmd = [
@@ -524,13 +529,32 @@ class VisualTestRunner:
         return sorted(configs, key=lambda c: (c.category, c.name))
 
     def update_baselines(self):
-        """Write current outputs to the baseline dir as small, metadata-free
-        thumbnails, and record provenance in baseline_manifest.json."""
+        """Write THIS RUN's outputs to the baseline dir as small,
+        metadata-free thumbnails, and record them in baseline_manifest.json.
+
+        Only the tests this run rendered: it used to take every PNG in
+        current/, so a `--category` run also re-baselined whatever stale
+        renders other categories had left there, and it rebuilt the
+        manifest from that folder alone, dropping every baseline the run
+        had not touched. Each test now deletes its own output before
+        rendering, and the manifest is merged."""
         print(f"\nUpdating baselines ({BASELINE_SIZE[0]}x{BASELINE_SIZE[1]}, metadata stripped)...")
         self.baseline_dir.mkdir(parents=True, exist_ok=True)
-        manifest, count, total = {}, 0, 0
-        kept = 0
-        for png in sorted(self.current_dir.glob("*.png")):
+        manifest_path = self.baseline_dir / "baseline_manifest.json"
+        try:
+            with open(manifest_path) as f:
+                manifest = json.load(f).get("images", {})
+        except (OSError, ValueError):
+            manifest = {}
+        count, total, kept, skipped = 0, 0, 0, 0
+        rendered = []
+        for r in self.results:
+            png = self.current_dir / f"{r.name}.png"
+            if r.actual_sha256 and png.exists():
+                rendered.append(png)
+            else:
+                skipped += 1
+        for png in sorted(rendered):
             baseline = self.baseline_dir / png.name
             # Only rewrite a baseline that actually moved beyond tolerance.
             # The solid-* renders are not bit-reproducible (in-batch depth
@@ -556,6 +580,10 @@ class VisualTestRunner:
             }
             total += size
             count += 1
+        # Entries for baselines that no longer exist (a removed config's,
+        # deleted by hand) would only mislead.
+        manifest = {name: entry for name, entry in manifest.items()
+                    if (self.baseline_dir / name).exists()}
         meta = {
             "generated_by": "tests/visual/run_tests.py --update-baseline",
             "baseline_size": list(BASELINE_SIZE),
@@ -571,9 +599,12 @@ class VisualTestRunner:
             ).stdout.strip()
         except Exception:
             pass
-        with open(self.baseline_dir / "baseline_manifest.json", "w") as f:
+        with open(manifest_path, "w") as f:
             json.dump(meta, f, indent=2, sort_keys=True)
-        print(f"Baselines: {count} total, {count - kept} rewritten, {kept} unchanged (left byte-identical), {total/1024/1024:.2f} MB")
+        print(f"Baselines from this run: {count}, {count - kept} rewritten, "
+              f"{kept} unchanged (left byte-identical), {total/1024/1024:.2f} MB"
+              + (f"; {skipped} not rendered, left as they were" if skipped else "")
+              + f". Manifest: {len(manifest)} images.")
 
     def print_result(self, result: TestResult):
         """Print test result."""
